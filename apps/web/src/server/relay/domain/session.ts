@@ -156,7 +156,12 @@ export type Effect =
   | { type: "refund_credit" }
   | { type: "runner"; effect: RunnerEffect } | { type: "retry_runner" }
   | { type: "complete_now" } | { type: "fill_replay" }
-  | { type: "release_output" };   // C1: remove the session's output — never the input (deleting it leaks recordings, C2)
+  | { type: "release_output" }   // C1: remove the session's output — never the input (deleting it leaks recordings, C2)
+  // The phone's own input (Input A, the session's CAMERA input) stops accepting connections: a phone left sending after the
+  // session ended — a Stop, a failure, the live limit — is turned away instead of pushing to Cloudflare for nothing. The usecase
+  // finds the input itself (never `ingest_input_uid`, which is Input B on a composed session); best-effort, and the input is
+  // switched OFF, never deleted (C2).
+  | { type: "disable_phone_input" };
 
 export interface Decision { next: Session; events: DomainEvent[]; effects: Effect[] }
 
@@ -335,6 +340,11 @@ function runner(s: Session, trigger: RunnerTrigger, now: Date, illegal: () => In
  *  other runner state still refuses it, so adding it here widens what a terminal session can BECOME by nothing at all. */
 export const RUNNER_CLEANUP_TRIGGERS: readonly RunnerTrigger["type"][] = ["create_ok", "create_failed", "callback_stopped", "observed", "destroy_ok", "grace_expired", "orphan_listed"];
 
+// ENTERING a terminal state, never being in one: a terminal composed session still takes its runner's cleanup triggers
+// (C27), and each of those lands terminal again. A passthrough decision never starts terminal (decideCell refuses every
+// command there), so for passthrough the first conjunct is the predicate it always was.
+const entersTerminal = (before: Session, d: Decision): boolean => !isTerminal(before.state) && isTerminal(d.next.state);
+
 /** C1 (lane C final review; orchestrator ruling — ONE predicate, never per arm). A passthrough broadcast is Cloudflare
  *  simulcasting the phone's input to the destination through the output `add_output` created, and nothing else stops it:
  *  failing or completing the ROW left the stream running (unpaid after a credit refusal, still public after a Stop). So
@@ -343,16 +353,22 @@ export const RUNNER_CLEANUP_TRIGGERS: readonly RunnerTrigger["type"][] = ["creat
  *  new way to end a session is covered without an edit here. A terminal session never re-enters: `decideCell` refuses
  *  every passthrough command on one. The release goes FIRST, ahead of the replay fill, so a failing later effect cannot
  *  skip it. Killer: session.test.ts "C1 (lane C final review) … the sweep". */
-const releasesOutput = (before: Session, d: Decision): boolean =>
-  // R2004: both modes hold an output now (composed's on its programme input). ENTERING a terminal state, never being in
-  // one: a terminal composed session still takes its runner's cleanup triggers (C27), and each of those lands terminal
-  // again. A passthrough decision never starts terminal (decideCell refuses every command there), so for passthrough the
-  // first conjunct is the predicate it always was.
-  !isTerminal(before.state) && before.outputUid !== null && isTerminal(d.next.state);
+// R2004: both modes hold an output now (composed's on its programme input).
+const releasesOutput = (before: Session, d: Decision): boolean => entersTerminal(before, d) && before.outputUid !== null;
+
+/** The same ONE predicate, without the output: a session that ended before its output was added (a provision timeout, a Stop
+ *  while provisioning) still has a phone holding its input's credentials, so the input is switched off on EVERY entry to a
+ *  terminal state, by any command — stop and wall clock through their completion, every failure, every timeout. It goes
+ *  right after the release and ahead of the runner and replay effects, so a later effect that throws cannot skip it. */
+const disablesPhoneInput = entersTerminal;
 
 export function decide(s: Session, c: Command, now: Date): Decision {
   const d = decideCell(s, c, now);
-  return releasesOutput(s, d) ? { ...d, effects: [{ type: "release_output" }, ...d.effects] } : d;
+  const first: Effect[] = [
+    ...(releasesOutput(s, d) ? [{ type: "release_output" } as const] : []),
+    ...(disablesPhoneInput(s, d) ? [{ type: "disable_phone_input" } as const] : []),
+  ];
+  return first.length > 0 ? { ...d, effects: [...first, ...d.effects] } : d;
 }
 
 function decideCell(s: Session, c: Command, now: Date): Decision {

@@ -2011,7 +2011,7 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
       "requested>provisioning", "provisioning>warming", "warming>live", "live>ending", "ending>completed",
     ]);
     expect(rows.filter((x) => x.kind === "action").map((x) => [x.type, x.actor_user_id, x.source])).toEqual([["create", r.auth.userId, "client"], ["stop", r.auth.userId, "client"]]);
-    expect(rows.filter((x) => x.kind === "effect").map((x) => [x.type, x.result])).toEqual([["create_live_input", "ok"], ["add_output", "ok"], ["release_output", "ok"], ["fill_replay", "ok"]]);   // C1: the output is removed at the completion, before the replay fill
+    expect(rows.filter((x) => x.kind === "effect").map((x) => [x.type, x.result])).toEqual([["create_live_input", "ok"], ["add_output", "ok"], ["release_output", "ok"], ["disable_phone_input", "ok"], ["fill_replay", "ok"]]);   // C1: the output is removed at the completion, then the phone's input is switched off, before the replay fill
     expect(rows.filter((x) => x.kind === "observed").map((x) => [x.type, x.to_state])).toEqual([["ingest_status", "connected"]]);
     expect(rows.some((x) => x.kind === "runner_transition")).toBe(false);
   });
@@ -2079,9 +2079,9 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
     const effects = await sql<{ type: string; result: string }[]>`select type, result from fixture_stream_events where session_id = ${sessionId} and kind = 'effect' order by seq`;
     // R2004: two inputs (camera, then programme); the Machine is asked for as provisioning's first composed edge, and the
     // destination output is added on the programme at `provisioned` — composed now holds an output like passthrough
-    // does, released at the completion before the replay fill.
+    // does, released at the completion — then the phone's input is switched off — before the replay fill.
     expect(effects.map((e) => `${e.type}:${e.result}`)).toEqual([
-      "create_live_input:ok", "create_live_input:ok", "create_machine:ok", "add_output:ok", "stop_machine:ok", "release_output:ok", "fill_replay:ok",
+      "create_live_input:ok", "create_live_input:ok", "create_machine:ok", "add_output:ok", "stop_machine:ok", "release_output:ok", "disable_phone_input:ok", "fill_replay:ok",
     ]);
     const rt = await sql<{ type: string; from_state: string; to_state: string }[]>`select type, from_state, to_state from fixture_stream_events where session_id = ${sessionId} and kind = 'runner_transition' order by seq`;
     expect(rt.map((x) => `${x.from_state}-${x.type}->${x.to_state}`)).toEqual([
@@ -3992,6 +3992,214 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
     expect(r.ingest.liveOutputsTo(dest)).toBe(0);
     expect(f.output_released_at).toBeInstanceOf(Date);
     expect(await releaseRows(sessionId)).toEqual([{ result: "ok", source: "output", reason: "late_add", output: f.output_uid }]);
+  });
+});
+
+// Owner-approved 2026-10-26: when a session ENDS, the phone's own Cloudflare input (Input A — the session's CAMERA input) is
+// switched OFF, so Cloudflare turns away a phone that is still pushing. Switched off, never deleted (C2: the input carries the
+// recording). Every expected value is read from the rig's own DB rows and the fake's own call log, never from the code under
+// test. Input A is PER-SESSION (`provisionSession` makes a fresh input for every session), so no start ever lands on a disabled
+// input and there is no re-enable at session start — the sequence test below pins that, so a future reuse of an input shows up
+// as a red here rather than as a phone that cannot connect.
+describe.skipIf(!HAS_DB)("the phone's Cloudflare input is switched OFF on every way a session ends — and only that input", () => {
+  type Rig = Awaited<ReturnType<typeof rig>>;
+  const inputsOf = (sid: string) => sql<{ role: string; id: string }[]>`
+    select role, ingest_input_id as id from fixture_stream_inputs where session_id = ${sid} order by role, slot`;
+  /** The session's camera input, read back from its row; exactly one, or the premise of every test below is wrong. */
+  const cameraOf = async (sid: string) => {
+    const cameras = (await inputsOf(sid)).filter((i) => i.role === "camera");
+    expect(cameras, "a session has exactly one camera input").toHaveLength(1);
+    return cameras[0]!.id;
+  };
+  const disableRows = (sid: string) => sql<{ result: string; source: string; input: string | null; status: string | null }[]>`
+    select result, source, payload->>'inputUid' as input, payload->>'httpStatus' as status from fixture_stream_events
+     where session_id = ${sid} and kind = 'effect' and type = 'disable_phone_input' order by seq`;
+  const effectTypes = async (sid: string) => (await sql<{ type: string }[]>`
+    select type from fixture_stream_events where session_id = ${sid} and kind = 'effect' order by seq`).map((x) => x.type);
+  const alarms = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.disable_phone_input");
+  const goLive = async (r: Rig, fixtureId = r.fixtureId) => {
+    r.tick(3000);
+    expect((await currentSession(r.auth, fixtureId, r.deps))!.state).toBe("live");
+  };
+  /** A Cloudflare that refuses the disable while `down.on` — every other call is the rig's own fake. */
+  const flakyDisable = (r: Rig) => {
+    const down = { on: true, err: Object.assign(new Error("cloudflare set input enabled: HTTP 503 code 10000"), { status: 503, code: "10000" }) };
+    const ingest = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      async setInputEnabled(inputId: string, enabled: boolean, meta?: { sessionId?: string | null }) {
+        if (down.on) throw down.err;
+        return FakeIngest.prototype.setInputEnabled.call(r.ingest, inputId, enabled, meta);
+      },
+    });
+    return { down, deps: { ...r.deps, drivers: { ...r.deps.drivers, ingest } } as SessionDeps };
+  };
+
+  // Every terminal path the C1 table drives (the reader or the sweep), plus the sweep's own reconcile of the wall clock.
+  const PATHS: { name: string; streamKey?: string; connectAfterMs?: number; drive: (r: Rig, sid: string) => Promise<unknown>; ends: Record<string, string | null> }[] = [
+    { name: "the organiser's Stop", drive: async (r, sid) => { await goLive(r); return stopSession(r.auth, r.fixtureId, sid, r.deps); },
+      ends: { state: "completed", end_reason: "stopped", fail_reason: null } },
+    { name: "a credit refused at go-live", drive: async (r) => {
+      await sql`insert into org_stream_credits (org_id, delta, reason, balance_after) values (${r.auth.orgId}, -1, 'consume', 0)`;
+      r.tick(3000);
+      return currentSession(r.auth, r.fixtureId, r.deps);
+    }, ends: { state: "failed", fail_reason: "no_credits", end_reason: null } },
+    { name: "the wall clock (max duration), read by the organiser", drive: async (r) => {
+      await goLive(r);
+      r.tick((MAX_DURATION_MINUTES * 60 + 60) * 1000);
+      return currentSession(r.auth, r.fixtureId, r.deps);
+    }, ends: { state: "completed", end_reason: "max_duration", fail_reason: null } },
+    { name: "the wall clock (max duration), reconciled by the sweep with no reader", drive: async (r, sid) => {
+      await goLive(r);
+      r.tick((MAX_DURATION_MINUTES * 60 + 60) * 1000);
+      return reconcileSession(sid, r.deps);
+    }, ends: { state: "completed", end_reason: "max_duration", fail_reason: null } },
+    { name: "the warming timeout (no inbound video)", connectAfterMs: 24 * 3_600_000, drive: async (r) => {
+      r.tick((WARMING_TIMEOUT_MINUTES * 60 + 60) * 1000);
+      return currentSession(r.auth, r.fixtureId, r.deps);
+    }, ends: { state: "failed", fail_reason: "no_inbound_timeout", end_reason: null } },
+    { name: "a destination that rejects the output (the output fails closed)", streamKey: `${FAKE_REJECT_KEY_PREFIX}${randomUUID()}`, drive: (r) => currentSession(r.auth, r.fixtureId, r.deps),
+      ends: { state: "failed", fail_reason: "target_rejected", end_reason: null } },
+  ];
+
+  it("every terminal path — Stop, credit refused, wall clock (reader and sweep), warming timeout, target rejected — switches the camera input OFF exactly once: the fake's call log, its state, one ok effect row and one provider-call row carrying the session id (mutants: drop the domain predicate; drop the runEffects case → red at every path)", async () => {
+    let paths = 0;
+    for (const p of PATHS) {
+      const rec = new FakeRecorder();
+      const r = await rig({ credits: 1, recorder: rec, ...(p.streamKey ? { streamKey: p.streamKey } : {}), ...(p.connectAfterMs ? { connectAfterMs: p.connectAfterMs } : {}) });
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+      const camera = await cameraOf(sessionId);
+      expect(r.ingest.isEnabled(camera), `${p.name}: the positive pair — the input is on while the session runs`).toBe(true);
+      expect(r.ingest.enabledCalls, `${p.name}: nothing switched before the session ends`).toEqual([]);
+      await p.drive(r, sessionId);
+      await new Promise((res) => setImmediate(res));
+      const [f] = await sql<Record<string, string | null>[]>`select state, fail_reason, end_reason from fixture_stream_sessions where id = ${sessionId}`;
+      expect(f, p.name).toMatchObject(p.ends);
+      expect(r.ingest.enabledCalls, `${p.name}: one switch, OFF, on the camera`).toEqual([{ inputId: camera, enabled: false }]);
+      expect(r.ingest.isEnabled(camera), p.name).toBe(false);
+      expect(await disableRows(sessionId), p.name).toEqual([{ result: "ok", source: "ingest", input: camera, status: null }]);
+      const calls = rec.calls.filter((c) => c.operation === "setInputEnabled");
+      expect(calls, `${p.name}: the provider-call row`).toHaveLength(1);
+      expect(calls[0], p.name).toMatchObject({ sessionId, method: "PUT" });
+      paths++;
+    }
+    expect(paths).toBe(PATHS.length);
+    expect(paths).toBeGreaterThanOrEqual(6);
+  });
+
+  it("a Stop whose disable FAILS still completes — the effect row is failed, the failure is ALARMED naming the session and the input (and nothing that could hold the key), and the effects after it still ran: the output released, the replay filled", async () => {
+    const r = await rig({ credits: 1 });
+    const dest = { url: STREAM_PLATFORM_PRESETS.youtube, streamKey: "yt-key" };
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await goLive(r);
+    const camera = await cameraOf(sessionId);
+    const cf = flakyDisable(r);
+    sentry.captureError.mockClear();
+    const done = await stopSession(r.auth, r.fixtureId, sessionId, cf.deps);       // resolves: the organiser gets an answer
+    expect(done).toMatchObject({ id: sessionId, state: "completed", endReason: "stopped" });
+    expect(r.ingest.enabledCalls, "the refused call never reached the fake").toEqual([]);
+    expect(r.ingest.isEnabled(camera), "the truth: the phone may still be pushing").toBe(true);
+    expect(await disableRows(sessionId)).toEqual([{ result: "failed", source: "ingest", input: camera, status: "503" }]);
+    const hits = alarms();
+    expect(hits).toHaveLength(1);
+    expect(hits[0]![0]).toBe(cf.down.err);
+    expect(hits[0]![1]).toMatchObject({ orgId: r.auth.orgId, extra: { sessionId, inputUid: camera } });
+    expect(JSON.stringify(hits[0]![1])).not.toContain(dest.streamKey);
+    expect(JSON.stringify(hits[0]![1])).not.toContain(dest.url);
+    // The effects AFTER the disable still ran: release_output ran before it, fill_replay after it.
+    expect(await effectTypes(sessionId)).toEqual(expect.arrayContaining(["release_output", "disable_phone_input", "fill_replay"]));
+    expect(r.ingest.liveOutputsTo(dest), "the output is released all the same").toBe(0);
+    const [{ output_released_at }] = await sql<{ output_released_at: Date | null }[]>`select output_released_at from fixture_stream_sessions where id = ${sessionId}`;
+    expect(output_released_at).toBeInstanceOf(Date);
+    const [{ state }] = await sql<{ state: string }[]>`select state from fixture_stream_sessions where id = ${sessionId}`;
+    expect(state).toBe("completed");
+  });
+
+  it("both teardown calls FAILING at once — the output removal and the disable — each is recorded and alarmed under its OWN route, and the Stop still completes (neither failure shadows the other)", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await goLive(r);
+    const down = Object.assign(Object.create(r.ingest) as FakeIngest, {
+      async removeOutput() { throw Object.assign(new Error("cloudflare remove output: HTTP 503"), { status: 503 }); },
+      async setInputEnabled() { throw Object.assign(new Error("cloudflare set input enabled: HTTP 503"), { status: 503 }); },
+    });
+    sentry.captureError.mockClear();
+    const done = await stopSession(r.auth, r.fixtureId, sessionId, { ...r.deps, drivers: { ...r.deps.drivers, ingest: down } });
+    expect(done).toMatchObject({ id: sessionId, state: "completed" });
+    const routes = sentry.captureError.mock.calls.map(([, ctx]) => (ctx as { route?: string }).route);
+    expect(routes.filter((x) => x === "relay.release_output")).toHaveLength(1);
+    expect(routes.filter((x) => x === "relay.disable_phone_input")).toHaveLength(1);
+    expect((await disableRows(sessionId)).map((x) => x.result)).toEqual(["failed"]);
+  });
+
+  it("a SECOND Stop, and every later poll, of an ended session: no crash, no second switch — the fake's call log stays at one", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await goLive(r);
+    let answers = 0;
+    for (let i = 0; i < 3; i++) {
+      expect(await stopSession(r.auth, r.fixtureId, sessionId, r.deps), `stop ${i + 1}`).toMatchObject({ id: sessionId, state: "completed" });
+      expect(await currentSession(r.auth, r.fixtureId, r.deps), `poll ${i + 1}`).toMatchObject({ state: "completed" });
+      answers++;
+    }
+    expect(answers).toBe(3);
+    expect(r.ingest.enabledCalls).toHaveLength(1);
+    expect(await disableRows(sessionId)).toHaveLength(1);
+  });
+
+  it("SEQUENCE: start → Stop (input OFF) → a new session on the same fixture gets a FRESH, enabled input and goes live on the phone's connection with no enable call → Stop again (the new input OFF) — the first input stays off, and no call ever switches anything ON", async () => {
+    const r = await rig({ credits: 2 });
+    const first = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const in1 = await cameraOf(first.sessionId);
+    await goLive(r);
+    await stopSession(r.auth, r.fixtureId, first.sessionId, r.deps);
+    expect(r.ingest.enabledCalls).toEqual([{ inputId: in1, enabled: false }]);
+    expect((await r.ingest.inputStatus(in1)).state, "a phone still pushing at the first input is turned away").toBe("disconnected");
+
+    const second = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const in2 = await cameraOf(second.sessionId);
+    expect(second.sessionId).not.toBe(first.sessionId);
+    expect(in2, "an input is never reused across sessions").not.toBe(in1);
+    expect(r.ingest.isEnabled(in2), "the new input is on from creation").toBe(true);
+    expect(r.ingest.isEnabled(in1), "the old one stays off").toBe(false);
+    await goLive(r);                                                 // connects on its own — nothing had to switch it ON
+    expect((await r.ingest.inputStatus(in2)).state).toBe("connected");
+    await stopSession(r.auth, r.fixtureId, second.sessionId, r.deps);
+    expect(r.ingest.enabledCalls).toEqual([{ inputId: in1, enabled: false }, { inputId: in2, enabled: false }]);
+    expect(r.ingest.enabledCalls.filter((c) => c.enabled), "nothing in production ever switches an input ON").toEqual([]);
+    expect(r.ingest.isEnabled(in2)).toBe(false);
+  });
+
+  it("M10: under disabled drivers a leftover session is ended failed(relay_disabled) and the disable — which the disabled port refuses — is recorded failed and ALARMED once; the poll still answers and a second poll adds nothing", async () => {
+    const r = await rig({ credits: 2 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    const camera = await cameraOf(sessionId);
+    const off = { ...r.deps, drivers: disabledRelayDrivers() };
+    sentry.captureError.mockClear();
+    expect(await currentSession(r.auth, r.fixtureId, off)).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    expect(await currentSession(r.auth, r.fixtureId, off)).toMatchObject({ state: "failed", failReason: "relay_disabled" });
+    expect(alarms(), "one alarm for the one ending").toHaveLength(1);
+    expect(await disableRows(sessionId)).toEqual([{ result: "failed", source: "ingest", input: camera, status: null }]);
+    expect(r.ingest.enabledCalls, "the refusing port never reached the fake").toEqual([]);
+  });
+
+  it("an input the provider no longer has is not an error: the disable of a gone camera input is recorded ok and nothing is alarmed", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await goLive(r);
+    const camera = await cameraOf(sessionId);
+    await r.ingest.deleteInput(camera);
+    sentry.captureError.mockClear();
+    expect(await stopSession(r.auth, r.fixtureId, sessionId, r.deps)).toMatchObject({ state: "completed" });
+    expect(alarms()).toEqual([]);
+    expect(await disableRows(sessionId)).toEqual([{ result: "ok", source: "ingest", input: camera, status: null }]);
+  });
+
+  it("the empty case: a session that ended before any input was provisioned has no camera input to switch — nothing is called and no effect row is written", async () => {
+    const r = await rig({ credits: 1 });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps);
+    await sql`delete from fixture_stream_inputs where session_id = ${sessionId}`;
+    expect(await stopSession(r.auth, r.fixtureId, sessionId, r.deps)).toMatchObject({ state: "completed" });
+    expect(r.ingest.enabledCalls).toEqual([]);
+    expect(await disableRows(sessionId)).toEqual([]);
   });
 });
 

@@ -570,6 +570,41 @@ export async function releaseOutput(sessionId: string, site: ReleaseSite, deps: 
   }
 }
 
+/** The session has ENDED: the phone's own input (Input A — the session's CAMERA input) is switched OFF, so Cloudflare rejects
+ *  any further push. A phone left sending after a Stop, a failure or the live limit otherwise keeps a connection open to
+ *  Cloudflare for nothing. Only the camera input, found by role from `fixture_stream_inputs` — never `ingest_input_uid`, which
+ *  is the OUTPUT input (Input B, the compositor's programme, on a composed session) — and switched OFF, never deleted: the
+ *  input carries the recording (C2). A session with no camera input at the provider (it ended before it was provisioned, or
+ *  the retention sweep has reclaimed it) has nothing to disable and records nothing.
+ *
+ *  BEST EFFORT, and it never throws (the `releaseOutput` precedent): the terminal transition that asked for it has committed
+ *  and stays, so a failed disable never blocks or fails the Stop, and it never skips the effects after it (the replay fill).
+ *  The failure is recorded (the `disable_phone_input` effect row, and the adapter's own provider-call row with the HTTP status
+ *  and Cloudflare's code) and REPORTED to Sentry, naming the session and the input uid (not a secret) and nothing else. It has
+ *  no retry owner: each input belongs to ONE session (`provisionSession` makes a fresh pair per session), so nothing starts
+ *  on it again, and the input is reclaimed with the session's recordings by the retention sweep.
+ *
+ *  Idempotent at the provider (a disable of a disabled or gone input is success), and the domain emits the effect once per
+ *  session — on ENTERING a terminal state — so a second Stop of an ended session decides nothing and calls nothing. */
+export async function disablePhoneInput(sessionId: string, deps: SessionDeps): Promise<boolean> {
+  const row = await readRow(sessionId);
+  if (!row) return true;
+  const s = toSession(row);
+  const [camera] = await sql<{ uid: string | null }[]>`
+    select ingest_input_id as uid from fixture_stream_inputs where session_id = ${sessionId} and role = 'camera' order by slot asc limit 1`;
+  const inputUid = camera?.uid ?? null;
+  if (!inputUid) return true;
+  const extra = { sessionId, inputUid };
+  try {
+    await recordEffect(s, "disable_phone_input", "ingest", () => deps.drivers.ingest.setInputEnabled(inputUid, false, { sessionId }), { inputUid });
+    return true;
+  } catch (err) {
+    captureError(err, { orgId: s.orgId, route: "relay.disable_phone_input", extra });
+    log.error({ ...extra, err: String(err) }, "stream session: the phone's input was NOT disabled — the session has ended, a phone still pushing keeps its connection until the input is reclaimed; recorded and reported");
+    return false;
+  }
+}
+
 /** Task 12's orphan pass (A22(b)): destroy a Machine the provider LISTS under `sessionId` that its row does not own,
  *  through the shared forceDestroy above (site `sweep`) — recorded on that session's own ledger and alarmed on failure,
  *  never duplicated here. The row is read fresh for the ledger's attempt. `null` when the row no longer exists: a
@@ -840,6 +875,9 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
       }
       case "release_output":
         await releaseOutput(current.id, "decision", deps);   // C1: never throws — a failure is reported and retried
+        break;
+      case "disable_phone_input":
+        await disablePhoneInput(current.id, deps);           // never throws — a failure is reported; the Stop and the effects after it stand
         break;
       case "runner":
         current = await runRunnerEffect(current, e.effect, deps);

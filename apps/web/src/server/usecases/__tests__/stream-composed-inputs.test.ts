@@ -202,6 +202,28 @@ describe.skipIf(!HAS_DB)("R2004: composed provisioning — two inputs, the outpu
     expect(r.ingest.liveOutputsTo(await destinationOf(r.auth.orgId, r.target.id)), "nothing simulcasts to the destination").toBe(0);
   });
 
+  it("a composed session's PHONE input (A, the camera) is switched OFF when it ends — and only A: B, the programme the compositor publishes into, is never touched; nothing is switched while the Machine is still flushing (ending)", async () => {
+    const r = await rig();
+    const spy = vi.spyOn(r.ingest, "createLiveInput");
+    const { sessionId } = await r.start("composed");
+    const [a, b] = await Promise.all(spy.mock.results.map((x) => x.value as ReturnType<FakeIngest["createLiveInput"]>));
+    const rows = await inputs(sessionId);
+    expect(rows.map((x) => [x.role, x.ingest_input_id]), "premise: A is the camera row, B the programme row").toEqual([["camera", a!.inputId], ["programme", b!.inputId]]);
+    // The trap this pins: on a composed session `ingest_input_uid` is B, the OUTPUT input — the camera is found by its role.
+    expect((await sessionRow(sessionId))!.ingest_input_uid, "premise: the session's ingest_input_uid is B").toBe(b!.inputId);
+    expect(a!.inputId).not.toBe(b!.inputId);
+
+    expect((await stopSession(r.auth, r.fixtureId, sessionId, r.deps)).state).toBe("ending");
+    expect(r.ingest.enabledCalls, "the compositor is still reading A while it flushes — nothing is switched yet").toEqual([]);
+    expect((await currentSession(r.auth, r.fixtureId, r.deps))!.state).toBe("completed");
+    expect(r.ingest.enabledCalls, "A, OFF, once — B never named").toEqual([{ inputId: a!.inputId, enabled: false }]);
+    expect(r.ingest.isEnabled(a!.inputId)).toBe(false);
+    expect(r.ingest.isEnabled(b!.inputId), "B is untouched").toBe(true);
+    await currentSession(r.auth, r.fixtureId, r.deps);
+    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    expect(r.ingest.enabledCalls, "a second read and a second Stop switch nothing").toHaveLength(1);
+  });
+
   it("ADMISSION backstop, composed: a composed session whose end FAILED to release B's output holds its fixture — the next start is refused 409 active_session while the retry fails, and once it succeeds B's output is released (reason admission) and the start is admitted (mutant: restore the passthrough-only filter → admitted while the old output still simulcasts)", async () => {
     const r = await rig();
     const spy = vi.spyOn(r.ingest, "createLiveInput");

@@ -168,6 +168,11 @@ describe.skipIf(!HAS_DB)("automatic stop — fires AUTO_STOP_AFTER_RESULT_SECOND
     await currentSession(r.auth, r.fixtureId, r.deps);
     expect(await stopTransitions(sid), "exactly one stop transition however many ticks follow").toBe(1);
     expect(await sessionOf(sid)).toMatchObject({ end_reason: "auto_stopped" });
+    // The auto-stop is a way a session ENDS like any other: the phone's own Cloudflare input is switched OFF, once, however
+    // many ticks and reads followed — the camera row's uid, read back from the DB, not from the code under test.
+    const cameras = await sql<{ id: string }[]>`select ingest_input_id as id from fixture_stream_inputs where session_id = ${sid} and role = 'camera'`;
+    expect(cameras).toHaveLength(1);
+    expect(r.ingest.enabledCalls).toEqual([{ inputId: cameras[0]!.id, enabled: false }]);
   });
 
   it("the walkthrough's override is honoured at the call site: with the shortened delay it fires at that delay, not 180 s (ENV_NAME=ci)", async () => {
