@@ -81,6 +81,7 @@ describe.skipIf(!HAS_DB)("W2d T10 rule 10: pin monotonicity over every sequence 
     let checked = 0;
     let lockedRefusals = 0;
     let pinnedMoves = 0;
+    let voids = 0;
     await fc.assert(
       fc.asyncProperty(fc.array(opArb, { minLength: 2, maxLength: 7 }), async (ops) => {
         const s = await tableScene({});
@@ -187,8 +188,10 @@ describe.skipIf(!HAS_DB)("W2d T10 rule 10: pin monotonicity over every sequence 
             case "void": {
               const last = played.pop();
               if (last === undefined) break;
-              const [{ tip }] = await sql<{ tip: number }[]>`select coalesce(max(seq), -1)::int as tip from score_events where fixture_id = ${last.fixtureId}`;
-              await appendEvent(s.auth.orgId, last.fixtureId, tip + 1, { type: "core.void", payload: {}, voids: last.resultEventId });
+              // appendEvent's expectedSeq IS the ledger tip (append-event.ts: `coalesce(max(seq), 0)` must equal it).
+              const [{ tip }] = await sql<{ tip: number }[]>`select coalesce(max(seq), 0)::int as tip from score_events where fixture_id = ${last.fixtureId}`;
+              await appendEvent(s.auth.orgId, last.fixtureId, tip, { type: "core.void", payload: {}, voids: last.resultEventId });
+              voids++;
               break; // `scored` stays true: the lock is monotonic
             }
           }
@@ -198,6 +201,6 @@ describe.skipIf(!HAS_DB)("W2d T10 rule 10: pin monotonicity over every sequence 
       { numRuns: 12, endOnFailure: true },
     );
     expect(checked, "anti-vacuity: steps checked").toBeGreaterThan(0);
-    console.info(`[table-rules-sequence] checked ${checked} steps; ${pinnedMoves} own re-pins; ${lockedRefusals} locked refusals`);
+    console.info(`[table-rules-sequence] checked ${checked} steps; ${pinnedMoves} own re-pins; ${lockedRefusals} locked refusals; ${voids} voids`);
   }, 600_000);
 });
