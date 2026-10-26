@@ -17,6 +17,7 @@ import { volleyball } from "./volleyball.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
 const MODS = [volleyball, badminton, tabletennis] as const;
+type ModKey = "volleyball" | "badminton" | "tabletennis";
 
 const ev = (seq: number, type: string, payload: unknown): EventEnvelope =>
   makeEnvelope(seq, { type, payload });
@@ -27,7 +28,7 @@ describe("set-based wrappers — declared labels and cascade", () => {
     const unit = { volleyball: "Sets", badminton: "Games", tabletennis: "Games" } as const;
     let checked = 0;
     for (const mod of MODS) {
-      const many = unit[mod.key];
+      const many = unit[mod.key as ModKey];
       const labels = Object.fromEntries(mod.metrics.map((m) => [m.key, m.label]));
       expect(labels["sets_won"]).toBe(`${many} won`);
       expect(labels["sets_lost"]).toBe(`${many} lost`);
@@ -82,7 +83,7 @@ describe("set-based wrappers — player stat metrics", () => {
         { key: "serves", label: "Serves", from: `${mod.key}.rally`, field: "server", agg: "count" },
         {
           key: "sanctions",
-          label: expected[mod.key].card,
+          label: expected[mod.key as ModKey].card,
           from: `${mod.key}.sanction`,
           field: "person",
           agg: "count",
@@ -226,12 +227,13 @@ describe("table tennis — declared variants", () => {
 
 describe("volleyball — scoresheet template (Jul3/06 §3)", () => {
   const scoresheet = volleyball.exportTemplates!.scoresheet!;
+  const NO_PARAMS = {} as Parameters<typeof scoresheet>[1];
   const tally = (to: number) => Array.from({ length: to }, (_u, i) => i + 1).join(" ");
   const FORM = ["Final result: ________________", "Winner: ________________"];
   const SIGNATURES = ["1st referee", "Scorer", "Captain — Aces", "Captain — Blazers"];
 
   it("lays out indoor best-of-5 to 25 with a deciding set to 15 when cfg states nothing", () => {
-    const [section] = scoresheet({ home: "Aces", away: "Blazers" }, {});
+    const [section] = scoresheet({ home: "Aces", away: "Blazers" }, NO_PARAMS);
     const rows: (string | number)[][] = [];
     for (let set = 1; set <= 5; set++) {
       const to = set === 5 ? 15 : 25;
@@ -269,7 +271,7 @@ describe("volleyball — scoresheet template (Jul3/06 §3)", () => {
         homeColor: "#ff0000",
         awayColor: "#0000ff",
       },
-      {},
+      NO_PARAMS,
     );
     expect(section!.subheading).toBe("10:00 · Court 1 · Final");
     expect(section!.swatches).toStrictEqual([
@@ -280,13 +282,13 @@ describe("volleyball — scoresheet template (Jul3/06 §3)", () => {
 
   it("skips the details that are absent and each colour that is absent", () => {
     const base = { home: "Aces", away: "Blazers" };
-    const [homeOnly] = scoresheet({ ...base, court: "Court 1", homeColor: "#ff0000" }, {});
+    const [homeOnly] = scoresheet({ ...base, court: "Court 1", homeColor: "#ff0000" }, NO_PARAMS);
     expect(homeOnly!.subheading).toBe("Court 1");
     expect(homeOnly!.swatches).toStrictEqual([{ label: "Aces", color: "#ff0000" }]);
-    const [awayOnly] = scoresheet({ ...base, at: "10:00", stageName: "Final", awayColor: "#0000ff" }, {});
+    const [awayOnly] = scoresheet({ ...base, at: "10:00", stageName: "Final", awayColor: "#0000ff" }, NO_PARAMS);
     expect(awayOnly!.subheading).toBe("10:00 · Final");
     expect(awayOnly!.swatches).toStrictEqual([{ label: "Blazers", color: "#0000ff" }]);
-    const [neither] = scoresheet(base, {});
+    const [neither] = scoresheet(base, NO_PARAMS);
     expect(neither!.subheading).toBe("");
     expect("swatches" in neither!).toBe(false);
   });
