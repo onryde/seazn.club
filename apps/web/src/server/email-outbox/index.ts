@@ -13,7 +13,14 @@ export {
   onceKey,
   type OutboxMessage,
 } from "./enqueue";
-export { BOARD_SETTLED_REASON, CANCELLED_REASONS, FIXTURE_DELETED_REASON, ROUND_VOIDED_REASON, cancelQueuedEmails } from "./cancel";
+export {
+  BOARD_SETTLED_REASON,
+  CANCELLED_REASONS,
+  EMAIL_CHANGE_SUPERSEDED_REASON,
+  FIXTURE_DELETED_REASON,
+  ROUND_VOIDED_REASON,
+  cancelQueuedEmails,
+} from "./cancel";
 export { latestEmailStatus, latestStatusesOfRows, lockQueuedEmails, purgeOldEmails, type EmailStatusRow, type QueuedEmailRow } from "./status";
 export {
   attemptClaimed,

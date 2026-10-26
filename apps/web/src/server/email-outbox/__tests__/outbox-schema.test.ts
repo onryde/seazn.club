@@ -40,22 +40,26 @@ const SPEC_STATUSES = [
   "delivered", "bounced", "complained", "failed", "suppressed", "expired", "dead", "replaced",
 ];
 
+// Typed from the phase-3 spec's kind table (wave order), never read from constants.ts: the two phase-1 kinds, the five wave-1
+// kinds, wave 2's ten in the table's row order, then wave 3's eight in the table's row order. The vocabulary test compares
+// constants.ts with it, and the live-CHECK read compares the database's constraint with it as well.
+const SPEC_KINDS = [
+  "magic_link", "chess_invite", "registration_confirmation", "payment_reminder", "registration_promoted",
+  "refund_issued", "solo_signup_assigned",
+  "registration_dispute_alert", "registration_dispute_lost", "sponsor_invoice", "sponsor_receipt", "sponsor_refund",
+  "sponsor_dispute_alert", "sponsor_dispute_won", "sponsor_dispute_lost", "pass_revoked", "trial_ending",
+  "email_verification", "funnel_claim", "email_change_confirmation", "email_change_notice", "account_deletion",
+  "org_invite", "claim_invite", "official_invite",
+];
+
 describe("email outbox vocabularies (constants.ts)", () => {
   it("the status list is the spec's twelve, in the spec's order", () => {
     expect(SPEC_STATUSES.length).toBe(12);
     expect([...OUTBOX_STATUSES]).toEqual(SPEC_STATUSES);
   });
 
-  it("the kinds are the spec's seventeen, in the spec's wave order", () => {
-    // Typed from the phase-3 spec's kind table (wave order), never read from constants.ts: the two phase-1 kinds, the
-    // five wave-1 kinds, then wave 2's ten in the table's row order.
-    const SPEC_KINDS = [
-      "magic_link", "chess_invite", "registration_confirmation", "payment_reminder", "registration_promoted",
-      "refund_issued", "solo_signup_assigned",
-      "registration_dispute_alert", "registration_dispute_lost", "sponsor_invoice", "sponsor_receipt", "sponsor_refund",
-      "sponsor_dispute_alert", "sponsor_dispute_won", "sponsor_dispute_lost", "pass_revoked", "trial_ending",
-    ];
-    expect(SPEC_KINDS.length).toBe(17);
+  it("the kinds are the spec's twenty-five, in the spec's wave order", () => {
+    expect(SPEC_KINDS.length).toBe(25);
     expect([...OUTBOX_KINDS]).toEqual(SPEC_KINDS);
   });
 
@@ -243,6 +247,8 @@ describe.skipIf(!HAS_DB)("email_outbox (V470)", () => {
     expect(kinds.length).toBeGreaterThan(0);
     expect(statuses).toEqual([...OUTBOX_STATUSES].sort());
     expect(kinds).toEqual([...OUTBOX_KINDS].sort());
+    // And the database's list is the spec's own twenty-five, read against the typed list, not only against constants.ts.
+    expect(kinds).toEqual([...SPEC_KINDS].sort());
   });
 
   // ---- the credential and the lease ------------------------------------------------------------------------------

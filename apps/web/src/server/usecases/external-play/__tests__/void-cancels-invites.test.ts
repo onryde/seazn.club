@@ -254,8 +254,10 @@ describe("cancelQueuedEmails: its guards (no database)", () => {
     expect(tx).not.toHaveBeenCalled();
   });
 
-  it("the reasons it knows are the three the spec and this task write", () => {
-    expect([...CANCELLED_REASONS].sort()).toEqual([BOARD_SETTLED, FIXTURE_DELETED, ROUND_VOIDED].sort());
+  it("the reasons it knows are the three the spec and this task write, and wave 3's superseded email change", () => {
+    // The fourth is not a board's: an email-change request ends the user's older queued confirmation (phase-3 spec §5, wave-3 plan
+    // P-W3-4); email-outbox/__tests__/email-change-cancel.test.ts drives it.
+    expect([...CANCELLED_REASONS].sort()).toEqual([BOARD_SETTLED, FIXTURE_DELETED, ROUND_VOIDED, "email_change_superseded"].sort());
   });
 });
 
