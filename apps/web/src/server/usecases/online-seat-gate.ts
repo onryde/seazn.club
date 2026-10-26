@@ -49,7 +49,7 @@ export interface SeatGate {
   /** The same read, for a door on a superuser transaction (`sql.begin`): call it first thing inside. */
   load(tx: Tx): Promise<void>;
   /** Refuses (422, with the people named) when `divisionId` plays online and any of `personIds` has no link that plays. Reads the division in `tx`,
-   *  as the transaction sees it. A no-op for an empty roster and for a club not offered online chess. */
+   *  as the transaction sees it. Nothing to refuse for an empty roster, and a no-op for a club not offered online chess. */
   assertRoster(tx: Tx, divisionId: string, personIds: readonly string[]): Promise<void>;
 }
 
@@ -73,7 +73,7 @@ async function openGate(asker: OnlineChessAsker, scope: Scope): Promise<SeatGate
     tenant: offered === false ? {} : { privilegedPrelude: load },
     load,
     async assertRoster(tx, divisionId, personIds) {
-      if (offered === false || personIds.length === 0) return;
+      if (offered === false) return;
       const [division] = await tx<{ sport_key: string; config: unknown }[]>`
         select sport_key, config from divisions where id = ${divisionId}`;
       if (!division) throw new HttpError(404, "division not found");
