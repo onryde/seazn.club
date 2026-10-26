@@ -203,6 +203,24 @@ describe.skipIf(!HAS_DB)("an automatic waitlist promotion on an online division"
     expect(await seatedUsers(r.divisionId)).toEqual([ok.userId]);
   });
 
+  it("a promotion whose window lapsed frees its spot: the sweep's lapsing pass skips the registrant who cannot play, too", async () => {
+    const r = await rig(true);
+    const [unlinked, ok] = [await player(r, "none"), await player(r, "plays")];
+    const [a, b] = [await enter(r, unlinked, "waitlisted"), await enter(r, ok, "waitlisted")];
+    // An entry promoted off the waitlist whose confirm-or-lose window has since run out: the pass puts it back and re-offers the spot.
+    const lapsed = await enter(r, null, "pending");
+    await sql`
+      update registrations set promoted_at = now() - interval '2 hours', promotion_expires_at = now() - interval '1 hour'
+       where id = ${lapsed}`;
+
+    await sweepRegistrations("https://example.test");
+
+    expect((await statusOf(lapsed)).status, "premise: the lapsing pass put the holder back on the waitlist").toBe("waitlisted");
+    expect((await statusOf(b)).status).toBe("confirmed");
+    expect((await statusOf(a)).status).toBe("waitlisted");
+    expect(await seatedUsers(r.divisionId)).toEqual([ok.userId]);
+  });
+
   it("a division that is not online promotes the oldest, link or no link", async () => {
     const r = await rig(false);
     const unlinked = await player(r, "none");
