@@ -152,6 +152,38 @@ export async function seedPassOrg(
   return { orgId, compId, orgName, compName, ownerId, ownerEmail, trapId };
 }
 
+/**
+ * A billing group in its trial: the payer (`subscriptions.owner_user_id`, an account at `<prefix>-payer-…@test.local` with the given
+ * account language) and one org they created in the group (`orgDefaultLocale`, default en), whose slug the warning links to. The group
+ * carries a Stripe subscription id (`stripeSubId`), which is how a `trial_will_end` event finds it, and the `has_payment_method` mirror.
+ * Moved from billing-events-payout-health.test.ts's `trialingGroup`.
+ */
+export async function seedTrialingGroup(opts: {
+  hasPaymentMethod: boolean;
+  planKey?: string;
+  ownerLocale?: string | null;
+  orgDefaultLocale?: Locale;
+  prefix?: string;
+}): Promise<{ groupId: string; stripeSubId: string; ownerId: string; ownerEmail: string; slug: string; orgId: string }> {
+  const suffix = randomUUID().slice(0, 8);
+  const prefix = opts.prefix ?? "trial";
+  const ownerEmail = `${prefix}-payer-${suffix}@test.local`;
+  const [{ id: ownerId }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, locale)
+    values (${ownerEmail}, 'Owner', ${opts.ownerLocale ?? null}) returning id`;
+  const stripeSubId = `sub_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
+  const [{ id: groupId }] = await sql<{ id: string }[]>`
+    insert into subscriptions (owner_user_id, plan_key, status, has_payment_method, stripe_subscription_id)
+    values (${ownerId}, ${opts.planKey ?? "pro"}, 'trialing', ${opts.hasPaymentMethod}, ${stripeSubId})
+    returning id`;
+  const slug = `trial-${suffix}`;
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug, created_by, subscription_id, default_locale)
+    values (${`Trial ${suffix}`}, ${slug}, ${ownerId}, ${groupId}, ${opts.orgDefaultLocale ?? "en"})
+    returning id`;
+  return { groupId, stripeSubId, ownerId, ownerEmail, slug, orgId };
+}
+
 /** Everything the fixtures above made for these organisations: their outbox rows, their sponsor orders (a RESTRICT foreign key keeps
  *  an organisation with orders, V299), the organisations (packages, placements and memberships cascade), then the owners' billing
  *  groups and accounts. */

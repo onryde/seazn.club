@@ -16,13 +16,16 @@
 //    body left to open, and a guard over no bodies is the vacuous pass this file exists to avoid.
 //  - The bodies are opened with the outbox's own `openBody` and the recipient's address (lower-cased, as the row stores it) must be
 //    absent. A positive pair shows the bodies really were opened and are the kind's own mail (the invite carries the match link; a
-//    registration dispute notice names the competition; a sponsor dispute notice names the package; a pass notice names the competition).
+//    registration dispute notice names the competition; a sponsor dispute notice names the package; a pass notice names the competition;
+//    a trial warning links to the billing page).
 //  - The registration dispute notices are driven through the real `handleRegistrationDispute` on a card cart the real webhook confirmed.
 //    Neither touches Stripe: the alert never does, and the lost notice's dispute names no charge, so the balance recovery is skipped.
 //  - The sponsor dispute notices are driven through the real `handleSponsorDispute` on a paid sponsor order. None touches Stripe: the
 //    alert and the won notice never do, and the lost notice's dispute names no charge, so the balance recovery is skipped.
 //  - The pass notice is driven through the real `processStripeEvent` (`charge.refunded`, a full refund) on an Event Pass. The revoke and
 //    the notice read the database only; the other refund handlers no-op on a pass charge (their one Stripe lookup needs a Stripe key).
+//  - The trial warning is driven through the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a trialing billing
+//    group. Nothing reaches Stripe: the group is found by the subscription id it stores.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -40,7 +43,7 @@ import { openRound } from "@/server/usecases/external-play/open-round";
 import { handleRegistrationCheckoutCompleted, handleRegistrationDispute } from "@/server/usecases/registrations";
 import { handleSponsorDispute } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
-import { seedPassOrg, seedSponsorOrder } from "@/server/usecases/__tests__/_money-fixtures";
+import { seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -59,9 +62,7 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
 
 /** Account kinds whose producer has not moved to the outbox yet, so there is no real producer to drive. Each kind task deletes its own
  *  entry when it adds its producer to PRODUCERS below; T10 deletes the list. */
-const PRODUCERS_PENDING: readonly OutboxKind[] = [
-  "trial_ending",
-];
+const PRODUCERS_PENDING: readonly OutboxKind[] = [];
 
 beforeEach(() => stubOutboxEnv());
 afterAll(async () => {
@@ -158,6 +159,15 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       await processStripeEvent(event as unknown as Stripe.Event);
       // The notice names the competition the refunded pass was for.
       return { rowIds: await rowIdsOf("pass_revoked", chargeId), positive: literal(o.compName) };
+    },
+    trial_ending: async () => {
+      const g = await seedTrialingGroup({ hasPaymentMethod: false });
+      const trialEnd = Math.floor(Date.now() / 1000) + 3 * 24 * 60 * 60;
+      const sub = { id: g.stripeSubId, object: "subscription", status: "trialing", trial_end: trialEnd, metadata: {} };
+      const event = { id: `evt_akb_${randomUUID().slice(0, 12)}`, type: "customer.subscription.trial_will_end", data: { object: sub } };
+      await processStripeEvent(event as unknown as Stripe.Event);
+      // The warning links to the billing page, where the payer adds a card or cancels.
+      return { rowIds: await rowIdsOf("trial_ending", g.groupId), positive: /\/settings\/billing/ };
     },
   };
 

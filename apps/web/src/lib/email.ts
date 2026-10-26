@@ -1551,9 +1551,7 @@ export async function sendRegistrationRefundFailedAlertEmail(
   return send({ to: opts.to, transactional: true, subject, html, text });
 }
 
-export interface TrialEndingEmail {
-  to: string;
-  locale?: Locale;
+export interface TrialEndingEmailArgs {
   planName: string;
   trialEnd: string;
   hasPaymentMethod: boolean;
@@ -1564,25 +1562,23 @@ export interface TrialEndingEmail {
 }
 
 /**
- * Stripe's 3-day trial warning (V411, `customer.subscription.trial_will_end`).
- *
- * Transactional: it is the only notice before a no-card trial CANCELS or a
- * card-on-file trial CHARGES, so a group that unsubscribed from product mail
- * still gets to hear that their money is about to move.
+ * Stripe's 3-day trial warning (V411, `customer.subscription.trial_will_end`), in the payer's language, with the link to the billing
+ * page. It is queued on the email outbox by `handleTrialWillEnd` (billing-events.ts, kind `trial_ending`), TRANSACTIONAL: it is the only
+ * notice before a no-card trial CANCELS or a card-on-file trial CHARGES, so a group that unsubscribed from product mail still gets to hear
+ * that their money is about to move. Nothing sends it directly.
  */
-export async function sendTrialEndingEmail(opts: TrialEndingEmail): Promise<boolean> {
-  const { to, locale = "en", orgSlug, ...args } = opts;
+export async function trialEndingEmail(args: TrialEndingEmailArgs, locale: Locale): Promise<EmailContent> {
+  const { orgSlug, ...rest } = args;
   const base = (
     process.env.OAUTH_BASE_URL ||
     process.env.NEXT_PUBLIC_BASE_URL ||
     "http://localhost:3000"
   ).replace(/\/$/, "");
   const dict = await getDictionary(locale, "emails");
-  const body = trialEndingTemplate(
-    { ...args, locale, billingUrl: orgSlug ? `${base}/o/${orgSlug}/settings/billing` : base },
+  return trialEndingTemplate(
+    { ...rest, locale, billingUrl: orgSlug ? `${base}/o/${orgSlug}/settings/billing` : base },
     dict,
   );
-  return send({ to, transactional: true, ...body });
 }
 
 export interface ConnectBankAlertEmail {

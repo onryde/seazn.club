@@ -13,26 +13,27 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 
-// The trial warning's whole purpose is to REACH A PERSON — a DB write would be
-// an inert seam, since `trial_end` is already mirrored elsewhere. So the send
-// is what gets asserted, which means the email module is mocked here. Declared
-// before the import of the module under test so the mock is in place.
-type TrialEndingEmail = import("@/lib/email").TrialEndingEmail;
+// The bank-removed staff alert is asserted as a send, so that sender is mocked
+// here. Declared before the import of the module under test so the mock is in
+// place. The trial warning's whole purpose is to REACH A PERSON: it is queued on
+// the email outbox (phase 3 wave 2, email 10), so its row is what gets asserted.
 type ConnectBankAlertEmail = import("@/lib/email").ConnectBankAlertEmail;
 
-// The bodies read `opts` so the recorded call is typed all the way through —
-// `mock.calls[0][0]` is then a real TrialEndingEmail, not an empty tuple.
-const sendTrialEndingEmail = vi.fn(async (opts: TrialEndingEmail) => Boolean(opts.to));
+// The body reads `opts` so the recorded call is typed all the way through.
 const sendConnectBankAlertEmail = vi.fn(async (opts: ConnectBankAlertEmail) => Boolean(opts.to));
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendTrialEndingEmail,
   sendConnectBankAlertEmail,
 }));
+// The outbox's one network seam (the worker never runs here: the warning waits for it).
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn() }));
 
 const { sql } = await import("@/lib/db");
 const { HANDLED_EVENT_TYPES, CONNECT_SCOPED_EVENT_TYPES, processStripeEvent } =
   await import("../billing-events");
+const { seedTrialingGroup } = await import("./_money-fixtures");
+const { stubOutboxEnv } = await import("./_invite-mail");
+const { dictionarySubject } = await import("@/server/email-outbox/__tests__/_kind-harness");
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -149,7 +150,6 @@ describe("HANDLED_EVENT_TYPES (pure)", () => {
 describe.skipIf(!HAS_DB)("payout health — payout.failed / payout.paid", () => {
   beforeEach(() => {
     sendConnectBankAlertEmail.mockClear();
-    sendTrialEndingEmail.mockClear();
   });
 
   it("payout.failed raises payout_failed and records Stripe's failure code", async () => {
@@ -325,33 +325,30 @@ describe.skipIf(!HAS_DB)("payout health — external account changes", () => {
 });
 
 describe.skipIf(!HAS_DB)("customer.subscription.trial_will_end", () => {
+  const payers: string[] = [];
+
   beforeEach(() => {
-    sendTrialEndingEmail.mockClear();
+    stubOutboxEnv();
+  });
+
+  afterAll(async () => {
+    await sql`delete from email_outbox where kind = 'trial_ending' and recipient_user_id = any(${payers}::uuid[])`;
   });
 
   async function trialingGroup(hasPaymentMethod: boolean, planKey = "pro") {
-    const suffix = randomUUID().slice(0, 8);
-    const [owner] = await sql<{ id: string }[]>`
-      insert into users (email, display_name, locale)
-      values (${`trial-${suffix}@test.local`}, 'Owner', 'fr') returning id`;
-    const stripeSubId = `sub_${randomUUID().replace(/-/g, "").slice(0, 20)}`;
-    const [group] = await sql<{ id: string }[]>`
-      insert into subscriptions
-        (owner_user_id, plan_key, status, has_payment_method, stripe_subscription_id)
-      values (${owner!.id}, ${planKey}, 'trialing', ${hasPaymentMethod}, ${stripeSubId})
-      returning id`;
-    const [org] = await sql<{ id: string }[]>`
-      insert into organizations (name, slug, created_by, subscription_id)
-      values (${`Trial ${suffix}`}, ${`trial-${suffix}`}, ${owner!.id}, ${group!.id})
-      returning id`;
-    return {
-      groupId: group!.id,
-      stripeSubId,
-      ownerEmail: `trial-${suffix}@test.local`,
-      slug: `trial-${suffix}`,
-      orgId: org!.id,
-    };
+    const g = await seedTrialingGroup({ hasPaymentMethod, planKey, ownerLocale: "fr" });
+    payers.push(g.ownerId);
+    return g;
   }
+
+  /** The trial warnings an event queued (its id is the once-key), in every status. */
+  const warningsOf = (eventId: string) =>
+    sql<{ recipient: string; recipient_user_id: string | null; subject: string; body_sealed: Buffer | null }[]>`
+      select recipient, recipient_user_id, subject, body_sealed from email_outbox
+       where kind = 'trial_ending' and dedupe_key = ${eventId}`;
+
+  /** The date line of the warning, as the reader's own locale writes Stripe's trial_end. */
+  const longDate = (locale: string, at: Date) => new Intl.DateTimeFormat(locale, { dateStyle: "long", timeZone: "UTC" }).format(at);
 
   function trialSub(stripeSubId: string, trialEnd: Date): Stripe.Subscription {
     return {
@@ -364,39 +361,38 @@ describe.skipIf(!HAS_DB)("customer.subscription.trial_will_end", () => {
   }
 
   it("a no-card trial is warned it will STOP, in the owner's own locale", async () => {
+    const { planLabel } = await import("@/lib/plan-label");
     const g = await trialingGroup(false);
-    const endsAt = new Date(Date.now() + 3 * 24 * 60 * 60 * 1000);
-    await processStripeEvent(
-      event({
-        type: "customer.subscription.trial_will_end",
-        object: trialSub(g.stripeSubId, endsAt),
-      }),
+    const endsAt = new Date(epoch(new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)) * 1000);
+    const ev = event({ type: "customer.subscription.trial_will_end", object: trialSub(g.stripeSubId, endsAt) });
+    await processStripeEvent(ev);
+    const rows = await warningsOf(ev.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.recipient).toBe(g.ownerEmail);
+    expect(rows[0]!.recipient_user_id).toBe(g.ownerId);
+    // `card`: the no-card variant (add a card or the trial stops), in fr.
+    expect(rows[0]!.subject).toBe(
+      dictionarySubject("fr", "trialEnding.subject.card", { planName: planLabel("pro"), date: longDate("fr", endsAt) }),
     );
-    expect(sendTrialEndingEmail).toHaveBeenCalledTimes(1);
-    expect(sendTrialEndingEmail.mock.calls[0]![0]).toMatchObject({
-      to: g.ownerEmail,
-      locale: "fr",
-      hasPaymentMethod: false,
-      orgSlug: g.slug,
-    });
   });
 
   it("a card-on-file trial is warned it will CHARGE — the other variant", async () => {
     // Paired with the case above deliberately: `hasPaymentMethod` picks which
     // email this is, so one case alone cannot witness the split. Read from OUR
     // mirror, never the event, which carries no payment method for a trial.
+    const { planLabel } = await import("@/lib/plan-label");
+    const { openBody } = await import("@/server/email-outbox/seal");
     const g = await trialingGroup(true);
-    await processStripeEvent(
-      event({
-        type: "customer.subscription.trial_will_end",
-        object: trialSub(g.stripeSubId, new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)),
-      }),
+    const endsAt = new Date(epoch(new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)) * 1000);
+    const ev = event({ type: "customer.subscription.trial_will_end", object: trialSub(g.stripeSubId, endsAt) });
+    await processStripeEvent(ev);
+    const rows = await warningsOf(ev.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.subject).toBe(
+      dictionarySubject("fr", "trialEnding.subject.charge", { planName: planLabel("pro"), date: longDate("fr", endsAt) }),
     );
-    expect(sendTrialEndingEmail).toHaveBeenCalledTimes(1);
-    expect(sendTrialEndingEmail.mock.calls[0]![0]).toMatchObject({
-      hasPaymentMethod: true,
-      orgSlug: g.slug,
-    });
+    // The link goes to the billing page of the org the payer owns.
+    expect(openBody(rows[0]!.body_sealed!).text).toContain(`/o/${g.slug}/settings/billing`);
   });
 
   it("the plan NAME comes from planLabel, not from the raw key", async () => {
@@ -404,46 +400,41 @@ describe.skipIf(!HAS_DB)("customer.subscription.trial_will_end", () => {
     // renamed plan moves this expectation with it.
     const { planLabel } = await import("@/lib/plan-label");
     const g = await trialingGroup(true, "enterprise");
-    await processStripeEvent(
-      event({
-        type: "customer.subscription.trial_will_end",
-        object: trialSub(g.stripeSubId, new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)),
-      }),
-    );
-    expect(sendTrialEndingEmail.mock.calls[0]![0]).toMatchObject({
-      planName: planLabel("enterprise"),
+    const ev = event({
+      type: "customer.subscription.trial_will_end",
+      object: trialSub(g.stripeSubId, new Date(Date.now() + 3 * 24 * 60 * 60 * 1000)),
     });
+    await processStripeEvent(ev);
+    const rows = await warningsOf(ev.id);
+    expect(rows).toHaveLength(1);
+    expect(planLabel("enterprise"), "premise: the label is not the key").not.toBe("enterprise");
+    expect(rows[0]!.subject).toContain(planLabel("enterprise"));
   });
 
-  it("an event whose group cannot be resolved sends nothing and does not throw", async () => {
-    // A throw here would park the event and have the sweeper re-send the same
-    // warning up to three more times.
-    await expect(
-      processStripeEvent(
-        event({
-          type: "customer.subscription.trial_will_end",
-          object: trialSub(`sub_${randomUUID().replace(/-/g, "")}`, new Date()),
-        }),
-      ),
-    ).resolves.toBeUndefined();
-    expect(sendTrialEndingEmail).not.toHaveBeenCalled();
+  it("an event whose group cannot be resolved queues nothing and does not throw", async () => {
+    // A throw here would park the event and have the sweeper run it again.
+    const ev = event({
+      type: "customer.subscription.trial_will_end",
+      object: trialSub(`sub_${randomUUID().replace(/-/g, "")}`, new Date()),
+    });
+    await expect(processStripeEvent(ev)).resolves.toBeUndefined();
+    expect(await warningsOf(ev.id)).toHaveLength(0);
   });
 
-  it("an event carrying no trial_end sends nothing — there is no date to warn about", async () => {
+  it("an event carrying no trial_end queues nothing — there is no date to warn about", async () => {
     const g = await trialingGroup(false);
-    await processStripeEvent(
-      event({
-        type: "customer.subscription.trial_will_end",
-        object: {
-          id: g.stripeSubId,
-          object: "subscription",
-          status: "trialing",
-          trial_end: null,
-          metadata: {},
-        },
-      }),
-    );
-    expect(sendTrialEndingEmail).not.toHaveBeenCalled();
+    const ev = event({
+      type: "customer.subscription.trial_will_end",
+      object: {
+        id: g.stripeSubId,
+        object: "subscription",
+        status: "trialing",
+        trial_end: null,
+        metadata: {},
+      },
+    });
+    await expect(processStripeEvent(ev)).resolves.toBeUndefined();
+    expect(await warningsOf(ev.id)).toHaveLength(0);
   });
 });
 

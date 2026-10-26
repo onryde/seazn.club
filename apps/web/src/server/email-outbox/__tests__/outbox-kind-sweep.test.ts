@@ -37,6 +37,9 @@
 //     after the write-off and the worker makes the first attempt.
 //   - pass_revoked: the real `processStripeEvent` (`charge.refunded`, a full refund) on an Event Pass in an org whose owner's account is
 //     `nl`: the notice is queued to the owner's account in the transaction that deletes the pass, and the worker makes the first attempt.
+//   - trial_ending: the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a no-card trialing billing group whose
+//     payer's account is `fr`: the warning is queued to the payer's account, TRANSACTIONAL (the only wave-2 kind that is), with no
+//     organisation, and the worker makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -86,7 +89,8 @@ import {
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
-import { seedPassOrg, seedSponsorOrder, seedSponsorOrg } from "@/server/usecases/__tests__/_money-fixtures";
+import { seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
@@ -148,9 +152,7 @@ const SPEC_FACTS: KindFacts = {
 
 /** Wave 2's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T9) deletes it from NOT_YET_MOVED, and here. */
-const WAVE_2_UNMOVED: readonly OutboxKind[] = [
-  "trial_ending",
-];
+const WAVE_2_UNMOVED: readonly OutboxKind[] = [];
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
  *  addresses this run mails all start with RUN, so the accounts the magic-link route makes and the ones `accountAt` makes are found
@@ -706,6 +708,31 @@ async function passRevokedScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real `trial_will_end` webhook on a no-card trialing billing group: its payer (account `fr`, the org's default `en`, at a RUN
+ *  address, so it is found) is warned on the outbox, transactionally, in the `card` variant (add a card or the trial stops), and the first
+ *  attempt is the worker's. */
+async function trialEndingScenario(): Promise<KindScenario> {
+  const g = await seedTrialingGroup({ hasPaymentMethod: false, ownerLocale: "fr", orgDefaultLocale: "en", prefix: RUN });
+  made.orgIds.push(g.orgId);
+  made.userIds.push(g.ownerId);
+  const trialEnd = new Date(Math.floor((Date.now() + 3 * 24 * 60 * MIN) / 1000) * 1000);
+  return {
+    locale: "fr",
+    subjectKey: "trialEnding.subject.card",
+    subjectVars: {
+      planName: planLabel("pro"),
+      date: new Intl.DateTimeFormat("fr", { dateStyle: "long", timeZone: "UTC" }).format(trialEnd),
+    },
+    recipient: g.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      const sub = { id: g.stripeSubId, object: "subscription", status: "trialing", trial_end: trialEnd.getTime() / 1000, metadata: {} };
+      const event = { id: `evt_${RUN}_trial`, type: "customer.subscription.trial_will_end", data: { object: sub } };
+      await processStripeEvent(event as unknown as Stripe.Event);
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -771,6 +798,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", passRevoked.subjectKey, { rung: dictionarySubject("en", "passRevoked.rung.m", {}) }),
     );
 
+    const trialEnding = await trialEndingScenario();
+    expect(dictionarySubject("fr", trialEnding.subjectKey, trialEnding.subjectVars)).not.toBe(
+      dictionarySubject("en", trialEnding.subjectKey, trialEnding.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -789,6 +821,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         sponsor_dispute_won: sponsorDisputeWon,
         sponsor_dispute_lost: sponsorDisputeLost,
         pass_revoked: passRevoked,
+        trial_ending: trialEnding,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

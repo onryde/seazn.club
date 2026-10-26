@@ -62,15 +62,12 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendSuspensionServedEmail",
   "sendTransferCompleteEmail",
   "sendTransferOfferEmail",
-  "sendTrialEndingEmail",
   "sendVerificationEmail",
 ];
 
 /** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12); wave 2's T1 registered its ten kinds before their
  *  producers moved, so they are listed here until their kind task (T2-T9) deletes each one. The sweep covers every kind not listed. */
-export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "trial_ending",
-];
+export const NOT_YET_MOVED: readonly OutboxKind[] = [];
 
 /** For every kind, the direct sender its producer still calls (null = the kind has moved: nothing direct is left for it). */
 export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
@@ -90,7 +87,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   sponsor_dispute_won: null,
   sponsor_dispute_lost: null,
   pass_revoked: null,
-  trial_ending: "sendTrialEndingEmail",
+  trial_ending: null,
 };
 
 /** How long the allowlist must be while `unmoved` kinds are still on their direct sender: the spec's 49, less one for every phase-3 kind

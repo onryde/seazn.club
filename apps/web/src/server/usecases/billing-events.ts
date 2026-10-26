@@ -65,7 +65,7 @@ import {
   sendExtraOrgRepriceFailedAlertEmail,
   sendPassUnknownCompetitionAlertEmail,
   sendConnectBankAlertEmail,
-  sendTrialEndingEmail,
+  trialEndingEmail,
 } from "@/lib/email";
 import type { PassRevokedArgs, StaffDisputeAlertArgs } from "@/lib/email-templates";
 import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
@@ -82,7 +82,7 @@ import {
   syncConnectAccount,
 } from "@/server/usecases/stripe-connect";
 import { planLabel } from "@/lib/plan-label";
-import { toLocale, type Locale } from "@/lib/i18n-constants";
+import type { Locale } from "@/lib/i18n-constants";
 import {
   handleSponsorChargeRefunded,
   handleSponsorDispute,
@@ -2567,11 +2567,23 @@ async function handleExternalAccountChanged(event: Stripe.Event): Promise<void> 
  * not carry its default payment method (see `syncSubscriptionForGroup`'s
  * `hasPm` note), so the event cannot answer this question about itself.
  *
- * Best-effort throughout: an unresolvable group, a group with no reachable
- * owner, or a send failure all ACK. A throw here would park the event in the
- * ledger and have the sweeper re-send the same warning up to three more times.
+ * The warning is queued on the email outbox (kind `trial_ending`, ref
+ * `subscription/<group id>`, no organisation: a group can span several),
+ * addressed to the payer's account (`subscriptions.owner_user_id`, resolved at
+ * send) in the payer's language (D4: the account's, then the default of the org
+ * the billing link points at), TRANSACTIONAL as it always was, and the worker
+ * makes the first attempt. The once-key is the Stripe EVENT id: a redelivery,
+ * the stuck-event sweeper or a staff replay of one event queues one row, while a
+ * changed trial (a new `trial_will_end`, so a new event id) queues a new row
+ * that replaces a still-queued earlier one (the outbox's replace trigger).
+ *
+ * An unresolvable group, a group with no reachable payer (none, or a deleted
+ * account) and an event with no `trial_end` ACK with a log line: there is no
+ * one to warn, or nothing to warn about. A refused enqueue throws (D1), so the
+ * event stays unprocessed in the ledger and is run again; the once-key holds
+ * every run of it to one row.
  */
-async function handleTrialWillEnd(stripeSub: Stripe.Subscription): Promise<void> {
+async function handleTrialWillEnd(stripeSub: Stripe.Subscription, eventId: string): Promise<void> {
   const resolved = await resolveGroupForStripeSub(stripeSub);
   if (!resolved) {
     log.warn(
@@ -2584,12 +2596,13 @@ async function handleTrialWillEnd(stripeSub: Stripe.Subscription): Promise<void>
     {
       plan_key: string | null;
       has_payment_method: boolean | null;
+      owner_user_id: string;
       owner_email: string | null;
-      owner_locale: string | null;
       org_slug: string | null;
+      org_default_locale: string | null;
     }[]
   >`
-    select s.plan_key, s.has_payment_method, u.email as owner_email, u.locale as owner_locale,
+    select s.plan_key, s.has_payment_method, s.owner_user_id, u.email as owner_email,
            -- The billing page is per-ORG, but a group can span several. Prefer
            -- the one the payer actually owns — that is the org whose settings
            -- they can reach — and fall back to the group's oldest org so a
@@ -2601,7 +2614,18 @@ async function handleTrialWillEnd(stripeSub: Stripe.Subscription): Promise<void>
              (select o.slug from organizations o
                where o.subscription_id = s.id
                order by o.created_at limit 1)
-           ) as org_slug
+           ) as org_slug,
+           -- That same org's default language, by the same choice (an org's
+           -- default_locale is never null, so each coalesce settles on the
+           -- same arm).
+           coalesce(
+             (select o.default_locale from organizations o
+               where o.subscription_id = s.id and o.created_by = s.owner_user_id
+               order by o.created_at limit 1),
+             (select o.default_locale from organizations o
+               where o.subscription_id = s.id
+               order by o.created_at limit 1)
+           ) as org_default_locale
     from subscriptions s
     left join users u on u.id = s.owner_user_id and u.deleted_at is null
     where s.id = ${resolved.subscriptionId}`;
@@ -2625,18 +2649,28 @@ async function handleTrialWillEnd(stripeSub: Stripe.Subscription): Promise<void>
     );
     return;
   }
-  try {
-    await sendTrialEndingEmail({
-      to: row.owner_email,
-      locale: toLocale(row.owner_locale),
-      planName: planLabel(row.plan_key),
-      trialEnd,
-      hasPaymentMethod: row.has_payment_method === true,
-      orgSlug: row.org_slug,
-    });
-  } catch (err) {
-    log.error({ subscriptionId: resolved.subscriptionId, err }, "billing: trial-ending email failed");
-  }
+  const locale = await recipientLocale(sql, { pick: null, userId: row.owner_user_id, orgDefault: row.org_default_locale });
+  const kind = "trial_ending";
+  await enqueueEmailOnce(sql, {
+    kind,
+    refType: "subscription",
+    refId: resolved.subscriptionId,
+    orgId: null,
+    to: row.owner_email,
+    recipientUserId: row.owner_user_id,
+    ...(await trialEndingEmail(
+      {
+        planName: planLabel(row.plan_key),
+        trialEnd,
+        hasPaymentMethod: row.has_payment_method === true,
+        orgSlug: row.org_slug,
+      },
+      locale,
+    )),
+    transactional: true,
+    expiresAt: expiryWithin(null),
+    dedupeKey: onceKey(kind, "subscription", eventId),
+  });
 }
 
 /** The dispatch table (formerly inline in the webhook route). Unhandled
@@ -2780,7 +2814,7 @@ export async function processStripeEvent(event: Stripe.Event): Promise<void> {
     case "customer.subscription.trial_will_end":
       // Stripe's 3-day warning — the only notice before a no-card trial
       // cancels or a card-on-file trial charges.
-      await handleTrialWillEnd(event.data.object as Stripe.Subscription);
+      await handleTrialWillEnd(event.data.object as Stripe.Subscription, event.id);
       break;
     // Unhandled events are silently ACKed
   }
