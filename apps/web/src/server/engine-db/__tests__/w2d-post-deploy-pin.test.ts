@@ -13,8 +13,8 @@
 // The URL guard is tested without a database: a non-local URL is refused before any connection (exit 2, where a
 // connection attempt would exit 1) and no part of it is printed. NEVER against stg or prod: `--prod` is passed only with
 // URLs that reach nothing — ones the script's own parse refuses, one the driver's option parse refuses before it
-// connects, and `0.0.0.0` at a port just found closed (this machine). Fix round 2 adds the shoot-out split (V472's data
-// steps 3 and 4, redone for the window): its TypeScript twin is held to V472's own SQL over a grid of every sport the
+// connects, and `0.0.0.0` at a port just found closed (this machine). Fix round 2 adds the shoot-out split (V474's data
+// steps 3 and 4, redone for the window): its TypeScript twin is held to V474's own SQL over a grid of every sport the
 // split names and two it does not, and the CLI is run over an old-app football division and organisation variant.
 // Fix round 3 adds HELD rows (a write that would reach a scored stage is not made): each is scored through `scoreEvent`
 // and compared by what the scored stage READS (its computed table and stored snapshots, byte for byte), and the row
@@ -174,7 +174,7 @@ const APPLY_ZERO = {
 const CHECK_ZERO = { mode: "check", unpinnedStarted: 0, baseStageRules: 0, shootoutSplitConfigs: 0, held: 0 };
 
 type Pin = { points: unknown; tiebreakers: string[]; crossGroup: string[]; sources: { points: string; tiebreakers: string; crossGroup: string } };
-/** The pre-W2d cross-group order V472 pins (hard-coded at W2D_BASE, `packages/engine/src/competition/progression.ts:573-575`). */
+/** The pre-W2d cross-group order V474 pins (hard-coded at W2D_BASE, `packages/engine/src/competition/progression.ts:573-575`). */
 const PRE_W2D_CROSS_GROUP = ["points", "diff", "for", "wins"];
 const divisionConfigOf = async (id: string) =>
   (await sql<{ config: Record<string, unknown> }[]>`select config from divisions where id = ${id}`)[0]!.config;
@@ -338,7 +338,7 @@ describe.skipIf(!HAS_DB)("W2d T9 I2: scripts/w2d/post-deploy-pin.ts, run against
     expect(lastJson(check)).toEqual({ ...CHECK_ZERO, unpinnedStarted: 1, baseStageRules: 1 });
   }, 3 * CLI_MS);
 
-  it("N4: a {base} rule the old code saved over a stage ALREADY pinned is converted and that pin's points re-pinned to it (source stage) — an app pin of an own rule and a V472-migrated pin alike; the order, the cross-group order, their sources and the pin's date kept; a second run changes nothing", async () => {
+  it("N4: a {base} rule the old code saved over a stage ALREADY pinned is converted and that pin's points re-pinned to it (source stage) — an app pin of an own rule and a V474-migrated pin alike; the order, the cross-group order, their sources and the pin's date kept; a second run changes nothing", async () => {
     // P: a league with its own outcome-keyed rule, started through the product — the app's pin, points source "stage"
     const p = await tableScene({});
     const [leagueP] = p.stageIds as [string];
@@ -346,7 +346,7 @@ describe.skipIf(!HAS_DB)("W2d T9 I2: scripts/w2d/post-deploy-pin.ts, run against
     await startDivision(p.auth, p.divisionId);
     const appPin = (await stageRules(leagueP)).pin as Pin | null;
     expect(appPin?.sources.points, "premise: the app pinned the stage's own rule").toBe("stage");
-    // M: a league started, its pin then put in V472's shape (spec §5.4 "Migration pin": every source "migrated", the
+    // M: a league started, its pin then put in V474's shape (spec §5.4 "Migration pin": every source "migrated", the
     // cross-group order the pre-W2d hard-coded one)
     const m = await tableScene({});
     const [leagueM] = m.stageIds as [string];
@@ -535,7 +535,7 @@ async function runAgainstFirstTap(divisionId: string, fixtureId: string, args: r
 // the app computes it, and its stored snapshots — byte for byte before and after. Two sports: generic for the stage-rule
 // and pin rows (sport-blind doors, as above), football for the shoot-out split, the one rule the split moves.
 describe.skipIf(!HAS_DB)("W2d T9 fix round 3: a row whose write would reach a SCORED stage is held, never written", () => {
-  it("N5(a): an own {base} rule the old code saved on a V472-pinned stage that was then SCORED is held — not converted, not re-pinned; one on an unpinned scored stage is held ONCE; what each reads byte-identical; exit 1, the stages named; --check counts them", async () => {
+  it("N5(a): an own {base} rule the old code saved on a V474-pinned stage that was then SCORED is held — not converted, not re-pinned; one on an unpinned scored stage is held ONCE; what each reads byte-identical; exit 1, the stages named; --check counts them", async () => {
     const s = await tableScene({ entrants: 2 });
     const [league] = s.stageIds as [string];
     const [E1, E2] = s.entrants as [string, string];
@@ -543,7 +543,7 @@ describe.skipIf(!HAS_DB)("W2d T9 fix round 3: a row whose write would reach a SC
     const activation = (await stageRules(league)).pin as Pin;
     const migrated: Pin = { ...activation, crossGroup: PRE_W2D_CROSS_GROUP, sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" } };
     touched.push(league);
-    // the window: the old code saves a {base} rule over the V472 pin (its stage-rules save allows it until the first
+    // the window: the old code saves a {base} rule over the V474 pin (its stage-rules save allows it until the first
     // score) — and a match is then scored, read under the pin
     await sql`update stages set table_rules_pinned = ${sql.json(migrated as never)},
                      config = jsonb_set(coalesce(config, '{}'::jsonb), '{points}', ${sql.json(BASE_RULE as never)}) where id = ${league}`;
@@ -647,7 +647,7 @@ describe.skipIf(!HAS_DB)("W2d T9 fix round 3: a row whose write would reach a SC
     const [league] = f.stageIds as [string];
     await startDivision(f.auth, f.divisionId);
     const activation = (await stageRules(league)).pin as Pin;
-    // the rule the window's table was read under: V472's `w2d_pre_points` shape for a pre-W2d football split (spec §5.4
+    // the rule the window's table was read under: V474's `w2d_pre_points` shape for a pre-W2d football split (spec §5.4
     // "Migration pin": a shoot-out booked as the result, `win.so`/`loss.so`)
     const prePoints = PointsRule.parse({
       shootoutAs: "result",
@@ -809,9 +809,9 @@ describe.skipIf(!HAS_DB)("W2d T9 fix round 3: a row whose write would reach a SC
   }, 3 * CLI_MS + 120_000);
 });
 
-describe.skipIf(!HAS_DB)("W2d T9 fix round 2: dropShootoutSplit is V472's w2d_drop_shootout_split, case for case", () => {
+describe.skipIf(!HAS_DB)("W2d T9 fix round 2: dropShootoutSplit is V474's w2d_drop_shootout_split, case for case", () => {
   it("the split's rows are organisation variants only: a system preset (org_id null) on the split is never counted — whole-database census, before and after, in one rolled-back snapshot", async () => {
-    // A system preset is `sync:sports`'s, written from the code (V472 step 4 skips them alike); counted, the deploy would
+    // A system preset is `sync:sports`'s, written from the code (V474 step 4 skips them alike); counted, the deploy would
     // stop on a row this script must not write. Read whole-database (no --org): REPEATABLE READ holds other suites' rows
     // still, so the difference is this test's two rows alone.
     const { auth } = await seedOrg("pro");
@@ -907,7 +907,7 @@ describe.skipIf(!HAS_DB)("W2d T9 fix round 2: dropShootoutSplit is V472's w2d_dr
               const label = `${sport} ${JSON.stringify(cfg)}`;
               const twin = "refused" in ts ? { refused: true } : { refused: false, eq: true, same: !ts.changed, said: ts.notices };
               const pg = sqlSide.refused ? { refused: true } : { refused: false, eq: sqlSide.eq, same: sqlSide.same, said };
-              if (JSON.stringify(twin) !== JSON.stringify(pg)) mismatches.push(`${label}: twin ${JSON.stringify(twin)} ≠ V472 ${JSON.stringify(pg)}`);
+              if (JSON.stringify(twin) !== JSON.stringify(pg)) mismatches.push(`${label}: twin ${JSON.stringify(twin)} ≠ V474 ${JSON.stringify(pg)}`);
               if (sqlSide.refused) tally.refused++;
               else if (sqlSide.same) tally.unchanged++;
               else tally.changed++;
@@ -921,7 +921,7 @@ describe.skipIf(!HAS_DB)("W2d T9 fix round 2: dropShootoutSplit is V472's w2d_dr
     } finally {
       await client.end();
     }
-    expect(mismatches.join("\n"), "the twin and V472's SQL, case for case").toBe("");
+    expect(mismatches.join("\n"), "the twin and V474's SQL, case for case").toBe("");
     expect(tally.checked).toBe(SPORTS.length * CFGS.length);
     expect(tally.refused, "anti-vacuity: refusals compared").toBeGreaterThan(0);
     expect(tally.changed, "anti-vacuity: conversions compared").toBeGreaterThan(0);

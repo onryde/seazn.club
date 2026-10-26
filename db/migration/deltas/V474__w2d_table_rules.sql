@@ -1,4 +1,4 @@
--- V472 — W2d (format matrix: tables and tie-breaks): the stage table-rules pin, the stored lots draws, the B1 pin of every
+-- V474 — W2d (format matrix: tables and tie-breaks): the stage table-rules pin, the stored lots draws, the B1 pin of every
 -- started stage, and the outcome-keyed stage points rule on the public and console reads.
 -- Spec docs/superpowers/specs/2026-10-20-format-matrix-w2d-design.md §5.3, §5.4 "Migration pin (B1)", §5.8, §8; plan
 -- docs/superpowers/plans/2026-10-20-format-matrix-w2d.md Tasks 2 and 7 (PF-1, PF-3, PS-1d, PS-8). One unmerged

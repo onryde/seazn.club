@@ -276,7 +276,7 @@ interface StageRow {
     ladder_order?: string[];
   } | null;
   status: string;
-  /** W2d (V472): the table rules fixed at activation, and when (`table-rules.ts`). */
+  /** W2d (V474): the table rules fixed at activation, and when (`table-rules.ts`). */
   table_rules_pinned: unknown;
   table_rules_pinned_at: string | null;
 }

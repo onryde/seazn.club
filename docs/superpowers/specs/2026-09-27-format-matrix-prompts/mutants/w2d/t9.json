@@ -483,7 +483,7 @@
   },
   {
     "id": "t9-variants-org-only",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "   where org_id is not null\n     and sport_key in ('football', 'hockey', 'icehockey')",
     "replace": "   where true /*MUT*/\n     and sport_key in ('football', 'hockey', 'icehockey')",
     "killers": [
@@ -513,7 +513,7 @@
   },
   {
     "id": "t9r1-migration-skips-pin",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "  pinned := w2d_pin_started_stages();",
     "replace": "  pinned := 0; /*MUT*/",
     "killers": [
@@ -900,7 +900,7 @@
   },
   {
     "id": "t9r2-v472-crossgroup-source-stage",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'{\"points\": \"migrated\", \"tiebreakers\": \"migrated\", \"crossGroup\": \"migrated\"}'::jsonb)",
     "replace": "'{\"points\": \"migrated\", \"tiebreakers\": \"migrated\", \"crossGroup\": \"stage\"}'::jsonb) /*MUT*/",
     "killers": [
@@ -1539,7 +1539,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
         ],
-        "name": "V472-pinned stage that was then SCORED is held"
+        "name": "V474-pinned stage that was then SCORED is held"
       }
     ]
   },
@@ -1591,7 +1591,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
         ],
-        "name": "V472-pinned stage that was then SCORED is held"
+        "name": "V474-pinned stage that was then SCORED is held"
       }
     ]
   },
@@ -1681,7 +1681,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
         ],
-        "name": "V472-pinned stage that was then SCORED is held"
+        "name": "V474-pinned stage that was then SCORED is held"
       }
     ]
   },
@@ -1726,7 +1726,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
         ],
-        "name": "V472-pinned stage that was then SCORED is held"
+        "name": "V474-pinned stage that was then SCORED is held"
       }
     ]
   },
@@ -1756,7 +1756,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
         ],
-        "name": "V472-pinned stage that was then SCORED is held"
+        "name": "V474-pinned stage that was then SCORED is held"
       }
     ]
   },
@@ -1771,7 +1771,7 @@
         "files": [
           "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
         ],
-        "name": "V472-pinned stage that was then SCORED is held"
+        "name": "V474-pinned stage that was then SCORED is held"
       }
     ]
   },

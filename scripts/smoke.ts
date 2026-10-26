@@ -7380,7 +7380,7 @@ async function w2cStageRulesSuite(): Promise<void> {
 
 /**
  * Format matrix W2d (spec 2026-10-20, tables and tie-breaks) — PR A's smoke proof, over real HTTP against a live server.
- * A stage is pinned when it is generated (V472 `table_rules_pinned_at`, read from the database: PR A ships no HTTP reader
+ * A stage is pinned when it is generated (V474 `table_rules_pinned_at`, read from the database: PR A ships no HTTP reader
  * of the pin), and a residual tie that only lots can split is drawn ONCE and stored (`stage_lots_draws`), so two reloads
  * of the table across a later recompute give the same order. A generic league of six under 3/1/0: A beats C and B beats
  * D, leaving A and B level on every step before lots (they have not met), and likewise C and D; E–F's later draw

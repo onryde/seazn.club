@@ -66,7 +66,7 @@ export function tableStageKindOf(kind: string): TableStageKind {
 
 const SOURCE = z.enum(["stage", "division", "sport", "migrated"]);
 const CROSS_GROUP_SOURCE = z.enum(["stage", "derived", "migrated"]);
-/** The stored pin (`stages.table_rules_pinned`, V472): `{points, tiebreakers, crossGroup, sources}` — `sources.crossGroup`
+/** The stored pin (`stages.table_rules_pinned`, V474): `{points, tiebreakers, crossGroup, sources}` — `sources.crossGroup`
  *  says whether the cross-group order is the stage's own (T9 re-review N2). */
 const StoredPin = z.object({
   points: PointsRule,

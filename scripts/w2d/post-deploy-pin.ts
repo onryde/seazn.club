@@ -1,7 +1,7 @@
 // W2d Task 9 fix rounds 1 (I2), 2 (N1-N4, the shoot-out split) and 3 (N5-N8, held rows) — the post-deploy step for the
 // table-rules pin. ONE file, four jobs.
 //
-// V472 pins every started stage, converts every W2c `{base, bonuses, forfeit}` stage rule, and moves every football,
+// V474 pins every started stage, converts every W2c `{base, bonuses, forfeit}` stage rule, and moves every football,
 // hockey and ice hockey division config and organisation sport variant off the retired shoot-out split while it
 // migrates. Between that migration and the deploy of the code that pins at activation, the OLD code is still serving: a
 // stage it starts (or completes) in that window is left active/complete with no pin, a stage rule it saves is written in
@@ -11,14 +11,14 @@
 // deploy, in this order:
 //
 //   1. split — every football/hockey/ice hockey division config and organisation-owned (`org_id` not null) sport variant
-//      still holding `shootoutWin`/`shootoutLoss` is converted by `dropShootoutSplit`, the TypeScript twin of V472's
+//      still holding `shootoutWin`/`shootoutLoss` is converted by `dropShootoutSplit`, the TypeScript twin of V474's
 //      `w2d_drop_shootout_split` (spec §5.3, PS-1: `soBonus = shootoutWin − draw`, ice hockey drops the keys). A config
 //      that twin refuses is NOT written and is counted `refused`; that division's stages are then not pinned (a pin
 //      taken over a config the reader strips would pin the default bonus silently). The system presets (`org_id` null)
 //      are `sync:sports`'s, written from the code, which carries no split.
 //   2. convert — every stage `config.points` still in the `{base}` shape becomes the outcome-keyed rule through
-//      `parseLegacyPointsRule`, the engine's B1 authority (the twin of V472's `w2d_legacy_points`). A refused value is
-//      not written, counted `refused`, and its stage not pinned. A stage that is ALREADY pinned (V472 pinned it, or the
+//      `parseLegacyPointsRule`, the engine's B1 authority (the twin of V474's `w2d_legacy_points`). A refused value is
+//      not written, counted `refused`, and its stage not pinned. A stage that is ALREADY pinned (V474 pinned it, or the
 //      new code did, before the old code saved this rule) has its pin's points re-pinned to the converted rule through
 //      the app's own `repinStageOwnRules` — what the W2d code does on an own save (PS-5d) — counted `repinned` (N4).
 //   3. pin — every `active`/`complete` stage with no pin is pinned through the app's own `pinStageTableRules` (the
@@ -37,8 +37,8 @@
 //   - a `{base}` stage rule, or a started stage's pin: that stage (pinned or not — its own rule, or the pin itself);
 //   - a division config on the split: every stage of it that reads the division's points — no pin and no own rule (a
 //     falsy `config.points`, the reader's "inherit"; a pending stage with an ad-hoc match or a ladder challenge reads
-//     its live layers), or a pin the app took over them (`sources.points` "sport"). Not a V472 pin ("migrated": taken
-//     from the pre-W2d rule before V472 dropped the split) and not an own rule's ("stage"). The started stages of a
+//     its live layers), or a pin the app took over them (`sources.points` "sport"). Not a V474 pin ("migrated": taken
+//     from the pre-W2d rule before V474 dropped the split) and not an own rule's ("stage"). The started stages of a
 //     held division are held with it (a pin taken over its config would pin the stripped split).
 //   - an organisation variant: no stage. A variant's config is COPIED into a division when one is created or changes
 //     variant (usecases/divisions.ts); no stage reads it live, so a variant is never held.
@@ -210,7 +210,7 @@ export function failureLine(id: string, e: unknown, db: DatabaseUrl | null): str
   return `${id}: ${typeof code === "string" ? code : "ERROR"} ${redact(message, db)}`;
 }
 
-// ── The shoot-out split (spec §5.3, PS-1; the TypeScript twin of V472's `w2d_drop_shootout_split`) ──
+// ── The shoot-out split (spec §5.3, PS-1; the TypeScript twin of V474's `w2d_drop_shootout_split`) ──
 
 const SPLIT_SPORTS = new Set(["football", "hockey", "icehockey"]);
 const SPLIT_KEYS = ["shootoutWin", "shootoutLoss"] as const;
@@ -250,7 +250,7 @@ function decimalSub(a: number, b: number): number {
   return (Math.round(a * f) - Math.round(b * f)) / f;
 }
 
-/** A config off the retired shoot-out split, exactly as V472's `w2d_drop_shootout_split` converts it. Football and
+/** A config off the retired shoot-out split, exactly as V474's `w2d_drop_shootout_split` converts it. Football and
  *  hockey: `soBonus = shootoutWin − draw` (draw absent: 1), clamped at 0, unless a `soBonus` is already there; a
  *  `shootoutLoss` other than the draw is said (a draw-plus-bonus shoot-out pays its loser the draw). Ice hockey: the keys
  *  are dropped (a shoot-out pays the overtime values), and a split that differs from `otWin ?? win` / `otLoss ?? loss`
@@ -307,8 +307,8 @@ function inOrgs(sql: Sql | Tx, orgs: readonly string[]) {
 
 /** The stages of a division whose table reads the division's points (fix round 3): no pin and no own rule — a falsy
  *  `config.points` is the reader's "inherit" (`ownRulesOf`: `if (rawPoints)`; jsonb null, false, 0 and "" alike) — or a
- *  pin the app took over the division's layers (`sources.points` "sport"). A V472 pin ("migrated") was taken from the
- *  pre-W2d rule before V472 dropped the split, and an own rule ("stage") is the stage's: neither reads the division. */
+ *  pin the app took over the division's layers (`sources.points` "sport"). A V474 pin ("migrated") was taken from the
+ *  pre-W2d rule before V474 dropped the split, and an own rule ("stage") is the stage's: neither reads the division. */
 const READS_DIVISION_POINTS = (sql: Sql | Tx) => sql`
   ((table_rules_pinned is null
     and (config -> 'points' is null or config -> 'points' in ('null'::jsonb, 'false'::jsonb, '0'::jsonb, '""'::jsonb)))
@@ -381,7 +381,7 @@ export interface RunReport {
   failed: string[];
   /** Rows not written because the write would reach a scored stage, one line each (`stage <id>: …`, `division <id>: …`). */
   held: string[];
-  /** What the split conversion said out loud, one line per config (V472 raises the same as notices). */
+  /** What the split conversion said out loud, one line per config (V474 raises the same as notices). */
   notices: string[];
   after: Census;
 }

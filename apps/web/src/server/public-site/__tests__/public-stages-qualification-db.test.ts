@@ -391,10 +391,10 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     expect((await view(d.divisionId))[0]!.points_rule).toEqual(clean);
   });
 
-  // W2d V472: the function rebuilds `points_rule` from BOTH stored shapes. Each rule is written by raw SQL — the stage
+  // W2d V474: the function rebuilds `points_rule` from BOTH stored shapes. Each rule is written by raw SQL — the stage
   // door is not under test here (Task 10 owns it), the rebuild is — so every key the outcome-keyed PointsRule reads
   // is asked at once, with junk beside it at every level.
-  it("W2d V472: every key the outcome-keyed rule reads is published (ot, so, unplayed, soBonus, tie, noResult, a set map), junk is not, and a legacy `base` is not any more (W2d Task 9 retired it with the engine's read)", async () => {
+  it("W2d V474: every key the outcome-keyed rule reads is published (ot, so, unplayed, soBonus, tie, noResult, a set map), junk is not, and a legacy `base` is not any more (W2d Task 9 retired it with the engine's read)", async () => {
     const d = await division();
     const result = {
       win: { regulation: 3, ot: 2, so: 1.5 },

@@ -1,7 +1,7 @@
 [
   {
     "id": "t7-m1-pin-predicate-active-only",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "where s.status in ('active', 'complete') and s.table_rules_pinned is null",
     "replace": "where s.status = 'active' /*MUT1*/ and s.table_rules_pinned is null",
     "killers": [
@@ -16,7 +16,7 @@
   },
   {
     "id": "t7-m2-legacy-tie-null",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'tie',        0,",
     "replace": "'tie',        null /*MUT2*/,",
     "killers": [
@@ -31,7 +31,7 @@
   },
   {
     "id": "t7-m3-pin-idempotency-guard",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "where s.status in ('active', 'complete') and s.table_rules_pinned is null",
     "replace": "where s.status in ('active', 'complete') /*MUT3*/",
     "killers": [
@@ -46,7 +46,7 @@
   },
   {
     "id": "t7-m4-pin-after-division-conversion",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "  pinned := w2d_pin_started_stages();\n  select count(*) into unpinned from stages where status in ('active', 'complete') and table_rules_pinned is null;\n  if unpinned > 0 then\n    raise exception 'W2d B1: % started stage(s) left unpinned', unpinned;\n  end if;\n\n  update stages\n     set config = jsonb_set(config, '{points}', w2d_legacy_points(config -> 'points'))\n   where jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base';\n  get diagnostics stage_rules = row_count;\n\n  update divisions\n     set config = w2d_drop_shootout_split(sport_key, config)\n   where sport_key in ('football', 'hockey', 'icehockey')\n     and jsonb_typeof(config -> 'points') = 'object'\n     and config -> 'points' ?| array['shootoutWin', 'shootoutLoss'];\n  get diagnostics division_cfgs = row_count;\n",
     "replace": "  update stages\n     set config = jsonb_set(config, '{points}', w2d_legacy_points(config -> 'points'))\n   where jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base';\n  get diagnostics stage_rules = row_count;\n\n  update divisions\n     set config = w2d_drop_shootout_split(sport_key, config)\n   where sport_key in ('football', 'hockey', 'icehockey')\n     and jsonb_typeof(config -> 'points') = 'object'\n     and config -> 'points' ?| array['shootoutWin', 'shootoutLoss'];\n  get diagnostics division_cfgs = row_count;\n\n  /*MUT*/\n  pinned := w2d_pin_started_stages();\n  select count(*) into unpinned from stages where status in ('active', 'complete') and table_rules_pinned is null;\n  if unpinned > 0 then\n    raise exception 'W2d B1: % started stage(s) left unpinned', unpinned;\n  end if;\n",
     "killers": [
@@ -61,7 +61,7 @@
   },
   {
     "id": "t7-m5-unpinned-guard",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "  if unpinned > 0 then",
     "replace": "  if unpinned > 999999 /*MUT5*/ then",
     "killers": [
@@ -76,7 +76,7 @@
   },
   {
     "id": "t7-m6-football-split-either-key",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    if sw is null or sl is null then",
     "replace": "    if sw is null and sl is null /*MUT6*/ then",
     "killers": [
@@ -91,7 +91,7 @@
   },
   {
     "id": "t7-m7-period-win-so-dropped",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'win',  jsonb_strip_nulls(jsonb_build_object('regulation', w, 'ot', ow, 'so', sw)),",
     "replace": "'win',  jsonb_strip_nulls(jsonb_build_object('regulation', w, 'ot', ow /*MUT7*/)),",
     "killers": [
@@ -106,7 +106,7 @@
   },
   {
     "id": "t7-m8-period-win-ot-dropped",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'win',  jsonb_strip_nulls(jsonb_build_object('regulation', w, 'ot', ow, 'so', sw)),",
     "replace": "'win',  jsonb_strip_nulls(jsonb_build_object('regulation', w, /*MUT8*/ 'so', sw)),",
     "killers": [
@@ -121,7 +121,7 @@
   },
   {
     "id": "t7-m9-cricket-draw-not-tie",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'tie', t, 'noResult', nr, 'draw', coalesce(d, t));",
     "replace": "'tie', t, 'noResult', nr, 'draw', d /*MUT9*/);",
     "killers": [
@@ -136,7 +136,7 @@
   },
   {
     "id": "t7-m10-cricket-noresult-is-tie",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'tie', t, 'noResult', nr, 'draw', coalesce(d, t));",
     "replace": "'tie', t, 'noResult', t /*MUT10*/, 'draw', coalesce(d, t));",
     "killers": [
@@ -151,7 +151,7 @@
   },
   {
     "id": "t7-m11-football-draw-is-loss",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'so', sl)),\n      'draw', d,",
     "replace": "'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'so', sl)),\n      'draw', l /*MUT11*/,",
     "killers": [
@@ -166,7 +166,7 @@
   },
   {
     "id": "t7-m12-boardgame-unit-whole",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'draw', d, 'tie', 0, 'noResult', 0, 'unit', 'half');",
     "replace": "'draw', d, 'tie', 0, 'noResult', 0, 'unit', 'whole' /*MUT12*/);",
     "killers": [
@@ -181,7 +181,7 @@
   },
   {
     "id": "t7-m13-set-key-filter-off",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      if e.key ~ '^([0-9]+-[0-9]+|[*])$' then",
     "replace": "      if true /*MUT13*/ then",
     "killers": [
@@ -196,7 +196,7 @@
   },
   {
     "id": "t7-m15-icehockey-absent-default",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "when 'icehockey'   then '{\"win\": 3, \"draw\": 1, \"loss\": 0, \"otWin\": 2, \"otLoss\": 1}'",
     "replace": "when 'icehockey'   then '{\"win\": 3, \"draw\": 1, \"loss\": 0, \"otWin\": 3, \"otLoss\": 1}' /*MUT15*/",
     "killers": [
@@ -211,7 +211,7 @@
   },
   {
     "id": "t7-m16-football-per-key-draw-default",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "d  := w2d_points_num(p -> 'draw', '1', 'football points.draw', true);",
     "replace": "d  := w2d_points_num(p -> 'draw', '2', 'football points.draw', true); /*MUT16*/",
     "killers": [
@@ -226,7 +226,7 @@
   },
   {
     "id": "t7-m17-required-key-not-refused",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    if fallback is null and required then",
     "replace": "    if false /*MUT17*/ then",
     "killers": [
@@ -241,7 +241,7 @@
   },
   {
     "id": "t7-m18-number-type-not-checked",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "  if jsonb_typeof(v) <> 'number' then",
     "replace": "  if false /*MUT18*/ then",
     "killers": [
@@ -256,7 +256,7 @@
   },
   {
     "id": "t7-m19-legacy-bonus-enum-off",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "         or (b ->> 'when') not in ('loss_margin_lte',",
     "replace": "         or false /*MUT19*/ and (b ->> 'when') not in ('loss_margin_lte',",
     "killers": [
@@ -271,7 +271,7 @@
   },
   {
     "id": "t7-m20-legacy-param-dropped",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "        || case when b ? 'param'",
     "replace": "        || case when false /*MUT20*/",
     "killers": [
@@ -286,7 +286,7 @@
   },
   {
     "id": "t7-m21-legacy-award-pair-length",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      if jsonb_typeof(a) <> 'array' or jsonb_array_length(a) <> 2",
     "replace": "      if jsonb_typeof(a) <> 'array' or jsonb_array_length(a) < 1 /*MUT21*/",
     "killers": [
@@ -301,7 +301,7 @@
   },
   {
     "id": "t7-m22-own-rule-ignored",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    if r.own is null or r.own in ('null'::jsonb, 'false'::jsonb, '0'::jsonb, '\"\"'::jsonb) then",
     "replace": "    if true /*MUT22*/ or r.own is null then",
     "killers": [
@@ -316,7 +316,7 @@
   },
   {
     "id": "t7-m23-falsy-own-not-none",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "r.own in ('null'::jsonb, 'false'::jsonb, '0'::jsonb, '\"\"'::jsonb)",
     "replace": "r.own in ('null'::jsonb /*MUT23*/)",
     "killers": [
@@ -331,7 +331,7 @@
   },
   {
     "id": "t7-m24-division-list-ignored",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    if r.tiebreakers is null or jsonb_typeof(r.tiebreakers) = 'null' then",
     "replace": "    if true /*MUT24*/ then",
     "killers": [
@@ -346,7 +346,7 @@
   },
   {
     "id": "t7-m25-non-list-accepted",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    elsif jsonb_typeof(r.tiebreakers) = 'array' then",
     "replace": "    elsif true /*MUT25*/ then",
     "killers": [
@@ -361,7 +361,7 @@
   },
   {
     "id": "t7-m26-crossgroup-literal",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'crossGroup',  '[\"points\", \"diff\", \"for\", \"wins\"]'::jsonb,",
     "replace": "'crossGroup',  '[\"points\", \"diff\", \"for\"]'::jsonb, /*MUT26*/",
     "killers": [
@@ -376,7 +376,7 @@
   },
   {
     "id": "t7-m27-sources-literal",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'{\"points\": \"migrated\", \"tiebreakers\": \"migrated\", \"crossGroup\": \"migrated\"}'::jsonb)",
     "replace": "'{\"points\": \"migrated\", \"tiebreakers\": \"division\", \"crossGroup\": \"migrated\"}'::jsonb) /*MUT27*/",
     "killers": [
@@ -391,7 +391,7 @@
   },
   {
     "id": "t7-m28-drift-check-off",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "                   and w2d_pre_points(r.sport_key, f.config_snapshot) is distinct from pts) then",
     "replace": "                   and w2d_pre_points(r.sport_key, f.config_snapshot) is distinct from pts and false /*MUT28*/) then",
     "killers": [
@@ -406,7 +406,7 @@
   },
   {
     "id": "t7-m29-sobonus-not-minus-draw",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    bonus := (sw #>> '{}')::numeric - (d #>> '{}')::numeric;",
     "replace": "    bonus := (sw #>> '{}')::numeric /*MUT29*/;",
     "killers": [
@@ -421,7 +421,7 @@
   },
   {
     "id": "t7-m30-clamp-off",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    if bonus < 0 then",
     "replace": "    if bonus < -999 /*MUT30*/ then",
     "killers": [
@@ -436,7 +436,7 @@
   },
   {
     "id": "t7-m31-loss-differs-notice-off",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "  if sl is not null and sl is distinct from d then",
     "replace": "  if false /*MUT31*/ then",
     "killers": [
@@ -451,7 +451,7 @@
   },
   {
     "id": "t7-m32-icehockey-keys-kept",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    return jsonb_set(cfg, '{points}', p - 'shootoutWin' - 'shootoutLoss');\n  end if;",
     "replace": "    return cfg /*MUT32*/;\n  end if;",
     "killers": [
@@ -466,7 +466,7 @@
   },
   {
     "id": "t7-m33-icehockey-notice-off",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      raise notice 'W2d shoot-out split (%): a shoot-out now pays the overtime values, which differ from the split: %', sport, p::text;",
     "replace": "      null; /*MUT33*/",
     "killers": [
@@ -481,7 +481,7 @@
   },
   {
     "id": "t7-m33b-icehockey-win-side-unchecked",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    if (sw is not null and sw is distinct from coalesce(p -> 'otWin', p -> 'win'))",
     "replace": "    if (false /*MUT33b*/)",
     "killers": [
@@ -496,7 +496,7 @@
   },
   {
     "id": "t7-m33c-icehockey-loss-side-unchecked",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "       or (sl is not null and sl is distinct from coalesce(p -> 'otLoss', p -> 'loss')) then",
     "replace": "       or (false /*MUT33c*/) then",
     "killers": [
@@ -511,7 +511,7 @@
   },
   {
     "id": "t7-m33d-icehockey-no-overtime-fallback",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    if (sw is not null and sw is distinct from coalesce(p -> 'otWin', p -> 'win'))",
     "replace": "    if (sw is not null and sw is distinct from coalesce(p -> 'otWin', '2'::jsonb /*MUT33d*/))",
     "killers": [
@@ -526,7 +526,7 @@
   },
   {
     "id": "t7-m34-icehockey-divisions-skipped",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "   where sport_key in ('football', 'hockey', 'icehockey')",
     "replace": "   where sport_key in ('football', 'hockey') /*MUT34*/",
     "killers": [
@@ -541,7 +541,7 @@
   },
   {
     "id": "t7-m35-stage-conversion-off",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "   where jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base';",
     "replace": "   where jsonb_typeof(config -> 'points') = 'object' and false /*MUT35*/;",
     "killers": [
@@ -556,7 +556,7 @@
   },
   {
     "id": "t7-m38-badminton-cascade-literal",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "when 'badminton'   then '[\"points\", \"wins\", \"set_ratio\", \"point_ratio\", \"h2h_points\"]'",
     "replace": "when 'badminton'   then '[\"points\", \"wins\", \"set_ratio\", \"point_ratio\", \"h2h_points\", \"lots\"]' /*MUT38*/",
     "killers": [
@@ -571,7 +571,7 @@
   },
   {
     "id": "t7-m39-pin-count",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    n := n + 1;",
     "replace": "    n := n + 2 /*MUT39*/;",
     "killers": [
@@ -586,7 +586,7 @@
   },
   {
     "id": "t7-m40-legacy-noresult-null",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'noResult',   0,\n    'shootoutAs', 'result',",
     "replace": "'noResult',   null /*MUT40*/,\n    'shootoutAs', 'result',",
     "killers": [
@@ -601,7 +601,7 @@
   },
   {
     "id": "t7-m41-period-loss-so-dropped",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'ot', ol, 'so', sl)),",
     "replace": "'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'ot', ol /*MUT41*/)),",
     "killers": [
@@ -616,7 +616,7 @@
   },
   {
     "id": "t7-m42-carrom-draw-is-loss",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'draw', d, 'tie', 0, 'noResult', d);",
     "replace": "      'draw', l /*MUT42*/, 'tie', 0, 'noResult', d);",
     "killers": [
@@ -631,7 +631,7 @@
   },
   {
     "id": "t7-m43-generic-draw-is-loss",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    l := w2d_points_num(p -> 'l', null, 'generic points.l', true);\n    return common || jsonb_build_object(\n      'win', jsonb_build_object('regulation', w), 'loss', jsonb_build_object('regulation', l),\n      'draw', d,",
     "replace": "    l := w2d_points_num(p -> 'l', null, 'generic points.l', true);\n    return common || jsonb_build_object(\n      'win', jsonb_build_object('regulation', w), 'loss', jsonb_build_object('regulation', l),\n      'draw', l /*MUT43*/,",
     "killers": [
@@ -646,7 +646,7 @@
   },
   {
     "id": "t7-m44-boardgame-draw-is-loss",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'draw', d, 'tie', 0, 'noResult', 0, 'unit', 'half');",
     "replace": "      'draw', l /*MUT44*/, 'tie', 0, 'noResult', 0, 'unit', 'half');",
     "killers": [
@@ -661,7 +661,7 @@
   },
   {
     "id": "t7-m45-hockey-draw-is-loss",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'ot', ol, 'so', sl)),\n      'draw', d,",
     "replace": "'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'ot', ol, 'so', sl)),\n      'draw', l /*MUT45*/,",
     "killers": [
@@ -676,7 +676,7 @@
   },
   {
     "id": "t7-m46-set-map-not-bySetScore",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'bySetScore', m, 'tie', 0, 'noResult', 0);",
     "replace": "      'bySetScore', jsonb_build_object('*', sweep) /*MUT46*/, 'tie', 0, 'noResult', 0);",
     "killers": [
@@ -691,7 +691,7 @@
   },
   {
     "id": "t7-m47-empty-set-map-accepted",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    if m = '{}'::jsonb then",
     "replace": "    if false /*MUT47*/ then",
     "killers": [
@@ -706,7 +706,7 @@
   },
   {
     "id": "t7-m48-legacy-forfeit-dropped",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    rule := rule || jsonb_build_object('forfeit', forfeit);",
     "replace": "    rule := rule /*MUT48*/;",
     "killers": [
@@ -721,7 +721,7 @@
   },
   {
     "id": "t7-m49-legacy-bonuses-dropped",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "  rule := rule || jsonb_build_object('bonuses', bonuses);",
     "replace": "  rule := rule || jsonb_build_object('bonuses', '[]'::jsonb) /*MUT49*/;",
     "killers": [
@@ -736,7 +736,7 @@
   },
   {
     "id": "t7-m51-football-tie-zero",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'so', sl)),\n      'draw', d, 'tie', d, 'noResult', d);",
     "replace": "      'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'so', sl)),\n      'draw', d, 'tie', 0 /*E1*/, 'noResult', d);",
     "killers": [
@@ -751,7 +751,7 @@
   },
   {
     "id": "t7-m52-carrom-noresult-zero",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'draw', d, 'tie', 0, 'noResult', d);",
     "replace": "      'draw', d, 'tie', 0, 'noResult', 0 /*E2*/);",
     "killers": [
@@ -766,7 +766,7 @@
   },
   {
     "id": "t7-m53-football-noresult-zero",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'so', sl)),\n      'draw', d, 'tie', d, 'noResult', d);",
     "replace": "      'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'so', sl)),\n      'draw', d, 'tie', d, 'noResult', 0 /*M53*/);",
     "killers": [
@@ -781,7 +781,7 @@
   },
   {
     "id": "t7-m54-period-noresult-zero",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'ot', ol, 'so', sl)),\n      'draw', d, 'tie', d, 'noResult', d);",
     "replace": "      'loss', jsonb_strip_nulls(jsonb_build_object('regulation', l, 'ot', ol, 'so', sl)),\n      'draw', d, 'tie', d, 'noResult', 0 /*M54*/);",
     "killers": [
@@ -796,7 +796,7 @@
   },
   {
     "id": "t7-m55-generic-tie-zero",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'draw', d, 'tie', d, 'noResult', d);\n  else",
     "replace": "      'draw', d, 'tie', 0 /*M55*/, 'noResult', d);\n  else",
     "killers": [
@@ -811,7 +811,7 @@
   },
   {
     "id": "t7-m56-boardgame-noresult-draw",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'draw', d, 'tie', 0, 'noResult', 0, 'unit', 'half');",
     "replace": "      'draw', d, 'tie', 0, 'noResult', d /*M56*/, 'unit', 'half');",
     "killers": [
@@ -826,7 +826,7 @@
   },
   {
     "id": "t7-m57-carrom-tie-draw",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'draw', d, 'tie', 0, 'noResult', d);",
     "replace": "      'draw', d, 'tie', d /*M57*/, 'noResult', d);",
     "killers": [
@@ -841,7 +841,7 @@
   },
   {
     "id": "t7-m58-set-noresult-one",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      'bySetScore', m, 'tie', 0, 'noResult', 0);",
     "replace": "      'bySetScore', m, 'tie', 0, 'noResult', 1 /*M58*/);",
     "killers": [
@@ -856,7 +856,7 @@
   },
   {
     "id": "t7-m50-tennis-loss-is-win",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    l := w2d_points_num(p -> 'loss', null, 'tennis points.loss', true);",
     "replace": "    l := w2d_points_num(p -> 'win', null, 'tennis points.loss', true); /*MUT50*/",
     "killers": [
@@ -871,7 +871,7 @@
   },
   {
     "id": "t7-m59-pf3-points-rule-reads-pin",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "         stage_points_rule_published(src.points),",
     "replace": "         stage_points_rule_published(src.table_points) /*MUT59*/,",
     "killers": [
@@ -886,7 +886,7 @@
   },
   {
     "id": "t7-m60-pf3-own-points-coalesce-pin",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "           s.config -> 'points' as points,",
     "replace": "           coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') /*MUT60*/ as points,",
     "killers": [
@@ -916,7 +916,7 @@
   },
   {
     "id": "t7-m62-helper-drop-missing",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "drop function w2d_points_num(jsonb, jsonb, text, boolean);",
     "replace": "select 1 /*MUT62*/;",
     "killers": [
@@ -931,7 +931,7 @@
   },
   {
     "id": "t7-m63-new-shape-read-as-legacy",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      pts := r.own;",
     "replace": "      pts := w2d_legacy_points(r.own) /*MUT63*/;",
     "killers": [
@@ -946,7 +946,7 @@
   },
   {
     "id": "t7-m64-new-shape-guard-off",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    elsif jsonb_typeof(r.own -> 'win') = 'object' and jsonb_typeof(r.own #> '{win,regulation}') = 'number'",
     "replace": "    elsif true /*MUT64*/ or jsonb_typeof(r.own -> 'win') = 'object' and jsonb_typeof(r.own #> '{win,regulation}') = 'number'",
     "killers": [
@@ -961,7 +961,7 @@
   },
   {
     "id": "t7-m65-new-shape-loss-unchecked",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "          and jsonb_typeof(r.own -> 'loss') = 'object' and jsonb_typeof(r.own #> '{loss,regulation}') = 'number' then",
     "replace": "          then /*MUT65*/",
     "killers": [
@@ -976,7 +976,7 @@
   },
   {
     "id": "t7-m66-new-shape-win-regulation-unchecked",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "jsonb_typeof(r.own #> '{win,regulation}') = 'number'",
     "replace": "true /*MUT66*/",
     "killers": [
@@ -991,7 +991,7 @@
   },
   {
     "id": "t7-m67-e3-sweep-first-entry",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "    sweep := coalesce(p -> '*', sweep);",
     "replace": "    sweep := sweep /*MUT67*/;",
     "killers": [
@@ -1006,7 +1006,7 @@
   },
   {
     "id": "t7-m68-drift-handler-misses-22023",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      exception when sqlstate '22023' then",
     "replace": "      exception when sqlstate '99999' /*MUT68*/ then",
     "killers": [
@@ -1021,7 +1021,7 @@
   },
   {
     "id": "t7-m69-drift-handler-silent",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "      exception when sqlstate '22023' then\n        drift := drift || r.id::text;",
     "replace": "      exception when sqlstate '22023' then\n        null /*MUT69*/;",
     "killers": [
@@ -1036,7 +1036,7 @@
   },
   {
     "id": "t7-m70-cricket-tie-noresult-swapped",
-    "file": "db/migration/deltas/V472__w2d_table_rules.sql",
+    "file": "db/migration/deltas/V474__w2d_table_rules.sql",
     "find": "'tie', t, 'noResult', nr, 'draw', coalesce(d, t));",
     "replace": "'tie', nr, 'noResult', t, 'draw', coalesce(d, t)) /*MUT70*/;",
     "killers": [

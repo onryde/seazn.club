@@ -96,7 +96,7 @@ describe.skipIf(!HAS_DB)("a stage's deciders and own points reach the hub and th
   }, 90_000);
 
   it("W2d PF-3: a started stage PINNED to its table rules, with no points of its own, still prints no points line — the pin reaches the table's rule (the loader's `table_rules`), never the stage's own (points_rule)", async () => {
-    // The migration pins every started stage (V472 B1); a stage that plays the division's format must still read exactly
+    // The migration pins every started stage (V474 B1); a stage that plays the division's format must still read exactly
     // as before (division page, hub, embed: "a stage that plays the division's format gets nothing"). The pin is written
     // as the migration writes one; its points are a rule today's reader takes.
     const m = resolveLatestModule("hockey");

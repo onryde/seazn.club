@@ -526,14 +526,14 @@ describe.skipIf(!HAS_DB)("W2d T9: the pin at activation (X-TB-2, OC2)", () => {
     });
   }, 120_000);
 
-  it("PS-5d re-review N2: a V472-migrated pin's cross-group order is the migration's, never the stage's own — a points save keeps it, an order save re-derives it from the new order", async () => {
-    // The migrated pin exactly as V472 writes it: its cross-group literal and its sources, read from the delta's text.
+  it("PS-5d re-review N2: a V474-migrated pin's cross-group order is the migration's, never the stage's own — a points save keeps it, an order save re-derives it from the new order", async () => {
+    // The migrated pin exactly as V474 writes it: its cross-group literal and its sources, read from the delta's text.
     const deltas = resolve(import.meta.dirname, "../../../../../../db/migration/deltas");
-    const v472 = readFileSync(join(deltas, readdirSync(deltas).find((f) => /^V\d+__w2d_table_rules\.sql$/.test(f))!), "utf8");
-    const literal = (key: string) => JSON.parse(new RegExp(`'${key}',\\s*'([^']+)'::jsonb`).exec(v472)![1]!) as unknown;
+    const v474 = readFileSync(join(deltas, readdirSync(deltas).find((f) => /^V\d+__w2d_table_rules\.sql$/.test(f))!), "utf8");
+    const literal = (key: string) => JSON.parse(new RegExp(`'${key}',\\s*'([^']+)'::jsonb`).exec(v474)![1]!) as unknown;
     const MIGRATED_CROSS = literal("crossGroup") as TiebreakerKey[];
     const MIGRATED_SOURCES = literal("sources") as Record<string, string>;
-    expect(MIGRATED_SOURCES, "premise: V472 names every source the migration").toEqual({ points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" });
+    expect(MIGRATED_SOURCES, "premise: V474 names every source the migration").toEqual({ points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" });
     const s = await tableScene({});
     const stageId = s.stageIds[0]!;
     await generateStageFixtures(s.auth, stageId);
@@ -652,8 +652,8 @@ describe.skipIf(!HAS_DB)("W2d T9 fix I1: a stage that leaves pending by any door
 });
 
 describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progression is handed them (X-TB-7, §5.9)", () => {
-  /** The V472 migrated pin's cross-group literal and sources, read from the delta's text (never typed here). */
-  const v472 = (): { cross: TiebreakerKey[]; sources: Record<string, string> } => {
+  /** The V474 migrated pin's cross-group literal and sources, read from the delta's text (never typed here). */
+  const v474 = (): { cross: TiebreakerKey[]; sources: Record<string, string> } => {
     const deltas = resolve(import.meta.dirname, "../../../../../../db/migration/deltas");
     const text = readFileSync(join(deltas, readdirSync(deltas).find((f) => /^V\d+__w2d_table_rules\.sql$/.test(f))!), "utf8");
     const literal = (key: string) => JSON.parse(new RegExp(`'${key}',\\s*'([^']+)'::jsonb`).exec(text)![1]!) as unknown;
@@ -666,8 +666,8 @@ describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progre
       ...(rules.rngSeed === undefined ? {} : { rngSeed: rules.rngSeed }),
     }).rows.map((r) => r.entrantId);
 
-  it("X-TB-7 crossGroup: loadCrossGroupRules reads the source's PINNED cross-group order — a V472-migrated pin (points, diff, for, wins) keeps best-Nth where it was, the stage's own order moves it — with the stage's seeds and its stored cross-group draws (pool null)", async () => {
-    const { cross: MIGRATED_CROSS, sources: MIGRATED_SOURCES } = v472();
+  it("X-TB-7 crossGroup: loadCrossGroupRules reads the source's PINNED cross-group order — a V474-migrated pin (points, diff, for, wins) keeps best-Nth where it was, the stage's own order moves it — with the stage's seeds and its stored cross-group draws (pool null)", async () => {
+    const { cross: MIGRATED_CROSS, sources: MIGRATED_SOURCES } = v474();
     const s = await tableScene({ stages: { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } } });
     const stageId = s.stageIds[0]!;
     await generateStageFixtures(s.auth, stageId);
@@ -692,7 +692,7 @@ describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progre
     expect(derived.order).toEqual(pinned0.crossGroup);
     expect(derived.seeds).toEqual(new Map(s.entrants.map((id, i) => [id, i + 1])));
 
-    // A V472-migrated pin: its cross-group order is the pre-W2d list — goal difference first, W1 (+2) above W2 (+1).
+    // A V474-migrated pin: its cross-group order is the pre-W2d list — goal difference first, W1 (+2) above W2 (+1).
     expect(MIGRATED_SOURCES.crossGroup).toBe("migrated");
     await sql`update stages set table_rules_pinned = table_rules_pinned || ${sql.json({ crossGroup: MIGRATED_CROSS, sources: MIGRATED_SOURCES } as never)} where id = ${stageId}`;
     const migrated = await loaded(stageId);
@@ -766,11 +766,11 @@ describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progre
   const crossDraws = (stageId: string) => sql<{ members: string[]; drawn_order: string[] }[]>`
     select members, drawn_order from stage_lots_draws where stage_id = ${stageId} and pool_id is null and superseded_at is null`;
 
-  it("X-TB-7 crossGroup seedNextStage: best-Nth seats by the source's PINNED cross-group order — the stage's own order moves the seats, a V472-migrated pin keeps them where they were", async () => {
+  it("X-TB-7 crossGroup seedNextStage: best-Nth seats by the source's PINNED cross-group order — the stage's own order moves the seats, a V474-migrated pin keeps them where they were", async () => {
     // W1 won 3-1 (GD +2, GF 3); W2 won 5-4 (GD +1, GF 5). Goals for first: W2, W1. The migrated list (GD first): W1, W2.
     const own = await bestOfWinners("on_complete", [3, 1], [5, 4], { crossGroup: FOR_FIRST, source: "stage" });
     expect(own.done.qualified?.entrants).toEqual([own.W2, own.W1]);
-    const { cross: MIGRATED_CROSS } = v472();
+    const { cross: MIGRATED_CROSS } = v474();
     const migrated = await bestOfWinners("on_complete", [3, 1], [5, 4], { crossGroup: MIGRATED_CROSS, source: "migrated" });
     expect(migrated.done.qualified?.entrants).toEqual([migrated.W1, migrated.W2]);
     // Neither comparison drew lots: nothing stored.

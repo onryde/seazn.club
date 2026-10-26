@@ -132,7 +132,7 @@ const BADMINTON_GROUPS: readonly Group[] = [
   { pool: "P2", matches: [sets("a1", "a2", 2, 0, 42, 20), sets("a1", "a3", 2, 0, 42, 20), sets("a2", "a3", 2, 1, 61, 59)] },
 ];
 const BADMINTON_SEEDS = { a1: 1, x1: 2, a2: 3, x2: 4, a3: 5, x3: 6 };
-/** V472's migrated pin (`db/migration/deltas/V472__w2d_table_rules.sql:480-481`): the crossGroup it writes, typed. */
+/** V474's migrated pin (`db/migration/deltas/V474__w2d_table_rules.sql:480-481`): the crossGroup it writes, typed. */
 const MIGRATED_CROSS_GROUP: TiebreakerKey[] = ["points", "diff", "for", "wins"];
 
 describe("W2d T12 — cross-group ranking: the empty cases first (X-TB-7)", () => {
@@ -203,7 +203,7 @@ describe("W2d T12 — the source stage's order compares groups (X-TB-7, ST-G4)",
   });
 
   it("X-TB-7 a pinned stage's crossGroup (migrated: points, diff, for, wins) is what progression uses — B1 keeps best-third unmoved", () => {
-    // The pre-W2d list the seats were resolved by is the migrated pin's list (V472).
+    // The pre-W2d list the seats were resolved by is the migrated pin's list (V474).
     expect([...PRE_W2D_CROSS_GROUP]).toEqual(MIGRATED_CROSS_GROUP);
     const derived = rulesFor(badminton);
     const pin: TableRulesPin = {

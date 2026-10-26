@@ -183,7 +183,7 @@ async function refusal(tx: Tx, code: string, fn: (sp: Tx) => Promise<unknown>): 
   return (caught as Error).message;
 }
 
-describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V472)", () => {
+describe.skipIf(!HAS_DB)("W2d migration — B1 pin, stored lots table (V474)", () => {
   it("premise: the recording holds started stages of both statuses, pending ones, every sport, and its tables", () => {
     expect(files, "one W2d delta").toHaveLength(1);
     expect(STARTED.filter((s) => s.status === "complete").length).toBeGreaterThan(0);

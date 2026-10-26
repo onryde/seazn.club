@@ -1952,7 +1952,7 @@ describe("validatePack — the stage-config mirror is DRIVEN, key by key", () =>
     // division cfg awards 3/1/0; the stage rule awards 10/4/1, so the table is
     // green ONLY if the rule ran.
     // W2d T9 (PS-9f): a stored rule is read in the outcome-keyed shape only, as the product reads it — every stored
-    // row was converted by the migration (V472), so the retired `{ base }` shape is a rule the engine refuses, never
+    // row was converted by the migration (V474), so the retired `{ base }` shape is a rule the engine refuses, never
     // silently re-read. No committed pack carries one.
     const legacy = leaguePack({
       entrants: ["e1", "e2"],
