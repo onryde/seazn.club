@@ -96,6 +96,7 @@ import { archiveDivision, createDivision, deleteDivision } from "../../divisions
 import { createEntrants, deleteEntrant, patchEntrant } from "../../entrants";
 import { undoDivision } from "../../history";
 import { startDivision } from "../../schedule";
+import { scoreEvent } from "../../scoring";
 import { createStages, deleteStage, generateStageFixtures, rebuildStageFixtures, replaceStages, unpairSwissRound } from "../../stages";
 import { withdrawEntrantCascade } from "../../withdrawal";
 
@@ -755,18 +756,63 @@ describe.skipIf(!HAS_DB)("the paths that would delete an opened, invited round's
     expect(await stateOf(s), "no invite, board, bridge row or stage moved").toEqual(before);
   });
 
-  it("Pair next over the opened round is refused while its boards are undecided, so the shell reconcile never reaches a seated round", async () => {
+  it("Pair next while the opened round's boards are undecided is refused STAGE_NOT_READY and moves nothing (the entry refusal, ahead of the shell reconcile)", async () => {
     const s = await openedSwiss(4);
     await expectQueuedRows(s.orgId, 4);
     const before = await stateOf(s);
 
-    // `reconcileSwissRoundShells` refuses (or skips) a round with a seated board, but it sits BEHIND this refusal: the target is the
-    // next unseated round, and it is only reached once the round before is decided. Pinned at the entry, which is what a person can press.
     let thrown: unknown;
     await generateStageFixtures(s.owner, s.stageId).catch((e: unknown) => (thrown = e));
     expect(EngineError.is(thrown, "STAGE_NOT_READY"), `refused with STAGE_NOT_READY (got ${String(thrown)})`).toBe(true);
 
     expect(await stateOf(s), "no invite, board, bridge row or stage moved").toEqual(before);
+  });
+
+  // The path that RUNS the shell reconcile's delete (`reconcileSwissRoundShells`, the `doomed` shells): the target is the next
+  // unseated round (`nextUnseatedSwissRound`), so with round 1 opened, invited and decided it is round 2, and a shrunk field makes
+  // round 2's shells too many. Round 1 holds the invites and the bridge rows; the reconcile may remove round 2's shells and nothing of
+  // round 1's. What keeps round 1 out of it is the scope (`round_no === target`); the reconcile's own seated, played and evidence
+  // guards would each refuse if the scope slipped, and each is dead code for round 2 as long as it holds.
+  it("Pair next with round 1 opened, invited and decided and the field shrunk reshapes round 2's unseated shells, and round 1's invites, boards and bridge rows are exactly as found", async () => {
+    const s = await openedSwiss(4); // 4 players: 2 boards a round, 3 rounds of shells
+    await expectQueuedRows(s.orgId, 4);
+
+    // Decide round 1 through the scorer's quick result (home wins by resignation), the way the swiss chess walkover tests do.
+    const boards = await sql<{ id: string; home_entrant_id: string }[]>`
+      select id, home_entrant_id from fixtures where stage_id = ${s.stageId} and round_no = 1 and away_entrant_id is not null order by seq_in_round`;
+    expect(boards, "premise: round 1 has two seated boards").toHaveLength(2);
+    for (const b of boards) {
+      await scoreEvent(s.owner, b.id, { expected_seq: 0, type: "core.start", payload: {} });
+      await scoreEvent(s.owner, b.id, { expected_seq: 1, type: "boardgame.result", payload: { winner: b.home_entrant_id, method: "resign" } });
+    }
+    const undecided = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${s.stageId} and round_no = 1 and status not in ('decided', 'finalized')`;
+    expect(undecided[0]!.n, "premise: round 1 is decided").toBe(0);
+
+    // Shrink the field: a round-1 player withdraws (the board is decided, so the cascade writes no walkover). 3 active entrants are
+    // 1 board and a bye, where round 2's shells were minted for 4 (2 boards): one shell too many.
+    await withdrawEntrantCascade(s.owner, s.players[3]!.entrantId);
+
+    const round1 = async () => {
+      const f = await sql<{ id: string; status: string; home: string | null; away: string | null; outcome: unknown }[]>`
+        select id, status, home_entrant_id as home, away_entrant_id as away, outcome from fixtures where stage_id = ${s.stageId} and round_no = 1 order by id`;
+      return { fixtures: f, bridges: await bridgeCount(f.map((x) => x.id)), invites: (await stateOf(s)).invites };
+    };
+    const round2 = async () =>
+      (await sql<{ id: string; home: string | null; away: string | null; ext_key: string | null }[]>`
+        select id, home_entrant_id as home, away_entrant_id as away, ext_key from fixtures where stage_id = ${s.stageId} and round_no = 2 order by seq_in_round`);
+    const r1Before = await round1();
+    const r2Before = await round2();
+    expect(r1Before.bridges, "premise: round 1's boards are bridged").toBe(2);
+    expect(r2Before, "premise: round 2 holds 2 unseated board shells").toHaveLength(2);
+    expect(r2Before.every((f) => f.home === null && f.away === null), "premise: unseated").toBe(true);
+
+    await generateStageFixtures(s.owner, s.stageId); // Pair next: target round 2
+
+    const r2After = await round2();
+    const gone = r2Before.filter((f) => !r2After.some((g) => g.id === f.id));
+    expect(gone, "the delete ran: round 2 lost exactly the one shell the shrunk field no longer needs (2 boards -> 1 board and a bye)").toHaveLength(1);
+    expect(r2After.some((f) => f.ext_key?.endsWith("-bye")), "and the reconcile minted the bye").toBe(true);
+    expect(await round1(), "round 1's boards, bridge rows and invites are exactly as found").toEqual(r1Before);
   });
 
   it("deleting the division is refused while it is started and for 30 days after it is archived; the 30th day is the only way through", async () => {
