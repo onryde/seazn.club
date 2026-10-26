@@ -2195,7 +2195,7 @@
   "reg.withdraw.moneyRefunds": "La cuota pagada se reembolsa automáticamente (bloqueo de reembolso desactivado).",
   "reg.refund.bodyConfirmed": "Solo dinero: {name} permanece confirmado y conserva la plaza.",
   "reg.remind.sent": "Recordatorio de pago enviado.",
-  "reg.remind.notSent": "Recordatorio no enviado: el correo electrónico no está configurado.",
+  "reg.remind.notSent": "El recordatorio no salió de inmediato. Puede llegar más tarde o no llegar; si la persona no lo recibe, póngase en contacto con ella directamente.",
   "reg.stripeOffline.pre": "Los pagos con tarjeta están desconectados: los inscritos no pueden pagar hasta que Stripe se reconecte en ",
   "reg.stripeOffline.link": "Configuración → Connect",
   "reg.stripeOffline.post": ". La página pública muestra la división como temporalmente no disponible.",

@@ -8,6 +8,8 @@
 //     real account-kind enqueue, the real dispatch). Only `transport.deliver` is replaced: it is the network.
 //   - registration_confirmation: the route POST of app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route.ts with an `es`
 //     locale cookie (the real submit, `notifySubmitted`, the real enqueue, the dispatch after the response).
+//   - payment_reminder: the real `sweepRegistrations` (pass 1a) over a stripe cart due for its T-24h reminder, in an `fr` group: the real
+//     claim, mint (Stripe is the one mocked network), once-keyed enqueue and stamp. The sweep leaves the first attempt to the worker.
 //
 // Each kind task (T8-T12) adds its scenario and deletes its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 deletes the list. A kind that is neither moved nor listed fails by name, and so
@@ -31,13 +33,19 @@ vi.mock("next/headers", () => ({
 // The one network seam. The harness reads this same mock back (it imports `deliver` from the same module).
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
+// The payment reminder's sweep mints a Checkout session: Stripe is the second network seam.
+const stripeMock = vi.hoisted(() => {
+  const checkoutCreate = vi.fn();
+  return { checkoutCreate, stripe: { checkout: { sessions: { create: checkoutCreate } } } };
+});
+vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
-import { putRegistrationSettings } from "@/server/usecases/registrations";
+import { putRegistrationSettings, sweepRegistrations } from "@/server/usecases/registrations";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
-import { SETTINGS_BASE, asOwner, rig, seedOrg } from "@/server/usecases/__tests__/_registration-fixtures";
+import { SETTINGS_BASE, asOwner, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
@@ -107,6 +115,7 @@ beforeEach(() => {
   vi.stubEnv("RESEND_API_KEY", "re_test_sweep");
   deliverMock.mockReset();
   deliverMock.mockImplementation(async () => ({ ok: true, providerId: `re_${RUN}_${randomUUID()}` }));
+  stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({ id: `cs_${RUN}_${randomUUID().slice(0, 8)}`, url: "https://checkout.stripe.test/session" }));
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -275,6 +284,28 @@ async function registrationConfirmationScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real sweep: a stripe cart in an `fr` group whose deadline is inside the reminder window. The sweep claims it, mints a Checkout
+ *  session, and queues the reminder with its once-key; the first attempt is the worker's, so the harness sees the row wait. */
+async function paymentReminderScenario(): Promise<KindScenario> {
+  const w = await stripeRig({ feeCents: 500 });
+  made.orgIds.push(w.orgId);
+  made.userIds.push(w.ownerId);
+  const recipient = address();
+  const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: recipient, locale: "fr" });
+  await sql`update registration_groups set expires_at = now() + interval '10 hours' where id = ${registration.group_id}`;
+  return {
+    locale: "fr",
+    subjectKey: "paymentReminder.subject",
+    subjectVars: { competitionName: w.competition.name },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const out = await sweepRegistrations("https://sweep.test");
+      expect(out.reminded, "premise: the real sweep reminded the cart").toBeGreaterThanOrEqual(1);
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -287,8 +318,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", registration.subjectKey, registration.subjectVars),
     );
 
+    const reminder = await paymentReminderScenario();
+    expect(dictionarySubject("fr", reminder.subjectKey, reminder.subjectVars)).not.toBe(dictionarySubject("en", reminder.subjectKey, reminder.subjectVars));
+
     const out = await forEachOutboxKind(
-      { magic_link: magicLinkScenario(), chess_invite: chess, registration_confirmation: registration },
+      { magic_link: magicLinkScenario(), chess_invite: chess, registration_confirmation: registration, payment_reminder: reminder },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 

@@ -566,16 +566,14 @@ export async function registrationEmail(args: RegistrationEmailArgs, locale: Loc
   return registrationTemplate(args, dict);
 }
 
-export interface PaymentReminderEmail extends PaymentReminderArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Payment reminder for an unpaid entry fee (offline nudge or card T-24h). */
-export async function sendPaymentReminderEmail(opts: PaymentReminderEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** The payment reminder for an unpaid entry fee (offline nudge or card T-24h), RENDERED and not sent. The producers (the registration
+ *  sweep's two reminder passes and the organiser's manual reminder, `server/usecases/registrations.ts`) queue what this returns on the
+ *  email outbox (kind `payment_reminder`); there is no direct sender for it any more (a second path would skip the outbox's retry and
+ *  its once-key, which is what stops a failed send minting a new Checkout session on every sweep). The address is not part of the
+ *  content, so it is not an argument here. `locale` is the language the mail is written in: the producer resolves it (`recipientLocale`). */
+export async function paymentReminderEmail(args: PaymentReminderArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...paymentReminderTemplate(args, dict) });
+  return paymentReminderTemplate(args, dict);
 }
 
 export interface RegistrationPromotedEmail extends RegistrationPromotedArgs {

@@ -223,14 +223,10 @@ describe.skipIf(!HAS_DB)("createRegistrationCheckout — token===null return-URL
       set expires_at = now() + interval '2 hours'
       where id = ${first.registration.group_id}`;
 
-    // RS007 review fix (registrations.ts sweepRegistrations): `reminded` now
-    // requires a genuinely DELIVERED send, not just an attempted one — this
-    // file's own header comment above says it deliberately never mocks
-    // lib/email, so the real sendPaymentReminderEmail runs here and returns
-    // false with no RESEND_API_KEY configured (lib/email.ts's send()).
-    // Minting is unconditional either way (see createRegistrationCheckout's
-    // own doc comment), so the mint call itself — this test's actual point,
-    // per the file header above — is the right thing to assert on instead.
+    // The reminder is queued on the email outbox now (this file never mocks
+    // it either), so the sweep makes no send of its own and needs no mail
+    // provider here. The mint call itself — this test's actual point, per the
+    // file header above — is what is asserted.
     await sweepRegistrations("http://test.local");
     expect(stripeMock.checkoutCreate).toHaveBeenCalledTimes(1);
 

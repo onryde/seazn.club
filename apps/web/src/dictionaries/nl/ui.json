@@ -2195,7 +2195,7 @@
   "reg.withdraw.moneyRefunds": "De betaalde kosten worden automatisch terugbetaald (terugbetalingsvergrendeling uit).",
   "reg.refund.bodyConfirmed": "Alleen geld — {name} blijft bevestigd en behoudt de plek.",
   "reg.remind.sent": "Betalingsherinnering verzonden.",
-  "reg.remind.notSent": "Herinnering niet verzonden — e-mail is niet geconfigureerd.",
+  "reg.remind.notSent": "De herinnering is niet meteen verstuurd. Ze kan later aankomen, of helemaal niet: als de persoon haar niet ontvangt, neem dan rechtstreeks contact op.",
   "reg.stripeOffline.pre": "Kaartbetalingen zijn offline — deelnemers kunnen niet betalen totdat Stripe opnieuw is verbonden onder ",
   "reg.stripeOffline.link": "Instellingen → Connect",
   "reg.stripeOffline.post": ". De openbare pagina toont de divisie als tijdelijk niet beschikbaar.",

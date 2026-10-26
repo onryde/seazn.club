@@ -2195,7 +2195,7 @@
   "reg.withdraw.moneyRefunds": "Les frais payés sont remboursés automatiquement (verrou de remboursement désactivé).",
   "reg.refund.bodyConfirmed": "Argent uniquement — {name} reste confirmé(e) et conserve la place.",
   "reg.remind.sent": "Rappel de paiement envoyé.",
-  "reg.remind.notSent": "Rappel non envoyé — l'e-mail n'est pas configuré.",
+  "reg.remind.notSent": "Le rappel n'est pas parti tout de suite. Il peut arriver en retard, ou pas du tout : si la personne ne le reçoit pas, contactez-la directement.",
   "reg.stripeOffline.pre": "Les paiements par carte sont hors ligne — les inscrits ne peuvent pas payer tant que Stripe n'est pas reconnecté sous ",
   "reg.stripeOffline.link": "Paramètres → Connect",
   "reg.stripeOffline.post": ". La page publique affiche la division comme temporairement indisponible.",
