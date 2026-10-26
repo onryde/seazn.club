@@ -28,7 +28,7 @@ import {
   registrationEmail,
   paymentReminderEmail,
   registrationPromotedEmail,
-  sendRefundIssuedEmail,
+  refundIssuedEmail,
   sendDisputeAlertEmail,
   sendDisputeLostEmail,
   sendRegistrationRefundFailedAlertEmail,
@@ -3282,16 +3282,22 @@ async function confirmPaidRegistration(
     if (outcome.kind === "late" && outcome.reg.refunded_cents >= outcome.reg.amount_cents) {
       return;
     }
+    // Read BEFORE the money moves: a failure here lands in `refund_failed` with nothing refunded, which is true, where the same failure
+    // after the Stripe call would report a refund failure for a refund that went through.
+    const ctxRefund = await divisionCtx(sql, outcome.reg.division_id);
     const refund = await stripeRefund(outcome.intent, entryRefundCents);
-    if (outcome.kind === "late") {
-      // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
-      // fixup — these were two separate autocommit statements; if the
-      // second failed after the first committed, Stripe would already have
-      // refunded the money while the entry and cart totals silently
-      // diverged, and the whole attempt would still land in the catch below
-      // as `refund_failed` — a misleading audit trail for a refund that
-      // actually succeeded).
-      await sql.begin(async (tx) => {
+    // ONE transaction records the refund and queues the registrant's receipt. A webhook leaves the first attempt to the worker (it has
+    // no response of its own to defer behind). The duplicate path records no totals (the CONFIRMED payment is untouched), so its
+    // transaction holds the receipt alone.
+    await sql.begin(async (tx) => {
+      if (outcome.kind === "late") {
+        // Additive on BOTH tables (hazard 2 fixed), in ONE transaction (review
+        // fixup — these were two separate autocommit statements; if the
+        // second failed after the first committed, Stripe would already have
+        // refunded the money while the entry and cart totals silently
+        // diverged, and the whole attempt would still land in the catch below
+        // as `refund_failed` — a misleading audit trail for a refund that
+        // actually succeeded).
         await tx`
           update registrations
           set refunded_cents = refunded_cents + ${entryRefundCents}, updated_at = now()
@@ -3301,16 +3307,15 @@ async function confirmPaidRegistration(
           set refunded_cents = refunded_cents + ${entryRefundCents},
               refunded_at = now(), updated_at = now()
           where id = ${outcome.reg.group_id}`;
-      });
-    }
+      }
+      await queueRefundReceipt(tx, { reg: outcome.reg, ctx: ctxRefund, amountCents: entryRefundCents, refundId: refund.id });
+    });
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refunded", {
       registration_id: regId,
       amount_cents: outcome.reg.amount_cents,
       mode: outcome.kind === "late" ? "late_payment" : "duplicate",
       stripe_refund_id: refund.id,
     }, null);
-    const ctxLate = await divisionCtx(sql, outcome.reg.division_id);
-    notifyRefund(outcome.reg, ctxLate, outcome.reg.amount_cents);
   } catch (err) {
     await audit(sql, outcome.competitionId, outcome.reg.org_id, "registration.refund_failed", {
       registration_id: regId,
@@ -4664,19 +4669,60 @@ export async function stripeRefund(
   });
 }
 
-/** Fire-and-forget refund receipt to the registrant (spec T9). Exported for
- *  `registration-approval.ts` (RS002 W5 whole-branch review). */
-export function notifyRefund(reg: RegistrationWithGroupRow, ctx: DivisionCtx, amountCents: number): void {
-  void sendRefundIssuedEmail({
-    to: reg.contact_email,
-    locale: toLocale(reg.locale),
-    orgName: ctx.org_name,
-    competitionName: ctx.comp_name,
-    displayName: reg.display_name,
-    amountCents,
-    currency: reg.currency,
-    refCode: reg.ref_code,
-  }).catch(() => {});
+/**
+ * Queue the registrant's refund receipt on the email outbox, on the transaction that records the refund (`tx`): the receipt and the
+ * `refunded_cents` it reports commit together or not at all, so a refund the books lost is never mailed and a refund the books kept is
+ * never silently unmailed. Returns the outbox id, or `null` when there is nothing to send: the same Stripe refund already has its receipt
+ * (a webhook delivered twice, a retry), or the receipt could not be queued.
+ *
+ * The ref is the REFUND (`refund/<Stripe refund id>`), and so is the once-key: two partial refunds of one entry are two receipts, each
+ * naming its own amount, and neither supersedes the other (the replace rule keys on kind + ref + recipient). The key is a Stripe id, so it
+ * is globally unique.
+ *
+ * The receipt is a courtesy about money that has ALREADY moved at Stripe, so a failure here must never undo or fail the refund. It is
+ * contained at its own savepoint: a statement that errors inside a Postgres transaction aborts the whole transaction, which would roll
+ * back `refunded_cents` and push the refund into the caller's `refund_failed` path although the money had left. The render is inside the
+ * same try, so a template error is contained as well. The language is the registrant's (D4: the cart's pick, then the linked account,
+ * then the organiser's default).
+ *
+ * `ctx` is read by the caller BEFORE its transaction opens (a pooled read inside a tenant transaction waits on the connection the
+ * transaction holds, #996). Exported for `registration-approval.ts` and the refund tests.
+ */
+export async function queueRefundReceipt(
+  tx: Tx,
+  a: { reg: RegistrationWithGroupRow; ctx: DivisionCtx; amountCents: number; refundId: string },
+): Promise<string | null> {
+  const { reg, ctx, amountCents, refundId } = a;
+  try {
+    return await tx.savepoint(async (sp) => {
+      const locale = await recipientLocale(sp, { pick: reg.locale, userId: reg.user_id, orgDefault: ctx.default_locale });
+      const content = await refundIssuedEmail(
+        {
+          orgName: ctx.org_name,
+          competitionName: ctx.comp_name,
+          displayName: reg.display_name,
+          amountCents,
+          currency: reg.currency,
+          refCode: reg.ref_code,
+        },
+        locale,
+      );
+      return enqueueEmailOnce(sp, {
+        kind: "refund_issued",
+        refType: "refund",
+        refId: refundId,
+        orgId: reg.org_id,
+        to: reg.contact_email,
+        ...content,
+        transactional: false,
+        expiresAt: expiryWithin(null),
+        dedupeKey: refundId,
+      });
+    });
+  } catch (err) {
+    log.error({ err, registrationId: reg.id, refundId }, "registration: refund receipt could not be queued");
+    return null;
+  }
 }
 
 /** Plain string for a caught refund error — never rendered to a customer,
@@ -5049,7 +5095,9 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
       // cart totals silently diverged if the second failed after the first
       // committed, reachable today on a single-entry cart, no multi-entry
       // cart needed).
-      await sql.begin(async (tx) => {
+      // The registrant's receipt is queued in the SAME transaction (`ctx` was read before it). This is a request: the first attempt is
+      // made after the response, off the caller's path.
+      const receiptId = await sql.begin(async (tx) => {
         await tx`
           update registrations
           set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
@@ -5058,14 +5106,15 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
           update registration_groups
           set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
           where id = ${locked.group_id}`;
+        return queueRefundReceipt(tx, { reg: locked, ctx, amountCents: remaining, refundId: refund.id });
       });
+      if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
       await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
         registration_id: reg.id,
         amount_cents: remaining,
         mode: "auto",
         stripe_refund_id: refund.id,
       }, actorId);
-      notifyRefund(locked, ctx, remaining);
     } catch (err) {
       // Refund failure must not undo the withdrawal — surfaces on the
       // organiser console (withdrawn + refunded_cents < amount_cents).
@@ -5659,6 +5708,8 @@ export async function sweepRegistrations(
       const remaining = locked.amount_cents - locked.refunded_cents;
       try {
         const refund = await stripeRefund(locked.entry_payment_intent_id, remaining);
+        // The receipt is queued in the same transaction as the refund's record; a cron has no response to defer behind, so the first
+        // attempt is the worker's.
         await sql.begin(async (tx) => {
           await tx`
             update registrations
@@ -5668,6 +5719,7 @@ export async function sweepRegistrations(
             update registration_groups
             set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
             where id = ${locked.group_id}`;
+          await queueRefundReceipt(tx, { reg: locked, ctx, amountCents: remaining, refundId: refund.id });
         });
         await audit(sql, ctx.competition_id, ctx.org_id, "registration.refunded", {
           registration_id: locked.id,
@@ -5675,7 +5727,6 @@ export async function sweepRegistrations(
           mode: "auto_pool_deadline",
           stripe_refund_id: refund.id,
         }, null);
-        notifyRefund(locked, ctx, remaining);
       } catch (err) {
         await audit(sql, ctx.competition_id, ctx.org_id, "registration.refund_failed", {
           registration_id: locked.id,
@@ -6341,8 +6392,10 @@ export async function refundRegistration(
   if (amount > remaining) {
     throw new HttpError(422, `Refund exceeds the remaining ${remaining} cents`);
   }
+  // Read before the money moves and before the tenant transaction opens (a pooled read inside it waits on the connection it holds).
+  const ctx = await divisionCtx(sql, reg.division_id);
   const refund = await stripeRefund(reg.payment_intent_id, amount);
-  const row = await withTenant(auth.orgId, async (tx) => {
+  const { row, receiptId } = await withTenant(auth.orgId, async (tx) => {
     const [div] = await tx<{ competition_id: string }[]>`
       select competition_id from divisions where id = ${reg.division_id}`;
     // Additive on BOTH tables: this entry's own total (V368) and the cart's
@@ -6355,15 +6408,18 @@ export async function refundRegistration(
       update registration_groups
       set refunded_cents = refunded_cents + ${amount}, refunded_at = now(), updated_at = now()
       where id = ${reg.group_id}`;
+    // The receipt joins the refund's record and its audit entry: all three commit together, or none does.
+    const receiptId = await queueRefundReceipt(tx, { reg, ctx, amountCents: amount, refundId: refund.id });
     await audit(tx, div.competition_id, auth.orgId, "registration.refunded", {
       registration_id: regId,
       amount_cents: amount,
       mode: "manual",
       stripe_refund_id: refund.id,
     }, auth.userId);
-    return orgRegAfter(tx, regId);
+    return { row: await orgRegAfter(tx, regId), receiptId };
   });
-  notifyRefund(reg, await divisionCtx(sql, reg.division_id), amount);
+  // A request: the first attempt is made after the response.
+  if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
   return row;
 }
 
@@ -6567,8 +6623,8 @@ export async function registrationIcs(regId: string, token: string): Promise<str
   // This attachment is addressed to ONE specific person, unlike
   // calendar.ics's division-wide feed (which has no single "whose locale"
   // and resolves org.default_locale instead) — so it resolves the
-  // registrant's OWN locale, the same signal notifyRefund and every other
-  // post-signup email in this file already reads via toLocale(reg.locale).
+  // registrant's OWN locale, the same signal every other post-signup email
+  // in this file reads (the cart's pick, `reg.locale`).
   const locale = toLocale(reg.locale);
   const lookup = (
     k: Parameters<typeof msgFor>[1],

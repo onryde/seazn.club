@@ -602,16 +602,11 @@ export async function sendSoloSignUpAssignedEmail(
   return send({ to, ...soloSignUpAssignedTemplate(args, dict) });
 }
 
-export interface RefundIssuedEmail extends RefundIssuedArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Registrant receipt for any refund (auto, manual, late, duplicate). */
-export async function sendRefundIssuedEmail(opts: RefundIssuedEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Registrant receipt for any refund (auto, manual, late, duplicate): the subject and body in the registrant's language. It is queued on the
+ *  email outbox by `queueRefundReceipt` (registrations.ts), in the transaction that records the refund; nothing sends it directly. */
+export async function refundIssuedEmail(args: RefundIssuedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...refundIssuedTemplate(args, dict) });
+  return refundIssuedTemplate(args, dict);
 }
 
 export interface DisputeAlertEmail extends DisputeAlertArgs {

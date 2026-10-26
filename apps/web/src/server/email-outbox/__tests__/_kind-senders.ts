@@ -52,7 +52,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendPassRevokedEmail",
   "sendPassRungMismatchAlertEmail",
   "sendPassUnknownCompetitionAlertEmail",
-  "sendRefundIssuedEmail",
   "sendRegistrationRefundFailedAlertEmail",
   "sendReportSubmittedEmail",
   "sendSizePackGrantFailedAlertEmail",
@@ -78,7 +77,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
 
 /** Kinds whose producer still mails through a `send*` (T8-T12 move them, one each, and delete their entry). */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "refund_issued",
   "solo_signup_assigned",
 ];
 
@@ -89,6 +87,6 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   registration_confirmation: null,
   payment_reminder: null,
   registration_promoted: null,
-  refund_issued: "sendRefundIssuedEmail",
+  refund_issued: null,
   solo_signup_assigned: "sendSoloSignUpAssignedEmail",
 };

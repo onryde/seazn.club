@@ -13,6 +13,8 @@ import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
+import { deferred } from "@/lib/deferred";
+import { dispatchNow } from "@/server/email-outbox";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
@@ -36,7 +38,7 @@ import {
   withdrawRegistrationOrganiser,
   clearExpiresIfNoLongerNeeded,
   stripeRefund,
-  notifyRefund,
+  queueRefundReceipt,
   maybeAlertRegistrationRefundFailed,
   inviteUnclaimedMembers,
   type RegistrationWithGroupRow,
@@ -266,8 +268,11 @@ export async function rejectRegistration(
     const remaining = result.refundable.amount_cents - result.refundable.refunded_cents;
     if (remaining > 0) {
       try {
+        // Read BEFORE the money moves (a failure after it would report a refund failure for a refund that went through).
+        const refundCtx = await divisionCtx(sql, result.row.division_id);
         const refund = await stripeRefund(result.refundable.payment_intent_id, remaining);
-        await sql.begin(async (tx) => {
+        // The registrant's receipt is queued in the same transaction as the refund's record; the request makes the first attempt.
+        const receiptId = await sql.begin(async (tx) => {
           await tx`
             update registrations set refunded_cents = refunded_cents + ${remaining}, updated_at = now()
             where id = ${regId}`;
@@ -275,15 +280,15 @@ export async function rejectRegistration(
             update registration_groups
             set refunded_cents = refunded_cents + ${remaining}, refunded_at = now(), updated_at = now()
             where id = ${result.refundable!.group_id}`;
+          return queueRefundReceipt(tx, { reg: result.refundable!, ctx: refundCtx, amountCents: remaining, refundId: refund.id });
         });
+        if (receiptId !== null) deferred(() => dispatchNow([receiptId]));
         await audit(sql, result.competitionId!, auth.orgId, "registration.refunded", {
           registration_id: regId,
           amount_cents: remaining,
           mode: "reject",
           stripe_refund_id: refund.id,
         }, auth.userId);
-        const refundCtx = await divisionCtx(sql, result.row.division_id);
-        notifyRefund(result.refundable, refundCtx, remaining);
       } catch (err) {
         // Same fail-open contract as withdrawCore: a refund failure must not
         // undo the reject decision — surfaces on the organiser console

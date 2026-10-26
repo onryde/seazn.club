@@ -12,6 +12,8 @@
 //     behind them: the real promotion, `notifyPromoted`, the real once-keyed enqueue, the dispatch after the response.
 //   - payment_reminder: the real `sweepRegistrations` (pass 1a) over a stripe cart due for its T-24h reminder, in an `fr` group: the real
 //     claim, mint (Stripe is the one mocked network), once-keyed enqueue and stamp. The sweep leaves the first attempt to the worker.
+//   - refund_issued: the real `refundRegistration` of a paid `es` registrant (Stripe's refund is mocked): the receipt is queued in the transaction
+//     that records the refund, with the refund id as its ref and once-key, and the request that did it makes the first attempt.
 //
 // Each kind task (T8-T12) adds its scenario and deletes its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 deletes the list. A kind that is neither moved nor listed fails by name, and so
@@ -35,19 +37,20 @@ vi.mock("next/headers", () => ({
 // The one network seam. The harness reads this same mock back (it imports `deliver` from the same module).
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
-// The payment reminder's sweep mints a Checkout session: Stripe is the second network seam.
+// The payment reminder's sweep mints a Checkout session and the refund receipt's refund is a Stripe refund: Stripe is the second network seam.
 const stripeMock = vi.hoisted(() => {
   const checkoutCreate = vi.fn();
-  return { checkoutCreate, stripe: { checkout: { sessions: { create: checkoutCreate } } } };
+  const refundCreate = vi.fn();
+  return { checkoutCreate, refundCreate, stripe: { checkout: { sessions: { create: checkoutCreate } }, refunds: { create: refundCreate } } };
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
-import { putRegistrationSettings, sweepRegistrations, withdrawRegistrationPublic } from "@/server/usecases/registrations";
+import { handleRegistrationCheckoutCompleted, putRegistrationSettings, refundRegistration, sweepRegistrations, withdrawRegistrationPublic } from "@/server/usecases/registrations";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
-import { SETTINGS_BASE, asOwner, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
+import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
@@ -118,6 +121,7 @@ beforeEach(() => {
   deliverMock.mockReset();
   deliverMock.mockImplementation(async () => ({ ok: true, providerId: `re_${RUN}_${randomUUID()}` }));
   stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({ id: `cs_${RUN}_${randomUUID().slice(0, 8)}`, url: "https://checkout.stripe.test/session" }));
+  stripeMock.refundCreate.mockReset().mockImplementation(async () => ({ id: `re_${RUN}_${randomUUID().slice(0, 8)}` }));
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -307,6 +311,15 @@ async function registrationPromotedScenario(): Promise<KindScenario> {
     run: async () => {
       const view = await withdrawRegistrationPublic(holder.registration.id, holder.access_token);
       expect(view.status, "premise: the real withdrawal went through").toBe("withdrawn");
+      // The promotion email is queued after the withdrawal's own commit, off the response (`void notifyPromoted`): the producer has not
+      // finished when the withdrawal returns. Wait for its row, or a busy machine reads "no row" before the enqueue has run.
+      await vi.waitFor(
+        async () => {
+          const [queued] = await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where kind = 'registration_promoted' and lower(recipient) = lower(${recipient})`;
+          if (queued!.n === 0) throw new Error("the promotion email has not been queued yet");
+        },
+        { timeout: 10_000, interval: 50 },
+      );
     },
   };
 }
@@ -327,8 +340,38 @@ async function paymentReminderScenario(): Promise<KindScenario> {
     recipient,
     firstAttempt: "worker",
     run: async () => {
-      const out = await sweepRegistrations("https://sweep.test");
-      expect(out.reminded, "premise: the real sweep reminded the cart").toBeGreaterThanOrEqual(1);
+      await sweepRegistrations("https://sweep.test");
+      // The sweep is global to the database, and other test files run their own sweeps beside this one: theirs may have claimed this cart
+      // first, so this call's own `reminded` count is not the evidence. The evidence is the queued row, which the harness requires next.
+      await vi.waitFor(
+        async () => {
+          const [queued] = await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where kind = 'payment_reminder' and lower(recipient) = lower(${recipient})`;
+          if (queued!.n === 0) throw new Error("the reminder has not been queued yet");
+        },
+        { timeout: 10_000, interval: 50 },
+      );
+    },
+  };
+}
+
+/** The real organiser refund: an `es` registrant has paid (the real webhook confirmed the entry) and the organiser refunds them in full. The
+ *  receipt is queued in the transaction that records the refund, and the request that did it makes the first attempt. */
+async function refundIssuedScenario(): Promise<KindScenario> {
+  const w = await stripeRig({ feeCents: 700 });
+  made.orgIds.push(w.orgId);
+  made.userIds.push(w.ownerId);
+  const recipient = address();
+  const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: recipient, locale: "es" });
+  await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 700));
+  return {
+    locale: "es",
+    subjectKey: "refundIssued.subject",
+    subjectVars: { competitionName: w.competition.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const after = await refundRegistration(w.owner, registration.id, undefined);
+      expect(after.refunded_cents, "premise: the real refund went through").toBe(700);
     },
   };
 }
@@ -351,8 +394,18 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const reminder = await paymentReminderScenario();
     expect(dictionarySubject("fr", reminder.subjectKey, reminder.subjectVars)).not.toBe(dictionarySubject("en", reminder.subjectKey, reminder.subjectVars));
 
+    const refund = await refundIssuedScenario();
+    expect(dictionarySubject("es", refund.subjectKey, refund.subjectVars)).not.toBe(dictionarySubject("en", refund.subjectKey, refund.subjectVars));
+
     const out = await forEachOutboxKind(
-      { magic_link: magicLinkScenario(), chess_invite: chess, registration_confirmation: registration, payment_reminder: reminder, registration_promoted: promoted },
+      {
+        magic_link: magicLinkScenario(),
+        chess_invite: chess,
+        registration_confirmation: registration,
+        payment_reminder: reminder,
+        registration_promoted: promoted,
+        refund_issued: refund,
+      },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 
