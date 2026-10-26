@@ -2061,9 +2061,13 @@ jobs:
   # never pushed) would pass everywhere. `verify-pin` fetches the proto at that
   # commit from the placement repo and compares its sha256.
   #
-  # The job cannot be skipped or made non-blocking (no `if:`, `continue-on-error:`
-  # or `defaults:` at the job level): a skipped placement-pin skips scheduler-live
-  # with it, and a skipped `needs` job reads as a green run.
+  # The job-level keys of this job and of scheduler-live are pinned EXACTLY (this
+  # job: name, runs-on, outputs, steps; scheduler-live: name, needs, runs-on,
+  # services, steps, with `needs` exactly `placement-pin`) by
+  # placement-image-wiring.test.ts. Any other key can skip the job (`if:`, or a
+  # `needs:` on a job that is itself skipped) or make its red non-blocking
+  # (`continue-on-error:`), and a skipped placement-pin skips scheduler-live with
+  # it: a skipped job reads as a green run.
   # -------------------------------------------------------------------------
   placement-pin:
     name: Resolve the pinned placement image

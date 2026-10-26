@@ -292,6 +292,9 @@ describe("placement-image.sh verify-pin", () => {
   const URL = `https://raw.githubusercontent.com/onryde/seazn.club.placement/${COMMIT}/proto/scheduler.proto`;
   const PROTO = 'syntax = "proto3";\npackage scheduler;\n';
   const sha = (text: string): string => createHash("sha256").update(text).digest("hex");
+  // Every fetch must be bounded: without `--max-time` one hung connection stalls the job until the runner's own timeout, and
+  // the retry loop never gets to run. A positive whole number of seconds (curl reads 0 as "no limit").
+  const BOUNDED = /(?:^| )--max-time [1-9][0-9]*(?: |$)/;
   // A curl that records its argv and answers from CURL_RESULTS: comma-separated, one per call, the last repeats. An entry is
   // STATUS or STATUS:EXIT. The shim prints the status the way `--write-out %{http_code}` does, writes CURL_BODY to the
   // `--output` file when the status is 200, and exits EXIT (default 0; 7 for status 000, a dropped connection). It is
@@ -350,6 +353,7 @@ describe("placement-image.sh verify-pin", () => {
     expect(out.code, out.stderr).toBe(0);
     expect(out.curls).toHaveLength(1);
     expect(out.curls[0], "the raw URL at the pinned commit").toContain(URL);
+    expect(out.curls[0], "the fetch is time-bounded").toMatch(BOUNDED);
     expect(out.stdout).toContain(COMMIT);
     expect(out.stdout).toContain(sha(PROTO));
   });
@@ -396,6 +400,7 @@ describe("placement-image.sh verify-pin", () => {
     expect(out.curls).toHaveLength(3);
     expect(out.sleeps).toEqual(["0", "0"]);
     expect(out.stderr).toMatch(/::error::.*3 attempts.*503/);
+    expect(out.curls.filter((c) => BOUNDED.test(c)), "every one of the three fetches is time-bounded").toHaveLength(3);
   });
 
   it("a 200 whose transfer was cut short (curl exits non-zero) is NOT a fetched file: retried, never compared, never read as a lying pin", () => {
@@ -483,11 +488,30 @@ interface Job {
   text: string;
 }
 const key = (job: Job): string => `${job.file}:${job.id}`;
-/** Job-level keys that skip a job, make its red non-blocking or move its steps: `if:` and `continue-on-error:` (a skipped job
- *  reads as green, and so does everything that `needs` it), `defaults:` (a working-directory there moves every step). Anchored
- *  to the job's key column, so a step's own `if:` (8 spaces), a `run:` body line and a comment never match. */
-const JOB_SILENCERS = /^ {4}(?:if|continue-on-error|defaults):/gm;
-const silencersOf = (j: Job): string[] => j.text.match(JOB_SILENCERS) ?? [];
+/** The job-level keys the two live-solver jobs are PINNED to: an allowlist, not a denylist. The keys that skip a job (or make
+ *  its red non-blocking) are not a closed set: `if:`, `continue-on-error:`, `defaults:`, a `strategy:` with an empty matrix, and
+ *  `needs: <some job that is itself skipped>` (placement-pin gaining `needs: matrix-sample`, a job with its own `if:`, skips
+ *  placement-pin and, with it, scheduler-live). A skipped job reads as a green run, and so does everything that needs it. */
+const PINNED_JOB_KEYS: Record<string, string[]> = {
+  "placement-pin": ["name", "runs-on", "outputs", "steps"],
+  "scheduler-live": ["name", "needs", "runs-on", "services", "steps"],
+};
+/** A job's own keys: column 4 of its text (comments are already stripped), so a step's key (6 or 8 spaces), a `run:` body line
+ *  and a comment never count. */
+const jobKeysOf = (j: Job): string[] => (j.text.match(/^ {4}[A-Za-z][A-Za-z0-9_-]*(?=:)/gm) ?? []).map((k) => k.trim());
+/** The raw value of the job's own `needs:`; a block list reads as the empty string, which is not `placement-pin` either. */
+const jobNeedsOf = (j: Job): string | undefined => /^ {4}needs:[ \t]*(.*)$/m.exec(j.text)?.[1]?.trim();
+/** Everything wrong with a pinned job's shape; empty is clean. */
+function jobShapeProblems(j: Job): string[] {
+  const want = PINNED_JOB_KEYS[j.id];
+  if (!want) return [`${key(j)} has no pinned key set`];
+  const problems: string[] = [];
+  const got = [...jobKeysOf(j)].sort();
+  const exp = [...want].sort();
+  if (got.join() !== exp.join()) problems.push(`${key(j)} job-level keys are [${got.join(", ")}], expected exactly [${exp.join(", ")}]`);
+  if (j.id === "scheduler-live" && jobNeedsOf(j) !== "placement-pin") problems.push(`${key(j)} needs ${JSON.stringify(jobNeedsOf(j))}, expected exactly "placement-pin"`);
+  return problems;
+}
 
 /** Every job of one workflow: the 2-space `id:` lines under the top-level `jobs:`. */
 const jobsOf = (file: string): Job[] => parseJobs(file, readFileSync(join(WORKFLOWS, file), "utf8"));
@@ -799,15 +823,18 @@ describe("ci.yml: placement-pin resolves the reference, scheduler-live runs the 
     expect(using, "steps that read the container id").toBe(2);
   });
 
-  it("neither placement-pin nor scheduler-live can be skipped, made non-blocking or moved at the JOB level (`if:`, `continue-on-error:`, `defaults:`)", () => {
+  it("placement-pin and scheduler-live carry EXACTLY their pinned job-level keys, and scheduler-live needs exactly placement-pin", () => {
     // A skipped placement-pin skips scheduler-live with it (a `needs` job that did not run), and a skipped job reads as green:
-    // the only job that talks to a real solver would vanish without a red. Step-level keys are pinned step by step, below.
+    // the only job that talks to a real solver would vanish without a red. The keys that can skip a job are not a closed set
+    // (`needs: <a skipped job>` is one), so any key beyond the pinned set is refused. Step-level keys are pinned step by step.
     let jobs = 0;
     for (const j of [PIN(), LIVE()]) {
-      expect(silencersOf(j), `${key(j)} carries a job-level key that can skip or soften it`).toEqual([]);
+      expect(jobShapeProblems(j), key(j)).toEqual([]);
       jobs++;
     }
     expect(jobs, "jobs checked").toBe(2);
+    expect(jobNeedsOf(PIN()), "placement-pin needs nothing: it is the root of the chain").toBeUndefined();
+    expect(jobNeedsOf(LIVE())).toBe("placement-pin");
   });
 
   it("the judge and the wait step carry no key beyond name, env, run", () => {
@@ -815,49 +842,72 @@ describe("ci.yml: placement-pin resolves the reference, scheduler-live runs the 
     expect(stepNamed(LIVE(), "Wait for the placement service").keys).toEqual(["name", "env", "run"]);
   });
 
-  describe("the job-level check refuses each way to silence the two jobs (negative self-test on a mutated copy of the real ci.yml)", () => {
+  describe("the job-shape check refuses each way to skip or soften the two jobs (negative self-test on a mutated copy of the real ci.yml)", () => {
     const REAL = readFileSync(join(WORKFLOWS, "ci.yml"), "utf8");
-    const after = (anchor: string, insert: string): string => {
+    const once = (anchor: string): void => {
       expect(REAL.split(anchor).length - 1, `anchor occurs once: ${anchor.trim()}`).toBe(1);
+    };
+    const after = (anchor: string, insert: string): string => {
+      once(anchor);
       return REAL.replace(anchor, () => `${anchor}${insert}`);
+    };
+    const swap = (anchor: string, replacement: string): string => {
+      once(anchor);
+      return REAL.replace(anchor, () => replacement);
     };
     const PIN_HEAD = "    name: Resolve the pinned placement image\n";
     const LIVE_HEAD = "    name: Scheduler ↔ live placement service (real gRPC, no mocks)\n";
     const PIN_LAST = '          echo "image=$ref" >> "$GITHUB_OUTPUT"\n';
     const LIVE_LAST = '          echo "integration suite ran against the live service: $passed passed, 0 skipped"\n';
-    const MUTED: [label: string, jobId: string, yml: () => string][] = [
-      ["`if: false` on placement-pin", "placement-pin", () => after(PIN_HEAD, "    if: false\n")],
-      ["`continue-on-error: true` on placement-pin", "placement-pin", () => after(PIN_HEAD, "    continue-on-error: true\n")],
-      ["`defaults:` on placement-pin", "placement-pin", () => after(PIN_HEAD, "    defaults:\n      run:\n        working-directory: apps/web\n")],
-      ["`if:` on placement-pin, written AFTER its steps", "placement-pin", () => after(PIN_LAST, "    if: github.event_name == 'push'\n")],
-      ["`continue-on-error:` on placement-pin, written AFTER its steps", "placement-pin", () => after(PIN_LAST, "    continue-on-error: true\n")],
-      ["`if: false` on scheduler-live", "scheduler-live", () => after(LIVE_HEAD, "    if: false\n")],
-      ["`continue-on-error: true` on scheduler-live", "scheduler-live", () => after(LIVE_HEAD, "    continue-on-error: true\n")],
-      ["`defaults:` on scheduler-live", "scheduler-live", () => after(LIVE_HEAD, "    defaults:\n      run:\n        working-directory: apps/web\n")],
-      ["`if:` on scheduler-live, written AFTER its steps", "scheduler-live", () => after(LIVE_LAST, "    if: false\n")],
+    const LIVE_NEEDS = "    needs: placement-pin\n";
+    const DEFAULTS = "    defaults:\n      run:\n        working-directory: apps/web\n";
+    const STRATEGY = "    strategy:\n      matrix:\n        shard: []\n";
+    const MUTED: [label: string, jobId: string, yml: () => string, problem: RegExp][] = [
+      ["`if: false` on placement-pin", "placement-pin", () => after(PIN_HEAD, "    if: false\n"), /keys are \[.*\bif\b.*\]/],
+      ["`continue-on-error: true` on placement-pin", "placement-pin", () => after(PIN_HEAD, "    continue-on-error: true\n"), /keys are \[.*\bcontinue-on-error\b.*\]/],
+      ["`defaults:` on placement-pin", "placement-pin", () => after(PIN_HEAD, DEFAULTS), /keys are \[.*\bdefaults\b.*\]/],
+      ["`strategy:` with an empty matrix on placement-pin", "placement-pin", () => after(PIN_HEAD, STRATEGY), /keys are \[.*\bstrategy\b.*\]/],
+      ["`timeout-minutes:` on placement-pin", "placement-pin", () => after(PIN_HEAD, "    timeout-minutes: 1\n"), /keys are \[.*\btimeout-minutes\b.*\]/],
+      ["`needs: matrix-sample` (a job with its own `if:`) on placement-pin", "placement-pin", () => after(PIN_HEAD, "    needs: matrix-sample\n"), /keys are \[.*\bneeds\b.*\]/],
+      ["`needs: [matrix-sample]` on placement-pin, written AFTER its steps", "placement-pin", () => after(PIN_LAST, "    needs: [matrix-sample]\n"), /keys are \[.*\bneeds\b.*\]/],
+      ["`if:` on placement-pin, written AFTER its steps", "placement-pin", () => after(PIN_LAST, "    if: github.event_name == 'push'\n"), /keys are \[.*\bif\b.*\]/],
+      ["`continue-on-error:` on placement-pin, written AFTER its steps", "placement-pin", () => after(PIN_LAST, "    continue-on-error: true\n"), /keys are \[.*\bcontinue-on-error\b.*\]/],
+      ["`if: false` on scheduler-live", "scheduler-live", () => after(LIVE_HEAD, "    if: false\n"), /keys are \[.*\bif\b.*\]/],
+      ["`continue-on-error: true` on scheduler-live", "scheduler-live", () => after(LIVE_HEAD, "    continue-on-error: true\n"), /keys are \[.*\bcontinue-on-error\b.*\]/],
+      ["`defaults:` on scheduler-live", "scheduler-live", () => after(LIVE_HEAD, DEFAULTS), /keys are \[.*\bdefaults\b.*\]/],
+      ["`strategy:` with an empty matrix on scheduler-live", "scheduler-live", () => after(LIVE_HEAD, STRATEGY), /keys are \[.*\bstrategy\b.*\]/],
+      ["`if:` on scheduler-live, written AFTER its steps", "scheduler-live", () => after(LIVE_LAST, "    if: false\n"), /keys are \[.*\bif\b.*\]/],
+      ["scheduler-live `needs: [placement-pin, matrix-sample]` (same key set, a second dependency)", "scheduler-live", () => swap(LIVE_NEEDS, "    needs: [placement-pin, matrix-sample]\n"), /needs "\[placement-pin, matrix-sample\]"/],
+      ["scheduler-live `needs:` written as a block list", "scheduler-live", () => swap(LIVE_NEEDS, "    needs:\n      - placement-pin\n      - matrix-sample\n"), /needs ""/],
+      ["scheduler-live `needs: matrix-sample` instead of placement-pin", "scheduler-live", () => swap(LIVE_NEEDS, "    needs: matrix-sample\n"), /needs "matrix-sample"/],
+      ["scheduler-live with no `needs:` at all", "scheduler-live", () => swap(LIVE_NEEDS, ""), /keys are \[.*\]/],
     ];
-    it.each(MUTED)("flags %s", (_label, jobId, yml) => {
-      const mutated = parseJobs("ci.yml", yml()).find((j) => j.id === jobId);
-      expect(mutated, `the mutated file still has job ${jobId}`).toBeDefined();
-      expect(silencersOf(mutated!), "silencing keys found").toHaveLength(1);
+    const problemsOf = (yml: string, jobId: string): string[] => {
+      const found = parseJobs("ci.yml", yml).find((j) => j.id === jobId);
+      expect(found, `the mutated file still has job ${jobId}`).toBeDefined();
+      return jobShapeProblems(found!);
+    };
+    it.each(MUTED)("flags %s", (_label, jobId, yml, problem) => {
+      const problems = problemsOf(yml(), jobId);
+      expect(problems.length, "problems found").toBeGreaterThan(0);
+      expect(problems.join("\n")).toMatch(problem);
     });
 
     it("anti-vacuity: the table is not empty, and the unmutated file is clean for both jobs", () => {
-      expect(MUTED.length).toBeGreaterThanOrEqual(9);
+      expect(MUTED.length).toBeGreaterThanOrEqual(18);
       let clean = 0;
       for (const id of ["placement-pin", "scheduler-live"]) {
-        expect(silencersOf(parseJobs("ci.yml", REAL).find((j) => j.id === id)!), id).toEqual([]);
+        expect(problemsOf(REAL, id), id).toEqual([]);
         clean++;
       }
       expect(clean).toBe(2);
     });
 
-    it("does not flag what silences nothing: a comment, a step's own `if:`", () => {
-      const pinOf = (yml: string) => parseJobs("ci.yml", yml).find((j) => j.id === "placement-pin")!;
-      expect(silencersOf(pinOf(after(PIN_HEAD, "    # continue-on-error: true\n    # if: false\n")))).toEqual([]);
-      const stepIf = pinOf(after("      - name: Verify the pin against the placement repo\n", "        if: false\n"));
-      expect(stepIf.text, "the fixture really put an `if:` on the step").toMatch(/^ {8}if: false$/m);
-      expect(silencersOf(stepIf), "a step-level `if:` is the step pin's business, not the job check's").toEqual([]);
+    it("does not flag what changes neither job's shape: a comment, a step's own `if:`", () => {
+      expect(problemsOf(after(PIN_HEAD, "    # continue-on-error: true\n    # needs: matrix-sample\n    # if: false\n"), "placement-pin")).toEqual([]);
+      const stepIf = after("      - name: Verify the pin against the placement repo\n", "        if: false\n");
+      expect(parseJobs("ci.yml", stepIf).find((j) => j.id === "placement-pin")!.text, "the fixture really put an `if:` on the step").toMatch(/^ {8}if: false$/m);
+      expect(problemsOf(stepIf, "placement-pin"), "a step-level `if:` is the step pin's business, not the job check's").toEqual([]);
     });
   });
 

@@ -56,3 +56,10 @@
 - M2: survived (m-2).
 - M4: caught at runtime by the wait gate.
 - M5, M6: survived (I-1).
+
+## Re-review (821cf6906e)
+- **Verdict: READY.** I-1, m-1, m-2 and m-4 are closed.
+- **New, fixed in the follow-up commit:**
+  - m-A: the job-key check was a denylist, so `needs: matrix-sample` on `placement-pin` (a job with its own `if:`) skipped both live jobs with the run green. The job-level keys of `placement-pin` and `scheduler-live` are now pinned exactly, and `scheduler-live` needs exactly `placement-pin`.
+  - m-B: the `verify-pin` curl shim never asserted `--max-time`; it now does, on every fetch.
+- **Checked and fine:** fail-open on a malformed or missing field, exact bytes of the fetched file, fork PRs (the anonymous fetch needs no secret).
