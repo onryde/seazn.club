@@ -101,6 +101,7 @@ import { createDivision } from "../divisions";
 import { forgetOnlineChessFlagCache } from "../external-play/online-chess-flag";
 import { openRegistrationSeatGate } from "../online-seat-gate";
 import { promoteFromWaitlist } from "../registration-approval";
+import { submitRegistrationGroup } from "../registration-submit";
 import {
   loadSettings,
   promoteOldestWaitlisted,
@@ -554,5 +555,103 @@ describe.skipIf(!HAS_DB)("what the pre-filter leaves to the promotion itself", (
     expect(promoted?.id).toBe(a);
     expect(await statusOf(a)).toEqual({ status: "pending", entrant_id: null });
     expect(await skipsOf(r.competitionId)).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A registrant who submitted with no date of birth
+// ---------------------------------------------------------------------------
+// Their own row is untied from their account (`deriveLinkUserId`), but the cart remembers who was signed in and the submit asked that
+// session's link: the promotion reads the same account the organiser's Approve does (online-seat-gate-writers.test.ts). Built by the REAL
+// submit into a full division (capacity 1), so the entry is waitlisted by the producer and not by a hand-written row.
+
+/** An account with a Lichess link of `kind` and NO person row (the seat makes the person). */
+async function bareAccount(kind: Kind): Promise<SeedPlayer> {
+  const lichessId = `w-${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+  const [{ id: userId }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified, locale)
+    values (${`${lichessId}@t.local`}, ${"Player " + lichessId}, true, 'en') returning id`;
+  const p = { userId, lichessId, personId: "" } as SeedPlayer;
+  if (kind === "plays") await reconnectLichess(p);
+  if (kind === "identity-only") await linkWithoutPlayConsent(p, "identity-only");
+  return p;
+}
+
+async function waitlistedSubmitter(r: Rig, who: SeedPlayer): Promise<string> {
+  const [{ slug: orgSlug }] = await sql<{ slug: string }[]>`select slug from organizations where id = ${r.auth.orgId}`;
+  const [{ slug: compSlug }] = await sql<{ slug: string }[]>`select slug from competitions where id = ${r.competitionId}`;
+  const res = await submitRegistrationGroup(
+    { orgSlug, compSlug, sessionUserId: who.userId },
+    {
+      contact: { name: "Player " + who.lichessId, email: `${who.lichessId}@t.local` },
+      privacy_consent: true,
+      entries: [
+        {
+          division_id: r.divisionId,
+          entrant_kind: "individual",
+          team_name: null,
+          players: [{ full_name: "Player " + who.lichessId }],
+          registering_self: true,
+          self_player_index: 0,
+          answers: {},
+        },
+      ],
+    },
+  );
+  const entry = res.entries[0]!;
+  expect(entry.status, "premise: the division is full, so the real submit waitlisted the entry").toBe("waitlisted");
+  const [row] = await sql<{ user_id: string | null }[]>`select user_id from registration_players where registration_id = ${entry.registration_id}`;
+  expect(row!.user_id, "premise: no date of birth, so the player row is not tied to the account").toBeNull();
+  return entry.registration_id;
+}
+
+async function fullRig(): Promise<Rig> {
+  const r = await rig(true);
+  // The public submit only finds a public competition.
+  await sql`update competitions set visibility = 'public' where id = ${r.competitionId}`;
+  await putRegistrationSettings(r.auth, r.divisionId, {
+    enabled: true,
+    entrant_kind: "individual",
+    fee_cents: 0,
+    form_fields: [],
+    opens_at: null,
+    closes_at: null,
+    capacity: 1,
+    refund_lock_at: null,
+    payment_method: "offline",
+    approval: "auto",
+    allow_free_agents: false,
+  });
+  return r;
+}
+
+describe.skipIf(!HAS_DB)("a waitlisted submitter with no date of birth", () => {
+  it("is promoted and seated when they hold a link that plays (the pre-filter and the seat both read their cart's account)", async () => {
+    const r = await fullRig();
+    const holder = await enter(r, null, "pending");
+    const who = await bareAccount("plays");
+    const entry = await waitlistedSubmitter(r, who);
+
+    await withdrawRegistrationOrganiser(r.auth, holder);
+
+    expect((await statusOf(entry)).status).toBe("confirmed");
+    expect((await statusOf(entry)).entrant_id).not.toBeNull();
+    expect(await skipsOf(r.competitionId), "and not recorded as a skip").toEqual([]);
+  });
+
+  it("is skipped, with the gate's own code, once their link is gone - and takes the spot after they reconnect", async () => {
+    const r = await fullRig();
+    const [h1, h2] = [await enter(r, null, "pending"), await enter(r, null, "pending")];
+    const who = await bareAccount("plays");
+    const entry = await waitlistedSubmitter(r, who);
+    await sql`delete from user_external_accounts where user_id = ${who.userId}`;
+
+    await withdrawRegistrationOrganiser(r.auth, h1);
+    expect((await statusOf(entry)).status, "premise: the spot is not theirs while they cannot play").toBe("waitlisted");
+    expect(await skipsOf(r.competitionId)).toEqual([{ registration: entry, code: "LICHESS_LINK_REQUIRED", actor: null }]);
+    await reconnectLichess(who);
+    await withdrawRegistrationOrganiser(r.auth, h2);
+
+    expect((await statusOf(entry)).status).toBe("confirmed");
   });
 });

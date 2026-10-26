@@ -306,15 +306,19 @@ export async function assignSoloSignUp(
     // a consent-pending player who has in fact consented. This is the one
     // way an `organiser_assigned` row differs from a `captain_entered` one,
     // where 'pending' is right because someone else typed the name.
+    //
+    // It carries the solo's account forward too (`user_id`), as it does to `joinExistingEntrant` below: a team that is not
+    // materialised yet seats this row LATER, in `materialise`, which resolves the person by that account and reads the player's Lichess
+    // link by it. Without it the row names nobody, and on an online division the confirm that seats the team refuses a solo who plays.
     let inserted: { id: string } | undefined;
     try {
       [inserted] = await tx<{ id: string }[]>`
         insert into registration_players
           (registration_id, org_id, full_name, email, dob, gender, source,
-           consent_status, consent_at, assigned_from_registration_id)
+           consent_status, consent_at, assigned_from_registration_id, user_id)
         select ${targetId}, r.org_id, ${player.full_name}, ${player.email}, ${player.dob},
                ${player.gender}, 'organiser_assigned', ${player.consent_status},
-               ${player.consent_at}, ${sourceId}
+               ${player.consent_at}, ${sourceId}, ${player.user_id}
         from registrations r where r.id = ${targetId}
         returning id`;
     } catch (err) {

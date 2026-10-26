@@ -44,8 +44,10 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { forgetOnlineChessFlagCache } from "../external-play/online-chess-flag";
+import { openRegistrationSeatGate } from "../online-seat-gate";
 import { assignSoloSignUp } from "../registration-assign";
-import { submitRegistrationGroup, type SubmitGroupEntryInput } from "../registration-submit";
+import { approveRegistration } from "../registration-approval";
+import { joinTeamEntry, submitRegistrationGroup, type SubmitGroupEntryInput } from "../registration-submit";
 import { confirmRegistration, putRegistrationSettings } from "../registrations";
 import { seedRegistration } from "./_registration-fixtures";
 import { linkWithoutPlayConsent, reconnectLichess, seedOwner } from "./_external-play-seed";
@@ -302,6 +304,33 @@ describe.skipIf(!HAS_DB)("assign: placing a solo sign-up on a team that already 
     count("assign");
   });
 
+  it("a team that is not materialised yet: a player who PLAYS is not refused when the team is confirmed, and is seated as their own account", async () => {
+    const w = await world("team", true);
+    const who = await account(w, "plays", true);
+    const p = await placement(w, who, { materialised: false });
+
+    await p.go();
+    const [row] = await sql<{ user_id: string | null }[]>`select user_id from registration_players where registration_id = ${p.targetId}`;
+    expect(row!.user_id, "premise: the placed row names the solo's account, so the confirm that seats them can read their link").toBe(who.userId);
+    await confirmRegistration(w.auth, p.targetId);
+
+    expect(await p.seated(), "seated on the account the solo signed up with").toEqual([who.userId]);
+    count("assign");
+  });
+
+  it("a team that is not materialised yet: a player with an identity-only link is refused as RECONNECT when the team is confirmed", async () => {
+    const w = await world("team", true);
+    const who = await account(w, "identity-only", true);
+    const p = await placement(w, who, { materialised: false });
+
+    await p.go();
+    const got = await refusalOf(confirmRegistration(w.auth, p.targetId));
+
+    expect(got).toMatchObject({ status: 422, code: "LICHESS_RECONSENT_REQUIRED" });
+    expect(await p.seated()).toEqual([]);
+    count("assign");
+  });
+
   it("a division that is not online asks for no link", async () => {
     const w = await world("team", false);
     const who = await account(w, "none", true);
@@ -342,18 +371,22 @@ async function submit(
   kind: Kind,
   submitter: Account,
   mates: number,
-  contact: { dob?: string | null } = { dob: ADULT },
+  contact: { dob?: string | null; guardian_name?: string; guardian_consent?: boolean } = { dob: ADULT },
+  /** `rosterless`: a team the captain enters without putting themselves on it (nobody on the roster; players join by the link). */
+  opts: { rosterless?: boolean } = {},
 ): Promise<ReturnType<typeof submitRegistrationGroup>> {
   const entry: SubmitGroupEntryInput = {
     division_id: w.divisionId,
     entrant_kind: kind,
     team_name: kind === "team" ? "Seat Club " + randomUUID().slice(0, 6) : null,
-    players: [
-      { full_name: "Submitter " + submitter.lichessId, is_captain: true },
-      ...Array.from({ length: mates }, (_, i) => ({ full_name: `Teammate ${i + 1} ${randomUUID().slice(0, 6)}` })),
-    ],
+    players: opts.rosterless
+      ? []
+      : [
+          { full_name: "Submitter " + submitter.lichessId, is_captain: true },
+          ...Array.from({ length: mates }, (_, i) => ({ full_name: `Teammate ${i + 1} ${randomUUID().slice(0, 6)}` })),
+        ],
     registering_self: true,
-    self_player_index: 0,
+    ...(opts.rosterless ? {} : { self_player_index: 0 }),
     answers: {},
   };
   return submitRegistrationGroup(
@@ -491,10 +524,261 @@ describe.skipIf(!HAS_DB)("submit: the inline confirm seats the whole roster, so 
   });
 });
 
+// ---------------------------------------------------------------------------
+// approve: the submitter whose own row carries no account
+// ---------------------------------------------------------------------------
+//
+// `deriveLinkUserId` ties the submitter's own row to their account only for an adult WITH a date of birth; without one the row's
+// `user_id` is null, though the cart (`registration_groups.user_id`) still remembers who signed in and the submit asked THAT session's
+// link. On a manual-approval division the organiser's Approve is the first time the row is seated, so the gate must read the
+// submitter's link by the cart's account - and only for the submitter's own row: not for a teammate, not for a joiner, not for a row
+// the submit left untied on purpose (a minor, a guardian's entry). Every scenario below is built by the real submit (and the real
+// join link), never by writing the rows by hand.
+
+const withdrawLink = async (a: Account): Promise<void> => {
+  await sql`delete from user_external_accounts where user_id = ${a.userId}`;
+};
+
+const submitterPremises = async (registrationId: string, submitter: Account): Promise<void> => {
+  const rows = await sql<{ user_id: string | null; cart_user: string | null }[]>`
+    select rp.user_id, g.user_id as cart_user
+      from registration_players rp join registrations r on r.id = rp.registration_id join registration_groups g on g.id = r.group_id
+     where rp.registration_id = ${registrationId}`;
+  expect(rows, "premise: the entry holds the submitter's one row").toHaveLength(1);
+  expect(rows[0]!.user_id, "premise: without a date of birth the row is NOT tied to the account (deriveLinkUserId)").toBeNull();
+  expect(rows[0]!.cart_user, "premise: but the cart remembers who was signed in").toBe(submitter.userId);
+  expect(await seatedAfterSubmit(registrationId), "premise: manual approval seats nobody at submit").toEqual({ status: "pending", people: 0 });
+};
+
+describe.skipIf(!HAS_DB)("approve: a submitter who holds a link but gave no date of birth is seated by it", () => {
+  for (const kind of ["individual", "team"] as const) {
+    it(`${kind}: the organiser's Approve seats them`, async () => {
+      const w = await world(kind, true, { approval: "manual" });
+      const submitter = await account(w, "plays", false);
+      const res = await submit(w, kind, submitter, 0, { dob: null });
+      const regId = res.entries[0]!.registration_id;
+      await submitterPremises(regId, submitter);
+
+      await approveRegistration(w.auth, regId);
+
+      expect(await seatedAfterSubmit(regId)).toEqual({ status: "confirmed", people: 1 });
+      count("approve-submitter");
+    });
+  }
+
+  it("the link they held is the one asked: withdrawn after the submit, Approve refuses as LINK and seats nobody", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const submitter = await account(w, "plays", false);
+    const regId = (await submit(w, "individual", submitter, 0, { dob: null })).entries[0]!.registration_id;
+    await withdrawLink(submitter);
+
+    const got = await refusalOf(approveRegistration(w.auth, regId));
+
+    expect(got).toMatchObject({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+    expect(await seatedAfterSubmit(regId), "refused: still waiting, nobody seated").toEqual({ status: "pending", people: 0 });
+    count("approve-submitter");
+  });
+
+  it("an identity-only link (the play grant withdrawn) is refused as RECONNECT, not waved through as 'linked'", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const submitter = await account(w, "plays", false);
+    const regId = (await submit(w, "individual", submitter, 0, { dob: null })).entries[0]!.registration_id;
+    await withdrawLink(submitter);
+    await linkWithoutPlayConsent(submitter, "identity-only");
+
+    const got = await refusalOf(approveRegistration(w.auth, regId));
+
+    expect(got).toMatchObject({ status: 422, code: "LICHESS_RECONSENT_REQUIRED" });
+    expect(await seatedAfterSubmit(regId)).toEqual({ status: "pending", people: 0 });
+    count("approve-submitter");
+  });
+
+  it("the SEQUENCE: refused with no link, the player reconnects, the same Approve seats them", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const submitter = await account(w, "plays", false);
+    const regId = (await submit(w, "individual", submitter, 0, { dob: null })).entries[0]!.registration_id;
+    await withdrawLink(submitter);
+
+    await refusalOf(approveRegistration(w.auth, regId));
+    await reconnectLichess(submitter);
+    await approveRegistration(w.auth, regId);
+
+    expect(await seatedAfterSubmit(regId)).toEqual({ status: "confirmed", people: 1 });
+    count("approve-submitter");
+  });
+
+  it("a pair: the captain's link does not stand in for a teammate the captain typed in", async () => {
+    const w = await world("pair", true, { approval: "manual" });
+    const captain = await account(w, "plays", false);
+    const regId = (await submit(w, "pair", captain, 1, { dob: null })).entries[0]!.registration_id;
+
+    const got = await refusalOf(approveRegistration(w.auth, regId));
+
+    expect(got).toMatchObject({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+    expect(await seatedAfterSubmit(regId), "nobody seated: the teammate has no link").toEqual({ status: "pending", people: 0 });
+    count("approve-submitter");
+  });
+
+  it("a pair whose teammate claims their spot through the join link (an adult with a date of birth, their own link) is seated whole", async () => {
+    const w = await world("pair", true, { approval: "manual" });
+    const captain = await account(w, "plays", false);
+    const mate = await account(w, "plays", false);
+    const res = await submit(w, "pair", captain, 1, { dob: null });
+    const regId = res.entries[0]!.registration_id;
+    const [slot] = await sql<{ id: string; full_name: string }[]>`
+      select id, full_name from registration_players where registration_id = ${regId} and consent_status = 'pending'`;
+    await joinTeamEntry(
+      { sessionUserId: mate.userId },
+      { join_code: res.entries[0]!.join_code!, player_id: slot!.id, player: { full_name: slot!.full_name, dob: ADULT }, privacy_consent: true },
+    );
+
+    await approveRegistration(w.auth, regId);
+
+    expect(await seatedAfterSubmit(regId)).toEqual({ status: "confirmed", people: 2 });
+    count("approve-submitter");
+  });
+
+  it("a pair whose teammate claimed WITHOUT a date of birth and has since lost their link is refused: the captain's link is not theirs", async () => {
+    const w = await world("pair", true, { approval: "manual" });
+    const captain = await account(w, "plays", false);
+    const mate = await account(w, "plays", false);
+    const res = await submit(w, "pair", captain, 1, { dob: null });
+    const regId = res.entries[0]!.registration_id;
+    const [slot] = await sql<{ id: string; full_name: string }[]>`
+      select id, full_name from registration_players where registration_id = ${regId} and consent_status = 'pending'`;
+    await joinTeamEntry(
+      { sessionUserId: mate.userId },
+      { join_code: res.entries[0]!.join_code!, player_id: slot!.id, player: { full_name: slot!.full_name }, privacy_consent: true },
+    );
+    const rows = await sql<{ user_id: string | null; consent_status: string }[]>`select user_id, consent_status from registration_players where id = ${slot!.id}`;
+    expect(rows[0], "premise: the claimed row is granted and, with no date of birth, untied - the captain's own row's shape").toEqual({ user_id: null, consent_status: "granted" });
+    await withdrawLink(mate);
+
+    const got = await refusalOf(approveRegistration(w.auth, regId));
+
+    expect(got).toMatchObject({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+    expect(await seatedAfterSubmit(regId)).toEqual({ status: "pending", people: 0 });
+    count("approve-submitter");
+  });
+
+  it("a team whose joiner (a new roster row, no date of birth) has since lost their link is refused: the captain's link is not theirs", async () => {
+    const w = await world("team", true, { approval: "manual" });
+    const captain = await account(w, "plays", false);
+    const joiner = await account(w, "plays", false);
+    // The roster is empty at submit: a boardgame team seats ONE player, and the join link's new-row path only opens while there is room.
+    const res = await submit(w, "team", captain, 0, { dob: null }, { rosterless: true });
+    const regId = res.entries[0]!.registration_id;
+    await joinTeamEntry(
+      { sessionUserId: joiner.userId },
+      { join_code: res.entries[0]!.join_code!, player: { full_name: "Joiner " + joiner.lichessId }, privacy_consent: true },
+    );
+    const rows = await sql<{ source: string; user_id: string | null }[]>`
+      select source, user_id from registration_players where registration_id = ${regId}`;
+    expect(rows, "premise: the joiner's is the one row, and it is not tied to an account (no date of birth)").toEqual([{ source: "self_joined", user_id: null }]);
+    await withdrawLink(joiner);
+
+    const got = await refusalOf(approveRegistration(w.auth, regId));
+
+    expect(got).toMatchObject({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+    expect(await seatedAfterSubmit(regId)).toEqual({ status: "pending", people: 0 });
+    count("approve-submitter");
+  });
+
+  it("a minor registered by a signed-in, linked guardian is refused: the guardian's link is not the child's", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const guardian = await account(w, "plays", false);
+    const regId = (await submit(w, "individual", guardian, 0, { dob: "2015-03-01", guardian_name: "Guardian " + guardian.lichessId, guardian_consent: true }))
+      .entries[0]!.registration_id;
+
+    const got = await refusalOf(approveRegistration(w.auth, regId));
+
+    expect(got).toMatchObject({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+    expect(await seatedAfterSubmit(regId)).toEqual({ status: "pending", people: 0 });
+    count("approve-submitter");
+  });
+
+  it("a guardian named on a submitter with no date of birth is refused too: the row was untied on purpose", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const guardian = await account(w, "plays", false);
+    const regId = (await submit(w, "individual", guardian, 0, { dob: null, guardian_name: "Guardian " + guardian.lichessId, guardian_consent: true }))
+      .entries[0]!.registration_id;
+    const [row] = await sql<{ user_id: string | null; dob: string | null; guardian_name: string | null }[]>`
+      select user_id, dob::text as dob, guardian_name from registration_players where registration_id = ${regId}`;
+    expect(row, "premise: no date of birth, a guardian on the row, untied").toMatchObject({ user_id: null, dob: null, guardian_name: expect.any(String) });
+
+    const got = await refusalOf(approveRegistration(w.auth, regId));
+
+    expect(got).toMatchObject({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+    count("approve-submitter");
+  });
+
+  it("an adult WITH a date of birth who was untied by a guardian tick is refused too: only a missing date of birth is the gap", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const submitter = await account(w, "plays", false);
+    const regId = (await submit(w, "individual", submitter, 0, { dob: ADULT, guardian_consent: true })).entries[0]!.registration_id;
+    const [row] = await sql<{ user_id: string | null; dob: string | null; guardian_name: string | null }[]>`
+      select user_id, dob::text as dob, guardian_name from registration_players where registration_id = ${regId}`;
+    expect(row, "premise: a date of birth, no guardian name, and still untied (the guardian tick)").toEqual({ user_id: null, dob: ADULT, guardian_name: null });
+
+    const got = await refusalOf(approveRegistration(w.auth, regId));
+
+    expect(got).toMatchObject({ status: 422, code: "LICHESS_LINK_REQUIRED" });
+    count("approve-submitter");
+  });
+
+  it("a person is matched to an account only through the entries the gate was opened for, not through a row of some other entry", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const inScope = await account(w, "plays", false);
+    const other = await account(w, "plays", false);
+    const regId = (await submit(w, "individual", inScope, 0, { dob: null })).entries[0]!.registration_id;
+    await withdrawLink(inScope);
+    // The in-scope entry also names `other`'s account (a tied teammate row), so the gate reads `other`'s link - which plays.
+    await sql`
+      insert into registration_players (registration_id, full_name, user_id, source, consent_status)
+      values (${regId}, 'Tied teammate', ${other.userId}, 'captain_entered', 'granted')`;
+    // A person who is stamped only on the submitter-shaped row of ANOTHER entry, whose cart is `other`'s.
+    const [person] = await sql<{ id: string }[]>`insert into persons (org_id, full_name) values (${w.auth.orgId}, 'Elsewhere') returning id`;
+    const { registration: elsewhere } = await seedRegistration(
+      w.competitionId,
+      w.divisionId,
+      { fee_cents: 0, currency: "gbp", payment_method: "offline" },
+      { status: "pending", displayName: "Elsewhere " + randomUUID().slice(0, 6) },
+    );
+    await sql`update registration_groups set user_id = ${other.userId} where id = ${elsewhere.group_id}`;
+    await sql`
+      insert into registration_players (registration_id, full_name, person_id, source, consent_status, consent_at)
+      values (${elsewhere.id}, 'Elsewhere', ${person!.id}, 'captain_entered', 'granted', now())`;
+    const gate = await openRegistrationSeatGate({ divisionId: w.divisionId, registrationId: regId, auth: w.auth });
+
+    const got = await refusalOf(
+      sql.begin(async (tx) => {
+        await gate.load(tx);
+        await gate.assertRoster(tx, w.divisionId, [person!.id]);
+      }),
+    );
+
+    expect(got.code, "the other entry's cart is not the gate's to lend: nothing in the entries it was opened for names this person").toBe("LICHESS_LINK_REQUIRED");
+    count("approve-submitter");
+  });
+
+  it("a division that is not online asks nothing of the submitter", async () => {
+    const w = await world("individual", false, { approval: "manual" });
+    const submitter = await account(w, "none", false);
+    const regId = (await submit(w, "individual", submitter, 0, { dob: null })).entries[0]!.registration_id;
+
+    await approveRegistration(w.auth, regId);
+
+    expect(await seatedAfterSubmit(regId)).toEqual({ status: "confirmed", people: 1 });
+    count("approve-submitter");
+  });
+});
+
 describe.skipIf(!HAS_DB)("the writers file ran what it owes", () => {
   it("anti-vacuity: every writer ran every scenario", () => {
-    expect([...ran.writers].sort()).toEqual(["assign", "submit"]);
-    // assign: 10 scenarios above; submit: 5 per kind x 2 kinds + 2 (a captain with no date of birth, per kind) + 3.
-    expect(ran.scenarios).toBe(10 + (5 * 2 + 2 + 3));
+    expect([...ran.writers].sort()).toEqual(["approve-submitter", "assign", "submit"]);
+    // assign: 12 scenarios above; submit: 5 per kind x 2 kinds + 2 (a captain with no date of birth, per kind) + 3;
+    // approve-submitter: 2 (individual, team) + 3 (link withdrawn, identity-only, sequence) + 3 (pair: typed-in mate, claimed with a date of
+    // birth, claimed without) + 1 (joiner) + 3 (minor, guardian on no-dob, guardian tick on adult) + 1 (a person matched through another entry's row) + 1 (not online).
+    expect(ran.scenarios).toBe(12 + (5 * 2 + 2 + 3) + (2 + 3 + 3 + 1 + 3 + 1 + 1));
   });
 });
