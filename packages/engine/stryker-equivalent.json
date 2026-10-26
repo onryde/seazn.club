@@ -1068,6 +1068,30 @@
       "original": "fine?.nonStriker",
       "line": "const nonStriker = fine?.nonStriker ?? null;",
       "reason": "onRetire runs only for a retire the reducer accepted, and applyRetire refuses fine === null ('summary fidelity — retirements are not allowed') and an absent open innings ('retirement needs an innings in progress'); probed by folding a retire (hurt/out/other, both openers) onto an open coarse innings, a closed one and an empty ledger: all throw EngineError before the observer, so `fine` is never null here and `?.` reads the same value as `.`."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:431:9 ConditionalExpression → true",
+      "original": "credited !== null",
+      "line": "if (credited !== null && !bowlerOrder.includes(credited)) bowlerOrder.push(credited);",
+      "reason": "After a folded delivery finishDelivery leaves either currentBowler (mid-over) or prevOverBowler (the ball that closed the over) set, so creditedBowler never returns null in onBall; the left operand is always true. The whole-condition `true` variant (every ball re-pushes the bowler) shares this key and is killed by the exact bowling-row lists in scorecard.mutation.test.ts. Probed: with a throw planted on the null case, the 298 scoped tests (src/sports/cricket/__tests__ plus cricket.test.ts, including non-strict reads that name a bowler who does not own the over, retire-out, all-out, super-over and coarse ledgers) never reached it."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:548:23 OptionalChaining → fine.striker",
+      "original": "fine?.striker",
+      "line": "const striker = fine?.striker ?? null;",
+      "reason": "`fine` is the FineInnings of the innings a delivery just folded (applyDelivery refuses fine === null, and a fine innings is created only by a ball), never null/undefined. Probed: with a throw planted on the null case, the 298 scoped tests (src/sports/cricket/__tests__ plus cricket.test.ts, including non-strict reads that name a bowler who does not own the over, retire-out, all-out, super-over and coarse ledgers) never reached it."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:549:26 OptionalChaining → fine.nonStriker",
+      "original": "fine?.nonStriker",
+      "line": "const nonStriker = fine?.nonStriker ?? null;",
+      "reason": "`fine` is the FineInnings of the innings a delivery just folded (applyDelivery refuses fine === null, and a fine innings is created only by a ball), never null/undefined. Probed: with a throw planted on the null case, the 298 scoped tests (src/sports/cricket/__tests__ plus cricket.test.ts, including non-strict reads that name a bowler who does not own the over, retire-out, all-out, super-over and coarse ledgers) never reached it."
+    },
+    {
+      "mutant": "src/sports/cricket/scorecard.ts:564:11 ConditionalExpression → true",
+      "original": "overBowler !== null",
+      "line": "if (overBowler !== null && this.overRunsByIndex[index] === 0) {",
+      "reason": "The branch runs only when the delivery closed an over, and finishDelivery sets prevOverBowler = currentBowler in that same step with currentBowler non-null, so overBowler is never null; the left operand is always true. The whole-condition `true` variant shares this key and is killed by the maiden counts in scorecard.mutation.test.ts. Probed: with a throw planted on the null case, the 298 scoped tests (src/sports/cricket/__tests__ plus cricket.test.ts, including non-strict reads that name a bowler who does not own the over, retire-out, all-out, super-over and coarse ledgers) never reached it."
     }
   ]
 }
