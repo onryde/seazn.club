@@ -1,5 +1,5 @@
-// W2d Task 9 fix rounds 1 (I2) and 2 (N1-N4, the shoot-out split) — the post-deploy step for the table-rules pin. ONE
-// file, four jobs.
+// W2d Task 9 fix rounds 1 (I2), 2 (N1-N4, the shoot-out split) and 3 (N5-N8, held rows) — the post-deploy step for the
+// table-rules pin. ONE file, four jobs.
 //
 // V472 pins every started stage, converts every W2c `{base, bonuses, forfeit}` stage rule, and moves every football,
 // hockey and ice hockey division config and organisation sport variant off the retired shoot-out split while it
@@ -25,7 +25,27 @@
 //      activation door's code, run here), each in its own transaction. Steps 1 and 2 run FIRST so a started stage's pin
 //      carries its converted config and rule, never the sport's.
 //   4. `--check` — read-only: prints the three counts (started stages with no pin; `{base}` stage rules; configs on the
-//      shoot-out split) and exits 1 if any is above 0, else 0. Nothing is written.
+//      shoot-out split) and the rows a run would HOLD, and exits 1 if any is above 0, else 0. Nothing is written.
+//
+// HELD (fix round 3, owner ruling: the script NEVER changes what a scored stage reads). Each row's transaction first asks
+// the app's own lock predicate (`lockedStageIdsAmong`, server/usecases/rule-locks.ts: a played fixture or an opened
+// round) of every stage that row's write would reach, under the lock the app's rule writers take (`division-config:`
+// EXCLUSIVE, which a match's first event takes SHARED before it freezes: a first tap in flight commits before the read
+// and is seen, or waits for this row). A hit is HELD: not written, named on stderr (`held: …`), counted
+// in the summary and in `--check`, and the run exits 1. A held row is the owner's to decide ("call us"); running again
+// holds it again. What a row reaches:
+//   - a `{base}` stage rule, or a started stage's pin: that stage (pinned or not — its own rule, or the pin itself);
+//   - a division config on the split: every stage of it that reads the division's points — no pin and no own rule (a
+//     falsy `config.points`, the reader's "inherit"; a pending stage with an ad-hoc match or a ladder challenge reads
+//     its live layers), or a pin the app took over them (`sources.points` "sport"). Not a V472 pin ("migrated": taken
+//     from the pre-W2d rule before V472 dropped the split) and not an own rule's ("stage"). The started stages of a
+//     held division are held with it (a pin taken over its config would pin the stripped split).
+//   - an organisation variant: no stage. A variant's config is COPIED into a division when one is created or changes
+//     variant (usecases/divisions.ts); no stage reads it live, so a variant is never held.
+// After a division's conversion, every UNSCORED stage of it pinned over the old config (`sources.points` "sport": the
+// new code's pin at activation, after the deploy, over the stripped split — re-review N8) is re-pinned from the
+// converted config through `repinStageOwnRules` (points only, source "sport"; order, cross-group order and date kept),
+// counted `repinned`.
 //
 //   node --experimental-strip-types scripts/w2d/post-deploy-pin.ts --check   # audit, writes nothing
 //   node --experimental-strip-types scripts/w2d/post-deploy-pin.ts           # split, convert, then pin
@@ -34,10 +54,11 @@
 // DATABASE_URL whose host is not localhost / 127.0.0.1 / ::1. ONLY THE OWNER passes `--prod`. The URL is read from the
 // environment and never accepted on argv, never printed, and never handed to anything that can echo it before this
 // file has parsed it itself (`parseDatabaseUrl`, which never echoes; a `new URL` error carries its input). Every driver
-// message this script prints has the URL's host, port, user and password, and any IP address, taken out (`redact`).
+// message this script prints has the URL's host, port, user, password and database name, and any IP address, taken out
+// (`redact`).
 //
-// Exit: 0 = nothing left to do; 1 = work remains (`--check` found some, or a run refused/failed a row — a deploy must
-// stop); 2 = refused to start (no/unreadable/non-local URL without `--prod`, a bad argument). Safe to run twice: a
+// Exit: 0 = nothing left to do; 1 = work remains (`--check` found some, or a run refused, failed or held a row — a deploy
+// must stop); 2 = refused to start (no/unreadable/non-local URL without `--prod`, a bad argument). Safe to run twice: a
 // converted config holds no split, a converted rule is no longer `{base}`, a pinned stage is no longer unpinned, and
 // `pinStageTableRules` itself writes only `where table_rules_pinned is null` — a second run reports zeros and changes no
 // row.
@@ -95,6 +116,8 @@ export interface DatabaseUrl {
   port: string;
   username: string;
   password: string;
+  /** The database as the driver sends it (`url.pathname.slice(1)`, not decoded); "" when the URL names none. */
+  database: string;
   /** A `?host=`/`?hostaddr=` parameter: the URL's host is then not proven to be the one reached. */
   hostOverride: boolean;
 }
@@ -122,6 +145,7 @@ export function parseDatabaseUrl(url: string): DatabaseUrl | null {
       port: u.port,
       username: decodeURIComponent(u.username),
       password: decodeURIComponent(u.password),
+      database: u.pathname.slice(1),
       hostOverride: u.searchParams.has("host") || u.searchParams.has("hostaddr"),
     };
   } catch {
@@ -141,15 +165,23 @@ export function isLocalDatabaseUrl(url: string): boolean {
   return db !== null && isLocalDatabase(db);
 }
 
+const safeDecode = (s: string): string => {
+  try {
+    return decodeURIComponent(s);
+  } catch {
+    return s;
+  }
+};
 const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** `s` anywhere it is not part of a longer alphanumeric run. */
 const word = (s: string, flags: string): RegExp => new RegExp(`(?<![A-Za-z0-9])${escapeRe(s)}(?![A-Za-z0-9])`, flags);
 const IPV4 = /(?<![\d.])(?:\d{1,3}\.){3}\d{1,3}(?::\d{1,5})?(?![\d.])/g;
 const IPV6 = /(?<![\w:])\[?(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}\]?(?::\d{1,5})?(?![\w:])/gi;
 
-/** A driver or server message with the URL's host, port, user and password — and any IP address the host resolved to —
- *  taken out (re-review N3: `connect ECONNREFUSED ip:port`, `write CONNECTION_CLOSED host:port`, `password
- *  authentication failed for user "x"`). The rest of the message (its code words) is kept so the owner can act on it. */
+/** A driver or server message with the URL's host, port, user, password and database — and any IP address the host
+ *  resolved to — taken out (re-review N3: `connect ECONNREFUSED ip:port`, `write CONNECTION_CLOSED host:port`, `password
+ *  authentication failed for user "x"`; N7: `database "x" does not exist`). The rest of the message (its code words) is
+ *  kept so the owner can act on it. */
 export function redact(message: string, db: DatabaseUrl | null): string {
   let out = message;
   const take = (s: string, label: string, flags = "gi"): void => {
@@ -161,6 +193,9 @@ export function redact(message: string, db: DatabaseUrl | null): string {
     // the host as named, an IPv6 one without its brackets (`connect ECONNREFUSED ::1:5432`); its port goes below
     take(db.hostname.replace(/^\[|\]$/g, ""), "<host>");
     take(db.username, "<user>");
+    // as the driver sent it, and decoded (a name with an escape in it)
+    take(db.database, "<database>");
+    take(safeDecode(db.database), "<database>");
   }
   out = out.replace(IPV4, "<address>").replace(IPV6, "<address>");
   // the port as a number of its own (never four digits inside an id: `-` is a uuid's separator)
@@ -270,6 +305,22 @@ function inOrgs(sql: Sql | Tx, orgs: readonly string[]) {
   return orgs.length === 0 ? sql`true` : sql`org_id in ${sql(orgs as string[])}`;
 }
 
+/** The stages of a division whose table reads the division's points (fix round 3): no pin and no own rule — a falsy
+ *  `config.points` is the reader's "inherit" (`ownRulesOf`: `if (rawPoints)`; jsonb null, false, 0 and "" alike) — or a
+ *  pin the app took over the division's layers (`sources.points` "sport"). A V472 pin ("migrated") was taken from the
+ *  pre-W2d rule before V472 dropped the split, and an own rule ("stage") is the stage's: neither reads the division. */
+const READS_DIVISION_POINTS = (sql: Sql | Tx) => sql`
+  ((table_rules_pinned is null
+    and (config -> 'points' is null or config -> 'points' in ('null'::jsonb, 'false'::jsonb, '0'::jsonb, '""'::jsonb)))
+   or table_rules_pinned -> 'sources' ->> 'points' = 'sport')`;
+
+const BASE_RULE_ROWS = (sql: Sql | Tx) => sql`jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base'`;
+const UNPINNED_STARTED = (sql: Sql | Tx) => sql`status in ('active', 'complete') and table_rules_pinned is null`;
+
+/** The app's lock predicate (`lockedStageIdsAmong`, server/usecases/rule-locks.ts): the stages among `stageIds` with a
+ *  played fixture or an opened round. */
+export type LockedAmong = (tx: Sql | Tx, stageIds: readonly string[]) => Promise<Set<string>>;
+
 export interface Census {
   /** Stages `active`/`complete` with no pin. */
   unpinnedStarted: number;
@@ -277,17 +328,40 @@ export interface Census {
   baseStageRules: number;
   /** Football/hockey/ice hockey division configs and organisation sport variants still on the shoot-out split. */
   shootoutSplitConfigs: number;
+  /** Of the rows above, those a run would HOLD (each is also still in its own count): division configs whose split
+   *  reaches a scored stage, and `{base}` and unpinned started stages that are scored or whose division is held. */
+  held: number;
 }
 
-export async function census(sql: Sql, orgs: readonly string[]): Promise<Census> {
+/** The rows a run would hold, as `run` decides them, read in one pass (`--check` and the run's `after`). */
+async function heldCount(sql: Sql, orgs: readonly string[], locked: LockedAmong): Promise<number> {
+  const splitDivisions = (await sql<{ id: string }[]>`select id from divisions where ${SPLIT_ROWS(sql)} and ${inOrgs(sql, orgs)}`).map((d) => d.id);
+  const reach =
+    splitDivisions.length === 0
+      ? []
+      : await sql<{ id: string; division_id: string }[]>`
+          select id, division_id from stages where division_id in ${sql(splitDivisions)} and ${READS_DIVISION_POINTS(sql)}`;
+  const based = await sql<{ id: string }[]>`select id from stages where ${BASE_RULE_ROWS(sql)} and ${inOrgs(sql, orgs)}`;
+  const unpinned = await sql<{ id: string; division_id: string }[]>`
+    select id, division_id from stages where ${UNPINNED_STARTED(sql)} and ${inOrgs(sql, orgs)}`;
+  const scored = await locked(sql, [...new Set([...reach, ...based, ...unpinned].map((s) => s.id))]);
+  const heldDivisions = new Set(reach.filter((s) => scored.has(s.id)).map((s) => s.division_id));
+  const heldStages = new Set([
+    ...based.filter((s) => scored.has(s.id)).map((s) => s.id),
+    ...unpinned.filter((s) => scored.has(s.id) || heldDivisions.has(s.division_id)).map((s) => s.id),
+  ]);
+  return heldDivisions.size + heldStages.size;
+}
+
+export async function census(sql: Sql, orgs: readonly string[], locked: LockedAmong): Promise<Census> {
   const [row] = await sql<{ unpinned: number; base: number }[]>`
-    select count(*) filter (where status in ('active', 'complete') and table_rules_pinned is null)::int as unpinned,
-           count(*) filter (where jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base')::int as base
+    select count(*) filter (where ${UNPINNED_STARTED(sql)})::int as unpinned,
+           count(*) filter (where ${BASE_RULE_ROWS(sql)})::int as base
       from stages where ${inOrgs(sql, orgs)}`;
   const [split] = await sql<{ n: number }[]>`
     select (select count(*) from divisions where ${SPLIT_ROWS(sql)} and ${inOrgs(sql, orgs)})::int
          + (select count(*) from sport_variants where ${SPLIT_VARIANTS(sql)} and ${inOrgs(sql, orgs)})::int as n`;
-  return { unpinnedStarted: row.unpinned, baseStageRules: row.base, shootoutSplitConfigs: split.n };
+  return { unpinnedStarted: row.unpinned, baseStageRules: row.base, shootoutSplitConfigs: split.n, held: await heldCount(sql, orgs, locked) };
 }
 
 export interface RunReport {
@@ -296,7 +370,8 @@ export interface RunReport {
   /** Organisation sport variants moved off the shoot-out split. */
   variantConfigs: number;
   converted: number;
-  /** Of `converted`: stages already pinned, whose pin's points were re-pinned to the converted rule (N4). */
+  /** Pinned stages re-pinned: of `converted`, those whose pin's points became the converted rule (N4); and the unscored
+   *  stages of a converted division pinned over its old config, re-pinned from the converted one (N8). */
   repinned: number;
   pinned: number;
   /** What a reader refused, one line each (`stage <id> …`, `division <id> …`, `variant …`): left as it is, and a refused
@@ -304,6 +379,8 @@ export interface RunReport {
   refused: string[];
   /** Rows whose write failed: `id: CODE message` (`failureLine`). */
   failed: string[];
+  /** Rows not written because the write would reach a scored stage, one line each (`stage <id>: …`, `division <id>: …`). */
+  held: string[];
   /** What the split conversion said out loud, one line per config (V472 raises the same as notices). */
   notices: string[];
   after: Census;
@@ -312,15 +389,29 @@ export interface RunReport {
 type PinStage = (tx: Tx, stageId: string) => Promise<void>;
 type RepinStage = (tx: Tx, stageId: string, saved: { readonly points?: unknown }) => Promise<void>;
 
-/** The app's two pin doors the run calls (`server/engine-db/table-rules.ts`), and the parsed URL its failures are redacted
- *  against. */
+/** The app's two pin doors and its lock predicate the run calls (`server/engine-db/table-rules.ts`,
+ *  `server/usecases/rule-locks.ts`), and the parsed URL its failures are redacted against. */
 export interface Doors {
   pinStageTableRules: PinStage;
   repinStageOwnRules: RepinStage;
+  lockedStageIdsAmong: LockedAmong;
   db: DatabaseUrl | null;
 }
 
-/** The writes, in order (split, convert, then pin), each row in its own transaction. */
+/** The lock the app's rule writers hold from before their lock read to their commit (`stage-rules.ts` putStageRules,
+ *  `divisions.ts` patchDivision): `division-config:<division>` EXCLUSIVE, which a match's first event takes SHARED before
+ *  it freezes (append-event.ts) — so a first tap in flight commits before the lock read below it (which then sees the
+ *  stage played) or waits for this row's commit. Taken first in each row's transaction (the app's global order puts it
+ *  after `division:`, stage seats and `fixture:`, none of which this script takes; the rows it writes are locked
+ *  `for update` after it). */
+async function lockDivisionRules(tx: Tx, divisionId: string): Promise<void> {
+  await tx`select pg_advisory_xact_lock(hashtext(${"division-config:" + divisionId}))`;
+}
+
+const SCORED = "it has a played fixture or an opened round";
+
+/** The writes, in order (split, convert, then pin), each row in its own transaction; a row whose write would reach a
+ *  scored stage is held. */
 export async function run(sql: Sql, orgs: readonly string[], doors: Doors): Promise<RunReport> {
   const report: RunReport = {
     divisionConfigs: 0,
@@ -330,11 +421,19 @@ export async function run(sql: Sql, orgs: readonly string[], doors: Doors): Prom
     pinned: 0,
     refused: [],
     failed: [],
+    held: [],
     notices: [],
-    after: { unpinnedStarted: 0, baseStageRules: 0, shootoutSplitConfigs: 0 },
+    after: { unpinnedStarted: 0, baseStageRules: 0, shootoutSplitConfigs: 0, held: 0 },
   };
   const refusedStages = new Set<string>();
   const refusedDivisions = new Set<string>();
+  const heldDivisions = new Set<string>();
+  // One line per held row: a stage held for its `{base}` rule is not asked again for its pin (step 3 skips it).
+  const heldKeys = new Set<string>();
+  const hold = (key: string, why: string): void => {
+    heldKeys.add(key);
+    report.held.push(`${key}: ${why}`);
+  };
 
   // 1. the shoot-out split: division configs, then organisation sport variants
   const divisions = await sql<{ id: string }[]>`
@@ -342,27 +441,49 @@ export async function run(sql: Sql, orgs: readonly string[], doors: Doors): Prom
   for (const { id } of divisions) {
     try {
       const outcome = await sql.begin(async (tx) => {
+        await lockDivisionRules(tx, id);
         const [row] = await tx<{ sport_key: string; config: unknown }[]>`
           select sport_key, config from divisions where id = ${id} and ${SPLIT_ROWS(tx)} for update`;
         if (row === undefined) return null; // converted by someone else since the list was read
+        // N5(b), N8: the stages this conversion reaches, and whether any is scored — asked before the twin, so a
+        // division that would also be refused is held (the owner's call comes first)
+        const reach = await tx<{ id: string; pinned: boolean }[]>`
+          select id, table_rules_pinned is not null as pinned from stages
+           where division_id = ${id} and ${READS_DIVISION_POINTS(tx)} order by id for update`;
+        const locked = await doors.lockedStageIdsAmong(tx, reach.map((s) => s.id));
+        const scored = reach.filter((s) => locked.has(s.id)).map((s) => s.id);
+        if (scored.length > 0) return { kind: "held" as const, scored };
         const r = dropShootoutSplit(row.sport_key, row.config);
-        if (!("refused" in r) && r.changed) {
-          await tx`update divisions set config = jsonb_set(config, '{points}', ${tx.json((r.cfg as { points: never }).points)}) where id = ${id}`;
+        if ("refused" in r) return { kind: "refused" as const, why: r.refused };
+        if (!r.changed) return null; // the twin's own precondition is the row filter's: nothing to write
+        await tx`update divisions set config = jsonb_set(config, '{points}', ${tx.json((r.cfg as { points: never }).points)}) where id = ${id}`;
+        // N8: a stage the app pinned over the old config reads the stripped split for good — re-pinned from the
+        // converted config (points only, from the live layers now: source "sport")
+        let repinned = 0;
+        for (const s of reach) {
+          if (!s.pinned) continue;
+          await doors.repinStageOwnRules(tx, s.id, { points: null });
+          repinned++;
         }
-        return r;
+        return { kind: "converted" as const, notices: r.notices, repinned };
       });
       if (outcome === null) continue;
-      if ("refused" in outcome) {
+      if (outcome.kind === "held") {
+        heldDivisions.add(id);
+        hold(`division ${id}`, `shoot-out split not converted: it would change the table of stage(s) ${outcome.scored.join(", ")} (${SCORED}); its started stages not pinned`);
+      } else if (outcome.kind === "refused") {
         refusedDivisions.add(id);
-        report.refused.push(`division ${id}: shoot-out split not converted (${outcome.refused}); its stages not pinned`);
-      } else if (outcome.changed) {
+        report.refused.push(`division ${id}: shoot-out split not converted (${outcome.why}); its stages not pinned`);
+      } else {
         report.divisionConfigs++;
+        report.repinned += outcome.repinned;
         for (const n of outcome.notices) report.notices.push(`division ${id}: ${n}`);
       }
     } catch (e) {
       report.failed.push(failureLine(`division ${id}`, e, doors.db));
     }
   }
+  // An organisation variant reaches no stage (a division copies it when created or moved to it), so it is never held.
   const variants = await sql<{ sport_key: string; key: string; org_id: string }[]>`
     select sport_key, key, org_id from sport_variants
      where ${SPLIT_VARIANTS(sql)} and ${inOrgs(sql, orgs)}
@@ -394,18 +515,18 @@ export async function run(sql: Sql, orgs: readonly string[], doors: Doors): Prom
     }
   }
 
-  // 2. the `{base}` stage rules; a stage already pinned has its pin's points re-pinned (N4)
-  const based = await sql<{ id: string }[]>`
-    select id from stages
-     where jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base' and ${inOrgs(sql, orgs)}
-     order by id`;
-  for (const { id } of based) {
+  // 2. the `{base}` stage rules; a stage already pinned has its pin's points re-pinned (N4); a scored stage is held (N5a)
+  const based = await sql<{ id: string; division_id: string }[]>`
+    select id, division_id from stages where ${BASE_RULE_ROWS(sql)} and ${inOrgs(sql, orgs)} order by id`;
+  for (const { id, division_id } of based) {
     try {
       const outcome = await sql.begin(async (tx) => {
+        await lockDivisionRules(tx, division_id);
         const [row] = await tx<{ points: unknown; pinned: boolean }[]>`
           select config -> 'points' as points, table_rules_pinned is not null as pinned from stages
-           where id = ${id} and jsonb_typeof(config -> 'points') = 'object' and config -> 'points' ? 'base' for update`;
+           where id = ${id} and ${BASE_RULE_ROWS(tx)} for update`;
         if (row === undefined) return "gone" as const; // converted by someone else since the list was read
+        if ((await doors.lockedStageIdsAmong(tx, [id])).has(id)) return "held" as const;
         const rule = parseLegacyPointsRule(row.points);
         if (rule === null) return "refused" as const;
         await tx`update stages set config = jsonb_set(config, '{points}', ${tx.json(rule)}) where id = ${id}`;
@@ -417,6 +538,7 @@ export async function run(sql: Sql, orgs: readonly string[], doors: Doors): Prom
       });
       if (outcome === "converted" || outcome === "repinned") report.converted++;
       if (outcome === "repinned") report.repinned++;
+      if (outcome === "held") hold(`stage ${id}`, `{base} rule not converted (${SCORED}); not pinned`);
       if (outcome === "refused") {
         refusedStages.add(id);
         report.refused.push(`stage ${id}: {base} rule not converted (the B1 reader refuses it); not pinned`);
@@ -427,37 +549,46 @@ export async function run(sql: Sql, orgs: readonly string[], doors: Doors): Prom
     }
   }
 
-  // 3. the pin of every started stage with none
+  // 3. the pin of every started stage with none — not a scored one (N5, N6: a pin taken now is W2d's rule, not the one
+  // it was scored under), nor one whose division is held
   const unpinned = await sql<{ id: string; division_id: string }[]>`
-    select id, division_id from stages
-     where status in ('active', 'complete') and table_rules_pinned is null and ${inOrgs(sql, orgs)}
-     order by id`;
+    select id, division_id from stages where ${UNPINNED_STARTED(sql)} and ${inOrgs(sql, orgs)} order by id`;
   for (const { id, division_id } of unpinned) {
-    if (refusedStages.has(id) || refusedDivisions.has(division_id)) continue;
+    const key = `stage ${id}`;
+    if (heldKeys.has(key)) continue;
+    if (heldDivisions.has(division_id)) {
+      hold(key, `not pinned: its division ${division_id} is held`);
+      continue;
+    }
     try {
-      const pinned = await sql.begin(async (tx) => {
-        const [row] = await tx<{ id: string }[]>`
-          select id from stages where id = ${id} and status in ('active', 'complete') and table_rules_pinned is null for update`;
-        if (row === undefined) return false;
+      const outcome = await sql.begin(async (tx) => {
+        await lockDivisionRules(tx, division_id);
+        const [row] = await tx<{ id: string }[]>`select id from stages where id = ${id} and ${UNPINNED_STARTED(tx)} for update`;
+        if (row === undefined) return "gone" as const;
+        // the lock first: a scored stage is held even where its rule or division was refused (as `--check` counts it)
+        if ((await doors.lockedStageIdsAmong(tx, [id])).has(id)) return "held" as const;
+        if (refusedStages.has(id) || refusedDivisions.has(division_id)) return "skipped" as const;
         await doors.pinStageTableRules(tx, id);
         const [after] = await tx<{ pinned: boolean }[]>`select table_rules_pinned is not null as pinned from stages where id = ${id}`;
         if (after?.pinned !== true) throw Object.assign(new Error("the pin wrote nothing"), { code: "NOT_PINNED" });
-        return true;
+        return "pinned" as const;
       });
-      if (pinned) report.pinned++;
+      if (outcome === "pinned") report.pinned++;
+      if (outcome === "held") hold(key, `not pinned (${SCORED})`);
     } catch (e) {
-      report.failed.push(failureLine(`stage ${id}`, e, doors.db));
+      report.failed.push(failureLine(key, e, doors.db));
     }
   }
-  report.after = await census(sql, orgs);
+  report.after = await census(sql, orgs, doors.lockedStageIdsAmong);
   return report;
 }
 
-const anyLeft = (c: Census): boolean => c.unpinnedStarted > 0 || c.baseStageRules > 0 || c.shootoutSplitConfigs > 0;
+// A held row is never written, so it stays in its own count too; `held` is named here so the exit reads as the rule does.
+const anyLeft = (c: Census): boolean => c.unpinnedStarted > 0 || c.baseStageRules > 0 || c.shootoutSplitConfigs > 0 || c.held > 0;
 
-/** Exit code of an apply run: 0 only when nothing was refused or failed and nothing is left in scope. */
+/** Exit code of an apply run: 0 only when nothing was refused, failed or held and nothing is left in scope. */
 export function exitCodeOfRun(r: RunReport): number {
-  return r.refused.length > 0 || r.failed.length > 0 || anyLeft(r.after) ? 1 : 0;
+  return r.refused.length > 0 || r.failed.length > 0 || r.held.length > 0 || anyLeft(r.after) ? 1 : 0;
 }
 
 /** Exit code of `--check`: 1 while any count is above 0. */
@@ -465,8 +596,16 @@ export function exitCodeOfCheck(c: Census): number {
   return anyLeft(c) ? 1 : 0;
 }
 
-/** Lets node load apps/web server modules: `server-only` is a no-op, `@/` is apps/web/src, and an extensionless
- *  relative specifier is the `.ts`/`.tsx`/`/index.ts` file on disk. Process-wide, so only `main` calls it. */
+/** Barrels node reads as the one module the doors this file loads need from them. `@/server/engine-db` re-exports
+ *  from append-event, rebuild, replay and the rest, which reach `lib/errors.ts` — whose constructor parameter properties
+ *  Node 26 cannot strip (it has no transform mode) — while `rule-locks.ts` takes only `resolveModule` from it, whose
+ *  home is `registry.ts`. Fail-loud: a module that imports any other name from the barrel stops this script at link
+ *  time ("does not provide an export named …"), before it connects. */
+const BARREL_AS = new Map([["@/server/engine-db", "server/engine-db/registry"]]);
+
+/** Lets node load apps/web server modules: `server-only` is a no-op, `@/` is apps/web/src (a barrel in `BARREL_AS` as
+ *  the module named there), and an extensionless relative specifier is the `.ts`/`.tsx`/`/index.ts` file on disk.
+ *  Process-wide, so only `main` calls it. */
 function registerWebResolve(webSrc: string): void {
   const file = (p: string): string | null => {
     for (const c of [p, `${p}.ts`, `${p}.tsx`, `${p}/index.ts`]) if (existsSync(c) && statSync(c).isFile()) return c;
@@ -476,7 +615,7 @@ function registerWebResolve(webSrc: string): void {
     resolve(specifier, context, next) {
       if (specifier === "server-only") return { url: "data:text/javascript,export{}", shortCircuit: true };
       if (specifier.startsWith("@/")) {
-        const f = file(resolvePath(webSrc, specifier.slice(2)));
+        const f = file(resolvePath(webSrc, BARREL_AS.get(specifier) ?? specifier.slice(2)));
         if (f !== null) return { url: pathToFileURL(f).href, shortCircuit: true };
       }
       if ((specifier.startsWith("./") || specifier.startsWith("../")) && context.parentURL?.startsWith("file:")) {
@@ -518,6 +657,9 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
     pinStageTableRules: PinStage;
     repinStageOwnRules: RepinStage;
   };
+  const ruleLocks = (await import(pathToFileURL(resolvePath(webSrc, "server/usecases/rule-locks.ts")).href)) as {
+    lockedStageIdsAmong: LockedAmong;
+  };
   let sql: Sql;
   try {
     // N1: the driver's own option parse can still refuse what ours read (a `target_session_attrs` it does not know, and
@@ -530,14 +672,20 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
   }
   try {
     if (args.check) {
-      const c = await census(sql, args.orgs);
+      const c = await census(sql, args.orgs, ruleLocks.lockedStageIdsAmong);
       console.log(JSON.stringify({ mode: "check", ...c }));
       return exitCodeOfCheck(c);
     }
-    const r = await run(sql, args.orgs, { ...tableRules, db });
+    const r = await run(sql, args.orgs, {
+      pinStageTableRules: tableRules.pinStageTableRules,
+      repinStageOwnRules: tableRules.repinStageOwnRules,
+      lockedStageIdsAmong: ruleLocks.lockedStageIdsAmong,
+      db,
+    });
     for (const n of r.notices) console.error(`shoot-out split converted, said: ${n}`);
     for (const line of r.refused) console.error(`refused: ${line}`);
     for (const f of r.failed) console.error(`failed: ${f}`);
+    for (const line of r.held) console.error(`held: ${line}`);
     console.log(
       JSON.stringify({
         mode: "apply",
@@ -548,7 +696,10 @@ export async function main(argv: readonly string[], env: NodeJS.ProcessEnv): Pro
         pinned: r.pinned,
         refused: r.refused.length,
         failed: r.failed.length,
-        ...r.after,
+        held: r.held.length,
+        unpinnedStarted: r.after.unpinnedStarted,
+        baseStageRules: r.after.baseStageRules,
+        shootoutSplitConfigs: r.after.shootoutSplitConfigs,
       }),
     );
     return exitCodeOfRun(r);

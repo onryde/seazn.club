@@ -16,6 +16,9 @@
 // connects, and `0.0.0.0` at a port just found closed (this machine). Fix round 2 adds the shoot-out split (V472's data
 // steps 3 and 4, redone for the window): its TypeScript twin is held to V472's own SQL over a grid of every sport the
 // split names and two it does not, and the CLI is run over an old-app football division and organisation variant.
+// Fix round 3 adds HELD rows (a write that would reach a scored stage is not made): each is scored through `scoreEvent`
+// and compared by what the scored stage READS (its computed table and stored snapshots, byte for byte), and the row
+// lock the script takes is raced by a first tap held open in this process (pg_locks shows the run waiting on it).
 // Single-sport reason (the stage-rule cases): the convert and pin steps are sport-blind (they move stored rows through
 // one module-agnostic door); generic is the one sport whose stage cfg the test can author without a catalog.
 import { execFile } from "node:child_process";
@@ -30,8 +33,13 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { connectionOptions, sql } from "@/lib/db";
 import { buildTemplateStages } from "@/lib/format-templates";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import type { CreateStages } from "@/server/api-v1/schemas";
+import { rankedStageStandings } from "@/server/engine-db/competition";
+import { liveCfg } from "@/server/engine-db/fixture-cfg";
+import { lockedStageIdsAmong } from "@/server/usecases/rule-locks";
 import { startDivision } from "@/server/usecases/schedule";
+import { addFixture } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedFootballCatalog, seedOrg } from "@/server/usecases/__tests__/_seed";
 import {
   census,
@@ -43,7 +51,8 @@ import {
   redact,
   type SplitNotice,
 } from "../../../../../../scripts/w2d/post-deploy-pin.ts";
-import { stageRules, tableScene } from "./helpers/w2d-table-rig";
+import { post } from "./helpers/w2b-rig";
+import { genericResult, seatedFixtures, stageRules, tableScene } from "./helpers/w2d-table-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const REPO = join(import.meta.dirname, "..", "..", "..", "..", "..", "..");
@@ -156,10 +165,13 @@ const APPLY_ZERO = {
   pinned: 0,
   refused: 0,
   failed: 0,
+  held: 0,
   unpinnedStarted: 0,
   baseStageRules: 0,
   shootoutSplitConfigs: 0,
 };
+/** A `--check` summary with nothing left: every key it prints. */
+const CHECK_ZERO = { mode: "check", unpinnedStarted: 0, baseStageRules: 0, shootoutSplitConfigs: 0, held: 0 };
 
 type Pin = { points: unknown; tiebreakers: string[]; crossGroup: string[]; sources: { points: string; tiebreakers: string; crossGroup: string } };
 /** The pre-W2d cross-group order V472 pins (hard-coded at W2D_BASE, `packages/engine/src/competition/progression.ts:573-575`). */
@@ -169,6 +181,69 @@ const divisionConfigOf = async (id: string) =>
 const variantConfigOf = async (key: string) =>
   (await sql<{ config: Record<string, unknown> }[]>`select config from sport_variants where key = ${key}`)[0]?.config;
 const withoutPoints = (o: Record<string, unknown>): Record<string, unknown> => Object.fromEntries(Object.entries(o).filter(([k]) => k !== "points"));
+
+/** What a stage READS, as text — fix round 3's "never changes what a scored stage reads" witness: its table as the app
+ *  computes it now (`rankedStageStandings`, inside a transaction rolled back so a lots draw it makes is not kept), or the
+ *  typed refusal it reads as instead; and every standings snapshot stored for it (what its public table shows). */
+async function readsOf(stageId: string): Promise<{ table: string; snapshots: string }> {
+  const ROLLBACK = new Error("rollback");
+  let table = "";
+  await expect(
+    sql.begin(async (tx) => {
+      try {
+        table = JSON.stringify(await rankedStageStandings(tx as never, stageId));
+      } catch (e) {
+        const err = e as { code?: unknown; data?: { reason?: unknown } };
+        table = JSON.stringify({ refused: err.code ?? String(e), reason: err.data?.reason ?? null });
+      }
+      throw ROLLBACK;
+    }),
+  ).rejects.toBe(ROLLBACK);
+  const [s] = await sql<{ t: string | null }[]>`
+    select json_agg(json_build_object('pool', pool_id, 'rows', rows, 'previous', previous_rows, 'through', computed_through_seq)
+                    order by pool_id)::text as t
+      from standings_snapshots where stage_id = ${stageId}`;
+  return { table, snapshots: s?.t ?? "[]" };
+}
+
+interface TableRow {
+  entrantId: string;
+  won: number;
+  drawn: number;
+  lost: number;
+  points: number;
+}
+/** One entrant's row of a computed table (`readsOf(...).table`). */
+function rowOf(table: string, entrant: string): TableRow {
+  const rows = JSON.parse(table) as TableRow[];
+  if (!Array.isArray(rows)) throw new Error(`no table: ${table}`);
+  const row = rows.find((r) => r.entrantId === entrant);
+  if (row === undefined) throw new Error(`no row for ${entrant} in ${table}`);
+  return row;
+}
+
+const footballModule = builtinModules.find((m) => m.key === "football") as AnySportModule;
+/** A football division whose level league match goes straight to a shoot-out (no extra time): a result only the shoot-out
+ *  rule pays, so a change to that rule moves the table. */
+const SHOOTOUT_CFG = { ...(footballModule.variants["11-a-side"] as Record<string, unknown>), shootout: true, extraTime: { enabled: false, halfMinutes: 15 } };
+/** The W2c split an old-app save writes into a division's points (spec §5.3). */
+const WINDOW_SPLIT = { win: 3, draw: 1, loss: 0, shootoutWin: 3, shootoutLoss: 1 };
+
+/** 0-0 at full time, then won 4-3 on penalties by `home` (five kicks each, decided on the last). */
+async function shootoutWin(auth: AuthCtx, fixtureId: string, home: string, away: string): Promise<void> {
+  await post(auth, fixtureId, "core.start");
+  await post(auth, fixtureId, "football.period", { phase: "HT" });
+  await post(auth, fixtureId, "football.period", { phase: "FT" });
+  const kicks: [string, boolean][] = [
+    [home, true], [away, true], [home, true], [away, true], [home, true], [away, true], [home, false], [away, false], [home, true], [away, false],
+  ];
+  for (const [by, scored] of kicks) await post(auth, fixtureId, "football.shootout.kick", { by, scored });
+  const [f] = await sql<{ status: string; outcome: { kind?: string; winner?: string; method?: string } | null }[]>`
+    select status, outcome from fixtures where id = ${fixtureId}`;
+  if (f?.status !== "decided" || f.outcome?.kind !== "win" || f.outcome.winner !== home || f.outcome.method !== "shootout") {
+    throw new Error(`rig: not a shoot-out win for the home side (${f?.status} ${JSON.stringify(f?.outcome)})`);
+  }
+}
 
 describe.skipIf(!HAS_DB)("W2d T9 I2: scripts/w2d/post-deploy-pin.ts, run against the stages the deploy window leaves", () => {
   it("converts {base}, then pins every started stage with no pin — the activation door's pin; scoped by --org; a second run changes nothing; --check reads 2/2 before and 0/0 after", async () => {
@@ -199,7 +274,7 @@ describe.skipIf(!HAS_DB)("W2d T9 I2: scripts/w2d/post-deploy-pin.ts, run against
     const window_ = await rowsOf([leagueA, koA, leagueB]);
     const before = await cli(["--check", ...both], env);
     expect(before.code, `--check finds the window's leftovers: ${before.err}`).toBe(1);
-    expect(lastJson(before)).toEqual({ mode: "check", unpinnedStarted: 2, baseStageRules: 2, shootoutSplitConfigs: 0 });
+    expect(lastJson(before)).toEqual({ ...CHECK_ZERO, unpinnedStarted: 2, baseStageRules: 2 });
     expect(await rowsOf([leagueA, koA, leagueB]), "--check writes nothing").toEqual(window_);
 
     // A alone: B is out of scope and untouched
@@ -241,7 +316,7 @@ describe.skipIf(!HAS_DB)("W2d T9 I2: scripts/w2d/post-deploy-pin.ts, run against
 
     const after = await cli(["--check", ...both], env);
     expect(after.code, after.err).toBe(0);
-    expect(lastJson(after)).toEqual({ mode: "check", unpinnedStarted: 0, baseStageRules: 0, shootoutSplitConfigs: 0 });
+    expect(lastJson(after)).toEqual(CHECK_ZERO);
   }, 6 * CLI_MS);
 
   it("a {base} rule the B1 reader refuses is neither written nor pinned over (the sport's rule would be pinned silently): exit 1, the stage named", async () => {
@@ -260,7 +335,7 @@ describe.skipIf(!HAS_DB)("W2d T9 I2: scripts/w2d/post-deploy-pin.ts, run against
     expect(await rowsOf([league]), "nothing written").toEqual(before);
     const check = await cli(["--check", "--org", c.auth.orgId], { ...process.env });
     expect(check.code).toBe(1);
-    expect(lastJson(check)).toEqual({ mode: "check", unpinnedStarted: 1, baseStageRules: 1, shootoutSplitConfigs: 0 });
+    expect(lastJson(check)).toEqual({ ...CHECK_ZERO, unpinnedStarted: 1, baseStageRules: 1 });
   }, 3 * CLI_MS);
 
   it("N4: a {base} rule the old code saved over a stage ALREADY pinned is converted and that pin's points re-pinned to it (source stage) — an app pin of an own rule and a V472-migrated pin alike; the order, the cross-group order, their sources and the pin's date kept; a second run changes nothing", async () => {
@@ -334,7 +409,7 @@ describe.skipIf(!HAS_DB)("W2d T9 I2: scripts/w2d/post-deploy-pin.ts, run against
     await sql`update divisions set config = jsonb_set(config, '{points}', ${sql.json(SPLIT)}) where id = ${f.divisionId}`;
     const splitOnly = await cli(["--check", ...scope], env);
     expect(splitOnly.code, `a split alone keeps a deploy from passing: ${splitOnly.err}`).toBe(1);
-    expect(lastJson(splitOnly)).toEqual({ mode: "check", unpinnedStarted: 0, baseStageRules: 0, shootoutSplitConfigs: 1 });
+    expect(lastJson(splitOnly)).toEqual({ ...CHECK_ZERO, shootoutSplitConfigs: 1 });
     // …and it started the league with no pin
     await sql`update stages set table_rules_pinned = null, table_rules_pinned_at = null where id = ${league}`;
     const divisionBefore = await divisionConfigOf(f.divisionId);
@@ -351,7 +426,7 @@ describe.skipIf(!HAS_DB)("W2d T9 I2: scripts/w2d/post-deploy-pin.ts, run against
 
     const check = await cli(["--check", ...scope], env);
     expect(check.code, check.err).toBe(1);
-    expect(lastJson(check)).toEqual({ mode: "check", unpinnedStarted: 1, baseStageRules: 0, shootoutSplitConfigs: 2 });
+    expect(lastJson(check)).toEqual({ ...CHECK_ZERO, unpinnedStarted: 1, shootoutSplitConfigs: 2 });
     const theirsBefore = await variantConfigOf(theirs);
     const run = await cli(scope, env);
     expect(run.code, run.err).toBe(0);
@@ -377,7 +452,7 @@ describe.skipIf(!HAS_DB)("W2d T9 I2: scripts/w2d/post-deploy-pin.ts, run against
     expect({ stage: await rowsOf([league]), division: await divisionConfigOf(f.divisionId), variant: await variantConfigOf(mine) }).toEqual(settled);
     const after = await cli(["--check", ...scope], env);
     expect(after.code, after.err).toBe(0);
-    expect(lastJson(after)).toEqual({ mode: "check", unpinnedStarted: 0, baseStageRules: 0, shootoutSplitConfigs: 0 });
+    expect(lastJson(after)).toEqual(CHECK_ZERO);
   }, 6 * CLI_MS);
 
   it("a shoot-out split the B1 reader refuses (a non-number) is not written and its division's started stage is not pinned over it: exit 1, the division named", async () => {
@@ -418,6 +493,322 @@ describe.skipIf(!HAS_DB)("W2d T9 I2: scripts/w2d/post-deploy-pin.ts, run against
   }, 2 * CLI_MS);
 });
 
+type Scene = Awaited<ReturnType<typeof tableScene>>;
+
+/** Runs the script (`args`) while this test holds `division-config:<division>` SHARED — what a match's first event holds
+ *  from before it resolves its config until it commits (append-event.ts) — and, once the run is seen WAITING for that
+ *  lock (an ungranted request on its key in pg_locks) or has exited, marks `fixtureId` played (a frozen config:
+ *  `playedSql`'s first arm) in the same transaction and commits: the first tap lands. A run that takes the app's lock
+ *  before its lock read waits, then reads the fixture played; one that does not has read it unplayed already. */
+async function runAgainstFirstTap(divisionId: string, fixtureId: string, args: readonly string[]): Promise<{ r: Cli; waited: boolean }> {
+  const key = `division-config:${divisionId}`;
+  let waited = false;
+  let done: Cli | undefined;
+  let running: Promise<Cli> | undefined;
+  await sql.begin(async (tx) => {
+    await tx`select pg_advisory_xact_lock_shared(hashtext(${key}))`;
+    running = cli(args, { ...process.env }).then((x) => (done = x));
+    const until = Date.now() + CLI_MS;
+    while (done === undefined && Date.now() < until) {
+      // a one-key advisory lock shows its key's high half as classid, its low half as objid
+      const [w] = await tx<{ n: number }[]>`
+        select count(*)::int as n from pg_locks
+         where locktype = 'advisory' and not granted
+           and database = (select oid from pg_database where datname = current_database())
+           and classid::bigint = ((hashtext(${key})::bigint >> 32) & 4294967295)
+           and objid::bigint = (hashtext(${key})::bigint & 4294967295)`;
+      if (w!.n > 0) {
+        waited = true;
+        break;
+      }
+      await new Promise((d) => setTimeout(d, 100));
+    }
+    await tx`update fixtures set config_snapshot = coalesce(config_snapshot, '{}'::jsonb) where id = ${fixtureId}`;
+  });
+  return { r: await running!, waited };
+}
+
+// Fix round 3 (N5, N6, N8; owner ruling: the script NEVER changes what a scored stage reads). Each row's transaction asks
+// the lock's own predicate (`lockedStageIdsAmong`: a played fixture or an opened round) of every stage the row's write
+// would reach; a hit is HELD — not written, named on stderr, counted in the summary and in `--check`, exit 1. Every case
+// below is scored through `scoreEvent` (the console's write) and compares what the scored stage READS — its table as
+// the app computes it, and its stored snapshots — byte for byte before and after. Two sports: generic for the stage-rule
+// and pin rows (sport-blind doors, as above), football for the shoot-out split, the one rule the split moves.
+describe.skipIf(!HAS_DB)("W2d T9 fix round 3: a row whose write would reach a SCORED stage is held, never written", () => {
+  it("N5(a): an own {base} rule the old code saved on a V472-pinned stage that was then SCORED is held — not converted, not re-pinned; one on an unpinned scored stage is held ONCE; what each reads byte-identical; exit 1, the stages named; --check counts them", async () => {
+    const s = await tableScene({ entrants: 2 });
+    const [league] = s.stageIds as [string];
+    const [E1, E2] = s.entrants as [string, string];
+    await startDivision(s.auth, s.divisionId);
+    const activation = (await stageRules(league)).pin as Pin;
+    const migrated: Pin = { ...activation, crossGroup: PRE_W2D_CROSS_GROUP, sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" } };
+    touched.push(league);
+    // the window: the old code saves a {base} rule over the V472 pin (its stage-rules save allows it until the first
+    // score) — and a match is then scored, read under the pin
+    await sql`update stages set table_rules_pinned = ${sql.json(migrated as never)},
+                     config = jsonb_set(coalesce(config, '{}'::jsonb), '{points}', ${sql.json(BASE_RULE as never)}) where id = ${league}`;
+    await genericResult(s.auth, league, E1, E2, 2, 1);
+    // and a stage the old code started with no pin, saved a {base} rule on and scored: both its rows (the rule, the pin)
+    // reach it, and it is held once
+    const u = await tableScene({ entrants: 2 });
+    const [loose] = u.stageIds as [string];
+    await startDivision(u.auth, u.divisionId);
+    await genericResult(u.auth, loose, u.entrants[0]!, u.entrants[1]!, 2, 1);
+    touched.push(loose);
+    await sql`update stages set table_rules_pinned = null, table_rules_pinned_at = null,
+                     config = jsonb_set(coalesce(config, '{}'::jsonb), '{points}', ${sql.json(BASE_RULE as never)}) where id = ${loose}`;
+    const env = { ...process.env };
+    const scope = ["--org", s.auth.orgId, "--org", u.auth.orgId];
+    const before = { rows: await rowsOf([league, loose]), reads: await readsOf(league), loose: await readsOf(loose) };
+    expect(before.reads.snapshots, "premise: the score wrote a table").not.toBe("[]");
+    // premise: converting would move the table — the pin pays generic's win, the saved rule its own (B1, one goal's margin)
+    expect(rowOf(before.reads.table, E1).points, "premise: the table pays the pin's win").toBe(GENERIC_CONFIG.points.w);
+    expect(BASE_RULE.base.win).not.toBe(GENERIC_CONFIG.points.w);
+
+    const check = await cli(["--check", ...scope], env);
+    expect(check.code, check.err).toBe(1);
+    expect(lastJson(check)).toEqual({ ...CHECK_ZERO, baseStageRules: 2, unpinnedStarted: 1, held: 2 });
+    const r = await cli(scope, env);
+    expect(r.code, "a held row stops a deploy").toBe(1);
+    expect(lastJson(r)).toEqual({ ...APPLY_ZERO, held: 2, baseStageRules: 2, unpinnedStarted: 1 });
+    expect(r.err).toContain(`held: stage ${league}`);
+    expect(r.err.split("\n").filter((l) => l.startsWith(`held: stage ${loose}`)), "held once, not once per row").toHaveLength(1);
+    expect(await rowsOf([league, loose]), "nothing written: the {base} rules and the pins as they were").toEqual(before.rows);
+    expect(await readsOf(league), "what the scored stage reads: byte-identical").toEqual(before.reads);
+    expect(await readsOf(loose), "and the unpinned one").toEqual(before.loose);
+  }, 2 * CLI_MS + 90_000);
+
+  it("N5: a stage the old code started with no pin and that was SCORED in the window is held, not pinned — still unpinned, what it reads byte-identical; exit 1; --check counts it", async () => {
+    const s = await tableScene({ entrants: 2 });
+    const [league] = s.stageIds as [string];
+    const [E1, E2] = s.entrants as [string, string];
+    await startDivision(s.auth, s.divisionId);
+    await genericResult(s.auth, league, E1, E2, 2, 1);
+    touched.push(league);
+    await sql`update stages set table_rules_pinned = null, table_rules_pinned_at = null where id = ${league}`;
+    const env = { ...process.env };
+    const scope = ["--org", s.auth.orgId];
+    const before = { rows: await rowsOf([league]), reads: await readsOf(league) };
+    expect(before.reads.snapshots, "premise: the score wrote a table").not.toBe("[]");
+
+    const check = await cli(["--check", ...scope], env);
+    expect(check.code, check.err).toBe(1);
+    expect(lastJson(check)).toEqual({ ...CHECK_ZERO, unpinnedStarted: 1, held: 1 });
+    const r = await cli(scope, env);
+    expect(r.code, "a held row stops a deploy").toBe(1);
+    expect(lastJson(r)).toEqual({ ...APPLY_ZERO, held: 1, unpinnedStarted: 1 });
+    expect(r.err).toContain(`held: stage ${league}`);
+    expect(await stageRules(league), "not pinned").toMatchObject({ status: "active", pin: null });
+    expect(await rowsOf([league]), "nothing written").toEqual(before.rows);
+    expect(await readsOf(league), "what the scored stage reads: byte-identical").toEqual(before.reads);
+  }, 2 * CLI_MS + 60_000);
+
+  it("N5(b): a division the old code saved on the shoot-out split, whose PENDING stage (no pin: it reads the live layers) then played an ad-hoc match won on penalties, is held — not converted; the winner keeps the draw plus the default bonus; exit 1, the division named", async () => {
+    await seedFootballCatalog();
+    const f = await tableScene({ sport: "football", variant: "11-a-side", config: SHOOTOUT_CFG, entrants: 2 });
+    const [league] = f.stageIds as [string];
+    const [E1, E2] = f.entrants as [string, string];
+    touchedDivisions.push(f.divisionId);
+    // the window: the old code saves the split (its lock allows it, nothing has played yet); the division starts with an
+    // ad-hoc match already on its league, so the start generates nothing and leaves the league pending (I1's shape) — and
+    // the match is played, the pending league reading the division's points live: stripped of the split, the default bonus
+    await sql`update divisions set config = jsonb_set(config, '{points}', ${sql.json(WINDOW_SPLIT)}) where id = ${f.divisionId}`;
+    // its own points a JSON null: "inherit", as an absent key is (`ownRulesOf` reads any falsy value so)
+    await sql`update stages set config = jsonb_set(coalesce(config, '{}'::jsonb), '{points}', 'null'::jsonb) where id = ${league}`;
+    const { fixture_id } = await addFixture(f.auth, league, { home_entrant_id: E1, away_entrant_id: E2 });
+    await startDivision(f.auth, f.divisionId);
+    await shootoutWin(f.auth, fixture_id, E1, E2);
+    expect(await stageRules(league), "premise: the stage is pending and unpinned").toMatchObject({ status: "pending", pin: null });
+    const env = { ...process.env };
+    const scope = ["--org", f.auth.orgId];
+    const before = { division: await divisionConfigOf(f.divisionId), stage: await rowsOf([league]), reads: await readsOf(league) };
+    expect(before.reads.snapshots, "premise: the score wrote a table").not.toBe("[]");
+    // B2 (`payout`): a draw-plus-bonus shoot-out pays its winner the draw plus `soBonus`, absent 1; PS-1's conversion
+    // makes it shootoutWin − draw, so the winner would move from draw + 1 to shootoutWin
+    expect(rowOf(before.reads.table, E1).points, "premise: the winner holds the draw plus the default bonus").toBe(WINDOW_SPLIT.draw + 1);
+    expect(WINDOW_SPLIT.shootoutWin, "premise: the conversion would move it").not.toBe(WINDOW_SPLIT.draw + 1);
+
+    const check = await cli(["--check", ...scope], env);
+    expect(check.code, check.err).toBe(1);
+    expect(lastJson(check)).toEqual({ ...CHECK_ZERO, shootoutSplitConfigs: 1, held: 1 });
+    const r = await cli(scope, env);
+    expect(r.code, "a held row stops a deploy").toBe(1);
+    expect(lastJson(r)).toEqual({ ...APPLY_ZERO, held: 1, shootoutSplitConfigs: 1 });
+    expect(r.err).toContain(`held: division ${f.divisionId}`);
+    expect(r.err, "it names the scored stage").toContain(league);
+    expect(await divisionConfigOf(f.divisionId), "the division is not converted").toEqual(before.division);
+    expect(await rowsOf([league]), "nor its stage").toEqual(before.stage);
+    expect(await readsOf(league), "what the scored stage reads: byte-identical").toEqual(before.reads);
+  }, 2 * CLI_MS + 60_000);
+
+  it("N6: a football stage the old code started with no pin, with a shoot-out WIN scored in the window (pre-W2d: a shoot-out pays as the result), is held — not pinned under W2d's draw-plus-bonus, so the win is not flipped to a draw", async () => {
+    await seedFootballCatalog();
+    const f = await tableScene({ sport: "football", variant: "11-a-side", config: SHOOTOUT_CFG, entrants: 2 });
+    const [league] = f.stageIds as [string];
+    await startDivision(f.auth, f.divisionId);
+    const activation = (await stageRules(league)).pin as Pin;
+    // the rule the window's table was read under: V472's `w2d_pre_points` shape for a pre-W2d football split (spec §5.4
+    // "Migration pin": a shoot-out booked as the result, `win.so`/`loss.so`)
+    const prePoints = PointsRule.parse({
+      shootoutAs: "result",
+      unit: "whole",
+      bonuses: [],
+      win: { regulation: 3, so: WINDOW_SPLIT.shootoutWin },
+      loss: { regulation: 0, so: WINDOW_SPLIT.shootoutLoss },
+      draw: 1,
+      tie: 1,
+      noResult: 1,
+    });
+    const prePin = { ...activation, points: prePoints, crossGroup: PRE_W2D_CROSS_GROUP, sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" } };
+    await sql`update stages set table_rules_pinned = ${sql.json(prePin as never)} where id = ${league}`;
+    const [fx] = await seatedFixtures(league);
+    await shootoutWin(f.auth, fx!.id, fx!.home, fx!.away);
+    touched.push(league);
+    // …and the old code had left the stage with no pin
+    await sql`update stages set table_rules_pinned = null, table_rules_pinned_at = null where id = ${league}`;
+    const winnerOf = (snapshots: string) => (JSON.parse(snapshots) as { rows: TableRow[] }[])[0]?.rows.find((x) => x.entrantId === fx!.home);
+    const before = { rows: await rowsOf([league]), reads: await readsOf(league) };
+    expect(winnerOf(before.reads.snapshots), "premise: the window's table counts the shoot-out as a win").toMatchObject({ won: 1, drawn: 0 });
+
+    const r = await cli(["--org", f.auth.orgId], { ...process.env });
+    expect(r.code, "a held row stops a deploy").toBe(1);
+    expect(lastJson(r)).toEqual({ ...APPLY_ZERO, held: 1, unpinnedStarted: 1 });
+    expect(r.err).toContain(`held: stage ${league}`);
+    expect(await stageRules(league), "not pinned under W2d's shoot-out").toMatchObject({ status: "active", pin: null });
+    const after = await readsOf(league);
+    expect(winnerOf(after.snapshots), "the win is not flipped to a draw").toMatchObject({ won: 1, drawn: 0 });
+    expect(after, "what the scored stage reads: byte-identical").toEqual(before.reads);
+    expect(await rowsOf([league])).toEqual(before.rows);
+  }, CLI_MS + 60_000);
+
+  it("N8: a split division whose stage the NEW code pinned over the stripped config (source sport) is converted and that UNSCORED stage re-pinned from it (soBonus = shootoutWin − draw; order, cross-group order, their sources and the date kept) — a played stage with its own rule does not hold it; a SCORED pinned one's division is held with its unpinned started stage, pin and table byte-identical; a second run changes nothing", async () => {
+    await seedFootballCatalog();
+    const parsed = footballModule.configSchema.parse(SHOOTOUT_CFG);
+    // an own rule (createStages parses it): the sport's own for a league, so the stage pays as the division does today
+    const ownRule = footballModule.tablePointsRule(parsed as never, "league");
+    const two = (second: Record<string, unknown>) =>
+      [
+        { seq: 1, kind: "league", name: "League", config: {} },
+        { seq: 2, kind: "league", name: "Second", config: second },
+      ] as CreateStages;
+    const one = await tableScene({ sport: "football", variant: "11-a-side", config: SHOOTOUT_CFG, entrants: 2, stages: two({ points: ownRule }) });
+    const other = await tableScene({ sport: "football", variant: "11-a-side", config: SHOOTOUT_CFG, entrants: 2, stages: two({}) });
+    const [f1, own1] = one.stageIds as [string, string];
+    const [f2, late2] = other.stageIds as [string, string];
+    touchedDivisions.push(one.divisionId, other.divisionId);
+    touched.push(late2);
+    // the window: the old code saves both divisions on the split; after the deploy the NEW code starts both (pinning
+    // over the config its schema strips); a match of the second division's league is won on penalties, and an ad-hoc
+    // match on the first division's pending stage with its own rule is too
+    for (const sc of [one, other]) await sql`update divisions set config = jsonb_set(config, '{points}', ${sql.json(WINDOW_SPLIT)}) where id = ${sc.divisionId}`;
+    await startDivision(one.auth, one.divisionId);
+    await startDivision(other.auth, other.divisionId);
+    const [fx2] = await seatedFixtures(f2);
+    await shootoutWin(other.auth, fx2!.id, fx2!.home, fx2!.away);
+    const { fixture_id: ownFixture } = await addFixture(one.auth, own1, { home_entrant_id: one.entrants[0]!, away_entrant_id: one.entrants[1]! });
+    await shootoutWin(one.auth, ownFixture, one.entrants[0]!, one.entrants[1]!);
+    // …and the old code had started the second division's second league with no pin, nothing played on it
+    await sql`update stages set status = 'active' where id = ${late2}`;
+    const BONUS = WINDOW_SPLIT.shootoutWin - WINDOW_SPLIT.draw; // spec §5.3 / PS-1
+    const [was1] = await rowsOf([f1]);
+    const pin1 = was1!.pin as Pin & { points: { soBonus?: number } };
+    expect(pin1.sources.points, "premise: the new code pinned the sport's rule").toBe("sport");
+    expect(pin1.points.soBonus, "premise: pinned over the stripped split — not the organiser's bonus").not.toBe(BONUS);
+    expect(await stageRules(own1), "premise: the stage with its own rule is pending, unpinned").toMatchObject({ status: "pending", pin: null });
+    const ownBefore = await readsOf(own1);
+    expect(ownBefore.snapshots, "premise: its match wrote a table").not.toBe("[]");
+    const before2 = { division: await divisionConfigOf(other.divisionId), stages: await rowsOf([f2, late2]), reads: await readsOf(f2) };
+    expect(before2.reads.snapshots, "premise: the score wrote a table").not.toBe("[]");
+    const env = { ...process.env };
+    const scope = ["--org", one.auth.orgId, "--org", other.auth.orgId];
+
+    const check = await cli(["--check", ...scope], env);
+    expect(check.code, check.err).toBe(1);
+    expect(lastJson(check)).toEqual({ ...CHECK_ZERO, unpinnedStarted: 1, shootoutSplitConfigs: 2, held: 2 });
+    const r = await cli(scope, env);
+    expect(r.code, "a held row stops a deploy").toBe(1);
+    expect(lastJson(r)).toEqual({ ...APPLY_ZERO, divisionConfigs: 1, repinned: 1, held: 2, unpinnedStarted: 1, shootoutSplitConfigs: 1 });
+    expect(r.err).toContain(`held: division ${other.divisionId}`);
+    expect(r.err).toContain(`held: stage ${late2}: not pinned: its division ${other.divisionId} is held`);
+    // unscored: converted, and the stage re-pinned from the converted config through the engine's resolver
+    const d1 = await divisionConfigOf(one.divisionId);
+    expect(d1.points).toEqual({ win: 3, draw: 1, loss: 0, soBonus: BONUS });
+    const [now1] = await rowsOf([f1]);
+    const resolved = resolveTableRules({
+      module: footballModule,
+      stageKind: "league",
+      mergedCfg: liveCfg(d1, { kind: "league", config: now1!.config as Record<string, unknown> | null }, footballModule as never),
+      stageOwn: { points: null, tiebreakers: null, crossGroup: null },
+      divisionTiebreakers: null,
+      pinned: null,
+    });
+    expect(now1!.pin, "only the points field re-pinned, source sport").toEqual({ ...pin1, points: resolved.points, sources: { ...pin1.sources, points: "sport" } });
+    expect((now1!.pin as { points: { soBonus?: number } }).points.soBonus, "the organiser's bonus").toBe(BONUS);
+    expect(now1!.at, "the pin's date kept").toBe(was1!.at);
+    expect(now1!.status).toBe(was1!.status);
+    expect(await readsOf(own1), "a played stage with its own rule reads no division points: unmoved").toEqual(ownBefore);
+    // scored: held, with its division's unpinned started stage
+    expect(await divisionConfigOf(other.divisionId), "the scored stage's division is not converted").toEqual(before2.division);
+    expect(await rowsOf([f2, late2]), "nor its pin, nor a pin for its unpinned stage").toEqual(before2.stages);
+    expect(await readsOf(f2), "what the scored stage reads: byte-identical").toEqual(before2.reads);
+
+    const settled = await rowsOf([f1, own1]);
+    const again = await cli(scope, env);
+    expect(again.code, "still held").toBe(1);
+    expect(lastJson(again)).toEqual({ ...APPLY_ZERO, held: 2, unpinnedStarted: 1, shootoutSplitConfigs: 1 });
+    expect(await rowsOf([f1, own1]), "a second run changes nothing").toEqual(settled);
+  }, 3 * CLI_MS + 180_000);
+
+  it("N5: each row takes the app's division-config lock before its lock read — a first tap in flight is waited for and its fixture then read as played: held (a division on the split, a {base} rule, a pin alike), nothing written", async () => {
+    await seedFootballCatalog();
+    // a division on the split, its pending league holding an ad-hoc match not yet played
+    const d = await tableScene({ sport: "football", variant: "11-a-side", config: SHOOTOUT_CFG, entrants: 2 });
+    const [dLeague] = d.stageIds as [string];
+    touchedDivisions.push(d.divisionId);
+    await sql`update divisions set config = jsonb_set(config, '{points}', ${sql.json(WINDOW_SPLIT)}) where id = ${d.divisionId}`;
+    const { fixture_id: dFixture } = await addFixture(d.auth, dLeague, { home_entrant_id: d.entrants[0]!, away_entrant_id: d.entrants[1]! });
+    await startDivision(d.auth, d.divisionId);
+    // a started, pinned league whose {base} rule the old code saved, nothing played
+    const b = await tableScene({ entrants: 2 });
+    const [bLeague] = b.stageIds as [string];
+    await startDivision(b.auth, b.divisionId);
+    touched.push(bLeague);
+    await sql`update stages set config = jsonb_set(coalesce(config, '{}'::jsonb), '{points}', ${sql.json(BASE_RULE as never)}) where id = ${bLeague}`;
+    // a league the old code started with no pin, nothing played
+    const p = await tableScene({ entrants: 2 });
+    const [pLeague] = p.stageIds as [string];
+    await startDivision(p.auth, p.divisionId);
+    touched.push(pLeague);
+    await sql`update stages set table_rules_pinned = null, table_rules_pinned_at = null where id = ${pLeague}`;
+    const [bFixture] = await seatedFixtures(bLeague);
+    const [pFixture] = await seatedFixtures(pLeague);
+    const cases: { name: string; scene: Scene; fixture: string; line: string; left: Record<string, number>; rows: () => Promise<unknown> }[] = [
+      {
+        name: "a division on the split",
+        scene: d,
+        fixture: dFixture,
+        line: `held: division ${d.divisionId}`,
+        left: { shootoutSplitConfigs: 1 },
+        rows: async () => ({ division: await divisionConfigOf(d.divisionId), stage: await rowsOf([dLeague]) }),
+      },
+      { name: "a {base} rule", scene: b, fixture: bFixture!.id, line: `held: stage ${bLeague}`, left: { baseStageRules: 1 }, rows: () => rowsOf([bLeague]) },
+      { name: "a pin", scene: p, fixture: pFixture!.id, line: `held: stage ${pLeague}`, left: { unpinnedStarted: 1 }, rows: () => rowsOf([pLeague]) },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const before = await c.rows();
+      const { r, waited } = await runAgainstFirstTap(c.scene.divisionId, c.fixture, ["--org", c.scene.auth.orgId]);
+      expect(waited, `${c.name}: the run waited for the first tap's lock (${r.code} ${r.err})`).toBe(true);
+      expect(r.code, `${c.name}: ${r.err}`).toBe(1);
+      expect(lastJson(r), c.name).toEqual({ ...APPLY_ZERO, held: 1, ...c.left });
+      expect(r.err, c.name).toContain(c.line);
+      expect(await c.rows(), `${c.name}: nothing written`).toEqual(before);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  }, 3 * CLI_MS + 120_000);
+});
+
 describe.skipIf(!HAS_DB)("W2d T9 fix round 2: dropShootoutSplit is V472's w2d_drop_shootout_split, case for case", () => {
   it("the split's rows are organisation variants only: a system preset (org_id null) on the split is never counted — whole-database census, before and after, in one rolled-back snapshot", async () => {
     // A system preset is `sync:sports`'s, written from the code (V472 step 4 skips them alike); counted, the deploy would
@@ -430,11 +821,11 @@ describe.skipIf(!HAS_DB)("W2d T9 fix round 2: dropShootoutSplit is V472's w2d_dr
     await expect(
       sql.begin(async (tx) => {
         await tx`set transaction isolation level repeatable read`;
-        const before = await census(tx as never, []);
+        const before = await census(tx as never, [], lockedStageIdsAmong as never);
         await tx`insert into sport_variants (sport_key, key, name, config, is_system, org_id) values
                  ('football', ${VARIANT_PREFIX + "org"}, 'org', ${tx.json(cfg)}, false, ${auth.orgId}),
                  ('football', ${VARIANT_PREFIX + "sys"}, 'sys', ${tx.json(cfg)}, true, null)`;
-        const after = await census(tx as never, []);
+        const after = await census(tx as never, [], lockedStageIdsAmong as never);
         delta = after.shootoutSplitConfigs - before.shootoutSplitConfigs;
         throw ROLLBACK;
       }),
@@ -641,6 +1032,18 @@ describe("W2d T9 I2: the script refuses any database not on this machine, and ne
     for (const s of ["sentinel", SENTINEL, "0.0.0.0", String(port)]) expect(r.out + r.err, `printed ${s}`).not.toContain(s);
   }, CLI_MS);
 
+  it.skipIf(!HAS_DB)("N7: a database that does not exist on this machine's own server (3D000): the code printed, the database's name not", async () => {
+    const u = new URL(process.env.DATABASE_URL!);
+    expect(isLocalDatabaseUrl(u.toString()), "premise: the test database is on this machine").toBe(true);
+    const name = `sentinel_nodb_${randomUUID().slice(0, 8)}`;
+    u.pathname = `/${name}`;
+    const r = await cli(["--check"], { ...process.env, DATABASE_URL: u.toString() });
+    expect(r.code, `${r.out} ${r.err}`).toBe(1);
+    expect(r.err, "the code is printed (the owner can act on it)").toContain("3D000");
+    expect(r.err).toContain('database "<database>" does not exist');
+    for (const s of ["sentinel", name]) expect(r.out + r.err, `printed ${s}`).not.toContain(s);
+  }, CLI_MS);
+
   it("parseDatabaseUrl reads what the driver reads (host, port, decoded user and password, a host override) and never throws", () => {
     expect(parseDatabaseUrl("postgresql://us%40er:p%3Ass@db.example.invalid:6543/x?sslmode=require")).toEqual({
       raw: "postgresql://us%40er:p%3Ass@db.example.invalid:6543/x?sslmode=require",
@@ -649,9 +1052,14 @@ describe("W2d T9 I2: the script refuses any database not on this machine, and ne
       port: "6543",
       username: "us@er",
       password: "p:ss",
+      database: "x",
       hostOverride: false,
     });
-    expect(parseDatabaseUrl("postgres://u@[::1]/db")).toMatchObject({ hostname: "[::1]", port: "", username: "u", password: "" });
+    expect(parseDatabaseUrl("postgres://u@[::1]/db")).toMatchObject({ hostname: "[::1]", port: "", username: "u", password: "", database: "db" });
+    // N7: the database as the driver sends it (postgres.js 3.4.9 `url.pathname.slice(1)`, NOT decoded) — `redact` takes
+    // that and its decoded form both; none named reads "" (the driver then sends the user's name)
+    expect(parseDatabaseUrl("postgresql://u@h.invalid/my%5Fdb?sslmode=require")?.database).toBe("my%5Fdb");
+    expect(parseDatabaseUrl("postgresql://u@h.invalid")?.database).toBe("");
     expect(parseDatabaseUrl("postgresql://u@localhost/db?hostaddr=10.0.0.1")?.hostOverride).toBe(true);
     let checked = 0;
     for (const bad of ["", "postgresql:///db", "postgresql://u@a,b/db", "postgresql://u:p@a@b/db", "http://u@h/db", "postgresql://u:%E0%A4%A@h/db", "nope"]) {
@@ -672,6 +1080,8 @@ describe("W2d T9 I2: the script refuses any database not on this machine, and ne
       [`could not use postgresql://sentinel_user:${SENTINEL}@sentinel-host.invalid:5999/sentinel_db`, "could not use"],
       [`password ${SENTINEL} rejected at SENTINEL-HOST.INVALID`, "rejected at"],
       ["the server at port 5999 closed the connection", "closed the connection"],
+      // N7: the server's own 3D000 line names the database the URL asked for
+      ['database "sentinel_db" does not exist', "does not exist"],
     ];
     let checked = 0;
     for (const [message, kept] of cases) {
@@ -688,6 +1098,11 @@ describe("W2d T9 I2: the script refuses any database not on this machine, and ne
     );
     // with no parsed URL, addresses still go
     expect(redact("connect ECONNREFUSED 192.0.2.4:6543", null)).toBe("connect ECONNREFUSED <address>");
+    // N7: a database named with an escape goes as the driver sent it (raw) and as decoded
+    const encoded = parseDatabaseUrl("postgresql://u@h.invalid/sentinel%5Fenc")!;
+    for (const name of ["sentinel%5Fenc", "sentinel_enc"]) {
+      expect(redact(`database "${name}" does not exist`, encoded)).toBe('database "<database>" does not exist');
+    }
   });
 
   it("N3 failureLine: the row, the error's code, and its message redacted; an EngineError's message kept", () => {

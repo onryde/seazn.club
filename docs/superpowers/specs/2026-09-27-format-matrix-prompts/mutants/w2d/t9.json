@@ -768,8 +768,8 @@
   {
     "id": "t9r1-pdp-refused-pinned",
     "file": "scripts/w2d/post-deploy-pin.ts",
-    "find": "    if (refusedStages.has(id) || refusedDivisions.has(division_id)) continue;",
-    "replace": "    if (refusedDivisions.has(division_id)) continue; /*MUT*/",
+    "find": "        if (refusedStages.has(id) || refusedDivisions.has(division_id)) return \"skipped\" as const;",
+    "replace": "        if (refusedDivisions.has(division_id)) return \"skipped\" as const; /*MUT*/",
     "killers": [
       {
         "cwd": "apps/web",
@@ -783,8 +783,8 @@
   {
     "id": "t9r1-pdp-pin-before-convert",
     "file": "scripts/w2d/post-deploy-pin.ts",
-    "find": "  for (const { id } of based) {\n    try {\n      const outcome",
-    "replace": "  for (const { id } of based) {\n    await sql.begin(async (tx) => { const [s] = await tx<{ status: string }[]>`select status from stages where id = ${id}`; if (s?.status !== \"pending\") await doors.pinStageTableRules(tx, id); }).catch((e: unknown) => { report.failed.push(failureLine(`stage ${id}`, e, doors.db)); }); /*MUT*/\n    try {\n      const outcome",
+    "find": "  for (const { id, division_id } of based) {\n    try {\n      const outcome",
+    "replace": "  for (const { id, division_id } of based) {\n    await sql.begin(async (tx) => { const [s] = await tx<{ status: string }[]>`select status from stages where id = ${id}`; if (s?.status !== \"pending\") await doors.pinStageTableRules(tx, id); }).catch((e: unknown) => { report.failed.push(failureLine(`stage ${id}`, e, doors.db)); }); /*MUT*/\n    try {\n      const outcome",
     "killers": [
       {
         "cwd": "apps/web",
@@ -1128,8 +1128,8 @@
   {
     "id": "t9r2-pdp-split-refused-pinned",
     "file": "scripts/w2d/post-deploy-pin.ts",
-    "find": "    if (refusedStages.has(id) || refusedDivisions.has(division_id)) continue;",
-    "replace": "    if (refusedStages.has(id)) continue; /*MUT*/",
+    "find": "        if (refusedStages.has(id) || refusedDivisions.has(division_id)) return \"skipped\" as const;",
+    "replace": "        if (refusedStages.has(id)) return \"skipped\" as const; /*MUT*/",
     "killers": [
       {
         "cwd": "apps/web",
@@ -1173,8 +1173,8 @@
   {
     "id": "t9r2-pdp-split-census",
     "file": "scripts/w2d/post-deploy-pin.ts",
-    "find": "shootoutSplitConfigs: split.n };",
-    "replace": "shootoutSplitConfigs: 0 /*MUT*/ };",
+    "find": "shootoutSplitConfigs: split.n, held:",
+    "replace": "shootoutSplitConfigs: 0 /*MUT*/, held:",
     "killers": [
       {
         "cwd": "apps/web",
@@ -1188,8 +1188,8 @@
   {
     "id": "t9r2-pdp-split-exit",
     "file": "scripts/w2d/post-deploy-pin.ts",
-    "find": "c.unpinnedStarted > 0 || c.baseStageRules > 0 || c.shootoutSplitConfigs > 0;",
-    "replace": "c.unpinnedStarted > 0 || c.baseStageRules > 0; /*MUT*/",
+    "find": "c.unpinnedStarted > 0 || c.baseStageRules > 0 || c.shootoutSplitConfigs > 0 || c.held > 0;",
+    "replace": "c.unpinnedStarted > 0 || c.baseStageRules > 0 || c.held > 0; /*MUT*/",
     "killers": [
       {
         "cwd": "apps/web",
@@ -1362,6 +1362,448 @@
           "src/competition/table-rules.test.ts"
         ],
         "name": "X-TB-1 own order beats the division"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-division-lock-check",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "        if (scored.length > 0) return { kind: \"held\" as const, scored };",
+    "replace": "        if (scored.length < 0 /*MUT*/) return { kind: \"held\" as const, scored };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "whose PENDING stage"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-reach-pinned-sport-arm",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "   or table_rules_pinned -> 'sources' ->> 'points' = 'sport')`;",
+    "replace": "   or false /*MUT*/)`;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a split division whose stage the NEW code pinned over the stripped config"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-reach-unpinned-arm",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "  ((table_rules_pinned is null\n    and (config",
+    "replace": "  ((false /*MUT*/\n    and (config",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "whose PENDING stage"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-reach-own-rule-inherits",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    and (config -> 'points' is null or config -> 'points' in ('null'::jsonb, 'false'::jsonb, '0'::jsonb, '\"\"'::jsonb)))",
+    "replace": "    and (true /*MUT*/))",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a split division whose stage the NEW code pinned over the stripped config"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-reach-json-null",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    and (config -> 'points' is null or config -> 'points' in ('null'::jsonb, 'false'::jsonb, '0'::jsonb, '\"\"'::jsonb)))",
+    "replace": "    and (config -> 'points' is null /*MUT*/))",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "whose PENDING stage"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-reach-absent",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    and (config -> 'points' is null or config -> 'points' in (",
+    "replace": "    and (false /*MUT*/ or config -> 'points' in (",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a first tap in flight is waited for"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-n8-repin-dropped",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "          await doors.repinStageOwnRules(tx, s.id, { points: null });\n",
+    "replace": "          /*MUT*/\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a split division whose stage the NEW code pinned over the stripped config"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-n8-repin-pinned-guard",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "          if (!s.pinned) continue;",
+    "replace": "          if (s.pinned) continue; /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a split division whose stage the NEW code pinned over the stripped config"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-n8-repin-not-counted",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "          repinned++;\n        }\n        return { kind: \"converted\"",
+    "replace": "          /*MUT*/\n        }\n        return { kind: \"converted\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a split division whose stage the NEW code pinned over the stripped config"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-base-lock-check",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "        if ((await doors.lockedStageIdsAmong(tx, [id])).has(id)) return \"held\" as const;\n        const rule",
+    "replace": "        if (false /*MUT*/) return \"held\" as const;\n        const rule",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "V472-pinned stage that was then SCORED is held"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-pin-lock-check",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "counts it)\n        if ((await doors.lockedStageIdsAmong(tx, [id])).has(id)) return \"held\" as const;",
+    "replace": "counts it)\n        if (false /*MUT*/) return \"held\" as const;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a stage the old code started with no pin and that was SCORED in the window"
+      },
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a football stage the old code started with no pin, with a shoot-out WIN"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-pin-held-division",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    if (heldDivisions.has(division_id)) {",
+    "replace": "    if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a split division whose stage the NEW code pinned over the stripped config"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-step3-skip-held",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    if (heldKeys.has(key)) continue;",
+    "replace": "    /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "V472-pinned stage that was then SCORED is held"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-lock-config-key",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "  await tx`select pg_advisory_xact_lock(hashtext(${\"division-config:\" + divisionId}))`;",
+    "replace": "  /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a first tap in flight is waited for"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-lock-division-row",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "        await lockDivisionRules(tx, id);\n",
+    "replace": "        /*MUT*/\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a first tap in flight is waited for"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-lock-base-row",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "        await lockDivisionRules(tx, division_id);\n        const [row] = await tx<{ points: unknown; pinned: boolean }[]>",
+    "replace": "        /*MUT*/\n        const [row] = await tx<{ points: unknown; pinned: boolean }[]>",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a first tap in flight is waited for"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-lock-pin-row",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "        await lockDivisionRules(tx, division_id);\n        const [row] = await tx<{ id: string }[]>",
+    "replace": "        /*MUT*/\n        const [row] = await tx<{ id: string }[]>",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a first tap in flight is waited for"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-census-held-divisions",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "  const heldDivisions = new Set(reach.filter((s) => scored.has(s.id)).map((s) => s.division_id));",
+    "replace": "  const heldDivisions = new Set<string>(); /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "whose PENDING stage"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-census-held-base",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    ...based.filter((s) => scored.has(s.id)).map((s) => s.id),\n",
+    "replace": "    /*MUT*/\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "V472-pinned stage that was then SCORED is held"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-census-held-unpinned-scored",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "...unpinned.filter((s) => scored.has(s.id) || heldDivisions.has(s.division_id))",
+    "replace": "...unpinned.filter((s) => heldDivisions.has(s.division_id) /*MUT*/)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a stage the old code started with no pin and that was SCORED in the window"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-census-held-unpinned-division",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "...unpinned.filter((s) => scored.has(s.id) || heldDivisions.has(s.division_id))",
+    "replace": "...unpinned.filter((s) => scored.has(s.id) /*MUT*/)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a split division whose stage the NEW code pinned over the stripped config"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-census-held-zero",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "held: await heldCount(sql, orgs, locked) };",
+    "replace": "held: 0 /*MUT*/ };",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "V472-pinned stage that was then SCORED is held"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-census-candidates-reach",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "const scored = await locked(sql, [...new Set([...reach, ...based, ...unpinned].map((s) => s.id))]);",
+    "replace": "const scored = await locked(sql, [...new Set([...based, ...unpinned].map((s) => s.id))]); /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "whose PENDING stage"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-json-held",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "        held: r.held.length,",
+    "replace": "        held: 0 /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "V472-pinned stage that was then SCORED is held"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-stderr-held",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    for (const line of r.held) console.error(`held: ${line}`);",
+    "replace": "    /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "V472-pinned stage that was then SCORED is held"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-redact-database-raw",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    take(db.database, \"<database>\");",
+    "replace": "    /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "N3 redact: a driver"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-redact-database-decoded",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "    take(safeDecode(db.database), \"<database>\");",
+    "replace": "    /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "N3 redact: a driver"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-parse-database",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "      database: u.pathname.slice(1),",
+    "replace": "      database: \"\" /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "parseDatabaseUrl reads what the driver reads"
+      }
+    ]
+  },
+  {
+    "id": "t9r3-barrel-redirect",
+    "file": "scripts/w2d/post-deploy-pin.ts",
+    "find": "BARREL_AS.get(specifier) ?? specifier.slice(2)",
+    "replace": "specifier.slice(2) /*MUT*/",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/w2d-post-deploy-pin.test.ts"
+        ],
+        "name": "a database that does not exist on this machine"
       }
     ]
   }
