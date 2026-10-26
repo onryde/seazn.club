@@ -2123,6 +2123,22 @@ describe("step 5 — submit", () => {
     expect(island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-lichess-refusal")).toHaveLength(0);
   });
 
+  // The code alone is not the refusal: the join page keys on (422, code) (classifyJoinFailure) and the register page must
+  // too, or a 409/5xx/403 that happens to carry the string is shown as an instruction to go and reconnect.
+  const NOT_422_CASES = ["LICHESS_LINK_REQUIRED", "LICHESS_RECONSENT_REQUIRED"].flatMap((code) =>
+    [400, 403, 409, 500].map((status) => ({ code, status })),
+  );
+  it("anti-vacuity: the status x code table below has its 2 codes x 4 statuses", () => {
+    expect(NOT_422_CASES).toHaveLength(8);
+  });
+  it.each(NOT_422_CASES)("a Lichess code on a $status is not shown as a Lichess refusal: $code keeps the generic line", async ({ code, status }) => {
+    const island = await submitRefused(new ApiV1Error("some server text", status, code));
+    const { primary } = alertBlock(island);
+    expect(textOf(primary)).toBe(String(EN_UI[status === 409 || status >= 500 ? "register.submit.error" : "register.submit.errorRejected"]));
+    expect(island.tree().filter((e) => propsOf(e)["data-testid"] === "reg-lichess-refusal"), "no Lichess block").toHaveLength(0);
+    expect(island.tree().filter((e) => String(propsOf(e)["data-testid"] ?? "").startsWith("register-lichess-")), "no Lichess action").toHaveLength(0);
+  });
+
   it("a CONFLICT failure (409 — a concurrent checkout-mint race) shows the retry-bucket message, not the rejected one", async () => {
     apiV1Mock.impl.mockRejectedValueOnce(
       new ApiV1Error(

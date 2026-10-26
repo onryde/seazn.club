@@ -8,7 +8,7 @@
 // uses elsewhere (org-switch-target.test.ts tests the URL a component
 // hard-navigates to, not the navigate call itself).
 import { describe, expect, it } from "vitest";
-import { buildSubmitBody, classifySubmitFailure, resolvePostSubmitNavigation } from "../submit";
+import { buildSubmitBody, classifySubmitFailure, lichessRefusalReason, resolvePostSubmitNavigation } from "../submit";
 import { EMPTY_CART, EMPTY_CONSENT, EMPTY_CONTACT, type CartState, type ContactState } from "../types";
 
 describe("buildSubmitBody", () => {
@@ -184,5 +184,31 @@ describe("classifySubmitFailure", () => {
 
   it("422 is rejected", () => {
     expect(classifySubmitFailure(422)).toBe("rejected");
+  });
+});
+
+// Owner 2026-10-25: a registration into an online-play division is refused with one of TWO Lichess reasons. The reason is the
+// pair (HTTP 422, fixed code) - the register stepper and the join page share this one function, so they cannot disagree.
+describe("lichessRefusalReason", () => {
+  it("422 + the link code is `link`, 422 + the reconnect code is `reconnect`, and they are different reasons", () => {
+    expect(lichessRefusalReason(422, "LICHESS_LINK_REQUIRED")).toBe("link");
+    expect(lichessRefusalReason(422, "LICHESS_RECONSENT_REQUIRED")).toBe("reconnect");
+  });
+
+  it("the code alone is not enough: every other status, and no status, is no Lichess refusal (counted)", () => {
+    let checked = 0;
+    for (const status of [undefined, 200, 400, 401, 403, 404, 409, 429, 500, 503]) {
+      for (const code of ["LICHESS_LINK_REQUIRED", "LICHESS_RECONSENT_REQUIRED"]) {
+        expect(lichessRefusalReason(status, code), `${status} + ${code}`).toBeNull();
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 10 statuses x 2 codes").toBe(20);
+  });
+
+  it("422 with any other code, or none, or a near-miss spelling, is no Lichess refusal", () => {
+    for (const code of [undefined, "", "DIVISION_FULL", "lichess_link_required", "LICHESS_LINK_REQUIRED ", "LICHESS_RECONSENT"]) {
+      expect(lichessRefusalReason(422, code), String(code)).toBeNull();
+    }
   });
 });

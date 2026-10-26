@@ -34,7 +34,9 @@ import { clearRegisterState, REGISTER_STATE_VERSION, loadRegisterState, saveRegi
 import {
   buildSubmitBody,
   classifySubmitFailure,
+  lichessRefusalReason,
   resolvePostSubmitNavigation,
+  type LichessRefusal,
   type SubmitFailureKind,
   type SubmitResultShape,
 } from "./submit";
@@ -184,7 +186,8 @@ export function RegisterStepper({
   const [submitError, setSubmitError] = useState<{
     kind: SubmitFailureKind;
     detail: string;
-    code?: string;
+    /** Which Lichess reason this was, when it was one (submit.ts `lichessRefusalReason`: 422 AND the fixed code). */
+    lichess: LichessRefusal | null;
   } | null>(null);
   // Review finding #2 (MEDIUM) — focus management across step transitions.
   // `containerRef` scopes the DOM query the focus effect below runs
@@ -419,7 +422,7 @@ export function RegisterStepper({
       setSubmitError({
         kind: classifySubmitFailure(status),
         detail: err instanceof Error ? err.message : String(err),
-        code: err instanceof ApiV1Error ? err.code : undefined,
+        lichess: err instanceof ApiV1Error ? lichessRefusalReason(err.status, err.code) : null,
       });
       setSubmitting(false);
     }
@@ -505,7 +508,7 @@ export function RegisterStepper({
         <>
           <StepReview summary={reviewSummary} locale={locale} />
           {submitError &&
-            (submitError.code === "LICHESS_LINK_REQUIRED" || submitError.code === "LICHESS_RECONSENT_REQUIRED" ? (
+            (submitError.lichess !== null ? (
               // A Lichess reason says WHAT is wrong and WHAT to do, so it stands alone: the generic "check your details"
               // line would send a player with correct details hunting for a mistake they have not made. The amber is the
               // Lichess card's own "needs reconnecting" colour (register-lichess-card.tsx), the one place this is said
@@ -520,7 +523,7 @@ export function RegisterStepper({
                   <path d="M12 17h.01" />
                   <path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
                 </svg>
-                {submitError.code === "LICHESS_LINK_REQUIRED" ? (
+                {submitError.lichess === "link" ? (
                   <p className="m-0 min-w-0">
                     {t("register.lichessLinkRequired")}{" "}
                     {/* `ph-no-capture`: the return path carries the team's join code (`?join=`), url-encoded into this href. */}

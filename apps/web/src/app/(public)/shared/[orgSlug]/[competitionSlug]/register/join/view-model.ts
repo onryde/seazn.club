@@ -5,6 +5,7 @@
 // sends, how a status code maps to a DESIGNED state rather than a raw
 // error) are provable without a render. Mirrors register/status/
 // view-model.ts's own "pure logic, own file" convention for this route.
+import { lichessRefusalReason } from "@/components/public-site/register/submit";
 import type { CartState, ConsentState, ContactState } from "@/components/public-site/register/types";
 import type { WhoFieldRequirements } from "@/components/public-site/register/validation";
 
@@ -193,8 +194,9 @@ export function classifyJoinFailure(status: number | undefined, code?: string): 
   if (status === 409) return "conflict";
   if (status === 429) return "rateLimited";
   if (status >= 500) return "retry";
-  if (status === 422 && code === "LICHESS_LINK_REQUIRED") return "lichessLink";
-  if (status === 422 && code === "LICHESS_RECONSENT_REQUIRED") return "lichessReconnect";
+  const lichess = lichessRefusalReason(status, code);
+  if (lichess === "link") return "lichessLink";
+  if (lichess === "reconnect") return "lichessReconnect";
   return "rejected";
 }
 
