@@ -12,12 +12,15 @@
 //     behind them: the real promotion, `notifyPromoted`, the real once-keyed enqueue, the dispatch after the response.
 //   - payment_reminder: the real `sweepRegistrations` (pass 1a) over a stripe cart due for its T-24h reminder, in an `fr` group: the real
 //     claim, mint (Stripe is the one mocked network), once-keyed enqueue and stamp. The sweep leaves the first attempt to the worker.
+//   - solo_signup_assigned: the real `assignSoloSignUp` of a pooled `fr` solo sign-up onto a team entry: the email is queued in the
+//     assignment's own transaction and the request that did it makes the first attempt.
 //   - refund_issued: the real `refundRegistration` of a paid `es` registrant (Stripe's refund is mocked): the receipt is queued in the transaction
 //     that records the refund, with the refund id as its ref and once-key, and the request that did it makes the first attempt.
 //
-// Each kind task (T8-T12) adds its scenario and deletes its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
-// SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 deletes the list. A kind that is neither moved nor listed fails by name, and so
-// does a kind that is listed while it has a scenario (a stale entry would skip the sweep), and so do the three lists when they disagree.
+// Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
+// SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list, so every kind in the registry is swept. A kind that is neither
+// moved nor listed fails by name, and so does a kind that is listed while it has a scenario (a stale entry would skip the sweep), and so do
+// the three lists when they disagree.
 //
 // Sport: not applicable. These emails do not vary by sport (spec, Test strategy 4).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -48,6 +51,7 @@ vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
+import { assignSoloSignUp } from "@/server/usecases/registration-assign";
 import { handleRegistrationCheckoutCompleted, putRegistrationSettings, refundRegistration, sweepRegistrations, withdrawRegistrationPublic } from "@/server/usecases/registrations";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
@@ -164,8 +168,10 @@ describe("the spec's lists (no database)", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
-    // Both sides of the equivalence are exercised: kinds that have moved and kinds that have not.
-    expect(NOT_YET_MOVED.length).toBeGreaterThan(0);
+    // Wave 1 is closed (T12): every kind has moved, so no kind is listed and none has a direct sender left. The moved side is what the loop
+    // above judged for all of them; the unmoved side of the equivalence has no member to judge until a later wave registers a kind early.
+    expect(NOT_YET_MOVED, "wave 1 is closed: every kind has moved to the outbox").toEqual([]);
+    expect(Object.values(KIND_DIRECT_SENDER).filter((x) => x !== null), "and none still names a direct sender").toEqual([]);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
     const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
     expect(new Set(senders).size, "no two kinds share a direct sender").toBe(senders.length);
@@ -332,7 +338,6 @@ async function paymentReminderScenario(): Promise<KindScenario> {
   made.userIds.push(w.ownerId);
   const recipient = address();
   const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: recipient, locale: "fr" });
-  await sql`update registration_groups set expires_at = now() + interval '10 hours' where id = ${registration.group_id}`;
   return {
     locale: "fr",
     subjectKey: "paymentReminder.subject",
@@ -340,9 +345,13 @@ async function paymentReminderScenario(): Promise<KindScenario> {
     recipient,
     firstAttempt: "worker",
     run: async () => {
+      // The cart is made due HERE, immediately before the sweep, and not when the scenario is built: the sweep is global to the database and
+      // other test files run their own beside this one. A cart that sat due while the other scenarios ran was claimed by one of THEIR sweeps
+      // (in a process with no outbox key, so the row it queued had no body and ended dead).
+      await sql`update registration_groups set expires_at = now() + interval '10 hours' where id = ${registration.group_id}`;
       await sweepRegistrations("https://sweep.test");
-      // The sweep is global to the database, and other test files run their own sweeps beside this one: theirs may have claimed this cart
-      // first, so this call's own `reminded` count is not the evidence. The evidence is the queued row, which the harness requires next.
+      // Even so, a sweep elsewhere may win the claim in the instant between: this call's own `reminded` count is not the evidence. The
+      // evidence is the queued row, which the harness requires next.
       await vi.waitFor(
         async () => {
           const [queued] = await sql<{ n: number }[]>`select count(*)::int as n from email_outbox where kind = 'payment_reminder' and lower(recipient) = lower(${recipient})`;
@@ -376,6 +385,45 @@ async function refundIssuedScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real organiser assignment: a pooled `fr` solo sign-up is placed on a team entry (the `generic` sport's roster cap of one is room enough
+ *  for the one player). The email is queued in the assignment's own transaction; the request that did it makes the first attempt. */
+async function soloSignupAssignedScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("pro");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const owner = asOwner(orgId, ownerId);
+  const { competition, division } = await rig(owner);
+  const settings = await putRegistrationSettings(owner, division.id, {
+    ...SETTINGS_BASE,
+    entrant_kind: "team",
+    allow_free_agents: true,
+    fee_cents: 0,
+    payment_method: "offline",
+  });
+  const teamName = `Sweep Team ${randomUUID().slice(0, 6)}`;
+  const team = await seedRegistration(competition.id, division.id, settings, { contactEmail: address(), displayName: teamName, status: "confirmed" });
+  const recipient = address();
+  const solo = await seedRegistration(competition.id, division.id, settings, {
+    contactEmail: recipient,
+    displayName: "Sweep Solo",
+    status: "confirmed",
+    locale: "fr",
+    players: [{ name: "Sweep Solo" }],
+  });
+  await sql`update registrations set free_agent = true where id = ${solo.registration.id}`;
+  return {
+    locale: "fr",
+    subjectKey: "soloSignUpAssigned.subject",
+    subjectVars: { teamName },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const placed = await assignSoloSignUp(owner, { registration_id: solo.registration.id, target_registration_id: team.registration.id });
+      expect(placed.target_display_name, "premise: the real assignment placed the person on the team").toBe(teamName);
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -397,6 +445,9 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const refund = await refundIssuedScenario();
     expect(dictionarySubject("es", refund.subjectKey, refund.subjectVars)).not.toBe(dictionarySubject("en", refund.subjectKey, refund.subjectVars));
 
+    const solo = await soloSignupAssignedScenario();
+    expect(dictionarySubject("fr", solo.subjectKey, solo.subjectVars)).not.toBe(dictionarySubject("en", solo.subjectKey, solo.subjectVars));
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -405,13 +456,14 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         payment_reminder: reminder,
         registration_promoted: promoted,
         refund_issued: refund,
+        solo_signup_assigned: solo,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 
-    expect(out.checked, "anti-vacuity: the kinds that have moved were all swept").toBe(SPEC_KINDS.length - NOT_YET_MOVED.length);
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept (wave 1 closed: none is left unmoved)").toBe(SPEC_KINDS.length);
     expect(out.checked).toBeGreaterThan(0);
-    expect(out.kinds, "and they are exactly the spec's kinds that are not listed as unmoved").toEqual(SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k)));
+    expect(out.kinds, "and they are exactly the spec's kinds, in the spec's order").toEqual([...SPEC_KINDS]);
   }, 60_000);
 });
 

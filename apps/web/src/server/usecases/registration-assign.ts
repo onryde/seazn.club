@@ -30,9 +30,9 @@ import {
   releaseSoloSignUpPlacement,
   rosterCapExpr,
 } from "./registrations";
-import { sql } from "@/lib/db";
-import { sendSoloSignUpAssignedEmail } from "@/lib/email";
-import { toLocale } from "@/lib/i18n-constants";
+import { soloSignUpAssignedEmail } from "@/lib/email";
+import { deferred } from "@/lib/deferred";
+import { dispatchNow, enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
 
 type Tx = postgres.TransactionSql;
 
@@ -224,10 +224,6 @@ export async function assignSoloSignUp(
     if (existing) {
       if (existing.registration_id === targetId) {
         const state = await rosterState(tx, targetId);
-        const [{ full_name: existingPlayerName }] = await tx<{ full_name: string }[]>`
-          select full_name from registration_players where id = ${existing.id}`;
-        const [{ name: existingDivisionName }] = await tx<{ name: string }[]>`
-          select name from divisions where id = ${target.division_id}`;
         return {
           registration_id: sourceId,
           target_registration_id: targetId,
@@ -236,21 +232,9 @@ export async function assignSoloSignUp(
           roster_count: state.count,
           roster_cap: state.cap,
           alreadyPlaced: true,
-          // The REAL notification data, not blanks. An earlier version put
-          // nulls here "because the notification is skipped anyway", which
-          // made `alreadyPlaced` redundant with the null-email check and left
-          // the double-click guard untested: a mutant that dropped
-          // `!result.alreadyPlaced` still sent nothing, so the test passed
-          // for the wrong reason and the mutant SURVIVED. With real data
-          // here, `alreadyPlaced` is the only thing preventing a second
-          // email, which is exactly what the test should be pinning.
-          notify: {
-            email: source.contact_email,
-            locale: source.locale,
-            playerName: existingPlayerName,
-            divisionId: target.division_id,
-            divisionName: existingDivisionName,
-          },
+          // The repeat queues nothing: the email was queued by the first assignment, in its own transaction. (A second Assign of the
+          // same pair is the organiser's double-click, and must not mail the registrant twice.)
+          emailId: null as string | null,
         };
       }
       const [{ display_name: onTeam }] = await tx<{ display_name: string }[]>`
@@ -355,6 +339,37 @@ export async function assignSoloSignUp(
       if (seated) await seatGate?.assertRoster(tx, target.division_id, [seated]);
     }
 
+    // The one message this feature owes (owner ruling, 2026-08-30): the person who entered alone is told they now have a team. It is
+    // queued HERE, in the assignment's own transaction and before its audit entry, so the placement, the email and the audit row commit
+    // together or not at all; the first attempt is made after the commit (below), off the roster lock. The ref is the SOLO SIGN-UP
+    // (`registration/<id>`): a later assignment of the same person to another team restates this one and supersedes it unread. There is
+    // no once-key, because the repeat of the same pair never reaches this line (it returned `alreadyPlaced` above).
+    let emailId: string | null = null;
+    if (source.contact_email) {
+      const ctx = await divisionCtx(tx, target.division_id);
+      const locale = await recipientLocale(tx, { pick: source.locale, userId: source.user_id, orgDefault: ctx.default_locale });
+      emailId = await enqueueEmail(tx, {
+        kind: "solo_signup_assigned",
+        refType: "registration",
+        refId: sourceId,
+        orgId: source.org_id,
+        to: source.contact_email,
+        ...(await soloSignUpAssignedEmail(
+          {
+            orgName: ctx.org_name,
+            competitionName: ctx.comp_name,
+            divisionName: division.name,
+            playerName: player.full_name,
+            teamName: target.display_name,
+            refStatusUrl: null,
+          },
+          locale,
+        )),
+        transactional: false,
+        expiresAt: expiryWithin(null),
+      });
+    }
+
     await audit(
       tx,
       division.competition_id,
@@ -373,47 +388,15 @@ export async function assignSoloSignUp(
       roster_count: after.count,
       roster_cap: after.cap,
       alreadyPlaced: false,
-      // Carried out for the notification below — read inside the tx because
-      // that is where the row is already locked and consistent, but USED
-      // outside it: a mail send must never sit inside a transaction holding
-      // a row lock on a contended roster.
-      notify: {
-        email: source.contact_email,
-        locale: source.locale,
-        playerName: player.full_name,
-        divisionId: target.division_id,
-        divisionName: division.name,
-      },
+      emailId,
     };
   }, seatGate?.tenant);
 
-  // The one message this feature owes (owner ruling, 2026-08-30): the person
-  // who entered alone is told they now have a team. Fire-and-forget AFTER the
-  // transaction commits — a placement that succeeded must not be rolled back
-  // because a mail server was slow, and a send must never hold the roster
-  // lock. Skipped on an idempotent repeat: an organiser double-clicking
-  // Assign should not email the registrant twice.
-  if (!result.alreadyPlaced && result.notify.email) {
-    void (async () => {
-      try {
-        const ctx = await divisionCtx(sql, result.notify.divisionId);
-        await sendSoloSignUpAssignedEmail({
-          to: result.notify.email as string,
-          locale: toLocale(result.notify.locale),
-          orgName: ctx.org_name,
-          competitionName: ctx.comp_name,
-          divisionName: result.notify.divisionName,
-          playerName: result.notify.playerName,
-          teamName: result.target_display_name,
-          refStatusUrl: null,
-        });
-      } catch (err) {
-        log.warn(
-          { registrationId: result.registration_id, err: String(err) },
-          "registration: solo sign-up assigned, but the notification failed",
-        );
-      }
-    })();
+  // The first attempt is the request's, after the commit: the registrant is not kept waiting on the provider, a send never holds the roster
+  // lock, and a placement that succeeded is not rolled back by a mail server having a bad day (a failed attempt is the outbox's retry).
+  if (result.emailId !== null) {
+    const emailId = result.emailId;
+    deferred(() => dispatchNow([emailId]));
   }
 
   log.info(

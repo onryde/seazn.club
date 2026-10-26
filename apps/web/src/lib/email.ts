@@ -585,21 +585,14 @@ export async function registrationPromotedEmail(args: RegistrationPromotedArgs, 
   return registrationPromotedTemplate(args, dict);
 }
 
-export interface SoloSignUpAssignedEmail extends SoloSignUpAssignedArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** RS009 — tells the person who entered alone that they are now on a team.
- *  The answer to the promise the public stepper makes at sign-up; without it
- *  the placement happens entirely inside the organiser's console and the
- *  person it concerns is never told. */
-export async function sendSoloSignUpAssignedEmail(
-  opts: SoloSignUpAssignedEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** RS009 — tells the person who entered alone that they are now on a team, RENDERED and not sent. The answer to the promise the public
+ *  stepper makes at sign-up; without it the placement happens entirely inside the organiser's console and the person it concerns is never
+ *  told. The producer (`assignSoloSignUp` in `server/usecases/registration-assign.ts`) queues what this returns on the email outbox (kind
+ *  `solo_signup_assigned`), inside the assignment's transaction; nothing sends it directly. `locale` is the language the mail is written
+ *  in: the producer resolves it (`recipientLocale`). */
+export async function soloSignUpAssignedEmail(args: SoloSignUpAssignedArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...soloSignUpAssignedTemplate(args, dict) });
+  return soloSignUpAssignedTemplate(args, dict);
 }
 
 /** Registrant receipt for any refund (auto, manual, late, duplicate): the subject and body in the registrant's language. It is queued on the

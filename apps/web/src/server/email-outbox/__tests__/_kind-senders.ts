@@ -55,7 +55,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendRegistrationRefundFailedAlertEmail",
   "sendReportSubmittedEmail",
   "sendSizePackGrantFailedAlertEmail",
-  "sendSoloSignUpAssignedEmail",
   "sendSponsorDisputeAlertEmail",
   "sendSponsorDisputeLostEmail",
   "sendSponsorDisputeWonEmail",
@@ -75,10 +74,9 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendVerificationEmail",
 ];
 
-/** Kinds whose producer still mails through a `send*` (T8-T12 move them, one each, and delete their entry). */
-export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "solo_signup_assigned",
-];
+/** Kinds whose producer still mails through a `send*`. Empty since T12: wave 1 moved all five (T8-T12, one each), so the sweep covers every
+ *  kind in the registry. Kept as the list a later wave adds to when it registers a kind before its producer has moved. */
+export const NOT_YET_MOVED: readonly OutboxKind[] = [];
 
 /** For every kind, the direct sender its producer still calls (null = the kind has moved: nothing direct is left for it). */
 export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
@@ -88,5 +86,5 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   payment_reminder: null,
   registration_promoted: null,
   refund_issued: null,
-  solo_signup_assigned: "sendSoloSignUpAssignedEmail",
+  solo_signup_assigned: null,
 };
