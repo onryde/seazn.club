@@ -106,10 +106,13 @@ async function world(kind: Kind, online: boolean, over: { approval?: "auto" | "m
     variant_key: "classical",
     config: { variant: "classical", ...(online ? { onlinePlay: "lichess" } : {}), clock: { base: 600, increment: 5 } },
   });
-  // The REAL producer of the shape under test: a team (or pair) division. Solo sign-ups only exist on a team division.
-  const saved = await putRegistrationSettings(auth, division.id, {
+  // Chess takes individual players only (owner ruling 2026-10-26), so putRegistrationSettings refuses a team or pair
+  // chess division (CHESS_INDIVIDUAL_ONLY). These tests are for the divisions saved BEFORE that ruling that still hold
+  // the shape: the door code must keep reading them. So the row is made as an individual division through the real
+  // writer, then moved to the legacy shape directly. Solo sign-ups only exist on a team division.
+  await putRegistrationSettings(auth, division.id, {
     enabled: true,
-    entrant_kind: kind,
+    entrant_kind: "individual",
     fee_cents: 0,
     form_fields: [],
     opens_at: null,
@@ -117,9 +120,15 @@ async function world(kind: Kind, online: boolean, over: { approval?: "auto" | "m
     capacity: null,
     refund_lock_at: null,
     approval: over.approval ?? "auto",
-    allow_free_agents: kind === "team",
+    allow_free_agents: false,
   });
-  expect(saved.entrant_kind, "premise: the division saved as a " + kind + " division").toBe(kind);
+  await sql`
+    update registration_settings
+       set entrant_kind = ${kind}, allow_free_agents = ${kind === "team"}
+     where division_id = ${division.id}`;
+  const [saved] = await sql<{ entrant_kind: string }[]>`
+    select entrant_kind from registration_settings where division_id = ${division.id}`;
+  expect(saved?.entrant_kind, "premise: the division is stored as a " + kind + " division").toBe(kind);
   return { auth, orgSlug, competitionId: competition.id, compSlug: competition.slug, divisionId: division.id };
 }
 
