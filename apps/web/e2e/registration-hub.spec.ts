@@ -39,7 +39,16 @@ import {
   orgTimezoneSql,
   forceFreeAgentsTeamMismatchSql,
   seedBareRegistrationSql,
+  withDb,
 } from "./helpers";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** The SHIPPED English copy, so a copy assertion has one authority and moves with the dictionary (same idiom as
+ *  `run-sheet.spec.ts` and four others). */
+const UI_EN = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+) as Record<string, string>;
 
 const GENERIC_CONFIG = { points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
@@ -1114,6 +1123,86 @@ test.describe("RS005 registrants tab", () => {
 
     const resendAttempt = await apiJson(page.request, `/api/v1/registrations/${regId}/resend-confirmation`, "POST");
     expect(resendAttempt.status, "the API must refuse to resend a confirmation on a withdrawn entry").toBe(422);
+  });
+
+  // --- 7b. The confirmation is a row, and Resend says what a row can promise ---
+  // Email outbox phase 3 (Task 14, spec §4): the submit queues the cart's confirmation on the outbox (kind
+  // `registration_confirmation`, ref `registration_group/<group id>`) and makes its first attempt after the response, so the row has
+  // left `queued`/`sending` and holds no body by the time it is read. The organiser's Resend queues a second row and attempts it at
+  // once. The e2e servers have no mail provider (RESEND_API_KEY unset, locally and in CI), so that attempt never goes out and the
+  // notice is the "may arrive late" one - not the "resent" one, which would claim a delivery nobody made.
+  test("a submitted registration leaves one confirmation row, and Resend says the email may arrive late", async ({
+    page,
+    request,
+  }) => {
+    const org = await activeOrg(page);
+    const { competitionSlug, divisionId } = await seedDivision(request, { divisionName: "Confirmation Row" });
+    const settings = await apiJson(request, `/api/v1/divisions/${divisionId}/registration-settings`, "PUT", {
+      enabled: true,
+      entrant_kind: "individual",
+      fee_cents: 0,
+      approval: "manual",
+    });
+    expect(settings.status).toBeLessThan(300);
+    const suffix = `${TAG}-${Math.random().toString(36).slice(2, 7)}`;
+    const displayName = `Confirmation ${suffix}`;
+    const submitted = await apiJson<{ group_id: string; entries: { registration_id: string; status: string }[] }>(
+      request,
+      `/api/v1/public/orgs/${org.slug}/competitions/${competitionSlug}/register`,
+      "POST",
+      {
+        contact: { name: displayName, email: `delivered+confirmation-${suffix}@resend.dev` },
+        privacy_consent: true,
+        entries: [
+          { division_id: divisionId, entrant_kind: "individual", players: [{ full_name: displayName }], answers: {} },
+        ],
+      },
+    );
+    expect(submitted.status, JSON.stringify(submitted.error)).toBe(201);
+    const groupId = submitted.data!.group_id;
+    const regId = submitted.data!.entries[0]!.registration_id;
+    expect(groupId, "premise: the submit names the cart the confirmation is keyed to").toBeTruthy();
+
+    // What the outbox holds for this cart: how many rows, how many still waiting for an attempt, how many still hold a body.
+    const confirmations = () =>
+      withDb(async (sql) => {
+        const rows = await sql<{ status: string; hasBody: boolean }[]>`
+          select status, body_sealed is not null as "hasBody"
+            from email_outbox
+           where kind = 'registration_confirmation' and ref_type = 'registration_group' and ref_id = ${groupId}`;
+        return {
+          count: rows.length,
+          waiting: rows.filter((r) => r.status === "queued" || r.status === "sending").length,
+          withBody: rows.filter((r) => r.hasBody).length,
+        };
+      });
+    await expect
+      .poll(confirmations, {
+        timeout: 20_000,
+        message: "the submit left ONE confirmation row for the cart, its first attempt made, no body kept",
+      })
+      .toEqual({ count: 1, waiting: 0, withBody: 0 });
+
+    await page.goto(registrantsPath(org.slug, competitionSlug), { waitUntil: "load" });
+    const row = await expandRow(page, regId);
+    await row.locator('[data-registration-hub-registrant-action="resend"]').click();
+
+    const noticeCopy = UI_EN["reg.hub.registrants.detail.actions.resendNotSent"];
+    expect(noticeCopy, "premise: the English dictionary carries the not-sent notice").toBeTruthy();
+    const feedback = row.locator("[data-registration-hub-registrant-actions-feedback]");
+    await expect(feedback, "no key, so the attempt never went out: the notice says it may arrive late").toContainText(
+      noticeCopy!,
+      { timeout: 20_000 },
+    );
+    await expect(feedback, "and it is the not-sent notice, never the resent one").not.toContainText(
+      UI_EN["reg.hub.registrants.detail.actions.resent"]!,
+    );
+
+    // The press queued a SECOND row (a resend is a deliberate second mail, it replaces nothing that was already attempted), and
+    // attempted it before answering.
+    await expect
+      .poll(confirmations, { timeout: 20_000, message: "Resend added one more row, attempted, with no body kept" })
+      .toEqual({ count: 2, waiting: 0, withBody: 0 });
   });
 
   // --- 8. The optimistic rollback tells the truth --------------------------
