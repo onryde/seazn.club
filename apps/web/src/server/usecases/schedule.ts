@@ -815,10 +815,19 @@ export async function peopleByEntrant(tx: Tx, entrantIds: string[]): Promise<Map
 // only becomes REAL once real entrants land surfaces as a warning then, not
 // silently forever — this function needs no change for that, since it
 // already reads whatever fixtures.*_entrant_id holds at call time.
+//
+// De-duplicated: a person who is a member of BOTH entrants (a roster mistake,
+// or one player entered in two teams) is still one person at this fixture.
+// Listed twice, the placement service refuses the whole request
+// (INVALID_REQUEST "person_indices repeats a person") and the WHOLE board falls
+// back to greedy; and every per-person tally (`entityKeysFor`'s universal
+// scopes) would count that one fixture twice for them.
 function peopleOf(f: FixtureLite, people: Map<string, string[]>): string[] {
   return [
-    ...(f.home_entrant_id ? (people.get(f.home_entrant_id) ?? []) : []),
-    ...(f.away_entrant_id ? (people.get(f.away_entrant_id) ?? []) : []),
+    ...new Set([
+      ...(f.home_entrant_id ? (people.get(f.home_entrant_id) ?? []) : []),
+      ...(f.away_entrant_id ? (people.get(f.away_entrant_id) ?? []) : []),
+    ]),
   ];
 }
 
