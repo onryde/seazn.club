@@ -20,7 +20,7 @@ import type { RegisterLichessState } from "@/components/public-site/register/reg
 import { getCurrentUser } from "@/lib/auth";
 import { lichessFlashCode } from "@/lib/lichess-link";
 import { lichessConfigured } from "@/lib/oauth";
-import { getLichessLink } from "@/server/usecases/external-accounts";
+import { getLichessLink, lichessGrantPlays } from "@/server/usecases/external-accounts";
 
 type Props = {
   params: Promise<{ orgSlug: string; competitionSlug: string }>;
@@ -44,6 +44,9 @@ async function lichessStateFor(
   return {
     configured: lichessConfigured(),
     linkedUsername: link?.username ?? null,
+    // The seat gate's own predicate (and `/me`'s): a link it refuses is refused at registration too, so the card says
+    // "reconnect" up front instead of ticking a link the submit then turns away.
+    needsReconsent: link !== null && !lichessGrantPlays(link),
     flash: lichessFlashCode(flash),
   };
 }

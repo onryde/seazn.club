@@ -14837,7 +14837,7 @@ async function twoVenueScheduleSuite(): Promise<void> {
  * against a live service, THAT board stalls at `tiers_completed: 1/4`,
  * `budget_expired: true`, and falls back to greedy for a reason that has
  * nothing to do with the cutover: `PLACEMENT_WALL_SECONDS_MAX` defaults to
- * 10s (`services/placement/src/placement/config.py`), and proving makespan
+ * 10s (`src/placement/config.py` in onryde/seazn.club.placement), and proving makespan
  * optimal on a 21-fixture/2-court board with a real rest floor does not
  * finish inside it. This 9-fixture hand-built board does, reproducibly:
  *
@@ -23711,41 +23711,71 @@ async function v13Suite(admin: Session, proOrgId: string, proOrgSlug: string): P
     esSoloOne.display_name === `Magnus ${tag}`,
   );
 
-  // A team entrant is refused until Settings widens the division's kinds.
+  // Chess takes individual players only (owner ruling 2026-10-26): a team is refused with the one named code however
+  // the kind is reached - as an entrant, as a division config override, as the registration entry type.
   const esTeamBlocked = await v1(admin, `/api/v1/divisions/${bgDiv.id}/entrants`, "POST", {
     kind: "team",
     display_name: `Squad ${tag}`,
   });
   check(
-    "entrant-shapes: team refused before widening (422 ENTRANT_KIND_NOT_ALLOWED)",
-    esTeamBlocked.status === 422 && esTeamBlocked.json.error?.code === "ENTRANT_KIND_NOT_ALLOWED",
+    "entrant-shapes: chess team entrant refused (422 CHESS_INDIVIDUAL_ONLY)",
+    esTeamBlocked.status === 422 && esTeamBlocked.json.error?.code === "CHESS_INDIVIDUAL_ONLY",
   );
-  // Settings → Entrants override: widen kinds to allow teams. The config is
-  // written wholesale, so re-send the full config with the entrants block.
+  // Settings -> Entrants override: widening a chess division to teams is refused too. The config is written
+  // wholesale, so re-send the full config with the entrants block.
   const esWiden = await v1(admin, `/api/v1/divisions/${bgDiv.id}`, "PATCH", {
     config: {
       ...bgConfig,
       entrants: { kinds: ["individual", "team"], defaultKind: "individual" },
     },
   });
-  check("entrant-shapes: widening kinds via config PATCH (200)", esWiden.status === 200);
-  const esTeamOk = await v1(admin, `/api/v1/divisions/${bgDiv.id}/entrants`, "POST", {
+  check(
+    "entrant-shapes: chess widening via config PATCH refused (422 CHESS_INDIVIDUAL_ONLY)",
+    esWiden.status === 422 && esWiden.json.error?.code === "CHESS_INDIVIDUAL_ONLY",
+  );
+  const esRegTeam = await v1(admin, `/api/v1/divisions/${bgDiv.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "team",
+  });
+  check(
+    "entrant-shapes: chess team registration refused (422 CHESS_INDIVIDUAL_ONLY)",
+    esRegTeam.status === 422 && esRegTeam.json.error?.code === "CHESS_INDIVIDUAL_ONLY",
+  );
+  const esRegSolo = await v1(admin, `/api/v1/divisions/${bgDiv.id}/registration-settings`, "PUT", {
+    enabled: true,
+    entrant_kind: "individual",
+  });
+  check("entrant-shapes: chess individual registration accepted (200)", esRegSolo.status === 200);
+
+  // Every other sport keeps the override: widen the kinds, enter a team, then the in-use guard blocks narrowing
+  // while that team is live. `generic` declares no entrant model, so it takes every kind.
+  const gConfig = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
+  const gDiv = v1data<{ id: string }>(
+    await v1(admin, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "Shapes",
+      sport_key: "generic",
+      variant_key: "score",
+      config: gConfig,
+    }),
+  );
+  const gWiden = await v1(admin, `/api/v1/divisions/${gDiv.id}`, "PATCH", {
+    config: { ...gConfig, entrants: { kinds: ["individual", "team"], defaultKind: "individual" } },
+  });
+  check("entrant-shapes: widening kinds via config PATCH on a team sport (200)", gWiden.status === 200);
+  const gTeam = await v1(admin, `/api/v1/divisions/${gDiv.id}/entrants`, "POST", {
     kind: "team",
     display_name: `Squad ${tag}`,
   });
-  check("entrant-shapes: team accepted after widening (201)", esTeamOk.status === 201);
+  check("entrant-shapes: team accepted on a team sport (201)", gTeam.status === 201);
 
   // Guard: narrowing kinds back to individual-only while that team entrant is
-  // live is refused — organisers must withdraw it first.
-  const esNarrow = await v1(admin, `/api/v1/divisions/${bgDiv.id}`, "PATCH", {
-    config: {
-      ...bgConfig,
-      entrants: { kinds: ["individual"], defaultKind: "individual" },
-    },
+  // live is refused - organisers must withdraw it first.
+  const gNarrow = await v1(admin, `/api/v1/divisions/${gDiv.id}`, "PATCH", {
+    config: { ...gConfig, entrants: { kinds: ["individual"], defaultKind: "individual" } },
   });
   check(
     "entrant-shapes: narrowing under a live team refused (422 ENTRANT_KIND_IN_USE)",
-    esNarrow.status === 422 && esNarrow.json.error?.code === "ENTRANT_KIND_IN_USE",
+    gNarrow.status === 422 && gNarrow.json.error?.code === "ENTRANT_KIND_IN_USE",
   );
 }
 

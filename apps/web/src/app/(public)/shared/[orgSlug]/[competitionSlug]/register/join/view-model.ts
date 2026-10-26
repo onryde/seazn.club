@@ -5,6 +5,7 @@
 // sends, how a status code maps to a DESIGNED state rather than a raw
 // error) are provable without a render. Mirrors register/status/
 // view-model.ts's own "pure logic, own file" convention for this route.
+import { lichessRefusalReason } from "@/components/public-site/register/submit";
 import type { CartState, ConsentState, ContactState } from "@/components/public-site/register/types";
 import type { WhoFieldRequirements } from "@/components/public-site/register/validation";
 
@@ -178,14 +179,24 @@ export function buildJoinBody(
  *  - rejected (everything else — 400/422/…): the server refused what was
  *    submitted (roster cap, pair-can't-add, guardian missing, eligibility).
  */
-export type JoinFailureKind = "notFound" | "conflict" | "retry" | "rateLimited" | "rejected";
+export type JoinFailureKind = "notFound" | "conflict" | "retry" | "rateLimited" | "rejected" | "lichessLink" | "lichessReconnect";
 
-export function classifyJoinFailure(status: number | undefined): JoinFailureKind {
+/** Two refusals are told apart by their CODE as well as their status, because the right next step differs and the
+ *  generic `rejected` copy ("check your details") would send a joiner with correct details hunting for a mistake:
+ *  - lichessLink (422 LICHESS_LINK_REQUIRED): the joiner has no Lichess link, and the division is played online;
+ *  - lichessReconnect (422 LICHESS_RECONSENT_REQUIRED): the link is there but cannot play yet (owner 2026-10-25: the
+ *    registration gate holds a joiner to the seat gate's bar).
+ *  The code is compared against these two fixed strings and never rendered, so this stays a classification by fixed
+ *  value (join-form.tsx's header: no server text reaches the page, and the join code is a capability token). */
+export function classifyJoinFailure(status: number | undefined, code?: string): JoinFailureKind {
   if (status === undefined) return "retry";
   if (status === 404) return "notFound";
   if (status === 409) return "conflict";
   if (status === 429) return "rateLimited";
   if (status >= 500) return "retry";
+  const lichess = lichessRefusalReason(status, code);
+  if (lichess === "link") return "lichessLink";
+  if (lichess === "reconnect") return "lichessReconnect";
   return "rejected";
 }
 

@@ -16,6 +16,11 @@ import { settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
+import {
+  CHESS_INDIVIDUAL_ONLY,
+  entrantsOverrideWidensBeyondIndividual,
+  isChessSport,
+} from "@/lib/chess-individual-only";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import { MatchRuleFields, hydrateRuleValues, rulesFor } from "./match-rules";
 import { visibleRuleFields } from "@/lib/match-rules";
@@ -47,9 +52,10 @@ import {
   type TemplateKnobs,
 } from "@/lib/format-templates";
 import { UpgradeGate } from "@/components/upgrade-gate";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
+import { hasLinkGaps, linkGapSentence, type LinkGapsSummary } from "@/lib/online-link-gaps";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
 import type { EffectiveEntrantModel } from "@seazn/engine/sport";
@@ -409,6 +415,7 @@ export function DivisionSettings({
   showSeeds,
   viewerPlan,
   onlineChessOffered,
+  lichessGaps,
 }: {
   division: DivisionSettingsInfo;
   /** Org id, for the tag-suggestions fetch only (the division PATCH itself
@@ -460,8 +467,17 @@ export function DivisionSettings({
    *  play select and the camera control are not rendered at all. A division already online keeps its stored value
    *  through a save — the select's state still starts from the config (applyFormat). */
   onlineChessOffered: boolean;
+  /** The players in the field who cannot be paired online yet (`listLichessLinkGaps`, summarised by the page): those with
+   *  no Lichess link, and those whose link cannot play and must be reconnected. Read only where the select renders. The
+   *  warning under the Online play select reads it - while the FORM says Lichess, so it shows at the moment of switching
+   *  and stays once saved - one sentence per kind (no link, reconnect, and an entrant with no player), each present only
+   *  when somebody is in it, and never blocks the switch
+   *  (owner ruling 2026-10-25). Absent or both counts `0` ⇒ no warning. */
+  lichessGaps?: LinkGapsSummary;
 }) {
   const msg = useMsg();
+  const plural = useMsgPlural();
+  const locale = useLocaleOrDefault();
   // The Format section names the division's sport and variant as WORDS (`sport.<key>`, `variant.<sport>.<variant>`),
   // never the stored keys: the key is the identity (`boardgame`), the word is what the organiser reads ("Chess").
   const sportName = sportLabel(division.sport_key, msg);
@@ -575,6 +591,11 @@ export function DivisionSettings({
   }
   // Entrants block (spec 2026-07-18): the ticked kinds, the default, and the
   // team extras seed from the resolved effective model.
+  // Chess is individual-only (owner ruling 2026-10-26): the block offers no kind to choose. A division saved before
+  // the ruling can still hold a widened override; it is named and can be Reset, never edited or re-saved here.
+  const chessOnly = isChessSport(division.sport_key);
+  const chessLegacyEntrants =
+    chessOnly && entrantsOverrideWidensBeyondIndividual((division.config as { entrants?: unknown } | null)?.entrants);
   const [entrantKinds, setEntrantKinds] = useState<string[]>(entrantModel.kinds);
   const [entrantDefault, setEntrantDefault] = useState<string>(entrantModel.defaultKind);
   const [squadNumbers, setSquadNumbers] = useState<boolean>(entrantModel.squadNumbers);
@@ -700,6 +721,10 @@ export function DivisionSettings({
         // the same in every locale; only the sentence around them is ours.
         const controls = Array.isArray(err.extra.controls) ? err.extra.controls.map(String).join(", ") : "";
         setError(msg("divset.err.timeControlUnsupported", { controls }));
+      } else if (err instanceof ApiV1Error && err.code === CHESS_INDIVIDUAL_ONLY) {
+        // Server English otherwise (no server-side i18n): localise the code. Reachable only from a stale page - the
+        // block offers nothing to widen - or a legacy override re-sent alongside a different one.
+        setError(msg("divset.err.chessIndividualOnly"));
       } else if (err instanceof ApiV1Error && err.code === ONLINE_CHESS_DISABLED_CODE) {
         // T20 (fix round 1, m6): turning online play on while the club is not offered online chess — a save racing a
         // flag change, a kept answer gone stale, PostHog down. Server English otherwise: localise the code.
@@ -1197,6 +1222,34 @@ export function DivisionSettings({
               </select>
             </label>
             <p className="mt-1 text-[11px] text-slate-500">{msg("divset.onlinePlay.help")}</p>
+            {/* WARN, never block: the select above and Save below stay live. The same sentence before and after the
+                save, because it follows the form's choice, which a save leaves where it was. */}
+            {onlinePlay === "lichess" && lichessGaps !== undefined && hasLinkGaps(lichessGaps) && (
+              <div
+                role="status"
+                data-testid="division-online-link-gaps"
+                className="mt-2 grid min-w-0 gap-2 break-words rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+              >
+                {/* An unbroken name (a 70-character token) must wrap INSIDE the box: `break-words` alone does not shrink a
+                    grid item below its min-content width, so each sentence also takes `min-w-0` and `anywhere`, which
+                    counts the break opportunities in the min-content width too. */}
+                {lichessGaps.unlinked.count > 0 && (
+                  <p data-testid="division-online-unlinked" className="min-w-0 [overflow-wrap:anywhere]">
+                    {linkGapSentence("unlinked", lichessGaps.unlinked, locale, plural)}
+                  </p>
+                )}
+                {lichessGaps.reconnect.count > 0 && (
+                  <p data-testid="division-online-reconnect" className="min-w-0 [overflow-wrap:anywhere]">
+                    {linkGapSentence("reconnect", lichessGaps.reconnect, locale, plural)}
+                  </p>
+                )}
+                {lichessGaps.empty.count > 0 && (
+                  <p data-testid="division-online-empty" className="min-w-0 [overflow-wrap:anywhere]">
+                    {linkGapSentence("empty", lichessGaps.empty, locale, plural)}
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -1358,9 +1411,38 @@ export function DivisionSettings({
 
       <Group
         title={msg("divset.entrants.title")}
-        summary={entrantKinds.map((k) => msg(KIND_LABEL_KEY[k as (typeof ENTRANT_KINDS)[number]])).join(", ")}
+        summary={
+          chessOnly
+            ? msg(KIND_LABEL_KEY.individual)
+            : entrantKinds.map((k) => msg(KIND_LABEL_KEY[k as (typeof ENTRANT_KINDS)[number]])).join(", ")
+        }
         defaultOpen
       >
+        {chessOnly ? (
+          <div className="space-y-2" data-testid="entrants-chess-only">
+            <p className="text-xs text-slate-600">{msg("divset.entrants.chessOnly")}</p>
+            {chessLegacyEntrants && (
+              <div
+                role="status"
+                className="grid min-w-0 gap-2 break-words rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800"
+                data-testid="entrants-chess-legacy"
+              >
+                <span>{msg("divset.entrants.chessLegacy")}</span>
+                {canEdit && (
+                  <button
+                    type="button"
+                    disabled={busy}
+                    onClick={resetEntrants}
+                    className="btn w-full justify-self-start text-xs sm:w-auto"
+                  >
+                    {msg("divset.entrants.reset")}
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        ) : (
+          <>
         <p className="text-xs text-slate-500">{msg("divset.entrants.desc")}</p>
 
         {/* Source line: a muted "Sport default" note, or, once overridden, the
@@ -1472,6 +1554,8 @@ export function DivisionSettings({
           </button>
         )}
         <p className="text-[11px] text-slate-500">{msg("divset.entrants.note")}</p>
+          </>
+        )}
       </Group>
 
       <Group

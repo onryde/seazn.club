@@ -95,10 +95,12 @@
 // not confirm (owner ruling).
 import { useRef, useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { apiV1 } from "@/lib/client-v1";
+import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { useConfirm } from "@/components/ui/confirm-provider";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { lichessRegistrantRefusalText } from "@/components/v2/entrants-lichess-refusal";
 import { deriveRegistrantActionFlags } from "@/components/registration-hub-registrant-derive";
+import type { MessageKey } from "@/lib/messages";
 import type { RegistrationListRow } from "@/server/usecases/registrations";
 
 type Status = RegistrationListRow["status"];
@@ -215,6 +217,14 @@ export function RegistrationHubRegistrantActions({
     },
   );
 
+  /** What the organiser reads when an action fails. An online-play division refuses to seat a registrant with no Lichess link
+   *  that can play (approve, mark paid and promote all seat them): the server's words are English only, so that refusal is
+   *  said here, in the organiser's language. This page is already the registrant's own, so nobody is named. */
+  function failureText(err: unknown): string {
+    const lichess = err instanceof ApiV1Error ? lichessRegistrantRefusalText(err, (key) => msg(key as MessageKey)) : null;
+    return lichess ?? errorText(err);
+  }
+
   async function runStatusAction(
     action: "approve" | "reject" | "withdraw" | "mark-paid",
     path: string,
@@ -237,7 +247,7 @@ export function RegistrationHubRegistrantActions({
     } catch (err) {
       // Latest known server truth, never the click-time snapshot — finding 2.
       setOptimisticStatus(latestStatusRef.current);
-      const text = errorText(err);
+      const text = failureText(err);
       // RS005 F2 finding 3 — see the file header. approveRegistration
       // (registration-approval.ts:128) and markRegistrationPaidOffline
       // (registrations.ts:3147) both gate on the DIVISION's LIVE fee, not
@@ -320,7 +330,7 @@ export function RegistrationHubRegistrantActions({
       router.refresh();
     } catch (err) {
       setPromotedOptimistically(false);
-      setFeedback({ tone: "error", text: errorText(err) });
+      setFeedback({ tone: "error", text: failureText(err) });
     } finally {
       setBusy(null);
     }

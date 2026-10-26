@@ -141,3 +141,18 @@ export function classifySubmitFailure(status: number | undefined): SubmitFailure
   if (status === 409 || status >= 500) return "retry";
   return "rejected";
 }
+
+/** The two Lichess reasons a registration into an online-play division is refused for (owner 2026-10-25: registration holds
+ *  a player to the seat gate's bar). `link`: no Lichess link at all. `reconnect`: a link that cannot play yet. */
+export type LichessRefusal = "link" | "reconnect";
+
+/** Which Lichess reason a failed registration or join answered with, or null for any other failure. ONE authority for the
+ *  register stepper and the join page: the reason is the pair (HTTP 422, fixed code), never the code alone - the code is a
+ *  string the server chose, and a 5xx or 409 that happens to carry it is not this refusal. The code is compared against
+ *  these two fixed strings and never rendered. */
+export function lichessRefusalReason(status: number | undefined, code: string | undefined): LichessRefusal | null {
+  if (status !== 422) return null;
+  if (code === "LICHESS_LINK_REQUIRED") return "link";
+  if (code === "LICHESS_RECONSENT_REQUIRED") return "reconnect";
+  return null;
+}

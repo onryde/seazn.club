@@ -1,4 +1,6 @@
-// Regenerate the TypeScript gRPC stubs from the shared `proto/scheduler.proto`.
+// Regenerate the TypeScript gRPC stubs from the vendored copy of the placement service's proto,
+// `packages/scheduler/proto/scheduler.proto`. The copy is written by `pnpm --filter @seazn/scheduler vendor:proto <placement
+// checkout>`, which also writes the image tag to VENDORED.json; this script never reads the proto from anywhere else.
 //
 //   pnpm --filter @seazn/scheduler gen:proto
 //
@@ -27,11 +29,11 @@ import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { VENDORED_PROTO_DIR } from "./proto-paths.ts";
 
 const pkgRoot = path.resolve(fileURLToPath(import.meta.url), "../..");
 const repoRoot = path.resolve(pkgRoot, "../..");
 const outDir = path.join(pkgRoot, "src/generated");
-const protoDir = path.join(repoRoot, "proto");
 
 /** Locate a devDependency binary, preferring the package-local pnpm bin dir. */
 function resolveBin(name: string): string {
@@ -64,8 +66,8 @@ execFileSync(
     `--ts_proto_out=${outDir}`,
     "--ts_proto_opt=outputServices=grpc-js,esModuleInterop=true",
     "-I",
-    protoDir,
-    path.join(protoDir, "scheduler.proto"),
+    VENDORED_PROTO_DIR,
+    path.join(VENDORED_PROTO_DIR, "scheduler.proto"),
   ],
   { stdio: "inherit" },
 );

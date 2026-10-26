@@ -7,10 +7,13 @@ import {
   PLAY_SCOPES,
   assertLichessConsentForPlay,
   assertPersonIdsLinkedForOnlinePlay,
+  assertUserHasLichessForOnlinePlay,
   getLichessAccessToken,
   getLichessLink,
   lichessGrantDowngraded,
-  personIdsWithLichessLink,
+  lichessGrantPlays,
+  lichessLinkStatesByPerson,
+  type LichessLinkState,
   unlinkLichess,
   upsertLichessLink,
 } from "../external-accounts";
@@ -759,6 +762,11 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
     return (await getLichessLink(person.user_id)) !== null;
   }
 
+  /** Who holds a Lichess row, as a set: the keys of the states map, the ONE reader (a "linked" person is a stored row,
+   *  whatever it stores; what the row lets them do is the map's value, swept in the next describe). */
+  const linkedSet = async (orgId: string, ids?: readonly string[]): Promise<Set<string>> =>
+    new Set((await sql.begin((tx) => lichessLinkStatesByPerson(tx, orgId, ids))).keys());
+
   it("holds exactly the org's persons whose user has a Lichess row — and agrees with the long way round on every one", async () => {
     const o = await seedOrgWithPeople("set");
     const linkedUser = await newUser(`set-linked-${o.suffix}`);
@@ -780,7 +788,7 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
       noUser: await o.person("No user", null),
     };
 
-    const set = await sql.begin((tx) => personIdsWithLichessLink(tx, o.orgId));
+    const set = await linkedSet(o.orgId);
 
     expect([...set].sort()).toEqual([people.linked, people.legacy].sort());
     expect(set.has(otherOrgPerson), "another org's person is not in this org's set").toBe(false);
@@ -798,7 +806,7 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
     const user = await newUser(`empty-user-${o.suffix}`);
     const p = await o.person("Unlinked", user);
 
-    const set = await sql.begin((tx) => personIdsWithLichessLink(tx, o.orgId));
+    const set = await linkedSet(o.orgId);
 
     expect(set.size).toBe(0);
     expect(set.has(p)).toBe(false);
@@ -809,13 +817,13 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
     const user = await newUser(`unlink-user-${o.suffix}`);
     const p = await o.person("Linked then not", user);
     // A user with a person but no Lichess row yet is not in the set; the link brings the person in.
-    expect((await sql.begin((tx) => personIdsWithLichessLink(tx, o.orgId))).has(p)).toBe(false);
+    expect((await linkedSet(o.orgId)).has(p)).toBe(false);
     await o.link(user);
-    expect((await sql.begin((tx) => personIdsWithLichessLink(tx, o.orgId))).has(p)).toBe(true);
+    expect((await linkedSet(o.orgId)).has(p)).toBe(true);
 
     await unlinkLichess(user);
 
-    expect((await sql.begin((tx) => personIdsWithLichessLink(tx, o.orgId))).has(p)).toBe(false);
+    expect((await linkedSet(o.orgId)).has(p)).toBe(false);
   });
 
   // Scoped to the persons a roster NAMES: the answer for those and no one else. Used when the roster is known up
@@ -828,7 +836,7 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
     // Another org's linked person, named explicitly: the org scope still applies to a named id.
     const other = await seedOrgWithPeople("scope-other");
     const foreign = await other.linkedPerson("Foreign linked");
-    const read = (ids?: readonly string[]) => sql.begin((tx) => personIdsWithLichessLink(tx, o.orgId, ids));
+    const read = (ids?: readonly string[]) => linkedSet(o.orgId, ids);
 
     expect([...(await read())].sort(), "premise: unscoped is the whole org").toEqual([linkedA, linkedB].sort());
     expect([...(await read([linkedA]))]).toEqual([linkedA]);
@@ -844,7 +852,7 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
   it("cannot be read through a tenant transaction — the table is sealed from app_user", async () => {
     const o = await seedOrgWithPeople("sealed");
 
-    await expect(withTenant(o.orgId, (tx) => personIdsWithLichessLink(tx, o.orgId))).rejects.toMatchObject({
+    await expect(withTenant(o.orgId, (tx) => lichessLinkStatesByPerson(tx, o.orgId))).rejects.toMatchObject({
       code: "42501", // insufficient_privilege
     });
   });
@@ -854,7 +862,7 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
     const user = await newUser(`prelude-user-${o.suffix}`);
     await o.link(user);
     const p = await o.person("Linked", user);
-    let loaded: ReadonlySet<string> | null = null;
+    let loaded: ReadonlyMap<string, LichessLinkState> | null = null;
     let preludePid: number | null = null;
     let preludeRole: string | null = null;
 
@@ -869,7 +877,7 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
         privilegedPrelude: async (ptx) => {
           [{ pid: preludePid, role: preludeRole }] = await ptx<{ pid: number; role: string }[]>`
             select pg_backend_pid() as pid, current_user as role`;
-          loaded = await personIdsWithLichessLink(ptx, o.orgId);
+          loaded = await lichessLinkStatesByPerson(ptx, o.orgId);
         },
       },
     );
@@ -884,6 +892,225 @@ describe.skipIf(!HAS_DB)("external-accounts — the roster's link set", () => {
   });
 });
 
+// What a roster's links LET each person do, not just whether they exist: the registration gate refuses exactly what the
+// seat gate refuses (`lichessGrantPlays`, owner 2026-10-25), so it needs each person's state - plays / reconnect / no
+// link - from the one reader, `lichessLinkStatesByPerson`. Expected states are derived from PLAY_SCOPES (the declared
+// play grant), never from a table of scope names typed here.
+describe.skipIf(!HAS_DB)("external-accounts — the roster's link states", () => {
+  async function seedOrg(tag: string) {
+    const suffix = randomUUID().slice(0, 8);
+    const ownerId = await newUser(`${tag}-owner-${suffix}`);
+    const [{ id: orgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug, created_by)
+      values (${`${tag} ${suffix}`}, ${`${tag}-${suffix}`}, ${ownerId}) returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${ownerId}, 'owner')`;
+    const person = async (name: string, userId: string | null, org: string = orgId): Promise<string> => {
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into persons (org_id, full_name, user_id) values (${org}, ${name}, ${userId}) returning id`;
+      return id;
+    };
+    const user = (name: string) => newUser(`${tag}-${name.replaceAll(" ", "")}-${suffix}`);
+    const grant = (userId: string, scopes: string[], consented = true) =>
+      consented
+        ? upsertLichessLink(userId, { externalUserId: lid(tag), username: tag, scopes, token: "lio_t" })
+        : sql`insert into user_external_accounts (user_id, provider, external_user_id, username, scopes)
+              values (${userId}, 'lichess', ${lid(tag)}, ${tag}, ${scopes})`;
+    return { orgId, person, user, grant };
+  }
+  const states = (orgId: string, ids?: readonly string[]) => sql.begin((tx) => lichessLinkStatesByPerson(tx, orgId, ids));
+
+  it("says plays / reconnect for each person by what their stored grant is, and nothing for a person with no link", async () => {
+    const o = await seedOrg("states");
+    const want = new Map<string, LichessLinkState | "absent">();
+    const add = async (name: string, state: LichessLinkState | "absent", setup: (userId: string) => Promise<unknown>) => {
+      const userId = await o.user(name);
+      await setup(userId);
+      want.set(await o.person(name, userId), state);
+    };
+
+    await add("Full grant", "plays", (u) => o.grant(u, [...PLAY_SCOPES]));
+    await add("Identity only", "reconnect", (u) =>
+      sql`insert into user_external_accounts (user_id, provider, external_user_id, username)
+          values (${u}, 'lichess', ${lid("states-idonly")}, 'Legacy')`);
+    // The scopes look right but the consent stamp is missing - and so is the token (V451's consent_token CHECK).
+    await add("Scopes, no consent", "reconnect", (u) => o.grant(u, [...PLAY_SCOPES], false));
+    // One case per declared play scope: the grant that has every scope BUT that one still owes a reconnect.
+    for (const dropped of PLAY_SCOPES) {
+      await add(`Without ${dropped}`, "reconnect", (u) => o.grant(u, PLAY_SCOPES.filter((x) => x !== dropped)));
+    }
+    // A grant wider than the play grant plays (extra scopes are not a reason to refuse).
+    await add("Wider grant", "plays", (u) => o.grant(u, [...PLAY_SCOPES, "email:read"]));
+    await add("User, no link", "absent", async () => undefined);
+    want.set(await o.person("No user", null), "absent");
+    // The same linked user in ANOTHER org: not this org's.
+    const other = await seedOrg("states-other");
+    const otherUser = await other.user("Other full");
+    await other.grant(otherUser, [...PLAY_SCOPES]);
+    const foreign = await other.person("Other org person", otherUser);
+
+    const got = await states(o.orgId);
+
+    let checked = 0;
+    for (const [id, state] of want) {
+      expect(got.get(id) ?? "absent", id).toBe(state);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: persons compared").toBe(want.size);
+    expect(want.size, "premise: every scope has its own case, plus 6 fixed ones").toBe(PLAY_SCOPES.length + 6);
+    expect([...want.values()].filter((v) => v === "reconnect").length, "premise: identity-only, no-consent, and one per dropped scope").toBe(PLAY_SCOPES.length + 2);
+    expect([...want.values()].filter((v) => v === "plays").length, "premise: the passing side is not empty").toBe(2);
+    expect(got.has(foreign), "another org's person is not answered for").toBe(false);
+    expect(got.size, "only the linked persons are in the map").toBe([...want.values()].filter((v) => v !== "absent").length);
+  });
+
+  it("scoped to person ids: answers for the named persons only, and for no one when none are named", async () => {
+    const o = await seedOrg("scope");
+    const mk = async (name: string, scopes: string[]) => {
+      const u = await o.user(name);
+      await o.grant(u, scopes);
+      return o.person(name, u);
+    };
+    const plays = await mk("Plays", [...PLAY_SCOPES]);
+    const narrow = await mk("Narrow", PLAY_SCOPES.slice(1));
+    const bystander = await mk("Bystander", [...PLAY_SCOPES]);
+
+    expect(Object.fromEntries(await states(o.orgId, [plays, narrow])), "named people, each with their state").toEqual({
+      [plays]: "plays",
+      [narrow]: "reconnect",
+    });
+    expect((await states(o.orgId, [narrow])).get(bystander), "a person not named is not answered for").toBeUndefined();
+    expect((await states(o.orgId, [])).size, "naming nobody asks about nobody").toBe(0);
+    expect((await states(o.orgId)).size, "premise: unscoped is the whole org").toBe(3);
+  });
+
+  // THE SEQUENCE this exists for: a player the gate refuses with "reconnect" is let through once they reconnect - and
+  // one who unlinks falls out of the map altogether (no link, a different reason from reconnect).
+  it("follows reconnect and unlink: reconnect -> plays -> (unlink) -> absent", async () => {
+    const o = await seedOrg("seq");
+    const u = await o.user("Sequence");
+    await sql`insert into user_external_accounts (user_id, provider, external_user_id, username)
+              values (${u}, 'lichess', ${lid("seq")}, 'Legacy')`;
+    const p = await o.person("Sequence", u);
+    expect((await states(o.orgId)).get(p), "identity-only").toBe("reconnect");
+
+    await upsertLichessLink(u, { externalUserId: lid("seq-2"), username: "Seq", scopes: [...PLAY_SCOPES], token: "lio_t" });
+    expect((await states(o.orgId)).get(p), "after the reconnect").toBe("plays");
+
+    await unlinkLichess(u);
+    expect((await states(o.orgId)).get(p), "after the unlink").toBeUndefined();
+  });
+
+  // The verdict is the seat gate's own predicate: a row the play gate would refuse is `reconnect`, always.
+  it("agrees with lichessGrantPlays on every stored row it reads", async () => {
+    const o = await seedOrg("oracle");
+    const rows: { personId: string; userId: string }[] = [];
+    for (const [name, scopes, consented] of [
+      ["Full", [...PLAY_SCOPES], true],
+      ["Half", PLAY_SCOPES.slice(0, 1), true],
+      ["Stamp missing", [...PLAY_SCOPES], false],
+      ["Empty", [], false],
+    ] as const) {
+      const u = await o.user(name);
+      await o.grant(u, [...scopes], consented);
+      rows.push({ personId: await o.person(name, u), userId: u });
+    }
+
+    const got = await states(o.orgId);
+
+    let checked = 0;
+    for (const r of rows) {
+      const link = await getLichessLink(r.userId);
+      expect(got.get(r.personId), r.personId).toBe(lichessGrantPlays(link!) ? "plays" : "reconnect");
+      checked++;
+    }
+    expect(checked, "anti-vacuity").toBe(4);
+    expect(new Set(got.values()), "premise: both verdicts occur").toEqual(new Set(["plays", "reconnect"]));
+  });
+});
+
+// The player's own side of the same ruling (owner 2026-10-25): signing themselves up for an online division refuses
+// exactly the link the seat gate refuses, with the reconnect reason. Expected scopes come from PLAY_SCOPES.
+describe.skipIf(!HAS_DB)("external-accounts - the registrant's own Lichess demand", () => {
+  const refusalOf = async (userId: string | null): Promise<{ status?: number; code?: string; message?: string } | null> =>
+    assertUserHasLichessForOnlinePlay(userId).then(
+      () => null,
+      (e: { status?: number; code?: string; message?: string }) => ({ status: e.status, code: e.code, message: e.message }),
+    );
+
+  it("nobody signed in, and a signed-in player with no link, are asked to LINK (the existing copy)", async () => {
+    expect(await refusalOf(null)).toEqual({
+      status: 422, code: "LICHESS_LINK_REQUIRED", message: "Sign in and link your Lichess account to register for online play",
+    });
+    expect(await refusalOf(await newUser("reg-nolink"))).toEqual({
+      status: 422, code: "LICHESS_LINK_REQUIRED", message: "Link your Lichess account in Settings before registering for online play",
+    });
+  });
+
+  it("a link that lets Seazn submit moves passes - and a wider grant does too", async () => {
+    const full = await newUser("reg-full");
+    await upsertLichessLink(full, { externalUserId: lid("reg-full"), username: "Full", scopes: [...PLAY_SCOPES], token: "lio_t" });
+    const wide = await newUser("reg-wide");
+    await upsertLichessLink(wide, { externalUserId: lid("reg-wide"), username: "Wide", scopes: [...PLAY_SCOPES, "email:read"], token: "lio_t" });
+
+    expect(await refusalOf(full)).toBeNull();
+    expect(await refusalOf(wide)).toBeNull();
+  });
+
+  it("an identity-only link, or a consented grant short of ANY one play scope, is asked to RECONNECT - not to link", async () => {
+    const wantMessage = "Reconnect your Lichess account so Seazn can submit your moves before registering for online play";
+    const identityOnly = await newUser("reg-idonly");
+    await sql`insert into user_external_accounts (user_id, provider, external_user_id, username)
+              values (${identityOnly}, 'lichess', ${lid("reg-idonly")}, 'Legacy')`;
+    expect(await refusalOf(identityOnly)).toEqual({ status: 422, code: "LICHESS_RECONSENT_REQUIRED", message: wantMessage });
+
+    let checked = 0;
+    for (const dropped of PLAY_SCOPES) {
+      const u = await newUser(`reg-without-${dropped.replace(":", "-")}`);
+      await upsertLichessLink(u, {
+        externalUserId: lid("reg-narrow"), username: "Narrow", scopes: PLAY_SCOPES.filter((x) => x !== dropped), token: "lio_t",
+      });
+      expect(await refusalOf(u), dropped).toEqual({ status: 422, code: "LICHESS_RECONSENT_REQUIRED", message: wantMessage });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every play scope swept").toBe(PLAY_SCOPES.length);
+    // The scopes look right but there is no consent stamp (and so no token): the other half of lichessGrantPlays.
+    const noStamp = await newUser("reg-nostamp");
+    await sql`insert into user_external_accounts (user_id, provider, external_user_id, username, scopes)
+              values (${noStamp}, 'lichess', ${lid("reg-nostamp")}, 'NoStamp', ${[...PLAY_SCOPES]})`;
+    expect(await refusalOf(noStamp)).toMatchObject({ code: "LICHESS_RECONSENT_REQUIRED" });
+  });
+
+  it("refuses by the same verdict as the play gate, row for row (one authority)", async () => {
+    let checked = 0;
+    let refused = 0;
+    for (const scopes of [[...PLAY_SCOPES], PLAY_SCOPES.slice(1), ["email:read"], [...PLAY_SCOPES, "email:read"]]) {
+      const u = await newUser("reg-oracle");
+      await upsertLichessLink(u, { externalUserId: lid("reg-oracle"), username: "O", scopes, token: "lio_t" });
+      const play = await assertLichessConsentForPlay(u).then(() => null, (e: { code?: string }) => e.code);
+      const reg = await refusalOf(u);
+      expect(reg?.code ?? null, scopes.join(",")).toBe(play);
+      checked++;
+      if (play !== null) refused++;
+    }
+    expect(checked, "anti-vacuity").toBe(4);
+    expect(refused, "premise: some rows are refused, some are not").toBe(2);
+  });
+
+  // The sequence the reason exists for: told to reconnect, reconnecting clears it; unlinking turns it back into "link".
+  it("reconnect -> passes; then unlink -> LINK, not reconnect", async () => {
+    const u = await newUser("reg-seq");
+    await sql`insert into user_external_accounts (user_id, provider, external_user_id, username)
+              values (${u}, 'lichess', ${lid("reg-seq")}, 'Legacy')`;
+    expect(await refusalOf(u)).toMatchObject({ code: "LICHESS_RECONSENT_REQUIRED" });
+
+    await upsertLichessLink(u, { externalUserId: lid("reg-seq-2"), username: "Seq", scopes: [...PLAY_SCOPES], token: "lio_t" });
+    expect(await refusalOf(u)).toBeNull();
+
+    await unlinkLichess(u);
+    expect(await refusalOf(u)).toMatchObject({ code: "LICHESS_LINK_REQUIRED" });
+  });
+});
+
 /** What a synchronous call throws, or null. */
 function thrownBy(fn: () => void): unknown {
   try {
@@ -895,30 +1122,67 @@ function thrownBy(fn: () => void): unknown {
 }
 
 describe("external-accounts — the roster's link demand (no DB)", () => {
-  it("assertPersonIdsLinkedForOnlinePlay: passes only when EVERY person is in the set", () => {
-    const set = new Set(["a", "b"]);
+  const states = (entries: [string, LichessLinkState][]): ReadonlyMap<string, LichessLinkState> => new Map(entries);
+  const naming = (e: unknown): unknown => (e as { extra?: { person_ids?: unknown } }).extra?.person_ids;
 
-    expect(thrownBy(() => assertPersonIdsLinkedForOnlinePlay(set, ["a", "b"]))).toBeNull();
+  it("assertPersonIdsLinkedForOnlinePlay: passes only when EVERY person's link plays", () => {
+    const map = states([["a", "plays"], ["b", "plays"]]);
+
+    expect(thrownBy(() => assertPersonIdsLinkedForOnlinePlay(map, ["a", "b"]))).toBeNull();
     let refused = 0;
     for (const ids of [["a", "x"], ["x"], ["x", "a", "b"]]) {
-      expect(thrownBy(() => assertPersonIdsLinkedForOnlinePlay(set, ids)), ids.join(",")).toMatchObject({
+      expect(thrownBy(() => assertPersonIdsLinkedForOnlinePlay(map, ids)), ids.join(",")).toMatchObject({
         status: 422,
         code: "LICHESS_LINK_REQUIRED",
       });
       refused++;
     }
-    expect(refused, "anti-vacuity: partial sets swept").toBe(3);
-    // The empty set refuses everyone it is asked about (it answers no, not "nothing to check").
-    expect(thrownBy(() => assertPersonIdsLinkedForOnlinePlay(new Set(), ["a"]))).toMatchObject({
+    expect(refused, "anti-vacuity: partial maps swept").toBe(3);
+    // The empty map refuses everyone it is asked about (it answers no, not "nothing to check").
+    expect(thrownBy(() => assertPersonIdsLinkedForOnlinePlay(new Map(), ["a"]))).toMatchObject({
       code: "LICHESS_LINK_REQUIRED",
     });
     // Nobody rostered, nobody to refuse.
-    expect(thrownBy(() => assertPersonIdsLinkedForOnlinePlay(set, []))).toBeNull();
+    expect(thrownBy(() => assertPersonIdsLinkedForOnlinePlay(map, []))).toBeNull();
   });
 
-  // `null` is "the set was never read for this transaction" — the division turned online between the prelude's read
+  // The owner's ruling (2026-10-25): a link the seat gate would refuse is refused at registration, with the RECONNECT
+  // reason (not "link"), so the player is told to reconnect before they register.
+  it("assertPersonIdsLinkedForOnlinePlay: a link that does not play is refused as RECONSENT, never as LINK", () => {
+    const e = thrownBy(() => assertPersonIdsLinkedForOnlinePlay(states([["a", "reconnect"]]), ["a"]));
+
+    expect(e).toMatchObject({ status: 422, code: "LICHESS_RECONSENT_REQUIRED" });
+    expect(naming(e)).toEqual(["a"]);
+    // Two reasons, two sentences: the player must be able to tell "link" from "reconnect" by the words alone.
+    const link = thrownBy(() => assertPersonIdsLinkedForOnlinePlay(new Map(), ["a"])) as Error;
+    expect((e as Error).message).not.toBe(link.message);
+    expect(link.message, "the existing not-linked copy is unchanged").toBe(
+      "Every player must link a Lichess account before entering online play",
+    );
+    expect((e as Error).message.toLowerCase()).toContain("reconnect");
+  });
+
+  it("assertPersonIdsLinkedForOnlinePlay: names each refused person under the reason that is true of them", () => {
+    const map = states([["ok", "plays"], ["re1", "reconnect"], ["re2", "reconnect"]]);
+
+    // Reconnect only: every reconnecting person is named, the one who plays is not.
+    const reconnect = thrownBy(() => assertPersonIdsLinkedForOnlinePlay(map, ["ok", "re1", "re2"]));
+    expect(reconnect).toMatchObject({ code: "LICHESS_RECONSENT_REQUIRED" });
+    expect(naming(reconnect)).toEqual(["re1", "re2"]);
+
+    // A person with no link at all is the EARLIER reason (you cannot reconnect what was never linked), and is the only
+    // one named under it - the reconnecting people are named when the roster is next tried.
+    const mixed = thrownBy(() => assertPersonIdsLinkedForOnlinePlay(map, ["ok", "re1", "none", "re2"]));
+    expect(mixed).toMatchObject({ code: "LICHESS_LINK_REQUIRED" });
+    expect(naming(mixed)).toEqual(["none"]);
+
+    // The same person named twice is named once.
+    expect(naming(thrownBy(() => assertPersonIdsLinkedForOnlinePlay(map, ["re1", "re1"])))).toEqual(["re1"]);
+  });
+
+  // `null` is "the states were never read for this transaction" - the division turned online between the prelude's read
   // and the transaction's. It cannot be answered from nothing, so it refuses (fails closed), the way an unasked flag does.
-  it("assertPersonIdsLinkedForOnlinePlay: a set that was never read refuses everyone who is rostered", () => {
+  it("assertPersonIdsLinkedForOnlinePlay: states that were never read refuse everyone who is rostered", () => {
     expect(thrownBy(() => assertPersonIdsLinkedForOnlinePlay(null, ["a"]))).toMatchObject({
       status: 422,
       code: "LICHESS_LINK_REQUIRED",

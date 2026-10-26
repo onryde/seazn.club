@@ -53,8 +53,8 @@ const ACTION = `${BUTTON_QUIET} w-full sm:w-auto`;
 export function RoundQueueCards({ round, held, flagged, ownFlagged, slugs, onSelect }: RoundQueueCardsProps) {
   const router = useRouter();
   const [decision, dispatch] = useReducer(arbiterDecision, null, initialArbiterDecision);
-  // Flag times of day are not drawn here, so the formatter needs no viewer clock.
-  const f = useFmt(null);
+  // Flag times of day are not drawn here, so the formatter needs neither a clock nor a zone: stated as null, never left to default.
+  const f = useFmt(null, null);
   const runner = useMemo(
     () =>
       decisionRunner({

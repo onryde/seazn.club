@@ -15,9 +15,15 @@ const doors = vi.hoisted(() => ({
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/server/usecases/registrations", () => ({ publicRegistrationInfo: (...a: unknown[]) => doors.info(...a) }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: () => doors.getCurrentUser() }));
-vi.mock("@/server/usecases/external-accounts", () => ({ getLichessLink: (id: string) => doors.getLichessLink(id) }));
+// `lichessGrantPlays` is the REAL one: the page's verdict on a stored link is the seat gate's own predicate, and a double
+// of it here would prove the double (a fixture on both ends). Only the link READ is a door.
+vi.mock("@/server/usecases/external-accounts", async () => {
+  const actual = await vi.importActual<typeof import("@/server/usecases/external-accounts")>("@/server/usecases/external-accounts");
+  return { lichessGrantPlays: actual.lichessGrantPlays, PLAY_SCOPES: actual.PLAY_SCOPES, getLichessLink: (id: string) => doors.getLichessLink(id) };
+});
 
 import { RegisterStepper } from "@/components/public-site/register/register-stepper";
+import { PLAY_SCOPES } from "@/server/usecases/external-accounts";
 import RegisterPage from "../page";
 
 const DIVISION = {
@@ -67,21 +73,45 @@ describe("register page — the viewer's Lichess link state (I5)", () => {
 
   it("online, signed out: not linked, and no link read for nobody", async () => {
     doors.info.mockResolvedValue(infoWith(true));
-    expect(await stepperLichess()).toEqual({ configured: true, linkedUsername: null, flash: null });
+    expect(await stepperLichess()).toEqual({ configured: true, linkedUsername: null, needsReconsent: false, flash: null });
     expect(doors.getLichessLink).not.toHaveBeenCalled();
   });
 
   it("online, signed in and linked, back from the start: who it is linked as, and the outcome", async () => {
     doors.info.mockResolvedValue(infoWith(true));
     doors.getCurrentUser.mockResolvedValue({ id: "u1" });
-    doors.getLichessLink.mockResolvedValue({ username: "ada_okonkwo", externalUserId: "ada", scopes: [], consentedAt: null });
-    expect(await stepperLichess({ lichess: "linked" })).toEqual({ configured: true, linkedUsername: "ada_okonkwo", flash: "linked" });
+    doors.getLichessLink.mockResolvedValue({ username: "ada_okonkwo", externalUserId: "ada", scopes: [...PLAY_SCOPES], consentedAt: new Date("2026-10-01T00:00:00Z") });
+    expect(await stepperLichess({ lichess: "linked" })).toEqual({ configured: true, linkedUsername: "ada_okonkwo", needsReconsent: false, flash: "linked" });
     expect(doors.getLichessLink.mock.calls).toEqual([["u1"]]);
+  });
+
+  // Owner ruling 2026-10-25: the card must know when the link cannot play, by the seat gate's own predicate.
+  it("online, signed in, linked but the link cannot play (identity-only, or short of any one play scope): needsReconsent - the registration gate's own verdict", async () => {
+    doors.info.mockResolvedValue(infoWith(true));
+    doors.getCurrentUser.mockResolvedValue({ id: "u1" });
+    const consentedAt = new Date("2026-10-01T00:00:00Z");
+    const stored = [
+      { label: "identity-only", scopes: [], consentedAt: null },
+      { label: "scopes, no consent stamp", scopes: [...PLAY_SCOPES], consentedAt: null },
+      ...PLAY_SCOPES.map((dropped) => ({ label: `without ${dropped}`, scopes: PLAY_SCOPES.filter((x) => x !== dropped), consentedAt })),
+    ];
+    let checked = 0;
+    for (const link of stored) {
+      doors.getLichessLink.mockResolvedValue({ username: "ada", externalUserId: "ada", scopes: link.scopes, consentedAt: link.consentedAt });
+      expect(await stepperLichess(), link.label).toEqual({ configured: true, linkedUsername: "ada", needsReconsent: true, flash: null });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: rows swept").toBe(2 + PLAY_SCOPES.length);
+    // The pair: a full grant, and a wider one, need nothing.
+    for (const scopes of [[...PLAY_SCOPES], [...PLAY_SCOPES, "email:read"]]) {
+      doors.getLichessLink.mockResolvedValue({ username: "ada", externalUserId: "ada", scopes, consentedAt });
+      expect(await stepperLichess(), scopes.join(",")).toMatchObject({ linkedUsername: "ada", needsReconsent: false });
+    }
   });
 
   it("a hand-typed ?lichess= value is not an outcome; an unconfigured server says so", async () => {
     doors.info.mockResolvedValue(infoWith(true));
     vi.stubEnv("LICHESS_CLIENT_ID", "");
-    expect(await stepperLichess({ lichess: "<script>" })).toEqual({ configured: false, linkedUsername: null, flash: null });
+    expect(await stepperLichess({ lichess: "<script>" })).toEqual({ configured: false, linkedUsername: null, needsReconsent: false, flash: null });
   });
 });

@@ -543,6 +543,12 @@ function offerAfter(b: BridgeRow, g: BoardGameFull, ply: number) {
   return by === "white" ? { ...keep, by, whitePly: ply } : { ...keep, by, blackPly: ply };
 }
 
+/** The largest clock `white_ms` / `black_ms` can hold: V454 declares both columns `integer` (int4), so 2^31 - 1 ms = 24.855 days.
+ *  A clock re-expressed as at `last_move_at` (Lichess's reading + the time since) is capped to it - a board whose last move is older
+ *  than that otherwise fails the whole reconcile write with 22003 `value "…" is out of range for type integer` on every sweep.
+ *  If those columns are ever widened, widen this with them (the reconcile test reads the column type and pins the two together). */
+export const CLOCK_MS_COLUMN_MAX = 2 ** 31 - 1;
+
 /** The row's clocks after this read, in the row's own terms (V454, T10's
  *  append): `white_ms`/`black_ms` are each side's time AS AT `last_move_at`,
  *  and every renderer counts the side to move down from `last_move_at`
@@ -554,7 +560,7 @@ function offerAfter(b: BridgeRow, g: BoardGameFull, ply: number) {
  *  adds back to the running clock the time it ran since then, so the
  *  renderer's countdown lands on Lichess's reading at the read. Lichess's
  *  own clock, re-expressed: nothing here decides a flag. */
-function clocksAt(b: BridgeRow, g: BoardGameFull, ply: number, adopted: number, at: Date) {
+function clocksAt(b: BridgeRow, g: BoardGameFull, ply: number, adopted: number, at: Date, fixtureId: string) {
   if (adopted > 0 || (b.last_move_at === null && ply > 0)) {
     return { whiteMs: g.whiteMs, blackMs: g.blackMs, lastMoveAt: at };
   }
@@ -564,10 +570,22 @@ function clocksAt(b: BridgeRow, g: BoardGameFull, ply: number, adopted: number, 
   // T17B fix 2, D11 (c): Lichess's reading of the running clock stops at 0, so a 0 says only "out of time by now" —
   // 0 + the time since the move is no clock at all (x0JKlePc stored white_ms 389906 on a 5+0). No move was made since
   // `last_move_at`, so the clock as at that move is still the one the row holds.
-  const asOfMove = (read: number, stored: number | null) => (read > 0 || stored === null ? read + since : stored);
+  // The sum is capped at the column's ceiling (CLOCK_MS_COLUMN_MAX) - and the cap says so: a board last moved over 24.855 days ago
+  // that Lichess still shows `started` is stuck, and a stored clock that is not the real one should never be silent.
+  const asOfMove = (side: Colour, read: number, stored: number | null) => {
+    if (read <= 0 && stored !== null) return stored;
+    const uncapped = read + since;
+    if (uncapped > CLOCK_MS_COLUMN_MAX) {
+      log.warn(
+        { fixtureId, gameId: g.gameId, side, uncapped, capped: CLOCK_MS_COLUMN_MAX },
+        "lichess reconcile: a clock re-expressed as at the last move does not fit its int4 column - capped",
+      );
+    }
+    return Math.min(CLOCK_MS_COLUMN_MAX, uncapped);
+  };
   return ply % 2 === 0
-    ? { whiteMs: asOfMove(g.whiteMs, b.white_ms), blackMs: g.blackMs, lastMoveAt: last }
-    : { whiteMs: g.whiteMs, blackMs: asOfMove(g.blackMs, b.black_ms), lastMoveAt: last };
+    ? { whiteMs: asOfMove("white", g.whiteMs, b.white_ms), blackMs: g.blackMs, lastMoveAt: last }
+    : { whiteMs: g.whiteMs, blackMs: asOfMove("black", g.blackMs, b.black_ms), lastMoveAt: last };
 }
 
 /** The instant the side to move's clock ran out, from the ROW's own clocks (V454: each clock as at `last_move_at`) — or
@@ -664,7 +682,7 @@ async function applyStream(
   }
   const ply = theirs.length;
   const adopted = ply - ours.length;
-  const clocks = clocksAt(g.bridge, lichess, ply, adopted, t.at);
+  const clocks = clocksAt(g.bridge, lichess, ply, adopted, t.at, fixtureId);
   // A game that has ended has no standing offer (an offer means something
   // only while the game is played); the plies stay, as T10 leaves them.
   const offer = IS_TERMINAL[lichess.status]

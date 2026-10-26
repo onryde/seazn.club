@@ -25,6 +25,7 @@ import {
   audit,
   divisionCtx,
   joinExistingEntrant,
+  openRegistrationSeatGateFor,
   orgReg,
   releaseSoloSignUpPlacement,
   rosterCapExpr,
@@ -139,6 +140,11 @@ export async function assignSoloSignUp(
   if (sourceId === targetId) {
     throw new HttpError(422, "An entry cannot be assigned to itself");
   }
+
+  // The solo sign-up is the person being seated. When the team's entrant already exists their seat is made HERE (below), so the online-play
+  // seat gate (online-seat-gate.ts) is asked about them as it is at every other door; a team not materialised yet is asked when
+  // `materialise` seats the whole roster. Opened out here, before the transaction: the link table is sealed from the tenant role.
+  const seatGate = await openRegistrationSeatGateFor(auth, sourceId);
 
   const result = await withTenant(auth.orgId, async (tx) => {
     // LOCK ORDER: source, then target. Both functions in this file must use
@@ -300,15 +306,19 @@ export async function assignSoloSignUp(
     // a consent-pending player who has in fact consented. This is the one
     // way an `organiser_assigned` row differs from a `captain_entered` one,
     // where 'pending' is right because someone else typed the name.
+    //
+    // It carries the solo's account forward too (`user_id`), as it does to `joinExistingEntrant` below: a team that is not
+    // materialised yet seats this row LATER, in `materialise`, which resolves the person by that account and reads the player's Lichess
+    // link by it. Without it the row names nobody, and on an online division the confirm that seats the team refuses a solo who plays.
     let inserted: { id: string } | undefined;
     try {
       [inserted] = await tx<{ id: string }[]>`
         insert into registration_players
           (registration_id, org_id, full_name, email, dob, gender, source,
-           consent_status, consent_at, assigned_from_registration_id)
+           consent_status, consent_at, assigned_from_registration_id, user_id)
         select ${targetId}, r.org_id, ${player.full_name}, ${player.email}, ${player.dob},
                ${player.gender}, 'organiser_assigned', ${player.consent_status},
-               ${player.consent_at}, ${sourceId}
+               ${player.consent_at}, ${sourceId}, ${player.user_id}
         from registrations r where r.id = ${targetId}
         returning id`;
     } catch (err) {
@@ -333,7 +343,7 @@ export async function assignSoloSignUp(
     // `joinExistingEntrant` is the shared path for precisely this, and its
     // docstring names RS009 as a caller.
     if (target.entrant_id) {
-      await joinExistingEntrant(tx, auth.orgId, target.entrant_id, {
+      const seated = await joinExistingEntrant(tx, auth.orgId, target.entrant_id, {
         id: inserted.id,
         full_name: player.full_name,
         dob: player.dob,
@@ -341,6 +351,8 @@ export async function assignSoloSignUp(
         email: player.email,
         user_id: player.user_id,
       });
+      // A refusal rolls the whole placement back: the roster row above, the person made for it, the seat.
+      if (seated) await seatGate?.assertRoster(tx, target.division_id, [seated]);
     }
 
     await audit(
@@ -373,7 +385,7 @@ export async function assignSoloSignUp(
         divisionName: division.name,
       },
     };
-  });
+  }, seatGate?.tenant);
 
   // The one message this feature owes (owner ruling, 2026-08-30): the person
   // who entered alone is told they now have a team. Fire-and-forget AFTER the

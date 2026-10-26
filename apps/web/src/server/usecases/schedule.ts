@@ -815,10 +815,19 @@ export async function peopleByEntrant(tx: Tx, entrantIds: string[]): Promise<Map
 // only becomes REAL once real entrants land surfaces as a warning then, not
 // silently forever — this function needs no change for that, since it
 // already reads whatever fixtures.*_entrant_id holds at call time.
+//
+// De-duplicated: a person who is a member of BOTH entrants (a roster mistake,
+// or one player entered in two teams) is still one person at this fixture.
+// Listed twice, the placement service refuses the whole request
+// (INVALID_REQUEST "person_indices repeats a person") and the WHOLE board falls
+// back to greedy; and every per-person tally (`entityKeysFor`'s universal
+// scopes) would count that one fixture twice for them.
 function peopleOf(f: FixtureLite, people: Map<string, string[]>): string[] {
   return [
-    ...(f.home_entrant_id ? (people.get(f.home_entrant_id) ?? []) : []),
-    ...(f.away_entrant_id ? (people.get(f.away_entrant_id) ?? []) : []),
+    ...new Set([
+      ...(f.home_entrant_id ? (people.get(f.home_entrant_id) ?? []) : []),
+      ...(f.away_entrant_id ? (people.get(f.away_entrant_id) ?? []) : []),
+    ]),
   ];
 }
 
@@ -2122,8 +2131,8 @@ export function autoSolverWallMs(): number {
  * through `reflowExisting` — none of the three calls z3 for scheduling any
  * more, since C4, 2026-08-14) is a remote call to the placement service,
  * which admits only a small, fixed number of concurrent solves
- * (`PLACEMENT_MAX_WORKERS` on the service side — see `services/placement/
- * fly.toml`; this comment predates that cutover and its "one at a time via
+ * (`PLACEMENT_MAX_WORKERS` on the service side — see `fly.toml` in
+ * onryde/seazn.club.placement; this comment predates that cutover and its "one at a time via
  * `withZ3Lock`" framing is no longer literally accurate, but the underlying
  * shape — a small shared ceiling, not unlimited parallelism — still holds,
  * which is why the numbers below have not been revisited). The failure mode

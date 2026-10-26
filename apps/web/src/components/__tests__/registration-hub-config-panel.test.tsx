@@ -4,7 +4,7 @@
 // useRegistrationConfigPanelState hook for fetch/patch/save.
 import { readFileSync } from "node:fs";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ReactNode } from "react";
+import type { ReactElement, ReactNode } from "react";
 import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
 import { Modal } from "@/components/modal";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
@@ -1458,5 +1458,103 @@ describe("RegistrationHubConfigPanel — clearing the age band clears a stranded
     expect(propsOf(findField(island.tree(), "age_cutoff_day")!).value).toBe(1);
     // Still enabled: hasAgeBand is true (age_max is still 18).
     expect(propsOf(findField(island.tree(), "age_cutoff_month")!).disabled).toBe(false);
+  });
+});
+
+// Owner ruling 2026-10-26: chess divisions are individual-only. Driven through the REAL panel (the hook's GET, the
+// state it seeds, the PUT body a save sends) so a prop that is declared and never read cannot pass: the seam is
+// division.individual_only -> the hook's seed -> the select, the checkbox and the wire body.
+describe("RegistrationHubConfigPanel — individual-only (chess)", () => {
+  const CHESS_DIVISION = { ...DIVISION, individual_only: true };
+  /** The entrant-type select's option values, read off its own children. */
+  const optionValues = (tree: ReturnType<typeof expandPanel>): string[] => {
+    const kids = propsOf(findField(tree, "entrant_kind")!).children;
+    return (Array.isArray(kids) ? kids.flat() : [kids])
+      .filter((k): k is { props: { value: string } } => typeof k === "object" && k !== null && "props" in k)
+      .map((k) => k.props.value);
+  };
+  const testId = (tree: ReturnType<typeof expandPanel>, id: string) => tree.find((e) => propsOf(e)["data-testid"] === id);
+  const saveButton = (island: { tree: () => ReactElement[] }) =>
+    island.tree().find((e) => e.type === "button" && propsOf(e)["data-action"] === "save")!;
+
+  it("offers only Individual, locked, with the reason beside it - and no solo sign-up checkbox", async () => {
+    // The stored row is the worst legacy case: team, solo pool on, a solo price.
+    net.getResponse = { ...RESPONSE, entrant_kind: "team", allow_free_agents: true, free_agent_fee_cents: 500 };
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: CHESS_DIVISION }, expandPanel);
+    await flush();
+    const tree = island.tree();
+    expect(optionValues(tree)).toEqual(["individual"]);
+    const select = findField(tree, "entrant_kind")!;
+    expect(propsOf(select).value).toBe("individual");
+    expect(propsOf(select).disabled).toBe(true);
+    expect(expandedText(tree)).toContain(t(uiEn, "reg.settings.entrant.chessOnly"));
+    expect(findField(tree, "allow_free_agents")).toBeUndefined();
+    expect(findField(tree, "free_agent_fee_cents")).toBeUndefined();
+  });
+
+  it("says that saving moves a legacy team row to individual entry - and only then", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "team", allow_free_agents: true };
+    const legacy = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: CHESS_DIVISION }, expandPanel);
+    await flush();
+    expect(testId(legacy.tree(), "entrant-kind-legacy")).toBeTruthy();
+    expect(expandedText(legacy.tree())).toContain(t(uiEn, "reg.settings.entrant.chessLegacy"));
+
+    net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false, free_agent_fee_cents: null };
+    const clean = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: CHESS_DIVISION }, expandPanel);
+    await flush();
+    expect(testId(clean.tree(), "entrant-kind-individual-only")).toBeTruthy();
+    expect(testId(clean.tree(), "entrant-kind-legacy")).toBeUndefined();
+  });
+
+  it("a save sends individual / no solo pool / no solo price, never the stored legacy shape", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "team", allow_free_agents: true, free_agent_fee_cents: 500 };
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: CHESS_DIVISION }, expandPanel);
+    await flush();
+    await (propsOf(saveButton(island)).onClick as () => Promise<void>)();
+    const put = net.calls.find((c) => c.method === "PUT")!;
+    expect(put.json).toMatchObject({ entrant_kind: "individual", allow_free_agents: false, free_agent_fee_cents: null });
+    // Everything else rides along unchanged (the full-replace contract).
+    expect(put.json).toMatchObject({ capacity: 32, fee_cents: 1500, approval: "manual" });
+  });
+
+  it("positive pair: the same stored team row on a division that is NOT individual-only offers all three, unlocked, and saves team", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "team", allow_free_agents: true, free_agent_fee_cents: 500 };
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: { ...DIVISION, individual_only: false } }, expandPanel);
+    await flush();
+    const tree = island.tree();
+    expect(optionValues(tree)).toEqual(["individual", "team", "pair"]);
+    expect(propsOf(findField(tree, "entrant_kind")!).disabled).toBeFalsy();
+    expect(propsOf(findField(tree, "entrant_kind")!).value).toBe("team");
+    expect(findField(tree, "allow_free_agents")).toBeTruthy();
+    expect(testId(tree, "entrant-kind-individual-only")).toBeUndefined();
+    await (propsOf(saveButton(island)).onClick as () => Promise<void>)();
+    expect(net.calls.find((c) => c.method === "PUT")!.json).toMatchObject({
+      entrant_kind: "team",
+      allow_free_agents: true,
+      free_agent_fee_cents: 500,
+    });
+  });
+
+  it("a division row that predates the flag (no individual_only) is not restricted", async () => {
+    const island = renderIsland(RegistrationHubConfigPanel, BASE_PROPS, expandPanel);
+    await flush();
+    expect(optionValues(island.tree())).toEqual(["individual", "team", "pair"]);
+  });
+
+  it("a refusal from a stale page lands on the entrant type, in the dictionary's words (not the server's English)", async () => {
+    net.getResponse = { ...RESPONSE, entrant_kind: "individual", allow_free_agents: false };
+    net.putRejection = new ApiV1Error("Chess divisions take individual players only (server English)", 422, "CHESS_INDIVIDUAL_ONLY");
+    const island = renderIsland(RegistrationHubConfigPanel, { ...BASE_PROPS, division: CHESS_DIVISION }, expandPanel);
+    await flush();
+    await (propsOf(saveButton(island)).onClick as () => Promise<void>)();
+    const shown = island.tree().find((e) => propsOf(e)["data-field-error"] === "entrant_kind");
+    expect(shown).toBeTruthy();
+    expect(expandedText([shown!])).toBe(t(uiEn, "divset.err.chessIndividualOnly"));
+  });
+
+  it("EligibilitySection hides the solo sign-up checkbox for individual-only even when handed a team state", () => {
+    const props = { state: FULL_STATE, errors: {}, patch: vi.fn(), msg: testMsg, locale: "en", orgTz: "UTC", dtDrafts: {}, onDateTimeHalfChange: vi.fn() };
+    expect(walk(EligibilitySection({ ...props, individualOnly: false })).some((e) => propsOf(e)["data-field"] === "allow_free_agents")).toBe(true);
+    expect(walk(EligibilitySection({ ...props, individualOnly: true })).some((e) => propsOf(e)["data-field"] === "allow_free_agents")).toBe(false);
   });
 });

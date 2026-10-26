@@ -14,6 +14,7 @@
 // This is the one place that reconciles both into { field, message }, so
 // the panel's error-rendering never has to know which shape it got.
 import type { ApiV1Error } from "@/lib/client-v1";
+import { CHESS_INDIVIDUAL_ONLY } from "@/lib/chess-individual-only";
 
 /** Every field this panel writes, across both endpoints. */
 export type ConfigFieldKey =
@@ -72,6 +73,9 @@ export interface SaveErrorInfo {
   /** Which field to show the message against; null renders as a banner. */
   field: ConfigFieldKey | null;
   message: string;
+  /** The server's stable code, when the refusal is one the panel localises
+   *  itself (the server's `message` is English-only). */
+  code?: string;
 }
 
 interface ZodIssueLike {
@@ -119,6 +123,11 @@ const MESSAGE_FIELD_PATTERNS: readonly [RegExp, ConfigFieldKey][] = [
 
 export function mapSaveError(err: unknown): SaveErrorInfo {
   const message = err instanceof Error ? err.message : String(err);
+  // Chess takes individual players only (owner ruling 2026-10-26). The panel does not offer the other shapes, so this
+  // is a stale page or a race - but it is the ENTRY SHAPE that was refused, so it belongs against that field.
+  if ((err as Partial<ApiV1Error>)?.code === CHESS_INDIVIDUAL_ONLY) {
+    return { field: "entrant_kind", message, code: CHESS_INDIVIDUAL_ONLY };
+  }
   const extra = (err as Partial<ApiV1Error>)?.extra;
   const issues = extra?.issues;
   if (Array.isArray(issues)) {

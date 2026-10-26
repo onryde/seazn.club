@@ -8,6 +8,12 @@ import * as Sentry from "@sentry/nextjs";
 export async function register() {
   if (process.env.NEXT_RUNTIME === "nodejs") {
     await import("./sentry.server.config");
+    // Next logs an uncaught error with a bare `console.error(err)`, and the app prints `console.error("...", err)` in a dozen places;
+    // util.inspect writes every enumerable field of a database error, Postgres' `detail` (the unique key, or the whole failing row)
+    // among them. Installed after Sentry's init so this wraps Sentry's console breadcrumb hook, which then sees the scrubbed
+    // arguments too. The same strip the logger and Sentry apply (lib/strip-db-echo.ts); see server/console-db-echo-scrub.ts.
+    const { installConsoleDbEchoScrub } = await import("@/server/console-db-echo-scrub");
+    installConsoleDbEchoScrub();
     // R5 (Task 14b): resolve the relay's driver mode BEFORE the server takes a request. It throws for an explicit
     // RELAY_DRIVERS=fake on a named deployment (ENV_NAME stg/prod), on a production server with no ENV_NAME at all
     // (m2), and for a junk value. What that does on Fly (lane-close re-review M-1): the process does NOT exit — Next

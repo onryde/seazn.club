@@ -36,8 +36,10 @@ import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-s
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
 import { log } from "@/server/logger";
 import { readOnlinePlay } from "@/server/external-play/online-play";
+import { assertChessKindIndividual } from "@/lib/chess-individual-only";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
-import { assertPersonIdsLinkedForOnlinePlay, personIdsWithLichessLink } from "./external-accounts";
+import { assertPersonIdsLinkedForOnlinePlay, lichessLinkStatesByPerson, type LichessLinkState } from "./external-accounts";
+import { openRosterSeatGate } from "./online-seat-gate";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -317,23 +319,23 @@ export async function createEntrants(
   // the division read under RLS inside the transaction still decides whether it IS online. `null` ⇒ not asked — the
   // division turned online in between, which only a club offered online chess can do — so the link is demanded.
   const onlineChessOn = readOnlinePlay(ref?.config) === "lichess" ? await onlineChessOffered(auth) : null;
-  // WHO HOLDS A LICHESS LINK, for an online division's roster check below. The answer lives in a sealed table
-  // (`user_external_accounts`: no `app_user` grant), so it cannot be read through the ambient `tx` once the role has
-  // dropped, and asking the pool from inside the callback is a SECOND connection while this one is held — pool-max
+  // WHO HOLDS A LICHESS LINK, AND WHAT IT LETS THEM DO (plays / must reconnect), for an online division's roster check below.
+  // The answer lives in a sealed table (`user_external_accounts`: no `app_user` grant), so it cannot be read through
+  // the ambient `tx` once the role has dropped, and asking the pool from inside the callback is a SECOND connection while this one is held — pool-max
   // concurrent creates on an online division pinned every slot and queued for one more, for ever (the per-person
   // check this replaced did exactly that). `withTenant`'s `privilegedPrelude` is the door built for this: it runs
   // FIRST, on this transaction's own connection, before the role drops - and the callback still runs as `app_user`,
   // so RLS still scopes everything it does. The final roster is only known inside the transaction (inline new persons,
-  // a copied roster, a team squad), so the prelude reads a set and the callback tests the roster against it: just the
-  // people the inputs name when every input names its own (`explicitRosterPersonIds`), the org's whole linked set when
+  // a copied roster, a team squad), so the prelude reads a map and the callback tests the roster against it: just the
+  // people the inputs name when every input names its own (`explicitRosterPersonIds`), the org's whole linked map when
   // some roster is resolved later. Read only when the division is online as the prelude sees it, and not when the
   // flag was asked and said no (then no link is demanded).
   const namedPersonIds = explicitRosterPersonIds(inputs);
-  let linkedPersonIds: ReadonlySet<string> | null = null;
-  const readLinkedPersonIds = async (ptx: Tx): Promise<void> => {
+  let linkStates: ReadonlyMap<string, LichessLinkState> | null = null;
+  const readLinkStates = async (ptx: Tx): Promise<void> => {
     const [current] = await ptx<{ config: unknown }[]>`select config from divisions where id = ${divisionId}`;
     if (readOnlinePlay(current?.config) === "lichess") {
-      linkedPersonIds = await personIdsWithLichessLink(ptx, auth.orgId, namedPersonIds);
+      linkStates = await lichessLinkStatesByPerson(ptx, auth.orgId, namedPersonIds);
     }
   };
   const { rows, competitionId } = await withTenant(auth.orgId, async (tx) => {
@@ -380,6 +382,11 @@ export async function createEntrants(
     const eff = await loadEntrantShape(tx, divisionId);
     for (const input of inputs) {
       const kind = input.kind ?? eff.defaultKind;
+      // Chess is individual-only (owner ruling 2026-10-26) — judged BEFORE the model below, because a chess division
+      // saved before the ruling can still carry an entrant-shape override that widens the model to teams or pairs; the
+      // model would accept what the ruling refuses. The default is judged too: a widened default must not slip a team
+      // in through an omitted kind.
+      assertChessKindIndividual(division.sport_key, kind);
       if (!eff.kinds.includes(kind as EntrantKind)) {
         throw new HttpError(
           422,
@@ -438,10 +445,10 @@ export async function createEntrants(
       assertRosterFits(eff, input.kind ?? eff.defaultKind, members.length);
 
       if (onlineChessOn !== false && readOnlinePlay(division.config) === "lichess" && members.length > 0) {
-        // `linkedPersonIds` is null only if the division turned online between the prelude's read and this one — then
+        // `linkStates` is null only if the division turned online between the prelude's read and this one — then
         // there is no answer to give and the roster is refused (see `assertPersonIdsLinkedForOnlinePlay`).
         assertPersonIdsLinkedForOnlinePlay(
-          linkedPersonIds,
+          linkStates,
           members.map((m) => m.person_id),
         );
       }
@@ -478,7 +485,7 @@ export async function createEntrants(
       });
     }
     return { rows, competitionId: division.competition_id };
-  }, onlineChessOn === false ? {} : { privilegedPrelude: readLinkedPersonIds });
+  }, onlineChessOn === false ? {} : { privilegedPrelude: readLinkStates });
   // A new entrant sits in no fixture yet; its name joins the division's lists.
   refreshEntrantPublicPages(
     { divisionId, competitionId, fixtureIds: [] },
@@ -583,6 +590,99 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
  *  half lives in `DEPARTED_STATUS_CHIPS` (standings-table.tsx) and is pinned
  *  to this set by `departed-vocabulary-is-single-sourced.test.ts`. */
 export const DEPARTED_STATUSES = new Set(["withdrawn", "disqualified"]);
+
+/** One line of the online-switch warning: who (or what) in a division's field cannot be paired online yet. `person` is a
+ *  rostered player (`id` a person id); `entrant` is an entrant with NOBODY on it (`id` an entrant id, `name` its own
+ *  display name), since there is no person to name. */
+export interface LichessLinkGap {
+  readonly kind: "person" | "entrant";
+  readonly id: string;
+  readonly name: string;
+}
+
+/** The three things the online-play switch warns about, kept apart because the fixes differ: `unlinked` are PLAYERS with
+ *  no Lichess link to use (the player links one), `reconnect` are players whose link cannot play (the player reconnects
+ *  Lichess and consents again), `empty` are ENTRANTS with nobody on them (a player is added). Only `unlinked` and
+ *  `reconnect` hold people; `empty` holds entrants, and an empty entrant is never counted as a player without a link. */
+export interface LichessLinkGaps {
+  readonly unlinked: LichessLinkGap[];
+  readonly reconnect: LichessLinkGap[];
+  readonly empty: LichessLinkGap[];
+}
+
+/** The people in a division's FIELD who cannot be paired online yet, by name - what the online-play switch warns about
+ *  (owner ruling 2026-10-25: the switch is ALLOWED, the organiser is told who is not ready; blocking was rejected because
+ *  clubs switch first and collect links later). "Cannot be paired" is the SEAT gate's verdict, so each gap is a reason the
+ *  gate would give:
+ *   - `unlinked`: no link row at all (`lichess_link_required`);
+ *   - `reconnect`: a row that cannot play (`lichess_reconsent_required`), decided by `lichessGrantPlays`, the gate's own
+ *     predicate, via `lichessLinkStatesByPerson` - never a second definition;
+ *   - `empty`: an entrant with no member, which nobody can claim a seat for (`seatPlayer` -> `not_a_player`,
+ *     external-play/preflight.ts) and no game is created for (`createGameIfReady` -> `no_person`, create-game.ts). Named
+ *     by the ENTRANT, as there is no person - and in its own list, since it is not a player who lacks a link.
+ *
+ *  A link is per PERSON, never per entrant (the registration gate it mirrors, `assertPersonIdsLinkedForOnlinePlay`, tests
+ *  `entrant_members` persons): a team's members are each named under their own state, and a person on two entrants is named
+ *  once. Only the field counts - a withdrawn or disqualified entrant (`DEPARTED_STATUSES`) is owed nothing.
+ *
+ *  The field's person ids are read ONCE, in the transaction's privileged prelude (the link table is sealed from `app_user`,
+ *  V451), scoped by `entrant_members.org_id` because a prelude is not under RLS; the link states are then read for exactly
+ *  those people, never the whole org. Everything that is RETURNED is read under RLS in the callback: the division must be
+ *  visible (another club's is a 404 and answers nothing) and the names come from the tenant's own `persons` and `entrants`.
+ *  Each list is sorted by name, case-insensitively, then id, so the same roster always prints the same lists. */
+export async function listLichessLinkGaps(auth: AuthCtx, divisionId: string): Promise<LichessLinkGaps> {
+  let fieldPersonIds: string[] = [];
+  let states: ReadonlyMap<string, LichessLinkState> = new Map();
+  return withTenant(
+    auth.orgId,
+    async (tx) => {
+      const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
+      if (!division) throw new HttpError(404, "division not found");
+      const field = await tx<LichessLinkGap[]>`
+        select * from (
+          select 'person' as kind, p.id, p.full_name as name
+            from persons p
+           where p.id = any(${fieldPersonIds})
+          union all
+          select 'entrant' as kind, e.id, e.display_name as name
+            from entrants e
+           where e.division_id = ${divisionId}
+             and not (e.status = any(${[...DEPARTED_STATUSES]}))
+             and not exists (select 1 from entrant_members em where em.entrant_id = e.id)
+        ) field
+        order by lower(name), id`;
+      const gaps: { unlinked: LichessLinkGap[]; reconnect: LichessLinkGap[]; empty: LichessLinkGap[] } = {
+        unlinked: [],
+        reconnect: [],
+        empty: [],
+      };
+      for (const row of field) {
+        // An entrant row is only ever an empty one (the query above): no person, so no link state to look up.
+        if (row.kind === "entrant") {
+          gaps.empty.push(row);
+          continue;
+        }
+        const state = states.get(row.id);
+        if (state === undefined) gaps.unlinked.push(row);
+        else if (state === "reconnect") gaps.reconnect.push(row);
+      }
+      return gaps;
+    },
+    {
+      privilegedPrelude: async (ptx) => {
+        const rows = await ptx<{ person_id: string }[]>`
+          select distinct em.person_id
+            from entrant_members em
+            join entrants e on e.id = em.entrant_id
+           where e.division_id = ${divisionId}
+             and em.org_id = ${auth.orgId}
+             and not (e.status = any(${[...DEPARTED_STATUSES]}))`;
+        fieldPersonIds = rows.map((r) => r.person_id);
+        states = await lichessLinkStatesByPerson(ptx, auth.orgId, fieldPersonIds);
+      },
+    },
+  );
+}
 
 /** An ad-hoc entrant's name and roster, read BEFORE a write that changes who
  *  its people are or what they are called. */
@@ -766,6 +866,15 @@ export async function patchEntrant(
   id: string,
   patch: PatchEntrant,
 ): Promise<EntrantWithMembers> {
+  // A roster replace seats people: on an online division each must hold a Lichess link that plays, as `createEntrants` demands.
+  // Asked out here, before the transaction (see online-seat-gate.ts); a patch that names no roster seats nobody and asks nothing.
+  const [home] = patch.members
+    ? await sql<{ division_id: string }[]>`select division_id from entrants where id = ${id}`
+    : [];
+  const seatGate =
+    patch.members && home
+      ? await openRosterSeatGate(auth, { divisionId: home.division_id, personIds: patch.members.map((m) => m.person_id) })
+      : undefined;
   const { out, fieldChanged, refresh } = await withTenant(auth.orgId, async (tx) => {
     // RS011: `eligibility_override` is request metadata for the gate below,
     // never an `entrants` column — destructured out alongside `members` so
@@ -797,6 +906,7 @@ export async function patchEntrant(
       // (kind itself isn't patchable, so only the roster is being written).
       const eff = await loadEntrantShape(tx, row.division_id);
       assertRosterFits(eff, row.kind, members.length);
+      await seatGate?.assertRoster(tx, row.division_id, members.map((m) => m.person_id));
       // The name follows the roster (2026-09-22, reported from production:
       // "Sankar & Ritwik" kept that name after Ritwik was swapped out) — but
       // only an AD-HOC entrant's, and only when this patch does not name it
@@ -853,7 +963,7 @@ export async function patchEntrant(
       fieldChanged,
       refresh: await entrantPublicScope(tx, row),
     };
-  });
+  }, seatGate?.tenant);
   // Before this, an entrant patch refreshed nothing, so a rename (or a roster,
   // seed, status or badge edit) reached the public pages only when their 30s
   // cache ran out.
@@ -888,6 +998,11 @@ export async function syncEntrantRosterFromSquad(
   id: string,
   override?: EligibilityOverride | null,
 ): Promise<CreatedEntrant & { members: unknown[] }> {
+  // The squad replaces the roster, so its people are seated: on an online division each must hold a link that plays. The squad is
+  // only read inside the transaction, so the gate reads the org's links (as `createEntrants` does for a squad-seeded roster).
+  const [home] = await sql<{ division_id: string; team_id: string | null }[]>`
+    select division_id, team_id from entrants where id = ${id}`;
+  const seatGate = home?.team_id ? await openRosterSeatGate(auth, { divisionId: home.division_id }) : undefined;
   const { out, refresh } = await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<EntrantRow[]>`select ${tx(COLS)} from entrants where id = ${id}`;
     if (!row) throw new HttpError(404, "entrant not found");
@@ -905,6 +1020,7 @@ export async function syncEntrantRosterFromSquad(
     );
     const eff = await loadEntrantShape(tx, row.division_id);
     assertRosterFits(eff, row.kind, members.length);
+    await seatGate?.assertRoster(tx, row.division_id, members.map((m) => m.person_id));
     await tx`delete from entrant_members where entrant_id = ${id}`;
     const warnings = await insertMembers(tx, id, members, {
       divisionId: row.division_id,
@@ -921,7 +1037,7 @@ export async function syncEntrantRosterFromSquad(
       },
       refresh: await entrantPublicScope(tx, row),
     };
-  });
+  }, seatGate?.tenant);
   refreshEntrantPublicPages(refresh, { entrantId: id, synced: true });
   return out;
 }

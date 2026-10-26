@@ -13,7 +13,8 @@ import { nameFieldCommit, nameFieldEnterCommits } from "@/lib/inline-name-edit";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
 import { useConfirm } from "@/components/ui/confirm-provider";
-import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import { lichessRefusalText } from "./entrants-lichess-refusal";
 import type { MessageKey } from "@/lib/messages";
 import { SuspensionChip } from "@/components/discipline/suspension-chip";
 // RS007/V380 — the SAME organiser-facing category/age-band derivations the
@@ -202,6 +203,8 @@ export function EntrantsPanel({
   divisionStatus,
 }: Props) {
   const msg = useMsg();
+  const msgPlural = useMsgPlural();
+  const locale = useLocaleOrDefault();
   const router = useRouter();
   const confirmDialog = useConfirm();
   const [persons, setPersons] = useState<Person[]>([]);
@@ -268,13 +271,27 @@ export function EntrantsPanel({
     ? entrants.filter((e) => clubEntrantIds.has(e.id))
     : entrants;
 
-  const fail = useCallback((err: unknown) => {
-    if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
-      setPaywallFeature(String(err.extra.feature_key ?? ""));
-    } else {
-      setError(err instanceof Error ? err.message : "Failed");
-    }
-  }, []);
+  const fail = useCallback(
+    (err: unknown) => {
+      if (err instanceof ApiV1Error && err.code === "PAYMENT_REQUIRED") {
+        setPaywallFeature(String(err.extra.feature_key ?? ""));
+        return;
+      }
+      // An online-play division refuses a player without a Lichess link that can play: the server's words are English
+      // only, so the code is said in the organiser's language, naming the people the payload names.
+      const lichess =
+        err instanceof ApiV1Error
+          ? lichessRefusalText(err, {
+              nameOf: (personId) => persons.find((p) => p.id === personId)?.full_name,
+              list: (names) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(names),
+              plural: msgPlural,
+              text: (key) => msg(key as MessageKey),
+            })
+          : null;
+      setError(lichess ?? (err instanceof Error ? err.message : "Failed"));
+    },
+    [persons, locale, msg, msgPlural],
+  );
 
   /** The Name field's save. Deliberately NOT `run`: that puts the whole panel
    *  busy, and the field saves on blur, which fires on the MOUSEDOWN of

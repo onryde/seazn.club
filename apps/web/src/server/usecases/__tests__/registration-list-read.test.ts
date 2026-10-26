@@ -18,6 +18,7 @@ import {
   putRegistrationSettings,
 } from "../registrations";
 import { createDivision } from "../divisions";
+import { openRegistrationSeatGate } from "../online-seat-gate";
 import { seedOrg, asOwner, rig, seedRegistration, SETTINGS_BASE } from "./_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -131,7 +132,10 @@ describe.skipIf(!HAS_DB)("RS005 W1a: listRegistrations widened read model", () =
     // A/B it actually promotes must be exactly the row this read model
     // ranked position 1 — read BEFORE this mutates the winner away from
     // 'waitlisted'.
-    const promoted = await sql.begin((tx) => promoteOldestWaitlisted(tx, division.id, settings));
+    // These settings promote straight into a seat, so the promotion is handed the seat gate exactly as the
+    // production callers open it (registrations.ts `promotionSeats`); without one it refuses (fail-closed).
+    const gate = await openRegistrationSeatGate({ divisionId: division.id });
+    const promoted = await sql.begin((tx) => promoteOldestWaitlisted(tx, division.id, settings, undefined, gate));
     expect(promoted).toBeTruthy();
     expect(promoted!.id).toBe(first!.id);
   });

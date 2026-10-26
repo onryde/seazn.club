@@ -261,10 +261,11 @@ export async function unlinkLichess(userId: string): Promise<void> {
      where user_id = ${userId} and provider = 'lichess'`;
 }
 
-/** REGISTRATION gate — a link is required to enter an online division.
- *  Deliberately NOT a consent gate: a player registers long before consent is
- *  needed, and §3.1 owes re-consent "before their first online fixture", not
- *  before signup. The consent gate is assertLichessConsentForPlay. */
+/** REGISTRATION gate - a Lichess link that PLAYS is required to enter an online division, the same bar the seat gate
+ *  (`assertLichessConsentForPlay`) holds the player to (owner 2026-10-25: reverses the earlier "register first, consent
+ *  before the first fixture" reading, so a player is told to reconnect when they sign up and not when they are turned away
+ *  at the board). Two refusals, as at the seat: no link is `LICHESS_LINK_REQUIRED`; a link `lichessGrantPlays` refuses
+ *  (identity-only, or short of a play scope) is `LICHESS_RECONSENT_REQUIRED`. */
 export async function assertUserHasLichessForOnlinePlay(userId: string | null): Promise<void> {
   if (!userId) {
     throw new HttpError(
@@ -273,51 +274,126 @@ export async function assertUserHasLichessForOnlinePlay(userId: string | null): 
       "LICHESS_LINK_REQUIRED",
     );
   }
-  if (!(await getLichessLink(userId))) {
+  const link = await getLichessLink(userId);
+  if (!link) {
     throw new HttpError(
       422,
       "Link your Lichess account in Settings before registering for online play",
       "LICHESS_LINK_REQUIRED",
     );
   }
+  if (!lichessGrantPlays(link)) {
+    throw new HttpError(
+      422,
+      "Reconnect your Lichess account so Seazn can submit your moves before registering for online play",
+      "LICHESS_RECONSENT_REQUIRED",
+    );
+  }
 }
 
-/** The org's persons whose Seazn user holds a Lichess account row, as a set, on a connection the caller already holds
- *  - optionally only among `personIds`, when the caller knows up front which people it will ask about. `undefined`
- *  reads every such person in the org; a list reads just those (an empty list reads no one).
+/** The org's persons whose Seazn user holds a Lichess account row, and what that row stores about playing (a "linked"
+ *  person is a row here, whatever it stores) - the query behind `lichessLinkStatesByPerson`. Optionally only among
+ *  `personIds`, when the caller knows up front which people it will ask about. `undefined` reads every such person in the org; a list reads just those (an empty list reads no one).
  *
  *  `user_external_accounts` is sealed from `app_user` (V451: FORCE RLS, no grant), so this can only run BEFORE a tenant
  *  transaction's role drop: pass it as `withTenant`'s `privilegedPrelude`, which runs on the transaction's own
  *  connection. Called from inside the callback it fails with `42501`; reaching for the pooled `sql` instead would be a
  *  second connection while the first is held (see lib/db.ts). Always scoped to `orgId` by `persons.org_id` - a named id
  *  of another org's person is not answered for - which is also what RLS scoped the roster's persons to. */
-export async function personIdsWithLichessLink(
+async function lichessLinkRows(
   tx: Tx,
   orgId: string,
   personIds?: readonly string[],
-): Promise<Set<string>> {
-  const rows = await tx<{ id: string }[]>`
-    select p.id
+): Promise<{ id: string; consented_at: Date | null; scopes: string[] }[]> {
+  return tx<{ id: string; consented_at: Date | null; scopes: string[] }[]>`
+    select p.id, a.consented_at, a.scopes
       from persons p
       join user_external_accounts a on a.user_id = p.user_id and a.provider = 'lichess'
      where p.org_id = ${orgId}
      ${personIds === undefined ? tx`` : tx`and p.id = any(${[...personIds]})`}`;
-  return new Set(rows.map((r) => r.id));
 }
 
-/** The organiser-side REGISTRATION gate for an online division: every rostered person must hold a Lichess link.
- *  `linked` is `personIdsWithLichessLink`'s answer for the org (or for the people the caller named). `null` is "never read for this transaction" (the
- *  division turned online after the prelude looked) — no answer, so it REFUSES, like an unasked flag does. */
+/** What a person's stored Lichess row lets them do: `plays` (the seat gate lets them in) or `reconnect` (a row is there,
+ *  but the gate would refuse it with `lichess_reconsent_required`: identity-only, or a grant short of a play scope).
+ *  A person with NO row is absent from the map - that is `lichess_link_required`, a different gap. */
+export type LichessLinkState = "plays" | "reconnect";
+
+/** The people with a Lichess row, each with the state of their link. The verdict is `lichessGrantPlays` - the very
+ *  function the seat gate (`assertLichessConsentForPlay`) refuses by - never a second definition of "can play". Same
+ *  connection rule, same scoping (see `lichessLinkRows`). The reader for states keyed by PERSON: the organiser's roster gates
+ *  (`assertPersonIdsLinkedForOnlinePlay`, via online-seat-gate.ts) and the online-switch warning (`listLichessLinkGaps`) all ask it. */
+export async function lichessLinkStatesByPerson(
+  tx: Tx,
+  orgId: string,
+  personIds?: readonly string[],
+): Promise<Map<string, LichessLinkState>> {
+  const rows = await lichessLinkRows(tx, orgId, personIds);
+  return new Map(rows.map((r): [string, LichessLinkState] => [r.id, linkStateOf(r)]));
+}
+
+/** The verdict on one stored row - `lichessGrantPlays`, the seat gate's own predicate, in the two words the gates speak. */
+function linkStateOf(row: { consented_at: Date | null; scopes: string[] }): LichessLinkState {
+  return lichessGrantPlays({ consentedAt: row.consented_at, scopes: row.scopes }) ? "plays" : "reconnect";
+}
+
+/** The same states, keyed by the Seazn USER who holds the link rather than by the org's person row - for a seat whose
+ *  person is created by the very transaction that seats them. A registrant's person row (`resolvePlayerPerson`) is minted at
+ *  `materialise`, so a map read before that transaction cannot hold it, and a person-keyed read would refuse every
+ *  first-time registrant who plays. A user with NO link is absent, exactly as a person with none is in
+ *  `lichessLinkStatesByPerson`. Same connection rule as that reader: the table is sealed from `app_user` (V451), so this runs
+ *  in a `privilegedPrelude`, or on a superuser transaction. */
+export async function lichessLinkStatesByUser(
+  db: Tx,
+  userIds: readonly string[],
+): Promise<Map<string, LichessLinkState>> {
+  if (userIds.length === 0) return new Map();
+  const rows = await db<{ user_id: string; consented_at: Date | null; scopes: string[] }[]>`
+    select user_id, consented_at, scopes
+      from user_external_accounts
+     where provider = 'lichess' and user_id = any(${[...userIds]})`;
+  return new Map(rows.map((r): [string, LichessLinkState] => [r.user_id, linkStateOf(r)]));
+}
+
+/** The organiser-side REGISTRATION gate for an online division: every rostered person must hold a Lichess link that
+ *  PLAYS - the same bar the seat gate holds them to (owner 2026-10-25), so a player is told to reconnect when they
+ *  register, not when they are turned away at the board.
+ *
+ *  `states` is `lichessLinkStatesByPerson`'s answer for the org (or for the people the caller named). Two refusals, in
+ *  the order the player would have to act: a person with NO link is `LICHESS_LINK_REQUIRED` (you cannot reconnect what
+ *  was never linked), else a person whose link does not play is `LICHESS_RECONSENT_REQUIRED`. Each carries
+ *  `extra.person_ids`: exactly the people that reason is true of, once each, in roster order. `null` is "never read for
+ *  this transaction" (the division turned online after the prelude looked) - no answer, so it REFUSES as not linked,
+ *  like an unasked flag does. */
 export function assertPersonIdsLinkedForOnlinePlay(
-  linked: ReadonlySet<string> | null,
+  states: ReadonlyMap<string, LichessLinkState> | null,
   personIds: readonly string[],
 ): void {
-  if (personIds.every((personId) => linked?.has(personId) === true)) return;
-  throw new HttpError(
-    422,
-    "Every player must link a Lichess account before entering online play",
-    "LICHESS_LINK_REQUIRED",
-  );
+  const rostered = [...new Set(personIds)];
+  const unlinked = rostered.filter((personId) => states?.get(personId) === undefined);
+  if (unlinked.length > 0) {
+    throw new HttpError(
+      422,
+      "Every player must link a Lichess account before entering online play",
+      "LICHESS_LINK_REQUIRED",
+      { person_ids: unlinked },
+    );
+  }
+  const reconnect = rostered.filter((personId) => states?.get(personId) === "reconnect");
+  if (reconnect.length > 0) {
+    throw new HttpError(
+      422,
+      "Every player must reconnect their Lichess account so Seazn can submit their moves before entering online play",
+      "LICHESS_RECONSENT_REQUIRED",
+      { person_ids: reconnect },
+    );
+  }
+}
+
+/** Whether `err` is one of the two refusals `assertPersonIdsLinkedForOnlinePlay` throws - the roster gate saying a person cannot be
+ *  seated on an online division yet (and not any other failure of the call it sat in). The one place a caller that must carry
+ *  on past the refusal (an automatic waitlist promotion that skips to the next registrant) asks. */
+export function isLichessRosterRefusal(err: unknown): err is HttpError {
+  return err instanceof HttpError && (err.code === "LICHESS_LINK_REQUIRED" || err.code === "LICHESS_RECONSENT_REQUIRED");
 }
 
 /** Whether a stored grant is enough to PLAY: a consent timestamp AND every scope in PLAY_SCOPES. The one authority —

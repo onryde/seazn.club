@@ -43,6 +43,9 @@ export type ExternalPlayQueueProps = {
   flagged: FlaggedBoard[];
   /** Flagged boards the viewer plays on: hidden from them (C1), counted. */
   ownFlagged: number;
+  /** The division's venue zone (`getScheduleSettings().tz`): every time of day on the flag cards is read in it, as on the arbiter panel
+   *  (Task 16 D1), and says "(Tokyo time)" after mount when the viewer's own offset differs at that instant. */
+  venueTz: string;
 };
 
 const CHIP = "self-start rounded-full px-2.5 py-[3px] text-xs font-semibold";
@@ -78,17 +81,18 @@ function rowNotice(fixtureId: string, decision: ArbiterDecisionState, over: bool
   );
 }
 
-export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged }: ExternalPlayQueueProps) {
+export function ExternalPlayNeedsResultQueue({ held, flagged, ownFlagged, venueTz }: ExternalPlayQueueProps) {
   const router = useRouter();
   const [decision, dispatch] = useReducer(arbiterDecision, null, initialArbiterDecision);
-  // Flag times of day render after mount: the server's timezone is not the
-  // organiser's (as in the arbiter panel).
+  // Flag times of day render after mount, and in the venue's zone (as in the
+  // arbiter panel): the server's timezone is not the organiser's, and the
+  // organiser may not be where the venue is.
   const [nowMs, setNowMs] = useState<number | null>(null);
   useEffect(() => {
     const first = setTimeout(() => setNowMs(Date.now()), 0);
     return () => clearTimeout(first);
   }, []);
-  const f = useFmt(nowMs);
+  const f = useFmt(nowMs, venueTz);
   const runner = useMemo(
     () =>
       decisionRunner({

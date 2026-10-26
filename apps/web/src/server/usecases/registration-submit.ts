@@ -55,6 +55,7 @@ import {
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { assertUserHasLichessForOnlinePlay } from "./external-accounts";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
+import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
 
 // ---------------------------------------------------------------------------
 // Input / output shapes
@@ -626,6 +627,16 @@ export async function submitRegistrationGroup(
   // moves out — the count and every insert stay inside one transaction.
   const planLimit = await getLimit(orgId, "entrants.per_division.max", competitionId);
 
+  // The online-play SEAT GATE (online-seat-gate.ts) for every online division in the cart, opened out here for the same reason as the plan cap:
+  // its flag question is a remote call and its probes run on the pooled `sql`. It asks about the people the inline confirm below SEATS - the
+  // submitter was asked above, by their own session link, and a teammate the captain typed in has no account to be asked about.
+  const seatGates = new Map<string, RegistrationSeatGate>();
+  for (const id of distinctDivisionIds) {
+    if (divisionPlaysOnline(divisionCtxById.get(id)!)) {
+      seatGates.set(id, await openRegistrationSeatGate({ divisionId: id, auth: { orgId, userId: null } }));
+    }
+  }
+
   const secret = mintRegistrationToken();
   const linkUserId = ctx.sessionUserId ?? null;
 
@@ -818,6 +829,7 @@ export async function submitRegistrationGroup(
         regRow = r!;
       }
 
+      let selfPlayerId: string | null = null;
       for (let i = 0; i < p.players.length; i++) {
         const player = p.players[i]!;
         const isSelf = i === p.selfIndex;
@@ -840,7 +852,7 @@ export async function submitRegistrationGroup(
               now,
             )
           : null;
-        await tx`
+        const [written] = await tx<{ id: string }[]>`
           insert into registration_players
             (registration_id, full_name, dob, gender, email, source, consent_status,
              consent_at, guardian_name, user_id, squad_number, is_captain)
@@ -850,7 +862,9 @@ export async function submitRegistrationGroup(
             'captain_entered', ${isSelf ? "granted" : "pending"},
             ${isSelf ? tx`now()` : null}, ${isSelf ? (input.contact.guardian_name ?? null) : null},
             ${playerUserId}, ${player.squad_number ?? null}, ${player.is_captain ?? false}
-          )`;
+          )
+          returning id`;
+        if (isSelf) selfPlayerId = written!.id;
       }
 
       // Free entries under auto-approval confirm INLINE — a shortcut RS002's
@@ -872,6 +886,19 @@ export async function submitRegistrationGroup(
       let finalStatus = regRow.status;
       if (!waitlisted && live.approval === "auto" && feeCents === 0) {
         const entrantId = await materialise(tx, regRow, p.input.entrant_kind);
+        const seatGate = seatGates.get(p.input.division_id);
+        // An online division: everyone the confirm just SEATED must be able to play, not only the submitter. A refusal rolls the whole
+        // submit back - the cart, the entry, the roster - exactly as `approveRegistration` refuses the same entry; nothing is half-written.
+        if (entrantId && seatGate) {
+          const mates = await tx<{ person_id: string }[]>`
+            select em.person_id from entrant_members em
+             where em.entrant_id = ${entrantId}
+               and not exists (
+                 select 1 from registration_players rp where rp.id = ${selfPlayerId} and rp.person_id = em.person_id
+               )`;
+          // The gate is never `load`ed here (see openRegistrationSeatGate): a teammate has no account to read, so it answers 'no link'.
+          if (mates.length > 0) await seatGate.assertRoster(tx, p.input.division_id, mates.map((m) => m.person_id));
+        }
         finalStatus = "confirmed";
         // The filter is LIVE, not forward-compatible spare capacity. RS008.1
         // added it ahead of RS009 with a note that it was a no-op "because

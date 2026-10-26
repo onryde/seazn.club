@@ -13,10 +13,14 @@ import { LichessFlashNotice } from "@/components/lichess-flash-notice";
 import { lichessLinkStartHref, type LichessFlashCode } from "@/lib/lichess-link";
 
 /** What the page knows for this viewer: whether this server can link at all, the linked Lichess name (null when
- *  signed out or not linked), and the `?lichess=` outcome a return from the start carried. */
+ *  signed out or not linked), whether that link cannot play (`lichessGrantPlays` refuses it: identity-only, or short of a
+ *  play scope - registration refuses it too, with LICHESS_RECONSENT_REQUIRED), and the `?lichess=` outcome a return from
+ *  the start carried. `needsReconsent` is only meaningful with a linked name; it is required so a state built without it
+ *  fails to compile instead of quietly reading as "plays". */
 export type RegisterLichessState = {
   configured: boolean;
   linkedUsername: string | null;
+  needsReconsent: boolean;
   flash: LichessFlashCode | null;
 };
 
@@ -63,6 +67,13 @@ export function RegisterLichessCard({
   // A `linked` outcome is shown as the linked row itself; the notice says only a failure. "linked" with no account on
   // file (a stale or hand-typed URL) is not a success to announce - the notice draws nothing for it, which is the ONE
   // place that rule lives (components/lichess-flash-notice.tsx, shared with the match room).
+  //
+  // Three states of the viewer, one card: not linked (link it), linked but the link cannot play (reconnect it - the
+  // registration gate refuses it exactly as the seat gate does), linked and playing (nothing to do). Only the last is
+  // done, so only the last hides the disclosure, the notice and the start.
+  const linked = state.linkedUsername !== null;
+  const reconnect = linked && state.needsReconsent;
+  const done = linked && !reconnect;
   return (
     <section
       data-testid="register-lichess-card"
@@ -71,16 +82,16 @@ export function RegisterLichessCard({
     >
       <div className="flex items-center justify-between gap-2">
         <h3 id="register-lichess-title" className="m-0 min-w-0 text-[17px] font-semibold text-[#2e1065]">
-          {t("register.lichess.title")}
+          {t(reconnect ? "register.lichess.reconnect.title" : "register.lichess.title")}
         </h3>
         <span className="shrink-0 rounded-full bg-[#2e1065] px-2.5 py-0.5 text-xs font-semibold text-white">
           {t("register.lichess.required")}
         </span>
       </div>
       <p className="m-0 text-sm leading-[1.45] text-[#2e1065] [overflow-wrap:anywhere]">
-        {plural("register.lichess.lead", divisions.length, { divisions: names })}
+        {plural(reconnect ? "register.lichess.reconnect.lead" : "register.lichess.lead", divisions.length, { divisions: names })}
       </p>
-      {state.linkedUsername !== null ? (
+      {done ? (
         <div
           role="status"
           data-testid="register-lichess-linked"
@@ -89,10 +100,26 @@ export function RegisterLichessCard({
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#5b21b6" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="shrink-0">
             <path d="M5 12l5 5 9-10" />
           </svg>
-          <span className="min-w-0 truncate">{t("settings.account.lichess.linkedAs", { username: state.linkedUsername })}</span>
+          <span className="min-w-0 truncate">{t("settings.account.lichess.linkedAs", { username: state.linkedUsername ?? "" })}</span>
         </div>
       ) : (
         <>
+          {reconnect && (
+            // Linked, so the name is shown - but no tick: a tick says "done", and this is the one thing left to do. The amber
+            // is the account card's own "re-link" colour (components/lichess-link-card.tsx), not a new one.
+            <div
+              role="status"
+              data-testid="register-lichess-needs-reconnect"
+              className="flex min-w-0 items-center gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3 py-2.5 text-sm text-amber-900"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b45309" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="shrink-0">
+                <path d="M12 8v5" />
+                <path d="M12 17h.01" />
+                <path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+              </svg>
+              <span className="min-w-0 truncate">{t("settings.account.lichess.linkedAs", { username: state.linkedUsername ?? "" })}</span>
+            </div>
+          )}
           <h4 className="m-0 mt-1 text-sm font-semibold text-[#2e1065]">{t("settings.account.lichess.consent.title")}</h4>
           <p className="m-0 text-xs leading-[1.45] text-[#4a3a6b]">{t("settings.account.lichess.consent.body")}</p>
           <p className="m-0 text-xs leading-[1.4] text-[#6b5b8a]">{t("settings.account.lichess.consent.scopes")}</p>
@@ -104,10 +131,10 @@ export function RegisterLichessCard({
                   url-encoded into this href; PostHog replay records attributes before the `before_send` scrub can see them. */}
               <a
                 href={lichessLinkStartHref(orgSlug, next)}
-                data-testid="register-lichess-start"
+                data-testid={reconnect ? "register-lichess-reconnect" : "register-lichess-start"}
                 className="ph-no-capture flex min-h-11 items-center justify-center rounded-[10px] bg-[#7c3aed] px-4 text-[15px] font-semibold text-white no-underline hover:bg-[#6d28d9] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#7c3aed]"
               >
-                {t("settings.account.lichess.link")}
+                {t(reconnect ? "register.lichess.reconnect.cta" : "settings.account.lichess.link")}
               </a>
               <p className="m-0 text-xs leading-[1.4] text-[#6b5b8a]">{t("register.lichess.returnHint")}</p>
             </>

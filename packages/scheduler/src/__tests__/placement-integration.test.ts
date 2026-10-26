@@ -1,8 +1,8 @@
 // Integration tests against a REAL running Placement service — everything
 // before Task 07 exercised `placement-client.ts`/`build.ts`'s Placement path
 // through a mocked `solveBuild` (`build.test.ts`'s "Placement path" describe
-// block). SKIPPED by default: see `services/placement/README.md`'s "Local dev"
-// section to start a real service and run this for real.
+// block). SKIPPED by default: see onryde/seazn.club.placement's README, "Local
+// dev", to start a real service and run this for real.
 //
 // `docs/superpowers/plans/2026-08-07-placement-service-prompts/_INDEX.md`'s "The
 // cutover nearly shipped INERT" is required reading for why this file exists
@@ -99,7 +99,7 @@ const buildLive = async (problem: BuildProblem): Promise<BuildResult> => {
  * is also off-grid — out of ONLY fields confirmed to reach placement's solver:
  * `dependencies` (`SolveBuildInput.dependencies`, sent verbatim) and
  * `restByDivision`. Verified directly in
- * `services/placement/src/placement/model.py` (section 8), not assumed: the
+ * `src/placement/model.py` in onryde/seazn.club.placement (section 8), not assumed: the
  * dependency constraint is `start[after] >= start[before] + dur_ms +
  * rest_ms[after]`, where `rest_ms[i]` is resolved per-fixture off THAT
  * fixture's own division's `restByDivision` entry — so a dependency pair,
@@ -166,7 +166,7 @@ function nonAlignedBoard(): BuildProblem {
  * apart on a `gapMinutes: 0` grid) — sized for SCALE rather than for that
  * file's gate math: 32 fixtures over 5 courts, closer to the
  * investigation's 37-fixture/5-court production board
- * (`services/placement/bench/placement_bench_boards.py`'s `production_board()`)
+ * (`production_board()` in onryde/seazn.club.placement's `bench/placement_bench_boards.py`)
  * than any other board in this suite. Still a long way off it: no
  * divisions, no `existing`/pins/dependencies, `matchMinutes`/`gapMinutes`
  * 40/0 rather than production's 40/10, and — the load-bearing difference —
@@ -370,7 +370,7 @@ describe.skipIf(!RUN_INTEGRATION)("placement integration (requires a running ser
    * documented BUILD/POLISH bracket boards hitting this same wall.
    *
    * ONE tick, two courts: the only way both fixtures could be placed AT
-   * ALL is at that one instant — concurrently. `services/placement/tests/
+   * ALL is at that one instant — concurrently. In onryde/seazn.club.placement, `tests/
    * test_model.py`'s `test_two_undecided_bracket_slots_sharing_people_are_
    * never_placed_concurrently` already proves the CP-SAT mechanics in
    * isolation, against the domain directly; this is the live, real-service,

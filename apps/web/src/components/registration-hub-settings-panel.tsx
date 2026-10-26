@@ -84,6 +84,7 @@ export function RegistrationHubSettingsPanel({
           division={{
             division_id: openRow.division_id,
             name: openRow.name,
+            individual_only: openRow.individual_only === true,
             category: openRow.category,
             age_min: openRow.age_min,
             age_max: openRow.age_max,

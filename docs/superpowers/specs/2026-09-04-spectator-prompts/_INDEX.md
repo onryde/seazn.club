@@ -822,7 +822,7 @@ Committed, implementer → controller-checked counts; task review and post-fix g
   call (a failed lookup must not 500 a saved score); `fireScoreRevalidate` fires the competition `"max"` BEFORE the
   division `{ expire: 0 }` because the tag manifest is last-write-wins inside a request (implementer's reading,
   reviewer verifying). 33/33 touched, 546/546 across 47 importing files, tsc 0, 8 mutants killed.
-- **P1c (open, found by the P1 implementer, NOT this round):** `void fireStageRevalidate` at `stages.ts:1152`,
+- **P1c (CLOSED by 9bae1fbcc7: all five sites now `await` a best-effort `fireStageRevalidate`; pinned by `stage-revalidate-settles.test.ts`; found by the P1 implementer, NOT this round):** `void fireStageRevalidate` at `stages.ts:1152`,
   `:1534`, `:2395` (`completeStage`, reachable from `scoreEvent`) and `:3248` drops its tag the same way. A score
   that completes a stage is covered by the score's own division expiry; console-driven stage writes are not.
 - **P1 concern, open:** in `event-import.ts` the invalidation now runs last inside its try, so an earlier throw

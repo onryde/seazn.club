@@ -122,7 +122,7 @@ function deadlineMsFor(input: SolveBuildInput): number {
  * the hardest possible shape to diagnose.
  *
  * `.flycast` requires a private IPv6 allocated once per app
- * (`fly ips allocate-v6 --private --app placement`) — see DEPLOY.md. It is NOT
+ * (`fly ips allocate-v6 --private --app placement`) — see DEPLOY.md in onryde/seazn.club.placement. It is NOT
  * automatic, and the failure mode if it is skipped is the same silent greedy
  * board as above.
  */
@@ -149,7 +149,7 @@ const STATUS_BY_WIRE_VALUE = new Map<number, SolveBuildOutcome["status"]>([
  * concurrent organisers riding one cached client ride ten HTTP/2 streams over
  * ONE TCP connection, and the proxy fans work out by CONNECTION — so all ten
  * pin to a single machine no matter how many are running or suspended.
- * `services/placement/fly.toml`'s `[services.concurrency] hard_limit = 1` is the
+ * `fly.toml`'s `[services.concurrency] hard_limit` (in onryde/seazn.club.placement) is the
  * other half of this fix; it only means anything if each solve actually opens
  * its own connection for the proxy to count.
  *

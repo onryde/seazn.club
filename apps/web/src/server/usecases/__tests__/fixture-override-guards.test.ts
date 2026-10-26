@@ -50,7 +50,8 @@ describe.skipIf(!HAS_DB)("Task 10 gap: a delete never takes a match's own format
     const id = b.fixtureIds[1]!;
     await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 });
     const before = await count(b.stageId);
-    await expect(rebuildStageFixtures(b.auth, b.stageId)).rejects.toMatchObject(ownFormat(id, await fixtureNo(id)));
+    const no = await fixtureNo(id);
+    await expect(rebuildStageFixtures(b.auth, b.stageId)).rejects.toMatchObject(ownFormat(id, no));
     expect(await count(b.stageId), "nothing deleted").toBe(before);
     expect((await sql`select 1 from fixtures where id = ${id} and rules_override is not null`).length).toBe(1);
     await writeFixtureRulesOverride(b.auth, [id], null);
@@ -61,7 +62,8 @@ describe.skipIf(!HAS_DB)("Task 10 gap: a delete never takes a match's own format
     const b = await seedBracket({ sport: "badminton", variant: "short", stageKind: "league", entrants: 3 });
     const id = b.fixtureIds[0]!;
     await writeFixtureRulesOverride(b.auth, [id], { bestOf: 1 });
-    await expect(undoDivision(b.auth, b.divisionId)).rejects.toMatchObject(ownFormat(id, await fixtureNo(id)));
+    const no = await fixtureNo(id);
+    await expect(undoDivision(b.auth, b.divisionId)).rejects.toMatchObject(ownFormat(id, no));
     expect(await count(b.stageId)).toBe(b.fixtureIds.length);
     await writeFixtureRulesOverride(b.auth, [id], null);
     await undoDivision(b.auth, b.divisionId);
@@ -77,7 +79,8 @@ describe.skipIf(!HAS_DB)("Task 10 gap: a delete never takes a match's own format
     await writeFixtureRulesOverride(b.auth, [inB!.id], { bestOf: 1 });
     // Pool A's fixtures carry nothing of their own: its clear goes through, though the stage holds an override.
     await expect(clearPoolEntrants(b.auth, poolA, true)).resolves.toMatchObject({ removed: expect.any(Number) });
-    await expect(clearPoolEntrants(b.auth, poolB, true)).rejects.toMatchObject(ownFormat(inB!.id, await fixtureNo(inB!.id)));
+    const no = await fixtureNo(inB!.id);
+    await expect(clearPoolEntrants(b.auth, poolB, true)).rejects.toMatchObject(ownFormat(inB!.id, no));
     await writeFixtureRulesOverride(b.auth, [inB!.id], null);
     await expect(clearPoolEntrants(b.auth, poolB, true)).resolves.toMatchObject({ removed: expect.any(Number) });
   });
@@ -112,7 +115,8 @@ describe.skipIf(!HAS_DB)("Task 10 gap, fix round 1: a Swiss reshape never delete
     const doomed = before.at(-1)!; // the highest `seq_in_round` goes first (the reconcile's own rule)
     await writeFixtureRulesOverride(sw.auth, [doomed.id], { bestOf: 1 });
     await deleteEntrant(sw.auth, sw.entrants.at(-1)!);
-    await expect(generateStageFixtures(sw.auth, sw.stageId)).rejects.toMatchObject(ownFormat(doomed.id, await fixtureNo(doomed.id)));
+    const no = await fixtureNo(doomed.id);
+    await expect(generateStageFixtures(sw.auth, sw.stageId)).rejects.toMatchObject(ownFormat(doomed.id, no));
     expect(await shellsOf(sw.stageId, 1), "nothing deleted, nothing minted").toEqual(before);
     await writeFixtureRulesOverride(sw.auth, [doomed.id], null);
     await generateStageFixtures(sw.auth, sw.stageId);
@@ -314,7 +318,8 @@ describe.skipIf(!HAS_DB)("Task 11: a STAGE save never leaves an unstarted match'
     });
     const id = b.fixtureIds[0]!;
     await writeFixtureRulesOverride(b.auth, [id], { [c.key]: c.own });
-    await expect(putStageRules(b.auth, b.stageId, { rules: null })).rejects.toMatchObject(noLongerFits(id, await fixtureNo(id), boundFieldOf(c)));
+    const no = await fixtureNo(id);
+    await expect(putStageRules(b.auth, b.stageId, { rules: null })).rejects.toMatchObject(noLongerFits(id, no, boundFieldOf(c)));
     expect(await storedRules(b.stageId), "the clear rolled back").toEqual({ [c.key]: c.wide });
     // …and with the match's format set back, the same clear goes through.
     await writeFixtureRulesOverride(b.auth, [id], null);
@@ -373,7 +378,8 @@ describe.skipIf(!HAS_DB)("Task 11: the guard asks the engine about the division'
     await writeFixtureRulesOverride(b.auth, [id], { cap: SHORT.setTo + 9 }); // the real module lets a match set its cap
     const config = (await sql<{ c: unknown }[]>`select config c from divisions where id = ${b.divisionId}`)[0]!.c;
     const ask = (variant: string | null) => withTenant(b.auth.orgId, (tx) => refuseInvalidatedOverrides(tx, b.divisionId, config, narrowed, variant));
-    await expect(ask("short")).rejects.toMatchObject(noLongerFits(id, await fixtureNo(id), "cap"));
+    const no = await fixtureNo(id);
+    await expect(ask("short")).rejects.toMatchObject(noLongerFits(id, no, "cap"));
     await expect(ask("bwf"), "the variant that allows the key").resolves.toBeUndefined();
     await expect(ask(null), "no variant narrows nothing").resolves.toBeUndefined();
   });

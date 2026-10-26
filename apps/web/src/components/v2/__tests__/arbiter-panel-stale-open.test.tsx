@@ -11,7 +11,9 @@
 // This file pins both orders with what the page really reads (loadArbiterRound, listOpenRounds) and what the press really does
 // (openRound), through the panel's own hook (ArbiterPanel -> ArbiterScreen -> RoundColumn, as arbiter-panel-d17.test.tsx drives it):
 //   - the order the spec had (the request is held BEFORE the server does its work): the screen goes to round 2 and the confirmation
-//     for round 3 is gone - the red CI saw, and the reason the e2e could not have passed;
+//     for round 3 is gone. This pins the owner-approved D12 contract (owner 2026-10-25, KEEP): a reopen of an older round from another
+//     device brings the arbiter's screen to that round, because its live check-in needs attention. It is also the red CI saw, and the
+//     reason the e2e could not have passed;
 //   - the order the spec has now (the server does its work, only the ANSWER is held): round 3 stays on screen, the confirmation
 //     stays open through the old answer's refresh, the tap sends exactly one request, for round 3, and round 3's own notice shows.
 //
@@ -203,7 +205,10 @@ async function roundThreeOnScreenWithADeadTap(r: SeedOnlineChessRoundResult, ui:
 }
 
 describe.skipIf(!HAS_DB)("a press for round 2 answering after round 3 has come on screen (e2e: the open-round hook resets on a round change)", () => {
-  it("the order the e2e had - the server does round 2's work AFTER round 3 opened: round 2 takes the screen back and round 3's confirmation is gone", async () => {
+  // Pins the owner-approved D12 contract (owner 2026-10-25, KEEP), not a quirk to be fixed: the panel shows the division's most recently
+  // OPENED round, a reopen is an open, so a reopen of round 2 from another device brings this screen back to round 2 - its live check-in
+  // needs attention - and round 3's confirmation, which belongs to a round no longer on screen, closes with the change.
+  it("D12 (owner-approved 2026-10-25) - the order the e2e had, the server does round 2's work AFTER round 3 opened: the reopen brings the screen back to round 2 and round 3's confirmation is gone", async () => {
     const r = await seedLeague();
     const ui = await roundTwoPressInFlight(r);
     await roundThreeOnScreenWithADeadTap(r, ui, at(3), at(4));

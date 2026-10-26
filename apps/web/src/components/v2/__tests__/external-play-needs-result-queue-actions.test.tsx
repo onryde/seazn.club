@@ -111,7 +111,7 @@ const flush = () => new Promise((r) => setTimeout(r, 0));
 const statusText = (tree: ReactElement[]) => textOf(byTestId(tree, "external-play-queue-status")[0]);
 
 function mount(props: Partial<ExternalPlayQueueProps>) {
-  const all: ExternalPlayQueueProps = { held: [], flagged: [], ownFlagged: 0, ...props };
+  const all: ExternalPlayQueueProps = { held: [], flagged: [], ownFlagged: 0, venueTz: "UTC", ...props };
   return renderIsland(ExternalPlayNeedsResultQueue, all);
 }
 
@@ -193,7 +193,7 @@ describe("where the answer shows", () => {
     net.calls[0]!.resolve({ status: "finished" });
     await flush();
     // The page's refresh hands down a queue without the row.
-    ui.rerender({ held: [], flagged: [], ownFlagged: 0 });
+    ui.rerender({ held: [], flagged: [], ownFlagged: 0, venueTz: "UTC" });
     expect(statusText(ui.tree())).toBe(EN_UI["arbiter.notice.settled"]);
     expect(propsOf(byTestId(ui.tree(), "external-play-queue-status")[0]!).className, "visible, not screen-reader only").not.toContain("sr-only");
     expect(byTestId(ui.tree(), "external-play-held")).toHaveLength(0);
@@ -213,7 +213,7 @@ describe("where the answer shows", () => {
       click(byTestId(ui.tree(), "external-play-go-on")[0]);
       net.calls[0]!.resolve({ closed: 2, stillOpen: 0 });
       await flush();
-      ui.rerender({ held: [], flagged: [], ownFlagged: 0 });
+      ui.rerender({ held: [], flagged: [], ownFlagged: 0, venueTz: "UTC" });
       expect(statusText(ui.tree()), `over: ${c.over}`).toBe(c.expected);
       checked++;
     }
@@ -225,7 +225,7 @@ describe("where the answer shows", () => {
     click(byTestId(ui.tree(), "external-play-go-on")[0]);
     net.calls[0]!.resolve({ closed: 2, stillOpen: 1 });
     await flush();
-    ui.rerender({ held: [], flagged: [FLAGGED("g1", { flags: [{ id: "late", kind: "out_of_band_play", at: "2026-10-12T19:05:00.000Z", plies: null }] })], ownFlagged: 0 });
+    ui.rerender({ held: [], flagged: [FLAGGED("g1", { flags: [{ id: "late", kind: "out_of_band_play", at: "2026-10-12T19:05:00.000Z", plies: null }] })], ownFlagged: 0, venueTz: "UTC" });
     const notice = byTestId(ui.tree(), "external-play-row-notice");
     expect(textOf(notice[0])).toBe(tRuntime(EN_UI, "arbiter.notice.wentOnNew.one", { count: 1 }));
   });

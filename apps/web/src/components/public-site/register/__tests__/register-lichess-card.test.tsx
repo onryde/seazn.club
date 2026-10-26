@@ -30,11 +30,12 @@ vi.mock("@/components/i18n/dict-provider", () => ({
 
 import { RegisterLichessCard, onlineDivisionNames, registerReturnPath, type RegisterLichessState } from "../register-lichess-card";
 import { StepConsent } from "../step-consent";
+import { BANNED_RE } from "@/components/v2/arbiter/__tests__/_banned-copy";
 import { EMPTY_CART } from "../types";
 
 const esc = (s: string) => s.replaceAll("&", "&amp;").replaceAll("'", "&#x27;").replaceAll('"', "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 const s = (loc: Loc, key: string) => String(DICTS[loc][key]);
-const UNLINKED: RegisterLichessState = { configured: true, linkedUsername: null, flash: null };
+const UNLINKED: RegisterLichessState = { configured: true, linkedUsername: null, needsReconsent: false, flash: null };
 const NEXT = "/shared/northfield/autumn-rapid/register";
 const render = (o: Partial<Parameters<typeof RegisterLichessCard>[0]> = {}, locale: Loc = "en") => {
   current.locale = locale;
@@ -111,7 +112,7 @@ describe("RegisterLichessCard — the consent step's Lichess link (I5, canvas Re
   });
 
   it("linked: the name it is linked as, and no start (nothing to do)", () => {
-    const h = render({ state: { configured: true, linkedUsername: "ada_okonkwo", flash: "linked" } });
+    const h = render({ state: { configured: true, linkedUsername: "ada_okonkwo", needsReconsent: false, flash: "linked" } });
     expect(h).toMatch(/data-testid="register-lichess-linked"[^>]*role="status"|role="status"[^>]*data-testid="register-lichess-linked"/);
     expect(h).toContain("ada_okonkwo");
     expect(h).not.toContain('data-testid="register-lichess-start"');
@@ -161,6 +162,93 @@ describe("RegisterLichessCard — the consent step's Lichess link (I5, canvas Re
     const h = render({ state: { ...UNLINKED, configured: false } });
     expect(h).toContain(esc(s("en", "settings.account.lichess.notConfigured")));
     expect(h).not.toContain("/api/auth/lichess");
+  });
+});
+
+// Owner ruling 2026-10-25: registration refuses a Lichess link the seat gate refuses (the server says
+// LICHESS_RECONSENT_REQUIRED), so a viewer whose link cannot play must be told to RECONNECT on this step - not shown
+// a "Linked as ..." tick that the submit then contradicts. `needsReconsent` is the page's `!lichessGrantPlays(link)`.
+describe("RegisterLichessCard - linked, but the link cannot play (reconnect)", () => {
+  const RECONNECT: RegisterLichessState = { configured: true, linkedUsername: "ada_idonly", needsReconsent: true, flash: null };
+  const NEW_KEYS = [
+    "register.lichess.reconnect.title",
+    "register.lichess.reconnect.lead.one",
+    "register.lichess.reconnect.lead.other",
+    "register.lichess.reconnect.cta",
+    "register.lichessReconnectRequired",
+  ] as const;
+
+  it("the new copy exists in all four dictionaries, is translated (not the English), and carries no dash or arrow", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      for (const k of NEW_KEYS) {
+        const v = DICTS[loc][k];
+        expect(typeof v, `${loc}: ${k}`).toBe("string");
+        expect(String(v).length, `${loc}: ${k} is not empty`).toBeGreaterThan(10);
+        if (loc !== "en") expect(v, `${loc}: ${k} is translated`).not.toBe(DICTS.en[k]);
+        expect(String(v), `${loc}: ${k} has no banned character`).not.toMatch(BANNED_RE);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity").toBe(LOCALES.length * NEW_KEYS.length);
+  });
+
+  it("says RECONNECT in every locale: the reconnect title and lead, who it is linked as without a tick, the grant disclosure, a 44px reconnect start back to this step", () => {
+    let checked = 0;
+    for (const loc of LOCALES) {
+      const h = render({ state: RECONNECT }, loc);
+      expect(h, loc).toContain(esc(s(loc, "register.lichess.reconnect.title")));
+      expect(h, loc).toContain(esc(s(loc, "register.lichess.reconnect.lead.one").replace("{divisions}", "Open Swiss")));
+      expect(h, loc).toContain(esc(s(loc, "register.lichess.required")));
+      for (const k of ["settings.account.lichess.consent.title", "settings.account.lichess.consent.body", "settings.account.lichess.consent.scopes", "register.lichess.returnHint"]) {
+        expect(h, `${loc}: ${k}`).toContain(esc(s(loc, k)));
+      }
+      const row = h.match(/<div[^>]*data-testid="register-lichess-needs-reconnect"[^>]*>/);
+      expect(row, `${loc}: the linked-but-not-ready row`).not.toBeNull();
+      expect(row![0], `${loc}: announced`).toContain('role="status"');
+      expect(h, loc).toContain(esc(s(loc, "settings.account.lichess.linkedAs").replace("{username}", "ada_idonly")));
+      const a = h.match(/<a[^>]*data-testid="register-lichess-reconnect"[^>]*>([^<]*)</);
+      expect(a, `${loc}: the reconnect start`).not.toBeNull();
+      expect(a![0], loc).toContain(`href="${lichessLinkStartHref("northfield", NEXT).replaceAll("&", "&amp;")}"`);
+      expect(a![0], loc).toMatch(/class="[^"]*\bmin-h-11\b/);
+      expect(a![1], loc).toBe(esc(s(loc, "register.lichess.reconnect.cta")));
+      // The pair: it is NOT the link card and NOT the done row.
+      expect(h, `${loc}: no link title`).not.toContain(esc(s(loc, "register.lichess.title")));
+      expect(h, `${loc}: no done tick`).not.toContain('data-testid="register-lichess-linked"');
+      expect(h, `${loc}: no link start`).not.toContain('data-testid="register-lichess-start"');
+      checked += 1;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("two divisions read in the plural; the same state with a link that PLAYS is the done row, with no reconnect", () => {
+    expect(render({ divisions: ["Open Swiss", "Junior Cup"], state: RECONNECT })).toContain(
+      esc(s("en", "register.lichess.reconnect.lead.other").replace("{divisions}", "Open Swiss and Junior Cup")),
+    );
+    const done = render({ state: { ...RECONNECT, needsReconsent: false } });
+    expect(done).toContain('data-testid="register-lichess-linked"');
+    expect(done).not.toContain("register-lichess-needs-reconnect");
+    expect(done).not.toContain("register-lichess-reconnect");
+    expect(done).not.toContain(esc(s("en", "register.lichess.reconnect.title")));
+  });
+
+  // A failed reconnect on the way back is NOT done - unlike a linked viewer, this one still has something to do - so the
+  // notice must show (a done viewer's flash is deliberately hidden).
+  it("a failed reconnect on the way back says why (and what to do), and still offers the reconnect", () => {
+    const h = render({ state: { ...RECONNECT, flash: "already_linked" } });
+    expect(h).toContain('data-testid="register-lichess-flash"');
+    expect(h).toContain(esc(s("en", "settings.account.lichess.flash.already_linked")));
+    expect(h).toContain(esc(s("en", "settings.account.lichess.flashNext.already_linked")));
+    expect(h).toContain('data-testid="register-lichess-reconnect"');
+    // `linked` in the reconnect state is a stale URL (the link still cannot play): nothing to announce.
+    expect(render({ state: { ...RECONNECT, flash: "linked" } })).not.toContain('data-testid="register-lichess-flash"');
+  });
+
+  it("no Lichess client on this server: says so, and starts nothing", () => {
+    const h = render({ state: { ...RECONNECT, configured: false } });
+    expect(h).toContain(esc(s("en", "settings.account.lichess.notConfigured")));
+    expect(h).not.toContain("/api/auth/lichess");
+    expect(h).not.toContain('data-testid="register-lichess-reconnect"');
   });
 });
 

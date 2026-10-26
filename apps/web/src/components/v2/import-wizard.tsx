@@ -8,8 +8,9 @@ import { useRouter } from "next/navigation";
 import { ApiV1Error } from "@/lib/client-v1";
 import { UpgradeGate } from "@/components/upgrade-gate";
 import type { ViewerPlan } from "@/lib/viewer-plan";
-import { useMsg } from "@/components/i18n/dict-provider";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
+import { lichessImportRefusalText } from "@/components/v2/entrants-lichess-refusal";
 // RS011 review round 3, finding 2: `commitImport` (server/usecases/
 // imports.ts) runs the SAME eligibility gate `putLineup`/roster-write
 // endpoints do and can 422 ELIGIBILITY_VIOLATION, but `commit()` had no
@@ -50,6 +51,12 @@ const ISSUE_I18N: Record<string, { messageKey: MessageKey; badgeKey: MessageKey 
   DIVISION_NOT_FOUND: {
     messageKey: "import.error.divisionNotFound",
     badgeKey: "import.issueCode.divisionNotFound",
+  },
+  // Owner ruling 2026-10-26: a row that would enter a team into a chess division. The server words it in English
+  // (usecases/imports.ts chessEntrantIssues); this is the localized line, with the division name as its argument.
+  CHESS_INDIVIDUAL_ONLY: {
+    messageKey: "import.error.chessIndividualOnly",
+    badgeKey: "import.issueCode.chessIndividualOnly",
   },
 };
 /** A plan target: either an existing row's id or a forward reference to
@@ -119,6 +126,8 @@ async function postForm<T>(url: string, form: FormData, headers?: Record<string,
 
 export function ImportWizard({ viewerPlan }: { viewerPlan: ViewerPlan }) {
   const msg = useMsg();
+  const msgPlural = useMsgPlural();
+  const locale = useLocaleOrDefault();
   const router = useRouter();
   const fileRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -233,6 +242,8 @@ export function ImportWizard({ viewerPlan }: { viewerPlan: ViewerPlan }) {
           message?: string;
           feature_key?: string;
           violations?: EligibilityIssue[];
+          /** LICHESS_*_REQUIRED: the file rows (the preview's "Row n") whose players cannot be seated. */
+          rows?: number[];
         };
       };
       if (!res.ok || payload.ok === false) {
@@ -243,6 +254,24 @@ export function ImportWizard({ viewerPlan }: { viewerPlan: ViewerPlan }) {
         if (payload.error?.code === "ELIGIBILITY_VIOLATION") {
           setEligibilityGate({ violations: payload.error.violations ?? [] });
           return;
+        }
+        // An online-play division refuses a player with no Lichess link that can play, and the whole commit with them (nothing
+        // was written). The server's words are English only: say it in the organiser's language, naming the file rows. The
+        // preview stays, so the same file imports again once those players have linked or reconnected.
+        if (payload.error) {
+          const { code, rows } = payload.error;
+          const lichess = lichessImportRefusalText(
+            { code, extra: { rows } },
+            {
+              list: (labels) => new Intl.ListFormat(locale, { style: "long", type: "conjunction" }).format(labels),
+              plural: msgPlural,
+              text: (key) => msg(key as MessageKey),
+            },
+          );
+          if (lichess) {
+            setError(lichess);
+            return;
+          }
         }
         throw new Error(payload.error?.message ?? msg("import.commitFailed"));
       }

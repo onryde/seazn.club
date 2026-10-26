@@ -59,6 +59,8 @@ vi.mock("@/components/i18n/dict-provider", async () => {
       () =>
       (key: string, count: number, vars?: Record<string, string | number>): string =>
         pluralise(dict(), key, count, active.locale as never, vars),
+    // The panel names the people of a Lichess roster refusal in the locale's own list form (entrants-lichess-refusal.ts).
+    useLocaleOrDefault: () => active.locale,
   };
 });
 vi.mock("next/navigation", () => ({

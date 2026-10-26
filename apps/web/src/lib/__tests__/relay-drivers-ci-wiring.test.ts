@@ -201,8 +201,8 @@ describe("capture-qr-v2: the CI override never reaches a deployed environment", 
     for (const f of checked) {
       expect(readFileSync(f, "utf8").includes("ONLINE_CHESS_ALWAYS"), `${relative(ROOT, f)} names ONLINE_CHESS_ALWAYS`).toBe(false);
     }
-    // Anti-vacuity, per kind: today fly.toml + fly.stg.toml + services/placement/fly.toml (and db/flyway.toml), the web
-    // and placement Dockerfiles, and stg / prod / placement-stg / placement-prod. No staging/production env file is
+    // Anti-vacuity, per kind: today fly.toml + fly.stg.toml (and db/flyway.toml), the web
+    // Dockerfile, and stg / prod (the placement service's own configs live in onryde/seazn.club.placement). No staging/production env file is
     // committed (their values live in Fly secrets), so that kind may be empty — the detector below proves it would bite.
     expect(fly.map((f) => relative(ROOT, f)), "the web app's two Fly configs").toEqual(expect.arrayContaining(["fly.toml", "fly.stg.toml"]));
     expect(docker.map((f) => relative(ROOT, f)), "the web app's Dockerfile").toContain("Dockerfile");

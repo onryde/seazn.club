@@ -37,6 +37,10 @@ import {
 export interface RegistrationHubRowData {
   division_id: string;
   name: string;
+  /** Chess (owner ruling 2026-10-26): the row-click config panel offers individual entry only. Carried through to
+   *  RegistrationHubConfigPanel's `division` prop; not read by this row card itself. Optional: absent reads as
+   *  "not restricted". */
+  individual_only?: boolean;
   category: DivisionCategoryValue | null;
   age_min: number | null;
   age_max: number | null;

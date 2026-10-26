@@ -30,8 +30,8 @@ export type Fmt = {
   plural: ReturnType<typeof usePlural>;
   locale: string;
   mounted: boolean;
-  /** "19:42", or null before mount. Read in the venue's zone when `useFmt` was given one, with "(Tokyo time)" added when the viewer's own
-   *  offset differs at that instant; the viewer's own zone, unlabelled, when it was not. */
+  /** "19:42", or null before mount (or when `useFmt` was given no zone). Read in the venue's zone, with "(Tokyo time)" added when the viewer's own
+   *  offset differs at that instant. */
   hm(iso: string): string | null;
   /** "19:31:05", or null before mount. Zoned and labelled as `hm`. */
   hms(iso: string): string | null;
@@ -39,27 +39,33 @@ export type Fmt = {
   list(items: string[]): string;
 };
 
-/** `venueTz`: the zone every time of day is read in (the arbiter panel passes the venue's, Task 16 D1). Left out, times are the viewer's
- *  own and carry no label (the organiser queue, which has no venue to name). */
-export function useFmt(nowMs: number | null, venueTz?: string): Fmt {
+/** `venueTz`: the zone every time of day is read in, STATED by every caller (the arbiter panel and the Fixtures tab's online queue pass the venue's,
+ *  Task 16 D1 and the owner's 2026-10-25 ruling). It is never optional: a formatter handed no zone used to read the viewer's own, unlabelled,
+ *  which is the bug that ruling fixed. `null` is for a caller that draws no time of day, and the types accept it only beside a `null` clock; a
+ *  live clock with a `null` zone is refused by the types, and if one gets here anyway the formatter paints no time (`hm`/`hms` answer `null`) rather
+ *  than a wrong one. */
+export function useFmt(nowMs: null, venueTz: null): Fmt;
+export function useFmt(nowMs: number | null, venueTz: string): Fmt;
+export function useFmt(nowMs: number | null, venueTz: string | null): Fmt {
   const t = useT();
   const plural = usePlural();
   const locale = useLocale();
   const viewerTz = useBrowserZone();
   const mounted = nowMs !== null;
-  const zone = venueTz === undefined ? undefined : isValidIana(venueTz) ? venueTz : DEFAULT_TZ;
+  const zone = venueTz === null ? null : isValidIana(venueTz) ? venueTz : DEFAULT_TZ;
   return useMemo<Fmt>(() => {
-    const hmsFmt = new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", ...(zone ? { timeZone: zone } : {}) });
-    // The label is added only for a venue zone, and only once the browser's own zone is known (never on a server render).
-    const named = (time: string, iso: string) =>
-      zone === undefined ? time : withVenueName(time, iso, zone, viewerTz, (v) => t("arbiter.venueTime", v));
+    // No zone, no clock face: never the viewer's own by default.
+    const hmsFmt =
+      zone === null ? null : new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit", second: "2-digit", hourCycle: "h23", timeZone: zone });
+    // The label is added only once the browser's own zone is known (never on a server render).
+    const named = (time: string, iso: string, venue: string) => withVenueName(time, iso, venue, viewerTz, (v) => t("arbiter.venueTime", v));
     return {
       t,
       plural,
       locale,
       mounted,
-      hm: (iso) => (mounted ? named(formatTimeOfDay(iso, locale, zone), iso) : null),
-      hms: (iso) => (mounted ? named(hmsFmt.format(new Date(iso)), iso) : null),
+      hm: (iso) => (mounted && zone !== null ? named(formatTimeOfDay(iso, locale, zone), iso, zone) : null),
+      hms: (iso) => (mounted && zone !== null && hmsFmt !== null ? named(hmsFmt.format(new Date(iso)), iso, zone) : null),
       duration: (raw) => {
         const s = Math.max(0, Math.round(raw));
         if (s < 60) return t("arbiter.duration.sec", { sec: s });

@@ -8,6 +8,7 @@ import {
   ImportConfig,
   ImportRow,
   planImport,
+  type ImportIssue,
   type ImportOp,
   type ImportPlan,
   type ImportSnapshot,
@@ -20,8 +21,16 @@ import { assertWithinLimit, getLimit, hasFeature, withinLimit } from "@/lib/enti
 import { cacheGet, cacheSet } from "@/lib/cache";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { EligibilityOverride } from "@/server/api-v1/schemas";
+import {
+  CHESS_INDIVIDUAL_ONLY,
+  CHESS_INDIVIDUAL_ONLY_MESSAGE,
+  chessIndividualOnlyError,
+  isChessSport,
+} from "@/lib/chess-individual-only";
 import { parseUpload, toImportRows, type ImportField } from "./import-parse";
 import { audit } from "./audit";
+import { isLichessRosterRefusal } from "./external-accounts";
+import { openOrgSeatGate, type SeatGate } from "./online-seat-gate";
 import {
   loadEligibilityDivisions,
   loadEligibilityPersons,
@@ -56,6 +65,47 @@ export interface ImportCommitResult {
 function pinSnapshot(snapshot: ImportSnapshot, pinDivisionId: string | null): ImportSnapshot {
   if (!pinDivisionId) return snapshot;
   return { ...snapshot, divisions: snapshot.divisions.filter((d) => d.id === pinDivisionId) };
+}
+
+/** Chess is individual-only (owner ruling 2026-10-26), and the planner places a
+ *  TEAM into any division a row names — `entrant.create` always carries
+ *  kind 'team' (types.ts). So every such op aimed at a chess division is an
+ *  error row in the plan: the preview shows it, and commit refuses on it.
+ *  Judged here, on the web side, because the engine's planner knows divisions
+ *  by sport key only to validate positions; the entrant-shape ruling is not
+ *  its to restate. A row that names no division (a directory-only import: clubs,
+ *  teams, people) creates no entrant and is untouched. */
+function chessEntrantIssues(plan: ImportPlan, snapshot: ImportSnapshot): ImportIssue[] {
+  const issues: ImportIssue[] = [];
+  for (const op of plan.ops) {
+    if (op.kind !== "entrant.create") continue;
+    const division = snapshot.divisions.find((d) => d.id === op.divisionId);
+    if (!division || !isChessSport(division.sportKey)) continue;
+    for (const rowNo of op.sourceRows) {
+      issues.push({
+        rowNo,
+        column: "divisionSlug",
+        severity: "error",
+        code: CHESS_INDIVIDUAL_ONLY,
+        message: `division '${division.name}' is a chess division — ${CHESS_INDIVIDUAL_ONLY_MESSAGE}`,
+        messageArgs: { division: division.name },
+      });
+    }
+  }
+  return issues;
+}
+
+/** `planImport` plus the entrant-shape ruling above. The ONE planning call the
+ *  three entry points (plan, re-preview, commit) share, so the preview and the
+ *  commit can never disagree about what is refused. */
+function planChecked(
+  rows: Parameters<typeof planImport>[0],
+  snapshot: ImportSnapshot,
+  config: Parameters<typeof planImport>[2],
+): ImportPlan {
+  const plan = planImport(rows, snapshot, config);
+  const chess = chessEntrantIssues(plan, snapshot);
+  return chess.length === 0 ? plan : { ...plan, issues: [...plan.issues, ...chess] };
 }
 
 // Read-only org state the planner matches against (Jul3/01 §3). Fetched in
@@ -149,7 +199,7 @@ export async function createImport(
 
   return withTenant(auth.orgId, async (tx) => {
     const snapshot = pinSnapshot(await fetchSnapshot(tx), input.pinDivision?.id ?? null);
-    const plan = planImport(rows, snapshot, config);
+    const plan = planChecked(rows, snapshot, config);
     const [row] = await tx<{ id: string }[]>`
       insert into imports (org_id, filename, config, rows, plan, pin_division_id, created_by)
       values (${auth.orgId}, ${input.filename}, ${tx.json(config as never)},
@@ -178,7 +228,7 @@ export async function getImport(auth: AuthCtx, id: string): Promise<ImportPrevie
     const rows = ImportRow.array().parse(imp.rows);
     const config = ImportConfig.parse(imp.config);
     const snapshot = pinSnapshot(await fetchSnapshot(tx), imp.pin_division_id);
-    const plan = planImport(rows, snapshot, config);
+    const plan = planChecked(rows, snapshot, config);
     if (imp.status === "planned") {
       await tx`update imports set plan = ${tx.json(plan as never)} where id = ${id}`;
     }
@@ -202,6 +252,11 @@ const IDEM_TTL_SECONDS = 24 * 60 * 60; // doc 08 §4
 interface RosterEligibilityCandidate {
   divisionId: string;
   person: EligibilityRosterPlayer;
+  /** The person's id, or - for one this plan creates - its `ref`: the op's own name for someone with no id yet. */
+  personKey: string;
+  isNewPerson: boolean;
+  /** The file's rows that put this person on this roster (1-based, as the plan's own issues number them). */
+  sourceRows: readonly number[];
   entrantKey: string;
   isNewEntrant: boolean;
 }
@@ -231,7 +286,7 @@ async function collectImportRosterCandidates(
 ): Promise<RosterEligibilityCandidate[]> {
   const personDraft = new Map<string, { full_name: string; dob: string | null; gender: string | null }>();
   const entrantDivisionByRef = new Map<string, string>();
-  const rosterAdds: { entrant: ImportTarget; person: ImportTarget }[] = [];
+  const rosterAdds: { entrant: ImportTarget; person: ImportTarget; sourceRows: readonly number[] }[] = [];
 
   for (const op of ops) {
     if (op.kind === "person.create") {
@@ -243,7 +298,7 @@ async function collectImportRosterCandidates(
     } else if (op.kind === "entrant.create") {
       entrantDivisionByRef.set(op.ref, op.divisionId);
     } else if (op.kind === "roster.add") {
-      rosterAdds.push({ entrant: op.entrant, person: op.person });
+      rosterAdds.push({ entrant: op.entrant, person: op.person, sourceRows: op.sourceRows });
     }
   }
   if (rosterAdds.length === 0) return [];
@@ -276,13 +331,16 @@ async function collectImportRosterCandidates(
   );
 
   const candidates: RosterEligibilityCandidate[] = [];
-  for (const { entrant, person } of rosterAdds) {
+  for (const { entrant, person, sourceRows } of rosterAdds) {
     const divisionId = "id" in entrant ? entrantDivisionById.get(entrant.id) : entrantDivisionByRef.get(entrant.ref);
     const p = "id" in person ? personById.get(person.id) : personDraft.get(person.ref);
     if (!divisionId || !p) continue; // an invalid plan is caught elsewhere (executePlan's own resolve())
     candidates.push({
       divisionId,
       person: p,
+      personKey: "id" in person ? person.id : person.ref,
+      isNewPerson: !("id" in person),
+      sourceRows,
       entrantKey: "id" in entrant ? `id:${entrant.id}` : `ref:${entrant.ref}`,
       isNewEntrant: !("id" in entrant),
     });
@@ -341,6 +399,10 @@ export async function commitImport(
   // `getLimit` to null = UNLIMITED, which `assertWithinLimit` treats as no
   // limit at all. Only the int-valued plans (community, 50 at V319:18) bind.
   const bulkCap = await getLimit(auth.orgId, "import.bulk");
+  // The Lichess seat gate for an online division in the file (online-seat-gate.ts): the plan is only made inside the transaction, so
+  // the gate asks whether the ORG has an online division at all, and reads the org's links for the roster check below. Asked here
+  // for the same reason as the entitlements above.
+  const seatGate = await openOrgSeatGate(auth);
 
   const result = await withTenant(auth.orgId, async (tx) => {
     // One import commit at a time per org — serialises the club/team upsert
@@ -363,7 +425,11 @@ export async function commitImport(
     assertWithinLimit(bulkCap, "import.bulk", rows.length);
     const config = ImportConfig.parse(imp.config);
     const snapshot = pinSnapshot(await fetchSnapshot(tx), imp.pin_division_id);
-    const plan = planImport(rows, snapshot, config);
+    const plan = planChecked(rows, snapshot, config);
+
+    // The named refusal first: it is the same answer every other chess writer gives, and it says which rows.
+    const chessRows = plan.issues.filter((i) => i.code === CHESS_INDIVIDUAL_ONLY).map((i) => i.rowNo);
+    if (chessRows.length > 0) throw chessIndividualOnlyError({ rows: chessRows });
 
     const blocking = plan.issues.filter((i) => i.severity === "error");
     if (blocking.length > 0) {
@@ -379,6 +445,8 @@ export async function commitImport(
     // the writes below), evaluate each against its division's first-class
     // columns, and block (or audit-and-proceed) the WHOLE commit atomically.
     const rosterCandidates = await collectImportRosterCandidates(tx, plan.ops);
+    // Before the eligibility gate: this refusal cannot be overridden, so the organiser should not be walked through an override first.
+    await assertImportRostersPlayOnline(tx, seatGate, rosterCandidates);
     if (rosterCandidates.length > 0) {
       const divisionIds = [...new Set(rosterCandidates.map((c) => c.divisionId))];
       const divisions = await loadEligibilityDivisions(tx, divisionIds);
@@ -534,10 +602,37 @@ export async function commitImport(
                          plan = ${tx.json(plan as never)}
       where id = ${id}`;
     return { importId: id, stats: plan.stats, divisionIds };
-  });
+  }, seatGate.tenant);
 
   if (idemKey) await cacheSet(idemKey, result, IDEM_TTL_SECONDS);
   return result;
+}
+
+/** The seat gate over a plan's roster adds: on every ONLINE division the file puts people on, each person must hold a Lichess link
+ *  that plays - the bar `createEntrants` holds a roster to, from the same gate. The whole commit is refused (it is one transaction:
+ *  nothing is written), with the gate's own code and people, and the FILE ROWS that put them there, since a CSV's reader finds a
+ *  player by row. Someone this plan creates has no id yet and no account to link, so they are named by their rows alone. */
+async function assertImportRostersPlayOnline(
+  tx: Tx,
+  seatGate: SeatGate,
+  candidates: readonly RosterEligibilityCandidate[],
+): Promise<void> {
+  const byDivision = new Map<string, RosterEligibilityCandidate[]>();
+  for (const c of candidates) byDivision.set(c.divisionId, [...(byDivision.get(c.divisionId) ?? []), c]);
+  for (const [divisionId, group] of byDivision) {
+    try {
+      await seatGate.assertRoster(tx, divisionId, [...new Set(group.map((c) => c.personKey))]);
+    } catch (err) {
+      if (!isLichessRosterRefusal(err)) throw err;
+      const named = new Set(Array.isArray(err.extra?.person_ids) ? (err.extra.person_ids as string[]) : []);
+      const refused = group.filter((c) => named.has(c.personKey));
+      throw new HttpError(err.status, err.message, err.code, {
+        // Real people only: a `ref` is the plan's own placeholder for someone who does not exist yet.
+        person_ids: [...new Set(refused.filter((c) => !c.isNewPerson).map((c) => c.personKey))],
+        rows: [...new Set(refused.flatMap((c) => c.sourceRows))].sort((a, b) => a - b),
+      });
+    }
+  }
 }
 
 // Execute ops in bucket order (clubs → teams → persons → entrants → rosters,

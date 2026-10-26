@@ -805,7 +805,7 @@ jobs:
       #
       # Backgrounded. This is the long pole of the setup phase (52-55s across
       # all five e2e runners on run 32008189967) and nothing before the `wait:`
-      # below reads its output, so the placement image build and the Chromium
+      # below reads its output, so the placement image pull and the Chromium
       # download ride alongside it instead of queueing behind it. Its log
       # interleaves with theirs — that is the documented cost of `background:`,
       # and the reason the DB steps above stay in the foreground as their own
@@ -840,31 +840,25 @@ jobs:
       #
       # So without this container the spec could only ever prove the fallback,
       # which is the opposite of its purpose. Same pattern as ci.yml's smoke
-      # job and placement-ci.yml's `integration` job; the image build is
-      # cached (type=gha) and shared with them.
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      # jobs: the image is PULLED from the pin (packages/scheduler/VENDORED.json)
+      # and retagged `placement-service:ci`, never built here.
       #
-      # Nothing consumes this build's imageid/digest; `load: true` puts the
-      # image in the local daemon, which is a side effect, not an output. It
-      # stays in the foreground (not backgrounded like the production build
-      # above) — an undocumented backgrounded `uses:` step was measured on
-      # this repo to lose its outputs (probe run 32011114196).
-      - name: Build the placement service image
+      # It is a `run:` step and stays in the foreground, exactly where the build
+      # step it replaces was (the `wait:` below names its id). Backgrounding it
+      # like the production build above is a possible later optimisation, not
+      # done here. The old reason for staying foreground was a measurement about
+      # an undocumented backgrounded `uses:` step losing its outputs (probe run
+      # 32011114196); it does not apply to a `run:` step, but the Playwright cache
+      # RESTORE below is still a `uses:` step, and still stays foreground for it.
+      - name: Pull the pinned placement image
         id: image
-        uses: docker/build-push-action@v6
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
+        run: bash packages/scheduler/scripts/placement-image.sh pull
       # Moved UP from after "Start server", where it used to sit: nothing about
       # downloading a browser needs a database, a build or a running server, so
       # down there it was ~16s of dead serial time. Browsers cached per
       # Playwright version. The cache RESTORE stays in the foreground (it is
       # ~3s, and a backgrounded actions/cache loses its outputs — see the note
-      # on the image build above); only the download is backgrounded.
+      # on the image pull above); only the download is backgrounded.
       # RESTORE ONLY. All seven jobs used to race one key on save and six lost
       # it every run — "Failed to save: Unable to reserve cache with key
       # playwright-…, another job may be creating this cache" (run
@@ -1399,7 +1393,7 @@ jobs:
       #
       # Backgrounded. This is the long pole of the setup phase (52-55s across
       # all five e2e runners on run 32008189967) and nothing before the `wait:`
-      # below reads its output, so the placement image build and the Chromium
+      # below reads its output, so the placement image pull and the Chromium
       # download ride alongside it instead of queueing behind it. Its log
       # interleaves with theirs — that is the documented cost of `background:`,
       # and the reason the DB steps above stay in the foreground as their own
@@ -1411,29 +1405,23 @@ jobs:
         env:
           SKIP_TYPECHECK: "1"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
       #
-      # Nothing consumes this build's imageid/digest; `load: true` puts the
-      # image in the local daemon, which is a side effect, not an output. It
-      # stays in the foreground (not backgrounded like the production build
-      # above) — an undocumented backgrounded `uses:` step was measured on
-      # this repo to lose its outputs (probe run 32011114196).
-      - name: Build the placement service image
+      # The image is PULLED from the pin (packages/scheduler/VENDORED.json) and
+      # retagged `placement-service:ci`; nothing is built here. It is a `run:`
+      # step and stays in the foreground, exactly where the build step it
+      # replaces was; backgrounding it like the production build above is a
+      # possible later optimisation, not done here. (The old reason — an
+      # undocumented backgrounded `uses:` step was measured to lose its outputs,
+      # probe run 32011114196 — applies to the cache RESTORE below, not to this.)
+      - name: Pull the pinned placement image
         id: image
-        uses: docker/build-push-action@v6
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
+        run: bash packages/scheduler/scripts/placement-image.sh pull
       # Moved UP from after "Start server", where it used to sit: nothing about
       # downloading a browser needs a database, a build or a running server, so
       # down there it was ~16s of dead serial time. Browsers cached per
       # Playwright version. The cache RESTORE stays in the foreground (it is
       # ~3s, and a backgrounded actions/cache loses its outputs — see the note
-      # on the image build above); only the download is backgrounded.
+      # on the image pull above); only the download is backgrounded.
       # RESTORE ONLY. All seven jobs used to race one key on save and six lost
       # it every run — "Failed to save: Unable to reserve cache with key
       # playwright-…, another job may be creating this cache" (run
@@ -1774,7 +1762,7 @@ jobs:
       #
       # Backgrounded. This is the long pole of the setup phase (52-55s across
       # all five e2e runners on run 32008189967) and nothing before the `wait:`
-      # below reads its output, so the placement image build and the Chromium
+      # below reads its output, so the placement image pull and the Chromium
       # download ride alongside it instead of queueing behind it. Its log
       # interleaves with theirs — that is the documented cost of `background:`,
       # and the reason the DB steps above stay in the foreground as their own
@@ -1786,29 +1774,23 @@ jobs:
         env:
           SKIP_TYPECHECK: "1"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
       #
-      # Nothing consumes this build's imageid/digest; `load: true` puts the
-      # image in the local daemon, which is a side effect, not an output. It
-      # stays in the foreground (not backgrounded like the production build
-      # above) — an undocumented backgrounded `uses:` step was measured on
-      # this repo to lose its outputs (probe run 32011114196).
-      - name: Build the placement service image
+      # The image is PULLED from the pin (packages/scheduler/VENDORED.json) and
+      # retagged `placement-service:ci`; nothing is built here. It is a `run:`
+      # step and stays in the foreground, exactly where the build step it
+      # replaces was; backgrounding it like the production build above is a
+      # possible later optimisation, not done here. (The old reason — an
+      # undocumented backgrounded `uses:` step was measured to lose its outputs,
+      # probe run 32011114196 — applies to the cache RESTORE below, not to this.)
+      - name: Pull the pinned placement image
         id: image
-        uses: docker/build-push-action@v6
-        with:
-          context: services/placement
-          file: services/placement/Dockerfile
-          push: false
-          load: true
-          tags: placement-service:ci
+        run: bash packages/scheduler/scripts/placement-image.sh pull
       # Moved UP from after "Start server", where it used to sit: nothing about
       # downloading a browser needs a database, a build or a running server, so
       # down there it was ~16s of dead serial time. Browsers cached per
       # Playwright version. The cache RESTORE stays in the foreground (it is
       # ~3s, and a backgrounded actions/cache loses its outputs — see the note
-      # on the image build above); only the download is backgrounded.
+      # on the image pull above); only the download is backgrounded.
       # RESTORE ONLY. All seven jobs used to race one key on save and six lost
       # it every run — "Failed to save: Unable to reserve cache with key
       # playwright-…, another job may be creating this cache" (run

@@ -16,6 +16,7 @@ import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
+import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
 import {
   SPOT_HOLDERS,
   freesTeamSlot,
@@ -29,6 +30,8 @@ import {
   fallbackOrigin,
   promoteOldestWaitlisted,
   promoteWaitlistedRow,
+  promotionSeats,
+  openRegistrationSeatGateFor,
   releaseSoloSignUpPlacement,
   withdrawRegistrationOrganiser,
   clearExpiresIfNoLongerNeeded,
@@ -110,6 +113,8 @@ export async function approveRegistration(
   // from inside a `withTenant` callback that already pins a connection is
   // the self-deadlock class documented on entitlement-freeze.ts.
   const frozen = await frozenCompetitionIds(auth.orgId);
+  // Approving seats the registrant: the seat gate, asked out here too (online-seat-gate.ts).
+  const seatGate = await openRegistrationSeatGateFor(auth, regId);
   const row = await withTenant(auth.orgId, async (tx) => {
     const reg = await orgReg(tx, regId);
     if (reg.status === "confirmed") return reg; // idempotent success
@@ -137,13 +142,13 @@ export async function approveRegistration(
     }
     const competitionId = await divisionCompetitionId(tx, reg.division_id);
     assertNotFrozen(frozen, competitionId);
-    await materialise(tx, reg, settings.entrant_kind);
+    await materialise(tx, reg, settings.entrant_kind, seatGate);
     await audit(tx, competitionId, auth.orgId, "registration.approved", {
       registration_id: regId,
       paid: reg.status === "paid",
     }, auth.userId);
     return orgRegAfter(tx, regId);
-  });
+  }, seatGate?.tenant);
   fireDivisionRevalidate(row.division_id);
   // RS008: fire-and-forget, strictly AFTER the transaction above has
   // committed — see registrations.ts's confirmRegistration for the
@@ -229,6 +234,8 @@ export async function rejectRegistration(
     // division's TEAM capacity (registration-submit.ts's `taken` gate
     // excludes it), so rejecting one must never promote a waitlisted team
     // off its own status change. See freesTeamSlot's own doc comment.
+    // No seat gate: a rejection needs a MANUAL-approval division (checked above), and a promotion seats the registrant at once only
+    // under auto-approval (`promotionSeats`) - here it opens a pay window or leaves the entry for the organiser, seating nobody.
     const promoted = freesTeamSlot(reg) ? await promoteOldestWaitlisted(tx, reg.division_id, settings) : null;
     await audit(tx, competitionId, auth.orgId, "registration.rejected", {
       registration_id: regId,
@@ -367,6 +374,12 @@ export async function promoteFromWaitlist(
   // a pay window and emails the registrant, which is not work a frozen org
   // should be able to start.
   const frozen = await frozenCompetitionIds(auth.orgId);
+  // A promotion seats the registrant at once only on a free, auto-approval division (`promotionSeats`); there the seat gate decides.
+  // An EXPLICIT promote of one named entry refuses it (the organiser chose them); the oldest-first default skips to the next
+  // who can be seated (`promoteOldestWaitlisted`). Asked out here, before the transaction.
+  const seatGate: RegistrationSeatGate | undefined = promotionSeats(await loadSettings(sql, divisionId))
+    ? await openRegistrationSeatGate({ divisionId, registrationId: opts.registrationId, auth })
+    : undefined;
   const result = await withTenant(auth.orgId, async (tx) => {
     const competitionId = await divisionCompetitionId(tx, divisionId);
     assertNotFrozen(frozen, competitionId);
@@ -387,10 +400,10 @@ export async function promoteFromWaitlist(
       } else if (target.status !== "waitlisted") {
         throw new HttpError(422, `Cannot promote a ${target.status} registration`);
       } else {
-        promoted = await promoteWaitlistedRow(tx, target.id, target.group_id, settings);
+        promoted = await promoteWaitlistedRow(tx, target.id, target.group_id, settings, seatGate);
       }
     } else {
-      promoted = await promoteOldestWaitlisted(tx, divisionId, settings);
+      promoted = await promoteOldestWaitlisted(tx, divisionId, settings, undefined, seatGate);
     }
 
     if (promoted && !alreadySettled) {
@@ -409,7 +422,7 @@ export async function promoteFromWaitlist(
       // never through here) exposed to the identical bug.
     }
     return { promoted, competitionId, settings, freshlyPromoted: !!promoted && !alreadySettled };
-  });
+  }, seatGate?.tenant);
 
   if (!result.promoted) return null;
   fireDivisionRevalidate(divisionId, result.competitionId);
