@@ -376,7 +376,7 @@ const address = (): string => `${RUN}-${randomUUID().slice(0, 8)}@x.test`;
 function magicLinkScenario(): KindScenario {
   const recipient = address();
   return {
-    // The route passes no locale to `magicLinkEmail` (route.ts:84): account email is rendered in `en` until wave 3.
+    // The link follows the account's language (D4), and the route creates the account here: a brand-new account has none, so `en`.
     locale: "en",
     subjectKey: "magicLink.subject",
     subjectVars: {},
