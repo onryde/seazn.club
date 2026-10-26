@@ -43,6 +43,8 @@
 //   - email_verification: the route POST of app/api/admin/users/[id]/resend-verification/route.ts, a staff press for an unverified `fr`
 //     account: the token and its row are one transaction on the pool, no organisation, and the request's own deferred attempt sends it.
 //     The staff member is signed in through the session stand-in below; `requireStaff` itself is real.
+//   - funnel_claim: the route POST of app/api/funnel/start/route.ts, a visitor's start (no account, no organisation, so `en`): the
+//     draft and its row are one transaction on the pool, and the request makes the first attempt after commit.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -89,6 +91,7 @@ vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as resendVerificationPost } from "@/app/api/admin/users/[id]/resend-verification/route";
+import { POST as funnelStartPost } from "@/app/api/funnel/start/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { assignSoloSignUp } from "@/server/usecases/registration-assign";
@@ -185,7 +188,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 3's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T4) deletes it from NOT_YET_MOVED, and here. The last move (T4c) empties both. */
 const WAVE_3_UNMOVED: readonly OutboxKind[] = [
-  "funnel_claim",
   "email_change_confirmation",
   "email_change_notice",
   "account_deletion",
@@ -215,6 +217,7 @@ async function cleanUp(): Promise<void> {
   await sql`delete from online_chess_audit where actor_user_id = any(${made.userIds}::uuid[])`;
   // The staff press's audit row references its staff member without a cascade.
   await sql`delete from staff_audit_log where actor_id in (select id from users where email like ${like})`;
+  await sql`delete from funnel_drafts where email like ${like}`;
   await sql`delete from users where email like ${like} or id = any(${made.userIds}::uuid[])`;
 }
 
@@ -839,6 +842,30 @@ async function emailVerificationScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real start of the funnel by a visitor: no account and no organisation, so the claim is rendered in `en` (D4's last step); the
+ *  request makes the first attempt. */
+function funnelClaimScenario(): KindScenario {
+  const recipient = address();
+  const competitionName = `Sweep Open ${RUN}`;
+  return {
+    locale: "en",
+    subjectKey: "funnelClaim.subject",
+    subjectVars: { competitionName },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await funnelStartPost(
+        new Request("https://sweep.test/api/funnel/start", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email: recipient, name: competitionName, sport: "Badminton", entrants: 8 }),
+        }),
+      );
+      expect(res.status, "premise: the real route answered 200").toBe(200);
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -934,6 +961,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         pass_revoked: passRevoked,
         trial_ending: trialEnding,
         email_verification: verification,
+        funnel_claim: funnelClaimScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
