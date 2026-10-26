@@ -290,13 +290,13 @@
       "reason": "The flag only moves the played ledger's `wins` value; creditedMetrics lays the double-walkover credit over it, and that credit carries every key the ledger has (wins, white, black) at 0, so the played value is never observable."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:910:15 ConditionalExpression → false",
+      "mutant": "src/sports/boardgame/boardgame.ts:915:15 ConditionalExpression → false",
       "original": "payload.moves === undefined",
       "line": "...(payload.moves === undefined ? {} : { moves: payload.moves }),",
       "reason": "With no moves the mutant hands decideResult `extra.moves: undefined` instead of omitting the key; decideResult is the only reader and re-tests `extra.moves === undefined` before writing state, so the same state is built either way."
     },
     {
-      "mutant": "src/sports/boardgame/boardgame.ts:911:15 ConditionalExpression → false",
+      "mutant": "src/sports/boardgame/boardgame.ts:916:15 ConditionalExpression → false",
       "original": "payload.winnerPerson === undefined",
       "line": "...(payload.winnerPerson === undefined ? {} : { winnerPerson: payload.winnerPerson }),",
       "reason": "With no winnerPerson the mutant hands decideResult `extra.winnerPerson: undefined` instead of omitting the key; decideResult is the only reader, tests `extra.winnerPerson !== undefined` for its draw guard and `=== undefined` before writing state, so it refuses and writes exactly as before."
@@ -458,7 +458,7 @@
       "reason": "breakerOf reads gameIndex only through `(gameIndex + boardIndex) % 2`, and length + 1 differs from length - 1 by 2, so the parity, and the breaker the summary reports, is identical."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:1220:12 EqualityOperator → adjust.delta <= 0",
+      "mutant": "src/sports/carrom/carrom.ts:1236:12 EqualityOperator → adjust.delta <= 0",
       "original": "adjust.delta < 0",
       "line": "(adjust.delta < 0 ? adjust.entrantId : opponentOf(adjust.entrantId));",
       "reason": "The branch is reached only for an adjust that parsed through CarromGameAdjust, whose delta refine rejects 0, so delta is never 0 here and `< 0` and `<= 0` agree."
@@ -1634,25 +1634,25 @@
       "reason": "`unitLabel.one` has no reader: kernel.ts only ever reads `unitLabel.many` (makeMetrics and the folded sets_won/sets_lost labels), the built module does not carry `unitLabel` forward, and nothing else in the package imports it, so the singular label is unobservable."
     },
     {
-      "mutant": "src/sports/setbased/tabletennis.ts:56:21 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/tabletennis.ts:59:21 StringLiteral → \"\"",
       "original": "\"Game\"",
       "line": "unitLabel: { one: \"Game\", many: \"Games\" },",
       "reason": "`unitLabel.one` has no reader: kernel.ts only ever reads `unitLabel.many` (makeMetrics and the folded sets_won/sets_lost labels), the built module does not carry `unitLabel` forward, and nothing else in the package imports it, so the singular label is unobservable."
     },
     {
-      "mutant": "src/sports/setbased/volleyball.ts:96:21 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/volleyball.ts:104:21 StringLiteral → \"\"",
       "original": "\"Set\"",
       "line": "unitLabel: { one: \"Set\", many: \"Sets\" },",
       "reason": "`unitLabel.one` has no reader: kernel.ts only ever reads `unitLabel.many` (makeMetrics and the folded sets_won/sets_lost labels), the built module does not carry `unitLabel` forward, and nothing else in the package imports it, so the singular label is unobservable."
     },
     {
-      "mutant": "src/sports/setbased/tabletennis.ts:87:15 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/tabletennis.ts:95:15 StringLiteral → \"\"",
       "original": "\"alternate\"",
       "line": "setStart: \"alternate\",",
       "reason": "`serve.setStart` is read in one place, kernel.ts openNextSet, as `rotation.setStart === \"set-winner\"`; the type is the two-value union \"set-winner\" | \"alternate\", so `\"\"` takes the same fall-through branch as \"alternate\" (the next set opens with the opponent of the previous opener) and no stream can tell them apart."
     },
     {
-      "mutant": "src/sports/setbased/volleyball.ts:127:15 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/volleyball.ts:143:15 StringLiteral → \"\"",
       "original": "\"alternate\"",
       "line": "setStart: \"alternate\",",
       "reason": "`serve.setStart` is read in one place, kernel.ts openNextSet, as `rotation.setStart === \"set-winner\"`; the type is the two-value union \"set-winner\" | \"alternate\", so `\"\"` takes the same fall-through branch as \"alternate\" (the next set opens with the opponent of the previous opener) and no stream can tell them apart."
