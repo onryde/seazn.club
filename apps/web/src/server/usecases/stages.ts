@@ -58,7 +58,7 @@ import { resolveModule } from "@/server/engine-db";
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
-import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
+import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandings } from "@/server/engine-db/competition";
 import { pinStageTableRules } from "@/server/engine-db/table-rules";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
@@ -130,6 +130,7 @@ import {
   resolveProgressionSource,
   sourceShapeOf,
   sourcesToTables,
+  persistCrossGroupDraws,
   standingsHash,
   poolTableRowsAcrossSources,
   validateStageProgression,
@@ -4469,7 +4470,7 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
 //
 // BRACKET_KINDS mirrors engine-db/competition.ts's own list — losersOfRound
 // only makes sense sourced from one of these.
-const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
+export const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
 // Exported (F3 review item 5): stage-seeding.ts's sourcesToTables needs the
 // SAME set to know when a source needs bracket data for a roundLosers take
 // rule — see loadBracketFixtures' own export note below.
@@ -4991,7 +4992,10 @@ async function tablesForCompletedStage(
   // not per-round results) — only a bracket-kind source has any, so this is
   // a cheap no-op query result for every other kind.
   const bracket = BRACKET_KINDS.has(stage.kind) ? await loadBracketFixtures(tx, stage.id) : undefined;
-  return { pools, ...(bracket ? { bracket } : {}) };
+  // W2d T12 (spec §5.9, X-TB-7): best-Nth compares groups by THIS stage's pinned cross-group order and its stored
+  // cross-group draws — only a real table has them (an americano or bracket source has no cross-group comparison).
+  const crossGroup = REAL_TABLE_KINDS.has(stage.kind) ? await loadCrossGroupRules(tx, stage.id) : undefined;
+  return { pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) };
 }
 
 async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<SeededStage | null> {
@@ -5050,7 +5054,9 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
     // (seedNextStage seeds INTO it), so `next.kind` is the real targetKind
     // ruling 13's snake/bracket-target guard needs on this resolution path
     // too, not just at createStages' save-time validateStageProgression call.
-    const { qualifiers } = resolveProgression(progression, shapes, sourceTables, next.kind);
+    const { qualifiers, newLotsDraws } = resolveProgression(progression, shapes, sourceTables, next.kind);
+    // W2d T12 (spec §5.9): a cross-group draw best-Nth made is stored with its source, under the division lock held above.
+    await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);
     const entrants = qualifiers.map((q) => q.entrantId);
     log.info(
       { event: "qualification_resolved", stageId: completedStageId, nextStageId: next.id, kind: current.kind, count: entrants.length },
@@ -5359,7 +5365,9 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // real targetKind ruling 13's snake/bracket-target guard needs to fire
     // on this resolution path too, not just at createStages' save-time
     // validateStageProgression call.
-    const { qualifiers, ties } = resolveProgression(progression, shapes, tables, stage.kind);
+    const { qualifiers, ties, newLotsDraws } = resolveProgression(progression, shapes, tables, stage.kind);
+    // W2d T12 (spec §5.9): stored under the division lock held above, so a re-proposal seats the same draw.
+    await persistCrossGroupDraws(tx, resolved, newLotsDraws);
 
     const slotBySeed = await destinationSlotsBySeed(tx, stageId);
     if (slotBySeed.size === 0) {

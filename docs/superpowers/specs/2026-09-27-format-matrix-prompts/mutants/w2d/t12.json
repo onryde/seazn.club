@@ -712,5 +712,79 @@
     "name": "X-TB-8 every key"
    }
   ]
+ },
+ {
+  "id": "t12-web-completed-stage-drops-cross-group",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  return { pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) };",
+  "replace": "  return { pools, ...(bracket ? { bracket } : {}) /*MUT*/ };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup, the whole way: a stage SAVE"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup seedNextStage: best-Nth seats"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-proposal-drops-cross-group",
+  "file": "apps/web/src/server/usecases/stage-seeding.ts",
+  "find": "    tables.push({ pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) });",
+  "replace": "    tables.push({ pools, ...(bracket ? { bracket } : {}) /*MUT*/ });",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup, the whole way: the setup-timing proposal"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup computeSeedProposal: the setup-timing proposal"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-seed-next-stage-draw-not-stored",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);",
+  "replace": "    /*MUT*/ void newLotsDraws;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup seedNextStage: a cross-group tie only lots"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-proposal-draw-not-stored",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    await persistCrossGroupDraws(tx, resolved, newLotsDraws);",
+  "replace": "    /*MUT*/ void newLotsDraws;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup computeSeedProposal: a cross-group tie only lots"
+   }
+  ]
  }
 ]

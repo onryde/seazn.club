@@ -19,6 +19,7 @@ import { buildTemplateStages } from "@/lib/format-templates";
 import type { CreateStages } from "@/server/api-v1/schemas";
 import { ENGINE_HTTP, v1 } from "@/server/api-v1/http";
 import { startDivision } from "@/server/usecases/schedule";
+import { putStageRules } from "@/server/usecases/stage-rules";
 import { scoreEvent } from "@/server/usecases/scoring";
 import { addFixture, completeStage, generateStageFixtures, issueChallenge, rebuildStageFixtures } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedFootballCatalog } from "@/server/usecases/__tests__/_seed";
@@ -721,7 +722,125 @@ describe.skipIf(!HAS_DB)("W2d T12: a source stage's cross-group rules, as progre
     expect(before.map((t) => t.pool_id === null), "no phantom null-pool table").toEqual([false, false]);
   }, 180_000);
 
-  it.todo(
-    "HELD until task-12-usecase-wiring.patch lands (usecases/** is T10's lane): seedNextStage and computeSeedProposal read best-Nth through loadCrossGroupRules — a B1-migrated source keeps its seats, an unpinned badminton source seats by set_diff, and a cross-group draw is stored under the source's pool null",
-  );
+  /** Two groups of two feeding a knockout by best-Nth (the two group winners compared across groups), played: group 1's
+   *  winner W1 by `g1`, group 2's W2 by `g2`. `pin` rewrites the group stage's pinned cross-group order (and its source)
+   *  before completion. Returns the winners and the group stage. */
+  const bestOfWinners = async (
+    timing: "on_complete" | "setup",
+    g1: readonly [number, number],
+    g2: readonly [number, number],
+    pin?: { crossGroup: readonly string[]; source: string },
+    save?: { crossGroup: readonly string[]; when: "pending" | "started" },
+  ) => {
+    const s = await tableScene({
+      stages: [
+        { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } },
+        {
+          seq: 2, kind: "knockout", name: "KO", config: {},
+          progression: { sources: [{ stage: "previous", take: [{ kind: "bestNth", nth: 1, count: 2 }] }], placement: "rank_order", timing },
+        },
+      ],
+    });
+    const [groupId, koId] = [s.stageIds[0]!, s.stageIds[1]!];
+    if (timing === "setup") await generateStageFixtures(s.auth, koId);
+    await generateStageFixtures(s.auth, groupId);
+    // The real producer: the stage's own cross-group order saved through the stage-rules door, pending (the start pins
+    // it) or started and not yet scored (the save re-pins it).
+    const saveOrder = () => putStageRules(s.auth, groupId, { crossGroupTiebreakers: save!.crossGroup as TiebreakerKey[] });
+    if (save?.when === "pending") await saveOrder();
+    await startDivision(s.auth, s.divisionId);
+    if (save?.when === "started") await saveOrder();
+    const fixtures = await seatedFixtures(groupId);
+    expect(fixtures, "rig: two groups of two, one match each").toHaveLength(2);
+    const [f1, f2] = [fixtures[0]!, fixtures[1]!];
+    if (pin !== undefined) {
+      const [row] = await sql<{ pin: { sources: Record<string, string> } }[]>`select table_rules_pinned as pin from stages where id = ${groupId}`;
+      const sources = { ...row!.pin.sources, crossGroup: pin.source };
+      await sql`update stages set table_rules_pinned = table_rules_pinned || ${sql.json({ crossGroup: pin.crossGroup, sources } as never)} where id = ${groupId}`;
+    }
+    await genericResult(s.auth, groupId, f1.home, f1.away, g1[0], g1[1]);
+    await genericResult(s.auth, groupId, f2.home, f2.away, g2[0], g2[1]);
+    const done = await completeStage(s.auth, groupId);
+    return { s, groupId, done, W1: f1.home, W2: f2.home };
+  };
+  const crossDraws = (stageId: string) => sql<{ members: string[]; drawn_order: string[] }[]>`
+    select members, drawn_order from stage_lots_draws where stage_id = ${stageId} and pool_id is null and superseded_at is null`;
+
+  it("X-TB-7 crossGroup seedNextStage: best-Nth seats by the source's PINNED cross-group order — the stage's own order moves the seats, a V472-migrated pin keeps them where they were", async () => {
+    // W1 won 3-1 (GD +2, GF 3); W2 won 5-4 (GD +1, GF 5). Goals for first: W2, W1. The migrated list (GD first): W1, W2.
+    const own = await bestOfWinners("on_complete", [3, 1], [5, 4], { crossGroup: FOR_FIRST, source: "stage" });
+    expect(own.done.qualified?.entrants).toEqual([own.W2, own.W1]);
+    const { cross: MIGRATED_CROSS } = v472();
+    const migrated = await bestOfWinners("on_complete", [3, 1], [5, 4], { crossGroup: MIGRATED_CROSS, source: "migrated" });
+    expect(migrated.done.qualified?.entrants).toEqual([migrated.W1, migrated.W2]);
+    // Neither comparison drew lots: nothing stored.
+    expect(await crossDraws(own.groupId)).toEqual([]);
+  }, 300_000);
+
+  it("X-TB-7 crossGroup seedNextStage: a cross-group tie only lots can split is drawn once and STORED under the source's pool null, and the seats follow the stored draw", async () => {
+    // Both winners 2-1: level on points, GD and GF — the derived cross-group order (generic: points, diff, for, lots) ends
+    // in lots.
+    const tie = await bestOfWinners("on_complete", [2, 1], [2, 1]);
+    const pinned = (await stageRules(tie.groupId)).pin as { crossGroup: TiebreakerKey[] };
+    expect(pinned.crossGroup.at(-1), "premise: the derived cross-group order ends in lots").toBe("lots");
+    const stored = await crossDraws(tie.groupId);
+    expect(stored, "one cross-group draw, stored").toHaveLength(1);
+    expect([...stored[0]!.members].sort()).toEqual([tie.W1, tie.W2].sort());
+    expect(tie.done.qualified?.entrants).toEqual(stored[0]!.drawn_order);
+    // The loader hands the stored draw back for the next resolution.
+    const rules = await sql.begin((tx) => loadCrossGroupRules(tx, tie.groupId));
+    expect(rules.lotsDraws?.get([tie.W1, tie.W2].sort().join(","))?.order).toEqual(stored[0]!.drawn_order);
+  }, 300_000);
+
+  it("X-TB-7 crossGroup computeSeedProposal: the setup-timing proposal reads the same pinned cross-group order", async () => {
+    const own = await bestOfWinners("setup", [3, 1], [5, 4], { crossGroup: FOR_FIRST, source: "stage" });
+    expect(own.done.seed_proposal, "rig: a setup-timing source completes into a proposal").toBeDefined();
+    const [proposal] = await sql<{ computed: { qualifiers: { entrantId: string }[] } }[]>`
+      select computed from stage_seed_proposals where id = ${own.done.seed_proposal!.id}`;
+    expect(proposal!.computed.qualifiers.map((q) => q.entrantId)).toEqual([own.W2, own.W1]);
+  }, 300_000);
+
+  it("X-TB-7 crossGroup computeSeedProposal: a cross-group tie only lots can split is drawn once and STORED under the source's pool null, and the proposal follows the stored draw", async () => {
+    const tie = await bestOfWinners("setup", [2, 1], [2, 1]);
+    expect(tie.done.seed_proposal, "rig: a setup-timing source completes into a proposal").toBeDefined();
+    const stored = await crossDraws(tie.groupId);
+    expect(stored, "one cross-group draw, stored").toHaveLength(1);
+    expect([...stored[0]!.members].sort()).toEqual([tie.W1, tie.W2].sort());
+    const [proposal] = await sql<{ computed: { qualifiers: { entrantId: string }[] } }[]>`
+      select computed from stage_seed_proposals where id = ${tie.done.seed_proposal!.id}`;
+    expect(proposal!.computed.qualifiers.map((q) => q.entrantId)).toEqual(stored[0]!.drawn_order);
+  }, 300_000);
+
+  // The seam the whole way (AGENTS.md class 1): no pin written by hand. The organiser's save (putStageRules) is the
+  // producer, the start (pending) or the re-pin (started) carries it into the pin, and completion's best-Nth
+  // (seedNextStage / computeSeedProposal → loadCrossGroupRules → resolveProgression) is the consumer. W1 won 3-1 (GD +2,
+  // GF 3), W2 won 5-4 (GD +1, GF 5): the derived order (generic: points, diff, for, lots — the stage order without its
+  // head-to-head) seats W1 first, the saved FOR_FIRST seats W2 first, so the seats witness which order was read.
+  const GROUP_ORDER = generic.defaultTiebreakers("group", generic.configSchema.parse(GENERIC_CONFIG));
+  const pinnedCross = async (stageId: string) => {
+    const pin = (await stageRules(stageId)).pin as { crossGroup: string[]; sources: Record<string, string> };
+    return { order: pin.crossGroup, source: pin.sources.crossGroup };
+  };
+
+  it("X-TB-7 crossGroup, the whole way: a stage SAVE of its own cross-group order — pending (pinned at start) or started (re-pinned) — is the order best-Nth seats by", async () => {
+    const control = await bestOfWinners("on_complete", [3, 1], [5, 4]);
+    expect(await pinnedCross(control.groupId), "control: no save, the derived order").toEqual({ order: defaultCrossGroup(GROUP_ORDER), source: "derived" });
+    expect(control.done.qualified?.entrants, "control: GD first seats W1").toEqual([control.W1, control.W2]);
+
+    for (const when of ["pending", "started"] as const) {
+      const saved = await bestOfWinners("on_complete", [3, 1], [5, 4], undefined, { crossGroup: FOR_FIRST, when });
+      expect(await pinnedCross(saved.groupId), `${when}: the save reached the pin`).toEqual({ order: FOR_FIRST, source: "stage" });
+      expect(saved.done.qualified?.entrants, `${when}: goals for first seats W2`).toEqual([saved.W2, saved.W1]);
+      expect(await crossDraws(saved.groupId), `${when}: no lots drawn`).toEqual([]);
+    }
+  }, 600_000);
+
+  it("X-TB-7 crossGroup, the whole way: the setup-timing proposal reads the order a stage SAVE pinned", async () => {
+    const saved = await bestOfWinners("setup", [3, 1], [5, 4], undefined, { crossGroup: FOR_FIRST, when: "pending" });
+    expect(await pinnedCross(saved.groupId)).toEqual({ order: FOR_FIRST, source: "stage" });
+    expect(saved.done.seed_proposal, "rig: a setup-timing source completes into a proposal").toBeDefined();
+    const [proposal] = await sql<{ computed: { qualifiers: { entrantId: string }[] } }[]>`
+      select computed from stage_seed_proposals where id = ${saved.done.seed_proposal!.id}`;
+    expect(proposal!.computed.qualifiers.map((q) => q.entrantId)).toEqual([saved.W2, saved.W1]);
+  }, 300_000);
 });
