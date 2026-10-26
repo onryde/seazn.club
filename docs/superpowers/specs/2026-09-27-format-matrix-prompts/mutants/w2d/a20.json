@@ -1,0 +1,32 @@
+[
+  {
+    "id": "a20-overall-scope-after-the-guard",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "  if (run.h2hScope === \"overall\" && cls.length >= 3) return [cls];\n  // W2d (ST-G12): the block reads a mini-table only when it is complete. (A\n  // re-applied or excluded sub-group of a complete class is complete.)\n  if (!scheduleComplete(cls, run)) return partialSchedule(cls, run);\n",
+    "replace": "  // W2d (ST-G12): the block reads a mini-table only when it is complete. (A\n  // re-applied or excluded sub-group of a complete class is complete.)\n  if (!scheduleComplete(cls, run)) return partialSchedule(cls, run);\n  if (run.h2hScope === \"overall\" && cls.length >= 3) return [cls];\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/partial-schedule.test.ts"
+        ],
+        "name": "X-TB-8 D3: a stage ranking ≥3-way ties on overall metrics"
+      }
+    ]
+  },
+  {
+    "id": "a20-overall-scope-on-pairs",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "  if (run.h2hScope === \"overall\" && cls.length >= 3) return [cls];\n",
+    "replace": "  if (run.h2hScope === \"overall\" && cls.length >= 2) return [cls];\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/partial-schedule.test.ts"
+        ],
+        "name": "X-TB-8 D3: 'overall' covers ties of three or more only"
+      }
+    ]
+  }
+]

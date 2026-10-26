@@ -97,6 +97,8 @@ interface Scene {
   readonly kind?: "league" | "swiss";
   /** A pinned stage's rules (B1): never re-validated, so an order W2d would refuse to save still ranks. */
   readonly pinned?: TableRulesPin;
+  /** The stage's circular-H2H mode for ≥3-way ties (Jul3/05 §5): default the mini-table. */
+  readonly h2hScope?: "mini_table" | "overall";
 }
 
 /** The stage's own path: every match paid through the sport's rule, ranked by the resolved order (or `order`), with the
@@ -122,6 +124,7 @@ function rank(s: Scene): readonly StandingsRow[] {
       ...(s.module.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: s.module.partialScheduleOrder }),
       ...(s.module.winsCount === undefined ? {} : { winsCount: s.module.winsCount }),
       ...(s.seeds === undefined ? {} : { seeds: new Map(Object.entries(s.seeds)) }),
+      ...(s.h2hScope === undefined ? {} : { h2hScope: s.h2hScope }),
     },
     fixtures,
   );
@@ -264,6 +267,49 @@ describe("W2d T12 — IIHF partial schedule (X-TB-8, IH-TB-2)", () => {
     expect(rowOf(rows, "A").metrics.gd).toBe(6);
     // A second call over the same stage is the same table.
     expect(rank(complete)).toStrictEqual(rows);
+  });
+
+  it("X-TB-8 D3: a stage ranking ≥3-way ties on overall metrics (h2h_scope 'overall') skips the block before the partial-schedule guard — no fewest-played, no note", () => {
+    // Jul3/05 §5: in a tie of three or more the organiser's 'overall' mode skips the mini-table and the later keys of the
+    // stage's order decide. Ice hockey's declared order after the block is overall GD, GF, seed, lots (premise). On the
+    // half-played table A, B and C are on 3: GD A +3, B +1, C +3; GF C 5, A 3 → C, A, B, with no 'h2h_incomplete' note,
+    // since no head-to-head step was skipped for want of a schedule — the organiser skipped every one.
+    const order = icehockey.defaultTiebreakers("league", cfgOf(icehockey));
+    expect(order.slice(order.indexOf("h2h_reapply") + 1)).toEqual(["diff", "for", "seed", "lots"]);
+    const rows = rank({ ...IIHF_HALF, h2hScope: "overall" });
+    expect(ids(rows)).toEqual(["C", "A", "B", "D"]);
+    expect(rowOf(rows, "C").tieBreak).toStrictEqual({ key: "for", with: ["A"] });
+    expect(rowOf(rows, "B").tieBreak).toStrictEqual({ key: "diff", with: ["A", "C"] });
+    for (const row of rows) expect(row.tieBreak?.note, row.entrantId).toBeUndefined();
+    expect(rows, "anti-vacuity: every row checked").toHaveLength(4);
+    // The wrong precedence — the guard first — ranks the class by the partial order (fewest played: A, B, then C), noted.
+    const guarded = rank(IIHF_HALF);
+    expect(ids(guarded)).toEqual(["A", "B", "C", "D"]);
+    expect(ids(guarded)).not.toEqual(ids(rows));
+    // 'mini_table' is the default: stated, it ranks as the default does.
+    expect(rank({ ...IIHF_HALF, h2hScope: "mini_table" })).toStrictEqual(guarded);
+  });
+
+  it("X-TB-8 D3: 'overall' covers ties of three or more only — a tied PAIR with an incomplete mini-schedule still takes the partial order", () => {
+    // Jul3/05 §5 names ≥3-way ties. Five teams, four games played: C beat B 1-0 and D 2-0 (6 points); A beat D 1-0 and B
+    // beat E 4-0 (3 points each). The tied class on 3 is the PAIR A, B, and A–B is still to play, so their mini-schedule
+    // is incomplete: the partial order ranks them (RBG:349-350), fewest played first — A (one game) above B (two), though
+    // B's GD (+3) is the better. D and E (0 points, D–E to play) are a pair the same way: E (one game) above D (two).
+    const rows = rank({
+      module: icehockey, decided: [goals("C", "B", 1, 0), goals("C", "D", 2, 0), goals("A", "D", 1, 0), goals("B", "E", 4, 0)],
+      pending: [["A", "B"], ["A", "C"], ["A", "E"], ["B", "D"], ["C", "E"], ["D", "E"]], h2hScope: "overall",
+    });
+    expect(rows.map((r) => [r.entrantId, r.points, r.played, r.metrics.gd])).toEqual([
+      ["C", 6, 2, 3], ["A", 3, 1, 1], ["B", 3, 2, 3], ["E", 0, 1, -4], ["D", 0, 2, -3],
+    ]);
+    expect(rowOf(rows, "A").tieBreak).toStrictEqual({ key: "fewest_played", with: ["B"] });
+    expect(rowOf(rows, "E").tieBreak).toStrictEqual({ key: "fewest_played", with: ["D"] });
+    // The wrong reading — 'overall' applied to a pair, which skips the block — leaves overall GD to decide: B (+3) above
+    // A (+1), D (−3) above E (−4). Without the schedule the block finds no meeting between them and gives the same answer.
+    expect(ids(rank({
+      module: icehockey, decided: [goals("C", "B", 1, 0), goals("C", "D", 2, 0), goals("A", "D", 1, 0), goals("B", "E", 4, 0)],
+      pending: [["A", "B"], ["A", "C"], ["A", "E"], ["B", "D"], ["C", "E"], ["D", "E"]], h2hScope: "overall", schedule: "none",
+    }))).toEqual(["C", "B", "A", "D", "E"]);
   });
 
   it("X-TB-8 a second call over the half-played table is the same table", () => {
