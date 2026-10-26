@@ -21,7 +21,15 @@ export {
   ROUND_VOIDED_REASON,
   cancelQueuedEmails,
 } from "./cancel";
-export { latestEmailStatus, latestStatusesOfRows, lockQueuedEmails, purgeOldEmails, type EmailStatusRow, type QueuedEmailRow } from "./status";
+export {
+  latestEmailStatus,
+  latestStatusesOfRows,
+  lockQueuedEmails,
+  purgeOldEmails,
+  scrubEndedRecipients,
+  type EmailStatusRow,
+  type QueuedEmailRow,
+} from "./status";
 export {
   attemptClaimed,
   dispatchNow,

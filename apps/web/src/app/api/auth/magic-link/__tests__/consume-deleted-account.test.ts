@@ -9,7 +9,7 @@
 //
 // Driven through the real producer and consumer: createLoginLink issues the link, the REAL DELETE /api/users/me deletes the
 // account (real createSession/destroySession on a cookie jar), the REAL POST /api/auth/magic-link/consume redeems it, all on
-// real Postgres. The stand-ins are the outside world only: `next/headers`, the rate limiter, the deletion email, Stripe.
+// real Postgres. The stand-ins are the outside world only: `next/headers`, the rate limiter, Stripe.
 //
 // "Refused" is not asserted against a number written in this file: the expected response is the one the route gives an
 // UNKNOWN token, measured in the same test, so the claim is "exactly what an invalid link gets", with no new copy.
@@ -21,10 +21,6 @@ import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 vi.mock("@/lib/stripe", () => ({ getStripe: () => ({ subscriptions: { cancel: vi.fn(async () => ({})) } }) }));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendAccountDeletionEmail: vi.fn(async () => {}),
-}));
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),
   rateLimit: vi.fn(async () => {}),

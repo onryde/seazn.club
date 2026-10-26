@@ -16,8 +16,8 @@
 // WHAT HAPPENS TO THE ACCOUNT'S ROWS: the ones still `queued` end `expired` / `account_deleted`, body and lease gone, and are handed
 // back for the kind's hook; EVERY matching row, whatever its status, then has its recipient replaced by the account's placeholder.
 //
-// Driven end to end against a real Postgres through the REAL DELETE /api/users/me. Only Stripe, the session half of auth, the
-// account-deletion email, the rate limiter and `next/headers` are stand-ins. The expected placeholder is typed here from the rule
+// Driven end to end against a real Postgres through the REAL DELETE /api/users/me. Only Stripe, the session half of auth, the rate
+// limiter and `next/headers` are stand-ins. The expected placeholder is typed here from the rule
 // (`deleted-<id>@deleted.invalid`), never read back from the code under test.
 //
 // Sport: not applicable. Account deletion is sport-agnostic, and the only kind that is addressed to an account is the chess invite.
@@ -32,10 +32,6 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
   destroySession: vi.fn(async () => {}),
   invalidateUser: vi.fn(async () => {}),
   invalidateUserOrgs: vi.fn(async () => {}),
-}));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendAccountDeletionEmail: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),

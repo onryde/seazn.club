@@ -29,7 +29,6 @@ export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess
 /** The `send*` exports of lib/email.ts as of the start of phase 3 wave 1 (spec: "49 send* exports"), copied once from the file.
  *  `sendWithResult` is the outbox's own typed sender and is not among them. */
 export const SENDER_ALLOWLIST: readonly string[] = [
-  "sendAccountDeletionEmail",
   "sendAiRunCostAlertEmail",
   "sendClaimInviteEmail",
   "sendConnectBankAlertEmail",
@@ -66,7 +65,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  way, in the spec's table order: each kind task (T2-T4) deletes its own, and the last move (T4c) closes the list again. The sweep
  *  covers every kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "account_deletion",
   "org_invite",
   "claim_invite",
   "official_invite",
@@ -96,7 +94,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   funnel_claim: null,
   email_change_confirmation: null,
   email_change_notice: null,
-  account_deletion: "sendAccountDeletionEmail",
+  account_deletion: null,
   org_invite: "sendInviteEmail",
   claim_invite: "sendClaimInviteEmail",
   official_invite: "sendOfficialInviteEmail",

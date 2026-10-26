@@ -471,12 +471,12 @@ export async function emailChangeNoticeEmail(newEmail: string, locale: Locale): 
   return emailChangeNoticeTemplate(newEmail, dict);
 }
 
-export async function sendAccountDeletionEmail(
-  to: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The notice that an account was deleted, RENDERED and not sent. The account deletion (`DELETE /api/users/me`) queues what this returns
+ *  on the email outbox (kind `account_deletion`, transactional, to the address the account had) in the deletion's own transaction, and
+ *  makes the first attempt after commit. Nothing sends it directly. */
+export async function accountDeletionEmail(locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...accountDeletionTemplate(dict) });
+  return accountDeletionTemplate(dict);
 }
 
 // ---------------------------------------------------------------------------

@@ -39,7 +39,7 @@ const KEK = "ab".repeat(32);
 const API_KEY = "re_test";
 const MIN = 60_000;
 
-const ZERO: OutboxTickReport = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0, purged: 0 };
+const ZERO: OutboxTickReport = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0, purged: 0, scrubbed: 0 };
 
 const http = (status: number, errorName: string): DeliverResult => ({ ok: false, reason: "http", status, errorName, detail: `RAW-${status}` });
 

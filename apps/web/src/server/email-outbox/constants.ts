@@ -82,6 +82,11 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
  *  person it happened. */
 export const ACCOUNT_MAIL_KINDS: readonly OutboxKind[] = ["email_verification", "email_change_confirmation", "email_change_notice"];
 
+/** Kinds whose row gives up its address once it has ended (phase-3 §6, P-W3-6): the deletion notice is addressed to a person whose
+ *  account is gone, so the address may live only while the row can still be sent. The worker's scrub (status.ts
+ *  `scrubEndedRecipients`, tick step 7a) replaces it with the deleted account's placeholder, found by the row's `user / <account>` ref. */
+export const SCRUBBED_WHEN_ENDED: readonly OutboxKind[] = ["account_deletion"];
+
 /** Spec order: the happy path first (`queued` -> `sending` -> `sent` -> `delivered`, `delayed` between `sent` and
  *  `delivered`), then the other terminal states. Twelve members; the spec's "Statuses" paragraph is the authority. */
 export const OUTBOX_STATUSES = [

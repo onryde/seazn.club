@@ -8,12 +8,12 @@ import {
 } from "@/lib/auth";
 import { handler, HttpError } from "@/lib/http";
 import { deleteAccountSchema, updateProfileSchema } from "@/lib/types";
-import { sendAccountDeletionEmail } from "@/lib/email";
+import { accountDeletionEmail } from "@/lib/email";
 import { cancelBillingGroup } from "@/lib/billing";
 import { groupIdsOwnedBy } from "@/lib/billing-group";
-import { toLocale } from "@/lib/i18n";
+import { deferred } from "@/lib/deferred";
 import { unlinkLichess } from "@/server/usecases/external-accounts";
-import { afterEndedBadly } from "@/server/email-outbox";
+import { afterEndedBadly, dispatchNow, enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
 import { anonymiseAccountEmails, deletedAccountPlaceholder } from "@/server/email-outbox/account-deletion";
 
 /**
@@ -164,7 +164,7 @@ export async function DELETE(req: Request) {
     const purgeAfter = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
     const anonEmail = deletedAccountPlaceholder(user.id);
 
-    const endedEmails = await sql.begin(async (tx) => {
+    const deletion = await sql.begin(async (tx) => {
       // Remove from all orgs they were sole owner of (no other members — safe to dissolve)
       await tx`
         delete from org_members where user_id = ${user.id}`;
@@ -190,21 +190,40 @@ export async function DELETE(req: Request) {
           purge_after   = ${purgeAfter.toISOString()}
         where id = ${user.id}`;
 
-      return endedByDeletion;
+      // The notice that the account is gone, to the address it had, queued in the deletion's own transaction (account mail has no
+      // organisation): a deletion that rolls back queues nothing. It is queued after the sweep above, which does not match this kind
+      // (ACCOUNT_MAIL_KINDS), so the sweep cannot end it. Language: the account's own pick, read by requireUser before the anonymisation;
+      // the account step is skipped (`userId: null`), because the account is deleted in this transaction and is no longer a source. The
+      // once-key (the account) is a belt: a deleted account cannot ask again (requireUser refuses it). Once the row has ended, the worker
+      // takes the address out of it (SCRUBBED_WHEN_ENDED, P-W3-6).
+      const noticeId = await enqueueEmailOnce(tx, {
+        kind: "account_deletion",
+        refType: "user",
+        refId: user.id,
+        dedupeKey: onceKey("account_deletion", "user", user.id),
+        orgId: null,
+        to: user.email,
+        transactional: true,
+        expiresAt: expiryWithin(null),
+        ...(await accountDeletionEmail(await recipientLocale(tx, { pick: user.locale, userId: null, orgDefault: null }))),
+      });
+
+      return { endedByDeletion, noticeId };
     });
 
     await invalidateUser(user.id);
     await invalidateUserOrgs(user.id);
 
-    // Best-effort notification before destroying session
-    await sendAccountDeletionEmail(user.email, toLocale(user.locale));
+    // After commit. Deferred: nobody reads the outcome, and a failed attempt is the retry worker's to finish.
+    const { noticeId } = deletion;
+    if (noticeId) deferred(() => dispatchNow([noticeId]));
     await destroySession();
 
     // The emails the deletion ended are badly-ended rows like any other: the chess hook releases a seat whose every email has now ended,
     // so the board reads "still to invite" for the organiser. After the commit, as everywhere else the hooks run, and AFTER the sign-out:
     // the hook locks the board's bridge row, and a lock wait must not delay clearing the session cookie. It never throws (a hook that
     // fails is logged, and the worker's re-drive finishes the release), so it cannot fail a deletion that already committed.
-    await afterEndedBadly(endedEmails);
+    await afterEndedBadly(deletion.endedByDeletion);
 
     return { ok: true };
   });

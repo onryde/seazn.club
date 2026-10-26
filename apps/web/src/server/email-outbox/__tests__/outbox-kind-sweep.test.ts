@@ -49,6 +49,10 @@
 //     stand-in): the confirmation to the NEW address is queued in the request's transaction, and the request makes the first attempt.
 //   - email_change_notice: the same route by another `es` account: the notice to the OLD address, once per request, is queued in the
 //     same transaction, and the request makes the first attempt.
+//   - account_deletion: the route DELETE of app/api/users/me/route.ts by an `nl` account (signed in through the session stand-in): the
+//     notice to the address the account had is queued in the deletion's own transaction, once per account, and the request's own
+//     deferred attempt sends it. The harness finds the row by that address before any tick runs, and judges it by id afterwards, so
+//     the worker's scrub of an ended notice's address (step 7a) does not hide it.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -97,6 +101,7 @@ import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as resendVerificationPost } from "@/app/api/admin/users/[id]/resend-verification/route";
 import { POST as funnelStartPost } from "@/app/api/funnel/start/route";
 import { POST as changeEmailPost } from "@/app/api/auth/change-email/route";
+import { DELETE as deleteAccount } from "@/app/api/users/me/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { assignSoloSignUp } from "@/server/usecases/registration-assign";
@@ -193,7 +198,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 3's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T4) deletes it from NOT_YET_MOVED, and here. The last move (T4c) empties both. */
 const WAVE_3_UNMOVED: readonly OutboxKind[] = [
-  "account_deletion",
   "org_invite",
   "claim_invite",
   "official_invite",
@@ -211,7 +215,8 @@ async function cleanUp(): Promise<void> {
   await sql`
     delete from email_outbox
      where ref_id like ${like} or lower(recipient) like ${like} or recipient_user_id = any(${made.userIds}::uuid[])
-        or recipient_user_id in (select id from users where email like ${like})`;
+        or recipient_user_id in (select id from users where email like ${like})
+        or (ref_type = 'user' and ref_id = any(${made.userIds}::text[]))`;
   // A sponsor org's orders hold it (a RESTRICT foreign key, V299): they go first.
   if (made.orgIds.length > 0) await sql`delete from sponsor_orders where org_id = any(${made.orgIds}::uuid[])`;
   if (made.orgIds.length > 0) await sql`delete from organizations where id = any(${made.orgIds}::uuid[])`;
@@ -897,6 +902,27 @@ async function emailChangeNoticeScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real deletion of an `nl` account by itself: the notice goes to the address the account had, in its language, and the request's
+ *  own (deferred) attempt sends it. The deletion replaces the account's address, so the clean-up finds the account (and the notice, once
+ *  a tick has scrubbed its address) by id. */
+async function accountDeletionScenario(): Promise<KindScenario> {
+  const user = await runUser({ locale: "nl" });
+  made.userIds.push(user.id);
+  return {
+    locale: "nl",
+    subjectKey: "accountDeletion.subject",
+    subjectVars: {},
+    recipient: user.email,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await signedInAs(user.id, () =>
+        deleteAccount(new Request("https://sweep.test/api/users/me", { method: "DELETE", body: JSON.stringify({ confirm: "DELETE" }) })),
+      );
+      expect(res.status, "premise: the real route answered 200").toBe(200);
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -994,6 +1020,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const notice = await emailChangeNoticeScenario();
     expect(dictionarySubject("es", notice.subjectKey, notice.subjectVars)).not.toBe(dictionarySubject("en", notice.subjectKey, notice.subjectVars));
 
+    const deletion = await accountDeletionScenario();
+    expect(dictionarySubject("nl", deletion.subjectKey, deletion.subjectVars)).not.toBe(
+      dictionarySubject("en", deletion.subjectKey, deletion.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1017,6 +1048,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         funnel_claim: funnelClaimScenario(),
         email_change_confirmation: confirmation,
         email_change_notice: notice,
+        account_deletion: deletion,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

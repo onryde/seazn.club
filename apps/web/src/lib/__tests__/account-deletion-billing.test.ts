@@ -33,7 +33,6 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
   invalidateUser: vi.fn(async () => {}),
   invalidateUserOrgs: vi.fn(async () => {}),
 }));
-vi.mock("@/lib/email", () => ({ sendAccountDeletionEmail: vi.fn(async () => {}) }));
 
 import { sql } from "@/lib/db";
 import { DELETE } from "@/app/api/users/me/route";

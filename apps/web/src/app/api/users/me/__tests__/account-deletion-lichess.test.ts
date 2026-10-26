@@ -6,7 +6,8 @@
 // the handler soft-deleted `users` and never touched user_external_accounts.
 //
 // Real Postgres required; skipped without DATABASE_URL. The session half of
-// auth and the email are stubbed (as account-deletion-billing.test.ts does);
+// auth is stubbed (as account-deletion-billing.test.ts does); the deletion
+// notice is the real outbox row (keyless here, so its attempt never fetches);
 // the link is written by the real upsertLichessLink, so the token is sealed
 // under the real envelope and the revoke carries the OPENED token.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -25,7 +26,6 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
   invalidateUser: vi.fn(async () => {}),
   invalidateUserOrgs: vi.fn(async () => {}),
 }));
-vi.mock("@/lib/email", () => ({ sendAccountDeletionEmail: vi.fn(async () => {}) }));
 
 import { sql } from "@/lib/db";
 import { DELETE } from "@/app/api/users/me/route";
