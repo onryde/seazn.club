@@ -835,7 +835,13 @@ async function read(out: string): Promise<void> {
       const emptyPoints = Object.fromEntries(
         POINTS_KEYS.filter((k) => defaultConfig !== null && k in defaultConfig).map((k) => [k, parsed(m, { ...first, [k]: {} })?.[k] ?? null]),
       );
-      return [m.key, { version: m.version, defaultTiebreakers: m.defaultTiebreakers, variants: m.variants, defaultConfig, emptyPoints }];
+      // At W2D_BASE `defaultTiebreakers` is the pre-W2d LIST, the one this capture records; W2d made it a per-kind method,
+      // which JSON.stringify would silently drop — so a run on any later tree refuses instead of writing a capture without it.
+      const defaultTiebreakers: unknown = (m as { defaultTiebreakers: unknown }).defaultTiebreakers;
+      if (!Array.isArray(defaultTiebreakers)) {
+        throw new Error(`${m.key}: defaultTiebreakers is no list here - capture at W2D_BASE (pre-W2d), never a later tree`);
+      }
+      return [m.key, { version: m.version, defaultTiebreakers, variants: m.variants, defaultConfig, emptyPoints }];
     }),
   );
   const doc = {
