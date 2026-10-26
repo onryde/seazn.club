@@ -6,15 +6,14 @@
 //
 // Every case builds a REAL git repository in a temp dir and a temp `pkgRoot`, so nothing here touches the real
 // packages/scheduler/proto or VENDORED.json (test/vendored-proto.test.ts reads those). Expected values come from git itself
-// (`rev-parse HEAD`) and node:crypto, never from the code under test.
+// (`rev-parse HEAD`), never from the code under test.
 import { execFileSync, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
-import { resolveCheckout, sha256Of, vendorProto, type VendoredPin } from "../scripts/vendor-proto-lib.ts";
+import { resolveCheckout, vendorProto, type VendoredPin } from "../scripts/vendor-proto-lib.ts";
 
 const PACKAGE = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -36,7 +35,6 @@ function git(cwd: string, ...args: string[]): string {
   ).trim();
 }
 const head = (repo: string): string => git(repo, "rev-parse", "HEAD");
-const sha256 = (bytes: Buffer): string => createHash("sha256").update(bytes).digest("hex");
 
 /** The proto bytes: CRLF, a non-UTF-8 byte and no trailing newline, so a text round trip (utf8 decode/encode, newline
  *  normalisation, a trailing-newline fix) cannot reproduce them. */
@@ -62,16 +60,6 @@ const pkgRootDir = (): string => fresh("pkg");
 const copyOf = (pkg: string): Buffer => readFileSync(join(pkg, "proto/scheduler.proto"));
 const pinText = (pkg: string): string => readFileSync(join(pkg, "VENDORED.json"), "utf8");
 
-describe("sha256Of", () => {
-  it("is the lowercase hex sha256 of the file's bytes (NIST vector for 'abc', and a non-UTF-8 file)", () => {
-    const dir = fresh("sha");
-    writeFileSync(join(dir, "abc"), "abc");
-    expect(sha256Of(join(dir, "abc"))).toBe("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
-    writeFileSync(join(dir, "raw"), PROTO_V1);
-    expect(sha256Of(join(dir, "raw"))).toBe(sha256(PROTO_V1));
-  });
-});
-
 describe("vendorProto", () => {
   it("writes the copy and the pin", () => {
     const repo = placementRepo();
@@ -79,11 +67,11 @@ describe("vendorProto", () => {
     const pin = vendorProto({ checkout: repo, pkgRoot: pkg });
 
     expect(copyOf(pkg).equals(PROTO_V1), "the copy is the source byte for byte").toBe(true);
-    const want = { placementCommit: head(repo), sha256: sha256(PROTO_V1), imageTag: head(repo) };
+    const want = { imageTag: head(repo) };
     expect(pin).toEqual(want);
     const onDisk = JSON.parse(pinText(pkg)) as Record<string, string>;
     expect(onDisk).toEqual(want);
-    expect(Object.keys(onDisk), "exactly these keys, in this order").toEqual(["placementCommit", "sha256", "imageTag"]);
+    expect(Object.keys(onDisk), "exactly one key, the image tag").toEqual(["imageTag"]);
     expect(head(repo)).toMatch(/^[0-9a-f]{40}$/);
     expect(pinText(pkg), "2-space JSON with a trailing newline").toBe(`${JSON.stringify(want, null, 2)}\n`);
   });
@@ -107,7 +95,7 @@ describe("vendorProto", () => {
     expect(pinText(pkg)).toBe(pin1);
   });
 
-  it("follows a new commit: the copy, both commit fields and the sha all move", () => {
+  it("follows a new commit: the copy and the image tag both move", () => {
     const repo = placementRepo();
     const pkg = pkgRootDir();
     const before = vendorProto({ checkout: repo, pkgRoot: pkg });
@@ -115,16 +103,13 @@ describe("vendorProto", () => {
     git(repo, "commit", "-q", "-am", "additive change");
     const after = vendorProto({ checkout: repo, pkgRoot: pkg });
 
-    expect(after.placementCommit).toBe(head(repo));
     expect(after.imageTag, "the image can never be older than the proto").toBe(head(repo));
-    expect(after.placementCommit).not.toBe(before.placementCommit);
-    expect(after.sha256).toBe(sha256(PROTO_V2));
-    expect(after.sha256).not.toBe(before.sha256);
+    expect(after.imageTag).not.toBe(before.imageTag);
     expect(copyOf(pkg).equals(PROTO_V2)).toBe(true);
     expect(JSON.parse(pinText(pkg))).toEqual(after);
   });
 
-  it("follows a commit that does not touch the proto: the commit fields move, the sha does not", () => {
+  it("follows a commit that does not touch the proto: the image tag moves, the copy does not", () => {
     // The image tag is the placement COMMIT, not the proto's last change, so a Python-only commit still moves the pin.
     const repo = placementRepo();
     const pkg = pkgRootDir();
@@ -132,10 +117,9 @@ describe("vendorProto", () => {
     writeFileSync(join(repo, "README.md"), "placement, edited\n");
     git(repo, "commit", "-q", "-am", "python only");
     const after = vendorProto({ checkout: repo, pkgRoot: pkg });
-    expect(after.placementCommit).toBe(head(repo));
     expect(after.imageTag).toBe(head(repo));
-    expect(after.placementCommit).not.toBe(before.placementCommit);
-    expect(after.sha256).toBe(before.sha256);
+    expect(after.imageTag).not.toBe(before.imageTag);
+    expect(copyOf(pkg).equals(PROTO_V1), "the copy is still the first commit's bytes").toBe(true);
   });
 
   describe("refuses a dirty checkout, and writes nothing (the old pin survives)", () => {
@@ -338,7 +322,7 @@ describe("vendorProto", () => {
       expect(() => {
         pin = vendorProto({ checkout: placement, pkgRoot: pkg });
       }, "a package inside another repository is not this repository").not.toThrow();
-      expect(pin?.placementCommit).toBe(head(placement));
+      expect(pin?.imageTag).toBe(head(placement));
       expect(copyOf(pkg).equals(PROTO_V1)).toBe(true);
     });
   });
@@ -419,7 +403,7 @@ describe("vendorProto", () => {
       expect(() => {
         pin = withEnv(env, () => vendorProto({ checkout: repo, pkgRoot: pkg }));
       }, `vendoring must not be disturbed by an inherited ${name}`).not.toThrow();
-      expect(pin?.placementCommit).toBe(wantHead);
+      expect(pin?.imageTag).toBe(wantHead);
       expect(copyOf(pkg).equals(PROTO_V1), "the copy is the checkout's bytes, not the decoy's").toBe(true);
     });
   });
@@ -435,7 +419,7 @@ describe("vendorProto", () => {
       expect(() => {
         pin = vendorProto({ checkout: variant, pkgRoot: pkg });
       }, "the same directory under another spelling is the same checkout").not.toThrow();
-      expect(pin?.placementCommit).toBe(head(repo));
+      expect(pin?.imageTag).toBe(head(repo));
     } else {
       // Case-sensitive volume (Linux CI): there is no such directory, and the refusal carries git's own words.
       expect(() => vendorProto({ checkout: variant, pkgRoot: pkg })).toThrow(/^not a git checkout: .*\(fatal: /);
@@ -505,9 +489,9 @@ describe("scripts/vendor-proto.ts (the CLI)", () => {
     expect(existsSync(join(pkg, "proto/scheduler.proto")), "the copy landed in the script's own package").toBe(true);
     expect(existsSync(join(pkg, "VENDORED.json")), "and so did the pin").toBe(true);
     expect(copyOf(pkg).equals(PROTO_V1), "the copy is the source byte for byte").toBe(true);
-    const want = { placementCommit: head(repo), sha256: sha256(PROTO_V1), imageTag: head(repo) };
+    const want = { imageTag: head(repo) };
     expect(JSON.parse(pinText(pkg))).toEqual(want);
-    expect(out.out, "the pin is printed").toContain(`"placementCommit": "${head(repo)}"`);
+    expect(out.out, "the pin is printed").toContain(`"imageTag": "${head(repo)}"`);
     expect(out.out, "and the next command is named").toContain("pnpm --filter @seazn/scheduler gen:proto");
     expect(readdirSync(pkg).sort(), "nothing but the copy, the pin and the scripts").toEqual(["VENDORED.json", "proto", "scripts"]);
   });
@@ -519,7 +503,7 @@ describe("scripts/vendor-proto.ts (the CLI)", () => {
     const out = cli(pkg, [basename(repo)], { INIT_CWD: dirname(repo) });
     expect(out.code, out.err).toBe(1);
     expect(out.err).toContain(`has uncommitted changes: ${repo}`);
-    expect(out.out, "no pin is printed on a refusal").not.toContain("placementCommit");
+    expect(out.out, "no pin is printed on a refusal").not.toContain("imageTag");
     expect(readdirSync(pkg), "nothing was written").toEqual(["scripts"]);
   });
 

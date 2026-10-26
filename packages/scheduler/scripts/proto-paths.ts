@@ -8,5 +8,5 @@ export const PKG_ROOT: string = path.resolve(fileURLToPath(import.meta.url), "..
 /** The directory protoc is pointed at. It holds exactly one file: the placement repo's `proto/scheduler.proto`. */
 export const VENDORED_PROTO_DIR: string = path.join(PKG_ROOT, "proto");
 export const VENDORED_PROTO: string = path.join(VENDORED_PROTO_DIR, "scheduler.proto");
-/** The pin: which placement commit the copy came from, the copy's sha256, and the image built from that commit. */
+/** The pin: the tag of the placement image CI pulls, which is the placement commit the copy came from. */
 export const VENDORED_JSON: string = path.join(PKG_ROOT, "VENDORED.json");

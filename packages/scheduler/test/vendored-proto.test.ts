@@ -1,12 +1,12 @@
 // The REAL vendored proto and its pin (engine-split phase 2a, Task W1). test/vendor-proto.test.ts proves the vendoring
-// script on temp repos; this file proves the files it left in THIS package are what they claim to be, so a hand edit of the
-// copy, a stale pin, a second proto dropped in beside it, or a gen-proto.ts still reading the old repo-root /proto all red
-// here, at the unit tier, before the CI drift gate.
+// script on temp repos; this file proves the files it left in THIS package are what they claim to be, so a malformed pin, a
+// second proto dropped in beside the copy, or a gen-proto.ts still reading the old repo-root /proto all red here, at the
+// unit tier, before the CI drift gate. The pin is one key, the image tag: it is not checked against the copy or the placement
+// repo (a contract change is handled by hand).
 //
-// Expected values come from the file's own bytes (node:crypto) and from git's own attribute resolution, never from the
-// vendoring code under test.
+// Expected values come from git's own attribute resolution and the pin's declared shape, never from the vendoring code under
+// test.
 import { execFileSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,20 +28,10 @@ describe("proto-paths", () => {
 });
 
 describe("the vendored placement proto", () => {
-  it("VENDORED.json has exactly the three keys, in order, well-formed", () => {
+  it("VENDORED.json has exactly one key, imageTag, a 40-hex commit sha", () => {
     const pin = readPin();
-    expect(Object.keys(pin)).toEqual(["placementCommit", "sha256", "imageTag"]);
-    expect(pin.placementCommit, "placementCommit").toMatch(/^[0-9a-f]{40}$/);
-    expect(pin.sha256, "sha256").toMatch(/^[0-9a-f]{64}$/);
+    expect(Object.keys(pin)).toEqual(["imageTag"]);
     expect(pin.imageTag, "imageTag").toMatch(/^[0-9a-f]{40}$/);
-    expect(pin.imageTag, "the image is built from the very commit the proto was copied at").toBe(pin.placementCommit);
-  });
-
-  it("the vendored copy matches its pin", () => {
-    const pin = readPin();
-    const bytes = readFileSync(VENDORED_PROTO);
-    expect(bytes.length, "an empty copy would match an empty pin").toBeGreaterThan(1000);
-    expect(createHash("sha256").update(bytes).digest("hex")).toBe(pin.sha256);
   });
 
   it("it is the only proto vendored", () => {

@@ -2,6 +2,6 @@
 # conversion on checkout or commit, or a Windows clone reads a different digest than the one pinned.
 docs/contracts/** -text
 
-# The scheduler's vendored copy of the placement proto is CHECKSUMMED byte for byte (packages/scheduler/VENDORED.json pins its
-# sha256, and the TypeScript stubs embed its comments): no end-of-line conversion, or a Windows clone reads a different digest.
+# The scheduler's vendored copy of the placement proto is kept byte for byte (it is copied from the placement checkout, and the
+# TypeScript stubs embed its comments): no end-of-line conversion, or a Windows clone reads different bytes than were vendored.
 packages/scheduler/proto/** -text
