@@ -1027,6 +1027,11 @@ describe.skipIf(!process.env.DATABASE_URL)("match room - the opponent's camera p
     vi.stubEnv("REALTIMEKIT_APP_ID", "app-test");
     vi.stubEnv("REALTIMEKIT_PLAYER_PRESET", "seazn_chess_player");
     vi.stubEnv("REALTIMEKIT_ARBITER_PRESET", "seazn_chess_arbiter");
+    // The spy is installed BEFORE the boards are seeded, and seeding a started division pushes a Supabase realtime broadcast
+    // (schedule.ts afterScheduleWrite -> realtime.ts) whenever BOTH of these are set - as a dev `.env.local` sets them and CI does
+    // not. Blank them so the watch sees only what a ROOM READ sends: 10 broadcasts from seeding once read as "10 vendor calls".
+    vi.stubEnv("NEXT_PUBLIC_SUPABASE_URL", "");
+    vi.stubEnv("SUPABASE_SERVICE_ROLE_KEY", "");
     const fetchSpy = vi.fn(async () => new Response(JSON.stringify({ success: true, data: [] }), { status: 200 }));
     vi.stubGlobal("fetch", fetchSpy);
     try {
