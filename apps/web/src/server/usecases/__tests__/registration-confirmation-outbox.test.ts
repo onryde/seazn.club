@@ -455,7 +455,7 @@ describe.skipIf(!HAS_DB)("the submit queues the confirmation on the outbox (DB)"
     expect(out.status).toBe(201);
     const groupId = String(out.body.data!.group_id);
     expect(enqueueGate.calls, "premise: the producer did reach the (refusing) enqueue").toBe(1);
-    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ groupId }), expect.stringContaining("confirmation"));
+    expect(spy).toHaveBeenCalledWith(expect.objectContaining({ groupId }), expect.stringContaining("could not be queued"));
     expect(await rowsOf(groupId), "nothing was queued").toHaveLength(0);
     const [reg] = await sql<{ status: string }[]>`select status from registrations where group_id = ${groupId}`;
     expect(reg!.status, "the cart still holds its spot").toBe("confirmed");
@@ -781,7 +781,8 @@ describe.skipIf(!HAS_DB)("D4: the confirmation's language, through the real prod
 // withdrawal), so the cart's total, the pay link and its deadline, the payment instructions, and the organisation's and the
 // competition's names. Only a RESEND refreshes it: the resend writes a new row, and the replace rule retires the stale one. Nothing
 // refreshes or cancels it on its own, and no cancel reason in CANCELLED_REASONS (round_voided, board_settled, fixture_deleted) is
-// about a registration, so a withdrawal does not cancel it (the second test documents that, as it stands).
+// about a registration, so a withdrawal does not cancel it (the second test documents that, as it stands). Accepted: a withdrawal
+// while a confirmation sits in retry only happens during a provider outage, so it is rare and no cancel path is built for it.
 
 describe.skipIf(!HAS_DB)("a queued confirmation is a frozen snapshot (DB)", () => {
   const paidLine = dictionarySubject("en", "registration.textFee", { amount: "£15.00" });
@@ -817,9 +818,9 @@ describe.skipIf(!HAS_DB)("a queued confirmation is a frozen snapshot (DB)", () =
   });
 
   it("CURRENT BEHAVIOUR: a withdrawal while the confirmation waits does not cancel it, the stale confirmation is what sends", async () => {
-    // There is no cancel reason for a registration (the three in CANCELLED_REASONS are about online chess boards), and the owner's ruling
-    // is not to invent one. This test pins what happens today so a change is a decision, not an accident: the registrant who has pulled
-    // out still gets the mail that was queued before they did, and it states their old state.
+    // There is no cancel reason for a registration (the three in CANCELLED_REASONS are about online chess boards). Accepted: rare (a
+    // confirmation only waits in retry during a provider outage). This test pins what happens today so a change is a decision, not an
+    // accident: the registrant who has pulled out still gets the mail that was queued before they did, and it states their old state.
     const w = await world({ fee: 1500 });
     deliverMock.mockReset().mockImplementation(later);
     const out = await submit(w);

@@ -51,6 +51,20 @@ describe("ResendConfirmation", () => {
     const island = renderIsland(ResendConfirmation, { groupId: "grp-1", token: "rg_tok" });
     await (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
     expect(island.text().toLowerCase()).toContain("sent");
+    expect(island.text()).toContain("Confirmation email sent");
+  });
+
+  // The email outbox answers 200 { sent: false } when the first attempt was not accepted (the mail stays queued and is retried).
+  // The page must not claim it was sent: it uses the existing "couldn't resend, try again or contact the organiser" copy.
+  it("a 200 with sent:false does NOT say the confirmation was sent: it shows the could-not-resend copy, with no empty detail line", async () => {
+    net.response = { sent: false };
+    const island = renderIsland(ResendConfirmation, { groupId: "grp-1", token: "rg_tok" });
+    await (propsOf(findButton(island.tree())).onClick as () => Promise<void>)();
+
+    expect(island.text()).toContain("We couldn't resend the confirmation");
+    expect(island.text()).not.toContain("Confirmation email sent");
+    const detailLines = island.tree().filter((e) => e.type === "p" && String(propsOf(e).className).includes("text-ink-muted"));
+    expect(detailLines, "a failure with no server detail renders no empty secondary line").toHaveLength(0);
   });
 
   // RS007 i18n follow-up — AUDIT FINDING: this used to render `err.message`

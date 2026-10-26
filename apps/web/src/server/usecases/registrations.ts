@@ -1799,7 +1799,7 @@ export async function notifySubmitted(
     // this session went unnoticed for weeks: the confirmation send failed
     // and nothing recorded it. Still fire-and-forget — the point is that a
     // failure stops being invisible, not that submit starts failing.
-    log.error({ err, groupId }, "registration: submit confirmation send failed");
+    log.error({ err, groupId }, "registration: submit confirmation could not be queued");
   }
 }
 
