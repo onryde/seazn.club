@@ -27,5 +27,6 @@ export {
 export { KIND_HOOKS, afterEndedBadly, type EndedRow, type KindHook } from "./hooks";
 export { OutboxKeyUnavailableError, assertOutboxCanQueue, outboxKeyProblem, type OutboxKeyProblem } from "./seal";
 export { classifyResult, nextAttemptAt, type Verdict } from "./classify";
+export { recipientLocale } from "./locale";
 export { outboxRoleOk } from "./role-check";
 export { PROVIDER_EVENT_STATUS, applyProviderEvent, type ProviderEventResult, type ProviderEventType } from "./provider-events";
