@@ -197,7 +197,7 @@ function scanImports(source: string, fromRel: string): Scan {
     const braces = /\{([^}]*)\}/.exec(clause);
     for (const token of (braces?.[1] ?? "").split(",")) {
       const t = token.trim();
-      if (t === "" || /^type\s/.test(t)) continue; // `{ type X }` is erased
+      if (t === "") continue; // (an inline `type X` reads as the name "type X", which is no gated name: erased imports never offend)
       const name = t.split(/\s+as\s+/)[0]!.trim();
       if (GATED_NAMES.includes(name)) offences.push(`${keyword === "import" ? "imports" : "re-exports"} ${name} from ${spec}`);
     }
@@ -293,6 +293,7 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
       "a type query": `const actual = await importOriginal<typeof import("@/lib/email")>();\nactual.sendInviteEmail();`,
       "a dynamic load that names nothing gated": `const m = await import("@/lib/email");\nm.sendInviteEmail(x);`,
       "a dynamic load of another outbox module, in a file that mocks deliver": `vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn() }));\nconst { latestEmailStatus } = await import("@/server/email-outbox/status");`,
+      "the type of a gated function, by a type query": `type Deliver = typeof import("@/lib/email").deliver;`,
       "a type taken off a dynamic import": `const f = (msg: import("@/server/email-outbox/transport").DeliverMessage) => msg;`,
       "a destructured sender": `const { sendInviteEmail } = await import("@/lib/email");`,
       "a vi.mock string": `vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn() }));`,
@@ -319,6 +320,20 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
   it("the exemption for lib/email.ts's own unit test is exact and still needed", () => {
     expect(OWN_TESTS).toEqual(["lib/__tests__/email-send-result.test.ts"]);
     for (const f of OWN_TESTS) expect(scanImports(read(f), f).offences.length, `${f} still imports a gated function`).toBeGreaterThan(0);
+  });
+
+  it("the exemption is exactly the outbox directory, lib/email.ts and that one unit test (no neighbour rides along)", () => {
+    const exempted = ["server/email-outbox/attempt.ts", "server/email-outbox/__tests__/dispatch-wire.test.ts", "lib/email.ts", "lib/__tests__/email-send-result.test.ts"];
+    const scanned = [
+      "lib/mask-email.ts",
+      "lib/email-templates/magic-link.ts",
+      "lib/__tests__/email-builders.test.ts",
+      "server/email-outbox-like/x.ts",
+      "server/usecases/registrations.ts",
+      "app/api/auth/magic-link/route.ts",
+    ];
+    for (const f of exempted) expect(exempt(f), `${f} is exempt`).toBe(true);
+    for (const f of scanned) expect(exempt(f), `${f} is scanned`).toBe(false);
   });
 
   it("no file under src/ outside the outbox and lib/email.ts imports deliver, sendWithResult or checkSendable", () => {

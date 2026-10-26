@@ -13,6 +13,8 @@
 // Sport: not applicable. These emails do not vary by sport (spec, Test strategy 4).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { sql } from "@/lib/db";
 
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
@@ -111,6 +113,26 @@ describe("the spec's lists (no database)", () => {
     expect(new Set(NOT_YET_MOVED).size).toBe(NOT_YET_MOVED.length);
     for (const k of NOT_YET_MOVED) expect(SPEC_KINDS as readonly string[]).toContain(k);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
+  });
+});
+
+describe("dictionarySubject reads the dictionary on disk (no database)", () => {
+  it("fills the tokens from the dictionary of the locale it is given, and the locales differ", () => {
+    const vars = { roundNo: "3", opponentName: "Ana Opponent" };
+    const en = dictionarySubject("en", "externalPlayInvite.subject", vars);
+    const es = dictionarySubject("es", "externalPlayInvite.subject", vars);
+    for (const subject of [en, es]) {
+      expect(subject).toContain("Ana Opponent");
+      expect(subject).toContain("3");
+      expect(subject, "no token left").not.toMatch(/\{\w+\}/);
+    }
+    expect(es, "a Spanish subject is not the English one").not.toBe(en);
+    expect(dictionarySubject("en", "magicLink.subject", {}), "a subject with no tokens needs none").toBe(JSON.parse(readFileSync(resolve(import.meta.dirname, "../../../dictionaries/en/emails.json"), "utf8"))["magicLink.subject"]);
+  });
+
+  it("refuses an unknown key and a token nobody gave a value for (a sentence must not go out with a brace in it)", () => {
+    expect(() => dictionarySubject("en", "externalPlayInvite.noSuchKey", {})).toThrow(/no key/);
+    expect(() => dictionarySubject("en", "externalPlayInvite.subject", { roundNo: "3" })).toThrow(/still has \{opponentName\}/);
   });
 });
 
@@ -301,6 +323,29 @@ describe.skipIf(!HAS_DB)("the harness judges what it says it judges (DB)", () =>
     await expect(swept({ chess_invite: moved })).rejects.toThrow(/chess_invite[\s\S]*another address/);
   });
 
+  it("the stored subject and the sent subject are each judged (a producer that edits one after the other is seen both ways)", async () => {
+    const right = dictionarySubject("en", "magicLink.subject", {});
+    // The row says one thing and the mail said another: the row is rewritten after the send.
+    const storedWrong = handMade({
+      run: async (to) => {
+        const id = await enqueueEmail(sql, row({ to }));
+        await dispatchNow([id]);
+        await sql`update email_outbox set subject = 'rewritten after the send' where id = ${id}`;
+      },
+    });
+    await expect(swept({ magic_link: storedWrong })).rejects.toThrow(/magic_link[\s\S]*queued with subject/);
+    // The mail said one thing and the row says another: the row is edited for the send and restored after it.
+    const sentWrong = handMade({
+      run: async (to) => {
+        const id = await enqueueEmail(sql, row({ to }));
+        await sql`update email_outbox set subject = 'edited for the send' where id = ${id}`;
+        await dispatchNow([id]);
+        await sql`update email_outbox set subject = ${right} where id = ${id}`;
+      },
+    });
+    await expect(swept({ magic_link: sentWrong })).rejects.toThrow(/magic_link[\s\S]*was sent with subject/);
+  });
+
   it("the transport is called exactly once per row: a second send of one row (a second path) fails", async () => {
     const twice = handMade({
       run: async (to) => {
@@ -347,6 +392,28 @@ describe.skipIf(!HAS_DB)("the harness judges what it says it judges (DB)", () =>
   it("a worker-path kind whose producer already sent the row fails (it said the worker sends first)", async () => {
     const eager = handMade({ firstAttempt: "worker", run: sendsInRequest() });
     await expect(swept({ magic_link: eager })).rejects.toThrow(/magic_link[\s\S]*queued/);
+  });
+
+  it("a worker-path kind whose row already had an attempt fails, even if the worker would take it (a first attempt is the worker's, once)", async () => {
+    const retried = handMade({
+      firstAttempt: "worker",
+      run: async (to) => {
+        const id = await enqueueEmail(sql, row({ to }));
+        // The shape of a request that tried and was told 503: one attempt, due again now. The worker WOULD send it.
+        await sql`update email_outbox set attempts = 1, next_attempt_at = now() - interval '1 second' where id = ${id}`;
+      },
+    });
+    await expect(swept({ magic_link: retried })).rejects.toThrow(/magic_link[\s\S]*1 attempt/);
+  });
+
+  it("a row that ended dead fails, though the transport was called once with the right subject (the provider's refusal is not a send)", async () => {
+    deliverMock.mockImplementation(async () => ({ ok: false, reason: "http", status: 422, errorName: "validation_error", detail: "refused" }));
+    await expect(swept({ magic_link: handMade({ run: sendsInRequest() }) })).rejects.toThrow(/magic_link[\s\S]*ended dead/);
+  });
+
+  it("a scenario given for something that is not a kind fails by name (a typo would otherwise be a sweep that never ran)", async () => {
+    const typo = { magic_link: handMade({ run: sendsInRequest() }), "magic-link": handMade({ run: sendsInRequest() }) } as unknown as Partial<Record<OutboxKind, KindScenario>>;
+    await expect(forEachOutboxKind(typo, { notYetMoved: except("magic_link"), specFacts: SPEC_FACTS })).rejects.toThrow(/magic-link/);
   });
 
   it("a scenario for a kind that is also listed as not yet moved fails (a stale entry would skip the sweep)", async () => {
