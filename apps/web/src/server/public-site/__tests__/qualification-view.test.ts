@@ -1552,7 +1552,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const d = must(view({ kind: "league", rows, fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
     expect(d.whatIf).toMatch(new RegExp(`^If you finish level on points with Bo, ${word("goals")} decides[.:]`));
   });
-  it("a badminton walkover credits its sets (BD-WO-1): set ratio reads them, so the walkover is IN the average, rule or no rule", () => {
+  it("a badminton walkover credits its sets (BD-WO-1): on a points-first stage, set ratio reads them, so the walkover is IN the average, rule or no rule", () => {
     // open4 with r1's A–D a walkover: r1 C 2–1 B; r2 A 2–0 C, B 2–1 D. Before W2b a badminton walkover credited
     // nothing, so Di's sets (1–2) were ONE real match's and a win by 2 fit it (3.5/2.5 > 1) — "win by 2". W2b
     // Task 13 (ruling 108, X-WO-1): the walkover credits the table the engine's own sets (`forfeitCredit`, read

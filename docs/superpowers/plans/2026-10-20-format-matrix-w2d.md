@@ -17,7 +17,7 @@
   - **A21**: PR A's ship gates.
 - **PR B** = Tasks 13–21, branched from PR A.
 - **V472 is frozen** once PR A merges.
-- `scripts/w2d/post-deploy-pin.ts` is the one owner-run post-deploy script. Prod is idle, so run `--check` after the deploy, and run fix mode (a run without `--check`) only if a count is above 0.
+- `scripts/w2d/post-deploy-pin.ts` is the one owner-run post-deploy script (owner: "create one script only"). Run `--check` after the deploy, and run fix mode (a run without `--check`) only if a count is above 0 (orchestrator ruling 2026-10-26, on the owner's word: "nobody is using the prod now so we can run the script anytime").
 - The tennis player stat `nestedGamesOf` stays unchanged (owner).
 
 **Goal:** Every table stage ranks by its sport's real rules — outcome-keyed points (regulation, overtime, shoot-out, tie, no result), a per-stage tie-break order validated when it is saved, a stored drawing of lots, the sport's cross-group order — and once a stage is active its table can no longer move under anyone, including under this release.
@@ -1232,7 +1232,7 @@ SPEC §5.7, §6 W6/W8/B2, §9 public table, D10(b), anti-goals 2 (the popover ha
 
 **Files:**
 - Modify: `E/competition/display.ts` — a column per new key (set difference, point difference, field goals, SB in round robin, tennis game ratio ST-G29); IIHF `OTW`/`OTL` (= `won_ot + won_so`, `lost_ot + lost_so`, RBG:343-344); recreational GP W D L; chess `unit:"half"` renders `pointsToText` ("1½").
-- Modify: `W/server/public-site/standings-view.ts` (`standingsColumns`), `W/components/public-site/standings-table.tsx` (popover), `W/lib/tiebreak-label.ts:21` — new key labels, "Drawn by lots on {date}", "head-to-head not complete" (`h2h_incomplete`, Task 12), "head-to-head applies to two teams only" (`h2h_two_not_applicable`, Task 4), "level"; the empty table renders every rank "–" and no leader styling or qualification chips.
+- Modify: `W/server/public-site/standings-view.ts` (`standingsColumns`), `W/components/public-site/standings-table.tsx` (popover), `W/lib/tiebreak-label.ts:21` — new key labels (MOVED to PR A as A-labels, orchestrator ruling 2026-10-26: raw keys on a public page are a defect; the ten keys' `div.detail.tiebreak.rule.*` and `table.tieBreak.*` strings and their `TIE_BREAK_MSG_KEYS` entries already exist, so Task 17 adds none), "Drawn by lots on {date}", "head-to-head not complete" (`h2h_incomplete`, Task 12), "head-to-head applies to two teams only" (`h2h_two_not_applicable`, Task 4), "level"; the empty table renders every rank "–" and no leader styling or qualification chips.
 - Modify: the division page (`W/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx:960-979`) — the read-only caption becomes per stage, with source and pinned.
 - Modify: `tools/matrix/lib/browser/pages/standings.ts` — re-checked against the new columns (SPEC §6 B2).
 - Modify: `W/dictionaries/{en,es,fr,nl}/public.json` (+ `ui.json` for the caption), `pnpm i18n:gen-keys`.
@@ -1351,7 +1351,7 @@ SPEC §15.4–5, §12.3, §16.
 - [ ] **Step 2: W5 amendments** (D7, SPEC §12.3), same PR: `W5-round-robin.md:79-80` trap → "fixed in W2d (stored lots)"; `2026-09-27-format-matrix-design.md:455` W5 row drops ST-G4 and ST-G13; `IDX:4406,4408,4409` (the ST-G4, ST-G12 and ST-G13 rows; ST-G6 sits between them at `:4407` and is not W2d's) → W2d. ST-G3 has no IDX row; it stays W5 in `W5-round-robin.md:36`.
 - [ ] **Step 3: Ruling-70 regression (SPEC §16).** Dispatch one judge regression over the `swiss_knockout` L3 cells; record any new P6 cell against ruling 70 rather than parking it.
 - [ ] **Step 4: Gates.** The union of every task's scoped Step 4 on the final tree (never the full suite); `pnpm --filter @onryde/seazn-engine fold-epoch:check --against <merge-base>`; OpenAPI drift; `pnpm i18n:check`; a whole-branch `reviewer` pass (the three standing lenses).
-- [ ] **Step 5: PR** (one PR, merge commit; body: per-wave verdicts, the regression map, MD-1 before/after, the staging pin counts from Task 7 Step 6, the planner's calls). Smoke runs on the PR. E2E by `gh workflow run e2e.yml --ref feat/format-matrix-w2d`, judged per spec file. Merge only on the owner's explicit go after any owner-run staging steps. Delete the lane worktrees.
+- [ ] **Step 5: PR** (PR B's ship gate — W2d ships as two PRs and PR A's gates are A21, see "PR split" above; merge commit; body: per-wave verdicts, the regression map, MD-1 before/after, the staging pin counts from Task 7 Step 6, the planner's calls). Smoke runs on the PR. E2E by `gh workflow run e2e.yml --ref <PR B's branch>`, judged per spec file. Merge only on the owner's explicit go after any owner-run staging steps. Delete the lane worktrees.
 
 ---
 

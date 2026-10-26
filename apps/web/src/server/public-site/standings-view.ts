@@ -34,6 +34,7 @@ import {
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { standingsColumns, formatMetric, type MetricSpecLike } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
+import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { TableViewT } from "./competition-hub-schema";
 import type { QualificationView } from "./qualification-view";
 
@@ -187,10 +188,13 @@ export function columnHeader(
  *  same shape `packages/engine/src/competition/display.test.ts` uses to pin
  *  `DERIVED_METRICS`. Exported for that test.
  *
- *  Typed `TKey`, not `DictionaryKey`, because none of these exist in the
- *  dictionaries yet (Task 6 owns them) and `DictionaryKey` is generated FROM
- *  them — tightening it today would red tsc. Worth tightening once Task 6
- *  lands: that is the only thing that would make a typo here a build error. */
+ *  Read as `Record<string, TKey>` (callers index it by a trace's raw key), but
+ *  the literal `satisfies Record<TiebreakerKey, DictionaryKey>` (W2d merge-fix
+ *  review m9): every engine key must be here, nothing else may be, and every
+ *  value must be a generated dictionary key — a missing key, a stray key or a
+ *  typo is a tsc error, not only a red sweep. The sweeps read
+ *  `defaultOrderOf(m)` alone, so a key reachable only through a preset, a stage
+ *  kind or a cfg was covered by luck before this. */
 export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
   points: "table.tieBreak.points",
   wins: "table.tieBreak.wins",
@@ -221,7 +225,7 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
   sberger: "table.tieBreak.sberger",
   seed: "table.tieBreak.seed",
   lots: "table.tieBreak.lots",
-};
+} satisfies Record<TiebreakerKey, DictionaryKey>;
 
 /** Sort key for a row the ranking pass has not ranked (a division with no
  *  played fixtures yet, or a row excluded from the cascade). Unranked rows go

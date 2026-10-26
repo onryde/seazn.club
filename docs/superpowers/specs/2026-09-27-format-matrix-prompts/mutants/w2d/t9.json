@@ -300,6 +300,34 @@
     ]
   },
   {
+    "id": "t9-slideshow-public",
+    "file": "apps/web/src/server/slideshow-data.ts",
+    "find": "stageShape(metricSpecs, stage.table_rules?.tiebreakers)",
+    "replace": "stageShape(metricSpecs, undefined /*MUT*/)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/slideshow-labels.test.tsx"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t9-slideshow-public-ratio",
+    "file": "apps/web/src/server/slideshow-data.ts",
+    "find": "stageShape(metricSpecs, stage.table_rules?.tiebreakers)",
+    "replace": "stageShape(metricSpecs, [...(stage.table_rules?.tiebreakers ?? []), \"point_ratio\"] /*MUT*/)",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/__tests__/slideshow-labels.test.tsx"
+        ]
+      }
+    ]
+  },
+  {
     "id": "t9-console-caption",
     "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
     "find": "{tableOrderOf(stageOrder(stage.id)).map((key, i) => (",
