@@ -625,16 +625,12 @@ export async function sponsorInvoiceEmail(args: SponsorInvoiceArgs, locale: Loca
   return sponsorInvoiceTemplate(args, dict);
 }
 
-export interface SponsorReceiptEmail extends SponsorReceiptArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Receipt to the sponsor once the order is paid and the placement is live. */
-export async function sendSponsorReceiptEmail(opts: SponsorReceiptEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Receipt to the sponsor once the order is paid and the placement is live, in the org's language. It is queued on the email outbox by
+ *  `queueSponsorReceipt` (sponsors.ts, kind `sponsor_receipt`) in the transaction that activates the placement; nothing sends it
+ *  directly. The dispute evidence pack quotes the same rendering. */
+export async function sponsorReceiptEmail(args: SponsorReceiptArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorReceiptTemplate(args, dict) });
+  return sponsorReceiptTemplate(args, dict);
 }
 
 export interface SponsorRefundEmail extends SponsorRefundArgs {

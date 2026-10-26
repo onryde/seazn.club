@@ -49,6 +49,73 @@ export async function seedSponsorOrg(opts: { defaultLocale?: Locale; prefix?: st
   };
 }
 
+/**
+ * A sponsor order in an organisation that sells sponsorship, with its owner (an account at `<prefix>-owner-…@test.local`, with the given
+ * account language, seated in `org_members`: the dispute mail's recipient), a competition-scoped package (so a dispute recovery has a
+ * competition to audit on), and a sponsor contact at `<prefix>-sponsor-…@test.local`. Generalised from sponsor-dispute.test.ts's
+ * `seedPaidSponsorOrder`.
+ *
+ *  - `paid`: the order carries its payment intent and `paid_at`, and the active placement it bought (`sponsorId`).
+ *  - `pending`: a checkout that has not been paid yet: no placement, no `paid_at`, and no intent on the order (the success webhook
+ *    writes it). `intent` is still returned: it is the id the caller's payment event carries.
+ *
+ * The org and package names carry no `&`, `<` or `>`.
+ */
+export async function seedSponsorOrder(opts: {
+  status: "pending" | "paid";
+  intent?: string;
+  defaultLocale?: Locale;
+  ownerLocale?: string | null;
+  prefix?: string;
+}): Promise<{
+  orderId: string;
+  orgId: string;
+  sponsorId: string | null;
+  intent: string;
+  sponsorEmail: string;
+  ownerId: string;
+  ownerEmail: string;
+  orgName: string;
+  packageName: string;
+}> {
+  const suffix = randomUUID().slice(0, 12);
+  const prefix = opts.prefix ?? "sp";
+  const intent = opts.intent ?? `pi_sp_${suffix}`;
+  const ownerEmail = `${prefix}-owner-${suffix}@test.local`;
+  const sponsorEmail = `${prefix}-sponsor-${suffix}@test.local`;
+  const [{ id: ownerId }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified, locale)
+    values (${ownerEmail}, 'Owner', true, ${opts.ownerLocale ?? null}) returning id`;
+  const orgName = `Sponsor Org ${suffix}`;
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug, created_by, stripe_account_id, stripe_charges_enabled, default_locale)
+    values (${orgName}, ${`sp-org-${suffix}`}, ${ownerId}, ${`acct_${suffix}`}, true, ${opts.defaultLocale ?? "en"}) returning id`;
+  await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${ownerId}, 'owner')`;
+  const [{ id: compId }] = await sql<{ id: string }[]>`
+    insert into competitions (org_id, name, slug)
+    values (${orgId}, ${`Sponsor Cup ${suffix}`}, ${`sp-cup-${suffix}`}) returning id`;
+  const packageName = "Gold package";
+  const [{ id: packageId }] = await sql<{ id: string }[]>`
+    insert into sponsor_packages (org_id, competition_id, name, price_cents, currency, tier)
+    values (${orgId}, ${compId}, ${packageName}, 25000, 'gbp', 'gold') returning id`;
+  const paid = opts.status === "paid";
+  const sponsorId = paid
+    ? (
+        await sql<{ id: string }[]>`
+          insert into sponsors (org_id, competition_id, name, tier, status)
+          values (${orgId}, ${compId}, 'Acme Corp', 'gold', 'active') returning id`
+      )[0]!.id
+    : null;
+  const [{ id: orderId }] = await sql<{ id: string }[]>`
+    insert into sponsor_orders (org_id, package_id, sponsor_name, sponsor_email,
+                                amount_cents, currency, status, sponsor_id,
+                                payment_intent_id, paid_at)
+    values (${orgId}, ${packageId}, 'Acme Corp', ${sponsorEmail},
+            25000, 'gbp', ${opts.status}, ${sponsorId}, ${paid ? intent : null}, ${paid ? new Date() : null})
+    returning id`;
+  return { orderId, orgId, sponsorId, intent, sponsorEmail, ownerId, ownerEmail, orgName, packageName };
+}
+
 /** Everything the fixtures above made for these organisations: their outbox rows, their sponsor orders (a RESTRICT foreign key keeps
  *  an organisation with orders, V299), the organisations (packages, placements and memberships cascade), then the owners' billing
  *  groups and accounts. */

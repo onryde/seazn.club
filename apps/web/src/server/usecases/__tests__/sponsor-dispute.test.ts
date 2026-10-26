@@ -31,54 +31,11 @@ vi.mock("@/lib/email", async (importOriginal) => ({
 import { sql } from "@/lib/db";
 import { handleSponsorDispute } from "../sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
+import { seedSponsorOrder } from "./_money-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
 const uniq = () => randomUUID().slice(0, 12);
-
-/** Paid, comp-scoped sponsor order + the active placement it activated, plus
- *  the org's owner (via org_members — the alert/lost mail recipient). The
- *  package is competition-scoped so the recovery audit sink has a competition
- *  to hang `sponsor.*` events on. Returns the run-unique payment intent. */
-async function seedPaidSponsorOrder(): Promise<{
-  intent: string;
-  orderId: string;
-  sponsorId: string;
-  orgId: string;
-  ownerEmail: string;
-  orgName: string;
-  packageName: string;
-}> {
-  const suffix = uniq();
-  const intent = `pi_sp_${suffix}`;
-  const ownerEmail = `owner-${suffix}@test.local`;
-  const [{ id: ownerId }] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, email_verified)
-    values (${ownerEmail}, 'Owner', true) returning id`;
-  const orgName = "Sponsor Org " + suffix;
-  const [{ id: orgId }] = await sql<{ id: string }[]>`
-    insert into organizations (name, slug, stripe_account_id, stripe_charges_enabled)
-    values (${orgName}, ${"sp-org-" + suffix}, ${"acct_" + suffix}, true) returning id`;
-  await sql`insert into org_members (org_id, user_id, role)
-            values (${orgId}, ${ownerId}, 'owner')`;
-  const [{ id: compId }] = await sql<{ id: string }[]>`
-    insert into competitions (org_id, name, slug)
-    values (${orgId}, ${"Sponsor Cup " + suffix}, ${"sp-cup-" + suffix}) returning id`;
-  const packageName = "Gold package";
-  const [{ id: packageId }] = await sql<{ id: string }[]>`
-    insert into sponsor_packages (org_id, competition_id, name, price_cents, currency, tier)
-    values (${orgId}, ${compId}, ${packageName}, 25000, 'gbp', 'gold') returning id`;
-  const [{ id: sponsorId }] = await sql<{ id: string }[]>`
-    insert into sponsors (org_id, competition_id, name, tier, status)
-    values (${orgId}, ${compId}, 'Acme Corp', 'gold', 'active') returning id`;
-  const [{ id: orderId }] = await sql<{ id: string }[]>`
-    insert into sponsor_orders (org_id, package_id, sponsor_name, sponsor_email,
-                                amount_cents, currency, status, sponsor_id,
-                                payment_intent_id, paid_at)
-    values (${orgId}, ${packageId}, 'Acme Corp', 'billing@acme.test',
-            25000, 'gbp', 'paid', ${sponsorId}, ${intent}, now()) returning id`;
-  return { intent, orderId, sponsorId, orgId, ownerEmail, orgName, packageName };
-}
 
 const disputeFor = (intent: string, id: string, status = "needs_response") =>
   ({ id, payment_intent: intent, amount: 25000, status, charge: "ch_x" }) as unknown as Stripe.Dispute;
@@ -96,7 +53,7 @@ afterAll(async () => {
 
 describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
   it("created: flags the order and takes the placement to pending", async () => {
-    const { intent, orderId, sponsorId, ownerEmail } = await seedPaidSponsorOrder();
+    const { intent, orderId, sponsorId, ownerEmail } = await seedSponsorOrder({ status: "paid" });
     const did = "dp_" + uniq();
     await handleSponsorDispute(disputeFor(intent, did), "created");
     const [o] = await sql`select disputed_at, dispute_id from sponsor_orders where id = ${orderId}`;
@@ -117,7 +74,7 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
   });
 
   it("created replay: idempotent flag, no second alert email", async () => {
-    const { intent, orderId, ownerEmail } = await seedPaidSponsorOrder();
+    const { intent, orderId, ownerEmail } = await seedSponsorOrder({ status: "paid" });
     const did = "dp_" + uniq();
     await handleSponsorDispute(disputeFor(intent, did), "created");
     const [first] = await sql<{ disputed_at: Date }[]>`
@@ -132,7 +89,7 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
   });
 
   it("closed lost: order refunded-state, placement inactive, recovery audited", async () => {
-    const { intent, orderId, sponsorId } = await seedPaidSponsorOrder();
+    const { intent, orderId, sponsorId } = await seedSponsorOrder({ status: "paid" });
     const did = "dp_" + uniq();
     await handleSponsorDispute(disputeFor(intent, did), "created");
     await handleSponsorDispute(disputeFor(intent, did, "lost"), "closed");
@@ -153,7 +110,7 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
   });
 
   it("closed lost replay: order + placement stay written off (idempotent)", async () => {
-    const { intent, orderId, sponsorId } = await seedPaidSponsorOrder();
+    const { intent, orderId, sponsorId } = await seedSponsorOrder({ status: "paid" });
     const did = "dp_" + uniq();
     await handleSponsorDispute(disputeFor(intent, did), "created");
     const lost = disputeFor(intent, did, "lost");
@@ -166,7 +123,7 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
   });
 
   it("closed won: flag cleared, placement re-activated (idempotent on replay)", async () => {
-    const { intent, orderId, sponsorId, ownerEmail } = await seedPaidSponsorOrder();
+    const { intent, orderId, sponsorId, ownerEmail } = await seedSponsorOrder({ status: "paid" });
     const did = "dp_" + uniq();
     await handleSponsorDispute(disputeFor(intent, did), "created");
     const won = disputeFor(intent, did, "won");
@@ -191,7 +148,7 @@ describe.skipIf(!HAS_DB)("handleSponsorDispute", () => {
   });
 
   it("dispatch wires charge.dispute.created/closed to the sponsor handler", async () => {
-    const { intent, orderId, sponsorId } = await seedPaidSponsorOrder();
+    const { intent, orderId, sponsorId } = await seedSponsorOrder({ status: "paid" });
     const did = "dp_" + uniq();
     await processStripeEvent({
       type: "charge.dispute.created",

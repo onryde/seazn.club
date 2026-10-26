@@ -9,14 +9,14 @@ import "server-only";
 // webhook activation.
 import type Stripe from "stripe";
 import { z } from "zod";
-import { sql, withTenant } from "@/lib/db";
+import { sql, withTenant, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { requireFeature } from "@/lib/entitlements";
 import { brandingSponsors } from "@/lib/org-branding";
 import { getStripe } from "@/lib/stripe";
 import {
   sponsorInvoiceEmail,
-  sendSponsorReceiptEmail,
+  sponsorReceiptEmail,
   sendSponsorRefundEmail,
   sendSponsorDisputeAlertEmail,
   sendSponsorDisputeLostEmail,
@@ -595,6 +595,11 @@ export async function startSponsorCheckout(
  * under /admin/billing-events replay — belt (order already paid) and braces
  * (order already carries a sponsor_id) both short-circuit; Stripe's own
  * idempotency keys expire ~24h so this DB guard is the real one.
+ *
+ * The sponsor's receipt is queued on the email outbox in the SAME transaction
+ * (`queueSponsorReceipt`), so it exists exactly when the activation does, and
+ * only on the transition (the guards above stop a replay before it). The
+ * worker makes the first attempt: a webhook has no response to defer behind.
  */
 export async function handleSponsorPaymentSucceeded(
   intent: Stripe.PaymentIntent,
@@ -623,27 +628,74 @@ export async function handleSponsorPaymentSucceeded(
                  and competition_id is not distinct from ${pkg.competition_id}
                  and tier = ${pkg.tier}))
       returning id`;
+    await queueSponsorReceipt(tx, { order, packageName: pkg.name, intentId: intent.id });
     await tx`
       update sponsor_orders
       set status = 'paid', paid_at = now(),
           payment_intent_id = coalesce(payment_intent_id, ${intent.id}),
           sponsor_id = ${sponsor!.id}
       where id = ${orderId}`;
-    return { order, packageName: pkg.name };
+    return { order };
   });
   if (!activated) return;
 
-  const [org] = await sql<{ slug: string; name: string }[]>`
-    select slug, name from organizations where id = ${activated.order.org_id}`;
+  const [org] = await sql<{ slug: string }[]>`
+    select slug from organizations where id = ${activated.order.org_id}`;
   if (org) deferred(() => fireOrgRevalidate(org.slug));
-  await sendSponsorReceiptEmail({
-    to: activated.order.sponsor_email,
-    orgName: org?.name ?? "the organiser",
-    packageName: activated.packageName,
-    sponsorName: activated.order.sponsor_name,
-    amountCents: activated.order.amount_cents,
-    currency: activated.order.currency,
-    publicUrl: org ? `${sponsorEmailOrigin()}/shared/${org.slug}` : null,
+}
+
+/**
+ * Queue the sponsor's payment receipt on the email outbox, on `tx`: the
+ * transaction that activates the placement (R1), so the receipt and the paid
+ * order commit together or not at all. Kind `sponsor_receipt`, ref
+ * `sponsor_order/<order id>`, once-key the payment intent: one receipt per
+ * payment, whatever redelivers it. Literal address (the sponsor contact), in
+ * the org's language (D4: the order has no pick and no account). The org is
+ * read through `tx` (#996). There is no catch (D1): a refused enqueue rolls the
+ * activation back and fails the webhook, which Stripe delivers again. Returns
+ * the outbox id, or `null` when this payment already has its receipt.
+ * Exported for the once-key test.
+ */
+export async function queueSponsorReceipt(
+  tx: Tx,
+  a: {
+    order: {
+      id: string;
+      org_id: string;
+      sponsor_name: string;
+      sponsor_email: string;
+      amount_cents: number;
+      currency: string;
+    };
+    packageName: string;
+    intentId: string;
+  },
+): Promise<string | null> {
+  const { order, packageName, intentId } = a;
+  const [org] = await tx<{ slug: string; name: string; default_locale: string }[]>`
+    select slug, name, default_locale from organizations where id = ${order.org_id}`;
+  const locale = await recipientLocale(tx, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
+  const content = await sponsorReceiptEmail(
+    {
+      orgName: org?.name ?? "the organiser",
+      packageName,
+      sponsorName: order.sponsor_name,
+      amountCents: order.amount_cents,
+      currency: order.currency,
+      publicUrl: org ? `${sponsorEmailOrigin()}/shared/${org.slug}` : null,
+    },
+    locale,
+  );
+  return enqueueEmailOnce(tx, {
+    kind: "sponsor_receipt",
+    refType: "sponsor_order",
+    refId: order.id,
+    dedupeKey: onceKey("sponsor_receipt", "sponsor_order", intentId),
+    orgId: order.org_id,
+    to: order.sponsor_email,
+    transactional: false,
+    expiresAt: expiryWithin(null),
+    ...content,
   });
 }
 
@@ -983,8 +1035,8 @@ export async function buildSponsorDisputeEvidence(
   const [pkg] = await sql<
     { name: string; tier: SponsorTier; competition_id: string | null }[]
   >`select name, tier, competition_id from sponsor_packages where id = ${order.package_id}`;
-  const [org] = await sql<{ name: string; slug: string }[]>`
-    select name, slug from organizations where id = ${auth.orgId}`;
+  const [org] = await sql<{ name: string; slug: string; default_locale: string }[]>`
+    select name, slug, default_locale from organizations where id = ${auth.orgId}`;
   const [comp] = pkg?.competition_id
     ? await sql<{ name: string; slug: string }[]>`
         select name, slug from competitions where id = ${pkg.competition_id}`
@@ -1001,21 +1053,22 @@ export async function buildSponsorDisputeEvidence(
     where c.org_id = ${auth.orgId} and e.payload->>'order_id' = ${orderId}
     order by e.created_at`;
 
-  // The receipt, reconstructed with the exact sender inputs (sponsor emails
-  // are sent in en — orders carry no locale).
-  const { sponsorReceiptTemplate } = await import("@/lib/email-templates/sponsor-receipt");
-  const { getDictionary } = await import("@/lib/i18n");
+  // The receipt, reconstructed with the exact sender inputs, in the language
+  // it was sent in: the org's (queueSponsorReceipt resolves it the same way).
   const publicUrl = org ? `${origin}/shared/${org.slug}` : null;
-  const emailText = sponsorReceiptTemplate(
-    {
-      orgName: org?.name ?? "the organiser",
-      packageName: pkg?.name ?? "sponsorship",
-      sponsorName: order.sponsor_name,
-      amountCents: order.amount_cents,
-      currency: order.currency,
-      publicUrl,
-    },
-    await getDictionary("en", "emails"),
+  const locale = await recipientLocale(sql, { pick: null, userId: null, orgDefault: org?.default_locale ?? null });
+  const emailText = (
+    await sponsorReceiptEmail(
+      {
+        orgName: org?.name ?? "the organiser",
+        packageName: pkg?.name ?? "sponsorship",
+        sponsorName: order.sponsor_name,
+        amountCents: order.amount_cents,
+        currency: order.currency,
+        publicUrl,
+      },
+      locale,
+    )
   ).text;
 
   const when = (d: Date | string | null) => (d ? new Date(d).toISOString() : "—");

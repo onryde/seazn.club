@@ -23,6 +23,8 @@
 //     queued to the owner's account and the worker makes the first attempt.
 //   - sponsor_invoice: the real `startSponsorCheckout` of a package in an `fr` org (the Checkout session is the Stripe mock's): the invoice
 //     is queued to the sponsor contact after the session is minted, and the request that did it makes the first attempt.
+//   - sponsor_receipt: the real `handleSponsorPaymentSucceeded` on a pending order in an `nl` org: the receipt is queued to the sponsor
+//     contact in the transaction that activates the placement, and the worker makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -69,9 +71,9 @@ import {
   sweepRegistrations,
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
-import { startSponsorCheckout } from "@/server/usecases/sponsors";
+import { handleSponsorPaymentSucceeded, startSponsorCheckout } from "@/server/usecases/sponsors";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
-import { seedSponsorOrg } from "@/server/usecases/__tests__/_money-fixtures";
+import { seedSponsorOrder, seedSponsorOrg } from "@/server/usecases/__tests__/_money-fixtures";
 import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
@@ -134,7 +136,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 2's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T9) deletes it from NOT_YET_MOVED, and here. */
 const WAVE_2_UNMOVED: readonly OutboxKind[] = [
-  "sponsor_receipt",
   "sponsor_refund",
   "sponsor_dispute_alert",
   "sponsor_dispute_won",
@@ -570,6 +571,26 @@ async function sponsorInvoiceScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real payment webhook on a pending order in an `nl` org: the receipt is queued to the sponsor contact in the transaction that
+ *  activates the placement, and the first attempt is the worker's. The fixture's addresses start with RUN, so they are found. */
+async function sponsorReceiptScenario(): Promise<KindScenario> {
+  const o = await seedSponsorOrder({ status: "pending", defaultLocale: "nl", prefix: RUN });
+  made.orgIds.push(o.orgId);
+  made.userIds.push(o.ownerId);
+  return {
+    locale: "nl",
+    subjectKey: "sponsorReceipt.subject",
+    subjectVars: { orgName: o.orgName },
+    recipient: o.sponsorEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      await handleSponsorPaymentSucceeded({ id: o.intent, metadata: { kind: "sponsor", order_id: o.orderId } } as unknown as Stripe.PaymentIntent);
+      const [order] = await sql<{ status: string }[]>`select status from sponsor_orders where id = ${o.orderId}`;
+      expect(order!.status, "premise: the real handler activated the order").toBe("paid");
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -607,6 +628,9 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const invoice = await sponsorInvoiceScenario();
     expect(dictionarySubject("fr", invoice.subjectKey, invoice.subjectVars)).not.toBe(dictionarySubject("en", invoice.subjectKey, invoice.subjectVars));
 
+    const receipt = await sponsorReceiptScenario();
+    expect(dictionarySubject("nl", receipt.subjectKey, receipt.subjectVars)).not.toBe(dictionarySubject("en", receipt.subjectKey, receipt.subjectVars));
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -619,6 +643,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         registration_dispute_alert: disputeAlert,
         registration_dispute_lost: disputeLost,
         sponsor_invoice: invoice,
+        sponsor_receipt: receipt,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

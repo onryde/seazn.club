@@ -24,12 +24,10 @@ const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 
 const emailMock = vi.hoisted(() => ({
-  receipt: vi.fn().mockResolvedValue(true),
   refund: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendSponsorReceiptEmail: emailMock.receipt,
   sendSponsorRefundEmail: emailMock.refund,
 }));
 
@@ -38,6 +36,8 @@ import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { idempotencyKey } from "@/server/email-outbox/constants";
+import { runOutboxTick } from "@/server/email-outbox/worker";
+import { bornAgo } from "@/server/email-outbox/__tests__/_kind-harness";
 import { stubOutboxEnv } from "./_invite-mail";
 import {
   createSponsorPackage,
@@ -93,7 +93,6 @@ beforeEach(() => {
   deliverMock.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_${randomUUID()}` }));
   stripeMock.checkoutCreate.mockReset();
   stripeMock.refundCreate.mockReset().mockResolvedValue({ id: "re_test" });
-  emailMock.receipt.mockClear();
   emailMock.refund.mockClear();
 });
 
@@ -355,13 +354,22 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
       sponsor_id: sponsors[0]!.id,
       payment_intent_id: intent.id,
     });
-    expect(emailMock.receipt).toHaveBeenCalledOnce();
+    // One receipt for the replayed payment: an outbox row the worker sends.
+    const receipts = await sql<{ id: string; status: string }[]>`
+      select id, status from email_outbox where kind = 'sponsor_receipt' and ref_id = ${order.id}`;
+    expect(receipts).toHaveLength(1);
+    expect(receipts[0]!.status).toBe("queued");
+    await bornAgo([receipts[0]!.id]);
+    await runOutboxTick({ onlyIds: [receipts[0]!.id], sleep: async () => undefined });
+    const mailed = deliverMock.mock.calls
+      .map((c) => c[0] as { to: string; text: string; idempotencyKey: string })
+      .filter((c) => c.idempotencyKey === idempotencyKey(receipts[0]!.id));
+    expect(mailed).toHaveLength(1);
+    expect(mailed[0]!.to).toBe("b@bolt.test");
     // The "See it live" link must be absolute — mail clients have no origin
     // to resolve "/shared/…" against (stg regression: NEXT_PUBLIC_APP_URL was
     // never set anywhere, so every receipt shipped a relative link).
-    expect(emailMock.receipt.mock.calls[0]![0]).toMatchObject({
-      publicUrl: expect.stringMatching(/^https?:\/\/.+\/shared\//),
-    });
+    expect(mailed[0]!.text).toMatch(/^https?:\/\/.+\/shared\//m);
 
     // A late failure event never clobbers the paid order.
     await handleSponsorPaymentFailed(intent);
@@ -489,7 +497,9 @@ describe.skipIf(!HAS_DB)("sponsor monetization", () => {
     const sponsors = await sql<{ id: string }[]>`
       select id from sponsors where org_id = ${orgId}`;
     expect(sponsors).toHaveLength(0);
-    expect(emailMock.receipt).not.toHaveBeenCalled();
+    const receipts = await sql<{ id: string }[]>`
+      select id from email_outbox where kind = 'sponsor_receipt' and org_id = ${orgId}`;
+    expect(receipts).toHaveLength(0);
   });
 });
 
