@@ -19,10 +19,11 @@ import { DRAW_KINDS, EngineError, StageKind, type MatchOutcome, type StandingsDe
 import type { AnySportModule } from "@seazn/engine/sport";
 import { SPLIT_REASONS, type SplitReason } from "@/lib/rule-errors";
 
-/** One outcome's pay, the winner's then the loser's (each side of a level result), or "unpaid" where `payout` refuses it
- *  (the rule leaves it uncovered: coverage's gap, never a 0 made up here). */
+/** One outcome's pay, the winner's then the loser's (each side of a level result), or "uncovered" where `payout` refuses
+ *  it (the rule leaves it uncovered: coverage's gap, never a 0 made up here). Not "unpaid": that is a Stripe-only
+ *  subscription status, and status-vocabulary-truth.test.ts refuses the literal outside the billing boundary. */
 type Paid = readonly [string, string];
-const UNPAID: Paid = ["unpaid", "unpaid"];
+const UNCOVERED: Paid = ["uncovered", "uncovered"];
 
 const WINNER = "winner";
 const LOSER = "loser";
@@ -48,8 +49,8 @@ function paid(run: () => FixtureResult): Paid {
     const [a, b] = run();
     return [String(a.points), String(b.points)];
   } catch (e) {
-    // Only the engine's own refusal is "unpaid"; anything else is a defect, never a silent difference.
-    if (e instanceof EngineError) return UNPAID;
+    // Only the engine's own refusal is "uncovered"; anything else is a defect, never a silent difference.
+    if (e instanceof EngineError) return UNCOVERED;
     throw e;
   }
 }
