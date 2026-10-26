@@ -83,6 +83,42 @@ export async function seedPlayer(
   return { userId, personId, lichessId };
 }
 
+/** A Lichess link in the two shapes the play gate refuses with `LICHESS_RECONSENT_REQUIRED` (`lichessGrantPlays`):
+ *  - `identity-only` - the row V405's identity-only flow wrote: no token, no consent stamp, no scopes (raw SQL, because
+ *    `upsertLichessLink` always writes a token and a consent stamp together - V451's consent_token CHECK);
+ *  - `{ without }` - a consented grant of EVERY play scope except `without` (what a PLAY_SCOPES that grew, or a player who
+ *    narrowed the grant at lichess.org, leaves behind). The scope list comes from PLAY_SCOPES, never from a typed table.
+ *  `seedPlayer(..., linked: false)` first, then this - the person has an account but, until the grant plays, no way in. */
+export async function linkWithoutPlayConsent(
+  p: Pick<SeedPlayer, "userId" | "lichessId">,
+  shape: "identity-only" | { without: string },
+): Promise<void> {
+  if (shape === "identity-only") {
+    await sql`
+      insert into user_external_accounts (user_id, provider, external_user_id, username)
+      values (${p.userId}, 'lichess', ${p.lichessId}, ${p.lichessId})`;
+    return;
+  }
+  if (!PLAY_SCOPES.includes(shape.without)) throw new Error(`linkWithoutPlayConsent: ${shape.without} is not a play scope`);
+  await upsertLichessLink(p.userId, {
+    externalUserId: p.lichessId,
+    username: p.lichessId,
+    scopes: PLAY_SCOPES.filter((s) => s !== shape.without),
+    token: `lio_narrow_${p.lichessId}`,
+  });
+}
+
+/** The reconnect itself: the player runs the link flow again and grants every play scope - exactly the write the OAuth
+ *  callback makes (`upsertLichessLink`), over whatever row (or none) was there. */
+export async function reconnectLichess(p: Pick<SeedPlayer, "userId" | "lichessId">): Promise<void> {
+  await upsertLichessLink(p.userId, {
+    externalUserId: p.lichessId,
+    username: p.lichessId,
+    scopes: [...PLAY_SCOPES],
+    token: `lio_reconnect_${p.lichessId}`,
+  });
+}
+
 export type SeedOnlineChessFixtureOpts = {
   onlinePlay: "off" | "lichess";
   divisionStarted: boolean;

@@ -1,9 +1,9 @@
 // What `createEntrants` asks its privileged prelude to read on an ONLINE division, and who that read answers for.
 //
-// The Lichess-link read is org-wide by nature (one set, read before the role drops, tested against the roster the
-// transaction resolves). When the roster is known up front - every input names its own people - the read is scoped to
+// The Lichess-link read is org-wide by nature (one map of person -> what their link lets them do, read before the role
+// drops, tested against the roster the transaction resolves). When the roster is known up front - every input names its own people - the read is scoped to
 // exactly those ids, so a large org's whole linked list is not pulled to answer for one player. When it is NOT known up
-// front (a team squad seeds it, or a copied roster replaces it) the whole org is read. `personIdsWithLichessLink` is
+// front (a team squad seeds it, or a copied roster replaces it) the whole org is read. `lichessLinkStatesByPerson` is
 // wrapped by a pass-through spy so the id list it was handed is the thing asserted, beside what each path DOES.
 //
 // Also here: the security shape of a prelude. The callback it precedes must still run as `app_user`, so another org's
@@ -21,9 +21,9 @@ vi.mock("../external-accounts", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../external-accounts")>();
   return {
     ...actual,
-    personIdsWithLichessLink: (tx: Tx, orgId: string, personIds?: readonly string[]) => {
+    lichessLinkStatesByPerson: (tx: Tx, orgId: string, personIds?: readonly string[]) => {
       spy.calls.push({ orgId, personIds: personIds === undefined ? undefined : [...personIds] });
-      return actual.personIdsWithLichessLink(tx, orgId, personIds);
+      return actual.lichessLinkStatesByPerson(tx, orgId, personIds);
     },
   };
 });
@@ -33,7 +33,8 @@ import type { CreateEntrant } from "@/server/api-v1/schemas";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { createEntrants } from "../entrants";
-import { seedOwner, seedPlayer, type SeedPlayer } from "./_external-play-seed";
+import { PLAY_SCOPES } from "../external-accounts";
+import { linkWithoutPlayConsent, reconnectLichess, seedOwner, seedPlayer, type SeedPlayer } from "./_external-play-seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -219,6 +220,112 @@ describe.skipIf(!HAS_DB)("createEntrants on an online division - who the link re
     await expect(
       createEntrants(auth, divisionId, [entryOf(unlinked, "Unlinked explicit"), { display_name: "y", kind: "individual", members: [] }]),
     ).rejects.toMatchObject({ code: "LICHESS_LINK_REQUIRED" });
+  });
+
+  // ---- Owner ruling 2026-10-25: registration refuses exactly what the seat gate refuses (`lichessGrantPlays`). ----
+
+  /** A player with an account whose Lichess link does NOT let Seazn submit moves, in the given shape. */
+  const nonPlaying = async (auth: AuthCtx, shape: "identity-only" | { without: string }): Promise<SeedPlayer> => {
+    const p = await player(auth, false);
+    await linkWithoutPlayConsent(p, shape);
+    return p;
+  };
+  const refusalOf = async (promise: Promise<unknown>): Promise<{ status?: number; code?: string; ids?: unknown }> => {
+    const e = (await promise.then(
+      () => null,
+      (err: unknown) => err,
+    )) as { status?: number; code?: string; extra?: { person_ids?: unknown } } | null;
+    expect(e, "premise: it was refused").not.toBeNull();
+    return { status: e!.status, code: e!.code, ids: e!.extra?.person_ids };
+  };
+
+  it("a player whose link is identity-only is refused with the RECONNECT reason, names them, and nobody enters", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth, true);
+    const idOnly = await nonPlaying(auth, "identity-only");
+
+    const got = await refusalOf(createEntrants(auth, divisionId, [entryOf(idOnly, "Identity only")]));
+
+    expect(got).toEqual({ status: 422, code: "LICHESS_RECONSENT_REQUIRED", ids: [idOnly.personId] });
+    expect(await entrantCount(divisionId)).toBe(0);
+  });
+
+  it("a grant short of ANY one play scope is refused with the reconnect reason (one case per declared scope)", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth, true);
+    let checked = 0;
+    for (const dropped of PLAY_SCOPES) {
+      const narrow = await nonPlaying(auth, { without: dropped });
+      expect(await refusalOf(createEntrants(auth, divisionId, [entryOf(narrow, `Without ${dropped}`)])), dropped).toEqual({
+        status: 422,
+        code: "LICHESS_RECONSENT_REQUIRED",
+        ids: [narrow.personId],
+      });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every play scope swept").toBe(PLAY_SCOPES.length);
+    expect(PLAY_SCOPES.length, "premise: the play grant has more than one scope").toBeGreaterThan(1);
+    expect(await entrantCount(divisionId)).toBe(0);
+  });
+
+  it("a mixed batch names the right person under the right reason - the first refused entrant, in input order", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth, true);
+    const [ok, reconnect, unlinked] = [await player(auth, true), await nonPlaying(auth, "identity-only"), await player(auth, false)];
+
+    // The gate runs entrant by entrant: whichever refused entrant comes FIRST decides the reason, and only its people are named.
+    expect(await refusalOf(createEntrants(auth, divisionId, [entryOf(ok, "Ok"), entryOf(reconnect, "Reconnect"), entryOf(unlinked, "Unlinked")]))).toEqual({
+      status: 422,
+      code: "LICHESS_RECONSENT_REQUIRED",
+      ids: [reconnect.personId],
+    });
+    expect(await refusalOf(createEntrants(auth, divisionId, [entryOf(ok, "Ok"), entryOf(unlinked, "Unlinked"), entryOf(reconnect, "Reconnect")]))).toEqual({
+      status: 422,
+      code: "LICHESS_LINK_REQUIRED",
+      ids: [unlinked.personId],
+    });
+    expect(await entrantCount(divisionId), "nobody entered, whatever else was named").toBe(0);
+  });
+
+  // A chess entrant holds ONE person (boardgame allows `individual` only), so a single roster never mixes the two reasons
+  // in the product - the mix is across entrants, above; the gate's own split inside one roster is its unit test's.
+  it("a team squad whose player must reconnect is refused for them, and one whose player plays is not (the whole org is read)", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth, true);
+    const [ok, reconnect] = [await player(auth, true), await nonPlaying(auth, "identity-only")];
+    const [goodTeam, badTeam] = [await teamWithSquad(auth.orgId, [ok]), await teamWithSquad(auth.orgId, [reconnect])];
+    const seeded = (team: string): CreateEntrant => ({ display_name: "x", kind: "individual", team_id: team, members: [] });
+
+    expect(await createEntrants(auth, divisionId, [seeded(goodTeam)]), "premise: the squad that plays enters").toHaveLength(1);
+    const got = await refusalOf(createEntrants(auth, divisionId, [seeded(badTeam)]));
+
+    expect(got).toEqual({ status: 422, code: "LICHESS_RECONSENT_REQUIRED", ids: [reconnect.personId] });
+    expect(spy.calls.map((c) => c.personIds), "the squad is not known up front").toEqual([undefined, undefined]);
+    expect(await entrantCount(divisionId)).toBe(1);
+  });
+
+  // The sequence the reason exists for: told to reconnect, the player reconnects, and the very same request now enters.
+  it("refused as reconnect, then the player reconnects: the same request enters them", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth, true);
+    const p = await nonPlaying(auth, "identity-only");
+    const request = () => createEntrants(auth, divisionId, [entryOf(p, "Comes back")]);
+
+    expect(await refusalOf(request())).toMatchObject({ code: "LICHESS_RECONSENT_REQUIRED" });
+    await reconnectLichess(p);
+    const created = await request();
+
+    expect(created).toHaveLength(1);
+    expect(await entrantCount(divisionId)).toBe(1);
+  });
+
+  it("an over-the-board division enters a player whose link does not play (the demand is for online play only)", async () => {
+    const auth = await seedOwner();
+    const divisionId = await seedDivisionOf(auth, false);
+    const idOnly = await nonPlaying(auth, "identity-only");
+
+    expect(await createEntrants(auth, divisionId, [entryOf(idOnly, "Over the board")])).toHaveLength(1);
+    expect(spy.calls).toEqual([]);
   });
 
   it("an over-the-board division reads no link set at all (negative pair of the above)", async () => {

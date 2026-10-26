@@ -37,12 +37,7 @@ import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matc
 import { log } from "@/server/logger";
 import { readOnlinePlay } from "@/server/external-play/online-play";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
-import {
-  assertPersonIdsLinkedForOnlinePlay,
-  lichessLinkStatesByPerson,
-  personIdsWithLichessLink,
-  type LichessLinkState,
-} from "./external-accounts";
+import { assertPersonIdsLinkedForOnlinePlay, lichessLinkStatesByPerson, type LichessLinkState } from "./external-accounts";
 
 type Tx = postgres.TransactionSql;
 type MemberInput = z.infer<typeof EntrantMemberInput>;
@@ -322,23 +317,23 @@ export async function createEntrants(
   // the division read under RLS inside the transaction still decides whether it IS online. `null` ⇒ not asked — the
   // division turned online in between, which only a club offered online chess can do — so the link is demanded.
   const onlineChessOn = readOnlinePlay(ref?.config) === "lichess" ? await onlineChessOffered(auth) : null;
-  // WHO HOLDS A LICHESS LINK, for an online division's roster check below. The answer lives in a sealed table
-  // (`user_external_accounts`: no `app_user` grant), so it cannot be read through the ambient `tx` once the role has
-  // dropped, and asking the pool from inside the callback is a SECOND connection while this one is held — pool-max
+  // WHO HOLDS A LICHESS LINK, AND WHAT IT LETS THEM DO (plays / must reconnect), for an online division's roster check below.
+  // The answer lives in a sealed table (`user_external_accounts`: no `app_user` grant), so it cannot be read through
+  // the ambient `tx` once the role has dropped, and asking the pool from inside the callback is a SECOND connection while this one is held — pool-max
   // concurrent creates on an online division pinned every slot and queued for one more, for ever (the per-person
   // check this replaced did exactly that). `withTenant`'s `privilegedPrelude` is the door built for this: it runs
   // FIRST, on this transaction's own connection, before the role drops - and the callback still runs as `app_user`,
   // so RLS still scopes everything it does. The final roster is only known inside the transaction (inline new persons,
-  // a copied roster, a team squad), so the prelude reads a set and the callback tests the roster against it: just the
-  // people the inputs name when every input names its own (`explicitRosterPersonIds`), the org's whole linked set when
+  // a copied roster, a team squad), so the prelude reads a map and the callback tests the roster against it: just the
+  // people the inputs name when every input names its own (`explicitRosterPersonIds`), the org's whole linked map when
   // some roster is resolved later. Read only when the division is online as the prelude sees it, and not when the
   // flag was asked and said no (then no link is demanded).
   const namedPersonIds = explicitRosterPersonIds(inputs);
-  let linkedPersonIds: ReadonlySet<string> | null = null;
-  const readLinkedPersonIds = async (ptx: Tx): Promise<void> => {
+  let linkStates: ReadonlyMap<string, LichessLinkState> | null = null;
+  const readLinkStates = async (ptx: Tx): Promise<void> => {
     const [current] = await ptx<{ config: unknown }[]>`select config from divisions where id = ${divisionId}`;
     if (readOnlinePlay(current?.config) === "lichess") {
-      linkedPersonIds = await personIdsWithLichessLink(ptx, auth.orgId, namedPersonIds);
+      linkStates = await lichessLinkStatesByPerson(ptx, auth.orgId, namedPersonIds);
     }
   };
   const { rows, competitionId } = await withTenant(auth.orgId, async (tx) => {
@@ -443,10 +438,10 @@ export async function createEntrants(
       assertRosterFits(eff, input.kind ?? eff.defaultKind, members.length);
 
       if (onlineChessOn !== false && readOnlinePlay(division.config) === "lichess" && members.length > 0) {
-        // `linkedPersonIds` is null only if the division turned online between the prelude's read and this one — then
+        // `linkStates` is null only if the division turned online between the prelude's read and this one — then
         // there is no answer to give and the roster is refused (see `assertPersonIdsLinkedForOnlinePlay`).
         assertPersonIdsLinkedForOnlinePlay(
-          linkedPersonIds,
+          linkStates,
           members.map((m) => m.person_id),
         );
       }
@@ -483,7 +478,7 @@ export async function createEntrants(
       });
     }
     return { rows, competitionId: division.competition_id };
-  }, onlineChessOn === false ? {} : { privilegedPrelude: readLinkedPersonIds });
+  }, onlineChessOn === false ? {} : { privilegedPrelude: readLinkStates });
   // A new entrant sits in no fixture yet; its name joins the division's lists.
   refreshEntrantPublicPages(
     { divisionId, competitionId, fixtureIds: [] },

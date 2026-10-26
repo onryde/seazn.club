@@ -398,9 +398,11 @@ const PAINTERS: Record<string, { verdict: true | string; handoff?: string }> = {
     verdict: "passes the team's join code to RegistrationHubRegistrantJoinCode as a prop and paints nothing itself",
     handoff: "components/registration-hub-registrant-join-code.tsx",
   },
+  // The Lichess refusal's link: its `href` carries the return path, which carries the join code (`?join_code=`), a capability token.
+  "app/(public)/shared/[orgSlug]/[competitionSlug]/register/join/join-form.tsx": { verdict: true },
   "app/(public)/shared/[orgSlug]/[competitionSlug]/register/join/page.tsx": {
     verdict:
-      "passes join_code to JoinForm as a prop (and to previewJoinEntry on the server): JoinForm uses it in the preview request's URL and the join POST body, and paints it nowhere",
+      "passes join_code to JoinForm as a prop (and to previewJoinEntry on the server): JoinForm uses it in the preview request's URL and the join POST body, and paints it only into the Lichess refusal link's href (join-form.tsx, verdict true above), never anywhere else",
   },
   "components/org-team.tsx": {
     verdict:
@@ -440,6 +442,8 @@ describe("every element that paints a scrubbed secret carries ph-no-capture, or 
     expect(hrefNames("components/auth-form.tsx")).toContain("googleHref");
     expect(hrefNames("components/public-site/register/register-stepper.tsx")).toContain("lichessReturn");
     expect(hrefNames("components/public-site/register/register-lichess-card.tsx")).toContain("next");
+    // ... and the join page's refusal link, whose return path interpolates the join code itself.
+    expect(hrefNames("app/(public)/shared/[orgSlug]/[competitionSlug]/register/join/join-form.tsx")).toContain("joinCode");
     expect(painters.size).toBeGreaterThanOrEqual(12);
     let sites = 0;
     for (const s of painters.values()) sites += s.length;

@@ -18,6 +18,7 @@
 import { useState } from "react";
 import { useT } from "@/components/i18n/dict-provider";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { lichessLinkStartHref } from "@/lib/lichess-link";
 import { StepConsent } from "@/components/public-site/register/step-consent";
 import { StepWho } from "@/components/public-site/register/step-who";
 import { validateConsent, validateContact } from "@/components/public-site/register/validation";
@@ -152,7 +153,7 @@ export function JoinForm({
       setMeter(rosterMeterAfterJoin(total, slots.length, selected === NEW_PLAYER_CHOICE));
     } catch (err) {
       const status = err instanceof ApiV1Error ? err.status : undefined;
-      setFailure(classifyJoinFailure(status));
+      setFailure(classifyJoinFailure(status, err instanceof ApiV1Error ? err.code : undefined));
       setSubmitting(false);
     }
   }
@@ -240,7 +241,33 @@ export function JoinForm({
         errors={attempted ? consentValidation.errors : {}}
       />
 
-      {failure && (
+      {(failure === "lichessLink" || failure === "lichessReconnect") && (
+        // A Lichess reason stands alone (no "check your details": theirs are fine) and carries its way out - the same
+        // start the register page uses, coming back to THIS join page. The amber is the Lichess card's own colour.
+        <div
+          role="alert"
+          data-testid="reg-join-lichess-refusal"
+          className="flex min-w-0 items-start gap-2.5 rounded-xl border border-amber-300 bg-amber-50 px-3.5 py-3 text-sm text-amber-900"
+        >
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#b45309" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" className="mt-0.5 shrink-0">
+            <path d="M12 8v5" />
+            <path d="M12 17h.01" />
+            <path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.7 3h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z" />
+          </svg>
+          <p className="m-0 min-w-0">
+            {t(FAILURE_KEY[failure])}{" "}
+            {/* `ph-no-capture`: the return path carries the join code, a capability token, url-encoded into this href. */}
+            <a
+              href={lichessLinkStartHref(orgSlug, `/shared/${orgSlug}/${competitionSlug}/register/join?join_code=${encodeURIComponent(joinCode)}`)}
+              className="ph-no-capture font-medium underline"
+              data-testid={failure === "lichessLink" ? "reg-join-lichess-link" : "reg-join-lichess-reconnect"}
+            >
+              {t(failure === "lichessLink" ? "register.lichessLinkCta" : "register.lichess.reconnect.cta")}
+            </a>
+          </p>
+        </div>
+      )}
+      {failure && failure !== "lichessLink" && failure !== "lichessReconnect" && (
         <div role="alert" className="rounded-lg border border-red-200 bg-red-50 px-3.5 py-3 text-sm text-red-700">
           <p>{t(FAILURE_KEY[failure])}</p>
           {failure === "conflict" && (
@@ -286,4 +313,6 @@ const FAILURE_KEY: Record<JoinFailureKind, string> = {
   conflict: "register.join.error.claimed",
   rateLimited: "register.join.error.rateLimited",
   rejected: "register.join.error.rejected",
+  lichessLink: "register.lichessLinkRequired",
+  lichessReconnect: "register.lichessReconnectRequired",
 };

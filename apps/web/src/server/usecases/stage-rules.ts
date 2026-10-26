@@ -251,9 +251,10 @@ export async function putStageRules(
     };
   });
 
-  // AFTER the transaction commits, and not voided. `stages.ts` has four
-  // `void fireStageRevalidate(...)` calls already recorded as a defect; this
-  // is deliberately neither of those shapes. `fireStageRevalidate` is
+  // AFTER the transaction commits, and not voided. `stages.ts` used to `void`
+  // its `fireStageRevalidate(...)` calls (a recorded defect, now awaited;
+  // stage-revalidate-settles.test.ts); this is deliberately neither of those
+  // shapes. `fireStageRevalidate` is
   // module-private and opens a `withTenant` of its OWN purely to look up the
   // division and competition — ids this transaction has already read — so
   // calling it from inside the callback would re-set the nesting trap above,

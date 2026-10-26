@@ -486,6 +486,72 @@ describe("submit — designed failure states, never a raw server string", () => 
     expect(m.pageText()).not.toContain("This roster is already full");
   });
 
+  // Fix round 1 (owner 2026-10-25): the joiner's own Lichess link is held to the seat gate's bar, and the two reasons
+  // are different jobs - link one / reconnect the one you have. Each is said in its own words, ALONE (the generic
+  // "check your details" line would send a joiner with correct details hunting for a mistake), with its way out: the
+  // start route, coming back to THIS join page.
+  const JOIN_PATH = `/shared/riverside/summer-smash/register/join?join_code=${encodeURIComponent(JOIN_CODE)}`;
+  const START = `/api/auth/lichess?org=riverside&next=${encodeURIComponent(JOIN_PATH)}`;
+  const GENERIC = () => String(EN_UI["register.join.error.rejected"]);
+  const byTestId = (m: ReturnType<typeof mount>, id: string) => m.island.tree().filter((e) => propsOf(e)["data-testid"] === id);
+
+  it("422 LICHESS_LINK_REQUIRED says to LINK, in the dictionary's words, alone, with the start back to this page", async () => {
+    apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("Sign in and link your Lichess account to register for online play", 422, "LICHESS_LINK_REQUIRED") });
+    const m = mount({ initialPlayerId: "p1" });
+    fillMinimalValidForm(m);
+    await submit(m);
+
+    const refusal = byTestId(m, "reg-join-lichess-refusal");
+    expect(refusal, "one Lichess refusal block").toHaveLength(1);
+    expect(textOf(refusal[0]!)).toContain(String(EN_UI["register.lichessLinkRequired"]));
+    expect(textOf(refusal[0]!)).not.toContain(String(EN_UI["register.lichessReconnectRequired"]));
+    const link = byTestId(m, "reg-join-lichess-link");
+    expect(link, "the link affordance").toHaveLength(1);
+    expect(propsOf(link[0]!).href).toBe(START);
+    expect(textOf(link[0]!)).toBe(String(EN_UI["register.lichessLinkCta"]));
+    expect(byTestId(m, "reg-join-lichess-reconnect"), "no reconnect affordance for this reason").toHaveLength(0);
+    expect(m.pageText(), "alone: no generic line").not.toContain(GENERIC());
+    expect(m.pageText(), "never the server's own English").not.toContain("Sign in and link your Lichess account to register");
+    expect(m.pageText()).not.toContain(JOIN_CODE);
+  });
+
+  it("422 LICHESS_RECONSENT_REQUIRED says to RECONNECT, alone, with the same start back to this page (the pair)", async () => {
+    apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("Reconnect your Lichess account so Seazn can submit your moves before registering for online play", 422, "LICHESS_RECONSENT_REQUIRED") });
+    const m = mount({ initialPlayerId: "p1" });
+    fillMinimalValidForm(m);
+    await submit(m);
+
+    const refusal = byTestId(m, "reg-join-lichess-refusal");
+    expect(refusal, "one Lichess refusal block").toHaveLength(1);
+    expect(textOf(refusal[0]!)).toContain(String(EN_UI["register.lichessReconnectRequired"]));
+    expect(textOf(refusal[0]!)).not.toContain(String(EN_UI["register.lichessLinkRequired"]));
+    const link = byTestId(m, "reg-join-lichess-reconnect");
+    expect(link, "the reconnect affordance").toHaveLength(1);
+    expect(propsOf(link[0]!).href).toBe(START);
+    expect(textOf(link[0]!)).toBe(String(EN_UI["register.lichess.reconnect.cta"]));
+    expect(byTestId(m, "reg-join-lichess-link"), "no link affordance for this reason").toHaveLength(0);
+    expect(m.pageText(), "alone: no generic line").not.toContain(GENERIC());
+    expect(m.pageText(), "never the server's own English").not.toContain("Reconnect your Lichess account so Seazn");
+    expect(m.pageText()).not.toContain(JOIN_CODE);
+  });
+
+  it("the other direction: a Lichess code on a status that is not 422 is classified by its status, and a plain 422 keeps the generic line", async () => {
+    // 503 carrying the code: a server fault is a retry, never a Lichess instruction.
+    apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("boom", 503, "LICHESS_LINK_REQUIRED") });
+    const down = mount({ initialPlayerId: "p1" });
+    fillMinimalValidForm(down);
+    await submit(down);
+    expect(byTestId(down, "reg-join-lichess-refusal")).toHaveLength(0);
+    expect(down.pageText()).toContain("Something went wrong — please try again.");
+
+    apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("This roster is already full", 422, "ROSTER_FULL") });
+    const full = mount({ initialPlayerId: "p1" });
+    fillMinimalValidForm(full);
+    await submit(full);
+    expect(byTestId(full, "reg-join-lichess-refusal")).toHaveLength(0);
+    expect(full.pageText()).toContain(GENERIC());
+  });
+
   it("5xx / network failure shows the generic retry copy", async () => {
     apiV1Mock.queue.push({ ok: false, error: new ApiV1Error("boom", 503, "INTERNAL") });
     const m = mount({ initialPlayerId: "p1" });
@@ -495,12 +561,12 @@ describe("submit — designed failure states, never a raw server string", () => 
   });
 
   it("CRITICAL: the join_code capability token never appears in ANY rendered failure banner", async () => {
-    for (const status of [404, 409, 422, 429, 503]) {
-      apiV1Mock.queue = [{ ok: false, error: new ApiV1Error("server detail", status, "X") }];
+    for (const [status, code] of [[404, "X"], [409, "X"], [422, "X"], [422, "LICHESS_LINK_REQUIRED"], [422, "LICHESS_RECONSENT_REQUIRED"], [429, "X"], [503, "X"]] as const) {
+      apiV1Mock.queue = [{ ok: false, error: new ApiV1Error("server detail", status, code) }];
       const m = mount({ initialPlayerId: "p1" });
       fillMinimalValidForm(m);
       await submit(m);
-      expect(m.pageText(), `status ${status} leaked the join_code`).not.toContain(JOIN_CODE);
+      expect(m.pageText(), `status ${status} (${code}) leaked the join_code`).not.toContain(JOIN_CODE);
     }
   });
 });
