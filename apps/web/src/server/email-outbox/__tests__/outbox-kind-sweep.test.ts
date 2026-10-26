@@ -27,6 +27,8 @@
 //     contact in the transaction that activates the placement, and the worker makes the first attempt.
 //   - sponsor_refund: the real `refundSponsorOrder` of a paid order in an `es` org (Stripe's refund is mocked): the notice is queued in
 //     the transaction that records the refund, at its own savepoint, and the request that did it makes the first attempt.
+//   - sponsor_dispute_alert: the real `handleSponsorDispute` (`created`) on a paid sponsor order whose org owner's account is `fr`: the
+//     alert is queued to the owner's account in the transaction that flags the order, and the worker makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -73,7 +75,7 @@ import {
   sweepRegistrations,
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
-import { handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
+import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { seedSponsorOrder, seedSponsorOrg } from "@/server/usecases/__tests__/_money-fixtures";
 import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
@@ -138,7 +140,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 2's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T9) deletes it from NOT_YET_MOVED, and here. */
 const WAVE_2_UNMOVED: readonly OutboxKind[] = [
-  "sponsor_dispute_alert",
   "sponsor_dispute_won",
   "sponsor_dispute_lost",
   "pass_revoked",
@@ -612,6 +613,32 @@ async function sponsorRefundScenario(): Promise<KindScenario> {
   };
 }
 
+/** A paid sponsor order whose org's one owner (an account at a RUN address, so it is found) has the given language, under the given org
+ *  default. */
+async function disputableSponsorOrder(o: { ownerLocale: string | null; defaultLocale: "en" | "es" | "fr" | "nl" }) {
+  const order = await seedSponsorOrder({ status: "paid", ownerLocale: o.ownerLocale, defaultLocale: o.defaultLocale, prefix: RUN });
+  made.orgIds.push(order.orgId);
+  made.userIds.push(order.ownerId);
+  return order;
+}
+
+/** The real `created` webhook handler on a paid sponsor order: the org's owner (account `fr`, org default `en`) is alerted on the outbox
+ *  in the transaction that flags the order, and the first attempt is the worker's. */
+async function sponsorDisputeAlertScenario(): Promise<KindScenario> {
+  const o = await disputableSponsorOrder({ ownerLocale: "fr", defaultLocale: "en" });
+  return {
+    locale: "fr",
+    subjectKey: "sponsorDisputeAlert.subject",
+    subjectVars: { orgName: o.orgName },
+    recipient: o.ownerEmail,
+    firstAttempt: "worker",
+    run: async () => {
+      const dispute = { id: `dp_${RUN}_sp_alert`, payment_intent: o.intent, amount: 25000, status: "needs_response" } as unknown as Stripe.Dispute;
+      expect(await handleSponsorDispute(dispute, "created"), "premise: the real handler matched the sponsor's charge").toBe(true);
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -657,6 +684,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", sponsorRefund.subjectKey, sponsorRefund.subjectVars),
     );
 
+    const sponsorDisputeAlert = await sponsorDisputeAlertScenario();
+    expect(dictionarySubject("fr", sponsorDisputeAlert.subjectKey, sponsorDisputeAlert.subjectVars)).not.toBe(
+      dictionarySubject("en", sponsorDisputeAlert.subjectKey, sponsorDisputeAlert.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -671,6 +703,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         sponsor_invoice: invoice,
         sponsor_receipt: receipt,
         sponsor_refund: sponsorRefund,
+        sponsor_dispute_alert: sponsorDisputeAlert,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

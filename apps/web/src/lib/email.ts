@@ -641,18 +641,12 @@ export async function sponsorRefundEmail(args: SponsorRefundArgs, locale: Locale
   return sponsorRefundTemplate(args, dict);
 }
 
-export interface SponsorDisputeAlertEmail extends SponsorDisputeAlertArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Organiser alert: a sponsorship package payment was disputed (P0-2). */
-export async function sendSponsorDisputeAlertEmail(
-  opts: SponsorDisputeAlertEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Organiser alert: a sponsorship package payment was disputed (P0-2), in the owner's language. It is queued on the email outbox by
+ *  `handleSponsorDispute` (sponsors.ts, kind `sponsor_dispute_alert`) in the transaction that flags the order; nothing sends it
+ *  directly. */
+export async function sponsorDisputeAlertEmail(args: SponsorDisputeAlertArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...sponsorDisputeAlertTemplate(args, dict) });
+  return sponsorDisputeAlertTemplate(args, dict);
 }
 
 export interface SponsorDisputeLostEmail extends SponsorDisputeLostArgs {

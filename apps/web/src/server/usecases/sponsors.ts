@@ -18,7 +18,7 @@ import {
   sponsorInvoiceEmail,
   sponsorReceiptEmail,
   sponsorRefundEmail,
-  sendSponsorDisputeAlertEmail,
+  sponsorDisputeAlertEmail,
   sendSponsorDisputeLostEmail,
   sendSponsorDisputeWonEmail,
 } from "@/lib/email";
@@ -36,6 +36,7 @@ import { fireOrgRevalidate } from "@/server/public-site/revalidate";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { applicationFeeCents, feePercentFor } from "./registrations";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
+import { orgOwnerRecipient } from "./org-owner";
 
 export const SPONSOR_TIERS = ["title", "gold", "silver", "partner"] as const;
 export type SponsorTier = (typeof SPONSOR_TIERS)[number];
@@ -914,6 +915,19 @@ async function resolvePackageName(packageId: string): Promise<string> {
   return pkg?.name ?? "sponsorship";
 }
 
+/** Who a sponsorship dispute notice goes to: the org's current owner (the
+ *  oldest, `orgOwnerRecipient`, owner ruling Q2) as an account, in their
+ *  language (D4: the account's, then the org default). Read on the pool,
+ *  before any transaction opens. `null`: the org has no current owner, so the
+ *  dispute is recorded and nobody is mailed. */
+async function sponsorDisputeRecipient(orgId: string, orgDefault: string | null) {
+  const owner = await orgOwnerRecipient(sql, orgId);
+  return owner && {
+    ...owner,
+    locale: await recipientLocale(sql, { pick: null, userId: owner.userId, orgDefault }),
+  };
+}
+
 /** Actorless audit breadcrumb for a sponsor recovery, on the same
  *  competition_events ledger the registration recovery writes to. A sponsor
  *  package can be org-wide (no competition) and there is no actorless
@@ -957,10 +971,15 @@ async function recoverSponsorDispute(
  * loss. Dispatched after handleRegistrationDispute for both event types —
  * a non-sponsor intent matches no order row and no-ops.
  *
+ * The owner's alert goes through the email outbox (kind
+ * `sponsor_dispute_alert`, ref `dispute/<id>`), addressed to the owner's
+ * account in their language; the worker makes the first attempt.
+ *
  * Replay-safe: the disputed_at/dispute_id + status writes converge, the
- * created alert fires only on the first flag of a given dispute, and the lost
- * recovery + its email short-circuit on the core's dispute_id metadata guard.
- * Stripe calls stay OUTSIDE any sql tx.
+ * created alert is queued only on the transition to a given dispute (and its
+ * once-key holds it to one row), and the lost recovery + its email
+ * short-circuit on the core's dispute_id metadata guard. Stripe calls stay
+ * OUTSIDE any sql tx.
  */
 export async function handleSponsorDispute(
   dispute: Stripe.Dispute,
@@ -975,37 +994,67 @@ export async function handleSponsorDispute(
       disputed_at: Date | null;
       dispute_id: string | null;
       competition_id: string | null;
+      org_name: string | null;
+      org_default_locale: string | null;
+      package_name: string | null;
     })[]
   >`
     select ${sql(ORDER_COLS as unknown as string[])}, org_id, disputed_at, dispute_id,
            (select competition_id from sponsor_packages p where p.id = sponsor_orders.package_id)
-             as competition_id
+             as competition_id,
+           (select name from sponsor_packages p where p.id = sponsor_orders.package_id)
+             as package_name,
+           (select name from organizations g where g.id = sponsor_orders.org_id) as org_name,
+           (select default_locale from organizations g where g.id = sponsor_orders.org_id)
+             as org_default_locale
     from sponsor_orders where payment_intent_id = ${intent}`;
   if (!order) return false; // not a sponsor charge (or it doesn't know its intent YET)
 
+  // What a dispute notice says about the order, read with it, before any
+  // transaction. Rendering needs no handle.
+  const noticeArgs = {
+    orgName: order.org_name ?? "your organisation",
+    packageName: order.package_name ?? "sponsorship",
+    sponsorName: order.sponsor_name,
+    amountCents: dispute.amount,
+    currency: order.currency,
+  };
+
   if (phase === "created") {
-    // A replayed created event re-stamps nothing new: coalesce keeps the first
-    // flag time and the alert / placement park run only the first time.
-    const firstFlag = order.dispute_id !== dispute.id;
-    await sql`update sponsor_orders
-              set disputed_at = coalesce(disputed_at, now()), dispute_id = ${dispute.id}
-              where id = ${order.id}`;
-    if (firstFlag) {
-      if (order.sponsor_id) {
-        await sql`update sponsors set status = 'pending' where id = ${order.sponsor_id}`;
+    const recipient = await sponsorDisputeRecipient(order.org_id, order.org_default_locale);
+    // ONE transaction flags the order and queues the owner's alert, so the
+    // alert exists exactly when the flag does (R1). The alert and the
+    // placement park run only on the TRANSITION to this dispute (the order,
+    // read under lock, named another dispute or none): a redelivered `created`
+    // is not one, and coalesce keeps the first flag time. The once-key keeps
+    // an older dispute's `created`, arriving again after a newer one moved the
+    // order on, from alerting twice.
+    await sql.begin(async (tx) => {
+      const [prior] = await tx<{ dispute_id: string | null }[]>`
+        select dispute_id from sponsor_orders where id = ${order.id} for update`;
+      await tx`update sponsor_orders
+               set disputed_at = coalesce(disputed_at, now()), dispute_id = ${dispute.id}
+               where id = ${order.id}`;
+      const firstFlag = prior?.dispute_id !== dispute.id;
+      if (firstFlag && recipient) {
+        const kind = "sponsor_dispute_alert";
+        await enqueueEmailOnce(tx, {
+          kind,
+          refType: "dispute",
+          refId: dispute.id,
+          orgId: order.org_id,
+          to: recipient.email,
+          recipientUserId: recipient.userId,
+          ...(await sponsorDisputeAlertEmail(noticeArgs, recipient.locale)),
+          transactional: false,
+          expiresAt: expiryWithin(null),
+          dedupeKey: onceKey(kind, "dispute", dispute.id, "created"),
+        });
       }
-      const owner = await currentOrgOwnerEmail(order.org_id);
-      if (owner) {
-        void sendSponsorDisputeAlertEmail({
-          to: owner,
-          orgName: (await resolveOrgName(order.org_id)) ?? "your organisation",
-          packageName: await resolvePackageName(order.package_id),
-          sponsorName: order.sponsor_name,
-          amountCents: dispute.amount,
-          currency: order.currency,
-        }).catch(() => {});
+      if (firstFlag && order.sponsor_id) {
+        await tx`update sponsors set status = 'pending' where id = ${order.sponsor_id}`;
       }
-    }
+    });
     bustPublicSponsors(order.org_id);
     return true;
   }

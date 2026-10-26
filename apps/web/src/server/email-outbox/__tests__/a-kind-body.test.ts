@@ -16,9 +16,11 @@
 //    body left to open, and a guard over no bodies is the vacuous pass this file exists to avoid.
 //  - The bodies are opened with the outbox's own `openBody` and the recipient's address (lower-cased, as the row stores it) must be
 //    absent. A positive pair shows the bodies really were opened and are the kind's own mail (the invite carries the match link; a
-//    registration dispute notice names the competition).
+//    registration dispute notice names the competition; a sponsor dispute notice names the package).
 //  - The registration dispute notices are driven through the real `handleRegistrationDispute` on a card cart the real webhook confirmed.
 //    Neither touches Stripe: the alert never does, and the lost notice's dispute names no charge, so the balance recovery is skipped.
+//  - The sponsor dispute notices are driven through the real `handleSponsorDispute` on a paid sponsor order. The alert never touches
+//    Stripe.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -34,6 +36,8 @@ vi.mock("@/server/email-outbox/transport", () => ({
 
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { handleRegistrationCheckoutCompleted, handleRegistrationDispute } from "@/server/usecases/registrations";
+import { handleSponsorDispute } from "@/server/usecases/sponsors";
+import { seedSponsorOrder } from "@/server/usecases/__tests__/_money-fixtures";
 import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -53,7 +57,6 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
 /** Account kinds whose producer has not moved to the outbox yet, so there is no real producer to drive. Each kind task deletes its own
  *  entry when it adds its producer to PRODUCERS below; T10 deletes the list. */
 const PRODUCERS_PENDING: readonly OutboxKind[] = [
-  "sponsor_dispute_alert",
   "sponsor_dispute_won",
   "sponsor_dispute_lost",
   "pass_revoked",
@@ -119,6 +122,14 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       expect(await handleRegistrationDispute(dispute, "closed"), "premise: the real handler matched the entry-fee charge").toBe(true);
       // The notice names the competition the written-off entry belongs to.
       return { rowIds: await rowIdsOf("registration_dispute_lost", disputeId), positive: literal(competitionName) };
+    },
+    sponsor_dispute_alert: async () => {
+      const o = await seedSponsorOrder({ status: "paid" });
+      const disputeId = `dp_akb_${randomUUID().slice(0, 12)}`;
+      const dispute = { id: disputeId, payment_intent: o.intent, amount: 25000, status: "needs_response" } as unknown as Stripe.Dispute;
+      expect(await handleSponsorDispute(dispute, "created"), "premise: the real handler matched the sponsor's charge").toBe(true);
+      // The alert names the package the disputed payment bought.
+      return { rowIds: await rowIdsOf("sponsor_dispute_alert", disputeId), positive: literal(o.packageName) };
     },
   };
 
