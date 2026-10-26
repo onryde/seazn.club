@@ -543,6 +543,12 @@ function offerAfter(b: BridgeRow, g: BoardGameFull, ply: number) {
   return by === "white" ? { ...keep, by, whitePly: ply } : { ...keep, by, blackPly: ply };
 }
 
+/** The largest clock `white_ms` / `black_ms` can hold: V454 declares both columns `integer` (int4), so 2^31 - 1 ms = 24.855 days.
+ *  A clock re-expressed as at `last_move_at` (Lichess's reading + the time since) is capped to it - a board whose last move is older
+ *  than that otherwise fails the whole reconcile write with 22003 `value "…" is out of range for type integer` on every sweep.
+ *  If those columns are ever widened, widen this with them (the reconcile test reads the column type and pins the two together). */
+export const CLOCK_MS_COLUMN_MAX = 2 ** 31 - 1;
+
 /** The row's clocks after this read, in the row's own terms (V454, T10's
  *  append): `white_ms`/`black_ms` are each side's time AS AT `last_move_at`,
  *  and every renderer counts the side to move down from `last_move_at`
@@ -564,7 +570,7 @@ function clocksAt(b: BridgeRow, g: BoardGameFull, ply: number, adopted: number, 
   // T17B fix 2, D11 (c): Lichess's reading of the running clock stops at 0, so a 0 says only "out of time by now" —
   // 0 + the time since the move is no clock at all (x0JKlePc stored white_ms 389906 on a 5+0). No move was made since
   // `last_move_at`, so the clock as at that move is still the one the row holds.
-  const asOfMove = (read: number, stored: number | null) => (read > 0 || stored === null ? read + since : stored);
+  const asOfMove = (read: number, stored: number | null) => (read > 0 || stored === null ? Math.min(CLOCK_MS_COLUMN_MAX, read + since) : stored);
   return ply % 2 === 0
     ? { whiteMs: asOfMove(g.whiteMs, b.white_ms), blackMs: g.blackMs, lastMoveAt: last }
     : { whiteMs: g.whiteMs, blackMs: asOfMove(g.blackMs, b.black_ms), lastMoveAt: last };
