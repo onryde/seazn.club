@@ -16,6 +16,8 @@
 //     assignment's own transaction and the request that did it makes the first attempt.
 //   - refund_issued: the real `refundRegistration` of a paid `es` registrant (Stripe's refund is mocked): the receipt is queued in the transaction
 //     that records the refund, with the refund id as its ref and once-key, and the request that did it makes the first attempt.
+//   - registration_dispute_alert: the real `handleRegistrationDispute` (`created`) on a paid card cart whose org owner's account is `fr`: the
+//     alert is queued to the owner's account in the transaction that records the dispute, and the worker makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -28,6 +30,7 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
+import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
@@ -53,7 +56,14 @@ import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { assignSoloSignUp } from "@/server/usecases/registration-assign";
-import { handleRegistrationCheckoutCompleted, putRegistrationSettings, refundRegistration, sweepRegistrations, withdrawRegistrationPublic } from "@/server/usecases/registrations";
+import {
+  handleRegistrationCheckoutCompleted,
+  handleRegistrationDispute,
+  putRegistrationSettings,
+  refundRegistration,
+  sweepRegistrations,
+  withdrawRegistrationPublic,
+} from "@/server/usecases/registrations";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
@@ -117,7 +127,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 2's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T9) deletes it from NOT_YET_MOVED, and here. */
 const WAVE_2_UNMOVED: readonly OutboxKind[] = [
-  "registration_dispute_alert",
   "registration_dispute_lost",
   "sponsor_invoice",
   "sponsor_receipt",
@@ -224,8 +233,9 @@ describe("the spec's lists (no database)", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
-    // Wave 1 is closed (T12) and wave 2's T1 registered its ten kinds before any producer moved: exactly those ten are unmoved, and they
-    // are exactly the kinds that still name a direct sender. Both sides of the equivalence above have members to judge.
+    // Wave 1 is closed (T12) and wave 2's T1 registered its ten kinds before any producer moved: exactly the ones still listed in
+    // WAVE_2_UNMOVED are unmoved (each kind task deletes its own), and they are exactly the kinds that still name a direct sender. Both
+    // sides of the equivalence above have members to judge.
     expect(NOT_YET_MOVED, "the unmoved kinds are wave 2's, in the spec's order").toEqual(WAVE_2_UNMOVED);
     expect(
       SPEC_KINDS.filter((k) => KIND_DIRECT_SENDER[k] !== null),
@@ -483,6 +493,39 @@ async function soloSignupAssignedScenario(): Promise<KindScenario> {
   };
 }
 
+/** A card-paid entry (the real webhook confirmed it) in a fresh org whose one owner's account is mailed at a run-unique address, in the given
+ *  language, under the given org default. Returns the address and the payment intent its cart carries (read back, not rebuilt). */
+async function disputableEntry(o: { ownerLocale: string | null; orgDefault: string; feeCents: number }) {
+  const w = await stripeRig({ feeCents: o.feeCents });
+  made.orgIds.push(w.orgId);
+  made.userIds.push(w.ownerId);
+  const recipient = address();
+  await sql`update users set email = ${recipient}, locale = ${o.ownerLocale} where id = ${w.ownerId}`;
+  await sql`update organizations set default_locale = ${o.orgDefault} where id = ${w.orgId}`;
+  const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: address() });
+  await handleRegistrationCheckoutCompleted(fakeSession(registration.id, o.feeCents));
+  const [cart] = await sql<{ payment_intent_id: string | null }[]>`select payment_intent_id from registration_groups where id = ${registration.group_id}`;
+  expect(cart!.payment_intent_id, "premise: the paid cart carries its payment intent").toBeTruthy();
+  return { w, recipient, intent: cart!.payment_intent_id! };
+}
+
+/** The real `created` webhook handler on a paid card cart: the org's owner (account `fr`, org default `en`) is alerted on the outbox in the
+ *  transaction that records the dispute, and the first attempt is the worker's. */
+async function registrationDisputeAlertScenario(): Promise<KindScenario> {
+  const { w, recipient, intent } = await disputableEntry({ ownerLocale: "fr", orgDefault: "en", feeCents: 900 });
+  return {
+    locale: "fr",
+    subjectKey: "disputeAlert.subject",
+    subjectVars: { competitionName: w.competition.name },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const dispute = { id: `dp_${RUN}_alert`, payment_intent: intent, amount: 900, status: "needs_response" } as unknown as Stripe.Dispute;
+      expect(await handleRegistrationDispute(dispute, "created"), "premise: the real handler matched the entry-fee charge").toBe(true);
+    },
+  };
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -507,6 +550,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const solo = await soloSignupAssignedScenario();
     expect(dictionarySubject("fr", solo.subjectKey, solo.subjectVars)).not.toBe(dictionarySubject("en", solo.subjectKey, solo.subjectVars));
 
+    const disputeAlert = await registrationDisputeAlertScenario();
+    expect(dictionarySubject("fr", disputeAlert.subjectKey, disputeAlert.subjectVars)).not.toBe(
+      dictionarySubject("en", disputeAlert.subjectKey, disputeAlert.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -516,6 +564,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         registration_promoted: promoted,
         refund_issued: refund,
         solo_signup_assigned: solo,
+        registration_dispute_alert: disputeAlert,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

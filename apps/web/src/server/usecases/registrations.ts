@@ -29,7 +29,7 @@ import {
   paymentReminderEmail,
   registrationPromotedEmail,
   refundIssuedEmail,
-  sendDisputeAlertEmail,
+  disputeAlertEmail,
   sendDisputeLostEmail,
   sendRegistrationRefundFailedAlertEmail,
   sendClaimInviteEmail,
@@ -38,7 +38,7 @@ import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import { deferred } from "@/lib/deferred";
-import { dispatchNow, enqueueEmail, enqueueEmailOnce, expiryWithin, recipientLocale, type OutboxMessage } from "@/server/email-outbox";
+import { dispatchNow, enqueueEmail, enqueueEmailOnce, expiryWithin, onceKey, recipientLocale, type OutboxMessage } from "@/server/email-outbox";
 import { isValidRefCode, normalizeRefCode } from "@/lib/ref-code";
 import { anyOptedOut, resolvePersonDisplayName } from "@/lib/name-display";
 import { isoFromZonedParts } from "@/lib/zoned-datetime";
@@ -54,6 +54,7 @@ import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { resolveLogoUrl } from "@/server/public-site/data";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
+import { orgOwnerRecipient } from "./org-owner";
 import { createSystemClaimInvite } from "./person-claims";
 // The entrant status flip inside `withdrawCore` is raw SQL, so `patchEntrant`'s
 // own hook cannot fire — this is what refreshes a seeding draft that still
@@ -3358,27 +3359,55 @@ export async function handleRegistrationDispute(
   const ctx = await divisionCtx(sql, reg.division_id);
 
   if (phase === "created") {
-    // disputed_at/dispute_id live on the cart now (V364).
-    await sql`update registration_groups
-              set disputed_at = now(), dispute_id = ${dispute.id}, updated_at = now()
-              where id = ${reg.group_id}`;
-    await audit(sql, ctx.competition_id, reg.org_id, "registration.disputed", {
-      registration_id: reg.id,
-      dispute_id: dispute.id,
-      amount_cents: dispute.amount,
-    }, null);
-    const owner = await currentOwnerEmail(reg.org_id);
-    if (owner) {
-      void sendDisputeAlertEmail({
-        to: owner,
-        orgName: ctx.org_name,
-        competitionName: ctx.comp_name,
-        displayName: reg.display_name,
-        amountCents: dispute.amount,
-        currency: reg.currency,
-        refCode: reg.ref_code,
-      }).catch(() => {});
-    }
+    // The owner to alert and their language (D4: the account's, then the org default), read before the transaction opens. `null`: the
+    // org has no current owner, so the dispute is recorded and nobody is mailed.
+    const owner = await orgOwnerRecipient(sql, reg.org_id);
+    const recipient = owner && {
+      ...owner,
+      locale: await recipientLocale(sql, { pick: null, userId: owner.userId, orgDefault: ctx.default_locale }),
+    };
+    // ONE transaction records the dispute on the cart (disputed_at/dispute_id live on the cart, V364) and queues the owner's alert, so the
+    // alert exists exactly when the record does. The alert is written only on the TRANSITION to this dispute (the cart, read under lock,
+    // named another dispute or none): a redelivered `created` is not one. The once-key keeps an older dispute's `created`, arriving again
+    // after a newer one moved the cart on, from alerting twice. A webhook has no response to defer behind, so the worker makes the first
+    // attempt. The audit stays unconditional: it records every delivery.
+    await sql.begin(async (tx) => {
+      const [prior] = await tx<{ dispute_id: string | null }[]>`
+        select dispute_id from registration_groups where id = ${reg.group_id} for update`;
+      await tx`update registration_groups
+               set disputed_at = now(), dispute_id = ${dispute.id}, updated_at = now()
+               where id = ${reg.group_id}`;
+      if (prior?.dispute_id !== dispute.id && recipient) {
+        const kind = "registration_dispute_alert";
+        await enqueueEmailOnce(tx, {
+          kind,
+          refType: "dispute",
+          refId: dispute.id,
+          orgId: reg.org_id,
+          to: recipient.email,
+          recipientUserId: recipient.userId,
+          ...(await disputeAlertEmail(
+            {
+              orgName: ctx.org_name,
+              competitionName: ctx.comp_name,
+              displayName: reg.display_name,
+              amountCents: dispute.amount,
+              currency: reg.currency,
+              refCode: reg.ref_code,
+            },
+            recipient.locale,
+          )),
+          transactional: false,
+          expiresAt: expiryWithin(null),
+          dedupeKey: onceKey(kind, "dispute", dispute.id, "created"),
+        });
+      }
+      await audit(tx, ctx.competition_id, reg.org_id, "registration.disputed", {
+        registration_id: reg.id,
+        dispute_id: dispute.id,
+        amount_cents: dispute.amount,
+      }, null);
+    });
     return true;
   }
   if (dispute.status === "won") {

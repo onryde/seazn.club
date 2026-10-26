@@ -15,8 +15,13 @@
 //    the transport is replaced, and it answers 503 so every row stays `queued` with its sealed body. A row that had been sent has no
 //    body left to open, and a guard over no bodies is the vacuous pass this file exists to avoid.
 //  - The bodies are opened with the outbox's own `openBody` and the recipient's address (lower-cased, as the row stores it) must be
-//    absent. A positive pair shows the bodies really were opened and are the invite (they carry the match link).
+//    absent. A positive pair shows the bodies really were opened and are the kind's own mail (the invite carries the match link; a
+//    registration dispute notice names the competition).
+//  - The registration dispute alert is driven through the real `handleRegistrationDispute` on a card cart the real webhook confirmed; it
+//    never touches Stripe.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
+import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { OUTBOX_KIND_FACTS, OUTBOX_KINDS, type OutboxKind } from "../constants";
 import { openBody } from "../seal";
@@ -28,6 +33,8 @@ vi.mock("@/server/email-outbox/transport", () => ({
 }));
 
 import { openRound } from "@/server/usecases/external-play/open-round";
+import { handleRegistrationCheckoutCompleted, handleRegistrationDispute } from "@/server/usecases/registrations";
+import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -46,7 +53,6 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
 /** Account kinds whose producer has not moved to the outbox yet, so there is no real producer to drive. Each kind task deletes its own
  *  entry when it adds its producer to PRODUCERS below; T10 deletes the list. */
 const PRODUCERS_PENDING: readonly OutboxKind[] = [
-  "registration_dispute_alert",
   "registration_dispute_lost",
   "sponsor_dispute_alert",
   "sponsor_dispute_won",
@@ -70,6 +76,20 @@ describe("which kinds are addressed to an account (no database)", () => {
 });
 
 describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipient (real producer, real renderer)", () => {
+  /** A card-paid entry (the real webhook confirmed it) in a fresh org: its competition's name and the payment intent its cart carries. */
+  async function disputableEntry(): Promise<{ competitionName: string; intent: string }> {
+    const w = await stripeRig({ feeCents: 900 });
+    const { registration } = await seedRegistration(w.competition.id, w.division.id, w.settings, { contactEmail: `akb-${randomUUID().slice(0, 8)}@test.local` });
+    await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 900));
+    const [cart] = await sql<{ payment_intent_id: string | null }[]>`select payment_intent_id from registration_groups where id = ${registration.group_id}`;
+    expect(cart!.payment_intent_id, "premise: the paid cart carries its payment intent").toBeTruthy();
+    return { competitionName: w.competition.name, intent: cart!.payment_intent_id! };
+  }
+  const rowIdsOf = async (kind: OutboxKind, disputeId: string): Promise<string[]> =>
+    (await sql<{ id: string }[]>`select id from email_outbox where kind = ${kind} and ref_id = ${disputeId}`).map((x) => x.id);
+  /** A pattern that matches `text` literally. */
+  const literal = (text: string): RegExp => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
+
   // One producer per account kind that has moved: the real code path that writes the kind's rows. It returns the ids of the rows it wrote
   // and a pattern the kind's own body must carry (the positive pair: an empty or unreadable body would pass every absence check).
   const PRODUCERS: Readonly<Partial<Record<OutboxKind, () => Promise<{ rowIds: string[]; positive: RegExp }>>>> = {
@@ -83,6 +103,14 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       expect(rows.length, "anti-vacuity: the chess_invite producer wrote a row per seat").toBeGreaterThanOrEqual(2);
       // The invite carries the match link.
       return { rowIds: rows.map((x) => x.id), positive: /href="https?:\/\// };
+    },
+    registration_dispute_alert: async () => {
+      const { competitionName, intent } = await disputableEntry();
+      const disputeId = `dp_akb_${randomUUID().slice(0, 12)}`;
+      const dispute = { id: disputeId, payment_intent: intent, amount: 900, status: "needs_response" } as unknown as Stripe.Dispute;
+      expect(await handleRegistrationDispute(dispute, "created"), "premise: the real handler matched the entry-fee charge").toBe(true);
+      // The alert names the competition the disputed entry belongs to.
+      return { rowIds: await rowIdsOf("registration_dispute_alert", disputeId), positive: literal(competitionName) };
     },
   };
 

@@ -602,16 +602,12 @@ export async function refundIssuedEmail(args: RefundIssuedArgs, locale: Locale):
   return refundIssuedTemplate(args, dict);
 }
 
-export interface DisputeAlertEmail extends DisputeAlertArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Organiser alert: an entry-fee payment was disputed (spec issue #5). */
-export async function sendDisputeAlertEmail(opts: DisputeAlertEmail): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Organiser alert: an entry-fee payment was disputed (spec issue #5), in the owner's language. It is queued on the email outbox by
+ *  `handleRegistrationDispute` (registrations.ts, kind `registration_dispute_alert`) in the transaction that records the dispute; nothing
+ *  sends it directly. */
+export async function disputeAlertEmail(args: DisputeAlertArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...disputeAlertTemplate(args, dict) });
+  return disputeAlertTemplate(args, dict);
 }
 
 export interface DisputeLostEmail extends DisputeLostArgs {
