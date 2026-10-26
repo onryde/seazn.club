@@ -71,6 +71,7 @@ import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/e
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { isLichessRosterRefusal } from "./external-accounts";
 import { openRegistrationSeatGate, type RegistrationSeatGate, type SeatGate } from "./online-seat-gate";
+import { submitterAccounts } from "./registration-submitter-account";
 
 type Tx = postgres.TransactionSql;
 
@@ -909,6 +910,23 @@ async function loadPlayers(tx: Tx, registrationId: string): Promise<
 }
 
 /**
+ * On an ONLINE division, the submitter's own row - which carries no `user_id` when they gave no date of birth (`deriveLinkUserId`) - is
+ * resolved by the account that submitted the cart, as a tied row would be: `resolvePlayerPerson` reuses the person that account already
+ * holds in the club (`persons_org_user_lane_uq`: one person per account, so there is no duplicate and no unique-index error to meet) or
+ * makes one tied to it. The board reads a Lichess link by the PERSON's account, so a seat left untied is one the gate allowed and the board
+ * then turns away. Which row is the submitter's, and whose account, is `registration-submitter-account.ts` - the same rule the seat gate
+ * asks. Nobody else is touched: a teammate (typed in, claimed or joined), a minor, an entry made on a guardian's behalf. Left as it was on
+ * a division that is not played online: tying every dob-less self-registration to an account is a change for other consumers of the person.
+ */
+async function withSubmitterAccount<P extends { id: string; user_id: string | null }>(tx: Tx, reg: RegistrationRow, players: P[]): Promise<P[]> {
+  const accounts = await submitterAccounts(tx, reg.id);
+  if (accounts.size === 0) return players;
+  const [division] = await tx<{ sport_key: string; config: unknown }[]>`select sport_key, config from divisions where id = ${reg.division_id}`;
+  if (!division || !divisionPlaysOnline(division)) return players;
+  return players.map((p) => ({ ...p, user_id: p.user_id ?? accounts.get(p.id) ?? null }));
+}
+
+/**
  * Clears the cart's shared `expires_at` ONLY when no OTHER entry in it is
  * still `pending` — i.e. nothing else still depends on the deadline. The
  * counterpart to `promoteWaitlistedRow`'s monotonic-extend ruling (RS002 W5
@@ -989,7 +1007,7 @@ export async function materialise(
     insert into entrants (division_id, kind, display_name, status)
     values (${reg.division_id}, ${entrantKind}, ${reg.display_name}, 'confirmed')
     returning id`;
-  const players = await loadPlayers(tx, reg.id);
+  const players = await withSubmitterAccount(tx, reg, await loadPlayers(tx, reg.id));
   if (entrantKind === "individual") {
     // No player row yet (nothing populates registration_players until
     // RS002/RS003 ship the new submit flow) falls back to the entry's own

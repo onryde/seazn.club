@@ -20,7 +20,8 @@ import "server-only";
 //      the registrant's person row is created by `materialise` in the very transaction that seats them, so no map read
 //      beforehand can hold it; its link is read by the registrant's USER (the account on `registration_players.user_id`;
 //      for the SUBMITTER's own row, which carries none when they gave no date of birth, the account the cart was submitted
-//      by - `submitterAccount`) and matched to the person once the transaction has made it.
+//      by - registration-submitter-account.ts, the same rule the seat uses to tie the person it makes) and matched to the
+//      person once the transaction has made it.
 //   4. The test itself, `assertRoster`: refuses when the division plays online (`divisionPlaysOnline`, read in the
 //      caller's transaction) and one of the people is not in the map as playing.
 //
@@ -43,6 +44,7 @@ import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { onlineChessOffered, type OnlineChessAsker } from "./external-play/online-chess-flag";
+import { submitterAccounts } from "./registration-submitter-account";
 import {
   assertPersonIdsLinkedForOnlinePlay,
   isLichessRosterRefusal,
@@ -164,41 +166,6 @@ export function openOrgSeatGate(auth: Pick<AuthCtx, "orgId" | "userId">): Promis
   return openGate(auth, { probe: anyOnline, read: personKeyed(auth.orgId, undefined) });
 }
 
-/** A `registration_players` row as the registration gate reads it, with the account that SUBMITTED its cart. */
-interface PlayerAccountRow {
-  user_id: string | null;
-  /** `registration_groups.user_id`: who was signed in when the cart was submitted. Not tied to a date of birth, as `user_id` is. */
-  cart_user: string | null;
-  no_dob: boolean;
-  guardian_name: string | null;
-  source: string;
-  /** The row was consented in the very transaction that wrote it: `consent_at` is the transaction's own `now()`, as `created_at` is. */
-  at_submit: boolean | null;
-}
-
-const accountColumns = (db: Db) => db`
-  rp.user_id, g.user_id as cart_user, (rp.dob is null) as no_dob, rp.guardian_name, rp.source,
-  (rp.consent_at = rp.created_at) as at_submit`;
-
-/** The account to read a registrant's link by when their OWN row names none, or null when there is no such account.
- *
- *  `deriveLinkUserId` ties a self-registered player's row to the signed-in account only for an adult WITH a date of birth, so the
- *  submitter of a division that does not ask for one is untied - yet the submit asked THEIR session's link, and the cart remembers
- *  whose it was. This returns that account for exactly that row and no other:
- *    - `captain_entered`: not a joiner's own row (`self_joined`), not an organiser's placement;
- *    - consented in the submit's own transaction: a teammate the captain typed in has no consent yet, and one who claimed their spot did
- *      so later, in a transaction of their own - neither is the submitter, and the cart's account is not theirs;
- *    - no date of birth and no guardian: a minor, or an entry made on a guardian's behalf, is untied ON PURPOSE (the account is the
- *      guardian's, not the player's), and an adult with a date of birth who is untied was untied for a reason the row does not show. */
-function submitterAccount(row: PlayerAccountRow): string | null {
-  if (row.cart_user === null) return null;
-  if (row.source !== "captain_entered") return null;
-  if (row.at_submit !== true) return null;
-  if (!row.no_dob) return null;
-  if (row.guardian_name !== null) return null;
-  return row.cart_user;
-}
-
 /** A REGISTRATION door (`materialise`: approve, confirm, waive, mark-paid, a promotion that seats; `assignSoloSignUp`). Keyed by the
  *  registrant's account, because their person row may not exist until `materialise` makes it (see the header). `registrationId`
  *  scopes the read to that one entry's players; omit it for a promotion that picks its own candidate (the division's waitlist is read).
@@ -226,7 +193,7 @@ export async function openRegistrationSeatGate(scope: {
          where r.org_id = ${orgId} and r.division_id = ${scope.divisionId}
            and ${scope.registrationId === undefined ? db`r.status = 'waitlisted'` : db`r.id = ${scope.registrationId}`}`;
       const entryIds = entries.map((e) => e.id);
-      // Every account the entries' players, or their carts, name. A cart's account is read for the submitter's own row (`submitterAccount`).
+      // Every account the entries' players, or their carts, name. A cart's account is read for the submitter's own row (registration-submitter-account.ts).
       const accounts = await db<{ user_id: string }[]>`
         select rp.user_id from registration_players rp where rp.registration_id = any(${entryIds}::uuid[]) and rp.user_id is not null
         union
@@ -238,24 +205,14 @@ export async function openRegistrationSeatGate(scope: {
       );
       held.byUser = read;
       return async (tx, personIds) => {
-        // A person is matched to an account by its own `user_id`; one that has none (made by `materialise` for a row that has none) by
-        // the row it was made from, which `materialise` stamped on `person_id` before it asked.
-        const people = await tx<(PlayerAccountRow & { person_id: string; person_user: string | null })[]>`
-          select p.id as person_id, p.user_id as person_user, ${accountColumns(tx)}
-            from persons p
-            left join registration_players rp on rp.person_id = p.id and rp.registration_id = any(${entryIds}::uuid[])
-            left join registrations r on r.id = rp.registration_id
-            left join registration_groups g on g.id = r.group_id
-           where p.id = any(${[...personIds]})`;
-        const accountOf = new Map<string, string>();
-        for (const p of people) {
-          const account = p.person_user ?? submitterAccount(p);
-          if (account !== null && !accountOf.has(p.person_id)) accountOf.set(p.person_id, account);
-        }
+        // A person is matched to its account by its own `user_id`. The seat ties the person it makes for the submitter's own row to the
+        // cart's account (`materialise`, on an online division) before it asks, so that row is found here like any other.
+        const people = await tx<{ id: string; user_id: string | null }[]>`
+          select id, user_id from persons where id = any(${[...personIds]})`;
         return new Map(
-          [...accountOf].flatMap(([personId, account]): [string, LichessLinkState][] => {
-            const state = read.get(account);
-            return state === undefined ? [] : [[personId, state]];
+          people.flatMap((p): [string, LichessLinkState][] => {
+            const state = p.user_id === null ? undefined : read.get(p.user_id);
+            return state === undefined ? [] : [[p.id, state]];
           }),
         );
       };
@@ -267,16 +224,13 @@ export async function openRegistrationSeatGate(scope: {
       const read = held.byUser;
       if (read === null) return null;
       // The entry's own players, each keyed by the account on its row - the same people `materialise` resolves to persons.
-      const players = await tx<(PlayerAccountRow & { id: string })[]>`
-        select rp.id, ${accountColumns(tx)}
-          from registration_players rp
-          join registrations r on r.id = rp.registration_id
-          left join registration_groups g on g.id = r.group_id
-         where rp.registration_id = ${registrationId}
-         order by rp.created_at, rp.id`;
+      const players = await tx<{ id: string; user_id: string | null }[]>`
+        select id, user_id from registration_players where registration_id = ${registrationId} order by created_at, id`;
+      // The submitter's own row names no account when they gave no date of birth: the seat would resolve it by the cart's.
+      const cart = await submitterAccounts(tx, registrationId);
       const states = new Map(
         players.flatMap((p): [string, LichessLinkState][] => {
-          const account = p.user_id ?? submitterAccount(p);
+          const account = p.user_id ?? cart.get(p.id) ?? null;
           const state = account === null ? undefined : read.get(account);
           return state === undefined ? [] : [[p.id, state]];
         }),

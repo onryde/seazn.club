@@ -44,6 +44,8 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { forgetOnlineChessFlagCache } from "../external-play/online-chess-flag";
+import { loadSides } from "../external-play/guard";
+import { playGrantRefusal } from "../external-play/preflight";
 import { openRegistrationSeatGate } from "../online-seat-gate";
 import { assignSoloSignUp } from "../registration-assign";
 import { approveRegistration } from "../registration-approval";
@@ -405,6 +407,13 @@ const writtenBy = async (w: World): Promise<{ registrations: number; groups: num
   entrants: (await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${w.divisionId}`)[0]!.n,
 });
 
+/** The people seated on the entry's entrant, with the account each is tied to (null: untied). */
+const seatedPeople = async (registrationId: string): Promise<{ id: string; full_name: string; user_id: string | null }[]> =>
+  sql<{ id: string; full_name: string; user_id: string | null }[]>`
+    select p.id, p.full_name, p.user_id
+      from registrations r join entrant_members em on em.entrant_id = r.entrant_id join persons p on p.id = em.person_id
+     where r.id = ${registrationId} order by p.full_name`;
+
 const seatedAfterSubmit = async (registrationId: string): Promise<{ status: string; people: number }> => {
   const [r] = await sql<{ status: string; people: number }[]>`
     select r.status, (select count(*)::int from entrant_members em where em.entrant_id = r.entrant_id) as people
@@ -495,6 +504,7 @@ describe.skipIf(!HAS_DB)("submit: the inline confirm seats the whole roster, so 
       const [player] = await sql<{ user_id: string | null }[]>`select user_id from registration_players where registration_id = ${res.entries[0]!.registration_id}`;
       expect(player!.user_id, "premise: without a date of birth the player row is NOT tied to the account (deriveLinkUserId)").toBeNull();
       expect(await seatedAfterSubmit(res.entries[0]!.registration_id)).toEqual({ status: "confirmed", people: 1 });
+      expect((await seatedPeople(res.entries[0]!.registration_id)).map((p) => p.user_id), "and the seat ties the person to the account the board will read").toEqual([captain.userId]);
       count("submit");
     });
   }
@@ -562,6 +572,13 @@ describe.skipIf(!HAS_DB)("approve: a submitter who holds a link but gave no date
       await approveRegistration(w.auth, regId);
 
       expect(await seatedAfterSubmit(regId)).toEqual({ status: "confirmed", people: 1 });
+      // The gate and the board are one authority: the person Approve seated is the one the BOARD's own reader (`loadSides`, then T2's
+      // play-grant check) finds a playing Lichess link for. A seat the gate allowed and the board then turned away is the defect.
+      const [{ entrant_id: entrantId }] = await sql<{ entrant_id: string }[]>`select entrant_id from registrations where id = ${regId}`;
+      const { home } = await loadSides({ homeEntrantId: entrantId, awayEntrantId: entrantId });
+      expect(home.userId, "the board resolves the seated person to the submitter's account").toBe(submitter.userId);
+      expect(home.lichess, "and to their Lichess link").toEqual({ id: submitter.lichessId, username: submitter.lichessId });
+      expect(await playGrantRefusal(home.userId), "which plays").toBeNull();
       count("approve-submitter");
     });
   }
@@ -773,12 +790,150 @@ describe.skipIf(!HAS_DB)("approve: a submitter who holds a link but gave no date
   });
 });
 
+// ---------------------------------------------------------------------------
+// approve: the tie stops at the submitter's own row
+// ---------------------------------------------------------------------------
+//
+// The seat ties the person it makes for the submitter's own row to the cart's account, on an online division, so the board (which reads a
+// link by the PERSON's account) agrees with the gate. Nobody else is tied by it. Seen with the club's flag off, where the gate asks nothing
+// and so lets every one of these rows through: the only thing left to see is who the seat tied.
+
+describe.skipIf(!HAS_DB)("approve: the seat ties the submitter's own person to their account, and no one else's", () => {
+  it("a pair: the captain is tied; the teammate the captain typed in is not", async () => {
+    const w = await world("pair", true, { approval: "manual" });
+    const captain = await account(w, "plays", false);
+    const regId = (await submit(w, "pair", captain, 1, { dob: null })).entries[0]!.registration_id;
+    loseTheFlag();
+
+    await approveRegistration(w.auth, regId);
+
+    const people = await seatedPeople(regId);
+    expect(people.map((p) => p.user_id).sort(), "premise: both seated, one tied").toEqual([captain.userId, null].sort());
+    expect(people.find((p) => p.full_name.startsWith("Submitter"))!.user_id, "the tied one is the captain's own").toBe(captain.userId);
+    count("approve-tie");
+  });
+
+  it("a pair whose teammate claimed their spot WITHOUT a date of birth: the claimed teammate is not tied to the captain's account", async () => {
+    const w = await world("pair", true, { approval: "manual" });
+    const captain = await account(w, "plays", false);
+    const mate = await account(w, "plays", false);
+    const res = await submit(w, "pair", captain, 1, { dob: null });
+    const regId = res.entries[0]!.registration_id;
+    const [slot] = await sql<{ id: string; full_name: string }[]>`
+      select id, full_name from registration_players where registration_id = ${regId} and consent_status = 'pending'`;
+    await joinTeamEntry(
+      { sessionUserId: mate.userId },
+      { join_code: res.entries[0]!.join_code!, player_id: slot!.id, player: { full_name: slot!.full_name }, privacy_consent: true },
+    );
+    loseTheFlag();
+
+    await approveRegistration(w.auth, regId);
+
+    const people = await seatedPeople(regId);
+    expect(people.find((p) => p.full_name === slot!.full_name)!.user_id, "the claimed teammate's person is untied: not the captain's account").toBeNull();
+    expect(people.find((p) => p.full_name.startsWith("Submitter"))!.user_id).toBe(captain.userId);
+    count("approve-tie");
+  });
+
+  it("a minor registered by a signed-in guardian is not tied to the guardian's account", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const guardian = await account(w, "plays", false);
+    const regId = (await submit(w, "individual", guardian, 0, { dob: "2015-03-01", guardian_name: "Guardian " + guardian.lichessId, guardian_consent: true }))
+      .entries[0]!.registration_id;
+    loseTheFlag();
+
+    await approveRegistration(w.auth, regId);
+
+    expect((await seatedPeople(regId)).map((p) => p.user_id)).toEqual([null]);
+    count("approve-tie");
+  });
+
+  it("an entry with a guardian named and no date of birth is not tied either", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const guardian = await account(w, "plays", false);
+    const regId = (await submit(w, "individual", guardian, 0, { dob: null, guardian_name: "Guardian " + guardian.lichessId, guardian_consent: true }))
+      .entries[0]!.registration_id;
+    loseTheFlag();
+
+    await approveRegistration(w.auth, regId);
+
+    expect((await seatedPeople(regId)).map((p) => p.user_id)).toEqual([null]);
+    count("approve-tie");
+  });
+
+  it("a division that is not played online keeps the old behaviour: the submitter's person is not tied", async () => {
+    const w = await world("individual", false, { approval: "manual" });
+    const submitter = await account(w, "none", false);
+    const regId = (await submit(w, "individual", submitter, 0, { dob: null })).entries[0]!.registration_id;
+
+    await approveRegistration(w.auth, regId);
+
+    expect((await seatedPeople(regId)).map((p) => p.user_id)).toEqual([null]);
+    count("approve-tie");
+  });
+
+  it("an account that already holds a person in the club is seated AS that person: one person per account, no duplicate, no unique-index error", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const submitter = await account(w, "plays", true);
+    const regId = (await submit(w, "individual", submitter, 0, { dob: null })).entries[0]!.registration_id;
+
+    await approveRegistration(w.auth, regId);
+
+    const people = await seatedPeople(regId);
+    expect(people.map((p) => p.id), "seated as the person the account already held").toEqual([submitter.personId]);
+    const holders = await sql`select 1 from persons where org_id = ${w.auth.orgId} and user_id = ${submitter.userId} and lane = 'player' and merged_into is null`;
+    expect(holders, "and no second person holds the account").toHaveLength(1);
+    count("approve-tie");
+  });
+
+  it("a row that names its OWN account keeps it: the cart's account does not override it", async () => {
+    const w = await world("individual", true, { approval: "manual" });
+    const submitter = await account(w, "plays", false);
+    const named = await account(w, "plays", false);
+    const regId = (await submit(w, "individual", submitter, 0, { dob: null })).entries[0]!.registration_id;
+    // The row now names an account of its own (as a claim would leave it) while it still has the submitter's shape.
+    await sql`update registration_players set user_id = ${named.userId} where registration_id = ${regId}`;
+
+    await approveRegistration(w.auth, regId);
+
+    expect((await seatedPeople(regId)).map((p) => p.user_id), "seated on the account the row names").toEqual([named.userId]);
+    count("approve-tie");
+  });
+
+  it("the SEQUENCE: the same account's second entry, in the same club, is seated as the same person", async () => {
+    const w1 = await world("individual", true, { approval: "manual" });
+    const submitter = await account(w1, "plays", false);
+    const first = (await submit(w1, "individual", submitter, 0, { dob: null })).entries[0]!.registration_id;
+    await approveRegistration(w1.auth, first);
+    const [{ id: firstPerson }] = await seatedPeople(first);
+    // A second division in the SAME competition of the same club.
+    const second = await createDivision(w1.auth, w1.competitionId, {
+      name: "Second online",
+      sport_key: "boardgame",
+      variant_key: "classical",
+      config: { variant: "classical", onlinePlay: "lichess", clock: { base: 600, increment: 5 } },
+    });
+    await putRegistrationSettings(w1.auth, second.id, {
+      enabled: true, entrant_kind: "individual", fee_cents: 0, form_fields: [], opens_at: null, closes_at: null, capacity: null,
+      refund_lock_at: null, approval: "manual", allow_free_agents: false,
+    });
+    const w2: World = { ...w1, divisionId: second.id };
+    const secondReg = (await submit(w2, "individual", submitter, 0, { dob: null })).entries[0]!.registration_id;
+
+    await approveRegistration(w2.auth, secondReg);
+
+    expect((await seatedPeople(secondReg)).map((p) => p.id), "the same person, not a second one").toEqual([firstPerson]);
+    count("approve-tie");
+  });
+});
+
 describe.skipIf(!HAS_DB)("the writers file ran what it owes", () => {
   it("anti-vacuity: every writer ran every scenario", () => {
-    expect([...ran.writers].sort()).toEqual(["approve-submitter", "assign", "submit"]);
+    expect([...ran.writers].sort()).toEqual(["approve-submitter", "approve-tie", "assign", "submit"]);
     // assign: 12 scenarios above; submit: 5 per kind x 2 kinds + 2 (a captain with no date of birth, per kind) + 3;
     // approve-submitter: 2 (individual, team) + 3 (link withdrawn, identity-only, sequence) + 3 (pair: typed-in mate, claimed with a date of
     // birth, claimed without) + 1 (joiner) + 3 (minor, guardian on no-dob, guardian tick on adult) + 1 (a person matched through another entry's row) + 1 (not online).
-    expect(ran.scenarios).toBe(12 + (5 * 2 + 2 + 3) + (2 + 3 + 3 + 1 + 3 + 1 + 1));
+    // approve-tie: 8 (the captain, a claimed teammate, a minor, a guardian on no date of birth, a division not online, an account that already holds a person, a row naming its own account, the second entry).
+    expect(ran.scenarios).toBe(12 + (5 * 2 + 2 + 3) + (2 + 3 + 3 + 1 + 3 + 1 + 1) + 8);
   });
 });
