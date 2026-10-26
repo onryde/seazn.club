@@ -7311,37 +7311,48 @@ async function w2cStageRulesSuite(): Promise<void> {
   // Task 11's every-sport check needs more divisions than the free plan allows in one competition (4); the Pro bump is
   // the suite's own, after the seed-independent sign-in, and affects no check below it.
   await setPlan(who.org_id, "pro", owner);
-  // Task 2's owed check — the division lock names the started stage (X-SR-4). `h2h_points`, not `head_to_head`: the
-  // v1 schema (TiebreakerKeyS) refuses the latter 400 VALIDATION before any lock is asked; the stored cascade is null,
-  // so any accepted key is a change.
+  // Task 2's owed check (X-SR-4), as W2d Task 10 reads it (spec §5.4, §11 item 4): a division's tie-break order no longer
+  // locks a started stage — Pool A is pinned (generated, then started) and ranks by its pin — so the save answers 200, refuses
+  // nothing, and names the pinned stage it kept in `stagesKeptPinned`. The order must pass `validateCascade` on the write
+  // path (W2c's `["h2h_points"]` puts neither the primary first nor lots last), and must MOVE the division's live order (the
+  // stored cascade is null, so the live one is the sport's default): the sport's own default without its head-to-head steps.
+  const bdmCfg = badminton.configSchema.parse(badminton.variants.short) as never;
+  const bdmDefault = badminton.defaultTiebreakers("league", bdmCfg);
+  const order = bdmDefault.filter((k) => !k.startsWith("h2h"));
   const { divisionId, fixtureId, unstartedId } = await w2cSeedStartedPool(owner);
-  const r = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { tiebreakers: ["h2h_points"] });
-  const tableLocked =
-    r.status === 409 && r.json.error?.code === "DIVISION_TABLE_RULES_LOCKED" && JSON.stringify(r.json).includes("Pool A");
+  const r = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { tiebreakers: order });
+  const rRow = r.json.data as { refused?: unknown[]; stagesKeptPinned?: { name?: string }[]; tiebreakers?: unknown } | undefined;
+  const keptNamed =
+    order.length >= 3 &&
+    JSON.stringify(order) !== JSON.stringify(bdmDefault) &&
+    r.status === 200 &&
+    (rRow?.refused ?? []).length === 0 &&
+    JSON.stringify(rRow?.tiebreakers) === JSON.stringify(order) &&
+    rRow?.stagesKeptPinned?.length === 1 &&
+    rRow.stagesKeptPinned[0]?.name === "Pool A";
   check(
-    "w2c: division table rules lock names the started stage" +
-      (tableLocked ? "" : ` — got ${r.status} ${JSON.stringify(r.json.error ?? r.json.data)}`),
-    tableLocked,
+    "w2c→w2d: a division tie-break order never locks a started stage; the save names the pinned stage it kept" +
+      (keptNamed ? "" : ` — got ${r.status} ${JSON.stringify(r.json.error ?? r.json.data)} (order ${JSON.stringify(order)})`),
+    keptNamed,
   );
-  // Task 20's owed check (S4, X-SR-4 UI half) — the SAME locked key beside a field that lands is NOT a 409: the save is
-  // applied per field, answers 200 and names what it kept in `refused[]` (the settings form reads it to say "saved, but
-  // ..." instead of "saved" over a value that snapped back). The rename landing and the cascade staying as stored are
-  // both read back from the division, so a 200 that dropped the rename — or applied the cascade — fails here.
+  // Task 20's owed check (S4) — a rename beside a cascade change: both land in one 200, nothing refused, the pinned stage
+  // named as kept. The rename and the cascade are read back from the division, so a 200 that dropped either fails here. The
+  // second order swaps the two middle steps of the first (a change from what is now stored; both pass `validateCascade`).
   const renamed = `W2c Singles Renamed ${tag}`;
-  const mixed = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { name: renamed, tiebreakers: ["h2h_points"] });
-  const mixedRow = mixed.json.data as { name?: string; refused?: { field?: string; code?: string; stageName?: string }[] } | undefined;
+  const order2 = [order[0], ...order.slice(1, -1).reverse(), order[order.length - 1]];
+  const mixed = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { name: renamed, tiebreakers: order2 });
+  const mixedRow = mixed.json.data as { name?: string; refused?: unknown[]; stagesKeptPinned?: { name?: string }[] } | undefined;
   const afterMixed = v1data<{ name: string; tiebreakers: unknown }>(await v1(owner, `/api/v1/divisions/${divisionId}`));
   const mixedOk =
+    JSON.stringify(order2) !== JSON.stringify(order) &&
     mixed.status === 200 &&
     mixedRow?.name === renamed &&
-    mixedRow.refused?.length === 1 &&
-    mixedRow.refused[0]?.field === "tiebreakers" &&
-    mixedRow.refused[0]?.code === "DIVISION_TABLE_RULES_LOCKED" &&
-    mixedRow.refused[0]?.stageName === "Pool A" &&
+    (mixedRow.refused ?? []).length === 0 &&
+    mixedRow.stagesKeptPinned?.[0]?.name === "Pool A" &&
     afterMixed.name === renamed &&
-    afterMixed.tiebreakers == null;
+    JSON.stringify(afterMixed.tiebreakers) === JSON.stringify(order2);
   check(
-    "w2c: a mixed division save answers 200, lands the rename and names the kept cascade in refused[]" +
+    "w2c→w2d: a mixed division save answers 200, lands the rename AND the cascade, refuses nothing" +
       (mixedOk ? "" : ` — got ${mixed.status} ${JSON.stringify(mixed.json.error ?? mixed.json.data)} / stored ${JSON.stringify(afterMixed)}`),
     mixedOk,
   );

@@ -2318,6 +2318,14 @@ export function makeSetBasedModule(
   const cleanSweepPair = (cfg: SetBasedCfg): PointsPair =>
     cfg.pointsMap["*"] ?? Object.entries(cfg.pointsMap).find(([key]) => SET_SCORE_KEY.test(key))?.[1] ?? [1, 0];
 
+  // W2d Task 10 (Task 8 carry 2): the pairs the table can PAY — those under a set-score key (`SET_SCORE_KEY`), the only
+  // keys `matchPoints` and `cleanSweepPair` read. A map that prices none is read whole, as before: it pays no match at all
+  // (`matchPoints` refuses each), so its bounds are never consulted on a payout, and a tolerant read must not throw.
+  const pricedPairs = (cfg: SetBasedCfg): readonly PointsPair[] => {
+    const priced = Object.entries(cfg.pointsMap).filter(([key]) => SET_SCORE_KEY.test(key)).map(([, pair]) => pair);
+    return priced.length > 0 ? priced : Object.values(cfg.pointsMap);
+  };
+
   // pointsMap lookup for a decided match: exact "W-L", else "*".
   const matchPoints = (cfg: SetBasedCfg, winnerSets: number, loserSets: number): PointsPair => {
     const exact = cfg.pointsMap[`${winnerSets}-${loserSets}`];
@@ -2694,11 +2702,11 @@ export function makeSetBasedModule(
     // §9.3 — every decided fixture pays a pointsMap value-sum (a forfeit pays its
     // credited score's pair, a bye the clean-sweep pair — both pointsMap values).
     declaredPointsSets(cfg) {
-      return [...new Set(Object.values(cfg.pointsMap).map(([w, l]) => w + l))];
+      return [...new Set(pricedPairs(cfg).map(([w, l]) => w + l))];
     },
 
     matchPointsBounds(cfg) {
-      const pairs = Object.values(cfg.pointsMap) as readonly (readonly [number, number])[];
+      const pairs = pricedPairs(cfg) as readonly (readonly [number, number])[];
       return boundsFrom(pairs.map((p) => p[0]), pairs.map((p) => p[1]));
     },
 

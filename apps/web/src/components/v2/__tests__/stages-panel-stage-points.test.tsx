@@ -2,13 +2,13 @@
 // no DOM: a static render settles "is it on the card, in which state, with which words" - the wiring a builder test cannot
 // see (AGENTS.md class 2). Saving, reloading and the table are the browser's (stage-rules-w2c.spec.ts).
 //
-// Expected values come from the engine's declarations (`DRAW_KINDS`, `pointsRuleExpressible`) and the dictionaries the product
-// renders; every sweep reports its count and zero is a failure.
+// Expected values come from the engine's declarations (`DRAW_KINDS`, the sport's own parsed config) and the dictionaries the
+// product renders; every sweep reports its count and zero is a failure. W2d Task 10 (spec §11): the inexpressible state is
+// deleted, so a division W2c split opens the editor on the card like any other.
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StagesPanel } from "@/components/v2/stages-panel";
 import { BRACKET_KINDS, DRAW_KINDS } from "@seazn/engine/core";
-import { pointsRuleExpressible } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import enPublic from "@/dictionaries/en/public.json";
 import type { Dict } from "@/lib/i18n-constants";
@@ -87,37 +87,32 @@ describe("the points section is on a TABLE stage's card and on no other", () => 
 });
 
 describe("the state the section opens in follows the division (scoring is free on every plan: the panel is handed no plan)", () => {
-  it("an expressible division opens the editor, for a viewer of any plan the panel is built for", () => {
+  it("a division opens the editor, for a viewer of any plan the panel is built for", () => {
     expect(stateOf(panel())).toBe("editor");
     for (const plan of ["community", "pro"]) expect(stateOf(panel({ viewerPlan: { plan, isStaff: false } as never })), plan).toBe("editor");
   });
 
-  it("a division whose points a stage cannot say shows the reason on the card; one the stage still stores a rule on also shows that rule and the way out", () => {
+  it("W2d T10: an ice-hockey division that splits its overtime points (W2c: inexpressible) opens the editor on the card, stored rule or none; a started stage reads it", () => {
     const m = builtinModules.find((x) => x.key === "icehockey")!;
-    const split = Object.keys(m.variants).find((v) => !pointsRuleExpressible(m.configSchema.parse(m.variants[v])).ok);
-    expect(split, "premise: the engine has a splitting ice-hockey variant").toBeDefined();
+    const split = Object.keys(m.variants).find((v) => {
+      const pts = (m.configSchema.parse(m.variants[v]) as { points?: Record<string, unknown> }).points ?? {};
+      return "otWin" in pts;
+    });
+    expect(split, "premise: the engine has an ice-hockey variant paying overtime apart (iihf)").toBeDefined();
     const html = panel({ sportKey: "icehockey", divisionConfig: m.variants[split!] });
-    expect(stateOf(html)).toBe("inexpressible");
-    expect(html).toContain('data-testid="stage-points-inexpressible"');
-    expect(html, "nothing stored: the reason alone").not.toContain('data-testid="stage-points-clear"');
-    const stored = panel({
-      sportKey: "icehockey",
-      divisionConfig: m.variants[split!],
-      stages: stageOf("league", { points: { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } }),
-      pointsDict: POINTS_DICT,
-    });
-    expect(stateOf(stored)).toBe("inexpressible");
-    for (const id of ["stage-points-inexpressible", "stage-points-readonly", "stage-points-preview", "stage-points-clear"]) expect(stored, id).toContain(`data-testid="${id}"`);
-    // a started stage reads the same rule and cannot clear it
-    const locked = panel({
-      sportKey: "icehockey",
-      divisionConfig: m.variants[split!],
-      stages: stageOf("league", { points: { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } }),
-      pointsDict: POINTS_DICT,
-      formatLockedStageIds: [STAGE_ID],
-    });
+    expect(stateOf(html)).toBe("editor");
+    expect(html, "no inexpressible card").not.toContain('data-testid="stage-points-inexpressible"');
+    expect(html, "the inherit control is there (W2c showed no control here)").toContain('data-testid="stage-points-use-division"');
+    const OWN = { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] };
+    const stored = panel({ sportKey: "icehockey", divisionConfig: m.variants[split!], stages: stageOf("league", { points: OWN }), pointsDict: POINTS_DICT });
+    expect(stateOf(stored)).toBe("editor");
+    const win = stored.slice(stored.lastIndexOf("<", stored.indexOf('data-testid="stage-points-win"')), stored.indexOf(">", stored.indexOf('data-testid="stage-points-win"')) + 1);
+    expect(win, "the stored rule's own win").toContain('value="4"');
+    // a started stage reads the same rule and gets no control
+    const locked = panel({ sportKey: "icehockey", divisionConfig: m.variants[split!], stages: stageOf("league", { points: OWN }), pointsDict: POINTS_DICT, formatLockedStageIds: [STAGE_ID] });
+    expect(stateOf(locked)).toBe("readonly");
     expect(locked).toContain('data-testid="stage-points-readonly"');
-    expect(locked).not.toContain('data-testid="stage-points-clear"');
+    expect(locked).not.toContain('data-testid="stage-points-inexpressible"');
   });
 });
 

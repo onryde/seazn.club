@@ -80,7 +80,7 @@ describe.skipIf(!HAS_DB)("W2d payout through the web fold: how a match was decid
     for (const script of SCRIPTS) {
       const play = async (rule: boolean) => {
         // Raw SQL before the generate (seedBracket's `stagePoints`): the W2c door still refuses a split rule on a division
-        // that scores overtime apart (`pointsRuleExpressible`, lifted later in W2d); the activation pin carries it.
+        // that scores overtime apart (W2c's Q1, lifted in W2d Task 10); the activation pin carries it.
         const s = await seedBracket({ sport: "icehockey", variant: "iihf", stageKind: "league", entrants: 2, ...(rule ? { stagePoints: RULE } : {}) });
         const id = s.fixtureIds[0]!;
         const f = await fixtureRow(id);

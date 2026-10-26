@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { legacyPointsRule, pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
+import { legacyPointsRule, pointsRuleAwardReachesTable } from "@seazn/engine/competition";
 import { BRACKET_KINDS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
@@ -555,7 +555,7 @@ test("chess stage under a division that holds a tie-break list: the blank stage 
 // the win / draw / loss sentence, "More" for the walkover row and bonuses, Save, and what the API and the TABLE then say.
 //
 // WHERE THE EXPECTED VALUES COME FROM. Whether a sport shows the walkover SCORE is the engine's `pointsRuleAwardReachesTable`;
-// whether a division can have a stage rule at all is the engine's `pointsRuleExpressible`; the division's own base points are
+// every table stage has the editor (W2d Task 10 retired W2c's "inexpressible" division); the division's own base points are
 // the numbers the test STORES on the division (distinct from the defaults, so a prefill from the wrong place is visible); the
 // preview sentence is the public line's own words (`pointsLine` + the public dictionary); and the proof that a walkover pays
 // what the section says is the stage's STANDINGS, read after a real walkover - not the stored JSON alone.
@@ -757,6 +757,8 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   expect(await storedPoints(request, rig.divisionId, rig.stageId), "and the API still holds the new rule after the reload").toEqual(want2);
 
   // The table: a REAL walkover pays what the section said LAST (6 / 1 points, 3-0 in goals), not the first save's 7 / 2 nor the division's 4 / 1.
+  // W2d Task 10 (PS-5d, X-PT-1): the stage was pinned at generate, BEFORE both saves; each own save before the first score
+  // re-pins the field it saved, so the table pays the saved rule and not the pin's (the division's 4 / 1).
   await rig.start();
   await walkover(request, rig.fixtureId, rig.away);
   await expect
@@ -805,6 +807,7 @@ test("badminton league: a set sport shows the walkover points and NO score box, 
   expect(sent.points.forfeit, "no awardScore key on a set sport").toEqual({ winnerPoints: 5, loserPoints: 1 });
   const want = { ...editorRule(base), forfeit: { winnerPoints: 5, loserPoints: 1 } };
   await expect.poll(() => storedPoints(request, rig.divisionId, rig.stageId), { timeout: STEP_MS }).toEqual(want);
+  // W2d Task 10 (PS-5d): pinned at generate, re-pinned by the save above, so the walkover pays the saved 5 / 1.
   await rig.start();
   await walkover(request, rig.fixtureId, rig.away);
   await expect
@@ -877,51 +880,56 @@ test("generic bonus editor: the margin bonuses are offered where the sport feeds
   await expect.poll(async () => ((await storedPoints(request, divisionId, stageId)) as { bonuses: unknown[] } | null)?.bonuses, { timeout: STEP_MS }).toEqual([]);
 });
 
-test("ice hockey: a division that scores overtime separately says why a stage cannot set its points - no inputs - and the server answers the same; a recreational variant has the editor", async ({ page, request }) => {
+test("ice hockey: a division that scores overtime separately has the editor like any table stage (W2d T10), the server takes a stage rule, and a stored own rule opens in the boxes and clears", async ({ page, request }) => {
   test.setTimeout(180_000);
   const m = builtinModules.find((x) => x.key === "icehockey")!;
   const variants = Object.keys(m.variants);
-  const split = variants.find((v) => !pointsRuleExpressible(parsedCfg("icehockey", v)).ok);
-  const plain = variants.find((v) => pointsRuleExpressible(parsedCfg("icehockey", v)).ok);
+  // The splitting variant is the engine's declaration: its parsed points carry an overtime split (`otWin` / `otLoss`).
+  const splits = (v: string): boolean => {
+    const pts = (parsedCfg("icehockey", v).points ?? {}) as Record<string, unknown>;
+    return "otWin" in pts || "otLoss" in pts;
+  };
+  const split = variants.find(splits);
+  const plain = variants.find((v) => !splits(v));
   expect(split, "premise: the engine has a splitting variant").toBeDefined();
   expect(plain, "premise: and one that does not").toBeDefined();
   const a = await seedStage(request, "icehockey", { kind: "league", label: "points-split", variant: split });
   await page.goto(await divisionPath(request, a.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
   const section = sectionOf(page, a.stageId);
-  await expect(section).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: STEP_MS });
-  await expect(section.getByTestId("stage-points-inexpressible")).toContainText(/can't be set per stage/i);
-  await expect(section.locator("input, select, button")).toHaveCount(0);
+  // W2c refused such a division a stage rule ("inexpressible"); W2d's outcome-keyed rule pays overtime itself.
+  await expect(section).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(section.getByTestId("stage-points-inexpressible"), "W2c's refusal card is gone").toHaveCount(0);
+  await expect(section.getByTestId("stage-points-use-division"), "nothing stored: it inherits").toBeChecked();
   await expectNoHorizontalScroll(page);
-  await shootSection(page, section, "inexpressible");
-  const refused = await apiJson<unknown>(request, `/api/v1/stages/${a.stageId}/rules`, "PUT", { points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] } });
-  expect(refused.status).toBe(422);
-  expect((refused.error as { code?: string } | undefined)?.code).toBe("POINTS_RULE_INEXPRESSIBLE");
+  await shootSection(page, section, "split-editor");
+  const rule = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] };
+  const saved = await apiJson<unknown>(request, `/api/v1/stages/${a.stageId}/rules`, "PUT", { points: rule });
+  expect(saved.status, `the server takes a stage rule on a splitting division: ${JSON.stringify(saved.error)}`).toBe(200);
+  expect(await storedPoints(request, a.divisionId, a.stageId), "and stores it").toMatchObject(rule);
 
-  // Review M1: a stage that STORES its own rule on such a division (a legacy row - every door that writes one now refuses) is
-  // not left with only the reason: it reads the rule it plays, and an editable stage can clear it.
+  // Review M1, W2d: a stage that STORES its own rule opens the editor on it - the boxes hold its numbers - and clears.
   const own = { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } };
   await withDb(async (sql) => {
     await sql`update stages set config = config || ${sql.json({ points: own })} where id = ${a.stageId}`;
   });
   await page.reload({ waitUntil: "load" });
-  const legacy = sectionOf(page, a.stageId);
-  await expect(legacy).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: STEP_MS });
-  await expect(legacy.getByTestId("stage-points-inexpressible"), "the reason is still said").toContainText(/can't be set per stage/i);
-  await expect(legacy.getByTestId("stage-points-readonly")).toHaveText(L["stagePoints.ownPoints"]!);
-  await expect(legacy.getByTestId("stage-points-preview"), "and the rule it plays is read in the public line's words").toHaveText(rulesLineText(PUB, pointsLine(own, { awardReaches: pointsRuleAwardReachesTable(m) })));
-  await expect(legacy.locator("input, select"), "no box: a rule that cannot be re-saved cannot be edited").toHaveCount(0);
+  const stored = sectionOf(page, a.stageId);
+  await expect(stored).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(stored.getByTestId("stage-points-use-division"), "its own rule: not inheriting").not.toBeChecked();
+  await expect(stored.getByTestId("stage-points-win"), "the boxes hold the stored rule").toHaveValue("4");
+  await openMore(stored);
+  await expect(stored.getByTestId("stage-points-walkover-w")).toHaveValue("3");
+  await expect(stored.getByTestId("stage-points-preview"), "and the rule it plays is read in the public line's words").toHaveText(rulesLineText(PUB, pointsLine(own, { awardReaches: pointsRuleAwardReachesTable(m) })));
   await expectNoHorizontalScroll(page);
-  await shootSection(page, legacy, "stored-inexpressible");
+  await shootSection(page, stored, "stored-split", () => openMore(stored));
+  await stored.getByTestId("stage-points-use-division").check();
   const clearPut = nextPointsPut(page, a.stageId);
-  await legacy.getByTestId("stage-points-clear").click();
+  await stored.getByTestId("stage-points-save").click();
   expect((await clearPut).postDataJSON(), "the clear sends the strict body, points null").toEqual({ points: null });
   await expect.poll(() => storedPoints(request, a.divisionId, a.stageId), { timeout: STEP_MS }).toBeNull();
-  await expect(legacy.getByTestId("stage-points-clear"), "cleared: nothing left to clear").toHaveCount(0, { timeout: STEP_MS });
-  await expect(legacy.getByTestId("stage-points-readonly")).toHaveCount(0);
-  await expect(legacy.getByTestId("stage-points-inexpressible"), "and the reason stays").toBeVisible();
   await page.reload({ waitUntil: "load" });
-  await expect(sectionOf(page, a.stageId).getByTestId("stage-points-clear")).toHaveCount(0);
+  await expect(sectionOf(page, a.stageId).getByTestId("stage-points-use-division"), "a reload inherits").toBeChecked({ timeout: STEP_MS });
   const b = await seedStage(request, "icehockey", { kind: "league", label: "points-plain", variant: plain });
   await page.goto(await divisionPath(request, b.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await expect(sectionOf(page, b.stageId)).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });

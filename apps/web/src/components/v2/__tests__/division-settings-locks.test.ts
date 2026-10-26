@@ -6,7 +6,8 @@
 // fields and the keys they edit are the SPORT_RULES table (the declaration the form renders), and every sentence is read
 // from the en dictionary - none is typed here.
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { randomUUID } from "node:crypto";
+import { afterAll, describe, expect, it } from "vitest";
 import { SPORT_RULES, SINGLE_SET_POINTS_LABEL, rulesFor, visibleRuleFields } from "@/lib/match-rules";
 import { BEST_OF_ONE_PAIR } from "@/lib/match-rules/best-of-one";
 import type { RefusedField } from "@/lib/rule-errors";
@@ -20,6 +21,15 @@ import {
   mergeLocks,
   refusedLines,
 } from "../division-settings-locks";
+import { builtinModules } from "@seazn/engine/sports";
+import { sql } from "@/lib/db";
+import { appendEvent } from "@/server/engine-db";
+import { createCompetition } from "@/server/usecases/competitions";
+import { createDivision } from "@/server/usecases/divisions";
+import { createEntrants } from "@/server/usecases/entrants";
+import { divisionLockedFields } from "@/server/usecases/rule-locks";
+import { createStages, generateStageFixtures } from "@/server/usecases/stages";
+import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
 
 const topOf = (path: string): string => path.split(".")[0]!;
 const refusal = (field: string, over: Partial<RefusedField> = {}): RefusedField => ({
@@ -267,5 +277,52 @@ describe("rulesFor: the crash-proof read of a sport's fields", () => {
       expect(() => [...rulesFor(key)], `${key} does not throw when iterated`).not.toThrow();
       expect(rulesFor(key), key).toEqual([]);
     }
+  });
+});
+
+// W2d Task 10 (SPEC §11 item 4, PS-9e) - the page's lock list, read from the server as the form receives it. Once a stage
+// starts the division's tie-break order is no longer refused (it reaches only unpinned stages, `stagesKeptPinned`), so
+// the list carries no `tiebreakers` entry and the form no line for it; the points a started (pinned) stage replaces are
+// open too. A board game's `scoring` also writes the game's score, so it keeps DIVISION_TABLE_RULES_LOCKED. Real Postgres;
+// skipped without DATABASE_URL.
+const HAS_DB = !!process.env.DATABASE_URL;
+afterAll(async () => {
+  if (!HAS_DB) return;
+  const g = globalThis as { _sql?: { end(): Promise<void> } };
+  const c = g._sql;
+  g._sql = undefined;
+  await c?.end();
+});
+
+/** A division of the sport with one league stage that has started (generated: pinned; its first event recorded: locked). */
+async function startedDivision(sport: string, variant: string, config: Record<string, unknown>) {
+  const { auth } = await seedOrg("pro");
+  const suffix = randomUUID().slice(0, 8);
+  const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "T10l " + suffix, visibility: "private", branding: {} });
+  const d = await createDivision(auth, comp.id, { name: "Open", slug: "open-" + suffix, sport_key: sport, variant_key: variant, config });
+  const kind = builtinModules.find((m) => m.key === sport)?.entrantModel?.defaultKind ?? "individual";
+  await createEntrants(auth, d.id, [1, 2].map((i) => ({ kind, display_name: `E${i}`, seed: i, members: [] })));
+  const [s] = await createStages(auth, d.id, { seq: 1, kind: "league", name: "Pool A", config: {}, progression: null });
+  await generateStageFixtures(auth, s!.id);
+  const [f] = await sql<{ id: string }[]>`
+    select id from fixtures where stage_id = ${s!.id} and home_entrant_id is not null and away_entrant_id is not null limit 1`;
+  await appendEvent(auth.orgId, f!.id, 0, { type: "core.start", payload: {} });
+  return divisionLockedFields(auth, d.id);
+}
+
+describe.skipIf(!HAS_DB)("W2d T10 the lock list once the pin owns a started stage's table", () => {
+  it("§11 item 4 a started stage leaves the tiebreakers field open (no lock line); boardgame scoring still carries DIVISION_TABLE_RULES_LOCKED", async () => {
+    const generic = await startedDivision("generic", "score", GENERIC_CONFIG);
+    expect(lockLineFor("variant_key", generic)?.stageName, "premise: the stage has started (its format is locked)").toBe("Pool A");
+    expect(generic.map((r) => r.field), "no tie-break entry in the list").not.toContain("tiebreakers");
+    expect(lockLineFor("tiebreakers", generic), "the tie-break order carries no lock line").toBeUndefined();
+    expect(lockLineFor("points", generic), "the points the pinned stage replaces are open").toBeUndefined();
+    const boardgame = await startedDivision("boardgame", "classical", {});
+    expect(boardgame.map((r) => r.field)).not.toContain("tiebreakers");
+    const scoring = lockLineFor("scoring", boardgame);
+    expect(scoring, "boardgame scoring keeps its lock").toMatchObject({ field: "scoring", code: "DIVISION_TABLE_RULES_LOCKED", stageName: "Pool A" });
+    expect(lockSentence(scoring!, (k, v) => (enUi as Record<string, string>)[k]!.replace("{stage}", String(v?.stage)))).toBe(
+      (enUi as Record<string, string>)["ruleLock.DIVISION_TABLE_RULES_LOCKED"]!.replace("{stage}", "Pool A"),
+    );
   });
 });

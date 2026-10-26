@@ -17,7 +17,12 @@ export const RULE_ERROR_STATUS = {
   FIXTURE_FORMAT_LOCKED: 409,
   FORMAT_DOES_NOT_FIT_PLAY: 409,
   RULE_NOT_SETTABLE: 400,
-  POINTS_RULE_INEXPRESSIBLE: 422,
+  /** W2d (spec §10) — a tie-break order `validateCascade` refuses: every refused step in `extra.refusals`
+   *  (`{index, key, reason, need?}`), the first one in the sentence. */
+  TIEBREAK_KEY_INVALID: 422,
+  /** W2d (spec §10, D9) — a stage's rules or a match's own format that makes an outcome reachable its points rule does
+   *  not pay (`coverage`): the outcomes in `extra.uncovered` (`draw`, `tie`, `set:W-L`). */
+  POINTS_OUTCOME_UNCOVERED: 422,
   /** W2c Task 14 — a delete (rebuild, Undo of a generation, pool clear, Swiss reshape) that would take a match's own
    *  format with it (`fixture-override-guards.ts`). The organiser sets that match back to its stage's format first. */
   FIXTURE_HAS_OWN_FORMAT: 409,
@@ -50,7 +55,8 @@ export const RULE_ERROR_KEYS = {
   FIXTURE_FORMAT_LOCKED: "rules.err.fixtureFormatLocked",
   FORMAT_DOES_NOT_FIT_PLAY: "rules.err.formatDoesNotFitPlay",
   RULE_NOT_SETTABLE: "rules.err.ruleNotSettable",
-  POINTS_RULE_INEXPRESSIBLE: "rules.err.pointsRuleInexpressible",
+  TIEBREAK_KEY_INVALID: "rules.err.tiebreakKeyInvalid",
+  POINTS_OUTCOME_UNCOVERED: "rules.err.pointsOutcomeUncovered",
   FIXTURE_HAS_OWN_FORMAT: "rules.err.fixtureHasOwnFormat",
   FIXTURE_OWN_FORMAT_NO_LONGER_FITS: "rules.err.fixtureOwnFormatNoLongerFits",
   FIXTURE_RULES_CHANGED: "rules.err.fixtureRulesChanged",
@@ -75,8 +81,13 @@ export const RULE_ERROR_SUPPORT_KEYS = {
   match: "rules.err.match",
   thisMatch: "rules.err.thisMatch",
   matchSays: "rules.err.matchSays",
-  /** POINTS_RULE_INEXPRESSIBLE's reason: "this division scores {fields} separately". */
-  pointsSplit: "rules.err.pointsSplit",
+  /** TIEBREAK_KEY_INVALID for the empty order, which has no step to name. */
+  tiebreakOrderEmpty: "rules.err.tiebreakOrderEmpty",
+  /** TIEBREAK_KEY_INVALID for an order a new stage would INHERIT (spec §5.5: the reason tells the organiser to set the
+   *  stage's own order). */
+  tiebreakInherited: "rules.err.tiebreakInherited",
+  /** POINTS_OUTCOME_UNCOVERED's set scores: "with a set score of {scores}". */
+  outcomeSet: "rules.err.outcome.set",
   /** FIXTURE_RULES_CHANGED when the describer has no line for the corrected format (or the reader's client does not
    *  have it in the reader's language): "the format was corrected", without naming it. */
   fixtureRulesChangedNoLine: "rules.err.fixtureRulesChangedNoLine",
@@ -104,25 +115,36 @@ const isNotSettableReason = (r: unknown): r is RuleNotSettableReason =>
 /** The server's English for a not-settable reason: the en dictionary's, as every other refusal sentence. */
 export const notSettableReasonEn = (r: RuleNotSettableReason): string => enMsg(RULE_NOT_SETTABLE_REASON_KEYS[r]);
 
-/**
- * W2c Task 13 — the division points a stage PointsRule cannot express, by their config key (the engine's
- * `pointsRuleExpressible` names them: ice hockey's OT split, hockey's and football's shoot-out bonus, cricket's tie and no
- * result, a set sport's `pointsMap` that pays more than one pair), each with its label. POINTS_RULE_INEXPRESSIBLE carries
- * the KEYS (`extra.keys`), never English, and every reader names them through this table: the server in en, a client in
- * the reader's language. Swept against every sport's declared points in rule-errors-copy.test.ts: a key the engine can
- * refuse over with no label here is a red, and so is a label for a key it never refuses over.
- */
-export const POINTS_SPLIT_LABEL_KEYS = {
-  otWin: "rules.err.pointsSplit.otWin",
-  otLoss: "rules.err.pointsSplit.otLoss",
-  soBonus: "rules.err.pointsSplit.soBonus",
-  tie: "rules.err.pointsSplit.tie",
-  noResult: "rules.err.pointsSplit.noResult",
-  pointsMap: "rules.err.pointsSplit.pointsMap",
+/** W2d (spec §10) — why a tie-break step is refused (`CascadeRefusal.reason`, the engine's code, never English), each with
+ *  its words. `first` names the sport's primary measure (`{primary}`). */
+export const TIEBREAK_REASON_KEYS = {
+  sport: "rules.err.tiebreak.reason.sport",
+  stage_format: "rules.err.tiebreak.reason.stage_format",
+  cross_group: "rules.err.tiebreak.reason.cross_group",
+  fair_play_off: "rules.err.tiebreak.reason.fair_play_off",
+  position: "rules.err.tiebreak.reason.position",
+  first: "rules.err.tiebreak.reason.first",
+  last: "rules.err.tiebreak.reason.last",
+  duplicate: "rules.err.tiebreak.reason.duplicate",
+  empty: "rules.err.tiebreak.reason.empty",
 } as const satisfies Record<string, MessageKey>;
+export type TiebreakRefusalReason = keyof typeof TIEBREAK_REASON_KEYS;
+const isTiebreakReason = (r: unknown): r is TiebreakRefusalReason => typeof r === "string" && Object.hasOwn(TIEBREAK_REASON_KEYS, r);
 
-const isSplitKey = (k: unknown): k is keyof typeof POINTS_SPLIT_LABEL_KEYS =>
-  typeof k === "string" && Object.hasOwn(POINTS_SPLIT_LABEL_KEYS, k);
+/** W2d — the level outcomes POINTS_OUTCOME_UNCOVERED can name by a word ("in a draw"); a set score is `outcomeSet`. */
+export const OUTCOME_KEYS = {
+  draw: "rules.err.outcome.draw",
+  tie: "rules.err.outcome.tie",
+} as const satisfies Record<string, MessageKey>;
+const isOutcomeWord = (o: unknown): o is keyof typeof OUTCOME_KEYS => typeof o === "string" && Object.hasOwn(OUTCOME_KEYS, o);
+
+/** One refused step as the wire carries it (`extra.refusals[i]`). */
+export interface TiebreakRefusalWire {
+  index: number;
+  key: string | null;
+  reason: TiebreakRefusalReason;
+  need?: string;
+}
 
 /** One field a division save did not apply, and the first started stage that depends on it. Lives here, not beside
  *  `divisionRefusals` (server-only): the 409 body and the 200 body's `refused` list both carry it to a client. */
@@ -174,8 +196,12 @@ export interface RuleErrorParams {
   match?: string;
   /** FIXTURE_FORMAT_LOCKED: why (default finished). */
   lock?: FixtureLockReason;
-  /** POINTS_RULE_INEXPRESSIBLE: the division's split keys (`pointsRuleExpressible`), named by their labels. */
-  keys?: readonly string[];
+  /** TIEBREAK_KEY_INVALID: the refused step the sentence names (the first of `extra.refusals`), and whether the order is
+   *  one a new stage would inherit (the advice to set the stage's own order). */
+  refusal?: TiebreakRefusalWire;
+  inherited?: boolean;
+  /** POINTS_OUTCOME_UNCOVERED: the outcomes the rule does not pay (`coverage`'s `uncovered`). */
+  uncovered?: readonly string[];
   /** FIXTURE_RULES_CHANGED: the corrected format as the public describer says it, in the sentence's language. */
   format?: string;
   /** DIVISION_FORMAT_LOCKED: whether the stage's matches can take a format of their own (default true). False drops the
@@ -184,6 +210,38 @@ export interface RuleErrorParams {
 }
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+
+/** A tie-break step's name in the reader's language (`div.detail.tiebreak.rule.*`, the standings caption's words), else the
+ *  key itself: the en lookup answers undefined for a key it lacks, a client's the key it was asked. */
+function stepName(key: string, m: Msg): string {
+  const k = `div.detail.tiebreak.rule.${key}` as MessageKey;
+  const said = m(k) as string | undefined;
+  return typeof said === "string" && said !== k && said.length > 0 ? said : key;
+}
+
+function tiebreakSentence(p: RuleErrorParams, m: Msg): string {
+  const r = p.refusal;
+  let said: string;
+  if (r === undefined || r.key === null) said = m(RULE_ERROR_SUPPORT_KEYS.tiebreakOrderEmpty);
+  else {
+    const reason = m(TIEBREAK_REASON_KEYS[r.reason], r.reason === "first" ? { primary: stepName(r.need ?? "", m) } : {});
+    said = m(RULE_ERROR_KEYS.TIEBREAK_KEY_INVALID, { step: stepName(r.key, m), reason });
+  }
+  if (p.inherited === true) said = m(RULE_ERROR_SUPPORT_KEYS.tiebreakInherited, { reason: said });
+  return p.stage !== undefined ? m(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: p.stage, reason: said }) : said;
+}
+
+/** The outcomes, worded: the level ones by their word, the set scores in one phrase; a key with no word by itself. */
+function outcomeWords(uncovered: readonly string[], m: Msg): string {
+  const words: string[] = [];
+  const scores: string[] = [];
+  for (const o of uncovered) {
+    if (o.startsWith("set:")) scores.push(o.slice("set:".length));
+    else words.push(isOutcomeWord(o) ? m(OUTCOME_KEYS[o]) : o);
+  }
+  if (scores.length > 0) words.push(m(RULE_ERROR_SUPPORT_KEYS.outcomeSet, { scores: scores.join(", ") }));
+  return words.join(", ");
+}
 
 /** One code's sentence through `m` — the en dictionary on the server, the reader's on a client. */
 function sentence(code: RuleErrorCode, p: RuleErrorParams, m: Msg): string {
@@ -198,12 +256,11 @@ function sentence(code: RuleErrorCode, p: RuleErrorParams, m: Msg): string {
         : m(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: p.field ?? "" });
       return p.stage !== undefined ? m(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: p.stage, reason: said }) : said;
     }
-    case "POINTS_RULE_INEXPRESSIBLE": {
-      // The keys by their labels; a key with no label (none today: swept) by its config key rather than dropped.
-      const reason = p.keys !== undefined
-        ? m(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: p.keys.map((k) => (isSplitKey(k) ? m(POINTS_SPLIT_LABEL_KEYS[k]) : k)).join(", ") })
-        : p.reason ?? "";
-      return m(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason });
+    case "TIEBREAK_KEY_INVALID":
+      return tiebreakSentence(p, m);
+    case "POINTS_OUTCOME_UNCOVERED": {
+      const said = m(RULE_ERROR_KEYS.POINTS_OUTCOME_UNCOVERED, { outcome: outcomeWords(p.uncovered ?? [], m) });
+      return p.stage !== undefined ? m(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: p.stage, reason: said }) : said;
     }
     case "FIXTURE_HAS_OWN_FORMAT":
     case "FIXTURE_OWN_FORMAT_NO_LONGER_FITS":
@@ -231,7 +288,8 @@ const isCode = (code: string): code is RuleErrorCode => Object.hasOwn(RULE_ERROR
  * A rule-lock refusal in the reader's language, read off its code and the facts its emitter puts in `extra`:
  * `refused[0].stageName` (the division save), `stage_name` (the stage save; and the stage a division save's RULE_NOT_SETTABLE is
  * about), `fixture_no` (the match's number on the board), `reason` (why a match is locked; why a key is not settable),
- * `fit_reason` (which fit reason), `field`, `keys` (the points a stage rule cannot express), `match_edits` (whether a locked
+ * `fit_reason` (which fit reason), `field`, `refusals` (the tie-break steps refused) with `inherited` (an order a new stage
+ * would inherit), `uncovered` (the outcomes a points rule does not pay), `match_edits` (whether a locked
  * stage's matches take a format of their own). Null when it is not a rule-lock code, or when the sentence needs a
  * fact the refusal does not carry — and for an engine's own reason (no `fit_reason`), which this app cannot say better:
  * the caller then keeps its own copy.
@@ -268,11 +326,19 @@ export function ruleRefusalText(code: string | undefined, extra: Readonly<Record
             m,
           )
         : null;
-    case "POINTS_RULE_INEXPRESSIBLE": {
-      // W2c Task 13: the stage PUT, the create door and the division save send the split keys. Only keys this app can
-      // name: anything else is the server's to say (null: the caller keeps the message).
-      const keys = Array.isArray(x.keys) ? (x.keys as unknown[]) : [];
-      return keys.length > 0 && keys.every(isSplitKey) ? sentence(code, { keys }, m) : null;
+    case "TIEBREAK_KEY_INVALID": {
+      // The first refused step, as the emitter sends it; a refusal this app cannot read is the server's to say.
+      const first: unknown = Array.isArray(x.refusals) ? x.refusals[0] : undefined;
+      if (typeof first !== "object" || first === null) return null;
+      const { index, key, reason, need } = first as Record<string, unknown>;
+      if (typeof index !== "number" || !(key === null || typeof key === "string") || !isTiebreakReason(reason)) return null;
+      const refusal: TiebreakRefusalWire = { index, key, reason, ...(typeof need === "string" ? { need } : {}) };
+      return sentence(code, { refusal, inherited: x.inherited !== undefined, stage: typeof x.stage_name === "string" && typeof x.stage_id === "string" ? x.stage_name : undefined }, m);
+    }
+    case "POINTS_OUTCOME_UNCOVERED": {
+      const uncovered = Array.isArray(x.uncovered) ? (x.uncovered as unknown[]) : [];
+      if (uncovered.length === 0 || !uncovered.every((o): o is string => typeof o === "string")) return null;
+      return sentence(code, { uncovered, stage: typeof x.stage_name === "string" && typeof x.stage_id === "string" ? x.stage_name : undefined }, m);
     }
     case "FIXTURE_HAS_OWN_FORMAT":
     case "FIXTURE_OWN_FORMAT_NO_LONGER_FITS":

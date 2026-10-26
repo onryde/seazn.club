@@ -746,12 +746,13 @@ describe.skipIf(!HAS_DB)(
       expect(savedEntrants?.kinds).toEqual(["individual", "team"]);
       expect(savedEntrants?.captain).toBe(true);
 
-      // (b) Entrants change PLUS a real config field (points, a TABLE rule): the
-      // entrants part still lands; points is refused BY NAME and stays as stored.
+      // (b) Entrants change PLUS a real config field (allowDraws, a match-format key the started stage inherits): the
+      // entrants part still lands; allowDraws is refused BY NAME and stays as stored. (W2d Task 10: a TABLE rule such as
+      // `points` is no longer the example — the started stage is pinned and pays its pin's rule, see (d).)
       const mixed = await patchDivision(owner, division.id, {
         config: {
           ...storedConfig,
-          points: { w: 5, d: 5, l: 5 },
+          allowDraws: false,
           entrants: {
             kinds: ["individual", "team"],
             defaultKind: "individual",
@@ -759,10 +760,10 @@ describe.skipIf(!HAS_DB)(
         },
       });
       expect(mixed.refused).toEqual([
-        { field: "points", code: "DIVISION_TABLE_RULES_LOCKED", stageId: stage!.id, stageName: "L" },
+        { field: "allowDraws", code: "DIVISION_FORMAT_LOCKED", stageId: stage!.id, stageName: "L" },
       ]);
-      expect((mixed.config as { points: unknown }).points).toEqual(
-        (storedConfig as { points: unknown }).points,
+      expect((mixed.config as { allowDraws?: unknown }).allowDraws).toEqual(
+        (storedConfig as { allowDraws?: unknown }).allowDraws,
       );
       expect(
         (mixed.config as { entrants?: { captain?: boolean } }).entrants?.captain,
@@ -774,13 +775,20 @@ describe.skipIf(!HAS_DB)(
       const stored = (await getDivision(owner, division.id)).config as Record<string, unknown>;
       await expect(
         patchDivision(owner, division.id, {
-          config: { ...stored, points: { w: 7, d: 7, l: 7 } },
+          config: { ...stored, allowDraws: false },
         }),
       ).rejects.toMatchObject({
         status: 409,
-        code: "DIVISION_TABLE_RULES_LOCKED",
-        extra: { refused: [{ field: "points", stageName: "L" }] },
+        code: "DIVISION_FORMAT_LOCKED",
+        extra: { refused: [{ field: "allowDraws", stageName: "L" }] },
       });
+
+      // (d) W2d Task 10 (spec §5.4): the division's points no longer lock the pinned started stage. The save lands, the
+      // stage keeps its pin, and the answer names it.
+      const pts = await patchDivision(owner, division.id, { config: { ...stored, points: { w: 7, d: 7, l: 7 } } });
+      expect(pts.refused, "points: nothing refused").toEqual([]);
+      expect((pts.config as { points: unknown }).points, "the division's points landed").toEqual({ w: 7, d: 7, l: 7 });
+      expect(pts.stagesKeptPinned, "the pinned stage that kept its rules is named").toEqual([{ stageId: stage!.id, name: "L" }]);
     });
   },
 );

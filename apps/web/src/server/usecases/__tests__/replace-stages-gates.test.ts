@@ -10,7 +10,7 @@
 // typed plan table. Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
-import { stageDefaultsFor, type AnySportModule } from "@seazn/engine/sport";
+import { stageDefaultsFor, type AnySportModule, type TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -345,6 +345,10 @@ describe.skipIf(!HAS_DB)("batch 4 I1: createStages reads the division UNDER the 
 // lock each and wanted the other's: Postgres broke it with 40P01 after ~1 s. Interleaving, with no sleeps: a holder takes
 // the advisory lock, the stage writer queues on it first, the patch queues second, and the holder commits. The writer is
 // woken first and wants the row; under the old order the patch already holds it.
+/** W2d Task 10: a division order is `validateCascade`d on the write path, so the race writes a valid badminton order (it
+ *  opens on the primary `wins` and closes on `lots`; `head_to_head` is no tie-break key). */
+const BDM_ORDER: TiebreakerKey[] = ["wins", "set_diff", "point_diff", "lots"];
+
 describe.skipIf(!HAS_DB)("batch 4 N1: patchDivision and the stage writers take the division locks in ONE order (advisory, then row)", () => {
   type Case = { name: string; seedStage: boolean; write: (auth: AuthCtx, divisionId: string) => Promise<unknown> };
   const cases: Case[] = [
@@ -377,7 +381,7 @@ describe.skipIf(!HAS_DB)("batch 4 N1: patchDivision and the stage writers take t
       writer = c.write(auth, divisionId);
       writer.catch(() => undefined); // the verdict is read below; a rejection must not escape as an unhandled one first
       await until("the stage writer queues on the held division lock", async () => (await waitersOn(held!.pid)).length === 1);
-      patch = patchDivision(auth, divisionId, { player_name_display: "first_initial", tiebreakers: ["head_to_head"] as never });
+      patch = patchDivision(auth, divisionId, { player_name_display: "first_initial", tiebreakers: BDM_ORDER });
       patch.catch(() => undefined);
       await until("the patch queues behind it", async () => (await waitersOn(held!.pid)).length === 2);
     }); // commits: the writer is woken first and wants the divisions row
@@ -390,7 +394,7 @@ describe.skipIf(!HAS_DB)("batch 4 N1: patchDivision and the stage writers take t
     const end = await read();
     expect(end.status, "the stage write reopened the division").toBe("active");
     expect(end.player_name_display, "the patch's masking write landed").toBe("first_initial");
-    expect(end.tiebreakers, "the patch's format write landed").toEqual(["head_to_head"]);
+    expect(end.tiebreakers, "the patch's format write landed").toEqual(BDM_ORDER);
     const stagesAfter = await stageIds(divisionId);
     expect(stagesAfter.length, "one stage stands").toBe(1);
     if (c.seedStage) expect(stagesAfter, "replaceStages replaced the graph").not.toEqual(stagesBefore);

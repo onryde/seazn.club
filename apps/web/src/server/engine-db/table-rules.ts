@@ -97,9 +97,14 @@ function parsePin(stageId: string, raw: unknown): TableRulesPin {
   return { ...parsed.data, tiebreakers: parsed.data.tiebreakers as TiebreakerKey[], crossGroup: parsed.data.crossGroup as TiebreakerKey[] };
 }
 
-// The stage's own values (`stages.config.points`, `.tiebreakers`; spec §5.4 "Storage"). Null or absent = inherit (any
-// falsy `points`, as the fold always read it). A value that is not a rule or an order is refused, typed.
-function ownRulesOf(row: TableRulesRow): { points: PointsRule | null; tiebreakers: readonly TiebreakerKey[] | null } {
+// The stage's own values (`stages.config.points`, `.tiebreakers`, `.crossGroupTiebreakers`; spec §5.4 "Storage", §5.9:
+// the API's explicit cross-group order, W2d Task 10). Null or absent = inherit (any falsy `points`, as the fold always
+// read it). A value that is not a rule or an order is refused, typed.
+function ownRulesOf(row: TableRulesRow): {
+  points: PointsRule | null;
+  tiebreakers: readonly TiebreakerKey[] | null;
+  crossGroup: readonly TiebreakerKey[] | null;
+} {
   const rawPoints = row.stageConfig?.points;
   let points: PointsRule | null = null;
   if (rawPoints) {
@@ -118,7 +123,14 @@ function ownRulesOf(row: TableRulesRow): { points: PointsRule | null; tiebreaker
     if (!order.success) throw refused(row.stageId, "its own tie-break order is not a list of steps", { reason: "order_invalid" });
     tiebreakers = order.data as TiebreakerKey[];
   }
-  return { points, tiebreakers };
+  const rawCross = row.stageConfig?.crossGroupTiebreakers;
+  let crossGroup: readonly TiebreakerKey[] | null = null;
+  if (rawCross !== undefined && rawCross !== null) {
+    const order = Order.safeParse(rawCross);
+    if (!order.success) throw refused(row.stageId, "its own cross-group order is not a list of steps", { reason: "order_invalid" });
+    crossGroup = order.data as TiebreakerKey[];
+  }
+  return { points, tiebreakers, crossGroup };
 }
 
 function divisionOrderOf(row: TableRulesRow): readonly TiebreakerKey[] | null {
@@ -159,12 +171,12 @@ export function tableRulesOf(row: TableRulesRow, module: AnySportModule): Loaded
   if (started && pinned === null) {
     throw refused(row.stageId, `it is ${row.status} but its table rules were never pinned`, { reason: "unpinned", status: row.status });
   }
-  const own = pinned === null ? ownRulesOf(row) : { points: null, tiebreakers: null };
+  const own = pinned === null ? ownRulesOf(row) : { points: null, tiebreakers: null, crossGroup: null };
   const rules = resolveTableRules({
     module,
     stageKind,
     mergedCfg,
-    stageOwn: { points: own.points, tiebreakers: own.tiebreakers, crossGroup: null },
+    stageOwn: { points: own.points, tiebreakers: own.tiebreakers, crossGroup: own.crossGroup },
     divisionTiebreakers: pinned === null ? divisionOrderOf(row) : null,
     pinned,
   });
@@ -212,6 +224,28 @@ async function rulesRows(db: Db, stageIds: readonly string[]): Promise<RulesQuer
            d.config as division_config, d.tiebreakers as division_tiebreakers, d.sport_key, d.module_version
     from stages s join divisions d on d.id = s.division_id
     where s.id in ${db(stageIds as string[])}`;
+}
+
+/** W2d Task 10 — the rows `tableRulesOf` reads, for the write guards (`usecases/table-rule-guards.ts`): each stage's row
+ *  with its name and its division's module, in board order. A guard asks the loader's own question of the rows as they
+ *  stand and as a save would leave them, so the write side never re-derives a layer the read side resolves. */
+export async function tableRulesRowsOf(
+  db: Db,
+  where: { readonly stageIds: readonly string[] } | { readonly divisionId: string },
+): Promise<{ row: TableRulesRow; name: string; module: AnySportModule }[]> {
+  const ids =
+    "stageIds" in where
+      ? [...where.stageIds]
+      : (await db<{ id: string }[]>`select id from stages where division_id = ${where.divisionId} order by seq`).map((r) => r.id);
+  const rows = await rulesRows(db, ids);
+  const names = new Map(
+    (ids.length === 0 ? [] : await db<{ id: string; name: string }[]>`select id, name from stages where id in ${db(ids)}`).map((r) => [r.id, r.name]),
+  );
+  const byId = new Map(rows.map((r) => [r.stage_id, r]));
+  return ids.flatMap((id) => {
+    const r = byId.get(id);
+    return r === undefined ? [] : [{ row: toRow(r), name: names.get(id) ?? "", module: resolveModule(r.sport_key, r.module_version) }];
+  });
 }
 
 /** X-TB-1/X-TB-2: the stage's table rules — its pin once active, else the live layers. Throws CONFIG_INVALID for an
@@ -310,19 +344,28 @@ export async function pinStageTableRules(tx: Db, stageId: string): Promise<void>
 export async function repinStageOwnRules(
   tx: Db,
   stageId: string,
-  saved: {
-    readonly points?: PointsRule | null;
-    readonly tiebreakers?: readonly TiebreakerKey[] | null;
-    readonly crossGroup?: readonly TiebreakerKey[] | null;
-  },
+  saved: OwnSave,
 ): Promise<void> {
   const [locked] = await tx<{ pin: unknown }[]>`select table_rules_pinned as pin from stages where id = ${stageId} for update`;
   if (locked === undefined || locked.pin === null || locked.pin === undefined) return;
-  const pin = parsePin(stageId, locked.pin);
   const [row] = await rulesRows(tx, [stageId]);
   if (!row) throw new EngineError("STAGE_NOT_READY", `stage ${stageId} not found`, { stageId });
-  const sportModule = resolveModule(row.sport_key, row.module_version);
-  const r = toRow(row);
+  const next = repinnedOf({ ...toRow(row), pin: locked.pin }, resolveModule(row.sport_key, row.module_version), saved);
+  await tx`update stages set table_rules_pinned = ${tx.json(pinJson(next) as never)} where id = ${stageId}`;
+}
+
+/** What one own save writes to a stage's table layer: each field absent = kept, a value = the stage's own, null = cleared. */
+export interface OwnSave {
+  readonly points?: PointsRule | null;
+  readonly tiebreakers?: readonly TiebreakerKey[] | null;
+  readonly crossGroup?: readonly TiebreakerKey[] | null;
+}
+
+/** The pin `repinStageOwnRules` writes for `saved`, from the stage's row as the save leaves it (its own layer written, its
+ *  pin as stored) — pure, so the write guards (`usecases/table-rule-guards.ts`) ask what a save WOULD pin before anything
+ *  is written, by the one definition the write itself uses. */
+export function repinnedOf(r: TableRulesRow, sportModule: AnySportModule, saved: OwnSave): TableRulesPin {
+  const pin = parsePin(r.stageId, r.pin);
   const stageKind = tableStageKindOf(r.kind);
   const mergedCfg = liveCfg(r.divisionConfig, { kind: r.kind, config: r.stageConfig }, sportModule);
   const resolve = (stageOwn: TableRulesInputOwn) =>
@@ -339,7 +382,7 @@ export async function repinStageOwnRules(
     tiebreakers: keepOrder ? pin.tiebreakers : (saved.tiebreakers ?? null),
     crossGroup: saved.crossGroup !== undefined ? saved.crossGroup : crossGroupIsOwn ? pin.crossGroup : null,
   });
-  const next: TableRulesPin = {
+  return {
     points: rules.points,
     tiebreakers: rules.tiebreakers,
     crossGroup: keepCrossGroup ? pin.crossGroup : rules.crossGroup,
@@ -349,7 +392,6 @@ export async function repinStageOwnRules(
       crossGroup: keepCrossGroup ? pin.sources.crossGroup : rules.sources.crossGroup,
     },
   };
-  await tx`update stages set table_rules_pinned = ${tx.json(pinJson(next) as never)} where id = ${stageId}`;
 }
 
 type TableRulesInputOwn = Parameters<typeof resolveTableRules>[0]["stageOwn"];

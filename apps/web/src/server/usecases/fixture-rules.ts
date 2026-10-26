@@ -20,6 +20,8 @@ import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { matchName } from "./fixture-override-guards";
 import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import { invalidatePublicCache } from "./scoring";
+import { tableRulesRowsOf } from "@/server/engine-db/table-rules";
+import { refuseOverrideUncovered } from "./table-rule-guards";
 
 /**
  * W2c Task 14 — THE ONE WRITER of `fixtures.rules_override` (V469): one match's own format (X-SR-2), and the live
@@ -87,6 +89,7 @@ interface LockedRow {
   variant_key: string | null;
   sport_key: string;
   module_version: string;
+  stage_id: string | null;
   stage_kind: string | null;
   stage_config: Record<string, unknown> | null;
 }
@@ -285,7 +288,7 @@ export async function writeFixtureRulesOverride(
       const [row] = await tx<LockedRow[]>`
         select f.id, f.fixture_no, f.status, f.outcome, f.config_snapshot, f.rules_override, f.rules_version,
                f.division_id, d.competition_id, d.config as division_config, d.variant_key, d.sport_key,
-               d.module_version, s.kind as stage_kind, s.config as stage_config
+               d.module_version, f.stage_id, s.kind as stage_kind, s.config as stage_config
           from fixtures f join divisions d on d.id = f.division_id left join stages s on s.id = f.stage_id
          where f.id = ${id}`;
       if (!row) throw new HttpError(404, "fixture not found", undefined, { fixture_id: id });
@@ -343,6 +346,17 @@ export async function writeFixtureRulesOverride(
         if (played) await assertFits(tx, row, cfg);
         // (7b) Unstarted, or that legacy shape: a write that moves what it resolves to moves its version.
         if (canonicalJson(cfg) !== canonicalJson(liveNow)) version = await bumpRulesVersion(tx, id);
+      }
+      // W2d Task 10 (spec §5.4 "Fixture override coverage", X-PT-3, VB-PT-3): the stage pays this match by ITS rule (its
+      // pin once active), so the match's own format may not reach an outcome that rule does not pay — a best-of-3 under a
+      // FIVB best-of-5 table names set:2-0 and set:2-1. An override that only removes outcomes is always covered. Asked
+      // AFTER the fit checks (one transaction: a refusal here rolls a re-freeze back), so a correction the recorded play
+      // cannot take keeps its own 409.
+      if (row.stage_id !== null) {
+        const [stageRow] = await tableRulesRowsOf(tx, { stageIds: [row.stage_id] });
+        if (stageRow !== undefined) {
+          refuseOverrideUncovered(m, stageRow.row, cfg, { fixture_id: id, fixture_no: row.fixture_no, stage_name: stageRow.name });
+        }
       }
       await tx`update fixtures set rules_override = ${next === null ? null : tx.json(next as never)} where id = ${id}`;
       // After the override lands: the award's score re-written under the cfg the fixture now resolves to.

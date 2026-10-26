@@ -54,6 +54,7 @@ import { countsTowardPublicQuota } from "./entitlement-freeze";
 import { expireCompetitionShell } from "@/server/public-site/revalidate";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
 import { validatedStageConfig } from "./stage-defaults";
+import { refuseCascadeForSport, refuseNewStageTable, refuseStrayPointsMapKeys } from "./table-rule-guards";
 import { validateStageProgression } from "./stage-seeding";
 import { getTemplate } from "@/server/templates/catalog";
 import type { CompetitionTemplate, TemplateStage } from "@/server/templates/schema";
@@ -252,6 +253,11 @@ export async function instantiateTemplate(
         if (!parsedConfig.success) {
           throw new Error(`invalid ${templateDivision.sportKey} config: ${parsedConfig.error.message}`);
         }
+        // W2d Task 10 (spec §5.5) — createDivision's questions: a points table keyed by a set score, and the division's
+        // order against the sport (a key outside the vocabulary, or one the sport does not record, is a catalog bug,
+        // located below like every other). Each stage is asked its own kind's below.
+        refuseStrayPointsMapKeys(parsedConfig.data);
+        if (templateDivision.tiebreakers !== undefined) refuseCascadeForSport(sportModule, parsedConfig.data, templateDivision.tiebreakers);
 
         const divisionName = t(dict, templateDivision.i18nNameKey);
         const division = await withUniqueSlug(
@@ -351,6 +357,12 @@ export async function instantiateTemplate(
             templateDivision.variantKey,
             parsedConfig.data,
             effectiveStageConfig(templateStage),
+          );
+          // W2d Task 10: the order this stage will rank by and the points it will pay, as `createStages` asks them.
+          refuseNewStageTable(
+            sportModule,
+            { kind: templateStage.kind, name: stageName, config: stageConfig },
+            { config: parsedConfig.data, tiebreakers: templateDivision.tiebreakers ?? null },
           );
           const [stage] = await tx<{ id: string }[]>`
             insert into stages (division_id, seq, kind, name, config, progression)

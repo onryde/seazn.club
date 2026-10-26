@@ -580,40 +580,6 @@ export function forfeitAwardOffer(
 }
 
 // ---------------------------------------------------------------------------
-// Q1 (W2c spec item 10): what a stage PointsRule cannot express.
-// ---------------------------------------------------------------------------
-
-export type Expressible = { readonly ok: true } | { readonly ok: false; readonly keys: readonly string[]; readonly reason: string };
-
-/** The `points` keys a stage PointsRule's `base` stands in for: the three-way result, under either spelling (generic
- *  writes w/d/l). Every other non-null key of a division's `points` pays a result the rule has no field for. */
-const BASE_KEYS: ReadonlySet<string> = new Set(["win", "draw", "loss", "w", "d", "l"]);
-
-/**
- * W2c Q1 (owner "A"): can a stage PointsRule (win/draw/loss + bonuses + a forfeit row) stand in for this division's own
- * points without dropping any of them? Refused — never silently dropped — where the division splits its points in a way
- * the rule cannot say (W2d widens PointsRule and lifts this):
- *  - a `points` key beyond the three-way result: ice hockey's `otWin`/`otLoss`, hockey's shoot-out `soBonus` (W2d PS-1),
- *    cricket's `tie`/`noResult` (plan finding 29);
- *  - a set sport's `pointsMap` that pays more than one pair by set score (volleyball's FIVB 3-2 → 2:1 beside 3:0): the
- *    rule pays one pair per result. A map of one pair (badminton's `*` 2:0) is the rule's own win/loss.
- * The empty case first: no cfg, or one with neither key, is expressible.
- */
-export function pointsRuleExpressible(divisionCfg: unknown): Expressible {
-  const cfg = (typeof divisionCfg === "object" && divisionCfg !== null ? divisionCfg : {}) as {
-    points?: Record<string, unknown> | null;
-    pointsMap?: Record<string, unknown> | null;
-  };
-  const pts = cfg.points ?? {};
-  const keys = Object.keys(pts).filter((k) => !BASE_KEYS.has(k) && pts[k] != null);
-  const pairs = new Set(Object.values(cfg.pointsMap ?? {}).map((pair) => JSON.stringify(pair)));
-  if (pairs.size > 1) keys.push("pointsMap");
-  return keys.length === 0
-    ? { ok: true }
-    : { ok: false, keys, reason: `this division awards ${keys.join(", ")}, which a stage points rule cannot express yet` };
-}
-
-// ---------------------------------------------------------------------------
 // Carry-over (Jul3/05 §3): a synthetic opening delta folded before new
 // fixtures — carry-over is data, not new fold logic.
 // ---------------------------------------------------------------------------

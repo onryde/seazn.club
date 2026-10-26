@@ -10,14 +10,15 @@ import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { classifyActError, rebuildErrorText, undoRefusalMessage } from "@/components/v2/stages-panel";
-import { z } from "zod";
-import { pointsRuleExpressible } from "@seazn/engine/competition";
+import { validateCascade, type CascadeRefusalReason } from "@seazn/engine/competition";
+import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import {
   FIXTURE_LOCK_KEYS,
   FORMAT_FIT_REASONS,
-  POINTS_SPLIT_LABEL_KEYS,
   FORMAT_FIT_REASON_KEYS,
+  OUTCOME_KEYS,
+  TIEBREAK_REASON_KEYS,
   RULE_ERROR_KEYS,
   RULE_ERROR_STATUS,
   RULE_ERROR_SUPPORT_KEYS,
@@ -57,8 +58,10 @@ describe("every W2c refusal code has a key, in all four locales", () => {
       ...Object.values(FORMAT_FIT_REASON_KEYS),
       ...Object.values(FIXTURE_LOCK_KEYS),
       ...Object.values(RULE_ERROR_SUPPORT_KEYS),
-      ...Object.values(POINTS_SPLIT_LABEL_KEYS),
       ...Object.values(RULE_NOT_SETTABLE_REASON_KEYS),
+      // W2d Task 10 (spec §10): the nine tie-break reasons and the outcome words.
+      ...Object.values(TIEBREAK_REASON_KEYS),
+      ...Object.values(OUTCOME_KEYS),
     ]);
     let checked = 0;
     for (const key of keys)
@@ -103,9 +106,17 @@ describe("the server's English is the en dictionary", () => {
       ["RULE_NOT_SETTABLE", { field: "bestOf", reason: "it is set per stage" }, say(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: "bestOf", reason: "it is set per stage" })],
       // Final review M1: a refusal about one stage names it ("{stage}: {reason}"), as the division save's re-ask says it.
       ["RULE_NOT_SETTABLE", { field: "clock", reason: say(RULE_NOT_SETTABLE_REASON_KEYS.online_division), stage: "Finals" }, say(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: "Finals", reason: say(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: "clock", reason: say(RULE_NOT_SETTABLE_REASON_KEYS.online_division) }) })],
-      ["POINTS_RULE_INEXPRESSIBLE", { reason: "x" }, say(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: "x" })],
-      // W2c Task 13: the split keys are named by their labels, never by the raw config key.
-      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["otWin", "otLoss"] }, say(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: say(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: [say(POINTS_SPLIT_LABEL_KEYS.otWin), say(POINTS_SPLIT_LABEL_KEYS.otLoss)].join(", ") }) })],
+      // W2d Task 10 (spec §10): a refused step by its caption's name and its reason's words; `first` names the primary.
+      ["TIEBREAK_KEY_INVALID", { refusal: { index: 1, key: "nrr", reason: "sport" } }, say(RULE_ERROR_KEYS.TIEBREAK_KEY_INVALID, { step: say("div.detail.tiebreak.rule.nrr"), reason: say(TIEBREAK_REASON_KEYS.sport) })],
+      ["TIEBREAK_KEY_INVALID", { refusal: { index: 0, key: "diff", reason: "first", need: "points" } }, say(RULE_ERROR_KEYS.TIEBREAK_KEY_INVALID, { step: say("div.detail.tiebreak.rule.diff"), reason: say(TIEBREAK_REASON_KEYS.first, { primary: say("div.detail.tiebreak.rule.points") }) })],
+      // The empty order has no step to name; an inherited order says to set the stage's own; a division save names the stage.
+      ["TIEBREAK_KEY_INVALID", { refusal: { index: -1, key: null, reason: "empty" } }, say(RULE_ERROR_SUPPORT_KEYS.tiebreakOrderEmpty)],
+      ["TIEBREAK_KEY_INVALID", { refusal: { index: 1, key: "buchholz", reason: "stage_format", need: "swiss" }, inherited: true }, say(RULE_ERROR_SUPPORT_KEYS.tiebreakInherited, { reason: say(RULE_ERROR_KEYS.TIEBREAK_KEY_INVALID, { step: say("div.detail.tiebreak.rule.buchholz"), reason: say(TIEBREAK_REASON_KEYS.stage_format) }) })],
+      ["TIEBREAK_KEY_INVALID", { refusal: { index: 2, key: "lots", reason: "duplicate" }, stage: "Pool B" }, say(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: "Pool B", reason: say(RULE_ERROR_KEYS.TIEBREAK_KEY_INVALID, { step: say("div.detail.tiebreak.rule.lots"), reason: say(TIEBREAK_REASON_KEYS.duplicate) }) })],
+      // The outcomes by their words, the set scores in one phrase.
+      ["POINTS_OUTCOME_UNCOVERED", { uncovered: ["draw"] }, say(RULE_ERROR_KEYS.POINTS_OUTCOME_UNCOVERED, { outcome: say(OUTCOME_KEYS.draw) })],
+      ["POINTS_OUTCOME_UNCOVERED", { uncovered: ["set:2-0", "set:2-1"] }, say(RULE_ERROR_KEYS.POINTS_OUTCOME_UNCOVERED, { outcome: say(RULE_ERROR_SUPPORT_KEYS.outcomeSet, { scores: "2-0, 2-1" }) })],
+      ["POINTS_OUTCOME_UNCOVERED", { uncovered: ["tie", "draw"], stage: "Pool A" }, say(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: "Pool A", reason: say(RULE_ERROR_KEYS.POINTS_OUTCOME_UNCOVERED, { outcome: [say(OUTCOME_KEYS.tie), say(OUTCOME_KEYS.draw)].join(", ") }) })],
       ["FIXTURE_HAS_OWN_FORMAT", { match: "Match 3" }, say(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: "Match 3" })],
       ["FIXTURE_OWN_FORMAT_NO_LONGER_FITS", { match: "Match 3" }, say(RULE_ERROR_KEYS.FIXTURE_OWN_FORMAT_NO_LONGER_FITS, { match: "Match 3" })],
       // W2c Task 15: the corrected format as the describer says it; none when the describer has no line for it.
@@ -151,13 +162,19 @@ describe("ruleRefusalText — the client reads the code and its extra, in the re
       ["RULE_NOT_SETTABLE", { field: "clock", reason: "online_division", stage_id: "s", stage_name: "Finals" }, sayEs(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: "Finals", reason: sayEs(RULE_ERROR_SUPPORT_KEYS.ruleNotSettableBecause, { field: "clock", reason: sayEs(RULE_NOT_SETTABLE_REASON_KEYS.online_division) }) })],
       ["RULE_NOT_SETTABLE", { field: "clock", stage_id: "s", stage_name: "Finals" }, sayEs(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: "Finals", reason: sayEs(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: "clock" }) })],
       ["RULE_NOT_SETTABLE", { field: "clock", reason: "some_future_reason" }, sayEs(RULE_ERROR_KEYS.RULE_NOT_SETTABLE, { field: "clock" })],
-      ["POINTS_RULE_INEXPRESSIBLE", {}, null],
-      // W2c Task 13: its emitter sends the split keys; a key with no label is one this app cannot say (null: the message).
-      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["otWin", "otLoss"] }, sayEs(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: sayEs(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: [sayEs(POINTS_SPLIT_LABEL_KEYS.otWin), sayEs(POINTS_SPLIT_LABEL_KEYS.otLoss)].join(", ") }) })],
-      // W2d PS-1: hockey's FIH shoot-out bonus is the split key the shoot-out pair used to be.
-      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["soBonus"] }, sayEs(RULE_ERROR_KEYS.POINTS_RULE_INEXPRESSIBLE, { reason: sayEs(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: sayEs(POINTS_SPLIT_LABEL_KEYS.soBonus) }) })],
-      ["POINTS_RULE_INEXPRESSIBLE", { keys: ["soBonus", "notAPointsKey"] }, null],
-      ["POINTS_RULE_INEXPRESSIBLE", { keys: [] }, null],
+      // W2d Task 10: the first refused step of `extra.refusals`, in the reader's language; `extra.inherited` (an order a new
+      // stage would inherit) adds the advice; a stage named WITH its id (a division save) prefixes the stage. A refusal this
+      // app cannot read (no list, a reason it does not know) is the server's to say: null.
+      ["TIEBREAK_KEY_INVALID", { refusals: [{ index: 1, key: "nrr", reason: "sport", need: "runs_for" }] }, sayEs(RULE_ERROR_KEYS.TIEBREAK_KEY_INVALID, { step: sayEs("div.detail.tiebreak.rule.nrr"), reason: sayEs(TIEBREAK_REASON_KEYS.sport) })],
+      ["TIEBREAK_KEY_INVALID", { refusals: [{ index: -1, key: null, reason: "empty" }] }, sayEs(RULE_ERROR_SUPPORT_KEYS.tiebreakOrderEmpty)],
+      ["TIEBREAK_KEY_INVALID", { stage_name: "Pool A", stage_kind: "league", inherited: "division", refusals: [{ index: 1, key: "buchholz", reason: "stage_format", need: "swiss" }] }, sayEs(RULE_ERROR_SUPPORT_KEYS.tiebreakInherited, { reason: sayEs(RULE_ERROR_KEYS.TIEBREAK_KEY_INVALID, { step: sayEs("div.detail.tiebreak.rule.buchholz"), reason: sayEs(TIEBREAK_REASON_KEYS.stage_format) }) })],
+      ["TIEBREAK_KEY_INVALID", { stage_id: "s", stage_name: "Pool B", refusals: [{ index: 0, key: "diff", reason: "first", need: "points" }, { index: 2, key: "for", reason: "last", need: "lots" }] }, sayEs(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: "Pool B", reason: sayEs(RULE_ERROR_KEYS.TIEBREAK_KEY_INVALID, { step: sayEs("div.detail.tiebreak.rule.diff"), reason: sayEs(TIEBREAK_REASON_KEYS.first, { primary: sayEs("div.detail.tiebreak.rule.points") }) }) })],
+      ["TIEBREAK_KEY_INVALID", { refusals: [] }, null],
+      ["TIEBREAK_KEY_INVALID", { refusals: [{ index: 1, key: "nrr", reason: "a_future_reason" }] }, null],
+      ["POINTS_OUTCOME_UNCOVERED", { uncovered: ["draw"] }, sayEs(RULE_ERROR_KEYS.POINTS_OUTCOME_UNCOVERED, { outcome: sayEs(OUTCOME_KEYS.draw) })],
+      ["POINTS_OUTCOME_UNCOVERED", { fixture_id: "f", fixture_no: 3, stage_name: "Pool A", uncovered: ["set:2-0", "set:2-1"] }, sayEs(RULE_ERROR_KEYS.POINTS_OUTCOME_UNCOVERED, { outcome: sayEs(RULE_ERROR_SUPPORT_KEYS.outcomeSet, { scores: "2-0, 2-1" }) })],
+      ["POINTS_OUTCOME_UNCOVERED", { stage_id: "s", stage_name: "Pool A", uncovered: ["tie"] }, sayEs(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: "Pool A", reason: sayEs(RULE_ERROR_KEYS.POINTS_OUTCOME_UNCOVERED, { outcome: sayEs(OUTCOME_KEYS.tie) }) })],
+      ["POINTS_OUTCOME_UNCOVERED", { uncovered: [] }, null],
       ["FIXTURE_HAS_OWN_FORMAT", { fixture_id: "f", fixture_no: 3 }, sayEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) })],
       ["FIXTURE_HAS_OWN_FORMAT", { fixture_id: "f", fixture_no: null }, sayEs(RULE_ERROR_KEYS.FIXTURE_HAS_OWN_FORMAT, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.thisMatch) })],
       ["FIXTURE_OWN_FORMAT_NO_LONGER_FITS", { fixture_id: "f", fixture_no: 3, field: "extraTime" }, sayEs(RULE_ERROR_KEYS.FIXTURE_OWN_FORMAT_NO_LONGER_FITS, { match: sayEs(RULE_ERROR_SUPPORT_KEYS.match, { n: 3 }) })],
@@ -252,27 +269,32 @@ describe("stages-panel reads the code, not the English (M1: undo, rebuild, and t
   });
 });
 
-describe("W2c Task 13 — every split key the engine refuses a stage rule over has a label, in all four locales", () => {
-  it("the label table is exactly the keys pointsRuleExpressible refuses, across every sport's declared points (counted)", () => {
-    // The candidates are each sport's OWN declaration (its config schema's `points` keys, and `pointsMap` where it declares
-    // one); which of them split is the engine's answer (`pointsRuleExpressible`), never a list typed here.
-    const split = new Set<string>();
-    let candidates = 0;
-    for (const m of builtinModules) {
-      const props = (z.toJSONSchema(m.configSchema as z.ZodType, { io: "input", unrepresentable: "any" }) as { properties?: Record<string, { properties?: Record<string, unknown> }> }).properties ?? {};
-      for (const k of Object.keys(props.points?.properties ?? {})) {
-        candidates++;
-        const got = pointsRuleExpressible({ points: { [k]: 1 } });
-        if (!got.ok) for (const key of got.keys) split.add(key);
-      }
-      if (props.pointsMap !== undefined) {
-        candidates++;
-        const got = pointsRuleExpressible({ pointsMap: { "2-0": [3, 0], "2-1": [2, 1] } });
-        if (!got.ok) for (const key of got.keys) split.add(key);
-      }
-    }
-    expect(candidates, "anti-vacuity: the sports declare points").toBeGreaterThan(0);
-    expect(split.size, "anti-vacuity: some declared key splits").toBeGreaterThan(0);
-    expect(Object.keys(POINTS_SPLIT_LABEL_KEYS).sort(), "a label for every split key, and none for a key that never splits").toEqual([...split].sort());
+describe("W2d Task 10 — every reason the engine refuses a tie-break step for has its words, in all four locales", () => {
+  it("the reason table is exactly the reasons validateCascade gives, each witnessed by an order the engine refuses for it (counted)", () => {
+    // Compile-time half: the table names every engine reason and no other (`satisfies` refuses a missing or an extra key).
+    const typed = TIEBREAK_REASON_KEYS satisfies Record<CascadeRefusalReason, string>;
+    const mod = (key: string) => builtinModules.find((m) => m.key === key) as AnySportModule;
+    const generic = mod("generic");
+    const football = mod("football");
+    const gcfg = generic.configSchema.parse(generic.variants.score);
+    const noFairPlay = football.configSchema.parse({ ...football.variants["11-a-side"], fairPlay: false });
+    const p = generic.primaryTableKey;
+    // Runtime half: each reason from the engine's own answer to an order built to earn it.
+    const orders: [AnySportModule, unknown, TiebreakerKey[], boolean][] = [
+      [generic, gcfg, [], false],
+      [generic, gcfg, [p, "diff", "diff", "lots"], false],
+      [generic, gcfg, ["diff", p, "lots"], false],
+      [generic, gcfg, [p, "diff"], false],
+      [generic, gcfg, [p, "nrr", "lots"], false],
+      [generic, gcfg, [p, "buchholz", "lots"], false],
+      [generic, gcfg, [p, "h2h_points", "lots"], true],
+      [football, noFairPlay, [football.primaryTableKey, "fair_play", "lots"], false],
+      [generic, gcfg, [p, "h2h_reapply", "lots"], false],
+    ];
+    const seen = new Set<string>();
+    for (const [m, cfg, order, crossGroup] of orders)
+      for (const r of validateCascade(order, { module: m, cfg, stageKind: "league", crossGroup })) seen.add(r.reason);
+    expect(seen.size, "anti-vacuity: reasons witnessed").toBeGreaterThan(0);
+    expect([...seen].sort(), "every reason the table names was earned from the engine").toEqual(Object.keys(typed).sort());
   });
 });

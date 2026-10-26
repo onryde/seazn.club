@@ -19,6 +19,7 @@ import { DEPARTED_STATUSES } from "./entrants";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
 import { sentPoints, validatedStageConfig } from "./stage-defaults";
+import { refuseNewStageTable } from "./table-rule-guards";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -375,10 +376,13 @@ interface StageRulesScope {
 }
 
 /** What a stage SLOT keeps across `replaceStages`' delete-and-recreate, keyed `seq:kind`: its stored rules (R-T12-4,
- *  `{}` for a cleared slot) and its own points rule when it has one (R-T13-1). */
+ *  `{}` for a cleared slot), its own points rule when it has one (R-T13-1), and (W2d Task 10) its own tie-break and
+ *  cross-group orders when it has them — the organiser's choices on the same screen as its points, re-asked with them. */
 export interface StageCarry {
   rules: Record<string, unknown>;
   points?: unknown;
+  tiebreakers?: unknown;
+  crossGroupTiebreakers?: unknown;
 }
 
 /** W2c Task 12 — the config each stage of a batch is inserted with: its rules validated on the stage PUT's terms and
@@ -400,7 +404,11 @@ function stageConfigsAtCreate(
   return inputs.map((s) => {
     const carry = carried.get(`${s.seq}:${s.kind}`);
     const sent = (s.config ?? {}) as Record<string, unknown>;
-    const config = carry?.points !== undefined && sent.points === undefined ? { ...sent, points: carry.points } : sent;
+    // Each own table value the body does not send is the slot's carry (a body's own replaces it whole; null drops it).
+    const config: Record<string, unknown> = { ...sent };
+    for (const key of ["points", "tiebreakers", "crossGroupTiebreakers"] as const) {
+      if (carry?.[key] !== undefined && sent[key] === undefined) config[key] = carry[key];
+    }
     return validatedStageConfig(
       sportModule,
       division.sport_key,
@@ -553,14 +561,21 @@ async function insertStageBatch(
   carried?: ReadonlyMap<string, StageCarry>,
 ): Promise<StageRow[]> {
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-  const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
-    select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}
+  const [division] = await tx<({ competition_id: string; tiebreakers: string[] | null } & StageRulesScope)[]>`
+    select competition_id, sport_key, module_version, variant_key, config, tiebreakers from divisions where id = ${divisionId}
     for no key update`;
   if (!division) throw new HttpError(404, "division not found");
   // Before any insert: a refused rules fragment (or a preset the division cannot take) writes nothing, the whole batch.
   // The same door asks each stage's points the stage PUT's questions (W2c Task 13, `refuseStagePoints`), the old
   // fail-closed metrics check (Jul3/05 §8: a rule needing metrics the sport doesn't emit never reaches play) among them.
   const configs = stageConfigsAtCreate(division, inputs, carried);
+  // W2d Task 10 (spec §5.5) — the order each new stage will rank by (its own, else the division's, else the sport's) is
+  // `validateCascade`d on its kind, an inherited one the kind refuses refused with "set this stage's own order"; and the
+  // points it will pay must pay every outcome its rules reach (`coverage`). Before any insert, the whole batch.
+  const sportModule = resolveModule(division.sport_key, division.module_version);
+  for (const [i, s] of inputs.entries()) {
+    refuseNewStageTable(sportModule, { kind: s.kind, name: s.name, config: configs[i]! }, { config: division.config, tiebreakers: division.tiebreakers });
+  }
   assertNotFrozen(frozen, division.competition_id);
 
   // Doc 10 §1: `stages.per_division.max` (∞ on every plan since V471; an
@@ -683,9 +698,14 @@ export async function replaceStages(
       // R-T13-1: the slot's own points ride the same carry (an organiser's choice on the same screen, not the
       // template's), and are re-asked below with the body; a slot that has none carries none.
       const points = r.config?.points;
+      // W2d Task 10: and its own orders, the same way (a slot with none carries none, and inherits).
+      const tiebreakers = r.config?.tiebreakers;
+      const crossGroupTiebreakers = r.config?.crossGroupTiebreakers;
       keep.set(`${r.seq}:${r.kind}`, {
         rules: cleared ? {} : (rules as Record<string, unknown>),
         ...(points !== undefined && points !== null ? { points } : {}),
+        ...(tiebreakers !== undefined && tiebreakers !== null ? { tiebreakers } : {}),
+        ...(crossGroupTiebreakers !== undefined && crossGroupTiebreakers !== null ? { crossGroupTiebreakers } : {}),
       });
     }
     await tx`delete from stages where division_id = ${divisionId}`;

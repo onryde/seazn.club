@@ -17,7 +17,7 @@ import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { buildStream, lineupFromCatalog, makeEnvelope } from "../testkit/helpers.ts";
 import { decidedInFor } from "./decided-in.ts";
-import { forfeitShaped, isUnplayedForfeit, legacyPointsRule, payout, pointsRuleAwardReachesTable, pointsRuleExpressible, PointsRule } from "./points.ts";
+import { forfeitShaped, isUnplayedForfeit, legacyPointsRule, payout, pointsRuleAwardReachesTable, PointsRule } from "./points.ts";
 import { foldResults, type FixtureResult } from "./standings.ts";
 import { AGAINST_KEYS, DIFF_KEYS, FOR_KEYS, metricKeyOf, rankStandings } from "./tiebreakers.ts";
 
@@ -438,66 +438,5 @@ describe("X-PT-1 gap (a) — the awarded score reaches the sport's own score key
       seen.add(h.metrics.gd as number);
     }
     expect(seen.size, "two division values, two different tables under one stage rule").toBe(2);
-  });
-});
-
-/** Q1 / spec §2 routing (b): the per-sport point systems a stage PointsRule (win/draw/loss + bonuses + forfeit) cannot
- *  express — routed to W2d — named per module and preset. Ice hockey's OT/SO (default and iihf), hockey's shoot-out
- *  bonus (fih-shootout; W2d PS-1 made the split one `soBonus`), cricket's tie / no-result (every preset, plan finding 29), and volleyball's set-score map
- *  (FIVB 3-2 → 2:1, indoor and the default; beach pays one pair). Every other preset is expressible. */
-const INEXPRESSIBLE: Record<string, readonly string[]> = {
-  "icehockey/(schema default)": ["otWin", "otLoss"],
-  "icehockey/iihf": ["otWin", "otLoss"],
-  "hockey/fih-shootout": ["soBonus"],
-  "cricket/(schema default)": ["tie", "noResult"],
-  "cricket/t20": ["tie", "noResult"],
-  "cricket/odi": ["tie", "noResult"],
-  "cricket/hundred": ["tie", "noResult"],
-  "cricket/test": ["tie", "noResult"],
-  "volleyball/(schema default)": ["pointsMap"],
-  "volleyball/indoor": ["pointsMap"],
-};
-
-describe("Q1 pointsRuleExpressible — refused, never silently dropped", () => {
-  it("empty / null division cfg is expressible (the empty case)", () => {
-    expect(pointsRuleExpressible({})).toEqual({ ok: true });
-    expect(pointsRuleExpressible(null)).toEqual({ ok: true });
-    expect(pointsRuleExpressible(undefined)).toEqual({ ok: true });
-  });
-
-  it("every builtin division preset: refused exactly where the sport splits its points, naming the split keys (counted)", () => {
-    let checked = 0;
-    const seen = new Set<string>();
-    forEachSport(({ module: m }) => {
-      for (const { name, cfg } of declaredCfgs(m as never)) {
-        const id = `${m.key}/${name}`;
-        const want = INEXPRESSIBLE[id];
-        const got = pointsRuleExpressible(cfg);
-        if (want === undefined) expect(got, id).toEqual({ ok: true });
-        else {
-          expect(got, id).toMatchObject({ ok: false });
-          expect(got.ok === false ? [...got.keys].sort() : [], id).toEqual([...want].sort());
-          expect(got.ok === false ? got.reason : "", id).toMatch(/cannot express/);
-          seen.add(id);
-        }
-        checked++;
-      }
-    });
-    expect(checked).toBeGreaterThan(builtinModules.length);
-    expect([...seen].sort(), "every refusal the table names was reached").toEqual(Object.keys(INEXPRESSIBLE).sort());
-  });
-
-  it("a null split value is not a split; one set-score pair repeated is not a split", () => {
-    expect(pointsRuleExpressible({ points: { win: 3, draw: 1, loss: 0, otWin: null } })).toEqual({ ok: true });
-    expect(pointsRuleExpressible({ pointsMap: { "2-0": [2, 0], "2-1": [2, 0], "*": [2, 0] } })).toEqual({ ok: true });
-    expect(pointsRuleExpressible({ pointsMap: { "3-2": [2, 1], "*": [3, 0] } })).toMatchObject({ ok: false, keys: ["pointsMap"] });
-  });
-
-  it("the refusal names every split key, comma-separated, in the brief's declared sentence", () => {
-    expect(pointsRuleExpressible({ points: { win: 2, loss: 0, otWin: 2, otLoss: 1 } })).toEqual({
-      ok: false,
-      keys: ["otWin", "otLoss"],
-      reason: "this division awards otWin, otLoss, which a stage points rule cannot express yet",
-    });
   });
 });

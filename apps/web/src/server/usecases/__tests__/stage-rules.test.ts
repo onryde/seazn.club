@@ -786,10 +786,12 @@ describe.skipIf(!HAS_DB)("D10 — a bestOf override must not outrun the pointsMa
     // Bo5 → a winner needs 3 sets, so 3-0 / 3-1 / 3-2 are reachable and none
     // is in the map. The message has to NAME them: "invalid config" would
     // leave the organiser with no idea which entries to add.
+    // W2d Task 10: coverage owns the question (spec §5.4), so the refusal is POINTS_OUTCOME_UNCOVERED, the scores in
+    // `extra.uncovered` (W2c's POINTS_MAP_INCOMPLETE is retired with the merge's own points-map arm).
     const err = await putStageRules(auth, stageId, { rules: { bestOf: 5 } }).catch(
       (e: unknown) => e,
     );
-    expect(err).toMatchObject({ status: 422, code: "POINTS_MAP_INCOMPLETE" });
+    expect(err).toMatchObject({ status: 422, code: "POINTS_OUTCOME_UNCOVERED", extra: { uncovered: ["set:3-0", "set:3-1", "set:3-2"] } });
     for (const scoreKey of ["3-0", "3-1", "3-2"])
       expect((err as Error).message).toContain(scoreKey);
     // A 2-x score is already answered and must NOT be listed as missing.
@@ -867,7 +869,7 @@ describe.skipIf(!HAS_DB)("D10 — a bestOf override must not outrun the pointsMa
     const err = await putStageRules(auth, stageId, { rules: { bestOf: 3 } }).catch(
       (e: unknown) => e,
     );
-    expect(err).toMatchObject({ status: 422, code: "POINTS_MAP_INCOMPLETE" });
+    expect(err).toMatchObject({ status: 422, code: "POINTS_OUTCOME_UNCOVERED", extra: { uncovered: ["set:2-0", "set:2-1"] } });
     for (const scoreKey of ["2-0", "2-1"]) expect((err as Error).message).toContain(scoreKey);
     expect((await stageConfig(stageId)).rules).toBeUndefined();
   }, 30_000);

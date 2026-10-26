@@ -12,7 +12,7 @@
 // and the stored rows (stages.config, fixtures.rules_override / rules_version / config_snapshot, divisions.config).
 //
 // Expected values are NOT read off the code under test. The rig is derived from the engine's own declarations
-// (`ruleKeys` scopes, `fixtureKeysFor`, `stageKeysFor`, `pointsKeysFor`, `pointsRuleExpressible`, the sport's `configSchema`
+// (`ruleKeys` scopes, `fixtureKeysFor`, `stageKeysFor`, `pointsKeysFor`, `coverage` over `reachableOutcomes`, the sport's `configSchema`
 // and `variants`) and from the signed rows: X-SR-1 (a stage sets only the keys its engine declares), X-SR-2 (a match
 // differs from its stage only on match-scoped keys), X-SR-3 (a stage's format locks when any match starts and stays
 // locked after a void), X-SR-4 (a division setting locks only when a started stage INHERITS it; the refusal names the
@@ -22,11 +22,14 @@
 //
 // Sequence cases: the second call (a re-send changes nothing and bumps nothing), the empty case (nothing started: no
 // lock anywhere, an empty patch refuses nothing), a sport with no match-scoped key (the per-match door refuses by
-// declaration), a sport whose points a stage rule cannot say (Q1: refused by name), and the control division (the same
-// sport started WITHOUT stage points locks the table keys the first one does not). Real Postgres (skipped without
-// DATABASE_URL).
+// declaration), a sport whose stage can end in an outcome the saved points do not pay (W2d T10: cricket's tie, refused
+// POINTS_OUTCOME_UNCOVERED by name; W2c's Q1 "inexpressible" is retired), and the control division (the same sport started
+// with NO pin, a legacy row, locks the table keys the pinned stage frees). Real Postgres (skipped without DATABASE_URL).
+//
+// W2d Task 10 (spec §5.4): the generated stage is PINNED at activation, so the division's `points` / `pointsMap` and its
+// `tiebreakers` no longer reach it and are never refused; `scoring` / `awardScore` keep W2c's lock.
 import { afterAll, describe, expect, it } from "vitest";
-import { PointsRule, pointsRuleExpressible } from "@seazn/engine/competition";
+import { PointsRule, coverage, reachableOutcomes } from "@seazn/engine/competition";
 import { checkFixtureOverride, fixtureKeysFor, pointsKeysFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { sportCases } from "@seazn/engine/testkit";
 import { canonicalJson } from "@/lib/canonical-json";
@@ -172,8 +175,9 @@ const seen = {
   matchSaved: new Set<string>(),
   matchRefusedByDeclaration: new Set<string>(),
   pointsSaved: new Set<string>(),
-  pointsRefusedQ1: new Set<string>(),
+  pointsRefusedUncovered: new Set<string>(),
   tableSaveWitnessed: new Set<string>(),
+  keptNamed: new Set<string>(),
   controlLocked: new Set<string>(),
   controlOwed: new Set<string>(),
   voidKeptLock: new Set<string>(),
@@ -211,8 +215,8 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
       expect(await formatLockedStageIds(b.auth, b.divisionId), "saving a stage's rules does not start it").toEqual([]);
 
       // ---- 2. the stage's own points (T13/T18), the same door ------------------------------------------------------
-      const want = pointsRuleExpressible(resolved(m, rig));
-      let hasOwnPoints = false;
+      // The engine's own answer to "does this rule pay every outcome the stage can end in" (spec §5.4), on the stage's cfg.
+      const want = coverage(PointsRule.parse(BASE_POINTS), reachableOutcomes(m, resolved(m, rig, rig.stageKey.frag), "league"));
       if (want.ok) {
         const stored = PointsRule.parse(BASE_POINTS);
         const out = await putStageRules(b.auth, b.stageId, { points: BASE_POINTS });
@@ -223,19 +227,19 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
         const cfg = await stageConfig(b.stageId);
         expect(canonicalJson(cfg.points), "stored at stages.config.points").toBe(canonicalJson(PointsRule.parse(SECOND_POINTS)));
         expect(canonicalJson(rulesOf(cfg)), "points saved, rules untouched").toBe(canonicalJson(rulesStage));
-        hasOwnPoints = true;
         seen.pointsSaved.add(key);
       } else {
-        // Q1: the division awards points a stage rule cannot say (the engine's own verdict); refused by name, nothing stored.
+        // The stage can end in an outcome the rule does not pay (cricket's tie): refused by name, nothing stored.
+        expect(want.inapplicable, "premise: an outcome, not a set-score table on a sport with none").toEqual([]);
         await expect(putStageRules(b.auth, b.stageId, { points: BASE_POINTS })).rejects.toMatchObject({
-          status: RULE_ERROR_STATUS.POINTS_RULE_INEXPRESSIBLE,
-          code: "POINTS_RULE_INEXPRESSIBLE",
-          extra: { keys: want.keys },
+          status: RULE_ERROR_STATUS.POINTS_OUTCOME_UNCOVERED,
+          code: "POINTS_OUTCOME_UNCOVERED",
+          extra: { uncovered: want.uncovered },
         });
         const cfg = await stageConfig(b.stageId);
         expect(Object.hasOwn(cfg, "points"), "refused: no points stored").toBe(false);
         expect(canonicalJson(rulesOf(cfg)), "refused points leave the rules arm alone").toBe(canonicalJson(rulesStage));
-        seen.pointsRefusedQ1.add(key);
+        seen.pointsRefusedUncovered.add(key);
       }
 
       // ---- 3. one match's own override (T19) -----------------------------------------------------------------------
@@ -321,20 +325,21 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
       named(rig.inheritedKey.key, "DIVISION_FORMAT_LOCKED");
       expect(lockedKeys, `${rig.stageKey.key} is the stage's own, so the division may change it`).not.toContain(rig.stageKey.key);
       named("variant_key", "DIVISION_FORMAT_LOCKED");
-      named("tiebreakers", "DIVISION_TABLE_RULES_LOCKED");
-      // X-PT-1: a stage's own points replace the division's win/draw/loss (`points`) and set-score map (`pointsMap`) for
-      // its table; every other points-scope key the sport declares (a forfeit's award score, a board game's scoring) stays.
+      expect(lockedKeys, "W2d T10: the division's tiebreakers are never locked (the save below lands)").not.toContain("tiebreakers");
+      // X-PT-1 / W2d T10: the stage's PIN (and its own points) replace the division's win/draw/loss (`points`) and set-score
+      // map (`pointsMap`) for its table; every other points-scope key the sport declares (a forfeit's award score, a board
+      // game's scoring) stays locked.
       const tableKeys = [...pointsKeysFor(m, null, rig.variant), ...(Object.hasOwn(m.ruleKeys ?? {}, "pointsMap") ? ["pointsMap"] : [])];
       expect(tableKeys.length, "premise: every sport declares a points-scope key").toBeGreaterThan(0);
       for (const t of new Set(tableKeys)) {
-        if (hasOwnPoints && (t === "points" || t === "pointsMap")) {
-          expect(lockedKeys, `${t}: the stage's own points replace it, so it is free`).not.toContain(t);
+        if (t === "points" || t === "pointsMap") {
+          expect(lockedKeys, `${t}: the stage's pin replaces it, so it is free`).not.toContain(t);
         } else {
           named(t, "DIVISION_TABLE_RULES_LOCKED");
         }
       }
       // `pointsMap` is named by the table-rule set itself (rule-locks.ts `tableRuleKeys`), declared or not.
-      const declared = new Set([...Object.keys(m.ruleKeys ?? {}).map(topOf), "pointsMap", "variant_key", "tiebreakers"]);
+      const declared = new Set([...Object.keys(m.ruleKeys ?? {}).map(topOf), "pointsMap", "variant_key"]);
       for (const f of lockedKeys) expect(declared.has(f), `${f}: the form locks only what the engine declares`).toBe(true);
       expect(stageKeysFor(m, "league", rig.variant).map(topOf), "premise: the inherited key is one the stage kind may set").toContain(rig.inheritedKey.key);
 
@@ -354,30 +359,33 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
       const edit2 = await patchDivision(b.auth, b.divisionId, patch);
       expect(edit2.refused, "second call: the same refusal").toEqual(edit.refused);
       expect(canonicalJson(await divisionConfig(b)), "second call: nothing moved").toBe(canonicalJson(divCfg1));
-      // table rules and the variant: refused by their codes, the stage named
-      // A patch from which NOTHING lands is a 409 carrying the refusal, never a quiet success (divisions.ts).
-      const tbEntry = entryFor(locked, "tiebreakers");
-      await expect(patchDivision(b.auth, b.divisionId, { tiebreakers: ["head_to_head"] as never }), "tiebreakers: the cascade is a table rule").rejects.toMatchObject({
-        status: RULE_ERROR_STATUS.DIVISION_TABLE_RULES_LOCKED,
-        code: "DIVISION_TABLE_RULES_LOCKED",
-        extra: { refused: [tbEntry] },
-      });
-      expect((await getDivision(b.auth, b.divisionId)).tiebreakers, "the refused cascade was not written").toBeNull();
-      const tbBeside = await patchDivision(b.auth, b.divisionId, { name: "Renamed again", tiebreakers: ["head_to_head"] as never });
-      expect(tbBeside.refused, "beside a rename the same refusal rides the 200").toEqual([tbEntry]);
+      // W2d T10 (spec §5.4): the division's tiebreakers are never refused. The sport's own default (every default passes
+      // the validator, Task 11) is the order the pinned stage already plays, so the save lands and keeps nothing.
+      const order = m.defaultTiebreakers("league", m.configSchema.parse(divCfg1));
+      const tbBeside = await patchDivision(b.auth, b.divisionId, { name: "Renamed again", tiebreakers: [...order] });
+      expect(tbBeside.refused, "the order is not refused").toEqual([]);
       expect(tbBeside.name, "and the rename lands").toBe("Renamed again");
+      expect((await getDivision(b.auth, b.divisionId)).tiebreakers, "the order is stored").toEqual(order);
+      expect(tbBeside.stagesKeptPinned, "the stage already plays that order: nothing kept").toEqual([]);
       // nothing the refused and the landed keys did reached the stage, the open match, or the started match
       expect(canonicalJson(await stageConfig(b.stageId)), "the stage's stored config is untouched by the division edit").toBe(stageBefore);
       const rowAAfter = await fixtureRow(fixA);
       expect(rowAAfter.rules_version, "the unstarted match's version did not move: it resolves to the same format").toBe(rowAStarted.rules_version);
       expect(canonicalJson(rowAAfter.rules_override), "nor its override").toBe(canonicalJson(rowAStarted.rules_override));
       expect(canonicalJson((await fixtureRow(fixB)).config_snapshot), "the started match's frozen format did not move").toBe(snapshotB);
-      // the stage's own points free the division's win/draw/loss (or set-score map); the control below locks the same edit
+      // the stage's pin frees the division's win/draw/loss (or set-score map); the control below locks the same edit
       const moved = movedTablePatch(m, divCfg1);
-      if (hasOwnPoints && moved !== null) {
+      if (moved !== null) {
         const padBefore = (await loadFixturePadCfg(b.auth, fixA)).cfg;
         const pt = await patchDivision(b.auth, b.divisionId, { config: { ...divCfg1, [moved.key]: moved.value } });
-        expect(pt.refused, `${moved.key}: replaced by the stage's own points, so it saves`).toEqual([]);
+        expect(pt.refused, `${moved.key}: replaced by the stage's pin, so it saves`).toEqual([]);
+        // `stagesKeptPinned` names a pinned stage whose LIVE layers the save moved (what it would read were it pending): a
+        // stage with its own points (step 2) never read the division's, so nothing was kept from it (spec §5.4 "so nothing
+        // is dropped silently").
+        const ownsPoints = Object.hasOwn(await stageConfig(b.stageId), "points");
+        expect(ownsPoints, "premise: the stage owns points exactly when step 2 saved them").toBe(seen.pointsSaved.has(key));
+        expect(pt.stagesKeptPinned.map((x) => x.stageId), `${moved.key}: the pinned stage it did not reach is named (own points: none)`).toEqual(ownsPoints ? [] : [b.stageId]);
+        if (!ownsPoints) seen.keptNamed.add(key);
         expect(same((await divisionConfig(b))[moved.key], moved.value), `stored: ${moved.key} saved`).toBe(true);
         // X-SR-7: the unstarted match's version moves exactly when the format the pad folds does. The division's table key is
         // part of that cfg, so the pad is told to reload even though the stage's own points make the key inert for its table.
@@ -398,15 +406,17 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
       expect(await divisionLockedFields(b.auth, b.divisionId), "and the division form still lists the same locks").toEqual(locked);
       seen.voidKeptLock.add(key);
 
-      // ---- the control: the same sport started WITHOUT stage points locks the table keys this one freed ---------------
+      // ---- the control: the same sport started with NO pin and no stage points locks the table keys this one freed --------
+      // (W2d T10: a legacy row the post-deploy pin has not reached, the only stage the W2c table lock still holds.)
       const freed = [...new Set(tableKeys)].filter((t) => t === "points" || t === "pointsMap");
-      if (hasOwnPoints && freed.length > 0) seen.controlOwed.add(key);
-      if (hasOwnPoints && freed.length > 0) {
+      if (freed.length > 0) seen.controlOwed.add(key);
+      if (freed.length > 0) {
         const c = await seedBracket({ sport: key, variant: rig.variant, stageKind: "league", entrants: 3 });
         await appendEvent(c.auth.orgId, c.fixtureIds[0]!, 0, START);
+        await sql`update stages set table_rules_pinned = null, table_rules_pinned_at = null where id = ${c.stageId}`;
         const cl = await divisionLockedFields(c.auth, c.divisionId);
         for (const t of freed) {
-          expect(entryFor(cl, t), `${t}: with no stage points of its own the started stage inherits the division's`).toEqual({
+          expect(entryFor(cl, t), `${t}: with no pin and no stage points the started stage inherits the division's`).toEqual({
             field: t,
             code: "DIVISION_TABLE_RULES_LOCKED",
             stageId: c.stageId,
@@ -417,7 +427,7 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
           const cd = (await getDivision(c.auth, c.divisionId)).config as Record<string, unknown>;
           const cm = movedTablePatch(m, cd);
           expect(cm, "the control moves the same table key").not.toBeNull();
-          await expect(patchDivision(c.auth, c.divisionId, { config: { ...cd, [cm!.key]: cm!.value } }), `${cm!.key}: the same edit is refused without stage points`).rejects.toMatchObject({
+          await expect(patchDivision(c.auth, c.divisionId, { config: { ...cd, [cm!.key]: cm!.value } }), `${cm!.key}: the same edit is refused without a pin`).rejects.toMatchObject({
             status: RULE_ERROR_STATUS.DIVISION_TABLE_RULES_LOCKED,
             code: "DIVISION_TABLE_RULES_LOCKED",
             extra: { refused: [entryFor(cl, cm!.key)] },
@@ -437,11 +447,12 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
     expect(seen.matchSaved.size + seen.matchRefusedByDeclaration.size, "every sport took one of the two match branches").toBe(all.length);
     expect(seen.matchSaved.size, "some sport saved a match override").toBeGreaterThan(0);
     expect(seen.matchRefusedByDeclaration.size, "some sport declares no match key and was refused by declaration").toBeGreaterThan(0);
-    expect(seen.pointsSaved.size + seen.pointsRefusedQ1.size, "every sport took one of the two points branches").toBe(all.length);
+    expect(seen.pointsSaved.size + seen.pointsRefusedUncovered.size, "every sport took one of the two points branches").toBe(all.length);
     expect(seen.pointsSaved.size, "some sport saved stage points").toBeGreaterThan(0);
-    expect(seen.pointsRefusedQ1.size, "some sport was refused by Q1").toBeGreaterThan(0);
+    expect(seen.pointsRefusedUncovered.size, "some sport's stage can end in an outcome the points do not pay (cricket's tie)").toBeGreaterThan(0);
     expect([...seen.controlLocked].sort(), "the control ran for every sport whose stage points free a table key").toEqual([...seen.controlOwed].sort());
     expect(seen.controlLocked.size, "the control ran for at least one sport").toBeGreaterThan(0);
     expect(seen.tableSaveWitnessed.size, "the table-key edit saved for at least one sport").toBeGreaterThan(0);
+    expect(seen.keptNamed.size, "W2d T10: some sport's pinned stage (no own points) was named in stagesKeptPinned").toBeGreaterThan(0);
   });
 });

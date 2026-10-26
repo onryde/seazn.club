@@ -4,18 +4,12 @@
 // Client-safe like `stage-row-model.ts`: no "use client", no JSX, no `@/server` import.
 //
 // WHERE EVERY ANSWER COMES FROM. The section offers only what the server's PUT accepts, and the server's questions are
-// the engine's: `pointsRuleExpressible` (Q1: which divisions a stage rule can stand in for), `pointsRuleAwardReachesTable`
+// the engine's (W2d Task 10 retired W2c's Q1 expressibility check: a stage rule can say every split now, and whether it
+// PAYS every outcome is the server's coverage question, said back in its own words): `pointsRuleAwardReachesTable`
 // (batch-3 I3: which sports read a walkover SCORE), `validatePointsRule` (which bonus kinds the sport's metrics can feed),
 // `DRAW_KINDS` (which stages have a table). The web keeps no list of sports, kinds or metrics: a sport added to the
 // engine is offered exactly what the engine says it takes.
-import {
-  PointsRule,
-  parseStoredPointsRule,
-  pointsRuleAwardReachesTable,
-  pointsRuleExpressible,
-  validatePointsRule,
-  type Expressible,
-} from "@seazn/engine/competition";
+import { PointsRule, parseStoredPointsRule, pointsRuleAwardReachesTable, validatePointsRule } from "@seazn/engine/competition";
 import { DRAW_KINDS } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { pointsLine, type PointsClause } from "@/lib/points-line";
@@ -23,36 +17,20 @@ import { pointsLine, type PointsClause } from "@/lib/points-line";
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 // ---------------------------------------------------------------------------
-// Which state the section is in.
+// What the section offers.
 // ---------------------------------------------------------------------------
-
-export type PointsSectionState = "inexpressible" | "editor";
-
-/**
- * The section's state (review I9): a division whose points a stage rule cannot say is `inexpressible` (the reason, and no
- * boxes); every other division gets the `editor`. There is no plan state: scoring is free on every plan (owner, 2026-10-19),
- * so the section asks nothing of the org's entitlements.
- */
-export function pointsSectionState(expressible: boolean): PointsSectionState {
-  return expressible ? "editor" : "inexpressible";
-}
 
 /** Does this stage have a table its own points could rank? The server refuses a bracket kind (`refuseStagePoints`). */
 export function stageTakesPoints(kind: string): boolean {
   return (DRAW_KINDS as ReadonlySet<string>).has(kind);
 }
 
-/** The division's config AS THE SPORT PARSES IT (defaults applied), else as stored: the server asks Q1 of exactly this
- *  (`stage-rules-merge.ts parsedDivisionCfg`), so the section pre-checks what the PUT would answer. */
+/** The division's config AS THE SPORT PARSES IT (defaults applied), else as stored: what the section reads the division's
+ *  own points from. */
 export function divisionPointsCfg(module: AnySportModule, divisionConfig: unknown): Record<string, unknown> {
   const raw = isObj(divisionConfig) ? divisionConfig : {};
   const parsed = module.configSchema.safeParse(raw);
   return (parsed.success ? parsed.data : raw) as Record<string, unknown>;
-}
-
-/** Q1 for this division (the engine's `pointsRuleExpressible`): ok, or the split keys the stage rule cannot say. */
-export function divisionExpressible(module: AnySportModule, divisionConfig: unknown): Expressible {
-  return pointsRuleExpressible(divisionPointsCfg(module, divisionConfig));
 }
 
 // ---------------------------------------------------------------------------

@@ -12,7 +12,7 @@ import {
 } from "@/lib/chess-individual-only";
 import { assertWithinLimit, getLimit, requireFeature, passLockReason } from "@/lib/entitlements";
 import { EngineError, type StageKind } from "@seazn/engine/core";
-import { effectiveEntrantModel, fixtureKeysFor, type EntrantKind } from "@seazn/engine/sport";
+import { effectiveEntrantModel, fixtureKeysFor, type EntrantKind, type TiebreakerKey } from "@seazn/engine/sport";
 import { resolveModule } from "@/server/engine-db";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import {
@@ -31,7 +31,9 @@ import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
 import { divisionRefusals } from "./rule-locks";
 import { refuseInvalidatedOverrides } from "./fixture-override-guards";
-import { refuseInexpressibleStagePoints, refuseInvalidatedStageRules } from "./stage-rules-merge";
+import { refuseInvalidatedStageRules } from "./stage-rules-merge";
+import { refuseCascadeForSport, refuseDivisionTableSave, refuseStrayPointsMapKeys, type KeptPinned } from "./table-rule-guards";
+import { tableRulesRowsOf } from "@/server/engine-db/table-rules";
 import { reseedStagePresets } from "./stage-preset-reseed";
 import { heldAwards, rewriteHeldAwards, type HeldAward } from "./award-rewrite";
 import { bumpMovedRules, unfrozenRules, type UnfrozenRules } from "@/server/engine-db/rules-version";
@@ -315,6 +317,11 @@ export async function createDivision(
       });
     }
     const finalConfig = parsed.data as Record<string, unknown>;
+    // W2d Task 10 (spec §5.5; Task 8 carry): a points table keyed by anything but a set score is refused at write, and
+    // the division's own tie-break order is validated against the sport (`validateCascade`'s kind-independent rules:
+    // every stage created under it is then asked its own kind's, `createStages`). `[]` is an order too: refused, empty.
+    refuseStrayPointsMapKeys(finalConfig);
+    if (input.tiebreakers !== undefined && input.tiebreakers !== null) refuseCascadeForSport(sportModule, finalConfig, input.tiebreakers);
     const inputCfg = input.config as Record<string, unknown>;
     const onlinePlay =
       inputCfg && "onlinePlay" in inputCfg
@@ -694,7 +701,9 @@ function restoreKey(target: Record<string, unknown>, from: Record<string, unknow
 
 /** What a division save answers: the stored row, plus every field the save did NOT apply and the started stage that
  *  depends on it (`[]` when nothing was refused). */
-export type PatchDivisionResult = DivisionRow & { refused: RefusedField[] };
+/** `stagesKeptPinned` (W2d Task 10, spec §5.4): the started (pinned) stages whose live table rules this save moved — they
+ *  keep their pin, board order. */
+export type PatchDivisionResult = DivisionRow & { refused: RefusedField[]; stagesKeptPinned: KeptPinned[] };
 
 // Keys on the constraint NAME, not just the Postgres 23514 code — divisions
 // also carries divisions_category_check, which shares the code but means a
@@ -816,6 +825,8 @@ export async function patchDivision(
   // W2c X-SR-4: the fields this save did not apply because a started stage depends on them. Assigned inside the
   // transaction and returned beside the row; `[]` when nothing was refused.
   let refused: RefusedField[] = [];
+  // W2d Task 10 (spec §5.4): the pinned stages this save did not reach (their live layers moved, their pin did not).
+  let stagesKeptPinned: KeptPinned[] = [];
   // W2c Task 11 (carry (b) of the batch-3 re-review): whether this save re-wrote a stored walkover score. Set in the
   // transaction, read after it commits.
   let rewroteAwards = false;
@@ -1027,7 +1038,8 @@ export async function patchDivision(
     //   1. the config is built as before, then every refused key is put back to its stored value;
     //   2. because that restore can produce a mix nobody validated (a restored `setTo` beside a saved `cap`), the config
     //      left over is parsed AGAIN, and an invalid mix is the same 422 CONFIG_INVALID, with nothing written;
-    //   3. tiebreakers join the lock — they were never locked before W2c (Q3).
+    //   3. tiebreakers joined the lock in W2c (Q3), and left it in W2d (Task 10, spec §5.4): a started stage is pinned, so
+    //      a division order reaches only unpinned stages, validated against each (`refuseDivisionTableSave` below).
     // An unparseable config is 422 whether or not anything has started: the old "409 beats 422 while locked" order
     // belonged to the division-wide lock, which is gone.
     if (touchesFormat) {
@@ -1077,6 +1089,9 @@ export async function patchDivision(
         // so carry it through the parse explicitly. Absent from the incoming
         // config → the override is cleared back to the module default.
         nextConfig = parsed.data as Record<string, unknown>;
+        // W2d Task 10 (Task 8 carry): a points-table key that is not a set score, refused at write — a key this save adds
+        // (one already stored is the read path's to tolerate, never a reason to refuse an unrelated edit).
+        refuseStrayPointsMapKeys(nextConfig, currentConfig);
         const incomingEntrants = (patch.config as { entrants?: unknown } | undefined)?.entrants;
         if (incomingEntrants != null && typeof incomingEntrants === "object") {
           // Chess is individual-only (owner ruling 2026-10-26). A chess division saved BEFORE the ruling may still hold
@@ -1109,7 +1124,7 @@ export async function patchDivision(
         patch.tiebreakers !== undefined && canonicalJson(patch.tiebreakers) !== canonicalJson(current.tiebreakers);
 
       refused = await divisionRefusals(
-        tx, id, { configKeys, variant: variantChanged, tiebreakers: tiebreakersChanged },
+        tx, id, { configKeys, variant: variantChanged },
         { module: sportModule ?? resolveModule(current.sport_key, current.module_version), variantKey: current.variant_key, divisionConfig: currentConfig },
       );
       const refusedFields = new Set(refused.map((r) => r.field));
@@ -1164,13 +1179,14 @@ export async function patchDivision(
       // What lands is read off what will be WRITTEN, not off "was anything refused". The lock now judges each change
       // by the stages that inherit it, so a refusal of one field says nothing about another: a started knockout has
       // no table, hence refuses a changed `setTo` and accepts a changed `tiebreakers` in the same patch (review I1).
-      // A tiebreakers change that is in the patch, differs from what is stored, and is not in `refused` is written
-      // (`effective.tiebreakers`, deleted only when refused), so it counts exactly as `otherColumn` and `configApplied` do.
+      // A tiebreakers change that is in the patch and differs from what is stored is written (`effective.tiebreakers`; W2d:
+      // never refused by the lock), so it counts exactly as `otherColumn` and `configApplied` do.
       // A VARIANT change needs no such term: the lock refuses it on the first started stage, and every other refusal also
       // needs a started stage, so once anything is refused a changed variant was refused with it.
       const lockable = new Set(["variant_key", "config", "tiebreakers"]);
       const otherColumn = Object.entries(patch).some(([k, v]) => v !== undefined && !lockable.has(k));
-      const tiebreakersApplied = tiebreakersChanged && !refusedFields.has("tiebreakers");
+      // W2d Task 10: no stage locks the order any more (a started stage is pinned), so a changed order always lands.
+      const tiebreakersApplied = tiebreakersChanged;
       if (refused.length > 0 && !otherColumn && !configApplied && !tiebreakersApplied) {
         const first = refused[0]!;
         // Final review M2: the format-lock sentence sends the organiser to change individual unstarted matches - advice
@@ -1262,14 +1278,25 @@ export async function patchDivision(
         }
         if (configApplied || variantApplied) {
           await refuseInvalidatedStageRules(tx, id, nextConfig, sportModule, current.sport_key, variantApplied ? (effective.variant_key as string) : null);
-          // W2c Task 13 (Q1): no unstarted stage may be left with its own points over a division whose points they cannot
-          // express (a variant or `points` edit that splits them) — the question the stage PUT asked when they were saved.
-          await refuseInexpressibleStagePoints(tx, id, currentConfig, nextConfig, sportModule);
         }
         // W2c Task 14 (I-A one layer up): no unstarted match's own format may be left invalid by this config.
         await refuseInvalidatedOverrides(tx, id, nextConfig, sportModule, effective.variant_key as string);
       }
-      if (refusedFields.has("tiebreakers")) delete effective.tiebreakers;
+      // W2d Task 10 (spec §5.4, §5.5; D8, D9; X-TB-5, FB-TB-4): the order and config this save leaves, asked of every stage
+      // of the division as the loader reads it (`tableRulesOf`) — a new order against the sport, then each UNPINNED table
+      // stage's order on its own kind (a football `fairPlay` flip re-asks them all), and every stage's points against what
+      // its matches can now reach. A pinned stage is not reached: it is listed in `stagesKeptPinned`. Asked only when the
+      // save really moves the config or the order (an unchanged one leaves every stage as it stood).
+      if (configApplied || tiebreakersChanged) {
+        const module_ = sportModule ?? resolveModule(current.sport_key, current.module_version);
+        const nextOrder = (patch.tiebreakers !== undefined ? patch.tiebreakers : current.tiebreakers) as TiebreakerKey[] | null;
+        const stages = await tableRulesRowsOf(tx, { divisionId: id });
+        stagesKeptPinned = refuseDivisionTableSave(module_, stages, {
+          config: configApplied && nextConfig !== undefined ? nextConfig : currentConfig,
+          tiebreakers: nextOrder,
+          orderSaved: tiebreakersChanged,
+        });
+      }
     }
     // Rename regenerates the slug (v3/01 §2); old slug keeps redirecting.
     let before: { name: string; slug: string; competition_id: string } | undefined;
@@ -1441,5 +1468,5 @@ export async function patchDivision(
       peersExpired,
     );
   }
-  return { ...row, refused };
+  return { ...row, refused, stagesKeptPinned };
 }

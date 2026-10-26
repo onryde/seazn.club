@@ -262,6 +262,25 @@ describe("the settings island: what is locked, before the organiser types", () =
     expect(byTestId(open, "division-locked-points")).toBeUndefined();
   });
 
+  it("§11 item 4 the list a started (pinned) football stage now yields - its variant and awardScore, no tiebreakers, no points - leaves the points boxes open and names no tie-break order; a 200 with stagesKeptPinned is a plain save", async () => {
+    // The list's shape is the server's (division-settings-locks.test.ts reads it from divisionLockedFields on a real stage).
+    const points = { win: 3, draw: 1, loss: 0 };
+    const given = [lock("variant_key"), lock("awardScore", { code: "DIVISION_TABLE_RULES_LOCKED" })];
+    const island = mount({ lockedFields: given }, "football", "standard", { points });
+    const tree = island.tree();
+    const boxes = tree.filter((e) => e.type === "input" && propsOf(e).min === 0 && propsOf(e).max === 99);
+    expect(boxes.length, "premise: football shows win/draw/loss boxes").toBe(3);
+    for (const b of boxes) expect(propsOf(b).disabled, "the points a pinned stage replaces are open").toBe(false);
+    expect(byTestId(tree, "division-locked-points")).toBeUndefined();
+    expect(byTestId(tree, "division-locked-tiebreakers"), "no line for the tie-break order").toBeUndefined();
+    expect(propsOf(variantSelect(tree)).disabled, "the contrast: the variant stays locked").toBe(true);
+    net.patch.body = { id: "d1", refused: [], stagesKeptPinned: [{ stageId: "stage-a", name: "Pool A" }] };
+    clickButton(island.tree(), L("divset.saveRules"));
+    await flush();
+    expect(byTestId(island.tree(), "division-partial-save"), "a kept pin is not a refusal").toBeUndefined();
+    expect(testIdsStartingWith(island.tree(), "division-refused-")).toEqual([]);
+  });
+
   it("a viewer who cannot edit keeps every control disabled whatever the locks say (the lock does not re-open anything)", () => {
     const tree = mount({ canEdit: false, lockedFields: [] }).tree();
     expect(propsOf(ruleFieldsEl(tree)).disabled).toBe(true);

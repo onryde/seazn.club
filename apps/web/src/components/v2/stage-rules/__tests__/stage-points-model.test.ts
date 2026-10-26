@@ -1,24 +1,24 @@
 // W2c Task 18 (review I9) - the decisions the stage points section makes live in a pure helper with unit killers, never in
 // a browser. Expected values come from the SERVER's own door (`refuseStagePoints`) and the engine's declarations
-// (`pointsRuleExpressible`, `pointsRuleAwardReachesTable`, `validatePointsRule`, `payout`), never from a table
-// typed here; every sweep reports how many items it checked and zero is a failure.
+// (`pointsRuleAwardReachesTable`, `validatePointsRule`, `payout`), never from a table typed here; every sweep reports how
+// many items it checked and zero is a failure. W2d Task 10 (spec §5.3, §11 "W2c's inexpressible card is deleted"): Q1's
+// pre-check and its "inexpressible" section state are retired with the engine's expressibility check — every
+// division opens the editor, and what a rule does not pay is the server's coverage refusal (POINTS_OUTCOME_UNCOVERED).
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { StageKind } from "@seazn/engine/core";
-import { PointsRule, legacyPointsRule, payout, pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
+import { PointsRule, legacyPointsRule, payout, pointsRuleAwardReachesTable } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { refuseStagePoints } from "@/server/usecases/stage-rules-merge";
 import {
   BONUS_KINDS,
   PARAM_BONUS_KINDS,
   divisionBasePoints,
-  divisionExpressible,
   draftFromStored,
   draftIsDirty,
   offeredBonusKinds,
   offersWalkoverScore,
   parseNumber,
-  pointsSectionState,
   previewClauses,
   ruleFromDraft,
   stageTakesPoints,
@@ -38,10 +38,19 @@ const football = sport("football");
 /** Every (sport, variant, division config) the registry ships: the config a division of that variant stores. */
 const DIVISIONS = builtinModules.flatMap((m) => Object.keys(m.variants).map((variant) => ({ m, variant, cfg: m.variants[variant] as Record<string, unknown> })));
 
-/** The server's answer to a rule on a league stage: undefined when it takes it, else the refusal's code/field. */
-function serverAnswer(m: AnySportModule, cfg: unknown, rule: PointsRule, kind: StageKind = "league"): { code?: string; field?: string } | undefined {
+/** The division's config as the sport reads it (its schema's defaults filled), and whether its points map pays more than one
+ *  pair - read off the config, never off the helper under test. */
+const parsedCfg = (m: AnySportModule, cfg: unknown): Record<string, unknown> => m.configSchema.parse(cfg) as Record<string, unknown>;
+const twoPairMap = (m: AnySportModule, cfg: unknown): boolean => {
+  const map = parsedCfg(m, cfg).pointsMap;
+  return typeof map === "object" && map !== null && new Set(Object.values(map).map((v) => JSON.stringify(v))).size > 1;
+};
+
+/** The server's answer to a rule on a league stage: undefined when it takes it, else the refusal's code/field. W2d T10: the
+ *  door no longer reads the division's config (Q1 retired); `cfg` stays in the signature so each sweep names its division. */
+function serverAnswer(m: AnySportModule, _cfg: unknown, rule: PointsRule, kind: StageKind = "league"): { code?: string; field?: string } | undefined {
   try {
-    refuseStagePoints(m, kind, cfg, rule);
+    refuseStagePoints(m, kind, rule);
     return undefined;
   } catch (e) {
     const err = e as { code?: string; extra?: { field?: string }; message: string };
@@ -57,28 +66,21 @@ const editorRule = (win: number, draw: number, loss: number): PointsRule => lega
 const plain = (): PointsRule => editorRule(BASE.win, BASE.draw, BASE.loss);
 
 describe("stage points model (I9 killers for t18)", () => {
-  it("pointsSectionState: a division a stage rule cannot say is inexpressible, every other the editor - both answers, counted", () => {
-    const rows: [boolean, string][] = [
-      [true, "editor"],
-      [false, "inexpressible"],
-    ];
-    let checked = 0;
-    for (const [expressible, want] of rows) {
-      expect(pointsSectionState(expressible), `expressible=${expressible}`).toBe(want);
-      checked++;
-    }
-    expect(checked).toBe(2);
-    // and against the SERVER's door, for every division the registry ships
+  it("W2d T10: no division is kept out of the editor - the server's door takes the plain rule on every division the registry ships (counted)", () => {
+    // The W2c answer was "inexpressible" for ice hockey, hockey's shoot-out, cricket and indoor volleyball (Q1). That refusal
+    // is retired (spec §5.3: those divisions' points are outcome-keyed now), so the door takes the editor's three boxes
+    // everywhere; the sweep counts the divisions the W2c engine would have split, by their own config, so it witnesses them.
     let swept = 0;
-    let split = 0;
+    let wasSplit = 0;
     for (const { m, variant, cfg } of DIVISIONS) {
-      const refused = serverAnswer(m, cfg, plain())?.code === "POINTS_RULE_INEXPRESSIBLE";
-      expect(pointsSectionState(divisionExpressible(m, cfg).ok), `${m.key}/${variant}`).toBe(refused ? "inexpressible" : "editor");
-      if (refused) split++;
+      expect(serverAnswer(m, cfg, plain()), `${m.key}/${variant}: the door takes the editor's rule`).toBeUndefined();
+      const c = parsedCfg(m, cfg);
+      const pts = (typeof c.points === "object" && c.points !== null ? c.points : {}) as Record<string, unknown>;
+      if (twoPairMap(m, cfg) || ["otWin", "otLoss", "soBonus", "tie", "noResult"].some((k) => k in pts)) wasSplit++;
       swept++;
     }
     expect(swept, "every division swept").toBe(DIVISIONS.length);
-    expect(split, "and some of them split").toBeGreaterThan(0);
+    expect(wasSplit, "and some of them are ones W2c kept out of the editor").toBeGreaterThan(0);
   });
 
   it("the section is mounted on table stages only: the server's own door refuses every other kind (sweep of every StageKind)", () => {
@@ -96,38 +98,14 @@ describe("stage points model (I9 killers for t18)", () => {
     expect(tables, "and some are not").toBeLessThan(checked);
   });
 
-  it("Q1: the section's pre-check says what the server's door says, for every sport and variant", () => {
-    let expressible = 0;
-    let split = 0;
-    for (const { m, variant, cfg } of DIVISIONS) {
-      const ui = divisionExpressible(m, cfg);
-      const server = serverAnswer(m, cfg, plain());
-      expect(server?.code === "POINTS_RULE_INEXPRESSIBLE", `${m.key}/${variant}: server refuses as inexpressible`).toBe(!ui.ok);
-      if (ui.ok) expressible++;
-      else {
-        split++;
-        expect(ui.keys.length, `${m.key}/${variant}: the split keys are named`).toBeGreaterThan(0);
-      }
-    }
-    expect(expressible + split, "every division swept").toBe(DIVISIONS.length);
-    expect(expressible, "some divisions are expressible").toBeGreaterThan(0);
-    expect(split, "and some split their points (ice hockey, hockey shoot-out, cricket, indoor volleyball)").toBeGreaterThan(0);
-  });
-
   it("I3: the walkover SCORE is offered exactly where the server accepts it, for every sport and variant (set sports, goal sports, both)", () => {
     let checked = 0;
-    let skipped = 0;
     let offered = 0;
     let hidden = 0;
     const withScore: PointsRule = { ...plain(), forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [3, 0] } };
     for (const { m, variant, cfg } of DIVISIONS) {
+      // W2d T10: no division is skipped as inexpressible any more (Q1 retired); every one is checked.
       const answer = serverAnswer(m, cfg, withScore);
-      if (answer?.code === "POINTS_RULE_INEXPRESSIBLE") {
-        // asked first; the score is moot where nothing can be saved. Counted, so a skip is never silent.
-        expect(divisionExpressible(m, cfg).ok, `${m.key}/${variant}: skipped only because the engine says it splits`).toBe(false);
-        skipped++;
-        continue;
-      }
       const serverRefusesScore = answer?.field === "points.forfeit.awardScore";
       expect(offersWalkoverScore(m), `${m.key}/${variant}: the input is shown iff the server takes the score`).toBe(!serverRefusesScore);
       expect(offersWalkoverScore(m), `${m.key}/${variant}: the engine's declaration`).toBe(pointsRuleAwardReachesTable(m));
@@ -135,19 +113,24 @@ describe("stage points model (I9 killers for t18)", () => {
       else hidden++;
       checked++;
     }
-    expect(checked + skipped, "every division is either checked or skipped for a stated reason").toBe(DIVISIONS.length);
-    expect(checked, "most divisions are checked").toBeGreaterThan(skipped);
-    expect(skipped, "and some split their points (ice hockey, cricket, indoor volleyball)").toBeGreaterThan(0);
+    expect(checked, "every division is checked").toBe(DIVISIONS.length);
     expect(offered, "goal sports reach the table").toBeGreaterThan(0);
     expect(hidden, "set sports, carrom and the board games do not").toBeGreaterThan(0);
   });
 
-  it("every rule the section builds is one the server takes: all expressible sports, with a walkover pair, a score, and every offered bonus kind", () => {
+  it("every rule the section builds is one the server takes: every division, with a walkover pair, a score, and every offered bonus kind", () => {
     let saved = 0;
+    let blank = 0;
     let bonusesChecked = 0;
     for (const { m, variant, cfg } of DIVISIONS) {
-      if (!divisionExpressible(m, cfg).ok) continue;
       const draft = draftFromStored(m, cfg, null);
+      if (draft.win === "") {
+        // W2d T10: a division whose map pays two different pairs has no one win to start from, so the boxes open blank (the
+        // organiser types them; a blank box is not zero, below). Counted, and only for such a map, from its own config.
+        expect(twoPairMap(m, cfg), `${m.key}/${variant}: blank only for a two-pair map`).toBe(true);
+        blank++;
+        continue;
+      }
       const offered = offeredBonusKinds(m, cfg);
       const filled: PointsDraft = {
         ...draft,
@@ -166,7 +149,8 @@ describe("stage points model (I9 killers for t18)", () => {
       saved++;
       bonusesChecked += built.rule.bonuses.length;
     }
-    expect(saved, "expressible divisions swept").toBeGreaterThan(10);
+    expect(saved + blank, "every division swept").toBe(DIVISIONS.length);
+    expect(saved, "divisions saved").toBeGreaterThan(10);
     expect(bonusesChecked, "bonus rows swept").toBeGreaterThan(0);
   });
 
@@ -174,7 +158,6 @@ describe("stage points model (I9 killers for t18)", () => {
     let withMargins = 0;
     let without = 0;
     for (const { m, variant, cfg } of DIVISIONS) {
-      if (!divisionExpressible(m, cfg).ok) continue;
       const offered = new Set(offeredBonusKinds(m, cfg));
       for (const when of PARAM_BONUS_KINDS) {
         const answer = serverAnswer(m, cfg, { ...plain(), bonuses: [{ when, param: 1, points: 1 }] });
@@ -191,11 +174,19 @@ describe("stage points model (I9 killers for t18)", () => {
   it("a draw bonus is offered only where the sport can draw; a no-result bonus only where the sport records one; the rest everywhere", () => {
     expect(offeredBonusKinds(football, football.variants["11-a-side"]), "football draws").toContain("draw");
     expect(offeredBonusKinds(badminton, badminton.variants.bwf), "badminton cannot draw").not.toContain("draw");
+    // W2d T10: cricket reaches this editor now (Q1 retired), and it records a no-result: offered exactly where the sport
+    // declares the metric, on both sides of the line.
+    let recordsNr = 0;
+    let none = 0;
     for (const { m, cfg } of DIVISIONS) {
-      if (!divisionExpressible(m, cfg).ok) continue;
       expect(offeredBonusKinds(m, cfg), `${m.key}: a walkover bonus is a bonus on every sport`).toEqual(expect.arrayContaining(["forfeit_win", "forfeit_loss"]));
-      expect(offeredBonusKinds(m, cfg), `${m.key}: no sport that reaches this editor records a no-result`).not.toContain("no_result");
+      const declares = m.metrics.some((k) => k.key === "no_results");
+      expect(offeredBonusKinds(m, cfg).includes("no_result"), `${m.key}: a no-result bonus iff the sport records one`).toBe(declares);
+      if (declares) recordsNr++;
+      else none++;
     }
+    expect(recordsNr, "cricket records a no-result").toBeGreaterThan(0);
+    expect(none, "and most sports do not").toBeGreaterThan(0);
   });
 
   it("the kinds that read a threshold are the ones the engine's fold reads it for (probe over the engine's own payout)", () => {
@@ -228,15 +219,15 @@ describe("stage points model (I9 killers for t18)", () => {
     expect(b(sport("boardgame"), "classical"), "chess keeps `scoring` (half-points)").toEqual({ win: 2, draw: 1, loss: 0 });
     let swept = 0;
     for (const { m, variant, cfg } of DIVISIONS) {
-      if (!divisionExpressible(m, cfg).ok) continue;
+      if (twoPairMap(m, cfg)) continue; // below
       const base = divisionBasePoints(m, cfg);
       expect(base.win, `${m.key}/${variant}: a win`).not.toBeNull();
       expect(base.loss, `${m.key}/${variant}: a loss`).not.toBeNull();
       swept++;
     }
     expect(swept).toBeGreaterThan(10);
-    // A pointsMap that pays TWO different pairs has no one win / loss: null, never the first pair's numbers. (Q1 keeps such a
-    // division out of the editor, so this guards the reader itself - a base invented from one of two pairs would be a lie.)
+    // A pointsMap that pays TWO different pairs has no one win / loss: null, never the first pair's numbers. (W2d T10: such a
+    // division reaches the editor now, which opens blank on it - a base invented from one of two pairs would be a lie.)
     expect(divisionBasePoints(badminton, { pointsMap: { "2-0": [3, 0], "2-1": [2, 1] } })).toEqual({ win: null, draw: null, loss: null });
     expect(divisionBasePoints(badminton, { pointsMap: { "2-0": [3, 0], "2-1": [3, 0] } }), "the same pair twice is one pair").toEqual({ win: 3, draw: null, loss: 0 });
   });
@@ -326,7 +317,9 @@ describe("stage points model (I9 killers for t18)", () => {
     }
     expect(junk.length, "rows tried").toBeGreaterThan(5);
     expect(storedPointsRule(plain()), "and a real rule is still a rule").not.toBeNull();
-    expect(storedPointsRule({ base: BASE, bonuses: [] }), "and so is a stored W2c row (W2d: read through legacyPointsRule)").toEqual(plain());
+    // W2d Task 9 (PS-9f): the read path takes the outcome-keyed shape alone - the migration (Task 7) converted every stored W2c
+    // row, so a `base` row is one nobody wrote since and reads as none (found red at T10's base: the T9 change outran this pin).
+    expect(storedPointsRule({ base: BASE, bonuses: [] }), "a stored W2c row reads as none since T9").toBeNull();
   });
 
   it("the preview says the walkover score only where the sport's table reads it, and nothing for a draft that is not a rule yet", () => {
@@ -341,6 +334,6 @@ describe("stage points model (I9 killers for t18)", () => {
 
   it("anti-vacuity: the registry the sweeps walk is the engine's, and it is not small", () => {
     expect(DIVISIONS.length).toBeGreaterThan(20);
-    expect(pointsRuleExpressible(football.variants["11-a-side"]).ok).toBe(true);
+    expect(DIVISIONS.filter((d) => d.m.key === "football").length, "football's variants are in it").toBeGreaterThan(0);
   });
 });

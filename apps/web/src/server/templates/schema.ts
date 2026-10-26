@@ -34,7 +34,7 @@
 // stay byte-stable.
 import "server-only";
 import { z } from "zod";
-import { StageKind, ProgressionSchema, type ProgressionInput } from "@/server/api-v1/schemas";
+import { StageKind, ProgressionSchema, TiebreakerKeyS, type ProgressionInput } from "@/server/api-v1/schemas";
 import { PointsRule } from "@seazn/engine/competition";
 
 /** ProgressionSchema narrowed to the ONE shape a static catalog entry can
@@ -132,7 +132,9 @@ export const TemplateDivision = z.object({
    *  createDivision uses (sportModule.configSchema) — a template failing
    *  validation is a catalog bug and must fail the unit gate. */
   cfgOverrides: z.record(z.string(), z.unknown()).optional(),
-  tiebreakers: z.array(z.string()).optional(),
+  /** W2d Task 10 (spec §5.5): the vocabulary's own enum (the API's `TiebreakerKeyS`), never a free string — and the order
+   *  is validated against the sport at apply (`refuseCascadeForSport`, templates.ts), every stage against its kind. */
+  tiebreakers: z.array(TiebreakerKeyS).optional(),
   /** Display-only guidance for the wizard gallery/detail sheet (placeholder
    *  entrant count + kind) — never written to any row; entrant kind is
    *  chosen per-entrant at entrant-creation time, not fixed at the division
