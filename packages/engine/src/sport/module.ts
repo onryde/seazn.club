@@ -1130,3 +1130,10 @@ export function tracksFairPlay(module: Pick<AnySportModule, "configSchema">, cfg
   const read: unknown = parsed.success ? parsed.data : cfg;
   return typeof read === "object" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;
 }
+
+/**
+ * A `bySetScore` key (`PointsRule`, competition/points.ts, which re-exports it): a set score "W-L", or "*" for every score
+ * the map does not name (SC-S9). Lives here, not in competition/, for the reason `tracksFairPlay` does: the set kernel
+ * reads it, and a sport file may not value-import competition/ (the phone closure, test/boundary-gate.test.ts).
+ */
+export const SET_SCORE_KEY = /^(\d+-\d+|\*)$/;

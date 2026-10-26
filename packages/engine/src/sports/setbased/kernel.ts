@@ -37,10 +37,10 @@ import {
   type StageKind,
   type StandingsDelta,
 } from "../../core/types.ts";
-import { SET_SCORE_KEY, type PointsRule } from "../../competition/points.ts";
+import type { PointsRule } from "../../competition/points.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
-import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
+import { SET_SCORE_KEY, boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import {
   personsForEntrant,

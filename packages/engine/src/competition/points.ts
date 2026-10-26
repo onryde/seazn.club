@@ -29,8 +29,8 @@ const ForfeitRow = z.object({
   loserPoints: z.number(),
   awardScore: z.tuple([z.number(), z.number()]).optional(), // 20 Jan
 });
-/** A `bySetScore` key: a set score "W-L", or "*" for every score the map does not name (SC-S9). */
-export const SET_SCORE_KEY = /^(\d+-\d+|\*)$/;
+import { SET_SCORE_KEY } from "../sport/module.ts"; // `bySetScore`'s key (SC-S9): defined there, off competition/, for the
+export { SET_SCORE_KEY }; // set kernel, which may not value-import competition/ (the phone closure; sport/module.ts).
 
 /**
  * W2d (spec §5.3, D4, B2, D6, D10) — a stage's points rule, keyed by outcome: a win and a loss by how the match was
