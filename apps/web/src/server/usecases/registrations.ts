@@ -70,7 +70,7 @@ import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { effectivePolicy, readCameraPolicy, type CameraPolicy } from "@/server/external-play/camera-policy";
 import { onlineChessOffered } from "./external-play/online-chess-flag";
 import { isLichessRosterRefusal } from "./external-accounts";
-import { openRegistrationSeatGate, type SeatGate } from "./online-seat-gate";
+import { openRegistrationSeatGate, type RegistrationSeatGate, type SeatGate } from "./online-seat-gate";
 
 type Tx = postgres.TransactionSql;
 
@@ -1049,8 +1049,11 @@ export async function materialise(
   // The seat gate (online-seat-gate.ts): the roster this entrant now HOLDS - whoever the players resolved to, a person minted a
   // moment ago included - must be able to play on an online division. Read back from the table rather than predicted from the
   // player rows, so it cannot drift from what the branches above wrote; a refusal rolls the whole confirmation back. Passed by the
-  // doors that seat on a person's behalf (the organiser's approve / confirm / waive / mark-paid, a promotion that seats); the card
-  // webhook and the submit's own inline confirm do not pass it - the first has been paid, the second asked the registrant at submit.
+  // doors that seat on a person's behalf (the organiser's approve / confirm / waive / mark-paid, a promotion that seats). The card
+  // webhook does not pass it: the registrant has PAID, and a payment that has already moved cannot be un-taken by a 422 - the seat
+  // was asked about at submit (the submitter) and is asked again at the organiser's own doors. The submit's inline confirm does not
+  // pass it either, but asks the same gate itself, for everyone but the submitter (registration-submit.ts: the submitter is asked
+  // by their own session link before the transaction).
   if (seatGate) {
     const seated = await tx<{ person_id: string }[]>`select person_id from entrant_members where entrant_id = ${entrant.id}`;
     await seatGate.assertRoster(tx, reg.division_id, seated.map((m) => m.person_id));
@@ -1100,6 +1103,12 @@ export async function materialise(
  * hand-copies of the same person-resolution + idempotent-upsert sequence —
  * a future change to it (a new column, a different resolution precedence)
  * is easy to apply to one copy and forget in the other.
+ *
+ * Returns the person seated, or null for a nameless row (it seats nobody).
+ * It does not ask the ONLINE-PLAY SEAT GATE (online-seat-gate.ts) itself: the
+ * caller that seats on a person's behalf does, with this id - `materialise`
+ * for the whole roster it made, `assignSoloSignUp` for the player it placed.
+ * `joinTeamEntry`'s self-joiner is asked by their own session link first.
  */
 export async function joinExistingEntrant(
   tx: Tx,
@@ -1115,9 +1124,9 @@ export async function joinExistingEntrant(
     squad_number?: number | null;
     is_captain?: boolean;
   },
-): Promise<void> {
+): Promise<string | null> {
   const name = player.full_name.trim();
-  if (!name) return;
+  if (!name) return null;
   const personId = player.user_id
     ? await resolvePlayerPerson(tx, orgId, player.user_id, name, player.dob, player.gender)
     : await findOrCreatePlayerPerson(tx, orgId, name, player.dob, player.gender, player.email);
@@ -1128,6 +1137,7 @@ export async function joinExistingEntrant(
   await tx`
     update registration_players set person_id = ${personId}, updated_at = now()
     where id = ${player.id}`;
+  return personId;
 }
 
 /** RS012 ruling 1 — a status leaving SPOT_HOLDERS only frees a TEAM slot
@@ -1185,14 +1195,14 @@ export async function promoteOldestWaitlisted(
   divisionId: string,
   settings: RegistrationSettingsRow | null,
   excludeId?: string,
-  seatGate?: SeatGate,
+  seatGate?: RegistrationSeatGate,
 ): Promise<RegistrationWithGroupRow | null> {
   // `skipped`: the candidates this call has passed over - `excludeId`, and (with a seat gate) every registrant whose seat the gate
   // refused. A passed-over entry is left exactly as it was: still waitlisted, in its place, picked again by the NEXT freed spot.
   const skipped: string[] = excludeId ? [excludeId] : [];
   for (;;) {
-    const [picked] = await tx<{ id: string; group_id: string }[]>`
-      select id, group_id from registrations
+    const [picked] = await tx<{ id: string; group_id: string; free_agent: boolean }[]>`
+      select id, group_id, free_agent from registrations
       where division_id = ${divisionId} and status = 'waitlisted'
         ${skipped.length > 0 ? tx`and id <> all(${skipped})` : tx``}
       order by coalesce(waitlisted_at, created_at), id limit 1
@@ -1201,20 +1211,47 @@ export async function promoteOldestWaitlisted(
     if (!seatGate) return promoteWaitlistedRow(tx, picked.id, picked.group_id, settings);
     // ONLINE division: the promotion seats the registrant at once (free, auto-approval - `promotionSeats`), and the seat gate may
     // refuse them (no Lichess link that plays). That must neither fail the withdrawal / sweep / organiser act that freed the spot
-    // nor leave the head of the queue stuck: roll back just this attempt (its savepoint) and offer the spot to the next in line.
-    // Hold-and-notify is not an option - an entry promoted to `pending` WITHOUT a seat can never be confirmed on this kind of
-    // division (see the RS010 note on `promoteWaitlistedRow`).
+    // nor leave the head of the queue stuck: offer the spot to the next in line. Hold-and-notify is not an option - an entry
+    // promoted to `pending` WITHOUT a seat can never be confirmed on this kind of division (see the RS010 note on `promoteWaitlistedRow`).
+    //
+    // Two nets, the cheap one first. The gate already read every waitlisted registrant's link in its prelude, so it can say from that
+    // alone who would be turned away (`registrantRefusal`: one small read, no entrant, no person, no savepoint) - a queue of
+    // registrants who cannot play yet is walked at that price, not at a full attempted seat each. A solo sign-up seats nobody
+    // (`materialise` confirms it and returns), so there is nothing to refuse it for. The savepoint is the net under that one: the
+    // seat itself is judged by `assertRoster`, and a registrant the pre-filter let through but the seat refuses rolls back just
+    // their own attempt.
+    const early = picked.free_agent || !promotionSeats(settings) ? null : await seatGate.registrantRefusal(tx, picked.id);
+    if (early) {
+      await recordSkippedPromotion(tx, divisionId, picked.id, early);
+      skipped.push(picked.id);
+      continue;
+    }
     try {
       return await tx.savepoint((sp) => promoteWaitlistedRow(sp, picked.id, picked.group_id, settings, seatGate));
     } catch (err) {
       if (!isLichessRosterRefusal(err)) throw err;
-      log.warn(
-        { registrationId: picked.id, divisionId, code: err.code },
-        "registrations: waitlist promotion skipped a registrant who cannot be seated on an online division yet",
-      );
+      await recordSkippedPromotion(tx, divisionId, picked.id, err);
       skipped.push(picked.id);
     }
   }
+}
+
+/** A waitlisted registrant an automatic promotion passed over because the seat gate refused them: logged, and written to the
+ *  competition's audit ledger (`registration.promotion_skipped`, with the gate's own code) so the organiser can see WHO was skipped
+ *  and why, instead of finding a spot taken by someone behind them in the queue with nothing to explain it. No one is notified. */
+async function recordSkippedPromotion(tx: Tx, divisionId: string, registrationId: string, refusal: HttpError): Promise<void> {
+  log.warn(
+    { registrationId, divisionId, code: refusal.code },
+    "registrations: waitlist promotion skipped a registrant who cannot be seated on an online division yet",
+  );
+  const [division] = await tx<{ competition_id: string; org_id: string }[]>`
+    select competition_id, org_id from divisions where id = ${divisionId}`;
+  if (!division) return;
+  await audit(tx, division.competition_id, division.org_id, "registration.promotion_skipped", {
+    registration_id: registrationId,
+    division_id: divisionId,
+    code: refusal.code ?? null,
+  }, null);
 }
 
 /** Whether promoting a waitlisted entry under these settings SEATS it at once: a free entry on an auto-approval division confirms
@@ -1231,14 +1268,14 @@ export function promotionSeats(settings: RegistrationSettingsRow | null): settin
 export async function openPromotionSeatGate(
   divisionId: string,
   settings?: RegistrationSettingsRow | null,
-): Promise<SeatGate | undefined> {
+): Promise<RegistrationSeatGate | undefined> {
   const live = settings === undefined ? await loadSettings(sql, divisionId) : settings;
   return promotionSeats(live) ? openRegistrationSeatGate({ divisionId }) : undefined;
 }
 
 /** The seat gate for an organiser door that seats ONE named registration (approve, confirm, waive, mark-paid, an explicit promote),
  *  or undefined when there is no such registration (the door's own lookup answers 404). */
-export async function openRegistrationSeatGateFor(auth: AuthCtx, regId: string): Promise<SeatGate | undefined> {
+export async function openRegistrationSeatGateFor(auth: AuthCtx, regId: string): Promise<RegistrationSeatGate | undefined> {
   const [row] = await sql<{ division_id: string }[]>`select division_id from registrations where id = ${regId}`;
   return row ? openRegistrationSeatGate({ divisionId: row.division_id, registrationId: regId, auth }) : undefined;
 }
@@ -1312,6 +1349,13 @@ export async function promoteWaitlistedRow(
   settings: RegistrationSettingsRow | null,
   seatGate?: SeatGate,
 ): Promise<RegistrationWithGroupRow | null> {
+  // FAIL CLOSED. Whether a promotion seats is decided from `settings` here, in the transaction; the caller decided whether to open a
+  // seat gate from a read it made BEFORE it. A settings edit in the window between the two (a fee dropped to 0, approval set to auto)
+  // would seat the registrant here with nobody having asked the gate. A seating promotion with no gate is refused, not allowed: the
+  // act that freed the spot is retried and sees the settings as they are now.
+  if (promotionSeats(settings) && !seatGate) {
+    throw new HttpError(409, "Registration settings changed while this was being processed - try again");
+  }
   const feeCents = settings?.fee_cents ?? 0;
   const method = settings?.payment_method ?? "offline";
   const stripeWindow = method === "stripe" && feeCents > 0;

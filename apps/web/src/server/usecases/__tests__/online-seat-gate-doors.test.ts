@@ -13,7 +13,9 @@
 //   import           commitImport            the CSV import
 //
 // (the controller's "approval" and "waitlist promote" are `materialise`'s one seat write, reached by those six doors; the
-// AUTOMATIC promotions - a withdrawal, the sweeps - are `online-seat-gate-waitlist.test.ts`.)
+// AUTOMATIC promotions - a withdrawal, the sweeps - are `online-seat-gate-waitlist.test.ts`; the two writers a team or pair division
+// adds - assigning a solo sign-up to a team, and the submit's inline confirm of a whole roster - are `online-seat-gate-writers.test.ts`.
+// Not asked, on purpose: the card webhook (the registrant has paid) and the join link (the joiner's own session link is asked first).)
 //
 // Each door gets the same sweep: a link that plays seats; an identity-only link is refused as RECONNECT; no link is refused as
 // LINK, both naming the person and leaving the roster exactly as it was; an empty roster and a division that is not online
@@ -25,7 +27,7 @@
 // the play bar is `lichessGrantPlays` seen through the seeds, and every sweep reports how many doors it ran.
 //
 // Boardgame only: the one sport that plays online (`supportsOnlinePlay`).
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 const flags = vi.hoisted(() => ({
@@ -104,6 +106,11 @@ interface Door {
   open(auth: AuthCtx, online: boolean): Promise<World>;
 }
 
+/** The "stale" describe at the end turns this on: `divisionFor` then builds a division of ANOTHER sport whose stored config still says
+ *  `onlinePlay: lichess` (left behind by a sport that has since changed, or written around the API). Only boardgame plays online
+ *  (`supportsOnlinePlay`), so such a division is not online and no door may ask its players for a link. */
+let staleOnlineSetting = false;
+
 async function divisionFor(auth: AuthCtx, online: boolean): Promise<{ id: string; slug: string; competitionId: string }> {
   const competition = await createCompetition(auth, {
     name: "Seat gate " + randomUUID().slice(0, 6),
@@ -112,6 +119,16 @@ async function divisionFor(auth: AuthCtx, online: boolean): Promise<{ id: string
     starts_on: "2026-12-01",
     ends_on: "2026-12-02",
   });
+  if (staleOnlineSetting) {
+    const other = await createDivision(auth, competition.id, {
+      name: "Stale",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+    });
+    await sql`update divisions set config = config || '{"onlinePlay":"lichess"}'::jsonb where id = ${other.id}`;
+    return { id: other.id, slug: other.slug, competitionId: competition.id };
+  }
   const division = await createDivision(auth, competition.id, {
     name: online ? "Online" : "Over the board",
     sport_key: "boardgame",
@@ -376,6 +393,7 @@ describe.skipIf(!HAS_DB)("every door that seats a player on an online division h
         expect(got.code).toBe("LICHESS_LINK_REQUIRED");
         const left = await sql`select 1 from persons where org_id = ${auth.orgId} and user_id = ${target.userId}`;
         expect(left, "the refused call created no person").toHaveLength(0);
+        expect(got.ids, "and so names nobody: the person it would have named does not exist").toEqual([]);
         ran.scenarios++;
       });
 
@@ -417,6 +435,41 @@ describe.skipIf(!HAS_DB)("every door that seats a player on an online division h
     const personal = DOORS.filter((d) => d.needsPerson).length;
     const registrations = DOORS.length - personal;
     expect(ran.scenarios).toBe(personal * 7 + registrations * 9);
+  });
+});
+
+// A division of another sport that still carries `onlinePlay: lichess` is NOT online (`divisionPlaysOnline` answers by sport as well as by
+// setting): every door seats an unlinked player there, and none asks the flag. The NEGATIVE pair of the sweep above - without it a gate that
+// read the stored setting alone would pass every positive test in this file.
+describe.skipIf(!HAS_DB)("a division of another sport with a stale onlinePlay setting is not online: every door seats ungated", () => {
+  const staleRan = new Set<string>();
+  beforeAll(() => {
+    staleOnlineSetting = true;
+  });
+  afterAll(() => {
+    staleOnlineSetting = false;
+  });
+
+  for (const door of DOORS) {
+    it(door.name, async () => {
+      const auth = await seedOwner();
+      const world = await door.open(auth, true);
+      const [division] = await sql<{ sport_key: string; config: { onlinePlay?: string } }[]>`
+        select sport_key, config from divisions where id = ${world.divisionId}`;
+      expect(division!.config.onlinePlay, "premise: the stored setting still says online").toBe("lichess");
+      expect(division!.sport_key, "premise: and the sport is not one that plays online").not.toBe("boardgame");
+      const target = await makeTarget(auth, "none", true);
+
+      await (await world.prepare(target))();
+
+      expect(await rosterUsers(world.divisionId)).toEqual([target.userId]);
+      staleRan.add(door.name);
+    });
+  }
+
+  it("anti-vacuity: every door ran", () => {
+    expect([...staleRan].sort()).toEqual(DOORS.map((d) => d.name).sort());
+    expect(staleRan.size).toBe(DOOR_COUNT);
   });
 });
 

@@ -16,7 +16,7 @@ import { log } from "@/server/logger";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
-import { openRegistrationSeatGate, type SeatGate } from "./online-seat-gate";
+import { openRegistrationSeatGate, type RegistrationSeatGate } from "./online-seat-gate";
 import {
   SPOT_HOLDERS,
   freesTeamSlot,
@@ -377,7 +377,7 @@ export async function promoteFromWaitlist(
   // A promotion seats the registrant at once only on a free, auto-approval division (`promotionSeats`); there the seat gate decides.
   // An EXPLICIT promote of one named entry refuses it (the organiser chose them); the oldest-first default skips to the next
   // who can be seated (`promoteOldestWaitlisted`). Asked out here, before the transaction.
-  const seatGate: SeatGate | undefined = promotionSeats(await loadSettings(sql, divisionId))
+  const seatGate: RegistrationSeatGate | undefined = promotionSeats(await loadSettings(sql, divisionId))
     ? await openRegistrationSeatGate({ divisionId, registrationId: opts.registrationId, auth })
     : undefined;
   const result = await withTenant(auth.orgId, async (tx) => {

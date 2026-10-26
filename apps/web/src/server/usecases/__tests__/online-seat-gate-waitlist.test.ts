@@ -14,6 +14,14 @@
 //     happens - the organiser's approve / mark-paid, covered in online-seat-gate-doors.test.ts.
 //   * The organiser's EXPLICIT promote of one named entry is a door, not an automatic promotion: it refuses (doors file).
 //
+//   * A SKIP IS NOT SILENT: each one writes a `registration.promotion_skipped` audit row carrying the gate's own code (and mails
+//     nobody), so an organiser can see who was passed over and why.
+//   * The cheap net first: the gate's prelude already read the queue's links, so a registrant who cannot play is passed over BEFORE the
+//     attempted seat (no entrant, no person, no savepoint); the savepoint stays under it for a seat the pre-filter let through.
+//   * Only a gate refusal is skipped. Any other failure of the attempted seat fails the whole call.
+//   * A promotion that would seat with no gate to ask refuses (fails closed): the settings can change between the read that decided
+//     whether to open a gate and the read that decides whether to seat.
+//
 // Every case drives the real usecase against the real database; the sequence case is the one that matters most: the
 // registrant who was skipped reconnects, and the very next freed spot takes them.
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
@@ -31,13 +39,76 @@ vi.mock("@/lib/posthog-server", async (importOriginal) => {
   };
 });
 
+// Every mail the usecases send, recorded and not sent: who got one is part of what a skip owes (nothing).
+const mail = vi.hoisted(() => ({ sent: [] as { fn: string; to: unknown }[] }));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return Object.fromEntries(
+    Object.entries(actual).map(([name, value]) => [
+      name,
+      typeof value === "function" && name.startsWith("send")
+        ? async (...args: unknown[]) => {
+            mail.sent.push({ fn: name, to: (args[0] as { to?: unknown } | undefined)?.to });
+            return true;
+          }
+        : value,
+    ]),
+  );
+});
+// The seat gate, with every roster it is asked to judge noted: what the pre-filter spares the seat shows as calls that never happen.
+const seats = vi.hoisted(() => ({ rosters: [] as string[][] }));
+vi.mock("../online-seat-gate", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../online-seat-gate")>();
+  return {
+    ...actual,
+    openRegistrationSeatGate: async (...args: Parameters<typeof actual.openRegistrationSeatGate>) => {
+      const gate = await actual.openRegistrationSeatGate(...args);
+      return {
+        ...gate,
+        assertRoster: (tx: Parameters<typeof gate.assertRoster>[0], divisionId: string, personIds: readonly string[]) => {
+          seats.rosters.push([...personIds]);
+          return gate.assertRoster(tx, divisionId, personIds);
+        },
+      };
+    },
+  };
+});
+// A failure that is NOT the gate's: the verdict function answers as itself for the first `skip` asks, then throws a plain Error the next
+// `remaining` times it is asked, then answers as itself again. (`skip` aims the failure at the attempted seat rather than at the pre-filter's
+// own read, which asks first.)
+const poison = vi.hoisted(() => ({ skip: 0, remaining: 0 }));
+vi.mock("../external-accounts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../external-accounts")>();
+  return {
+    ...actual,
+    assertPersonIdsLinkedForOnlinePlay: (...args: Parameters<typeof actual.assertPersonIdsLinkedForOnlinePlay>) => {
+      if (poison.skip > 0) {
+        poison.skip--;
+      } else if (poison.remaining > 0) {
+        poison.remaining--;
+        throw new Error("boom: the link lookup failed (not a Lichess refusal)");
+      }
+      return actual.assertPersonIdsLinkedForOnlinePlay(...args);
+    },
+  };
+});
+
 import { sql } from "@/lib/db";
+import { HttpError } from "@/lib/errors";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
 import { createDivision } from "../divisions";
 import { forgetOnlineChessFlagCache } from "../external-play/online-chess-flag";
+import { openRegistrationSeatGate } from "../online-seat-gate";
 import { promoteFromWaitlist } from "../registration-approval";
-import { sweepRegistrations, withdrawRegistrationOrganiser } from "../registrations";
+import {
+  loadSettings,
+  promoteOldestWaitlisted,
+  promoteWaitlistedRow,
+  putRegistrationSettings,
+  sweepRegistrations,
+  withdrawRegistrationOrganiser,
+} from "../registrations";
 import { seedRegistration } from "./_registration-fixtures";
 import { linkWithoutPlayConsent, reconnectLichess, seedOwner, seedPlayer, type SeedPlayer } from "./_external-play-seed";
 
@@ -50,6 +121,10 @@ afterEach(() => {
   vi.stubEnv("ONLINE_CHESS_ALWAYS", "1");
   forgetOnlineChessFlagCache();
   flags.isServerFeatureEnabled.mockReset();
+  mail.sent.length = 0;
+  seats.rosters.length = 0;
+  poison.skip = 0;
+  poison.remaining = 0;
 });
 
 type Kind = "plays" | "identity-only" | "none";
@@ -74,9 +149,20 @@ async function rig(online: boolean, fee = 0): Promise<Rig> {
     variant_key: "classical",
     config: { variant: "classical", ...(online ? { onlinePlay: "lichess" } : {}), clock: { base: 600, increment: 5 } },
   });
-  await sql`
-    insert into registration_settings (division_id, enabled, entrant_kind, fee_cents, payment_method, approval, allow_free_agents)
-    values (${division.id}, true, 'individual', ${fee}, 'offline', 'auto', false)`;
+  // The real producer of the settings, not a raw row.
+  await putRegistrationSettings(auth, division.id, {
+    enabled: true,
+    entrant_kind: "individual",
+    fee_cents: fee,
+    form_fields: [],
+    opens_at: null,
+    closes_at: null,
+    capacity: null,
+    refund_lock_at: null,
+    payment_method: "offline",
+    approval: "auto",
+    allow_free_agents: false,
+  });
   return { auth, competitionId: competition.id, divisionId: division.id };
 }
 
@@ -92,7 +178,7 @@ async function enter(r: Rig, p: SeedPlayer | null, status: "waitlisted" | "pendi
     r.competitionId,
     r.divisionId,
     { fee_cents: 0, currency: "gbp", payment_method: "offline" },
-    { status, displayName: "Entry " + randomUUID().slice(0, 6) },
+    { status, displayName: "Entry " + randomUUID().slice(0, 6), contactEmail: `entry-${randomUUID().slice(0, 8)}@t.local` },
   );
   if (p) {
     await sql`
@@ -262,5 +348,211 @@ describe.skipIf(!HAS_DB)("an automatic waitlist promotion on an online division"
     const promoted = await statusOf(a);
     expect(promoted.status, "promoted to pay").toBe("pending");
     expect(promoted.entrant_id, "and not seated").toBeNull();
+  });
+});
+
+const contactOf = async (id: string): Promise<string> =>
+  (
+    await sql<{ contact_email: string }[]>`
+      select g.contact_email from registrations r join registration_groups g on g.id = r.group_id where r.id = ${id}`
+  )[0]!.contact_email;
+
+/** The skips the audit ledger holds for the competition: who, and the gate's own code. Sorted by registration: the skips of ONE promotion are
+ *  written in one transaction, so they share a timestamp and the ledger's uuid ids do not say which came first. */
+const skipsOf = async (competitionId: string): Promise<{ registration: string; code: string | null; actor: string | null }[]> =>
+  (
+    await sql<{ payload: { registration_id: string; code: string | null }; actor_id: string | null }[]>`
+      select payload, actor_id from competition_events
+       where competition_id = ${competitionId} and type = 'registration.promotion_skipped'`
+  )
+    .map((e) => ({ registration: e.payload.registration_id, code: e.payload.code, actor: e.actor_id }))
+    .sort((x, y) => x.registration.localeCompare(y.registration));
+
+describe.skipIf(!HAS_DB)("a skipped registrant is on the record", () => {
+  it("each skip writes a promotion_skipped row with the gate's own code, mails nobody, and a promotion that went through writes none", async () => {
+    const r = await rig(true);
+    const [reconnect, unlinked, ok] = [await player(r, "identity-only"), await player(r, "none"), await player(r, "plays")];
+    const [a, b, c] = [await enter(r, reconnect, "waitlisted"), await enter(r, unlinked, "waitlisted"), await enter(r, ok, "waitlisted")];
+    const holder = await enter(r, null, "pending");
+
+    await withdrawRegistrationOrganiser(r.auth, holder);
+
+    expect((await statusOf(c)).status, "premise: C took the spot").toBe("confirmed");
+    expect(await skipsOf(r.competitionId), "A and B, with the code the gate gave each; no row for C").toEqual(
+      [
+        { registration: a, code: "LICHESS_RECONSENT_REQUIRED", actor: null },
+        { registration: b, code: "LICHESS_LINK_REQUIRED", actor: null },
+      ].sort((x, y) => x.registration.localeCompare(y.registration)),
+    );
+    // Nobody is notified of a skip: the registrants passed over, and the ones not, are told nothing by it.
+    const skippedAddresses = [await contactOf(a), await contactOf(b)];
+    expect(
+      mail.sent.filter((m) => skippedAddresses.includes(m.to as string)),
+      "no mail went to a skipped registrant",
+    ).toEqual([]);
+  });
+
+  it("the SEQUENCE: every spot that passes a registrant is recorded against them again", async () => {
+    const r = await rig(true);
+    const unlinked = await player(r, "none");
+    const a = await enter(r, unlinked, "waitlisted");
+    const [h1, h2] = [await enter(r, null, "pending"), await enter(r, null, "pending")];
+
+    await withdrawRegistrationOrganiser(r.auth, h1);
+    expect(await skipsOf(r.competitionId), "premise: one skip after one freed spot").toHaveLength(1);
+    await withdrawRegistrationOrganiser(r.auth, h2);
+
+    expect((await skipsOf(r.competitionId)).map((s) => s.registration), "a second freed spot passes them again").toEqual([a, a]);
+  });
+
+  it("an empty queue, or a queue of registrants who can all play, records nothing", async () => {
+    const r = await rig(true);
+    const empty = await enter(r, null, "pending");
+    await withdrawRegistrationOrganiser(r.auth, empty);
+    const ok = await player(r, "plays");
+    await enter(r, ok, "waitlisted");
+    const holder = await enter(r, null, "pending");
+
+    await withdrawRegistrationOrganiser(r.auth, holder);
+
+    expect(await skipsOf(r.competitionId)).toEqual([]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("the pre-filter spares the seat, and the savepoint is the net under it", () => {
+  it("registrants who cannot play are passed over before any seat is attempted: the gate is only asked about the one who is seated", async () => {
+    const r = await rig(true);
+    const [unlinked, reconnect, ok] = [await player(r, "none"), await player(r, "identity-only"), await player(r, "plays")];
+    const [a, b, c] = [await enter(r, unlinked, "waitlisted"), await enter(r, reconnect, "waitlisted"), await enter(r, ok, "waitlisted")];
+    const holder = await enter(r, null, "pending");
+
+    await withdrawRegistrationOrganiser(r.auth, holder);
+
+    expect((await statusOf(c)).status, "premise: C is seated").toBe("confirmed");
+    expect(await queueOf(r.divisionId), "premise: A and B were passed over and keep their place").toEqual([a, b]);
+    expect(seats.rosters, "the seat gate judged ONE roster - C's - and never tried the seats of A and B").toEqual([[ok.personId]]);
+  });
+
+  it("a registrant the pre-filter cannot judge (an entry with no player rows) is still refused by the seat itself: the savepoint skips them and records it", async () => {
+    const r = await rig(true);
+    const ok = await player(r, "plays");
+    // An entry with no registration_players row seats a person made from its display name - who has no account, so no link.
+    const anonymous = await enter(r, null, "waitlisted");
+    const c = await enter(r, ok, "waitlisted");
+    const holder = await enter(r, null, "pending");
+
+    await withdrawRegistrationOrganiser(r.auth, holder);
+
+    expect((await statusOf(c)).status, "the next in line took the spot").toBe("confirmed");
+    expect((await statusOf(anonymous)).status, "the anonymous entry keeps its place").toBe("waitlisted");
+    expect(seats.rosters.length, "the seat WAS tried for the anonymous entry (the pre-filter had nothing to judge), then for C").toBe(2);
+    expect(seats.rosters[1]).toEqual([ok.personId]);
+    expect(await skipsOf(r.competitionId)).toEqual([{ registration: anonymous, code: "LICHESS_LINK_REQUIRED", actor: null }]);
+    expect(await seatedUsers(r.divisionId), "and no person was left behind by the rolled-back attempt").toEqual([ok.userId]);
+  });
+});
+
+describe.skipIf(!HAS_DB)("only the gate's refusal is skipped: any other failure fails the whole call", () => {
+  it("a seat that fails for another reason fails the withdrawal that freed the spot, and nothing is promoted or skipped", async () => {
+    const r = await rig(true);
+    const anonymous = await enter(r, null, "waitlisted");
+    const holder = await enter(r, null, "pending");
+    // The pre-filter asks first (and passes the entry: it has no players to refuse); the failure is the SEAT's own ask, inside the savepoint.
+    poison.skip = 1;
+    poison.remaining = 1;
+
+    await expect(withdrawRegistrationOrganiser(r.auth, holder)).rejects.toThrow(/boom: the link lookup failed/);
+
+    expect(poison.remaining, "premise: the failure was raised and used").toBe(0);
+    expect((await statusOf(holder)).status, "the withdrawal rolled back with it").toBe("pending");
+    expect((await statusOf(anonymous)).status).toBe("waitlisted");
+    expect(await skipsOf(r.competitionId), "a failure is not a skip").toEqual([]);
+  });
+
+  it("the same failure raised by the pre-filter's own read fails the call too, and the next attempt - the failure gone - promotes", async () => {
+    const r = await rig(true);
+    const ok = await player(r, "plays");
+    const a = await enter(r, ok, "waitlisted");
+    const holder = await enter(r, null, "pending");
+    poison.remaining = 1;
+
+    await expect(withdrawRegistrationOrganiser(r.auth, holder)).rejects.toThrow(/boom: the link lookup failed/);
+    expect((await statusOf(a)).status, "premise: nothing was promoted by the failed call").toBe("waitlisted");
+
+    await withdrawRegistrationOrganiser(r.auth, holder);
+
+    expect((await statusOf(a)).status).toBe("confirmed");
+  });
+});
+
+describe.skipIf(!HAS_DB)("a promotion that would seat with no gate to ask fails closed", () => {
+  it("promoteWaitlistedRow and promoteOldestWaitlisted refuse (409) rather than seat ungated, and leave the registrant waitlisted", async () => {
+    const r = await rig(true);
+    const unlinked = await player(r, "none");
+    const a = await enter(r, unlinked, "waitlisted");
+    const settings = (await loadSettings(sql, r.divisionId))!;
+    expect(settings.approval, "premise: these settings seat on promotion (free, auto)").toBe("auto");
+    expect(settings.fee_cents).toBe(0);
+    const [{ group_id: groupId }] = await sql<{ group_id: string }[]>`select group_id from registrations where id = ${a}`;
+
+    const viaRow = await sql.begin((tx) => promoteWaitlistedRow(tx, a, groupId, settings)).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    const viaQueue = await sql.begin((tx) => promoteOldestWaitlisted(tx, r.divisionId, settings)).then(
+      () => null,
+      (err: unknown) => err,
+    );
+
+    for (const got of [viaRow, viaQueue]) {
+      expect(got).toBeInstanceOf(HttpError);
+      expect((got as HttpError).status).toBe(409);
+    }
+    expect(await statusOf(a), "refused, nothing written: still waitlisted, no entrant").toEqual({ status: "waitlisted", entrant_id: null });
+  });
+
+  it("a promotion that seats nobody (a fee to pay first) needs no gate, as before", async () => {
+    const r = await rig(true, 500);
+    const unlinked = await player(r, "none");
+    const a = await enter(r, unlinked, "waitlisted");
+    const settings = (await loadSettings(sql, r.divisionId))!;
+    const [{ group_id: groupId }] = await sql<{ group_id: string }[]>`select group_id from registrations where id = ${a}`;
+
+    const promoted = await sql.begin((tx) => promoteWaitlistedRow(tx, a, groupId, settings));
+
+    expect(promoted?.status).toBe("pending");
+    expect((await statusOf(a)).entrant_id).toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("what the pre-filter leaves to the promotion itself", () => {
+  it("a waitlisted solo sign-up (free agent) seats nobody, so it is promoted whatever its link", async () => {
+    const r = await rig(true);
+    const unlinked = await player(r, "none");
+    const solo = await enter(r, unlinked, "waitlisted");
+    await sql`update registrations set free_agent = true where id = ${solo}`;
+    const holder = await enter(r, null, "pending");
+
+    await withdrawRegistrationOrganiser(r.auth, holder);
+
+    expect(await statusOf(solo), "confirmed, and seated nowhere: a solo sign-up has no roster of its own").toEqual({ status: "confirmed", entrant_id: null });
+    expect(await skipsOf(r.competitionId), "and not recorded as a skip").toEqual([]);
+  });
+
+  it("settings that no longer seat on promotion (a fee set after the gate was opened) have nothing to refuse: the registrant is promoted to pay", async () => {
+    const r = await rig(true);
+    const unlinked = await player(r, "none");
+    const a = await enter(r, unlinked, "waitlisted");
+    const gate = await openRegistrationSeatGate({ divisionId: r.divisionId, auth: r.auth }); // opened while the division promotes straight into a seat
+    const nowAFee = { ...(await loadSettings(sql, r.divisionId))!, fee_cents: 500 };
+
+    const promoted = await sql.begin(async (tx) => {
+      await gate.load(tx);
+      return promoteOldestWaitlisted(tx, r.divisionId, nowAFee, undefined, gate);
+    });
+
+    expect(promoted?.id).toBe(a);
+    expect(await statusOf(a)).toEqual({ status: "pending", entrant_id: null });
+    expect(await skipsOf(r.competitionId)).toEqual([]);
   });
 });

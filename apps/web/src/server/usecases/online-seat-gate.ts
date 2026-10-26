@@ -24,6 +24,18 @@ import "server-only";
 //      caller's transaction) and one of the people is not in the map as playing.
 //
 // One gate serves ONE call: it carries the states its prelude read.
+//
+// THE DOORS that ask it (each driven through its real usecase in __tests__/online-seat-gate-*.test.ts):
+//   a roster         patchEntrant, syncEntrantRosterFromSquad
+//   a file           commitImport
+//   a registrant     approveRegistration, confirmRegistration, confirmRegistrationWaived, markRegistrationPaidOffline, an explicit
+//                    promoteFromWaitlist (all through `materialise`), and an AUTOMATIC promotion - a withdrawal, a sweep - which SKIPS the
+//                    registrant it refuses (and writes `registration.promotion_skipped`) rather than failing the act that freed the spot
+//   a placement      assignSoloSignUp (a solo sign-up put on a team whose entrant already exists)
+//   the submit       the inline confirm of a free, auto-approval entry: everyone it seats but the submitter
+// Two seat writers do NOT, on purpose, and a new one must say which side of this line it is on: the card webhook (the registrant has
+// PAID - a 422 cannot take a payment back; the seat was asked about at submit and is asked again at the organiser's own doors), and the
+// join link (`joinTeamEntry` asks the joiner's own session link before it writes, as the submit asks the submitter's).
 import type postgres from "postgres";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -32,6 +44,7 @@ import { divisionPlaysOnline } from "@/server/external-play/online-play";
 import { onlineChessOffered, type OnlineChessAsker } from "./external-play/online-chess-flag";
 import {
   assertPersonIdsLinkedForOnlinePlay,
+  isLichessRosterRefusal,
   lichessLinkStatesByPerson,
   lichessLinkStatesByUser,
   type LichessLinkState,
@@ -49,8 +62,20 @@ export interface SeatGate {
   /** The same read, for a door on a superuser transaction (`sql.begin`): call it first thing inside. */
   load(tx: Tx): Promise<void>;
   /** Refuses (422, with the people named) when `divisionId` plays online and any of `personIds` has no link that plays. Reads the division in `tx`,
-   *  as the transaction sees it. Nothing to refuse for an empty roster, and a no-op for a club not offered online chess. */
+   *  as the transaction sees it. Nothing to refuse for an empty roster, and a no-op for a club not offered online chess.
+   *
+   *  On a REGISTRATION gate the people named are the ones who EXIST once the refusal has rolled the transaction back: a person `materialise`
+   *  minted a moment ago for this very seat is gone with it, and an id that points at nothing is not a name the organiser can find. */
   assertRoster(tx: Tx, divisionId: string, personIds: readonly string[]): Promise<void>;
+}
+
+/** The gate of a door that seats REGISTRANTS: it can also say, from what its prelude read and without trying the seat, whether an entry
+ *  would be refused - what an automatic waitlist promotion asks to skip a registrant cheaply (see `promoteOldestWaitlisted`). */
+export interface RegistrationSeatGate extends SeatGate {
+  /** The refusal the seat of this entry would meet - the SAME verdict `assertRoster` gives, from the same function, over the entry's own
+   *  players keyed by their account - or null when it would be seated (or when nothing was read: the flag said no, or the division is not
+   *  online as the prelude saw it). A pre-filter, not the gate: `assertRoster` still judges the seat itself. */
+  registrantRefusal(tx: Tx, registrationId: string): Promise<HttpError | null>;
 }
 
 interface Scope {
@@ -58,6 +83,9 @@ interface Scope {
   probe(db: Db): Promise<boolean>;
   /** Reads the link states (privileged) and says how to look a person up in them. */
   read(db: Tx): Promise<StatesFor>;
+  /** The seat being judged MAKES the person rows it judges (a registrant's, in the same transaction), so a refusal - which rolls them back -
+   *  must not name them. Left off by the scopes whose people already exist, or are named by the caller's own keys (the import's placeholders). */
+  mintsPersons?: boolean;
 }
 
 async function openGate(asker: OnlineChessAsker, scope: Scope): Promise<SeatGate> {
@@ -78,10 +106,30 @@ async function openGate(asker: OnlineChessAsker, scope: Scope): Promise<SeatGate
         select sport_key, config from divisions where id = ${divisionId}`;
       if (!division) throw new HttpError(404, "division not found");
       if (!divisionPlaysOnline(division)) return;
-      // No states read (the division turned online after the prelude looked) is no answer: it refuses, like an unasked flag does.
-      assertPersonIdsLinkedForOnlinePlay(statesFor ? await statesFor(tx, personIds) : null, personIds);
+      try {
+        // No states read (the division turned online after the prelude looked) is no answer: it refuses, like an unasked flag does.
+        assertPersonIdsLinkedForOnlinePlay(statesFor ? await statesFor(tx, personIds) : null, personIds);
+      } catch (err) {
+        throw scope.mintsPersons && isLichessRosterRefusal(err) ? await refusalNamingSurvivors(tx, err) : err;
+      }
     },
   };
+}
+
+/** `refusal` with `extra.person_ids` cut down to the people that were here BEFORE this transaction began: the ones the refusal's rollback
+ *  leaves behind. A person is minted by the seat that is being refused (a registrant's row is made by `materialise`, in the same
+ *  transaction), and `created_at` is the transaction's own `now()` for exactly those. */
+async function refusalNamingSurvivors(tx: Tx, refusal: HttpError): Promise<HttpError> {
+  const named = Array.isArray(refusal.extra?.person_ids) ? (refusal.extra.person_ids as string[]) : [];
+  const survivors = new Set(
+    named.length === 0
+      ? []
+      : (await tx<{ id: string }[]>`select id from persons where id = any(${named}) and created_at < now()`).map((p) => p.id),
+  );
+  return new HttpError(refusal.status, refusal.message, refusal.code, {
+    ...refusal.extra,
+    person_ids: named.filter((id) => survivors.has(id)),
+  });
 }
 
 const divisionOnline = (divisionId: string) => async (db: Db): Promise<boolean> => {
@@ -115,19 +163,26 @@ export function openOrgSeatGate(auth: Pick<AuthCtx, "orgId" | "userId">): Promis
   return openGate(auth, { probe: anyOnline, read: personKeyed(auth.orgId, undefined) });
 }
 
-/** A REGISTRATION door (`materialise`: approve, confirm, waive, mark-paid, a promotion that seats). Keyed by the registrant's
- *  account, because their person row may not exist until `materialise` makes it (see the header). `registrationId` scopes the
- *  read to that one entry's players; omit it for a promotion that picks its own candidate, and the division's waitlist is read.
- *  `auth` is who asked for the flag (an automatic promotion has no one: it is asked as the club, like the submit is). */
+/** A REGISTRATION door (`materialise`: approve, confirm, waive, mark-paid, a promotion that seats; `assignSoloSignUp`). Keyed by the
+ *  registrant's account, because their person row may not exist until `materialise` makes it (see the header). `registrationId`
+ *  scopes the read to that one entry's players; omit it for a promotion that picks its own candidate (the division's waitlist is read).
+ *  `auth` is who asked for the flag (an automatic promotion has no one: it is asked as the club, like the submit is).
+ *
+ *  The submit's inline confirm opens one too but never `load`s it: the entry does not exist until the submit's own transaction makes it,
+ *  and the people it asks about are the teammates a captain typed in, who have no account to read. An UNREAD gate answers 'no link' for
+ *  everyone it is asked about (`assertRoster`), which is the true answer for them. */
 export async function openRegistrationSeatGate(scope: {
   divisionId: string;
   registrationId?: string;
   auth?: Pick<AuthCtx, "orgId" | "userId">;
-}): Promise<SeatGate> {
+}): Promise<RegistrationSeatGate> {
   const [division] = await sql<{ org_id: string }[]>`select org_id from divisions where id = ${scope.divisionId}`;
   // A division that is not there is not online: no flag is asked, nothing is read, and the door's own lookup answers 404.
   const orgId = scope.auth?.orgId ?? division?.org_id ?? "";
-  return openGate(scope.auth ?? { orgId, userId: null }, {
+  // What the prelude read, by account. Held for `registrantRefusal`; null until a `load` reads it.
+  const held: { byUser: ReadonlyMap<string, LichessLinkState> | null } = { byUser: null };
+  const gate = await openGate(scope.auth ?? { orgId, userId: null }, {
+    mintsPersons: true,
     probe: divisionOnline(scope.divisionId),
     read: async (db) => {
       const players = await db<{ user_id: string }[]>`
@@ -137,20 +192,47 @@ export async function openRegistrationSeatGate(scope: {
          where r.org_id = ${orgId} and r.division_id = ${scope.divisionId}
            and ${scope.registrationId === undefined ? db`r.status = 'waitlisted'` : db`r.id = ${scope.registrationId}`}
            and rp.user_id is not null`;
-      const byUser = await lichessLinkStatesByUser(
+      const read = await lichessLinkStatesByUser(
         db,
         players.map((p) => p.user_id),
       );
+      held.byUser = read;
       return async (tx, personIds) => {
         const people = await tx<{ id: string; user_id: string | null }[]>`
           select id, user_id from persons where id = any(${[...personIds]})`;
         return new Map(
           people.flatMap((p): [string, LichessLinkState][] => {
-            const state = p.user_id === null ? undefined : byUser.get(p.user_id);
+            const state = p.user_id === null ? undefined : read.get(p.user_id);
             return state === undefined ? [] : [[p.id, state]];
           }),
         );
       };
     },
   });
+  return {
+    ...gate,
+    async registrantRefusal(tx, registrationId) {
+      const read = held.byUser;
+      if (read === null) return null;
+      // The entry's own players, each keyed by the account on its row - the same people `materialise` resolves to persons.
+      const players = await tx<{ id: string; user_id: string | null }[]>`
+        select id, user_id from registration_players where registration_id = ${registrationId} order by created_at, id`;
+      const states = new Map(
+        players.flatMap((p): [string, LichessLinkState][] => {
+          const state = p.user_id === null ? undefined : read.get(p.user_id);
+          return state === undefined ? [] : [[p.id, state]];
+        }),
+      );
+      try {
+        assertPersonIdsLinkedForOnlinePlay(
+          states,
+          players.map((p) => p.id),
+        );
+        return null;
+      } catch (err) {
+        if (isLichessRosterRefusal(err)) return err;
+        throw err;
+      }
+    },
+  };
 }
