@@ -65,8 +65,9 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendVerificationEmail",
 ];
 
-/** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12); wave 2's T1 registered its ten kinds before their
- *  producers moved, so they are listed here until their kind task (T2-T9) deletes each one. The sweep covers every kind not listed. */
+/** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12). Wave 2's T1 listed its ten kinds before their
+ *  producers moved, each kind task (T2-T9) deleted its own, and T10 closed the list again. A later wave that registers a kind before its
+ *  producer moves lists it here until then. The sweep covers every kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [];
 
 /** For every kind, the direct sender its producer still calls (null = the kind has moved: nothing direct is left for it). */

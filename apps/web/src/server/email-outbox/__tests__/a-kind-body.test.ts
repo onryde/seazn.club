@@ -8,8 +8,8 @@
 // What is checked, and how:
 //  - WHICH kinds are account kinds is the engine's own declaration (`OUTBOX_KIND_FACTS`), compared with a list typed here from the
 //    spec (`chess_invite` and wave 2's seven). A new account kind is then a failure that asks for a decision here, not a quiet pass.
-//  - Every account kind is swept through its real producer, except those in PRODUCERS_PENDING: wave 2's kinds, registered (T1) before
-//    their producers moved. Each kind task (T2-T9) adds its producer and deletes its entry; T10 deletes the list.
+//  - Every account kind is swept through its real producer. Wave 2's T1 registered its kinds before their producers moved, each kind task
+//    (T2-T9) added its producer here, and T10 deleted the list of the pending ones.
 //  - The bodies are the REAL producer's: `openRound` renders the invite with the real `externalPlayInviteEmail` (NOT replaced, unlike the
 //    sibling suites: their stand-in puts the address in the body on purpose so the transport double can read it) and queues it. Only
 //    the transport is replaced, and it answers 503 so every row stays `queued` with its sealed body. A row that had been sent has no
@@ -60,10 +60,6 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
   "trial_ending",
 ];
 
-/** Account kinds whose producer has not moved to the outbox yet, so there is no real producer to drive. Each kind task deletes its own
- *  entry when it adds its producer to PRODUCERS below; T10 deletes the list. */
-const PRODUCERS_PENDING: readonly OutboxKind[] = [];
-
 beforeEach(() => stubOutboxEnv());
 afterAll(async () => {
   if (HAS_DB) await sql.end({ timeout: 2 }).catch(() => undefined);
@@ -93,7 +89,7 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
   /** A pattern that matches `text` literally. */
   const literal = (text: string): RegExp => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
-  // One producer per account kind that has moved: the real code path that writes the kind's rows. It returns the ids of the rows it wrote
+  // One producer per account kind: the real code path that writes the kind's rows. It returns the ids of the rows it wrote
   // and a pattern the kind's own body must carry (the positive pair: an empty or unreadable body would pass every absence check).
   const PRODUCERS: Readonly<Partial<Record<OutboxKind, () => Promise<{ rowIds: string[]; positive: RegExp }>>>> = {
     chess_invite: async () => {
@@ -171,12 +167,11 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
     },
   };
 
-  it("every account kind with a producer: the recipient's address is absent from the subject, the html and the text", async () => {
-    const swept = SPEC_ACCOUNT_KINDS.filter((k) => !PRODUCERS_PENDING.includes(k));
-    expect(Object.keys(PRODUCERS).sort(), "a producer for exactly the account kinds that are not pending").toEqual([...swept].sort());
+  it("every account kind: the recipient's address is absent from the subject, the html and the text", async () => {
+    expect(Object.keys(PRODUCERS).sort(), "a producer for exactly the account kinds").toEqual([...SPEC_ACCOUNT_KINDS].sort());
     let kindsChecked = 0;
     let rowsChecked = 0;
-    for (const kind of swept) {
+    for (const kind of SPEC_ACCOUNT_KINDS) {
       const { rowIds, positive } = await PRODUCERS[kind]!();
       const rows = await sql<{ id: string; recipient: string; recipient_user_id: string | null; subject: string; status: string; body_sealed: Buffer | null }[]>`
         select id, recipient, recipient_user_id, subject, status, body_sealed
@@ -200,7 +195,7 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       }
       kindsChecked += 1;
     }
-    expect(kindsChecked, "every account kind that is not pending was checked").toBe(SPEC_ACCOUNT_KINDS.length - PRODUCERS_PENDING.length);
+    expect(kindsChecked, "every account kind was checked").toBe(SPEC_ACCOUNT_KINDS.length);
     expect(kindsChecked, "anti-vacuity: at least one account kind was swept").toBeGreaterThan(0);
     expect(rowsChecked, "anti-vacuity: bodies were opened, at least one per kind").toBeGreaterThanOrEqual(kindsChecked);
   });
