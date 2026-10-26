@@ -14,8 +14,16 @@ import { resolve } from "node:path";
 import { sql } from "@/lib/db";
 import type { Locale } from "@/lib/i18n-constants";
 import { FIRST_ATTEMPT_WINDOW_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
+import { dispatchNow } from "../attempt";
 import { deliver } from "../transport";
 import { runOutboxTick } from "../worker";
+
+/** How long the harness waits for a request-path kind's own first attempt to finish. The request owns a never-attempted row for
+ *  exactly `FIRST_ATTEMPT_WINDOW_MS` (the worker leaves it alone until then: constants.ts, M2), which is the longest a correct
+ *  `dispatchNow` can still be working on it (budget + the one request in flight + the write transaction); the slack is the
+ *  poll and the database round trip. Derived from the engine's own constant, never a number typed here that the day the
+ *  budget moves would fail a correct producer (or wait less than a correct one needs). */
+export const REQUEST_ATTEMPT_WAIT_MS = FIRST_ATTEMPT_WINDOW_MS + 5_000;
 
 /** One kind's way into the outbox. `run` drives the real producer (a route, a usecase, a sweep); everything else is what the spec says
  *  the result must be. */
@@ -102,6 +110,38 @@ const fail = (kind: OutboxKind, message: string): never => {
 };
 
 /**
+ * The second call. The rows are `sent`; both ways a second send could start are tried and must change nothing:
+ *
+ *  - the request path again: `dispatchNow(ids)` (a first-attempt claim of a row that is no longer queued);
+ *  - the worker again: one tick, after the rows are made to LOOK due (`next_attempt_at` in the past). A `sent` row is never due,
+ *    so a tick over rows that merely sit there proves nothing; this one hands the claim every reason to take them, and a claim
+ *    that ignored `status` (or the first-attempt guard of `dispatchNow`) would take them.
+ *
+ * A row that was claimed again changes (`attempts + 1`, even if the attempt then fails for want of a body), so the check is on the
+ * rows as well as on the transport: no new call under these keys, and every row's status, attempts, last error and cleared body as
+ * they were. Exported for the harness's own test, which gives it rows that ARE due so that it can be seen to fail.
+ */
+export async function assertNothingMoreToSend(kind: OutboxKind, ids: readonly string[]): Promise<void> {
+  const keys = new Set(ids.map(idempotencyKey));
+  const callsOf = (): number => transportCalls().filter((c) => keys.has(c.idempotencyKey)).length;
+  const settled = (rows: RowRec[]) => rows.map((r) => ({ id: r.id, status: r.status, attempts: r.attempts, last_error: r.last_error, cleared: r.cleared }));
+
+  const rowsBefore = settled(await rowsById(ids));
+  const callsBefore = callsOf();
+
+  await dispatchNow(ids);
+  await sql`update email_outbox set next_attempt_at = now() - interval '1 second' where id = any(${ids as string[]}::uuid[])`;
+  await runOutboxTick({ onlyIds: ids as string[], sleep: async () => undefined });
+
+  const callsAfter = callsOf();
+  if (callsAfter !== callsBefore) fail(kind, `a second call sent ${callsAfter - callsBefore} more time(s)`);
+  const rowsAfter = settled(await rowsById(ids));
+  if (JSON.stringify(rowsAfter) !== JSON.stringify(rowsBefore)) {
+    fail(kind, `a second call changed the rows: ${JSON.stringify(rowsBefore)} -> ${JSON.stringify(rowsAfter)}`);
+  }
+}
+
+/**
  * Sweep every kind in `OUTBOX_KINDS` that is not listed in `opts.notYetMoved`, each through its scenario's real producer.
  *
  * Checked up front, before any scenario runs: every kind is either listed as not yet moved or has a scenario (`no scenario for outbox
@@ -112,13 +152,16 @@ const fail = (kind: OutboxKind, message: string): never => {
  * `transactional` flag, and `recipient_user_id` non-null exactly when the kind is an account's); see the first attempt through
  * (`request`: wait for the rows to leave `queued`/`sending`; `worker`: they must still be `queued` with no attempt, then one tick
  * sends them); require every row `sent` with its body gone; the transport reached exactly once per row under `email-outbox/<id>`,
- * addressed to the recipient, with the subject the dictionary gives in the scenario's locale; and a second tick that sends nothing.
+ * addressed to the recipient, with the subject the dictionary gives in the scenario's locale; and a second call (`dispatchNow` again, and a
+ * tick over rows made to look due) that sends nothing and changes no row.
  *
  * Returns how many kinds were swept and which. Zero is the CALLER's failure to refuse: a harness that swept nothing proves nothing.
+ *
+ * `requestWaitMs` is for the harness's own test of its wait; a real sweep leaves it at `REQUEST_ATTEMPT_WAIT_MS`.
  */
 export async function forEachOutboxKind(
   scenarios: Partial<Record<OutboxKind, KindScenario>>,
-  opts: { notYetMoved: readonly OutboxKind[]; specFacts: KindFacts },
+  opts: { notYetMoved: readonly OutboxKind[]; specFacts: KindFacts; requestWaitMs?: number },
 ): Promise<{ checked: number; kinds: OutboxKind[] }> {
   transportCalls(); // refuses a real transport before anything runs
 
@@ -169,7 +212,7 @@ export async function forEachOutboxKind(
               select count(*)::int as n from email_outbox where id = any(${ids}::uuid[]) and status in ('queued', 'sending')`;
             if (open!.n > 0) throw new Error(`${open!.n} row(s) still queued or sending`);
           },
-          { timeout: 10_000, interval: 50 },
+          { timeout: opts.requestWaitMs ?? REQUEST_ATTEMPT_WAIT_MS, interval: 50 },
         );
       } catch (err) {
         fail(k, `the request's own attempt did not finish: ${err instanceof Error ? err.message : String(err)}`);
@@ -200,12 +243,8 @@ export async function forEachOutboxKind(
       if (call.to.toLowerCase() !== s.recipient.toLowerCase()) fail(k, `row ${r.id} was sent to another address than the scenario's recipient`);
     }
 
-    // Nothing is left to send: a second tick makes no call.
-    const keys = new Set(ids.map(idempotencyKey));
-    const callsBefore = transportCalls().filter((c) => keys.has(c.idempotencyKey)).length;
-    await runOutboxTick({ onlyIds: ids, sleep: async () => undefined });
-    const callsAfter = transportCalls().filter((c) => keys.has(c.idempotencyKey)).length;
-    if (callsAfter !== callsBefore) fail(k, `a second tick sent ${callsAfter - callsBefore} more time(s)`);
+    // The second call: nothing is left to send.
+    await assertNothingMoreToSend(k, ids);
 
     kinds.push(k);
   }

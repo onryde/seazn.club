@@ -7,8 +7,9 @@
 //   - chess_invite: the real `openRound` on a `seedOnlineChessRound` whose player's account is `es` (the real invite renderer, the
 //     real account-kind enqueue, the real dispatch). Only `transport.deliver` is replaced: it is the network.
 //
-// Each kind task (T8-T12) adds its scenario and deletes its entry from NOT_YET_MOVED; T12 deletes the list. A kind that is neither
-// moved nor listed fails by name, and so does a kind that is listed while it has a scenario (a stale entry would skip the sweep).
+// Each kind task (T8-T12) adds its scenario and deletes its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
+// SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 deletes the list. A kind that is neither moved nor listed fails by name, and so
+// does a kind that is listed while it has a scenario (a stale entry would skip the sweep), and so do the three lists when they disagree.
 //
 // Sport: not applicable. These emails do not vary by sport (spec, Test strategy 4).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -32,10 +33,11 @@ vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
-import { OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
+import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
-import { dictionarySubject, forEachOutboxKind, type KindFacts, type KindScenario } from "./_kind-harness";
+import { REQUEST_ATTEMPT_WAIT_MS, assertNothingMoreToSend, dictionarySubject, forEachOutboxKind, type KindFacts, type KindScenario } from "./_kind-harness";
+import { KIND_DIRECT_SENDER, NOT_YET_MOVED, SENDER_ALLOWLIST } from "./_kind-senders";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = `ks-${randomUUID().slice(0, 8)}`;
@@ -57,15 +59,6 @@ const SPEC_KINDS = [
   "solo_signup_assigned",
 ] as const satisfies readonly OutboxKind[];
 
-/** Kinds whose producer still mails through a `send*` (T8-T12 move them, one each, and delete their entry). */
-const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "registration_confirmation",
-  "payment_reminder",
-  "registration_promoted",
-  "refund_issued",
-  "solo_signup_assigned",
-];
-
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
 const SPEC_FACTS: KindFacts = {
   magic_link: ["literal", true],
@@ -77,9 +70,29 @@ const SPEC_FACTS: KindFacts = {
   solo_signup_assigned: ["literal", false],
 };
 
+/** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
+ *  addresses this run mails all start with RUN, so the accounts the magic-link route makes and the ones `accountAt` makes are found
+ *  by address; a seeded player's address is not ours, so those are tracked by id.) */
+const made = { userIds: [] as string[], orgIds: [] as string[] };
+
+/** Everything this file wrote: outbox rows (the real producers write `ref_id` = a user id or a seat key, not RUN, so by recipient and
+ *  by account too), the seeded organisation (cascades its competition, fixtures and seats), then the accounts (login links cascade). */
+async function cleanUp(): Promise<void> {
+  const like = `${RUN}-%`;
+  await sql`
+    delete from email_outbox
+     where ref_id like ${like} or lower(recipient) like ${like} or recipient_user_id = any(${made.userIds}::uuid[])
+        or recipient_user_id in (select id from users where email like ${like})`;
+  if (made.orgIds.length > 0) await sql`delete from organizations where id = any(${made.orgIds}::uuid[])`;
+  // The seeded owner is referenced without a cascade by the plan it was given and by the round's audit trail.
+  await sql`delete from subscriptions where owner_user_id = any(${made.userIds}::uuid[])`;
+  await sql`delete from online_chess_audit where actor_user_id = any(${made.userIds}::uuid[])`;
+  await sql`delete from users where email like ${like} or id = any(${made.userIds}::uuid[])`;
+}
+
 afterAll(async () => {
   if (HAS_DB) {
-    await sql`delete from email_outbox where ref_id like ${`${RUN}-%`}`;
+    await cleanUp();
     await sql.end({ timeout: 2 }).catch(() => undefined);
   }
 });
@@ -113,6 +126,35 @@ describe("the spec's lists (no database)", () => {
     expect(new Set(NOT_YET_MOVED).size).toBe(NOT_YET_MOVED.length);
     for (const k of NOT_YET_MOVED) expect(SPEC_KINDS as readonly string[]).toContain(k);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
+  });
+
+  it("the three lists agree: a kind is unmoved exactly when its direct sender is still in the allowlist of lib/email's senders", () => {
+    expect(Object.keys(KIND_DIRECT_SENDER).sort(), "the map names every kind, once").toEqual([...SPEC_KINDS].sort());
+    let checked = 0;
+    for (const k of SPEC_KINDS) {
+      const sender = KIND_DIRECT_SENDER[k];
+      const unmoved = NOT_YET_MOVED.includes(k);
+      const stillExported = sender !== null && SENDER_ALLOWLIST.includes(sender);
+      expect(
+        unmoved,
+        `${k}: ${unmoved ? "listed as not yet moved" : "not listed as unmoved"}, but its direct sender ${sender ?? "(none: moved)"} is ${stillExported ? "still" : "no longer"} in SENDER_ALLOWLIST`,
+      ).toBe(stillExported);
+      // The map says the same thing in its own words: a kind with a sender has not moved.
+      expect(unmoved, `${k}: ${sender === null ? "no direct sender in the map, so it has moved" : `the map names ${sender}, so it has not moved`}`).toBe(sender !== null);
+      checked += 1;
+    }
+    expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
+    // Both sides of the equivalence are exercised: kinds that have moved and kinds that have not.
+    expect(NOT_YET_MOVED.length).toBeGreaterThan(0);
+    expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
+    const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
+    expect(new Set(senders).size, "no two kinds share a direct sender").toBe(senders.length);
+  });
+
+  it("the harness waits for a request's own attempt longer than the longest a correct dispatchNow can still be working", () => {
+    // dispatchNow's budget, plus the one request in flight and the write transaction before it (constants.ts); the harness's wait
+    // must be strictly past that or a slow but correct producer is called broken. Derived from the declarations, not typed here.
+    expect(REQUEST_ATTEMPT_WAIT_MS).toBeGreaterThan(DISPATCH_NOW_BUDGET_MS + DISPATCH_NOW_MARGIN_MS);
   });
 });
 
@@ -169,6 +211,8 @@ function magicLinkScenario(): KindScenario {
 async function chessInviteScenario(): Promise<KindScenario> {
   const r = await seedOnlineChessRound({ fixtures: 1 });
   const board = r.boards[0]!;
+  made.orgIds.push(r.orgId);
+  made.userIds.push(r.ownerUserId, board.home.userId, board.away.userId);
   await sql`update users set locale = 'es' where id = ${board.home.userId}`;
   // The opponent's name as the seed made it: the person row, read back (not the invite's own view of it).
   const [opponent] = await sql<{ full_name: string }[]>`select full_name from persons where id = ${board.away.personId}`;
@@ -249,7 +293,7 @@ const swept = (scenarios: Partial<Record<OutboxKind, KindScenario>>, facts: Kind
 
 describe.skipIf(!HAS_DB)("the harness judges what it says it judges (DB)", () => {
   afterEach(async () => {
-    await sql`delete from email_outbox where ref_id like ${`${RUN}-%`}`;
+    await cleanUp();
   });
 
   it("a kind with no scenario fails by name", async () => {
@@ -358,7 +402,8 @@ describe.skipIf(!HAS_DB)("the harness judges what it says it judges (DB)", () =>
         );
       },
     });
-    await expect(swept({ magic_link: twice })).rejects.toThrow(/magic_link[\s\S]*2 times|magic_link[\s\S]*exactly once/);
+    // Two calls, not "not exactly one": a row that never reached the transport says "0 times" in the same sentence.
+    await expect(swept({ magic_link: twice })).rejects.toThrow(/outbox kind magic_link: row \S+ reached the transport 2 times, expected exactly once/);
   });
 
   it("a request-path kind is waited for: a producer that does not await its own dispatch still passes once the row is sent", async () => {
@@ -404,6 +449,35 @@ describe.skipIf(!HAS_DB)("the harness judges what it says it judges (DB)", () =>
       },
     });
     await expect(swept({ magic_link: retried })).rejects.toThrow(/magic_link[\s\S]*1 attempt/);
+  });
+
+  it("a request-path kind whose row is never attempted fails once the wait is up, naming the request's own attempt", async () => {
+    // The producer wrote the row and returned; nothing ever sends it in the request (and the worker is not run for a request kind).
+    const neverSent = handMade({ run: async (to) => void (await enqueueEmail(sql, row({ to }))) });
+    const t0 = Date.now();
+    await expect(
+      forEachOutboxKind({ magic_link: neverSent }, { notYetMoved: except("magic_link"), specFacts: SPEC_FACTS, requestWaitMs: 400 }),
+    ).rejects.toThrow(/outbox kind magic_link: the request's own attempt did not finish: 1 row\(s\) still queued or sending/);
+    expect(Date.now() - t0, "it waited the wait it was given, not forever").toBeLessThan(10_000);
+    expect(deliverMock, "and nothing was sent").not.toHaveBeenCalled();
+  });
+
+  it("the second call: a sent row stays untouched by dispatchNow again and by a tick that finds it due; a row that IS sendable is seen", async () => {
+    const id = await enqueueEmail(sql, row({ to: address() }));
+    await dispatchNow([id]);
+    const [sent] = await sql<{ status: string }[]>`select status from email_outbox where id = ${id}`;
+    expect(sent!.status, "premise: the first attempt sent it").toBe("sent");
+    await expect(assertNothingMoreToSend("magic_link", [id])).resolves.toBeUndefined();
+    expect(deliverMock, "the first send is the only one").toHaveBeenCalledTimes(1);
+
+    // The same check over a row that has not been sent: the second call IS its first, and the check says so.
+    const queued = await enqueueEmail(sql, row({ to: address() }));
+    await expect(assertNothingMoreToSend("magic_link", [queued])).rejects.toThrow(/outbox kind magic_link: a second call sent 1 more time/);
+
+    // A second call that sends nothing but ends a row (it expired between the calls) still changed it.
+    const expiring = await enqueueEmail(sql, row({ to: address() }));
+    await sql`update email_outbox set expires_at = now() - interval '1 minute' where id = ${expiring}`;
+    await expect(assertNothingMoreToSend("magic_link", [expiring])).rejects.toThrow(/outbox kind magic_link: a second call changed the rows/);
   });
 
   it("a row that ended dead fails, though the transport was called once with the right subject (the provider's refusal is not a send)", async () => {

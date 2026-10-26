@@ -16,16 +16,24 @@ import { recipientLocale } from "../locale";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
+/** Every account this file commits. Removed in `afterAll`, by id and (for the one a rolled-back transaction would have made) by address. */
+const RUN = `loc-${randomUUID().slice(0, 8)}`;
+const created: string[] = [];
+
 afterAll(async () => {
-  if (HAS_DB) await sql.end({ timeout: 2 }).catch(() => undefined);
+  if (HAS_DB) {
+    await sql`delete from users where id = any(${created}::uuid[]) or email like ${`${RUN}-%`}`;
+    await sql.end({ timeout: 2 }).catch(() => undefined);
+  }
 });
 
 /** A user with the given stored locale (null = never chose one), soft-deleted or not. Returns its id. */
 async function account(locale: string | null, deleted: boolean): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
     insert into users (email, display_name, email_verified, locale, deleted_at)
-    values (${`loc-${randomUUID().slice(0, 12)}@test.local`}, 'Locale probe', true, ${locale}, ${deleted ? new Date() : null})
+    values (${`${RUN}-${randomUUID().slice(0, 12)}@test.local`}, 'Locale probe', true, ${locale}, ${deleted ? new Date() : null})
     returning id`;
+  created.push(row!.id);
   return row!.id;
 }
 
@@ -125,17 +133,26 @@ describe.skipIf(!HAS_DB)("recipientLocale follows D4 (DB)", () => {
   });
 
   it("reads on the handle it is given: a transaction sees an account its own transaction has not committed (#996: no pooled call inside withTenant)", async () => {
-    const out = await sql
+    // Rolled back at the end (a sentinel throw), so the account this makes is never committed: the pooled read below could not see it
+    // either way, and nothing is left behind.
+    class Rollback extends Error {}
+    const box: { out?: { inTx: string; pooled: string } } = {};
+    await sql
       .begin(async (tx) => {
         const [row] = await tx<{ id: string }[]>`
           insert into users (email, display_name, email_verified, locale)
-          values (${`loc-tx-${randomUUID().slice(0, 12)}@test.local`}, 'Locale tx probe', true, 'fr') returning id`;
+          values (${`${RUN}-tx-${randomUUID().slice(0, 12)}@test.local`}, 'Locale tx probe', true, 'fr') returning id`;
         const inTx = await recipientLocale(tx, { pick: null, userId: row!.id, orgDefault: "nl" });
         // The pool cannot see the uncommitted row, so a pooled read would have answered the org default.
         const pooled = await recipientLocale(sql, { pick: null, userId: row!.id, orgDefault: "nl" });
-        return { inTx, pooled };
+        box.out = { inTx, pooled };
+        throw new Rollback();
+      })
+      .catch((err: unknown) => {
+        if (!(err instanceof Rollback)) throw err;
       });
-    expect(out.inTx).toBe("fr");
-    expect(out.pooled, "premise: the pool does not see the uncommitted account").toBe("nl");
+    if (box.out === undefined) throw new Error("the transaction body did not run");
+    expect(box.out.inTx).toBe("fr");
+    expect(box.out.pooled, "premise: the pool does not see the uncommitted account").toBe("nl");
   });
 });
