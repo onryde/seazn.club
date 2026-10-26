@@ -162,22 +162,19 @@ export function ddlMutants(schema: string, delta: string): DdlMutant[] {
       `drop policy stage_lots_draws_tenant on ${T}; ${POLICY}`,
     ),
     // The read function as the pages call it (review I-1): the format line must never print a pin as a stage's own
-    // points, and the table's bounds must read the pin. The pin test installs the function from the delta's text, so
-    // only the applied function can be mutated here; restored from that same text.
+    // points. The pin test installs the function from the delta's text, so only the applied function can be mutated
+    // here; restored from that same text. The function reads no pin since T9 review fix round 1 (m-items: the
+    // `table_points` column and the trailing `table_points_rule` were dropped; the table's rule is the loader's), so the
+    // one mutant left is the I-1 defect itself — the stage's own points read through the pin — and the former
+    // "F2-table-points-rule-ignores-the-pin" is retired with the column it mutated.
     {
       id: "F1-points-rule-reads-the-pin",
       killer: LINES_TEST,
-      apply: replaceOnce(meta, "stage_points_rule_published(src.points),", "stage_points_rule_published(src.table_points),", "F1"),
-      restore: meta,
-    },
-    {
-      id: "F2-table-points-rule-ignores-the-pin",
-      killer: LINES_TEST,
       apply: replaceOnce(
         meta,
-        "coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') as table_points",
-        "s.config -> 'points' as table_points",
-        "F2",
+        "s.config -> 'points' as points,",
+        "coalesce(s.table_rules_pinned -> 'points', s.config -> 'points') as points,",
+        "F1",
       ),
       restore: meta,
     },

@@ -69,14 +69,20 @@ describe("ddl-mutants: the mutant table", () => {
       expect([PIN_TEST, LINES_TEST], m.id).toContain(m.killer);
       checked++;
     }
-    expect(checked).toBe(17);
+    expect(checked).toBe(16);
     // the read-function mutants restore to the delta's own definition, placeholder filled
     const fn = mutants.filter((m) => m.id.startsWith("F"));
-    expect(fn).toHaveLength(2);
+    expect(fn).toHaveLength(1);
+    const srcCols = (text: string) => new Set([...text.matchAll(/\bsrc\.([a-z_]+)/g)].map((x) => x[1]));
     for (const m of fn) {
       expect(m.restore).toBe(deltaFunction(delta, "stage_qualification_meta", "seazn_club"));
       expect(m.restore).not.toContain("${flyway:defaultSchema}");
       expect(m.restore).toContain("set search_path = seazn_club, pg_temp");
+      // A mutant reads only what the function's own `src` carries: one naming a column the delta has since dropped
+      // (T9 r1 dropped `table_points`) fails to apply instead of testing anything.
+      const own = srcCols(m.restore);
+      expect(own.size, `${m.id}: premise, the function reads src`).toBeGreaterThan(0);
+      for (const c of srcCols(m.apply)) expect(own, `${m.id}: src.${c}`).toContain(c);
     }
   });
 
