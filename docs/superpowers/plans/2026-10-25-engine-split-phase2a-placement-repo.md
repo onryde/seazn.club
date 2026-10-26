@@ -581,6 +581,7 @@ cd ~/github/seazn.club-worktrees/engine-split-2a/packages/scheduler && R=$(mktem
   - `packages/scheduler/test/integration-runs-elsewhere.test.ts:191-205` (delete the `placement-ci.yml` paths test)
   - `.gitignore` (`/services/placement/` with a one-line reason: the pre-split venvs linger in old checkouts)
   - `eslint.config.mjs:28` (remove `"services/**"`; nothing is left under it)
+  - `packages/scheduler/test/placement-image-wiring.test.ts` (W2 review M5: drop `FROZEN_TREE_WORKFLOWS` and its "every exemption is real" test — the three workflows it exempts are deleted here)
 - Modify (stale references; comments only, unless a step says otherwise):
   - workflows: `.github/workflows/{ci,e2e,bench,stg,prod}.yml` (`placement-ci.yml` / `placement-prod.yml` mentions)
   - apps/web: `apps/web/e2e/placement-cutover.spec.ts:27`, `apps/web/src/lib/__tests__/_fly-health-check.ts:16`, `apps/web/src/lib/__tests__/relay-drivers-ci-wiring.test.ts:204-205`, `apps/web/src/server/usecases/schedule.ts:2125`
