@@ -11,8 +11,8 @@ import type { CartState, ConsentState, ContactState } from "./types";
 
 /** Mirrors `PublicRegisterGroupRequest`'s wire shape (schemas.ts:2430)
  *  field-for-field. `locale` is deliberately absent: the route resolves it
- *  server-side from the `seazn_locale` cookie (route.ts's own
- *  `explicitLocale`) and never reads a client-supplied one, so there is
+ *  server-side from the `seazn_locale` cookie (`explicitLocale`,
+ *  lib/explicit-locale.ts) and never reads a client-supplied one, so there is
  *  nothing correct for this shape to send. */
 export interface SubmitRequestBody {
   contact: {

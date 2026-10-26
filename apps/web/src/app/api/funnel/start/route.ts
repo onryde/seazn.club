@@ -6,7 +6,8 @@ import { rateLimit, EMAIL_LIMIT } from "@/lib/rate-limit";
 import { baseUrl } from "@/lib/oauth";
 import { createFunnelDraft, funnelPayloadSchema } from "@/lib/funnel";
 import { funnelClaimEmail } from "@/lib/email";
-import { dispatchNow, enqueueEmail, expiryWithin } from "@/server/email-outbox";
+import { dispatchNow, enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
+import { explicitLocale } from "@/lib/explicit-locale";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { mayExposeDevLink } from "@/lib/dev-links";
@@ -41,8 +42,12 @@ export async function POST(req: Request) {
         to: email,
         transactional: true,
         expiresAt: expiryWithin(draft.expiresAt),
-        // D4 ends at `en`: the start carries no language, and there is no account and no organisation yet (P-W3-15).
-        ...(await funnelClaimEmail({ competitionName: payload.name, sport: payload.sport, link }, "en")),
+        // D4: the visitor's explicit pick (the switcher's cookie, read as the public register route reads it), then `en`: there is no
+        // account and no organisation yet.
+        ...(await funnelClaimEmail(
+          { competitionName: payload.name, sport: payload.sport, link },
+          await recipientLocale(tx, { pick: explicitLocale(req), userId: null, orgDefault: null }),
+        )),
       });
       return { draftId: draft.id, rowId, link };
     });

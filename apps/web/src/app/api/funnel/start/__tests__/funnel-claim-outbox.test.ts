@@ -40,11 +40,10 @@ type ClaimRow = {
 const address = (): string => `${RUN}-${randomUUID().slice(0, 8)}@x.test`;
 const competition = (): string => `Spring Open ${randomUUID().slice(0, 6)}`;
 
-/** The visitor's start, as the /start page posts it. */
-async function post(body: Record<string, unknown>): Promise<{ status: number }> {
-  const res = await start(
-    new Request(`${ORIGIN}/api/funnel/start`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) }),
-  );
+/** The visitor's start, as the /start page posts it (with the browser's cookie header, when one is given). */
+async function post(body: Record<string, unknown>, cookie?: string): Promise<{ status: number }> {
+  const headers: Record<string, string> = { "content-type": "application/json", ...(cookie === undefined ? {} : { cookie }) };
+  const res = await start(new Request(`${ORIGIN}/api/funnel/start`, { method: "POST", headers, body: JSON.stringify(body) }));
   await res.text();
   return { status: res.status };
 }
@@ -127,6 +126,30 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/start queues the claim link on the ou
     expect(html.Chess).toContain(sentence("Chess"));
     expect(html.Chess).not.toContain(sentence("Badminton"));
     expect(Object.keys(html), "anti-vacuity: both sports were driven").toHaveLength(sports.length);
+  });
+
+  it("the language the visitor chose (the seazn_locale cookie) is the claim's; a cookie naming no shipped language keeps English", async () => {
+    // D4's explicit pick is the footer switcher's cookie, as on the public register route. There is no account and no organisation to
+    // follow, so a cookie that names no shipped language ends at `en` (test 1 is the no-cookie case).
+    const cases = [
+      { cookie: "seazn_locale=fr", locale: "fr" },
+      { cookie: "seazn_locale=de", locale: "en" },
+    ] as const;
+    let checked = 0;
+    for (const c of cases) {
+      const email = address();
+      const name = competition();
+      expect((await post({ email, name, sport: "Badminton", entrants: 8 }, c.cookie)).status, c.cookie).toBe(200);
+      const [row] = await claimRows(email);
+      expect(row!.subject, c.cookie).toBe(dictionarySubject(c.locale, "funnelClaim.subject", { competitionName: name }));
+      expect(callsFor(row!.id).map((m) => m.subject), `${c.cookie}: the mail sent is the row's`).toEqual([row!.subject]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every cookie was driven").toBe(cases.length);
+    // The French case can tell the two apart only while the dictionaries differ.
+    expect(dictionarySubject("fr", "funnelClaim.subject", { competitionName: "x" })).not.toBe(
+      dictionarySubject("en", "funnelClaim.subject", { competitionName: "x" }),
+    );
   });
 
   it("a second start is a second draft and a second email; neither replaces the other", async () => {
