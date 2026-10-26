@@ -11,18 +11,27 @@ import "server-only";
 //  - `purgeOldEmails` is the worker's last step (RETENTION_DAYS).
 import { sql, type Tx } from "@/lib/db";
 import { PURGE_BATCH, RETENTION_DAYS, type OutboxKind, type OutboxStatus } from "./constants";
+import { CANCELLED_REASONS } from "./cancel";
 
-// THE RULE for "which row is the email a recipient has about a thing", in one place. Two reads need it and their call shapes
+// THE RULE for "which row is the email a recipient has about a thing", in one place. THREE statements need it and their call shapes
 // differ - `latestEmailStatus` asks by (organisation, ref type, refs) and answers per recipient; `latestStatusesOfRows` asks by row
-// id (the rows a request has just written, whose org it owns) and answers per row - so they cannot be one statement, but they
-// share these two fragments and so cannot disagree about what "latest" means:
+// id (the rows a request has just written, whose org it owns) and answers per row; `lockQueuedEmails` asks by (kind, ref type, refs)
+// and locks what it keeps - so they cannot be one statement, but they share these two fragments and so cannot disagree about what
+// "latest" means:
 //  - `current`: a `replaced` row is never the answer, even when it is the newest on the clock (the V470 replace trigger supersedes
-//    by KEY, not by time, so the row that carries the outcome is the newest one that is not replaced);
+//    by KEY, not by time, so the row that carries the outcome is the newest one that is not replaced); and neither is a row a VOID
+//    ended (`expired` with a cancel reason in `last_error`, cancel.ts): the thing it was about is gone, so it is not "mail this
+//    recipient has about the thing". The test is the pair - status AND reason - because `expired` alone also means the worker aged a
+//    row out, which IS an answer (the invite never went). Without this skip, a seat re-paired to the same player after an Unpair
+//    read the voided row as "Not delivered" (P8, found through the arbiter loader);
 //  - `newestFirst`: "newest" is `created_at`, ties by `id` - never `status_at`, which moves with every status change and says
 //    nothing about which email is the latest.
 // Both are written unqualified on purpose: inside `latestStatusesOfRows`' lateral subselect an unqualified column binds to the inner
 // table (`x`), the one being ranked, and not to the outer row.
-const current = () => sql`status <> 'replaced'`;
+// `coalesce(..., false)`: an `expired` row the worker aged out has a NULL `last_error`, and `status = 'expired' and null` is null, so a
+// bare `not (...)` would be null too and the row would vanish from the answer (a null in a where clause is "no").
+const current = () =>
+  sql`status <> 'replaced' and not (status = 'expired' and coalesce(last_error = any(${CANCELLED_REASONS as string[]}::text[]), false))`;
 const newestFirst = () => sql`created_at desc, id desc`;
 
 /** One recipient's latest email about one thing. `at` is when its status last changed (`status_at`). `recipientUserId` is the account

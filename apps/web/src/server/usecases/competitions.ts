@@ -10,6 +10,8 @@ import { publicDashboardsReason } from "@/lib/feature-copy";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS, type AnalyticsEvent } from "@/lib/analytics-events";
 import { log } from "@/server/logger";
+import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
+import { cancelBoardInvites } from "./external-play/cancel-invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { page, type ListQuery, type Page } from "@/server/api-v1/http";
 import { CompetitionStatus, ENDS_BEFORE_STARTS, type CreateCompetition, type PatchCompetition, type PublicQuotaDegraded } from "@/server/api-v1/schemas";
@@ -870,6 +872,14 @@ export async function deleteCompetition(auth: AuthCtx, id: string): Promise<void
       delete from sponsor_orders o
       using sponsor_packages p
       where p.id = o.package_id and p.competition_id = ${id}`;
+    // Phase 3 wave 1 (G-1): the delete CASCADEs to every fixture, and the bridge row of each online board with it. A chess invite
+    // still queued for one of those boards would keep retrying a mail to a board that no longer exists, so it ends first
+    // (`fixture_deleted`). Only a bridged fixture can have been invited, so those are the boards named.
+    const boards = await tx<{ id: string }[]>`
+      select ep.fixture_id as id from fixture_external_play ep
+        join fixtures f on f.id = ep.fixture_id join divisions d on d.id = f.division_id
+       where d.competition_id = ${id}`;
+    await cancelBoardInvites(tx, boards.map((b) => b.id), FIXTURE_DELETED_REASON);
     const [deleted] = await tx<{ slug: string; org_slug: string | null }[]>`
       delete from competitions c where c.id = ${id}
       returning c.slug, (select o.slug from organizations o where o.id = c.org_id) as org_slug`;

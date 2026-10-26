@@ -29,6 +29,8 @@ import { fixtureHasResultSql, playedFixtureIds } from "./fixture-results-sql";
 import { refuseOwnFormatLoss } from "./fixture-override-guards";
 import { getLimit, requireFeature } from "@/lib/entitlements";
 import { log } from "@/server/logger";
+import { FIXTURE_DELETED_REASON } from "@/server/email-outbox/cancel";
+import { cancelBoardInvites } from "./external-play/cancel-invites";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { CourtId, VenueId } from "@/server/api-v1/schemas";
 import { generateStageFixtures, wireCrossFeeds } from "./stages";
@@ -577,6 +579,9 @@ async function execute(
           )
           select gone.id, exists (select 1 from score_events se where se.fixture_id = gone.id) as scored
           from gone`;
+        // Phase 3 wave 1 (G-1): the chess invites still queued for the boards just deleted end with them (`fixture_deleted`). Named
+        // from the rows the delete returned - an unplayed filter above may have spared some - and ended in this same transaction.
+        await cancelBoardInvites(tx, removed.map((row) => row.id), FIXTURE_DELETED_REASON);
         wrote(removed);
         if (removed.some((row) => row.scored)) effects.scoredFixtureRemoved = true;
       }
