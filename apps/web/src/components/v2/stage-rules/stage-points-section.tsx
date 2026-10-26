@@ -5,9 +5,14 @@
 // row (its own PUT arm, `{points}`) and follows the same lock: a started stage, or a viewer, reads it and cannot change it.
 //
 // WHAT IT OFFERS IS WHAT THE SERVER TAKES (every question is `stage-points-model.ts`'s, which asks the engine):
-//   - every division gets the editor (W2d Task 10 retired W2c's Q1 inexpressible state: a stage rule can say every split
-//     now); a rule that does not pay every outcome the stage reaches is refused by the server (POINTS_OUTCOME_UNCOVERED),
-//     said in its own words beside the inputs;
+//   - the editor's boxes are a FLAT rule (one amount per win and per loss), so a stage whose sport pays an outcome its own
+//     way (IIHF's overtime 2/1, FIVB's 3-2, ICC's tie and no result, ITTF's loss not played, FIH's shoot-out bonus) gets
+//     "can't be set per stage yet" with the reason and NO inputs (W2d Task 10 fix round 1, I2, owner 2026-10-26:
+//     `pointsEditorFits`, over the engine's payout) - a Save there would flatten that outcome onto the win or the loss. A
+//     rule the stage STORES anyway is read beside the reason, with "Use the division's points" to clear it (`{points:
+//     null}` flattens nothing). The server refuses a flat rule there too (POINTS_SPLIT_FLATTENED), as defence in depth;
+//   - everywhere else, the editor; a rule that does not pay every outcome the stage reaches is refused by the server
+//     (POINTS_OUTCOME_UNCOVERED), said in its own words beside the inputs;
 //   - scoring is free on every plan (owner, 2026-10-19: "all scoring are free", V393 gives community `custom_points`), so
 //     the section asks no plan question; the server's gate stays and a 402 is said in the server's own words;
 //   - the walkover SCORE is shown only where the sport's table reads it (batch-3 I3: the server REFUSES it elsewhere, so a
@@ -30,6 +35,7 @@ import {
   draftIsDirty,
   offeredBonusKinds,
   offersWalkoverScore,
+  pointsEditorFits,
   previewClauses,
   ruleFromDraft,
   storedPointsRule,
@@ -99,6 +105,8 @@ interface Saved {
 export function StagePointsSection({
   stageId,
   module,
+  kind,
+  stageConfig,
   divisionConfig,
   stored,
   pointsDict,
@@ -107,6 +115,9 @@ export function StagePointsSection({
 }: {
   stageId: string;
   module: AnySportModule;
+  /** The stage's kind and its own config (its `rules` move the outcomes it reaches): what the editor is asked to fit. */
+  kind: string;
+  stageConfig: unknown;
   divisionConfig: Record<string, unknown>;
   /** `stage.config.points` as the page read it. */
   stored: unknown;
@@ -122,6 +133,7 @@ export function StagePointsSection({
   const [draft, setDraft] = useState<PointsDraft>(() => draftFromStored(module, divisionConfig, stored));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const fit = pointsEditorFits(module, divisionConfig, { kind, config: stageConfig });
 
   const heading = (
     <span className="text-xs font-semibold text-slate-800">{msg("stagePoints.title")}</span>
@@ -130,7 +142,7 @@ export function StagePointsSection({
     <section
       aria-label={msg("stagePoints.title")}
       data-testid={`stage-points-${stageId}`}
-      data-stage-points-state={readOnly ? "readonly" : "editor"}
+      data-stage-points-state={!fit.fits ? "inexpressible" : readOnly ? "readonly" : "editor"}
       className="border-b border-slate-100 px-4 py-3"
     >
       {children}
@@ -160,6 +172,54 @@ export function StagePointsSection({
     } finally {
       setSaving(false);
     }
+  }
+
+  // Fix round 1 I2: the reason, in the reader's words, and no inputs. A rule the stage STORES anyway is not hidden behind the
+  // reason (it is what the stage plays): it is read, and an editable stage can clear it - the one change that flattens
+  // nothing. The server stays the authority (a flat rule there is POINTS_SPLIT_FLATTENED).
+  if (!fit.fits) {
+    const reason = ruleRefusalText("POINTS_SPLIT_FLATTENED", { splits: fit.reasons }, msg);
+    const own = ownRule === null ? "" : preview(draftFromStored(module, divisionConfig, inForce));
+    return shell(
+      <div className="space-y-2">
+        {heading}
+        <p
+          role="status"
+          data-testid="stage-points-inexpressible"
+          className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-snug text-slate-700"
+        >
+          {reason ?? msg("stagePoints.inexpressible")}
+        </p>
+        {ownRule !== null && (
+          <div className="space-y-2">
+            <p className="text-xs text-slate-600" data-testid="stage-points-readonly">
+              {msg("stagePoints.ownPoints")}
+            </p>
+            {own !== "" && (
+              <p className="text-xs text-slate-700" data-testid="stage-points-preview">
+                {own}
+              </p>
+            )}
+            {!readOnly && (
+              <button
+                type="button"
+                className="btn btn-ghost min-h-11 px-3 py-1.5 text-xs"
+                data-testid="stage-points-clear"
+                disabled={saving}
+                onClick={() => void write(null)}
+              >
+                {saving ? msg("schedule.working") : msg("stagePoints.useDivision")}
+              </button>
+            )}
+            {error !== null && (
+              <p role="alert" className="text-xs text-red-600" data-testid="stage-points-error">
+                {error}
+              </p>
+            )}
+          </div>
+        )}
+      </div>,
+    );
   }
 
   // A started stage, or a viewer: what the stage plays, in words. No control.

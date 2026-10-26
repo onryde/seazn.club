@@ -31,6 +31,7 @@ import {
 import { longName, roundGameSql, seedOnlineRound, uiEn } from "./match-room-kit";
 import { ARMAGEDDON_RESULTS } from "@seazn/engine/sports/boardgame";
 import { builtinModules } from "@seazn/engine/sports";
+import { RULEBOOK_SPLITS } from "../src/components/v2/stage-rules/__tests__/_points-split-rulebook";
 import {
   HIT_TARGET_FLOOR_PX,
   consentedAnonymousState,
@@ -5911,49 +5912,40 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
   expect(here, `the points section's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls(section));
   await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 
-  // --- ice hockey (a division that scores overtime separately): the editor, as on any table stage (W2d T10) ---------------
-  // W2c refused such a division a stage rule and showed a refusal card; W2d's outcome-keyed rule pays overtime itself. The
-  // splitting variant is the engine's declaration: its parsed points carry an overtime split (`otWin` / `otLoss`).
+  // --- ice hockey (a division that scores overtime separately): the can't-set-per-stage state (W2d T10 fix round 1 I2) ------
+  // The editor's boxes are a flat rule, which would pay IIHF's overtime win as regulation's: the section says why and sends
+  // nothing. The splitting variant is the rulebooks' (`_points-split-rulebook.ts`).
   const hockey = builtinModules.find((m) => m.key === "icehockey")!;
-  const splitVariant = Object.keys(hockey.variants).find((v) => {
-    const r = hockey.configSchema.safeParse(hockey.variants[v]);
-    const pts = ((r.success ? r.data : hockey.variants[v]) as { points?: Record<string, unknown> }).points ?? {};
-    return "otWin" in pts || "otLoss" in pts;
-  });
-  expect(splitVariant, "premise: the engine has a splitting ice-hockey variant").toBeDefined();
+  const splitVariant = Object.keys(hockey.variants).find((v) => RULEBOOK_SPLITS[`icehockey/${v}`] !== undefined);
+  expect(splitVariant, "premise: the rulebooks split an ice-hockey variant (iihf)").toBeDefined();
   const ih = await seed("icehockey", splitVariant, "icehockey");
   await page.goto(await divisionPath(page.request, ih.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   const card = page.getByTestId(`stage-points-${ih.stageId}`);
-  await expect(card).toHaveAttribute("data-stage-points-state", "editor", { timeout: 20_000 });
-  await expect(card.getByTestId("stage-points-inexpressible"), "W2c's refusal card is gone").toHaveCount(0);
-  await expect(card.getByTestId("stage-points-use-division"), "nothing stored: it inherits").toBeChecked();
-  await assertTapFloor(card.locator("label").first(), "Use the division's points (ice hockey)");
+  await expect(card).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: 20_000 });
+  await expect(card.getByTestId("stage-points-inexpressible"), "the reason is on the card").toBeVisible();
+  await expect(card.locator("input, select, button"), "no control: nothing can be sent").toHaveCount(0);
   const cclip = await overflowingIn(page, `[data-testid="stage-points-${ih.stageId}"]`, "*", "the ice hockey section is missing");
   expect(cclip.clipped, `nothing in the ice hockey section is clipped at ${projectWidth}`).toEqual([]);
   await expectNoHorizontalScroll(page);
 
-  // --- review M1, W2d: the same division, a stage that STORES its own rule: the editor opens on it (its numbers in the boxes),
-  // every control on the 44px floor, nothing clipped, the same control set as 1280 ----------------------------------------
+  // --- the same division, a stage that STORES its own rule: read beside the reason, its one control (clear) on the 44px floor,
+  // nothing clipped, the same control set as 1280 ------------------------------------------------------------------------
   await withDb(async (sql) => {
     await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } } })} where id = ${ih.stageId}`;
   });
   await page.reload({ waitUntil: "load" });
   const legacy = page.getByTestId(`stage-points-${ih.stageId}`);
-  await expect(legacy).toHaveAttribute("data-stage-points-state", "editor", { timeout: 20_000 });
-  await expect(legacy.getByTestId("stage-points-use-division"), "its own rule: not inheriting").not.toBeChecked();
-  await expect(legacy.getByTestId("stage-points-win"), "the boxes hold the stored rule").toHaveValue("4");
-  for (const id of ["stage-points-win", "stage-points-loss"]) await assertTapFloor(legacy.getByTestId(id), `${id} (ice hockey)`);
-  await openMoreHere(legacy);
-  await expect(legacy.getByTestId("stage-points-walkover-w")).toHaveValue("3");
-  await assertTapFloor(legacy.getByTestId("stage-points-walkover-w"), "stage-points-walkover-w (ice hockey)");
+  await expect(legacy).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: 20_000 });
+  await expect(legacy.getByTestId("stage-points-readonly"), "its own rule is read").toBeVisible();
+  await expect(legacy.locator("input, select"), "still no input").toHaveCount(0);
+  await assertTapFloor(legacy.getByTestId("stage-points-clear"), "Use the division's points (ice hockey)");
   const lclip = await overflowingIn(page, `[data-testid="stage-points-${ih.stageId}"]`, "*", "the stored-rule section is missing");
   expect(lclip.clipped, `nothing in the stored-rule section is clipped at ${projectWidth}`).toEqual([]);
   await expectNoHorizontalScroll(page);
   const legacyHere = await visibleControls(legacy);
-  expect(legacyHere.length, "the stored-rule editor's controls were read").toBeGreaterThan(4);
+  expect(legacyHere.length, "the stored-rule state's one control was read").toBe(1);
   await page.setViewportSize({ width: 1280, height: 900 });
-  await openMoreHere(legacy);
-  expect(legacyHere, `the stored-rule editor's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls(legacy));
+  expect(legacyHere, `the stored-rule state's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls(legacy));
   await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 });
 

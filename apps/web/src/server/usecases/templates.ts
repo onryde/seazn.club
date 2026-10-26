@@ -258,6 +258,8 @@ export async function instantiateTemplate(
         // located below like every other). Each stage is asked its own kind's below.
         refuseStrayPointsMapKeys(parsedConfig.data);
         if (templateDivision.tiebreakers !== undefined) refuseCascadeForSport(sportModule, parsedConfig.data, templateDivision.tiebreakers);
+        // The order the division row stores (null: none of its own), and so the one each stage below is asked to inherit.
+        const storedOrder = templateDivision.tiebreakers ? templateDivision.tiebreakers : null;
 
         const divisionName = t(dict, templateDivision.i18nNameKey);
         const division = await withUniqueSlug(
@@ -278,7 +280,7 @@ export async function instantiateTemplate(
               values (${competitionId}, ${divisionName}, ${divisionSlug}, ${templateDivision.sportKey},
                       ${templateDivision.variantKey}, ${q.json(parsedConfig.data as never)},
                       ${sport.module_version},
-                      ${templateDivision.tiebreakers ? q.json(templateDivision.tiebreakers as never) : null})
+                      ${storedOrder === null ? null : q.json(storedOrder as never)})
               returning id`;
             return row!;
           },
@@ -362,7 +364,7 @@ export async function instantiateTemplate(
           refuseNewStageTable(
             sportModule,
             { kind: templateStage.kind, name: stageName, config: stageConfig },
-            { config: parsedConfig.data, tiebreakers: templateDivision.tiebreakers ?? null },
+            { config: parsedConfig.data, tiebreakers: storedOrder },
           );
           const [stage] = await tx<{ id: string }[]>`
             insert into stages (division_id, seq, kind, name, config, progression)

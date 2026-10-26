@@ -335,7 +335,11 @@ describe.skipIf(!HAS_DB)("W2d T10 the division's order and points after the pin"
         }
       }
     }
-    expect(defaults, "anti-vacuity: sport defaults checked").toBeGreaterThan(0);
+    // Fix round 1 m8: the exact count, from the registry's own declarations (every sport × its variants × the three kinds),
+    // so a sport or a variant the loop skipped is a red — and every sport is in it.
+    const variants = (builtinModules as readonly AnySportModule[]).reduce((n, m) => n + Object.keys(m.variants).length, 0);
+    expect(variants, "anti-vacuity: every sport declares a variant").toBeGreaterThanOrEqual(builtinModules.length);
+    expect(defaults, "anti-vacuity: sport defaults checked, each sport × variant × non-Swiss kind").toBe(variants * NON_SWISS.length);
     // Every write path refuses an order that does not end in lots on a non-Swiss stage: the stage's own (PUT) and the
     // division's (PATCH, an unpinned league inheriting it), per sport.
     let refused = 0;

@@ -2,8 +2,9 @@
 // markup (no DOM, no effects): this is the "is the control on the screen, in this state, for this sport" half; clicking,
 // saving and reloading are the e2e's. Expected values come from the engine's declarations (`pointsRuleAwardReachesTable`,
 // `offeredBonusKinds` over `validatePointsRule`) and from the dictionaries the product renders - none is typed here. Every
-// sweep reports how many items it checked and zero is a failure. W2d Task 10 (spec §11 "W2c's inexpressible card is
-// deleted"): the section has one editable state on every division; the divisions W2c kept out are swept as editors.
+// sweep reports how many items it checked and zero is a failure. W2d Task 10 fix round 1, I2 (owner, 2026-10-26): the
+// editor's boxes are a flat rule, so a division whose sport pays an outcome its own way (the rulebooks' list,
+// `_points-split-rulebook.ts`) gets "can't be set per stage yet" with its reason and no inputs; every other the editor.
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
@@ -19,6 +20,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { msg as enMsg } from "@/lib/messages";
 import { StagePointsSection, failureText } from "../stage-points-section";
 import { offeredBonusKinds } from "../stage-points-model";
+import { RULEBOOK_SPLITS } from "./_points-split-rulebook";
 
 const sport = (key: string): AnySportModule => builtinModules.find((m) => m.key === key)!;
 const UI = enUi as Record<string, string>;
@@ -30,13 +32,20 @@ const HEAD = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, tie: 0,
 const FORFEIT_RULE: PointsRule = { ...HEAD, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1 } };
 const SCORED_RULE: PointsRule = { ...HEAD, bonuses: [], forfeit: { winnerPoints: 4, loserPoints: 1, awardScore: [3, 0] } };
 
-function render(m: AnySportModule, variant: string, stored: unknown, over: { readOnly?: boolean; pointsDict?: Dict } = {}): string {
+function render(
+  m: AnySportModule,
+  variant: string,
+  stored: unknown,
+  over: { readOnly?: boolean; pointsDict?: Dict; kind?: string; stageConfig?: Record<string, unknown>; divisionConfig?: Record<string, unknown> } = {},
+): string {
   return renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
       <StagePointsSection
         stageId={ID}
         module={m}
-        divisionConfig={m.variants[variant] as Record<string, unknown>}
+        kind={over.kind ?? "league"}
+        stageConfig={over.stageConfig ?? {}}
+        divisionConfig={over.divisionConfig ?? (m.variants[variant] as Record<string, unknown>)}
         stored={stored}
         pointsDict={"pointsDict" in over ? over.pointsDict : POINTS_DICT}
         readOnly={over.readOnly ?? false}
@@ -61,15 +70,15 @@ const generic = sport("generic");
 
 /** Every (sport, variant) the registry ships. */
 const VARIANTS = builtinModules.flatMap((m) => Object.keys(m.variants).map((variant) => ({ m, variant })));
-/** The divisions W2c kept out of the editor ("inexpressible"): split overtime / shoot-out / tie / no-result points, or a map
- *  paying two pairs - read off the sport's own parsed config, so the sweep witnesses them. */
-function w2cSplit(m: AnySportModule, variant: string): boolean {
-  const c = m.configSchema.parse(m.variants[variant]) as Record<string, unknown>;
-  const pts = (typeof c.points === "object" && c.points !== null ? c.points : {}) as Record<string, unknown>;
-  const map = typeof c.pointsMap === "object" && c.pointsMap !== null ? Object.values(c.pointsMap) : [];
-  return new Set(map.map((v) => JSON.stringify(v))).size > 1 || ["otWin", "otLoss", "soBonus", "tie", "noResult"].some((k) => k in pts);
-}
-const SPLIT = VARIANTS.filter(({ m, variant }) => w2cSplit(m, variant));
+/** The divisions the rulebooks split (fix round 1 I2): the section's state there, never the editor. */
+const SPLIT = VARIANTS.filter(({ m, variant }) => RULEBOOK_SPLITS[`${m.key}/${variant}`] !== undefined);
+const EDITABLE = VARIANTS.filter(({ m, variant }) => RULEBOOK_SPLITS[`${m.key}/${variant}`] === undefined);
+/** The state's sentence for a rulebook row, built from the en dictionary the product renders (never the helper's own). */
+const stateSentence = (id: string): string =>
+  UI["rules.err.pointsRuleInexpressible"]!.replace(
+    "{reason}",
+    UI["rules.err.pointsSplit"]!.replace("{fields}", RULEBOOK_SPLITS[id]!.map((r) => UI[`rules.err.pointsSplit.${r}`]!).join(", ")),
+  );
 
 describe("I3: the walkover SCORE is shown on goal sports and hidden on the sports whose table never reads it (a render per family)", () => {
   it("a goal sport (football) shows the score boxes beside the walkover points", () => {
@@ -98,12 +107,11 @@ describe("I3: the walkover SCORE is shown on goal sports and hidden on the sport
     }
   });
 
-  it("sweep: every sport and variant shows the score iff the engine's table reads it", () => {
+  it("sweep: every sport and variant the editor fits shows the score iff the engine's table reads it (the rulebook splits show no input at all, I2)", () => {
     let shown = 0;
     let hidden = 0;
     let checked = 0;
-    for (const m of builtinModules)
-      for (const variant of Object.keys(m.variants)) {
+    for (const { m, variant } of EDITABLE) {
         const html = render(m, variant, { ...HEAD, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } });
         const score = has(html, "stage-points-award-w") && has(html, "stage-points-award-l");
         expect(score, `${m.key}/${variant}`).toBe(pointsRuleAwardReachesTable(m));
@@ -111,38 +119,64 @@ describe("I3: the walkover SCORE is shown on goal sports and hidden on the sport
         if (score) shown++;
         else hidden++;
         checked++;
-      }
-    expect(checked, "every division swept").toBe(VARIANTS.length);
+    }
+    expect(checked, "every editable division swept").toBe(EDITABLE.length);
+    expect(checked + SPLIT.length, "and with the rulebook splits, every division").toBe(VARIANTS.length);
     expect(shown, "goal sports").toBeGreaterThan(0);
     expect(hidden, "set sports and the rest").toBeGreaterThan(0);
   });
 });
 
-describe("W2d T10: one state, the editor, on every division - the inexpressible card is gone (scoring is free on every plan)", () => {
-  it("an ice-hockey division that splits its overtime points (W2c: inexpressible, no inputs) opens the editor with its boxes", () => {
+describe("W2d T10 fix round 1 I2: the editor where its flat rule says the sport's points, the can't-set-per-stage state where it would flatten them (owner 2026-10-26)", () => {
+  it("ice hockey (IIHF's overtime 2/1): the state, the reason in the reader's words, no input, no Save - and recreational ice hockey (no split) the editor", () => {
     const m = sport("icehockey");
-    const variant = Object.keys(m.variants).find((v) => w2cSplit(m, v))!;
-    expect(variant, "premise: a variant W2c kept out exists (iihf)").toBeDefined();
-    const html = render(m, variant, null);
-    expect(html).toContain('data-stage-points-state="editor"');
-    expect(has(html, "stage-points-inexpressible"), "no inexpressible card").toBe(false);
-    // Nothing stored: "Use the division's points" is checked, and it is a control (W2c showed no input at all here).
-    expect(tagOf(html, "stage-points-use-division"), "the inherit control is there").toMatch(/^<(input|label)/);
-    expect(html, "and the section has inputs").toContain("<input");
+    const html = render(m, "iihf", null);
+    expect(html).toContain('data-stage-points-state="inexpressible"');
+    expect(text(tagOf(html, "stage-points-inexpressible") + html.slice(html.indexOf('data-testid="stage-points-inexpressible"')))).toContain(stateSentence("icehockey/iihf"));
+    expect(html, "no control: nothing can be sent").not.toMatch(/<(input|select|button)/);
+    expect(has(html, "stage-points-save")).toBe(false);
+    const plain = render(m, "recreational", null);
+    expect(plain, "the positive pair: the same sport where the editor fits").toContain('data-stage-points-state="editor"');
+    expect(has(plain, "stage-points-inexpressible")).toBe(false);
   });
 
-  it("sweep: every (sport, variant) in the registry renders the editor and never the inexpressible card, the W2c splits among them (counted)", () => {
+  it("sweep: every (sport, variant) in the registry - the state with its rulebook reason on the rulebook splits, the editor on every other (counted, both sides > 0)", () => {
     let checked = 0;
-    let split = 0;
+    let state = 0;
     for (const { m, variant } of VARIANTS) {
+      const id = `${m.key}/${variant}`;
       const html = render(m, variant, null);
-      expect(html, `${m.key}/${variant}`).toContain('data-stage-points-state="editor"');
-      expect(has(html, "stage-points-inexpressible"), `${m.key}/${variant}: no inexpressible card`).toBe(false);
-      if (w2cSplit(m, variant)) split++;
+      if (RULEBOOK_SPLITS[id] !== undefined) {
+        expect(html, id).toContain('data-stage-points-state="inexpressible"');
+        expect(text(html), `${id}: the reason`).toContain(stateSentence(id));
+        expect(html, `${id}: no control`).not.toMatch(/<(input|select|button)/);
+        state++;
+      } else {
+        expect(html, id).toContain('data-stage-points-state="editor"');
+        expect(has(html, "stage-points-inexpressible"), `${id}: no state card`).toBe(false);
+      }
       checked++;
     }
     expect(checked, "every division").toBe(VARIANTS.length);
-    expect(split, "the divisions W2c kept out are among them (iihf, fih-shootout, cricket, indoor volleyball)").toBeGreaterThanOrEqual(4);
+    expect(state, "the rulebook splits, each reached").toBe(Object.keys(RULEBOOK_SPLITS).length);
+    expect(checked - state, "and editors").toBeGreaterThan(0);
+  });
+
+  it("the stage's own rules move it: a hockey league stage switching FIH's shoot-out on gets the state; a bracket stage is never asked", () => {
+    const m = sport("hockey");
+    const shootout = (m.configSchema.parse(m.variants["fih-shootout"]) as { shootout: unknown }).shootout;
+    expect(render(m, "fih-outdoor", null), "no shoot-out: the editor").toContain('data-stage-points-state="editor"');
+    expect(render(m, "fih-outdoor", null, { stageConfig: { rules: { shootout } } }), "the stage's own shoot-out").toContain('data-stage-points-state="inexpressible"');
+  });
+
+  it("fail-closed: a division config the sport refuses (no sport rule to compare against) gets the state with the general sentence and no control, never the editor", () => {
+    const m = sport("icehockey");
+    const refused = { ...(m.variants.iihf as Record<string, unknown>), periods: "many" };
+    expect(m.configSchema.safeParse(refused).success, "premise: the sport refuses this config").toBe(false);
+    const html = render(m, "iihf", null, { divisionConfig: refused });
+    expect(html).toContain('data-stage-points-state="inexpressible"');
+    expect(text(html), "no split to name: the general sentence").toContain(UI["stagePoints.inexpressible"]!);
+    expect(html, "no control").not.toMatch(/<(input|select|button)/);
   });
 
   it("editor: the base sentence, the walkover row and the bonus add menu are all there for every stored rule - no plan note, no held boxes", () => {
@@ -161,32 +195,36 @@ describe("W2d T10: one state, the editor, on every division - the inexpressible 
   });
 });
 
-describe("W2d T10: a STORED own rule on a division W2c could not say (review M1) opens as itself, editable, and clears like any other", () => {
+describe("fix round 1 I2: a STORED own rule on a division the editor cannot say is read beside the reason, never hidden, and clears", () => {
   const OWN: PointsRule = { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } };
 
-  it("an editable stage opens the editor on the stored rule's own numbers, with 'Use the division's points' unchecked (counted over every W2c split)", () => {
+  it("an editable stage: the reason, the stored rule in the public line's words, and 'Use the division's points' (the one change that flattens nothing) - no input (counted over every rulebook split)", () => {
     let checked = 0;
     for (const { m, variant } of SPLIT) {
+      const id = `${m.key}/${variant}`;
       const html = render(m, variant, OWN);
-      expect(html, `${m.key}/${variant}`).toContain('data-stage-points-state="editor"');
-      expect(has(html, "stage-points-inexpressible"), `${m.key}/${variant}: no inexpressible card`).toBe(false);
-      expect(tagOf(html, "stage-points-win"), `${m.key}/${variant}: the stored win`).toContain('value="4"');
-      expect(tagOf(html, "stage-points-walkover-w"), `${m.key}/${variant}: the stored walkover`).toContain('value="3"');
+      expect(html, id).toContain('data-stage-points-state="inexpressible"');
+      expect(text(html), `${id}: the reason`).toContain(stateSentence(id));
+      expect(text(html.slice(html.indexOf('data-testid="stage-points-readonly"'))), `${id}: it says the stage has its own`).toContain(UI["stagePoints.ownPoints"]!);
+      expect(text(html), `${id}: the stored rule, read`).toContain(rulesLineText(POINTS_DICT, pointsLine(OWN, { awardReaches: pointsRuleAwardReachesTable(m) })));
+      expect(text(tagOf(html, "stage-points-clear") + html.slice(html.indexOf('data-testid="stage-points-clear"'))), `${id}: clear`).toContain(UI["stagePoints.useDivision"]!);
+      expect(html, `${id}: no input`).not.toMatch(/<(input|select)/);
       checked++;
     }
-    expect(checked, "W2c splits swept").toBe(SPLIT.length);
+    expect(checked, "rulebook splits swept").toBe(SPLIT.length);
     expect(checked).toBeGreaterThan(0);
   });
 
-  it("a locked stage or a viewer reads it - the sentence and its preview - and gets no control (the server holds the same lock)", () => {
+  it("a locked stage or a viewer: the reason and the stored rule are read, and there is no control at all (the server holds the same lock)", () => {
     const m = sport("icehockey");
-    const variant = Object.keys(m.variants).find((v) => w2cSplit(m, v))!;
-    const html = render(m, variant, OWN, { readOnly: true });
-    expect(html).toContain('data-stage-points-state="readonly"');
+    const html = render(m, "iihf", OWN, { readOnly: true });
+    expect(html).toContain('data-stage-points-state="inexpressible"');
     expect(has(html, "stage-points-readonly") && has(html, "stage-points-preview"), "the rule is read").toBe(true);
-    expect(text(html.slice(html.indexOf('data-testid="stage-points-readonly"')))).toContain(UI["stagePoints.ownPoints"]!);
-    expect(text(html), "the preview is the stored rule in the public line's words").toContain(rulesLineText(POINTS_DICT, pointsLine(OWN, { awardReaches: pointsRuleAwardReachesTable(m) })));
+    expect(text(html)).toContain(stateSentence("icehockey/iihf"));
     expect(html).not.toMatch(/<(input|select|button)/);
+    const inheriting = render(m, "iihf", null, { readOnly: true });
+    expect(inheriting, "nothing stored, a viewer: the reason alone").not.toMatch(/<(input|select|button)/);
+    expect(has(inheriting, "stage-points-readonly"), "no own rule to read").toBe(false);
   });
 });
 
@@ -206,6 +244,10 @@ describe("what a failed Save says (review M2)", () => {
     expect(refused).toBe(UI["rules.err.pointsOutcomeUncovered"]!.replace("{outcome}", UI["rules.err.outcome.draw"]!));
     expect(refused).not.toBe("english from the server");
     expect(failureText(new ApiV1Error("english from the server", 422, "POINTS_OUTCOME_UNCOVERED", { uncovered: [] }), m), "no outcome to name: the message").toBe("english from the server");
+    // Fix round 1 I2: the flat-over-split refusal, from its `splits` (a stale page that still showed the editor).
+    const flattened = failureText(new ApiV1Error("english from the server", 422, "POINTS_SPLIT_FLATTENED", { splits: ["otWin", "otLoss"] }), m);
+    expect(flattened).toBe(stateSentence("icehockey/iihf"));
+    expect(failureText(new ApiV1Error("english from the server", 422, "POINTS_SPLIT_FLATTENED", { splits: ["a_future_split"] }), m), "a split it cannot name: the message").toBe("english from the server");
     expect(failureText(new ApiV1Error("boom", 500, "INTERNAL", {}), m)).toBe("boom");
     expect(failureText(new Error("offline"), m)).toBe("offline");
     expect(failureText("odd", m)).toBe("odd");
@@ -295,10 +337,9 @@ describe("a started stage, or a viewer, reads the section and changes nothing", 
     expect(text(inherited)).toContain(rulesLineText(POINTS_DICT, pointsLine({ ...HEAD, bonuses: [] })));
   });
 
-  it("W2d T10: a division W2c split is read by a viewer like any other - the division's points, no inexpressible card", () => {
+  it("fix round 1 I2: on a division the editor fits, a viewer reads the division's points - the state is the rulebook splits' alone", () => {
     const m = sport("icehockey");
-    const variant = Object.keys(m.variants).find((v) => w2cSplit(m, v))!;
-    const html = render(m, variant, null, { readOnly: true });
+    const html = render(m, "recreational", null, { readOnly: true });
     expect(html).toContain('data-stage-points-state="readonly"');
     expect(has(html, "stage-points-inexpressible")).toBe(false);
     expect(text(html)).toContain(UI["stagePoints.divisionPoints"]!);

@@ -87,12 +87,26 @@ function classify(text: string): "order" | "exempt" | "other" {
     if (merge !== null) return ORDER_KEY.test(merge[1]!) ? "order" : "exempt";
     const removal = KEY_REMOVAL.exec(text);
     if (removal !== null) return ORDER_KEY.test(removal[1]!) ? "order" : "exempt";
-    return ORDER_KEY.test(text) ? "order" : "exempt";
+    // Fail closed (fix round 1, m1): any other `stages.config` write — a whole config, a merge of a computed object — can
+    // carry an order whether or not its text names the key, so it counts as an order writer.
+    return "order";
   }
   return "other";
 }
 
 describe("W2d T10 every writer of a tie-break order validates it (source scan)", () => {
+  it("fix round 1 m1, fail closed: a stages.config write that is neither a literal-key merge nor a key removal counts as an order writer, whatever its text names", () => {
+    const cases: [string, ReturnType<typeof classify>][] = [
+      ["update stages set config = ${tx.json(next as never)} where id = ${id}`", "order"],
+      ["update stages set config = config || ${tx.json(patch)} where id = ${id}`", "order"],
+      ["update stages set config = config || ${tx.json({ rules: merged })} where id = ${id}`", "exempt"],
+      ["update stages set config = config || ${tx.json({ tiebreakers: order })} where id = ${id}`", "order"],
+      ["update stages set config = config - 'ladder_order' where id = ${id}`", "exempt"],
+    ];
+    for (const [text, want] of cases) expect(classify(text), text).toBe(want);
+    expect(cases.length, "anti-vacuity").toBe(5);
+  });
+
   it("every SQL write to divisions.tiebreakers and stages.config under W/server is in a function that calls validateCascade (counted; 0 fails)", () => {
     const guards = cascadeGuards();
     expect(guards.size, "anti-vacuity: the guards module has a guard that calls validateCascade").toBeGreaterThan(0);

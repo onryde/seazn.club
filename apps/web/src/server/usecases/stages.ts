@@ -18,7 +18,7 @@ import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { DEPARTED_STATUSES } from "./entrants";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
-import { sentPoints, validatedStageConfig } from "./stage-defaults";
+import { validatedStageConfig } from "./stage-defaults";
 import { refuseNewStageTable } from "./table-rule-guards";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
@@ -39,7 +39,6 @@ import {
   type Colour,
 } from "@seazn/engine/scheduling";
 import {
-  PointsRule,
   carryDeltas,
   placementTable,
   progressionSize,
@@ -422,19 +421,8 @@ function stageConfigsAtCreate(
 }
 
 /**
- * Jul3/05 §7 — the ONE entitlement gate on a stage's own points (W2c Task 13: `createStages` and the stage PUT both call
- * it): base win/draw/loss points are free on every plan; bonuses or a forfeit row need `standings.custom_points` (402).
- * A pooled read (`requireFeature`): call it BEFORE `withTenant` opens, never inside one (lib/db.ts, the pool
- * self-deadlock).
- */
-export async function assertCustomPointsAllowed(auth: AuthCtx, rule: PointsRule): Promise<void> {
-  if (rule.bonuses.length > 0 || rule.forfeit !== undefined) await requireFeature(auth.orgId, "standings.custom_points");
-}
-
-/**
  * W2c Task 13 fix round 1 (R-T13-2) — every refusal a stage BATCH earns from its input alone, before anything is written:
- * the entitlement gates (`formats.double_elim`, `formats.advanced`, `standings.custom_points` on a body's own points,
- * `tiebreakers.custom`, `standings.carry_over`), the feed graph, the stage cap counted against the batch, and a seq the
+ * the entitlement gates (`formats.double_elim`, `formats.advanced`, `standings.carry_over`), the feed graph, the stage cap counted against the batch, and a seq the
  * batch names twice. Pooled reads (`requireFeature`, `getLimit`), so both callers ask it before their transaction opens,
  * never inside one (lib/db.ts): `createStages` before its inserts, `replaceStages` before the one transaction that
  * deletes and recreates (R-T13-3), so a 402 or a 409 here writes nothing. It is not the only refusal a batch can earn —
@@ -475,19 +463,12 @@ export async function assertStageBatchGates(
     }
     validateFeedGraph(edges);
   }
-  // Jul3/05 §7: base win/draw/loss numbers are free; bonuses + forfeit points
-  // + circular-H2H + carry-over were the Pro layer. All four keys are granted
-  // on every plan now (custom points / tiebreakers since V393, carry-over since
-  // V471), so each call below refuses only on an explicit staff
-  // `org_entitlement_overrides` deny — kept for exactly that lever.
+  // Jul3/05 §7: bonuses + forfeit points + circular-H2H + carry-over were the Pro layer. A stage's own points and its
+  // head-to-head scope ask no gate at all (W2d T10 fix round 1, I4: the owner's standing rule, all scoring is free — the
+  // `standings.custom_points` and `tiebreakers.custom` reads are deleted; `overrideStandings` keeps the latter). Carry-over
+  // is granted on every plan since V471, so its call refuses only on an explicit staff `org_entitlement_overrides` deny —
+  // kept for exactly that lever.
   for (const s of inputs) {
-    const cfg = s.config as { points?: unknown; h2h_scope?: string } | undefined;
-    // M6: a null `points` is "no points for this slot" (`sentPoints`): nothing to gate.
-    const points = sentPoints(cfg);
-    if (points !== undefined) await assertCustomPointsAllowed(auth, PointsRule.parse(points));
-    if (cfg?.h2h_scope === "overall") {
-      await requireFeature(auth.orgId, "tiebreakers.custom");
-    }
     if (s.progression?.carry !== undefined && s.progression.carry !== "none") {
       await requireFeature(auth.orgId, "standings.carry_over");
     }

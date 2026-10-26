@@ -2542,6 +2542,8 @@ function StageFormatRow({
       <StagePointsSection
         stageId={stageId}
         module={sportModule}
+        kind={kind}
+        stageConfig={stageConfig}
         divisionConfig={divisionConfig}
         stored={stageConfig.points}
         pointsDict={pointsDict}

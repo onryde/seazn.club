@@ -23,6 +23,12 @@ export const RULE_ERROR_STATUS = {
   /** W2d (spec §10, D9) — a stage's rules or a match's own format that makes an outcome reachable its points rule does
    *  not pay (`coverage`): the outcomes in `extra.uncovered` (`draw`, `tie`, `set:W-L`). */
   POINTS_OUTCOME_UNCOVERED: 422,
+  /** W2d Task 10 fix round 1, I2 (owner, 2026-10-26) — a FLAT stage points rule (one amount per win and per loss: no
+   *  overtime, shoot-out or not-played split, no set-score table, a shoot-out booked as a result) written to a stage whose
+   *  sport pays an outcome it reaches its own way (`sportPointsSplits`, lib/stage-points-splits.ts): saved, it would pay
+   *  that outcome as a plain win or loss. `extra.splits` names what the sport pays apart (`SPLIT_REASON_KEYS`). The
+   *  stage points editor never sends one (it shows "can't be set per stage yet" there); this is its defence in depth. */
+  POINTS_SPLIT_FLATTENED: 422,
   /** W2c Task 14 — a delete (rebuild, Undo of a generation, pool clear, Swiss reshape) that would take a match's own
    *  format with it (`fixture-override-guards.ts`). The organiser sets that match back to its stage's format first. */
   FIXTURE_HAS_OWN_FORMAT: 409,
@@ -57,6 +63,7 @@ export const RULE_ERROR_KEYS = {
   RULE_NOT_SETTABLE: "rules.err.ruleNotSettable",
   TIEBREAK_KEY_INVALID: "rules.err.tiebreakKeyInvalid",
   POINTS_OUTCOME_UNCOVERED: "rules.err.pointsOutcomeUncovered",
+  POINTS_SPLIT_FLATTENED: "rules.err.pointsRuleInexpressible",
   FIXTURE_HAS_OWN_FORMAT: "rules.err.fixtureHasOwnFormat",
   FIXTURE_OWN_FORMAT_NO_LONGER_FITS: "rules.err.fixtureOwnFormatNoLongerFits",
   FIXTURE_RULES_CHANGED: "rules.err.fixtureRulesChanged",
@@ -88,6 +95,8 @@ export const RULE_ERROR_SUPPORT_KEYS = {
   tiebreakInherited: "rules.err.tiebreakInherited",
   /** POINTS_OUTCOME_UNCOVERED's set scores: "with a set score of {scores}". */
   outcomeSet: "rules.err.outcome.set",
+  /** POINTS_SPLIT_FLATTENED's reason, and the stage points editor's: "this division scores {fields} separately". */
+  pointsSplit: "rules.err.pointsSplit",
   /** FIXTURE_RULES_CHANGED when the describer has no line for the corrected format (or the reader's client does not
    *  have it in the reader's language): "the format was corrected", without naming it. */
   fixtureRulesChangedNoLine: "rules.err.fixtureRulesChangedNoLine",
@@ -137,6 +146,24 @@ export const OUTCOME_KEYS = {
   tie: "rules.err.outcome.tie",
 } as const satisfies Record<string, MessageKey>;
 const isOutcomeWord = (o: unknown): o is keyof typeof OUTCOME_KEYS => typeof o === "string" && Object.hasOwn(OUTCOME_KEYS, o);
+
+/** W2d Task 10 fix round 1, I2 — what a sport's own points pay apart from a plain win or loss, as the stage points editor
+ *  and POINTS_SPLIT_FLATTENED name it (`extra.splits`): each a label in the division's words. In the order a sentence
+ *  lists them. Reached by `sportPointsSplits` (lib/stage-points-splits.ts), which reads the engine, never a sport list. */
+export const SPLIT_REASON_KEYS = {
+  otWin: "rules.err.pointsSplit.otWin",
+  otLoss: "rules.err.pointsSplit.otLoss",
+  shootoutWin: "rules.err.pointsSplit.shootoutWin",
+  shootoutLoss: "rules.err.pointsSplit.shootoutLoss",
+  soBonus: "rules.err.pointsSplit.soBonus",
+  unplayed: "rules.err.pointsSplit.unplayed",
+  tie: "rules.err.pointsSplit.tie",
+  noResult: "rules.err.pointsSplit.noResult",
+  pointsMap: "rules.err.pointsSplit.pointsMap",
+} as const satisfies Record<string, MessageKey>;
+export type SplitReason = keyof typeof SPLIT_REASON_KEYS;
+export const SPLIT_REASONS = Object.keys(SPLIT_REASON_KEYS) as readonly SplitReason[];
+export const isSplitReason = (r: unknown): r is SplitReason => typeof r === "string" && Object.hasOwn(SPLIT_REASON_KEYS, r);
 
 /** One refused step as the wire carries it (`extra.refusals[i]`). */
 export interface TiebreakRefusalWire {
@@ -202,6 +229,8 @@ export interface RuleErrorParams {
   inherited?: boolean;
   /** POINTS_OUTCOME_UNCOVERED: the outcomes the rule does not pay (`coverage`'s `uncovered`). */
   uncovered?: readonly string[];
+  /** POINTS_SPLIT_FLATTENED: what the sport pays apart (`SplitReason`s), named by their labels. */
+  splits?: readonly SplitReason[];
   /** FIXTURE_RULES_CHANGED: the corrected format as the public describer says it, in the sentence's language. */
   format?: string;
   /** DIVISION_FORMAT_LOCKED: whether the stage's matches can take a format of their own (default true). False drops the
@@ -243,6 +272,13 @@ function outcomeWords(uncovered: readonly string[], m: Msg): string {
   return words.join(", ");
 }
 
+/** "this division scores overtime wins, overtime losses separately": the splits by their labels, in `SPLIT_REASONS`'
+ *  order (the stage points editor's state says the same reason). */
+export function splitReasonText(splits: readonly SplitReason[], m: Msg): string {
+  const fields = SPLIT_REASONS.filter((r) => splits.includes(r)).map((r) => m(SPLIT_REASON_KEYS[r]));
+  return m(RULE_ERROR_SUPPORT_KEYS.pointsSplit, { fields: fields.join(", ") });
+}
+
 /** One code's sentence through `m` — the en dictionary on the server, the reader's on a client. */
 function sentence(code: RuleErrorCode, p: RuleErrorParams, m: Msg): string {
   switch (code) {
@@ -260,6 +296,10 @@ function sentence(code: RuleErrorCode, p: RuleErrorParams, m: Msg): string {
       return tiebreakSentence(p, m);
     case "POINTS_OUTCOME_UNCOVERED": {
       const said = m(RULE_ERROR_KEYS.POINTS_OUTCOME_UNCOVERED, { outcome: outcomeWords(p.uncovered ?? [], m) });
+      return p.stage !== undefined ? m(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: p.stage, reason: said }) : said;
+    }
+    case "POINTS_SPLIT_FLATTENED": {
+      const said = m(RULE_ERROR_KEYS.POINTS_SPLIT_FLATTENED, { reason: splitReasonText(p.splits ?? [], m) });
       return p.stage !== undefined ? m(RULE_ERROR_SUPPORT_KEYS.stageSays, { stage: p.stage, reason: said }) : said;
     }
     case "FIXTURE_HAS_OWN_FORMAT":
@@ -289,7 +329,8 @@ const isCode = (code: string): code is RuleErrorCode => Object.hasOwn(RULE_ERROR
  * `refused[0].stageName` (the division save), `stage_name` (the stage save; and the stage a division save's RULE_NOT_SETTABLE is
  * about), `fixture_no` (the match's number on the board), `reason` (why a match is locked; why a key is not settable),
  * `fit_reason` (which fit reason), `field`, `refusals` (the tie-break steps refused) with `inherited` (an order a new stage
- * would inherit), `uncovered` (the outcomes a points rule does not pay), `match_edits` (whether a locked
+ * would inherit), `uncovered` (the outcomes a points rule does not pay), `splits` (what a sport pays apart that a flat
+ * points rule would flatten), `match_edits` (whether a locked
  * stage's matches take a format of their own). Null when it is not a rule-lock code, or when the sentence needs a
  * fact the refusal does not carry — and for an engine's own reason (no `fit_reason`), which this app cannot say better:
  * the caller then keeps its own copy.
@@ -333,12 +374,21 @@ export function ruleRefusalText(code: string | undefined, extra: Readonly<Record
       const { index, key, reason, need } = first as Record<string, unknown>;
       if (typeof index !== "number" || !(key === null || typeof key === "string") || !isTiebreakReason(reason)) return null;
       const refusal: TiebreakRefusalWire = { index, key, reason, ...(typeof need === "string" ? { need } : {}) };
-      return sentence(code, { refusal, inherited: x.inherited !== undefined, stage: typeof x.stage_name === "string" && typeof x.stage_id === "string" ? x.stage_name : undefined }, m);
+      // The stage is named whenever its own order is the one refused: a division save's stage (`stage_id`) and a NEW stage's
+      // (createStages: `stage_name` alone, no id before the insert), as the server's sentence names them; an inherited
+      // order says the advice instead (fix round 1 m3).
+      return sentence(code, { refusal, inherited: x.inherited !== undefined, stage: typeof x.stage_name === "string" && x.inherited === undefined ? x.stage_name : undefined }, m);
     }
     case "POINTS_OUTCOME_UNCOVERED": {
       const uncovered = Array.isArray(x.uncovered) ? (x.uncovered as unknown[]) : [];
       if (uncovered.length === 0 || !uncovered.every((o): o is string => typeof o === "string")) return null;
       return sentence(code, { uncovered, stage: typeof x.stage_name === "string" && typeof x.stage_id === "string" ? x.stage_name : undefined }, m);
+    }
+    case "POINTS_SPLIT_FLATTENED": {
+      // Fix round 1 I2: only splits this app can name (a newer server's other reason is the server's to say).
+      const splits = Array.isArray(x.splits) ? (x.splits as unknown[]) : [];
+      if (splits.length === 0 || !splits.every(isSplitReason)) return null;
+      return sentence(code, { splits, stage: typeof x.stage_name === "string" ? x.stage_name : undefined }, m);
     }
     case "FIXTURE_HAS_OWN_FORMAT":
     case "FIXTURE_OWN_FORMAT_NO_LONGER_FITS":

@@ -10,6 +10,12 @@ import "server-only";
 //  2. a stage's points must pay every outcome its matches can reach (`coverage(rule, reachableOutcomes(...))`): 422
 //     POINTS_OUTCOME_UNCOVERED naming them in `extra.uncovered`. It replaces W2c's POINTS_MAP_INCOMPLETE, whose question
 //     (does the division's `pointsMap` answer every set score a `bestOf` reaches) is one case of it;
+//  2b. (fix round 1 I2, owner 2026-10-26) a FLAT rule — one amount per win and per loss — written to a stage whose sport
+//     pays an outcome it reaches its own way (IIHF's overtime, FIVB's 3-2, ITTF's loss not played, FIH's shoot-out bonus;
+//     `sportPointsSplits`, lib/stage-points-splits.ts, over the engine's payout) would pay that outcome as a plain win or
+//     loss: 422 POINTS_SPLIT_FLATTENED naming the splits in `extra.splits`. The stage points editor never sends one (it
+//     shows "can't be set per stage yet" there); this is the server holding the same line for any caller. A rule that
+//     states the outcome (`win.ot`, `loss.unplayed`, `bySetScore`, …) is the caller's choice and is never refused for it;
 //  3. which rules a stage reads is the loader's answer (`tableRulesOf`, engine-db/table-rules.ts), asked of the rows as they
 //     stand and as the save would leave them. The write side never re-derives a layer (the single-resolver scan).
 //
@@ -29,6 +35,7 @@ import {
 import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
 import { HttpError } from "@/lib/errors";
 import { RULE_ERROR_STATUS, ruleErrorMessage, type TiebreakRefusalWire } from "@/lib/rule-errors";
+import { isFlatRule, sportPointsSplits } from "@/lib/stage-points-splits";
 import { liveCfg } from "@/server/engine-db/fixture-cfg";
 import { repinnedOf, tableRulesOf, type LoadedTableRules, type TableRulesRow } from "@/server/engine-db/table-rules";
 
@@ -162,6 +169,20 @@ function refuseUnpaid(
   if (fresh.uncovered.length > 0 || fresh.inapplicable.length > 0) throw uncoveredRefusal(fresh, extra, stage);
 }
 
+/** 2b. Refuse a flat `rule` the save writes onto a stage whose sport pays an outcome it reaches apart (under `cfg`, the
+ *  stage's merged cfg as the save leaves it). Asked only of a rule the save WRITES (cause, not state). */
+function refuseFlatOverSplit(module: AnySportModule, rule: PointsRule, cfg: unknown, kind: string, extra: Record<string, unknown> = {}, stage?: string): void {
+  if (!isFlatRule(rule)) return;
+  const splits = sportPointsSplits(module, parsedOr(module, cfg), kind);
+  if (splits.length === 0) return;
+  throw new HttpError(
+    RULE_ERROR_STATUS.POINTS_SPLIT_FLATTENED,
+    ruleErrorMessage("POINTS_SPLIT_FLATTENED", { splits, stage }),
+    "POINTS_SPLIT_FLATTENED",
+    { ...extra, splits },
+  );
+}
+
 // ── 3. The writers ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** What one save writes to a stage's own table layer (`stages.config`): each arm absent = kept, null = cleared. */
@@ -256,6 +277,7 @@ export function refuseStageTableSave(
     { rule: now.points, cfg: cfgNow, kind: before.kind },
     pointsWhole || was === null ? null : { rule: was.points, cfg: cfgWas, kind: before.kind },
   );
+  if (arms.points !== undefined && arms.points !== null) refuseFlatOverSplit(module, arms.points, cfgNow, before.kind);
 }
 
 /**
@@ -305,12 +327,12 @@ export function refuseNewStageTable(
       throw tiebreakRefusal(
         refusals,
         { stage_name: stage.name, stage_kind: stage.kind, ...(inherited ? { inherited: rules.sources.tiebreakers } : {}) },
-        { inherited },
+        inherited ? { inherited } : { stage: stage.name },
       );
     }
     if (rules.sources.crossGroup === "stage") {
       const cross = cascadeRefusals(module, cfg, kind, rules.crossGroup, true);
-      if (cross.length > 0) throw tiebreakRefusal(cross, { stage_name: stage.name, stage_kind: stage.kind, field: "crossGroupTiebreakers" });
+      if (cross.length > 0) throw tiebreakRefusal(cross, { stage_name: stage.name, stage_kind: stage.kind, field: "crossGroupTiebreakers" }, { stage: stage.name });
     }
   }
   const own = stage.config.points !== undefined && stage.config.points !== null;
@@ -321,6 +343,9 @@ export function refuseNewStageTable(
     own ? null : { rule: bare.points, cfg: stageCfgOf(module, { ...row, stageConfig: {} }), kind: stage.kind },
     { stage_name: stage.name, stage_kind: stage.kind },
   );
+  if (own && rules.sources.points === "stage") {
+    refuseFlatOverSplit(module, rules.points, cfg, stage.kind, { stage_name: stage.name, stage_kind: stage.kind }, stage.name);
+  }
 }
 
 /** One stage of a division save, as `tableRulesRowsOf` reads it. */
@@ -345,7 +370,8 @@ export interface KeptPinned {
  *    its kind. A pinned stage is never asked: the save does not reach it.
  *  - Every stage's points must still pay what its matches can reach under the new config: refused for an outcome the save
  *    leaves newly unpaid (a pinned stage keeps its rule while the division's format moves under it).
- * Returns the pinned stages whose live layers the save moved (`stagesKeptPinned`), in board order.
+ * Returns the pinned stages whose live layers the save moved (`stagesKeptPinned`), in board order — the ones this save
+ * pinned first (`startedStagesToPin`, fix round 1 I1) among them, since their live layers are what reached them.
  */
 export function refuseDivisionTableSave(
   module: AnySportModule,
@@ -380,6 +406,38 @@ export function refuseDivisionTableSave(
     if (pinned && liveMoved(module, row, after)) kept.push({ stageId: row.stageId, name });
   }
   return kept;
+}
+
+/**
+ * W2d Task 10 fix round 1 (I1; spec §5.4 "active or complete ⇒ pinned", D9): the STARTED stages a division save would
+ * reach while they still have no pin, to be pinned with their CURRENT rules before the save lands. A stage starts without
+ * being activated when an ad-hoc match (`addFixture`) on a pending league, group or Swiss stage takes its first event (or
+ * a round of it opens): it stays `pending`, so neither generate nor completion has pinned it, and a division order or
+ * points edit would otherwise move the table under a played match (class 6: silently re-ranked).
+ *
+ * `started` is the lock's own answer (`lockedStageIdsAmong`) for the division's UNPINNED stages (a pinned stage's pin
+ * answers; `pinStageTableRules` writes nothing over one). A started stage is reached when the points or the order it
+ * reads live move (`liveMoved`, the question `stagesKeptPinned` asks of a pinned stage) — never when its rules do not read
+ * today (the read path refuses it by name, typed, and this save cannot make it read). Only a `pending` stage: an active or
+ * complete stage with no pin is a pre-W2d row, `scripts/w2d/post-deploy-pin.ts`'s to pin AFTER it converts the row's
+ * config and rule (a pin taken here would carry the unconverted split), and the lock still refuses the points that would
+ * reach it (`divisionRefusals`). A bracket stage takes no ad-hoc match
+ * (`addFixture`) and is pinned when it is seeded. A `fairPlay` flip never reaches a started stage: it is match format,
+ * refused by the lock while a started stage inherits it (`divisionRefusals`). Empty case first: none started pins nothing.
+ */
+export function startedStagesToPin(
+  module: AnySportModule,
+  stages: readonly DivisionStageRow[],
+  started: ReadonlySet<string>,
+  next: { config: unknown; tiebreakers: readonly TiebreakerKey[] | null },
+): DivisionStageRow[] {
+  if (started.size === 0) return [];
+  return stages.filter(
+    ({ row }) =>
+      row.status === "pending" &&
+      started.has(row.stageId) &&
+      liveMoved(module, row, { ...row, divisionConfig: next.config, divisionTiebreakers: next.tiebreakers }),
+  );
 }
 
 /** `read()`, or null where the engine refuses to read the rows (a typed EngineError); anything else is a defect. */

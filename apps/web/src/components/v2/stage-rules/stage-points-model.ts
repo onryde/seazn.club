@@ -5,7 +5,8 @@
 //
 // WHERE EVERY ANSWER COMES FROM. The section offers only what the server's PUT accepts, and the server's questions are
 // the engine's (W2d Task 10 retired W2c's Q1 expressibility check: a stage rule can say every split now, and whether it
-// PAYS every outcome is the server's coverage question, said back in its own words): `pointsRuleAwardReachesTable`
+// PAYS every outcome is the server's coverage question, said back in its own words; fix round 1 I2 keeps the EDITOR's own
+// limit — its boxes are a flat rule — as `pointsEditorFits`, over the engine's `payout`): `pointsRuleAwardReachesTable`
 // (batch-3 I3: which sports read a walkover SCORE), `validatePointsRule` (which bonus kinds the sport's metrics can feed),
 // `DRAW_KINDS` (which stages have a table). The web keeps no list of sports, kinds or metrics: a sport added to the
 // engine is offered exactly what the engine says it takes.
@@ -13,6 +14,9 @@ import { PointsRule, parseStoredPointsRule, pointsRuleAwardReachesTable, validat
 import { DRAW_KINDS } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { pointsLine, type PointsClause } from "@/lib/points-line";
+import { SPLIT_REASONS as SPLIT_ORDER, type SplitReason } from "@/lib/rule-errors";
+import { liveStageCfg } from "@/lib/stage-decider-off";
+import { flatOf, splitsLost, sportStageRule } from "@/lib/stage-points-splits";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -23,6 +27,33 @@ const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object
 /** Does this stage have a table its own points could rank? The server refuses a bracket kind (`refuseStagePoints`). */
 export function stageTakesPoints(kind: string): boolean {
   return (DRAW_KINDS as ReadonlySet<string>).has(kind);
+}
+
+/** Can the editor say this stage's points? */
+export type EditorFit = { readonly fits: true } | { readonly fits: false; readonly reasons: readonly SplitReason[] };
+
+/**
+ * W2d Task 10 fix round 1, I2 (owner decision 2026-10-26) — does the editor fit this stage? Its boxes ARE a flat rule (one
+ * amount per win, per loss, a draw, and a tie and a no result of 0: `ruleFromDraft`), so it fits exactly where the rule it
+ * would save from the division's own numbers pays every outcome the stage reaches what the sport's own rule pays
+ * (`tablePointsRule` under the stage's cfg, through the engine's `payout`: `lib/stage-points-splits.ts`). Where it does not
+ * (IIHF's overtime 2/1, FIVB's 3-2, ICC's tie and no result, ITTF's loss not played, FIH's shoot-out bonus), the section
+ * shows "can't be set per stage yet" and sends nothing: a Save would flatten that outcome onto the win or the loss.
+ * `reasons` names what the sport pays apart (the sentence's labels); empty when no split explains the difference.
+ * Fail-closed: a stage whose sport rule cannot be read (a cfg the sport refuses) is not offered the editor.
+ */
+export function pointsEditorFits(module: AnySportModule, divisionConfig: unknown, stage: { kind: string; config: unknown }): EditorFit {
+  if (!stageTakesPoints(stage.kind)) return { fits: true };
+  const config = isObj(stage.config) ? stage.config : null;
+  const sport = sportStageRule(module, liveStageCfg(divisionConfig, { kind: stage.kind, config }, module), stage.kind);
+  if (sport === null) return { fits: false, reasons: [] };
+  const structural = splitsLost(module, sport, flatOf(sport.rule)).reasons;
+  const editor = ruleFromDraft(module, { ...draftFromStored(module, divisionConfig, null), useDivision: false });
+  if (!editor.ok || editor.rule === null) return { fits: false, reasons: structural };
+  const lost = splitsLost(module, sport, editor.rule);
+  if (!lost.differs) return { fits: true };
+  const reasons = new Set<SplitReason>([...structural, ...lost.reasons]);
+  return { fits: false, reasons: SPLIT_ORDER.filter((r) => reasons.has(r)) };
 }
 
 /** The division's config AS THE SPORT PARSES IT (defaults applied), else as stored: what the section reads the division's

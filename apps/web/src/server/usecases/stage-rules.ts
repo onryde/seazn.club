@@ -28,7 +28,6 @@ import { mergedStageRules, refuseStagePoints, refuseUnsettableKeys, stageRulesPr
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { repinStageOwnRules, tableRulesRowsOf } from "@/server/engine-db/table-rules";
 import { refuseStageTableSave } from "./table-rule-guards";
-import { assertCustomPointsAllowed } from "./stages";
 // The format-lock predicate lives in rule-locks.ts (moved from here, W2c Task 2): the division PATCH asks the same
 // question per stage, and both halves must read one definition of "started".
 import { lockedStageIdsAmong } from "./rule-locks";
@@ -70,7 +69,7 @@ export async function formatLockedStageIds(auth: AuthCtx, divisionId: string): P
  * stage's own PointsRule (the engine's), written WHOLE to `config.points` (a rule is one sentence, not a fragment: a
  * second save replaces it); `points: null` removes it. Asked the questions every door asks of a stage's points
  * (`refuseStagePoints`: a bracket kind, Q1's inexpressible division, a walkover score the table never reads, metrics the
- * sport does not emit), behind the ONE entitlement gate (`assertCustomPointsAllowed`), and under the same per-stage lock.
+ * sport does not emit), under the same per-stage lock; no entitlement gate (W2d T10 fix round 1, I4: all scoring is free).
  * A save that moves the points re-folds a table that already has rows (a Swiss bye), after the commit.
  *
  * W2d Task 10 (spec §5.4, §5.5, §10; D3, D9; PS-5d; X-TB-2, X-TB-5, X-PT-3) — two more arms, the stage's OWN tie-break
@@ -95,14 +94,8 @@ export async function putStageRules(
   // The rule as the engine reads it (defaults applied), parsed here as well as at the route: an internal caller reaches
   // this usecase with no schema in front of it.
   const points = input.points === undefined || input.points === null ? input.points : PointsRule.parse(input.points);
-  // The entitlement gate is a pooled read: asked BEFORE the transaction opens (createStages does the same), never inside.
-  // A stage that is not there (or is another org's) answers 404 before it, never the gate's 402: one short tenant-scoped
-  // read first (fix round 1), only when there is a rule to gate.
-  if (points !== undefined && points !== null) {
-    const exists = await withTenant(auth.orgId, async (tx) => (await tx`select 1 from stages where id = ${stageId}`).length > 0);
-    if (!exists) throw new HttpError(404, "stage not found");
-    await assertCustomPointsAllowed(auth, points);
-  }
+  // W2d Task 10 fix round 1 (I4; owner standing rule "all scoring is free"): a stage's own points ask no entitlement gate.
+  // The `standings.custom_points` read (and the existence read that put a 404 before its 402) is gone.
   // Resolved BEFORE the transaction: `frozenCompetitionIds` runs its own
   // pooled query, and issuing that inside a `withTenant` callback that already
   // pins a connection is the nesting `entitlement-freeze.ts`'s header warns

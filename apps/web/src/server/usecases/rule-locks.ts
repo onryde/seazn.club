@@ -103,7 +103,8 @@ function forcedKeys(module: AnySportModule, divisionConfig: Record<string, unkno
  * value is not a change). `variant` is a change of variant key.
  *
  * W2d Task 10 (spec §5.4, §11 item 4): the division's tie-break order is no longer asked. A started stage is PINNED (its
- * order and points are its pin's, `table-rules.ts`), so a division order reaches only unpinned stages and the save
+ * order and points are its pin's, `table-rules.ts`) — at activation, or by the save itself when the stage started
+ * without one (fix round 1, I1: `startedStagesToPin`) — so a division order reaches only unstarted stages and the save
  * answers with the pinned ones it did not reach (`stagesKeptPinned`, divisions.ts), never a refusal.
  *
  * Empty case first: nothing changed asks no question and costs no query. A division with no started stage refuses
@@ -116,8 +117,8 @@ export async function divisionRefusals(
   scope: { module: AnySportModule; variantKey: string; divisionConfig: Record<string, unknown> },
 ): Promise<RefusedField[]> {
   if (change.configKeys.length === 0 && !change.variant) return [];
-  const stages = await tx<{ id: string; name: string; seq: number; kind: StageKind; config: Record<string, unknown> | null; pinned: boolean }[]>`
-    select id, name, seq, kind, config, table_rules_pinned is not null as pinned from stages where division_id = ${divisionId} order by seq`;
+  const stages = await tx<{ id: string; name: string; seq: number; kind: StageKind; status: string; config: Record<string, unknown> | null; pinned: boolean }[]>`
+    select id, name, seq, kind, status, config, table_rules_pinned is not null as pinned from stages where division_id = ${divisionId} order by seq`;
   const started = await lockedStageIdsAmong(tx, stages.map((s) => s.id));
   const live = stages.filter((s) => started.has(s.id));
   const out: RefusedField[] = [];
@@ -137,8 +138,12 @@ export async function divisionRefusals(
     const s = first((st) => {
       const cfg = st.config ?? {};
       if (table && !DRAW_KINDS.has(st.kind)) return false;        // a knockout has no table to protect
-      // The stage's own PointsRule replaces it, and so does its pin (W2d): a pinned stage pays the pin's rule.
-      if (table && STAGE_POINTS_REPLACES.has(key) && (st.pinned || cfg.points != null)) return false;
+      // The stage's own PointsRule replaces it, and so does its pin (W2d): a pinned stage pays the pin's rule. So does the
+      // pin the save writes first (fix round 1, I1): a started stage that is still `pending` (an ad-hoc match scored before
+      // any generate) is pinned with its current rules before the save lands (`startedStagesToPin`, divisions.ts). Only an
+      // active or complete stage with no pin (a legacy row the post-deploy pin has not reached, which no read can rank
+      // until it is pinned) keeps W2c's lock: a pin written later would otherwise take the new points.
+      if (table && STAGE_POINTS_REPLACES.has(key) && (st.pinned || cfg.points != null || st.status === "pending")) return false;
       // NOT `appliesTo`: that says where the engine OFFERS a key, and the fold reads cfg whatever the stage kind (boardgame
       // `tiebreak` is listed for bracket kinds, yet a league game folds to the tie-break phase when the division says so).
       // What a stage truly ignores is a key it FORCES.

@@ -24,7 +24,8 @@ import { createEntrants } from "../entrants";
 import { pinStageTableRules } from "@/server/engine-db/table-rules";
 import { divisionLockedFields, tableRuleKeys } from "../rule-locks";
 import { putStageRules } from "../stage-rules";
-import { createStages, generateStageFixtures } from "../stages";
+import { addFixture, createStages, generateStageFixtures } from "../stages";
+import { startDivision } from "../schedule";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 afterAll(async () => { await (globalThis as { _sql?: { end(): Promise<void> } })._sql?.end(); });
@@ -122,14 +123,38 @@ describe.skipIf(!HAS_DB)("W2c T20 the settings form's locks, loaded from the sam
     expect(replaced, "anti-vacuity: badminton's pointsMap is a key the pin replaces").toBeGreaterThan(0);
   });
 
-  it("the same stage UNPINNED (a legacy started stage, before the post-deploy pin): every table rule stays locked, the cascade still carries no lock", async () => {
+  it("W2d T10 fix round 1 (I1): a league started AD HOC (a loose match played before any generate: pending, no pin) shows the keys a pin replaces open — the save pins it first — and the format locked", async () => {
+    const auth = await seedOrg();
+    const d = await seedDivision(auth, "badminton", "short");
+    const [e1, e2] = await createEntrants(auth, d.id, [1, 2].map((i) => ({ kind: "individual" as const, display_name: `E${i}`, seed: i, members: [] })));
+    const [s1] = await createStages(auth, d.id, { seq: 1, kind: "league", name: "Pool A", config: {}, progression: null });
+    const { fixture_id } = await addFixture(auth, s1!.id, { home_entrant_id: e1!.id, away_entrant_id: e2!.id });
+    await startDivision(auth, d.id);
+    await start(auth, fixture_id);
+    const [row] = await sql<{ status: string; pinned: boolean }[]>`select status, table_rules_pinned is not null as pinned from stages where id = ${s1!.id}`;
+    expect(row, "premise: started ad hoc, pending, no pin").toEqual({ status: "pending", pinned: false });
+    const locks = byField(await divisionLockedFields(auth, d.id));
+    const table = tableRuleKeys(resolveLatestModule("badminton"), "short");
+    expect(locks.variant_key, "premise: the stage has started").toMatchObject({ code: "DIVISION_FORMAT_LOCKED", stageName: "Pool A" });
+    expect(locks.tiebreakers, "the cascade is never locked").toBeUndefined();
+    let open = 0;
+    for (const k of table) {
+      if (PIN_REPLACES.has(k)) { expect(locks[k], `${k}: the save pins the stage first`).toBeUndefined(); open++; }
+      else expect(locks[k]?.code, `${k} (a table rule no pin replaces)`).toBe("DIVISION_TABLE_RULES_LOCKED");
+    }
+    expect(open, "anti-vacuity: badminton's pointsMap is judged").toBeGreaterThan(0);
+  });
+
+  it("a pre-W2d row (active, no pin: the post-deploy pin's input, which no product path writes, so it is shaped by hand) keeps every table rule locked; the cascade still carries no lock", async () => {
     const r = await rig("badminton", "short");
     await start(r.auth, r.fixtureId);
     await sql`update stages set table_rules_pinned = null, table_rules_pinned_at = null where id = ${r.s1.id}`;
+    const [row] = await sql<{ status: string }[]>`select status from stages where id = ${r.s1.id}`;
+    expect(row!.status, "premise: the legacy shape is an ACTIVE stage").toBe("active");
     const locks = byField(await divisionLockedFields(r.auth, r.divisionId));
     const table = tableRuleKeys(resolveLatestModule("badminton"), "short");
     expect(locks.tiebreakers, "the cascade is never locked").toBeUndefined();
-    for (const k of table) expect(locks[k], `${k} (a table rule, unpinned)`).toMatchObject({ code: "DIVISION_TABLE_RULES_LOCKED", stageName: "Pool A" });
+    for (const k of table) expect(locks[k], `${k} (a table rule, pre-W2d row)`).toMatchObject({ code: "DIVISION_TABLE_RULES_LOCKED", stageName: "Pool A" });
     expect([...table].filter((k) => PIN_REPLACES.has(k)).length, "anti-vacuity: a key the pin would replace is judged").toBeGreaterThan(0);
   });
 
@@ -191,7 +216,7 @@ describe.skipIf(!HAS_DB)("W2c T20 the settings form's locks, loaded from the sam
     expect(await divisionLockedFields(r.auth, randomUUID()), "and an unknown id").toEqual([]);
   });
 
-  it("every sport, a started league: the variant and every field the form shows are locked, by the engine's own table/format split; once pinned, the keys the pin replaces open (W2d T10)", async () => {
+  it("every sport, a started league: the variant and every field the form shows are locked by the engine's own table/format split, except the keys a pin replaces — open on a league started pending (the save pins it first) and once pinned, locked on a pre-W2d row (W2d T10)", async () => {
     let sports = 0;
     let judged = 0;
     let tableJudged = 0;
@@ -208,19 +233,24 @@ describe.skipIf(!HAS_DB)("W2c T20 the settings form's locks, loaded from the sam
       expect(locks.tiebreakers, `${m.key}: the cascade is never locked`).toBeUndefined();
       const keys = formKeys(m.key);
       expect(keys.length, `${m.key}: the form edits at least one key`).toBeGreaterThan(0);
+      // The stage above started PENDING (its first frozen fixture, no generate: what an ad-hoc match leaves), so a save that
+      // moves its points pins it first (fix round 1, I1): the keys a pin replaces are open, every other key is locked.
+      const want = (k: string) => (PIN_REPLACES.has(k) ? undefined : table.has(k) ? "DIVISION_TABLE_RULES_LOCKED" : "DIVISION_FORMAT_LOCKED");
       for (const k of keys) {
-        expect(locks[k]?.code, `${m.key}.${k}`).toBe(table.has(k) ? "DIVISION_TABLE_RULES_LOCKED" : "DIVISION_FORMAT_LOCKED");
+        expect(locks[k]?.code, `${m.key}.${k}`).toBe(want(k));
         judged++;
       }
-      // The table keys the form has no box for (an API client sends them) are named too: the save refuses `pointsMap` on
-      // a started table whether or not the sport's form edits it, so the loader must say so for every sport.
+      // The table keys the form has no box for (an API client sends them) are named too, for every sport: on a pre-W2d row
+      // (active, no pin: the post-deploy pin's input, shaped by hand) the save refuses every one of them, `pointsMap` too.
+      await sql`update stages set status = 'active' where id = ${g.stage.id}`;
+      const legacy = byField(await divisionLockedFields(g.auth, g.divisionId));
       for (const k of table) {
-        expect(locks[k]?.code, `${m.key}.${k} (a table rule, with or without a form box)`).toBe("DIVISION_TABLE_RULES_LOCKED");
+        expect(locks[k]?.code, `${m.key}.${k} (started pending)`).toBe(want(k));
+        expect(legacy[k]?.code, `${m.key}.${k} (a table rule on a pre-W2d row, with or without a form box)`).toBe("DIVISION_TABLE_RULES_LOCKED");
         tableJudged++;
         if (!keys.includes(k)) tableWithoutBox++;
       }
-      // The stage above is unpinned (a raw fixture row, no generate): the legacy shape. Pinned, as every started stage is
-      // after the post-deploy pin, it pays its pin's points: those keys open, every other key keeps its lock.
+      // Pinned, as every started stage is after the post-deploy pin, it pays its pin's points: those keys open again.
       await pinStageTableRules(sql, g.stage.id);
       const pinned = byField(await divisionLockedFields(g.auth, g.divisionId));
       expect(pinned.variant_key, `${m.key}: variant (pinned)`).toMatchObject({ code: "DIVISION_FORMAT_LOCKED" });

@@ -23,13 +23,16 @@
 // Sequence cases: the second call (a re-send changes nothing and bumps nothing), the empty case (nothing started: no
 // lock anywhere, an empty patch refuses nothing), a sport with no match-scoped key (the per-match door refuses by
 // declaration), a sport whose stage can end in an outcome the saved points do not pay (W2d T10: cricket's tie, refused
-// POINTS_OUTCOME_UNCOVERED by name; W2c's Q1 "inexpressible" is retired), and the control division (the same sport started
+// POINTS_OUTCOME_UNCOVERED by name; W2c's Q1 "inexpressible" is retired), a division whose rulebook pays an outcome apart
+// (W2d T10 fix round 1 I2: IIHF's overtime, FIVB's 3-2, ITTF's loss not played - a FLAT rule is refused
+// POINTS_SPLIT_FLATTENED naming the splits, `_points-split-rulebook.ts`, and a rule that states one is saved), and the control division (the same sport started
 // with NO pin, a legacy row, locks the table keys the pinned stage frees). Real Postgres (skipped without DATABASE_URL).
 //
 // W2d Task 10 (spec §5.4): the generated stage is PINNED at activation, so the division's `points` / `pointsMap` and its
 // `tiebreakers` no longer reach it and are never refused; `scoring` / `awardScore` keep W2c's lock.
 import { afterAll, describe, expect, it } from "vitest";
 import { PointsRule, coverage, reachableOutcomes } from "@seazn/engine/competition";
+import { RULEBOOK_SPLITS } from "@/components/v2/stage-rules/__tests__/_points-split-rulebook";
 import { checkFixtureOverride, fixtureKeysFor, pointsKeysFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { sportCases } from "@seazn/engine/testkit";
 import { canonicalJson } from "@/lib/canonical-json";
@@ -176,6 +179,7 @@ const seen = {
   matchRefusedByDeclaration: new Set<string>(),
   pointsSaved: new Set<string>(),
   pointsRefusedUncovered: new Set<string>(),
+  pointsRefusedFlat: new Set<string>(),
   tableSaveWitnessed: new Set<string>(),
   keptNamed: new Set<string>(),
   controlLocked: new Set<string>(),
@@ -217,15 +221,31 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
       // ---- 2. the stage's own points (T13/T18), the same door ------------------------------------------------------
       // The engine's own answer to "does this rule pay every outcome the stage can end in" (spec §5.4), on the stage's cfg.
       const want = coverage(PointsRule.parse(BASE_POINTS), reachableOutcomes(m, resolved(m, rig, rig.stageKey.frag), "league"));
+      // W2d T10 fix round 1 I2: where the division's rulebook pays an outcome apart (IIHF's overtime, FIVB's 3-2, ITTF's loss
+      // not played), the FLAT rule is refused by name and nothing is stored; a rule that states a split (a loss not played
+      // paying 0) is the caller's own and is saved. Cricket's tie and no result are a flat rule's own fields, never a split.
+      const splits = (RULEBOOK_SPLITS[`${key}/${rig.variant}`] ?? []).filter((r) => r !== "tie" && r !== "noResult");
+      const stated = (r: typeof BASE_POINTS) => (splits.length === 0 ? r : { ...r, loss: { ...r.loss, unplayed: 0 } });
+      const base = stated(BASE_POINTS);
+      const second = stated(SECOND_POINTS);
       if (want.ok) {
-        const stored = PointsRule.parse(BASE_POINTS);
-        const out = await putStageRules(b.auth, b.stageId, { points: BASE_POINTS });
+        if (splits.length > 0) {
+          await expect(putStageRules(b.auth, b.stageId, { points: BASE_POINTS }), `${key}/${rig.variant}: the flat rule`).rejects.toMatchObject({
+            status: RULE_ERROR_STATUS.POINTS_SPLIT_FLATTENED,
+            code: "POINTS_SPLIT_FLATTENED",
+            extra: { splits },
+          });
+          expect(Object.hasOwn(await stageConfig(b.stageId), "points"), "refused flat: no points stored").toBe(false);
+          seen.pointsRefusedFlat.add(key);
+        }
+        const stored = PointsRule.parse(base);
+        const out = await putStageRules(b.auth, b.stageId, { points: base });
         expect(canonicalJson(out.points), "the rule as the engine reads it (defaults in)").toBe(canonicalJson(stored));
         expect(canonicalJson(out.rules), "the rules arm, omitted, is left as stored").toBe(canonicalJson(rulesStage));
-        const replaced = await putStageRules(b.auth, b.stageId, { points: SECOND_POINTS });
-        expect(canonicalJson(replaced.points), "second call: a rule is one sentence, written whole").toBe(canonicalJson(PointsRule.parse(SECOND_POINTS)));
+        const replaced = await putStageRules(b.auth, b.stageId, { points: second });
+        expect(canonicalJson(replaced.points), "second call: a rule is one sentence, written whole").toBe(canonicalJson(PointsRule.parse(second)));
         const cfg = await stageConfig(b.stageId);
-        expect(canonicalJson(cfg.points), "stored at stages.config.points").toBe(canonicalJson(PointsRule.parse(SECOND_POINTS)));
+        expect(canonicalJson(cfg.points), "stored at stages.config.points").toBe(canonicalJson(PointsRule.parse(second)));
         expect(canonicalJson(rulesOf(cfg)), "points saved, rules untouched").toBe(canonicalJson(rulesStage));
         seen.pointsSaved.add(key);
       } else {
@@ -296,7 +316,7 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
       await expect(putStageRules(b.auth, b.stageId, { rules: rig.stageKey.frag }), "even a re-send is a write the lock refuses").rejects.toMatchObject(refusedLock);
       await expect(putStageRules(b.auth, b.stageId, { rules: rig.inheritedKey.frag })).rejects.toMatchObject(refusedLock);
       await expect(putStageRules(b.auth, b.stageId, { rules: null })).rejects.toMatchObject(refusedLock);
-      await expect(putStageRules(b.auth, b.stageId, { points: SECOND_POINTS })).rejects.toMatchObject(refusedLock);
+      await expect(putStageRules(b.auth, b.stageId, { points: second })).rejects.toMatchObject(refusedLock);
       await expect(putStageRules(b.auth, b.stageId, { points: null }), "a removal is a change too").rejects.toMatchObject(refusedLock);
       expect(canonicalJson(await stageConfig(b.stageId)), "every refusal wrote nothing").toBe(stageBefore);
       const blockB = await loadFixtureMatchRules(b.auth, fixB, dict);
@@ -407,7 +427,9 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
       seen.voidKeptLock.add(key);
 
       // ---- the control: the same sport started with NO pin and no stage points locks the table keys this one freed --------
-      // (W2d T10: a legacy row the post-deploy pin has not reached, the only stage the W2c table lock still holds.)
+      // (W2d T10: a pre-W2d row — ACTIVE, no pin: the post-deploy pin's input, which no product path writes, so it is shaped by
+      // hand — the only stage the W2c points lock still holds. A stage that starts PENDING with no pin, an ad-hoc match, is
+      // pinned by the save instead: division-locks.test.ts "W2d T10 fix round 1 (I1)".)
       const freed = [...new Set(tableKeys)].filter((t) => t === "points" || t === "pointsMap");
       if (freed.length > 0) seen.controlOwed.add(key);
       if (freed.length > 0) {
@@ -450,6 +472,8 @@ describe.skipIf(!HAS_DB)("one division, one stage: override, points, match overr
     expect(seen.pointsSaved.size + seen.pointsRefusedUncovered.size, "every sport took one of the two points branches").toBe(all.length);
     expect(seen.pointsSaved.size, "some sport saved stage points").toBeGreaterThan(0);
     expect(seen.pointsRefusedUncovered.size, "some sport's stage can end in an outcome the points do not pay (cricket's tie)").toBeGreaterThan(0);
+    expect(seen.pointsRefusedFlat.size, "fix round 1 I2: some sport's rulebook split refused the flat rule").toBeGreaterThan(0);
+    expect([...seen.pointsRefusedFlat].filter((k) => !seen.pointsSaved.has(k)), "and each then saved the rule that states a split").toEqual([]);
     expect([...seen.controlLocked].sort(), "the control ran for every sport whose stage points free a table key").toEqual([...seen.controlOwed].sort());
     expect(seen.controlLocked.size, "the control ran for at least one sport").toBeGreaterThan(0);
     expect(seen.tableSaveWitnessed.size, "the table-key edit saved for at least one sport").toBeGreaterThan(0);

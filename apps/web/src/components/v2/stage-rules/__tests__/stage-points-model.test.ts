@@ -19,12 +19,14 @@ import {
   offeredBonusKinds,
   offersWalkoverScore,
   parseNumber,
+  pointsEditorFits,
   previewClauses,
   ruleFromDraft,
   stageTakesPoints,
   storedPointsRule,
   type PointsDraft,
 } from "../stage-points-model";
+import { RULEBOOK_SPLITS, TABLE_KINDS } from "./_points-split-rulebook";
 
 const sport = (key: string): AnySportModule => {
   const m = builtinModules.find((x) => x.key === key);
@@ -66,10 +68,12 @@ const editorRule = (win: number, draw: number, loss: number): PointsRule => lega
 const plain = (): PointsRule => editorRule(BASE.win, BASE.draw, BASE.loss);
 
 describe("stage points model (I9 killers for t18)", () => {
-  it("W2d T10: no division is kept out of the editor - the server's door takes the plain rule on every division the registry ships (counted)", () => {
-    // The W2c answer was "inexpressible" for ice hockey, hockey's shoot-out, cricket and indoor volleyball (Q1). That refusal
-    // is retired (spec §5.3: those divisions' points are outcome-keyed now), so the door takes the editor's three boxes
-    // everywhere; the sweep counts the divisions the W2c engine would have split, by their own config, so it witnesses them.
+  it("W2d T10: the server's points door (`refuseStagePoints`: the kind and metrics questions) takes the plain rule on every division the registry ships (counted); which divisions keep the EDITOR is `pointsEditorFits`'s (fix round 1 I2, below)", () => {
+    // The W2c answer was "inexpressible" for ice hockey, hockey's shoot-out, cricket and indoor volleyball (Q1), asked by
+    // this door. W2d retired that question here (spec §5.3: those divisions' points are outcome-keyed now); the door asks
+    // only what a rule is on any division. Fix round 1 I2 (owner 2026-10-26) keeps the editor's own "not yet" state, and the
+    // stage save's flat-over-split refusal, beside it (`table-rule-guards.ts`): neither is this door. The sweep counts the
+    // divisions W2c split, by their own config, so it witnesses them.
     let swept = 0;
     let wasSplit = 0;
     for (const { m, variant, cfg } of DIVISIONS) {
@@ -335,5 +339,92 @@ describe("stage points model (I9 killers for t18)", () => {
   it("anti-vacuity: the registry the sweeps walk is the engine's, and it is not small", () => {
     expect(DIVISIONS.length).toBeGreaterThan(20);
     expect(DIVISIONS.filter((d) => d.m.key === "football").length, "football's variants are in it").toBeGreaterThan(0);
+  });
+});
+
+describe("W2d T10 fix round 1 I2: the editor keeps a can't-set-per-stage state where its flat rule would flatten the sport's own (owner 2026-10-26)", () => {
+  const fit = (m: AnySportModule, cfg: unknown, kind = "league", config: Record<string, unknown> = {}) => pointsEditorFits(m, cfg, { kind, config });
+
+  it("named: ice hockey (IIHF's 3-2-1-0), indoor volleyball (FIVB's 3-2 = 2/1) and cricket (ICC's tie and no result) get the state with their reasons; a plain 3/1/0 sport (generic) keeps the editor", () => {
+    const ih = sport("icehockey");
+    const vb = sport("volleyball");
+    const cr = sport("cricket");
+    expect(fit(ih, ih.variants.iihf), "ice hockey").toEqual({ fits: false, reasons: ["otWin", "otLoss"] });
+    expect(fit(vb, vb.variants.indoor), "indoor volleyball").toEqual({ fits: false, reasons: ["pointsMap"] });
+    expect(fit(cr, cr.variants.t20), "cricket").toEqual({ fits: false, reasons: ["tie", "noResult"] });
+    // The positive pair, on the sport whose 3/1/0 the editor's boxes were built for.
+    const plainCfg = generic.variants.score as Record<string, unknown>;
+    expect((generic.configSchema.parse(plainCfg) as { points: unknown }).points, "premise: generic pays 3/1/0").toEqual({ w: 3, d: 1, l: 0 });
+    expect(fit(generic, plainCfg), "generic").toEqual({ fits: true });
+  });
+
+  it("sweep: every (sport, variant) the registry ships × every table stage kind — the state exactly on the divisions the rulebooks split, with their reasons; the editor on the rest (counted, both sides > 0, every rulebook row reached)", () => {
+    let checked = 0;
+    let state = 0;
+    let editor = 0;
+    const reached = new Set<string>();
+    for (const { m, variant, cfg } of DIVISIONS) {
+      const id = `${m.key}/${variant}`;
+      for (const kind of TABLE_KINDS) {
+        const want = RULEBOOK_SPLITS[id];
+        const got = fit(m, cfg, kind);
+        if (want === undefined) {
+          expect(got, `${id} ${kind}: the editor`).toEqual({ fits: true });
+          editor++;
+        } else {
+          expect(got, `${id} ${kind}: the state, named`).toEqual({ fits: false, reasons: [...want] });
+          reached.add(id);
+          state++;
+        }
+        checked++;
+      }
+    }
+    expect(checked, "every division × every table kind").toBe(DIVISIONS.length * TABLE_KINDS.length);
+    expect(TABLE_KINDS.length, "anti-vacuity: table kinds").toBeGreaterThan(1);
+    expect(state, "the state was reached").toBe(Object.keys(RULEBOOK_SPLITS).length * TABLE_KINDS.length);
+    expect(editor, "and the editor").toBeGreaterThan(0);
+    expect([...reached].sort(), "every rulebook row is a division the registry ships").toEqual(Object.keys(RULEBOOK_SPLITS).sort());
+  });
+
+  it("it follows the division's config, not the sport's name: ice hockey's recreational variant keeps the editor, and so does an IIHF division edited to pay overtime like regulation; an empty config reads the sport's defaults", () => {
+    const ih = sport("icehockey");
+    expect(fit(ih, ih.variants.recreational), "recreational: no overtime split").toEqual({ fits: true });
+    const iihf = ih.configSchema.parse(ih.variants.iihf) as { points: Record<string, number> };
+    const flat = { ...iihf, points: { ...iihf.points, otWin: iihf.points.win!, otLoss: iihf.points.loss! } };
+    expect(fit(ih, flat), "IIHF paying an overtime win and loss as regulation's").toEqual({ fits: true });
+    expect(fit(ih, iihf), "the same division as shipped (the positive pair)").toEqual({ fits: false, reasons: ["otWin", "otLoss"] });
+    // A second call answers the same (pure): no state carried between asks.
+    expect(fit(ih, iihf), "asked twice").toEqual(fit(ih, iihf));
+    const empty = fit(ih, {});
+    expect(empty, "the empty config: the sport's defaults decide").toEqual(fit(ih, ih.configSchema.parse({})));
+  });
+
+  it("the STAGE's own rules are read, not the division's alone: a hockey league stage that switches FIH's shoot-out on (its division has none) gets the state; the same stage without it keeps the editor", () => {
+    const hk = sport("hockey");
+    const outdoor = hk.variants["fih-outdoor"];
+    const shootout = (hk.configSchema.parse(hk.variants["fih-shootout"]) as { shootout: unknown }).shootout;
+    expect(shootout, "premise: FIH's shoot-out, from the sport's own variant").toBeDefined();
+    expect(fit(hk, outdoor, "league", {}), "no shoot-out on the table: the editor").toEqual({ fits: true });
+    expect(fit(hk, outdoor, "league", { rules: { shootout } }), "the stage's shoot-out: booked drawn plus a bonus").toEqual({ fits: false, reasons: ["soBonus"] });
+  });
+
+  it("fail-closed: a division config the sport refuses leaves no sport rule to compare against - the state, no reason named (never the editor)", () => {
+    const ih = sport("icehockey");
+    const refused = { ...(ih.variants.iihf as Record<string, unknown>), periods: "many" };
+    expect(ih.configSchema.safeParse(refused).success, "premise: the sport refuses this config").toBe(false);
+    expect(fit(ih, refused)).toEqual({ fits: false, reasons: [] });
+    const recreational = { ...(ih.variants.recreational as Record<string, unknown>), periods: "many" };
+    expect(fit(ih, recreational), "even on the variant whose editor fits").toEqual({ fits: false, reasons: [] });
+  });
+
+  it("a stage kind with no table is never asked (the section is not mounted there): fits", () => {
+    const ih = sport("icehockey");
+    let bracket = 0;
+    for (const kind of StageKind.options) {
+      if (stageTakesPoints(kind)) continue;
+      expect(fit(ih, ih.variants.iihf, kind), kind).toEqual({ fits: true });
+      bracket++;
+    }
+    expect(bracket, "bracket kinds checked").toBeGreaterThan(0);
   });
 });

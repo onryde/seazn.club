@@ -77,7 +77,8 @@ describe("OpenAPI — 400s are validation errors; POST /stages documents the cre
       "`points.forfeit.awardScore`",
       "422 POINTS_OUTCOME_UNCOVERED (`uncovered`)",
       "402 PAYMENT_REQUIRED",
-      "`standings.custom_points`",
+      "`competitions.max_active`",
+      "bonuses and a forfeit row are free on every plan",
     ])
       expect(op.summary, claim).toContain(claim);
     expect(op.summary, "W2d T10: the retired code is not claimed").not.toMatch(/INEXPRESSIBLE|POINTS_MAP_INCOMPLETE/);
@@ -115,9 +116,10 @@ describe("OpenAPI — 400s are validation errors; POST /stages documents the cre
       "RULE_NOT_SETTABLE (`field` `points`)",
       "`points.forfeit.awardScore`",
       "422 POINTS_OUTCOME_UNCOVERED (`uncovered`, `stage_name`)",
-      "422 TIEBREAK_KEY_INVALID (`refusals`)",
+      "422 TIEBREAK_KEY_INVALID (`refusals`, `stage_id`, `stage_name`) for the INHERITED tie-break order",
+      "`config.tiebreakers` is an unknown key of the strict stage config: 400 VALIDATION",
       "402 PAYMENT_REQUIRED",
-      "`standings.custom_points`",
+      "A stage's own points ask no plan feature",
     ])
       expect(op.summary, claim).toContain(claim);
     expect(op.summary, "W2d T10: the retired codes are not claimed").not.toMatch(/INEXPRESSIBLE|POINTS_MAP_INCOMPLETE/);

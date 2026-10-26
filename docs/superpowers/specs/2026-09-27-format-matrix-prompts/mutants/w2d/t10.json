@@ -106,8 +106,8 @@
  {
   "id": "t10-pinned-exemption-dropped",
   "file": "apps/web/src/server/usecases/rule-locks.ts",
-  "find": "(st.pinned || cfg.points != null)",
-  "replace": "(/*MUT*/ cfg.points != null)",
+  "find": "(st.pinned || cfg.points != null || st.status === \"pending\")",
+  "replace": "(/*MUT*/ cfg.points != null || st.status === \"pending\")",
   "killers": [
    {
     "cwd": "apps/web",
@@ -369,6 +369,377 @@
      "src/server/usecases/__tests__/division-tiebreaks-write.test.ts"
     ],
     "name": "createStages: an inherited key invalid for the new stage's kind"
+   }
+  ]
+ },
+ {
+  "id": "t10-division-save-skips-pin",
+  "file": "apps/web/src/server/usecases/divisions.ts",
+  "find": "        for (const s of toPin) await pinStageTableRules(tx, s.row.stageId);",
+  "replace": "        /*MUT*/ void toPin;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locks.test.ts"
+    ],
+    "name": "I1 an ad-hoc match played on a pending league"
+   }
+  ]
+ },
+ {
+  "id": "t10-to-pin-unstarted-too",
+  "file": "apps/web/src/server/usecases/table-rule-guards.ts",
+  "find": "      started.has(row.stageId) &&",
+  "replace": "      /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locks.test.ts"
+    ],
+    "name": "I1 a division POINTS save on the same shape lands"
+   }
+  ]
+ },
+ {
+  "id": "t10-to-pin-any-status",
+  "file": "apps/web/src/server/usecases/table-rule-guards.ts",
+  "find": "      row.status === \"pending\" &&\n      started.has(row.stageId) &&",
+  "replace": "      /*MUT*/ started.has(row.stageId) &&",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locks.test.ts"
+    ],
+    "name": "I1 a pre-W2d row"
+   }
+  ]
+ },
+ {
+  "id": "t10-to-pin-unmoved",
+  "file": "apps/web/src/server/usecases/table-rule-guards.ts",
+  "find": "      liveMoved(module, row, { ...row, divisionConfig: next.config, divisionTiebreakers: next.tiebreakers }),",
+  "replace": "      /*MUT*/ true,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locks.test.ts"
+    ],
+    "name": "I1 empty case two"
+   }
+  ]
+ },
+ {
+  "id": "t10-lock-pending-arm-dropped",
+  "file": "apps/web/src/server/usecases/rule-locks.ts",
+  "find": "(st.pinned || cfg.points != null || st.status === \"pending\")",
+  "replace": "(st.pinned || cfg.points != null /*MUT*/)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locks.test.ts"
+    ],
+    "name": "I1 a division POINTS save on the same shape lands"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/division-locked-fields.test.ts"
+    ],
+    "name": "W2d T10 fix round 1"
+   }
+  ]
+ },
+ {
+  "id": "t10-split-flat-guard-dropped",
+  "file": "apps/web/src/server/usecases/table-rule-guards.ts",
+  "find": "  if (!isFlatRule(rule)) return;",
+  "replace": "  /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "W2d T10 fix round 1 I2: a FLAT rule over a sport"
+   }
+  ]
+ },
+ {
+  "id": "t10-split-refusal-dropped",
+  "file": "apps/web/src/server/usecases/table-rule-guards.ts",
+  "find": "  if (splits.length === 0) return;",
+  "replace": "  if (/*MUT*/ true) return;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "W2d T10 fix round 1 I2: a FLAT rule over a sport"
+   }
+  ]
+ },
+ {
+  "id": "t10-split-put-unasked",
+  "file": "apps/web/src/server/usecases/table-rule-guards.ts",
+  "find": "  if (arms.points !== undefined && arms.points !== null) refuseFlatOverSplit(module, arms.points, cfgNow, before.kind);",
+  "replace": "  /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "W2d T10 fix round 1 I2: a FLAT rule over a sport"
+   }
+  ]
+ },
+ {
+  "id": "t10-split-create-unasked",
+  "file": "apps/web/src/server/usecases/table-rule-guards.ts",
+  "find": "    refuseFlatOverSplit(module, rules.points, cfg, stage.kind, { stage_name: stage.name, stage_kind: stage.kind }, stage.name);",
+  "replace": "    /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "another sport and another door"
+   }
+  ]
+ },
+ {
+  "id": "t10-isflat-drops-win-ot",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "    rule.win.ot === undefined &&",
+  "replace": "    /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "isFlatRule"
+   }
+  ]
+ },
+ {
+  "id": "t10-isflat-drops-win-so",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "    rule.win.so === undefined &&",
+  "replace": "    /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "isFlatRule"
+   }
+  ]
+ },
+ {
+  "id": "t10-isflat-drops-loss-ot",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "    rule.loss.ot === undefined &&",
+  "replace": "    /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "isFlatRule"
+   }
+  ]
+ },
+ {
+  "id": "t10-isflat-drops-loss-so",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "    rule.loss.so === undefined &&",
+  "replace": "    /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "isFlatRule"
+   }
+  ]
+ },
+ {
+  "id": "t10-isflat-drops-loss-unplayed",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "    rule.loss.unplayed === undefined &&",
+  "replace": "    /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "isFlatRule"
+   }
+  ]
+ },
+ {
+  "id": "t10-isflat-drops-bySetScore",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "    rule.bySetScore === undefined &&",
+  "replace": "    /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "isFlatRule"
+   }
+  ]
+ },
+ {
+  "id": "t10-isflat-drops-shootoutAs",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "    rule.shootoutAs === \"result\"\n  );",
+  "replace": "    /*MUT*/ true\n  );",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "isFlatRule"
+   }
+  ]
+ },
+ {
+  "id": "t10-editor-fits-always",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  if (!lost.differs) return { fits: true };",
+  "replace": "  return { fits: true }; /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+    ],
+    "name": "W2d T10 fix round 1 I2"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "W2d T10 fix round 1 I2"
+   }
+  ]
+ },
+ {
+  "id": "t10-section-ignores-fit",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+  "find": "  if (!fit.fits) {",
+  "replace": "  if (/*MUT*/ false) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "W2d T10 fix round 1 I2"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+    ],
+    "name": "fix round 1 I2"
+   }
+  ]
+ },
+ {
+  "id": "t10-fits-open-on-no-sport-rule",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  if (sport === null) return { fits: false, reasons: [] };",
+  "replace": "  if (sport === null) return { fits: true }; /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+    ],
+    "name": "fail-closed"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "fail-closed"
+   }
+  ]
+ },
+ {
+  "id": "t10-fits-open-on-blank-editor",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  if (!editor.ok || editor.rule === null) return { fits: false, reasons: structural };",
+  "replace": "  if (!editor.ok || editor.rule === null) return { fits: true }; /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+    ],
+    "name": "W2d T10 fix round 1 I2"
+   }
+  ]
+ },
+ {
+  "id": "t10-fits-structural-reasons-dropped",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  const reasons = new Set<SplitReason>([...structural, ...lost.reasons]);",
+  "replace": "  const reasons = new Set<SplitReason>([/*MUT*/ ...lost.reasons]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+    ],
+    "name": "W2d T10 fix round 1 I2"
+   }
+  ]
+ },
+ {
+  "id": "t10-split-text-unknown-reason-said",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "      if (splits.length === 0 || !splits.every(isSplitReason)) return null;",
+  "replace": "      if (splits.length === 0 /*MUT*/) return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ]
+   }
+  ]
+ },
+ {
+  "id": "t10-m3-inherited-named-as-stage",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "stage: typeof x.stage_name === \"string\" && x.inherited === undefined ? x.stage_name : undefined",
+  "replace": "stage: typeof x.stage_name === \"string\" /*MUT*/ ? x.stage_name : undefined",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/rule-errors-copy.test.ts"
+    ]
    }
   ]
  }

@@ -3,8 +3,9 @@
 // see (AGENTS.md class 2). Saving, reloading and the table are the browser's (stage-rules-w2c.spec.ts).
 //
 // Expected values come from the engine's declarations (`DRAW_KINDS`, the sport's own parsed config) and the dictionaries the
-// product renders; every sweep reports its count and zero is a failure. W2d Task 10 (spec §11): the inexpressible state is
-// deleted, so a division W2c split opens the editor on the card like any other.
+// product renders; every sweep reports its count and zero is a failure. W2d Task 10 fix round 1, I2 (owner 2026-10-26): a
+// division whose sport pays an outcome its own way (IIHF's overtime 2/1) gets "can't be set per stage yet" on the card,
+// asked of the stage the PANEL hands the section (its kind and its own rules: the wiring a section test cannot see).
 import { describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { StagesPanel } from "@/components/v2/stages-panel";
@@ -92,27 +93,33 @@ describe("the state the section opens in follows the division (scoring is free o
     for (const plan of ["community", "pro"]) expect(stateOf(panel({ viewerPlan: { plan, isStaff: false } as never })), plan).toBe("editor");
   });
 
-  it("W2d T10: an ice-hockey division that splits its overtime points (W2c: inexpressible) opens the editor on the card, stored rule or none; a started stage reads it", () => {
+  it("fix round 1 I2: an ice-hockey division that pays overtime apart (IIHF) gets the state on the card - no input - stored rule or none; a started stage reads it with no control; recreational ice hockey keeps the editor", () => {
     const m = builtinModules.find((x) => x.key === "icehockey")!;
-    const split = Object.keys(m.variants).find((v) => {
-      const pts = (m.configSchema.parse(m.variants[v]) as { points?: Record<string, unknown> }).points ?? {};
-      return "otWin" in pts;
-    });
-    expect(split, "premise: the engine has an ice-hockey variant paying overtime apart (iihf)").toBeDefined();
-    const html = panel({ sportKey: "icehockey", divisionConfig: m.variants[split!] });
-    expect(stateOf(html)).toBe("editor");
-    expect(html, "no inexpressible card").not.toContain('data-testid="stage-points-inexpressible"');
-    expect(html, "the inherit control is there (W2c showed no control here)").toContain('data-testid="stage-points-use-division"');
+    const iihf = m.variants.iihf;
+    const pts = (m.configSchema.parse(iihf) as { points?: Record<string, number> }).points ?? {};
+    expect(pts.otWin !== pts.win, "premise: IIHF pays an overtime win apart, from the sport's own config").toBe(true);
+    const html = panel({ sportKey: "icehockey", divisionConfig: iihf });
+    expect(stateOf(html)).toBe("inexpressible");
+    expect(html, "the state card").toContain('data-testid="stage-points-inexpressible"');
+    expect(html, "no inherit control, no boxes: nothing can be sent").not.toContain('data-testid="stage-points-use-division"');
+    expect(html).not.toContain('data-testid="stage-points-win"');
     const OWN = { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] };
-    const stored = panel({ sportKey: "icehockey", divisionConfig: m.variants[split!], stages: stageOf("league", { points: OWN }), pointsDict: POINTS_DICT });
-    expect(stateOf(stored)).toBe("editor");
-    const win = stored.slice(stored.lastIndexOf("<", stored.indexOf('data-testid="stage-points-win"')), stored.indexOf(">", stored.indexOf('data-testid="stage-points-win"')) + 1);
-    expect(win, "the stored rule's own win").toContain('value="4"');
-    // a started stage reads the same rule and gets no control
-    const locked = panel({ sportKey: "icehockey", divisionConfig: m.variants[split!], stages: stageOf("league", { points: OWN }), pointsDict: POINTS_DICT, formatLockedStageIds: [STAGE_ID] });
-    expect(stateOf(locked)).toBe("readonly");
+    const stored = panel({ sportKey: "icehockey", divisionConfig: iihf, stages: stageOf("league", { points: OWN }), pointsDict: POINTS_DICT });
+    expect(stateOf(stored)).toBe("inexpressible");
+    expect(stored, "the stored rule is read beside the reason").toContain('data-testid="stage-points-preview"');
+    expect(stored, "and it clears").toContain('data-testid="stage-points-clear"');
+    const locked = panel({ sportKey: "icehockey", divisionConfig: iihf, stages: stageOf("league", { points: OWN }), pointsDict: POINTS_DICT, formatLockedStageIds: [STAGE_ID] });
+    expect(stateOf(locked)).toBe("inexpressible");
     expect(locked).toContain('data-testid="stage-points-readonly"');
-    expect(locked).not.toContain('data-testid="stage-points-inexpressible"');
+    expect(locked, "a started stage: no clear").not.toContain('data-testid="stage-points-clear"');
+    expect(stateOf(panel({ sportKey: "icehockey", divisionConfig: m.variants.recreational })), "the positive pair").toBe("editor");
+  });
+
+  it("fix round 1 I2: the panel hands the section the STAGE's own rules - a hockey league stage switching FIH's shoot-out on gets the state; its division alone keeps the editor", () => {
+    const m = builtinModules.find((x) => x.key === "hockey")!;
+    const shootout = (m.configSchema.parse(m.variants["fih-shootout"]) as { shootout: unknown }).shootout;
+    expect(stateOf(panel({ sportKey: "hockey", divisionConfig: m.variants["fih-outdoor"] })), "no shoot-out").toBe("editor");
+    expect(stateOf(panel({ sportKey: "hockey", divisionConfig: m.variants["fih-outdoor"], stages: stageOf("league", { rules: { shootout } }) })), "the stage's own shoot-out").toBe("inexpressible");
   });
 });
 

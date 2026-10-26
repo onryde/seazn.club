@@ -204,8 +204,8 @@ const notSettable = (field: string, reason: string): HttpError =>
  *     RULE_NOT_SETTABLE, field `points.forfeit.awardScore`;
  *  4. a rule that reads metrics the sport does not emit (a margin bonus on a sport with no score): the engine's
  *     CONFIG_INVALID (`validatePointsRule`).
- * The entitlement half (bonuses and a forfeit row need `standings.custom_points`) is `assertCustomPointsAllowed`
- * (`stages.ts`): a pooled read, asked before the caller's transaction opens. Pure; the caller's transaction is untouched.
+ * No entitlement half: bonuses and a forfeit row are free on every plan (W2d T10 fix round 1, I4: the owner's "all
+ * scoring is free"; the `standings.custom_points` gate is deleted). Pure; the caller's transaction is untouched.
  */
 export function refuseStagePoints(module: AnySportModule, kind: StageKind, rule: PointsRule): void {
   if (!DRAW_KINDS.has(kind)) throw notSettable("points", "a bracket stage has no table to rank");

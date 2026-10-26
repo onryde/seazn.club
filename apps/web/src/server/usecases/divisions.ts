@@ -29,11 +29,11 @@ import { isValidCutoffDay } from "@/lib/registration-rules";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { assertCompetitionNotFrozen } from "./entitlement-freeze";
-import { divisionRefusals } from "./rule-locks";
+import { divisionRefusals, lockedStageIdsAmong } from "./rule-locks";
 import { refuseInvalidatedOverrides } from "./fixture-override-guards";
 import { refuseInvalidatedStageRules } from "./stage-rules-merge";
-import { refuseCascadeForSport, refuseDivisionTableSave, refuseStrayPointsMapKeys, type KeptPinned } from "./table-rule-guards";
-import { tableRulesRowsOf } from "@/server/engine-db/table-rules";
+import { refuseCascadeForSport, refuseDivisionTableSave, refuseStrayPointsMapKeys, startedStagesToPin, type KeptPinned } from "./table-rule-guards";
+import { pinStageTableRules, tableRulesRowsOf } from "@/server/engine-db/table-rules";
 import { reseedStagePresets } from "./stage-preset-reseed";
 import { heldAwards, rewriteHeldAwards, type HeldAward } from "./award-rewrite";
 import { bumpMovedRules, unfrozenRules, type UnfrozenRules } from "@/server/engine-db/rules-version";
@@ -702,7 +702,8 @@ function restoreKey(target: Record<string, unknown>, from: Record<string, unknow
 /** What a division save answers: the stored row, plus every field the save did NOT apply and the started stage that
  *  depends on it (`[]` when nothing was refused). */
 /** `stagesKeptPinned` (W2d Task 10, spec §5.4): the started (pinned) stages whose live table rules this save moved — they
- *  keep their pin, board order. */
+ *  keep their pin, board order. A stage that started with no pin (an ad-hoc match on a pending stage) is pinned by the save
+ *  first and listed with them (fix round 1, I1). */
 export type PatchDivisionResult = DivisionRow & { refused: RefusedField[]; stagesKeptPinned: KeptPinned[] };
 
 // Keys on the constraint NAME, not just the Postgres 23514 code — divisions
@@ -1287,15 +1288,21 @@ export async function patchDivision(
       // stage's order on its own kind (a football `fairPlay` flip re-asks them all), and every stage's points against what
       // its matches can now reach. A pinned stage is not reached: it is listed in `stagesKeptPinned`. Asked only when the
       // save really moves the config or the order (an unchanged one leaves every stage as it stood).
+      //
+      // Fix round 1 (I1): a stage that STARTED without a pin (an ad-hoc match scored on a pending table stage) and that
+      // this save reaches is pinned FIRST, with the rules it reads now, in this transaction and under this save's locks —
+      // the division row is written further down, so the pin reads the stored layers — and is then a pinned stage like
+      // any other: not asked, and listed in `stagesKeptPinned`. A refusal below rolls the pin back with the save.
       if (configApplied || tiebreakersChanged) {
         const module_ = sportModule ?? resolveModule(current.sport_key, current.module_version);
         const nextOrder = (patch.tiebreakers !== undefined ? patch.tiebreakers : current.tiebreakers) as TiebreakerKey[] | null;
-        const stages = await tableRulesRowsOf(tx, { divisionId: id });
-        stagesKeptPinned = refuseDivisionTableSave(module_, stages, {
-          config: configApplied && nextConfig !== undefined ? nextConfig : currentConfig,
-          tiebreakers: nextOrder,
-          orderSaved: tiebreakersChanged,
-        });
+        const leaves = { config: configApplied && nextConfig !== undefined ? nextConfig : currentConfig, tiebreakers: nextOrder };
+        const rows = await tableRulesRowsOf(tx, { divisionId: id });
+        const unpinned = rows.filter((s) => s.row.pin === null || s.row.pin === undefined).map((s) => s.row.stageId);
+        const toPin = startedStagesToPin(module_, rows, await lockedStageIdsAmong(tx, unpinned), leaves);
+        for (const s of toPin) await pinStageTableRules(tx, s.row.stageId);
+        const stages = toPin.length === 0 ? rows : await tableRulesRowsOf(tx, { divisionId: id });
+        stagesKeptPinned = refuseDivisionTableSave(module_, stages, { ...leaves, orderSaved: tiebreakersChanged });
       }
     }
     // Rename regenerates the slug (v3/01 §2); old slug keeps redirecting.

@@ -94,7 +94,9 @@ async function seededGraph(auth: AuthCtx): Promise<{ divisionId: string; competi
   return { ...d, before };
 }
 
-const withForfeit = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 3, loserPoints: 0 } };
+/** A body one gate still reads (`formats.double_elim`, kept for a staff deny override). W2d T10 fix round 1 (I4): a stage's
+ *  own points ask no gate any more (all scoring is free), so the "before the gate" cases deny this one instead. */
+const DOUBLE_ELIM = { seq: 1, kind: "double_elim" as const, name: "DE", config: {}, progression: null };
 
 describe.skipIf(!HAS_DB)("R-T13-2 replaceStages asks every batch gate BEFORE its delete", () => {
   it("the positive pair first: a clean Apply replaces the graph (new rows)", async () => {
@@ -104,17 +106,6 @@ describe.skipIf(!HAS_DB)("R-T13-2 replaceStages asks every batch gate BEFORE its
     const after = await stageIds(divisionId);
     expect(after.length).toBe(2);
     expect(after).not.toContain(before[0]);
-  });
-
-  it("a custom_points 402 leaves the original stages untouched (count and ids)", async () => {
-    const auth = await seedOrg("pro");
-    await denyFeature(auth.orgId, "standings.custom_points");
-    const { divisionId, before } = await seededGraph(auth);
-    await expect(replaceStages(auth, divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({
-      status: 402,
-      featureKey: "standings.custom_points",
-    });
-    expect(await stageIds(divisionId)).toEqual(before);
   });
 
   it("a formats.double_elim 402 leaves the original stages untouched (count and ids)", async () => {
@@ -166,15 +157,15 @@ describe.skipIf(!HAS_DB)("R-T13-2 replaceStages asks every batch gate BEFORE its
 
   it("a nonexistent division, or another org's, is 404 before any gate's 402; the other org's stages untouched", async () => {
     const auth = await seedOrg("pro");
-    await denyFeature(auth.orgId, "standings.custom_points");
-    await expect(replaceStages(auth, randomUUID(), [league(1, { points: withForfeit })])).rejects.toMatchObject({ status: 404 });
+    await denyFeature(auth.orgId, "formats.double_elim");
+    await expect(replaceStages(auth, randomUUID(), [DOUBLE_ELIM])).rejects.toMatchObject({ status: 404 });
     const other = await seedOrg("pro");
     const theirs = await seededGraph(other);
-    await expect(replaceStages(auth, theirs.divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({ status: 404 });
+    await expect(replaceStages(auth, theirs.divisionId, [DOUBLE_ELIM])).rejects.toMatchObject({ status: 404 });
     expect(await stageIds(theirs.divisionId)).toEqual(theirs.before);
     // The positive pair: the same body on the denied org's OWN division answers the gate's 402.
     const own = await seededGraph(auth);
-    await expect(replaceStages(auth, own.divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({ status: 402 });
+    await expect(replaceStages(auth, own.divisionId, [DOUBLE_ELIM])).rejects.toMatchObject({ status: 402 });
   });
 });
 
@@ -221,7 +212,7 @@ describe.skipIf(!HAS_DB)("R-T13-3 replaceStages deletes and inserts in ONE trans
 describe.skipIf(!HAS_DB)("fix round 2 (c): Apply on a LOCKED division answers FORMAT_LOCKED before any gate", () => {
   it("fixtures exist + a gated body = 409 FORMAT_LOCKED, never the 402; nothing changes", async () => {
     const auth = await seedOrg("pro");
-    await denyFeature(auth.orgId, "standings.custom_points");
+    await denyFeature(auth.orgId, "formats.double_elim");
     const { divisionId } = await seedDivision(auth);
     await createEntrants(
       auth,
@@ -233,14 +224,14 @@ describe.skipIf(!HAS_DB)("fix round 2 (c): Apply on a LOCKED division answers FO
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${stage!.id}`;
     expect(n, "premise: fixtures exist, so the format is locked").toBeGreaterThan(0);
     const before = await stageIds(divisionId);
-    await expect(replaceStages(auth, divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({
+    await expect(replaceStages(auth, divisionId, [DOUBLE_ELIM])).rejects.toMatchObject({
       status: 409,
       code: "FORMAT_LOCKED",
     });
     expect(await stageIds(divisionId)).toEqual(before);
     // The positive pair: the same gated body on an UNLOCKED division of the same org still answers the gate's 402.
     const open = await seededGraph(auth);
-    await expect(replaceStages(auth, open.divisionId, [league(1, { points: withForfeit })])).rejects.toMatchObject({ status: 402 });
+    await expect(replaceStages(auth, open.divisionId, [DOUBLE_ELIM])).rejects.toMatchObject({ status: 402 });
   });
 });
 
