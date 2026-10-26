@@ -59,7 +59,7 @@ jobs:
       group: deploy-prod
       # Serialise, don't cancel: an in-flight production rollout must not be
       # killed mid-deploy by a second tag pushed moments later. Mirrors
-      # placement-prod.yml's `deploy` job.
+      # the placement repo's `prod.yml` `deploy` job.
       cancel-in-progress: false
     env:
       PROD_STRIPE_SECRET_KEY: ${{ secrets.PROD_STRIPE_SECRET_KEY }}

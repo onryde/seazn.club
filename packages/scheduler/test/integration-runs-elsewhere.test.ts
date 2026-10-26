@@ -8,8 +8,8 @@
 //     files, or it goes red for a reason that has nothing to do with the code.
 //   * ci.yml's `scheduler-live` job stands up the real placement container (the PINNED image, as a service: engine-split phase
 //     2a, Task W2) and is the only place those files can run. It must run BOTH, with a judge that fails on zero tests, on any
-//     skip, and on any live file that did not report. They ran in placement-ci.yml's `integration` job until the placement
-//     service moved to its own repo.
+//     skip, and on any live file that did not report. They ran in the placement workflow's `integration` job until the
+//     placement service moved to its own repo.
 //
 // Before this test, the live job ran one of the two (the other was run by no workflow at all) and pointed at a path that
 // had stopped existing when the file moved, so the job would have "ran 0 files" and still read as an intentional skip. Both
@@ -309,22 +309,6 @@ describe("the scheduler's live tests run in ci.yml's scheduler-live job, against
     const out = judge(json());
     expect(out.code, `the judge accepted it; errors: ${out.errors}`).toBe(1);
     expect(out.errors).toMatch(why);
-  });
-
-  it("placement-ci.yml's filter and drift gate follow the code to packages/scheduler", () => {
-    const yml = workflow("placement-ci.yml");
-    const paths = yml.slice(yml.indexOf("    paths:"), yml.indexOf("concurrency:"));
-    expect(paths, "the scheduler is in the PR path filter").toContain('"packages/scheduler/**"');
-    // build.ts still owns the request and the fallback, so the engine's scheduling tree stays in the filter.
-    expect(paths).toContain('"packages/engine/src/scheduling/**"');
-    expect(paths, "the retired engine codegen script is no longer a trigger").not.toContain("packages/engine/scripts/gen-proto.ts");
-    // Each step on its own: the drift gate's error message also names the command, so a joined text would let a stale
-    // regenerate step ride on the message of the next one.
-    const regenerate = step(yml, "Regenerate TypeScript proto stubs");
-    expect(regenerate, "the codegen runs in the scheduler workspace").toMatch(/run:\s*pnpm --filter @seazn\/scheduler gen:proto\s*$/);
-    const drift = step(yml, "TypeScript stub drift gate");
-    expect(drift, "the gate diffs the scheduler's generated tree").toContain("git status --porcelain -- packages/scheduler/src/generated/");
-    expect(regenerate + drift, "no stale engine path in the codegen or its gate").not.toMatch(/packages\/engine\/(src\/scheduling\/generated|scripts)/);
   });
 
   it("ci.yml's scheduler step excludes every live file, and still runs the rest of the package", () => {

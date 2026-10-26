@@ -579,7 +579,7 @@ jobs:
       # without a service it SKIPS, and skipped code is uncovered code. Pointing
       # this job at a container does lift coverage (measured 89.97% -> 90.64%),
       # and it was tried — but it made the job RED, while the identical three
-      # tests passed in the live-service job (then placement-ci.yml's `integration`, now `scheduler-live`) on the same
+      # tests passed in the live-service job (`scheduler-live`) on the same
       # commit, same image: `total=3 passed=3 failed=0 skipped=0`.
       #
       # The difference is contention. That job runs those three tests alone;
@@ -2094,7 +2094,7 @@ jobs:
   # assertion that would have caught it, and it lives in the suite this job
   # runs.
   #
-  # These two files ran in placement-ci.yml's `integration` job until the
+  # These two files ran in the placement workflow's `integration` job until the
   # placement service moved to its own repo; the service is now the PINNED image
   # (placement-pin), started by the runner as a service container. Affordable
   # because the service is stateless: no DB, no Flyway, no seeding.

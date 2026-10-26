@@ -149,7 +149,7 @@ const STATUS_BY_WIRE_VALUE = new Map<number, SolveBuildOutcome["status"]>([
  * concurrent organisers riding one cached client ride ten HTTP/2 streams over
  * ONE TCP connection, and the proxy fans work out by CONNECTION — so all ten
  * pin to a single machine no matter how many are running or suspended.
- * `services/placement/fly.toml`'s `[services.concurrency] hard_limit = 1` is the
+ * `fly.toml`'s `[services.concurrency] hard_limit = 1` (onryde/seazn.club.placement) is the
  * other half of this fix; it only means anything if each solve actually opens
  * its own connection for the proxy to count.
  *

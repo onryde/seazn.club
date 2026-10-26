@@ -332,12 +332,7 @@ function jobsOf(file: string): Job[] {
 const WORKFLOW_FILES = readdirSync(WORKFLOWS)
   .filter((f) => f.endsWith(".yml"))
   .sort();
-/** The three workflows that still build or deploy the frozen in-tree placement service (W3 deletes all three): each names
- *  `services/placement` and builds its own image from it, so they are outside both "builds from source" and "pulls the pin".
- *  Named, with a test that every exemption is real, so the list cannot quietly widen or outlive the files. */
-const FROZEN_TREE_WORKFLOWS = ["placement-ci.yml", "placement-prod.yml", "placement-stg.yml"];
 const ALL_JOBS = WORKFLOW_FILES.flatMap((f) => jobsOf(f));
-const PINNED_JOBS = ALL_JOBS.filter((j) => !FROZEN_TREE_WORKFLOWS.includes(j.file));
 
 /** The jobs that docker-run the CI placement image: facts, from the plan's table — not from the scan under test. */
 const RUNNERS = [
@@ -428,7 +423,7 @@ describe("the workflows: every placement image comes from the pin", () => {
   it("scans every workflow (anti-vacuity), and finds exactly the seven jobs that docker-run the CI placement image", () => {
     expect(WORKFLOW_FILES.length, "workflow files scanned").toBeGreaterThan(10);
     expect(ALL_JOBS.length, "jobs found").toBeGreaterThan(30);
-    const found = PINNED_JOBS.filter(runsPlacement).map(key).sort();
+    const found = ALL_JOBS.filter(runsPlacement).map(key).sort();
     expect(found.length, "jobs found that run placement-service:ci").toBe(RUNNERS.length);
     expect(found).toEqual([...RUNNERS].sort());
   });
@@ -507,7 +502,7 @@ describe("the workflows: every placement image comes from the pin", () => {
       expect(jobs, `${file}: jobs parsed`).toBeGreaterThan(0);
       jobsScanned += jobs;
       expect(text, `${file}: a typed placement tag`).not.toMatch(/\/seazn-placement:[0-9a-f]{7,}/);
-      if (!FROZEN_TREE_WORKFLOWS.includes(file)) expect(text, `${file}: builds placement from source`).not.toMatch(/context:\s*services\/placement/);
+      expect(text, `${file}: builds placement from source`).not.toMatch(/context:\s*services\/placement/);
     }
     expect(jobsScanned, "jobs scanned across every workflow").toBe(ALL_JOBS.length);
     expect(jobsScanned, "and that is a real number of jobs").toBeGreaterThan(30);
@@ -520,19 +515,6 @@ describe("the workflows: every placement image comes from the pin", () => {
       blocks++;
     }
     expect(blocks).toBe(7);
-  });
-
-  it("every exemption is real: each frozen-tree workflow exists and still builds placement from source (delete the exemption with the file, W3)", () => {
-    let checked = 0;
-    for (const file of FROZEN_TREE_WORKFLOWS) {
-      expect(WORKFLOW_FILES, `the exempt workflow ${file} exists`).toContain(file);
-      expect(stripComments(readFileSync(join(WORKFLOWS, file), "utf8")), `${file} builds from services/placement`).toMatch(/context:\s*services\/placement/);
-      checked++;
-    }
-    expect(checked).toBe(3);
-    const exemptJobs = FROZEN_TREE_WORKFLOWS.flatMap((f) => jobsOf(f)).length;
-    expect(exemptJobs, "they have jobs").toBeGreaterThan(0);
-    expect(PINNED_JOBS.length, "the exemption removes only those files' jobs").toBe(ALL_JOBS.length - exemptJobs);
   });
 });
 
@@ -633,7 +615,7 @@ describe("ci.yml: placement-pin resolves the reference, scheduler-live runs the 
   // cannot hold: that it GIVES UP (`exit 1`), after exactly the loop bound, and that it stops at the first success (`break`).
   describe("the wait step's script, executed", () => {
     const CONTAINER = "feedbeef-service-container-id";
-    const BOUND = 15; // the loop `placement-ci.yml` ran: `seq 1 15`, one second apart, the figure its own message gives
+    const BOUND = 15; // the loop the pre-split placement CI workflow ran: `seq 1 15`, one second apart, the figure its own message gives
     const SHIMS = shimDir({
       // Succeeds on the TIMEOUT_OK_ON-th probe and never before; unset means never.
       timeout: [

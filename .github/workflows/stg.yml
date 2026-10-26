@@ -7,7 +7,7 @@ name: Stg
 #
 # NO `needs:` — the gates live in a SEPARATE workflow (ci.yml) now, and a
 # `needs:` job can only reference jobs in its own workflow file. Same
-# reasoning placement-prod.yml's `deploy` job already uses: this workflow
+# reasoning the placement repo's `prod.yml` `deploy` job already uses: this workflow
 # only runs on push, ci.yml only runs on pull_request, and they never
 # overlap, so the gates having already been green is trusted rather than
 # re-checked here.

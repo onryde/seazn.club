@@ -10,8 +10,8 @@
 //     exactly that commit's bytes;
 //   * a checkout whose proto is not committed, is empty, or whose working copy is not HEAD's committed bytes even though
 //     `status` is clean (assume-unchanged / skip-worktree, or a smudge filter);
-//   * THIS repository (the one `pkgRoot` lives in): it also has a committed proto/scheduler.proto, so the pin would name a
-//     monorepo commit and the image tag would not exist;
+//   * THIS repository (the one `pkgRoot` lives in): any of its commits is a monorepo commit, so the image tag would not exist
+//     (and a pre-split checkout of it still commits a root proto/scheduler.proto that would otherwise be vendored);
 //   * a relative path resolved against the wrong directory (`resolveCheckout`).
 // Every refusal happens BEFORE the first write, so a refused run leaves the previous copy and pin exactly as they were.
 //
@@ -95,8 +95,9 @@ export function vendorProto(opts: { checkout: string; pkgRoot?: string }): Vendo
     throw new Error(`not a git checkout: ${checkout} (expected the root of a git work tree; git says the root is ${top.out})`);
   }
 
-  // 1b. Not THIS repository. The monorepo also commits a proto/scheduler.proto, so without this a mistaken argument vendors our
-  //     own copy and pins a monorepo commit. Worktrees of one repository share a common dir, so compare that, not the toplevel.
+  // 1b. Not THIS repository. Any monorepo commit is the wrong pin, and a pre-split checkout of it still commits a root
+  //     proto/scheduler.proto, so without this a mistaken argument vendors that copy. Worktrees of one repository share a
+  //     common dir, so compare that, not the toplevel.
   const common = commonDirOf(checkout);
   const own = commonDirOf(pkgRoot);
   if (common !== null && own !== null && samePlace(common, own)) {

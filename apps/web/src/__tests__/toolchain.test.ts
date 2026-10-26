@@ -210,12 +210,7 @@ describe("toolchain: no V8 heap ceiling for typecheck", () => {
     const header = job.slice(0, job.indexOf("steps:"));
     expect(header).not.toContain("github.event_name");
 
-    for (const file of [
-      "stg.yml",
-      "prod.yml",
-      "placement-stg.yml",
-      "placement-prod.yml",
-    ]) {
+    for (const file of ["stg.yml", "prod.yml"]) {
       const text = readFileSync(
         join(REPO_ROOT, ".github/workflows", file),
         "utf8",

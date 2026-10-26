@@ -77,6 +77,11 @@ packages/engine/dist/
 # Turborepo
 .turbo
 
+# The placement service moved to onryde/seazn.club.placement (engine-split phase 2a). Checkouts that ever ran it natively
+# still hold an untracked services/placement/venv (hundreds of MB); the tree's own .gitignore went with the deletion, so
+# without this line `git status` lists that venv as untracked forever.
+/services/placement/
+
 # Subagent scratch memory. Agents write these under whatever package they are
 # working in, so they appear as untracked dirs anywhere in the tree — and a
 # single `git add -A` would commit twelve of them. Agent DEFINITIONS
