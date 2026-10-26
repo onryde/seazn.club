@@ -18,7 +18,7 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
 }));
 
-import { qualificationStatus, type PointsRule } from "@seazn/engine/competition";
+import { coverage, reachableOutcomes, type PointsRule } from "@seazn/engine/competition";
 import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import en from "@/dictionaries/en/public.json";
@@ -438,7 +438,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect([rowOf(rows, t.P!).tieBreak?.key, rowOf(rows, t.Q!).tieBreak?.key], "lots, not direct, split them").toEqual(["lots", "lots"]);
   });
 
-  it("X-TB-2 the pin comes from the real generate; the override refusal reads it (the real fixture-rules usecase); the lock comes from the real first event; a division order saved after activation never reaches the public table", async () => {
+  it("X-TB-2 the pin comes from the real generate; with the division's live points moved off it, the override refusal (the real fixture-rules usecase) and the public table both follow the PIN; the lock comes from the real first event; a division order saved after activation never reaches the public table", async () => {
     // single-sport: the override refusal needs a match-scope format key whose change adds outcomes the pinned rule does
     // not pay — volleyball's best-of (VB-PT-3); generic has no match-scope key.
     const vb = mod("volleyball");
@@ -451,8 +451,20 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     const pinned = await loadTableRules(sql, s.stageId);
     expect(pinned.tiebreakers, "pinned to FIVB V3's order (the engine's declaration)").toEqual(vb.defaultTiebreakers("league", cfg));
     expect(pinned.points, "pinned to the sport's rule").toEqual(vb.tablePointsRule(cfg, "league"));
+    // Move the LIVE layer off the pin (A14 review m2): the division's own points table, saved through the real division
+    // door before the first event, pays every win 3/0 ("*", an organiser's map pays as given). The pin keeps FIVB's
+    // best-of-5 rule, so pin and live now disagree on a best-of-3's 2-0 and 2-1 and on what a 3-2 pays.
+    const LIVE_MAP = { "*": [3, 0] };
+    await patchDivision(s.auth, s.divisionId, { config: { pointsMap: LIVE_MAP } });
+    const [stored] = await sql<{ map: unknown }[]>`select config -> 'pointsMap' as map from divisions where id = ${s.divisionId}`;
+    expect(stored?.map, "premise: the division's live points table landed").toEqual(LIVE_MAP);
+    const liveCfg = (bestOf: number) => vb.configSchema.parse({ ...variantCfg("volleyball", "indoor"), pointsMap: LIVE_MAP, bestOf });
+    const live = vb.tablePointsRule(liveCfg(5), "league");
+    expect(live, "premise: the live rule is not the pin").not.toEqual(pinned.points);
+    expect(coverage(vb.tablePointsRule(liveCfg(3), "league"), reachableOutcomes(vb, liveCfg(3), "league")).ok, "premise: the LIVE rule pays a best-of-3's every outcome").toBe(true);
+    expect((await loadTableRules(sql, s.stageId)).points, "the pin holds").toEqual(pinned.points);
     // The override refusal reads the PIN: a best-of-3 match on a best-of-5 stage reaches 2-0 and 2-1, which FIVB's
-    // best-of-5 rule does not pay (VB-PT-3).
+    // best-of-5 rule does not pay (VB-PT-3) — and which the live table would.
     const bc = await between(s.stageId, t.B!, t.C!);
     await expect(writeFixtureRulesOverride(s.auth, [bc.id], { bestOf: 3 })).rejects.toMatchObject({
       status: 422,
@@ -478,16 +490,17 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     await playSets(s.auth, s.stageId, "volleyball", t.B!, t.C!, [[25, 23], [25, 23], [25, 23]]);
     await playSets(s.auth, s.stageId, "volleyball", t.C!, t.A!, [[25, 23], [25, 23], [25, 23]]);
     const rows = await publicRows(s);
-    // FIVB (VB-PT-1): 3-0 pays 3/0, 3-2 pays 2/1 → A 2, B 1 + 3 = 4, C 3. One win each.
+    // The PIN pays (FIVB, VB-PT-1): 3-0 pays 3/0, 3-2 pays 2/1 → A 2, B 1 + 3 = 4, C 3. One win each. The live table
+    // ("*" 3/0) would pay A 3, B 3, C 3.
     expect(Object.fromEntries(Object.entries(t).map(([k, id]) => [k, rowOf(rows, id).points]))).toEqual({ A: 2, B: 4, C: 3 });
     // The pinned order (wins, points, …) → B, C, A. The division's later order (wins, point_ratio, …) would read A first:
     // A won 180 rally points to 125, C 144 to 144, B 125 to 180.
     expect(order(rows, t)).toEqual(["B", "C", "A"]);
   });
 
-  it("X-TB-3 a wins-first sport's DEFAULT reaches the public qualification view through the real loader: badminton races in matches won (BWF 16.2.1) and the view is built, not silently dropped", async () => {
-    // single-sport: badminton stands for the wins-first sports (volleyball, tennis share the gate); its default order is
-    // the one the routed gap names (merge-fix report, A14 route).
+  it("X-TB-3 a wins-first sport's DEFAULT reaches the public qualification view through the real loader: badminton's table gets its view, not silently dropped", async () => {
+    // single-sport: badminton's default order is the one the routed gap names (merge-fix report, A14 route). Its flat 2/0
+    // makes a race in points the race in wins scaled by two, so the race itself is witnessed on volleyball (next case).
     const bdm = mod("badminton");
     const s = await publicScene({
       sport: "badminton",
@@ -504,7 +517,6 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
         },
       ] as never,
     });
-    const t = named("ABCD", s.entrants);
     // Two of the three rounds, the higher seed winning every match.
     const fixtures = await sql<{ round_no: number; home: string; away: string }[]>`
       select round_no, home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${s.stageId} order by round_no, seq_in_round`;
@@ -535,21 +547,76 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     const view = build(stage, snap);
     expect(view, "a wins-first table gets its qualification view").not.toBeNull();
     expect(view!.table.cutIndex).toBe(2);
-    // The race in matches won (BWF 16.2.1: each match pays one win or none), from the engine's qualification maths over
-    // the W column and a remaining count read straight from the fixtures table.
-    const left = (id: string) =>
-      fixtures.filter((f) => f.round_no > 2 && (f.home === id || f.away === id)).length;
-    const engine = qualificationStatus({
-      rows: snap.rows.map((r) => ({ entrantId: r.entrantId, points: r.won, active: true })),
-      remaining: new Map(snap.rows.map((r) => [r.entrantId, left(r.entrantId)])),
-      perMatch: { max: 1, min: 0, winFloor: 1, lossCeil: 0, winsOnly: true },
-      cut: 2,
-      anyPlayed: true,
-      complete: false,
-    })!;
+  });
+
+  it("X-TB-3 volleyball races in matches WON, not in its table points: after two rounds of 3-2 results the two winners are Through and the two losers Out on wins (FIVB V3-1), where a race in FIVB points (VB-PT-1) would leave all four open", async () => {
+    // single-sport: volleyball is the wins-first sport whose rule pays a win unevenly (3-0 → 3/0, 3-2 → 2/1), so a race
+    // in points and a race in wins disagree; badminton's flat 2/0 cannot show it (above), and tennis shares the gate.
+    const vb = mod("volleyball");
+    const cfg = vb.configSchema.parse(variantCfg("volleyball", "indoor"));
+    expect([vb.primaryTableKey, vb.defaultTiebreakers("league", cfg)[0]], "premise: FIVB V3-1 ranks on matches won first").toEqual(["wins", "wins"]);
+    const s = await publicScene({
+      sport: "volleyball",
+      variant: "indoor",
+      entrants: 4,
+      stages: [
+        { seq: 1, kind: "league", name: "Table", config: {} },
+        {
+          seq: 2,
+          kind: "knockout",
+          name: "Finals",
+          config: {},
+          progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 2 }] }], placement: "rank_order", timing: "on_complete" },
+        },
+      ] as never,
+    });
+    // Named by the last round: X–Y and Z–W meet in round 3, so rounds 1–2 are the four cross matches, each won by X or Y 3-2.
+    const fixtures = await sql<{ round_no: number; home: string; away: string }[]>`
+      select round_no, home_entrant_id as home, away_entrant_id as away from fixtures where stage_id = ${s.stageId} order by round_no, seq_in_round`;
+    const last = fixtures.filter((f) => f.round_no === 3);
+    expect([fixtures.length, last.length], "rig: one round robin of four, three rounds").toEqual([6, 2]);
+    const t: Record<string, string> = { X: last[0]!.home, Y: last[0]!.away, Z: last[1]!.home, W: last[1]!.away };
+    const top = new Set([t.X, t.Y]);
+    let played = 0;
+    for (const f of fixtures.filter((x) => x.round_no <= 2)) {
+      const [w, l] = top.has(f.home) ? [f.home, f.away] : [f.away, f.home];
+      expect(top.has(w) && !top.has(l), "rig: every early match is a cross match").toBe(true);
+      await playSets(s.auth, s.stageId, "volleyball", w, l, [[25, 20], [20, 25], [25, 20], [20, 25], [15, 10]]);
+      played++;
+    }
+    expect(played, "two rounds of two matches").toBe(4);
+    const data = (await getPublicDivision(...s.slugs))!;
+    const stage = data.stages.find((x) => x.id === s.stageId)!;
+    const snap = data.standings.find((x) => x.stage_id === s.stageId && x.pool_id === null)!;
+    // VB-PT-1: a 3-2 pays 2/1. X and Y: two wins, 4 points; Z and W: no win, 2 points — points are not wins scaled.
+    expect(Object.fromEntries(Object.entries(t).map(([k, id]) => [k, [rowOf(snap.rows, id).won, rowOf(snap.rows, id).points]]))).toEqual({
+      X: [2, 4],
+      Y: [2, 4],
+      Z: [0, 2],
+      W: [0, 2],
+    });
+    const view = divisionQualification({
+      module_: vb,
+      division: data.division,
+      dict: en as never,
+      locale: "en",
+      fixtures: await qualificationFixtures(data.fixtures, vb, data.stages),
+      entrantStatuses: Object.fromEntries(data.entrants.map((e) => [e.id, e.status])),
+      entrantNames: Object.fromEntries(data.entrants.map((e) => [e.id, e.display_name])),
+    })(stage, snap);
+    expect(view, "a wins-first table gets its qualification view").not.toBeNull();
+    expect(view!.table.cutIndex).toBe(2);
+    // Two qualify; one match each is left. In WINS (one or none a match): X's worst is 2 and only Y can reach 2 (Z and W
+    // top out at 1) — one rival for two places, Through, and Y likewise; Z's best is 1 and two rivals already have 2 —
+    // Out, and W likewise. In POINTS (0 to 3 a match, a win at least 2): X's worst is 4 and Y (7), Z (5) and W (5) can all
+    // reach it, so not Through, but one win (6) leaves only Y able to reach it — "win 1"; Z's best is 5 and nobody is
+    // above 5 yet, so not Out, and one win (4) is reachable by three rivals — needs help. Hand arithmetic, not the view's.
+    const WINS_RACE: Record<string, string> = { X: "through", Y: "through", Z: "out", W: "out" };
+    const POINTS_RACE: Record<string, string> = { X: "win_k", Y: "win_k", Z: "needs_help", W: "needs_help" };
     let checked = 0;
     for (const [k, id] of Object.entries(t)) {
-      expect(view!.rows[id]?.status, k).toBe(engine.get(id)?.status.kind);
+      expect(WINS_RACE[k], `premise: the two races disagree on ${k}`).not.toBe(POINTS_RACE[k]);
+      expect(view!.rows[id]?.status, k).toBe(WINS_RACE[k]);
       checked++;
     }
     expect(checked).toBe(4);
