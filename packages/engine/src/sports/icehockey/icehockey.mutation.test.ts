@@ -212,7 +212,18 @@ describe("icehockey — standings metrics and tie-break order", () => {
     expect(byKey.size).toBe(icehockey.metrics.length);
   });
 
-  it("ranks points, then the H2H sub-group, then overall — Event Code §220", () => {
-    expect(icehockey.defaultTiebreakers).toEqual(["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "seed"]);
+  it("ranks points, then the H2H sub-group (re-applied), then overall, then lots — Event Code §220; a Swiss stage keeps the pre-W2d order", () => {
+    // W2d asks the order per stage kind. A table stage takes SPEC §5.10's signed IIHF row; a Swiss stage keeps the
+    // pre-W2d order (OC1).
+    const cfg = icehockey.configSchema.parse({});
+    let checked = 0;
+    for (const kind of ["league", "group", "americano"] as const) {
+      expect(icehockey.defaultTiebreakers(kind, cfg), kind).toEqual([
+        "points", "h2h_points", "h2h_diff", "h2h_for", "h2h_reapply", "diff", "for", "seed", "lots",
+      ]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    expect(icehockey.defaultTiebreakers("swiss", cfg)).toEqual(["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "seed"]);
   });
 });

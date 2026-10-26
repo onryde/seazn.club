@@ -40,17 +40,30 @@ describe("set-based wrappers — declared labels and cascade", () => {
     expect(checked).toBe(3);
   });
 
-  it("declares the points → wins → set ratio → point ratio → h2h cascade", () => {
-    // spec 04 §3.4 (volleyball), §4 (badminton), §5 (table tennis) — the same five keys, in order.
+  it("a Swiss stage declares the points → wins → set ratio → point ratio → h2h cascade; a table stage its sport's signed order", () => {
+    // spec 04 §3.4 (volleyball), §4 (badminton), §5 (table tennis) — the same five keys, in order, which a Swiss stage
+    // keeps (W2d OC1). W2d asks the order per stage kind: a table stage takes its sport's SPEC §5.10 signed row.
+    const signed: Record<ModKey, readonly string[]> = {
+      volleyball: ["wins", "points", "set_ratio", "point_ratio", "h2h_points", "lots"],
+      badminton: ["wins", "h2h_two", "set_diff", "h2h_two", "point_diff", "h2h_two", "lots"],
+      tabletennis: ["points", "h2h_points", "h2h_set_ratio", "h2h_point_ratio", "h2h_exclusion", "lots"],
+    };
+    let checked = 0;
     for (const mod of MODS) {
-      expect(mod.defaultTiebreakers).toEqual([
+      const cfg = mod.configSchema.parse({});
+      expect(mod.defaultTiebreakers("swiss", cfg), mod.key).toEqual([
         "points",
         "wins",
         "set_ratio",
         "point_ratio",
         "h2h_points",
       ]);
+      for (const kind of ["league", "group", "americano"] as const) {
+        expect(mod.defaultTiebreakers(kind, cfg), `${mod.key} ${kind}`).toEqual(signed[mod.key as ModKey]);
+        checked++;
+      }
     }
+    expect(checked).toBe(9);
   });
 
   it("names the scoring official per doc 13 §1 and the set-based entrant shapes", () => {

@@ -51,14 +51,25 @@ describe("tennis — lineup policy (ITF Rule 30: no substitute, a retired player
 });
 
 describe("tennis — standings cascade", () => {
-  it("declares points → set ratio → game ratio → h2h → seed (v6/00 §4)", () => {
-    expect(tennis.defaultTiebreakers).toEqual([
+  it("a Swiss stage declares points → set ratio → game ratio → h2h → seed (v6/00 §4); a table stage the ATP order (W2d SPEC §5.10)", () => {
+    // W2d asks the order per stage kind. A Swiss stage keeps the pre-W2d order (OC1); a table stage takes SPEC §5.10's
+    // signed tennis row (wins > played > H2H2 > set% > game% > seed, D5), ending in lots.
+    const cfg = tennis.configSchema.parse({});
+    expect(tennis.defaultTiebreakers("swiss", cfg)).toEqual([
       "points",
       "set_ratio",
       "game_ratio",
       "h2h_points",
       "seed",
     ]);
+    let checked = 0;
+    for (const kind of ["league", "group", "americano"] as const) {
+      expect(tennis.defaultTiebreakers(kind, cfg), kind).toEqual([
+        "wins", "matches_played", "h2h_two", "set_ratio", "h2h_two", "game_ratio", "h2h_two", "seed", "lots",
+      ]);
+      checked++;
+    }
+    expect(checked).toBe(3);
   });
 });
 
