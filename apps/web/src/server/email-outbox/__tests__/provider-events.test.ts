@@ -282,7 +282,7 @@ describe.skipIf(!HAS_DB)("Resend delivery events on the outbox row (DB)", () => 
       checked++;
     }
     expect(checked).toBe(OUTBOX_KINDS.length);
-    expect(OUTBOX_KINDS.length).toBeGreaterThanOrEqual(2); // a second kind really exists to be confused with the first
+    expect(OUTBOX_KINDS.length).toBeGreaterThanOrEqual(2); // a floor, not the count: more than one kind exists, so one kind's hook can be confused with another's
   });
 
   it("a move into delivered or delayed does not run the hook; an ignored duplicate of a bad ending does not run it again", async () => {
