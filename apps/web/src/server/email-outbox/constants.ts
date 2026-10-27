@@ -3,7 +3,7 @@
 // can all read them without a cycle.
 //
 // The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
-// (as last redefined) in V476__email_outbox_phase3_wave4.sql. They are two copies of one fact, so outbox-schema.test.ts reads the
+// (as last redefined) in V477__email_outbox_phase3_wave4.sql. They are two copies of one fact, so outbox-schema.test.ts reads the
 // constraint definitions back from the catalogue and requires them to name exactly these members.
 
 export const OUTBOX_KINDS = [
