@@ -21,8 +21,6 @@ vi.mock("@/lib/db", () => ({ sql: sqlMock }));
 import {
   checkSendable,
   deliver,
-  sendAiRunCostAlertEmail,
-  sendStaffDisputeAlertEmail,
   sendWithResult,
   type SendOptions,
 } from "../email";
@@ -458,51 +456,46 @@ describe("checkSendable / deliver — the seam the outbox's attemptClaimed uses"
   });
 });
 
-describe("regression — existing senders resolve a boolean exactly as before", () => {
+describe("regression — the gate then deliver, with today's logging, is what a direct sender did", () => {
+  // Every direct sender of lib/email.ts was `checkSendable` then `deliver` with no options (through the private `send()`), and the
+  // outbox's attempt is the same two calls. The senders are leaving for the outbox one kind at a time (phase 3), so this block pins the
+  // two calls themselves rather than whichever sender is still left: the answer on 2xx, on a 500 and with no key, the request on the
+  // wire when no option is given, and today's log line for a network error. Expected values come from the spec ("Sending"), the
+  // stubbed fetch and Resend's documented request shape, never from the code under test.
   const to = "someone@example.test";
-  // The representative transactional sender rendered from the dictionary. It was the verification email until that moved to the
-  // outbox (wave 3), then the funnel reminder until that moved (wave 5, T3); the staff dispute alert is transactional and
-  // dictionary-rendered too, and keeps its direct sender until the outbox takes it.
-  const dispute = {
-    to,
-    kind: "subscription" as const,
-    orgName: "Spring Club",
-    phase: "created" as const,
-    status: "needs_response",
-    amountCents: 1900,
-    currency: "eur",
-    disputeId: "dp_test_1",
-  };
+  const transactional: SendOptions = { to, subject: "Registration refund failed", html: "<p>alert</p>", text: "alert", transactional: true };
+  const plain: SendOptions = { to, subject: "Weekly digest", html: "<p>digest</p>", text: "digest" };
 
-  it("sendStaffDisputeAlertEmail: true on 2xx, false on 500, false on no key", async () => {
-    expect(await sendStaffDisputeAlertEmail(dispute)).toBe(true);
+  /** What a direct sender did: the gate, then (only when sendable) the request, with no options. */
+  async function gateThenDeliver(m: SendOptions): Promise<boolean> {
+    const gate = await checkSendable(m);
+    if (!gate.ok) return false;
+    return (await deliver(m, gate.apiKey)).ok;
+  }
+
+  it("ok on 2xx, not ok on a 500, and blocked before fetch with no key", async () => {
+    expect(await gateThenDeliver(transactional)).toBe(true);
 
     fetchMock.mockImplementationOnce(async () => new Response("boom", { status: 500 }));
-    expect(await sendStaffDisputeAlertEmail(dispute)).toBe(false);
+    expect(await gateThenDeliver(transactional)).toBe(false);
 
     fetchMock.mockClear();
     delete process.env.RESEND_API_KEY;
-    expect(await sendStaffDisputeAlertEmail(dispute)).toBe(false);
+    expect(await checkSendable(transactional)).toEqual({ ok: false, reason: "no_api_key" });
+    expect(await gateThenDeliver(transactional)).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("existing senders put today's request on the wire: no Idempotency-Key, no signal, no tags", async () => {
-    // One dictionary-rendered sender and one inline-English alert sender: the two routes into send().
-    expect(await sendStaffDisputeAlertEmail(dispute)).toBe(true);
-    const transactional = lastCall();
-    expect(await sendAiRunCostAlertEmail({
-      to,
-      orgId: "org-1",
-      model: "claude-sonnet-5",
-      costUsd: 0.5,
-      medianUsd: 0.05,
-      windowDays: 30,
-      phase: "schedule",
-    })).toBe(true);
-    const alert = lastCall();
+  it("with no options, today's request goes on the wire: no Idempotency-Key, no signal, no tags", async () => {
+    // A transactional message and a non-transactional one: the gate's two routes to the request.
+    expect(await gateThenDeliver(transactional)).toBe(true);
+    const first = lastCall();
+    expect(await gateThenDeliver(plain)).toBe(true);
+    const second = lastCall();
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
-    for (const call of [transactional, alert]) {
+    let checked = 0;
+    for (const call of [first, second]) {
       expect(call.init.headers).toEqual({
         Authorization: `Bearer ${KEY}`,
         "Content-Type": "application/json",
@@ -510,14 +503,16 @@ describe("regression — existing senders resolve a boolean exactly as before", 
       expect(call.init.signal).toBeUndefined();
       expect("tags" in call.body).toBe(false);
       expect(call.init.method).toBe("POST");
+      checked++;
     }
+    expect(checked, "anti-vacuity: both requests were judged").toBe(2);
   });
 
-  it("a network error resolves false, and logs today's line", async () => {
+  it("a network error is not ok, and logs today's line (with the recipient: the default logging)", async () => {
     fetchMock.mockImplementation(async () => {
       throw new TypeError("fetch failed");
     });
-    expect(await sendStaffDisputeAlertEmail(dispute)).toBe(false);
+    expect(await gateThenDeliver(transactional)).toBe(false);
     expect(error).toHaveBeenCalledWith(`[email] send error to ${to}:`, expect.any(TypeError));
   });
 });

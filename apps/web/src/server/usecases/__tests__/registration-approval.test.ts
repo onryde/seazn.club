@@ -23,18 +23,18 @@ const stripeMock = vi.hoisted(() => {
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
-// RS006 follow-up: observe the staff refund-failed alert without touching
-// the rest of the email module (send() is a no-op without RESEND_API_KEY
-// either way, same reasoning as registrations.test.ts's own emailMock).
-const emailMock = vi.hoisted(() => ({
-  registrationRefundFailedAlert: vi.fn().mockResolvedValue(true),
-}));
+// RS006 follow-up: the staff refund-failed alert is queued on the email outbox
+// (kind `staff_registration_refund_failed`, to STAFF_ALERT_EMAIL, phase 3 wave
+// 5), so the reject test reads its row. Sentry's issue capture is observed
+// (call-through) so it can also assert the alert was not dropped.
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
+// Its builder, observed (call-through): what the alert says is read where it enters the mail.
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return {
-    ...actual,
-    sendRegistrationRefundFailedAlertEmail: emailMock.registrationRefundFailedAlert,
-  };
+  return { ...actual, registrationRefundFailedAlertEmail: vi.fn(actual.registrationRefundFailedAlertEmail) };
 });
 
 // RS008: inviteUnclaimedMembers is a fire-and-forget, post-commit side
@@ -54,6 +54,10 @@ vi.mock("../registrations", async (importOriginal) => {
 });
 
 import { sql, statementCount } from "@/lib/db";
+import { captureError } from "@/lib/sentry";
+import { registrationRefundFailedAlertEmail } from "@/lib/email";
+import { log } from "@/server/logger";
+import { staffAlertDrops, staffRows } from "./_money-fixtures";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { seedRegistration } from "@/server/usecases/__tests__/_registration-fixtures";
 import { HttpError } from "@/lib/errors";
@@ -84,7 +88,8 @@ beforeEach(() => {
     url: "https://checkout.stripe.test/session",
   });
   stripeMock.refundCreate.mockReset().mockResolvedValue({ id: "re_test_1" });
-  emailMock.registrationRefundFailedAlert.mockClear();
+  vi.mocked(captureError).mockClear();
+  vi.mocked(registrationRefundFailedAlertEmail).mockClear();
   inviteSweepMock.fn.mockClear();
 });
 
@@ -567,29 +572,44 @@ describe.skipIf(!HAS_DB)("reject/approve on a paid-awaiting-approval entry", () 
       select currency from registration_groups where id = ${submitted.group_id}`;
 
     stripeMock.refundCreate.mockRejectedValueOnce(new Error("connected account restricted"));
-    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+    const staff = `staff-${randomUUID().slice(0, 8)}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    const errors = vi.spyOn(log, "error");
     try {
       const rejected = await rejectRegistration(owner, regId);
       // Same fail-open contract as withdrawCore (rejectRegistration's own
       // comment above the catch): the refund failure must not undo reject.
       expect(rejected.status).toBe("rejected");
-
-      expect(emailMock.registrationRefundFailedAlert).toHaveBeenCalledTimes(1);
-      const args = emailMock.registrationRefundFailedAlert.mock.calls[0]![0];
-      expect(args.to).toBe("ops@seazn.test");
-      expect(args.registrationId).toBe(regId);
-      expect(args.orgId).toBe(orgId);
-      expect(args.competitionId).toBe(competition.id);
-      expect(args.amountCents).toBe(1000);
-      expect(args.currency).toBe(groupRow!.currency);
-      expect(args.paymentIntentId).toBe("pi_test_fake");
-      expect(args.reason).toBe("connected account restricted");
+      expect(stripeMock.refundCreate, "premise: the refund was really attempted").toHaveBeenCalledTimes(1);
 
       const [row] = await sql<{ refunded_cents: number }[]>`
         select refunded_cents from registrations where id = ${regId}`;
       expect(row!.refunded_cents).toBe(0); // the refund really never landed
+      expect(groupRow!.currency, "premise: the cart's currency, which the subject's literal is typed in").toBe("gbp");
+
+      // Keyed `<registration>:reject:<remaining>` (P-W5-7), to the staff address, the sender's literal subject.
+      expect(await staffRows("staff_registration_refund_failed", "registration", regId)).toEqual([
+        {
+          ref_id: `${regId}:reject:1000`,
+          dedupe_key: `${regId}:reject:1000`,
+          status: "queued",
+          recipient: staff,
+          subject: `Registration refund failed — £10.00 still owed (registration ${regId})`,
+        },
+      ]);
+      expect(registrationRefundFailedAlertEmail, "what the alert says").toHaveBeenCalledWith({
+        registrationId: regId,
+        orgId,
+        competitionId: competition.id,
+        amountCents: 1000,
+        currency: "gbp",
+        paymentIntentId: "pi_test_fake",
+        reason: "connected account restricted",
+      });
+      expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
     } finally {
-      delete process.env.STAFF_ALERT_EMAIL;
+      errors.mockRestore();
+      vi.unstubAllEnvs();
     }
   });
 

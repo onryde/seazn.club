@@ -154,6 +154,22 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/remind queues the +24h reminder on th
     expect(callsFor(row.id), "the cron did not attempt the send: the first attempt is the worker's").toHaveLength(0);
   });
 
+  it("a draft that expires within the day: the row expires with the draft, not at the outbox's bound", async () => {
+    // The first test's check (row expiry <= draft expiry) cannot fail for a fresh draft: its expiry is days out, past the outbox's
+    // 24-hour bound, so the bound alone satisfies it. A draft that ends in two hours separates the two: the row must end with it.
+    const email = address();
+    const d = await dueDraft(email);
+    await sql`update funnel_drafts set expires_at = now() + interval '2 hours' where id = ${d.id}`;
+    const draft = await draftOf(d.id);
+    expect(draft.expires_at.getTime() - Date.now(), "premise: the draft ends well inside the outbox's 24-hour bound").toBeLessThan(3 * 3_600_000);
+
+    expect((await sweep()).status).toBe(200);
+
+    const rows = await rowsOf(email);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.expires_at.getTime(), "the reminder is worthless once the draft has expired").toBe(draft.expires_at.getTime());
+  });
+
   it("§9: with the transport failing, the draft is stamped, the row waits, and the worker retries it to sent", async () => {
     const email = address();
     const d = await dueDraft(email);

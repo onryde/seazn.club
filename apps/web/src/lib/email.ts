@@ -1442,7 +1442,6 @@ export async function sendExtraOrgRepriceFailedAlertEmail(
 }
 
 export interface RegistrationRefundFailedAlertEmail {
-  to: string;
   /** The entry that should have been refunded but was not — what a human
    *  looks up first. */
   registrationId: string;
@@ -1471,10 +1470,11 @@ export interface RegistrationRefundFailedAlertEmail {
  * alerting them would produce alarm with no remedy.
  *
  * Ops-only, no user-facing i18n (mirrors sendExtraOrgRepriceFailedAlertEmail).
+ *
+ * RENDERED and not sent: `maybeAlertRegistrationRefundFailed` (registrations.ts) queues what this returns on the email outbox through
+ * `queueStaffAlert` (kind `staff_registration_refund_failed`), once per registration, mode and amount. Nothing sends it directly.
  */
-export async function sendRegistrationRefundFailedAlertEmail(
-  opts: RegistrationRefundFailedAlertEmail,
-): Promise<boolean> {
+export function registrationRefundFailedAlertEmail(opts: RegistrationRefundFailedAlertEmail): EmailContent {
   const amount = money(opts.amountCents, opts.currency);
   const subject = `Registration refund failed — ${amount} still owed (registration ${opts.registrationId})`;
   const bodyText =
@@ -1503,7 +1503,7 @@ export async function sendRegistrationRefundFailedAlertEmail(
   const text =
     `${bodyText}\n\nregistration: ${opts.registrationId} · org: ${opts.orgId} · competition: ${opts.competitionId} · ` +
     `amount: ${amount} · payment intent: ${opts.paymentIntentId ?? "(none)"} · reason: ${opts.reason}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface TrialEndingEmailArgs {

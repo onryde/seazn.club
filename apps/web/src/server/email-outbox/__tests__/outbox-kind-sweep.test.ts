@@ -92,6 +92,9 @@
 //   - funnel_reminder: the cron POST of app/api/funnel/remind/route.ts (the cron secret is the stubbed `CRON_SECRET`, carried by the
 //     `next/headers` stand-in) over a day-old draft a Dutch visitor started: no account and no organisation, so the draft's own language
 //     (Q3); the claim of the draft and its row are one transaction on the pool, and the worker makes the first attempt.
+//   - staff_registration_refund_failed: the real `maybeAlertRegistrationRefundFailed` (every one of its four sites calls it; their own
+//     suites drive them to a row) with this run's STAFF_ALERT_EMAIL: no org, no account, the writer on the pool, and the worker makes
+//     the first attempt. The subject is the sender's inline English (spec F2), a literal typed from its source.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -178,6 +181,7 @@ import {
   handleRegistrationDispute,
   putRegistrationSettings,
   refundRegistration,
+  maybeAlertRegistrationRefundFailed,
   sweepRegistrations,
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
@@ -1103,6 +1107,34 @@ function funnelReminderScenario(): KindScenario {
   };
 }
 
+/** The real staff alert for a failed registration refund, to this run's STAFF_ALERT_EMAIL (stubbed for the run; the worker reads the
+ *  address off the row): no org, no account, and the worker makes the first attempt. The subject is the sender's inline English with
+ *  `money(1234, "gbp")` in en-GB, typed from its source. */
+function registrationRefundFailedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const registrationId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Registration refund failed — £12.34 still owed (registration ${registrationId})`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await maybeAlertRegistrationRefundFailed({
+        registrationId,
+        orgId: randomUUID(),
+        competitionId: randomUUID(),
+        amountCents: 1234,
+        currency: "gbp",
+        paymentIntentId: `pi_${RUN}_refund_failed`,
+        reason: "connected account restricted",
+        mode: "auto",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
  *  request makes the first attempt. */
 async function emailChangeConfirmationScenario(): Promise<KindScenario> {
@@ -1668,6 +1700,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         group_org_removed: orgRemoved,
         group_org_left: orgLeft,
         funnel_reminder: funnelReminder,
+        staff_registration_refund_failed: registrationRefundFailedScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
