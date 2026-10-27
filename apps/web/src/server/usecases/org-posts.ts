@@ -27,6 +27,9 @@ import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { resolveFixtureCfg, resolveModule } from "@/server/engine-db";
 import { loadLineupPair } from "@/server/engine-db/lineups";
 import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
+import { tableLayoutFor } from "@/server/public-site/standings-view";
+import { isLevelTable, pointsText } from "@seazn/engine/competition";
 import { entrantFoldCtx, loadEntrantMembersForFixture } from "@/server/engine-db/entrant-members";
 import { log } from "@/server/logger";
 import { slugify, withUniqueSlug, SLUG_CONSTRAINT } from "./slugs";
@@ -1112,18 +1115,27 @@ interface StandingRow {
   position: number;
   name: string;
   played: number;
-  points: number;
+  /** As the public table prints it (`pointsText` under the stage's unit): chess's half-points read "1½" (RB2B-17). */
+  points: string;
+}
+
+/** The unit a stage's stored points print in — the public table's own (`tableLayoutFor` over the one loader's rules). */
+async function pointsUnitOf(tx: Tx, stageId: string) {
+  return tableLayoutFor((await stageTableRulesDocs(tx, [stageId]))[stageId]).unit;
 }
 
 /** Top of the stage table from standings_snapshots (JSON rows), entrant names
- *  resolved, ranked by the engine's `rank` (falls back to array order). */
+ *  resolved, ranked by the engine's `rank` (falls back to array order). A LEVEL
+ *  table (started, nothing counted — X-TB-6) has no top: its order is the seed
+ *  list, so it is no table at all here (anti-goal 3: nobody reads as first). */
 async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP): Promise<StandingRow[]> {
   const rows = await tx<
-    { rows: { entrantId: string; played: number; points: number; rank?: number }[] }[]
+    { rows: { entrantId: string; played: number; points: number; rank?: number; level?: boolean }[] }[]
   >`
     select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
   const table = rows[0]?.rows;
-  if (!table || table.length === 0) return [];
+  if (!table || table.length === 0 || isLevelTable(table)) return [];
+  const unit = await pointsUnitOf(tx, stageId);
   const sorted = [...table].sort(
     (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
   );
@@ -1139,7 +1151,7 @@ async function topStandings(tx: Tx, stageId: string, top = RECAP_STANDINGS_TOP):
     position: r.rank ?? i + 1,
     name: names.get(r.entrantId) ?? "—",
     played: r.played,
-    points: r.points,
+    points: pointsText(r.points, unit),
   }));
 }
 
@@ -1308,7 +1320,9 @@ export async function assembleDigestStandings(
         const [snap] = await sp<{ rows: RankedEntrantRow[]; previous_rows: RankedEntrantRow[] | null }[]>`
           select rows, previous_rows from standings_snapshots
           where stage_id = ${stage.stage_id} and pool_id is null`;
-        if (!snap || snap.rows.length === 0) return;
+        // A level table (X-TB-6) has no top 3 — its order is the seed list (anti-goal 3).
+        if (!snap || snap.rows.length === 0 || isLevelTable(snap.rows)) return;
+        const unit = await pointsUnitOf(sp, stage.stage_id);
         const sorted = [...snap.rows].sort(
           (a, b) => (a.rank ?? Number.MAX_SAFE_INTEGER) - (b.rank ?? Number.MAX_SAFE_INTEGER),
         );
@@ -1332,7 +1346,7 @@ export async function assembleDigestStandings(
           top3: top3.map((r, i) => ({
             position: r.rank ?? i + 1,
             name: names.get(r.entrantId) ?? "—",
-            points: r.points,
+            points: pointsText(r.points, unit),
           })),
           ...(climberOut ? { climber: climberOut } : {}),
         });

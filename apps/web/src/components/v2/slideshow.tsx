@@ -307,14 +307,15 @@ export function Slideshow({
                       key={r.rank + r.name}
                       className={`relative grid ${standingsCols} items-center gap-x-5 rounded-lg bg-white/[0.05] px-6 py-2.5 ring-1 ring-inset ring-white/10`}
                     >
-                      {i === 0 && (
+                      {i === 0 && !slide.level && (
                         <span
                           aria-hidden
                           className="absolute inset-y-0 left-0 w-1 rounded-l-lg bg-accent"
                         />
                       )}
                       <span>
-                        {i === 0 ? (
+                        {/* W2d T17 (X-TB-6): a level table draws no row as first. */}
+                        {i === 0 && !slide.level ? (
                           <span className="flex h-10 w-10 items-center justify-center rounded-md bg-accent font-display text-2xl font-bold text-accent-ink">
                             {r.rank}
                           </span>

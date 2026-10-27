@@ -100,9 +100,9 @@ describe("roundRecapDraft", () => {
       { homeName: "Eastend", homeScore: "0", awayName: "Westgate", awayScore: "0" },
     ],
     standings: [
-      { position: 1, name: "Riverside", played: 3, points: 9 },
-      { position: 2, name: "Westgate", played: 3, points: 5 },
-      { position: 3, name: "Eastend", played: 3, points: 4 },
+      { position: 1, name: "Riverside", played: 3, points: "9" },
+      { position: 2, name: "Westgate", played: 3, points: "5" },
+      { position: 3, name: "Eastend", played: 3, points: "4" },
     ],
   };
 
@@ -124,8 +124,8 @@ describe("roundRecapDraft", () => {
     const twoTeamInput = {
       ...input,
       standings: [
-        { position: 1, name: "Riverside", played: 3, points: 9 },
-        { position: 2, name: "Northside", played: 3, points: 6 },
+        { position: 1, name: "Riverside", played: 3, points: "9" },
+        { position: 2, name: "Northside", played: 3, points: "6" },
       ],
     };
     const { bodyMd } = roundRecapDraft(twoTeamInput);
@@ -195,9 +195,9 @@ describe("byte-identical output when enrichment is absent (regression anchor)", 
         { homeName: "Eastend", homeScore: "0", awayName: "Westgate", awayScore: "0" },
       ],
       standings: [
-        { position: 1, name: "Riverside", played: 3, points: 9 },
-        { position: 2, name: "Westgate", played: 3, points: 5 },
-        { position: 3, name: "Eastend", played: 3, points: 4 },
+        { position: 1, name: "Riverside", played: 3, points: "9" },
+        { position: 2, name: "Westgate", played: 3, points: "5" },
+        { position: 3, name: "Eastend", played: 3, points: "4" },
       ],
     };
     expect(roundRecapDraft(input)).toEqual({
@@ -272,7 +272,7 @@ describe("roundRecapDraft enrichment", () => {
     divisionName: "Premier",
     roundNo: 3,
     results: [{ homeName: "Riverside", homeScore: "3", awayName: "Northside", awayScore: "1" }],
-    standings: [{ position: 1, name: "Riverside", played: 3, points: 9 }],
+    standings: [{ position: 1, name: "Riverside", played: 3, points: "9" }],
   };
 
   it("full enrichment renders leaders, biggest result, and standings moves", () => {
@@ -329,7 +329,7 @@ describe("weeklyDigestDraft", () => {
       standings: [
         {
           divisionName: "Premier",
-          top3: [{ position: 1, name: "Riverside", points: 12 }],
+          top3: [{ position: 1, name: "Riverside", points: "12" }],
           climber: { entrantName: "Eastend", from: 5, to: 2 },
         },
       ],

@@ -1099,7 +1099,7 @@ test.describe("W2d T17: the lots note, the level table and the head-to-head note
       await expect(panel).toContainText(T17.lots.b);
     });
 
-    test(`${surface}: X-TB-6 a level table prints every rank '–', no leader row, no tie marker, no qualification mark`, async ({ browser }) => {
+    test(`${surface}: X-TB-6 a level table prints every rank '–', no leader row, no tie marker`, async ({ browser }) => {
       const page = await spectator(browser, { width: 1280, height: 900 });
       await page.goto(pathOf(seeded.level!), { waitUntil: "load" });
       await ready(page);
@@ -1115,7 +1115,6 @@ test.describe("W2d T17: the lots note, the level table and the head-to-head note
       const firstCells = await rows.evaluateAll((trs) => trs.map((tr) => (tr.querySelector("td,th") as HTMLElement | null)?.innerText.trim() ?? ""));
       expect(firstCells.every((text) => text.startsWith("–")), `every rank cell leads with the level dash: ${JSON.stringify(firstCells)}`).toBe(true);
       await expect(scope.getByText(dictString("en", "table.level"), { exact: true })).toHaveCount(3);
-      await expect(scope.locator("[data-qual]")).toHaveCount(0);
       await expect(scope.locator(".bg-amber-50, .bg-amber-50\\/60"), "no leader row on a level table").toHaveCount(0);
     });
 

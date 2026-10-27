@@ -120,6 +120,8 @@ export interface RankedEntrantRow {
    *  (engine's `StandingsRow.rank?`) — such a row cannot be compared. */
   rank?: number;
   points: number;
+  /** W2d (X-TB-6): every row of a started table with nothing counted is level — its order is the seed list. */
+  level?: boolean;
 }
 
 export interface Climber {

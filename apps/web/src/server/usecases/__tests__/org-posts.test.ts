@@ -21,7 +21,9 @@ import {
   publicPost,
   draftPostsForDecidedFixture,
   shouldFirePostPublished,
+  assembleDigestStandings,
 } from "../org-posts";
+import { chessRoundRobin, levelLeague, sportOf } from "@/server/engine-db/__tests__/helpers/stored-table-rows";
 import { scoreEvent } from "../scoring";
 import { msgFor } from "@/lib/messages-i18n";
 import { putLineup, getLineup } from "../fixtures";
@@ -990,5 +992,78 @@ describe.skipIf(!HAS_DB)("org-posts auto-drafts", () => {
     expect(recap[0]!.bodyMd).not.toContain("climbed from");
     expect(recap[0]!.bodyMd).not.toContain("Movers");
     expect(recap[0]!.bodyMd).not.toContain("undefined");
+  });
+});
+
+// W2d T17 fix 1 (I3): the news posts print a stored table through the public table's own helpers — the stage's unit
+// (chess's half-points, RB2B-17) and its level test (X-TB-6, anti-goal 3: a level table's order is the seed list, so it
+// has no top). The snapshot rows are the engine's own (ranked by `completeTableStage` under the sport's rule); the rules
+// are whatever the one loader serves for the seeded division. Expected values are FIDE's 1 / ½ / 0, never the helpers'.
+describe.skipIf(!HAS_DB)("org-posts — W2d T17 fix 1: posts print the public table's points and never a level table's top", () => {
+  /** A football division made a chess one (the loader reads the division's sport), with Clara and Dmitri added. */
+  async function chessDivision(ctx: Ctx): Promise<DivCtx & { ids: [string, string, string, string] }> {
+    const div = await seedDivision(ctx, { autoPosts: true });
+    const chess = sportOf("boardgame");
+    await sql`
+      update divisions set sport_key = 'boardgame', variant_key = 'classical',
+        config = ${sql.json(chess.variants["classical"] as never)}, module_version = ${chess.version}
+      where id = ${div.divisionId}`;
+    const more = await sql<{ id: string }[]>`
+      insert into entrants (division_id, org_id, kind, display_name, seed)
+      values (${div.divisionId}, ${ctx.orgId}, 'individual', 'Clara', 3), (${div.divisionId}, ${ctx.orgId}, 'individual', 'Dmitri', 4)
+      returning id`;
+    return { ...div, ids: [div.entrantA, div.entrantB, more[0]!.id, more[1]!.id] };
+  }
+  const storeSnapshot = (ctx: Ctx, stageId: string, rows: unknown[]) => sql`
+    insert into standings_snapshots (stage_id, org_id, pool_id, rows, computed_through_seq)
+    values (${stageId}, ${ctx.orgId}, null, ${sql.json(rows as never)}, 1)`;
+  const recapOf = async (ctx: Ctx) => {
+    const recap = (await listPosts(ctx.auth, ctx.orgId)).filter((p) => p.kind === "round_recap");
+    expect(recap, "the round is complete: one recap").toHaveLength(1);
+    return recap[0]!.bodyMd;
+  };
+  const digestOf = (ctx: Ctx, stageId: string) =>
+    withTenant(ctx.orgId, (tx) => assembleDigestStandings(tx, [{ stage_id: stageId, division_name: "Premier" }]));
+
+  it("a chess round recap and digest print 1½ / 1 / ½ / 0 — the stored half-points never leak", async () => {
+    const ctx = await seedOrg();
+    const div = await chessDivision(ctx);
+    // Riverside beat Northside, drew Clara, lost to Dmitri: 1 + ½ + 0 = 1½; Dmitri 1; Clara ½; Northside 0.
+    await storeSnapshot(ctx, div.stageId, chessRoundRobin(div.ids).rows);
+    await draft(ctx, await seedDecidedFixture(ctx, div, { round: 1 }));
+    const body = await recapOf(ctx);
+    expect(body).toContain("**Standings**");
+    expect(body.split("\n").filter((l) => /^\d\. /.test(l))).toEqual([
+      "1. Riverside — 1½ pts (3)",
+      "2. Dmitri — 1 pts (1)",
+      "3. Clara — ½ pts (1)",
+      "4. Northside — 0 pts (1)",
+    ]);
+    const [section] = await digestOf(ctx, div.stageId);
+    expect(section?.top3).toEqual([
+      { position: 1, name: "Riverside", points: "1½" },
+      { position: 2, name: "Dmitri", points: "1" },
+      { position: 3, name: "Clara", points: "½" },
+    ]);
+  });
+
+  it("a level table (a round closed with nothing counted) gives the recap no standings block and the digest no section; one counted result gives both back", async () => {
+    const ctx = await seedOrg();
+    const div = await seedDivision(ctx, { autoPosts: true });
+    const level = levelLeague([div.entrantA, div.entrantB]);
+    expect(level.rows.every((r) => r.level === true), "premise: the engine marks every row level").toBe(true);
+    await storeSnapshot(ctx, div.stageId, level.rows);
+    await draft(ctx, await seedDecidedFixture(ctx, div, { round: 1 }));
+    const body = await recapOf(ctx);
+    expect(body, "the results are there").toContain("Riverside 2–1 Northside");
+    expect(body, "no standings block (en recap heading)").not.toContain("**Standings**");
+    expect(body.split("\n").filter((l) => /^\d\. /.test(l)), "no row reads as first").toEqual([]);
+    expect(await digestOf(ctx, div.stageId)).toEqual([]);
+    // The pair: the same stage once a result counts (Riverside 3, Northside 0 under football's 3-1-0).
+    await sql`update standings_snapshots set rows = ${sql.json([
+      { entrantId: div.entrantA, played: 1, won: 1, drawn: 0, lost: 0, points: 3, metrics: {}, rank: 1 },
+      { entrantId: div.entrantB, played: 1, won: 0, drawn: 0, lost: 1, points: 0, metrics: {}, rank: 2 },
+    ] as never)} where stage_id = ${div.stageId} and pool_id is null`;
+    expect((await digestOf(ctx, div.stageId))[0]?.top3.map((r) => [r.name, r.points])).toEqual([["Riverside", "3"], ["Northside", "0"]]);
   });
 });

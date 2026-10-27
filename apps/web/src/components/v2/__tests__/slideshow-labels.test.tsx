@@ -369,7 +369,8 @@ const EVERY_BRANCH: Slide[] = [
     kind: "standings",
     division: "Open",
     caption: "Groups — Pool A",
-    rows: [{ rank: 1, name: "Mexico", played: 3, won: 3, drawn: 0, lost: 0, points: 9, pointRatio: "1.50" }],
+    rows: [{ rank: "1", name: "Mexico", played: 3, won: 3, drawn: 0, lost: 0, points: "9", pointRatio: "1.50" }],
+    level: false,
   },
   {
     kind: "fixtures",

@@ -6544,12 +6544,28 @@ test("W2d T17 public standings: IIHF OTW/OTL columns on both public tables, no h
   const { clipped, scrollable } = await overflowingIn(page, "#panel-standings", "table,div,span,th,td", "the standings panel was not in the DOM");
   expect(clipped, `the division table clips content at ${width}px`).toEqual([]);
   for (const box of scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
+  // Anti-vacuity (T17 fix 1, m6): at 320 the division table's nine columns do not fit, so the loop above checked a rail.
+  if (width <= 320) expect(scrollable.length, "anti-vacuity: the 320 division table scrolls in a rail the loop checked").toBeGreaterThanOrEqual(1);
 
   // ── the hub's Table tab ──
   await page.goto(`/shared/${org.slug}/${competition.slug}?tab=table`, { waitUntil: "load" });
   const hub = page.getByTestId("mh-tab-panel-table");
   await expect(hub).toBeVisible();
-  // OTW/OTL are compact columns: on screen at every width, without opening "Show all columns"
+  // T17 fix 1 (m2): on a phone the split table shows GP and Pts and folds W · OTW · OTL · L behind "Show all columns";
+  // from md up nothing folds. Points stays on screen, inside the table's box, without a swipe (AGENTS #22: open the fold
+  // only when its toggle is visible — at 768/834 it is md:hidden).
+  const pts = hub.locator('th[data-col="points"]').first();
+  await expect(pts).toBeVisible();
+  const box = await hub.getByTestId(/-scroll$/).first().boundingBox();
+  const ptsBox = await pts.boundingBox();
+  expect(box && ptsBox, "the hub table and its Points header have boxes").toBeTruthy();
+  expect(ptsBox!.x + ptsBox!.width, `Points ends inside the table's box at ${width}px`).toBeLessThanOrEqual(box!.x + box!.width + 0.5);
+  const more = hub.locator('[data-testid$="-more"]').first();
+  if (await more.isVisible()) {
+    await expect(hub.locator('th[data-col="otw"]').first(), "folded on a phone until asked").toBeHidden();
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+  }
   await expect(hub.locator('th[data-col="otw"]').first()).toBeVisible();
   await expect(hub.locator('th[data-col="otl"]').first()).toBeVisible();
   await expectNoHorizontalScroll(page);

@@ -21,7 +21,19 @@ import { poolLabel } from "@/lib/pool-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
-import { DERIVED_METRICS, derivedMetricText, type StandingsRow } from "@seazn/engine/competition";
+import {
+  DERIVED_METRICS,
+  PLAIN_LAYOUT,
+  derivedMetricText,
+  isLevelTable,
+  pointsText,
+  rankText,
+  type OutcomeKey,
+  type PointsRule,
+  type StandingsRow,
+  type TableLayout,
+} from "@seazn/engine/competition";
+import { tableLayoutFor } from "@/server/public-site/standings-view";
 import { standingsColumns, type MetricSpecLike } from "@/lib/public-site";
 import { resolveModule } from "@/server/engine-db/registry";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
@@ -29,13 +41,16 @@ import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
 export interface StandingsSlideRow {
-  rank: number;
+  /** The rank as the public table prints it (`rankText`): the place, or "–" on a level table (X-TB-6). */
+  rank: string;
   name: string;
   played: number;
   won: number;
   drawn: number;
   lost: number;
-  points: number;
+  /** The points as the public table prints them (`pointsText` under the stage's unit): chess's half-points read
+   *  "1½", never the stored 3 (RB2B-17: "on every surface"). */
+  points: string;
   /** The "Pts ratio" cell, display-ready ("1.50", "∞", "—"): the engine's own
    *  `derivedMetricText` for `point_ratio`, the very text the normal standings
    *  table prints. Set on every row of a slide whose division ranks on
@@ -52,6 +67,17 @@ export interface StandingsSlideRow {
 interface StandingsShape {
   metricSpecs: readonly MetricSpecLike[];
   cascade: readonly string[];
+  /** W2d T17: the stage's table layout (`tableLayoutFor`, the public table's own) — its points unit. */
+  layout: TableLayout;
+}
+
+/** A stage's loaded rules as these builders receive them: the organiser's from `stageTableRulesDocs`, the public one's
+ *  from `PublicStage.table_rules`. `points` and `reachable` are optional because hand-built inputs predate them, and
+ *  read as no rules (whole points, the plain layout). */
+interface StageRulesInput {
+  readonly tiebreakers: readonly string[];
+  readonly points?: PointsRule;
+  readonly reachable?: readonly OutcomeKey[];
 }
 
 /** What a division says about its own standings. Every field is optional: a
@@ -76,9 +102,10 @@ function divisionMetrics(division: StandingsShapeInput): readonly MetricSpecLike
 
 /** One stage's standings shape: the division's metrics and the stage's order (none for a stage whose rules the loader
  *  refused, or a hand-built input that carries none). */
-const stageShape = (metricSpecs: readonly MetricSpecLike[], cascade: readonly string[] | null | undefined): StandingsShape => ({
+const stageShape = (metricSpecs: readonly MetricSpecLike[], rules: StageRulesInput | null | undefined): StandingsShape => ({
   metricSpecs,
-  cascade: cascade ?? [],
+  cascade: rules?.tiebreakers ?? [],
+  layout: rules?.points === undefined || rules.reachable === undefined ? PLAIN_LAYOUT : tableLayoutFor({ points: rules.points, reachable: rules.reachable }),
 });
 
 /** A snapshot row as `standings_snapshots` persists it. `metrics` is optional
@@ -92,6 +119,8 @@ interface StandingsSlideSnapshotRow {
   points: number;
   rank?: number;
   metrics?: Record<string, number>;
+  /** W2d (X-TB-6): every row of a table with no counted fixture is level. */
+  level?: boolean;
 }
 
 /**
@@ -106,21 +135,25 @@ function standingsSlideRows(
   snapRows: readonly StandingsSlideSnapshotRow[],
   shape: StandingsShape,
   names: Record<string, string>,
-): StandingsSlideRow[] {
+): { rows: StandingsSlideRow[]; level: boolean } {
   const engineRows: StandingsRow[] = snapRows.map((r) => ({ ...r, metrics: r.metrics ?? {} }));
   const showsPointRatio = standingsColumns(shape.metricSpecs, shape.cascade, engineRows, DERIVED_METRICS).some(
     (c) => c.kind === "derived" && c.key === "point_ratio",
   );
-  return engineRows.map((r, i) => ({
-    rank: r.rank ?? i + 1,
+  // W2d T17 (X-TB-6, RB2B-17): the public table's own helpers — a level table has no places and no leader, and the
+  // points print in the stage's unit.
+  const level = isLevelTable(engineRows);
+  const rows = engineRows.map((r, i) => ({
+    rank: rankText({ ...r, rank: r.rank ?? i + 1 }, level),
     name: names[r.entrantId] ?? "—",
     played: r.played,
     won: r.won,
     drawn: r.drawn,
     lost: r.lost,
-    points: r.points,
+    points: pointsText(r.points, shape.layout.unit),
     ...(showsPointRatio ? { pointRatio: derivedMetricText(r, "point_ratio") ?? "—" } : {}),
   }));
+  return { rows, level };
 }
 
 export interface FixtureSlideItem {
@@ -175,7 +208,14 @@ export interface BracketSlideFixture {
 }
 
 export type Slide =
-  | { kind: "standings"; division: string; caption: string; rows: StandingsSlideRow[] }
+  | {
+      kind: "standings";
+      division: string;
+      caption: string;
+      rows: StandingsSlideRow[];
+      /** W2d T17 (X-TB-6, anti-goal 3): no counted fixture yet — no row is drawn as first. */
+      level: boolean;
+    }
   | {
       kind: "fixtures";
       division: string;
@@ -332,9 +372,9 @@ export async function buildDivisionSlides(
           )
         : [{ caption: stage.name, snap: await getStandings(auth, stage.id) }];
     for (const { caption, snap } of tables) {
-      const rows = standingsSlideRows(snap.rows as StandingsSlideSnapshotRow[], stageShape(metricSpecs, tableRules[stage.id]?.tiebreakers), names);
+      const { rows, level } = standingsSlideRows(snap.rows as StandingsSlideSnapshotRow[], stageShape(metricSpecs, tableRules[stage.id]), names);
       if (rows.length > 0) {
-        slides.push({ kind: "standings", division: divisionName, caption, rows });
+        slides.push({ kind: "standings", division: divisionName, caption, rows, level });
       }
     }
   }
@@ -469,7 +509,7 @@ export interface PublicSlideInput {
   };
   /** W2d Task 9: each stage carries its table rules (`PublicStage.table_rules`, the one loader's); its order picks the
    *  columns with the module's metrics. Absent or null: no order (no ratio column). */
-  stages: { id: string; kind: string; name: string; table_rules?: { readonly tiebreakers: readonly string[] } | null }[];
+  stages: { id: string; kind: string; name: string; table_rules?: StageRulesInput | null }[];
   /** A pool is labelled from its KEY (`lib/pool-label.ts`); the stored
    *  English `name` is deliberately not part of this input. */
   pools: { id: string; stage_id: string; key: string }[];
@@ -605,13 +645,15 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     const stage = stageById.get(snap.stage_id);
     if (!stage || snap.rows.length === 0) continue;
     const pool = snap.pool_id !== null ? poolById.get(snap.pool_id) : undefined;
+    const { rows, level } = standingsSlideRows(snap.rows, stageShape(metricSpecs, stage.table_rules), names);
     slides.push({
       kind: "standings",
       division: data.division.name,
       // From the pool's KEY in the org's locale, never its stored English
       // name (`lib/pool-label.ts`).
       caption: pool !== undefined ? `${stage.name} — ${poolLabel(publicDict, pool.key)}` : stage.name,
-      rows: standingsSlideRows(snap.rows, stageShape(metricSpecs, stage.table_rules?.tiebreakers), names),
+      rows,
+      level,
     });
   }
 

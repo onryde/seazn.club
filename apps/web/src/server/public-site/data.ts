@@ -458,6 +458,8 @@ export interface StandingsSnapshotRow {
   rank?: number;
   rankLocked?: boolean;
   tieBreak?: { key: string; with: string[] };
+  /** W2d (X-TB-6): set on every row of a table with no counted fixture. */
+  level?: boolean;
 }
 
 export interface PublicEntrantMember {

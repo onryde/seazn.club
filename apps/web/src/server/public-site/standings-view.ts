@@ -54,7 +54,17 @@ import type { QualificationView } from "./qualification-view";
  *  phone widths and always visible from `md` up. Exported because it is the
  *  definition of "compact", and a test that restated it would be a second
  *  declaration to drift. */
-export const COMPACT_KEYS: ReadonlySet<string> = new Set(["played", "won", "otw", "otl", "lost", "points"]);
+export const COMPACT_KEYS: ReadonlySet<string> = new Set(["played", "won", "lost", "points"]);
+
+/** W2d T17 fix 1 (m2): a table that splits its results apart (IIHF's W · OTW · OTL · L, RBG:343-344) shows only played
+ *  and points on a phone and folds the whole split behind the same disclosure. Four result columns beside a name do not
+ *  fit at 320 (measured: the hub's table ran 110px wide and put Points off-screen), and W and L alone would read as a
+ *  ledger that does not add up to P. The narrow set is the hub preview's (`PREVIEW_KEYS`, standings-table-view.tsx). */
+export const SPLIT_COMPACT_KEYS: ReadonlySet<string> = new Set(["played", "points"]);
+
+/** The columns a phone shows without asking, for this table's layout. */
+export const compactKeysOf = (layout: TableLayout): ReadonlySet<string> =>
+  layout.apart.length > 0 ? SPLIT_COMPACT_KEYS : COMPACT_KEYS;
 
 /** The ledger columns `standingsColumns` emits with `kind: "structural"`.
  *  These are COPY (Played, Won, Drawn, Lost, Points) and get a dictionary key;
@@ -517,6 +527,7 @@ export interface TableViewInput {
 
 export function buildTableView(input: TableViewInput): TableViewT {
   const layout = tableLayoutFor(input.rules);
+  const compact = compactKeysOf(layout);
   const columns = tableColumns(input.metricSpecs, input.cascade, input.rows, layout);
   const ranked = [...input.rows].sort((a, b) => (a.rank ?? UNRANKED) - (b.rank ?? UNRANKED));
   const name = (id: string) => input.entrantNames[id] ?? id;
@@ -537,7 +548,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
     columns: columns.map((c) => ({
       key: c.key,
       ...columnHeader(c, input.msg),
-      compact: COMPACT_KEYS.has(c.key),
+      compact: compact.has(c.key),
     })),
     rows: ranked.map((r) => ({
       rank: level ? null : (r.rank ?? null),

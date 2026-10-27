@@ -100,7 +100,12 @@ const docOf = (m: AnySportModule, variant?: string, kind = "league", divisionTie
   unpinnedRulesDoc({ module: m, kind, divisionConfig: cfgOf(m, variant), divisionTiebreakers });
 
 /** The stage's table, as the ranking pass leaves it, under its own rules. */
-const tableOf = (doc: Doc, entrants: readonly string[], fixtures: readonly TableFixture[], extra: { lots?: Map<string, { order: string[]; drawnAt: string }> } = {}): StandingsRow[] => [
+const tableOf = (
+  doc: Doc,
+  entrants: readonly string[],
+  fixtures: readonly TableFixture[],
+  extra: { lots?: Map<string, { order: string[]; drawnAt: string }>; scheduledPairs?: readonly (readonly [string, string])[] } = {},
+): StandingsRow[] => [
   ...completeTableStage(
     {
       id: "s",
@@ -108,6 +113,8 @@ const tableOf = (doc: Doc, entrants: readonly string[], fixtures: readonly Table
       entrants,
       rules: tableRulesOf(doc.tiebreakers, doc.points),
       ...(extra.lots === undefined ? {} : { lotsDraws: new Map([["", extra.lots]]) }),
+      // The stage's round-robin schedule, as production passes it (engine-db `scheduledPairsOf`).
+      ...(extra.scheduledPairs === undefined ? {} : { scheduledPairs: extra.scheduledPairs }),
     } as Parameters<typeof completeTableStage>[0],
     fixtures,
   ).tables.overall!,
@@ -171,7 +178,8 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
     expect(cells("A")).toEqual(["4", "1", "2", "1", "0", "11", "7", "4", "8"]);
     expect(cells("E")).toEqual(["1", "0", "1", "0", "0", "2", "1", "1", "2"]);
     expect(cells("D")).toEqual(["1", "0", "0", "1", "0", "2", "3", "-1", "1"]);
-    // The division page's table prints the same columns and the same cells (one cell expression, `cellText`).
+    // The division page's table prints the same columns (asserted here: the headers); the cells are pinned on the hub's
+    // view above, and the division page shares its one cell expression (`cellText`).
     const html = tableHtml(doc, ih, rows);
     expect(headerAbbrs(html)).toEqual(view.columns.map((c) => c.abbr));
     // Ice hockey's recreational variant: no OT, draws stand, 2/1/0 — GP W D L and no OT columns.
@@ -182,6 +190,15 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
     expect(recView.rows.find((r) => r.entrantId === "A")!.cells).toEqual(["2", "1", "1", "0", "5", "3", "2", "3"]);
     // A stage the loader refused (no rules) prints W and L as folded — never a guessed split.
     expect(buildTableView(input(null, ih, rows)).columns.map((c) => c.key)).not.toContain("otw");
+    // T17 fix 1 (m2): on a phone, the split table keeps played and points and folds W · OTW · OTL · L together (W and L
+    // alone would not add up to GP); a table that does not split keeps its four. The hub prints the fold as `max-md:hidden`.
+    const phone = (v: ReturnType<typeof buildTableView>) => v.columns.filter((c) => c.compact).map((c) => c.key);
+    expect(phone(view)).toEqual(["played", "points"]);
+    expect(phone(recView)).toEqual(["played", "won", "lost", "points"]);
+    const hub = renderToStaticMarkup(createElement(StandingsTableView, { view, dict: EN, testid: "h" }));
+    const folded = [...hub.matchAll(/<th[^>]*data-col="([a-z_]+)"[^>]*>/g)].filter((m) => /\smax-md:hidden"|\smax-md:hidden\s/.test(m[0])).map((m) => m[1]);
+    expect(folded).toEqual(["won", "otw", "otl", "lost", "gf", "ga", "gd"]);
+    expect(hub, "a long tail on a phone has its disclosure").toContain('data-testid="h-more"');
   });
 
   it("BG-PT-1 chess 3 half-points print '1½' (D10(b), RB2B-17) — a round robin with its SB column", () => {
@@ -332,7 +349,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
     expect(buildTableView(input(doc, fb, pending)).rows.every((r) => !(r.tieBreakText ?? "").includes(note))).toBe(true);
   });
 
-  it("anti-goal 2 a class of three on a badminton h2h_two step: the popover says head-to-head applies to two teams only (note h2h_two_not_applicable), and a class of two shows no such note (the positive pair)", () => {
+  it("anti-goal 2 a class of three on a badminton h2h_two step: the popover says head-to-head applies between two only (note h2h_two_not_applicable), and a class of two shows no such note (the positive pair)", () => {
     const bd = sport("badminton");
     const doc = docOf(bd);
     expect(doc.tiebreakers.filter((k) => k === "h2h_two").length, "premise: BWF's order re-asks head-to-head for two").toBeGreaterThan(0);
@@ -386,6 +403,46 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
     }
     // a row with no trace has no note at all
     expect(tieNoteText({ ...row, tieBreak: undefined }, [row], enMsg, (id) => id, () => null)).toBeNull();
+  });
+
+  // W2d T17 fix 1 (I1, review m5): the note driven through the ranking pass, not typed. Spec anti-goal 2 (spec:113-115)
+  // and §5.6 (spec:480): when a tied pair has not met and a LATER step splits them (here goal difference), the table says
+  // head-to-head is not complete. FIFA 2026 (football's default): points, then the head-to-head block, then GD.
+  it("head-to-head not complete, through the ranking pass: football's GD split carries the note on both rows, in every locale", () => {
+    const fb = sport("football");
+    const doc = docOf(fb);
+    expect(doc.tiebreakers.slice(0, 2), "premise: football ranks head-to-head before goal difference").toEqual(["points", "h2h_points"]);
+    const ids = ["A", "B", "C", "D"];
+    const roundRobin = ids.flatMap((x, i) => ids.slice(i + 1).map((y) => [x, y] as const));
+    // Ash beat Cedar 3-0 and Birch beat Dogwood 1-0; Ash v Birch is still to play. Level on 3, split on GD (+3 v +1).
+    const played = [goals("g1", "A", "C", [3, 0], "regulation", doc.points), goals("g2", "B", "D", [1, 0], "regulation", doc.points)];
+    const rows = tableOf(doc, ids, played, { scheduledPairs: roundRobin });
+    expect(rows.map((r) => r.entrantId)).toEqual(["A", "B", "D", "C"]);
+    let checked = 0;
+    for (const dict of [en, es, fr, nl] as unknown as Dict[]) {
+      const msg = (k: string, v?: Record<string, string | number>) => t(dict, k, v);
+      for (const [id, other] of [["A", "Birch"], ["B", "Ash"]] as const) {
+        const row = rows.find((r) => r.entrantId === id)!;
+        expect(tieNoteText(row, rows, msg, (x) => NAMES[x]!, () => null)!.split("\n"), `${id}`).toEqual([
+          // A goal ledger's difference is "goal difference" (FIFA 2026 art. 13).
+          msg("table.tieBreak", { with: other, rule: msg("table.tieBreak.diffGoals") }),
+          (dict as unknown as Record<string, string>)["table.tieNote.h2hIncomplete"],
+        ]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+    // The division page's table: one note per row the engine marked (Ash, Birch, and Cedar / Dogwood, who have not met).
+    const notes = (html: string) => html.split(en["table.tieNote.h2hIncomplete"]).length - 1;
+    expect(rows.filter((r) => r.tieBreak?.note === "h2h_incomplete")).toHaveLength(4);
+    expect(notes(tableHtml(doc, fb, rows))).toBe(4);
+    // The pair: Ash v Birch played (a 1-1 draw) — the head-to-head step ran on a complete schedule and answered; no note.
+    const met = tableOf(doc, ids, [...played, goals("g3", "A", "B", [1, 1], null, doc.points)], { scheduledPairs: roundRobin });
+    expect(met.filter((r) => r.entrantId === "A" || r.entrantId === "B").map((r) => r.tieBreak)).toEqual([
+      { key: "diff", with: ["B"] },
+      { key: "diff", with: ["A"] },
+    ]);
+    expect(notes(tableHtml(doc, fb, met)), "only Cedar and Dogwood, still to meet, keep it").toBe(2);
   });
 
   it("the division caption is per stage and says where its order came from and that it is pinned", () => {

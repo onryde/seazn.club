@@ -4,6 +4,7 @@
 import { describe, expect, it } from "vitest";
 import { fixtureCardModel, ogTheme, standingsCardModel } from "@/server/og/model";
 import { msgFor } from "@/lib/messages-i18n";
+import { chessRoundRobin, levelLeague, type StoredTable } from "@/server/engine-db/__tests__/helpers/stored-table-rows";
 
 const brandingOf = (hex: string) => ({ colors: { primary: hex } });
 
@@ -37,6 +38,7 @@ const baseStandings = {
     { rank: 2, entrantId: "e2", played: 3, points: 6 },
   ],
   names: { e1: "Maya Kapoor", e2: "Leo Ng" },
+  rules: null,
 };
 
 describe("standingsCardModel youth rule", () => {
@@ -60,7 +62,7 @@ describe("standingsCardModel youth rule", () => {
 
   it("adult division → names render, top 6, rank order", () => {
     const m = standingsCardModel({ ...baseStandings, youth: false, entrantKind: "individual" });
-    expect(m.rows[0]).toMatchObject({ rank: 1, name: "Maya Kapoor", points: 9 });
+    expect(m.rows[0]).toMatchObject({ rank: "1", name: "Maya Kapoor", points: "9", leader: true });
     expect(m.fallbackKey).toBeNull();
   });
 
@@ -68,6 +70,48 @@ describe("standingsCardModel youth rule", () => {
     const m = standingsCardModel({ ...baseStandings, rows: [], youth: false, entrantKind: "individual" });
     expect(m.rows).toHaveLength(0);
     expect(m.fallbackKey).toBe("og.standings.empty");
+  });
+});
+
+// W2d T17 fix 1 (I3): the share card prints a stored table through the public table's own helpers — the stage's unit
+// (chess's half-points, RB2B-17), the level test and the rank text (X-TB-6, anti-goal 3: a level table has no leader).
+// The rows are the engine's own, ranked by `completeTableStage` under the sport's rule; the expected values are the
+// rulebook's (FIDE 1 / ½ / 0), never the helpers' output.
+describe("standingsCardModel — W2d T17 fix 1: the public table's points and places", () => {
+  const NAMES = { e1: "Anand", e2: "Bela", e3: "Clara", e4: "Dmitri" };
+  const inputOf = (t: StoredTable, rules: StoredTable["doc"] | null) => ({
+    ...baseStandings,
+    youth: false,
+    entrantKind: "individual",
+    names: NAMES,
+    rules,
+    rows: t.rows.map((r) => ({ rank: r.rank ?? null, entrantId: r.entrantId, played: r.played, points: r.points, ...(r.level === true ? { level: true } : {}) })),
+  });
+
+  it("a chess table prints 1½ / 1 / ½ / 0 under its stage's half-point unit; without the stage's rules, the stored number", () => {
+    // Anand beat Bela, drew Clara, lost to Dmitri: 1 + ½ + 0 = 1½; Dmitri 1; Clara ½; Bela 0.
+    const chess = chessRoundRobin(["e1", "e2", "e3", "e4"]);
+    const m = standingsCardModel(inputOf(chess, chess.doc));
+    expect(m.rows.map((r) => [r.rank, r.name, r.points, r.leader])).toEqual([
+      ["1", "Anand", "1½", true],
+      ["2", "Dmitri", "1", false],
+      ["3", "Clara", "½", false],
+      ["4", "Bela", "0", false],
+    ]);
+    expect(standingsCardModel(inputOf(chess, null)).rows.map((r) => r.points), "no rules: the stored half-points").toEqual(["3", "2", "1", "0"]);
+  });
+
+  it("a level table (started, nothing counted) prints no places and draws no leader; it is still a table, not the empty line", () => {
+    const level = levelLeague(["e1", "e2", "e3"]);
+    expect(level.rows.every((r) => r.level === true), "premise: the engine marks every row level").toBe(true);
+    const m = standingsCardModel(inputOf(level, level.doc));
+    expect(m.rows.map((r) => [r.rank, r.leader])).toEqual([["–", false], ["–", false], ["–", false]]);
+    expect(m.fallbackKey).toBeNull();
+  });
+
+  it("a row the ranking pass left without a place keeps the card's '–' while its neighbours keep theirs", () => {
+    const m = standingsCardModel({ ...baseStandings, youth: false, entrantKind: "individual", rows: [{ rank: 1, entrantId: "e1", played: 3, points: 9 }, { rank: null, entrantId: "e2", played: 3, points: 6 }] });
+    expect(m.rows.map((r) => r.rank)).toEqual(["1", "–"]);
   });
 });
 
