@@ -294,10 +294,12 @@ export class ApiBackedTargetError extends Error {
 
 /** §5.3 — each ACTIVE destination's key hint, opened here so the full key never leaves this module. An envelope that
  *  will not open under a valid KEK (a rotated KEK, a corrupt byte) is a row with no hint, never a failed list (Review
- *  Focus 1). A missing or malformed RELAY_KEK is the deployment's fault, not a row's: it rethrows (M3; N1, B2 re-review). */
+ *  Focus 1). A missing or malformed RELAY_KEK is the deployment's fault, not a row's: it rethrows (M3; N1, B2 re-review).
+ *  YouTube Connect (T3): an API-backed row seals no key of its own (`rtmp_enc` is null), so it has no entry at all — not a
+ *  null one — and is never opened; an org holding only such rows reads its hints without a RELAY_KEK. */
 export async function readKeyHints(tx: Tx, orgId: string): Promise<Map<string, string | null>> {
   const rows = await tx<{ id: string; rtmp_enc: Uint8Array }[]>`
-    select id, rtmp_enc from org_stream_targets where org_id = ${orgId} and archived_at is null`;
+    select id, rtmp_enc from org_stream_targets where org_id = ${orgId} and archived_at is null and rtmp_enc is not null`;
   const hints = new Map<string, string | null>();
   for (const r of rows) {
     let hint: string | null = null;
@@ -344,10 +346,15 @@ export type ReplaceKeyResult =
  *  preset (D6: server-filled), so it is re-sealed there; a legacy kind has no preset to fall back on and is `unreadable`
  *  (the caller's 422: remove it — a legacy kind cannot be added again, D6). The old envelope is never needed to write the new one. */
 export async function replaceTargetKey(tx: Tx, orgId: string, targetId: string, streamKey: string): Promise<ReplaceKeyResult> {
-  const [row] = await tx<{ rtmp_enc: Uint8Array; dest_fingerprint: string | null; kind: string }[]>`
+  const [row] = await tx<{ rtmp_enc: Uint8Array | null; dest_fingerprint: string | null; kind: string }[]>`
     select rtmp_enc, dest_fingerprint, kind from org_stream_targets
      where id = ${targetId} and org_id = ${orgId} and archived_at is null`;
   if (!row) return { ok: false, reason: "not_found" };
+  // YouTube Connect (T3): an API-backed row has no key to replace — its keys live in the connection's pool — and "no
+  // envelope" is not the unopenable-envelope case below, which RECOVERS by re-sealing; that write onto a keyless row would
+  // break the exactly-one-source check. Refused after the org/archive filter (no oracle) and before any decrypt, as
+  // `readTargetSecret` does. The usecase answers 422 YOUTUBE_USE_DISCONNECT before it ever gets here; this is the floor.
+  if (row.rtmp_enc === null) throw new ApiBackedTargetError(targetId);
   let url: string;
   let recovering = false;
   try {

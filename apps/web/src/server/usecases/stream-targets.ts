@@ -6,11 +6,11 @@ import "server-only";
 // caller that bypasses parseBody still cannot store an off-list host.
 // The ingest url is the platform's preset (D6); `checkDestination` still runs on it as a guard, so a
 // preset the allowlist stopped admitting refuses by rule, never silently.
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import {
   DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
-  checkDestination, isStreamPlatform, type DestinationRefusal,
+  YOUTUBE_USE_DISCONNECT, checkDestination, isStreamPlatform, type DestinationRefusal,
 } from "@/lib/stream-destinations";
 import { streamUrlSchema } from "@/lib/stream-url";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -125,6 +125,20 @@ export function targetHeld(h: TargetHolder): HttpError {
 
 const targetNotFound = () => new HttpError(404, "stream target not found");
 
+/** YouTube Connect (plan P9): 422 YOUTUBE_USE_DISCONNECT — Rename, Replace key and Remove are for pasted-key rows. An
+ *  API-backed destination is a connected channel: it has no key of its own and leaves only through Disconnect. */
+const disconnectRefusal = () =>
+  new HttpError(422, "This destination is a connected YouTube channel; disconnect the channel instead", YOUTUBE_USE_DISCONNECT);
+
+/** True when this ACTIVE row of this org is API-backed (it names a connection). False for a pasted row AND for a row that
+ *  is absent, archived or another org's — callers ask it only AFTER their 404 check has passed, so those never reach it. */
+async function isApiBacked(exec: Tx | typeof sql, orgId: string, targetId: string): Promise<boolean> {
+  const [row] = await exec<{ api: boolean }[]>`
+    select youtube_connection_id is not null as api from org_stream_targets
+     where id = ${targetId} and org_id = ${orgId} and archived_at is null`;
+  return row?.api === true;
+}
+
 /** M5 (B1 review): a label is trimmed exactly as the key is — the schema's min(1) admits "   ", which the Directory
  *  would render as a blank name — and nothing left is a 422. */
 function labelOf(raw: string): string {
@@ -137,16 +151,19 @@ export async function patchStreamTarget(auth: AuthCtx, orgId: string, targetId: 
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   if (body.label !== undefined) {
     const label = labelOf(body.label);
+    // `youtube_connection_id is null`: an API-backed row is never renamed from here (plan P9) — the write itself carries
+    // the guard, and a miss is told apart below (an API row is 422, an absent/archived/foreign one is the plain 404).
     const renamed = await sql<{ id: string }[]>`
       update org_stream_targets set label = ${label}
-       where id = ${targetId} and org_id = ${orgId} and archived_at is null returning id`;
-    if (renamed.length === 0) throw targetNotFound();
+       where id = ${targetId} and org_id = ${orgId} and archived_at is null and youtube_connection_id is null returning id`;
+    if (renamed.length === 0) throw (await isApiBacked(sql, orgId, targetId)) ? disconnectRefusal() : targetNotFound();
   } else {
     // Review Focus 2: trimmed exactly as create trims, so a re-paste of the same key fingerprints the same.
     const streamKey = (body.streamKey ?? "").trim();
     if (streamKey === "") throw streamKeyEmpty();
     await sql.begin(async (tx) => {
       if (!(await lockStreamTarget(tx, orgId, targetId))) throw targetNotFound();
+      if (await isApiBacked(tx, orgId, targetId)) throw disconnectRefusal();
       const [holder] = await holderRows(tx, { orgId, targetId });
       if (holder) throw targetHeld(holder);
       const r = await replaceTargetKey(tx, orgId, targetId, streamKey);
@@ -169,6 +186,7 @@ export async function removeStreamTarget(auth: AuthCtx, orgId: string, targetId:
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
   await sql.begin(async (tx) => {
     if (!(await lockStreamTarget(tx, orgId, targetId))) throw targetNotFound();
+    if (await isApiBacked(tx, orgId, targetId)) throw disconnectRefusal();
     const [holder] = await holderRows(tx, { orgId, targetId });
     if (holder) throw targetHeld(holder);
     await archiveStreamTarget(tx, orgId, targetId);

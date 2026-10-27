@@ -33,7 +33,7 @@ import { FAKE_CONNECTING_KEY_PREFIX, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRec
 import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { routes } from "@/lib/routes";
 import { admit, holdStateOf, type AdmitInput, type SessionState } from "@/server/relay/domain/session";
-import { pairPresentPhone, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { apiSessionOnTarget, pairPresentPhone, resealTargetDestination, rigApiTarget, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readFirstInput, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
@@ -289,6 +289,8 @@ async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: b
 }
 
 const body = (targetId: string, mode: "passthrough" | "composed" = "passthrough") => ({ mode, targetId });
+/** YouTube Connect T3: did a start get refused as "the destination is held"? (`null` = the start did not throw.) */
+const refusedAsHeld = (err: unknown) => (err as { code?: string } | null)?.code === "target_in_use";
 
 /** A7 (capture QR v2 T6) — this file's start helper. W5 refuses every organiser start with no present phone, and no start
  *  below except the W5 cases is ABOUT the phone: each re-beats its fixture's pairing on the start's OWN clock first (a
@@ -3749,6 +3751,73 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
     expect(await forceDestroysOf(live)).toEqual([]);
   });
 
+  // YouTube Connect T3 (spec §5.2): the destination is the unit of exclusivity for PASTED rows only. One channel streams several
+  // matches at once (the key pool exists for it), so each of the three destination doors — the active holder, the prior
+  // Machine teardown, the prior output release — is narrowed to pasted targets, by the TARGET's source (`youtube_connection_id`),
+  // and each is a negative beside its positive twin on the same set-up. Until T11 admits an API target, a start that gets
+  // PAST the doors dies at the key read (`ApiBackedTargetError`); every API case here therefore asserts "not refused
+  // target_in_use" and what the door did or did not CALL, never what happens after it.
+  it.each(["pasted", "api"] as const)("T3 holder door (%s): fixture B's start on a destination fixture A is actively streaming to is refused target_in_use ONLY when the destination is a pasted key — an API-backed one has no holder", async (kind) => {
+    const { r, a, b } = await twoFixturesOneTarget();
+    const exclusive = kind === "pasted";
+    const targetId = exclusive ? r.target.id : (await rigApiTarget(r.auth.orgId, "Channel")).targetId;
+    const heldBy = exclusive
+      ? (await createSession(r.auth, a, body(targetId), r.deps)).sessionId
+      : await apiSessionOnTarget(r.auth.orgId, a, targetId, "live");
+    expect(ACTIVE_STATES, "premise: A's session is active").toContain((await r.row(heldBy)).state);
+    const ingestSpy = vi.spyOn(r.ingest, "createLiveInput");
+    try {
+      const err = await createSession(r.auth, b, body(targetId), r.deps).then(() => null, (e: unknown) => e);
+      if (exclusive) {
+        expect(err).toMatchObject({ status: 409, code: "target_in_use" });
+        expect(ingestSpy, "the pasted refusal is early: no provider call").not.toHaveBeenCalled();
+      } else {
+        expect(refusedAsHeld(err), `an API destination is not held by A (got ${(err as Error | null)?.message ?? "no error"})`).toBe(false);
+      }
+    } finally {
+      ingestSpy.mockRestore();
+    }
+    expect((await r.row(heldBy)).state, "A's session is untouched").not.toBe("failed");
+  });
+
+  /** fixture A's ENDED composed session with its Machine still listed (zombieOnTarget), optionally MOVED onto an API-backed
+   *  destination — what T11 will leave behind (an api_backed terminal session whose Machine the provider still lists). */
+  async function zombieOn(kind: "pasted" | "api") {
+    const z = await zombieOnTarget();
+    if (kind === "pasted") return { ...z, targetId: z.r.target.id };
+    const { targetId } = await rigApiTarget(z.r.auth.orgId, "Channel");
+    const moved = await sql`update fixture_stream_sessions set target_id = ${targetId}, api_backed = true where id = ${z.old} returning id`;
+    expect(moved, "premise: the ended session moved onto the API destination").toHaveLength(1);
+    return { ...z, targetId };
+  }
+
+  it.each(["pasted", "api"] as const)("T3 prior-Machine door (%s): another fixture's ENDED composed session with a Machine still listed on the SAME destination is destroyed (and holds the destination while that fails) ONLY for a pasted key — on an API destination B's admission destroys nothing and refuses nothing", async (kind) => {
+    const { r, b, old, machine, flaky, destroyCalls, targetId } = await zombieOn(kind);
+    const exclusive = kind === "pasted";
+    const callsBefore = destroyCalls.length;
+    const eventsBefore = (await forceDestroysOf(old)).length;
+    const err = await createSession(r.auth, b, body(targetId), flaky).then(() => null, (e: unknown) => e);
+    if (exclusive) {
+      expect(err).toMatchObject({ status: 409, code: "target_in_use" });
+      expect(destroyCalls.slice(callsBefore), "the pasted leftover is tried exactly once").toEqual([machine]);
+      expect((await forceDestroysOf(old)).length, "…and recorded on A's ledger").toBe(eventsBefore + 1);
+    } else {
+      expect(refusedAsHeld(err), `not held (got ${(err as Error | null)?.message ?? "no error"})`).toBe(false);
+      expect(destroyCalls.slice(callsBefore), "nothing is destroyed on an API destination").toEqual([]);
+      expect((await forceDestroysOf(old)).length, "…and nothing is recorded on A's ledger").toBe(eventsBefore);
+      expect((await r.runner.list()).map((m) => m.runnerId), "A's Machine is left alone").toContain(machine);
+    }
+  });
+
+  it("T3 prior-Machine door: B's OWN fixture's earlier session is still torn down on an API destination (the first arm of the predicate stays) — a Machine of B's own session that survives its destroy refuses active_session", async () => {
+    const { r, a, old, machine, flaky, destroyCalls, targetId } = await zombieOn("api");
+    const callsBefore = destroyCalls.length;
+    // A restarts on the API destination: the zombie is A's OWN, so the same-fixture arm destroys it whatever the target is.
+    const err = await createSession(r.auth, a, body(targetId), flaky).then(() => null, (e: unknown) => e);
+    expect(err).toMatchObject({ status: 409, code: "active_session", extra: { sessionId: old } });
+    expect(destroyCalls.slice(callsBefore), "tried once").toEqual([machine]);
+  });
+
   it("G-T5 the index is what survives a second writer: two non-terminal rows on ONE target_id (two fixtures, so the FIXTURE index cannot be what refuses) → 23505 NAMING fixture_stream_sessions_one_active_target; terminal rows never collide; and the name and predicate are pinned as text, derived from ACTIVE_STATES / TERMINAL_STATES", async () => {
     const { r, a, b } = await twoFixturesOneTarget();
     // Db/Dc: sport_key, competition_id, division_id and entitlement_via_override are NOT NULL with no default,
@@ -4225,6 +4294,40 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
     expect((await facts(old)).output_released_at).toBeInstanceOf(Date);
     expect(r.ingest.liveOutputsTo(dest)).toBe(1);                                 // the NEW session's, alone
     expect((await releaseRows(old)).map((x) => `${x.result}:${x.reason}`)).toEqual(["failed:decision", "failed:admission", "failed:admission", "ok:admission"]);
+  });
+
+  // YouTube Connect T3 (spec §5.2): the output door, narrowed like the Machine door above. An ended session whose release
+  // FAILED holds a PASTED destination (a second output on one key would fight the first); on an API destination the output
+  // sits on a pooled key, and exclusivity there is the key's (§5.4), so another fixture's start neither retries it nor is
+  // refused for it. Same set-up for both kinds: A's passthrough Stop with the removal failing, A's row moved onto the API
+  // destination for the second kind (what an api_backed terminal session looks like).
+  it.each(["pasted", "api"] as const)("T3 prior-output door (%s): another fixture's ENDED session whose output release FAILED holds the destination (retried, then refused target_in_use) ONLY for a pasted key — on an API destination B's admission retries nothing and refuses nothing", async (kind) => {
+    const r = await rig({ credits: 2, fixtures: 2 });
+    const [f1, f2] = r.fixtureIds as [string, string];
+    const { sessionId: old } = await createSession(r.auth, f1, body(r.target.id), r.deps);
+    await goLive(r, f1);
+    const cf = flakyRemoval(r);
+    await stopSession(r.auth, f1, old, cf.deps);
+    expect((await facts(old)).output_released_at, "premise: A's output release failed and is still owed").toBeNull();
+    expect((await facts(old)).output_uid, "premise: A recorded an output").not.toBeNull();
+    const exclusive = kind === "pasted";
+    let targetId = r.target.id;
+    if (!exclusive) {
+      targetId = (await rigApiTarget(r.auth.orgId, "Channel")).targetId;
+      const moved = await sql`update fixture_stream_sessions set target_id = ${targetId}, api_backed = true where id = ${old} returning id`;
+      expect(moved, "premise: the ended session moved onto the API destination").toHaveLength(1);
+    }
+    const before = (await releaseRows(old)).map((x) => `${x.result}:${x.reason}`);
+    const err = await createSession(r.auth, f2, body(targetId), cf.deps).then(() => null, (e: unknown) => e);
+    const after = (await releaseRows(old)).map((x) => `${x.result}:${x.reason}`);
+    if (exclusive) {
+      expect(err).toMatchObject({ status: 409, code: "target_in_use" });
+      expect(after, "the pasted leftover's release is retried once").toEqual([...before, "failed:admission"]);
+    } else {
+      expect(refusedAsHeld(err), `not held (got ${(err as Error | null)?.message ?? "no error"})`).toBe(false);
+      expect(after, "an API destination's leftover output is not B's to retry").toEqual(before);
+      expect((await facts(old)).output_released_at, "…and it is still owed").toBeNull();
+    }
   });
 
   it("a Stop that lands WHILE the output is still being added: the terminal decision read no output, so the output the add then returns is released at once — never left simulcasting for a session that is over (mutant: drop the late-add release → red)", async () => {

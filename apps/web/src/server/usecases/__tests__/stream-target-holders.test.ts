@@ -9,7 +9,7 @@ import { describe, expect, it } from "vitest";
 import { sql } from "@/lib/db";
 import { routes } from "@/lib/routes";
 import { ACTIVE_STATES, TERMINAL_STATES, holdStateOf } from "@/server/relay/domain/session";
-import { holdRig, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
+import { apiSessionOnTarget, holdRig, rigApiTarget, rigTarget, sessionOnTarget } from "@/server/relay/__tests__/_session-rig";
 import { startedDivisionWithFixture } from "./_rig";
 import { holderRows, toTargetHolder } from "../stream-target-holders";
 
@@ -73,6 +73,32 @@ describe.skipIf(!HAS_DB)("holderRows — who holds a destination, named for a pe
     expect(survivors).toBe(2);
     // …and across the org, notFixtureId drops exactly the one session it names.
     expect((await holderRows(sql, { orgId: r.auth.orgId, notFixtureId: r.fixtureId })).map((h) => h.sessionId).sort()).toEqual([sAnother, sDeleted].sort());
+  });
+
+  // YouTube Connect T3 (spec §5.2): a destination is exclusive for PASTED rows only. One channel streams several matches at
+  // once, so the sessions on an API-backed target are not holders; exclusivity for them lives at the key (§5.4). Expected
+  // values come from the domain's own ACTIVE_STATES and holdStateOf, and the decision from the TARGET's source
+  // (`youtube_connection_id`), not from anything the session carries.
+  it("an ACTIVE session on an API-backed target is no holder, in every active state — two of them on one target neither; the pasted target beside it holds (positive pair), org-wide and by id", async () => {
+    let checked = 0;
+    for (const state of ACTIVE_STATES) {
+      const r = await holdRig();                                   // org + a started fixture + a PASTED target
+      const { fixtureIds: [f1, f2] } = await startedDivisionWithFixture(r.auth, { fixtures: 2 });
+      const { targetId: apiTarget } = await rigApiTarget(r.auth.orgId);
+      const pasted = await sessionOnTarget(r.auth.orgId, r.fixtureId, r.targetId, state);
+      // TWO api-backed sessions in the same active state on ONE API target: the pasted index would refuse the second.
+      await apiSessionOnTarget(r.auth.orgId, f1!, apiTarget, state);
+      await apiSessionOnTarget(r.auth.orgId, f2!, apiTarget, state);
+      const [{ n }] = await sql<{ n: number }[]>`
+        select count(*)::int as n from fixture_stream_sessions where target_id = ${apiTarget} and state = ${state}`;
+      expect(n, `${state}: the two API sessions really are seated, so their absence below is the guard and not an empty seed`).toBe(2);
+      expect(await holderRows(sql, { orgId: r.auth.orgId, targetId: apiTarget }), `${state}: by id`).toEqual([]);
+      expect((await holderRows(sql, { orgId: r.auth.orgId, targetId: r.targetId })).map((h) => h.sessionId), `${state}: the pasted target holds`).toEqual([pasted]);
+      expect((await holderRows(sql, { orgId: r.auth.orgId })).map((h) => h.sessionId), `${state}: org-wide, only the pasted one`).toEqual([pasted]);
+      expect(await holderRows(sql, { orgId: r.auth.orgId, targetId: apiTarget, notFixtureId: r.fixtureId }), `${state}: with notFixtureId`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(ACTIVE_STATES.length);
   });
 
   it("toTargetHolder refuses a TERMINAL row — 'a holder is active' is a guard, not a comment", () => {

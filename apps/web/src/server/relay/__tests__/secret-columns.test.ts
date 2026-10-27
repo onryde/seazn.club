@@ -1077,4 +1077,60 @@ describe.skipIf(!HAS_DB)("YouTube Connect T2 — pooled keys and API-backed dest
     const r = await rig();
     expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId)), "a pasted row is unchanged").toEqual(r.target);
   });
+
+  // YouTube Connect T3 (carried from T2): an API-backed row has no envelope, so the two readers/writers that opened
+  // `rtmp_enc` blindly must filter or refuse it — a hint read must not depend on the KEK for a row with nothing sealed, and
+  // Replace key must never re-seal onto a row the exactly-one-source check forbids a key on.
+  /** A pasted destination in the preset's canonical form (the T2 pool's `ingest()` carries an explicit port). */
+  const pastedDest = (streamKey = secret65()) => ({ url: "rtmps://a.rtmps.youtube.com/live2", streamKey });
+
+  it("readKeyHints: an API-backed row has NO entry (not a null one) while the pasted rows beside it keep theirs — and an org holding only API rows reads its hints with no RELAY_KEK at all", async () => {
+    const r = await ytRig();
+    const api = await apiTarget(r.orgId, r.connectionId);
+    const gone = await apiTarget(r.orgId, r.connectionId, true);
+    // Only API rows: nothing to open, so the KEK is not consulted — an unset or malformed one must not fail the read.
+    let checked = 0;
+    for (const f of KEK_FAULTS) {
+      const hints = await withKek(f.value, () => sql.begin((tx) => readKeyHints(tx, r.orgId)));
+      expect(hints.size, `${f.name} KEK, API rows only`).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(KEK_FAULTS.length);
+    // Beside pasted rows: the good one hints, the unopenable one is a null hint (unchanged), the API row is absent.
+    const good = await sql.begin((tx) => insertStreamTarget(tx, { orgId: r.orgId, kind: "youtube", label: "good", watchUrl: null, rtmp: pastedDest("abcd-1234-efgh-5678-ijkl") }));
+    const [bad] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${r.orgId}, 'youtube', 'bad', ${Buffer.from("not-a-real-envelope")}) returning id`;
+    const hints = await sql.begin((tx) => readKeyHints(tx, r.orgId));
+    expect(hints.get(good.id)).toBe("ijkl".slice(-KEY_HINT_CHARS));
+    expect(hints.get(bad!.id), "an unopenable PASTED envelope is still a row with a null hint").toBeNull();
+    expect(hints.has(api), "an API row has no entry").toBe(false);
+    expect(hints.has(gone), "an archived API row has none either").toBe(false);
+    expect(hints.size).toBe(2);
+  });
+
+  it("replaceTargetKey on an API-backed row throws ApiBackedTargetError{targetId} — before any decrypt, KEK or no KEK — and writes nothing: the row stays keyless and keeps its connection; another org's and an archived API row are still 'not_found'; a pasted row replaces (positive pair)", async () => {
+    const a = await ytRig();
+    const b = await ytRig();
+    const api = await apiTarget(a.orgId, a.connectionId);
+    const gone = await apiTarget(a.orgId, a.connectionId, true);
+    const state = async (id: string) => (await sql<{ keyless: boolean; connection: string | null; fingerprint: string | null }[]>`
+      select rtmp_enc is null as keyless, youtube_connection_id as connection, dest_fingerprint as fingerprint from org_stream_targets where id = ${id}`)[0]!;
+    const before = await state(api);
+    expect(before, "premise: a keyless API row").toEqual({ keyless: true, connection: a.connectionId, fingerprint: null });
+    let checked = 0;
+    for (const f of [{ name: "valid", value: process.env.RELAY_KEK }, ...KEK_FAULTS]) {
+      const err = await withKek(f.value, () => sql.begin((tx) => replaceTargetKey(tx, a.orgId, api, secret65())).then(() => null, (e: unknown) => e));
+      expect(err, f.name).toBeInstanceOf(ApiBackedTargetError);
+      expect(err, f.name).toMatchObject({ targetId: api });
+      expect(await state(api), `${f.name}: unchanged`).toEqual(before);
+      checked++;
+    }
+    expect(checked).toBe(1 + KEK_FAULTS.length);
+    // No oracle: the org and archive filters answer first.
+    expect(await sql.begin((tx) => replaceTargetKey(tx, b.orgId, api, secret65())), "another org's").toEqual({ ok: false, reason: "not_found" });
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, gone, secret65())), "an archived one").toEqual({ ok: false, reason: "not_found" });
+    // The positive pair: a pasted row in the same org replaces.
+    const t = await sql.begin((tx) => insertStreamTarget(tx, { orgId: a.orgId, kind: "youtube", label: "pasted", watchUrl: null, rtmp: pastedDest() }));
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, t.id, secret65()))).toEqual({ ok: true, changed: true });
+  });
 });

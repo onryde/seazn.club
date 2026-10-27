@@ -43,10 +43,10 @@ import {
 import { CreateStreamTarget, PatchStreamTarget, StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
 import { ACTIVE_STATES, TERMINAL_STATES, holdStateOf } from "@/server/relay/domain/session";
 import { archiveStreamTarget, lockStreamTarget, readTargetSecret } from "@/server/relay/secret-columns";
-import { holdRig, rigTarget, sessionOnTarget, targetEnvelope } from "@/server/relay/__tests__/_session-rig";
+import { apiSessionOnTarget, holdRig, rigApiTarget, rigTarget, sessionOnTarget, targetEnvelope } from "@/server/relay/__tests__/_session-rig";
 import { GET, POST } from "@/app/api/v1/orgs/[id]/stream-targets/route";
 import { createApiKey } from "../api-keys";
-import { seedOrg } from "./_rig";
+import { seedOrg, startedDivisionWithFixture } from "./_rig";
 import { makeUser, seedOrg as seedSignedInOrg } from "./_seed";
 import { createStreamTarget, listStreamTargets, patchStreamTarget, removeStreamTarget } from "../stream-targets";
 
@@ -344,6 +344,23 @@ describe.skipIf(!HAS_DB)("stream targets — the usecase", () => {
     const list = await listStreamTargets(auth, auth.orgId);
     expect(list.find((t) => t.label === "Unreadable")).toMatchObject({ keyHint: null });
   });
+
+  // YouTube Connect T3 (spec §5.2): an API-backed row has no key of its own and is never "in use" by a match — one
+  // channel streams several at once. The list must answer for it (no sealed column to open) and name no holder.
+  it("an API-backed row lists with no keyHint and inUse null even with TWO live sessions on it, and the list still answers; the pasted rows beside it keep their keyHint and their holder (positive pair)", async () => {
+    const { auth } = await seedOrg();
+    const { fixtureIds: [f1, f2] } = await startedDivisionWithFixture(auth, { fixtures: 2 });
+    const { fixtureId: f3 } = await startedDivisionWithFixture(auth);
+    const pasted = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Pasted", streamKey: "abcd-1234-efgh-5678-ijkl" });
+    const { targetId: api } = await rigApiTarget(auth.orgId, "Channel");
+    await apiSessionOnTarget(auth.orgId, f1!, api, "live");
+    await apiSessionOnTarget(auth.orgId, f2!, api, "warming");
+    const held = await sessionOnTarget(auth.orgId, f3, pasted.id, "live");
+    const list = await listStreamTargets(auth, auth.orgId);
+    expect(list.map((t) => t.id).sort(), "both rows are listed").toEqual([api, pasted.id].sort());
+    expect(list.find((t) => t.id === api)).toMatchObject({ kind: "youtube", label: "Channel", keyHint: null, inUse: null });
+    expect(list.find((t) => t.id === pasted.id)).toMatchObject({ keyHint: "jkl", inUse: { sessionId: held, state: "live" } });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -486,6 +503,65 @@ describe.skipIf(!HAS_DB)("rename, replace key, remove (spec §5.2, D2)", () => {
     expect(back).toMatchObject({ id: t.id, label: "Tw again", watchUrl: "https://www.twitch.tv/club", outcome: "restored" });
     expect((await listStreamTargets(auth, auth.orgId)).find((x) => x.id === t.id), "the list reads the restored row's new name")
       .toMatchObject({ label: "Tw again", watchUrl: "https://www.twitch.tv/club" });
+  });
+
+  // YouTube Connect T3 (plan P9): an API-backed row is changed by Connect and Disconnect alone. Rename, Replace key and
+  // Remove answer 422 YOUTUBE_USE_DISCONNECT — AFTER the 404 checks, so another org's or an archived API row is still a
+  // plain "not found" — and write nothing.
+  describe("an API-backed row (YouTube Connect)", () => {
+    const rowOf = async (id: string) => (await sql<{ label: string; archived_at: Date | null; youtube_connection_id: string | null }[]>`
+      select label, archived_at, youtube_connection_id from org_stream_targets where id = ${id}`)[0]!;
+    const ops = (auth: Awaited<ReturnType<typeof seedOrg>>["auth"], id: string) => ({
+      rename: () => patchStreamTarget(auth, auth.orgId, id, { label: "Renamed" }),
+      replace: () => patchStreamTarget(auth, auth.orgId, id, { streamKey: `k-${randomUUID()}` }),
+      remove: () => removeStreamTarget(auth, auth.orgId, id),
+    });
+
+    it("Rename, Replace key and Remove are each 422 YOUTUBE_USE_DISCONNECT — idle and with a live session on it, and again on a second call — and the row is unchanged and still listed; the pasted row beside it still renames, replaces and removes", async () => {
+      const { auth } = await seedOrg();
+      const { fixtureId } = await startedDivisionWithFixture(auth);
+      const { targetId: api, connectionId } = await rigApiTarget(auth.orgId, "Channel");
+      const pasted = await createStreamTarget(auth, auth.orgId, { kind: "youtube", label: "Pasted", streamKey: `k-${randomUUID()}` });
+      let checked = 0;
+      for (const seated of [false, true]) {
+        if (seated) await apiSessionOnTarget(auth.orgId, fixtureId, api, "live");
+        for (const [name, call] of Object.entries(ops(auth, api))) {
+          for (const round of [1, 2]) {
+            const err = await call().then(() => null, (e: unknown) => e);
+            expect(err, `${name} ${seated ? "live" : "idle"} #${round}`).toMatchObject({ status: 422, code: "YOUTUBE_USE_DISCONNECT" });
+            expect(await rowOf(api), `${name} ${seated ? "live" : "idle"} #${round}: unchanged`).toMatchObject({ label: "Channel", archived_at: null, youtube_connection_id: connectionId });
+            checked++;
+          }
+        }
+      }
+      expect(checked).toBe(2 * 3 * 2);
+      expect((await listStreamTargets(auth, auth.orgId)).map((t) => t.id), "still listed").toContain(api);
+      // The positive pair: the same three operations on the pasted row all succeed.
+      expect(await patchStreamTarget(auth, auth.orgId, pasted.id, { label: "Pasted 2" })).toMatchObject({ id: pasted.id, label: "Pasted 2" });
+      expect(await patchStreamTarget(auth, auth.orgId, pasted.id, { streamKey: `k-${randomUUID()}` })).toMatchObject({ id: pasted.id });
+      await expect(removeStreamTarget(auth, auth.orgId, pasted.id)).resolves.toEqual({ removed: true });
+    });
+
+    it("the 404 checks come first: another org's API row and an ARCHIVED API row are 404, never 422 (no oracle for the connection); the live row beside them is the 422", async () => {
+      const a = await seedOrg();
+      const b = await seedOrg();
+      const live = (await rigApiTarget(a.auth.orgId, "Live")).targetId;
+      const gone = (await rigApiTarget(a.auth.orgId, "Gone")).targetId;
+      await sql`update org_stream_targets set archived_at = now() where id = ${gone}`;
+      let checked = 0;
+      for (const [who, auth, id] of [["another org", b.auth, live], ["archived", a.auth, gone]] as const) {
+        for (const [name, call] of Object.entries(ops(auth, id))) {
+          await expect(call(), `${who} ${name}`).rejects.toMatchObject({ status: 404 });
+          checked++;
+        }
+      }
+      expect(checked).toBe(6);
+      for (const [name, call] of Object.entries(ops(a.auth, live))) {
+        await expect(call(), `own live ${name}`).rejects.toMatchObject({ status: 422, code: "YOUTUBE_USE_DISCONNECT" });
+        checked++;
+      }
+      expect(checked).toBe(9);
+    });
   });
 
   it("another org's target is 404 for rename, replace and remove — never a 409 that confirms it exists", async () => {

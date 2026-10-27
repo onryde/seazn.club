@@ -1257,6 +1257,16 @@ async function targetHolderFor(targetId: string, orgId: string, fixtureId: strin
   return still ?? null;
 }
 
+/** YouTube Connect T3 (spec §5.2): the cross-fixture arm of both prior-teardown queries below — "any terminal session on THIS
+ *  destination, whichever fixture it was made for" — holds only for a PASTED destination, where a Machine or an output on
+ *  the key fights the next publisher. An API-backed destination (a connection) streams several matches at once, each on its
+ *  own pooled key, and its exclusivity is the key's (§5.4); another fixture's leftover there is neither destroyed nor
+ *  retried from this admission, and refuses nothing. The fixture's OWN sessions stay in scope either way (the other arm).
+ *  Decided by the TARGET's source (`youtube_connection_id`), in the caller's org. A target that is not this org's, or is
+ *  gone, is not API-backed as far as this fragment can tell, so it keeps today's behaviour (`admit` answers it 404). */
+const pastedTarget = (orgId: string, targetId: string) => sql`not exists (
+  select 1 from org_stream_targets x where x.id = ${targetId} and x.org_id = ${orgId} and x.youtube_connection_id is not null)`;
+
 /** 2C-post m5 (Task 2C-post review m5; post-2C-post plan sync). The fixture's one-active index releases the moment a session
  *  goes terminal — since F-A a stop whose Machine never auto-destroyed completes at grace + slack — whether or not that
  *  Machine's destroy was ever CONFIRMED: a force_destroy whose DELETE threw leaves the row completed + destroyed, and nothing
@@ -1273,7 +1283,7 @@ async function targetHolderFor(targetId: string, orgId: string, fixtureId: strin
  *
  *  I1 (Task 10 fix round 1 + addendum). The DESTINATION is the unit of exclusivity (V421), and a Machine pushes to the
  *  destination's key whichever fixture it was made for — so the query also covers every terminal composed session on THIS
- *  target (`fixture_id = $f OR target_id = $t`, inside the caller's org). A TERMINAL session's still-listed Machine is an
+ *  target (`fixture_id = $f OR target_id = $t`, inside the caller's org; the target arm is for a PASTED destination only — `pastedTarget`). A TERMINAL session's still-listed Machine is an
  *  orphan by Task 12's rule whichever fixture it belongs to, so admission destroys it now rather than waiting for the daily
  *  sweep — refusing without trying would brick the destination for the next match on that court until then (failure class
  *  13; orchestrator ruling reversed 2026-09-28 on that reasoning). Each attempt is the SAME force_destroy effect row on the
@@ -1297,7 +1307,7 @@ async function tearDownPriorMachines(
   const prior = await sql<(Row & TerminalHolderRow)[]>`
     select p.*, t.label as holder_label, c.name as holder_court, ${terminalHolderCols()}
       from (select ${cols()} from fixture_stream_sessions
-             where org_id = ${orgId} and (fixture_id = ${fixtureId} or target_id = ${targetId})
+             where org_id = ${orgId} and (fixture_id = ${fixtureId} or (target_id = ${targetId} and ${pastedTarget(orgId, targetId)}))
                and mode = 'composed' and runner_state <> 'none' and state in ${sql([...TERMINAL_STATES])}
                and not (runner_state = 'destroyed' and runner_gone_confirmed_at is not null)) p
       join org_stream_targets t on t.id = p.target_id
@@ -1332,7 +1342,7 @@ async function tearDownPriorMachines(
  *  its output release FAILED may still be simulcasting to its destination, and V421's one-active index covers active
  *  states only — so a new session on the same destination would add a SECOND output to the same key while the first
  *  phone still publishes. Admission therefore retries the release first, for every terminal session of THIS
- *  fixture or on THIS destination (inside the caller's org) whose output is recorded and not released — either mode since
+ *  fixture or on THIS pasted destination (inside the caller's org; an API-backed one is exempt, `pastedTarget`) whose output is recorded and not released — either mode since
  *  R2004 (a composed session's output is on its programme input) — and refuses only
  *  when the retry fails: this fixture's → `active_session` naming it, another fixture's → `target_in_use` naming its
  *  court — the same two refusals, for the same reason, as a Machine that survived its destroy. The provider is asked
@@ -1347,7 +1357,7 @@ async function releasePriorOutputs(
       left join fixtures f on f.id = s.fixture_id
       left join courts c on c.id = f.court_id
       ${terminalHolderJoins()}
-     where s.org_id = ${orgId} and (s.fixture_id = ${fixtureId} or s.target_id = ${targetId})
+     where s.org_id = ${orgId} and (s.fixture_id = ${fixtureId} or (s.target_id = ${targetId} and ${pastedTarget(orgId, targetId)}))
        and s.state in ${sql([...TERMINAL_STATES])}   -- R2004: either mode holds an output (composed's on its programme input)
        and s.output_uid is not null and s.output_released_at is null
      order by s.created_at`;
