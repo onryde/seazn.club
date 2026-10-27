@@ -628,21 +628,13 @@ export async function passRevokedEmail(args: PassRevokedArgs, locale: Locale): P
   return passRevokedTemplate(args, dict);
 }
 
-export interface StaffDisputeAlertEmail extends StaffDisputeAlertArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Internal staff alert (payments-hardening Task 7): a PLATFORM charge — a
- *  subscription invoice or an Event Pass — was disputed. Transactional: staff
- *  must always receive it (bypasses the suppression list); the platform locale
- *  is en. */
-export async function sendStaffDisputeAlertEmail(
-  opts: StaffDisputeAlertEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Internal staff alert (payments-hardening Task 7): a PLATFORM charge — a subscription invoice, a match-credit pack or an Event Pass —
+ *  was disputed. RENDERED here, in the platform locale (en) unless a caller says otherwise; it is queued on the email outbox by
+ *  `notifyStaffDispute` (billing-events.ts, kind `staff_dispute_alert`, transactional: staff must always receive it), once per dispute
+ *  phase; nothing sends it directly. */
+export async function staffDisputeAlertEmail(args: StaffDisputeAlertArgs, locale: Locale = "en"): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...staffDisputeAlertTemplate(args, dict) });
+  return staffDisputeAlertTemplate(args, dict);
 }
 
 export interface StuckEventsAlertEmail {

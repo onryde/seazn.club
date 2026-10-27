@@ -31,7 +31,7 @@ import { sql } from "@/lib/db";
 import { seedOrg } from "./_rig";
 import { processStripeEvent, runEvent } from "../billing-events";
 import { creditBalance } from "../stream-credits";
-import { sendStaffDisputeAlertEmail, streamCreditClawbackAlertEmail } from "@/lib/email";
+import { staffDisputeAlertEmail, streamCreditClawbackAlertEmail } from "@/lib/email";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
 import { staffAlertDrops, staffRows } from "./_money-fixtures";
@@ -44,13 +44,15 @@ import { staffAlertDrops, staffRows } from "./_money-fixtures";
 // enters the mail; the copy itself is proven in
 // lib/__tests__/stream-credit-clawback-alert-email.test.ts. Sentry's issue
 // capture is observed (call-through) so a test can assert the writer dropped
-// nothing. The dispute alert is still mocked at its sender.
+// nothing. The platform dispute alert (`staff_dispute_alert`) is queued the same
+// way; its builder is a call-through spy too, read here only for what it says
+// (platform-dispute.test.ts owns its rows).
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
   return {
     ...actual,
     streamCreditClawbackAlertEmail: vi.fn(actual.streamCreditClawbackAlertEmail),
-    sendStaffDisputeAlertEmail: vi.fn(async () => true),
+    staffDisputeAlertEmail: vi.fn(actual.staffDisputeAlertEmail),
   };
 });
 vi.mock("@/lib/sentry", async (importOriginal) => {
@@ -58,7 +60,7 @@ vi.mock("@/lib/sentry", async (importOriginal) => {
   return { ...actual, captureError: vi.fn(actual.captureError) };
 });
 const clawbackAlert = vi.mocked(streamCreditClawbackAlertEmail);
-const disputeAlert = vi.mocked(sendStaffDisputeAlertEmail);
+const disputeAlert = vi.mocked(staffDisputeAlertEmail);
 const KIND = "staff_stream_credit_clawback";
 const RUN = `scc-${randomUUID().slice(0, 8)}`;
 const clawSubject = (ref: string): string => `Match credits claw-back needs review: ${ref}`;
@@ -221,7 +223,7 @@ const clawRow = (ref: string, suffix: string) => ({
 
 afterAll(async () => {
   if (!HAS_DB) return;
-  await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
+  await sql`delete from email_outbox where kind in ${sql([KIND, "staff_dispute_alert"])} and lower(recipient) like ${`staff-${RUN}-%`}`;
 });
 
 describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {

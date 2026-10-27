@@ -13,19 +13,26 @@
 // on STRIPE_SECRET_KEY; one test stubs that key + the retrieve seam to cover the
 // prod path. Seeds are run-unique (randomUUID) so a re-run never collides with
 // a prior run's rows.
+//
+// The staff alert is queued on the email outbox (phase 3 wave 5, kind
+// `staff_dispute_alert`, once per dispute phase: `<dispute>:created`,
+// `<dispute>:closed`) to this suite's own STAFF_ALERT_EMAIL, set for every test
+// (CI sets none, and the database is shared), so a test reads its rows
+// (`staffRows`). The builder is a spy that calls through, so what the alert
+// SAYS is read where it enters the mail; Sentry's issue capture is observed
+// (call-through) so a test can assert the writer dropped nothing.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 
-// Observe the staff alert without touching the rest of the email module (send()
-// is a no-op without RESEND_API_KEY either way).
-const emailMock = vi.hoisted(() => ({
-  staff: vi.fn().mockResolvedValue(true),
-}));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendStaffDisputeAlertEmail: emailMock.staff,
-}));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, staffDisputeAlertEmail: vi.fn(actual.staffDisputeAlertEmail) };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
 
 // A real webhook sends `charge` as an id STRING, so the subscription branch
 // reads the customer via getStripe().charges.retrieve (guarded on
@@ -38,24 +45,52 @@ const stripeMock = vi.hoisted(() => {
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { sql } from "@/lib/db";
+import { staffDisputeAlertEmail } from "@/lib/email";
 import { hasFeature } from "@/lib/entitlements";
 import type { PassKey } from "@/lib/currency";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
 import { processStripeEvent } from "@/server/usecases/billing-events";
+import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { seedSponsorOrder, staffAlertDrops, staffRows } from "./_money-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 12);
 
+const staffAlert = vi.mocked(staffDisputeAlertEmail);
+const KIND = "staff_dispute_alert";
+const RUN = `pd-${randomUUID().slice(0, 8)}`;
+let staff = "";
+let errors: ReturnType<typeof vi.spyOn>;
+/** What the writer's never-throws catch left (I2): an alert that was queued or deduplicated left nothing. */
+const drops = () => staffAlertDrops(errors, vi.mocked(captureError));
+/** The subject staff read, from the English dictionary (the platform locale), never from the template under test. */
+const disputeSubject = (orgName: string, kindKey: string): string =>
+  dictionarySubject("en", "staffDisputeAlert.subject", { orgName, kind: dictionarySubject("en", kindKey, {}) });
+/** One queued dispute alert to this test's staff address, keyed `<dispute>:<phase>`. */
+const disputeRow = (disputeId: string, phase: "created" | "closed", subject: string) => ({
+  ref_id: `${disputeId}:${phase}`,
+  dedupe_key: `${disputeId}:${phase}`,
+  status: "queued",
+  recipient: staff,
+  subject,
+});
+
 // A pro-plan org with a linked Stripe customer — the subscription-charge match
 // key. stripe_subscription_id makes it a realistic Stripe-billed sub.
-async function seedSubOrg(plan = "pro"): Promise<{ orgId: string; customer: string }> {
+async function seedSubOrg(
+  plan = "pro",
+  locale: "en" | "fr" = "en",
+): Promise<{ orgId: string; customer: string; orgName: string }> {
   const suffix = uniq();
   const customer = `cus_${suffix}`;
+  const orgName = "Sub Org " + suffix;
   const [{ id: payerId }] = await sql<{ id: string }[]>`
-    insert into users (email, display_name)
-    values (${"payer-" + suffix + "@test.local"}, 'Payer') returning id`;
+    insert into users (email, display_name, locale)
+    values (${"payer-" + suffix + "@test.local"}, 'Payer', ${locale}) returning id`;
   const [{ id: orgId }] = await sql<{ id: string }[]>`
-    insert into organizations (name, slug, created_by)
-    values (${"Sub Org " + suffix}, ${"sub-org-" + suffix}, ${payerId}) returning id`;
+    insert into organizations (name, slug, created_by, default_locale)
+    values (${orgName}, ${"sub-org-" + suffix}, ${payerId}, ${locale}) returning id`;
   await sql`
     with s as (
       insert into subscriptions
@@ -65,7 +100,7 @@ async function seedSubOrg(plan = "pro"): Promise<{ orgId: string; customer: stri
       returning id
     )
     update organizations o set subscription_id = s.id from s where o.id = ${orgId}`;
-  return { orgId, customer };
+  return { orgId, customer, orgName };
 }
 
 /** The group's wallet — org_addons.wallet_id IS the subscription id. */
@@ -112,19 +147,21 @@ async function seedPassOrg(passKey: PassKey = "event_pass"): Promise<{
   orgId: string;
   compId: string;
   intent: string;
+  orgName: string;
 }> {
   const suffix = uniq();
   const intent = `pi_pass_${suffix}`;
+  const orgName = "Pass Org " + suffix;
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug)
-    values (${"Pass Org " + suffix}, ${"pass-org-" + suffix}) returning id`;
+    values (${orgName}, ${"pass-org-" + suffix}) returning id`;
   const [{ id: compId }] = await sql<{ id: string }[]>`
     insert into competitions (org_id, name, slug)
     values (${orgId}, ${"Pass Cup " + suffix}, ${"pass-cup-" + suffix}) returning id`;
   await sql`
     insert into competition_passes (competition_id, org_id, stripe_payment_intent, pass_key)
     values (${compId}, ${orgId}, ${intent}, ${passKey})`;
-  return { orgId, compId, intent };
+  return { orgId, compId, intent, orgName };
 }
 
 /** A charge.dispute.* event for a SUBSCRIPTION charge: `charge` is expanded to
@@ -176,13 +213,22 @@ function passDisputeEvent(
 }
 
 beforeEach(() => {
-  emailMock.staff.mockClear();
+  staffAlert.mockClear();
+  vi.mocked(captureError).mockClear();
   stripeMock.retrieve.mockReset();
+  // This test's own staff address: CI sets none, and the database is shared.
+  staff = `staff-${RUN}-${uniq()}@x.test`;
+  vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+  errors = vi.spyOn(log, "error");
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  errors.mockRestore();
+  vi.unstubAllEnvs();
+});
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
   const client = globalForDb._sql;
   globalForDb._sql = undefined;
@@ -273,15 +319,16 @@ describe.skipIf(!HAS_DB)("platform-charge disputes — subscription", () => {
     expect(s.status).toBe("canceled");
   });
 
-  it("fires the staff alert to STAFF_ALERT_EMAIL when it is set", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.club");
-    const { customer } = await seedSubOrg("pro");
-    await processStripeEvent(subDisputeEvent("created", customer, "dp_" + uniq()));
-    expect(emailMock.staff).toHaveBeenCalledTimes(1);
-    expect(emailMock.staff.mock.calls[0]![0]).toMatchObject({
-      to: "ops@seazn.club",
-      kind: "subscription",
-    });
+  it("queues the staff alert to STAFF_ALERT_EMAIL", async () => {
+    const { customer, orgName } = await seedSubOrg("pro");
+    const did = "dp_" + uniq();
+    await processStripeEvent(subDisputeEvent("created", customer, did));
+    expect(staffAlert).toHaveBeenCalledTimes(1);
+    expect(staffAlert.mock.calls[0]![0]).toMatchObject({ kind: "subscription" });
+    expect(await staffRows(KIND, "dispute", did)).toEqual([
+      disputeRow(did, "created", disputeSubject(orgName, "staffDisputeAlert.kind.subscription")),
+    ]);
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
   });
 
   it("closed lost guards on dispute_id: a stale loss never clobbers a re-bought sub", async () => {
@@ -447,27 +494,31 @@ describe.skipIf(!HAS_DB)("platform-charge disputes — Event Pass", () => {
     expect(row).toBeUndefined();
   });
 
-  it("fires the staff alert with kind=event_pass when STAFF_ALERT_EMAIL is set", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.club");
-    const { intent } = await seedPassOrg();
-    await processStripeEvent(passDisputeEvent("closed", intent, "dp_" + uniq(), "lost"));
-    expect(emailMock.staff).toHaveBeenCalledTimes(1);
-    expect(emailMock.staff.mock.calls[0]![0]).toMatchObject({
-      kind: "event_pass",
-    });
+  it("queues the staff alert with kind=event_pass", async () => {
+    const { intent, orgName } = await seedPassOrg();
+    const did = "dp_" + uniq();
+    await processStripeEvent(passDisputeEvent("closed", intent, did, "lost"));
+    expect(staffAlert).toHaveBeenCalledTimes(1);
+    expect(staffAlert.mock.calls[0]![0]).toMatchObject({ kind: "event_pass" });
+    expect(await staffRows(KIND, "dispute", did)).toEqual([
+      disputeRow(did, "closed", disputeSubject(orgName, "staffDisputeAlert.kind.pass")),
+    ]);
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
   });
 
   // v17 #294: the alert carries the RUNG, not just "a pass". Staff triaging a
   // chargeback see the product that was actually bought — a $59 Event Pass L
   // labelled "Event Pass" sends them looking for a $29 charge that never existed.
   it("names the L rung on the staff alert for a disputed Event Pass L", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.club");
-    const { intent } = await seedPassOrg("event_pass_l");
-    await processStripeEvent(passDisputeEvent("closed", intent, "dp_" + uniq(), "lost"));
-    expect(emailMock.staff).toHaveBeenCalledTimes(1);
-    expect(emailMock.staff.mock.calls[0]![0]).toMatchObject({
-      kind: "event_pass_l",
-    });
+    const { intent, orgName } = await seedPassOrg("event_pass_l");
+    const did = "dp_" + uniq();
+    await processStripeEvent(passDisputeEvent("closed", intent, did, "lost"));
+    expect(staffAlert).toHaveBeenCalledTimes(1);
+    expect(staffAlert.mock.calls[0]![0]).toMatchObject({ kind: "event_pass_l" });
+    // The subject staff read names the L rung, not the M one.
+    expect(await staffRows(KIND, "dispute", did)).toEqual([
+      disputeRow(did, "closed", disputeSubject(orgName, "staffDisputeAlert.kind.passL")),
+    ]);
   });
 
   it("revokes a disputed L pass exactly as it revokes an M one", async () => {
@@ -485,15 +536,19 @@ describe.skipIf(!HAS_DB)("platform-charge disputes — routing", () => {
     // the dispute-before-activation race fix, an unmatched CREATED must fail
     // the event (ledger keeps it unprocessed; sweeper retries) instead of
     // being silently ACKed. Nothing is written and no alert goes out.
-    const ev = subDisputeEvent("created", `cus_nobody_${uniq()}`, "dp_" + uniq());
+    const did = "dp_" + uniq();
+    const ev = subDisputeEvent("created", `cus_nobody_${uniq()}`, did);
     await expect(processStripeEvent(ev)).rejects.toThrow(/matched no/);
-    expect(emailMock.staff).not.toHaveBeenCalled();
+    expect(staffAlert).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "dispute", did), "STAFF_ALERT_EMAIL is set, and nothing is queued").toEqual([]);
   });
 
   it("an unmatched CLOSED stays a silent no-op (deleted-pass replays depend on it)", async () => {
-    const ev = subDisputeEvent("closed", `cus_nobody_${uniq()}`, "dp_" + uniq());
+    const did = "dp_" + uniq();
+    const ev = subDisputeEvent("closed", `cus_nobody_${uniq()}`, did);
     await expect(processStripeEvent(ev)).resolves.toBeUndefined();
-    expect(emailMock.staff).not.toHaveBeenCalled();
+    expect(staffAlert).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "dispute", did), "STAFF_ALERT_EMAIL is set, and nothing is queued").toEqual([]);
   });
 
   it("keyless: a real webhook charge id string can't resolve a customer → event kept for retry", async () => {
@@ -522,5 +577,95 @@ describe.skipIf(!HAS_DB)("platform-charge disputes — routing", () => {
       select disputed_at, plan_key from subscriptions where id = (select subscription_id from organizations where id = ${orgId})`;
     expect(s.disputed_at).toBeNull(); // untouched — couldn't be identified
     expect(s.plan_key).toBe("pro");
+  });
+});
+
+describe.skipIf(!HAS_DB)("platform-charge disputes — the staff alert (email outbox)", () => {
+  it("a platform dispute created pages once, in English, from the dictionary", async () => {
+    // A French organisation: the platform's staff read English, so a producer
+    // that rendered in the org's (or its payer's) language would show here.
+    const { customer, orgName } = await seedSubOrg("pro", "fr");
+    const did = "dp_" + uniq();
+
+    await processStripeEvent(subDisputeEvent("created", customer, did));
+
+    expect(await staffRows(KIND, "dispute", did)).toEqual([
+      disputeRow(did, "created", disputeSubject(orgName, "staffDisputeAlert.kind.subscription")),
+    ]);
+    expect(staffAlert, "what the alert says, and in which language").toHaveBeenCalledWith(
+      {
+        kind: "subscription",
+        orgName,
+        phase: "created",
+        status: "needs_response",
+        amountCents: 1900,
+        currency: "gbp",
+        disputeId: did,
+      },
+      "en",
+    );
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("a redelivered created pages nothing more", async () => {
+    const { customer, orgName } = await seedSubOrg("pro");
+    const did = "dp_" + uniq();
+    const created = subDisputeEvent("created", customer, did);
+
+    await processStripeEvent(created);
+    await processStripeEvent(created);
+
+    expect(staffAlert, "premise: the redelivery reached the alert again").toHaveBeenCalledTimes(2);
+    expect(await staffRows(KIND, "dispute", did)).toEqual([
+      disputeRow(did, "created", disputeSubject(orgName, "staffDisputeAlert.kind.subscription")),
+    ]);
+    expect(drops(), "deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("created then closed are two alerts", async () => {
+    // One dispute, two phases, one recipient: with a shared ref the replace
+    // trigger would let the closed alert supersede the created one while it
+    // waits for the worker.
+    const { customer, orgName } = await seedSubOrg("pro");
+    const did = "dp_" + uniq();
+
+    await processStripeEvent(subDisputeEvent("created", customer, did));
+    await processStripeEvent(subDisputeEvent("closed", customer, did, "won"));
+
+    const subject = disputeSubject(orgName, "staffDisputeAlert.kind.subscription");
+    expect(await staffRows(KIND, "dispute", did)).toEqual([
+      disputeRow(did, "created", subject),
+      disputeRow(did, "closed", subject),
+    ]);
+    expect(drops(), "both queued, nothing dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("a dispute on a charge that is not the platform's pages nothing", async () => {
+    // A sponsorship charge: the sponsor handler matches it and returns first,
+    // so the platform handler (and its staff alert) never runs.
+    const order = await seedSponsorOrder({ status: "paid", prefix: RUN });
+    const did = "dp_" + uniq();
+
+    await processStripeEvent(passDisputeEvent("created", order.intent, did));
+
+    const [flag] = await sql<{ dispute_id: string | null }[]>`
+      select dispute_id from sponsor_orders where id = ${order.orderId}`;
+    expect(flag?.dispute_id, "premise: the sponsor handler took the dispute").toBe(did);
+    expect(staffAlert).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "dispute", did), "STAFF_ALERT_EMAIL is set, and nothing is queued").toEqual([]);
+  });
+
+  it("with STAFF_ALERT_EMAIL unset the dispute is still flagged and pages nothing", async () => {
+    vi.stubEnv("STAFF_ALERT_EMAIL", undefined);
+    const { orgId, customer } = await seedSubOrg("pro");
+    const did = "dp_" + uniq();
+
+    await processStripeEvent(subDisputeEvent("created", customer, did));
+
+    const [s] = await sql<{ dispute_id: string | null }[]>`
+      select dispute_id from subscriptions where id = (select subscription_id from organizations where id = ${orgId})`;
+    expect(s?.dispute_id, "the flag is the source of truth and does not wait on the alert").toBe(did);
+    expect(await staffRows(KIND, "dispute", did)).toEqual([]);
+    expect(drops(), "an unset address is not a failure").toEqual({ logged: 0, issues: 0 });
   });
 });

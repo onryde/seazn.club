@@ -117,6 +117,10 @@
 //   - staff_extra_org_reprice_failed: the real `maybeAlertOrgRepriceFailed` (its four sites, the webhook's three convergence failures
 //     and the daily stale-price sweep, call it; extra-org-addon.test.ts drives the three and org-addon-price-sweep.test.ts the sweep,
 //     each to a row), for one rider of a billing group, the same way.
+//   - staff_dispute_alert: the real `notifyStaffDispute` (its three sites in `handlePlatformDispute`, the Event Pass, match-credit pack
+//     and subscription branches, call it; platform-dispute.test.ts drives the pass and subscription branches to a row and
+//     stream-credits-clawback.test.ts the pack branch's render), for a `created` subscription dispute. Unlike the other staff alerts its
+//     subject IS a dictionary key, rendered in the platform locale (en) whatever the org's own language.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -213,6 +217,7 @@ import {
   alertSizePackGrantFailed,
   alertStreamClawback,
   maybeAlertOrgRepriceFailed,
+  notifyStaffDispute,
   processStripeEvent,
 } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
@@ -1368,6 +1373,33 @@ function extraOrgRepriceFailedScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for a platform-charge dispute, to this run's STAFF_ALERT_EMAIL, for a `created` subscription dispute of an org
+ *  that speaks French: the alert is in the platform locale (en) all the same, it names the org, and the worker makes the first
+ *  attempt. */
+async function staffDisputeAlertScenario(): Promise<KindScenario> {
+  const recipient = address();
+  const orgName = `Dispute Org ${RUN} ${randomUUID().slice(0, 8)}`;
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug, default_locale)
+    values (${orgName}, ${`dispute-org-${RUN}-${randomUUID().slice(0, 8)}`}, 'fr') returning id`;
+  return {
+    locale: "en",
+    subjectKey: "staffDisputeAlert.subject",
+    subjectVars: { orgName, kind: dictionarySubject("en", "staffDisputeAlert.kind.subscription", {}) },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      await notifyStaffDispute(
+        "subscription",
+        orgId,
+        { id: `dp_${RUN}_${randomUUID().slice(0, 8)}`, status: "needs_response", amount: 1900, currency: "gbp" } as Stripe.Dispute,
+        "created",
+      );
+    },
+  };
+}
+
 /** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
  *  request makes the first attempt. */
 async function emailChangeConfirmationScenario(): Promise<KindScenario> {
@@ -1896,6 +1928,13 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", funnelReminder.subjectKey, funnelReminder.subjectVars),
     );
 
+    // The staff alert's language is the platform's, never the org's: the French subject is a different sentence, so a producer that
+    // took the org's locale would fail the English one below.
+    const staffDispute = await staffDisputeAlertScenario();
+    expect(dictionarySubject("fr", staffDispute.subjectKey, staffDispute.subjectVars)).not.toBe(
+      dictionarySubject("en", staffDispute.subjectKey, staffDispute.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1942,6 +1981,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_pass_unknown_competition: passUnknownCompetitionScenario(),
         staff_stream_credit_clawback: streamCreditClawbackScenario(),
         staff_extra_org_reprice_failed: extraOrgRepriceFailedScenario(),
+        staff_dispute_alert: staffDispute,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

@@ -57,12 +57,6 @@ vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
 vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 
-// Mocked at the function so no case depends on a mail transport being set.
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendStaffDisputeAlertEmail: vi.fn(async () => true),
-}));
-
 import { sql } from "@/lib/db";
 import { reconcilePassCheckout, recordPassPurchase } from "@/lib/billing";
 import { PASS_KEYS, type PassKey } from "@/lib/currency";

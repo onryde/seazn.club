@@ -58,7 +58,7 @@ import {
 import { getStripe } from "@/lib/stripe";
 import {
   passRevokedEmail,
-  sendStaffDisputeAlertEmail,
+  staffDisputeAlertEmail,
   sendStuckEventsAlertEmail,
   creditPackGrantFailedAlertEmail,
   type CreditPackGrantFailedAlertEmail,
@@ -2322,15 +2322,19 @@ async function disputeCustomerId(dispute: Stripe.Dispute): Promise<string | null
   return null;
 }
 
-/** Staff notification for a PLATFORM-charge dispute: an email to
- *  STAFF_ALERT_EMAIL (skipped when unset) plus a best-effort staff_audit_log
- *  breadcrumb. staff_audit_log.actor_id is NOT NULL (FK users) and a webhook
- *  dispute has no staff actor, so the row is attributed to the accountable
- *  superadmin and skipped when none exists (e.g. tests) — the same actorless
- *  limitation sponsors.ts documents. Never throws: the flag / downgrade /
- *  revoke is the source of truth and must not be undone by an alerting hiccup,
- *  and the email is fire-and-forget. */
-async function notifyStaffDispute(
+/** Staff notification for a PLATFORM-charge dispute: a best-effort
+ *  staff_audit_log breadcrumb plus an alert queued on the email outbox (kind
+ *  `staff_dispute_alert`, to STAFF_ALERT_EMAIL, nothing when unset), once per
+ *  dispute PHASE (`<dispute>:created`, `<dispute>:closed`): a redelivered
+ *  event pages nothing more, and a dispute's close is a second alert that does
+ *  not replace its open. Rendered in the platform locale (en), whatever the
+ *  org's own language. staff_audit_log.actor_id is NOT NULL (FK users) and a
+ *  webhook dispute has no staff actor, so the row is attributed to the
+ *  accountable superadmin and skipped when none exists (e.g. tests) — the same
+ *  actorless limitation sponsors.ts documents. Never throws: the flag /
+ *  downgrade / revoke is the source of truth and must not be undone by an
+ *  alerting hiccup (the queue logs and reports its own failure). */
+export async function notifyStaffDispute(
   kind: StaffDisputeAlertArgs["kind"],
   orgId: string,
   dispute: Stripe.Dispute,
@@ -2360,18 +2364,25 @@ async function notifyStaffDispute(
     /* breadcrumb is best-effort — never block the ACK */
   }
 
-  const to = process.env.STAFF_ALERT_EMAIL;
-  if (!to) return;
-  void sendStaffDisputeAlertEmail({
-    to,
-    kind,
-    orgName,
-    phase,
-    status: dispute.status,
-    amountCents: dispute.amount,
-    currency: dispute.currency,
-    disputeId: dispute.id,
-  }).catch(() => {});
+  await queueStaffAlert({
+    kind: "staff_dispute_alert",
+    refType: "dispute",
+    id: dispute.id,
+    suffix: phase,
+    render: () =>
+      staffDisputeAlertEmail(
+        {
+          kind,
+          orgName,
+          phase,
+          status: dispute.status,
+          amountCents: dispute.amount,
+          currency: dispute.currency,
+          disputeId: dispute.id,
+        },
+        "en",
+      ),
+  });
 }
 
 /**
