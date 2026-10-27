@@ -160,7 +160,8 @@ async function literal(kind: Exclude<OutboxKind, "chess_invite">, to: string, re
 }
 
 /** A row of a wave-3 literal kind (account mail, or an org's invite), through the real writer on a transaction of the pool, as its producer
- *  writes it: no organisation, no account id. */
+ *  writes it: no account id. Account mail carries no organisation; this helper seeds the org invite without one too, which the arm
+ *  under test ignores (it keys on kind, ref type and ref id). */
 async function accountMailRow(kind: OutboxKind, refType: string, refId: string, to: string): Promise<string> {
   const id = await sql.begin((tx) =>
     enqueueEmail(tx, {

@@ -870,7 +870,7 @@ test.describe("legacy settings redirects", () => {
     });
     expect(currentEmail, `no users row for the signed-in account ${userId}`).toBeTruthy();
 
-    // Mirrors POST /api/auth/change-email (route.ts:31-33) column for column —
+    // Mirrors POST /api/auth/change-email's `email_change_requests` insert column for column —
     // the row production writes, not an invented shape.
     await withDb(
       (sql) => sql`

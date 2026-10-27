@@ -314,13 +314,15 @@ describe.skipIf(!HAS_DB)("POST /api/admin/users/[id]/resend-verification — the
       { id: gone.id, status: 404 },
       { id: verified.id, status: 400 },
     ];
+    let driven = 0;
     for (const c of cases) {
+      driven += 1;
       const pressed = await pressResend(staff.id, c.id);
       expect(pressed.status, `target ${c.id}`).toBe(c.status);
       expect(pressed.mailed, "nothing mailed").toEqual([]);
       expect(await verificationRows(c.id), `target ${c.id}: no row queued`).toEqual([]);
     }
     expect(minted.calls, "nothing minted").toEqual([]);
-    expect(cases.length, "anti-vacuity: every refusal was driven").toBe(3);
+    expect(driven, "anti-vacuity: every refusal was driven").toBe(3);
   });
 });
