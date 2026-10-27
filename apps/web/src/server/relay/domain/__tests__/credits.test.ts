@@ -3,8 +3,11 @@
 // ever see it). C3's arithmetic is pure here so the differential is a
 // millisecond test, and Task 10's DB test proves the SAME function is wired.
 import { describe, expect, it } from "vitest";
-import { CREDIT_REUSE_HOURS, FREE_RESTARTS_PER_WINDOW, NEVER_LIVE_REFUNDS_PER_WINDOW } from "../../config";
-import { InsufficientCredits, RECORDINGS_PER_SESSION, credit, debit, headroomAfterReservations, neverLiveRefundCapped, reservationMinutes, restartIsFree, withinReuseWindow } from "../credits";
+import { CREDIT_REUSE_HOURS, FREE_RESTARTS_PER_WINDOW, MAX_DURATION_MINUTES, NEVER_LIVE_REFUNDS_PER_WINDOW, RESERVATION_BUFFER_MINUTES } from "../../config";
+import {
+  InsufficientCredits, RECORDINGS_PER_SESSION, credit, debit, elapsedMinutesSince, endedCameraReservationMinutes, headroomAfterReservations,
+  neverLiveRefundCapped, reservationMinutes, restartIsFree, withinReuseWindow,
+} from "../credits";
 
 describe("debit / credit", () => {
   it("debit 1 from 1 → 0 (exactly zero is allowed); from 0 → InsufficientCredits", () => {
@@ -29,20 +32,106 @@ describe("withinReuseWindow (24 h same-fixture rule, m5's pure twin)", () => {
 });
 
 // R2004 (owner ruling 2026-10-18, option (a)): a composed session's camera (A) AND programme (B) both record while it
-// runs, so it reserves two full matches; passthrough records its one input. The counts are the RULING's, typed here.
-describe("reservationMinutes (R2004, owner ruling 2026-10-18)", () => {
-  it("passthrough reserves ONE recording of the match, composed TWO — the ruling's 1× and 2×, at two durations", () => {
+// runs, so it makes two recordings; passthrough records its one input. The counts are the RULING's, typed here.
+// Owner ruling 2026-10-26 (E1, "30 mins buffer") AMENDS how much each recording reserves: not a full match up front but
+// min(maxDurationMinutes, ceil(elapsed minutes) + RESERVATION_BUFFER_MINUTES). Every expected value below is built from
+// RESERVATION_BUFFER_MINUTES / MAX_DURATION_MINUTES / RECORDINGS_PER_SESSION, so a change to a constant moves the test with it.
+describe("reservationMinutes (R2004 recordings x the 2026-10-26 rolling reservation)", () => {
+  const MODES = ["passthrough", "composed"] as const;
+  const B = RESERVATION_BUFFER_MINUTES;
+  const MAX = MAX_DURATION_MINUTES;
+  it("the ruling's recording counts (1 and 2) and the premise the cases below rely on: the buffer is a whole number that leaves room under the cap", () => {
     expect(RECORDINGS_PER_SESSION).toEqual({ passthrough: 1, composed: 2 });
-    expect(reservationMinutes("passthrough", 300)).toBe(300);
-    expect(reservationMinutes("composed", 300)).toBe(600);
-    expect(reservationMinutes("passthrough", 90)).toBe(90);
-    expect(reservationMinutes("composed", 90)).toBe(180);
+    expect(Number.isInteger(B) && B > 0, "a zero buffer would reserve nothing at elapsed 0").toBe(true);
+    expect(B * 2, "the cap and the buffer must be distinguishable, or the cap cases witness nothing").toBeLessThan(MAX);
   });
-  it("the empty case: a zero-length reservation is zero in both modes, and a duration that is not a whole non-negative number is refused by name", () => {
+  it("ELAPSED 0 - the admission threshold: just the buffer per recording (passthrough B, composed 2B), never the full match", () => {
+    for (const mode of MODES) expect(reservationMinutes(mode, MAX), mode).toBe(RECORDINGS_PER_SESSION[mode] * B);
+    expect(reservationMinutes("composed", MAX), "the differential from the retired rule (2 x MAX)").not.toBe(2 * MAX);
+  });
+  it("rolls with the elapsed time, rounded UP to a whole minute: 47.3 min -> 48 + buffer per recording; a whole 47 stays 47", () => {
+    for (const mode of MODES) {
+      const n = RECORDINGS_PER_SESSION[mode];
+      expect(reservationMinutes(mode, MAX, 47.3), `${mode} 47.3`).toBe(n * (48 + B));
+      expect(reservationMinutes(mode, MAX, 47), `${mode} 47`).toBe(n * (47 + B));
+      expect(reservationMinutes(mode, MAX, 47.0001), `${mode} 47.0001`).toBe(n * (48 + B));
+      expect(reservationMinutes(mode, MAX, 0.001), `${mode} the first fraction of a minute already counts a minute`).toBe(n * (1 + B));
+    }
+  });
+  it("capped at the booking, per recording: the cap's boundary row (elapsed = MAX - B) is exactly MAX, one minute earlier is MAX - 1, one later is still MAX; far past it stays MAX", () => {
+    for (const mode of MODES) {
+      const n = RECORDINGS_PER_SESSION[mode];
+      expect(reservationMinutes(mode, MAX, MAX - B - 1), `${mode} below the cap`).toBe(n * (MAX - 1));
+      expect(reservationMinutes(mode, MAX, MAX - B), `${mode} at the cap`).toBe(n * MAX);
+      expect(reservationMinutes(mode, MAX, MAX - B + 1), `${mode} past the cap`).toBe(n * MAX);
+      expect(reservationMinutes(mode, MAX, MAX * 10), `${mode} far past`).toBe(n * MAX);
+    }
+  });
+  it("the booking's OWN length is the cap, not 300: a booking shorter than the buffer reserves its own length per recording at elapsed 0", () => {
+    const short = Math.floor(B / 3);
+    expect(short, "premise: the booking is shorter than the buffer").toBeLessThan(B);
+    for (const mode of MODES) expect(reservationMinutes(mode, short), mode).toBe(RECORDINGS_PER_SESSION[mode] * short);
+  });
+  it("the empty case: a zero-length booking reserves zero in both modes; a duration or an elapsed that is not a whole/finite non-negative number is refused by name", () => {
     expect(reservationMinutes("passthrough", 0)).toBe(0);
     expect(reservationMinutes("composed", 0)).toBe(0);
     for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => reservationMinutes("composed", bad), String(bad)).toThrow(/reservationMinutes: maxDurationMinutes must be a whole non-negative number/);
+    }
+    for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => reservationMinutes("composed", MAX, bad), String(bad)).toThrow(/reservationMinutes: elapsedMinutes must be a finite non-negative number/);
+    }
+  });
+});
+
+describe("elapsedMinutesSince (a running session's elapsed, from its start)", () => {
+  const now = new Date("2026-10-26T12:00:00Z");
+  it("no start yet is zero (the empty case: a session that has not begun owes the buffer only); a start in the future is zero, never negative", () => {
+    expect(elapsedMinutesSince(null, now)).toBe(0);
+    expect(elapsedMinutesSince(new Date(now.getTime() + 5 * 60_000), now)).toBe(0);
+  });
+  it("fractional minutes between the start and now", () => {
+    expect(elapsedMinutesSince(new Date(now.getTime() - 47.3 * 60_000), now)).toBeCloseTo(47.3, 9);
+    expect(elapsedMinutesSince(now, now)).toBe(0);
+  });
+});
+
+// Owner ruling 2026-10-26 ("C"): an ENDED composed session keeps the camera's share only for the minutes it actually ran,
+// rounded UP to a whole minute and capped at the booking; a span that cannot be read is the whole booking, never zero.
+describe("endedCameraReservationMinutes (the 2026-10-26 ended rule)", () => {
+  const MAX = MAX_DURATION_MINUTES;
+  const t0 = new Date("2026-10-26T09:00:00Z");
+  const after = (minutes: number) => new Date(t0.getTime() + minutes * 60_000);
+  it("a 6-minute stream reserves 6, not the 300 it reserved before", () => {
+    expect(endedCameraReservationMinutes(t0, after(6), MAX)).toBe(6);
+  });
+  it("rounds UP to a whole minute: 59.2 -> 60, a whole 60 stays 60, a millisecond over is 61", () => {
+    expect(endedCameraReservationMinutes(t0, after(59.2), MAX)).toBe(60);
+    expect(endedCameraReservationMinutes(t0, after(60), MAX)).toBe(60);
+    expect(endedCameraReservationMinutes(t0, new Date(after(60).getTime() + 1), MAX)).toBe(61);
+  });
+  it("capped at the booking: exactly MAX is MAX, one over is MAX, far over is MAX, and a session's own shorter booking is the cap", () => {
+    expect(endedCameraReservationMinutes(t0, after(MAX - 1), MAX)).toBe(MAX - 1);
+    expect(endedCameraReservationMinutes(t0, after(MAX), MAX)).toBe(MAX);
+    expect(endedCameraReservationMinutes(t0, after(MAX + 1), MAX)).toBe(MAX);
+    expect(endedCameraReservationMinutes(t0, after(MAX * 10), MAX)).toBe(MAX);
+    expect(endedCameraReservationMinutes(t0, after(100), 90), "the session's own booking").toBe(90);
+  });
+  it("a MISSING timestamp is the whole booking (conservative), never zero: no start, no end, neither", () => {
+    expect(endedCameraReservationMinutes(null, after(6), MAX), "no start").toBe(MAX);
+    expect(endedCameraReservationMinutes(t0, null, MAX), "no end").toBe(MAX);
+    expect(endedCameraReservationMinutes(null, null, MAX), "neither").toBe(MAX);
+    expect(endedCameraReservationMinutes(null, null, 90), "the session's own booking").toBe(90);
+  });
+  it("an unreadable span is the whole booking too (an end BEFORE the start, an invalid date); a span of exactly zero is a real measurement of zero", () => {
+    expect(endedCameraReservationMinutes(after(6), t0, MAX), "end before start").toBe(MAX);
+    expect(endedCameraReservationMinutes(new Date(Number.NaN), after(6), MAX), "invalid start").toBe(MAX);
+    expect(endedCameraReservationMinutes(t0, new Date(Number.NaN), MAX), "invalid end").toBe(MAX);
+    expect(endedCameraReservationMinutes(t0, t0, MAX)).toBe(0);
+  });
+  it("a booking that is not a whole non-negative number is refused by name", () => {
+    for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(() => endedCameraReservationMinutes(t0, after(6), bad), String(bad)).toThrow(/endedCameraReservationMinutes: maxDurationMinutes must be a whole non-negative number/);
     }
   });
 });

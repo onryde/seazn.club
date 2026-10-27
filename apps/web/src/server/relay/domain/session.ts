@@ -129,7 +129,9 @@ export function admit(i: AdmitInput): { ok: true } | { ok: false; refusal: Admit
   if (i.phone === "silent") return { ok: false, refusal: "phone_not_responding" };
   if (i.balance < 1 && !i.restartWithinReuseWindow) return { ok: false, refusal: "no_credits" };   // I2: ONLY this gate is waived
   if (!i.targetBelongsToOrg) return { ok: false, refusal: "target_not_found" };
-  // R2004: room for every recording the session makes — two for composed (owner ruling 2026-10-18, option (a)).
+  // R2004: room for every recording the session makes — two for composed (owner ruling 2026-10-18, option (a)). Owner ruling
+  // 2026-10-26 (E1): a start holds the buffer alone, so the threshold is the reservation at ELAPSED 0 (`reservationMinutes`'s
+  // default) — composed 2 × RESERVATION_BUFFER_MINUTES, passthrough 1 × — not a full match; the reservation grows as it runs.
   if (i.headroomMinutes < reservationMinutes(i.mode, i.maxDurationMinutes)) return { ok: false, refusal: "storage_exhausted" };
   return { ok: true };
 }

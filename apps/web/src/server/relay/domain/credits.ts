@@ -1,7 +1,7 @@
 // server/relay/domain/credits.ts — the match-credit value object (design §5.2).
 // PURE. `debit` is FS10 in memory (owner ruling 1 keeps the CHECK too): a
 // consume that would overdraw is refused before any row is written.
-import { CREDIT_REUSE_HOURS } from "../config";
+import { CREDIT_REUSE_HOURS, RESERVATION_BUFFER_MINUTES } from "../config";
 
 export class InsufficientCredits extends Error {
   constructor(readonly balance: number, readonly amount: number) { super(`insufficient credits: ${balance} < ${amount}`); }
@@ -52,13 +52,42 @@ export function neverLiveRefundCapped(priorRefundAts: readonly Date[], now: Date
  *  delivery watch reads A's — and its programme input (B) records the product. Passthrough records its one input. */
 export const RECORDINGS_PER_SESSION: Readonly<Record<"passthrough" | "composed", number>> = { passthrough: 1, composed: 2 };
 
-/** C3 + R2004: the storage minutes one session reserves while it runs — a full match per recording it makes. A duration
- *  that is not a whole non-negative number is refused by name: read as a number it would reserve a fraction, or nothing. */
-export function reservationMinutes(mode: "passthrough" | "composed", maxDurationMinutes: number): number {
+/** C3 + R2004, amended by the owner ruling 2026-10-26 (E1, "30 mins buffer"): the storage minutes one RUNNING session reserves.
+ *  Each recording it makes reserves `min(maxDurationMinutes, ceil(elapsed) + RESERVATION_BUFFER_MINUTES)` — rolling with the
+ *  minutes the session has run, never a full match up front. `elapsedMinutes` defaults to 0, which is ADMISSION: a session
+ *  that has not begun holds the buffer alone (composed 2 × 30, passthrough 30), and a booking shorter than the buffer holds
+ *  its own length. A duration that is not a whole non-negative number, or an elapsed that is not a finite non-negative one,
+ *  is refused by name: read as a number it would reserve a fraction, or nothing, or NaN. */
+export function reservationMinutes(mode: "passthrough" | "composed", maxDurationMinutes: number, elapsedMinutes = 0): number {
   if (!Number.isInteger(maxDurationMinutes) || maxDurationMinutes < 0) {
     throw new RangeError(`reservationMinutes: maxDurationMinutes must be a whole non-negative number, got ${maxDurationMinutes}`);
   }
-  return RECORDINGS_PER_SESSION[mode] * maxDurationMinutes;
+  if (!Number.isFinite(elapsedMinutes) || elapsedMinutes < 0) {
+    throw new RangeError(`reservationMinutes: elapsedMinutes must be a finite non-negative number, got ${elapsedMinutes}`);
+  }
+  return RECORDINGS_PER_SESSION[mode] * Math.min(maxDurationMinutes, Math.ceil(elapsedMinutes) + RESERVATION_BUFFER_MINUTES);
+}
+
+/** A running session's elapsed minutes (fractional) from its start to `now`. No start yet is 0 — a session that has not
+ *  begun owes the buffer only — and a start in the future (clock skew between writers) is 0 too, never negative. */
+export function elapsedMinutesSince(from: Date | null, now: Date): number {
+  if (from === null) return 0;
+  return Math.max(0, (now.getTime() - from.getTime()) / 60_000);
+}
+
+/** Owner ruling 2026-10-26 ("C"): the storage minutes an ENDED composed session's camera input still reserves until the daily
+ *  sweep deletes its recordings — the minutes it actually ran, rounded UP to a whole minute and capped at the booking. A span
+ *  that cannot be read (either instant missing or invalid, or the end before the start) is the WHOLE booking: conservative,
+ *  never zero. A span of exactly zero is a real measurement and reserves zero. The booking itself must be a whole
+ *  non-negative number, refused by name. */
+export function endedCameraReservationMinutes(startedAt: Date | null, endedAt: Date | null, maxDurationMinutes: number): number {
+  if (!Number.isInteger(maxDurationMinutes) || maxDurationMinutes < 0) {
+    throw new RangeError(`endedCameraReservationMinutes: maxDurationMinutes must be a whole non-negative number, got ${maxDurationMinutes}`);
+  }
+  if (startedAt === null || endedAt === null) return maxDurationMinutes;
+  const spanMs = endedAt.getTime() - startedAt.getTime();
+  if (!Number.isFinite(spanMs) || spanMs < 0) return maxDurationMinutes;
+  return Math.min(maxDurationMinutes, Math.ceil(spanMs / 60_000));
 }
 
 /** C3: limit − used − Σ reservations. Poll-then-admit is unsound, not imprecise. */

@@ -5,8 +5,9 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 import {
-  ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, RELAY_EXIT_RESTART, RUNNER_CRASH_CAP, RUNNER_MAX_ATTEMPTS, RUNNER_RESTART_CAP, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
+  ENDING_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, RELAY_EXIT_RESTART, RESERVATION_BUFFER_MINUTES, RUNNER_CRASH_CAP, RUNNER_MAX_ATTEMPTS, RUNNER_RESTART_CAP, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS, STALE_HEARTBEAT_SECONDS_COMPOSED,
 } from "../../config";
+import { RECORDINGS_PER_SESSION } from "../credits";
 import { evaluate, type Expiry } from "../expiry";
 import {
   ACTIVE_STATES, InvalidTransition, TERMINAL_STATES, admit, decide, eventRowsOf, isActive, isTerminal,
@@ -45,13 +46,14 @@ const REFUSAL_LADDER = [
   [{ phone: "silent" }, "phone_not_responding"],
   [{ balance: 0 }, "no_credits"],
   [{ targetBelongsToOrg: false }, "target_not_found"],
-  [{ headroomMinutes: 299 }, "storage_exhausted"],           // C3: headroom < max_duration refuses
+  [{ headroomMinutes: RESERVATION_BUFFER_MINUTES - 1 }, "storage_exhausted"],   // C3: headroom < the start's reservation refuses (passthrough: one buffer)
 ] as const;
 
 // R2004 (owner ruling 2026-10-18, option (a)): BOTH of a composed session's inputs record — the camera (A) keeps its HLS
 // for the phone's delivery watch, the programme (B) is the product — so a composed start reserves room for TWO
-// recordings of the full match. The numbers are the ruling's ("2 × MAX_DURATION_MINUTES"), typed here, never read from
-// the reservation helper; `OK.maxDurationMinutes` is 300.
+// recordings. Owner ruling 2026-10-26 (E1, "30 mins buffer"): at admission each recording holds the buffer alone, not a
+// full match, so the thresholds are RECORDINGS_PER_SESSION × RESERVATION_BUFFER_MINUTES (passthrough 30, composed 60),
+// read from the two declarations here and never from the reservation helper under test.
 const COMPOSED_OK = { ...OK, mode: "composed" as Mode };
 
 describe("admit — the §6.3 gates, in order", () => {
@@ -64,16 +66,30 @@ describe("admit — the §6.3 gates, in order", () => {
     const fixed = Object.fromEntries(Object.keys(over).map((k) => [k, OK[k as keyof typeof OK]]));
     expect(admit({ ...OK, ...over, ...fixed })).toEqual({ ok: true });
   });
-  it("headroom EXACTLY max_duration admits (boundary)", () => {
-    expect(admit({ ...OK, headroomMinutes: 300 })).toEqual({ ok: true });
+  it("headroom EXACTLY the passthrough start's reservation (one buffer) admits, one minute less refuses (boundary)", () => {
+    const need = RECORDINGS_PER_SESSION.passthrough * RESERVATION_BUFFER_MINUTES;
+    expect(admit({ ...OK, headroomMinutes: need })).toEqual({ ok: true });
+    expect(admit({ ...OK, headroomMinutes: need - 1 })).toMatchObject({ ok: false, refusal: "storage_exhausted" });
   });
-  it("R2004: a COMPOSED start needs room for TWO recordings — 599 refuses storage_exhausted where passthrough admits, 600 admits (the boundary); passthrough's own boundary does not move", () => {
-    expect(admit({ ...COMPOSED_OK, headroomMinutes: 599 })).toMatchObject({ ok: false, refusal: "storage_exhausted" });
-    expect(admit({ ...OK, headroomMinutes: 599 }), "the differential: passthrough records once").toEqual({ ok: true });
-    expect(admit({ ...COMPOSED_OK, headroomMinutes: 600 })).toEqual({ ok: true });
-    expect(admit({ ...COMPOSED_OK, headroomMinutes: 300 }), "one recording's room is not enough").toMatchObject({ refusal: "storage_exhausted" });
-    expect(admit({ ...OK, headroomMinutes: 300 })).toEqual({ ok: true });
-    expect(admit({ ...OK, headroomMinutes: 299 })).toMatchObject({ refusal: "storage_exhausted" });
+  it("R2004 + the 2026-10-26 buffer: a COMPOSED start needs room for TWO recordings' buffers — one minute short refuses storage_exhausted where passthrough admits, exactly enough admits; passthrough's own boundary does not move", () => {
+    const composed = RECORDINGS_PER_SESSION.composed * RESERVATION_BUFFER_MINUTES;
+    const passthrough = RECORDINGS_PER_SESSION.passthrough * RESERVATION_BUFFER_MINUTES;
+    expect(composed, "premise: composed needs strictly more room than passthrough, or the differential below witnesses nothing").toBeGreaterThan(passthrough);
+    expect(admit({ ...COMPOSED_OK, headroomMinutes: composed - 1 })).toMatchObject({ ok: false, refusal: "storage_exhausted" });
+    expect(admit({ ...OK, headroomMinutes: composed - 1 }), "the differential: passthrough records once").toEqual({ ok: true });
+    expect(admit({ ...COMPOSED_OK, headroomMinutes: composed })).toEqual({ ok: true });
+    expect(admit({ ...COMPOSED_OK, headroomMinutes: passthrough }), "one recording's room is not enough").toMatchObject({ refusal: "storage_exhausted" });
+    expect(admit({ ...OK, headroomMinutes: passthrough })).toEqual({ ok: true });
+    expect(admit({ ...OK, headroomMinutes: passthrough - 1 })).toMatchObject({ refusal: "storage_exhausted" });
+  });
+  it("the retired rule is gone: a start is NOT refused for lacking a full match — headroom below max_duration (the old 300 / 600) admits once it covers the buffers", () => {
+    expect(admit({ ...OK, headroomMinutes: MAX_DURATION_MINUTES - 1 })).toEqual({ ok: true });
+    expect(admit({ ...COMPOSED_OK, headroomMinutes: 2 * MAX_DURATION_MINUTES - 1 })).toEqual({ ok: true });
+  });
+  it("a booking shorter than the buffer needs only its own length per recording (the cap wins at admission)", () => {
+    const short = Math.floor(RESERVATION_BUFFER_MINUTES / 3);
+    expect(admit({ ...COMPOSED_OK, maxDurationMinutes: short, headroomMinutes: RECORDINGS_PER_SESSION.composed * short })).toEqual({ ok: true });
+    expect(admit({ ...COMPOSED_OK, maxDurationMinutes: short, headroomMinutes: RECORDINGS_PER_SESSION.composed * short - 1 })).toMatchObject({ refusal: "storage_exhausted" });
   });
   it("ORDER: two refusals true at once yield the earlier — balance 0 AND no headroom → no_credits, not storage_exhausted", () => {
     expect(admit({ ...OK, balance: 0, headroomMinutes: 0 })).toMatchObject({ refusal: "no_credits" });
@@ -181,8 +197,8 @@ describe("admit — R2001: composed_unavailable, first on the ladder", () => {
   });
 
   it("composed + AVAILABLE → the existing ladder answers exactly as for passthrough, gate by gate; and everything satisfied → ok", () => {
-    // R2004: the base has room for a composed session's TWO recordings (600 = 2 × OK's 300), so every gate below is the
-    // only thing refusing; the storage boundary itself is the "R2004: a COMPOSED start needs room for TWO" test's.
+    // R2004: the base has more than room for a composed session's TWO recordings' buffers (2 × 30), so every gate below is
+    // the only thing refusing; the storage boundary itself is the "R2004 + the 2026-10-26 buffer" test's.
     const ROOM = { headroomMinutes: 600 };
     expect(admit({ ...OK, ...ROOM, mode: "composed", composedUnavailable: false })).toEqual({ ok: true });
     let checked = 0;

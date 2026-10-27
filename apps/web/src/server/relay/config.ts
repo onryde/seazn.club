@@ -41,6 +41,13 @@ export const RUNNER_DEFAULT_REGION = "lhr";
 
 /** Design §6.1 default and ruling E: 5 h. */
 export const MAX_DURATION_MINUTES = 300;
+/** Owner ruling 2026-10-26 ("E1, 30 mins buffer"): a RUNNING session's claim on the recording pool is rolling, not a full
+ *  match up front. Each recording it makes reserves `min(maxDurationMinutes, ceil(elapsed minutes) + RESERVATION_BUFFER_MINUTES)`
+ *  (domain/credits.ts `reservationMinutes`), so a stream just admitted holds the buffer alone — `RECORDINGS_PER_SESSION × 30`,
+ *  the admission threshold — and grows as it runs, to a full booking at most. The buffer is the sweep-to-sweep headroom the
+ *  reservation owes the stream between two reads of the pool. A reservation no longer guarantees a full 5 h, so the pool can
+ *  be overcommitted; that is reported (`relay.storage_overcommitted`), never enforced against a running stream. */
+export const RESERVATION_BUFFER_MINUTES = 30;
 /** §6.6: job/page tokens expire at max_duration + 30 min. */
 export const TOKEN_GRACE_MINUTES = 30;
 /** §6.4: warming > 10 min → failed(no_inbound_timeout). */
