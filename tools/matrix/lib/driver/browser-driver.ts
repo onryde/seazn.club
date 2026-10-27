@@ -63,7 +63,7 @@ import {
   DriverMisuse, NoOrganiserPath, OrgMismatch, RefusedCall, SEEDING_FAILED_AFTER_COMMIT, VOID_EVENT, VisibilityDegraded, requireVoidTarget,
   type AmericanoViewOut, type ChallengeOut, type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
   type FixtureStateOut, type FromTemplateOut, type GenerateOut, type LineupChecked, type LineupSlotWire, type OrganiserDriver, type PostedEvent, type ProbeOutcome,
-  type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StartOut, type VoidedOut, type WithdrawOut,
+  type PublicStandingsOut, type ScheduledOut, type SeedConfirmOut, type SeedProposalOut, type StageRef, type StagesProbe, type StandingsOut, type StandingsRowWire, type StartOut, type VoidedOut, type WithdrawOut,
 } from "./types.ts";
 
 /** sport → pad adapter (pads/index.ts PAD_ADAPTERS). A sport without one is
@@ -291,10 +291,15 @@ export function publicFreshnessMs(c: Pick<PageCtx, "holdMs">): number {
 }
 const FRESHNESS_LAYERS = `the page's revalidate ${PUBLIC_REVALIDATE_S} s + its data cache's ${PUBLIC_DATA_REVALIDATE_S} s + a navigation`;
 
-export interface NamedTable { label: string; rows: readonly { rank: number; name: string }[] }
+/** `rank` null: a LEVEL row (W2d T17, X-TB-6) — the API row carries `level: true`, the page prints "–". */
+export interface NamedTable { label: string; rows: readonly { rank: number | null; name: string }[] }
 
-const byRank = <R extends { rank: number }>(rows: readonly R[]): R[] => [...rows].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
-const orderOf = (rows: readonly { rank: number; name: string }[]) => rows.map((r) => `${r.rank} ${r.name}`).join(", ");
+const byRank = <R extends { rank: number | null }>(rows: readonly R[]): R[] => [...rows].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+const orderOf = (rows: readonly { rank: number | null; name: string }[]) => rows.map((r) => `${r.rank ?? "–"} ${r.name}`).join(", ");
+/** An API table's rows as the page draws them: in the engine's rank order (StandingsTable sorts by it), a level row's
+ *  place withheld — so a page that prints a place on a level table, or "–" on a ranked one, is an order difference. */
+const drawnRows = (rows: readonly StandingsRowWire[], names: ReadonlyMap<string, string>): NamedTable["rows"] =>
+  byRank(rows).map((r) => ({ rank: r.level === true ? null : r.rank, name: names.get(r.entrantId) ?? r.entrantId }));
 const namesOf = (rows: readonly { name: string }[]) => rows.map((r) => r.name).sort();
 
 /** The page's tables against the API's. A table carries no pool identity on
@@ -1129,7 +1134,7 @@ export class BrowserDriver implements OrganiserDriver {
       const pools = [...new Set(fixtures.filter((f) => f.stage_id === s.id).map((f) => f.pool_id))];
       for (const pool of pools.length > 0 ? pools : [null]) {
         const t = await this.#http.standings(s.id, pool);
-        tables.push({ label: `${s.kind} stage ${s.seq}${pool === null ? "" : ` pool ${pool}`}`, rows: t.rows.map((r) => ({ rank: r.rank, name: names.get(r.entrantId) ?? r.entrantId })) });
+        tables.push({ label: `${s.kind} stage ${s.seq}${pool === null ? "" : ` pool ${pool}`}`, rows: drawnRows(t.rows, names) });
       }
     }
     return { kinds, tables };
@@ -1199,7 +1204,7 @@ export class BrowserDriver implements OrganiserDriver {
       .filter((s) => !PUBLIC_BRACKET_KINDS.has(stage.get(s.stage_id)?.kind ?? ""))
       .map((s) => ({
         label: `${stage.get(s.stage_id)?.kind ?? "unknown"} stage ${stage.get(s.stage_id)?.seq ?? s.stage_id}${s.pool_id === null ? "" : ` pool ${s.pool_id}`}`,
-        rows: s.rows.map((r) => ({ rank: r.rank, name: names.get(r.entrantId) ?? r.entrantId })),
+        rows: drawnRows(s.rows, names),
       }));
     const want = this.#championWant(stages, names);
     const kinds = [...new Set(stages.map((s) => s.kind))];

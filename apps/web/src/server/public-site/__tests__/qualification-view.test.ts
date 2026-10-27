@@ -1878,11 +1878,43 @@ describe("a match held for settle is still open (X-AB-5; the public table reads 
   });
 });
 
+describe("what-if on a wins table (W2d T17, P25): the copy says 'level on wins', never 'level on points'", () => {
+  // A table ranked on matches won first (badminton, tennis, volleyball: their rulebooks) ties its rows on WINS, so the
+  // what-if names that measure. The same open4 scenes as the points block above, led by `wins`; each of the six
+  // sentences is reached once, and the positive pair is the same scene led by points.
+  const RULE = "difference";
+  const WINS = { primary: "wins", cascade: ["wins", "diff"] } as const;
+  const wins = (scene: Scene) => must(view(scene, WINS)).rows;
+  it("win by m, any win, lose by at most m, safe, rule and values, rule alone — each in the wins sentence", () => {
+    const winBy = wins(open4({ D: [6, 8], B: [1, 1] })).D!;
+    expect(winBy.whatIf).toBe(`If you finish level on wins with Bo, ${RULE} decides: win your next match by 3 or more to finish ahead.`);
+    expect(wins(open4({ D: [6, 8], B: [1, 4] })).D!.whatIf).toBe(
+      `If you finish level on wins with Bo, ${RULE} decides: any win in your next match puts you ahead.`,
+    );
+    expect(wins(open4({ A: [5, 3], C: [1, 1] })).A!.whatIf).toBe(
+      `If you finish level on wins with Cy, ${RULE} decides: lose your next match by no more than 1 to finish ahead.`,
+    );
+    expect(wins(open4({ A: [5, 3], C: [2, 1] })).A!.whatIf).toBe(`If you finish level on wins with Cy, ${RULE} decides. Now: you +2, Cy +1.`);
+    expect(wins(open4({ A: [5, 3], C: [0, 3] })).A!.whatIf).toBe(
+      `If you finish level on wins with Cy, you stay ahead on ${RULE} even after a heavy defeat.`,
+    );
+    const s = open4();
+    const rows = s.rows.map((r) => (r.entrantId === "B" ? { ...r, metrics: {} } : r));
+    expect(wins({ ...s, rows }).D!.whatIf).toBe(`If you finish level on wins with Bo, ${RULE} decides.`);
+    // the assumption line names the rival, not the measure: one sentence for both tables
+    expect(winBy.whatIfAssumption).toBe("Assumes Bo's figures stay the same and your next match is an average one.");
+  });
+  it("…and its pair: the same scene led by points says 'level on points'", () => {
+    const d = must(view(open4({ D: [6, 8], B: [1, 1] }), { primary: "wins", cascade: ["points", "diff"] })).rows.D!;
+    expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 3 or more to finish ahead.`);
+  });
+});
+
 describe("copy coverage", () => {
   const placeholders = (s: string) => [...s.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
   const qualKeys = Object.keys(en).filter((k) => k.startsWith("table.qual."));
   it("every table.qual key exists in es/fr/nl with the same placeholders", () => {
-    expect(qualKeys.length).toBe(34);
+    expect(qualKeys.length).toBe(40); // W2d T17 (P25): + the six table.qual.whatIfWins.* sentences
     for (const [name, dict] of [["es", es], ["fr", fr], ["nl", nl]] as const) {
       const d = dict as Record<string, string>;
       for (const k of qualKeys) {

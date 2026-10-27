@@ -153,6 +153,9 @@ describe("the tie note says the sport's word — on the hub and on the division 
       id: "t",
       division: { id: "d1", slug: "div", name: "Div" },
       caption: "League",
+      // W2d T17: no stage rules (a plain whole-point layout) and no date — these suites pin the rest of the view
+      rules: null,
+      dateOf: () => null,
       fullHref: "/x",
       metricSpecs: m.metrics,
       cascade: defaultOrderOf(m),
@@ -245,6 +248,9 @@ describe("a tied row with no ledger reads its partners' word", () => {
       id: "t",
       division: { id: "d1", slug: "div", name: "Div" },
       caption: "League",
+      // W2d T17: no stage rules (a plain whole-point layout) and no date — these suites pin the rest of the view
+      rules: null,
+      dateOf: () => null,
       fullHref: "/x",
       metricSpecs: HOCKEY.metrics,
       cascade: defaultOrderOf(HOCKEY),

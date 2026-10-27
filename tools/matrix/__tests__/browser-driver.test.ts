@@ -690,7 +690,7 @@ describe("compareTables — pairing by the product's own identity, pool membersh
 });
 
 describe("BrowserDriver — the public view (ruling C)", () => {
-  const pub = (o: { kind?: string; standings?: { stage_id: string; pool_id: string | null; rows: { entrantId: string; rank: number }[] }[] } = {}) => stubHttp({
+  const pub = (o: { kind?: string; standings?: { stage_id: string; pool_id: string | null; rows: { entrantId: string; rank: number; level?: boolean }[] }[] } = {}) => stubHttp({
     listStages: async () => [stageRef("s1", 1, o.kind ?? "league")],
     listEntrants: async () => ENTRANTS,
     publicStandings: async () => ({ division_id: "d1", standings: o.standings ?? [{ stage_id: "s1", pool_id: null, rows: rows("e1", "e2") }] }),
@@ -776,6 +776,21 @@ describe("BrowserDriver — the public view (ruling C)", () => {
     const ids = driver.checks().map((k) => k.id);
     expect(ids).toEqual(expect.arrayContaining(["organiser-ui-path", "ui-public-standings-match", "ui-champion-shown", "mixed-driver-coverage", "visual-evidence"]));
     expect(only(driver, "organiser-ui-path").verdict).toBe("pass");
+  });
+
+  it("W2d T17 (X-TB-6): a level table — every API row `level` — is drawn with no places: the page's '–' rows pass, a page printing places on it fails", async () => {
+    const level = [{ stage_id: "s1", pool_id: null, rows: rows("e1", "e2").map((r) => ({ ...r, level: true })) }];
+    const dashes = { rows: [{ rank: null, name: "Ann" }, { rank: null, name: "Bob" }] };
+    const ok = make({ http: pub({ standings: level }), clock: fakeClock(), pages: { readPublicUi: async () => ({ tables: [dashes], champion: null }) } });
+    await ok.driver.publicStandings(ref(await built(ok.driver, spec("league"))));
+    expect(only(ok.driver, "ui-public-standings-match")).toMatchObject({ verdict: "pass", checked: 1 });
+    // the positive pair: places printed on a level table are a difference, named
+    const clock = fakeClock();
+    const bad = make({ http: pub({ standings: level }), clock, pages: { readPublicUi: async () => ({ tables: [uiRows("Ann", "Bob")], champion: null }) } });
+    await bad.driver.publicStandings(ref(await built(bad.driver, spec("league"))));
+    const c = only(bad.driver, "ui-public-standings-match");
+    expect(c).toMatchObject({ verdict: "fail", checked: 1 });
+    expect(c.evidence).toEqual(["league stage 1: page order 1 Ann, 2 Bob; API order – Ann, – Bob"]);
   });
 
   it("the window counts from the case's LAST write: long after it, one read decides; a fresh write restarts it", async () => {

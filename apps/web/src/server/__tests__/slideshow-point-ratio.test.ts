@@ -113,6 +113,9 @@ function normalTable(module_: { metrics: TableViewInput["metricSpecs"] }, cascad
     id: "t",
     division: { id: "d1", slug: "open", name: "Open" },
     caption: "League",
+    // W2d T17: no stage rules (a plain whole-point layout) and no date — these suites pin the rest of the view
+    rules: null,
+    dateOf: () => null,
     fullHref: "/",
     rows: snapshotRows.map(engineRow),
     metricSpecs: module_.metrics,

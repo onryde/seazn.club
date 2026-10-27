@@ -57,7 +57,9 @@ The game-winning shot counts in the official score: a match tied 2-2 and won on 
 
 ## Standings and stats
 
-Regulation win 3, overtime or shoot-out win 2, overtime or shoot-out loss 1, loss 0. Ties break head-to-head first, then on goal difference and goals for.
+Regulation win 3, overtime or shoot-out win 2, overtime or shoot-out loss 1, loss 0. The table counts overtime and shoot-out results in their own **OTW** and **OTL** columns, so **W** and **L** are regulation results only.
+
+Ties break head-to-head first: points, then goal difference, then goals scored in the games between the tied teams, asked again among any teams still level. Then goal difference and goals for in all games, seeding, and last a drawing of lots. If the tied teams have not all played each other yet, head-to-head waits: they are ordered by fewest games played, then goal difference, goals for, seeding and lots, and the table's tie note says head-to-head is not complete.
 
 The division's **Stats** tab carries goals, assists and points, penalty minutes (2 for a minor or bench minor, 4 for a double, 5 for a major, 10 for a misconduct, 20 for a game misconduct, 25 for a match penalty), power-play and short-handed goals, shoot-out attempts and goals, and — for goalkeepers — shots faced, saves and save percentage.
 

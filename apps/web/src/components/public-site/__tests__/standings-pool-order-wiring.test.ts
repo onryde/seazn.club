@@ -41,6 +41,8 @@ import nlPublic from "@/dictionaries/nl/public.json";
 import EmbedWidgetPage from "@/app/embed/divisions/[id]/[widget]/page";
 import DivisionHomePage from "@/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page";
 import { StandingsTable } from "../standings-table";
+import { builtinModules } from "@seazn/engine/sports";
+import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
 
 /** The en captions of pools A and B under `stage`: `table.poolLabel` over the
  *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
@@ -190,6 +192,37 @@ describe("pool order on the pages that draw one standings table per pool", () =>
     }
     // Anti-vacuity: two pools, two pages, four locales.
     expect(checked).toBe(2 * 2 * 4);
+  });
+
+  // W2d T17: each table prints by its OWN stage's rules (IIHF's OTW/OTL, chess's half-points) and dates a lots draw in
+  // the org's language and zone — so both pages hand the table the stage's `table_rules`, the org locale and the zone.
+  it("W2d T17: both pages hand each table its stage's rules, the org's locale and the division's zone", async () => {
+    const rules = unpinnedRulesDoc({
+      module: builtinModules.find((m) => m.key === "generic")!,
+      kind: "group",
+      divisionConfig: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 } },
+    });
+    const p = payload();
+    const withRules = {
+      ...p,
+      org: { ...p.org, default_locale: "es" },
+      tz: "Europe/Madrid",
+      stages: p.stages.map((st) => ({ ...st, table_rules: rules })),
+    };
+    getPublicDivision.mockResolvedValue(withRules);
+    const page = tables(
+      await DivisionHomePage({ params: Promise.resolve({ orgSlug: "test-org", competitionSlug: "test-comp", divisionSlug: "open" }) }),
+    );
+    embedDivisionData.mockResolvedValue({ ok: true, data: { ...withRules, sponsors: [] } });
+    const embed = tables(await EmbedWidgetPage({ params: Promise.resolve({ id: "d1", widget: "standings" }) }));
+    let checked = 0;
+    for (const el of [...page, ...embed]) {
+      expect(el.props.rules).toBe(rules);
+      expect(el.props.locale).toBe("es");
+      expect(el.props.tz).toBe("Europe/Madrid");
+      checked++;
+    }
+    expect(checked, "two pools on each page").toBe(4);
   });
 
   it("no surface sorts pools by id any more", () => {

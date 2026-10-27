@@ -24,15 +24,25 @@ import {
   DERIVED_METRICS,
   DIFF_KEYS,
   FOR_KEYS,
+  PLAIN_LAYOUT,
   RATIO_LEDGERS,
   derivedMetricText,
+  isLevelTable,
   metricKeyOf,
+  resultColumnText,
+  tableLayoutOf,
   tieBreakLabel,
+  type OutcomeKey,
+  type PointsRule,
   type RatioKey,
+  type ResultColumnKey,
   type StandingsRow,
+  type TableLayout,
+  type TableRulesSource,
+  type TieBreakNote,
 } from "@seazn/engine/competition";
 import type { PartialScheduleKey, TiebreakerKey } from "@seazn/engine/sport";
-import { standingsColumns, formatMetric, type MetricSpecLike } from "@/lib/public-site";
+import { standingsColumns, formatMetric, type MetricSpecLike, type StandingsColumn } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { TableViewT } from "./competition-hub-schema";
@@ -44,7 +54,7 @@ import type { QualificationView } from "./qualification-view";
  *  phone widths and always visible from `md` up. Exported because it is the
  *  definition of "compact", and a test that restated it would be a second
  *  declaration to drift. */
-export const COMPACT_KEYS: ReadonlySet<string> = new Set(["played", "won", "lost", "points"]);
+export const COMPACT_KEYS: ReadonlySet<string> = new Set(["played", "won", "otw", "otl", "lost", "points"]);
 
 /** The ledger columns `standingsColumns` emits with `kind: "structural"`.
  *  These are COPY (Played, Won, Drawn, Lost, Points) and get a dictionary key;
@@ -57,6 +67,8 @@ export const COMPACT_KEYS: ReadonlySet<string> = new Set(["played", "won", "lost
 export const STRUCTURAL_KEYS: ReadonlySet<string> = new Set([
   "played",
   "won",
+  "otw",
+  "otl",
   "drawn",
   "lost",
   "points",
@@ -72,6 +84,9 @@ export const STRUCTURAL_KEYS: ReadonlySet<string> = new Set([
 export const STRUCTURAL_ABBR_KEYS: Readonly<Record<string, TKey>> = {
   played: "table.abbr.played",
   won: "table.abbr.won",
+  // W2d T17 (RBG §3.4): IIHF's overtime-or-shoot-out wins and losses.
+  otw: "table.abbr.otw",
+  otl: "table.abbr.otl",
   drawn: "table.abbr.drawn",
   lost: "table.abbr.lost",
   points: "table.abbr.points",
@@ -129,6 +144,13 @@ export const METRIC_HEADER_KEYS: Readonly<Record<string, Readonly<Record<string,
   set_ratio: { Ratio: { abbr: "table.abbr.ratio", title: "table.col.ratio" } },
   board_ratio: { "Board ratio": { abbr: "table.abbr.boardRatio", title: "table.col.boardRatio" } },
   point_ratio: { "Pts ratio": { abbr: "table.abbr.pointRatio", title: "table.col.pointRatio" } },
+  // W2d T17 (ST-G29): badminton's set and point difference, hockey's field goals, tennis's game ratio. The set
+  // difference keeps the ratio's neutral word ("Diff"), for the same reason its ratio is "Ratio": `sets_won` is games
+  // in badminton and table tennis, sets in volleyball and tennis.
+  set_diff: { Diff: { abbr: "table.abbr.setDiff", title: "table.col.setDiff" } },
+  point_diff: { "Pts diff": { abbr: "table.abbr.pointDiff", title: "table.col.pointDiff" } },
+  field_goals: { FG: { abbr: "table.abbr.fieldGoals", title: "table.col.fieldGoals" } },
+  game_ratio: { "Game ratio": { abbr: "table.abbr.gameRatio", title: "table.col.gameRatio" } },
 };
 
 /** The columns whose header is the sport's own NOTATION, printed as the engine
@@ -373,6 +395,90 @@ export function ratioNote(
   });
 }
 
+/** What a table reads off its stage's rules (`StageTableRulesDoc`): the points rule and the outcomes it pays. */
+export interface TableRulesLike {
+  readonly points: PointsRule;
+  readonly reachable: readonly OutcomeKey[];
+}
+
+/** W2d T17 (spec §5.7) — the stage's result-column layout (IIHF's OTW/OTL, chess's half-points), from its rules; a
+ *  stage the loader refused (no rules) prints W and L as folded, in whole points. */
+export function tableLayoutFor(rules: TableRulesLike | null | undefined): TableLayout {
+  return rules === null || rules === undefined ? PLAIN_LAYOUT : tableLayoutOf(rules.points, rules.reachable);
+}
+
+/** One cell's text — THE cell expression of both standings tables (the hub's view below and `standings-table.tsx`), so
+ *  the two cannot print different numbers in the same cell. */
+export function cellText(row: StandingsRow, column: StandingsColumn, layout: TableLayout): string {
+  if (column.kind === "derived") return derivedMetricText(row, column.key as TiebreakerKey) ?? "—";
+  if (column.kind === "structural") return resultColumnText(row, column.key as ResultColumnKey, layout);
+  return formatMetric(row.metrics[column.key], column.decimals);
+}
+
+/** The columns a stage's table shows, under its layout (`standingsColumns` plus the engine's DERIVED_METRICS). */
+export function tableColumns(
+  metricSpecs: readonly MetricSpecLike[],
+  cascade: readonly string[],
+  rows: readonly StandingsRow[],
+  layout: TableLayout,
+): StandingsColumn[] {
+  return standingsColumns(metricSpecs, cascade, rows, DERIVED_METRICS, layout.apart.length > 0);
+}
+
+/** W2d T17 (anti-goal 2, X-TB-8): why a conditional step left a tie unsplit, as the tie popover says it. Spelled out
+ *  and exhaustive over the engine's `TieBreakNote`, like `TIE_BREAK_MSG_KEYS`. */
+export const TIE_NOTE_KEYS = {
+  h2h_two_not_applicable: "table.tieNote.h2hTwoNotApplicable",
+  h2h_incomplete: "table.tieNote.h2hIncomplete",
+} as const satisfies Record<TieBreakNote, DictionaryKey>;
+
+/**
+ * The tie popover's text for one tied row, or null for a row with no trace: the sentence naming who it was tied with
+ * and what split them, then — each on its own line — why a step did not apply (`tieBreak.note`) and the date a stored
+ * drawing of lots was made (`tieBreak.drawnAt`, X-TB-4). `dateOf` formats an instant in the page's locale and zone.
+ * Lines are joined by "\n"; `TieNoteText` renders each on its own line. Shared by both tables and the qualification
+ * popover, like `tieBreakRule`.
+ */
+export function tieNoteText(
+  row: StandingsRow,
+  table: readonly StandingsRow[],
+  msg: (key: TKey, vars?: Record<string, string | number>) => string,
+  nameOf: (id: string) => string,
+  dateOf: (iso: string) => string | null,
+): string | null {
+  const tb = row.tieBreak;
+  if (!tb) return null;
+  const lines = [msg("table.tieBreak", { with: tb.with.map(nameOf).join(", "), rule: tieBreakRule(tb.key, msg, row, table) })];
+  if (tb.note !== undefined) lines.push(msg(TIE_NOTE_KEYS[tb.note]));
+  const drawn = tb.drawnAt === undefined ? null : dateOf(tb.drawnAt);
+  if (drawn !== null) lines.push(msg("table.tieNote.drawnAt", { date: drawn }));
+  return lines.join("\n");
+}
+
+/** W2d T17 — where a stage's order came from, as the organiser's caption says it (`StageTableRulesDoc.sources`). */
+export const ORDER_SOURCE_KEYS = {
+  sport: "div.detail.tiebreak.source.sport",
+  division: "div.detail.tiebreak.source.division",
+  stage: "div.detail.tiebreak.source.stage",
+  migrated: "div.detail.tiebreak.source.migrated",
+} as const satisfies Record<TableRulesSource, DictionaryKey>;
+
+/** The organiser caption's second line for one stage: where its order came from, and whether it is pinned (X-TB-2: a
+ *  started stage ranks by the rules it started with, D9) — with the date, in the viewer's locale and zone. Null for a
+ *  stage the loader refused: no caption, never a guessed order (R3). */
+export function stageOrderNote(
+  rules: { readonly sources: { readonly tiebreakers: TableRulesSource }; readonly pinnedAt: string | null } | null | undefined,
+  msg: (key: TKey, vars?: Record<string, string | number>) => string,
+  dateOf: (iso: string) => string | null,
+): { source: string; pinned: string } | null {
+  if (rules === null || rules === undefined) return null;
+  const date = rules.pinnedAt === null ? null : dateOf(rules.pinnedAt);
+  return {
+    source: msg(ORDER_SOURCE_KEYS[rules.sources.tiebreakers]),
+    pinned: date === null ? msg("div.detail.tiebreak.live") : msg("div.detail.tiebreak.pinned", { date }),
+  };
+}
+
 export interface TableViewInput {
   /** Stable id for this table within the document — a division may publish an
    *  overall table and one per pool, so this is not the division id. */
@@ -402,13 +508,23 @@ export interface TableViewInput {
    *  `buildQualificationView`; null/absent = no cut to show. Carried, never
    *  derived: the table line as is, and each row's status by entrant id. */
   qualification?: QualificationView | null;
+  /** W2d T17: the stage's rules (`StageTableRulesDoc`), for its column layout — OTW/OTL, half-points. Null: a stage the
+   *  loader refused, printed plain. */
+  rules: TableRulesLike | null;
+  /** An instant as the page prints a date (the org's locale and zone): the lots note's "Drawn by lots on {date}". */
+  dateOf: (iso: string) => string | null;
 }
 
 export function buildTableView(input: TableViewInput): TableViewT {
-  const columns = standingsColumns(input.metricSpecs, input.cascade, input.rows, DERIVED_METRICS);
+  const layout = tableLayoutFor(input.rules);
+  const columns = tableColumns(input.metricSpecs, input.cascade, input.rows, layout);
   const ranked = [...input.rows].sort((a, b) => (a.rank ?? UNRANKED) - (b.rank ?? UNRANKED));
   const name = (id: string) => input.entrantNames[id] ?? id;
-  const qual = input.qualification ?? null;
+  // X-TB-6 (anti-goal 3): a table with no counted fixture is level — no place on any row (the client prints the level
+  // dash for a null rank), no leader, no champion, no qualification chip and no tie note (its rows still carry the
+  // ranking pass's trace, "split on seeding", which would explain a place the table does not print).
+  const level = isLevelTable(input.rows);
+  const qual = level ? null : (input.qualification ?? null);
 
   return {
     id: input.id,
@@ -424,7 +540,7 @@ export function buildTableView(input: TableViewInput): TableViewT {
       compact: COMPACT_KEYS.has(c.key),
     })),
     rows: ranked.map((r) => ({
-      rank: r.rank ?? null,
+      rank: level ? null : (r.rank ?? null),
       entrantId: r.entrantId,
       name: name(r.entrantId),
       badgeUrl: input.entrantLogos[r.entrantId] ?? null,
@@ -432,27 +548,16 @@ export function buildTableView(input: TableViewInput): TableViewT {
       // Byte-for-byte `standings-table.tsx`'s cell expression, in the same
       // column order — the view's `cells[i]` IS `columns[i]`, and the renderer
       // relies on that pairing rather than looking anything up by key.
-      cells: columns.map((c) =>
-        c.kind === "derived"
-          ? (derivedMetricText(r, c.key as TiebreakerKey) ?? "—")
-          : c.kind === "structural"
-            ? formatMetric(r[c.key as "played" | "won" | "drawn" | "lost" | "points"])
-            : formatMetric(r.metrics[c.key], c.decimals),
-      ),
+      cells: columns.map((c) => cellText(r, c, layout)),
       // Paired with `cells` by index, like the cells with the columns. Only a
       // derived column can carry one; `ratioNote` decides which of those do.
       cellNotes: columns.map((c) => (c.kind === "derived" ? ratioNote(r, c.key, input.msg) : null)),
-      tieBreakText: r.tieBreak
-        ? input.msg("table.tieBreak", {
-            with: r.tieBreak.with.map(name).join(", "),
-            rule: tieBreakRule(r.tieBreak.key, input.msg, r, input.rows),
-          })
-        : null,
+      tieBreakText: level ? null : tieNoteText(r, input.rows, input.msg, name, input.dateOf),
       // Keyed by entrant id, never by rank or position: a shared rank is two
       // rows, and the view's row order is its own. No status = null, which the
       // schema states as a required key (never an absent one).
       qual: qual !== null && Object.hasOwn(qual.rows, r.entrantId) ? qual.rows[r.entrantId]! : null,
-      champion: input.championId === r.entrantId,
+      champion: !level && input.championId === r.entrantId,
     })),
     qualification: qual?.table ?? null,
   };

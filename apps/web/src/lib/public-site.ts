@@ -223,16 +223,28 @@ export interface StandingsColumn {
   decimals?: number;
 }
 
+/**
+ * `apart` (W2d spec §5.7; RBG §3.4): the table counts its decisions beyond regulation in their own columns — IIHF's
+ * GP · W · OTW · OTL · L — from the engine's `tableLayoutOf` (`apart.length > 0`); W and L then leave them out
+ * (`resultColumnText`). False for every other table.
+ */
 export function standingsColumns(
   metricSpecs: readonly MetricSpecLike[],
   cascade: readonly string[],
   rows: readonly StandingsRowLike[],
   derivedSpecs: readonly { key: string; label: string; decimals: number }[],
+  apart = false,
 ): StandingsColumn[] {
   const hasDraws = rows.some((r) => r.drawn > 0);
   const columns: StandingsColumn[] = [
     { key: "played", label: "P", kind: "structural" },
     { key: "won", label: "W", kind: "structural" },
+    ...(apart
+      ? [
+          { key: "otw", label: "OTW", kind: "structural" as const },
+          { key: "otl", label: "OTL", kind: "structural" as const },
+        ]
+      : []),
     ...(hasDraws ? [{ key: "drawn", label: "D", kind: "structural" as const }] : []),
     { key: "lost", label: "L", kind: "structural" },
   ];

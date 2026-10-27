@@ -94,7 +94,7 @@ import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import type { TableColumnT, TableViewT } from "@/server/public-site/competition-hub-schema";
 import { StandingsPopover } from "./standings-popover";
-import { QualCutRow, QualLegend, QualMarker, QualPopoverBody } from "./qualification-bits";
+import { QualCutRow, QualLegend, QualMarker, QualPopoverBody, TieNoteText } from "./qualification-bits";
 
 export interface StandingsTableViewProps {
   view: TableViewT;
@@ -361,7 +361,13 @@ export function StandingsTableView({
         rank !== null && MEDAL[rank] ? MEDAL[rank] : "text-ink-muted"
       }`}
     >
-      {rank ?? ""}
+      {rank ?? (
+        // W2d T17 (X-TB-6): a level table's row has no place — the builder sends no rank.
+        <>
+          <span aria-hidden="true">–</span>
+          <span className="sr-only">{t(dict, "table.level")}</span>
+        </>
+      )}
     </span>
   );
 
@@ -535,7 +541,7 @@ export function StandingsTableView({
                             </>
                           }
                         >
-                          {r.tieBreakText}
+                          <TieNoteText text={r.tieBreakText} />
                         </StandingsPopover>
                       ) : (
                         <span className="flex items-center gap-px">{rankChip(r.rank)}</span>
