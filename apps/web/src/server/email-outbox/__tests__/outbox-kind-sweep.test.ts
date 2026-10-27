@@ -139,6 +139,9 @@
 //     earn-grant-volume-alert.test.ts drives it to a row), over today's earn grants with 20 seeded, the same way. Its key is today's
 //     UTC day itself (P-W5-15), so the scenario clears a row an earlier sweep left today, and its subject's count is the number the
 //     producer handed the builder (a call-through spy on `earnGrantVolumeAlertEmail`; the count moves with neighbouring suites).
+//   - staff_extra_org_allowance: the real `maybeAlertOrgAllowance` (its one site, `setExtraOrgs`, defers it after the Stripe mutation;
+//     extra-org-addon.test.ts drives a purchase to a row), for a `pro` group bought to 25 organisations, the same way. Its key is the
+//     group and the count (P-W5-16), and the plan's base is read from plan_entitlements, as the producer reads it.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -249,6 +252,7 @@ import {
 import { alertStreamPackPriceDrift, StreamPackPriceDriftError } from "@/lib/relay-checkout";
 import { maybeAlertExpensiveRun } from "@/server/usecases/ai-runs-admin";
 import { checkEarnGrantVolumeAlert } from "@/lib/credits";
+import { maybeAlertOrgAllowance } from "@/server/usecases/extra-orgs";
 import { earnGrantVolumeAlertEmail } from "@/lib/email";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
@@ -1527,6 +1531,35 @@ function earnGrantVolumeScenario(): LiteralKindScenario {
   return s;
 }
 
+/** The real staff alert for a billing group a purchase took to the threshold of 25 organisations, to this run's STAFF_ALERT_EMAIL: no
+ *  org on the row, no account, and the worker makes the first attempt. The group needs no row (the alert names it and reads only the
+ *  plan's base). The subject is the builder's inline English, typed from its source; the purchase is the threshold less the plan's
+ *  base, read from plan_entitlements as the producer reads it. */
+function extraOrgAllowanceScenario(): LiteralKindScenario {
+  const recipient = address();
+  const groupId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Large billing group: 25 organisations (group ${groupId})`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const [plan] = await sql<{ int_value: number | null }[]>`
+        select int_value from plan_entitlements where plan_key = 'pro' and feature_key = 'orgs.max_owned'`;
+      expect(plan?.int_value, "premise: the pro plan has a finite base").toEqual(expect.any(Number));
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await maybeAlertOrgAllowance({
+        subscriptionId: groupId,
+        orgId: randomUUID(),
+        planKey: "pro",
+        extraOrgs: 25 - plan!.int_value!,
+        previousExtraOrgs: 0,
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real staff alert for a platform-charge dispute, to this run's STAFF_ALERT_EMAIL, for a `created` subscription dispute of an org
  *  that speaks French: the alert is in the platform locale (en) all the same, it names the org, and the worker makes the first
  *  attempt. */
@@ -2142,6 +2175,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_stream_pack_price_drift: streamPackPriceDriftScenario(),
         staff_ai_run_cost: aiRunCostScenario(),
         staff_earn_grant_volume: earnGrantVolumeScenario(),
+        staff_extra_org_allowance: extraOrgAllowanceScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

@@ -277,6 +277,9 @@ export async function sendWithResult(opts: SendOptions): Promise<SendResult> {
   return deliver(opts, gate.apiKey);
 }
 
+// No caller is left: every kind is on the outbox (phase 3 wave 5 moved the last). Kept until wave 5's T7 deletes it with the
+// closing assertions, by that task's ruling; the disable goes with it.
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 async function send(opts: SendOptions): Promise<boolean> {
   return (await sendWithResult(opts)).ok;
 }
@@ -1296,7 +1299,6 @@ export function earnGrantVolumeAlertEmail(opts: EarnGrantVolumeAlertEmail): Emai
 }
 
 export interface ExtraOrgAllowanceAlertEmail {
-  to: string;
   /** The billing GROUP (subscriptions.id) — the thing that holds the orgs. */
   subscriptionId: string;
   /** The org whose payer made the purchase; the entry point for a sales
@@ -1323,12 +1325,12 @@ export interface ExtraOrgAllowanceAlertEmail {
  *  group at this size "becomes an enterprise conversation rather than a silent
  *  reseller"; this is that conversation being started while the customer is
  *  actively expanding, instead of a sweep noticing weeks later.
- *  Ops-only, no user-facing i18n (mirrors earnGrantVolumeAlertEmail). Not
- *  deduped: a group that keeps adding organisations is exactly the one to keep
- *  hearing about. */
-export async function sendExtraOrgAllowanceAlertEmail(
-  opts: ExtraOrgAllowanceAlertEmail,
-): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors earnGrantVolumeAlertEmail). RENDERED
+ *  here; it is queued on the email outbox by `maybeAlertOrgAllowance`
+ *  (extra-orgs.ts, kind `staff_extra_org_allowance`) once per group and count:
+ *  a group that keeps adding organisations is exactly the one to keep hearing
+ *  about, and each new count is a new key. Nothing sends it directly. */
+export function extraOrgAllowanceAlertEmail(opts: ExtraOrgAllowanceAlertEmail): EmailContent {
   const subject = `Large billing group: ${opts.totalAllowance} organisations (group ${opts.subscriptionId})`;
   const bodyText =
     `A ${opts.planKey} billing group just raised its extra-organisation add-on from ` +
@@ -1357,7 +1359,7 @@ export async function sendExtraOrgAllowanceAlertEmail(
   const text =
     `${bodyText}\n\nbilling group: ${opts.subscriptionId} · plan: ${opts.planKey} · ` +
     `base ${opts.baseCap} + ${opts.extraOrgs} extra = ${opts.totalAllowance} (threshold ${opts.threshold})`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface ExtraOrgRepriceFailedAlertEmail {
@@ -1402,7 +1404,7 @@ export interface ExtraOrgRepriceFailedAlertEmail {
  * until they land, THIS is the entire safety net.
  *
  * Never blocks the webhook; queued on the outbox, whose worker delivers and retries it.
- * Ops-only, no user-facing i18n (mirrors sendExtraOrgAllowanceAlertEmail).
+ * Ops-only, no user-facing i18n (mirrors extraOrgAllowanceAlertEmail).
  *
  * RENDERED and not sent: `maybeAlertOrgRepriceFailed` (billing-events.ts) queues what this returns on the email outbox through
  * `queueStaffAlert` (kind `staff_extra_org_reprice_failed`), once per rider per UTC day. Nothing sends it directly.

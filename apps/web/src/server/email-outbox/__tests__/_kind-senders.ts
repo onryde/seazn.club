@@ -28,9 +28,7 @@ export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess
 
 /** The `send*` exports of lib/email.ts as of the start of phase 3 wave 1 (spec: "49 send* exports"), copied once from the file.
  *  `sendWithResult` is the outbox's own typed sender and is not among them. */
-export const SENDER_ALLOWLIST: readonly string[] = [
-  "sendExtraOrgAllowanceAlertEmail",
-];
+export const SENDER_ALLOWLIST: readonly string[] = [];
 
 /** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12). Wave 2's T1 listed its ten kinds before their
  *  producers moved, each kind task (T2-T9) deleted its own, and T10 closed the list again. Wave 3's T1 listed its eight kinds the same
@@ -38,10 +36,7 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  way, in the spec's table order: each kind task (T2-T4) deletes its own, and the last move closes the list again. Wave 5's T1 appended
  *  its seventeen after them, in the spec's table order, and each of its kind tasks (T3-T6) deletes its own. The sweep covers every kind
  *  not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
-export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  // Wave 5, in the spec's table order.
-  "staff_extra_org_allowance",
-];
+export const NOT_YET_MOVED: readonly OutboxKind[] = [];
 
 /** For every kind, the direct sender its producer still calls (null = the kind has moved: nothing direct is left for it). */
 export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
@@ -100,7 +95,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   staff_stream_pack_price_drift: null,
   staff_ai_run_cost: null,
   staff_earn_grant_volume: null,
-  staff_extra_org_allowance: "sendExtraOrgAllowanceAlertEmail",
+  staff_extra_org_allowance: null,
 };
 
 /** How long the allowlist must be while `unmoved` kinds are still on their direct sender: the spec's 49, less one for every phase-3 kind

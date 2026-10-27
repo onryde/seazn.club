@@ -92,7 +92,12 @@ describe("1. the send* allowlist", () => {
     const found = senderExports(read("lib/email.ts"));
     expect(new Set(found).size, "premise: no name is exported twice").toBe(found.length);
     expect(SENDER_ALLOWLIST, "the spec says 49 send* exports at the start of wave 1; each kind that moves takes its own with it").toHaveLength(allowlistLengthFor(NOT_YET_MOVED.length));
-    expect(found.length, "anti-vacuity: the file was read and its senders found").toBeGreaterThan(0);
+    // Anti-vacuity: once every kind has moved the allowlist is empty and `found` is too, so the positive control is the outbox's own
+    // sender, which the matcher's line form reads and then sets aside. A file that was not read, or a form that matches no export,
+    // would not find it either.
+    expect(read("lib/email.ts").match(/^export\s+(?:async\s+)?function\s+(send\w*)/gm), "anti-vacuity: the file was read and its export lines found").toContain(
+      `export async function ${OUTBOX_SENDER}`,
+    );
     expect([...found].sort()).toEqual([...SENDER_ALLOWLIST].sort());
   });
 

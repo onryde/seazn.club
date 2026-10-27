@@ -23,7 +23,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
-import type { EmailContent, ExtraOrgRepriceFailedAlertEmail } from "@/lib/email";
+import type { EmailContent, ExtraOrgAllowanceAlertEmail, ExtraOrgRepriceFailedAlertEmail } from "@/lib/email";
 
 // getLimit reads through resolve()'s entitlement cache; disable it so a
 // just-written add-on row is seen on the very next read (same mock as
@@ -38,8 +38,8 @@ vi.mock("@/lib/cache", () => ({
 
 // Purchase-route tests (Task 3): stub the group-payer gate so a non-payer can
 // be proven refused BEFORE any Stripe call, spy on Stripe to assert exactly
-// which mutation fired, and spy on the staff-alert email so the >= 25
-// allowance watch is observable without sending anything.
+// which mutation fired, and spy on the staff alerts' builders (call-through:
+// the outbox queues what they render) so what each alert says is observable.
 const {
   retrieveSpy,
   itemCreateSpy,
@@ -63,7 +63,10 @@ const {
   // calls through: the mock factory below sets its implementation to the real
   // builder, and the convergence describe restores it before every test.
   repriceAlertSpy: vi.fn<(opts: ExtraOrgRepriceFailedAlertEmail) => EmailContent>(),
-  realBuilders: {} as { reprice?: (opts: ExtraOrgRepriceFailedAlertEmail) => EmailContent },
+  realBuilders: {} as {
+    reprice?: (opts: ExtraOrgRepriceFailedAlertEmail) => EmailContent;
+    allowance?: (opts: ExtraOrgAllowanceAlertEmail) => EmailContent;
+  },
   // Typed with the resolver's args so a test can answer PER LOOKUP KEY (Task
   // 4b's `describe` block resolves every lookup key to its own live price id,
   // via its local `livePriceFor`); the default implementation ignores them.
@@ -71,7 +74,10 @@ const {
     (args: { lookup_keys: string[]; limit?: number }) => Promise<{ data: { id: string }[] }>
   >(async () => ({ data: [{ id: "price_org_addon" }] })),
   requireBillingOwnerMock: vi.fn(),
-  allowanceAlertSpy: vi.fn(async () => true),
+  // The >= 25 allowance alert's BUILDER, a call-through spy like the re-price
+  // one: the factory below sets it to the real builder, and the purchase-time
+  // describe restores it before every test.
+  allowanceAlertSpy: vi.fn<(opts: ExtraOrgAllowanceAlertEmail) => EmailContent>(),
 }));
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
@@ -88,19 +94,22 @@ vi.mock("@/lib/stripe", () => ({
 vi.mock("@/server/usecases/billing-manage", () => ({
   requireBillingOwner: requireBillingOwnerMock,
 }));
-// Partial mock: billing-events.ts imports a dozen other senders from this
-// module, so only the ones under test are replaced. The re-price alert is
-// queued on the email outbox (phase 3 wave 5, kind
-// `staff_extra_org_reprice_failed`, once per rider per UTC day), so its
-// builder is a call-through spy and the tests read its rows; Sentry's issue
+// Partial mock: billing-events.ts imports a dozen other builders from this
+// module, so only the ones under test are replaced. The re-price alert and
+// the allowance alert are queued on the email outbox (phase 3 wave 5, kinds
+// `staff_extra_org_reprice_failed`, once per rider per UTC day, and
+// `staff_extra_org_allowance`, once per group and count), so their builders
+// are call-through spies and the tests read their rows; Sentry's issue
 // capture is observed (call-through) so a test can tell a drop apart.
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
   realBuilders.reprice = actual.extraOrgRepriceFailedAlertEmail;
   repriceAlertSpy.mockImplementation(actual.extraOrgRepriceFailedAlertEmail);
+  realBuilders.allowance = actual.extraOrgAllowanceAlertEmail;
+  allowanceAlertSpy.mockImplementation(actual.extraOrgAllowanceAlertEmail);
   return {
     ...actual,
-    sendExtraOrgAllowanceAlertEmail: allowanceAlertSpy,
+    extraOrgAllowanceAlertEmail: allowanceAlertSpy,
     extraOrgRepriceFailedAlertEmail: repriceAlertSpy,
   };
 });
@@ -109,7 +118,7 @@ vi.mock("@/lib/sentry", async (importOriginal) => {
   return { ...actual, captureError: vi.fn(actual.captureError) };
 });
 
-import { sql } from "@/lib/db";
+import { sql, statementCount } from "@/lib/db";
 import { createOrgForUser } from "@/lib/auth";
 import { walletIdFor } from "@/lib/credits";
 import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
@@ -715,34 +724,113 @@ describe("extra-org allowance alert — the pure trigger", () => {
 });
 
 describe.skipIf(!HAS_DB)("extra-org allowance alert — at purchase time", () => {
+  // Queued on the email outbox (kind `staff_extra_org_allowance`, P-W5-16),
+  // once per billing group and count: `<group>:<extraOrgs>`. A later purchase
+  // is a new count, so a new key.
+  const RUN = `eoa-al-${uniq()}`;
+  const KIND = "staff_extra_org_allowance";
+  let staff = "";
+  let errors: ReturnType<typeof vi.spyOn>;
+  /** What the writer's never-throws catch left (I2): an alert that was queued or deduplicated left nothing. */
+  const drops = () => staffAlertDrops(errors, vi.mocked(captureError));
+  /** One queued allowance alert to this test's address. The subject is the builder's inline English, typed from its source. */
+  const allowanceRow = (groupId: string, extraOrgs: number, total: number) => ({
+    ref_id: `${groupId}:${extraOrgs}`,
+    dedupe_key: `${groupId}:${extraOrgs}`,
+    status: "queued",
+    recipient: staff,
+    subject: `Large billing group: ${total} organisations (group ${groupId})`,
+  });
+  /** The deferred alert's rows for a group, once it has queued `n` of them (the purchase does not wait for it). */
+  const rowsOnceQueued = async (groupId: string, n: number) => {
+    await vi.waitFor(async () => expect(await staffRows(KIND, "subscription", groupId)).toHaveLength(n));
+    return staffRows(KIND, "subscription", groupId);
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllEnvs();
-    allowanceAlertSpy.mockResolvedValue(true);
+    // `clearAllMocks` keeps an implementation a test replaced (a throwing
+    // render), so the real builder is put back before every test.
+    allowanceAlertSpy.mockImplementation(realBuilders.allowance!);
+    errors = vi.spyOn(log, "error");
+    // This test's own staff address: CI sets none, and the database is shared.
+    staff = `staff-${RUN}-${uniq()}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
   });
 
-  it("alerts staff when the purchase takes the group to the threshold, reading the base from plan_entitlements", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.test");
+  afterEach(() => {
+    errors.mockRestore();
+    vi.unstubAllEnvs();
+  });
+
+  afterAll(async () => {
+    await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
+  });
+
+  it("a purchase that crosses the threshold pages once", async () => {
+    // The base is READ from plan_entitlements (beforeAll), never assumed; the
+    // threshold is the rule's 25.
     const { orgId, walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     retrieveSpy.mockResolvedValueOnce({ id: stripeSubId, items: { data: [] } });
+    const extras = 25 - proBase;
 
-    const extras = ORG_ALLOWANCE_ALERT_THRESHOLD - proBase;
     await setExtraOrgs(extras);
 
-    await vi.waitFor(() => expect(allowanceAlertSpy).toHaveBeenCalledTimes(1));
-    expect(allowanceAlertSpy).toHaveBeenCalledWith(
-      expect.objectContaining({
-        to: "ops@seazn.test",
-        subscriptionId: walletId,
-        orgId,
-        planKey: "pro",
-        baseCap: proBase,
-        extraOrgs: extras,
-        previousExtraOrgs: 0,
-        totalAllowance: ORG_ALLOWANCE_ALERT_THRESHOLD,
-        threshold: ORG_ALLOWANCE_ALERT_THRESHOLD,
-      }),
-    );
+    expect(await rowsOnceQueued(walletId, 1)).toEqual([allowanceRow(walletId, extras, 25)]);
+    expect(allowanceAlertSpy, "what the alert says").toHaveBeenCalledTimes(1);
+    expect(allowanceAlertSpy).toHaveBeenCalledWith({
+      subscriptionId: walletId,
+      orgId,
+      planKey: "pro",
+      baseCap: proBase,
+      extraOrgs: extras,
+      previousExtraOrgs: 0,
+      totalAllowance: 25,
+      threshold: 25,
+    });
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("the same count again pages nothing more", async () => {
+    // A double-submitted purchase: both requests read Stripe before either
+    // wrote, so both take the group from 0 to the same count and both reach
+    // the alert. The group and the count are the key, so staff hear once.
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    retrieveSpy
+      .mockResolvedValueOnce({ id: stripeSubId, items: { data: [] } })
+      .mockResolvedValueOnce({ id: stripeSubId, items: { data: [] } });
+    const extras = 25 - proBase;
+
+    await setExtraOrgs(extras);
+    await setExtraOrgs(extras);
+
+    await vi.waitFor(() => expect(allowanceAlertSpy, "premise: both purchases reached the alert").toHaveBeenCalledTimes(2));
+    await flushDeferred();
+    expect(await staffRows(KIND, "subscription", walletId)).toEqual([allowanceRow(walletId, extras, 25)]);
+    expect(drops(), "deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("a later purchase to a higher count pages again", async () => {
+    // The positive pair of "the same count again": a group that keeps adding
+    // organisations is exactly the one to keep hearing about.
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
+    const extras = 25 - proBase;
+    retrieveSpy.mockResolvedValueOnce({ id: stripeSubId, items: { data: [] } });
+
+    await setExtraOrgs(extras);
+    await rowsOnceQueued(walletId, 1);
+    retrieveSpy.mockResolvedValueOnce({
+      id: stripeSubId,
+      items: { data: [{ id: "si_more", quantity: extras, price: { lookup_key: proEntry.lookupKey } }] },
+    });
+    await setExtraOrgs(extras + 1);
+
+    expect(await rowsOnceQueued(walletId, 2)).toEqual([
+      allowanceRow(walletId, extras, 25),
+      allowanceRow(walletId, extras + 1, 26),
+    ]);
+    expect(drops(), "both queued, nothing dropped").toEqual({ logged: 0, issues: 0 });
   });
 
   // "alerts a pro_plus group at FEWER extras" (a second, higher-base tier
@@ -759,31 +847,53 @@ describe.skipIf(!HAS_DB)("extra-org allowance alert — at purchase time", () =>
   // plan_entitlements; a second integration case with no second real base
   // would only repeat that with the same number.
 
-  it("stays silent one organisation below the threshold — the purchase is never blocked either", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.test");
-    const { stripeSubId } = await makeBilledGroupOrg("pro");
+  it("a purchase below the threshold pages nothing", async () => {
+    // One organisation short, and the purchase is never blocked either. The
+    // positive pair is "a purchase that crosses the threshold pages once".
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     retrieveSpy.mockResolvedValueOnce({ id: stripeSubId, items: { data: [] } });
 
-    const result = await setExtraOrgs(ORG_ALLOWANCE_ALERT_THRESHOLD - proBase - 1);
+    const result = await setExtraOrgs(25 - proBase - 1);
 
-    expect(result.extraOrgs).toBe(ORG_ALLOWANCE_ALERT_THRESHOLD - proBase - 1);
+    expect(result.extraOrgs).toBe(25 - proBase - 1);
     await flushDeferred();
     expect(allowanceAlertSpy).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "subscription", walletId)).toEqual([]);
   });
 
   it("stays silent when STAFF_ALERT_EMAIL is unset, however large the purchase", async () => {
-    const { stripeSubId } = await makeBilledGroupOrg("pro");
+    vi.stubEnv("STAFF_ALERT_EMAIL", "");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     retrieveSpy.mockResolvedValueOnce({ id: stripeSubId, items: { data: [] } });
 
     await setExtraOrgs(MAX_EXTRA_ORGS);
 
     await flushDeferred();
     expect(allowanceAlertSpy).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "subscription", walletId)).toEqual([]);
+  });
+
+  it("unset: the plan's cap is never read", async () => {
+    // Cheap guards FIRST: with no address (the normal case) the purchase's
+    // tail work pays for no query. Called directly so the count is the
+    // alert's own, not the purchase's.
+    vi.stubEnv("STAFF_ALERT_EMAIL", "");
+    const { orgId, walletId } = await makeGroupOrg("pro");
+    const args = { subscriptionId: walletId, orgId, planKey: "pro", extraOrgs: MAX_EXTRA_ORGS, previousExtraOrgs: 0 };
+
+    const before = statementCount();
+    expect(await maybeAlertOrgAllowance(args)).toBeNull();
+    expect(statementCount() - before, "no statement at all: neither the plan read nor an insert").toBe(0);
+
+    // The positive pair: the same call with the address set reads the cap and queues the alert.
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    const set = statementCount();
+    expect(await maybeAlertOrgAllowance(args)).toEqual(expect.any(String));
+    expect(statementCount() - set, "the plan read and the insert").toBeGreaterThanOrEqual(2);
   });
 
   it("stays silent when the change LOWERS the count, even above the threshold", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.test");
-    const { stripeSubId } = await makeBilledGroupOrg("pro");
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     retrieveSpy.mockResolvedValueOnce({
       id: stripeSubId,
       items: { data: [{ id: "si_big", quantity: 40, price: { lookup_key: proEntry.lookupKey } }] },
@@ -793,12 +903,14 @@ describe.skipIf(!HAS_DB)("extra-org allowance alert — at purchase time", () =>
 
     await flushDeferred();
     expect(allowanceAlertSpy).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "subscription", walletId)).toEqual([]);
   });
 
-  it("still buys the organisations when the alert send blows up — MAX_EXTRA_ORGS is the only bound", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.test");
-    allowanceAlertSpy.mockRejectedValue(new Error("resend is down"));
-    const { stripeSubId } = await makeBilledGroupOrg("pro");
+  it("still buys the organisations when the alert cannot be queued — MAX_EXTRA_ORGS is the only bound", async () => {
+    allowanceAlertSpy.mockImplementation(() => {
+      throw new Error("render failed");
+    });
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     retrieveSpy.mockResolvedValueOnce({ id: stripeSubId, items: { data: [] } });
 
     const result = await setExtraOrgs(MAX_EXTRA_ORGS);
@@ -807,13 +919,14 @@ describe.skipIf(!HAS_DB)("extra-org allowance alert — at purchase time", () =>
     expect(itemCreateSpy).toHaveBeenCalledWith(
       expect.objectContaining({ quantity: MAX_EXTRA_ORGS }),
     );
-    await vi.waitFor(() => expect(allowanceAlertSpy).toHaveBeenCalled());
-    await flushDeferred();
+    await vi.waitFor(() => expect(drops(), "the drop is logged once and raised to Sentry once").toEqual({ logged: 1, issues: 1 }));
+    expect(await staffRows(KIND, "subscription", walletId)).toEqual([]);
   });
 
-  it("maybeAlertOrgAllowance resolves rather than throwing when the send throws", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.test");
-    allowanceAlertSpy.mockRejectedValue(new Error("resend is down"));
+  it("maybeAlertOrgAllowance resolves rather than throwing when the alert cannot be queued", async () => {
+    allowanceAlertSpy.mockImplementation(() => {
+      throw new Error("render failed");
+    });
     const { orgId, walletId } = await makeGroupOrg("pro");
 
     // Called directly, NOT through deferred()'s swallow: this is what proves
@@ -826,12 +939,13 @@ describe.skipIf(!HAS_DB)("extra-org allowance alert — at purchase time", () =>
         extraOrgs: MAX_EXTRA_ORGS,
         previousExtraOrgs: 0,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeNull();
     expect(allowanceAlertSpy).toHaveBeenCalled();
+    expect(drops()).toEqual({ logged: 1, issues: 1 });
+    expect(await staffRows(KIND, "subscription", walletId)).toEqual([]);
   });
 
   it("maybeAlertOrgAllowance resolves when the base-cap lookup finds no plan row", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.test");
     const { orgId, walletId } = await makeGroupOrg("pro");
 
     await expect(
@@ -842,9 +956,10 @@ describe.skipIf(!HAS_DB)("extra-org allowance alert — at purchase time", () =>
         extraOrgs: MAX_EXTRA_ORGS,
         previousExtraOrgs: 0,
       }),
-    ).resolves.toBeUndefined();
+    ).resolves.toBeNull();
     await flushDeferred();
     expect(allowanceAlertSpy).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "subscription", walletId)).toEqual([]);
   });
 });
 
@@ -1180,8 +1295,11 @@ describe.skipIf(!HAS_DB)("extra-org item reconciliation — tier changes and dup
   });
 
   it("counts duplicates TOGETHER, so the >= 25 alert cannot be dodged by a stranded item", async () => {
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.test");
-    const { stripeSubId } = await makeBilledGroupOrg("pro");
+    // This test's own staff address (the alert is queued on the shared outbox), cleared below.
+    const staff = `staff-eoa-dup-${uniq()}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    allowanceAlertSpy.mockImplementation(realBuilders.allowance!);
+    const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     retrieveSpy.mockResolvedValue({
       id: stripeSubId,
       items: {
@@ -1200,6 +1318,10 @@ describe.skipIf(!HAS_DB)("extra-org item reconciliation — tier changes and dup
       // 19 previously billed across two items, not the 10 a `find` would see.
       expect.objectContaining({ previousExtraOrgs: 19, extraOrgs: 20, totalAllowance: proBase + 20 }),
     );
+    await vi.waitFor(async () =>
+      expect((await staffRows("staff_extra_org_allowance", "subscription", walletId)).map((r) => r.ref_id)).toEqual([`${walletId}:20`]),
+    );
+    await sql`delete from email_outbox where kind = 'staff_extra_org_allowance' and lower(recipient) = ${staff}`;
   });
 });
 
