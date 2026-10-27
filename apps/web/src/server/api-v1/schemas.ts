@@ -1055,8 +1055,9 @@ export type TakeRuleSchemaMatchesEngineFields = AssertTrue<
   MutuallyAssignable<WireDeepRequired<TakeRuleWire>, WireDeepRequired<TakeRule>>
 >;
 
-// W2d (m8): the API's tie-break vocabularies are the engine's, exactly — a key or note the engine writes that the wire
-// cannot name fails `tsc`, not a consumer.
+// W2d (m8): the API's tie-break vocabularies are the engine's declared ones, exactly — a key or note added to the
+// engine's `TiebreakerKey`, `PartialScheduleKey` or `TieBreakNote` that the wire cannot name fails `tsc`. It binds the
+// declarations, not each writer: a standings row's `tieBreak.key` is typed `string` in the engine (`markTieBreak`).
 export type TiebreakerKeySchemaMatchesEngine = AssertTrue<MutuallyAssignable<z.infer<typeof TiebreakerKeyS>, TiebreakerKey>>;
 export type TieBreakKeySchemaMatchesEngine = AssertTrue<MutuallyAssignable<z.infer<typeof TieBreakKeyS>, PartialScheduleKey>>;
 export type TieBreakNoteSchemaMatchesEngine = AssertTrue<MutuallyAssignable<z.infer<typeof TieBreakNoteS>, TieBreakNote>>;
@@ -1302,7 +1303,8 @@ export const StageCourtTags = z.object({
  *  unstarted match's own format still fitting (409
  *  FIXTURE_OWN_FORMAT_NO_LONGER_FITS).
  *
- *  W2c Task 13 (ST-G8): two arms, `rules` and `points`, each left as stored when
+ *  W2c Task 13 (ST-G8) and W2d Task 13: four arms, `rules`, `points`,
+ *  `tiebreakers` and `crossGroupTiebreakers`, each left as stored when
  *  omitted, at least one sent. `points` is the stage's own PointsRule (the
  *  engine's shape), written whole; `null` removes it. The key set is CLOSED: a
  *  misspelled arm was silently stripped before (and answered 200 having saved
@@ -1477,7 +1479,7 @@ export const StandingsSnapshot = z.object({
   stage_id: Uuid,
   pool_id: Uuid.nullable(),
   rows: z.array(StandingsRow),
-  computed_through_seq: z.union([z.string().regex(/^\d+$/), z.literal(0)]),
+  computed_through_seq: z.union([z.string().regex(/^\d+$/).meta({ examples: ["42"] }), z.literal(0)]),
   updated_at: z.string().nullable(),
 });
 

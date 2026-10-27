@@ -11,9 +11,10 @@
 //                                                      `level`, validated against the documented schema;
 //   PATCH /divisions/{id}                            → `stagesKeptPinned` after activation.
 //
-// Carried from PR A (orchestrator rulings): N2 (a flat rule that pays every outcome as the sport does is accepted; one that
-// flattens a real split stays refused), N3 (the same answer for a rule `replaceStages` carries), m8 (the API's tie-break
-// enums take `fewest_played` and `h2h_incomplete`), and the strict body (an unknown top-level key is 400).
+// Carried from PR A (orchestrator rulings): N2 (a flat rule over a split sport is refused naming the split; fix round 1 I1:
+// its premise — that some flat rule pays a split sport as the sport does — is false, a retirement after play always pays
+// the flat loss), N3 (the same answer for a rule `replaceStages` carries), m8 (the API's tie-break enums take
+// `fewest_played` and `h2h_incomplete`), and the strict body (an unknown top-level key is 400).
 //
 // Expected values come from the rulebooks named in each test and the engine's declarations (`defaultTiebreakers`,
 // `validateCascade`, `reachableOutcomes`, `coverage`, `defaultCrossGroup`, `primaryTableKey`), never from the code under
@@ -132,6 +133,17 @@ const OWN_ORDER: TiebreakerKey[] = ["points", "for", "diff", "lots"];
 /** A rule that pays every outcome generic reaches (a win, a loss, a draw) and differs from generic's own 3/1/0. */
 const RULE = { win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole", bonuses: [] } as const;
 
+// single-sport: table tennis is the split (a loss not played, ITTF 2/1/0 — rulebook-W2-sets-cricket.md:218-221, spec D6)
+// a flat rule's forfeit row seems to pay whole: the row pays the walkover 2/0, but a retirement AFTER play pays the flat
+// loss (1) where ITTF pays the retired loser 0 (fix round 1 I1).
+const tt = mod("tabletennis");
+const TT_DECLARED = tt.tablePointsRule(parsedCfg(tt, tt.variants.bo5), "league");
+const ITTF_FLAT = { win: { regulation: 2 }, loss: { regulation: 1 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } };
+/** The split the ENGINE declares for a table-tennis league — the loss not played paid apart — so the refusal names it. */
+const TT_SPLITS = TT_DECLARED.loss.unplayed !== undefined && TT_DECLARED.loss.unplayed !== TT_DECLARED.loss.regulation ? ["unplayed"] : [];
+/** ITTF's rule with the split STATED (the engine's own amounts): the caller's choice, never refused. */
+const ITTF_STATED = { ...ITTF_FLAT, win: { regulation: TT_DECLARED.win.regulation }, loss: { regulation: TT_DECLARED.loss.regulation, unplayed: TT_DECLARED.loss.unplayed } };
+
 describe.skipIf(!HAS_DB)("W2d T13 the table rules over API v1 (route handlers, label DB)", () => {
   it("premise: the orders the tests save are valid generic league orders, and differ from the sport's own and from each other", () => {
     const ctx = { module: generic, cfg: parsedCfg(generic, GENERIC_CONFIG), stageKind: "league" as const, crossGroup: false };
@@ -151,6 +163,7 @@ describe.skipIf(!HAS_DB)("W2d T13 the table rules over API v1 (route handlers, l
     expect(before.tiebreakers).toEqual({ keys: GENERIC_DEFAULT, source: "sport", pinnedAt: null, sportDefault: GENERIC_DEFAULT });
     expect(before.crossGroup.keys).toEqual(defaultCrossGroup(GENERIC_DEFAULT));
     expect(before.points.source).toBe("sport");
+    expect(before.points.rule, "the sport's own points for the kind").toEqual(PointsRule.parse(generic.tablePointsRule(parsedCfg(generic, GENERIC_CONFIG), "league")));
     expect(before.points.pinnedAt).toBeNull();
     expect(sorted(before.reachableOutcomes)).toEqual(reach);
     // The stages list carries the same rules for the same stage.
@@ -412,26 +425,23 @@ describe.skipIf(!HAS_DB)("W2d T13 the table rules over API v1 (route handlers, l
     expect(S.PatchedDivision.parse(again.data).stagesKeptPinned).toEqual([]);
   });
 
-  it("N2 a flat PUT body that pays every outcome the stage reaches as the sport does is accepted (ITTF: win 2, loss 1, a walkover 2/0 by the forfeit row); a flat body that flattens a real split stays 422 POINTS_SPLIT_FLATTENED", async () => {
-    // ITTF team league points (DOMAIN.tabletennis.md, TT-PT-1): a win 2, a played loss 1, a loss not played 0. A flat rule
-    // whose forfeit row pays the walkover 2/0 pays every outcome a table-tennis league reaches the same way.
-    const tt = as(await tableScene({ sport: "tabletennis", variant: "bo5", entrants: 2 }));
-    const ittfEqual = { win: { regulation: 2 }, loss: { regulation: 1 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } };
-    const accepted = await putRules(tt.stageIds[0]!, { points: ittfEqual });
-    expect(accepted.status, JSON.stringify(accepted.error)).toBe(200);
-    expect((await getStage(tt.stageIds[0]!)).tableRules!.points).toMatchObject({ rule: PointsRule.parse(ittfEqual), source: "stage" });
-    // The refused direction, same sport: no forfeit row, so a walkover would pay the played loss's 1 — the split flattened.
-    const flat = { ...ittfEqual, forfeit: undefined };
-    const tt2 = as(await tableScene({ sport: "tabletennis", variant: "bo5", entrants: 2 }));
-    const refused = await putRules(tt2.stageIds[0]!, { points: flat });
-    expect(refused.status).toBe(422);
-    expect(refused.error?.code).toBe("POINTS_SPLIT_FLATTENED");
-    expect(refused.error?.splits).toEqual(["unplayed"]);
-    // A flat rule that pays any reachable outcome other than the sport does is refused too (a walkover winner's 3, not 2).
-    const other = await putRules(tt2.stageIds[0]!, { points: { ...ittfEqual, forfeit: { winnerPoints: 3, loserPoints: 0 } } });
-    expect(other.status).toBe(422);
-    expect(other.error?.code).toBe("POINTS_SPLIT_FLATTENED");
-    expect(Object.hasOwn(await stageConfig(tt2.stageIds[0]!), "points"), "nothing stored").toBe(false);
+  it("N2 a flat PUT body over a split sport is 422 POINTS_SPLIT_FLATTENED naming the engine's split, even ITTF's 2/1 with a forfeit row paying the walkover 2/0; the split stated is accepted; a sport with no split takes the flat rule", async () => {
+    expect(TT_SPLITS, "premise: the engine declares a table-tennis league's loss not played apart").toEqual(["unplayed"]);
+    const t1 = as(await tableScene({ sport: "tabletennis", variant: "bo5", entrants: 2 }));
+    const t1Stage = t1.stageIds[0]!;
+    // ITTF-looking: the forfeit row pays the walkover 2/0, but a retirement after play would pay the flat loss — refused.
+    const looking = await putRules(t1Stage, { points: ITTF_FLAT });
+    expect([looking.status, looking.error?.code, looking.error?.splits]).toEqual([422, "POINTS_SPLIT_FLATTENED", TT_SPLITS]);
+    // No forfeit row, or a walkover paying 3/0: refused the same way.
+    const noRow = await putRules(t1Stage, { points: { ...ITTF_FLAT, forfeit: undefined } });
+    expect([noRow.status, noRow.error?.code, noRow.error?.splits]).toEqual([422, "POINTS_SPLIT_FLATTENED", TT_SPLITS]);
+    const other = await putRules(t1Stage, { points: { ...ITTF_FLAT, forfeit: { winnerPoints: 3, loserPoints: 0 } } });
+    expect([other.status, other.error?.code]).toEqual([422, "POINTS_SPLIT_FLATTENED"]);
+    expect(Object.hasOwn(await stageConfig(t1Stage), "points"), "nothing stored by any of them").toBe(false);
+    // The positive pair, same stage (a second call after three refusals): the split stated is the caller's choice.
+    const stated = await putRules(t1Stage, { points: ITTF_STATED });
+    expect(stated.status, JSON.stringify(stated.error)).toBe(200);
+    expect((await getStage(t1Stage)).tableRules!.points).toMatchObject({ rule: PointsRule.parse(ITTF_STATED), source: "stage" });
     // Another sport: IIHF's overtime 2/1 is a split no flat rule pays (IIHF 3-2-1-0) — refused naming it; a sport with no
     // split (generic) takes the flat rule.
     const ih = as(await tableScene({ sport: "icehockey", variant: "iihf", entrants: 2 }));
@@ -442,16 +452,44 @@ describe.skipIf(!HAS_DB)("W2d T13 the table rules over API v1 (route handlers, l
     expect(plain.status, JSON.stringify(plain.error)).toBe(200);
   });
 
-  it("N3 replaceStages carries a stored flat rule on a split sport by the same answer: one that pays as the sport does is kept (ITTF), one that flattens a split is refused naming it (a beach rule carried onto FIVB indoor)", async () => {
-    // ITTF-equal (N2's accepted rule), stored through the PUT, then the whole graph replaced: the slot keeps its points.
-    const tt = as(await tableScene({ sport: "tabletennis", variant: "bo5", entrants: 2 }));
-    const ittfEqual = { win: { regulation: 2 }, loss: { regulation: 1 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } };
-    expect((await putRules(tt.stageIds[0]!, { points: ittfEqual })).status).toBe(200);
+  it("I1 a retirement AFTER play pays the retired table-tennis loser the sport's loss not played (0), never a flat loss: the flat ITTF body is refused, and the standings read back pay 2 and 0", async () => {
+    expect(TT_DECLARED.loss.unplayed, "premise: ITTF's retired loser is paid apart from a played loss").not.toBe(ITTF_FLAT.loss.regulation);
+    const s = as(await tableScene({ sport: "tabletennis", variant: "bo5", entrants: 2 }));
+    const stageId = s.stageIds[0]!;
+    const declared = tt.tablePointsRule(parsedCfg(tt, await divisionCfg(s.divisionId)), "league");
+    const refused = await putRules(stageId, { points: ITTF_FLAT });
+    expect([refused.status, refused.error?.code, refused.error?.splits]).toEqual([422, "POINTS_SPLIT_FLATTENED", TT_SPLITS]);
+    expect(Object.hasOwn(await stageConfig(stageId), "points"), "the flat rule never reached the stage").toBe(false);
+    await generateStageFixtures(s.auth, stageId);
+    await startDivision(s.auth, s.divisionId);
+    const [W, L] = s.entrants as [string, string];
+    const f = await between(stageId, W, L);
+    await post(s.auth, f.id, "core.start");
+    for (let i = 0; i < 3; i++) await post(s.auth, f.id, "tabletennis.rally", { wonBy: W });
+    await post(s.auth, f.id, "tabletennis.rally", { wonBy: L });
+    await post(s.auth, f.id, "core.forfeit", { by: L, reason: "retired" });
+    const row = await fixtureRow(f.id);
+    expect(row.outcome, "rig: a retirement after play").toMatchObject({ kind: "award", winner: W, loser: L, reason: "retired" });
+    const rows = (await standings(stageId)).rows;
+    const pts = (id: string) => rows.find((r) => r.entrantId === id)?.points;
+    expect([pts(W), pts(L)], "the sport's win and its loss not played").toEqual([declared.win.regulation, declared.loss.unplayed]);
+    expect(pts(L), "never the flat rule's played loss").not.toBe(ITTF_FLAT.loss.regulation);
+  });
+
+  it("N3 replaceStages carries a stored rule on a split sport by the same answer: the split stated is kept (ITTF), a flat one is refused naming the split (a flat ITTF rule stored before I1; a beach rule carried onto FIVB indoor)", async () => {
+    // ITTF with its split stated, stored through the PUT, then the whole graph replaced: the slot keeps its points.
+    const t1 = as(await tableScene({ sport: "tabletennis", variant: "bo5", entrants: 2 }));
+    expect((await putRules(t1.stageIds[0]!, { points: ITTF_STATED })).status).toBe(200);
     const graph = [{ seq: 1, kind: "league", name: "League", config: {}, progression: null }];
-    const kept = await call(replaceStagesRoute, { id: tt.divisionId }, "PUT", `/divisions/${tt.divisionId}/stages`, graph);
+    const kept = await call(replaceStagesRoute, { id: t1.divisionId }, "PUT", `/divisions/${t1.divisionId}/stages`, graph);
     expect(kept.status, JSON.stringify(kept.error)).toBe(200);
     const [after] = S.Stage.array().parse(kept.data);
-    expect((await stageConfig(after!.id)).points, "the carried rule").toMatchObject(PointsRule.parse(ittfEqual));
+    expect((await stageConfig(after!.id)).points, "the carried rule").toMatchObject(PointsRule.parse(ITTF_STATED));
+    // A flat ITTF rule already stored (planted: no PUT writes one now) is refused when the replace carries it.
+    const t2 = as(await tableScene({ sport: "tabletennis", variant: "bo5", entrants: 2 }));
+    await sql`update stages set config = config || ${sql.json({ points: ITTF_FLAT })} where id = ${t2.stageIds[0]!}`;
+    const flatCarried = await call(replaceStagesRoute, { id: t2.divisionId }, "PUT", `/divisions/${t2.divisionId}/stages`, graph);
+    expect([flatCarried.status, flatCarried.error?.code, flatCarried.error?.splits]).toEqual([422, "POINTS_SPLIT_FLATTENED", TT_SPLITS]);
     // FIVB beach pays 2-0 on every set score (no split), so a flat 2/0 is stored there; the division then moves to indoor
     // (FIVB V3: 3-2 pays 2/1) before any fixture, and the replace carries the flat rule onto a split it would flatten.
     const vb = as(await tableScene({ sport: "volleyball", variant: "beach", entrants: 2 }));
@@ -520,6 +558,23 @@ describe("W2d T13 the documented standings row and the retired code", () => {
       }
     }
     expect(checked).toBeGreaterThanOrEqual(3);
+  });
+
+  it("m3 the published standings response examples are documents their schemas take (computed_through_seq a decimal string), in both generated JSONs", () => {
+    let checked = 0;
+    for (const file of ["v1.json", "v1.public.json"]) {
+      const doc = JSON.parse(readFileSync(join(REPO, "openapi", file), "utf8")) as { paths: Record<string, Record<string, { responses: Record<string, { content?: Record<string, { example?: { data?: unknown } }> }> }>> };
+      const example = (path: string) => doc.paths[path]?.get?.responses["200"]?.content?.["application/json"]?.example?.data;
+      const own = example("/api/v1/stages/{id}/standings");
+      expect(own, `${file}: the stage standings example`).toBeDefined();
+      expect(S.StandingsSnapshot.safeParse(own).success, `${file}: ${JSON.stringify(own)}`).toBe(true);
+      checked++;
+      const pub = example("/api/v1/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/standings");
+      expect(pub, `${file}: the public standings example`).toBeDefined();
+      expect(S.PublicDivisionStandings.safeParse(pub).success, `${file}: ${JSON.stringify(pub)}`).toBe(true);
+      checked++;
+    }
+    expect(checked, "both examples in both JSONs").toBe(4);
   });
 
   it("the published PUT /stages/{id}/rules example's orders are ones the validator takes (a generic league; the cross-group one across groups)", () => {

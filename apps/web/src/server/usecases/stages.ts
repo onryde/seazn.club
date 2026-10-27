@@ -5209,7 +5209,9 @@ export interface StandingsOut {
   stage_id: string;
   pool_id: string | null;
   rows: unknown[];
-  computed_through_seq: number;
+  /** The stored snapshot's int8 watermark as postgres.js serves a bigint (a decimal string); 0 for a table folded on the
+   *  read. The wire documents the same (`StandingsSnapshot`). */
+  computed_through_seq: string | 0;
   updated_at: string | null;
 }
 

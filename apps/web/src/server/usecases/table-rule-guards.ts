@@ -15,9 +15,9 @@ import "server-only";
 //     `sportPointsSplits`, lib/stage-points-splits.ts, over the engine's payout) would pay that outcome as a plain win or
 //     loss: 422 POINTS_SPLIT_FLATTENED naming the splits in `extra.splits`. The stage points editor never sends one (it
 //     shows "can't be set per stage yet" there); this is the server holding the same line for any caller. A rule that
-//     states the outcome (`win.ot`, `loss.unplayed`, `bySetScore`, …) is the caller's choice and is never refused for it,
-//     and (Task 13, N2/N3) neither is a flat rule that pays every outcome the stage reaches as the sport does
-//     (`flattenedSplits`: the editor's own fit, asked of the rule sent or carried);
+//     states the outcome (`win.ot`, `loss.unplayed`, `bySetScore`, …) is the caller's choice and is never refused for it.
+//     (Task 13, N2/N3) The rule sent or carried is asked too (`flattenedSplits`, the editor's own fit), with the award
+//     after play among the outcomes (fix round 1 I1): no flat rule pays a split sport's every outcome, so it is refused;
 //  3. which rules a stage reads is the loader's answer (`tableRulesOf`, engine-db/table-rules.ts), asked of the rows as they
 //     stand and as the save would leave them. The write side never re-derives a layer (the single-resolver scan).
 //
@@ -172,9 +172,8 @@ function refuseUnpaid(
 }
 
 /** 2b. Refuse a flat `rule` the save writes onto a stage whose sport pays an outcome it reaches apart (under `cfg`, the
- *  stage's merged cfg as the save leaves it) — unless the rule pays every outcome the stage reaches as the sport does
- *  (`flattenedSplits`, W2d Task 13 N2/N3: the caller's rule is asked, not only the sport). Asked only of a rule the save
- *  WRITES (cause, not state). */
+ *  stage's merged cfg as the save leaves it) — `flattenedSplits`, W2d Task 13 N2/N3: the caller's rule is asked, not only
+ *  the sport, an award after play included (fix round 1 I1). Asked only of a rule the save WRITES (cause, not state). */
 function refuseFlatOverSplit(module: AnySportModule, rule: PointsRule, cfg: unknown, kind: string, extra: Record<string, unknown> = {}, stage?: string): void {
   const splits = flattenedSplits(module, parsedOr(module, cfg), kind, rule);
   if (splits.length === 0) return;

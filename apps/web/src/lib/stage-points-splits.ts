@@ -58,8 +58,10 @@ function paid(run: () => FixtureResult): Paid {
 /**
  * What `rule` pays on every outcome a stage of `kind` reaches under `cfg` (as the sport parses it), keyed: a decided
  * result per way it can be decided (`regulation`, `ot`, `so`) and per final set score where the stage reaches one
- * (`ot@3-2`); an award (`award`, per set score likewise) — every table can produce one, a forfeit with nothing played;
- * and the level results the stage reaches (`draw`, `tie`, `noResult`).
+ * (`ot@3-2`); an award with nothing played (`award`, a walkover, per set score likewise) and an award AFTER play
+ * (`awardPlayed`: a retirement, a disqualification or a withdrawal once play started — every table can produce both, and
+ * `payout` pays them apart: the forfeit row reaches only the unplayed one, W2d Task 13 fix round 1 I1); and the level
+ * results the stage reaches (`draw`, `tie`, `noResult`).
  */
 function paidOutcomes(module: AnySportModule, cfg: unknown, kind: StageKind, rule: PointsRule): ReadonlyMap<string, Paid> {
   const reach = reachableOutcomes(module, cfg, kind);
@@ -82,6 +84,9 @@ function paidOutcomes(module: AnySportModule, cfg: unknown, kind: StageKind, rul
   }
   const award: MatchOutcome = { kind: "award", winner: WINNER, loser: LOSER, reason: "walkover" };
   for (const s of scores) out.set(at("award", s), paid(() => payout(award, null, decidedPair(s), false, rule, keys, setsToWin)));
+  // A retirement is always after play (ruling 113); its loser is an unfinished loss (spec D6, ITTF 3.7.5.1).
+  const retired: MatchOutcome = { kind: "award", winner: WINNER, loser: LOSER, reason: "retired" };
+  for (const s of scores) out.set(at("awardPlayed", s), paid(() => payout(retired, null, decidedPair(s), true, rule, keys, setsToWin)));
   const LEVEL = [["draw", "draw"], ["tie", "tie"], ["noResult", "no_result"]] as const;
   for (const [key, outcomeKind] of LEVEL) {
     if (reach.has(key)) out.set(key, paid(() => payout({ kind: outcomeKind }, null, LEVEL_PAIR, true, rule, keys, setsToWin)));
@@ -140,8 +145,9 @@ function reasonOf(sport: PointsRule, key: string, sideIx: 0 | 1): SplitReason | 
   const [base, score] = key.split("@") as [string, string | undefined];
   if (base === "tie" || base === "noResult") return base;
   if (base === "draw") return null;
-  if (base === "award" && sideIx === 1 && sport.loss.unplayed !== undefined) return "unplayed";
-  if (sport.bySetScore !== undefined && (score !== undefined || base === "regulation" || base === "award")) return "pointsMap";
+  const anAward = base === "award" || base === "awardPlayed";
+  if (anAward && sideIx === 1 && sport.loss.unplayed !== undefined) return "unplayed";
+  if (sport.bySetScore !== undefined && (score !== undefined || base === "regulation" || anAward)) return "pointsMap";
   if (base === "ot") return sideIx === 0 ? "otWin" : "otLoss";
   if (base === "so") {
     if (sport.shootoutAs === "draw_plus_bonus") return "soBonus";
@@ -184,12 +190,15 @@ export function sportPointsSplits(module: AnySportModule, cfg: unknown, kind: st
 }
 
 /**
- * W2d Task 13 (N2, N3; orchestrator ruling) — the splits a FLAT `rule` written to a stage of `kind` under `cfg` would
- * flatten: the server's POINTS_SPLIT_FLATTENED answer, the editor's (`pointsEditorFits`) asked of the rule actually sent.
- * Empty where there is nothing to refuse: a rule that is not flat (it states its splits), a stage whose sport pays nothing
- * apart (`sportPointsSplits` empty: a flat rule says its points whole), and a flat rule that pays every outcome the stage
- * reaches exactly as the sport does (ITTF's win 2, loss 1 with a `forfeit` row paying the walkover 2/0 — nothing is
- * flattened). Otherwise the sport's splits (`sportPointsSplits`), as the refusal has always named them.
+ * W2d Task 13 (N2, N3) — the splits a FLAT `rule` written to a stage of `kind` under `cfg` would flatten: the server's
+ * POINTS_SPLIT_FLATTENED answer, the editor's (`pointsEditorFits`) asked of the rule actually sent. Empty where there is
+ * nothing to refuse: a rule that is not flat (it states its splits), a stage whose sport pays nothing apart
+ * (`sportPointsSplits` empty: a flat rule says its points whole), and a flat rule that pays every outcome the stage
+ * reaches as the sport does. Otherwise the sport's splits (`sportPointsSplits`), as the refusal has always named them.
+ * Fix round 1 (I1): with the award after play asked, that last class holds no split the registry ships — a forfeit row
+ * stops at the unplayed forfeit and the bye, so a retirement pays a flat rule's loss, never the sport's `loss.unplayed`;
+ * and a flat rule pays one amount where the sport's overtime, shoot-out or set table pays two. The closest flat rule to
+ * every shipped division is refused (the sweep in `stage-points-splits.test.ts`); only a contrived set table reaches it.
  */
 export function flattenedSplits(module: AnySportModule, cfg: unknown, kind: string, rule: PointsRule): SplitReason[] {
   if (!isFlatRule(rule)) return [];

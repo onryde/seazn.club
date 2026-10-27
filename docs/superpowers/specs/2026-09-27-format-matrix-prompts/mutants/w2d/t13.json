@@ -163,23 +163,9 @@
    {
     "cwd": "apps/web",
     "files": [
-     "src/server/api-v1/__tests__/w2d-api.test.ts"
-    ],
-    "name": "N2 a flat PUT body"
-   },
-   {
-    "cwd": "apps/web",
-    "files": [
-     "src/server/api-v1/__tests__/w2d-api.test.ts"
-    ],
-    "name": "N3 replaceStages carries"
-   },
-   {
-    "cwd": "apps/web",
-    "files": [
      "src/lib/__tests__/stage-points-splits.test.ts"
     ],
-    "name": "ITTF: a flat 2/1"
+    "name": "the split is asked of what the rule PAYS"
    }
   ]
  },
@@ -231,6 +217,64 @@
      "src/server/usecases/__tests__/stage-points.test.ts"
     ],
     "name": "W2d T10 fix round 1 I2: a FLAT rule over a sport"
+   }
+  ]
+ },
+ {
+  "id": "t13-i1-after-play-award-unasked",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "  for (const s of scores) out.set(at(\"awardPlayed\", s), paid(() => payout(retired, null, decidedPair(s), true, rule, keys, setsToWin)));\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "ITTF: a flat 2/1 is refused"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "so is the closest flat rule"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "N2 a flat PUT body over a split sport"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "I1 a retirement AFTER play"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "N3 replaceStages carries"
+   }
+  ]
+ },
+ {
+  "id": "t13-i1-after-play-reason-unnamed",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "  const anAward = base === \"award\" || base === \"awardPlayed\";\n",
+  "replace": "  const anAward = base === \"award\";\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "the after-play award names it"
    }
   ]
  },
