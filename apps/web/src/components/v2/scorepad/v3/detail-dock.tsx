@@ -5,7 +5,8 @@
 // component is what appears for the HOLD_MS window afterward, offering
 // OPTIONAL chips (scorer, assist, boundary type, card colour…) that mutate
 // the still-unsent payload before it drains. It never asks for anything the
-// payload REQUIRES — only enrichment — and it never blocks: dismissing
+// payload REQUIRES — only enrichment (a required answer is `ChoiceDock`'s, at
+// the foot of this file: W2d T18, nothing held until it is given) — and it never blocks: dismissing
 // early sends immediately (`releaseHeld`), exactly the same outcome as
 // letting the window expire on its own (queue.ts's own release tick fires
 // the identical `onDue` either way — see that file's header).
@@ -45,7 +46,7 @@
 // `chipClass`), not an invented one. Typography stays off .app-display for
 // the same reason tile-grid.tsx gives: a chip is a control, never a
 // readout.
-import { useEffect, useReducer, useRef, useState } from "react";
+import { useEffect, useReducer, useRef, useState, type ReactElement } from "react";
 import type { DockChip, DockSpec } from "./types";
 import { mutateHeld, releaseHeld } from "../queue";
 import type { QueueStore } from "../queue-store";
@@ -236,6 +237,120 @@ export function strandedFlagChipIds(chips: readonly DockChip[]): ReadonlySet<str
     }
   }
   return out;
+}
+
+/**
+ * ONE dock chip, shared by `DetailDock` (optional enrichment of a held tap) and `ChoiceDock` (W2d T18: a required
+ * answer, nothing held yet), so the two docks a scorer meets are the same control in the same place. Plain functions
+ * spread into each dock's own `<button>` rather than a child component, so the node test harness (`renderIsland`, one
+ * level deep) still sees every button the dock draws — and the click handler stays in each dock's JSX, where the
+ * React compiler can see it is an event handler (`DetailDock`'s reads a ref).
+ */
+function dockChipAttrs(chip: DockChip, selected: boolean, stranded: boolean) {
+  return {
+    type: "button" as const,
+    "data-testid": `pad-dock-chip-${chip.id}`,
+    "aria-pressed": selected,
+    "aria-disabled": selected || undefined,
+    style: { minHeight: 44 },
+    className: dockChipClassName(chip, selected, stranded),
+  };
+}
+
+/** The chip's look — see the notes below for every branch. */
+function dockChipClassName(chip: DockChip, selected: boolean, stranded: boolean): string {
+  // FIX ROUND 1 finding 3 (design call): a selected chip is
+  // ALREADY inert to a repeat tap at the controller level
+  // (dockController.tapChip: "at most once, never auto-undone")
+  // — leaving it a live, hover-reactive button that silently
+  // swallows every further tap gave no feedback that anything
+  // had changed. Reads as CONFIRMED, not merely disabled: keeps
+  // the existing solid violet-600 fill + checkmark (already the
+  // "chosen/done" treatment, matching TileGrid's own primary
+  // weight) and drops the click/hover affordance rather than
+  // inventing a separate greyed-out look. `aria-disabled` (not
+  // the native `disabled` attribute) keeps it focusable, so a
+  // screen-reader user tabbing through still perceives "this
+  // choice was made" instead of the control silently vanishing
+  // from the tab order.
+  // `DockChip.kind` (types.ts): a MODIFIER reads as a tab, a person
+  // as the pill they already were. The radius is the only thing that
+  // differs — same size, same border, same fill, so nothing about
+  // this changes a dock whose chips set no `kind` (cricket's).
+  //
+  // Owner review (2026-09-02), NEEDS WORK — "just names are coming
+  // out of circle": every chip, person or flag, shared the same
+  // max-md:grid-cols-2 half-width cell and the same rounded-full
+  // pill. A short flag label ("Own goal") fits that fine; a
+  // person's display name does not — forced into half of a 320px
+  // dock, it wrapped to four lines inside a pill whose radius then
+  // inflated the whole thing into a circular blob (spec
+  // 2026-09-02-scorepad-v3-phone-composition-design.md:73, "Person
+  // pickers ... render one per row"). A non-flag chip now spans
+  // the full grid row on phones (max-md:col-span-2), swaps the
+  // pill radius for a rectangle (max-md:rounded-xl) and
+  // left-aligns its text (max-md:justify-start max-md:text-left)
+  // so a wrapped name reads as a label, not a centred blob. Never
+  // truncated/clamped: the scorer must be able to read WHICH
+  // player this is, and min-w-0 + break-words (below) already let
+  // a long unbroken token wrap instead of overflowing. Desktop is
+  // untouched — every one of these is a max-md:* variant, so the
+  // unprefixed `rounded-full`/flex-wrap pill stays exactly as
+  // before at ≥768.
+  //
+  // Task 13 finding A — an ODD-length run of flag chips (generic's
+  // DOCK_AMOUNTS: "2 points"/"3 points"/"5 points") left its last
+  // chip flush-left in `max-md:grid-cols-2` with a dead half-row
+  // beside it — see `strandedFlagChipIds`'s own doc above. That
+  // one chip gets the SAME `max-md:col-span-2` the non-flag branch
+  // already uses to fill a row, keeping `rounded-lg` (never the
+  // pill radius, which is a flag/non-flag distinction, not a
+  // spanning one).
+  return `inline-flex min-w-0 max-w-full items-center gap-1.5 border px-4 text-sm font-medium transition-colors max-md:justify-center max-md:px-3 ${
+    chip.kind === "flag"
+      ? `rounded-lg${stranded ? " max-md:col-span-2" : ""}`
+      : "rounded-full max-md:col-span-2 max-md:rounded-xl max-md:justify-start max-md:text-left"
+  } ${
+    selected
+      ? "cursor-default border-transparent bg-violet-600 text-white"
+      : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
+  }`;
+}
+
+/** The chip's content: the tick once chosen, and its label (text wins over the key). */
+function dockChipBody(chip: DockChip, selected: boolean, t: (key: string, vars?: Record<string, string | number>) => string): ReactElement {
+  return (
+    <>
+      {selected && (
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 16 16"
+          className="h-3.5 w-3.5 shrink-0"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth={2}
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M3.5 8.5l3 3 6-7" />
+        </svg>
+      )}
+      {/* FIX ROUND 1 finding 5: a long localized chip label with no
+         natural break point can otherwise force this pill wider than
+         its container — the same 320px-overflow defect class
+         tile-grid.tsx's own fix round guarded against (`min-w-0` on
+         the flex item above + `break-words` here, not `truncate`:
+         mirrors that precedent's exact remedy rather than a new one). */}
+      {/* R3/football (`DockChip.labelText`, types.ts): a pre-localised
+         label WINS over the key. A chip naming a PERSON has no
+         dictionary key to resolve — routing a display name through
+         `t()` warns on every render and renders right only because the
+         runtime hands the key back. Same precedence `TileSpec.
+         labelText` already has in tile-grid.tsx: text wins, the key is
+         not resolved at all, nothing is concatenated. */}
+      <span className="break-words">{chip.labelText ?? t(chip.label)}</span>
+    </>
+  );
 }
 
 export interface DetailDockProps {
@@ -472,97 +587,11 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
         {controller.chips.map(({ chip, selected }) => (
           <button
             key={chip.id}
-            type="button"
-            data-testid={`pad-dock-chip-${chip.id}`}
-            aria-pressed={selected}
-            // FIX ROUND 1 finding 3 (design call): a selected chip is
-            // ALREADY inert to a repeat tap at the controller level
-            // (dockController.tapChip: "at most once, never auto-undone")
-            // — leaving it a live, hover-reactive button that silently
-            // swallows every further tap gave no feedback that anything
-            // had changed. Reads as CONFIRMED, not merely disabled: keeps
-            // the existing solid violet-600 fill + checkmark (already the
-            // "chosen/done" treatment, matching TileGrid's own primary
-            // weight) and drops the click/hover affordance rather than
-            // inventing a separate greyed-out look. `aria-disabled` (not
-            // the native `disabled` attribute) keeps it focusable, so a
-            // screen-reader user tabbing through still perceives "this
-            // choice was made" instead of the control silently vanishing
-            // from the tab order.
-            aria-disabled={selected || undefined}
+            {...dockChipAttrs(chip, selected, strandedFlagIds.has(chip.id))}
+            // A chosen chip is inert to a repeat tap — see the notes in `dockChipClassName`.
             onClick={selected ? undefined : () => handleTap(chip.id)}
-            style={{ minHeight: 44 }}
-            // `DockChip.kind` (types.ts): a MODIFIER reads as a tab, a person
-            // as the pill they already were. The radius is the only thing that
-            // differs — same size, same border, same fill, so nothing about
-            // this changes a dock whose chips set no `kind` (cricket's).
-            //
-            // Owner review (2026-09-02), NEEDS WORK — "just names are coming
-            // out of circle": every chip, person or flag, shared the same
-            // max-md:grid-cols-2 half-width cell and the same rounded-full
-            // pill. A short flag label ("Own goal") fits that fine; a
-            // person's display name does not — forced into half of a 320px
-            // dock, it wrapped to four lines inside a pill whose radius then
-            // inflated the whole thing into a circular blob (spec
-            // 2026-09-02-scorepad-v3-phone-composition-design.md:73, "Person
-            // pickers ... render one per row"). A non-flag chip now spans
-            // the full grid row on phones (max-md:col-span-2), swaps the
-            // pill radius for a rectangle (max-md:rounded-xl) and
-            // left-aligns its text (max-md:justify-start max-md:text-left)
-            // so a wrapped name reads as a label, not a centred blob. Never
-            // truncated/clamped: the scorer must be able to read WHICH
-            // player this is, and min-w-0 + break-words (below) already let
-            // a long unbroken token wrap instead of overflowing. Desktop is
-            // untouched — every one of these is a max-md:* variant, so the
-            // unprefixed `rounded-full`/flex-wrap pill stays exactly as
-            // before at ≥768.
-            //
-            // Task 13 finding A — an ODD-length run of flag chips (generic's
-            // DOCK_AMOUNTS: "2 points"/"3 points"/"5 points") left its last
-            // chip flush-left in `max-md:grid-cols-2` with a dead half-row
-            // beside it — see `strandedFlagChipIds`'s own doc above. That
-            // one chip gets the SAME `max-md:col-span-2` the non-flag branch
-            // already uses to fill a row, keeping `rounded-lg` (never the
-            // pill radius, which is a flag/non-flag distinction, not a
-            // spanning one).
-            className={`inline-flex min-w-0 max-w-full items-center gap-1.5 border px-4 text-sm font-medium transition-colors max-md:justify-center max-md:px-3 ${
-              chip.kind === "flag"
-                ? `rounded-lg${strandedFlagIds.has(chip.id) ? " max-md:col-span-2" : ""}`
-                : "rounded-full max-md:col-span-2 max-md:rounded-xl max-md:justify-start max-md:text-left"
-            } ${
-              selected
-                ? "cursor-default border-transparent bg-violet-600 text-white"
-                : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50"
-            }`}
           >
-            {selected && (
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 16 16"
-                className="h-3.5 w-3.5 shrink-0"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth={2}
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M3.5 8.5l3 3 6-7" />
-              </svg>
-            )}
-            {/* FIX ROUND 1 finding 5: a long localized chip label with no
-               natural break point can otherwise force this pill wider than
-               its container — the same 320px-overflow defect class
-               tile-grid.tsx's own fix round guarded against (`min-w-0` on
-               the flex item above + `break-words` here, not `truncate`:
-               mirrors that precedent's exact remedy rather than a new one). */}
-            {/* R3/football (`DockChip.labelText`, types.ts): a pre-localised
-               label WINS over the key. A chip naming a PERSON has no
-               dictionary key to resolve — routing a display name through
-               `t()` warns on every render and renders right only because the
-               runtime hands the key back. Same precedence `TileSpec.
-               labelText` already has in tile-grid.tsx: text wins, the key is
-               not resolved at all, nothing is concatenated. */}
-            <span className="break-words">{chip.labelText ?? t(chip.label)}</span>
+            {dockChipBody(chip, selected, t)}
           </button>
         ))}
       </div>
@@ -571,6 +600,106 @@ export function DetailDock({ spec, heldId, store, heldUntil, t, now = Date.now }
         <span className="text-xs font-medium text-slate-600" style={{ fontVariantNumeric: "tabular-nums" }}>
           {t("pad.dock.clears", { s: remainingS })}
         </span>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * W2d T18 (HK-TB-2, PS-7d; owner option A, 2026-10-20) — the claim behind `ChoiceDock`: the FIRST chip tap wins, and
+ * every later one (a double tap, a second answer before the dock unmounts) is refused SYNCHRONOUSLY, before any
+ * render — the same "claim before the async work" rule `dockController.tapChip` keeps. Without it two quick taps would
+ * dispatch two goals. An unknown chip id claims nothing, so the real answer that follows it still lands.
+ */
+export interface ChoiceController {
+  claim(chipId: string, spec: DockSpec): DockChip | null;
+}
+export function choiceController(): ChoiceController {
+  let claimed = false;
+  return {
+    claim(chipId, spec) {
+      if (claimed) return null;
+      const chip = spec.chips.find((c) => c.id === chipId);
+      if (chip === undefined) return null;
+      claimed = true;
+      return chip;
+    },
+  };
+}
+
+export interface ChoiceDockProps {
+  /** A dock whose `requires` the pending tap does not yet answer (`pad-host.tsx`'s `softCommitPlan` → "choose"). */
+  spec: DockSpec;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+  /** The chip the scorer picked; the host applies its `mutate` to the pending payload and dispatches the result. */
+  onChoose: (chip: DockChip) => void;
+  /** Drop the pending tap. Nothing was queued, so nothing is sent. */
+  onCancel: () => void;
+}
+
+/**
+ * The dock for an answer the event CANNOT be sent without (`DockSpec.requires`) — today, a hockey goal's type.
+ *
+ * It is `DetailDock` with the two things that would lie here taken out. There is no depletion bar and no "clears in
+ * Ns" countdown, because nothing is held: the tap has not been queued, and no timer will send it. And there is no
+ * top-right X, because that control means SEND NOW on every other dock — the muscle memory would be exactly wrong
+ * here, where the only way out without an answer is to drop the goal. That exit is a worded Cancel at the foot, next
+ * to the one line that says why the dock is waiting. Same surface, same chips (`dockChipAttrs`/`dockChipBody`), same place in the
+ * pad, so the scorer meets one dock, not two.
+ */
+export function ChoiceDock({ spec, t, onChoose, onCancel }: ChoiceDockProps) {
+  const [controller] = useState(choiceController);
+  const [chosen, setChosen] = useState<string | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null);
+  // On screen as soon as it opens — `revealDock`'s own reasoning: the board is taller than the viewport at every
+  // width, and a question the scorer cannot see is a goal that is never recorded.
+  useEffect(() => {
+    revealDock(rootRef.current);
+  }, []);
+
+  const stranded = strandedFlagChipIds(spec.chips);
+  const handleTap = (chipId: string) => {
+    const chip = controller.claim(chipId, spec);
+    if (chip === null) return;
+    setChosen(chip.id);
+    onChoose(chip);
+  };
+
+  return (
+    <div
+      ref={rootRef}
+      role="group"
+      aria-label={spec.title}
+      data-testid="pad-dock-choice"
+      className="overflow-hidden rounded-2xl border-t-2 border-lime-400 bg-cream shadow-lg"
+    >
+      <div className="px-4 pt-3">
+        <p className="text-sm font-semibold text-slate-800">{spec.title}</p>
+      </div>
+
+      <div className="flex flex-wrap gap-2 px-4 py-3 max-md:grid max-md:grid-cols-2">
+        {spec.chips.map((chip) => (
+          <button
+            key={chip.id}
+            {...dockChipAttrs(chip, chosen === chip.id, stranded.has(chip.id))}
+            onClick={chosen === chip.id ? undefined : () => handleTap(chip.id)}
+          >
+            {dockChipBody(chip, chosen === chip.id, t)}
+          </button>
+        ))}
+      </div>
+
+      <div className="flex items-center justify-between gap-3 px-4 pb-2">
+        <span className="min-w-0 text-xs font-medium text-slate-600">{t("pad.dock.choice.hint")}</span>
+        <button
+          type="button"
+          data-testid="pad-dock-cancel"
+          onClick={onCancel}
+          style={{ minHeight: 44 }}
+          className="-mr-2 shrink-0 rounded-full px-3 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-900/5 hover:text-slate-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
+        >
+          {t("pad.dock.choice.cancel")}
+        </button>
       </div>
     </div>
   );

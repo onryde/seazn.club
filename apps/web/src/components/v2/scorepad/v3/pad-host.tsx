@@ -63,7 +63,7 @@ import { createSkinDispatch } from "./skin-dispatch";
 import { ActionFormList } from "./action-form";
 import { Scorebug } from "./scorebug";
 import { TileGrid } from "./tile-grid";
-import { DetailDock, makeDockStore, type DockStore } from "./detail-dock";
+import { ChoiceDock, DetailDock, makeDockStore, type DockStore } from "./detail-dock";
 import { ContextStrip, type PoolView, type TFn } from "./context-strip";
 import { SwapSheet, refusalMessage, type PolicyVerdict, type SwapSheetSpec } from "./swap-sheet";
 import { GuidedSheet } from "./guided-sheet";
@@ -91,7 +91,7 @@ import {
   type ActivityDetailResolver,
   type ActivityEvent,
 } from "./activity";
-import { MORE_SHEET_KEY, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type ScorebugSpec, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
+import { MORE_SHEET_KEY, type DockChip, type DockSpec, type GuidedSheetSpec, type PadHostView, type PadPhase, type ScorebugSpec, type SkinDefV3, type SwapSlot, type TapEvent, type TileSpec } from "./types";
 import { sportThemeAttr, sportThemeStyle } from "./sport-theme";
 import { isOrganiserOnlyEvent, ORGANISER_ONLY } from "@/lib/organiser-only-events";
 
@@ -1333,6 +1333,39 @@ export function usesSoftCommit(dock: DockSpec | null): boolean {
 }
 
 /**
+ * W2d T18 (HK-TB-2, PS-7d; owner option A, 2026-10-20) — what the dispatch does with ONE tap, given the dock it would
+ * open: `"send"` it now, `"hold"` it for the soft-commit window, or `"choose"` — queue NOTHING and ask the dock's
+ * required question first (`DockSpec.requires`). A hockey goal is the case: the engine refuses it without its type,
+ * so holding the bare tap would only drain a refusal six seconds later.
+ *
+ * `"choose"` only while the payload still lacks the field; the answered payload is re-planned by the same function
+ * on the same dispatch, and lands on `"hold"`/`"send"` like any other tap. A required field that no chip of the dock
+ * can set is a skin defect, refused by name here: rendered, it would be a question with no answer and only Cancel
+ * to leave by — a goal that can never be recorded.
+ */
+export type SoftCommitPlan = "send" | "hold" | "choose";
+/** `softCommitPlan` for a RENDER: a trapped dock (its refusal) renders nothing rather than throwing mid-render, which
+ *  would blank the pad — the dispatch already raised the same refusal as the fallback banner. */
+function softCommitPlanOrNull(dock: DockSpec | null, payload: Record<string, unknown> | undefined): SoftCommitPlan | null {
+  try {
+    return softCommitPlan(dock, payload);
+  } catch {
+    return null;
+  }
+}
+export function softCommitPlan(dock: DockSpec | null, payload: Record<string, unknown> | undefined): SoftCommitPlan {
+  const required = dock?.requires;
+  if (dock !== null && required !== undefined && (payload ?? {})[required] === undefined) {
+    const base = payload ?? {};
+    if (!dock.chips.some((chip) => chip.mutate(base)[required] !== undefined)) {
+      throw new Error(`softCommitPlan: the dock requires "${required}" but no chip of it can set it`);
+    }
+    return "choose";
+  }
+  return usesSoftCommit(dock) ? "hold" : "send";
+}
+
+/**
  * R7-42/F (owner ruling on P-5, `_INDEX.md`) — "a doubles rally opens the
  * dock; if nobody answers within HOLD_MS the hold drains and the rally
  * submits with `wonBy` only... label the stat as partial wherever it
@@ -1648,6 +1681,14 @@ interface HeldTap {
   payload: unknown;
 }
 
+/** W2d T18 — a tap whose dock asks a REQUIRED question (`softCommitPlan` → "choose"): nothing is queued while this is
+ *  set. `key` remounts `ChoiceDock` per tap, so a fresh question never inherits the last one's claimed chip. */
+interface PendingChoice {
+  key: number;
+  eventType: string;
+  payload: Record<string, unknown>;
+}
+
 const NO_ENTITLEMENTS: Readonly<Record<string, boolean>> = {};
 const NO_NAMES: Readonly<Record<string, string>> = {};
 
@@ -1749,6 +1790,7 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const [phase, setPhase] = useState<PadPhase>("live");
   const [held, setHeld] = useState<HeldTap | null>(null);
+  const [choosing, setChoosing] = useState<PendingChoice | null>(null);
   // R3 chassis sub-wave (defect 2): the id of the OPEN swap slot, or null.
   // Was a bare `swapOpen` boolean, which could only ever mean "the swap sheet
   // is showing" — with one sheet per skin there was nothing else to say.
@@ -2012,8 +2054,18 @@ export function PadHostV3(props: PadHostV3Props) {
   const dispatch = useMemo(
     () =>
       createSkinDispatch(padView, async (type, payload) => {
-        const dock = dockFor(props.skin, type, view, payload as Record<string, unknown> | undefined);
-        if (!usesSoftCommit(dock)) {
+        const tap = payload as Record<string, unknown> | undefined;
+        const dock = dockFor(props.skin, type, view, tap);
+        const plan = softCommitPlan(dock, tap);
+        // W2d T18 — a required answer is missing (a hockey goal's type): queue NOTHING, ask. The answered payload
+        // comes back through this same dispatch (`chooseDockChip`) and lands on "hold"/"send" below. A new tap of
+        // any kind while a question is open replaces it — the scorer has moved on, and nothing was ever queued.
+        if (plan === "choose") {
+          setChoosing((prev) => ({ key: (prev?.key ?? 0) + 1, eventType: type, payload: tap ?? {} }));
+          return;
+        }
+        setChoosing(null);
+        if (plan === "send") {
           await pipeline.submit(type, payload);
           return;
         }
@@ -2061,6 +2113,22 @@ export function PadHostV3(props: PadHostV3Props) {
       });
     },
     [dispatch, msg, clock, props.module],
+  );
+
+  // W2d T18 — the scorer answered the open question. The payload already carries the TAP's own `at` (`send` stamped
+  // it), so this goes straight to `dispatch`, not back through `send`: a second stamp would move the goal to the
+  // moment the chip was picked. Same refusal handling as `send`.
+  const chooseDockChip = useCallback(
+    (chip: DockChip): void => {
+      if (choosing === null) return;
+      const { eventType, payload } = choosing;
+      setDispatchRefusal(null);
+      void dispatch(eventType, chip.mutate(payload)).catch((err: unknown) => {
+        console.error("scorepad v3: dispatch failed", eventType, err);
+        setDispatchRefusal(msg("scorepad.rejection.fallback"));
+      });
+    },
+    [choosing, dispatch, msg],
   );
 
   // ONE interval, and only while the clock is actually running: a paused clock
@@ -2207,6 +2275,10 @@ export function PadHostV3(props: PadHostV3Props) {
     };
   }, [pipeline.queueStore]);
   const dockSpec = resolveDockSpec(props.skin, held, view);
+  // W2d T18 — the open question's dock, re-read against the live view like `dockSpec` (an organiser-only chip is still
+  // filtered by `dockFor`). Rendered as a choice only while it still REQUIRES an answer the payload lacks.
+  const choiceDock = choosing === null ? null : dockFor(props.skin, choosing.eventType, view, choosing.payload);
+  const choiceSpec = choosing !== null && softCommitPlanOrNull(choiceDock, choosing.payload) === "choose" ? choiceDock : null;
 
   // Blocker 1 — see rejectionText's own doc above.
   const rejectionMsg = rejectionText(pipeline.lastRejection, msg);
@@ -2640,10 +2712,18 @@ export function PadHostV3(props: PadHostV3Props) {
         <TileGrid tiles={visibleTiles} phase={phase} t={t} onAction={handleTileAction} onOpenSheet={handleOpenSheet} />
       </div>
 
-      {held && (
+      {/* W2d T18 — an open REQUIRED question outranks the held dock: it is the scorer's latest tap, and the held one
+       *  (an earlier tap) drains on its own timer whether or not its dock is on screen. */}
+      {choiceSpec !== null && choosing !== null ? (
         <div data-role="v3-dock">
-          <DetailDock spec={dockSpec} heldId={held.id} store={dockStore} heldUntil={held.until} t={t} />
+          <ChoiceDock key={choosing.key} spec={choiceSpec} t={t} onChoose={chooseDockChip} onCancel={() => setChoosing(null)} />
         </div>
+      ) : (
+        held && (
+          <div data-role="v3-dock">
+            <DetailDock spec={dockSpec} heldId={held.id} store={dockStore} heldUntil={held.until} t={t} />
+          </div>
+        )
       )}
 
       {/* Defect fix (walkthrough 2026-08-17): this mount used to omit

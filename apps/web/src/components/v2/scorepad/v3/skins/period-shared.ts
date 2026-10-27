@@ -196,6 +196,21 @@ export interface PeriodSkinSpec {
    * ships in four locales via `ENUM_VOCAB.reason`, minted by S4/#428.
    */
   readonly reasons: readonly string[];
+  /**
+   * W2d T18 (HK-TB-2, B3; PS-7d) — the engine REFUSES this sport's goal without its type on the write path
+   * (`GOAL_KIND_REQUIRED`, `PeriodPreset.goalKindRequired` in `sports/period/kernel.ts`). FIH ranks level teams on
+   * field goals (GTR App. 3), so a hockey goal must say whether it came from open play, a penalty corner or a penalty
+   * stroke; IIHF ranks on no goal type, so ice hockey's stays optional enrichment.
+   *
+   * When true, the goal dock for an UNTYPED goal is a CHOICE (`DockSpec.requires: "kind"`): the cfg's kinds, Field
+   * goal first, plus the Own goal flag — and the host queues nothing until one is picked. Once the payload carries a
+   * kind, the dock is the ordinary enrichment dock without the kind chips.
+   *
+   * A MIRROR of a preset flag the pad view does not carry, with the obligation every mirror here has:
+   * `__tests__/hockey-goal-type.test.ts` folds an untyped goal through the real module and fails if the engine's
+   * refusal and this flag disagree.
+   */
+  readonly goalKindRequired?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1552,12 +1567,31 @@ export function buildDock(
   const side = sideOfEntrant(state, payload?.by);
 
   if (eventType === e.goal) {
+    // W2d T18 — a sport whose ranking reads the goal's type (FIH field goals, HK-TB-2) cannot send the goal without
+    // one, so an untyped goal's dock is the CHOICE, and nothing else: the cfg's kinds with Field goal (`fg`) as the
+    // first answer, then the existing Own goal flag (`og` still moves the goal to the other side, B3 counts it as a
+    // field goal for the side credited). No scorer or empty-net chip rides the choice — the host has queued nothing
+    // yet, so there is no held payload for them to enrich; they come on the next dock, once the kind is set.
+    if (spec.goalKindRequired === true && payload?.kind === undefined) {
+      const choice: DockChip[] = [];
+      for (const kind of cfg.goalKinds ?? []) {
+        if (kind === "og") continue;
+        choice.push({ id: `kind:${kind}`, label: `pad.${spec.key}.kind.${kind}`, mutate: (p) => ({ ...p, kind }) });
+      }
+      if ((cfg.goalKinds ?? []).includes("og")) {
+        choice.push({ id: "ownGoal", label: `pad.${spec.key}.dock.ownGoal`, kind: "flag", mutate: (p) => ({ ...p, kind: "og" }) });
+      }
+      return { title: t(`pad.${spec.key}.dock.goal.kind.title`), chips: choice, requires: "kind" };
+    }
+    const required = spec.goalKindRequired === true;
     const chips: DockChip[] = [];
     // HOW it was scored, from the cfg's own list. `fg` is the default and needs
     // no chip; `og` is the own-goal FLAG below, because it does not describe the
     // shot, it moves the goal to the other side (`applyGoal` credits the
-    // opponent for it).
-    for (const kind of cfg.goalKinds ?? []) {
+    // opponent for it). A sport that REQUIRES the type answered it on the choice
+    // above, so neither is offered again (a chip mutates at most once and is never
+    // undone — `dockController` — so a second kind chip could only contradict it).
+    for (const kind of required ? [] : (cfg.goalKinds ?? [])) {
       if (kind === "fg" || kind === "og") continue;
       chips.push({
         id: `kind:${kind}`,
@@ -1565,12 +1599,14 @@ export function buildDock(
         mutate: (p) => ({ ...p, kind }),
       });
     }
-    chips.push({
-      id: "ownGoal",
-      label: `pad.${spec.key}.dock.ownGoal`,
-      kind: "flag",
-      mutate: (p) => ({ ...p, kind: "og" }),
-    });
+    if (!required) {
+      chips.push({
+        id: "ownGoal",
+        label: `pad.${spec.key}.dock.ownGoal`,
+        kind: "flag",
+        mutate: (p) => ({ ...p, kind: "og" }),
+      });
+    }
     chips.push({
       id: "emptyNet",
       label: `pad.${spec.key}.action.goal.field.emptyNet`,
