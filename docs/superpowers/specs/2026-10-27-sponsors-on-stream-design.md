@@ -186,7 +186,7 @@ disjoint from its template's scorebug box, for every registry entry.
 
 ### 3.6 Proof of play
 
-Counted from **composed streams only** in the MVP (§8):
+Counted from **composed streams only** in the MVP (D10):
 
 1. At `host=compositor`, a sponsor moment entering `hold` logs
    `seazn:sponsor:start {"momentId","cardId","style","source","breakKind","at"}`; leaving `out` logs
