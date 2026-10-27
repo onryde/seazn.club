@@ -26,6 +26,17 @@ export type StaffKind = Extract<OutboxKind, `staff_${string}`>;
  *  `queueStaffAlert` answers `null` for unset, for a replay and for a drop alike, and only this line tells the last one apart. */
 export const STAFF_ALERT_QUEUE_FAILED = "staff alert could not be queued";
 
+/** `STAFF_ALERT_EMAIL`, trimmed; null when it is unset or blank. The one read of the variable. */
+function staffAlertAddress(): string | null {
+  return process.env.STAFF_ALERT_EMAIL?.trim() || null;
+}
+
+/** Whether a staff alert would be queued at all (the address is set). For a site whose DECISION to alert costs a query (a trailing
+ *  median, a plan's cap): it asks first, so the normal unset case pays for nothing. `queueStaffAlert` asks the same question. */
+export function staffAlertsOn(): boolean {
+  return staffAlertAddress() !== null;
+}
+
 /**
  * Queue one staff alert about `id` (a row UUID or a Stripe id) and return its row id; `null` when `STAFF_ALERT_EMAIL` is unset, when
  * this incident is already queued (`<id>` or `<id>:<suffix>` is taken for the kind), or when it could not be queued (logged). `render`
@@ -38,7 +49,7 @@ export async function queueStaffAlert(a: {
   suffix?: string;
   render: () => EmailContent | Promise<EmailContent>;
 }): Promise<string | null> {
-  const to = process.env.STAFF_ALERT_EMAIL?.trim();
+  const to = staffAlertAddress();
   if (!to) return null;
   try {
     const key = onceKey(a.kind, a.refType, a.id, a.suffix);

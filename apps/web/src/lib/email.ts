@@ -1175,7 +1175,6 @@ export function passUnknownCompetitionAlertEmail(opts: PassUnknownCompetitionAle
 }
 
 export interface AiRunCostAlertEmail {
-  to: string;
   orgId: string;
   competitionId?: string;
   phase: "schedule" | "officials";
@@ -1205,8 +1204,11 @@ export interface AiRunCostAlertEmail {
  *  phase — the exact trigger SPEC-2 §5.1 named for revisiting the flat
  *  1-credit-per-run price. Ops-only, no user-facing i18n (mirrors
  *  stuckEventsAlertEmail). Not deduped — a run class that keeps tripping
- *  this is the point, not a bug to suppress. */
-export async function sendAiRunCostAlertEmail(opts: AiRunCostAlertEmail): Promise<boolean> {
+ *  this is the point, not a bug to suppress. RENDERED here; it is queued on
+ *  the email outbox by `maybeAlertExpensiveRun` (ai-runs-admin.ts, kind
+ *  `staff_ai_run_cost`), once per run, under a ref minted for the run;
+ *  nothing sends it directly. */
+export function aiRunCostAlertEmail(opts: AiRunCostAlertEmail): EmailContent {
   const multiple = opts.medianUsd > 0 ? opts.costUsd / opts.medianUsd : null;
   const subject = `Expensive AI run: $${opts.costUsd.toFixed(4)} (org ${opts.orgId})`;
   // Size clause. `packUnits` is nullable (pre-wave rows have no such key), and
@@ -1253,7 +1255,7 @@ export async function sendAiRunCostAlertEmail(opts: AiRunCostAlertEmail): Promis
   const text =
     `${bodyText}\n\norg: ${opts.orgId} · phase: ${opts.phase} · model: ${opts.model} · ` +
     `cost $${opts.costUsd.toFixed(4)} · median $${opts.medianUsd.toFixed(4)}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface EarnGrantVolumeAlertEmail {

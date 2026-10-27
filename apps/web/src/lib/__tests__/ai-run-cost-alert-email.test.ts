@@ -25,43 +25,15 @@
 // "2x the median" reads as "2x the median FOR THIS MODE", which it is not.
 //
 // Internal staff alert: NOT localised (composed inline in lib/email.ts, takes
-// no locale/Dict), so English is the only copy to assert. Asserted through the
-// real send path with `fetch` stubbed — the body string is built inside the
-// send function and there is no separate template export to call. Same shape as
-// pass-credit-reversal-alert-email.test.ts.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendAiRunCostAlertEmail } from "../email";
+// no locale/Dict), so English is the only copy to assert. Asserted by calling
+// the builder that renders it (`aiRunCostAlertEmail`); `maybeAlertExpensiveRun`
+// queues what it returns on the email outbox (kind `staff_ai_run_cost`), and
+// ai-run-cost-alert.test.ts proves the row.
+import { describe, expect, it } from "vitest";
+import { aiRunCostAlertEmail } from "../email";
 import { AI_RUN_UNIT_NOUN, aiRunUnitNoun } from "../ai-pricing";
 
-interface SentPayload {
-  subject: string;
-  html: string;
-  text: string;
-}
-
-let sent: SentPayload[] = [];
-const OLD_KEY = process.env.RESEND_API_KEY;
-
-beforeEach(() => {
-  sent = [];
-  process.env.RESEND_API_KEY = "re_test_key";
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (_url: string, init: { body: string }) => {
-      sent.push(JSON.parse(init.body) as SentPayload);
-      return { ok: true, status: 200, text: async () => "" } as unknown as Response;
-    }),
-  );
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  if (OLD_KEY === undefined) delete process.env.RESEND_API_KEY;
-  else process.env.RESEND_API_KEY = OLD_KEY;
-});
-
 const base = {
-  to: "ops@seazn.test",
   orgId: "org-123",
   competitionId: "comp-456",
   model: "claude-sonnet-5",
@@ -89,17 +61,14 @@ describe("aiRunUnitNoun (pure, v17 gap #295)", () => {
   });
 });
 
-describe("sendAiRunCostAlertEmail — mode + pack_units in the copy (v17 gap #295)", () => {
-  it("names the run mode and the pack size, and labels the schedule unit as MOVABLE fixtures", async () => {
-    await sendAiRunCostAlertEmail({
+describe("aiRunCostAlertEmail — mode + pack_units in the copy (v17 gap #295)", () => {
+  it("names the run mode and the pack size, and labels the schedule unit as MOVABLE fixtures", () => {
+    const { subject, text, html } = aiRunCostAlertEmail({
       ...base,
       phase: "schedule",
       mode: "regenerate",
       packUnits: 40,
     });
-
-    expect(sent).toHaveLength(1);
-    const { subject, text, html } = sent[0]!;
     // Mode — a regenerate and a nudge are different cost classes.
     expect(text).toContain("mode: regenerate");
     expect(html).toContain("regenerate");
@@ -117,15 +86,12 @@ describe("sendAiRunCostAlertEmail — mode + pack_units in the copy (v17 gap #29
     expect(html).not.toMatch(/\{\{[A-Z_]+\}\}/);
   });
 
-  it("labels the officials unit as plain fixtures and flags that roster size is not stamped", async () => {
-    await sendAiRunCostAlertEmail({
+  it("labels the officials unit as plain fixtures and flags that roster size is not stamped", () => {
+    const { text } = aiRunCostAlertEmail({
       ...base,
       phase: "officials",
       packUnits: 8,
     });
-
-    expect(sent).toHaveLength(1);
-    const { text } = sent[0]!;
     expect(text).toContain("8 fixtures");
     // The schedule wording must NOT leak onto an officials run.
     expect(text).not.toContain("movable");
@@ -137,11 +103,8 @@ describe("sendAiRunCostAlertEmail — mode + pack_units in the copy (v17 gap #29
     expect(text).not.toContain("mode:");
   });
 
-  it("renders honestly when pack_units is absent (pre-wave rows) — no size clause, no fake zero", async () => {
-    await sendAiRunCostAlertEmail({ ...base, phase: "schedule" });
-
-    expect(sent).toHaveLength(1);
-    const { text, html } = sent[0]!;
+  it("renders honestly when pack_units is absent (pre-wave rows) — no size clause, no fake zero", () => {
+    const { text, html } = aiRunCostAlertEmail({ ...base, phase: "schedule" });
     expect(text).not.toContain("undefined");
     expect(text).not.toContain("NaN");
     // No invented size, and no "0 movable fixtures" (which would read as a
@@ -153,11 +116,8 @@ describe("sendAiRunCostAlertEmail — mode + pack_units in the copy (v17 gap #29
     expect(html).toContain("not recorded");
   });
 
-  it("does not divide by zero when a run stamped zero units", async () => {
-    await sendAiRunCostAlertEmail({ ...base, phase: "schedule", packUnits: 0 });
-
-    expect(sent).toHaveLength(1);
-    const { text } = sent[0]!;
+  it("does not divide by zero when a run stamped zero units", () => {
+    const { text } = aiRunCostAlertEmail({ ...base, phase: "schedule", packUnits: 0 });
     expect(text).not.toContain("Infinity");
     expect(text).not.toContain("NaN");
     // Zero units IS a real measurement (a pack with nothing movable), so it is

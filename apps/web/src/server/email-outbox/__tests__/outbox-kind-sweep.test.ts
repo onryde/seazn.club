@@ -131,6 +131,10 @@
 //   - staff_stream_pack_price_drift: the real `alertStreamPackPriceDrift` (its one site, the drift guard in
 //     `resolveStreamPackPriceId`, awaits it before refusing the checkout; relay-checkout-drift-alert.test.ts drives the real
 //     `createRelayCheckout` to a row), for a drifted Stripe price, the same way.
+//   - staff_ai_run_cost: the real `maybeAlertExpensiveRun` (its three deferred callers, the schedule, joint-schedule and officials
+//     runs, call it after the run's ledger row; ai-run-cost-alert.test.ts drives it to a row), for an officials run costing far over a
+//     seeded trailing median (25 runs of this run's own organisation, which the clean-up removes), the same way. Its ref is a UUID
+//     minted for the run (P-W5-6).
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -233,6 +237,7 @@ import {
   processStripeEvent,
 } from "@/server/usecases/billing-events";
 import { alertStreamPackPriceDrift, StreamPackPriceDriftError } from "@/lib/relay-checkout";
+import { maybeAlertExpensiveRun } from "@/server/usecases/ai-runs-admin";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
@@ -1446,6 +1451,37 @@ function streamPackPriceDriftScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for an AI run that cost far over its phase's trailing median, to this run's STAFF_ALERT_EMAIL: no org on the
+ *  row, no account, and the worker makes the first attempt. The baseline is 25 officials runs at a millionth of a dollar, seeded
+ *  under this run's own organisation (a median needs 20); a $50 run is orders over anything a mocked run records. The subject is
+ *  the builder's inline English, typed from its source. */
+function aiRunCostScenario(): LiteralKindScenario {
+  const recipient = address();
+  const orgId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Expensive AI run: $50.0000 (org ${orgId})`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const [org] = await sql<{ id: string }[]>`
+        insert into organizations (id, name, slug)
+        values (${orgId}, ${`AI Run Org ${RUN}`}, ${`ai-run-org-${RUN}-${randomUUID().slice(0, 8)}`}) returning id`;
+      made.orgIds.push(org!.id);
+      const [comp] = await sql<{ id: string }[]>`
+        insert into competitions (org_id, name, slug, visibility, branding)
+        values (${orgId}, 'AI Run Comp', ${`ai-run-comp-${RUN}`}, 'private', '{}') returning id`;
+      await sql`
+        insert into competition_events (competition_id, org_id, type, payload)
+        select ${comp!.id}::uuid, ${orgId}::uuid, 'schedule.ai_officials_generated', ${sql.json({ cost_usd: 0.000001 })}::jsonb
+          from generate_series(1, 25)`;
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await maybeAlertExpensiveRun({ orgId, phase: "officials", model: "claude-sonnet-5", costUsd: 50 });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real staff alert for a platform-charge dispute, to this run's STAFF_ALERT_EMAIL, for a `created` subscription dispute of an org
  *  that speaks French: the alert is in the platform locale (en) all the same, it names the org, and the worker makes the first
  *  attempt. */
@@ -2059,6 +2095,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_connect_bank_changed: connectBankChangedScenario(),
         staff_stuck_events: stuckEventsScenario(),
         staff_stream_pack_price_drift: streamPackPriceDriftScenario(),
+        staff_ai_run_cost: aiRunCostScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

@@ -29,7 +29,6 @@ export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess
 /** The `send*` exports of lib/email.ts as of the start of phase 3 wave 1 (spec: "49 send* exports"), copied once from the file.
  *  `sendWithResult` is the outbox's own typed sender and is not among them. */
 export const SENDER_ALLOWLIST: readonly string[] = [
-  "sendAiRunCostAlertEmail",
   "sendEarnGrantVolumeAlertEmail",
   "sendExtraOrgAllowanceAlertEmail",
 ];
@@ -42,7 +41,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
   // Wave 5, in the spec's table order.
-  "staff_ai_run_cost",
   "staff_earn_grant_volume",
   "staff_extra_org_allowance",
 ];
@@ -102,7 +100,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   staff_connect_bank_changed: null,
   staff_stuck_events: null,
   staff_stream_pack_price_drift: null,
-  staff_ai_run_cost: "sendAiRunCostAlertEmail",
+  staff_ai_run_cost: null,
   staff_earn_grant_volume: "sendEarnGrantVolumeAlertEmail",
   staff_extra_org_allowance: "sendExtraOrgAllowanceAlertEmail",
 };
