@@ -53,6 +53,9 @@
 //     notice to the address the account had is queued in the deletion's own transaction, once per account, and the request's own
 //     deferred attempt sends it. The harness finds the row by that address before any tick runs, and judges it by id afterwards, so
 //     the worker's scrub of an ended notice's address (step 7a) does not hide it.
+//   - org_invite: the route POST of app/api/orgs/[id]/invites/route.ts, an email invite by the owner of an `fr` organisation (signed in
+//     through the session stand-in): the invite and its row are one transaction on the pool, in the organisation's language, and the
+//     request makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -80,11 +83,22 @@ vi.mock("next/headers", () => ({
 }));
 // Wave 3's account mail comes from signed-in routes (a staff press, an email change). Their scenario sets who is signed in for its own
 // `run` only (`signedInAs`); every other producer here runs with nobody signed in, as before (the real `requireUser`, no session).
+// `requireOrgRole` reaches the session through the module's own `requireUser`, which this mock cannot replace, so it is stood in for the
+// same way: the signed-in account's role in the org is the REAL one (`getOrgRole`), and the route's editor check is applied to it.
 const session = vi.hoisted(() => ({ user: null as null | { id: string } }));
 vi.mock("@/lib/auth", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/lib/auth")>();
   type User = Awaited<ReturnType<typeof real.requireUser>>;
-  return { ...real, requireUser: vi.fn(async (): Promise<User> => (session.user as User | null) ?? real.requireUser()) };
+  return {
+    ...real,
+    requireUser: vi.fn(async (): Promise<User> => (session.user as User | null) ?? real.requireUser()),
+    requireOrgRole: vi.fn(async (orgId: string, roles: Parameters<typeof real.requireOrgRole>[1]) => {
+      if (session.user === null) return real.requireOrgRole(orgId, roles);
+      const role = await real.getOrgRole(orgId, session.user.id);
+      if (role === null || !roles.includes(role)) throw new Error("sweep: the signed-in account is not an editor of the organisation");
+      return { user: session.user as User, role };
+    }),
+  };
 });
 // The one network seam. The harness reads this same mock back (it imports `deliver` from the same module).
 const deliverMock = vi.hoisted(() => vi.fn());
@@ -102,6 +116,7 @@ import { POST as resendVerificationPost } from "@/app/api/admin/users/[id]/resen
 import { POST as funnelStartPost } from "@/app/api/funnel/start/route";
 import { POST as changeEmailPost } from "@/app/api/auth/change-email/route";
 import { DELETE as deleteAccount } from "@/app/api/users/me/route";
+import { POST as orgInvitePost } from "@/app/api/orgs/[id]/invites/route";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { assignSoloSignUp } from "@/server/usecases/registration-assign";
@@ -198,7 +213,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 3's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T4) deletes it from NOT_YET_MOVED, and here. The last move (T4c) empties both. */
 const WAVE_3_UNMOVED: readonly OutboxKind[] = [
-  "org_invite",
   "claim_invite",
   "official_invite",
 ];
@@ -923,6 +937,36 @@ async function accountDeletionScenario(): Promise<KindScenario> {
   };
 }
 
+/** The real email invite by the owner of an organisation whose default language is `fr`: the invitee has no account the org may follow,
+ *  so the invite is in the org's language, and the request makes the first attempt. */
+async function orgInviteScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("community");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const [org] = await sql<{ name: string }[]>`update organizations set default_locale = 'fr' where id = ${orgId} returning name`;
+  const recipient = address();
+  return {
+    locale: "fr",
+    subjectKey: "invite.subject",
+    subjectVars: { orgName: org!.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await signedInAs(ownerId, () =>
+        orgInvitePost(
+          new Request(`https://sweep.test/api/orgs/${orgId}/invites`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ role: "viewer", email: recipient }),
+          }),
+          { params: Promise.resolve({ id: orgId }) },
+        ),
+      );
+      expect(res.status, "premise: the real route answered 200").toBe(200);
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1025,6 +1069,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", deletion.subjectKey, deletion.subjectVars),
     );
 
+    const orgInvite = await orgInviteScenario();
+    expect(dictionarySubject("fr", orgInvite.subjectKey, orgInvite.subjectVars)).not.toBe(
+      dictionarySubject("en", orgInvite.subjectKey, orgInvite.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1049,6 +1098,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         email_change_confirmation: confirmation,
         email_change_notice: notice,
         account_deletion: deletion,
+        org_invite: orgInvite,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

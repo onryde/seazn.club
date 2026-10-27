@@ -3464,7 +3464,7 @@
   "settings.team.role.label": "Rôle",
   "settings.team.inviteEmail.send": "Envoyer l'invitation",
   "settings.team.inviteEmail.sent": "Invitation envoyée à {email}",
-  "settings.team.inviteEmail.notSent": "L'e-mail n'a pas pu être envoyé — copiez leur lien personnel ci-dessous et partagez-le directement.",
+  "settings.team.inviteEmail.notSent": "L'e-mail n'est pas parti tout de suite. Il peut arriver en retard, ou pas du tout : copiez leur lien personnel ci-dessous et partagez-le directement.",
   "settings.team.inviteEmail.expires": "expire",
   "settings.team.inviteLink.title": "Inviter par lien",
   "settings.team.inviteLink.desc": "Toute personne disposant du lien rejoint avec le rôle sélectionné. Les liens durent 24 heures et restent listés ici jusqu'à leur expiration ou leur révocation.",

@@ -483,14 +483,13 @@ export async function accountDeletionEmail(locale: Locale): Promise<EmailContent
 // Lifecycle emails (respect suppression list)
 // ---------------------------------------------------------------------------
 
-export async function sendInviteEmail(
-  to: string,
-  orgName: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The organisation's email invite (`/join/<token>`), RENDERED and not sent. The org's invite route (`api/orgs/[id]/invites`) queues
+ *  what this returns on the email outbox (kind `org_invite`, NOT transactional, as the direct sender was: the suppression list
+ *  applies), in the same transaction as the invite whose link it carries, and makes the first attempt after commit. Nothing sends it
+ *  directly. */
+export async function orgInviteEmail(args: { orgName: string; link: string }, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...inviteTemplate(orgName, link, dict) });
+  return inviteTemplate(args.orgName, args.link, dict);
 }
 
 /** A payer offered a whole billing group to this recipient (billing-group

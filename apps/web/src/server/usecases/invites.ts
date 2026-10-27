@@ -1,6 +1,6 @@
 import "server-only";
 import crypto from "node:crypto";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
 import type { OrgInvite } from "@/lib/types";
 
 /** No explicit expiry asked for → the courtside-QR default: one hour. */
@@ -20,11 +20,14 @@ export interface CreateInviteInput {
  *  - shareable links (team settings, courtside QR): expires_in_days picks the
  *    lifetime — undefined keeps the legacy one-hour TTL, null never expires;
  *  - email invites (`email` set): personal, forced single-use, 7-day expiry.
+ * `db` is the handle the insert runs on: the org's invite route passes its transaction, so an email invite and the outbox row that
+ * mails its link commit together.
  */
 export async function createInvite(
   orgId: string,
   createdBy: string,
   input: CreateInviteInput,
+  db: Tx | typeof sql = sql,
 ): Promise<OrgInvite> {
   const email = input.email?.trim().toLowerCase() || null;
   const maxUses = email ? 1 : input.max_uses;
@@ -39,7 +42,7 @@ export async function createInvite(
   }
 
   const token = crypto.randomBytes(24).toString("base64url");
-  const [invite] = await sql<OrgInvite[]>`
+  const [invite] = await db<OrgInvite[]>`
     insert into org_invites
       (org_id, role, email, token, created_by, expires_at, max_uses)
     values

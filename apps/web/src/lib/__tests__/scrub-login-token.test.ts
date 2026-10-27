@@ -56,10 +56,10 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/auth")>()),
   requireOrgRole: vi.fn(async () => ({ user: { id: (await import("./_fake-sql")).USER_ID }, role: "admin" })),
 }));
-// `to` is null for a builder that takes no address (the verification email's: the route queues it to the account's address).
+// `to` is null for a builder that takes no address (the verification email's and the org invite's: the route queues each to its address).
 const mail = vi.hoisted(() => ({ sent: [] as { to: string | null; link: string }[] }));
-// The sign-in link and the staff resend's verification link are RENDERED by their routes (`magicLinkEmail`, `verificationEmail`) and
-// queued; this records the link each was asked to render, which is what the old senders recorded. The outbox itself has its own
+// The sign-in link, the staff resend's verification link and the org's email invite are RENDERED by their routes (`magicLinkEmail`,
+// `verificationEmail`, `orgInviteEmail`) and queued; this records the link each was asked to render, which is what the old senders recorded. The outbox itself has its own
 // suites; here it is a stand-in (no database). The refusal classes, the readiness rule, the expiry bound and the language rule the
 // routes read are the REAL ones (a stand-in without them would die with "no export defined on the mock" the first time a case made a
 // route reach them); only the queue and the send are stand-ins.
@@ -86,9 +86,9 @@ vi.mock("@/lib/email", async (importOriginal) => {
       mail.sent.push({ to: null, link });
       return { subject: "s", html: "", text: "" };
     }),
-    sendInviteEmail: vi.fn(async (to: string, _org: string, link: string) => {
-      mail.sent.push({ to, link });
-      return true;
+    orgInviteEmail: vi.fn(async (args: { orgName: string; link: string }) => {
+      mail.sent.push({ to: null, link: args.link });
+      return { subject: "s", html: "", text: "" };
     }),
   };
 });

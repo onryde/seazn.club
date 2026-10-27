@@ -3464,7 +3464,7 @@
   "settings.team.role.label": "Role",
   "settings.team.inviteEmail.send": "Send invite",
   "settings.team.inviteEmail.sent": "Invite sent to {email}",
-  "settings.team.inviteEmail.notSent": "The email could not be sent — copy their personal link below and share it directly.",
+  "settings.team.inviteEmail.notSent": "The email didn't go out straight away. It may arrive late, or not at all: copy their personal link below and share it directly.",
   "settings.team.inviteEmail.expires": "expires",
   "settings.team.inviteLink.title": "Invite by link",
   "settings.team.inviteLink.desc": "Anyone with the link joins as the selected role. Links last 24 hours and stay listed here until they expire or are revoked.",

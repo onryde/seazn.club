@@ -3419,7 +3419,7 @@
   "settings.team.role.label": "Rol",
   "settings.team.inviteEmail.send": "Uitnodiging versturen",
   "settings.team.inviteEmail.sent": "Uitnodiging verzonden naar {email}",
-  "settings.team.inviteEmail.notSent": "De e-mail kon niet worden verzonden — kopieer de persoonlijke link hieronder en deel deze rechtstreeks.",
+  "settings.team.inviteEmail.notSent": "De e-mail is niet meteen verstuurd. Hij kan later aankomen, of helemaal niet: kopieer de persoonlijke link hieronder en deel deze rechtstreeks.",
   "settings.team.inviteEmail.expires": "verloopt",
   "settings.team.inviteLink.title": "Uitnodigen via link",
   "settings.team.inviteLink.desc": "Iedereen met de link doet mee met de gekozen rol. Links zijn 24 uur geldig en blijven hier vermeld totdat ze verlopen of worden ingetrokken.",

@@ -28,8 +28,8 @@ export function fakeSql(strings: TemplateStringsArray, ...values: unknown[]): Pr
     const [org_id, role, email, token, , expires_at, max_uses] = values;
     return Promise.resolve([{ id: "inv-1", org_id, role, email, token, expires_at, max_uses, used_count: 0, revoked: false, created_at: new Date().toISOString() }]);
   }
-  // The invite route names the club in the email.
-  if (/select name from organizations/i.test(text)) return Promise.resolve([{ name: "Lagos Chess Club" }]);
+  // The invite route names the club in the email, in the club's default language (none set: English).
+  if (/select name, default_locale from organizations/i.test(text)) return Promise.resolve([{ name: "Lagos Chess Club", default_locale: null }]);
   return Promise.resolve([]);
 }
 

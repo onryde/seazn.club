@@ -39,7 +39,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendFunnelReminderEmail",
   "sendGroupOrgLeftEmail",
   "sendGroupOrgRemovedEmail",
-  "sendInviteEmail",
   "sendOfficialAssignedEmail",
   "sendOfficialAssignmentChangedEmail",
   "sendOfficialInviteEmail",
@@ -65,7 +64,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  way, in the spec's table order: each kind task (T2-T4) deletes its own, and the last move (T4c) closes the list again. The sweep
  *  covers every kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "org_invite",
   "claim_invite",
   "official_invite",
 ];
@@ -95,7 +93,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   email_change_confirmation: null,
   email_change_notice: null,
   account_deletion: null,
-  org_invite: "sendInviteEmail",
+  org_invite: null,
   claim_invite: "sendClaimInviteEmail",
   official_invite: "sendOfficialInviteEmail",
 };
