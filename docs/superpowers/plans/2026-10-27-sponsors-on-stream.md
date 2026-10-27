@@ -55,7 +55,9 @@ False or shifted (recorded, not blockers):
   `overlay-moments.ts:48` is the `graphic` union.
 - **F3.** **The public match page has no sponsor strip.** The only `/s/` link is `components/public-site/sponsors-board.tsx:76`,
   mounted on the competition page (`app/(public)/shared/[orgSlug]/[competitionSlug]/page.tsx:414`). S10 tags that
-  board `src=site` and builds no match strip; `match` stays in the enum. Raised to the coordinator.
+  board `src=site`. **Owner ruling 2026-10-27 ("a"):** the same board also mounts on the public match page
+  (`app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx`), its links tagged
+  `?f=<fixtureId>&src=match`, so clicks there count for that match. S10 owns it.
 - **F4.** `host=obs` is not a query value. The OBS page is the overlay page without `host=compositor`
   (`app/overlay/fixtures/[fixtureId]/page.tsx:177`, `isCompositorHost`). Every "at `host=obs`" test drives the page with
   no `host`.
@@ -566,7 +568,10 @@ it("a second frame for the same moment replaces the path, one row", …);
 ### Task S10: Click attribution
 
 **Files:**
-- Modify: `app/s/[sponsorId]/route.ts`, `components/public-site/sponsors-board.tsx:76` (`src=site`, F3)
+- Modify: `app/s/[sponsorId]/route.ts`, `components/public-site/sponsors-board.tsx:76` (a `clickTag` prop: `src=site`
+  on the competition page, `f=<fixtureId>&src=match` on the match page; F3),
+  `app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/fixtures/[fixtureId]/page.tsx` (mount the board with
+  `resolveSponsors(org.id, competition.id)`, the competition page's own call; nothing rendered when it is empty)
 - Create: `server/sponsors/clicks.ts`
 - Test: `app/s/[sponsorId]/__tests__/route.test.ts`, `server/sponsors/__tests__/clicks.test.ts`
 
@@ -584,12 +589,16 @@ it("?f=<own-org fixture>&src=stream → 302 to the url, click_count + 1, one spo
 it("a fixture of another org → row with fixture null, source 'unknown'; still 302", …);
 it("src=bogus → 'unknown'; no query → 'unknown', fixture null", …);
 it("an inactive sponsor → 404, no row (unchanged)", …);
-it("sponsors-board links carry src=site", …);
+it("sponsors-board links carry src=site on the competition page", …);
+it("the match page renders the board with links ?f=<that fixture>&src=match", …);   // anchor on `="`, AGENTS.md
+it("the match page renders no board when the competition has no active sponsors", …);
 ```
 - [ ] **Step 2–4:** red → implement → green. **MUTATE** the org check on `f` and name the killer.
 - [ ] **Step 5: Commit** `feat(sponsors): tagged click attribution`.
 
-**Four types:** unit + regression; E2E `sponsors-hub.spec.ts › a stream click counts` (S13); smoke
+**Four types:** unit + regression; E2E `sponsors-hub.spec.ts › a stream click counts` (S13) and
+`public-fixture.spec.ts › the match page sponsor board counts a click for that match` (all 7 widths; frontend-design
+skill; house theme; no horizontal scroll at 320); smoke
 `/s/[id]?f=&src= records a click row and still redirects` (spec §7).
 
 ### Task S11: The Sponsors hub shell, the moves, and the nav

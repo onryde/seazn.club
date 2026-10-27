@@ -23,6 +23,7 @@ Captured scenario this fulfils: `2026-09-05-stream-overlay-prompts/_SCENARIO-202
 | D12 | Default dial | **Normal** for a newly ticked sponsor. Confirmed. |
 | D13 | Ship before YouTube Connect? | **No: build in parallel, release together** with YouTube Connect, so viewers and "watch this moment" are live on day one. |
 | D14 | Rotation continuity | **One rotation per org across all its matches** (a per-org cursor), so on Light a T20's single innings break does not always go to the first title sponsor. |
+| D15 | Match-page sponsor links | **"a": the sponsor board also shows on the public match page**, links tagged with that fixture (`src=match`), so clicks count per match. |
 
 Pricing (standing owner rule: all scoring and all stages are free, no gate, no upsell; streaming is already metered by
 stream credits): **no new gate. Rotation and the report are available wherever streaming is.** The existing Pro
