@@ -10,6 +10,7 @@ import "server-only";
 import { unstable_cache } from "next/cache";
 import { sql } from "@/lib/db";
 import { activeAbandonReasonSql, hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
+import { stageTableRulesDocs, type StageTableRulesDoc } from "@/server/engine-db/table-rules";
 import { log } from "@/server/logger";
 import { hasFeature } from "@/lib/entitlements";
 import { isoDateTime, sortOrgHomeCompetitions } from "@/lib/public-site";
@@ -431,6 +432,11 @@ export interface PublicStage {
    *  chips describe it through `stage-format-lines.ts`. Optional so a
    *  hand-built `PublicStage` in an existing test still type-checks. */
   rules?: unknown;
+  /** W2d Task 9 — the stage's TABLE rules from the one loader (`stageTableRulesDocs`): the order it ranks by, the rule
+   *  it is paid by, the outcomes it reaches, its sport's primary measure. What the standings caption, qualification and
+   *  the slideshow read; null when the loader refused the stage (no status, no caption). Optional so a hand-built
+   *  `PublicStage` in an existing test still type-checks. */
+  table_rules?: StageTableRulesDoc | null;
 }
 
 export interface PublicStandings {
@@ -988,6 +994,9 @@ export async function readPublicDivisionDetail(
              -- (progression, cross-feeds) stays private.
              (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules
       from public_stages_v where division_id = ${division.id} order by seq`;
+    // W2d Task 9: every stage's table rules in one read — its pin once started, else its live layers (OC2).
+    const tableRules = await stageTableRulesDocs(sql, stages.map((st) => st.id));
+    for (const st of stages) st.table_rules = tableRules[st.id] ?? null;
     const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
       select p.id, p.stage_id, p.key, p.name
       from public_pools_v p
@@ -1114,7 +1123,9 @@ export async function getPublicDivision(
     // v4 (per-stage format lines, 2026-09-24): every stage carries `rules`; a
     // v3 entry would read as "no stage overrides" and hide every stage line on
     // the hub and the division page until it expired.
-    ["pub-div-v4", division.id],
+    // v5 (W2d Task 9): every stage carries `table_rules`; a v4 entry would read as "rules unreadable" and drop every
+    // qualification status and tie-break caption until it expired.
+    ["pub-div-v5", division.id],
     {
       tags: [divisionTag(division.id), competitionTag(division.competition_id)],
       revalidate: REVALIDATE_FAST,

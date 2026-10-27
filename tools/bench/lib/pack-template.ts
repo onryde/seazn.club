@@ -68,7 +68,10 @@ export interface TemplateDivisionSkeleton {
   sportKey: string;
   variantKey: string;
   cfgOverrides: Record<string, PackJsonValue>;
-  tiebreakers: string[];
+  /** The division's OWN order, carried only when the pack declares one. Absent = the division inherits (a template
+   *  stores `null`, `usecases/templates.ts`): the sport's default reaches its stages until each is pinned at start (W2d
+   *  §5.4, D9). Never `[]`, which is an empty order (W2d Review Focus 4 refuses it), not "inherit". */
+  tiebreakers?: string[];
   entrantKind: PackEntrantKind;
   entrantCount: number;
   stages: TemplateStageSkeleton[];
@@ -104,7 +107,10 @@ export function packToTemplateSkeleton(pack: Pack): TemplateSkeleton {
         sportKey: division.sportKey,
         variantKey: division.variantKey,
         cfgOverrides: division.cfgOverrides,
-        tiebreakers: division.tiebreakers ?? [],
+        // W2d T9: a projection, not a resolver — the bench has no pin and no stage, and resolving here would freeze the
+        // sport's default into the template as the division's override (its Inherited badge would read Override, and
+        // a later default would stop reaching it). The old `?? []` read "no order declared" as an EMPTY order.
+        ...(division.tiebreakers === undefined ? {} : { tiebreakers: [...division.tiebreakers] }),
         entrantKind,
         entrantCount: entrants.length,
         stages: division.stages.map((stage) => ({

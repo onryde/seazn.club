@@ -269,7 +269,7 @@ export function seedRefusalMessage(
   );
 }
 
-/** The 19 comparator keys the competition engine's tiebreaker registry
+/** The 29 comparator keys the competition engine's tiebreaker registry
  *  resolves. Written out because the engine ships `TiebreakerKey` as a TYPE
  *  only (packages/engine/src/sport/module.ts:41) — there is no runtime array
  *  to import. `TIEBREAKER_KEYS_MATCH_THE_ENGINE` below makes the duplication
@@ -294,6 +294,17 @@ export const TIEBREAKER_KEYS = [
   "fair_play",
   "seed",
   "lots",
+  // W2d (spec §5.6) — the engine's new keys and h2h block modifiers.
+  "set_diff",
+  "point_diff",
+  "h2h_two",
+  "h2h_wins",
+  "h2h_set_ratio",
+  "h2h_point_ratio",
+  "h2h_reapply",
+  "h2h_exclusion",
+  "matches_played",
+  "field_goals",
 ] as const;
 
 // Compile-time, BIDIRECTIONAL. Left as declarations rather than assertions in

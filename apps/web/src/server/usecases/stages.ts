@@ -18,7 +18,8 @@ import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { DEPARTED_STATUSES } from "./entrants";
 import { feedsNextMatch } from "@/lib/bracket-next-match";
 import { stageNeedsAdvancedFormatsGate, stageNeedsDoubleElimGate } from "./format-gates";
-import { sentPoints, validatedStageConfig } from "./stage-defaults";
+import { validatedStageConfig } from "./stage-defaults";
+import { refuseNewStageTable } from "./table-rule-guards";
 import { advancesNobody, EngineError, type MatchOutcome } from "@seazn/engine/core";
 import {
   generateRoundRobin,
@@ -38,7 +39,6 @@ import {
   type Colour,
 } from "@seazn/engine/scheduling";
 import {
-  PointsRule,
   carryDeltas,
   placementTable,
   progressionSize,
@@ -58,7 +58,8 @@ import { resolveModule } from "@/server/engine-db";
 // but these two ARE exported from the module itself (pass 2); reuse them
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
-import { parseExtKey, bracketWinnerLoser, rankedStageStandings } from "@/server/engine-db/competition";
+import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandings } from "@/server/engine-db/competition";
+import { pinStageTableRules } from "@/server/engine-db/table-rules";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
@@ -129,6 +130,7 @@ import {
   resolveProgressionSource,
   sourceShapeOf,
   sourcesToTables,
+  persistCrossGroupDraws,
   standingsHash,
   poolTableRowsAcrossSources,
   validateStageProgression,
@@ -374,10 +376,13 @@ interface StageRulesScope {
 }
 
 /** What a stage SLOT keeps across `replaceStages`' delete-and-recreate, keyed `seq:kind`: its stored rules (R-T12-4,
- *  `{}` for a cleared slot) and its own points rule when it has one (R-T13-1). */
+ *  `{}` for a cleared slot), its own points rule when it has one (R-T13-1), and (W2d Task 10) its own tie-break and
+ *  cross-group orders when it has them — the organiser's choices on the same screen as its points, re-asked with them. */
 export interface StageCarry {
   rules: Record<string, unknown>;
   points?: unknown;
+  tiebreakers?: unknown;
+  crossGroupTiebreakers?: unknown;
 }
 
 /** W2c Task 12 — the config each stage of a batch is inserted with: its rules validated on the stage PUT's terms and
@@ -399,7 +404,11 @@ function stageConfigsAtCreate(
   return inputs.map((s) => {
     const carry = carried.get(`${s.seq}:${s.kind}`);
     const sent = (s.config ?? {}) as Record<string, unknown>;
-    const config = carry?.points !== undefined && sent.points === undefined ? { ...sent, points: carry.points } : sent;
+    // Each own table value the body does not send is the slot's carry (a body's own replaces it whole; null drops it).
+    const config: Record<string, unknown> = { ...sent };
+    for (const key of ["points", "tiebreakers", "crossGroupTiebreakers"] as const) {
+      if (carry?.[key] !== undefined && sent[key] === undefined) config[key] = carry[key];
+    }
     return validatedStageConfig(
       sportModule,
       division.sport_key,
@@ -413,19 +422,8 @@ function stageConfigsAtCreate(
 }
 
 /**
- * Jul3/05 §7 — the ONE entitlement gate on a stage's own points (W2c Task 13: `createStages` and the stage PUT both call
- * it): base win/draw/loss points are free on every plan; bonuses or a forfeit row need `standings.custom_points` (402).
- * A pooled read (`requireFeature`): call it BEFORE `withTenant` opens, never inside one (lib/db.ts, the pool
- * self-deadlock).
- */
-export async function assertCustomPointsAllowed(auth: AuthCtx, rule: PointsRule): Promise<void> {
-  if (rule.bonuses.length > 0 || rule.forfeit !== undefined) await requireFeature(auth.orgId, "standings.custom_points");
-}
-
-/**
  * W2c Task 13 fix round 1 (R-T13-2) — every refusal a stage BATCH earns from its input alone, before anything is written:
- * the entitlement gates (`formats.double_elim`, `formats.advanced`, `standings.custom_points` on a body's own points,
- * `tiebreakers.custom`, `standings.carry_over`), the feed graph, the stage cap counted against the batch, and a seq the
+ * the entitlement gates (`formats.double_elim`, `formats.advanced`, `standings.carry_over`), the feed graph, the stage cap counted against the batch, and a seq the
  * batch names twice. Pooled reads (`requireFeature`, `getLimit`), so both callers ask it before their transaction opens,
  * never inside one (lib/db.ts): `createStages` before its inserts, `replaceStages` before the one transaction that
  * deletes and recreates (R-T13-3), so a 402 or a 409 here writes nothing. It is not the only refusal a batch can earn —
@@ -466,19 +464,12 @@ export async function assertStageBatchGates(
     }
     validateFeedGraph(edges);
   }
-  // Jul3/05 §7: base win/draw/loss numbers are free; bonuses + forfeit points
-  // + circular-H2H + carry-over were the Pro layer. All four keys are granted
-  // on every plan now (custom points / tiebreakers since V393, carry-over since
-  // V471), so each call below refuses only on an explicit staff
-  // `org_entitlement_overrides` deny — kept for exactly that lever.
+  // Jul3/05 §7: bonuses + forfeit points + circular-H2H + carry-over were the Pro layer. A stage's own points and its
+  // head-to-head scope ask no gate at all (W2d T10 fix round 1, I4: the owner's standing rule, all scoring is free — the
+  // `standings.custom_points` and `tiebreakers.custom` reads are deleted; `overrideStandings` keeps the latter). Carry-over
+  // is granted on every plan since V471, so its call refuses only on an explicit staff `org_entitlement_overrides` deny —
+  // kept for exactly that lever.
   for (const s of inputs) {
-    const cfg = s.config as { points?: unknown; h2h_scope?: string } | undefined;
-    // M6: a null `points` is "no points for this slot" (`sentPoints`): nothing to gate.
-    const points = sentPoints(cfg);
-    if (points !== undefined) await assertCustomPointsAllowed(auth, PointsRule.parse(points));
-    if (cfg?.h2h_scope === "overall") {
-      await requireFeature(auth.orgId, "tiebreakers.custom");
-    }
     if (s.progression?.carry !== undefined && s.progression.carry !== "none") {
       await requireFeature(auth.orgId, "standings.carry_over");
     }
@@ -552,14 +543,21 @@ async function insertStageBatch(
   carried?: ReadonlyMap<string, StageCarry>,
 ): Promise<StageRow[]> {
   await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
-  const [division] = await tx<({ competition_id: string } & StageRulesScope)[]>`
-    select competition_id, sport_key, module_version, variant_key, config from divisions where id = ${divisionId}
+  const [division] = await tx<({ competition_id: string; tiebreakers: string[] | null } & StageRulesScope)[]>`
+    select competition_id, sport_key, module_version, variant_key, config, tiebreakers from divisions where id = ${divisionId}
     for no key update`;
   if (!division) throw new HttpError(404, "division not found");
   // Before any insert: a refused rules fragment (or a preset the division cannot take) writes nothing, the whole batch.
   // The same door asks each stage's points the stage PUT's questions (W2c Task 13, `refuseStagePoints`), the old
   // fail-closed metrics check (Jul3/05 §8: a rule needing metrics the sport doesn't emit never reaches play) among them.
   const configs = stageConfigsAtCreate(division, inputs, carried);
+  // W2d Task 10 (spec §5.5) — the order each new stage will rank by (its own, else the division's, else the sport's) is
+  // `validateCascade`d on its kind, an inherited one the kind refuses refused with "set this stage's own order"; and the
+  // points it will pay must pay every outcome its rules reach (`coverage`). Before any insert, the whole batch.
+  const sportModule = resolveModule(division.sport_key, division.module_version);
+  for (const [i, s] of inputs.entries()) {
+    refuseNewStageTable(sportModule, { kind: s.kind, name: s.name, config: configs[i]! }, { config: division.config, tiebreakers: division.tiebreakers });
+  }
   assertNotFrozen(frozen, division.competition_id);
 
   // Doc 10 §1: `stages.per_division.max` (∞ on every plan since V471; an
@@ -682,9 +680,14 @@ export async function replaceStages(
       // R-T13-1: the slot's own points ride the same carry (an organiser's choice on the same screen, not the
       // template's), and are re-asked below with the body; a slot that has none carries none.
       const points = r.config?.points;
+      // W2d Task 10: and its own orders, the same way (a slot with none carries none, and inherits).
+      const tiebreakers = r.config?.tiebreakers;
+      const crossGroupTiebreakers = r.config?.crossGroupTiebreakers;
       keep.set(`${r.seq}:${r.kind}`, {
         rules: cleared ? {} : (rules as Record<string, unknown>),
         ...(points !== undefined && points !== null ? { points } : {}),
+        ...(tiebreakers !== undefined && tiebreakers !== null ? { tiebreakers } : {}),
+        ...(crossGroupTiebreakers !== undefined && crossGroupTiebreakers !== null ? { crossGroupTiebreakers } : {}),
       });
     }
     await tx`delete from stages where division_id = ${divisionId}`;
@@ -2984,6 +2987,8 @@ async function generateStageFixturesWrite(
 
     if (stage.status === "pending") {
       await tx`update stages set status = 'active' where id = ${stageId}`;
+      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.
+      await pinStageTableRules(tx, stageId);
     }
 
     const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
@@ -3820,6 +3825,8 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
 
     if (stage.status === "pending") {
       await tx`update stages set status = 'active' where id = ${stageId}`;
+      // W2d X-TB-2 (OC2): the table rules are fixed in the transaction that starts the stage.
+      await pinStageTableRules(tx, stageId);
     }
 
     const fixtureRows = await tx<Omit<FixtureRow, "court_name">[]>`
@@ -4463,7 +4470,7 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
 //
 // BRACKET_KINDS mirrors engine-db/competition.ts's own list — losersOfRound
 // only makes sense sourced from one of these.
-const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
+export const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
 // Exported (F3 review item 5): stage-seeding.ts's sourcesToTables needs the
 // SAME set to know when a source needs bracket data for a roundLosers take
 // rule — see loadBracketFixtures' own export note below.
@@ -4985,7 +4992,10 @@ async function tablesForCompletedStage(
   // not per-round results) — only a bracket-kind source has any, so this is
   // a cheap no-op query result for every other kind.
   const bracket = BRACKET_KINDS.has(stage.kind) ? await loadBracketFixtures(tx, stage.id) : undefined;
-  return { pools, ...(bracket ? { bracket } : {}) };
+  // W2d T12 (spec §5.9, X-TB-7): best-Nth compares groups by THIS stage's pinned cross-group order and its stored
+  // cross-group draws — only a real table has them (an americano or bracket source has no cross-group comparison).
+  const crossGroup = REAL_TABLE_KINDS.has(stage.kind) ? await loadCrossGroupRules(tx, stage.id) : undefined;
+  return { pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) };
 }
 
 async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<SeededStage | null> {
@@ -5044,7 +5054,9 @@ async function seedNextStage(auth: AuthCtx, completedStageId: string): Promise<S
     // (seedNextStage seeds INTO it), so `next.kind` is the real targetKind
     // ruling 13's snake/bracket-target guard needs on this resolution path
     // too, not just at createStages' save-time validateStageProgression call.
-    const { qualifiers } = resolveProgression(progression, shapes, sourceTables, next.kind);
+    const { qualifiers, newLotsDraws } = resolveProgression(progression, shapes, sourceTables, next.kind);
+    // W2d T12 (spec §5.9): a cross-group draw best-Nth made is stored with its source, under the division lock held above.
+    await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);
     const entrants = qualifiers.map((q) => q.entrantId);
     log.info(
       { event: "qualification_resolved", stageId: completedStageId, nextStageId: next.id, kind: current.kind, count: entrants.length },
@@ -5353,7 +5365,9 @@ export async function computeSeedProposal(auth: AuthCtx, stageId: string): Promi
     // real targetKind ruling 13's snake/bracket-target guard needs to fire
     // on this resolution path too, not just at createStages' save-time
     // validateStageProgression call.
-    const { qualifiers, ties } = resolveProgression(progression, shapes, tables, stage.kind);
+    const { qualifiers, ties, newLotsDraws } = resolveProgression(progression, shapes, tables, stage.kind);
+    // W2d T12 (spec §5.9): stored under the division lock held above, so a re-proposal seats the same draw.
+    await persistCrossGroupDraws(tx, resolved, newLotsDraws);
 
     const slotBySeed = await destinationSlotsBySeed(tx, stageId);
     if (slotBySeed.size === 0) {

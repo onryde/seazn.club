@@ -170,6 +170,7 @@
 // the engine's barrels, so plain node loads it; tools/matrix/__tests__/boundary.test.ts
 // pins both files' imports.
 import {
+  DRAW_KINDS,
   EngineError,
   foldMatchWithStoppage,
   playRecorded,
@@ -185,12 +186,17 @@ import {
   type StageCtx,
   type StandingsDelta,
 } from "@seazn/engine/core";
-import { registry, type AnySportModule } from "@seazn/engine/sport";
+import { registry, type AnySportModule, type TableStageKind } from "@seazn/engine/sport";
 import { registerBuiltins } from "@seazn/engine/sports";
 import {
-  applyPointsRule,
   completeTableStage,
+  decidedInFor,
+  parseStoredPointsRule,
+  payout,
   PointsRule,
+  resolveTableRules,
+  setsToWinOf,
+  type FixtureResult,
   type StandingsRow,
   type TableFixture,
   type TableStage,
@@ -2168,11 +2174,27 @@ function firstMatchDivergence(
 // Stage 3's derivation — the product's own competition path
 // ---------------------------------------------------------------------------
 
+/** B5, as the product's `gamePointsReader` (engine-db/competition.ts): a result's GAME points from the map filled as each
+ *  result was paid, identity-keyed. A result the map does not hold was never paid by this stage — a defect, thrown, never
+ *  a fallback to the paid points (fix round 1, m2). */
+export function gamePointsReader(
+  gamePoints: ReadonlyMap<FixtureResult, readonly [number, number]>,
+): (result: FixtureResult) => readonly [number, number] {
+  return (result) => {
+    const pair = gamePoints.get(result);
+    if (pair === undefined) {
+      throw new Error(`game points asked for a result this stage did not pay (${result[0].entrantId} v ${result[1].entrantId})`);
+    }
+    return pair;
+  };
+}
+
 /**
  * Fold a division's streams into the ranked standings rows, through exactly
  * the path `recomputeStandings` uses:
- * `sportModule.standingsDelta(outcome, cfg, ctx, state)` per fixture, an
- * optional `applyPointsRule`, then `completeTableStage`.
+ * `sportModule.standingsDelta(outcome, cfg, ctx, state)` per fixture, `payout`
+ * under the stage's table rule (W2d T9: always — the stage's own, else its
+ * sport's under the fixture's cfg), then `completeTableStage`.
  *
  * Mirrors `apps/web/src/server/engine-db/competition.ts` — `ctxBase` at `:236`
  * (`{ kind }`, the stage's OWN kind, not the americano→league display map),
@@ -2208,10 +2230,13 @@ function deriveStandings(
   const pointsRuleRaw = stage.config["points"];
   let pointsRule: PointsRule | null = null;
   if (pointsRuleRaw !== undefined && pointsRuleRaw !== null) {
-    const rule = PointsRule.safeParse(pointsRuleRaw);
-    if (!rule.success)
-      return `stage "${stage.ref}" declares a points rule the engine refuses: ${rule.error.message}`;
-    pointsRule = rule.data;
+    // W2d: a stored rule is read as the product reads it — the outcome-keyed
+    // shape alone (PS-9f; a W2c `{base}` rule is refused, as the product refuses it).
+    pointsRule = parseStoredPointsRule(pointsRuleRaw);
+    if (pointsRule === null) {
+      const refused = PointsRule.safeParse(pointsRuleRaw);
+      return `stage "${stage.ref}" declares a points rule the engine refuses: ${refused.error?.message ?? "unreadable"}`;
+    }
   }
 
   // Which pool each fixture sat in, for a POOLED table. The product reads it
@@ -2225,6 +2250,10 @@ function deriveStandings(
   const fixtures: TableFixture[] = [];
   const entrants: string[] = [];
   const seen = new Set<string>();
+  // B5 (FIDE C.07): each paid result's GAME points — the sport's own ledger points, before the rule re-pays them
+  // (the product's `gamePoints`, engine-db/competition.ts).
+  const gamePoints = new Map<FixtureResult, readonly [number, number]>();
+  const tableKind: TableStageKind = DRAW_KINDS.has(stage.kind) ? (stage.kind as TableStageKind) : "league";
   for (const stream of streams) {
     const fold = folded.get(
       fixtureKey(stream.divisionRef, stream.fixtureExtKey),
@@ -2243,6 +2272,29 @@ function deriveStandings(
       ctxBase,
       fold.state,
     );
+    // W2c Task 9 (X-PT-1): the rule reads a forfeit's "was anything played" fact. A pack carries every fixture's
+    // events, so it is W2b's `playRecorded` over the same envelopes the fold read, under the fixture's module. Gap (a):
+    // the module's own score keys (`awardScoreKeys`) take the awarded score too. W2d T9: the rule ALWAYS pays (the
+    // product's standingsDelta fallback is gone) — the stage's own, else the sport's under the stage's format
+    // (`fold.cfg`, `stageScopedFoldCfg`: one cfg for every fixture of the stage), as the product pays a stage with no pin.
+    const result = payout(
+      fold.outcome,
+      decidedInFor(fold.module, fold.outcome),
+      pair,
+      playRecorded(packEnvelopes(stream), fold.module),
+      pointsRule ??
+        resolveTableRules({
+          module: fold.module,
+          stageKind: tableKind,
+          mergedCfg: fold.cfg,
+          stageOwn: { points: null, tiebreakers: null, crossGroup: null },
+          divisionTiebreakers: division.tiebreakers ?? null,
+          pinned: null,
+        }).points,
+      fold.module.awardScoreKeys,
+      setsToWinOf(fold.module, fold.cfg),
+    );
+    gamePoints.set(result, [pair[0].points, pair[1].points]);
     fixtures.push({
       id: fixtureKey(stream.divisionRef, stream.fixtureExtKey),
       ...(poolPrefix !== undefined &&
@@ -2254,12 +2306,7 @@ function deriveStandings(
       // 20) and the fold treats them identically, so the distinction — which
       // is a fixture-row fact a pack does not declare — cannot change a row.
       status: "decided",
-      // W2c Task 9 (X-PT-1): the rule reads a forfeit's "was anything played" fact. A pack carries every fixture's
-      // events, so it is W2b's `playRecorded` over the same envelopes the fold read, under the fixture's module. Gap (a):
-      // the module's own score keys (`awardScoreKeys`) take the awarded score too.
-      result: pointsRule
-        ? applyPointsRule(fold.outcome, pair, pointsRule, playRecorded(packEnvelopes(stream), fold.module), fold.module.awardScoreKeys)
-        : pair,
+      result,
     });
   }
 
@@ -2281,7 +2328,7 @@ function deriveStandings(
   // WHICH OF THESE `completeTableStage` ACTUALLY READS, measured rather than
   // assumed, because a mirror line nothing consumes is dead weight a reader
   // will take for a live one:
-  //   consumed  — entrants, cascade, seeds, rngSeed (the `lots` draw),
+  //   consumed  — entrants, rules (its order), seeds, rngSeed (the `lots` draw),
   //               swiss (assembles the ledger buchholz/sberger/direct need),
   //               openingDeltas, rankLocks, h2hScope. Each has its own test.
   //   CARRIED ONLY — `kind` and `rounds`. `completeTableStage` reads neither:
@@ -2290,6 +2337,25 @@ function deriveStandings(
   //               They are kept so the construction stays diff-able against
   //               `toTableStage`, and their mutants are recorded as equivalent
   //               in the task report rather than chased with a fake test.
+  // W2d T8: the stage's rules through the engine's one resolver, unpinned (a pack has no DB, so no pin and no stored
+  // draw) — the product's `tableRulesFor` (engine-db/competition.ts): the stage's own points rule, else the sport's under
+  // the stage's merged cfg; the division's order, else the sport's default for the stage kind. The sport and the merged
+  // cfg are the ones the first stream folded under (`fold.cfg` is the stage's format, `stageScopedFoldCfg`), so the
+  // rules and the fold can never read two different modules. With no stream folded the stage has no fixture and no
+  // entrant, and its table is the empty one under any rules (a named pool is only asked for after a stream carrying its
+  // prefix was found, above). The resolver's CONFIG_INVALID is not caught: a cfg it refuses has already thrown in the
+  // stream's `standingsDelta` above (an empty `pointsMap` prices no match either), and the division gate refuses a cfg
+  // the schema does not parse before any stream folds.
+  const sport = foldedSportOf(folded, streams);
+  if (sport === undefined) return [];
+  const rules = resolveTableRules({
+    module: sport.module,
+    stageKind: tableKind,
+    mergedCfg: sport.cfg,
+    stageOwn: { points: pointsRule, tiebreakers: null, crossGroup: null },
+    divisionTiebreakers: division.tiebreakers ?? null,
+    pinned: null,
+  });
   const stageConfig = stage.config as Record<string, unknown>;
   const carry = stageConfig["carry_deltas"];
   const overrides = stageConfig["rank_overrides"];
@@ -2300,8 +2366,10 @@ function deriveStandings(
       ? "league"
       : stage.kind) as TableStage["kind"],
     entrants,
-    cascade: (division.tiebreakers ??
-      tiebreakersOf(folded, streams)) as TableStage["cascade"],
+    rules,
+    // W2d T9, as the product's `toTableStage`: the sport's `winsCount` (B2, HK-TB-1) and each result's game points (B5)
+    ...(sport.module.winsCount === undefined ? {} : { winsCount: sport.module.winsCount }),
+    gamePoints: gamePointsReader(gamePoints),
     ...(seeds.size > 0 ? { seeds } : {}),
     // `!= null`, matching `toTableStage` exactly (competition.ts:337-338) and
     // NOT a `typeof === "number"` sniff. `PackStage.config` is an opaque JSON
@@ -2352,21 +2420,20 @@ function deriveStandings(
   return pool.rows;
 }
 
-/** The cascade a division inherits when it declares none — the SPORT's own
- *  default (`cascadeFor`, competition.ts:326-328). Read off the module that
- *  actually folded the streams rather than re-resolved, so the two can never
- *  be two different modules. */
-function tiebreakersOf(
+/** The sport a stage's table rules are read from (W2d T8, `resolveTableRules`): the module that actually folded its
+ *  streams, with the cfg the first of them folded under, rather than re-resolved, so the two can never be two
+ *  different modules. Undefined when no stream folded. */
+function foldedSportOf(
   folded: ReadonlyMap<string, FoldedStream>,
   streams: readonly PackStream[],
-): readonly string[] {
+): { readonly module: AnySportModule; readonly cfg: unknown } | undefined {
   for (const stream of streams) {
     const fold = folded.get(
       fixtureKey(stream.divisionRef, stream.fixtureExtKey),
     );
-    if (fold !== undefined) return fold.module.defaultTiebreakers;
+    if (fold !== undefined) return { module: fold.module, cfg: fold.cfg };
   }
-  return [];
+  return undefined;
 }
 
 const TABLE_SCALARS = ["played", "won", "drawn", "lost", "points"] as const;

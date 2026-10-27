@@ -22,6 +22,7 @@ import { fillPeriodMarkers, reconstructSetRallies } from "../reconstruct.ts";
 import {
   OFFLINE_RECORDED_AT,
   PACK_FOLD_OPTIONS,
+  gamePointsReader,
   packEnvelope,
   packEnvelopes,
   packLineupPair,
@@ -1946,17 +1947,30 @@ describe("validatePack — a pooled group stage is checked one table per pool", 
 
 describe("validatePack — the stage-config mirror is DRIVEN, key by key", () => {
   it("applies the stage's own points rule, which the division cfg cannot express", () => {
-    // The competition layer's `applyPointsRule` path, not the module's
+    // The competition layer's `payout` path, not the module's
     // `standingsDelta` path — a real group stage sets 3/1/0 at the STAGE. The
     // division cfg awards 3/1/0; the stage rule awards 10/4/1, so the table is
     // green ONLY if the rule ran.
-    const pack = leaguePack({
+    // W2d T9 (PS-9f): a stored rule is read in the outcome-keyed shape only, as the product reads it — every stored
+    // row was converted by the migration (V475), so the retired `{ base }` shape is a rule the engine refuses, never
+    // silently re-read. No committed pack carries one.
+    const legacy = leaguePack({
       entrants: ["e1", "e2"],
       fixtures: [["f1", "e1", "e2", 3, 1]],
       stage: { points: { base: { win: 10, draw: 4, loss: 1 } } },
       rows: [row("e1", 1, 1, 1, 0, 0, 10), row("e2", 2, 1, 0, 0, 1, 1)],
     });
-    expectClean(validatePack(pack, UNIT), []);
+    const refused = onlyError(validatePack(legacy, UNIT).findings);
+    expect(refused.code).toBe("standings.underivable");
+    expect(refused.message).toContain("points rule the engine refuses");
+
+    const keyed = leaguePack({
+      entrants: ["e1", "e2"],
+      fixtures: [["f1", "e1", "e2", 3, 1]],
+      stage: { points: { win: { regulation: 10 }, loss: { regulation: 1 }, draw: 4, shootoutAs: "result", unit: "whole" } },
+      rows: [row("e1", 1, 1, 1, 0, 0, 10), row("e2", 2, 1, 0, 0, 1, 1)],
+    });
+    expectClean(validatePack(keyed, UNIT), []);
 
     // The control: the SAME fixtures with no stage rule fall back to the
     // module's own 3/0, so the two paths are visibly different numbers.
@@ -5265,5 +5279,20 @@ describe("validatePack — a double walkover (W2b)", () => {
     );
     expect(reverse.code).toBe("match.outcome_kind");
     expect(reverse.message).toBe('outcome kind: pack expects "double_walkover", the fold produced "award"');
+  });
+});
+
+// W2d T9 fix round 1, m2 — the bench's game-points reader, as the product's: a result the stage never paid throws (a
+// structurally equal clone included), never falls back to the paid points. Both directions.
+describe("gamePointsReader (fix round 1, m2)", () => {
+  it("returns a paid result's game points and throws for a result the stage did not pay", () => {
+    const side = (entrantId: string, points: number) => ({ entrantId, points, played: 1, won: 0, drawn: 0, lost: 0, metrics: {} });
+    type Result = Parameters<ReturnType<typeof gamePointsReader>>[0];
+    const paid = [side("a", 3), side("b", 0)] as unknown as Result;
+    const read = gamePointsReader(new Map([[paid, [2, 1] as const]]));
+    expect(read(paid)).toEqual([2, 1]);
+    const clone = [side("a", 3), side("b", 0)] as unknown as Result;
+    expect(clone).toEqual(paid);
+    expect(() => read(clone)).toThrow(/did not pay \(a v b\)/);
   });
 });

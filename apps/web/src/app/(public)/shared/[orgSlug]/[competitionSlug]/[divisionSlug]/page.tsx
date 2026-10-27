@@ -6,6 +6,7 @@ import Link from "next/link";
 import { notFound, permanentRedirect } from "next/navigation";
 import type { Metadata } from "next";
 import { resolveModule } from "@/server/engine-db";
+import { tableOrderOf } from "@/server/engine-db/table-rules";
 import type { StandingsRow } from "@seazn/engine/competition";
 import { getPublicDivision } from "@/server/public-site/data";
 import { BRACKET_KINDS, divisionChampion } from "@/server/public-site/champion";
@@ -85,14 +86,13 @@ export default async function DivisionHomePage({ params }: Props) {
   }
   const { org, competition, division, stages, pools, fixtures, standings, entrants, tz } = data;
 
-  // MetricSpec[] + cascade from the division's PINNED module version.
+  // MetricSpec[] from the division's PINNED module version. The order each table is ranked and captioned by is its
+  // STAGE's (W2d Task 9: `stage.table_rules`, the one loader's — its pin, else its live layers).
   let metricSpecs: MetricSpecLike[] = [];
-  let cascade: readonly string[] = [];
   let module_: AnySportModule | null = null;
   try {
     module_ = resolveModule(division.sport_key, division.module_version);
     metricSpecs = module_.metrics;
-    cascade = division.tiebreakers ?? module_.defaultTiebreakers;
   } catch {
     // Unknown module version (e.g. retired build) — structural columns only.
   }
@@ -168,7 +168,6 @@ export default async function DivisionHomePage({ params }: Props) {
     fixtures: await qualificationFixtures(fixtures, module_, stages),
     entrantStatuses,
     entrantNames,
-    cascade,
   });
   // `ShareButton` reads its label through `useMsg()` (ui.json), which needs a
   // `<DictProvider>` ancestor to see any locale but English — the fixture
@@ -328,7 +327,7 @@ export default async function DivisionHomePage({ params }: Props) {
                   <StandingsTable
                     rows={snap.rows as StandingsRow[]}
                     metricSpecs={metricSpecs}
-                    cascade={cascade}
+                    cascade={tableOrderOf(stage.table_rules)}
                     entrantNames={entrantNames}
                     entrantLogos={entrantLogos}
                     entrantStatuses={entrantStatuses}

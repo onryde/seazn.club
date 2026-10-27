@@ -24,8 +24,10 @@ import type { AuthCtx } from "@/server/api-v1/auth";
 import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { heldAwards, rewriteHeldAwards } from "./award-rewrite";
 import { refuseInvalidatedOverrides } from "./fixture-override-guards";
-import { mergedStageRules, refuseStagePoints, refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
-import { assertCustomPointsAllowed } from "./stages";
+import { mergedStageRules, refuseStagePoints, refuseUnsettableKeys, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
+import type { TiebreakerKey } from "@seazn/engine/sport";
+import { repinStageOwnRules, tableRulesRowsOf } from "@/server/engine-db/table-rules";
+import { refuseStageTableSave } from "./table-rule-guards";
 // The format-lock predicate lives in rule-locks.ts (moved from here, W2c Task 2): the division PATCH asks the same
 // question per stage, and both halves must read one definition of "started".
 import { lockedStageIdsAmong } from "./rule-locks";
@@ -67,25 +69,33 @@ export async function formatLockedStageIds(auth: AuthCtx, divisionId: string): P
  * stage's own PointsRule (the engine's), written WHOLE to `config.points` (a rule is one sentence, not a fragment: a
  * second save replaces it); `points: null` removes it. Asked the questions every door asks of a stage's points
  * (`refuseStagePoints`: a bracket kind, Q1's inexpressible division, a walkover score the table never reads, metrics the
- * sport does not emit), behind the ONE entitlement gate (`assertCustomPointsAllowed`), and under the same per-stage lock.
+ * sport does not emit), under the same per-stage lock; no entitlement gate (W2d T10 fix round 1, I4: all scoring is free).
  * A save that moves the points re-folds a table that already has rows (a Swiss bye), after the commit.
+ *
+ * W2d Task 10 (spec §5.4, §5.5, §10; D3, D9; PS-5d; X-TB-2, X-TB-5, X-PT-3) — two more arms, the stage's OWN tie-break
+ * order (`config.tiebreakers`) and cross-group order (`config.crossGroupTiebreakers`), each absent = kept, null = removed
+ * (the stage inherits: the division's order, else the sport's; a derived cross-group order). Every arm is asked BEFORE
+ * anything is written (`refuseStageTableSave`): an order it writes is `validateCascade`d on the stage's kind (422
+ * TIEBREAK_KEY_INVALID, `extra.refusals`), and the points the stage will pay must pay every outcome its matches can reach
+ * (`coverage`; 422 POINTS_OUTCOME_UNCOVERED, `extra.uncovered`, replacing W2c's POINTS_MAP_INCOMPLETE). Between
+ * activation and the first score the save is accepted and RE-PINS only the fields it wrote (`repinStageOwnRules`); after
+ * the first score it is 409 STAGE_FORMAT_LOCKED (the lock above, W2c's monotonic predicate), a void notwithstanding.
  */
 export async function putStageRules(
   auth: AuthCtx,
   stageId: string,
-  input: { rules?: Record<string, unknown> | null; points?: z.input<typeof PointsRule> | null },
+  input: {
+    rules?: Record<string, unknown> | null;
+    points?: z.input<typeof PointsRule> | null;
+    tiebreakers?: readonly TiebreakerKey[] | null;
+    crossGroupTiebreakers?: readonly TiebreakerKey[] | null;
+  },
 ): Promise<{ rules: Record<string, unknown> | null; points: PointsRule | null }> {
   // The rule as the engine reads it (defaults applied), parsed here as well as at the route: an internal caller reaches
   // this usecase with no schema in front of it.
   const points = input.points === undefined || input.points === null ? input.points : PointsRule.parse(input.points);
-  // The entitlement gate is a pooled read: asked BEFORE the transaction opens (createStages does the same), never inside.
-  // A stage that is not there (or is another org's) answers 404 before it, never the gate's 402: one short tenant-scoped
-  // read first (fix round 1), only when there is a rule to gate.
-  if (points !== undefined && points !== null) {
-    const exists = await withTenant(auth.orgId, async (tx) => (await tx`select 1 from stages where id = ${stageId}`).length > 0);
-    if (!exists) throw new HttpError(404, "stage not found");
-    await assertCustomPointsAllowed(auth, points);
-  }
+  // W2d Task 10 fix round 1 (I4; owner standing rule "all scoring is free"): a stage's own points ask no entitlement gate.
+  // The `standings.custom_points` read (and the existence read that put a 404 before its 402) is gone.
   // Resolved BEFORE the transaction: `frozenCompetitionIds` runs its own
   // pooled query, and issuing that inside a `withTenant` callback that already
   // pins a connection is the nesting `entitlement-freeze.ts`'s header warns
@@ -167,7 +177,50 @@ export async function putStageRules(
 
     // W2c Task 13: the points arm's questions are asked before either arm writes, so a refused rule rolls back nothing
     // and a refused fragment nothing either (one transaction, but a refusal should not depend on which arm wrote first).
-    if (points !== undefined && points !== null) refuseStagePoints(module_, stage.stage_kind, stage.division_config, points);
+    if (points !== undefined && points !== null) refuseStagePoints(module_, stage.stage_kind, points);
+
+    // The rules arm's own questions, asked before any arm writes too (W2d Task 10: the table guard below reads the config
+    // the save leaves, which the merge decides). The merge is computed here, on the JS side, from the rules read under the
+    // lock above, and written whole below: every stage writer takes that lock, so nothing moves in between.
+    let nextRules: Record<string, unknown> | null | undefined;
+    if (input.rules !== undefined) {
+      if (input.rules !== null) refuseUnsettableKeys(module_, stage.sport_key, stage.stage_kind, stage.variant_key, stage.division_config, Object.keys(input.rules));
+      // "Inherit" is key ABSENCE, never an explicit null — the overlay spreads
+      // what it is given, so a null reaching the column blanks the division's
+      // value instead of deferring to it. `{rules: null}`, `{rules: {}}` and an
+      // emptied merge are one intent — inherit the division's format — so all
+      // three land on the same `- 'rules'`. Storing an empty `rules: {}` instead
+      // would leave a key that overrides nothing: the overlay would walk it for
+      // no reason, and every `"rules" in config` reader (the panel's "Same as
+      // division" state) would report an override that is not there.
+      nextRules = mergedStageRules(stage.stored_rules, input.rules);
+      // Validate the MERGE, store the FRAGMENT: `division ⊕ rules` through the sport's schema (the merged parse, in
+      // `stage-rules-merge.ts`). Whether the stage's points still pay every set score the merged `bestOf` reaches is the
+      // table guard's coverage question below (W2d: it replaced W2c's points-map arm).
+      if (nextRules !== null) {
+        const problem = stageRulesProblem(module_, stage.division_config, nextRules);
+        if (problem !== null) throw stageSaveRefusal(problem, stage.sport_key);
+      }
+    }
+
+    // W2d Task 10 — the table guard, over the stage's row as the loader reads it and the config the save leaves.
+    const tableArms = { points, tiebreakers: input.tiebreakers, crossGroupTiebreakers: input.crossGroupTiebreakers };
+    const writesTable = points !== undefined || input.tiebreakers !== undefined || input.crossGroupTiebreakers !== undefined;
+    if (writesTable || input.rules !== undefined) {
+      const [read] = await tableRulesRowsOf(tx, { stageIds: [stageId] });
+      if (read === undefined) throw new HttpError(404, "stage not found");
+      const afterConfig: Record<string, unknown> = { ...(read.row.stageConfig ?? {}) };
+      if (nextRules !== undefined) {
+        if (nextRules === null) delete afterConfig.rules;
+        else afterConfig.rules = nextRules;
+      }
+      for (const [key, value] of Object.entries(tableArms)) {
+        if (value === undefined) continue;
+        if (value === null) delete afterConfig[key];
+        else afterConfig[key] = value;
+      }
+      refuseStageTableSave(module_, read.row, afterConfig, tableArms);
+    }
 
     // W2c Task 15 fix round 1 (I-1): what every unstarted match of the stage resolves to before this save - read under the
     // `division-config:` EXCLUSIVE lock above, so no first event freezes between it and the bump after both arms. W2c Task 16b:
@@ -178,24 +231,8 @@ export async function putStageRules(
     // to reload (409 FIXTURE_RULES_CHANGED) rather than hold a version that no longer describes the match.
     const rulesBefore = input.rules !== undefined || points !== undefined ? await unfrozenRules(tx, { stageId }) : null;
 
-    if (input.rules !== undefined) {
-      const rules = input.rules;
-      if (rules !== null) refuseUnsettableKeys(module_, stage.sport_key, stage.stage_kind, stage.variant_key, stage.division_config, Object.keys(rules));
-
-      // The merge is computed here, on the JS side, from the rules read under the lock above, and written whole: every
-      // stage writer takes that lock, so nothing moves in between.
-      const stored = stage.stored_rules;
-
-      // "Inherit" is key ABSENCE, never an explicit null — the overlay spreads
-      // what it is given, so a null reaching the column blanks the division's
-      // value instead of deferring to it. `{rules: null}`, `{rules: {}}` and an
-      // emptied merge are one intent — inherit the division's format — so all
-      // three land on the same `- 'rules'`. Storing an empty `rules: {}` instead
-      // would leave a key that overrides nothing: the overlay would walk it for
-      // no reason, and every `"rules" in config` reader (the panel's "Same as
-      // division" state) would report an override that is not there.
-      const next = mergedStageRules(stored, rules);
-
+    if (nextRules !== undefined) {
+      const next = nextRules;
       // W2c batch-3 I1: the walkovers no event records, as they resolve BEFORE this save — re-written after it, under the
       // format the stage now plays (`award-rewrite.ts`). The stage lock above does not count them as play.
       const held = await heldAwards(tx, tx`stage_id = ${stageId}`);
@@ -205,13 +242,6 @@ export async function putStageRules(
         // the overlay copies over the division's value.
         await tx`update stages set config = config - 'rules' where id = ${stageId}`;
       } else {
-        // Validate the MERGE, store the FRAGMENT: `division ⊕ rules` through the sport's schema (the merged parse, in
-        // `stage-rules-merge.ts`), and — when the body moves `bestOf` — whether the division's `pointsMap` answers it
-        // (D10: checked only when this save actually moves `bestOf`; a division already missing entries for its OWN
-        // format is a division-level problem this endpoint did not cause and cannot fix).
-        const moved = rules !== null && setsBestOf(rules);
-        const problem = stageRulesProblem(module_, stage.division_config, next, moved);
-        if (problem !== null) throw stageSaveRefusal(problem, stage.sport_key);
         // Server-side merge (§T2): six other writers rewrite this column from a
         // JS-side read, and a spread of a stale read would revert this write.
         await tx`
@@ -231,21 +261,42 @@ export async function putStageRules(
       if (points === null) await tx`update stages set config = config - 'points' where id = ${stageId}`;
       else await tx`update stages set config = config || ${tx.json({ points } as never)} where id = ${stageId}`;
     }
+    // W2d Task 10 — the two order arms, written as the points arm is (whole; null removes the KEY: the stage inherits).
+    if (input.tiebreakers !== undefined) {
+      if (input.tiebreakers === null) await tx`update stages set config = config - 'tiebreakers' where id = ${stageId}`;
+      else await tx`update stages set config = config || ${tx.json({ tiebreakers: input.tiebreakers } as never)} where id = ${stageId}`;
+    }
+    if (input.crossGroupTiebreakers !== undefined) {
+      if (input.crossGroupTiebreakers === null) await tx`update stages set config = config - 'crossGroupTiebreakers' where id = ${stageId}`;
+      else
+        await tx`update stages set config = config || ${tx.json({ crossGroupTiebreakers: input.crossGroupTiebreakers } as never)} where id = ${stageId}`;
+    }
+    // PS-5d: a stage activated and not yet scored (the lock above let the save through) re-pins ONLY the fields this save
+    // wrote, each to its own new value or (cleared) the layer below as it stands now; a pending stage has no pin (no-op).
+    if (writesTable) {
+      await repinStageOwnRules(tx, stageId, { points, tiebreakers: input.tiebreakers, crossGroup: input.crossGroupTiebreakers });
+    }
     // ...and every unstarted match whose format (or walkover award) the save moved gets a new version: a pad open on it is
     // refused on its first tap (409 FIXTURE_RULES_CHANGED) instead of freezing a format it is not folding.
     if (rulesBefore !== null) await bumpMovedRules(tx, rulesBefore);
 
     // The stage as it now stands, both arms: what the save answers with.
-    const [after] = await tx<{ rules: Record<string, unknown> | null; points: PointsRule | null; snapshots: boolean }[]>`
+    const [after] = await tx<
+      {
+        rules: Record<string, unknown> | null;
+        points: PointsRule | null;
+        snapshots: boolean;
+      }[]
+    >`
       select config -> 'rules' as rules, config -> 'points' as points,
              exists (select 1 from standings_snapshots ss where ss.stage_id = ${stageId}) as snapshots
         from stages where id = ${stageId}`;
     return {
       rules: after!.rules ?? null,
       points: after!.points ?? null,
-      // A table already cached (a Swiss bye, an event-less walkover) is re-folded under the new points after the commit:
-      // `getStandings` answers from the snapshot, and nothing else re-folds a stage nobody has played in.
-      refold: points !== undefined && after!.snapshots,
+      // A table already cached (a Swiss bye, an event-less walkover) is re-folded under the new points or order after the
+      // commit: `getStandings` answers from the snapshot, and nothing else re-folds a stage nobody has played in.
+      refold: writesTable && after!.snapshots,
       divisionId: stage.division_id,
       competitionId: stage.competition_id,
     };
@@ -263,5 +314,6 @@ export async function putStageRules(
   // void), so there is no promise left floating either way.
   if (out.refold) await recomputeStandings(auth.orgId, stageId);
   fireDivisionRevalidate(out.divisionId, out.competitionId);
+  // The answer stays `{rules, points}` (`StageRules` on the wire): the orders' HTTP arm and their answer are Task 13's.
   return { rules: out.rules, points: out.points };
 }

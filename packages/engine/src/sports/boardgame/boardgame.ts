@@ -28,7 +28,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -548,6 +548,7 @@ const positions: PositionCatalog = {
 // Tiebreakers — spec 04 §6.3 / chess.md §4 (score = the standings points key).
 // ---------------------------------------------------------------------------
 
+// The Swiss order (W3's; unchanged by W2d, OC1): the Buchholz family first.
 export const BOARDGAME_TIEBREAKERS: TiebreakerKey[] = [
   "points",
   "buchholz_cut1",
@@ -557,6 +558,10 @@ export const BOARDGAME_TIEBREAKERS: TiebreakerKey[] = [
   "wins",
   "lots",
 ];
+
+// W2d (spec §5.10, BG-TB-1, BG-TB-2; RBG:459-461) — the round-robin order: points → direct encounter → number of wins →
+// Sonneborn-Berger → lots. No Buchholz outside Swiss (FIDE C.07 Art. 8 note).
+export const BOARDGAME_RR_TIEBREAKERS: TiebreakerKey[] = ["points", "direct", "wins", "sberger", "lots"];
 
 // ---------------------------------------------------------------------------
 // Display — half-points → points string (2 → "1", 1 → "½", 3 → "1½").
@@ -1069,14 +1074,26 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   },
 
   metrics: [
-    // doc 09 §2: chess shows Score, Buchholz Cut-1, SB (cascade-derived
-    // columns, engine competition/display.ts) — colour tallies are pairing
-    // metadata, not table columns.
+    // The table's columns derive from the stage's cascade (competition/display.ts): a Swiss shows Score, Buchholz Cut-1,
+    // SB; a round robin shows no Buchholz (C.07 Art. 8 note, BG-TB-2) — colour tallies
+    // are pairing metadata, not table columns.
     { key: "wins", label: "Wins", direction: "desc" },
     { key: "white", label: "Games as White", direction: "desc", display: false },
     { key: "black", label: "Games as Black", direction: "desc", display: false },
   ],
-  defaultTiebreakers: BOARDGAME_TIEBREAKERS,
+  defaultTiebreakers: (kind) => [...(kind === "swiss" ? BOARDGAME_TIEBREAKERS : BOARDGAME_RR_TIEBREAKERS)],
+  // W2d (spec §5.10, BG-PT-1) — FIDE's 1 / ½ / 0 in half-points on every table stage, and the 3/1/0 "football scoring"
+  // some opens use (RB2B-18) on a round-robin stage only: a Swiss pairs on the score, which 3/1/0 would distort.
+  tablePresets: (stageKind) => ({
+    points: [
+      { id: "fide_1_half_0", rule: { win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "half", bonuses: [] } },
+      ...(stageKind === "swiss"
+        ? []
+        : [{ id: "three_one_zero", rule: { win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] } }]),
+    ],
+    tiebreakers: [],
+  }),
+  primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // X-DR-1 (ruling 78): draws only where nobody must advance. A drawn bracket
   // game goes to the tie-break (BG-KO-1), never to a decided draw.
@@ -1090,6 +1107,28 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
   // (`decideResult`), and every tie-break event names a winner. Anything else - no tie-break, or an empty rung list -
   // leaves the draw standing, held for the organiser (ruling 79).
   canEndLevel: (cfg) => !(cfg.tiebreak === true && effectiveRungs(cfg).length > 0),
+  // W2d (spec §5.2, D4; X-PT-2) — a result names any method a winner may carry (the result schema refuses a winner only
+  // on a double forfeit), `regulation` when it names none (`decideResult`), and a tie-break game names its rung: chess's
+  // shoot-out (author's call, D4).
+  ...winMethodTable("boardgame", {
+    regulation: "regulation",
+    ...Object.fromEntries(BoardgameMethod.options.filter((m) => m !== "double_forfeit").map((m): [string, DecidedIn] => [m, "regulation"])),
+    ...Object.fromEntries(TIEBREAK_RUNGS.map((r): [string, DecidedIn] => [`tiebreak_${r}`, "so"])),
+  }),
+  // A drawn game goes to tie-break games only where the stage plays them and lists a rung (`decideResult`, `canEndLevel`).
+  reachableDecidedIn: (cfg) => new Set<DecidedIn>(cfg.tiebreak === true && effectiveRungs(cfg).length > 0 ? ["regulation", "so"] : ["regulation"]),
+  reachableResultKinds: (cfg, stage) => new Set<"draw" | "tie" | "noResult">(boardgame.supportsDraws(cfg, stage) ? ["draw"] : []),
+  shootoutAs: "result",
+  // W2d (spec §5.10; BG-PT-1) — `scoring` as stored, in half-points (2/1/0 is FIDE's 1/½/0, `unit: "half"`); a
+  // tie-break game's winner is paid a win (no `so` split).
+  tablePointsRule: (cfg) => ({
+    win: { regulation: cfg.scoring.win },
+    loss: { regulation: cfg.scoring.loss },
+    draw: cfg.scoring.draw,
+    shootoutAs: boardgame.shootoutAs,
+    unit: "half",
+    bonuses: [],
+  }),
   // C12: lots is the organiser's settle (ruling 73) — settleApplies is true while
   // the tie-break is pending. A held double forfeit is phase "done": false (T15-R1).
   awaitingDecider: (s: BoardgameState) => s.phase === "tiebreak",

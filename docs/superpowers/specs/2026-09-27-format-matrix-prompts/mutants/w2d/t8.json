@@ -1,0 +1,338 @@
+[
+ {
+  "id": "t8-division-beats-own",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "  const own = input.stageOwn.tiebreakers;\n  if (own != null) return { tiebreakers: own, source: \"stage\" };\n  const division = input.divisionTiebreakers;\n  if (division != null) return { tiebreakers: division, source: \"division\" };",
+  "replace": "  const own = input.stageOwn.tiebreakers;\n  const division = input.divisionTiebreakers;\n  if (division != null) return { tiebreakers: division, source: \"division\" };\n  if (own != null) return { tiebreakers: own, source: \"stage\" };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "X-TB-1 own order beats the division's"
+   }
+  ]
+ },
+ {
+  "id": "t8-crossgroup-keeps-h2h-two",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "  return tiebreakers.filter((key) => !isHeadToHeadKey(key));",
+  "replace": "  return tiebreakers.filter((key) => key === \"h2h_two\" || !isHeadToHeadKey(key));",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "defaultCrossGroup removes h2h_"
+   }
+  ]
+ },
+ {
+  "id": "t8-sport-asked-with-empty-cfg",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "askSport(input, (cfg) => input.module.defaultTiebreakers(input.stageKind, cfg))",
+  "replace": "askSport(input, () => input.module.defaultTiebreakers(input.stageKind, {}))",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "PS-7c the sport layer is asked with the input's mergedCfg"
+   }
+  ]
+ },
+ {
+  "id": "t8-pin-ignored",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "  if (input.pinned != null) return input.pinned;",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "X-TB-1 a pin beats every layer"
+   }
+  ]
+ },
+ {
+  "id": "t8-own-points-undefined-is-a-rule",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "  if (own != null) return { points: own, source: \"stage\" };",
+  "replace": "  if (own !== null) return { points: own, source: \"stage\" };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "X-TB-1 a value a stored config never had"
+   }
+  ]
+ },
+ {
+  "id": "t8-own-order-undefined-is-an-order",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "  if (own != null) return { tiebreakers: own, source: \"stage\" };",
+  "replace": "  if (own !== null) return { tiebreakers: own, source: \"stage\" };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "X-TB-1 a value a stored config never had"
+   }
+  ]
+ },
+ {
+  "id": "t8-division-undefined-is-an-order",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "  if (division != null) return { tiebreakers: division, source: \"division\" };",
+  "replace": "  if (division !== null) return { tiebreakers: division, source: \"division\" };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "X-TB-1 a value a stored config never had"
+   }
+  ]
+ },
+ {
+  "id": "t8-own-crossgroup-ignored",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "    crossGroup: input.stageOwn.crossGroup ?? defaultCrossGroup(order.tiebreakers),",
+  "replace": "    crossGroup: defaultCrossGroup(order.tiebreakers),",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "X-TB-1 own order beats the division's"
+   }
+  ]
+ },
+ {
+  "id": "t8-sport-read-unparsed",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "    const answer = ask(parsed.data);",
+  "replace": "    const answer = ask(input.mergedCfg);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "PS-7c the sport layer is asked with the input's mergedCfg"
+   }
+  ]
+ },
+ {
+  "id": "t8-schema-refusal-refuses-a-cfg-that-scores",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "    answer = ask(input.mergedCfg);",
+  "replace": "    throw new TypeError(\"not read as given\");",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "a merged cfg the sport layer cannot read is a typed CONFIG_INVALID refusal"
+   }
+  ]
+ },
+ {
+  "id": "t8-unreadable-cfg-crashes",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "    if (cause instanceof EngineError) throw cause;",
+  "replace": "    throw cause;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "a merged cfg the sport layer cannot read is a typed CONFIG_INVALID refusal"
+   }
+  ]
+ },
+ {
+  "id": "t8-as-given-rule-unchecked",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "  if (answerSchema === undefined) return answer;",
+  "replace": "  return answer;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "a merged cfg the sport layer cannot read is a typed CONFIG_INVALID refusal"
+   }
+  ]
+ },
+ {
+  "id": "t8-points-answer-not-checked",
+  "file": "packages/engine/src/competition/table-rules.ts",
+  "find": "askSport(input, (cfg) => input.module.tablePointsRule(cfg, input.stageKind), PointsRule)",
+  "replace": "askSport(input, (cfg) => input.module.tablePointsRule(cfg, input.stageKind))",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "a merged cfg the sport layer cannot read is a typed CONFIG_INVALID refusal"
+   }
+  ]
+ },
+ {
+  "id": "t8-unknown-key-crashes",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "  if (!Object.hasOwn(KEY_RULES, key)) throw new EngineError(\"CONFIG_INVALID\", `tie-break key \"${key}\" is not a tie-break key`, { key });\n  return KEY_RULES[key].headToHead === true;",
+  "replace": "  return KEY_RULES[key].headToHead === true;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "a stored order with a key outside the vocabulary is refused CONFIG_INVALID"
+   }
+  ]
+ },
+ {
+  "id": "t8-p25-primary-ignored",
+  "file": "packages/engine/src/competition/tie-what-if.ts",
+  "find": "  if (first !== \"points\" && first !== opts.primary) return null;",
+  "replace": "  if (first !== \"points\") return null;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tie-what-if.test.ts"
+    ],
+    "name": "P25 a wins-first volleyball order gets a what-if"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tie-what-if.test.ts"
+    ],
+    "name": "P25 every wins-primary sport"
+   }
+  ]
+ },
+ {
+  "id": "t8-p25-twin-always-wins",
+  "file": "packages/engine/src/competition/tie-what-if.ts",
+  "find": "  const twin: TiebreakerKey = first === \"points\" ? \"wins\" : \"points\";",
+  "replace": "  const twin: TiebreakerKey = \"wins\";",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tie-what-if.test.ts"
+    ],
+    "name": "P25 a wins-first volleyball order gets a what-if"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tie-what-if.test.ts"
+    ],
+    "name": "P25 every wins-primary sport"
+   }
+  ]
+ },
+ {
+  "id": "t8-p25-points-value-dropped",
+  "file": "packages/engine/src/competition/tie-what-if.ts",
+  "find": "    case \"points\":\n      return `${row.points}`;",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tie-what-if.test.ts"
+    ],
+    "name": "P25 a wins-first volleyball order gets a what-if"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tie-what-if.test.ts"
+    ],
+    "name": "P25 every wins-primary sport"
+   }
+  ]
+ },
+ {
+  "id": "t8-stage-ranks-by-a-fixed-order",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "      cascade: stage.rules.tiebreakers,",
+  "replace": "      cascade: [\"points\", \"diff\", \"lots\"],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "completeTableStage ranks with rules.tiebreakers"
+   }
+  ]
+ },
+ {
+  "id": "t8-stage-winscount-dropped",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "      ...(stage.winsCount === undefined ? {} : { winsCount: stage.winsCount }),",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "HK-TB-1 completeTableStage hands the stage's winsCount"
+   }
+  ]
+ },
+ {
+  "id": "t8-stage-gamepoints-dropped",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "      ...(stage.gamePoints === undefined ? {} : { gamePoints: stage.gamePoints }),",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/table-rules.test.ts"
+    ],
+    "name": "B5 completeTableStage hands the stage's gamePoints"
+   }
+  ]
+ },
+ {
+  "id": "t8-sim-replay-guard-reaches",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "      const stored = ctx.lotsDraws?.get(membersKey);",
+  "replace": "      const stored = undefined;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/testkit/simulation.test.ts"
+    ],
+    "name": "seeded divisions hold the global invariants"
+   }
+  ]
+ }
+]

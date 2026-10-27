@@ -43,7 +43,17 @@ import { StandingsTable } from "@/components/public-site/standings-table";
 import type { PublicEntrant, PublicFixture, PublicStage } from "@/server/public-site/data";
 import type { QualificationView } from "@/server/public-site/qualification-view";
 import enPublic from "@/dictionaries/en/public.json";
+import { resolveModule } from "@/server/engine-db/registry";
+import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
 import DivisionHomePage from "../page";
+
+/** The division's live cfg and pinned module; each stage carries the rules the one loader serves for it
+ *  (`PublicStage.table_rules`, W2d Task 9) — its order, its points, its bounds. */
+const DIVISION_CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 } };
+// the pinned module as the adapter resolves it (`resolveModule` boots the registry; a bare `registry.get` at import
+// time finds it empty and the file never collects)
+const GENERIC = resolveModule("generic", "1.0.0");
+const rulesFor = (kind: string) => unpinnedRulesDoc({ module: GENERIC, kind, divisionConfig: DIVISION_CFG });
 
 /** The en captions of pools A and B under `stage`: `table.poolLabel` over the
  *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
@@ -119,6 +129,7 @@ function divisionData(qualifyCount: number | null) {
     swiss_rounds: 3,
     points_rule: null,
     has_rank_overrides: false,
+    table_rules: rulesFor("swiss"),
   };
   return {
     org: { id: "o1", slug: "test-org", name: "Test Org", default_locale: "en" },
@@ -148,7 +159,7 @@ function divisionData(qualifyCount: number | null) {
       sport_name: null,
       entrant_count: 4,
       // The live cfg the forecast's per-match bounds come from.
-      config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 } },
+      config: DIVISION_CFG,
     },
     stages: [stage],
     pools: [],
@@ -199,6 +210,7 @@ function twoPoolData() {
     qualify_per_group: true,
     next_stage_name: "Finals",
     swiss_rounds: null,
+    table_rules: rulesFor("group"),
   };
   const inPool = (f: PublicFixture, pool: string): PublicFixture => ({ ...f, stage_id: "gr", pool_id: pool });
   const prow = (entrantId: string, rank: number, won: number, played: number) => ({

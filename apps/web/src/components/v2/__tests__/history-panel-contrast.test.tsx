@@ -221,7 +221,7 @@ describe("FixtureConsole — 'vs' separator contrast (regression, R3.5)", () => 
 // match), the two status chips (a DIFFERENT background — bg-slate-100, not
 // white — judged on their own rather than assumed to inherit the 7.58:1
 // figure above), and match-rules.tsx's shared field-help span, which Task I
-// put two new strings (shootoutWin/shootoutLoss) behind without the wave
+// put two new strings (the shoot-out points pair, retired in W2d) behind without the wave
 // noticing the span itself was already failing AA.
 //
 // Each instance is checked two ways, closing the gap a reviewer found in

@@ -8,7 +8,10 @@
 // reserves the column). That is NOT this module's concern — this module scores a
 // single singles/doubles fixture only (table-tennis.md §4).
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { makeSetBasedModule, SET_RULE_KEYS } from "./kernel.ts";
+import { makeSetBasedModule, samePointsMap, SET_RULE_KEYS, type SetBasedParams } from "./kernel.ts";
+
+// League convention 2/0 for the cfg's own map (`standingsDelta` reads it; configurable).
+const TT_POINTS: SetBasedParams["pointsMap"] = { "*": [2, 0] };
 
 // table-tennis.md §6 — no positions; singles/doubles/mixed = entrant kind (same
 // as badminton). One nominated unit per side.
@@ -27,7 +30,7 @@ export const tabletennis = makeSetBasedModule({
     finalSetTo: 11,
     winBy: 2,
     cap: null,
-    pointsMap: { "*": [2, 0] }, // league convention 2/0; configurable
+    pointsMap: TT_POINTS,
     // W4 (#407) — the ITTF match sheet carries one timeout per player per
     // match and the umpire's card ladder (yellow warning → `warning`, red
     // penalty → `penalty`, removal → `expulsion`/`disqualification`). No
@@ -54,8 +57,13 @@ export const tabletennis = makeSetBasedModule({
     allowSquadGrowth: false,
   }),
   unitLabel: { one: "Game", many: "Games" },
-  // spec 04 §5 / table-tennis.md §5 — matches → h2h → game ratio → point ratio.
-  defaultTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
+  // W2d (SPEC §5.10, TT-TB-1): ITTF 3.7.5 — match points, then only the matches among the tied: their match points,
+  // games ratio and points ratio (3.7.5.2); once some are placed, their matches drop and the rest recompute
+  // (3.7.5.3); then lots (3.7.5.4).
+  defaultTiebreakers: ["points", "h2h_points", "h2h_set_ratio", "h2h_point_ratio", "h2h_exclusion", "lots"],
+  // OC1: a Swiss stage keeps its pre-W2d order.
+  swissTiebreakers: ["points", "wins", "set_ratio", "point_ratio", "h2h_points"],
+  primaryTableKey: "points", // W2d (D11): ITTF match points first (a played loss pays 1).
   officialLabel: { scorer: "Umpire" }, // doc 13 §1
   coarseEventType: "game.summary",
   // S7/#427 — the ITTF umpire has exactly two cards, yellow and red, and no
@@ -88,6 +96,14 @@ export const tabletennis = makeSetBasedModule({
     serverFromPairOrder: true,
   },
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
+  // W2d (D6, PS-7a; ruling 108 amended) — a match the loser did not play pays it 0, not the played loss 1.
+  declaresUnplayedLoss: true,
+  // W2d (spec §5.10, D6; TT-PT-1) — table tennis's table pays 2/1/0: a played loss 1, an unplayed loss 0, where the
+  // shipped map paid every loss 0. For the shipped map only: an organiser's own map pays as written.
+  tablePointsRule: (cfg, fromMap) =>
+    samePointsMap(cfg.pointsMap, TT_POINTS)
+      ? { win: { regulation: 2 }, loss: { regulation: 1, unplayed: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] }
+      : fromMap,
   // `tabletennis.expedite.start` records that the umpire introduced the
   // expedite system, and every later rally carrying `returns` + `serving` is
   // judged against the receiver's thirteenth good return (see `records`

@@ -12,10 +12,14 @@ import {
   openStage,
   type BracketFixture,
   type BracketStage,
+  type CompletedTableStage,
   type DivisionEvent,
   type TableFixture,
   type TableStage,
 } from "../competition/stage.ts";
+import { validateCascade } from "../competition/cascade-rules.ts";
+import { resolveTableRules, type TableRules } from "../competition/table-rules.ts";
+import type { MembersKey, StoredLotsDraw } from "../competition/tiebreakers.ts";
 import {
   progressionSize,
   resolveProgression,
@@ -42,7 +46,7 @@ import {
   type SwissStanding,
 } from "../scheduling/swiss.ts";
 import { resolvePositions } from "../sport/catalog.ts";
-import type { AnySportModule, ModuleEvent, TiebreakerKey } from "../sport/module.ts";
+import type { AnySportModule, ModuleEvent, TableStageKind, TiebreakerKey } from "../sport/module.ts";
 import { lineupFromCatalog, TEST_INSTANT } from "./helpers.ts";
 
 // W4a (#425) §3.3 — every fold below is PAD-SHAPED: it builds a stream event by
@@ -225,17 +229,55 @@ export function drawEntrantCount(seed: number): number {
   return Math.min(64, 2 + Math.floor(rng() * rng() * 63));
 }
 
-const SWISS_ONLY_KEYS: ReadonlySet<TiebreakerKey> = new Set([
-  "buchholz",
-  "buchholz_cut1",
-  "sberger",
-  "direct",
-]);
+// The stage's table rules through the product's one resolver (W2d spec §5.4, §6 E6): the sport's points under the run's
+// cfg, and the sport's default order for the stage kind, inherited as it ships. No division order, no pin: a simulated
+// stage is never pinned. W2d T11 (review m7): a default that ranks on the Swiss ledger outside a Swiss stage (validateCascade
+// rule 3: the Buchholz pair; Sonneborn-Berger and the direct encounter read the pool's own ledger, §5.6, B5) is an order
+// the product refuses, so the sim refuses it by name rather than stripping it into one it would rank by. No signed default
+// holds one (defaults-sweep.test.ts); simulation.test.ts reaches the refusal with a planted key in every sport.
+function stageRules(ctx: SimContext, kind: TableStageKind): TableRules {
+  const order = ctx.module.defaultTiebreakers(kind, ctx.cfg);
+  const swissLedger = validateCascade(order, { module: ctx.module, cfg: ctx.cfg, stageKind: kind, crossGroup: false }).filter(
+    (refusal) => refusal.reason === "stage_format",
+  );
+  if (swissLedger.length > 0) {
+    throw new SimInvariantError(
+      `${ctx.module.key}'s ${kind} default ranks on the Swiss ledger (${swissLedger.map((r) => r.key).join(", ")}), which only a swiss stage assembles (validateCascade rule 3)`,
+      { order },
+    );
+  }
+  return resolveTableRules({
+    module: ctx.module,
+    stageKind: kind,
+    mergedCfg: ctx.cfg,
+    stageOwn: { points: null, tiebreakers: null, crossGroup: null },
+    divisionTiebreakers: null,
+    pinned: null,
+  });
+}
 
-// The stage cascade: the module's official cascade, minus Swiss-ledger keys
-// outside a swiss stage (they need the assembled ledger, spec 05 §4.1).
-function stageCascade(module: AnySportModule, swiss: boolean): TiebreakerKey[] {
-  return module.defaultTiebreakers.filter((key) => swiss || !SWISS_ONLY_KEYS.has(key));
+// Completes a table stage as the product does (W2d spec §5.8, §6 E6): rank, store each drawing of lots it made (the sim's
+// store stamps the date — the engine never invents one), then rank again with the stored draws. The second pass must
+// reproduce the first order in every pool and draw nothing new (X-TB-4: a stored draw IS the order); its rows carry the
+// stored date, and its rank_lock events the stored order and date.
+const poolOrders = (c: CompletedTableStage): string => JSON.stringify(c.tables.pools.map((p) => [p.pool, p.rows.map((r) => r.entrantId)]));
+function completeWithStoredLots(stage: TableStage, fixtures: readonly TableFixture[], drawnAt: string): CompletedTableStage {
+  const first = completeTableStage(stage, fixtures);
+  if (first.newLotsDraws.length === 0) return first;
+  const store = new Map<string, Map<MembersKey, StoredLotsDraw>>();
+  for (const draw of first.newLotsDraws) {
+    const pool = store.get(draw.pool) ?? new Map<MembersKey, StoredLotsDraw>();
+    pool.set(draw.membersKey, { order: draw.drawnOrder, drawnAt });
+    store.set(draw.pool, pool);
+  }
+  const stored = completeTableStage({ ...stage, lotsDraws: store }, fixtures);
+  if (stored.newLotsDraws.length > 0 || poolOrders(stored) !== poolOrders(first)) {
+    throw new SimInvariantError(`stage "${stage.id}": its stored drawing of lots did not reproduce the table it was drawn for`, {
+      drawn: first.newLotsDraws,
+      redrawn: stored.newLotsDraws,
+    });
+  }
+  return stored;
 }
 
 // ---------------------------------------------------------------------------
@@ -554,14 +596,15 @@ function playRoundRobinStage(
     id: stageId,
     kind,
     entrants: allEntrants,
-    cascade: stageCascade(ctx.module, false),
+    rules: stageRules(ctx, kind),
+    ...(ctx.module.winsCount === undefined ? {} : { winsCount: ctx.module.winsCount }),
     seeds,
     rngSeed: deriveSeed(ctx.seed, "lots", stageId),
   };
   if (!isTableStageComplete(stage, tableFixtures)) {
     throw new SimInvariantError(`stage "${stageId}" not complete after playing every fixture`);
   }
-  const completed = completeTableStage(stage, tableFixtures);
+  const completed = completeWithStoredLots(stage, tableFixtures, `sim:${ctx.seed}:${stageId}`);
   ctx.divisionEvents.push(...completed.events);
 
   const done = completed.events.find((e) => e.type === "stage_completed");
@@ -573,7 +616,7 @@ function playRoundRobinStage(
       entrants: allEntrants,
       fixtures: records,
       tables: completed.tables,
-      cascade: [...stage.cascade],
+      cascade: [...stage.rules.tiebreakers],
       ...(legs === 1 ? {} : { legs }),
       finalRanks,
     },
@@ -647,7 +690,8 @@ function playSwissStage(
     id: stageId,
     kind: "swiss",
     entrants: [...entrants],
-    cascade: stageCascade(ctx.module, true),
+    rules: stageRules(ctx, "swiss"),
+    ...(ctx.module.winsCount === undefined ? {} : { winsCount: ctx.module.winsCount }),
     swiss: true,
     seeds,
     rngSeed: deriveSeed(ctx.seed, "lots", stageId),
@@ -656,7 +700,7 @@ function playSwissStage(
   if (roundsPlayed === 0 || !isTableStageComplete(stage, tableFixtures)) {
     throw new SimInvariantError(`swiss stage "${stageId}" has no complete rounds`);
   }
-  const completed = completeTableStage(stage, tableFixtures);
+  const completed = completeWithStoredLots(stage, tableFixtures, `sim:${ctx.seed}:${stageId}`);
   ctx.divisionEvents.push(...completed.events);
   const done = completed.events.find((e) => e.type === "stage_completed");
   const finalRanks = done?.type === "stage_completed" ? done.finalRanks : [];
@@ -667,7 +711,7 @@ function playSwissStage(
       entrants: [...entrants],
       fixtures: records,
       tables: completed.tables,
-      cascade: [...stage.cascade],
+      cascade: [...stage.rules.tiebreakers],
       finalRanks,
     },
     tables: completed.tables,
@@ -1105,12 +1149,21 @@ function fail(sim: SimulationResult, message: string, detail?: unknown): never {
   throw new SimInvariantError(`[${sim.seedToken}] ${message}`, detail);
 }
 
+/** What `assertDivisionInvariants` checked, so a caller can refuse a vacuous pass: the table pools whose rank order it
+ *  held against each table measure (W2d T11). */
+export interface DivisionInvariantReport {
+  tableMeasureChecks: Record<TableMeasure, number>;
+}
+
+type TableMeasure = "points" | "wins";
+
 export function assertDivisionInvariants(
   sim: SimulationResult,
   module: AnySportModule,
   rawCfg?: unknown,
-): void {
+): DivisionInvariantReport {
   const cfg = module.configSchema.parse(rawCfg ?? {}) as unknown;
+  const tableMeasureChecks: Record<TableMeasure, number> = { points: 0, wins: 0 };
   const entrantSet = new Set(sim.entrants);
 
   // Champion well-defined.
@@ -1201,20 +1254,35 @@ export function assertDivisionInvariants(
         if (JSON.stringify([...ranks].sort((a, b) => (a ?? 0) - (b ?? 0))) !== JSON.stringify(want)) {
           fail(sim, `stage "${stage.id}" pool "${pool.pool}" ranks not a total order 1..n`, ranks);
         }
-        // Cascade sanity (the comparator-flip catcher): every builtin cascade
-        // ranks on points first, so rank order must be non-increasing in points.
-        if (stage.cascade?.[0] === "points") {
+        // Cascade sanity (the comparator-flip catcher): every builtin order opens on a table measure — `points`, or the
+        // sport's own primary (W2d D11: `wins` for volleyball, badminton and tennis; T11 re-keyed this off `points`
+        // alone, which skipped every wins-first default) — so rank order must be non-increasing in it. An order that
+        // opens on anything else is no builtin default: refused, not skipped.
+        const first = stage.cascade?.[0];
+        if (first !== undefined) {
+          if (first !== "points" && first !== module.primaryTableKey) {
+            fail(sim, `stage "${stage.id}" order opens on "${first}", neither points nor the sport's primary "${module.primaryTableKey}"`);
+          }
+          // `wins` is read as the plain W column: no builtin ranks wins-first while counting regulation wins only
+          // (hockey, the one winsCount "regulation" sport, ranks on points first — HK-TB-1). Refused, not misread.
+          if (first === "wins" && module.winsCount === "regulation") {
+            fail(sim, `stage "${stage.id}" ranks wins-first under winsCount "regulation", which this check does not model`);
+          }
+          const measure: TableMeasure = first;
           const sorted = [...pool.rows].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
           for (let i = 1; i < sorted.length; i++) {
             const prev = sorted[i - 1] as (typeof sorted)[number];
             const here = sorted[i] as (typeof sorted)[number];
-            if (here.points > prev.points) {
+            const was = measure === "points" ? prev.points : prev.won;
+            const now = measure === "points" ? here.points : here.won;
+            if (now > was) {
               fail(
                 sim,
-                `stage "${stage.id}" pool "${pool.pool}" rank order contradicts points (rank ${prev.rank}: ${prev.points} < rank ${here.rank}: ${here.points})`,
+                `stage "${stage.id}" pool "${pool.pool}" rank order contradicts ${measure} (rank ${prev.rank}: ${was} < rank ${here.rank}: ${now})`,
               );
             }
           }
+          tableMeasureChecks[measure]++;
         }
       }
     }
@@ -1303,4 +1371,5 @@ export function assertDivisionInvariants(
   for (const stage of sim.stages) {
     if (!completed.has(stage.id)) fail(sim, `stage "${stage.id}" never completed`);
   }
+  return { tableMeasureChecks };
 }

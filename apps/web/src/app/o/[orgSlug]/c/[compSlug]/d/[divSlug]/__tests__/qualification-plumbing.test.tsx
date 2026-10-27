@@ -121,6 +121,16 @@ import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
+import { defaultOrderOf } from "@seazn/engine/testkit";
+import type { AnySportModule } from "@seazn/engine/sport";
+import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
+
+/** The division's live cfg (the `getDivision` mock's). */
+const DIVISION_CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 } };
+/** The rules the one loader serves for a stage of `kind` (W2d Task 9, `listStageQualificationMeta` → `table_rules`):
+ *  the order the console ranks, captions and qualifies the table by. */
+const rulesFor = (kind: string, module_: AnySportModule = builtinModules.find((m) => m.key === "generic")!, divisionConfig: unknown = DIVISION_CFG) =>
+  unpinnedRulesDoc({ module: module_, kind, divisionConfig });
 
 /** The en captions of pools A and B under `stage`: `table.poolLabel` over the
  *  pool KEY, read from the dictionary file — never the stored "Pool " + key. */
@@ -169,14 +179,16 @@ const row = (entrantId: string, rank: number, won: number, played: number, goals
   metrics: { for: goals[0], against: goals[1], diff: goals[0] - goals[1] },
 });
 
-/** V414's six columns, as the usecase returns them. */
-const meta = (m: Partial<StageQualMetaRow>): StageQualMetaRow => ({
+/** V414's six columns and the stage's loaded table rules (W2d Task 9), as the usecase returns them. */
+const meta = (m: Partial<StageQualMetaRow>, kind = "swiss"): StageQualMetaRow => ({
   qualify_count: null,
   qualify_per_group: false,
   next_stage_name: null,
   swiss_rounds: null,
   points_rule: null,
   has_rank_overrides: false,
+  // the stage's rules as the loader serves them (an unpinned stage: the live layers)
+  table_rules: rulesFor(kind),
   ...m,
 });
 
@@ -343,7 +355,7 @@ describe("organiser console — the standings tables get the same qualification 
   it("two pools with a per-group cut: each pool's table gets ITS OWN pool's view, line and statuses", async () => {
     twoPoolScene();
     qual.listStageQualificationMeta.mockResolvedValue(
-      new Map([["gr", meta({ qualify_count: 1, qualify_per_group: true, next_stage_name: "Finals" })]]),
+      new Map([["gr", meta({ qualify_count: 1, qualify_per_group: true, next_stage_name: "Finals" }, "group")]]),
     );
     const tables = await renderTables();
     expect(tables.map((x) => x.caption)).toEqual(enCaptions("Groups"));
@@ -383,7 +395,7 @@ describe("organiser console — the standings tables get the same qualification 
     );
     expect([POOL_A, POOL_B].sort(), "premise: the ids sort B first").toEqual([POOL_B, POOL_A]);
     qual.listStageQualificationMeta.mockResolvedValue(
-      new Map([["gr", meta({ qualify_count: 1, qualify_per_group: true, next_stage_name: "Finals" })]]),
+      new Map([["gr", meta({ qualify_count: 1, qualify_per_group: true, next_stage_name: "Finals" }, "group")]]),
     );
     const tables = await renderTables();
     expect(tables.map((x) => x.caption)).toEqual(enCaptions("Groups"));
@@ -462,9 +474,37 @@ describe("organiser console — the tie-break cascade caption says the sport's w
       .map((el) => String((el.props as { children: unknown }).children));
   }
 
+  /** The stage's order as the one loader serves it for `module_` (no cut: the caption is all this reads). */
+  const captionMeta = (module_: AnySportModule, divisionConfig: unknown) =>
+    qual.listStageQualificationMeta.mockResolvedValue(new Map([["sw", { ...meta({ swiss_rounds: 3 }), table_rules: rulesFor("swiss", module_, divisionConfig) }]]));
+  const variantCfg = (m: AnySportModule) => m.variants[Object.keys(m.variants)[0]!];
+
+  it("a stage the loader refused (its row carries `table_rules: null`, as listStageQualificationMeta sends it) gets no caption — never a default re-read by the page", async () => {
+    swissScene();
+    // the positive pair: the same stage with its rules served captions its order
+    captionMeta(GENERIC, DIVISION_CFG);
+    expect((await cascadeCaption()).length, "premise: a served stage is captioned").toBeGreaterThan(0);
+    // production's shape for a refused stage: its V414 row is there, its rules are null (`stageTableRulesDocs` left it out)
+    qual.listStageQualificationMeta.mockResolvedValue(new Map([["sw", { ...meta({ swiss_rounds: 3 }), table_rules: null }]]));
+    const root = await DivisionPage({
+      params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
+      searchParams: Promise.resolve({ tab: "standings" }),
+    });
+    const caption = elements(root).find(
+      (el) => el.type === "p" && String((el.props as { className?: string }).className).includes("border-slate-100 pt-3"),
+    );
+    const words = caption
+      ? elements((caption.props as { children: unknown }).children).filter(
+          (el) => el.type === "span" && (el.props as { className?: string }).className === "text-slate-500",
+        )
+      : [];
+    expect(words).toEqual([]);
+  });
+
   it("generic: plain 'difference' and 'total scored', never the goal/run catch-all", async () => {
     swissScene();
-    expect(GENERIC.defaultTiebreakers, "premise: generic splits on diff then for").toEqual(
+    captionMeta(GENERIC, DIVISION_CFG);
+    expect(defaultOrderOf(GENERIC), "premise: generic splits on diff then for").toEqual(
       expect.arrayContaining(["diff", "for"]),
     );
     expect(await cascadeCaption()).toEqual(["points", "difference", "total scored", "head-to-head", "drawing of lots"]);
@@ -474,6 +514,7 @@ describe("organiser console — the tie-break cascade caption says the sport's w
     swissScene();
     const hockey = builtinModules.find((m) => m.key === "hockey")!;
     vi.mocked(resolveModule).mockImplementation(() => hockey);
+    captionMeta(hockey, variantCfg(hockey));
     expect(await cascadeCaption()).toEqual(["points", "goal difference", "goals scored", "head-to-head", "seeding"]);
   });
 
@@ -482,6 +523,7 @@ describe("organiser console — the tie-break cascade caption says the sport's w
     scene.locale = "fr";
     const hockey = builtinModules.find((m) => m.key === "hockey")!;
     vi.mocked(resolveModule).mockImplementation(() => hockey);
+    captionMeta(hockey, variantCfg(hockey));
     const caption = await cascadeCaption();
     expect(caption.slice(1, 3)).toEqual(["différence de buts", "buts marqués"]);
   });

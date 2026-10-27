@@ -150,7 +150,7 @@
   {
     "id": "t18-bonus-validate",
     "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
-    "find": "validatePointsRule(PointsRule.parse({ base: ZERO_BASE, bonuses: [{ when, param: 0, points: 0 }] }), module.metrics);",
+    "find": "validatePointsRule(PointsRule.parse({ ...ZERO_RULE, bonuses: [{ when, param: 0, points: 0 }] }), module.metrics);",
     "replace": "void 0;",
     "killers": [
       {
@@ -480,8 +480,8 @@
   {
     "id": "t18-stored-parse",
     "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
-    "find": "return parsed.success ? parsed.data : null;",
-    "replace": "return (stored as PointsRule | null) ?? null;",
+    "find": "  return parseStoredPointsRule(stored);\n",
+    "replace": "  return (stored as PointsRule | null) ?? null;\n",
     "killers": [
       {
         "cwd": "apps/web",

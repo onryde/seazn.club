@@ -17,19 +17,26 @@ import { ABANDONED_MATCHES_REASON } from "@/lib/abandoned-matches-refusal";
 import { inTheField } from "@/lib/entrant-field";
 import { EngineError, StageKind, type MatchOutcome, type StageCtx, type StandingsDelta } from "@seazn/engine/core";
 import {
-  PointsRule,
   SETTLED_FIXTURE_STATUSES,
-  applyPointsRule,
+  decidedInFor,
+  payout,
+  setsToWinOf,
   completeBracketStage,
   completeTableStage,
+  crossGroupRulesOf,
   isBracketStageComplete,
   isTableStageComplete,
   placementTable,
   type BracketFixture,
   type BracketStage,
+  type CompletedTableStage,
+  type CrossGroupRules,
   type DivisionEvent,
   type FixtureResult,
+  type MembersKey,
+  type PointsRule,
   type StandingsRow,
+  type StoredLotsDraw,
   type TableFixture,
   type TableStage,
 } from "@seazn/engine/competition";
@@ -37,6 +44,7 @@ import type { AnySportModule } from "@seazn/engine/sport";
 import { resolveModule } from "./registry";
 import { resolveFixtureCfg } from "./fixture-cfg";
 import { forfeitPlayedFacts, playedFor } from "./forfeit-played";
+import { loadLotsDraws, persistLotsDraws, pinStageTableRules, tableRulesOf, type LoadedTableRules } from "./table-rules";
 
 type Tx = postgres.TransactionSql;
 
@@ -88,14 +96,16 @@ const BYE_PHANTOM = "__bye__";
  * One-sided award bye → a single win delta via the sport module's own
  * `standingsDelta` (clean-sweep / points.w), not a hand-typed constant. A
  * phantom opponent lets `init` build a legal state; only the winner's half
- * is returned for the fold.
+ * is returned for the fold. W2d T9: paid by the stage's table rule (`payout`),
+ * as every decided fixture is — there is no "no rule" any more (the rule is the
+ * pin, the stage's own, or its sport's).
  */
 function awardByeDelta(
   sportModule: AnySportModule,
   outcome: MatchOutcome,
   rawCfg: unknown,
   ctx: StageCtx,
-  pointsRule: ReturnType<typeof PointsRule.parse> | null,
+  pointsRule: PointsRule,
   homeId: string | null,
 ): StandingsDelta {
   const winnerId = (outcome as Extract<MatchOutcome, { kind: "award" }>).winner;
@@ -109,11 +119,19 @@ function awardByeDelta(
     home: { entrantId: seatedHome ? winnerId : BYE_PHANTOM, slots: [] },
     away: { entrantId: seatedHome ? BYE_PHANTOM : winnerId, slots: [] },
   });
-  // `standingsDelta` returns a mutable pair, `applyPointsRule` a readonly
+  // `standingsDelta` returns a mutable pair, `payout` a readonly
   // `FixtureResult` — so this is a new local, not a reassignment (TS4104).
   const rawPair = sportModule.standingsDelta(bye, cfg, ctx, state);
   // W2c X-PT-1: a bye is told apart by its reason (`isBye`), never by `played` — and it has no ledger: nothing played.
-  const pair: FixtureResult = pointsRule ? applyPointsRule(bye, rawPair, pointsRule, false, sportModule.awardScoreKeys) : rawPair;
+  const pair: FixtureResult = payout(
+    bye,
+    decidedInFor(sportModule, bye),
+    rawPair,
+    false,
+    pointsRule,
+    sportModule.awardScoreKeys,
+    setsToWinOf(sportModule, cfg),
+  );
   const winner = pair[0].entrantId === winnerId ? pair[0] : pair[1];
   if (winner.entrantId !== winnerId) {
     throw new EngineError("CONFIG_INVALID", "award bye standings delta missing winner", {
@@ -258,6 +276,9 @@ interface StageRow {
     ladder_order?: string[];
   } | null;
   status: string;
+  /** W2d (V475): the table rules fixed at activation, and when (`table-rules.ts`). */
+  table_rules_pinned: unknown;
+  table_rules_pinned_at: string | null;
 }
 interface DivisionRow {
   config: unknown;
@@ -309,6 +330,12 @@ interface StageInputs {
   kind: StageKind;
   division: DivisionRow;
   module: AnySportModule;
+  /** W2d T9: the stage's table rules (`tableRulesOf`: its pin once active, else the live layers) — the points every
+   *  decided fixture is paid by and the order the table ranks by. */
+  rules: LoadedTableRules;
+  /** B5 (FIDE C.07): each decided fixture's GAME points — the sport's own ledger points (`standingsDelta`), before the
+   *  table rule re-pays them — keyed by the paid result the ranker is handed. */
+  gamePoints: ReadonlyMap<FixtureResult, readonly [number, number]>;
   fixtures: FixtureRow[];
   tableFixtures: TableFixture[];
   entrants: string[];
@@ -323,7 +350,9 @@ interface StageInputs {
 // complete so deltas are computed once per pass.
 async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   const [stage] = await tx<StageRow[]>`
-    select id, division_id, kind, config, status from stages where id = ${stageId}
+    select id, division_id, kind, config, status, table_rules_pinned,
+           to_json(table_rules_pinned_at) #>> '{}' as table_rules_pinned_at
+    from stages where id = ${stageId}
   `;
   if (!stage) throw new EngineError("STAGE_NOT_READY", `stage ${stageId} not found`, { stageId });
 
@@ -383,12 +412,31 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   // under its own per-stage lock (D1), so "locked the moment fixtures exist"
   // now describes the format keys rather than the whole column. Let `points`
   // into `rules`, or drop D1's lock, and this line is the same defect again.
-  const pointsRule = stage.config?.points ? PointsRule.parse(stage.config.points) : null;
-  // W2c Task 9 (X-PT-1): under a rule, each forfeit-shaped result's "was anything played" fact, from its own ledger —
-  // one read for the stage, and none without a rule (nothing reads it then) or without a forfeit.
-  const playedFacts = pointsRule
-    ? await forfeitPlayedFacts(tx, fixtures.filter((f) => f.outcome && f.state && f.home_entrant_id && f.away_entrant_id), sportModule)
-    : new Map<string, boolean>();
+  // W2d T9 (X-TB-1, X-TB-2): the stage's table rules — its pin once active (an active or complete stage with none is the
+  // loader's typed CONFIG_INVALID, never a live read), else its own ?? division ?? sport under the merged cfg. The rule
+  // ALWAYS pays: since W2d every stage has one (the pin, its own, or its sport's `tablePointsRule`), so the sport's
+  // `standingsDelta` points never reach the table unpaid.
+  const rules = tableRulesOf(
+    {
+      stageId,
+      kind: stage.kind,
+      status: stage.status,
+      stageConfig: stage.config as Record<string, unknown> | null,
+      pin: stage.table_rules_pinned,
+      pinnedAt: stage.table_rules_pinned_at,
+      divisionConfig: division.config,
+      divisionTiebreakers: division.tiebreakers,
+    },
+    sportModule,
+  );
+  // W2c Task 9 (X-PT-1): each forfeit-shaped result's "was anything played" fact, from its own ledger — one read for the
+  // stage, and none without a forfeit (`forfeitPlayedFacts`'s empty case).
+  const playedFacts = await forfeitPlayedFacts(
+    tx,
+    fixtures.filter((f) => f.outcome && f.state && f.home_entrant_id && f.away_entrant_id),
+    sportModule,
+  );
+  const gamePoints = new Map<FixtureResult, readonly [number, number]>();
 
   const tableFixtures: TableFixture[] = fixtures.map((f) => {
     const base: TableFixture = {
@@ -412,42 +460,47 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
       // resolver as both folds, so a fixture's table contribution and its state
       // can never be computed under two different configs; a fixture with no
       // snapshot (never scored) still reads live cfg, deliberately.
-      const pair = sportModule.standingsDelta(
-        f.outcome as MatchOutcome,
-        resolveFixtureCfg(
-          f,
-          division.config,
-          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
-          sportModule,
-        ),
-        ctx,
-        f.state,
+      const fixtureCfg = resolveFixtureCfg(
+        f,
+        division.config,
+        { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
+        sportModule,
       );
-      // Custom points rule (Jul3/05 §2): re-derive competition points from
-      // stage config. W2c X-PT-1: a forfeit with nothing played pays the
-      // rule's forfeit row, and its awarded score replaces the credit — on
-      // the generic keys and on the sport's own score keys (gap a,
-      // `awardScoreKeys`: football's gf/ga/gd); the rest of the ledger stands.
-      base.result = pointsRule
-        ? applyPointsRule(f.outcome as MatchOutcome, pair, pointsRule, playedFor(f, playedFacts), sportModule.awardScoreKeys)
-        : pair;
+      const pair = sportModule.standingsDelta(f.outcome as MatchOutcome, fixtureCfg, ctx, f.state);
+      // The table rule (W2d T9: always one) re-derives competition points. W2c X-PT-1: a forfeit with nothing played
+      // pays the rule's forfeit row, and its awarded score replaces the credit — on the generic keys and on the sport's
+      // own score keys (gap a, `awardScoreKeys`: football's gf/ga/gd); the rest of the ledger stands.
+      base.result = payout(
+        f.outcome as MatchOutcome,
+        decidedInFor(sportModule, f.outcome as MatchOutcome),
+        pair,
+        playedFor(f, playedFacts),
+        // the stage's ONE rule for every fixture (ruling 12: never per-fixture points) — its pin once started, so a
+        // division edit after a match was played never moves the table under it (V347's promise, kept by the pin)
+        rules.points,
+        sportModule.awardScoreKeys,
+        // I2: a set match settled before its end is scored to the sets this fixture's own format is won on
+        setsToWinOf(sportModule, fixtureCfg),
+      );
+      gamePoints.set(base.result, [pair[0].points, pair[1].points]);
     } else if (isOneSidedAwardBye(f)) {
       // Swiss odd-field sit-out (and KO seeded bye): forfeited award with one
       // seat null and no match_state. The two-sided gate above never fires, so
       // without this branch the bye winner stayed P0/pts=0 on the table while
       // swissGen still counted +1 for pairing — Gus on the demo Swiss 7.
       const ctx: StageCtx = { ...ctxBase, roundNo: f.round_no, ...(f.pool_id ? { poolId: f.pool_id } : {}) };
+      const byeCfg = resolveFixtureCfg(
+        f,
+        division.config,
+        { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
+        sportModule,
+      );
       base.awardDelta = awardByeDelta(
         sportModule,
         f.outcome as MatchOutcome,
-        resolveFixtureCfg(
-          f,
-          division.config,
-          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },
-          sportModule,
-        ),
+        byeCfg,
         ctx,
-        pointsRule,
+        rules.points,
         f.home_entrant_id,
       );
     }
@@ -478,6 +531,8 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
     kind,
     division,
     module: sportModule,
+    rules,
+    gamePoints,
     // No stage-wide `cfg` field: there is no such thing any more. Each fixture
     // resolves its own above, and a single shared one is exactly how live
     // config leaked back into decided fixtures.
@@ -489,17 +544,61 @@ async function loadStageInputs(tx: Tx, stageId: string): Promise<StageInputs> {
   };
 }
 
-function cascadeFor(inputs: StageInputs): readonly string[] {
-  return inputs.division.tiebreakers ?? inputs.module.defaultTiebreakers;
+/** B5: a result's GAME points, read from the map `loadStageInputs` filled as it paid each result (identity-keyed: the
+ *  engine hands back the very `FixtureResult` objects the stage gave it). A result the map does not hold is a result this
+ *  stage never paid — a defect, never a fallback: game points silently equal to the paid points would rank `direct` and
+ *  `sberger` by the wrong numbers (fix round 1, m2). */
+export function gamePointsReader(
+  gamePoints: ReadonlyMap<FixtureResult, readonly [number, number]>,
+): (result: FixtureResult) => readonly [number, number] {
+  return (result) => {
+    const pair = gamePoints.get(result);
+    if (pair === undefined) {
+      throw new Error(`game points asked for a result this stage did not pay (${result[0].entrantId} v ${result[1].entrantId})`);
+    }
+    return pair;
+  };
 }
 
-function toTableStage(inputs: StageInputs): TableStage {
+/** W2d T12 (spec §5.6 "ST-G12", X-TB-8): every fixture the stage schedules between two seated entrants, decided or not,
+ *  as [home, away] — one entry per fixture, so a double round robin lists a pair twice. The head-to-head steps read it to
+ *  know whether a tied class has played out its meetings. A fixture whose engine status is `void` will never be played (a
+ *  withdrawal's expunge, a voided match), and a seat still to be filled names nobody, so neither is on it. Read off the
+ *  same rows and statuses as the counted results (only `decided` / `walkover` count, never `void`), so every counted
+ *  result is on it — the engine refuses one that is not. */
+export function scheduledPairsOf(
+  fixtures: readonly Pick<FixtureRow, "id" | "home_entrant_id" | "away_entrant_id">[],
+  tableFixtures: readonly Pick<TableFixture, "id" | "status">[],
+): [string, string][] {
+  const statusOf = new Map(tableFixtures.map((f) => [f.id, f.status]));
+  const pairs: [string, string][] = [];
+  for (const f of fixtures) {
+    const status = statusOf.get(f.id);
+    if (status === undefined) throw new Error(`fixture ${f.id} has no engine status: the schedule and the table read different fixtures`);
+    if (status === "void" || !f.home_entrant_id || !f.away_entrant_id) continue;
+    pairs.push([f.home_entrant_id, f.away_entrant_id]);
+  }
+  return pairs;
+}
+
+// W2d T9: the stage as the ranker reads it — its rules (pin or live, `tableRulesOf`), the sport's `winsCount` (B2,
+// HK-TB-1) and each result's game points (B5), and the lots draws stored for it (§5.8; read under the division lock,
+// `rankWithStoredLots`). A bracket or ladder stage still reaches this fold (an admin cfg edit or a rules refold
+// recomputes its snapshot) and ranks by the order its rules give a league (`tableStageKindOf`).
+function toTableStage(
+  inputs: StageInputs,
+  lotsDraws: ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>,
+): TableStage {
+  const gamePoints = inputs.gamePoints;
   return {
     id: inputs.stage.id,
     // americano rides the league fold (Jul3/08 §3)
     kind: (inputs.stage.kind === "americano" ? "league" : inputs.stage.kind) as TableStage["kind"],
     entrants: inputs.entrants,
-    cascade: cascadeFor(inputs) as TableStage["cascade"],
+    rules: { points: inputs.rules.points, tiebreakers: inputs.rules.tiebreakers, crossGroup: inputs.rules.crossGroup },
+    ...(inputs.module.winsCount === undefined ? {} : { winsCount: inputs.module.winsCount }),
+    gamePoints: gamePointsReader(gamePoints),
+    lotsDraws,
     ...(inputs.seeds.size > 0 ? { seeds: inputs.seeds } : {}),
     ...(inputs.stage.config?.rngSeed != null ? { rngSeed: inputs.stage.config.rngSeed } : {}),
     ...(inputs.stage.config?.rounds != null ? { rounds: inputs.stage.config.rounds } : {}),
@@ -516,7 +615,22 @@ function toTableStage(inputs: StageInputs): TableStage {
         }
       : {}),
     ...(inputs.stage.config?.h2h_scope === "overall" ? { h2hScope: "overall" as const } : {}),
+    // W2d T12 (ST-G12, IH-TB-2): the schedule the head-to-head steps need complete, and the sport's order when it is not.
+    scheduledPairs: scheduledPairsOf(inputs.fixtures, inputs.tableFixtures),
+    ...(inputs.module.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: inputs.module.partialScheduleOrder }),
   };
+}
+
+/**
+ * W2d T12 (spec §5.9, ST-G4, X-TB-7): how a source stage compares entrants from DIFFERENT groups, for
+ * `SourceTables.crossGroup` — its effective `crossGroup` order (the pin once active: a B1-migrated pin's is the pre-W2d
+ * list, so its seats do not move), its seeds, rngSeed and `winsCount`, and the cross-group draws stored under its "" pool
+ * (`crossGroupRulesOf`). The one reading a seeding path hands `resolveProgression`; the draws best-Nth makes come back as
+ * its `newLotsDraws`, stored with `persistLotsDraws(tx, stageId, null, …)` under the division lock.
+ */
+export async function loadCrossGroupRules(tx: Tx, stageId: string): Promise<CrossGroupRules> {
+  const inputs = await loadStageInputs(tx, stageId);
+  return crossGroupRulesOf(toTableStage(inputs, await loadLotsDraws(tx, stageId)));
 }
 
 /**
@@ -590,8 +704,9 @@ export async function recomputeStandings(
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + inputs.stage.division_id}))`;
 
     // completeTableStage folds + ranks each pool; cache them all, then hand
-    // back the one we were asked for.
-    const { tables } = completeTableStage(toTableStage(inputs), inputs.tableFixtures);
+    // back the one we were asked for. Any lots it draws are stored first and the
+    // table re-ranked from the stored rows (§5.8), so the snapshot is the stored order.
+    const { tables } = await rankWithStoredLots(tx, inputs);
     for (const pool of tables.pools) {
       await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
     }
@@ -621,8 +736,34 @@ export async function rankedStageStandings(
 ): Promise<readonly StandingsRow[]> {
   const inputs = await loadStageInputs(tx, stageId);
   if (inputs.entrants.length === 0) return [];
-  const { tables } = completeTableStage(toTableStage(inputs), inputs.tableFixtures);
+  // The caller holds the division lock (its one caller, `swissGen`, generates under it): a draw made here is stored.
+  const { tables } = await rankWithStoredLots(tx, inputs);
   return tables.pools[0]?.rows ?? [];
+}
+
+/**
+ * W2d (spec §5.8, X-TB-4; PS-5b): rank the stage with its stored lots draws; store any draw the ranker had to make
+ * (`persistLotsDraws`, one live draw per pool and member set), then RE-READ the stored rows and rank again, so the order
+ * and `drawn_at` every caller sees — the snapshot, the rank_lock event — are the stored ones (the DB's `now()`), never
+ * this call's own. Called under the division advisory lock. A second pass that still draws means a draw was not stored:
+ * refused, never ranked by an order nobody stored.
+ */
+async function rankWithStoredLots(tx: Tx, inputs: StageInputs): Promise<CompletedTableStage> {
+  const stageId = inputs.stage.id;
+  const first = completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures);
+  if (first.newLotsDraws.length === 0) return first;
+  const byPool = new Map<string, (typeof first.newLotsDraws)[number][]>();
+  for (const draw of first.newLotsDraws) byPool.set(draw.pool, [...(byPool.get(draw.pool) ?? []), draw]);
+  for (const [pool, draws] of byPool) await persistLotsDraws(tx, stageId, pool === "" ? null : pool, draws);
+  const stored = completeTableStage(toTableStage(inputs, await loadLotsDraws(tx, stageId)), inputs.tableFixtures);
+  if (stored.newLotsDraws.length > 0) {
+    throw new EngineError("CONFIG_INVALID", `stage ${stageId}: a drawing of lots was made but not stored`, {
+      stageId,
+      reason: "lots_draw_unstored",
+      membersKeys: stored.newLotsDraws.map((d) => d.membersKey),
+    });
+  }
+  return stored;
 }
 
 // Append a division_event under the division lock, assigning a gapless per-
@@ -679,7 +820,8 @@ export async function completeStageIfReady(
     let events: DivisionEvent[] = [];
 
     if (isTable) {
-      const tableStage = toTableStage(inputs);
+      // Completion reads no draw: it asks only whether every fixture is settled.
+      const tableStage = toTableStage(inputs, new Map());
       if (!isTableStageComplete(tableStage, inputs.tableFixtures)) {
         // X-AB-5 (N2): a held match reads in play above, so it is what keeps the stage open. When it is the ONLY thing
         // left - every other match is settled - say so BY NAME, instead of the soft "not ready" an organiser reads as
@@ -703,7 +845,8 @@ export async function completeStageIfReady(
         }
         return { completed: false, events: [] };
       }
-      const completed = completeTableStage(tableStage, inputs.tableFixtures);
+      // X-TB-4: rank_lock carries the STORED order and drawn_at (PS-5b) — the second, stored pass's events.
+      const completed = await rankWithStoredLots(tx, inputs);
       events = completed.events;
       for (const pool of completed.tables.pools) {
         await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
@@ -846,6 +989,10 @@ export async function completeStageIfReady(
     for (const ev of events) {
       lastSeq = await appendDivisionEvent(tx, inputs.stage.division_id, ev.type, ev);
     }
+    // W2d T9 fix I1: a stage leaves pending by more doors than its two activation writers — a ladder challenge or an
+    // ad-hoc fixture played on a stage nobody generated completes it straight from pending. Pin it before the status
+    // write (idempotent: a stage pinned at activation keeps its first pin), so no started stage is ever unpinned.
+    await pinStageTableRules(tx, stageId);
     await tx`update stages set status = 'complete' where id = ${stageId}`;
     await tx`update divisions set seq = ${lastSeq} where id = ${inputs.stage.division_id}`;
     log.info({ event: "stage_completed", stageId, kind: inputs.kind }, "stage_completed");

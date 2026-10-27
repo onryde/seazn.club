@@ -741,7 +741,7 @@ test.describe("W2c Task 16b — the forfeit dialog previews the stage rule's wal
     expect(added.ids).toHaveLength(2);
     const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool" });
     const put = await apiJson(request, `/api/v1/stages/${stage.data!.id}/rules`, "PUT", {
-      points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: award } },
+      points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: award } },
     });
     expect(put.status, JSON.stringify(put.error)).toBe(200);
     const gen = await apiJson<{ fixtures: { id: string }[] }>(request, `/api/v1/stages/${stage.data!.id}/generate`, "POST");

@@ -21,7 +21,7 @@ import {
   type StageKind,
   type StandingsDelta,
 } from "../../core/types.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -785,13 +785,29 @@ export const generic: SportModule<GenericCfg, GenericEv, GenericState> = {
   ],
   // W2c X-PT-1 (gap a): generic's own ledger IS the generic for / against / diff.
   awardScoreKeys: { for: "for", against: "against", diff: "diff" },
-  defaultTiebreakers: ["points", "diff", "for", "h2h_points", "lots"],
+  defaultTiebreakers: () => ["points", "diff", "for", "h2h_points", "lots"],
+  primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // X-DR-1 (ruling 78): an allow-list — draws only where nobody must advance,
   // and only when the organiser declared them (cfg.allowDraws).
   supportsDraws(cfg, stage: StageKind) {
     return cfg.allowDraws && DRAW_KINDS.has(stage);
   },
+  // W2d (spec §5.2; X-PT-2) — one win method, in regulation; a draw only where the organiser allows one, in a table
+  // (`supportsDraws`).
+  ...winMethodTable("generic", { regulation: "regulation" }),
+  reachableDecidedIn: () => new Set<DecidedIn>(["regulation"]),
+  reachableResultKinds: (cfg, stage) => new Set<"draw" | "tie" | "noResult">(generic.supportsDraws(cfg, stage) ? ["draw"] : []),
+  shootoutAs: "result",
+  // W2d (spec §5.3, §5.10) — `points.w/d/l` as a rule (3/1/0 by default).
+  tablePointsRule: (cfg) => ({
+    win: { regulation: cfg.points.w },
+    loss: { regulation: cfg.points.l },
+    draw: cfg.points.d,
+    shootoutAs: generic.shootoutAs,
+    unit: "whole",
+    bonuses: [],
+  }),
 
   // W2a: none (spec §5.2). W2c I3 (ruling): sharing the points is a table-stage policy (its rule key applies in
   // DRAW_KINDS only) - a bracket cannot end level, so an abandon there follows W2a (held, then settled) whatever the

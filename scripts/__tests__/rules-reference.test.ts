@@ -35,8 +35,8 @@ const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
     by: "owner rulings 112, 113 and 114 (2026-10-11): nothing played means not started, for every reason; played is any sport event after the Start; ruling 118 (2026-10-12): in chess the Start itself is play",
   },
   "X-WO-1": {
-    says: "Walkover and retirement credit is derived from the stage's own cfg (best-of, target score, overs), and the same credited score is used in the table, tie-breaks, the public page and the qualification view; a credited result pays the table points of its credited score, the offender's side included (a bye keeps the clean-sweep pair).",
-    by: "owner ruling 108 (2026-10-11): a credited result pays the table points of its credited score",
+    says: "Walkover and retirement credit is derived from the stage's own cfg (best-of, target score, overs), and the same credited score is used in the table, tie-breaks, the public page and the qualification view; a credited result pays the table points of its credited score, the offender's side included (a bye keeps the clean-sweep pair). The exception: a sport may declare a *loss-not-played* value, and then the side that loses an award (walkover, retirement, default, disqualification or withdrawal; never a bye, which has no loser) is paid that value instead. The winner is still paid its credited score's points. Table tennis declares 0 (ITTF 3.7.5.1). No other sport declares one.",
+    by: "owner ruling 108 (2026-10-11): a credited result pays the table points of its credited score; amended by W2d D6 (owner Q6, 2026-10-20; signed 2026-10-24): a sport may declare a loss-not-played value, table tennis 0",
   },
   "VB-RT-1": {
     says: "Volleyball retirement (incomplete team) = winner given the sets and points it needed; the retiring side keeps what it won, and both sides take the table points of that credited set score (retiring at two sets all is a 3-2 loss).",

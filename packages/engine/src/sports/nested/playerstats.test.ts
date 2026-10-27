@@ -257,6 +257,8 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
       variants: {},
       positions: { groups: [], lineup: { size: 1, benchMax: 1 } },
       defaultTiebreakers: ["points"],
+      swissTiebreakers: ["points"],
+      primaryTableKey: "points",
       officialLabel: { scorer: "Umpire" },
       playerStats: {
         metrics: [
@@ -307,6 +309,8 @@ describe("kernel-default playerStats: merge + collisions (S8/#417)", () => {
       variants: {},
       positions: { groups: [], lineup: { size: 1, benchMax: 1 } },
       defaultTiebreakers: ["points"],
+      swissTiebreakers: ["points"],
+      primaryTableKey: "points",
       officialLabel: { scorer: "Umpire" },
       playerStats: {
         metrics: [],

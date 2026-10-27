@@ -24,6 +24,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import { DERIVED_METRICS, derivedMetricText, type StandingsRow } from "@seazn/engine/competition";
 import { standingsColumns, type MetricSpecLike } from "@/lib/public-site";
 import { resolveModule } from "@/server/engine-db/registry";
+import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
@@ -45,8 +46,9 @@ export interface StandingsSlideRow {
 }
 
 /** The inputs the division page hands `standingsColumns`: the pinned module's
- *  metrics, and the cascade (the division's own override, else the module's
- *  default). */
+ *  metrics, and the cascade — since W2d Task 9 the STAGE's order (its table rules
+ *  from the one loader: its pin, else its live layers), never the division's
+ *  override or the module default re-read here. */
 interface StandingsShape {
   metricSpecs: readonly MetricSpecLike[];
   cascade: readonly string[];
@@ -57,22 +59,27 @@ interface StandingsShape {
 interface StandingsShapeInput {
   sport_key?: string;
   module_version?: string;
-  tiebreakers?: readonly string[] | null;
 }
 
-/** Resolves a division's pinned module the way the division page does
+/** Resolves a division's pinned module's metrics the way the division page does
  *  (`(public)/shared/.../[divisionSlug]/page.tsx`): a module this build no
- *  longer carries degrades to structural columns only — it never throws. */
-function standingsShape(division: StandingsShapeInput): StandingsShape {
-  const none: StandingsShape = { metricSpecs: [], cascade: [] };
-  if (division.sport_key === undefined || division.module_version === undefined) return none;
+ *  longer carries degrades to structural columns only — it never throws. The
+ *  cascade is each stage's own (`stageShape`). */
+function divisionMetrics(division: StandingsShapeInput): readonly MetricSpecLike[] {
+  if (division.sport_key === undefined || division.module_version === undefined) return [];
   try {
-    const module_ = resolveModule(division.sport_key, division.module_version);
-    return { metricSpecs: module_.metrics, cascade: division.tiebreakers ?? module_.defaultTiebreakers };
+    return resolveModule(division.sport_key, division.module_version).metrics;
   } catch {
-    return none;
+    return [];
   }
 }
+
+/** One stage's standings shape: the division's metrics and the stage's order (none for a stage whose rules the loader
+ *  refused, or a hand-built input that carries none). */
+const stageShape = (metricSpecs: readonly MetricSpecLike[], cascade: readonly string[] | null | undefined): StandingsShape => ({
+  metricSpecs,
+  cascade: cascade ?? [],
+});
 
 /** A snapshot row as `standings_snapshots` persists it. `metrics` is optional
  *  only because hand-built inputs predate it; a real snapshot always has it. */
@@ -233,10 +240,9 @@ export async function buildDivisionSlides(
           player_name_display: string | null;
           sport_key: string;
           module_version: string;
-          tiebreakers: string[] | null;
         }[]
       >`
-        select youth, player_name_display, sport_key, module_version, tiebreakers
+        select youth, player_name_display, sport_key, module_version
         from divisions where id = ${divisionId}`,
     ),
     // P6 fix round 3, Important 4 — mirrors PublicSlideInput.orgLocale: the
@@ -302,9 +308,11 @@ export async function buildDivisionSlides(
     ]),
   );
   const slides: Slide[] = [];
-  // The division's own module and cascade decide its standings columns, the
-  // same way they do on its public page.
-  const shape = standingsShape(priv[0] ?? {});
+  // The division's own module and each stage's order decide its standings
+  // columns, the same way they do on its public page (W2d Task 9: the order from
+  // the one loader, `stageTableRulesDocs`).
+  const metricSpecs = divisionMetrics(priv[0] ?? {});
+  const tableRules = await withTenant(auth.orgId, (tx) => stageTableRulesDocs(tx, stages.map((s) => s.id)));
 
   // ── Standings — one slide per table stage (per pool when pooled) ──
   for (const stage of stages.filter((s) => TABLE_KINDS.has(s.kind))) {
@@ -324,7 +332,7 @@ export async function buildDivisionSlides(
           )
         : [{ caption: stage.name, snap: await getStandings(auth, stage.id) }];
     for (const { caption, snap } of tables) {
-      const rows = standingsSlideRows(snap.rows as StandingsSlideSnapshotRow[], shape, names);
+      const rows = standingsSlideRows(snap.rows as StandingsSlideSnapshotRow[], stageShape(metricSpecs, tableRules[stage.id]?.tiebreakers), names);
       if (rows.length > 0) {
         slides.push({ kind: "standings", division: divisionName, caption, rows });
       }
@@ -450,17 +458,18 @@ export interface PublicSlideInput {
      *  (public-site/data.ts) and should pass both through. */
     youth?: boolean;
     player_name_display?: string | null;
-    /** The division's pinned module and cascade override (`PublicDivision`),
-     *  which pick its standings columns exactly as its public page's table
-     *  does. Optional: hand-built inputs predate them and read as "no module",
-     *  i.e. no ratio column. Both /present pages spread `getPublicDivision`'s
-     *  result wholesale, so the real values arrive through this type — a type
-     *  that omitted them would ship the column inert. */
+    /** The division's pinned module (`PublicDivision`), whose metrics pick its
+     *  standings columns exactly as its public page's table does. Optional:
+     *  hand-built inputs predate them and read as "no module", i.e. no ratio
+     *  column. Both /present pages spread `getPublicDivision`'s result
+     *  wholesale, so the real values arrive through this type — a type that
+     *  omitted them would ship the column inert. */
     sport_key?: string;
     module_version?: string;
-    tiebreakers?: string[] | null;
   };
-  stages: { id: string; kind: string; name: string }[];
+  /** W2d Task 9: each stage carries its table rules (`PublicStage.table_rules`, the one loader's); its order picks the
+   *  columns with the module's metrics. Absent or null: no order (no ratio column). */
+  stages: { id: string; kind: string; name: string; table_rules?: { readonly tiebreakers: readonly string[] } | null }[];
   /** A pool is labelled from its KEY (`lib/pool-label.ts`); the stored
    *  English `name` is deliberately not part of this input. */
   pools: { id: string; stage_id: string; key: string }[];
@@ -590,7 +599,7 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
   const stageById = new Map(data.stages.map((s) => [s.id, s]));
   const poolById = new Map(data.pools.map((p) => [p.id, p]));
   const slides: Slide[] = [];
-  const shape = standingsShape(data.division);
+  const metricSpecs = divisionMetrics(data.division);
 
   for (const snap of data.standings) {
     const stage = stageById.get(snap.stage_id);
@@ -602,7 +611,7 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
       // From the pool's KEY in the org's locale, never its stored English
       // name (`lib/pool-label.ts`).
       caption: pool !== undefined ? `${stage.name} — ${poolLabel(publicDict, pool.key)}` : stage.name,
-      rows: standingsSlideRows(snap.rows, shape, names),
+      rows: standingsSlideRows(snap.rows, stageShape(metricSpecs, stage.table_rules?.tiebreakers), names),
     });
   }
 

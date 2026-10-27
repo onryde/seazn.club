@@ -22,7 +22,7 @@ import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { RefusedCall, type FixtureRow, type StageRef, type StandingsRowWire, type WithdrawOut } from "../driver/types.ts";
 import { fieldSizeFor } from "../field-size.ts";
-import { foldStream } from "../fold.ts";
+import { foldStream, tableContribution } from "../fold.ts";
 import { isTerminal, toObservedOutcome, type ObservedFixture, type ObservedOutcome, type ObservedRun } from "../observed.ts";
 import type { CreditCase } from "@seazn/reference";
 import type { CheckResult } from "../results.ts";
@@ -98,18 +98,20 @@ async function tableRows(ctx: ScenarioContext, stage: StageRef, fixtures: readon
   return out;
 }
 
-/** The sport's own contribution of a fixture the harness posted: standingsDelta over the folded stream, under the cfg
- *  and stage context the product folds it in. Null where the harness holds no stream or it folds no outcome. */
+/** The table's contribution of a fixture the harness posted, under the cfg and stage context the product folds it in:
+ *  the sport's ledger pair paid under the stage's table rule (fold.ts `tableContribution`; W2d T9 — the table pays the
+ *  rule, never `standingsDelta`'s points: table tennis's played loss pays 1, D6). Null where the harness holds no
+ *  stream or it folds no outcome. */
 function localDelta(ctx: ScenarioContext, rec: Recorder, stage: StageRef): (f: ObservedFixture) => readonly [LocalDelta, LocalDelta] | null {
   const m = sportModule(ctx.spec.sport);
   const cfg = caseStageCfg(ctx, stage.kind as StageKind);
   return (f) => {
     const events = rec.streams.get(f.id);
     if (events === undefined || f.home === null || f.away === null) return null;
-    const folded = foldStream(m, cfg, f.home, f.away, events);
-    if (folded.outcome === null) return null;
     const sctx = { kind: stage.kind as StageKind, ...(f.poolId ? { poolId: f.poolId } : {}), ...(f.roundNo ? { roundNo: f.roundNo } : {}) };
-    const [h, a] = m.standingsDelta(folded.outcome, cfg, sctx, folded.state);
+    const c = tableContribution(m, cfg, sctx, f.home, f.away, events);
+    if (c === null) return null;
+    const [h, a] = c.pair;
     return [h, a];
   };
 }

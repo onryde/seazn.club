@@ -232,8 +232,9 @@ export function ladderUnmoved(d: ForfeitDrive | null, before: readonly string[] 
 
 // ---------------------------------------------------------------------------------------------------------------
 // The table, isolated (X-WO-1, X-DW-4, X-AB-1): the product's standings row for an entrant, against the sum of what
-// each of its matches contributes — the rule's delta for the judged match, the sport's own standingsDelta of the
-// posted stream for every other. Only the keys the rule names are compared.
+// each of its matches contributes — the rule's delta for the judged match, the posted stream's table contribution for
+// every other (fold.ts `tableContribution`: the sport's ledger paid under the stage's table rule, W2d T9). Only the keys
+// the rule names are compared.
 
 export interface ExpectedDelta {
   readonly scalars: Readonly<Partial<Record<"played" | "won" | "drawn" | "lost" | "points", number>>>;

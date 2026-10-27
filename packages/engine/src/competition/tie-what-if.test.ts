@@ -17,10 +17,13 @@
 // reading cascade[0], ignoring winsOnly, skipping more than `wins`, or not
 // requiring `points` first; game_ratio / board_ratio dropped from the keys.
 import { describe, expect, it } from "vitest";
-import type { TiebreakerKey } from "../sport/module.ts";
+import { DRAW_KINDS } from "../core/types.ts";
+import type { TableStageKind, TiebreakerKey } from "../sport/module.ts";
 import { badminton } from "../sports/setbased/badminton.ts";
 import { volleyball } from "../sports/setbased/volleyball.ts";
 import { carrom } from "../sports/carrom/index.ts";
+import { builtinModules } from "../sports/index.ts";
+import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import type { StandingsRow } from "./standings.ts";
 import { rankStandings } from "./tiebreakers.ts";
 import { tieDecidingKey, tieKeyValue, tieWhatIf } from "./tie-what-if.ts";
@@ -29,8 +32,19 @@ const row = (id: string, played: number, metrics: Record<string, number>, won = 
   entrantId: id, played, won, drawn: 0, lost: 0, points: 6, metrics,
 });
 
-const ONLY_WINS = { winsOnly: true } as const;
-const NOT_ONLY_WINS = { winsOnly: false } as const;
+// The generic cases rank points-first, under the primary every points-first sport declares (W2d P25: `primary` is the
+// sport's `primaryTableKey`); the P25 case below states a wins-first one.
+const ONLY_WINS = { winsOnly: true, primary: "points" } as const;
+const NOT_ONLY_WINS = { winsOnly: false, primary: "points" } as const;
+
+// Each sport's default league order under its default cfg (W2d T8: `defaultTiebreakers(kind, cfg)`).
+const BADMINTON_ORDER = badminton.defaultTiebreakers("league", badminton.configSchema.parse({}));
+const VOLLEYBALL_ORDER = volleyball.defaultTiebreakers("league", volleyball.configSchema.parse({}));
+// W2d T11 (OC1): a Swiss stage keeps the pre-W2d points-first order, so the OQ1 skip of `wins` after `points` is still
+// read off a real module declaration — the Swiss one. The league orders are wins-first (D11; the P25 and BD-TB-1 cases).
+const BADMINTON_SWISS = badminton.defaultTiebreakers("swiss", badminton.configSchema.parse({}));
+const VOLLEYBALL_SWISS = volleyball.defaultTiebreakers("swiss", volleyball.configSchema.parse({}));
+const CARROM_ORDER = carrom.defaultTiebreakers("league", carrom.configSchema.parse({}));
 
 // The ledger each ratio comparator reads (tiebreakers.ts COMPARATORS). If a
 // pair here were wrong, `ahead()` would rank on an empty ledger and the
@@ -104,21 +118,21 @@ describe("tieDecidingKey", () => {
 describe("tieWhatIf — the cascade and the skip read off real modules", () => {
   // Badminton pays 2 for every win and 0 otherwise, so rows level on points
   // are level on wins: the target lands on set_ratio, the next key.
-  it("badminton default cascade: `wins` is skipped and the target is on set ratio", () => {
+  it("badminton Swiss default cascade: `wins` is skipped and the target is on set ratio", () => {
     const b = badminton.matchPointsBounds(badminton.configSchema.parse({}));
     expect(b.winsOnly).toBe(true);
     const me = { ...row("me", 3, { sets_won: 5, sets_lost: 3 }, 2), points: 2 * b.winFloor };
     const rv = { ...row("rv", 3, { sets_won: 4, sets_lost: 2 }, 2), points: 2 * b.winFloor };
-    expect(tieWhatIf(me, rv, badminton.defaultTiebreakers, { winsOnly: b.winsOnly })).toEqual({
+    expect(tieWhatIf(me, rv, BADMINTON_SWISS, { winsOnly: b.winsOnly, primary: badminton.primaryTableKey })).toEqual({
       kind: "target",
       key: "set_ratio",
       margin: 2,
     });
     expectTightTarget(me, rv, "set_ratio", 2);
     // The same answer through the FULL default cascade, `wins` included.
-    expect(ahead(me, rv, "set_ratio", 2, badminton.defaultTiebreakers)).toBe(true);
+    expect(ahead(me, rv, "set_ratio", 2, BADMINTON_SWISS)).toBe(true);
     // The differential: without the skip, `wins` decides and there is no target.
-    expect(tieWhatIf(me, rv, badminton.defaultTiebreakers, NOT_ONLY_WINS)).toEqual({
+    expect(tieWhatIf(me, rv, BADMINTON_SWISS, { winsOnly: false, primary: badminton.primaryTableKey })).toEqual({
       kind: "rule",
       key: "wins",
       mine: "2",
@@ -129,11 +143,11 @@ describe("tieWhatIf — the cascade and the skip read off real modules", () => {
   // "the first key the two rows differ on today". Level on sets NOW, the next
   // match still moves the set ratio, so the target stays on set_ratio; point
   // ratio decides only if the sets END level (m − 1 here).
-  it("badminton, sets level now: the target stays on set ratio; point ratio decides only if the sets end level", () => {
+  it("badminton Swiss, sets level now: the target stays on set ratio; point ratio decides only if the sets end level", () => {
     const b = badminton.matchPointsBounds(badminton.configSchema.parse({}));
     const me = { ...row("me", 3, { sets_won: 4, sets_lost: 4, points_won: 150, points_lost: 140 }, 2), points: 4 };
     const rv = { ...row("rv", 3, { sets_won: 3, sets_lost: 3, points_won: 120, points_lost: 125 }, 2), points: 4 };
-    expect(tieWhatIf(me, rv, badminton.defaultTiebreakers, { winsOnly: b.winsOnly })).toEqual({
+    expect(tieWhatIf(me, rv, BADMINTON_SWISS, { winsOnly: b.winsOnly, primary: badminton.primaryTableKey })).toEqual({
       kind: "target",
       key: "set_ratio",
       margin: 1,
@@ -146,29 +160,131 @@ describe("tieWhatIf — the cascade and the skip read off real modules", () => {
         { ...me, metrics: { ...me.metrics, sets_won: 5, sets_lost: 5 } },
         rv,
       ],
-      { cascade: badminton.defaultTiebreakers },
+      { cascade: BADMINTON_SWISS },
     ).rows;
     expect(flat[0]!.tieBreak?.key).toBe("point_ratio");
   });
   // Volleyball's 3-2 win pays 2 and its 2-3 loss pays 1, so rows level on
   // points can differ on wins: `wins` stays the deciding key, rule only.
-  it("volleyball default cascade: `wins` decides, so no target — the rule and both win counts", () => {
+  it("volleyball Swiss default cascade: `wins` decides, so no target — the rule and both win counts", () => {
     const b = volleyball.matchPointsBounds(volleyball.configSchema.parse({}));
     expect(b.winsOnly).toBe(false);
     const me = row("me", 3, { sets_won: 9, sets_lost: 6 }, 3); // three 3-2 wins
     const rv = row("rv", 3, { sets_won: 6, sets_lost: 3 }, 2); // 3-0, 3-0, 0-3
-    expect(tieWhatIf(me, rv, volleyball.defaultTiebreakers, { winsOnly: b.winsOnly })).toEqual({
+    expect(tieWhatIf(me, rv, VOLLEYBALL_SWISS, { winsOnly: b.winsOnly, primary: volleyball.primaryTableKey })).toEqual({
       kind: "rule",
       key: "wins",
       mine: "3",
       theirs: "2",
     });
   });
+  // W2d T11 BD-TB-1 (BWF GCR 16.2.2): two players level on matches won are settled by the match between them — the
+  // league default's next step is the two-way head-to-head, a rule with no per-row value and no margin to aim at.
+  it("BD-TB-1 badminton league default: two level on wins go to their own match — the h2h rule, no target", () => {
+    const b = badminton.matchPointsBounds(badminton.configSchema.parse({}));
+    const me = { ...row("me", 3, { sets_won: 5, sets_lost: 3 }, 2), points: 2 * b.winFloor };
+    const rv = { ...row("rv", 3, { sets_won: 4, sets_lost: 2 }, 2), points: 2 * b.winFloor };
+    expect(badminton.primaryTableKey).toBe("wins");
+    expect(tieWhatIf(me, rv, BADMINTON_ORDER, { winsOnly: b.winsOnly, primary: badminton.primaryTableKey })).toEqual({
+      kind: "rule",
+      key: "h2h_two",
+      mine: null,
+      theirs: null,
+    });
+    // The differential: the Swiss order (points first) still aims at set ratio for the very same pair.
+    expect(tieWhatIf(me, rv, BADMINTON_SWISS, { winsOnly: b.winsOnly, primary: badminton.primaryTableKey })?.kind).toBe("target");
+  });
+  // W2d P25 (spec §6 E3): the what-if keyed off `points` being first, so a wins-first order — the order volleyball,
+  // badminton and tennis rank by (D11) — lost it. The primary step is the sport's own (`primaryTableKey`); an order that
+  // starts with `points` (every pre-W2d default, and every stage the migration pinned to one) keeps its what-if.
+  it("P25 a wins-first volleyball order gets a what-if (primaryTableKey, not cascade[0]==='points')", () => {
+    // FIVB V3-1: matches won first (D11), then the order of spec §5.10 (RBS:291-296).
+    expect(volleyball.primaryTableKey).toBe("wins");
+    const WINS_FIRST: TiebreakerKey[] = ["wins", "points", "set_ratio", "point_ratio", "h2h_points", "lots"];
+    // W2d T11: the module's own league default IS that order now (VB-TB-1), so the what-if below is the shipped one.
+    expect(VOLLEYBALL_ORDER).toEqual(WINS_FIRST);
+    const primary = volleyball.primaryTableKey;
+    // Indoor: a 3-2 win pays 2 and a 3-0 pays 3, so rows level on wins can differ on points — `points` decides, a rule
+    // with both point totals (two wins each: 3-2 + 3-2 = 4 against 3-0 + 3-1 = 6).
+    const indoor = volleyball.matchPointsBounds(volleyball.configSchema.parse({}));
+    expect(indoor.winsOnly).toBe(false);
+    const me = { ...row("me", 3, { sets_won: 8, sets_lost: 7 }, 2), points: 4 };
+    const rv = { ...row("rv", 3, { sets_won: 6, sets_lost: 4 }, 2), points: 6 };
+    expect(tieDecidingKey(WINS_FIRST, { winsOnly: indoor.winsOnly, primary })).toBe("points");
+    expect(tieWhatIf(me, rv, WINS_FIRST, { winsOnly: indoor.winsOnly, primary })).toEqual({ kind: "rule", key: "points", mine: "4", theirs: "6" });
+    // Beach pays every win 2:0, so rows level on wins are level on points too: `points` is passed over (OQ1, the other way
+    // round) and the target lands on set ratio, as the engine's own comparator confirms through the whole order.
+    const beach = volleyball.matchPointsBounds(volleyball.configSchema.parse(volleyball.variants.beach));
+    expect(beach.winsOnly).toBe(true);
+    const bm = { ...row("me", 3, { sets_won: 5, sets_lost: 3 }, 2), points: 4 };
+    const br = { ...row("rv", 3, { sets_won: 4, sets_lost: 2 }, 2), points: 4 };
+    expect(tieWhatIf(bm, br, WINS_FIRST, { winsOnly: beach.winsOnly, primary })).toEqual({ kind: "target", key: "set_ratio", margin: 2 });
+    expectTightTarget(bm, br, "set_ratio", 2);
+    expect(ahead(bm, br, "set_ratio", 2, WINS_FIRST)).toBe(true);
+    // An order that starts with `points` keeps its what-if (a stage pinned to the pre-W2d default, spec §5.4 B1).
+    expect(tieDecidingKey(["points", "wins", "set_ratio", "point_ratio", "h2h_points"], { winsOnly: false, primary })).toBe("wins");
+    // A wins-first order where the sport's primary is points is still no what-if: football ranks on points (D11).
+    expect(tieDecidingKey(["wins", "points", "diff"], { winsOnly: false, primary: "points" })).toBeNull();
+  });
+  // The same claim for every sport that declares `wins` its primary measure, under every cfg it declares: its own default
+  // order with `wins` moved first gets a deciding key — the step after `wins`, passing over `points` only when every
+  // point came from wins (OQ1) — and, where points can split rows level on wins, a points rule naming both totals.
+  it("P25 every wins-primary sport (volleyball, badminton, tennis — D11) gets a what-if on a wins-first order, under every declared cfg (counted)", () => {
+    const winsPrimary = builtinModules.filter((m) => m.primaryTableKey === "wins");
+    // D11: matches won rank first in volleyball (FIVB), badminton (BWF) and tennis — the registry sweep's set, pinned.
+    // single-sport: the literal is the sweep's expected membership (D11), not a one-sport test; the sweep walks the registry
+    expect(winsPrimary.map((m) => m.key).sort()).toEqual(["badminton", "tennis", "volleyball"]);
+    let cfgs = 0;
+    let pointsRules = 0;
+    for (const module of winsPrimary) {
+      const primary = module.primaryTableKey;
+      for (const { name, cfg } of declaredCfgs(module)) {
+        const label = `${module.key} ${name}`;
+        const winsFirst: TiebreakerKey[] = ["wins", ...module.defaultTiebreakers("league", cfg).filter((k) => k !== "wins")];
+        const { winsOnly } = module.matchPointsBounds(cfg);
+        const after = winsFirst.slice(1).find((k) => !(winsOnly && k === "points"));
+        expect(after, `${label}: the order has a step after wins`).toBeDefined();
+        expect(tieDecidingKey(winsFirst, { winsOnly, primary }), label).toBe(after);
+        // The same order under a points primary is no what-if: the primary is the sport's, not the order's first step.
+        expect(tieDecidingKey(winsFirst, { winsOnly, primary: "points" }), label).toBeNull();
+        if (!winsOnly) {
+          const me = { ...row("me", 3, { sets_won: 8, sets_lost: 7 }, 2), points: 4 };
+          const rv = { ...row("rv", 3, { sets_won: 6, sets_lost: 4 }, 2), points: 6 };
+          expect(tieWhatIf(me, rv, winsFirst, { winsOnly, primary }), label).toEqual({ kind: "rule", key: "points", mine: "4", theirs: "6" });
+          pointsRules++;
+        }
+        cfgs++;
+      }
+    }
+    expect(cfgs, "every wins-primary sport declares at least one cfg").toBeGreaterThanOrEqual(winsPrimary.length);
+    expect(pointsRules, "a cfg where points split rows level on wins").toBeGreaterThan(0);
+  });
+  // W2d T11 (carry 3): can P25 accept the primary ONLY? No — measured, not assumed. Every shipped default starts with
+  // `points` or the sport's primary, but the Swiss orders of the wins-primary sports stay points-first (OC1), so a
+  // primary-only test would take their what-if away. This sweep is that measurement: it fails the day the tightening
+  // becomes safe (no points-first default under a wins primary), and the guard can then narrow.
+  it("P25 carry: every default order starts with points or the primary; the wins-primary Swiss orders still start with points (counted)", () => {
+    let checked = 0;
+    const pointsFirstUnderWins: string[] = [];
+    for (const module of builtinModules) {
+      for (const { name, cfg } of declaredCfgs(module)) {
+        for (const kind of [...DRAW_KINDS] as TableStageKind[]) {
+          const first = module.defaultTiebreakers(kind, cfg)[0];
+          expect([module.primaryTableKey, "points"], `${module.key} ${name} ${kind}`).toContain(first);
+          if (first === "points" && module.primaryTableKey !== "points") pointsFirstUnderWins.push(`${module.key}/${kind}`);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "orders checked").toBeGreaterThan(0);
+    // The set a primary-only guard would lose — Swiss only, and every wins-primary sport's Swiss order.
+    expect([...new Set(pointsFirstUnderWins)].sort()).toEqual(["badminton/swiss", "tennis/swiss", "volleyball/swiss"]);
+  });
   it("carrom default cascade: no draws, but a no-result pays — `wins` still decides", () => {
     const cfg = carrom.configSchema.parse({});
     const b = carrom.matchPointsBounds(cfg);
     expect(carrom.supportsDraws(cfg, "league")).toBe(false);
-    const got = tieWhatIf(row("me", 2, { boards_won: 9, boards_lost: 4 }, 1), row("rv", 2, { boards_won: 8, boards_lost: 2 }, 2), carrom.defaultTiebreakers, { winsOnly: b.winsOnly });
+    const got = tieWhatIf(row("me", 2, { boards_won: 9, boards_lost: 4 }, 1), row("rv", 2, { boards_won: 8, boards_lost: 2 }, 2), CARROM_ORDER, { winsOnly: b.winsOnly, primary: carrom.primaryTableKey });
     expect(got).toEqual({ kind: "rule", key: "wins", mine: "1", theirs: "2" });
   });
 });

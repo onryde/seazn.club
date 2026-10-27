@@ -100,6 +100,7 @@ import {
   type PublicStandings,
 } from "../data";
 import { readEveryPublicDivision } from "../read-every-division";
+import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { seedLoadersScene, type LoadersScene } from "./_public-loaders-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -117,14 +118,17 @@ const normalizeStandingsBefore = (s: PublicStandings): PublicStandings => ({
 });
 
 async function readPublicDivisionDetailBefore(division: PublicDivision) {
-  // `rules`: main's per-stage match rules (bb6523248), which landed on this
-  // read after the freeze; carried here so the diff is still T4's alone.
+  // `rules`: main's per-stage match rules (bb6523248), which landed on this read after the freeze; carried here so the
+  // diff is still T4's alone. (W2d's `table_points_rule` came and went the same way: T9 review m3.)
   const stages = await sql<PublicStage[]>`
     select id, division_id, seq, kind, name, status,
            qualify_count, qualify_per_group, next_stage_name, swiss_rounds, points_rule,
            has_rank_overrides,
            (select x.config->'rules' from stages x where x.id = public_stages_v.id) as rules
     from public_stages_v where division_id = ${division.id} order by seq`;
+  // `table_rules`: W2d Task 9's one table-rules loader, which landed on this read after the freeze; carried likewise.
+  const tableRules = await stageTableRulesDocs(sql, stages.map((st) => st.id));
+  for (const st of stages) st.table_rules = tableRules[st.id] ?? null;
   const pools = await sql<{ id: string; stage_id: string; key: string; name: string }[]>`
     select p.id, p.stage_id, p.key, p.name
     from public_pools_v p
@@ -275,6 +279,9 @@ async function embedDivisionDataBefore(divisionId: string) {
       left join organizations o on o.id = d.org_id
       where d.id = ${divisionId}`,
   ]);
+  // `table_rules`: W2d Task 9's one table-rules loader, which landed on this read after the freeze; carried likewise.
+  const tableRules = await stageTableRulesDocs(sql, stages.map((st) => st.id));
+  for (const st of stages) st.table_rules = tableRules[st.id] ?? null;
   return {
     ok: true,
     data: {

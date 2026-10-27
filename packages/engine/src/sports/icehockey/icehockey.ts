@@ -254,12 +254,20 @@ export const icehockey = makePeriodModule({
     { key: "sp_ps_scored", label: "PS scored", direction: "desc", display: false },
     { key: "sp_ps_resolved", label: "PS resolved", direction: "desc", display: false },
   ],
-  // Event Code §220 — H2H sub-group first, then overall (maps directly onto
-  // the existing comparator registry, v6/00 §1).
-  defaultTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "seed"],
+  // W2d (SPEC §5.10, IH-TB-1): IIHF — points, then the head-to-head block among the tied, re-applied to any smaller
+  // group still level, then overall goal difference and goals for, the seed, then lots.
+  defaultTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "h2h_reapply", "diff", "for", "seed", "lots"],
+  // OC1: a Swiss stage keeps its pre-W2d order.
+  swissTiebreakers: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "seed"],
+  // W2d (SPEC §5.6 "ST-G12", IH-TB-2): "if the tied teams have not all met" — a tied class whose mini-schedule is still
+  // incomplete — IIHF ranks by fewest games played, goal difference, goals for, then the seed (RBG:349-350), then lots.
+  partialScheduleOrder: ["fewest_played", "diff", "for", "seed", "lots"],
+  primaryTableKey: "points", // W2d (D11): the table ranks on points first.
   officialLabel: { scorer: "Scorekeeper" },
   suspensionReasons: ICEHOCKEY_SUSPENSION_REASONS,
   shootoutLabel: "GWS",
+  // W2d (X-PT-4) — the GWS decides the game: the table books it as a result (an OT/SO win), never a draw.
+  shootoutAs: "result",
   // IIHF Rule 87 / NHL Rule 84.4 — the game-winning shot is credited as a goal
   // in the official score (2-2 on the GWS is recorded 3-2). Derived at the
   // score layer; the shoot-out itself scores no player goals. FIH does not do

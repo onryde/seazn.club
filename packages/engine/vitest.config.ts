@@ -57,11 +57,13 @@ export default defineConfig({
       include: ["src/**/*.ts"],
       exclude: ["src/**/*.test.ts", "src/**/index.ts"],
       // PROMPT-14 §4 gate: ≥90% lines across the engine; the fold kernel and
-      // the tiebreaker cascade must be fully covered.
+      // the tiebreaker cascade must be fully covered — the ranker and, since
+      // W2d Task 6, the write-side check of an order (cascade-rules.ts).
       thresholds: {
         lines: 90,
         "src/core/**/*.ts": { lines: 100 },
         "src/competition/tiebreakers.ts": { lines: 100 },
+        "src/competition/cascade-rules.ts": { lines: 100 },
       },
     },
   },

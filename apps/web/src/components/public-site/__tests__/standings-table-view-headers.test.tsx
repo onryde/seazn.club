@@ -39,6 +39,7 @@ import {
 import { builtinModules } from "@seazn/engine/sports";
 import { RATIO_LEDGERS, type StandingsRow } from "@seazn/engine/competition";
 import { StandingsTableView } from "../standings-table-view";
+import { defaultOrderOf } from "@seazn/engine/testkit";
 
 /** Painted width (px) of each header word, measured in Chromium — see above. */
 const MEASURED: Readonly<Record<string, number>> = {
@@ -249,7 +250,7 @@ function widestView(sport: (typeof builtinModules)[number], dict: Dict): TableVi
     caption: "League",
     fullHref: "/x",
     metricSpecs: sport.metrics,
-    cascade: sport.defaultTiebreakers,
+    cascade: defaultOrderOf(sport),
     rows: [row("a", 1), row("b", 2)],
     entrantNames: { a: "Alpha", b: "Beta" },
     entrantLogos: {},

@@ -1303,6 +1303,10 @@ async function main() {
   // Format matrix W2c (stage-level rules, match overrides, their locks): every W2c task's named smoke check lives in
   // this one suite (plan Global Constraints). Own fresh org; keyless-safe.
   await w2cStageRulesSuite();
+
+  // Format matrix W2d PR A (tables and tie-breaks): a stage is pinned at generate, and a stored lots draw gives the same
+  // order on two reloads. Own fresh owner; needs DATABASE_URL (the pin read).
+  await w2dTablesSuite();
 }
 
 /** F5 remainder — build.ts's per-value i18n fallbacks (the "vs" result
@@ -7311,37 +7315,48 @@ async function w2cStageRulesSuite(): Promise<void> {
   // Task 11's every-sport check needs more divisions than the free plan allows in one competition (4); the Pro bump is
   // the suite's own, after the seed-independent sign-in, and affects no check below it.
   await setPlan(who.org_id, "pro", owner);
-  // Task 2's owed check — the division lock names the started stage (X-SR-4). `h2h_points`, not `head_to_head`: the
-  // v1 schema (TiebreakerKeyS) refuses the latter 400 VALIDATION before any lock is asked; the stored cascade is null,
-  // so any accepted key is a change.
+  // Task 2's owed check (X-SR-4), as W2d Task 10 reads it (spec §5.4, §11 item 4): a division's tie-break order no longer
+  // locks a started stage — Pool A is pinned (generated, then started) and ranks by its pin — so the save answers 200, refuses
+  // nothing, and names the pinned stage it kept in `stagesKeptPinned`. The order must pass `validateCascade` on the write
+  // path (W2c's `["h2h_points"]` puts neither the primary first nor lots last), and must MOVE the division's live order (the
+  // stored cascade is null, so the live one is the sport's default): the sport's own default without its head-to-head steps.
+  const bdmCfg = badminton.configSchema.parse(badminton.variants.short) as never;
+  const bdmDefault = badminton.defaultTiebreakers("league", bdmCfg);
+  const order = bdmDefault.filter((k) => !k.startsWith("h2h"));
   const { divisionId, fixtureId, unstartedId } = await w2cSeedStartedPool(owner);
-  const r = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { tiebreakers: ["h2h_points"] });
-  const tableLocked =
-    r.status === 409 && r.json.error?.code === "DIVISION_TABLE_RULES_LOCKED" && JSON.stringify(r.json).includes("Pool A");
+  const r = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { tiebreakers: order });
+  const rRow = r.json.data as { refused?: unknown[]; stagesKeptPinned?: { name?: string }[]; tiebreakers?: unknown } | undefined;
+  const keptNamed =
+    order.length >= 3 &&
+    JSON.stringify(order) !== JSON.stringify(bdmDefault) &&
+    r.status === 200 &&
+    (rRow?.refused ?? []).length === 0 &&
+    JSON.stringify(rRow?.tiebreakers) === JSON.stringify(order) &&
+    rRow?.stagesKeptPinned?.length === 1 &&
+    rRow.stagesKeptPinned[0]?.name === "Pool A";
   check(
-    "w2c: division table rules lock names the started stage" +
-      (tableLocked ? "" : ` — got ${r.status} ${JSON.stringify(r.json.error ?? r.json.data)}`),
-    tableLocked,
+    "w2c→w2d: a division tie-break order never locks a started stage; the save names the pinned stage it kept" +
+      (keptNamed ? "" : ` — got ${r.status} ${JSON.stringify(r.json.error ?? r.json.data)} (order ${JSON.stringify(order)})`),
+    keptNamed,
   );
-  // Task 20's owed check (S4, X-SR-4 UI half) — the SAME locked key beside a field that lands is NOT a 409: the save is
-  // applied per field, answers 200 and names what it kept in `refused[]` (the settings form reads it to say "saved, but
-  // ..." instead of "saved" over a value that snapped back). The rename landing and the cascade staying as stored are
-  // both read back from the division, so a 200 that dropped the rename — or applied the cascade — fails here.
+  // Task 20's owed check (S4) — a rename beside a cascade change: both land in one 200, nothing refused, the pinned stage
+  // named as kept. The rename and the cascade are read back from the division, so a 200 that dropped either fails here. The
+  // second order swaps the two middle steps of the first (a change from what is now stored; both pass `validateCascade`).
   const renamed = `W2c Singles Renamed ${tag}`;
-  const mixed = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { name: renamed, tiebreakers: ["h2h_points"] });
-  const mixedRow = mixed.json.data as { name?: string; refused?: { field?: string; code?: string; stageName?: string }[] } | undefined;
+  const order2 = [order[0], ...order.slice(1, -1).reverse(), order[order.length - 1]];
+  const mixed = await v1(owner, `/api/v1/divisions/${divisionId}`, "PATCH", { name: renamed, tiebreakers: order2 });
+  const mixedRow = mixed.json.data as { name?: string; refused?: unknown[]; stagesKeptPinned?: { name?: string }[] } | undefined;
   const afterMixed = v1data<{ name: string; tiebreakers: unknown }>(await v1(owner, `/api/v1/divisions/${divisionId}`));
   const mixedOk =
+    JSON.stringify(order2) !== JSON.stringify(order) &&
     mixed.status === 200 &&
     mixedRow?.name === renamed &&
-    mixedRow.refused?.length === 1 &&
-    mixedRow.refused[0]?.field === "tiebreakers" &&
-    mixedRow.refused[0]?.code === "DIVISION_TABLE_RULES_LOCKED" &&
-    mixedRow.refused[0]?.stageName === "Pool A" &&
+    (mixedRow.refused ?? []).length === 0 &&
+    mixedRow.stagesKeptPinned?.[0]?.name === "Pool A" &&
     afterMixed.name === renamed &&
-    afterMixed.tiebreakers == null;
+    JSON.stringify(afterMixed.tiebreakers) === JSON.stringify(order2);
   check(
-    "w2c: a mixed division save answers 200, lands the rename and names the kept cascade in refused[]" +
+    "w2c→w2d: a mixed division save answers 200, lands the rename AND the cascade, refuses nothing" +
       (mixedOk ? "" : ` — got ${mixed.status} ${JSON.stringify(mixed.json.error ?? mixed.json.data)} / stored ${JSON.stringify(afterMixed)}`),
     mixedOk,
   );
@@ -7361,6 +7376,148 @@ async function w2cStageRulesSuite(): Promise<void> {
   await w2cRulesVersionPreKickoffChecks(owner);
   await w2cPublicStageFormatChecks(owner, who.org_id);
   await w2cWalkoverHeadlineChecks(owner, who.org_id);
+}
+
+/**
+ * Format matrix W2d (spec 2026-10-20, tables and tie-breaks) — PR A's smoke proof, over real HTTP against a live server.
+ * A stage is pinned when it is generated (V475 `table_rules_pinned_at`, read from the database: PR A ships no HTTP reader
+ * of the pin), and a residual tie that only lots can split is drawn ONCE and stored (`stage_lots_draws`), so two reloads
+ * of the table across a later recompute give the same order. A generic league of six under 3/1/0: A beats C and B beats
+ * D, leaving A and B level on every step before lots (they have not met), and likewise C and D; E–F's later draw
+ * recomputes the table without touching either class. Own fresh owner; needs DATABASE_URL (the pin read). Every check is
+ * counted, and a run that checked nothing fails. SMOKE_ONLY=w2dTables runs it alone (SELECTABLE_SUITES).
+ */
+async function w2dTablesSuite(): Promise<void> {
+  const url = process.env.DATABASE_URL;
+  if (!url) throw new Error("DATABASE_URL is required for the W2d tables smoke (the pin is read from the database)");
+  const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+  const sql = postgres(url, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : isLocal ? false : "require",
+    prepare: !url.includes(":6543"),
+    max: 1,
+  });
+  const EXPECTED_CHECKS = 6;
+  let checked = 0;
+  const w2dCheck = (label: string, cond: boolean) => {
+    checked++;
+    check(label, cond);
+  };
+  try {
+    const owner = newSession();
+    await signIn(owner, `delivered+w2d_${tag}@resend.dev`);
+    const comp = v1data<{ id: string }>(
+      await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2d Tables ${tag}` }),
+    );
+    const divId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+        name: "W2d Table",
+        sport_key: "generic",
+        variant_key: "score",
+        config: { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false },
+      }),
+    )?.id;
+    const names = ["A", "B", "C", "D", "E", "F"] as const;
+    const entrants = v1data<{ id: string }[] | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/entrants`, "POST",
+        names.map((n, i) => ({ kind: "individual", display_name: `${n} ${tag}`, seed: i + 1 }))),
+    ) ?? [];
+    const id = Object.fromEntries(names.map((n, i) => [n, entrants[i]?.id ?? `missing ${n}`])) as Record<(typeof names)[number], string>;
+    const stageId = v1data<{ id: string } | undefined>(
+      await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: "Table" }),
+    )?.id ?? "";
+    const pinOf = async () =>
+      (await sql<{ pinned_at: Date | null; sources: unknown }[]>`
+        select table_rules_pinned_at as pinned_at, table_rules_pinned -> 'sources' as sources from stages where id = ${stageId}`)[0];
+
+    const before = await pinOf();
+    w2dCheck(
+      "w2d: a stage is unpinned before it is generated" + (before?.pinned_at === null ? "" : ` — got ${JSON.stringify(before)}`),
+      entrants.length === 6 && before !== undefined && before.pinned_at === null && before.sources === null,
+    );
+    const generated = v1data<{ fixtures: { id: string }[] } | undefined>(await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST"))?.fixtures ?? [];
+    const after = await pinOf();
+    w2dCheck(
+      "w2d: generating the stage pins its table rules (pinned_at set, sources recorded)" +
+        (after?.pinned_at != null ? "" : ` — got ${generated.length} fixture(s), ${JSON.stringify(after)}`),
+      generated.length === 15 && after?.pinned_at != null && after.sources != null,
+    );
+    const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
+
+    type Fx = { id: string; home_entrant_id: string | null; away_entrant_id: string | null };
+    const fixtures = v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${divId}/fixtures`)) ?? [];
+    // One result between x and y, x scoring xs: oriented to the fixture's seating (generic's p1 is home).
+    const result = async (x: string, y: string, xs: number, ys: number) => {
+      const f = fixtures.find((fx) => [fx.home_entrant_id, fx.away_entrant_id].sort().join() === [x, y].sort().join());
+      if (f === undefined) return 0;
+      const state = v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${f.id}/state`));
+      const [p1Score, p2Score] = f.home_entrant_id === x ? [xs, ys] : [ys, xs];
+      return (await v1(owner, `/api/v1/fixtures/${f.id}/events`, "POST", {
+        expected_seq: state.last_seq,
+        type: "generic.result",
+        payload: { p1Score, p2Score },
+      })).status;
+    };
+    type Row = { entrantId: string; points: number; tieBreak?: { key: string; drawnAt?: string } };
+    const table = async () => v1data<{ rows?: Row[] } | undefined>(await v1(owner, `/api/v1/stages/${stageId}/standings`))?.rows ?? [];
+    const pts = (rows: readonly Row[], e: string) => rows.find((r) => r.entrantId === e)?.points;
+    // The table is a snapshot the append refreshes; a bounded poll, its reads counted, never a fixed sleep.
+    const settled = async (ready: (rows: readonly Row[]) => boolean) => {
+      let rows = await table();
+      for (let reads = 1; reads < 20 && !ready(rows); reads++) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        rows = await table();
+      }
+      return rows;
+    };
+    const classOrder = (rows: readonly Row[], members: readonly string[]) => rows.map((r) => r.entrantId).filter((e) => members.includes(e));
+    const draws = (members: readonly string[]) =>
+      sql<{ id: string; drawn_order: string[]; superseded_at: Date | null }[]>`
+        select id, drawn_order, superseded_at from stage_lots_draws
+        where stage_id = ${stageId} and members_key = ${[...members].sort().join(",")}`;
+    const ab = [id.A, id.B];
+    const cd = [id.C, id.D];
+
+    const firstResults = [await result(id.A, id.C, 1, 0), await result(id.B, id.D, 1, 0)];
+    const read1 = await settled((rows) => pts(rows, id.A) === 3 && pts(rows, id.B) === 3 && pts(rows, id.C) === 0 && pts(rows, id.D) === 0);
+    const [abDraws1, cdDraws1] = [await draws(ab), await draws(cd)];
+    const drawnAsStored = (rows: readonly Row[], members: readonly string[], stored: readonly { drawn_order: string[]; superseded_at: Date | null }[]) =>
+      stored.length === 1 &&
+      stored[0].superseded_at === null &&
+      JSON.stringify(classOrder(rows, members)) === JSON.stringify(stored[0].drawn_order) &&
+      members.every((e) => rows.find((r) => r.entrantId === e)?.tieBreak?.key === "lots");
+    w2dCheck(
+      "w2d: a residual tie only lots can split is drawn and stored — A and B (3 points each, never met) rank as the stored draw" +
+        (drawnAsStored(read1, ab, abDraws1) ? "" : ` — start ${started.status}, results ${JSON.stringify(firstResults)}, rows ${JSON.stringify(read1.map((r) => [names[entrants.findIndex((e) => e.id === r.entrantId)], r.points, r.tieBreak?.key]))}, draws ${JSON.stringify(abDraws1)}`),
+      started.status < 300 && firstResults.every((s) => s === 201) && drawnAsStored(read1, ab, abDraws1),
+    );
+    w2dCheck(
+      "w2d: the losers' tie (C and D, 0 points, −1 each) is drawn and stored the same way" +
+        (drawnAsStored(read1, cd, cdDraws1) ? "" : ` — draws ${JSON.stringify(cdDraws1)}`),
+      drawnAsStored(read1, cd, cdDraws1),
+    );
+
+    // Reload across a recompute: E–F drawn moves the table and leaves both classes as they were.
+    const efResult = await result(id.E, id.F, 0, 0);
+    const read2 = await settled((rows) => pts(rows, id.E) === 1 && pts(rows, id.F) === 1);
+    const [abDraws2, cdDraws2] = [await draws(ab), await draws(cd)];
+    const sameAs1 = (members: readonly string[], d1: readonly { id: string }[], d2: readonly { id: string }[]) =>
+      JSON.stringify(classOrder(read2, members)) === JSON.stringify(classOrder(read1, members)) &&
+      d1.length === 1 && d2.length === 1 && d1[0].id === d2[0].id;
+    w2dCheck(
+      "w2d: two reloads across a recompute give the same lots order — each class drawn once, its stored draw reused" +
+        (sameAs1(ab, abDraws1, abDraws2) && sameAs1(cd, cdDraws1, cdDraws2) ? "" : ` — E–F ${efResult}, draws ${JSON.stringify([abDraws2, cdDraws2])}`),
+      efResult === 201 && pts(read2, id.E) === 1 && sameAs1(ab, abDraws1, abDraws2) && sameAs1(cd, cdDraws1, cdDraws2),
+    );
+    const read3 = await table();
+    w2dCheck(
+      "w2d: a plain reload serves the same table order",
+      read3.length > 0 && JSON.stringify(read3.map((r) => r.entrantId)) === JSON.stringify(read2.map((r) => r.entrantId)),
+    );
+  } finally {
+    await sql.end();
+  }
+  check(`w2d: the tables suite ran its ${EXPECTED_CHECKS} checks (ran ${checked})`, checked === EXPECTED_CHECKS);
 }
 
 /**
@@ -7387,7 +7544,7 @@ async function w2cStagePointsWalkoverChecks(owner: Session): Promise<void> {
   const stageId = v1data<{ id: string } | undefined>(
     await v1(owner, `/api/v1/divisions/${divId}/stages`, "POST", { seq: 1, kind: "league", name: "Points Pool" }),
   )?.id;
-  const points = { base: { win: own?.[0] ?? 0, draw: 0, loss: own?.[1] ?? 0 }, forfeit };
+  const points = { win: { regulation: own?.[0] ?? 0 }, draw: 0, loss: { regulation: own?.[1] ?? 0 }, shootoutAs: "result", unit: "whole", forfeit };
   const put = await v1(owner, `/api/v1/stages/${stageId}/rules`, "PUT", { points });
   const stored = (put.json.data as { points?: { forfeit?: unknown } | null } | undefined)?.points?.forfeit;
   check(
@@ -7524,7 +7681,7 @@ async function w2cWalkoverHeadlineChecks(owner: Session, orgId: string): Promise
   );
   const stage = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool" }));
   const put = await v1(owner, `/api/v1/stages/${stage.id}/rules`, "PUT", {
-    points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: award } },
+    points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: award } },
   });
   // The twin: a second pool over the same entrants with NO points rule - the same ledger read without an award.
   const twinStage = v1data<{ id: string }>(await v1(owner, `/api/v1/divisions/${div.id}/stages`, "POST", { seq: 2, kind: "league", name: "Pool B" }));
@@ -23378,6 +23535,10 @@ async function cleanup(tag: string): Promise<void> {
     // outboxTrialWarningSuite's own org (email outbox phase 3 wave 2 T11) — its group goes with the orphaned-group purge
     // below. Its trial_ending row has no org, so the suite deletes that itself.
     `delivered+trialwarn_${tag}@resend.dev`,
+    // w2cStageRulesSuite's own Pro org (W2c T10) — found in review (W2d A14 m4): it was never purged, one org a run.
+    `delivered+w2c_${tag}@resend.dev`,
+    // w2dTablesSuite's own org (W2d A-smoke) — its competition, the pinned stage and its stored lots draws cascade with it.
+    `delivered+w2d_${tag}@resend.dev`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {
@@ -23615,6 +23776,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   epochFloorOverride: () => epochFloorOverrideSuite(),
   registrationOpenFlow: () => registrationOpenFlowSuite(),
   outboxTrialWarning: () => outboxTrialWarningSuite(),
+  w2dTables: () => w2dTablesSuite(),
 };
 
 /** The subset's setup: the same calls main() makes for this state, in main()'s order — the admin sign-in, the plan

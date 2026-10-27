@@ -42,8 +42,8 @@ export interface RuleField {
    * no opinion when blank — a blank `halfMinutes` leaves whatever's already
    * saved untouched (no `buildOnBlank`, nothing merged, exactly the
    * pre-R3.5-review behaviour). A field whose blank state must ACTIVELY
-   * delete a previously-saved key (R3.5 review F5: shootoutWin/shootoutLoss)
-   * implements this instead. Return `undefined` for a key here — never just
+   * delete a previously-saved key (R3.5 review F5: football's shoot-out points
+   * pair, retired in W2d) implements this instead. Return `undefined` for a key here — never just
    * omit it — to signal "delete": division-settings.tsx's applyFormat
    * merges this return value on top of the division's existing saved
    * `points`, so omitting a key would leave that stale value in place, not
@@ -64,7 +64,7 @@ export interface RuleField {
    * organiser's first save would pin the whole division format onto the stage.
    *
    * Implemented for the two fields the original bug was reported against
-   * (shootoutWin/shootoutLoss) and for the nine sets-based keys the per-stage
+   * (football's shoot-out points pair, retired in W2d) and for the nine sets-based keys the per-stage
    * override covers (bestOf, setTo, finalSetTo, cap, winBy, and tennis's
    * setType/finalSet/noAd/tiebreakWinBy). The rest stay unimplemented, and
    * that is not a regression: a `build` that writes a DIFFERENT key than

@@ -153,7 +153,7 @@ describe("stage format line - a stage's own points rule (X-PT-1, public half)", 
   const division = divisionCfg(football, "11-a-side");
   // The rule's award score (7-0) is NOT the division's (football's own `awardScore.goals`). Since X-WO-1 part B (Task 16b)
   // the walkover headline reads the RULE's award wherever it reaches the sport's table, so the line says it there.
-  const points = { base: { win: 4, draw: 2, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [7, 0] } };
+  const points = { win: { regulation: 4 }, draw: 2, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [7, 0] } };
   const noAward = { ...points, forfeit: { winnerPoints: 2, loserPoints: 0 } };
 
   it("a stage with its own points and the division's format gets the points sentence alone", () => {

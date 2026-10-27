@@ -52,7 +52,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, tracksFairPlay, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -126,10 +126,10 @@ export const FootballCfg = z.object({
       win: z.number().int().nonnegative().default(3),
       draw: z.number().int().nonnegative().default(1),
       loss: z.number().int().nonnegative().default(0),
-      // spec 04 §1.4 — optional split for group-stage shootouts
-      // (youth-cup convention: SO win 2, SO loss 1).
-      shootoutWin: z.number().int().nonnegative().optional(),
-      shootoutLoss: z.number().int().nonnegative().optional(),
+      // W2d (spec §5.3, B2; PS-1) — a group-stage shoot-out is a draw on the table plus this bonus to its winner
+      // (RB2B-7: draw 1 + 1 = 2/1). Optional: absent pays 1. Read only by `tablePointsRule`; it replaces the W2c
+      // shoot-out win/loss split (greenfield, no alias: z.object strips the old keys).
+      soBonus: z.number().int().nonnegative().optional(),
     })
     .default({ win: 3, draw: 1, loss: 0 }),
   awardScore: z.object({ goals: z.number().int().positive() }).default({ goals: 3 }),
@@ -1787,13 +1787,24 @@ function displayedGoals(state: FootballState): { home: number; away: number } {
 // engine/11-sources.md: H2H-first cascade aligned with UEFA for 2026).
 // ---------------------------------------------------------------------------
 
-export const FOOTBALL_TIEBREAKERS: Record<"fifa2026" | "classic", TiebreakerKey[]> = {
+export const FOOTBALL_TIEBREAKERS: Record<"fifa2026" | "uefa" | "classic", TiebreakerKey[]> = {
   // points → H2H points → H2H GD → H2H goals → overall GD → overall GF →
-  // fair play → drawing of lots.
+  // fair play → drawing of lots (deviation: FIFA's world ranking, RB2B-4).
   fifa2026: ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "fair_play", "lots"],
+  // W2d (spec §5.10, FB-TB-2): UEFA Art. 20.01(d) — fifa2026 with the H2H block re-applied to any subset it leaves level.
+  // The criteria UEFA lists after overall goals are not modelled, so the tail is fifa2026's (INFERRED from RBG:111-112,
+  // which names only re-application); 20.02's penalties between two level teams is not offered (FB-TB-3, RB2B-5).
+  uefa: ["points", "h2h_points", "h2h_diff", "h2h_for", "h2h_reapply", "diff", "for", "fair_play", "lots"],
   // pre-2026 WC: points → overall GD → overall GF → H2H block → fair play → lots.
   classic: ["points", "diff", "for", "h2h_points", "h2h_diff", "h2h_for", "fair_play", "lots"],
 };
+
+// W2d (PS-7c, FB-TB-4; owner 2026-10-24 Option 1): the default ranks on fair play only while the division's cfg tracks it,
+// read by `tracksFairPlay` — the reading `validateCascade` refuses the step by — so the default always validates (D8).
+function footballDefaultOrder(cfg: unknown): TiebreakerKey[] {
+  const order = FOOTBALL_TIEBREAKERS.fifa2026;
+  return tracksFairPlay({ configSchema: FootballCfg }, cfg) ? [...order] : order.filter((key) => key !== "fair_play");
+}
 
 // ---------------------------------------------------------------------------
 // Positions — spec 04 §1 / PROMPT-04 §8
@@ -2777,15 +2788,10 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       }
       case "win": {
         const winnerSide = sideOf(state, outcome.winner);
-        // spec 04 §1.4 — optional shootout points split (group-stage SO).
-        const split =
-          outcome.method === "shootout" &&
-          cfg.points.shootoutWin !== undefined &&
-          cfg.points.shootoutLoss !== undefined;
-        const winnerPts = split ? (cfg.points.shootoutWin as number) : cfg.points.win;
-        const loserPts = split ? (cfg.points.shootoutLoss as number) : cfg.points.loss;
-        const winner = build(winnerSide, 1, 0, 0, winnerPts);
-        const loser = build(opponent(winnerSide), 0, 0, 1, loserPts);
+        // W2d PS-1: a shoot-out win pays a win here, as it did with no split set; the table's draw-plus-bonus booking is
+        // `tablePointsRule`'s (B2), paid by the stage's points rule.
+        const winner = build(winnerSide, 1, 0, 0, cfg.points.win);
+        const loser = build(opponent(winnerSide), 0, 0, 1, cfg.points.loss);
         return winnerSide === "home" ? [winner, loser] : [loser, winner];
       }
       case "draw":
@@ -2813,9 +2819,14 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   ],
   // W2c X-PT-1 (gap a): football's goal ledger (`sideMetrics`, `footballForfeitCredit`) is gf / ga / gd.
   awardScoreKeys: { for: "gf", against: "ga", diff: "gd" },
-  // Module default = fifa2026 (spec 04 §1.6); `classic` selectable by the
-  // organiser via FOOTBALL_TIEBREAKERS.
-  defaultTiebreakers: FOOTBALL_TIEBREAKERS.fifa2026,
+  // Module default = fifa2026 (spec 04 §1.6, §5.10) for every table kind (the Swiss order is the same list, unchanged,
+  // OC1), its fair-play step only while the cfg tracks fair play; `uefa` and `classic` are stage presets.
+  defaultTiebreakers: (_kind, cfg) => footballDefaultOrder(cfg),
+  tablePresets: () => ({
+    points: [],
+    tiebreakers: (["fifa2026", "uefa", "classic"] as const).map((id) => ({ id, keys: [...FOOTBALL_TIEBREAKERS[id]] })),
+  }),
+  primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // spec 04 §1.3 — draws are table results only. X-DR-1 (ruling 78; W2a plan
   // finding 15): americano is offered for football (offered-matrix.md:26).
@@ -2828,6 +2839,26 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
   // M-3: the penalty shoot-out is sudden death (`shootoutDecision` plays on until one side leads), so it always produces a
   // winner; extra time does not - a level score after it is a draw, held for the organiser.
   canEndLevel: (cfg) => cfg.shootout !== true,
+  // W2d (spec §5.2, D4, B2; X-PT-2) — the win methods this fold writes (`resolveFullTime`'s FT and ET whistles, the
+  // deciding kick, an award-policy abandon) and how each was decided.
+  ...winMethodTable("football", { regulation: "regulation", extra_time: "ot", shootout: "so", abandoned: "regulation" }),
+  reachableDecidedIn: (cfg) =>
+    new Set<DecidedIn>(["regulation", ...(cfg.extraTime.enabled ? (["ot"] as const) : []), ...(cfg.shootout ? (["so"] as const) : [])]),
+  // A draw stands in every table stage (`supportsDraws`), and a table shoot-out is booked as one too (B2); a bracket holds
+  // every level result for the organiser (ruling 79).
+  reachableResultKinds: (cfg, stage) => new Set<"draw" | "tie" | "noResult">(football.supportsDraws(cfg, stage) ? ["draw"] : []),
+  shootoutAs: "draw_plus_bonus",
+  // W2d (spec §5.3, §5.10) — W3 D1 L0; a table shoot-out is a draw plus `soBonus` (absent: 1) to its winner (B2,
+  // FB-PT-1). Overtime pays a win: no `ot` split (D9).
+  tablePointsRule: (cfg) => ({
+    win: { regulation: cfg.points.win },
+    loss: { regulation: cfg.points.loss },
+    draw: cfg.points.draw,
+    ...(cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),
+    shootoutAs: football.shootoutAs,
+    unit: "whole",
+    bonuses: [],
+  }),
 
   // W2c X-SR-6, FB-SO-1 (spec §4.2) — the preset a NEW bracket stage should start with: extra time 2×15, penalties and 5
   // kicks each (3 in the youth formats), every one the organiser's to switch off; a table stage starts with none. Stage
@@ -2838,22 +2869,14 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       ? { extraTime: { enabled: true, halfMinutes: 15 }, shootout: true, shootoutAttempts: SHOOTOUT_ATTEMPTS_DEFAULT, ...KO_VARIANT_PRESET.get(variant) }
       : {},
 
-  // §9.3 — {win+loss, 2·draw} plus the optional shootout split total.
+  // §9.3 — {win+loss, 2·draw} (W2d PS-1: a shoot-out win pays a win).
   declaredPointsSets(cfg) {
-    const totals = [cfg.points.win + cfg.points.loss, cfg.points.draw * 2];
-    if (cfg.points.shootoutWin !== undefined && cfg.points.shootoutLoss !== undefined) {
-      totals.push(cfg.points.shootoutWin + cfg.points.shootoutLoss);
-    }
-    return [...new Set(totals)];
+    return [...new Set([cfg.points.win + cfg.points.loss, cfg.points.draw * 2])];
   },
 
   matchPointsBounds(cfg) {
     const p = cfg.points;
-    return boundsFrom(
-      [p.win, ...(p.shootoutWin !== undefined ? [p.shootoutWin] : [])],
-      [p.loss, ...(p.shootoutLoss !== undefined ? [p.shootoutLoss] : [])],
-      [p.draw],
-    );
+    return boundsFrom([p.win], [p.loss], [p.draw]);
   },
 
   officialLabel: { scorer: "Referee" }, // doc 13 §1

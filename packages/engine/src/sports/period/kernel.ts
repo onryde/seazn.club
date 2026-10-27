@@ -42,7 +42,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit, goalCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -53,6 +53,9 @@ import type {
   PadSpec,
   RuleKeys,
   SportModule,
+  TablePresets,
+  PartialScheduleKey,
+  TableStageKind,
   TiebreakerKey,
 } from "../../sport/module.ts";
 import { playedInStats, type PlayerStatRow, type PlayerStatsModel, type StatsPlayDeclaration } from "../../stats/stats.ts";
@@ -101,8 +104,10 @@ export interface PeriodParams {
     loss: number;
     otWin?: number;
     otLoss?: number;
-    shootoutWin?: number;
-    shootoutLoss?: number;
+    // W2d (spec §5.3, B2; PS-1) — the shoot-out winner's bonus on top of the draw, where the sport books a table shoot-out
+    // as a draw plus a bonus (FIH; the schema declares it for those presets only). Absent pays 1. Read only by
+    // `tablePointsRule`; it replaces the W2c shoot-out win/loss split (greenfield, no alias).
+    soBonus?: number;
   };
   suspensions: SuspensionCfg | null;
   strength: { base: number; min: number };
@@ -155,7 +160,15 @@ export function makePeriodConfigSchema(
   defaults: PeriodParams,
   setPieceKinds: readonly string[] = [],
   abandonOptions: readonly string[] = DEFAULT_ABANDON_OPTIONS,
+  shootoutAs: PeriodPreset["shootoutAs"],
 ) {
+  // W2d (B2): a bonus exists only where a table shoot-out is a draw plus one. A sport that books it as a result (ice
+  // hockey's GWS) pays `otWin`/`otLoss` for it, and the PointsRule refuses a `soBonus` there, so its schema takes none.
+  // Typed as present for both, so the inferred cfg stays `PeriodCfg` (its `soBonus?` is optional either way); at run time
+  // a result sport's object declares no such key and strips it.
+  const soBonus = (shootoutAs === "draw_plus_bonus" ? { soBonus: z.number().int().nonnegative().optional() } : {}) as {
+    soBonus: z.ZodOptional<z.ZodNumber>;
+  };
   return z.object({
     // W4 review item 4 — which restarts this competition records as AWARDED
     // (FIH penalty corner / stroke, IIHF penalty shot). These used to be read
@@ -218,8 +231,7 @@ export function makePeriodConfigSchema(
         loss: z.number().int().nonnegative(),
         otWin: z.number().int().nonnegative().optional(),
         otLoss: z.number().int().nonnegative().optional(),
-        shootoutWin: z.number().int().nonnegative().optional(),
-        shootoutLoss: z.number().int().nonnegative().optional(),
+        ...soBonus,
       })
       .default(defaults.points),
     suspensions: z
@@ -1535,13 +1547,9 @@ function applyAbandon(state: PeriodState): PeriodState {
 // ---------------------------------------------------------------------------
 
 function winPoints(cfg: PeriodCfg, method: string | undefined): [number, number] {
-  if (method === "shootout") {
-    return [
-      cfg.points.shootoutWin ?? cfg.points.otWin ?? cfg.points.win,
-      cfg.points.shootoutLoss ?? cfg.points.otLoss ?? cfg.points.loss,
-    ];
-  }
-  if (method === "extra_time") {
+  // W2d PS-1: a shoot-out win pays the overtime values (the chain with no shoot-out split); FIH's draw-plus-bonus booking
+  // is `tablePointsRule`'s (B2), paid by the stage's points rule.
+  if (method === "shootout" || method === "extra_time") {
     return [cfg.points.otWin ?? cfg.points.win, cfg.points.otLoss ?? cfg.points.loss];
   }
   return [cfg.points.win, cfg.points.loss];
@@ -1880,16 +1888,29 @@ export interface PeriodPreset {
   lineupPolicy?: (cfg: PeriodCfg) => LineupPolicy;
   metrics: MetricSpec[];
   defaultTiebreakers: TiebreakerKey[];
+  // W2d (spec §5.10, OC1) — a Swiss stage's order, unchanged by W2d (W3 owns Swiss orders); `defaultTiebreakers` above is
+  // the round-robin, league and group order. Required, so a new sport states both.
+  swissTiebreakers: TiebreakerKey[];
+  // W2d (spec §5.10, HK-PT-2) — the sport's table presets (`SportModule.tablePresets`); omitted = none.
+  tablePresets?: (stageKind: TableStageKind) => TablePresets;
+  // W2d (D11; X-TB-3) — the module's `primaryTableKey`; stated per sport.
+  primaryTableKey: "points" | "wins";
   officialLabel: { scorer: string };
   shootoutLabel: string; // 'GWS' (ice) | 'SO' (FIH)
+  // W2d (X-PT-4, B2) — how a table books a shoot-out: FIH as a draw plus a bonus point, ice hockey as a result.
+  shootoutAs: "draw_plus_bonus" | "result";
+  // W2d (HK-TB-1) — "regulation" when the tie-break's "wins" counts regulation wins only (FIH); omitted = every win.
+  winsCount?: "regulation";
+  // W2d (spec §5.6 "ST-G12", IH-TB-2) — the module's `partialScheduleOrder`; omitted = none (the block does not split).
+  partialScheduleOrder?: readonly PartialScheduleKey[];
   // IIHF Rule 87 / NHL Rule 84.4 — the shoot-out winner is credited ONE extra
   // goal in the OFFICIAL SCORE: 2-2 won on the shoot-out is recorded 3-2, so
   // the winner's GF and the loser's GA carry it and it reaches goal difference.
   //
   // A SPORT flag, and omitted means off, because this is not a shared rule.
   // FIH records the identical match as a DRAW plus a bonus point — which is
-  // exactly what `hockey`'s `fih-shootout` variant encodes (`shootoutWin: 2`
-  // = draw 1 + 1) — and FIFA records 4-4 with the shoot-out beside it, which
+  // exactly what `hockey`'s `fih-shootout` variant encodes (`soBonus: 1`
+  // over a draw of 1, its table points rule) — and FIFA records 4-4 with the shoot-out beside it, which
   // is what football's corpus already holds. Awarding it in the kernel would
   // put a shoot-out win into FIH goal difference, where the same competition
   // has already paid for it in points.
@@ -1961,7 +1982,7 @@ export interface PeriodPreset {
 export function makePeriodModule(
   preset: PeriodPreset,
 ): SportModule<PeriodCfg, PeriodEv, PeriodState> {
-  const configSchema = makePeriodConfigSchema(preset.defaults, preset.setPieceKinds ?? [], preset.abandonOptions ?? DEFAULT_ABANDON_OPTIONS);
+  const configSchema = makePeriodConfigSchema(preset.defaults, preset.setPieceKinds ?? [], preset.abandonOptions ?? DEFAULT_ABANDON_OPTIONS, preset.shootoutAs);
   const goalType = `${preset.key}.goal`;
   const advanceType = `${preset.key}.period.advance`;
   const clockType = `${preset.key}.clock`;
@@ -2814,7 +2835,9 @@ export function makePeriodModule(
     metrics: preset.metrics,
     // W2c X-PT-1 (gap a): the kernel's own goal ledger (`sideMetrics`, `periodForfeitCredit`) is gf / ga / gd.
     awardScoreKeys: { for: "gf", against: "ga", diff: "gd" },
-    defaultTiebreakers: preset.defaultTiebreakers,
+    defaultTiebreakers: (kind) => [...(kind === "swiss" ? preset.swissTiebreakers : preset.defaultTiebreakers)],
+    ...(preset.tablePresets === undefined ? {} : { tablePresets: preset.tablePresets }),
+    primaryTableKey: preset.primaryTableKey,
 
     // v6/00 §3 — draws are a table result only where no decider is
     // configured (FIH outdoor, rec ice); OT or a shootout means every match
@@ -2829,18 +2852,42 @@ export function makePeriodModule(
     // M-3: the shoot-out is sudden death (`shootoutDecision`), so it always produces a winner. An overtime does not,
     // sudden-death or not: a scoreless one runs out and `resolveEnd` finishes level when no shoot-out follows.
     canEndLevel: (cfg) => cfg.shootout === null,
+    // W2d (spec §5.2, D4, B2; X-PT-2) — the win methods this kernel writes (`resolveEnd`'s whistles, the sudden-death
+    // overtime goal, the shoot-out, an award-policy abandon) and how each was decided; both codes share them.
+    ...winMethodTable(preset.key, { regulation: "regulation", extra_time: "ot", shootout: "so", abandoned: "regulation" }),
+    reachableDecidedIn: (cfg) =>
+      new Set<DecidedIn>([
+        "regulation",
+        ...(cfg.overtime !== null ? (["ot"] as const) : []),
+        ...(cfg.shootout !== null ? (["so"] as const) : []),
+      ]),
+    // A table pays a draw that stands (`drawStands`, the cfg half of `supportsDraws`) and, where the sport books a
+    // shoot-out as a draw plus a bonus (B2: FIH), a shoot-out the cfg plays. A bracket holds every level result (ruling 79).
+    reachableResultKinds: (cfg, stage) =>
+      new Set<"draw" | "tie" | "noResult">(
+        DRAW_KINDS.has(stage) && (drawStands(cfg) || (preset.shootoutAs === "draw_plus_bonus" && cfg.shootout !== null)) ? ["draw"] : [],
+      ),
+    shootoutAs: preset.shootoutAs,
+    ...(preset.winsCount === undefined ? {} : { winsCount: preset.winsCount }),
+    ...(preset.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: preset.partialScheduleOrder }),
+    // W2d (spec §5.3, §5.10) — the cfg's win/draw/loss, with `otWin`/`otLoss` as the overtime split (D9: absent pays a
+    // win). A `result` sport's shoot-out falls back to them (IIHF: the GWS pays 2/1, IH-PT-1); a `draw_plus_bonus` one is
+    // a draw plus `soBonus` (absent: 1; FIH Pro League 2/1, HK-PT-2).
+    tablePointsRule: (cfg) => ({
+      win: { regulation: cfg.points.win, ...(cfg.points.otWin === undefined ? {} : { ot: cfg.points.otWin }) },
+      loss: { regulation: cfg.points.loss, ...(cfg.points.otLoss === undefined ? {} : { ot: cfg.points.otLoss }) },
+      draw: cfg.points.draw,
+      ...(preset.shootoutAs !== "draw_plus_bonus" || cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),
+      shootoutAs: preset.shootoutAs,
+      unit: "whole",
+      bonuses: [],
+    }),
 
     declaredPointsSets(cfg) {
       const totals = [cfg.points.win + cfg.points.loss, cfg.points.draw * 2];
       if (cfg.points.otWin !== undefined || cfg.points.otLoss !== undefined) {
         totals.push(
           (cfg.points.otWin ?? cfg.points.win) + (cfg.points.otLoss ?? cfg.points.loss),
-        );
-      }
-      if (cfg.points.shootoutWin !== undefined || cfg.points.shootoutLoss !== undefined) {
-        totals.push(
-          (cfg.points.shootoutWin ?? cfg.points.otWin ?? cfg.points.win) +
-            (cfg.points.shootoutLoss ?? cfg.points.otLoss ?? cfg.points.loss),
         );
       }
       return [...new Set(totals)];
@@ -2850,8 +2897,8 @@ export function makePeriodModule(
       const p = cfg.points;
       const opt = (v: number | undefined) => (v !== undefined ? [v] : []);
       return boundsFrom(
-        [p.win, ...opt(p.otWin), ...opt(p.shootoutWin)],
-        [p.loss, ...opt(p.otLoss), ...opt(p.shootoutLoss)],
+        [p.win, ...opt(p.otWin)],
+        [p.loss, ...opt(p.otLoss)],
         [p.draw],
       );
     },

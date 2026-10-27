@@ -556,11 +556,16 @@ describe.skipIf(!HAS_DB)("putStageRules (design §T3)", () => {
     const auth = await seedOrg();
     const { divisionId } = await seedDivision(auth, "football", "11-a-side", 0);
 
-    // The shape SPORT_RULES.football genuinely emits — derived from the table, not invented. The custom-points paywall
-    // reads `s.config.points`, never `s.config.rules.points`: before W2c Task 12 this door refused `rules` outright; it
-    // now takes them through the engine's allowlist, which refuses every points key (they belong to the Points section).
-    const smuggled = buildRuleOverride("football", { shootoutWin: "3", shootoutLoss: "1" });
-    expect(smuggled).toEqual({ points: { shootoutWin: 3, shootoutLoss: 1 } });
+    // No SPORT_RULES field emits `points` since W2d PS-1 retired football's shoot-out pair, so the smuggled shape is the
+    // engine's own: football's schema declares `points.soBonus` (premise below), never a key typed for the test. The
+    // custom-points paywall reads `s.config.points`, never `s.config.rules.points`: before W2c Task 12 this door refused
+    // `rules` outright; it now takes them through the engine's allowlist, which refuses every points key (they belong
+    // to the Points section).
+    const fb = builtinModules.find((m) => m.key === "football")!;
+    const fbPoints = (fb.configSchema.parse({}) as { points: Record<string, number> }).points;
+    expect(fb.configSchema.safeParse({ points: { ...fbPoints, soBonus: 1 } }).success, "premise: football declares soBonus").toBe(true);
+    expect(buildRuleOverride("football", { soBonus: "1" }), "premise: no football field emits it").toEqual({});
+    const smuggled = { points: { soBonus: 1 } };
 
     await expect(
       createStages(auth, divisionId, {
@@ -781,10 +786,12 @@ describe.skipIf(!HAS_DB)("D10 — a bestOf override must not outrun the pointsMa
     // Bo5 → a winner needs 3 sets, so 3-0 / 3-1 / 3-2 are reachable and none
     // is in the map. The message has to NAME them: "invalid config" would
     // leave the organiser with no idea which entries to add.
+    // W2d Task 10: coverage owns the question (spec §5.4), so the refusal is POINTS_OUTCOME_UNCOVERED, the scores in
+    // `extra.uncovered` (W2c's POINTS_MAP_INCOMPLETE is retired with the merge's own points-map arm).
     const err = await putStageRules(auth, stageId, { rules: { bestOf: 5 } }).catch(
       (e: unknown) => e,
     );
-    expect(err).toMatchObject({ status: 422, code: "POINTS_MAP_INCOMPLETE" });
+    expect(err).toMatchObject({ status: 422, code: "POINTS_OUTCOME_UNCOVERED", extra: { uncovered: ["set:3-0", "set:3-1", "set:3-2"] } });
     for (const scoreKey of ["3-0", "3-1", "3-2"])
       expect((err as Error).message).toContain(scoreKey);
     // A 2-x score is already answered and must NOT be listed as missing.
@@ -862,7 +869,7 @@ describe.skipIf(!HAS_DB)("D10 — a bestOf override must not outrun the pointsMa
     const err = await putStageRules(auth, stageId, { rules: { bestOf: 3 } }).catch(
       (e: unknown) => e,
     );
-    expect(err).toMatchObject({ status: 422, code: "POINTS_MAP_INCOMPLETE" });
+    expect(err).toMatchObject({ status: 422, code: "POINTS_OUTCOME_UNCOVERED", extra: { uncovered: ["set:2-0", "set:2-1"] } });
     for (const scoreKey of ["2-0", "2-1"]) expect((err as Error).message).toContain(scoreKey);
     expect((await stageConfig(stageId)).rules).toBeUndefined();
   }, 30_000);

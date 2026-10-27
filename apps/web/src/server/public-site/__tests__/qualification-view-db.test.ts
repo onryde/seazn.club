@@ -187,16 +187,22 @@ async function load(
   const snap = data.standings.find((s) => s.stage_id === r.stageId && s.pool_id === poolId);
   const module_ = builtinModules.find((m) => m.key === data.division.sport_key);
   const statuses = Object.fromEntries(data.entrants.map((e) => [e.id, e.status]));
+  // W2d Task 9 (carry 5): the stage's table rules as the real read carries them (`PublicStage.table_rules`, the one
+  // loader's) — its order, its rule in force and the outcomes it reaches — never the division's raw cfg re-read here.
+  const rules = stage.table_rules;
+  expect(rules, "the public read carries the stage's table rules").toBeTruthy();
   const view = buildQualificationView({
-    stage: { id: stage.id, kind: stage.kind, meta: stageQualMeta(stage) },
+    stage: { id: stage.id, kind: stage.kind, meta: { ...stageQualMeta(stage), tablePointsRule: rules!.points } },
     poolId,
     rows: snap?.rows ?? [],
     // W2c X-PT-1: the played facts as the public surfaces read them (one read of the forfeit-shaped ledgers).
     fixtures: await qualificationFixtures(data.fixtures, module_, data.stages),
     entrantStatuses: statuses,
-    bounds: divisionPointsBounds(module_, data.division.config),
+    bounds: null,
+    reachable: new Set(rules!.reachable),
+    primary: rules!.primary,
     awardAddsToLedger: divisionAwardAddsToLedger(module_, data.division.config),
-    cascade: data.division.tiebreakers ?? module_!.defaultTiebreakers,
+    cascade: rules!.tiebreakers,
     entrantNames: Object.fromEntries(data.entrants.map((e) => [e.id, e.display_name])),
     msg: (k: TKey, v?: Record<string, string | number>) => t(en, k, v),
     plural: (k: string, n: number, v?: Record<string, string | number>) => plural(en, k, n, "en", v),

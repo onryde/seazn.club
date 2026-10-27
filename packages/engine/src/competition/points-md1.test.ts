@@ -5,7 +5,7 @@
 // Expected values come from the rule's own fields (`base`, a bonus's `points`, a lock's `rank`), from what the rule says
 // (Jul3/05 §2 bonuses, §3 carry-over, §4 rank locks, §8 "a rule referencing metrics the sport doesn't emit fails at
 // stage-config time"; the netball 26 Jan golden, "the losing side that scored at least 50%"), and from each sport's
-// DECLARED metrics. Never from `validatePointsRule`, `applyPointsRule`, `carryDeltas` or `applyRankLocks`.
+// DECLARED metrics. Never from `validatePointsRule`, `payout`, `carryDeltas` or `applyRankLocks`.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import type { MatchOutcome, StandingsDelta } from "../core/types.ts";
@@ -13,22 +13,27 @@ import type { AnySportModule } from "../sport/module.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { buildWalk, lineupFromCatalog } from "../testkit/helpers.ts";
-import { applyPointsRule, applyRankLocks, carryDeltas, PointsRule, validatePointsRule, type RankLock } from "./points.ts";
+import { applyRankLocks, carryDeltas, legacyPointsRule, payout, PointsRule, validatePointsRule, type RankLock } from "./points.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
-import { rankStandings } from "./tiebreakers.ts";
+import { AGAINST_KEYS, DIFF_KEYS, FOR_KEYS, rankStandings } from "./tiebreakers.ts";
 
 /** The bonus kinds that read the match SCORE (Jul3/05 §2): a winning margin, a losing margin, and the loser's score as a
  *  share of the winner's (netball). Written from what each kind means; checked below against PointsRule's own list. */
 const SCORE_READING: readonly string[] = ["loss_margin_lte", "win_margin_gte", "score_ratio_gte"];
 const KINDS: readonly string[] = PointsRule.shape.bonuses.unwrap().element.shape.when.options;
 const NOT_SCORE_READING = KINDS.filter((k) => !SCORE_READING.includes(k));
-/** The generic score keys those bonuses read: `delta.metrics.for`, `.against` and `.diff`. */
-const SCORE_KEYS = ["for", "against", "diff"] as const;
-
 const declared = (m: AnySportModule): Set<string> => new Set(m.metrics.map((x) => x.key));
-const declaresScore = (m: AnySportModule): boolean => SCORE_KEYS.every((k) => declared(m).has(k));
+/** The score aliases a sport declares any part of: index i names one score (`DIFF_KEYS[i]`, `FOR_KEYS[i]`,
+ *  `AGAINST_KEYS[i]` — tiebreakers.ts's own alias lists, index-aligned). */
+const aliasesOf = (m: AnySportModule): number[] =>
+  DIFF_KEYS.flatMap((_, i) => ([DIFF_KEYS[i]!, FOR_KEYS[i]!, AGAINST_KEYS[i]!].some((k) => declared(m).has(k)) ? [i] : []));
+/** W2d F11 (spec §2.1 #15): a sport declares a score when it declares a difference under any of the tie-break alias
+ *  names (`DIFF_KEYS`: gd / run_diff / diff) or both sides under one alias pair (`FOR_KEYS[i]` with `AGAINST_KEYS[i]`) —
+ *  the alias lists are tiebreakers.ts's own declarations, so football's gd and cricket's run_diff count. */
+const declaresScore = (m: AnySportModule): boolean =>
+  DIFF_KEYS.some((k) => declared(m).has(k)) || FOR_KEYS.some((k, i) => declared(m).has(k) && declared(m).has(AGAINST_KEYS[i]!));
 const ruleOf = (...kinds: string[]) =>
-  PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, bonuses: kinds.map((when) => ({ when, param: 1, points: 1 })) });
+  legacyPointsRule({ base: { win: 3, draw: 1, loss: 0 }, bonuses: kinds.map((when) => ({ when, param: 1, points: 1 })) });
 /** A metric list by key alone: the one field `validatePointsRule` is about. */
 const metricList = (...keys: string[]) => keys.map((key) => ({ key, label: key, direction: "desc" })) as never;
 const codeOf = (fn: () => void): string | null => {
@@ -41,15 +46,19 @@ const codeOf = (fn: () => void): string | null => {
 };
 
 describe("MD-1 points.ts: a bonus that reads the score fails closed where the sport emits none (Jul3/05 §8)", () => {
-  it("premise: every sport declares the generic score keys for, against and diff all together or not at all", () => {
-    // The guard behind the equivalents recorded for `validatePointsRule` and `marginOf` (stryker-equivalent.json,
-    // points.ts:96:7 and 96:30): no sport declares one side of the score without the other.
+  it("premise: every sport declares each score alias (its diff, for and against) all together or not at all, and at most one alias", () => {
+    // The guard behind `marginOf` and `scoreOf` (W2d F11): no sport declares one side of a score without the other, and
+    // none declares two aliases, so the first difference alias `marginOf` finds is the sport's one score.
     let all = 0;
     let none = 0;
     const visited = forEachSport(({ module: m }) => {
-      const present = SCORE_KEYS.filter((k) => declared(m).has(k));
-      expect([0, SCORE_KEYS.length], `${m.key} declares ${present.join(", ") || "none"}`).toContain(present.length);
-      if (present.length === 0) none++;
+      const aliases = aliasesOf(m);
+      expect(aliases.length, `${m.key} declares score aliases ${aliases.join(", ")}`).toBeLessThanOrEqual(1);
+      for (const i of aliases) {
+        const keys = [DIFF_KEYS[i]!, FOR_KEYS[i]!, AGAINST_KEYS[i]!];
+        expect(keys.filter((k) => declared(m).has(k)), `${m.key} declares ${keys.join("/")} together`).toEqual(keys);
+      }
+      if (aliases.length === 0) none++;
       else all++;
     });
     expect(all, "sports that declare a score").toBeGreaterThan(0);
@@ -108,9 +117,9 @@ const side = (entrantId: string, won: number, drawn: number, lost: number, metri
 const winPair = (winner: Record<string, number>, loser: Record<string, number>) =>
   [side("W", 1, 0, 0, winner), side("L", 0, 0, 1, loser)] as unknown as FixtureResult;
 const pointsOf = (outcome: MatchOutcome, pair: FixtureResult, rule: PointsRule) =>
-  applyPointsRule(outcome, pair, rule, PLAYED, NO_OWN_KEYS).map((d) => d.points);
+  payout(outcome, outcome.kind === "win" ? "regulation" : null, pair, PLAYED, rule, NO_OWN_KEYS, undefined).map((d) => d.points);
 const bonusRule = (when: string, param: number | undefined, points: number) =>
-  PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, bonuses: [{ when, ...(param === undefined ? {} : { param }), points }] });
+  legacyPointsRule({ base: { win: 3, draw: 1, loss: 0 }, bonuses: [{ when, ...(param === undefined ? {} : { param }), points }] });
 
 describe("MD-1 points.ts: the bonuses a played result earns", () => {
   it("a margin is the score difference: a delta's `diff` where it carries one, else its `for` minus its `against`", () => {
@@ -123,7 +132,7 @@ describe("MD-1 points.ts: the bonuses a played result earns", () => {
     ] as const) {
       for (const [param, paid] of [[3, true], [4, false]] as const) {
         const rule = bonusRule("win_margin_gte", param, 1);
-        const want = rule.base.win + (paid ? rule.bonuses[0]!.points : 0);
+        const want = rule.win.regulation + (paid ? rule.bonuses[0]!.points : 0);
         expect(pointsOf(WIN, winPair(winner, loser), rule)[0], `${shape}, win_margin_gte ${param}`).toBe(want);
         checked++;
       }
@@ -134,17 +143,17 @@ describe("MD-1 points.ts: the bonuses a played result earns", () => {
   it("a draw bonus pays each side of a drawn result on top of the draw, and nothing to a decided one", () => {
     const rule = bonusRule("draw", undefined, 2);
     const drawn = [side("H", 0, 1, 0, { for: 1, against: 1, diff: 0 }), side("A", 0, 1, 0, { for: 1, against: 1, diff: 0 })] as unknown as FixtureResult;
-    const each = rule.base.draw + rule.bonuses[0]!.points;
+    const each = rule.draw! + rule.bonuses[0]!.points;
     expect(pointsOf({ kind: "draw" }, drawn, rule)).toEqual([each, each]);
-    expect(pointsOf(WIN, winPair({ for: 2, against: 1, diff: 1 }, { for: 1, against: 2, diff: -1 }), rule)).toEqual([rule.base.win, rule.base.loss]);
+    expect(pointsOf(WIN, winPair({ for: 2, against: 1, diff: 1 }, { for: 1, against: 2, diff: -1 }), rule)).toEqual([rule.win.regulation, rule.loss.regulation]);
   });
 
   it("the losing-side ratio bonus pays a loser that scored AT LEAST param x the winner's score - the boundary included (netball 26 Jan: '>= 50%')", () => {
-    const rule = PointsRule.parse({ base: { win: 5, draw: 3, loss: 0 }, bonuses: [{ when: "score_ratio_gte", param: 0.5, points: 1 }] });
+    const rule = legacyPointsRule({ base: { win: 5, draw: 3, loss: 0 }, bonuses: [{ when: "score_ratio_gte", param: 0.5, points: 1 }] });
     const lost = (winnerScore: number, loserScore: number) =>
       pointsOf(WIN, winPair({ for: winnerScore, against: loserScore, diff: winnerScore - loserScore }, { for: loserScore, against: winnerScore, diff: loserScore - winnerScore }), rule)[1];
-    expect(lost(12, 6), "exactly 50%").toBe(rule.base.loss + rule.bonuses[0]!.points);
-    expect(lost(12, 5), "under 50%").toBe(rule.base.loss);
+    expect(lost(12, 6), "exactly 50%").toBe(rule.loss.regulation + rule.bonuses[0]!.points);
+    expect(lost(12, 5), "under 50%").toBe(rule.loss.regulation);
   });
 });
 
@@ -211,13 +220,13 @@ describe("MD-1 points.ts: carry-over and rank locks", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Premise for the `marginOf` equivalents (stryker-equivalent.json, points.ts:96:7 and 96:30).
+// Premise for `marginOf` reading the difference alias first (W2d F11): `scoreOf`'s for/against fallback is never reached.
 // ---------------------------------------------------------------------------
 
 describe("MD-1 points.ts: a sport that declares the score credits all of it on every delta a margin bonus can read", () => {
-  it("each decided walk's deltas (a win, a draw, an award) carry for, against and diff, with diff = for - against", () => {
-    // A margin bonus is taken only where the sport declares the score keys (above); there, a delta with no `diff` would
-    // reach `marginOf`'s fallback. This holds the score sports to crediting all three, so it never does.
+  it("each decided walk's deltas (a win, a draw, an award) carry the sport's score alias in full, with its diff = for - against", () => {
+    // A margin bonus is taken only where the sport declares a score (above); there, a delta with no difference would
+    // reach `marginOf`'s fallback. This holds the score sports to crediting all three keys, so it never does.
     let deltas = 0;
     let sports = 0;
     const kinds = new Set<string>();
@@ -233,8 +242,9 @@ describe("MD-1 points.ts: a sport that declares the score credits all of it on e
           // A double walkover pays no bonus at all (D14) and a no result has no score to read.
           if (outcome === null || outcome.kind === "double_walkover" || outcome.kind === "no_result") continue;
           kinds.add(outcome.kind);
+          const i = aliasesOf(m)[0]!;
           for (const d of m.standingsDelta(outcome, cfg, { kind: "league" }, state)) {
-            const { for: f, against: a, diff } = d.metrics;
+            const [f, a, diff] = [d.metrics[FOR_KEYS[i]!], d.metrics[AGAINST_KEYS[i]!], d.metrics[DIFF_KEYS[i]!]];
             expect([typeof f, typeof a, typeof diff], `${m.key} seed ${seed} ${outcome.kind}`).toEqual(["number", "number", "number"]);
             expect(diff, `${m.key} seed ${seed} ${outcome.kind}`).toBe(f! - a!);
             deltas++;
@@ -245,7 +255,7 @@ describe("MD-1 points.ts: a sport that declares the score credits all of it on e
     expect(sports, "sports that declare the score").toBeGreaterThan(0);
     expect(sports).toBeLessThanOrEqual(visited);
     expect(deltas, "deltas checked").toBeGreaterThan(0);
-    // The title's three kinds, each walked: the award is the one the points.ts:96:7 equivalents lean on.
+    // The title's three kinds, each walked: an award's credited score is read by the margin bonuses after play.
     expect([...kinds], `outcome kinds walked: ${[...kinds].join(", ")}`).toEqual(expect.arrayContaining(["win", "draw", "award"]));
   });
 });

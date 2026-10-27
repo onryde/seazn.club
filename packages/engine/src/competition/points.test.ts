@@ -1,7 +1,7 @@
 // PointsRule / carry-over / rank-lock tests (Jul3/05, PROMPT-25 acceptance).
 import { describe, expect, it } from "vitest";
 import fc from "fast-check";
-import { applyPointsRule, applyRankLocks, carryDeltas, PointsRule, pointsRuleBounds, validatePointsRule } from "./points.ts";
+import { applyRankLocks, carryDeltas, legacyPointsRule, payout, PointsRule, pointsRuleBounds, validatePointsRule, type OutcomeKey } from "./points.ts";
 import { foldResults, type FixtureResult, type StandingsRow } from "./standings.ts";
 import { rankStandings } from "./tiebreakers.ts";
 import type { MatchOutcome, StandingsDelta } from "../core/types.ts";
@@ -41,8 +41,14 @@ const NOTHING_PLAYED = false;
 /** W2c gap (a): `applyPointsRule`'s `scoreKeys` (a module's `awardScoreKeys`). These pairs are generic-shaped — their
  *  own score keys ARE for/against/diff — so no further keys are named. */
 const NO_OWN_KEYS = undefined;
+/** W2d Task 2: these cases are W2c rules (`{base, bonuses, forfeit}`), paid as before W2d through `legacyPointsRule` (B1),
+ *  and `payout` replaces `applyPointsRule` — a win here is decided in regulation (a legacy rule pays every win alike). */
+const applyPointsRule = (o: MatchOutcome, p: FixtureResult, r: PointsRule, played: boolean, keys: undefined): FixtureResult =>
+  payout(o, o.kind === "win" ? "regulation" : null, p, played, r, keys, undefined);
+/** Every outcome these synthetic corpora hold: the bounds are taken over all of them (W2d: over the reachable outcomes). */
+const ALL_OUTCOMES: ReadonlySet<OutcomeKey> = new Set<OutcomeKey>(["win.regulation", "loss.regulation", "draw", "tie", "noResult"]);
 
-const NETBALL = PointsRule.parse({
+const NETBALL = legacyPointsRule({
   base: { win: 5, draw: 3, loss: 0 },
   bonuses: [{ when: "score_ratio_gte", param: 0.5, points: 1 }],
 });
@@ -59,7 +65,7 @@ describe("PointsRule (Jul3/05 §2)", () => {
   });
 
   it("forfeit awards configured points with no invented score by default (20 Jan / 8 Dec)", () => {
-    const rule = PointsRule.parse({
+    const rule = legacyPointsRule({
       base: { win: 3, draw: 1, loss: 0 },
       forfeit: { winnerPoints: 3, loserPoints: -1 },
     });
@@ -70,7 +76,7 @@ describe("PointsRule (Jul3/05 §2)", () => {
     expect(b.points).toBe(-1);
     expect(a.metrics.for).toBe(0); // no fake score
 
-    const withScore = PointsRule.parse({
+    const withScore = legacyPointsRule({
       base: { win: 3, draw: 1, loss: 0 },
       forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [4, 0] },
     });
@@ -80,7 +86,7 @@ describe("PointsRule (Jul3/05 §2)", () => {
   });
 
   it("double-forfeit / no_result gives both sides the configured points, no score", () => {
-    const rule = PointsRule.parse({
+    const rule = legacyPointsRule({
       base: { win: 3, draw: 1, loss: 0 },
       bonuses: [{ when: "no_result", points: 1 }],
     });
@@ -106,7 +112,7 @@ describe("PointsRule (Jul3/05 §2)", () => {
   });
 
   it("pure fold: reordering decided fixtures yields identical standings; fractional/negative sum exactly", () => {
-    const rule = PointsRule.parse({
+    const rule = legacyPointsRule({
       base: { win: 2.5, draw: 1, loss: -0.5 },
       bonuses: [{ when: "win_margin_gte", param: 3, points: 0.25 }],
     });
@@ -242,7 +248,7 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
   // forfeit case kills: forfeit points left out of wins or losses, and
   // winFloor/lossCeil read from the wrong end. RUGBY kills lossCeil without
   // its bonuses and a bonus summed with its sign kept.
-  const RUGBY = PointsRule.parse({
+  const RUGBY = legacyPointsRule({
     base: { win: 4, draw: 2, loss: 0 },
     bonuses: [
       { when: "win_margin_gte", param: 20, points: 1 },
@@ -260,7 +266,7 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
         if (d.lost === 1) seen.loss.push(d.points);
       }
     }
-    const b = pointsRuleBounds(RUGBY);
+    const b = pointsRuleBounds(RUGBY, ALL_OUTCOMES);
     expect(b).toEqual({
       max: Math.max(...seen.all),
       min: Math.min(...seen.all, 0), // no_result scores 0
@@ -268,12 +274,12 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
       lossCeil: Math.max(...seen.loss),
       winsOnly: false, // the margin bonuses pay on some wins and some losses
     });
-    expect(b.max).toBeGreaterThan(RUGBY.base.win); // the differential: base.win alone is wrong
-    expect(b.lossCeil).toBeGreaterThan(RUGBY.base.loss);
+    expect(b.max).toBeGreaterThan(RUGBY.win.regulation); // the differential: base.win alone is wrong
+    expect(b.lossCeil).toBeGreaterThan(RUGBY.loss.regulation);
   });
   it("a forfeit rule widens the win floor and loss ceiling", () => {
-    const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: -1 } });
-    expect(pointsRuleBounds(rule)).toEqual({ max: 3, min: -1, winFloor: 2, lossCeil: 0, winsOnly: false });
+    const rule = legacyPointsRule({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: -1 } });
+    expect(pointsRuleBounds(rule, ALL_OUTCOMES)).toEqual({ max: 3, min: -1, winFloor: 2, lossCeil: 0, winsOnly: false });
   });
 
   // The two cases above pin exact values for two rules; they cannot see a bonus
@@ -299,8 +305,8 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
     const corpus = ruleCorpus();
     fc.assert(
       fc.property(rule, (raw) => {
-        const r = PointsRule.parse(raw);
-        const b = pointsRuleBounds(r);
+        const r = legacyPointsRule(raw);
+        const b = pointsRuleBounds(r, ALL_OUTCOMES);
         // One expect per rule, not per value: 4 per value timed out at 400 runs.
         const outside: string[] = [];
         for (const { outcome, pair } of corpus) for (const played of [NOTHING_PLAYED, PLAYED]) {
@@ -326,7 +332,7 @@ describe("pointsRuleBounds — safe per-side bounds for a custom points rule", (
 // that can pay, a paying draw or loss, or a forfeit that pays differently
 // turns it off. One case per conjunct.
 describe("pointsRuleBounds — winsOnly: only wins pay, at one amount", () => {
-  const bounds = (raw: unknown) => pointsRuleBounds(PointsRule.parse(raw));
+  const bounds = (raw: Parameters<typeof legacyPointsRule>[0]) => pointsRuleBounds(legacyPointsRule(raw), ALL_OUTCOMES);
   const BASE = { win: 2, draw: 0, loss: 0 };
   it("one win amount, 0 for everything else → true (a forfeit at the same amount, a 0-point bonus)", () => {
     expect(bounds({ base: BASE }).winsOnly).toBe(true);
@@ -359,8 +365,8 @@ describe("pointsRuleBounds — winsOnly: only wins pay, at one amount", () => {
     let checked = 0;
     const off: string[] = [];
     for (const raw of rules) {
-      const r = PointsRule.parse(raw);
-      const b = pointsRuleBounds(r);
+      const r = legacyPointsRule(raw);
+      const b = pointsRuleBounds(r, ALL_OUTCOMES);
       expect(b.winsOnly, JSON.stringify(raw)).toBe(true);
       for (const { outcome, pair } of ruleCorpus()) for (const played of [NOTHING_PLAYED, PLAYED]) {
         for (const d of applyPointsRule(outcome, pair, r, played, NO_OWN_KEYS)) {

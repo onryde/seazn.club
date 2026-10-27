@@ -121,7 +121,8 @@ const Q5 = {
     "playersPerSide", "maxSubs", "subWindows", "sinBinMinutes", "overtimeSkaters", "queenFollowsBoard", "queenCapAt",
     "queenPoints", "clockBaseMinutes", "clockIncrementSeconds", "clockDelaySeconds", "tiebreakRungs", "abandon",
   ],
-  points: ["shootoutWin", "shootoutLoss"],
+  // W2d (spec §5.3, D10(e); PS-1): the shoot-out split became one bonus (football, hockey), greenfield.
+  points: ["soBonus"],
 } as const satisfies Record<RuleScope, readonly string[]>;
 /** Q5 names no engine cfg holds yet, each with the task that adds it; the sweep fails once one lands, so its row goes. */
 const Q5_PENDING: Readonly<Record<string, string>> = {
@@ -136,7 +137,7 @@ const Q5_WHERE: Readonly<Record<string, Where>> = {
   overs: { path: "ballsPerInnings" }, overtimeSkaters: { path: "overtime.skaters", owner: "overtime" },
   clockBaseMinutes: { path: "clock.base", owner: "clock" }, clockIncrementSeconds: { path: "clock.increment", owner: "clock" },
   clockDelaySeconds: { path: "clock.delay", owner: "clock" }, abandon: { path: "abandonPolicy" },
-  shootoutWin: { path: "points.shootoutWin", owner: "points" }, shootoutLoss: { path: "points.shootoutLoss", owner: "points" },
+  soBonus: { path: "points.soBonus", owner: "points" },
 };
 const Q5_WHERE_BY_SPORT: Readonly<Record<string, Readonly<Record<string, Where>>>> = {
   football: { shootoutAttempts: { path: "shootoutAttempts" } }, // W2c Task 6 adds it to the schema, top-level
@@ -148,7 +149,9 @@ const PLAN_ONLY: Readonly<Record<string, Partial<Record<RuleScope, readonly stri
   tennis: { points: ["points"] },
   football: { stage: ["rollingSubs", "concussionSubs"], points: ["awardScore"] },
   cricket: { stage: ["superOverStillTied", "minOversForResult"], points: ["points"] },
-  icehockey: { points: ["awardScore"] },
+  // W2d (spec D10(e), PS-1): ice hockey keeps its `points` key for `otWin`/`otLoss` (a GWS pays them); Q5's shoot-out
+  // names became football's and hockey's `soBonus`, which a result sport's schema does not take.
+  icehockey: { points: ["awardScore", "points"] },
   hockey: { points: ["awardScore"] },
   boardgame: { points: ["scoring", "byeScore"] },
   carrom: { stage: ["pointsPerCoin"], points: ["points"] },

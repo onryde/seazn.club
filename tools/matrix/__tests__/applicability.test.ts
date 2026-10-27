@@ -210,7 +210,7 @@ describe("applicability — predicates against the product's own declarations", 
   it("R4b (half or more played) applies exactly where a row has a stage whose early withdrawal the ENGINE expunges (withdrawTableEntrant)", () => {
     // Ask the engine: 0 of 1 played is under half; which table kinds expunge it?
     const expunges = (["league", "group", "swiss"] as const).filter((kind) =>
-      withdrawTableEntrant({ id: "s", kind, entrants: [], cascade: [] }, "w", { played: [], pending: [{ id: "p", opponent: "o" }] })
+      withdrawTableEntrant({ id: "s", kind }, "w", { played: [], pending: [{ id: "p", opponent: "o" }] })
         .events.some((e) => (e as { mode?: string }).mode === "expunge"));
     expect(expunges.length).toBeGreaterThan(0);
     let judged = 0;

@@ -15,7 +15,8 @@ import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
 import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
-import { listStageQualificationMeta, type StageQualMetaRow } from "@/server/usecases/stage-qualification";
+import { listPinnedStagePoints, listStageQualificationMeta, type StageQualMetaRow } from "@/server/usecases/stage-qualification";
+import { stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
 import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
 import { formatLockedStageIds } from "@/server/usecases/stage-rules";
 import { divisionLockedFields } from "@/server/usecases/rule-locks";
@@ -47,6 +48,7 @@ import { hasFeature, orgPlanKey } from "@/lib/entitlements";
 import { viewerPlanFrom } from "@/lib/viewer-plan";
 import { listEntrantLogoUrls } from "@/server/usecases/teams";
 import { resolveModule } from "@/server/engine-db";
+import { tableOrderOf } from "@/server/engine-db/table-rules";
 import { lineupCatalogFor } from "@/server/usecases/lineup-catalog";
 import { effectiveEntrantModel } from "@seazn/engine/sport";
 import type { ProgressionSpec } from "@seazn/engine/competition";
@@ -434,6 +436,11 @@ export default async function DivisionPage({
   // row is not shown at all: another tab, or a viewer who cannot edit).
   const formatLockedStages =
     tab === "fixtures" && editable ? await formatLockedStageIds(auth, id) : [];
+  // W2d final review I1: the points each PINNED table stage pays - its pin's, which a division points save after generate
+  // never reaches (`rule-locks.ts` lets that save through). The stage points card says these, never `division.config`.
+  // Read for the stages the card is mounted on (`stageTakesPoints`), for an organiser and a viewer alike (both see it).
+  const pinnedStagePoints =
+    tab === "fixtures" ? await listPinnedStagePoints(auth, stages.filter((s) => stageTakesPoints(s.kind)).map((s) => s.id)) : {};
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
   // Badge chips on standings rows (v3/03 §5) — resolved once per render.
   // PROMPT-62: the bracket panel on the fixtures tab shows them too.
@@ -446,7 +453,6 @@ export default async function DivisionPage({
     (tab === "fixtures" && hasKnockout) || tab === "standings"
       ? await listFixtureHeadlines(auth, id)
       : undefined;
-  const cascade = division.tiebreakers ?? sportModule.defaultTiebreakers;
 
   // SPEC-1: the Discipline tab's queue + squad, and the entrant-row chips.
   const disciplineData =
@@ -536,9 +542,11 @@ export default async function DivisionPage({
           fixtures: await qualificationFixtures(fixtures, sportModule, [...qualMeta.values()]),
           entrantStatuses,
           entrantNames,
-          cascade,
         })
       : null;
+  // W2d Task 9: each table stage's order and where it came from (its pin, else its live layers — the one loader, via
+  // `listStageQualificationMeta`). A stage the loader refused has none: no caption, no trace.
+  const stageOrder = (stageId: string) => qualMeta.get(stageId)?.table_rules ?? null;
 
   // Spec 2026-09-30 §2 (T6): the stream panel lives on the fixture page; the run sheet keeps a chip ("● Live" /
   // "● Waiting for phone") per fixture with a session up, linking there with `?stream=open` — the division's path to
@@ -887,6 +895,7 @@ export default async function DivisionPage({
               ruleDict={ruleDict}
               pointsDict={pointsDict}
               formatLockedStageIds={formatLockedStages}
+              pinnedStagePoints={pinnedStagePoints}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page
               // resolves it for the board: `ScheduleSettingsWire` serves only
@@ -948,7 +957,7 @@ export default async function DivisionPage({
                       <StandingsTable
                         rows={snap.rows as StandingsRow[]}
                         metricSpecs={sportModule.metrics as MetricSpecLike[]}
-                        cascade={cascade}
+                        cascade={tableOrderOf(stageOrder(stage.id))}
                         entrantNames={entrantNames}
                         entrantLogos={entrantLogos}
                         entrantStatuses={entrantStatuses}
@@ -984,7 +993,7 @@ export default async function DivisionPage({
                 {/* Cascade trace (doc 05 §4): the exact tie-break order in force. */}
                 <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
                   {t(dict, "div.detail.tiebreak.label")}{" "}
-                  {cascade.map((key, i) => (
+                  {tableOrderOf(stageOrder(stage.id)).map((key, i) => (
                     <span key={key}>
                       {i > 0 && " → "}
                       <span className="text-slate-500">
@@ -997,9 +1006,13 @@ export default async function DivisionPage({
                     </span>
                   ))}
                   {" "}
-                  {division.tiebreakers
-                    ? t(dict, "div.detail.tiebreak.override")
-                    : t(dict, "div.detail.tiebreak.default")}
+                  {/* the sport's order reads "default"; the stage's or the division's "override"; a B1-migrated pin names
+                      no layer (Task 17 owns the caption) */}
+                  {stageOrder(stage.id)?.sources.tiebreakers === "sport"
+                    ? t(dict, "div.detail.tiebreak.default")
+                    : stageOrder(stage.id)?.sources.tiebreakers === "stage" || stageOrder(stage.id)?.sources.tiebreakers === "division"
+                      ? t(dict, "div.detail.tiebreak.override")
+                      : null}
                 </p>
               </section>
             ))}

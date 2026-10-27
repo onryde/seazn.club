@@ -143,7 +143,8 @@ export const hockey = makePeriodModule({
     // bonus point (App 12: 5 attempts, 8 s each, then sudden death).
     "fih-shootout": {
       shootout: { attempts: 5, suddenDeath: true, clockSeconds: 8 },
-      points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
+      // W2d (B2, HK-PT-2): the shoot-out is a draw on the table plus a bonus point to its winner (2/1, booked D).
+      points: { win: 3, draw: 1, loss: 0, soBonus: 1 },
       // HK-AB-2 (W2c, H-15): the FIH tournament rule - an abandon replays until the 4th quarter has started, then the
       // result stands (ruling 117 where the cfg refuses a draw).
       abandonPolicy: "q4_stands",
@@ -216,7 +217,7 @@ export const hockey = makePeriodModule({
     { key: "cards_red", label: "Red cards", direction: "asc", display: false },
     // Set-piece conversion, DISPLAY ONLY. Declared so `validateCascade` can see
     // the ledgers a future ratio comparator would need; no federation ranks on
-    // conversion (FIH is points → GD → GF → H2H), so nothing consults them for
+    // conversion (FIH App. 3 is points, wins, GD, GF, H2H, field goals), so nothing consults them for
     // ORDER today, and `display: false` keeps them out of the standings table.
     { key: "sp_pc_awarded", label: "PC awarded", direction: "desc", display: false },
     { key: "sp_pc_scored", label: "PC scored", direction: "desc", display: false },
@@ -225,11 +226,25 @@ export const hockey = makePeriodModule({
     { key: "sp_stroke_scored", label: "Strokes scored", direction: "desc", display: false },
     { key: "sp_stroke_resolved", label: "Strokes resolved", direction: "desc", display: false },
   ],
-  // FIH standard: points → GD → GF → H2H (v6/00 §4).
-  defaultTiebreakers: ["points", "diff", "for", "h2h_points", "seed"],
+  // W2d (SPEC §5.10, HK-TB-1): FIH GTR App. 3 — points, matches won, goal difference, goals for, the head-to-head
+  // block, field goals, then lots (in place of FIH's ranking shoot-out, App. 3 §2 g-k — RB2B-11).
+  defaultTiebreakers: ["points", "wins", "diff", "for", "h2h_points", "h2h_wins", "h2h_diff", "h2h_for", "field_goals", "lots"],
+  // OC1: a Swiss stage keeps its pre-W2d order.
+  swissTiebreakers: ["points", "diff", "for", "h2h_points", "seed"],
+  // W2d (HK-PT-2): the Pro League preset — the module's own `fih-shootout` points read through its own schema and
+  // its own `tablePointsRule`, so the preset is the variant and never a second hand-typed copy.
+  tablePresets: (kind) => ({
+    points: [{ id: "pro_league", rule: hockey.tablePointsRule(hockey.configSchema.parse(hockey.variants["fih-shootout"]), kind) }],
+    tiebreakers: [],
+  }),
+  primaryTableKey: "points", // W2d (D11): the table ranks on points first.
   officialLabel: { scorer: "Umpire" },
   suspensionReasons: HOCKEY_SUSPENSION_REASONS,
   shootoutLabel: "SO",
+  // W2d (B2, X-PT-4) — an FIH table books a shoot-out as a draw plus a bonus point; HK-TB-1 — FIH "matches won"
+  // counts regulation wins only.
+  shootoutAs: "draw_plus_bonus",
+  winsCount: "regulation",
   playerStats,
   // SPEC-1 — FIH card grades the discipline rules editor may accumulate/ban on.
   disciplineColors: [

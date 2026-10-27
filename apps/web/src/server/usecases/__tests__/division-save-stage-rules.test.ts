@@ -132,12 +132,14 @@ describe.skipIf(!HAS_DB)("I-A: a division pointsMap edit never leaves a stage's 
   const FULL: Record<string, [number, number]> = { "2-0": [2, 0], "2-1": [2, 0], "3-0": [2, 0], "3-1": [2, 0], "3-2": [2, 0] };
   const WITHOUT_3_2: Record<string, [number, number]> = Object.fromEntries(Object.entries(FULL).filter(([score]) => score !== "3-2"));
 
-  it("refused 422 POINTS_MAP_INCOMPLETE naming the stage and the score; the division is unchanged", async () => {
+  // W2d Task 10: coverage owns the question (spec §5.4), so the refusal is POINTS_OUTCOME_UNCOVERED, the score in
+  // `extra.uncovered` (W2c's POINTS_MAP_INCOMPLETE is retired with the merge's own points-map arm).
+  it("refused 422 POINTS_OUTCOME_UNCOVERED naming the stage and the score; the division is unchanged", async () => {
     const s = await seed({ ...SHORT, pointsMap: FULL }, ["Pool A", "Pool B"]);
     await putStageRules(s.auth, s.stages[1]!, { rules: { bestOf: 5 } });
     const before = await divisionConfigOf(s.divisionId);
     const err = await patchDivision(s.auth, s.divisionId, { config: { ...SHORT, pointsMap: WITHOUT_3_2 } }).catch((e: unknown) => e);
-    expect(err).toMatchObject({ status: 422, code: "POINTS_MAP_INCOMPLETE", extra: { stage_id: s.stages[1], stage_name: "Pool B" } });
+    expect(err).toMatchObject({ status: 422, code: "POINTS_OUTCOME_UNCOVERED", extra: { stage_id: s.stages[1], stage_name: "Pool B", uncovered: ["set:3-2"] } });
     expect(String((err as Error).message)).toContain("Pool B");
     expect(String((err as Error).message), "the score the map no longer answers").toContain("3-2");
     expect(String((err as Error).message), "a score it still answers is not listed").not.toContain("3-1");

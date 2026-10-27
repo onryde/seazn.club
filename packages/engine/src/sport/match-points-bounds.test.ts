@@ -20,6 +20,8 @@ import { tennis } from "../sports/tennis/index.ts";
 import { badminton } from "../sports/setbased/badminton.ts";
 import { tabletennis } from "../sports/setbased/tabletennis.ts";
 import { EngineError } from "../core/errors.ts";
+import { MatchOutcome } from "../core/types.ts";
+import { defaultLineupPair } from "../testkit/helpers.ts";
 import { boundsFrom, type AnySportModule } from "./module.ts";
 
 describe("boundsFrom", () => {
@@ -89,9 +91,10 @@ describe("matchPointsBounds — the cases a single 'win' constant gets wrong", (
     const cfg = icehockey.configSchema.parse({});
     const p = cfg.points;
     const b = icehockey.matchPointsBounds(cfg);
-    expect(b.winFloor).toBe(Math.min(p.win, p.otWin ?? p.win, p.shootoutWin ?? p.win));
-    expect(b.lossCeil).toBe(Math.max(p.loss, p.otLoss ?? p.loss, p.shootoutLoss ?? p.loss));
-    expect(b.max).toBe(Math.max(p.win, p.draw, p.otWin ?? 0, p.shootoutWin ?? 0));
+    // W2d PS-1: a GWS pays the overtime values (no shoot-out split), so the overtime pair bounds both.
+    expect(b.winFloor).toBe(Math.min(p.win, p.otWin ?? p.win));
+    expect(b.lossCeil).toBe(Math.max(p.loss, p.otLoss ?? p.loss));
+    expect(b.max).toBe(Math.max(p.win, p.draw, p.otWin ?? 0));
   });
   it("generic: win/draw/loss read from `points.w/d/l`", () => {
     const cfg = generic.configSchema.parse({ resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false });
@@ -106,30 +109,26 @@ describe("matchPointsBounds — the cases a single 'win' constant gets wrong", (
 });
 
 // Mutation sweep, Task 1 (measured against the cases above plus every
-// conformance §9.3b): dropping `others` from `max` in `boundsFrom`, dropping
-// football's draw from its `others`, and dropping football's shoot-out win
-// all SURVIVED — no shipped default makes a draw outpay a win, and no football
-// cfg in the tree sets the split. All are the UNSAFE direction: a low `max`
-// understates a rival's best case (a false "Through"), a high `winFloor` or a
-// low `lossCeil` makes a false "Win and in".
-describe("matchPointsBounds — split payouts the default cfgs never exercise", () => {
-  it("football youth-cup shoot-out split: an SO win is the floor, an SO loss the ceiling", () => {
-    const cfg = football.configSchema.parse({ points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 } });
-    const p = cfg.points;
-    const b = football.matchPointsBounds(cfg);
-    expect(b.winFloor).toBe(p.shootoutWin);
-    expect(b.lossCeil).toBe(p.shootoutLoss);
-    expect(b.winFloor).toBeLessThan(p.win); // the differential: winFloor ≠ the plain win
-    expect(b.lossCeil).toBeGreaterThan(p.loss); // and lossCeil ≠ the plain loss
-  });
-  it("hockey `fih-shootout`: an SO win is the floor, an SO loss the ceiling", () => {
-    const cfg = hockey.configSchema.parse(hockey.variants["fih-shootout"]);
-    const p = cfg.points;
-    const b = hockey.matchPointsBounds(cfg);
-    expect(b.winFloor).toBe(p.shootoutWin);
-    expect(b.lossCeil).toBe(p.shootoutLoss);
-    expect(b.winFloor).toBeLessThan(p.win);
-    expect(b.lossCeil).toBeGreaterThan(p.loss);
+// conformance §9.3b): dropping `others` from `max` in `boundsFrom` and dropping
+// football's draw from its `others` SURVIVED — no shipped default makes a draw
+// outpay a win. Both are the UNSAFE direction: a low `max` understates a rival's
+// best case (a false "Through").
+//
+// W2d PS-1: `standingsDelta` pays a shoot-out win as a plain win (the table's
+// draw plus `soBonus` is the stage points rule's, B2), so no football or hockey
+// cfg splits its bounds any more — and `soBonus` moves none of them.
+describe("matchPointsBounds — a shoot-out win pays a plain win (W2d PS-1)", () => {
+  const cases: [string, AnySportModule, unknown][] = [
+    ["football group with a shoot-out and a bonus", football, { shootout: true, points: { win: 3, draw: 1, loss: 0, soBonus: 2 } }],
+    ["hockey fih-shootout", hockey, hockey.variants["fih-shootout"]],
+  ];
+  it.each(cases)("%s: the SO win's own delta is the floor, its loss the ceiling — the plain win and loss", (_name, m, raw) => {
+    const cfg = m.configSchema.parse(raw) as { points: { win: number; loss: number } };
+    const b = m.matchPointsBounds(cfg);
+    const so = MatchOutcome.parse({ kind: "win", winner: "H", loser: "A", method: "shootout" });
+    const [h, a] = m.standingsDelta(so, cfg, { kind: "group" }, m.init(cfg, defaultLineupPair(m.positions)));
+    expect([b.winFloor, b.lossCeil]).toEqual([h.points, a.points]);
+    expect([b.winFloor, b.lossCeil]).toEqual([cfg.points.win, cfg.points.loss]);
   });
 });
 

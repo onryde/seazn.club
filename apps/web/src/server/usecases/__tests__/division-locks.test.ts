@@ -1,5 +1,12 @@
 // X-SR-4 — division table rules and match format lock per STARTED INHERITING
 // stage (Q3, Q4; plan D12). P4's lock sequence for the division (spec §9).
+//
+// W2d Task 10 (W2d spec §5.4 "What changes after the pin", §10, §11 item 4): the division's `tiebreakers` are never refused
+// any more, and the points keys a stage rule replaces (`points`, `pointsMap`) stop reaching a PINNED stage, so they are not
+// refused for one either: the save lands and `stagesKeptPinned` names the pinned stages that kept their rules. A stage that
+// started with no pin (an ad-hoc match on a pending stage) is pinned by the save first (fix round 1, I1: the describe at
+// the end drives that producer). The W2c table lock keeps `scoring` / `awardScore`; only a pre-W2d row (active, no pin:
+// the post-deploy pin's input, shaped by hand in the one test that needs it) still refuses `points` / `pointsMap`.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
@@ -10,17 +17,22 @@ import { RULE_ERROR_STATUS, ruleErrorMessage, type RuleErrorCode } from "@/lib/r
 import { BRACKET_KINDS, DRAW_KINDS, EngineError, StageKind, forbidsLevelResult } from "@seazn/engine/core";
 import { deciderKeysFor, pointsKeysFor, ruleKeyApplies, stageDefaultsFor, stageKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { PointsRule, applyPointsRule } from "@seazn/engine/competition";
+import { PointsRule, payout, validateCascade } from "@seazn/engine/competition";
+import type { TiebreakerKey } from "@seazn/engine/sport";
+import { loadTableRules, tableRulesRowsOf } from "@/server/engine-db/table-rules";
+import { startedStagesToPin } from "../table-rule-guards";
+import { recomputeStandings } from "@/server/engine-db/competition";
+import { between, genericResult, stageRules, tableScene } from "@/server/engine-db/__tests__/helpers/w2d-table-rig";
 import { defaultLineupPair } from "@seazn/engine/testkit";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { ENGINE_HTTP, v1 } from "@/server/api-v1/http";
 import { appendEvent, resolveLatestModule } from "@/server/engine-db";
 import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
-import { STAGE_POINTS_REPLACES, divisionRefusals, tableRuleKeys } from "../rule-locks";
+import { STAGE_POINTS_REPLACES, divisionRefusals, lockedStageIdsAmong, tableRuleKeys } from "../rule-locks";
 import { createEntrants } from "../entrants";
 import { startDivision } from "../schedule";
-import { createStages, generateStageFixtures } from "../stages";
+import { addFixture, createStages, generateStageFixtures } from "../stages";
 import { putStageRules } from "../stage-rules";
 import { withdrawEntrantCascade } from "../withdrawal";
 
@@ -49,6 +61,15 @@ async function rig(sport: string, variant: string, kind: "individual" | "team" =
 }
 const start = (auth: AuthCtx, fixtureId: string) => appendEvent(auth.orgId, fixtureId, 0, { type: "core.start", payload: {} });
 
+/** W2d T10 — the orders these cases save: badminton's own keys in two orders (order is part of the value) and generic's.
+ *  Each is one the engine's validator takes for its sport, pinned below, so a validator change reds that precondition. */
+const BDM_A: TiebreakerKey[] = ["wins", "set_diff", "point_diff", "lots"];
+const BDM_B: TiebreakerKey[] = ["wins", "point_diff", "set_diff", "lots"];
+const GEN_A: TiebreakerKey[] = ["points", "diff", "lots"];
+/** Football's own default league order without its fair-play step (fair play is optional): a valid order that is a change. */
+const FOOTBALL = resolveLatestModule("football");
+const FB_ORDER: TiebreakerKey[] = FOOTBALL.defaultTiebreakers("league", FOOTBALL.configSchema.parse(FOOTBALL.variants["11-a-side"])).filter((k) => k !== "fair_play");
+
 /** Pool B generates its fixtures and takes its first event: a SECOND started stage (`rig` starts neither). */
 async function startPoolB(r: Awaited<ReturnType<typeof rig>>): Promise<void> {
   await generateStageFixtures(r.auth, r.s2.id);
@@ -64,6 +85,24 @@ async function rejection(p: Promise<unknown>): Promise<Record<string, unknown>> 
   );
 }
 
+describe("W2d T10 precondition: the orders the lock cases save are valid for their sport", () => {
+  it("validateCascade takes BDM_A and BDM_B for badminton, GEN_A for generic and FB_ORDER for football, each on a league and a Swiss stage (counted)", () => {
+    let checked = 0;
+    for (const [sport, order] of [["badminton", BDM_A], ["badminton", BDM_B], ["generic", GEN_A], ["football", FB_ORDER]] as const) {
+      const m = resolveLatestModule(sport);
+      const cfg = m.configSchema.parse(Object.values(m.variants)[0]);
+      for (const stageKind of ["league", "swiss"] as const) {
+        expect(validateCascade(order, { module: m, cfg, stageKind, crossGroup: false }), `${sport} ${stageKind} ${order.join(",")}`).toEqual([]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+    expect(FB_ORDER, "the football order is a real order, not an empty one").toContain("points");
+    expect(BDM_A, "the two badminton orders differ only by order").not.toEqual(BDM_B);
+    expect([...BDM_A].sort()).toEqual([...BDM_B].sort());
+  });
+});
+
 describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", () => {
   it("empty patch on a started division: saves, refuses nothing", async () => {
     const r = await rig("badminton", "short");
@@ -76,11 +115,12 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     const auth = await seedOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Dl " + randomUUID().slice(0, 6), visibility: "private", branding: {} });
     const d = await createDivision(auth, comp.id, { name: "Open", slug: "o-" + randomUUID().slice(0, 6), sport_key: "generic", variant_key: "score", config: {} });
-    const out = await patchDivision(auth, d.id, { variant_key: "win_loss", tiebreakers: ["head_to_head"] as never });
+    const out = await patchDivision(auth, d.id, { variant_key: "win_loss", tiebreakers: GEN_A });
     expect(out.refused).toEqual([]);
     expect(out.variant_key).toBe("win_loss");
     expect((out.config as { resultMode: string }).resultMode).toBe("win_loss");
-    expect(out.tiebreakers).toEqual(["head_to_head"]);
+    expect(out.tiebreakers).toEqual(GEN_A);
+    expect(out.stagesKeptPinned, "no stage, none kept").toEqual([]);
   });
 
   it("generated but NOT started: a match-format change saves (the old division-wide FORMAT_LOCKED narrowed, P-2 A)", async () => {
@@ -124,49 +164,59 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     expect(out.config).toEqual({ ...before, cap: 19 });                        // cap saved, setTo restored, nothing else moved
   });
 
-  it("table rules: tiebreakers refused DIVISION_TABLE_RULES_LOCKED once a stage started (Q3; unlocked before W2c)", async () => {
+  it("W2d T10: tiebreakers are no longer locked — a started stage keeps its PIN, so the save lands and names the stage it did not reach", async () => {
     const r = await rig("badminton", "short");
     await start(r.auth, r.fixtureId);
-    const out = await patchDivision(r.auth, r.divisionId, { name: "N2", tiebreakers: ["head_to_head", "points_diff"] as never });
-    expect(out.refused).toEqual([{ field: "tiebreakers", code: "DIVISION_TABLE_RULES_LOCKED", stageId: r.s1.id, stageName: "Pool A" }]);
-    expect(out.tiebreakers, "the refused tiebreakers were not written").toBeNull();
-    expect(out.name, "the unrefused name was").toBe("N2");
+    const pinned = await loadTableRules(sql, r.s1.id);
+    expect(pinned.pinnedAt, "precondition: the generated Pool A is pinned").not.toBeNull();
+    const out = await patchDivision(r.auth, r.divisionId, { name: "N2", tiebreakers: BDM_A });
+    expect(out.refused).toEqual([]);
+    expect(out.tiebreakers, "the order was written").toEqual(BDM_A);
+    expect(out.name, "and so was the name").toBe("N2");
+    expect(out.stagesKeptPinned, "the pinned stage the save did not reach is named").toEqual([{ stageId: r.s1.id, name: "Pool A" }]);
+    expect((await loadTableRules(sql, r.s1.id)).tiebreakers, "Pool A plays its pinned order").toEqual(pinned.tiebreakers);
+    expect((await loadTableRules(sql, r.s2.id)).tiebreakers, "Pool B (not generated) follows the division").toEqual(BDM_A);
   });
 
-  it("table rules: not started — tiebreakers save, and clearing them back to null saves too", async () => {
+  it("W2d T10: not started — tiebreakers save, and clearing them back to null saves too (each naming the pinned Pool A)", async () => {
     const r = await rig("badminton", "short");
-    const set = await patchDivision(r.auth, r.divisionId, { tiebreakers: ["head_to_head"] as never });
+    const set = await patchDivision(r.auth, r.divisionId, { tiebreakers: BDM_A });
     expect(set.refused).toEqual([]);
-    expect(set.tiebreakers).toEqual(["head_to_head"]);
+    expect(set.tiebreakers).toEqual(BDM_A);
+    expect(set.stagesKeptPinned, "generated is pinned, started or not").toEqual([{ stageId: r.s1.id, name: "Pool A" }]);
     const cleared = await patchDivision(r.auth, r.divisionId, { tiebreakers: null });
     expect(cleared.refused).toEqual([]);
     expect(cleared.tiebreakers).toBeNull();
+    expect(cleared.stagesKeptPinned).toEqual([{ stageId: r.s1.id, name: "Pool A" }]);
   });
 
-  it("only refused fields in the patch: 409 with the first refusal's code and the whole list", async () => {
+  it("W2d T10: a tiebreakers-only patch on a started division is a save (200), never the W2c 409", async () => {
     const r = await rig("badminton", "short");
     await start(r.auth, r.fixtureId);
-    await expect(patchDivision(r.auth, r.divisionId, { tiebreakers: ["head_to_head"] as never })).rejects.toMatchObject({
-      status: 409, code: "DIVISION_TABLE_RULES_LOCKED", extra: { refused: [{ field: "tiebreakers", stageName: "Pool A" }] },
-    });
+    const out = await patchDivision(r.auth, r.divisionId, { tiebreakers: BDM_A });
+    expect(out.refused).toEqual([]);
+    expect((await getDivision(r.auth, r.divisionId)).tiebreakers, "stored").toEqual(BDM_A);
   });
 
-  it("the refusal's message is the spec sentence naming the stage", async () => {
-    const r = await rig("badminton", "short");
+  it("the table refusal's message is the spec sentence naming the stage (football awardScore: a table key the pin does not replace)", async () => {
+    const r = await rig("football", "11-a-side", "team");
     await start(r.auth, r.fixtureId);
-    await expect(patchDivision(r.auth, r.divisionId, { tiebreakers: ["head_to_head"] as never })).rejects.toMatchObject({
-      message: "Pool A has started — table rules are locked.",
+    const cfg = (await getDivision(r.auth, r.divisionId)).config as { awardScore: { goals: number } };
+    await expect(patchDivision(r.auth, r.divisionId, { config: { ...cfg, awardScore: { goals: cfg.awardScore.goals + 1 } } as never })).rejects.toMatchObject({
+      status: 409, code: "DIVISION_TABLE_RULES_LOCKED", message: "Pool A has started — table rules are locked.",
+      extra: { refused: [{ field: "awardScore", stageName: "Pool A" }] },
     });
   });
 
   it("after the only event is voided the stage is still started (score_events exist): still refused", async () => {
-    const r = await rig("badminton", "short");
+    const r = await rig("football", "11-a-side", "team");
     await start(r.auth, r.fixtureId);
     // Void by the real event id (ids are UUIDs; the engine refuses an unknown target, core/events.ts:296).
     const [{ id: startId }] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${r.fixtureId} and type = 'core.start'`;
     const v = await appendEvent(r.auth.orgId, r.fixtureId, 1, { type: "core.void", payload: {}, voids: startId });
     expect(v.event.voids).toBe(startId);                                   // the void landed
-    await expect(patchDivision(r.auth, r.divisionId, { tiebreakers: ["head_to_head"] as never })).rejects.toMatchObject({ code: "DIVISION_TABLE_RULES_LOCKED" });
+    const cfg = (await getDivision(r.auth, r.divisionId)).config as { awardScore: { goals: number } };
+    await expect(patchDivision(r.auth, r.divisionId, { config: { ...cfg, awardScore: { goals: cfg.awardScore.goals + 1 } } as never })).rejects.toMatchObject({ code: "DIVISION_TABLE_RULES_LOCKED" });
   });
 
   it("second call: re-sending the stored value is not a change and is not refused", async () => {
@@ -177,37 +227,47 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     expect(out.refused).toEqual([]);
   });
 
-  it("second call: re-sending the stored tiebreakers is not a change and is not refused", async () => {
+  it("second call: re-sending the stored tiebreakers is not a change — refused nothing and kept nothing; another order is", async () => {
     const r = await rig("badminton", "short");
-    await patchDivision(r.auth, r.divisionId, { tiebreakers: ["head_to_head", "points_diff"] as never });   // before anything started: saves
+    await patchDivision(r.auth, r.divisionId, { tiebreakers: BDM_A });
     await start(r.auth, r.fixtureId);
-    const out = await patchDivision(r.auth, r.divisionId, { name: "Same", tiebreakers: ["head_to_head", "points_diff"] as never });
+    const out = await patchDivision(r.auth, r.divisionId, { name: "Same", tiebreakers: BDM_A });
     expect(out.refused).toEqual([]);
-    expect(out.tiebreakers).toEqual(["head_to_head", "points_diff"]);
-    // Order is part of the value: the same keys in the other order ARE a change.
-    await expect(patchDivision(r.auth, r.divisionId, { tiebreakers: ["points_diff", "head_to_head"] as never })).rejects.toMatchObject({ code: "DIVISION_TABLE_RULES_LOCKED" });
+    expect(out.tiebreakers).toEqual(BDM_A);
+    expect(out.stagesKeptPinned, "nothing moved, so no stage is named").toEqual([]);
+    // Order is part of the value: the same keys in the other order ARE a change, which the pinned Pool A does not take.
+    const moved = await patchDivision(r.auth, r.divisionId, { tiebreakers: BDM_B });
+    expect(moved.tiebreakers).toEqual(BDM_B);
+    expect(moved.stagesKeptPinned).toEqual([{ stageId: r.s1.id, name: "Pool A" }]);
   });
 
-  it("every field of a two-field patch refused (variant + tiebreakers, and the preset keys the variant would move): one 409 carrying all of them, the variant's code first", async () => {
+  it("W2d T10: variant + tiebreakers on a started division: the variant and its preset keys are refused by name, the tiebreakers land (200, not the W2c 409 that dropped them)", async () => {
     const r = await rig("generic", "score");
     await start(r.auth, r.fixtureId);
     const before = await getDivision(r.auth, r.divisionId);
-    const err = await patchDivision(r.auth, r.divisionId, { variant_key: "win_loss", tiebreakers: ["head_to_head"] as never }).then(() => undefined, (e: unknown) => e);
-    expect(err, "the save was refused outright").toMatchObject({ status: 409, code: "DIVISION_FORMAT_LOCKED" });
-    const fields = (err as { extra: { refused: { field: string }[] } }).extra.refused.map((x) => x.field);
-    expect(fields).toEqual(expect.arrayContaining(["variant_key", "tiebreakers", "resultMode", "allowDraws"]));
+    const out = await patchDivision(r.auth, r.divisionId, { variant_key: "win_loss", tiebreakers: GEN_A });
+    const fields = out.refused.map((x) => x.field);
+    expect(fields).toEqual(expect.arrayContaining(["variant_key", "resultMode", "allowDraws"]));
+    expect(fields, "the order is never refused").not.toContain("tiebreakers");
+    expect(out.tiebreakers).toEqual(GEN_A);
     const after = await getDivision(r.auth, r.divisionId);
     expect(after.config).toEqual(before.config);
-    expect(after.tiebreakers).toEqual(before.tiebreakers);
+    expect(after.tiebreakers).toEqual(GEN_A);
     expect(after.variant_key).toBe(before.variant_key);
   });
 
-  it("another sport: a generic division's points (table rules) refused while a pool has started", async () => {
+  it("W2d T10: the same points edit while the started pool is PINNED saves: the pool keeps its pinned points and is named, the pending pool follows", async () => {
     const r = await rig("generic", "score");
     await start(r.auth, r.fixtureId);
+    const pinned = await loadTableRules(sql, r.s1.id);
     const before = await getDivision(r.auth, r.divisionId);
     const cfg = before.config as { points: Record<string, number> };
-    await expect(patchDivision(r.auth, r.divisionId, { config: { ...cfg, points: { ...cfg.points, w: 2 } } })).rejects.toMatchObject({ code: "DIVISION_TABLE_RULES_LOCKED" });
+    const out = await patchDivision(r.auth, r.divisionId, { config: { ...cfg, points: { ...cfg.points, w: cfg.points.w + 2 } } });
+    expect(out.refused).toEqual([]);
+    expect((out.config as { points: { w: number } }).points.w, "written").toBe(cfg.points.w + 2);
+    expect(out.stagesKeptPinned).toEqual([{ stageId: r.s1.id, name: "Pool A" }]);
+    expect((await loadTableRules(sql, r.s1.id)).points, "Pool A pays its pin").toEqual(pinned.points);
+    expect((await loadTableRules(sql, r.s2.id)).points, "Pool B follows the division").not.toEqual(pinned.points);
   });
 
   it("table rules: a started stage that carries its own points does not inherit the division's — the points change saves", async () => {
@@ -377,16 +437,18 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     expect((out.config as { setTo: number }).setTo).toBe((before as { setTo: number }).setTo);
   });
 
-  it("M-2 two started stages that both inherit: every refusal names the first by seq (Pool A) — config key, variant and tiebreakers", async () => {
+  it("M-2 two started stages that both inherit: every refusal names the first by seq (Pool A) — config key and variant; the tiebreakers land, both pins named (W2d T10)", async () => {
     const r = await rig("generic", "score");
     await start(r.auth, r.fixtureId);
     await startPoolB(r);
     const before = (await getDivision(r.auth, r.divisionId)).config as { allowDraws: boolean };
     const out = await patchDivision(r.auth, r.divisionId, {
-      name: "Renamed", tiebreakers: ["head_to_head"] as never, config: { ...before, allowDraws: !before.allowDraws },
+      name: "Renamed", tiebreakers: GEN_A, config: { ...before, allowDraws: !before.allowDraws },
     });
-    expect(out.refused.length, "a config key and the tiebreakers were refused").toBe(2);
+    expect(out.refused.map((x) => x.field), "the config key was refused, the tiebreakers were not").toEqual(["allowDraws"]);
     for (const x of out.refused) expect(x, x.field).toMatchObject({ stageId: r.s1.id, stageName: "Pool A" });
+    expect(out.tiebreakers).toEqual(GEN_A);
+    expect(out.stagesKeptPinned.map((x) => x.name)).toEqual(["Pool A", "Pool B"]);
     const v = await rejection(patchDivision(r.auth, r.divisionId, { variant_key: "win_loss" }));
     expect((v as { extra: { refused: { field: string; stageName: string }[] } }).extra.refused.find((x) => x.field === "variant_key")).toMatchObject({ stageName: "Pool A" });
   });
@@ -401,17 +463,27 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     expect(out.refused).toEqual([{ field: "allowDraws", code: "DIVISION_FORMAT_LOCKED", stageId: r.s1.id, stageName: "Pool A" }]);
   });
 
-  it("M-3 pointsMap is a TABLE rule: refused with the table code while a started stage inherits it, saved once the stage carries its own points", async () => {
-    const inherits = await rig("badminton", "short");
-    await start(inherits.auth, inherits.fixtureId);
-    const b1 = (await getDivision(inherits.auth, inherits.divisionId)).config as Record<string, unknown>;
-    const refused = await patchDivision(inherits.auth, inherits.divisionId, { name: "Renamed", config: { ...b1, pointsMap: { "*": [3, 0] } } });
-    expect(refused.refused).toEqual([{ field: "pointsMap", code: "DIVISION_TABLE_RULES_LOCKED", stageId: inherits.s1.id, stageName: "Pool A" }]);
-    expect((refused.config as { pointsMap: unknown }).pointsMap).toEqual((b1 as { pointsMap: unknown }).pointsMap);
+  it("M-3 pointsMap is a TABLE rule a stage's pin replaces: saved over a badminton stage started AD HOC (the save pins it first and names it); a pre-W2d row (active, no pin) with its own points saves it too, its own rule replacing it", async () => {
+    const s = await tableScene({ sport: "badminton", variant: "short", entrants: 2 });
+    const [E1, E2] = s.entrants as [string, string];
+    const { fixture_id } = await addFixture(s.auth, s.stageIds[0]!, { home_entrant_id: E1, away_entrant_id: E2 });
+    await startDivision(s.auth, s.divisionId);
+    await start(s.auth, fixture_id);
+    expect(await stageRules(s.stageIds[0]!), "premise: started ad hoc, still pending, no pin").toMatchObject({ status: "pending", pin: null });
+    const b1 = (await getDivision(s.auth, s.divisionId)).config as Record<string, unknown>;
+    const pinnedMap = (await loadTableRules(sql, s.stageIds[0]!)).points;
+    const out = await patchDivision(s.auth, s.divisionId, { name: "Renamed", config: { ...b1, pointsMap: { "*": [3, 0] } } });
+    expect(out.refused).toEqual([]);
+    expect((out.config as { pointsMap: unknown }).pointsMap).toEqual({ "*": [3, 0] });
+    expect(out.stagesKeptPinned).toEqual([{ stageId: s.stageIds[0]!, name: "League" }]);
+    expect((await loadTableRules(sql, s.stageIds[0]!)).points, "the stage keeps the map it read").toEqual(pinnedMap);
 
+    // The own-rule arm alone: a pre-W2d row (the post-deploy pin's input, which no product path writes) that carries its own points.
     const own = await rig("badminton", "short");
     await sql`update stages set config = config || ${sql.json({ points: { win: 3, loss: 0 } } as never)} where id = ${own.s1.id}`;
     await start(own.auth, own.fixtureId);
+    await sql`update stages set table_rules_pinned = null, table_rules_pinned_at = null where id = ${own.s1.id}`;
+    expect(await stageRules(own.s1.id), "premise: the legacy shape").toMatchObject({ status: "active", pin: null });
     const b2 = (await getDivision(own.auth, own.divisionId)).config as Record<string, unknown>;
     const saved = await patchDivision(own.auth, own.divisionId, { config: { ...b2, pointsMap: { "*": [3, 0] } } });
     expect(saved.refused).toEqual([]);
@@ -492,22 +564,21 @@ describe.skipIf(!HAS_DB)("X-SR-4 division locks per started inheriting stage", (
     expect(out.refused).toContainEqual(expect.objectContaining({ field: "variant_key", stageName: "Pool A" }));
   });
 
-  it("tiebreakers: [] against a stored null is a CHANGE (an empty cascade is not the sport default) — refused once started", async () => {
-    // Pinned as found, NOT as the fix-round brief asked ("[] and null both mean no custom tie-breaks, treat as equal"):
-    // `engine-db/competition.ts:413` reads `division.tiebreakers ?? module.defaultTiebreakers`, so null is the sport's default
-    // cascade and [] is an EMPTY one (rows then split by seed). Treating them as equal would either drop the organiser's
-    // explicit empty cascade or write it past the lock this task adds.
+  it("W2d T10: tiebreakers: [] is refused 422 TIEBREAK_KEY_INVALID (the empty order), started or not — never written; null is the no-op", async () => {
+    // W2c pinned [] as a CHANGE against a stored null (an empty cascade, rows then split by seed). W2d's validator refuses
+    // the empty order outright (spec §10 reason `empty`), so it can no longer reach the column at all.
     const r = await rig("badminton", "short");
     const before = await getDivision(r.auth, r.divisionId);
     expect(before.tiebreakers, "precondition: stored null").toBeNull();
+    const empty = { status: 422, code: "TIEBREAK_KEY_INVALID", extra: { refusals: [expect.objectContaining({ reason: "empty" })] } };
+    await expect(patchDivision(r.auth, r.divisionId, { tiebreakers: [] as never })).rejects.toMatchObject(empty);
     await start(r.auth, r.fixtureId);
-    await expect(patchDivision(r.auth, r.divisionId, { tiebreakers: [] as never })).rejects.toMatchObject({
-      status: 409, code: "DIVISION_TABLE_RULES_LOCKED", extra: { refused: [{ field: "tiebreakers", stageName: "Pool A" }] },
-    });
+    await expect(patchDivision(r.auth, r.divisionId, { tiebreakers: [] as never })).rejects.toMatchObject(empty);
     expect((await getDivision(r.auth, r.divisionId)).tiebreakers, "still null").toBeNull();
     // And null against a stored null is the genuine no-op.
     const same = await patchDivision(r.auth, r.divisionId, { name: "Same", tiebreakers: null });
     expect(same.refused).toEqual([]);
+    expect(same.stagesKeptPinned, "nothing moved").toEqual([]);
   });
 });
 
@@ -542,7 +613,7 @@ async function startedStageOfKind(sport: string, variant: string, kind: StageKin
 }
 
 describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration (no database)", () => {
-  // Fix round 2, I-2. What a stage PointsRule replaces is a fact about the engine (competition/points.ts: `applyPointsRule`
+  // Fix round 2, I-2. What a stage PointsRule replaces is a fact about the engine (competition/points.ts: `payout`
   // re-derives `points` and leaves the sport's metrics ledger untouched), so it is checked against the engine, not against
   // the lock's own constant.
   it("I-2 STAGE_POINTS_REPLACES names only declared table keys, and the three other points keys a module declares are the ones left locked (counted)", () => {
@@ -565,7 +636,7 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
     // played, so there the division's awardScore stops mattering. It still decides every forfeit AFTER play: X-PT-1 pays
     // that as a result and leaves the sport's credit, and the credit is `goalCredit(awardScore, real)` (FB-RT-1 / HK-RT-1 /
     // IH-RT-1) — so the key stays locked whatever the stage rule carries.
-    const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [1, 0] } });
+    const rule = PointsRule.parse({ win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [1, 0] } });
     let swept = 0;
     for (const m of builtinModules) {
       if (!pointsKeysFor(m, null, null).includes("awardScore")) continue;
@@ -577,7 +648,7 @@ describe("X-SR-4 the lock classifies a division key by the ENGINE's declaration 
       const outcome = (reason: "walkover" | "retired") => ({ kind: "award", winner: "H", loser: "A", reason }) as never;
       const delta = (side: 0 | 1, cfg: unknown, reason: "walkover" | "retired") => ({ entrantId: side === 0 ? "H" : "A", played: 1, won: side === 0 ? 1 : 0, drawn: 0, lost: side === 0 ? 0 : 1, points: 0, metrics: { ...ledger(cfg, reason)[side] } });
       const viaRule = (cfg: unknown, reason: "walkover" | "retired", played: boolean) =>
-        applyPointsRule(outcome(reason), [delta(0, cfg, reason), delta(1, cfg, reason)] as never, rule, played, m.awardScoreKeys)[0].metrics;
+        payout(outcome(reason), null, [delta(0, cfg, reason), delta(1, cfg, reason)] as never, played, rule, m.awardScoreKeys, undefined)[0].metrics;
       const own = Object.keys(ledger(base, "retired")[0]);
       expect(own.length, `${m.key}: the forfeit credits the winner something`).toBeGreaterThan(0);
       expect(ledger(raised, "retired")[0], `${m.key}: awardScore changes what a retirement credits`).not.toEqual(ledger(base, "retired")[0]);
@@ -647,32 +718,35 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
       name: "Renamed", // a save that applies nothing at all throws; the rename is what lands beside `refused`
       config: { ...before, points: { ...before.points, win: 4 }, awardScore: { goals: before.awardScore.goals + 1 }, periods: { ...before.periods, minutes: before.periods.minutes - 5 } },
     });
-    expect(out.refused.map((x) => x.field).sort(), "all three edits were refused").toEqual(["awardScore", "periods", "points"]);
+    // W2d T10: `points` reaches the pinned Pool A no more (its pin pays it, spec §5.4), so it lands and Pool A is named kept.
+    expect(out.refused.map((x) => x.field).sort(), "the two edits the pin does not replace were refused").toEqual(["awardScore", "periods"]);
     let judged = 0;
     for (const x of out.refused) {
       expect(x.code, x.field).toBe(table.has(x.field) ? "DIVISION_TABLE_RULES_LOCKED" : "DIVISION_FORMAT_LOCKED");
       judged++;
     }
-    expect(judged).toBe(3);
-    expect(out.refused.filter((x) => x.code === "DIVISION_TABLE_RULES_LOCKED").length, "both points keys were table rules").toBe(table.size);
-    expect(out.config, "nothing refused was written").toEqual(before);
+    expect(judged).toBe(2);
+    expect(out.refused.filter((x) => x.code === "DIVISION_TABLE_RULES_LOCKED").map((x) => x.field), "awardScore is a table rule").toEqual(["awardScore"]);
+    expect(out.config, "only the points were written").toEqual({ ...before, points: { ...before.points, win: 4 } });
+    expect(out.stagesKeptPinned).toEqual([{ stageId: r.s1.id, name: "Pool A" }]);
   });
 
-  it("M-b a started KNOCKOUT stage has no table: a division pointsMap and tiebreakers edit save; a started league stage refuses the same patch", async () => {
-    const ko = await rigBracket("badminton", "short");
+  it("M-b a started KNOCKOUT stage has no table: a division awardScore and tiebreakers edit save; a started league stage refuses the awardScore (a table key no pin replaces) and takes the order", async () => {
+    const ko = await rigBracket("football", "11-a-side", { kind: "team" });
     await start(ko.auth, ko.fixtureId);
-    const b1 = (await getDivision(ko.auth, ko.divisionId)).config as Record<string, unknown>;
-    const saved = await patchDivision(ko.auth, ko.divisionId, { config: { ...b1, pointsMap: { "*": [3, 0] } }, tiebreakers: ["head_to_head"] as never });
+    const b1 = (await getDivision(ko.auth, ko.divisionId)).config as { awardScore: { goals: number } };
+    const saved = await patchDivision(ko.auth, ko.divisionId, { config: { ...b1, awardScore: { goals: b1.awardScore.goals + 1 } } as never, tiebreakers: FB_ORDER });
     expect(saved.refused).toEqual([]);
-    expect((saved.config as { pointsMap: unknown }).pointsMap, "the table change was written").toEqual({ "*": [3, 0] });
-    expect(saved.tiebreakers, "the cascade change was written").toEqual(["head_to_head"]);
+    expect((saved.config as typeof b1).awardScore.goals, "the table change was written").toBe(b1.awardScore.goals + 1);
+    expect(saved.tiebreakers, "the cascade change was written").toEqual(FB_ORDER);
 
-    // The pair: the same two edits against a started LEAGUE stage are refused, by name.
-    const lg = await rig("badminton", "short");
+    // The pair: the same two edits against a started LEAGUE stage: the awardScore is refused, by name.
+    const lg = await rig("football", "11-a-side", "team");
     await start(lg.auth, lg.fixtureId);
-    const b2 = (await getDivision(lg.auth, lg.divisionId)).config as Record<string, unknown>;
-    const refused = await patchDivision(lg.auth, lg.divisionId, { name: "Renamed", config: { ...b2, pointsMap: { "*": [3, 0] } }, tiebreakers: ["head_to_head"] as never });
-    expect(refused.refused.map((x) => `${x.field}:${x.code}`).sort()).toEqual(["pointsMap:DIVISION_TABLE_RULES_LOCKED", "tiebreakers:DIVISION_TABLE_RULES_LOCKED"]);
+    const b2 = (await getDivision(lg.auth, lg.divisionId)).config as { awardScore: { goals: number } };
+    const refused = await patchDivision(lg.auth, lg.divisionId, { name: "Renamed", config: { ...b2, awardScore: { goals: b2.awardScore.goals + 1 } } as never, tiebreakers: FB_ORDER });
+    expect(refused.refused.map((x) => `${x.field}:${x.code}`).sort()).toEqual(["awardScore:DIVISION_TABLE_RULES_LOCKED"]);
+    expect(refused.tiebreakers, "the order landed").toEqual(FB_ORDER);
   });
 
   it("M-b a started knockout still inherits the division's MATCH format: setTo is refused naming the Final", async () => {
@@ -692,25 +766,26 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     const ko = await rigBracket("badminton", "short");
     await start(ko.auth, ko.fixtureId);
     const before = (await getDivision(ko.auth, ko.divisionId)).config as Record<string, unknown> & { setTo: number };
-    const out = await patchDivision(ko.auth, ko.divisionId, { config: { ...before, setTo: 15 }, tiebreakers: ["head_to_head"] as never });
+    const out = await patchDivision(ko.auth, ko.divisionId, { config: { ...before, setTo: 15 }, tiebreakers: BDM_A });
     expect(out.refused).toEqual([{ field: "setTo", code: "DIVISION_FORMAT_LOCKED", stageId: ko.ko.id, stageName: "Final" }]);
-    expect(out.tiebreakers, "the allowed change landed").toEqual(["head_to_head"]);
+    expect(out.tiebreakers, "the allowed change landed").toEqual(BDM_A);
     expect((out.config as { setTo: number }).setTo, "the refused change did not").toBe(before.setTo);
-    expect((await getDivision(ko.auth, ko.divisionId)).tiebreakers, "and it is stored").toEqual(["head_to_head"]);
+    expect((await getDivision(ko.auth, ko.divisionId)).tiebreakers, "and it is stored").toEqual(BDM_A);
 
-    // The negative's pair: the same patch where the tiebreakers change IS refused too (a started league has a table) lands
-    // nothing, so it is a 409 naming the first refused field, with every refused field in `refused`.
+    // W2d T10: the W2c pair (a started league refusing the cascade too, so nothing landed: a 409) is gone with the cascade
+    // lock. The same patch on a started league now lands the order the same way, setTo refused by name.
     const lg = await rig("badminton", "short");
     await start(lg.auth, lg.fixtureId);
     const b2 = (await getDivision(lg.auth, lg.divisionId)).config as Record<string, unknown>;
-    const tiebreakersBefore = (await getDivision(lg.auth, lg.divisionId)).tiebreakers;
-    const err = await rejection(patchDivision(lg.auth, lg.divisionId, { config: { ...b2, setTo: 15 }, tiebreakers: ["head_to_head"] as never }));
-    expect(err, "the first refusal in the list leads: the cascade, then the config keys").toMatchObject({ status: RULE_ERROR_STATUS.DIVISION_TABLE_RULES_LOCKED, code: "DIVISION_TABLE_RULES_LOCKED" });
-    expect((err as { extra?: { refused: { field: string }[] } }).extra?.refused.map((x) => x.field).sort()).toEqual(["setTo", "tiebreakers"]);
-    expect((await getDivision(lg.auth, lg.divisionId)).tiebreakers, "nothing landed").toEqual(tiebreakersBefore);
+    const both = await patchDivision(lg.auth, lg.divisionId, { config: { ...b2, setTo: 15 }, tiebreakers: BDM_A });
+    expect(both.refused.map((x) => x.field)).toEqual(["setTo"]);
+    expect((await getDivision(lg.auth, lg.divisionId)).tiebreakers, "the order landed").toEqual(BDM_A);
+    // The 409's pair: a patch from which nothing lands (setTo alone) is still the 409 naming it.
+    const err = await rejection(patchDivision(lg.auth, lg.divisionId, { config: { ...b2, setTo: 13 } }));
+    expect(err).toMatchObject({ status: RULE_ERROR_STATUS.DIVISION_FORMAT_LOCKED, code: "DIVISION_FORMAT_LOCKED" });
   });
 
-  it("M4 every stage kind: a table key and the cascade lock only a kind with a table, a format key every kind, carrom tieBoard on every kind but those that force it (counted)", async () => {
+  it("M4 every stage kind: a table key locks only a kind with a table, a format key every kind, carrom tieBoard on every kind but those that force it (counted; W2d T10: the cascade lock is gone)", async () => {
     const generic = resolveLatestModule("generic");
     const carrom = resolveLatestModule("carrom");
     expect(pointsKeysFor(generic, null, "score"), "precondition: generic's table key").toContain("points");
@@ -724,17 +799,24 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
       expect(hasTable !== BRACKET_KINDS.has(kind), `${kind}: the engine puts every kind in exactly one of the two sets`).toBe(true);
       const g = await startedStageOfKind("generic", "score", kind);
       const got = await sql.begin((tx) =>
-        divisionRefusals(tx, g.divisionId, { configKeys: ["points", "allowDraws"], variant: false, tiebreakers: true }, { module: generic, variantKey: "score", divisionConfig: {} }));
+        divisionRefusals(tx, g.divisionId, { configKeys: ["points", "allowDraws"], variant: false }, { module: generic, variantKey: "score", divisionConfig: {} }));
       const byField = Object.fromEntries(got.map((x) => [x.field, x.code]));
       expect(byField.allowDraws, `${kind}: a format key locks on every kind`).toBe("DIVISION_FORMAT_LOCKED");
-      expect(byField.points, `${kind} points`).toBe(hasTable ? "DIVISION_TABLE_RULES_LOCKED" : undefined);
-      expect(byField.tiebreakers, `${kind} tiebreakers`).toBe(hasTable ? "DIVISION_TABLE_RULES_LOCKED" : undefined);
+      // W2d T10 fix round 1 (I1): this stage started while PENDING (its first event, no generate), so a save that moves
+      // its points pins it first (`startedStagesToPin`): the table key is not refused on any kind.
+      expect(byField.points, `${kind} points (started pending: the save pins it)`).toBeUndefined();
       expect(got.every((x) => x.stageId === g.stage.id && x.stageName === g.stage.name), `${kind}: every refusal names the started stage`).toBe(true);
+      // The table-vs-bracket question itself, on the one row the save cannot pin: a pre-W2d row (active, no pin: the
+      // post-deploy pin's input, which no product path writes, so the status is set by hand).
+      await sql`update stages set status = 'active' where id = ${g.stage.id}`;
+      const legacy = await sql.begin((tx) =>
+        divisionRefusals(tx, g.divisionId, { configKeys: ["points"], variant: false }, { module: generic, variantKey: "score", divisionConfig: {} }));
+      expect(legacy.map((x) => x.code), `${kind} points (pre-W2d row)`).toEqual(hasTable ? ["DIVISION_TABLE_RULES_LOCKED"] : []);
       if (hasTable) withTable++; else withoutTable++;
 
       const c = await startedStageOfKind("carrom", "icf", kind);
       const tie = await sql.begin((tx) =>
-        divisionRefusals(tx, c.divisionId, { configKeys: ["tieBoard"], variant: false, tiebreakers: false }, { module: carrom, variantKey: "icf", divisionConfig: {} }));
+        divisionRefusals(tx, c.divisionId, { configKeys: ["tieBoard"], variant: false }, { module: carrom, variantKey: "icf", divisionConfig: {} }));
       // The oracle is the engine's own declaration of what a bracket stage forces: a stage that forces the tie board ignores
       // the division's, every other kind reads it.
       const forcesTieBoard = forbidsLevelResult(kind) && Object.hasOwn(carrom.bracketDeciders(carrom.configSchema.parse({}) as never), "tieBoard");
@@ -751,13 +833,16 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
   });
 
   it("M-b a knockout and a league both started: the table refusal names the league (the stage with a table), the format refusal the knockout (first by seq)", async () => {
-    const r = await rigBracket("badminton", "short", { league: true });
+    const r = await rigBracket("football", "11-a-side", { league: true, kind: "team" });
     await start(r.auth, r.fixtureId);
     await start(r.auth, r.leagueFixtureId!);
-    const before = (await getDivision(r.auth, r.divisionId)).config as Record<string, unknown>;
-    const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: { ...before, pointsMap: { "*": [3, 0] }, setTo: 15 }, tiebreakers: ["head_to_head"] as never });
+    const before = (await getDivision(r.auth, r.divisionId)).config as { awardScore: { goals: number }; halfMinutes: number };
+    const out = await patchDivision(r.auth, r.divisionId, {
+      name: "Renamed", config: { ...before, awardScore: { goals: before.awardScore.goals + 1 }, halfMinutes: before.halfMinutes + 5 } as never, tiebreakers: FB_ORDER,
+    });
     const byField = Object.fromEntries(out.refused.map((x) => [x.field, x.stageName]));
-    expect(byField).toEqual({ pointsMap: "Pool", tiebreakers: "Pool", setTo: "Final" });
+    expect(byField).toEqual({ awardScore: "Pool", halfMinutes: "Final" });
+    expect(out.tiebreakers, "W2d T10: the order is never refused").toEqual(FB_ORDER);
   });
 
   it("M-b carrom `tieBoard`: a started knockout forces the extra board and does not inherit the division's, a started league does", async () => {
@@ -911,7 +996,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
   // proving that is in the no-database describe.
   it("I-2 a started football league with its OWN stage points still locks awardScore (the forfeit goal credit); the points key it replaces saves", async () => {
     const r = await rig("football", "11-a-side", "team");
-    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] } } as never)} where id = ${r.s1.id}`;
+    await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as { awardScore: { goals: number }; points: { win: number; draw: number; loss: number } };
     const out = await patchDivision(r.auth, r.divisionId, {
@@ -927,7 +1012,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
   // the sport's `goalCredit(awardScore, real)` (FB-RT-1), so the division's value still reaches this stage's table.
   it("I-2 a stage rule that carries its own forfeit award score does not take awardScore over either: a forfeit after play still reads the division's", async () => {
     const r = await rig("football", "11-a-side", "team");
-    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } } as never)} where id = ${r.s1.id}`;
+    await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as { awardScore: { goals: number } };
     const out = await patchDivision(r.auth, r.divisionId, { name: "Renamed", config: { ...before, awardScore: { goals: before.awardScore.goals + 2 } } as never });
@@ -938,7 +1023,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
   // `cfg.scoring`), its declared points sets and its per-match bounds read it too, and a stage rule replaces none of them.
   it("I-2 a started chess league with its OWN stage points still locks `scoring` (it also writes the game's headline): a change is refused", async () => {
     const r = await rig("boardgame", "classical");
-    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 2, draw: 1, loss: 0 }, bonuses: [] } } as never)} where id = ${r.s1.id}`;
+    await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as { scoring: { win: number; draw: number; loss: number }; byeScore: number };
     const out = await patchDivision(r.auth, r.divisionId, {
@@ -951,7 +1036,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
 
   it("I-2 …and `byeScore` (the other points key chess declares) beside it: both refused, neither written", async () => {
     const r = await rig("boardgame", "classical");
-    await sql`update stages set config = config || ${sql.json({ points: { base: { win: 2, draw: 1, loss: 0 }, bonuses: [] } } as never)} where id = ${r.s1.id}`;
+    await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } } as never)} where id = ${r.s1.id}`;
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as { scoring: { win: number; draw: number; loss: number }; byeScore: number };
     const out = await patchDivision(r.auth, r.divisionId, {
@@ -963,7 +1048,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     expect((out.config as typeof before).byeScore, "byeScore was not").toBe(before.byeScore);
   });
 
-  it("I-2 the same league WITHOUT its own stage points inherits both: points and awardScore are refused", async () => {
+  it("W2d T10 (spec §5.4, §10): the same league PINNED: points save (the pin pays the stage) and awardScore keeps W2c's lock (the goal credit after play)", async () => {
     const r = await rig("football", "11-a-side", "team");
     await start(r.auth, r.fixtureId);
     const before = (await getDivision(r.auth, r.divisionId)).config as { awardScore: { goals: number }; points: { win: number; draw: number; loss: number } };
@@ -971,7 +1056,10 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
       name: "Renamed",
       config: { ...before, awardScore: { goals: before.awardScore.goals + 2 }, points: { ...before.points, win: before.points.win + 1 } } as never,
     });
-    expect(out.refused.map((x) => x.field).sort()).toEqual(["awardScore", "points"]);
+    expect(out.refused).toEqual([{ field: "awardScore", code: "DIVISION_TABLE_RULES_LOCKED", stageId: r.s1.id, stageName: "Pool A" }]);
+    expect((out.config as typeof before).points.win, "points written").toBe(before.points.win + 1);
+    expect((out.config as typeof before).awardScore.goals, "awardScore not").toBe(before.awardScore.goals);
+    expect(out.stagesKeptPinned).toEqual([{ stageId: r.s1.id, name: "Pool A" }]);
   });
 
   // Fix round 2, M-1. A stage's `rules: { key: null }` is "inherit" (stage-cfg.ts: a null is stripped on the way in and
@@ -998,7 +1086,7 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
     const fakeModule = (ruleKeys: Record<string, unknown>, forced: Record<string, unknown> | ((cfg: unknown) => Record<string, unknown>) = {}, parse: Parse = (c) => ({ success: true, data: c })) =>
       ({ key: "fake", ruleKeys, configSchema: { safeParse: parse }, bracketDeciders: typeof forced === "function" ? forced : () => forced }) as unknown as AnySportModule;
     const refusalsFor = async (r: { divisionId: string }, mod: AnySportModule, keys: string[], variantKey = "x", divisionConfig: Record<string, unknown> = {}) =>
-      sql.begin((tx) => divisionRefusals(tx, r.divisionId, { configKeys: keys, variant: false, tiebreakers: false }, { module: mod, variantKey, divisionConfig }));
+      sql.begin((tx) => divisionRefusals(tx, r.divisionId, { configKeys: keys, variant: false }, { module: mod, variantKey, divisionConfig }));
 
     it("I-1 an engine `appliesTo` (stage kinds or variants) never exempts a stage from a key: only a FORCED key is not inherited", async () => {
       const r = await rigBracket("generic", "score", { league: true });
@@ -1073,7 +1161,11 @@ describe.skipIf(!HAS_DB)("X-SR-4 the lock classifies a division key by the ENGIN
 describe("X-SR-4 rule-errors: the W2c code table", () => {
   const SPEC: Record<RuleErrorCode, number> = {
     STAGE_FORMAT_LOCKED: 409, DIVISION_TABLE_RULES_LOCKED: 409, DIVISION_FORMAT_LOCKED: 409,
-    FIXTURE_FORMAT_LOCKED: 409, FORMAT_DOES_NOT_FIT_PLAY: 409, RULE_NOT_SETTABLE: 400, POINTS_RULE_INEXPRESSIBLE: 422,
+    FIXTURE_FORMAT_LOCKED: 409, FORMAT_DOES_NOT_FIT_PLAY: 409, RULE_NOT_SETTABLE: 400,
+    // W2d Task 10 (W2d spec §10): W2c's "inexpressible" code is retired; the validator's and coverage's refusals are new.
+    TIEBREAK_KEY_INVALID: 422, POINTS_OUTCOME_UNCOVERED: 422,
+    // W2d Task 10 fix round 1 I2 (owner, 2026-10-26): a flat stage rule over a sport that pays an outcome its own way.
+    POINTS_SPLIT_FLATTENED: 422,
     // Task 14 (controller ruling, fix round 1): a delete that would take a match's own format with it.
     FIXTURE_HAS_OWN_FORMAT: 409,
     // Task 11 (controller ruling): a stage or division save that would leave an unstarted match's own format unable to fit.
@@ -1081,8 +1173,8 @@ describe("X-SR-4 rule-errors: the W2c code table", () => {
     // Task 15 (X-SR-7, brief): a pad's tap sent under rules the match no longer plays.
     FIXTURE_RULES_CHANGED: 409,
   };
-  it("declares exactly the ten codes, each with its status", () => {
-    expect(Object.keys(SPEC).length).toBe(10);
+  it("declares exactly the twelve codes, each with its status", () => {
+    expect(Object.keys(SPEC).length).toBe(12);
     expect(RULE_ERROR_STATUS).toEqual(SPEC);
   });
   it("every code has an English sentence, and the stage codes name the stage", () => {
@@ -1102,7 +1194,14 @@ describe("X-SR-4 rule-errors: the W2c code table", () => {
     expect(ruleErrorMessage("FORMAT_DOES_NOT_FIT_PLAY", {})).toBe("The recorded play does not fit this format.");
     expect(ruleErrorMessage("RULE_NOT_SETTABLE", { field: "points" })).toBe("points can't be set here.");
     expect(ruleErrorMessage("RULE_NOT_SETTABLE", { field: "points", reason: "table rules" })).toBe("points can't be set here — table rules.");
-    expect(ruleErrorMessage("POINTS_RULE_INEXPRESSIBLE", { reason: "a bonus on a tie" })).toBe("These points can't be set per stage yet — a bonus on a tie.");
+    // W2d spec §10's own wording.
+    expect(ruleErrorMessage("TIEBREAK_KEY_INVALID", { refusal: { index: 1, key: "buchholz", reason: "stage_format", need: "swiss" } })).toBe("Buchholz can't be used here: only in Swiss stages");
+    expect(ruleErrorMessage("TIEBREAK_KEY_INVALID", { refusal: { index: 2, key: "diff", reason: "last", need: "lots" } })).toMatch(/can't be used here: the order must end with a drawing of lots$/);
+    expect(ruleErrorMessage("POINTS_OUTCOME_UNCOVERED", { uncovered: ["set:2-1"] })).toBe("This stage can end with a set score of 2-1, and its points don't say what that pays.");
+    // Fix round 1 I2: W2c's restored wording (the owner's copy), the splits by their labels.
+    expect(ruleErrorMessage("POINTS_SPLIT_FLATTENED", { splits: ["otLoss", "otWin"] })).toBe(
+      "These points can't be set per stage yet — this division scores overtime wins, overtime losses separately.",
+    );
     expect(ruleErrorMessage("FIXTURE_HAS_OWN_FORMAT", { match: "Match 3" })).toBe(
       "Match 3 has its own format, and this would delete it — set it back to its stage's format first.",
     );
@@ -1116,4 +1215,170 @@ describe("X-SR-4 rule-errors: the W2c code table", () => {
       "The match's format was corrected. This entry was not recorded — check the score, then record it again.",
     );
   });
+});
+
+// ── W2d Task 10 fix round 1 (I1): a stage that started WITHOUT a pin ───────────────────────────────────────────────────
+// The real producer of a started, unpinned table stage: an ad-hoc match (`addFixture`) on a pending league, played before
+// anything generates it (the stage stays `pending`; generate and completion are the only pinning doors). A division save
+// that moves what the stage reads pins it FIRST, with its current rules, then lands: the table does not move under the
+// played match, and the answer names it in `stagesKeptPinned`. Expected rankings are the rulebook's arithmetic over the
+// results below (points, then goals for or goal difference), never the loader's answer.
+describe.skipIf(!HAS_DB)("W2d T10 fix round 1 (I1): a division save pins a stage that started without one, then lands", () => {
+  /** E1 9-8 E2, E3 3-0 E1, E2 1-0 E3: one win each (3 points apiece under GENERIC_CONFIG's w3/d1/l0). Goals for: E1 9,
+   *  E2 9, E3 3. Goal difference: E1 -2, E2 0, E3 +2. So "points, for, diff" ranks E2 (9, 0) > E1 (9, -2) > E3, and
+   *  "points, diff" ranks E3 > E2 > E1: the two orders disagree on every place. */
+  const BY_FOR: TiebreakerKey[] = ["points", "for", "diff", "lots"];
+  const BY_DIFF: TiebreakerKey[] = ["points", "diff", "lots"];
+  async function adHocTable() {
+    const s = await tableScene({ entrants: 3 });
+    const stageId = s.stageIds[0]!;
+    const [E1, E2, E3] = s.entrants as [string, string, string];
+    await patchDivision(s.auth, s.divisionId, { tiebreakers: BY_FOR }); // pending and unplayed: the stage follows it
+    for (const [h, a] of [[E1, E2], [E3, E1], [E2, E3]] as const) await addFixture(s.auth, stageId, { home_entrant_id: h, away_entrant_id: a });
+    await startDivision(s.auth, s.divisionId); // the stage already holds fixtures: the start generates nothing
+    return { ...s, stageId, E1, E2, E3 };
+  }
+  const order = (rows: readonly { entrantId: string }[]) => rows.map((r) => r.entrantId);
+
+  it("precondition: both orders are valid for generic, and they disagree on this table", () => {
+    const m = resolveLatestModule("generic");
+    const cfg = m.configSchema.parse(m.variants.score);
+    for (const o of [BY_FOR, BY_DIFF]) expect(validateCascade(o, { module: m, cfg, stageKind: "league", crossGroup: false }), o.join(",")).toEqual([]);
+    expect(BY_FOR).not.toEqual(BY_DIFF);
+  });
+
+  it("I1 an ad-hoc match played on a pending league, then a division order save: the stage is pinned first with the order it ranked by, its standings rows are byte-identical, and stagesKeptPinned names it", async () => {
+    const t = await adHocTable();
+    await genericResult(t.auth, t.stageId, t.E1, t.E2, 9, 8);
+    await genericResult(t.auth, t.stageId, t.E3, t.E1, 3, 0);
+    await genericResult(t.auth, t.stageId, t.E2, t.E3, 1, 0);
+    expect(await stageRules(t.stageId), "premise: played, still pending, no pin").toMatchObject({ status: "pending", pin: null });
+    expect((await sql.begin((tx) => lockedStageIdsAmong(tx, [t.stageId]))).has(t.stageId), "premise: the lock says it started").toBe(true);
+    const before = await recomputeStandings(t.auth.orgId, t.stageId);
+    expect(order(before), "premise: ranked by the division's points-for order").toEqual([t.E2, t.E1, t.E3]);
+
+    const out = await patchDivision(t.auth, t.divisionId, { tiebreakers: BY_DIFF });
+    expect(out.refused).toEqual([]);
+    expect(out.tiebreakers, "the order landed").toEqual(BY_DIFF);
+    expect(out.stagesKeptPinned).toEqual([{ stageId: t.stageId, name: "League" }]);
+    const pin = await loadTableRules(sql, t.stageId);
+    expect(pin.pinnedAt, "pinned by the save").not.toBeNull();
+    expect(pin.tiebreakers, "with the order it ranked by").toEqual(BY_FOR);
+    expect(pin.sources.tiebreakers, "taken from the division layer it read").toBe("division");
+    const after = await recomputeStandings(t.auth.orgId, t.stageId);
+    expect(JSON.stringify(after), "the standings rows are byte-identical").toBe(JSON.stringify(before));
+    // The counterfactual the pin prevents: this table under BY_DIFF is E3, E2, E1 (the rulebook arithmetic above).
+    expect(order(after)).not.toEqual([t.E3, t.E2, t.E1]);
+
+    // Second call: the same order again is no change (nothing asked, nothing kept); the other order is, and the pin holds.
+    const again = await patchDivision(t.auth, t.divisionId, { tiebreakers: BY_DIFF });
+    expect(again.stagesKeptPinned, "a re-sent order moves nothing").toEqual([]);
+    const back = await patchDivision(t.auth, t.divisionId, { tiebreakers: BY_FOR });
+    expect(back.stagesKeptPinned, "a pinned stage the order moves is named").toEqual([{ stageId: t.stageId, name: "League" }]);
+    expect((await loadTableRules(sql, t.stageId)).pinnedAt, "the pin's date is the first save's").toBe(pin.pinnedAt);
+  }, 120_000);
+
+  it("I1 a division POINTS save on the same shape lands (no DIVISION_TABLE_RULES_LOCKED): the stage keeps the points it was paid by, an unplayed pending stage takes the new ones", async () => {
+    const t = await adHocTable();
+    await genericResult(t.auth, t.stageId, t.E1, t.E2, 2, 0);
+    const [pool] = await createStages(t.auth, t.divisionId, { seq: 2, kind: "league", name: "Pool B", config: {}, progression: null });
+    const before = await recomputeStandings(t.auth.orgId, t.stageId);
+    expect(before.find((r) => r.entrantId === t.E1)?.points, "premise: a win pays GENERIC_CONFIG's 3").toBe(3);
+    const cfg = (await getDivision(t.auth, t.divisionId)).config as { points: Record<string, number> };
+    const out = await patchDivision(t.auth, t.divisionId, { config: { ...cfg, points: { ...cfg.points, w: 5 } } });
+    expect(out.refused, "the points landed").toEqual([]);
+    expect(((await getDivision(t.auth, t.divisionId)).config as { points: { w: number } }).points.w).toBe(5);
+    expect(out.stagesKeptPinned).toEqual([{ stageId: t.stageId, name: "League" }]);
+    const after = await recomputeStandings(t.auth.orgId, t.stageId);
+    expect(JSON.stringify(after), "the played table is byte-identical").toBe(JSON.stringify(before));
+    expect((await loadTableRules(sql, pool!.id)).points.win.regulation, "the unplayed stage follows the division").toBe(5);
+    expect((await stageRules(pool!.id)).pin, "and is not pinned").toBeNull();
+  }, 120_000);
+
+  it("I1 empty case: an ad-hoc match nobody has played does not start the stage; the order save pins nothing and the stage reads the new order", async () => {
+    const t = await adHocTable();
+    expect((await sql.begin((tx) => lockedStageIdsAmong(tx, [t.stageId]))).size, "premise: not started").toBe(0);
+    const out = await patchDivision(t.auth, t.divisionId, { tiebreakers: BY_DIFF });
+    expect(out.stagesKeptPinned).toEqual([]);
+    expect((await stageRules(t.stageId)).pin).toBeNull();
+    expect((await loadTableRules(sql, t.stageId)).tiebreakers).toEqual(BY_DIFF);
+  }, 120_000);
+
+  it("I1 empty case two: a started stage the save does not move (it pays its OWN points) is not pinned by a division points save - nothing it reads moved, so nothing is written to it; the order save that does reach it pins it", async () => {
+    const t = await adHocTable();
+    const own = PointsRule.parse({ win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] });
+    await putStageRules(t.auth, t.stageId, { points: own }); // pending and unplayed: its own points land
+    await genericResult(t.auth, t.stageId, t.E1, t.E2, 2, 0);
+    expect((await sql.begin((tx) => lockedStageIdsAmong(tx, [t.stageId]))).has(t.stageId), "premise: the lock says it started").toBe(true);
+    expect(await stageRules(t.stageId), "premise: still pending, no pin").toMatchObject({ status: "pending", pin: null });
+    const cfg = (await getDivision(t.auth, t.divisionId)).config as { points: Record<string, number> };
+    const out = await patchDivision(t.auth, t.divisionId, { config: { ...cfg, points: { ...cfg.points, w: 5 } } });
+    expect(out.refused, "the division's points landed").toEqual([]);
+    expect(out.stagesKeptPinned, "nothing the stage reads moved: nothing kept").toEqual([]);
+    expect((await stageRules(t.stageId)).pin, "and nothing pinned").toBeNull();
+    expect((await loadTableRules(sql, t.stageId)).points.win.regulation, "it still pays its own win").toBe(4);
+    // The positive pair: it inherits the division's ORDER, so an order save reaches it, and that save pins it.
+    const order = await patchDivision(t.auth, t.divisionId, { tiebreakers: BY_DIFF });
+    expect(order.stagesKeptPinned).toEqual([{ stageId: t.stageId, name: "League" }]);
+    expect((await loadTableRules(sql, t.stageId)).tiebreakers, "pinned with the order it ranked by").toEqual(BY_FOR);
+  }, 120_000);
+
+  it("I1 after a void the stage is still started: the save still pins it", async () => {
+    const t = await adHocTable();
+    const f = await between(t.stageId, t.E1, t.E2);
+    const started = await appendEvent(t.auth.orgId, f.id, 0, { type: "core.start", payload: {} });
+    await appendEvent(t.auth.orgId, f.id, 1, { type: "core.void", payload: {}, voids: started.event.id });
+    const out = await patchDivision(t.auth, t.divisionId, { tiebreakers: BY_DIFF });
+    expect(out.stagesKeptPinned).toEqual([{ stageId: t.stageId, name: "League" }]);
+    expect((await loadTableRules(sql, t.stageId)).tiebreakers, "pinned with the order it read").toEqual(BY_FOR);
+  }, 120_000);
+
+  it("I1 a save refused after the pin rolls the pin back with it (one transaction)", async () => {
+    const t = await adHocTable();
+    await genericResult(t.auth, t.stageId, t.E1, t.E2, 1, 0);
+    // nrr is cricket's: refused for generic ('sport') AFTER the reached stage was pinned in the same transaction.
+    const bad: TiebreakerKey[] = ["points", "nrr", "lots"];
+    const rows = await tableRulesRowsOf(sql, { divisionId: t.divisionId });
+    const reached = startedStagesToPin(resolveLatestModule("generic"), rows, await sql.begin((tx) => lockedStageIdsAmong(tx, [t.stageId])), {
+      config: rows[0]!.row.divisionConfig, tiebreakers: bad,
+    });
+    expect(reached.map((s) => s.row.stageId), "premise: the save reaches the stage, so it pins it before it is refused").toEqual([t.stageId]);
+    await expect(patchDivision(t.auth, t.divisionId, { tiebreakers: bad })).rejects.toMatchObject({ status: 422, code: "TIEBREAK_KEY_INVALID" });
+    expect((await stageRules(t.stageId)).pin, "the pin rolled back with the refused save").toBeNull();
+    expect((await getDivision(t.auth, t.divisionId)).tiebreakers, "and nothing else was written").toEqual(BY_FOR);
+  }, 120_000);
+
+  it("I1 another sport (football): an ad-hoc match started, points and awardScore saved together — points land and the stage is pinned with the old ones, awardScore keeps W2c's lock", async () => {
+    const s = await tableScene({ sport: "football", variant: "11-a-side", entrants: 2 });
+    const stageId = s.stageIds[0]!;
+    const [E1, E2] = s.entrants as [string, string];
+    const { fixture_id } = await addFixture(s.auth, stageId, { home_entrant_id: E1, away_entrant_id: E2 });
+    await startDivision(s.auth, s.divisionId);
+    await start(s.auth, fixture_id);
+    const fb = resolveLatestModule("football");
+    const before = (await getDivision(s.auth, s.divisionId)).config as { awardScore: { goals: number }; points: { win: number } };
+    const paid = PointsRule.parse(fb.tablePointsRule(fb.configSchema.parse(before), "league"));
+    const out = await patchDivision(s.auth, s.divisionId, {
+      name: "Renamed",
+      config: { ...before, awardScore: { goals: before.awardScore.goals + 2 }, points: { ...before.points, win: before.points.win + 1 } } as never,
+    });
+    expect(out.refused).toEqual([{ field: "awardScore", code: "DIVISION_TABLE_RULES_LOCKED", stageId, stageName: "League" }]);
+    expect((out.config as typeof before).points.win, "points landed").toBe(before.points.win + 1);
+    expect(out.stagesKeptPinned).toEqual([{ stageId, name: "League" }]);
+    expect((await loadTableRules(sql, stageId)).points, "pinned with the points it was paid by").toEqual(paid);
+  }, 120_000);
+
+  it("I1 a pre-W2d row (active, no pin: the post-deploy pin's input, which no product path writes, so it is shaped here) is never pinned by a save, and keeps W2c's points lock", async () => {
+    const r = await rig("generic", "score");
+    await start(r.auth, r.fixtureId);
+    await sql`update stages set table_rules_pinned = null, table_rules_pinned_at = null where id = ${r.s1.id}`;
+    expect(await stageRules(r.s1.id), "premise: the legacy shape").toMatchObject({ status: "active", pin: null });
+    const order = await patchDivision(r.auth, r.divisionId, { tiebreakers: GEN_A });
+    expect(order.stagesKeptPinned, "not pinned, so not kept").toEqual([]);
+    expect((await stageRules(r.s1.id)).pin, "post-deploy-pin.ts converts the row before it pins it").toBeNull();
+    const cfg = (await getDivision(r.auth, r.divisionId)).config as { points: Record<string, number> };
+    await expect(patchDivision(r.auth, r.divisionId, { config: { ...cfg, points: { ...cfg.points, w: 2 } } })).rejects.toMatchObject({
+      code: "DIVISION_TABLE_RULES_LOCKED", extra: { refused: [{ field: "points", stageName: "Pool A" }] },
+    });
+  }, 120_000);
 });

@@ -8,7 +8,8 @@
 // constant), and whether the rule applies to a given forfeit is `isUnplayedForfeit` (competition/points.ts: the table's
 // authority) - never the kernel's own predicate read back.
 import { describe, expect, it } from "vitest";
-import { applyPointsRule, forfeitAwardOffer, isUnplayedForfeit, pointsRuleAwardReachesTable, PointsRule } from "../competition/points.ts";
+import { decidedInFor } from "../competition/decided-in.ts";
+import { forfeitAwardOffer, isUnplayedForfeit, legacyPointsRule, payout, pointsRuleAwardReachesTable, type PointsRule } from "../competition/points.ts";
 import { foldMatchWithStoppage, outcomeOf, playRecorded, summaryOf, unplayedForfeitEvent, type EventEnvelope } from "../core/events.ts";
 import { FORFEIT_REASONS, type ForfeitReason } from "../core/types.ts";
 import { builtinModules } from "../sports/index.ts";
@@ -74,7 +75,7 @@ function ruleAwardFor(m: AnySportModule): readonly [number, number] {
 }
 
 const ruleOf = (award: readonly [number, number]): PointsRule =>
-  PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [...award] } });
+  legacyPointsRule({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [...award] } });
 
 describe("X-WO-1 B: the registry partition (anti-vacuity)", () => {
   it("states how many sports the stage rule's award reaches, and how many it does not; neither side is empty", () => {
@@ -110,10 +111,10 @@ describe("X-WO-1 B: an unplayed walkover under a stage award reads the RULE's nu
         const [winnerSide, offenderSide] = offender === A ? [credit.perSide[0], credit.perSide[1]] : [credit.perSide[1], credit.perSide[0]];
         expect([winnerSide[keys.for], winnerSide[keys.against], winnerSide[keys.diff]], `${m.key} winner credit`).toEqual([w, l, w - l]);
         expect([offenderSide[keys.for], offenderSide[keys.against], offenderSide[keys.diff]], `${m.key} offender credit`).toEqual([l, w, l - w]);
-        // The table: standingsDelta over the offered state equals applyPointsRule over the un-offered one (the two authorities).
+        // The table: standingsDelta over the offered state equals `payout` over the un-offered one (the two authorities).
         const stage = { kind: "league" } as never;
         const viaState = m.standingsDelta(offered.outcome!, cfg, stage, offered.folded.state);
-        const viaRule = applyPointsRule(base.outcome!, m.standingsDelta(base.outcome!, cfg, stage, base.folded.state), ruleOf(award), false, m.awardScoreKeys);
+        const viaRule = payout(base.outcome!, decidedInFor(m, base.outcome), m.standingsDelta(base.outcome!, cfg, stage, base.folded.state), false, ruleOf(award), m.awardScoreKeys, undefined);
         for (const side of [0, 1] as const) {
           for (const key of [keys.for, keys.against, keys.diff]) {
             expect(viaState[side].metrics[key], `${m.key} side ${side} ${key}: the state's credit and the rule's overlay agree`).toBe(viaRule[side].metrics[key]);
@@ -143,7 +144,7 @@ describe("X-WO-1 B: an unplayed walkover under a stage award reads the RULE's nu
         // The table: the state's credit and the rule's overlay agree on nil-nil (the two authorities).
         const stage = { kind: "league" } as never;
         const viaState = m.standingsDelta(nil.outcome!, cfg, stage, nil.folded.state);
-        const viaRule = applyPointsRule(base.outcome!, m.standingsDelta(base.outcome!, cfg, stage, base.folded.state), ruleOf([0, 0]), false, m.awardScoreKeys);
+        const viaRule = payout(base.outcome!, decidedInFor(m, base.outcome), m.standingsDelta(base.outcome!, cfg, stage, base.folded.state), false, ruleOf([0, 0]), m.awardScoreKeys, undefined);
         for (const side of [0, 1] as const) {
           for (const key of [keys.for, keys.against, keys.diff]) {
             expect(viaState[side].metrics[key], `${m.key} side ${side} ${key}: the state's credit and the rule's overlay agree on nil-nil`).toBe(viaRule[side].metrics[key]);
@@ -366,10 +367,10 @@ describe("X-WO-1 B: the offer a stage rule makes to a fold (`forfeitAwardOffer`)
     const base = { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] };
     expect(forfeitAwardOffer(null, football)).toBeUndefined();
     expect(forfeitAwardOffer(undefined, football)).toBeUndefined();
-    expect(forfeitAwardOffer(PointsRule.parse(base), football)).toBeUndefined();
-    expect(forfeitAwardOffer(PointsRule.parse({ ...base, forfeit: { winnerPoints: 2, loserPoints: 0 } }), football)).toBeUndefined();
+    expect(forfeitAwardOffer(legacyPointsRule(base), football)).toBeUndefined();
+    expect(forfeitAwardOffer(legacyPointsRule({ ...base, forfeit: { winnerPoints: 2, loserPoints: 0 } }), football)).toBeUndefined();
     // A 0-0 award is a score like any other (Task 9 fix round 2): it IS offered.
-    expect(forfeitAwardOffer(PointsRule.parse({ ...base, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [0, 0] } }), football)).toEqual([0, 0]);
+    expect(forfeitAwardOffer(legacyPointsRule({ ...base, forfeit: { winnerPoints: 2, loserPoints: 0, awardScore: [0, 0] } }), football)).toEqual([0, 0]);
   });
 
   it("the offer is a copy: the rule's own tuple is never handed to a state", () => {

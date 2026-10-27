@@ -183,9 +183,11 @@ describe.skipIf(!HAS_DB)("X-SR-7 before kickoff, the positive pair: a save that 
     const [{ rules }] = await sql<{ rules: Record<string, unknown> | null }[]>`select config -> 'rules' as rules from stages where id = ${b.stageId}`;
     const saves: readonly [string, () => Promise<unknown>][] = [
       ["a rename", () => patchDivision(b.auth, b.divisionId, { name: "Renamed " + b.divisionId.slice(0, 6) })],
-      ["a tiebreakers change", () => patchDivision(b.auth, b.divisionId, { tiebreakers: ["head_to_head"] as never })],
+      // W2d Task 10: a division order is `validateCascade`d on the write path (`head_to_head` is no tie-break key, and a
+      // badminton order opens on `wins` and closes on `lots`), so the change is a valid badminton order.
+      ["a tiebreakers change", () => patchDivision(b.auth, b.divisionId, { tiebreakers: ["wins", "set_diff", "point_diff", "lots"] })],
       ["the stored config re-sent (a format save that changes nothing)", () => patchDivision(b.auth, b.divisionId, { config } as never)],
-      ["a stage's points", () => putStageRules(b.auth, b.stageId, { points: { base: { win: 2, draw: 1, loss: 0 } } })],
+      ["a stage's points", () => putStageRules(b.auth, b.stageId, { points: { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" } })],
       ["the stage's stored rules re-sent", () => putStageRules(b.auth, b.stageId, { rules: rules ?? null })],
     ];
     let checked = 0;

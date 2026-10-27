@@ -30,7 +30,7 @@ The timer on the pad is a hint only: tap **Release** when the clock says the sus
 
 ## Standings
 
-FIH outdoor pays 3/1/0 with draws standing. On shoot-out formats a shoot-out win is worth 2 and a shoot-out loss 1. Ties break on goal difference, then goals for, then head-to-head.
+FIH outdoor pays 3/1/0 with draws standing. On shoot-out formats the table counts a shoot-out as a draw for both sides plus a bonus point for the team that wins it — with a draw worth 1, a shoot-out win is worth 2 and a shoot-out loss 1, and neither side is credited a win. Ties break on goal difference, then goals for, then head-to-head.
 
 ## Common questions
 

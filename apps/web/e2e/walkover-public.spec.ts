@@ -1346,7 +1346,7 @@ async function publicPoolWithAward(r: APIRequestContext) {
   const stage = await apiJson<{ id: string }>(r, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool" });
   expect(stage.status, JSON.stringify(stage.error)).toBe(201);
   const put = await apiJson(r, `/api/v1/stages/${stage.data!.id}/rules`, "PUT", {
-    points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: AWARD } },
+    points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: AWARD } },
   });
   expect(put.status, JSON.stringify(put.error)).toBe(200);
   const gen = await apiJson<{ fixtures: { id: string }[] }>(r, `/api/v1/stages/${stage.data!.id}/generate`, "POST");

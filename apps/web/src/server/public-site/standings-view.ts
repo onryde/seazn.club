@@ -31,9 +31,10 @@ import {
   type RatioKey,
   type StandingsRow,
 } from "@seazn/engine/competition";
-import type { TiebreakerKey } from "@seazn/engine/sport";
+import type { PartialScheduleKey, TiebreakerKey } from "@seazn/engine/sport";
 import { standingsColumns, formatMetric, type MetricSpecLike } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
+import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { TableViewT } from "./competition-hub-schema";
 import type { QualificationView } from "./qualification-view";
 
@@ -187,10 +188,13 @@ export function columnHeader(
  *  same shape `packages/engine/src/competition/display.test.ts` uses to pin
  *  `DERIVED_METRICS`. Exported for that test.
  *
- *  Typed `TKey`, not `DictionaryKey`, because none of these exist in the
- *  dictionaries yet (Task 6 owns them) and `DictionaryKey` is generated FROM
- *  them — tightening it today would red tsc. Worth tightening once Task 6
- *  lands: that is the only thing that would make a typo here a build error. */
+ *  Read as `Record<string, TKey>` (callers index it by a trace's raw key), but
+ *  the literal `satisfies Record<TiebreakerKey, DictionaryKey>` (W2d merge-fix
+ *  review m9): every engine key must be here, nothing else may be, and every
+ *  value must be a generated dictionary key — a missing key, a stray key or a
+ *  typo is a tsc error, not only a red sweep. The sweeps read
+ *  `defaultOrderOf(m)` alone, so a key reachable only through a preset, a stage
+ *  kind or a cfg was covered by luck before this. */
 export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
   points: "table.tieBreak.points",
   wins: "table.tieBreak.wins",
@@ -202,16 +206,29 @@ export const TIE_BREAK_MSG_KEYS: Readonly<Record<string, TKey>> = {
   game_ratio: "table.tieBreak.game_ratio",
   board_ratio: "table.tieBreak.board_ratio",
   point_ratio: "table.tieBreak.point_ratio",
+  set_diff: "table.tieBreak.set_diff",
+  point_diff: "table.tieBreak.point_diff",
+  matches_played: "table.tieBreak.matches_played",
+  field_goals: "table.tieBreak.field_goals",
   h2h_points: "table.tieBreak.h2h_points",
   h2h_diff: "table.tieBreak.h2h_diff",
   h2h_for: "table.tieBreak.h2h_for",
+  h2h_two: "table.tieBreak.h2h_two",
+  h2h_wins: "table.tieBreak.h2h_wins",
+  h2h_set_ratio: "table.tieBreak.h2h_set_ratio",
+  h2h_point_ratio: "table.tieBreak.h2h_point_ratio",
+  h2h_reapply: "table.tieBreak.h2h_reapply",
+  h2h_exclusion: "table.tieBreak.h2h_exclusion",
   direct: "table.tieBreak.direct",
   buchholz: "table.tieBreak.buchholz",
   buchholz_cut1: "table.tieBreak.buchholz_cut1",
   sberger: "table.tieBreak.sberger",
   seed: "table.tieBreak.seed",
   lots: "table.tieBreak.lots",
-};
+  // W2d T12 (IH-TB-2): a trace can also name a step of a sport's partial-schedule order — IIHF's internal
+  // `fewest_played`, which no stage order holds — so the map covers every PartialScheduleKey (TiebreakerKey + it).
+  fewest_played: "table.tieBreak.fewest_played",
+} satisfies Record<PartialScheduleKey, DictionaryKey>;
 
 /** Sort key for a row the ranking pass has not ranked (a division with no
  *  played fixtures yet, or a row excluded from the cascade). Unranked rows go

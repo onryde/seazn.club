@@ -1,0 +1,569 @@
+[
+ {
+  "id": "t6-empty-order-not-refused",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "  if (cascade.length === 0) return [{ index: -1, key: null, reason: \"empty\" }];",
+  "replace": "  if (cascade.length === -1) return [];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 \\[\\] is refused"
+   }
+  ]
+ },
+ {
+  "id": "t6-every-duplicate-allowed",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    if (seen.has(key) && key !== \"h2h_two\") out.push({ index, key, reason: \"duplicate\" });",
+  "replace": "    if (seen.has(key) && key === \"never\") out.push({ index, key, reason: \"duplicate\" });",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 OC3 h2h_two may appear twice"
+   }
+  ]
+ },
+ {
+  "id": "t6-h2h-two-not-exempt",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    if (seen.has(key) && key !== \"h2h_two\") out.push({ index, key, reason: \"duplicate\" });",
+  "replace": "    if (seen.has(key)) out.push({ index, key, reason: \"duplicate\" });",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 OC3 h2h_two may appear twice"
+   }
+  ]
+ },
+ {
+  "id": "t6-swiss-exemption-applies-to-every-kind",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "  if (ctx.stageKind !== \"swiss\") {",
+  "replace": "  if (ctx.stageKind === \"never\") {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 a non-Swiss order must start with primaryTableKey"
+   }
+  ]
+ },
+ {
+  "id": "t6-swiss-not-exempt",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "  if (ctx.stageKind !== \"swiss\") {",
+  "replace": "  if (ctx.stageKind !== \"never\") {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 OC1 a Swiss order"
+   }
+  ]
+ },
+ {
+  "id": "t6-first-check-deleted",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    if (cascade[0] !== primary) out.push({ index: 0, key: cascade[0] as TiebreakerKey, reason: \"first\", need: primary });",
+  "replace": "    void primary;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 a non-Swiss order must start with primaryTableKey"
+   }
+  ]
+ },
+ {
+  "id": "t6-first-reads-a-constant",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    const primary = ctx.module.primaryTableKey;",
+  "replace": "    const primary = \"points\";",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 a non-Swiss order must start with primaryTableKey"
+   }
+  ]
+ },
+ {
+  "id": "t6-last-check-deleted",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    if (cascade[last] !== \"lots\") out.push({ index: last, key: cascade[last] as TiebreakerKey, reason: \"last\", need: \"lots\" });",
+  "replace": "    void last;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 a non-Swiss order must end with exactly one lots"
+   }
+  ]
+ },
+ {
+  "id": "t6-lots-midway-allowed",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "      if (key === \"lots\" && index !== last) out.push({ index, key, reason: \"last\", need: \"lots\" });",
+  "replace": "      void index;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 a non-Swiss order must end with exactly one lots"
+   }
+  ]
+ },
+ {
+  "id": "t6-sport-ledger-skipped",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    if (missing.length > 0) {",
+  "replace": "    if (missing.length > 99) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-5 nrr outside cricket"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade.test.ts"
+    ],
+    "name": "refuses nrr when the NRR ledger is absent"
+   }
+  ]
+ },
+ {
+  "id": "t6-ledger-needs-every-alias",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    const missing = (rule.ledger ?? []).filter((aliases) => !aliases.some((metric) => recorded.has(metric)));",
+  "replace": "    const missing = (rule.ledger ?? []).filter((aliases) => !aliases.every((metric) => recorded.has(metric)));",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-5 every metric-backed key"
+   }
+  ]
+ },
+ {
+  "id": "t6-fair-play-cfg-check-skipped",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    } else if (rule.fairPlay === true && !tracksFairPlay(ctx.module, ctx.cfg)) {",
+  "replace": "    } else if (rule.fairPlay === true && !tracksFairPlay(ctx.module, ctx.cfg) && index < 0) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "FB-TB-4 fair_play"
+   }
+  ]
+ },
+ {
+  "id": "t6-fair-play-cfg-read-unparsed",
+  "file": "packages/engine/src/sport/module.ts",
+  "find": "  const read: unknown = parsed.success ? parsed.data : cfg;",
+  "replace": "  const read: unknown = cfg;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "FB-TB-4 fair_play"
+   }
+  ]
+ },
+ {
+  "id": "t6-stage-format-skipped",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    if (KEY_RULES[key].swissOnly === true && ctx.stageKind !== \"swiss\") out.push({ index, key, reason: \"stage_format\", need: \"swiss\" });",
+  "replace": "    if (KEY_RULES[key].swissOnly === true && ctx.stageKind === \"never\") out.push({ index, key, reason: \"stage_format\", need: \"swiss\" });",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-5 buchholz/buchholz_cut1 outside swiss"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade.test.ts"
+    ],
+    "name": "refuses buchholz unless the stage is Swiss"
+   }
+  ]
+ },
+ {
+  "id": "t6-cross-group-refusal-skipped",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "  if (ctx.crossGroup) {",
+  "replace": "  if (ctx.crossGroup && ctx.stageKind === \"never\") {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup:true"
+   }
+  ]
+ },
+ {
+  "id": "t6-cross-group-always-on",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "  if (ctx.crossGroup) {",
+  "replace": "  if (ctx.crossGroup || ctx.stageKind !== \"never\") {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup:true"
+   }
+  ]
+ },
+ {
+  "id": "t6-modifier-position-skipped",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    if (before === undefined || KEY_RULES[before].block !== true) out.push({ index, key, reason: \"position\" });",
+  "replace": "    if (before === null) out.push({ index, key, reason: \"position\" });",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "h2h_reapply/h2h_exclusion not directly after"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "rule 5 agrees with the ranker"
+   }
+  ]
+ },
+ {
+  "id": "t6-modifier-after-any-head-to-head-step",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    if (before === undefined || KEY_RULES[before].block !== true) out.push({ index, key, reason: \"position\" });",
+  "replace": "    if (before === undefined || KEY_RULES[before].headToHead !== true) out.push({ index, key, reason: \"position\" });",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "h2h_reapply/h2h_exclusion not directly after"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "rule 5 agrees with the ranker"
+   }
+  ]
+ },
+ {
+  "id": "t6-unknown-key-not-refused",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "    if (!Object.hasOwn(KEY_RULES, key)) {",
+  "replace": "    if (!Object.hasOwn(KEY_RULES, key) && index < 0) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "rule 6: an unknown key is refused by name"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tiebreakers.gaps.test.ts"
+    ],
+    "name": "validateCascade refuses it by name"
+   }
+  ]
+ },
+ {
+  "id": "t6-offerable-refusals-not-moved",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "refusalId(refusal, refusal.index >= position ? refusal.index + 1 : refusal.index)),",
+  "replace": "refusalId(refusal, refusal.index)),",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "offerableKeys complement"
+   }
+  ]
+ },
+ {
+  "id": "t6-offerable-moves-only-past-the-step",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "refusalId(refusal, refusal.index >= position ? refusal.index + 1 : refusal.index)),",
+  "replace": "refusalId(refusal, refusal.index > position ? refusal.index + 1 : refusal.index)),",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "offerableKeys complement"
+   }
+  ]
+ },
+ {
+  "id": "t6-offerable-position-unguarded",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "  if (!Number.isInteger(position) || position < 0 || position > cascade.length) {",
+  "replace": "  if (position < -1) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "offerableKeys refuses a position outside the order"
+   }
+  ]
+ },
+ {
+  "id": "t6-badminton-primary-points",
+  "file": "packages/engine/src/sports/setbased/badminton.ts",
+  "find": "primaryTableKey: \"wins\",",
+  "replace": "primaryTableKey: \"points\",",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 D11 primaryTableKey"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 a non-Swiss order must start with primaryTableKey"
+   }
+  ]
+ },
+ {
+  "id": "t6-tabletennis-primary-wins",
+  "file": "packages/engine/src/sports/setbased/tabletennis.ts",
+  "find": "primaryTableKey: \"points\",",
+  "replace": "primaryTableKey: \"wins\",",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 D11 primaryTableKey"
+   }
+  ]
+ },
+ {
+  "id": "t6-setbased-kernel-drops-the-preset-primary",
+  "file": "packages/engine/src/sports/setbased/kernel.ts",
+  "find": "    primaryTableKey: preset.primaryTableKey,",
+  "replace": "    primaryTableKey: \"points\" as const,",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 D11 primaryTableKey"
+   }
+  ]
+ },
+ {
+  "id": "t6-nested-kernel-drops-the-preset-primary",
+  "file": "packages/engine/src/sports/nested/kernel.ts",
+  "find": "    primaryTableKey: preset.primaryTableKey,",
+  "replace": "    primaryTableKey: \"points\" as const,",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 D11 primaryTableKey"
+   }
+  ]
+ },
+ {
+  "id": "t6-period-kernel-drops-the-preset-primary",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "    primaryTableKey: preset.primaryTableKey,",
+  "replace": "    primaryTableKey: \"wins\" as const,",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "X-TB-3 D11 primaryTableKey"
+   }
+  ]
+ },
+ {
+  "id": "t6-fair-play-read-object-check-true",
+  "file": "packages/engine/src/sport/module.ts",
+  "find": "  return typeof read === \"object\" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;",
+  "replace": "  return true && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "FB-TB-4 fair_play"
+   }
+  ]
+ },
+ {
+  "id": "t6-fair-play-read-object-guard-true",
+  "file": "packages/engine/src/sport/module.ts",
+  "find": "  return typeof read === \"object\" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;",
+  "replace": "  return true && (read as { fairPlay?: unknown }).fairPlay === true;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "FB-TB-4 fair_play"
+   }
+  ]
+ },
+ {
+  "id": "t6-fair-play-read-object-or-not-null",
+  "file": "packages/engine/src/sport/module.ts",
+  "find": "  return typeof read === \"object\" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;",
+  "replace": "  return (typeof read === \"object\" || read !== null) && (read as { fairPlay?: unknown }).fairPlay === true;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "FB-TB-4 fair_play"
+   }
+  ]
+ },
+ {
+  "id": "t6-fair-play-read-null-check-true",
+  "file": "packages/engine/src/sport/module.ts",
+  "find": "  return typeof read === \"object\" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;",
+  "replace": "  return typeof read === \"object\" && true && (read as { fairPlay?: unknown }).fairPlay === true;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "FB-TB-4 fair_play"
+   }
+  ]
+ },
+ {
+  "id": "t6-unknown-key-position-zero-based",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "at position ${index + 1} is not a tie-break key",
+  "replace": "at position ${index - 1} is not a tie-break key",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "rule 6: an unknown key is refused by name"
+   }
+  ]
+ },
+ {
+  "id": "t6-offerable-position-error-data-dropped",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "is outside the order (0..${cascade.length})`, { position });",
+  "replace": "is outside the order (0..${cascade.length})`, {});",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "offerableKeys refuses a position outside the order"
+   }
+  ]
+ },
+ {
+  "id": "t6-offerable-order-reversed",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "const KEYS = Object.keys(KEY_RULES) as TiebreakerKey[];",
+  "replace": "const KEYS = (Object.keys(KEY_RULES) as TiebreakerKey[]).reverse();",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "offerableKeys complement"
+   }
+  ]
+ },
+ {
+  "id": "t6-refusals-sorted-by-index",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "  return out;\n}",
+  "replace": "  return out.sort((a, b) => a.index - b.index);\n}",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cascade-rules.test.ts"
+    ],
+    "name": "refusals come in the spec"
+   }
+  ]
+ }
+]

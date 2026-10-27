@@ -46,6 +46,7 @@ import nl from "@/dictionaries/nl/public.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { TableView } from "../competition-hub-schema";
+import { defaultOrderOf } from "@seazn/engine/testkit";
 import {
   buildTableView,
   columnHeader,
@@ -250,7 +251,7 @@ describe("buildTableView", () => {
     // or, for a key the engine has no label for either (`game_ratio`, which
     // tennis ranks on), the raw key. A module that starts ranking on a new key
     // reds here until the key is added with its four translations.
-    const defaults = new Set(builtinModules.flatMap((m) => [...m.defaultTiebreakers]));
+    const defaults = new Set(builtinModules.flatMap((m) => [...defaultOrderOf(m)]));
     expect(defaults.size, "premise: the engine declares default cascades to check").toBeGreaterThan(5);
     expect(defaults.has("game_ratio"), "premise: tennis ranks on game_ratio by default").toBe(true);
     const unregistered = [...defaults].filter((key) => !Object.hasOwn(TIE_BREAK_MSG_KEYS, key));
@@ -362,6 +363,19 @@ describe("buildTableView", () => {
         `table.tieBreak:{"with":"Alpha","rule":"${dictKey}"}`,
       );
     }
+  });
+
+  it("X-TB-8 every key a sport's partial-schedule order can trace is localised — IIHF's internal fewest_played too (W2d T12)", () => {
+    // The trace names the step that split a row; a partial-schedule order (IH-TB-2) splits by keys no stage order holds
+    // (`fewest_played`). Read off the engine's declarations, counted: an unregistered one would print its raw key.
+    const keys = new Set(builtinModules.flatMap((m) => [...(m.partialScheduleOrder ?? [])]));
+    expect(keys.has("fewest_played"), "premise: ice hockey declares fewest_played (RBG:349-350)").toBe(true);
+    expect([...keys].filter((key) => !Object.hasOwn(TIE_BREAK_MSG_KEYS, key))).toEqual([]);
+    const v = buildTableView({
+      ...base,
+      rows: [row("a", { rank: 1 }), row("b", { rank: 2, tieBreak: { key: "fewest_played", with: ["a"] } })],
+    });
+    expect(v.rows[1]!.tieBreakText).toBe('table.tieBreak:{"with":"Alpha","rule":"table.tieBreak.fewest_played"}');
   });
 
   it("a self-labelling engine key is still localised (the trap that forbids deriving the set from tieBreakLabel)", () => {

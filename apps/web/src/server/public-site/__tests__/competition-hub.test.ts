@@ -108,6 +108,7 @@ import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
 import { resolveLatestModule } from "@/server/engine-db";
+import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
 import { twoSidedBracket } from "@seazn/engine/scheduling/bracket-layout";
 import { registry, type AnySportModule } from "@seazn/engine/sport";
 import { competitionTag, divisionTag, orgTag } from "../cache-tags";
@@ -686,6 +687,8 @@ const STAGE: PublicStage = {
   swiss_rounds: null,
   points_rule: null,
   has_rank_overrides: false,
+  // W2d Task 9: the rules the one loader serves for this stage (its order, its points) — the division's live layers
+  table_rules: unpinnedRulesDoc({ module: resolveLatestModule("football"), kind: "league", divisionConfig: DIV.config }),
 };
 
 const ENTRANTS: PublicEntrant[] = [
@@ -2881,8 +2884,13 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
     // what the reader returned; the hub reads the SHELL's row for the module.
     const division: PublicDivision = { ...DIV, module_version: moduleVersion, tiebreakers: ["points", "diff", "for"] };
     getPublicCompetitionMock.mockResolvedValue({ org: ORG, competition: COMP, divisions: [division], liveNow: [] });
+    // The stage's rules as the loader serves them under THIS division: its pinned module and its own order.
+    const stage: PublicStage = {
+      ...CUT_STAGE,
+      table_rules: unpinnedRulesDoc({ module: registry.get("football", moduleVersion), kind: "league", divisionConfig: DIV.config, divisionTiebreakers: division.tiebreakers }),
+    };
     getPublicDivisionMock.mockResolvedValue(
-      divisionDetail({ division, stages: [CUT_STAGE], fixtures, standings, entrants: [...ENTRANTS, E4] }),
+      divisionDetail({ division, stages: [stage], fixtures, standings, entrants: [...ENTRANTS, E4] }),
     );
   }
 
@@ -2969,7 +2977,14 @@ describe("loadCompetitionHub — standings qualification status (spec 2026-09-22
     // blank — never the right pool's line.
     const E5: PublicEntrant = { ...ENTRANTS[2]!, id: "e5", display_name: "Silver Swans", seed: 5 };
     const E6: PublicEntrant = { ...ENTRANTS[2]!, id: "e6", display_name: "Bronze Bears", seed: 6 };
-    const GROUP: PublicStage = { ...STAGE, kind: "group", qualify_count: 1, qualify_per_group: true, next_stage_name: "Finals" };
+    const GROUP: PublicStage = {
+      ...STAGE,
+      kind: "group",
+      qualify_count: 1,
+      qualify_per_group: true,
+      next_stage_name: "Finals",
+      table_rules: unpinnedRulesDoc({ module: resolveLatestModule("football"), kind: "group", divisionConfig: DIV.config }),
+    };
     const pools = [
       { id: "pA", stage_id: "st1", key: "A", name: "Pool A" },
       { id: "pB", stage_id: "st1", key: "B", name: "Pool B" },
@@ -3085,5 +3100,32 @@ describe("getPublicCompetitionHub — the ISR cache's key and tags", () => {
     getPublicCompetitionMock.mockResolvedValue(null);
     expect(await getPublicCompetitionHub("riverside", "private-cup")).toBeNull();
     expect(cacheCalls).toEqual([]);
+  });
+});
+
+// W2d Task 9 (carry 5): the hub's table shows the derived cascade columns of the order THIS stage ranks by — the one
+// loader's `stage.table_rules` — never a default re-read by the hub. Read through `loadCompetitionHub`, both directions,
+// with the division unchanged between the two reads.
+describe("loadCompetitionHub — W2d T9: a table's derived columns follow the stage's loaded order", () => {
+  it("a stage whose own order ranks by point ratio shows that column; the same stage on the division's order does not", async () => {
+    const football = resolveLatestModule("football");
+    const live = unpinnedRulesDoc({ module: football, kind: "league", divisionConfig: DIV.config });
+    const own = unpinnedRulesDoc({
+      module: football,
+      kind: "league",
+      divisionConfig: DIV.config,
+      stageConfig: { tiebreakers: ["points", "point_ratio"] },
+    });
+    // premise: the two orders differ in exactly the column under test
+    expect(live.tiebreakers, "football's own order has no point ratio").not.toContain("point_ratio");
+    expect(own.tiebreakers).toEqual(["points", "point_ratio"]);
+    const columnsWith = async (rules: typeof own) => {
+      getPublicDivisionMock.mockResolvedValue(divisionDetail({ stages: [{ ...STAGE, table_rules: rules }] }));
+      const doc = (await loadCompetitionHub("riverside", "autumn-cup", NOW))!;
+      expect(doc.tables).toHaveLength(1);
+      return doc.tables[0]!.columns.map((c) => c.key);
+    };
+    expect(await columnsWith(own)).toContain("point_ratio");
+    expect(await columnsWith(live)).not.toContain("point_ratio");
   });
 });

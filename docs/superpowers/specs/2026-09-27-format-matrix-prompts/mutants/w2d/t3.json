@@ -1,0 +1,407 @@
+[
+  {
+    "id": "t3-hk-shootoutas-result",
+    "file": "packages/engine/src/sports/hockey/hockey.ts",
+    "find": "  shootoutAs: \"draw_plus_bonus\",",
+    "replace": "  shootoutAs: \"result\" /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "HK-PT-2 the fih-shootout preset"
+      }
+    ]
+  },
+  {
+    "id": "t3-tt-unplayed-one",
+    "file": "packages/engine/src/sports/setbased/tabletennis.ts",
+    "find": "loss: { regulation: 1, unplayed: 0 }",
+    "replace": "loss: { regulation: 1, unplayed: 1 /*MUT*/ }",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "TT-PT-1 table tennis"
+      }
+    ]
+  },
+  {
+    "id": "t3-vb-bo3-21-pays-30",
+    "file": "packages/engine/src/sports/setbased/volleyball.ts",
+    "find": "3: { \"2-0\": [3, 0], \"2-1\": [2, 1] },",
+    "replace": "3: { \"2-0\": [3, 0], \"2-1\": [3, 0] /*MUT*/ },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "VB-PT-2 FIVB best of 3"
+      }
+    ]
+  },
+  {
+    "id": "t3-same-points-map-always",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "    keys.length === Object.keys(b).length &&",
+    "replace": "    true /*MUT*/ ||",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
+  },
+  {
+    "id": "t3-vb-fivb-guard-dropped",
+    "file": "packages/engine/src/sports/setbased/volleyball.ts",
+    "find": "const fivb = samePointsMap(cfg.pointsMap, FIVB_POINTS) && Object.hasOwn(",
+    "replace": "const fivb = /*MUT*/ Object.hasOwn(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
+  },
+  {
+    "id": "t3-tt-shipped-guard-dropped",
+    "file": "packages/engine/src/sports/setbased/tabletennis.ts",
+    "find": "    samePointsMap(cfg.pointsMap, TT_POINTS)\n",
+    "replace": "    true /*MUT*/\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
+  },
+  {
+    "id": "t3-setbased-preset-hook-ignored",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "return preset.tablePointsRule === undefined ? fromMap : preset.tablePointsRule(priced, fromMap);",
+    "replace": "return /*MUT*/ fromMap;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "TT-PT-1 table tennis"
+      }
+    ]
+  },
+  {
+    "id": "t3-setbased-unpriced-score-kept",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "if (pair !== undefined) bySetScore[score] = pair;",
+    "replace": "bySetScore[score] = pair as PointsPair /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "VB a configured map with no"
+      }
+    ]
+  },
+  {
+    "id": "t3-setbased-empty-map-fallback",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "bySetScore: Object.keys(bySetScore).length > 0 ? bySetScore : { ...map },",
+    "replace": "bySetScore /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "VB a configured map with no"
+      }
+    ]
+  },
+  {
+    "id": "t3-setbased-flat-never",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "const flat = new Set(Object.values(map).map(([w, l]) => `${w}:${l}`)).size <= 1 && Object.hasOwn(map, \"*\");",
+    "replace": "const flat = false /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "VB-PT-2 FIVB best of 3"
+      }
+    ]
+  },
+  {
+    "id": "t3-ck-draw-every-format",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "...(cfg.inningsPerSide === 2 ? { draw: cfg.points.draw ?? 1 } : {}),",
+    "replace": "...({ draw: cfg.points.draw ?? 1 } /*MUT*/),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "CK-PT-2 the two-innings draw"
+      }
+    ]
+  },
+  {
+    "id": "t3-ck-draw-default-zero",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "...(cfg.inningsPerSide === 2 ? { draw: cfg.points.draw ?? 1 } : {}),",
+    "replace": "...(cfg.inningsPerSide === 2 ? { draw: cfg.points.draw ?? 0 /*MUT*/ } : {}),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "CK-PT-2 the two-innings draw"
+      }
+    ]
+  },
+  {
+    "id": "t3-period-sobonus-schema-everywhere",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "const soBonus = (shootoutAs === \"draw_plus_bonus\" ? {",
+    "replace": "const soBonus = (true /*MUT*/ ? {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "football and hockey take"
+      }
+    ]
+  },
+  {
+    "id": "t3-period-rule-sobonus-dropped",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "      ...(preset.shootoutAs !== \"draw_plus_bonus\" || cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),\n      shootoutAs: preset.shootoutAs,",
+    "replace": "      /*MUT*/\n      shootoutAs: preset.shootoutAs,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "HK-PT-2 the fih-shootout preset"
+      }
+    ]
+  },
+  {
+    "id": "t3-fb-rule-sobonus-dropped",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "    ...(cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),",
+    "replace": "    /*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "FB-PT-1 football group"
+      }
+    ]
+  },
+  {
+    "id": "t3-period-winpoints-so-plain",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "if (method === \"shootout\" || method === \"extra_time\") {",
+    "replace": "if (method === \"extra_time\" /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "PS-1 a shoot-out win"
+      }
+    ]
+  },
+  {
+    "id": "t3-fb-declared-sets-drop-draw",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "return [...new Set([cfg.points.win + cfg.points.loss, cfg.points.draw * 2])];",
+    "replace": "return [...new Set([cfg.points.win + cfg.points.loss /*MUT*/])];",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/football/football.test.ts"
+        ],
+        "name": "pays a shoot-out win as a plain win"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-period-rule-sobonus-on-result",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "...(preset.shootoutAs !== \"draw_plus_bonus\" || cfg.points.soBonus === undefined ? {} :",
+    "replace": "...(/*MUT*/ cfg.points.soBonus === undefined ? {} :",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "PS-1 a shoot-out booked as a result takes no soBonus"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-setbased-junk-key-kept",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "Object.entries(cfg.pointsMap).filter(([key]) => SET_SCORE_KEY.test(key))",
+    "replace": "Object.entries(cfg.pointsMap).filter(() => true /*MUT*/)",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "a pointsMap key that is no set score is skipped"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-setbased-unpriced-map-not-refused",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "    if (Object.keys(map).length === 0) {\n      throw new EngineError(\"CONFIG_INVALID\", \"pointsMap prices no set score",
+    "replace": "    if (false /*MUT*/) {\n      throw new EngineError(\"CONFIG_INVALID\", \"pointsMap prices no set score",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "a pointsMap key that is no set score is skipped"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-fb-split-reader-readded",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "const winner = build(winnerSide, 1, 0, 0, cfg.points.win);",
+    "replace": "const winner = build(winnerSide, 1, 0, 0, outcome.method === \"shootout\" && (cfg.points as unknown as Record<string, number | undefined>).shootoutWin !== undefined ? (cfg.points as unknown as Record<string, number>).shootoutWin! /*MUT*/ : cfg.points.win);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "PS-1 an UNPARSED frozen cfg still carrying shootoutWin"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-period-split-reader-readded",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "  if (method === \"shootout\" || method === \"extra_time\") {\n",
+    "replace": "  if (method === \"shootout\" && (cfg.points as unknown as Record<string, number | undefined>).shootoutWin !== undefined) return [(cfg.points as unknown as Record<string, number>).shootoutWin!, cfg.points.loss] /*MUT*/;\n  if (method === \"shootout\" || method === \"extra_time\") {\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "PS-1 an UNPARSED frozen cfg still carrying shootoutWin"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-fb-rule-const-points",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "    win: { regulation: cfg.points.win },\n    loss: { regulation: cfg.points.loss },\n    draw: cfg.points.draw,",
+    "replace": "    win: { regulation: 3 },\n    loss: { regulation: 0 },\n    draw: 1 /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-period-rule-const-loss-draw",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "      loss: { regulation: cfg.points.loss, ...(cfg.points.otLoss === undefined ? {} : { ot: cfg.points.otLoss }) },\n      draw: cfg.points.draw,",
+    "replace": "      loss: { regulation: 0, ...(cfg.points.otLoss === undefined ? {} : { ot: cfg.points.otLoss }) },\n      draw: 1 /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-generic-rule-const-win",
+    "file": "packages/engine/src/sports/generic/generic.ts",
+    "find": "    win: { regulation: cfg.points.w },",
+    "replace": "    win: { regulation: 3 /*MUT*/ },",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr1-boardgame-rule-const-loss-draw",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "    loss: { regulation: cfg.scoring.loss },\n    draw: cfg.scoring.draw,",
+    "replace": "    loss: { regulation: 0 },\n    draw: 1 /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "X-PT-2 tablePointsRule pays exactly"
+      }
+    ]
+  },
+  {
+    "id": "t3-fr2-setbased-bye-reads-junk",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "Object.entries(cfg.pointsMap).find(([key]) => SET_SCORE_KEY.test(key))?.[1]",
+    "replace": "Object.entries(cfg.pointsMap).find(() => true /*MUT*/)?.[1]",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/table-points-parity.test.ts"
+        ],
+        "name": "a pointsMap key that is no set score is skipped"
+      }
+    ]
+  }
+]

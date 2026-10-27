@@ -7,7 +7,7 @@ import { foldMatch } from "../core/events.ts";
 import type { EventEnvelope } from "../core/events.ts";
 import type { LineupPair, StageCtx } from "../core/types.ts";
 import { generic, type GenericCfg } from "../sports/generic/generic.ts";
-import { makeEnvelope } from "../testkit/helpers.ts";
+import { makeEnvelope, tableRulesOf } from "../testkit/helpers.ts";
 import type { FixtureResult } from "./standings.ts";
 import { resolveProgression, type ProgressionSpec } from "./progression.ts";
 import {
@@ -115,7 +115,7 @@ function runDivision(): { champion: string; events: DivisionEvent[]; finalRanks:
     id: "groups",
     kind: "group",
     entrants: ["a1", "a2", "a3", "b1", "b2", "b3"],
-    cascade: ["points", "diff", "for", "lots"],
+    rules: tableRulesOf(["points", "diff", "for", "lots"]),
     rngSeed: 42,
   };
   events.push(...openStage(groupStage.id));

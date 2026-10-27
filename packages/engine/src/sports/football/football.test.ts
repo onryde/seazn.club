@@ -126,46 +126,21 @@ describe("football golden (b): knockout decided on penalties", () => {
     expect(football.summary(state).headline).toBe("1 — 1 (4–3 pens)");
   });
 
-  it("keeps regulation points in knockout but honours the group SO split", () => {
+  it("pays a shoot-out win as a plain win in knockout and group alike; the table's draw plus soBonus is the stage rule's (W2d PS-1, B2)", () => {
     const state = fold(knockoutCfg, events);
     const [home, away] = football.standingsDelta(state.outcome!, knockoutCfg, knockout, state);
     expect([home.points, away.points]).toEqual([3, 0]);
 
-    // spec 04 §1.4 — youth-cup convention SO win 2 / SO loss 1.
-    const splitCfg = football.configSchema.parse({
+    // A group stage with a shoot-out bonus of 2: `standingsDelta` still pays W3/L0 (the bonus is `tablePointsRule`'s).
+    const bonusCfg = football.configSchema.parse({
       extraTime: { enabled: true, halfMinutes: 15 },
       shootout: true,
-      points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
+      points: { win: 3, draw: 1, loss: 0, soBonus: 2 },
     });
-    const splitState = foldMatch(football, splitCfg, lineups, events);
-    const [h2, a2] = football.standingsDelta(splitState.outcome!, splitCfg, group, splitState);
-    expect([h2.points, a2.points]).toEqual([2, 1]);
-    expect(football.declaredPointsSets(splitCfg)).toContain(3);
-  });
-
-  it("F21 (R3.5/Task I): only one of shootoutWin/shootoutLoss set — the split does not fire, flat win/loss applies", () => {
-    // The engine's own gate (standingsDelta, football.ts) requires BOTH
-    // fields defined before it splits. The golden above already covers
-    // "both set" (F19) and "neither set" (F20) but never the asymmetric
-    // case — exactly the shape apps/web's new match-rules.tsx fields can
-    // produce if an organiser fills in only one of the pair.
-    const onlyWinCfg = football.configSchema.parse({
-      extraTime: { enabled: true, halfMinutes: 15 },
-      shootout: true,
-      points: { win: 3, draw: 1, loss: 0, shootoutWin: 2 },
-    });
-    const onlyWinState = foldMatch(football, onlyWinCfg, lineups, events);
-    const [hw, aw] = football.standingsDelta(onlyWinState.outcome!, onlyWinCfg, group, onlyWinState);
-    expect([hw.points, aw.points]).toEqual([3, 0]);
-
-    const onlyLossCfg = football.configSchema.parse({
-      extraTime: { enabled: true, halfMinutes: 15 },
-      shootout: true,
-      points: { win: 3, draw: 1, loss: 0, shootoutLoss: 1 },
-    });
-    const onlyLossState = foldMatch(football, onlyLossCfg, lineups, events);
-    const [hl, al] = football.standingsDelta(onlyLossState.outcome!, onlyLossCfg, group, onlyLossState);
-    expect([hl.points, al.points]).toEqual([3, 0]);
+    const bonusState = foldMatch(football, bonusCfg, lineups, events);
+    const [h2, a2] = football.standingsDelta(bonusState.outcome!, bonusCfg, group, bonusState);
+    expect([h2.points, a2.points, h2.won, a2.lost]).toEqual([3, 0, 1, 1]);
+    expect(football.declaredPointsSets(bonusCfg)).toEqual([3, 2]);
   });
 
   it("enforces kick alternation and early decision arithmetic", () => {
@@ -425,7 +400,7 @@ describe("football contract declarations", () => {
       "h2h_for",
     ]);
     expect(FOOTBALL_TIEBREAKERS.classic.slice(0, 3)).toEqual(["points", "diff", "for"]);
-    expect(football.defaultTiebreakers).toEqual(FOOTBALL_TIEBREAKERS.fifa2026);
+    expect(football.defaultTiebreakers("league", football.configSchema.parse({}))).toEqual(FOOTBALL_TIEBREAKERS.fifa2026);
   });
 
   it("supports draws in league/group but never in eliminations", () => {
@@ -435,8 +410,15 @@ describe("football contract declarations", () => {
     expect(football.supportsDraws(knockoutCfg, "double_elim")).toBe(false);
   });
 
-  it("declares point totals {3, 2} (+ SO split total when configured)", () => {
+  it("declares point totals {win+loss, 2·draw} — {3, 2} by default; a shoot-out bonus adds no total (§9.3, W2d PS-1)", () => {
     expect([...football.declaredPointsSets(leagueCfg)].sort()).toEqual([2, 3]);
+    // A decided match pays the winner `win` and the loser `loss`, so a paid loss moves the decided total: W3 D1 L1 is
+    // {3+1, 1+1} = {4, 2} (the default's L0 cannot tell win+loss from win-loss).
+    const paidLoss = football.configSchema.parse({ points: { win: 3, draw: 1, loss: 1 } });
+    expect([...football.declaredPointsSets(paidLoss)].sort()).toEqual([2, 4]);
+    // PS-1: a shoot-out pays a plain win in standingsDelta, so soBonus declares no extra total.
+    const withBonus = football.configSchema.parse({ shootout: true, points: { win: 3, draw: 1, loss: 0, soBonus: 2 } });
+    expect([...football.declaredPointsSets(withBonus)].sort()).toEqual([2, 3]);
   });
 });
 
@@ -447,17 +429,17 @@ conformanceSuite(football, {
   label: "knockout",
   stageCtxs: [{ kind: "knockout" }, { kind: "group" }],
 });
-// Standings qualification (review round 1) — the youth-cup shoot-out split
-// (spec 04 §1.4: SO win 2, SO loss 1). No other football cfg in the tree sets
-// it, so without this suite §9.3b never checks the split's winFloor/lossCeil
-// against a real `standingsDelta`, only against the cfg it was built from.
+// Standings qualification (review round 1), W2d PS-1 — a group with a
+// shoot-out and its bonus (`soBonus`, B2). No other football cfg in the tree
+// sets it, so without this suite §9.3b never checks the bounds of a bonus cfg
+// against a real `standingsDelta` (which pays the shoot-out as a plain win).
 conformanceSuite(football, {
   cfg: {
     extraTime: { enabled: true, halfMinutes: 15 },
     shootout: true,
-    points: { win: 3, draw: 1, loss: 0, shootoutWin: 2, shootoutLoss: 1 },
+    points: { win: 3, draw: 1, loss: 0, soBonus: 2 },
   },
-  label: "shoot-out split",
+  label: "shoot-out bonus",
   stageCtxs: [{ kind: "group" }, { kind: "knockout" }],
 });
 // S5/#431 — quarters instead of halves (mini-soccer). No explicit `lineups`:

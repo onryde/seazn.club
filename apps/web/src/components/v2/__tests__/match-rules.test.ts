@@ -152,74 +152,21 @@ describe("buildRuleOverride — football's two independent substitution caps", (
   });
 });
 
-// R3.5/Task I — group-stage shoot-out points (football.ts's standingsDelta
-// gates the split on BOTH `cfg.points.shootoutWin`/`shootoutLoss` being
-// defined). Unlike every other football field above, these two are NOT
-// independent top-level keys: `buildRuleOverride`'s outer loop does a
-// SHALLOW `Object.assign` per field (match-rules.tsx's own doc), so if each
-// field's build()/buildOnBlank() only emitted ITS OWN key inside `points`,
-// whichever field ran last would silently overwrite the other's
-// contribution — the exact trap the brief called out. Each field calls the
-// SAME shared `shootoutPointsPatch`, which reads BOTH raw values out of
-// `values` and reconstructs the full pair state every time, so the result
-// is identical regardless of field order.
-//
-// R3.5 review finding F5 (BLOCKER, superseded the original F19-F21 shape
-// below): the engine's split needs BOTH keys defined, so "one set, one
-// blank" was never a real state to persist — the original fix (this
-// describe block, pre-review) let a lone value ride through as-is, which is
-// what let a cleared box leave the OTHER box's stale value in the saved
-// config forever. Owner ruling: blank in EITHER box now resolves to an
-// explicit delete of BOTH keys (`undefined` — division-settings.tsx's
-// applyFormat turns that into a real deletion; see F20/F21 below for the
-// updated shape).
-describe("buildRuleOverride — football's shoot-out points split, merged into ONE points object", () => {
-  it("F19: both set — one points object carrying both keys, regardless of field order", () => {
-    expect(buildRuleOverride("football", { shootoutWin: "2", shootoutLoss: "1" })).toEqual({
-      points: { shootoutWin: 2, shootoutLoss: 1 },
-    });
+// W2d (spec §5.3, B2; PS-1) — the R3.5/Task I shoot-out points pair is gone (greenfield): a table shoot-out is a draw
+// plus `points.soBonus`, which the stage's Points section edits, never this field list. So no football field writes
+// `points` any more, and a value under either retired key (a stale form, a hand-built request) builds nothing.
+describe("buildRuleOverride — football has no shoot-out points field (W2d PS-1)", () => {
+  it("a value under a retired shoot-out points key builds nothing — no `points` override at all", () => {
+    expect(buildRuleOverride("football", { shootoutWin: "2", shootoutLoss: "1" })).toEqual({});
+    expect(buildRuleOverride("football", { shootoutWin: "", shootoutLoss: "" })).toEqual({});
   });
 
-  it("F5 (was F21): only shootoutWin set — deletes BOTH, not a lone shootoutWin", () => {
-    expect(buildRuleOverride("football", { shootoutWin: "2" })).toEqual({
-      points: { shootoutWin: undefined, shootoutLoss: undefined },
-    });
-  });
-
-  it("F5 (was F21): only shootoutLoss set — deletes BOTH, not a lone shootoutLoss", () => {
-    expect(buildRuleOverride("football", { shootoutLoss: "1" })).toEqual({
-      points: { shootoutWin: undefined, shootoutLoss: undefined },
-    });
-  });
-
-  it("F5 (was F20): both explicitly cleared — deletes BOTH (the 'turn it off' path)", () => {
-    expect(buildRuleOverride("football", { shootoutWin: "", shootoutLoss: "" })).toEqual({
-      points: { shootoutWin: undefined, shootoutLoss: undefined },
-    });
-  });
-
-  it("F20: neither field is part of this save at all — no points key, today's flat win/loss is untouched", () => {
-    // Distinct from the "explicitly cleared" case above: these keys are
-    // ABSENT from `values` (a fresh division, or a save that never touched
-    // shoot-out points), not present-and-blank. Emitting a delete-marker
-    // here regardless would pollute every unrelated football save's return
-    // value with shoot-out noise — see the "does not disturb..." test below.
-    expect(buildRuleOverride("football", {})).toEqual({});
-  });
-
-  it("a shoot-out win worth zero is a real, distinct value from 'unset' — blank must never become 0", () => {
-    expect(buildRuleOverride("football", { shootoutWin: "0", shootoutLoss: "1" })).toEqual({
-      points: { shootoutWin: 0, shootoutLoss: 1 },
-    });
-  });
-
-  it("does not disturb football's other independent fields when combined in one save", () => {
-    expect(
-      buildRuleOverride("football", { shootoutWin: "2", shootoutLoss: "1", maxSubs: "3" }),
-    ).toEqual({ points: { shootoutWin: 2, shootoutLoss: 1 }, maxSubs: 3 });
-  });
-
-  it("leaves maxSubs/subWindows untouched by shoot-out points when neither is part of the save", () => {
+  it("football's other fields build as before beside one", () => {
+    expect(buildRuleOverride("football", { shootoutWin: "2", maxSubs: "3" })).toEqual({ maxSubs: 3 });
     expect(buildRuleOverride("football", { maxSubs: "3" })).toEqual({ maxSubs: 3 });
+  });
+
+  it("a saved soBonus hydrates no football field (the stage Points section owns it)", () => {
+    expect(hydrateRuleValues("football", { points: { win: 3, draw: 1, loss: 0, soBonus: 1 } })).toEqual({});
   });
 });

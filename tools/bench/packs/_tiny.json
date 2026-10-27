@@ -119,11 +119,13 @@
       "moduleVersion": "1.0.0",
       "cfgOverrides": {},
       "tiebreakers": [
-        "points",
         "wins",
-        "set_ratio",
-        "point_ratio",
-        "h2h_points"
+        "h2h_two",
+        "set_diff",
+        "h2h_two",
+        "point_diff",
+        "h2h_two",
+        "lots"
       ],
       "stages": [
         {

@@ -4,54 +4,64 @@
 // Client-safe like `stage-row-model.ts`: no "use client", no JSX, no `@/server` import.
 //
 // WHERE EVERY ANSWER COMES FROM. The section offers only what the server's PUT accepts, and the server's questions are
-// the engine's: `pointsRuleExpressible` (Q1: which divisions a stage rule can stand in for), `pointsRuleAwardReachesTable`
+// the engine's (W2d Task 10 retired W2c's Q1 expressibility check: a stage rule can say every split now, and whether it
+// PAYS every outcome is the server's coverage question, said back in its own words; fix round 1 I2 keeps the EDITOR's own
+// limit — its boxes are a flat rule — as `pointsEditorFits`, over the engine's `payout`): `pointsRuleAwardReachesTable`
 // (batch-3 I3: which sports read a walkover SCORE), `validatePointsRule` (which bonus kinds the sport's metrics can feed),
 // `DRAW_KINDS` (which stages have a table). The web keeps no list of sports, kinds or metrics: a sport added to the
 // engine is offered exactly what the engine says it takes.
-import {
-  PointsRule,
-  pointsRuleAwardReachesTable,
-  pointsRuleExpressible,
-  validatePointsRule,
-  type Expressible,
-} from "@seazn/engine/competition";
+import { PointsRule, parseStoredPointsRule, pointsRuleAwardReachesTable, validatePointsRule } from "@seazn/engine/competition";
 import { DRAW_KINDS } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { pointsLine, type PointsClause } from "@/lib/points-line";
+import { SPLIT_REASONS as SPLIT_ORDER, type SplitReason } from "@/lib/rule-errors";
+import { liveStageCfg } from "@/lib/stage-decider-off";
+import { flatOf, splitsLost, sportStageRule } from "@/lib/stage-points-splits";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
 // ---------------------------------------------------------------------------
-// Which state the section is in.
+// What the section offers.
 // ---------------------------------------------------------------------------
-
-export type PointsSectionState = "inexpressible" | "editor";
-
-/**
- * The section's state (review I9): a division whose points a stage rule cannot say is `inexpressible` (the reason, and no
- * boxes); every other division gets the `editor`. There is no plan state: scoring is free on every plan (owner, 2026-10-19),
- * so the section asks nothing of the org's entitlements.
- */
-export function pointsSectionState(expressible: boolean): PointsSectionState {
-  return expressible ? "editor" : "inexpressible";
-}
 
 /** Does this stage have a table its own points could rank? The server refuses a bracket kind (`refuseStagePoints`). */
 export function stageTakesPoints(kind: string): boolean {
   return (DRAW_KINDS as ReadonlySet<string>).has(kind);
 }
 
-/** The division's config AS THE SPORT PARSES IT (defaults applied), else as stored: the server asks Q1 of exactly this
- *  (`stage-rules-merge.ts parsedDivisionCfg`), so the section pre-checks what the PUT would answer. */
+/** Can the editor say this stage's points? */
+export type EditorFit = { readonly fits: true } | { readonly fits: false; readonly reasons: readonly SplitReason[] };
+
+/**
+ * W2d Task 10 fix round 1, I2 (owner decision 2026-10-26) — does the editor fit this stage? Its boxes ARE a flat rule (one
+ * amount per win, per loss, a draw, and a tie and a no result of 0: `ruleFromDraft`), so it fits exactly where the rule it
+ * would save from the division's own numbers pays every outcome the stage reaches what the sport's own rule pays
+ * (`tablePointsRule` under the stage's cfg, through the engine's `payout`: `lib/stage-points-splits.ts`). Where it does not
+ * (IIHF's overtime 2/1, FIVB's 3-2, ICC's tie and no result, ITTF's loss not played, FIH's shoot-out bonus), the section
+ * shows "can't be set per stage yet" and sends nothing: a Save would flatten that outcome onto the win or the loss.
+ * `reasons` names what the sport pays apart (the sentence's labels); empty when no split explains the difference.
+ * Fail-closed: a stage whose sport rule cannot be read (a cfg the sport refuses) is not offered the editor.
+ */
+export function pointsEditorFits(module: AnySportModule, divisionConfig: unknown, stage: { kind: string; config: unknown }): EditorFit {
+  if (!stageTakesPoints(stage.kind)) return { fits: true };
+  const config = isObj(stage.config) ? stage.config : null;
+  const sport = sportStageRule(module, liveStageCfg(divisionConfig, { kind: stage.kind, config }, module), stage.kind);
+  if (sport === null) return { fits: false, reasons: [] };
+  const structural = splitsLost(module, sport, flatOf(sport.rule)).reasons;
+  const editor = ruleFromDraft(module, { ...draftFromStored(module, divisionConfig, null), useDivision: false });
+  if (!editor.ok || editor.rule === null) return { fits: false, reasons: structural };
+  const lost = splitsLost(module, sport, editor.rule);
+  if (!lost.differs) return { fits: true };
+  const reasons = new Set<SplitReason>([...structural, ...lost.reasons]);
+  return { fits: false, reasons: SPLIT_ORDER.filter((r) => reasons.has(r)) };
+}
+
+/** The division's config AS THE SPORT PARSES IT (defaults applied), else as stored: what the section reads the division's
+ *  own points from. */
 export function divisionPointsCfg(module: AnySportModule, divisionConfig: unknown): Record<string, unknown> {
   const raw = isObj(divisionConfig) ? divisionConfig : {};
   const parsed = module.configSchema.safeParse(raw);
   return (parsed.success ? parsed.data : raw) as Record<string, unknown>;
-}
-
-/** Q1 for this division (the engine's `pointsRuleExpressible`): ok, or the split keys the stage rule cannot say. */
-export function divisionExpressible(module: AnySportModule, divisionConfig: unknown): Expressible {
-  return pointsRuleExpressible(divisionPointsCfg(module, divisionConfig));
 }
 
 // ---------------------------------------------------------------------------
@@ -103,7 +113,12 @@ export const BONUS_KINDS: readonly BonusWhen[] = (
 /** The kinds that read a threshold (`param`): the margin and ratio bonuses. Every other kind pays on the result alone. */
 export const PARAM_BONUS_KINDS: ReadonlySet<BonusWhen> = new Set<BonusWhen>(["loss_margin_lte", "win_margin_gte", "score_ratio_gte"]);
 
-const ZERO_BASE = { win: 0, draw: 0, loss: 0 };
+/** W2d: the editor's three boxes as an outcome-keyed rule, read as the W2c rule read them (`legacyPointsRule`): every
+ *  win pays `win`, every loss `loss`, a draw `draw`, a tie and a no result 0, a shoot-out as a result. The per-outcome
+ *  fields (overtime, shoot-out, set score) are not the editor's yet. */
+const legacyEquivalent = (win: number, draw: number, loss: number) =>
+  ({ win: { regulation: win }, loss: { regulation: loss }, draw, tie: 0, noResult: 0, shootoutAs: "result", unit: "whole" }) as const;
+const ZERO_RULE = legacyEquivalent(0, 0, 0);
 
 /**
  * The bonus kinds worth offering for this sport: those the server's `validatePointsRule` accepts for the sport's metrics (a
@@ -119,7 +134,7 @@ export function offeredBonusKinds(module: AnySportModule, divisionConfig: unknow
     if (when === "draw" && !hasDraw) return false;
     if (when === "no_result" && !recordsNoResult) return false;
     try {
-      validatePointsRule(PointsRule.parse({ base: ZERO_BASE, bonuses: [{ when, param: 0, points: 0 }] }), module.metrics);
+      validatePointsRule(PointsRule.parse({ ...ZERO_RULE, bonuses: [{ when, param: 0, points: 0 }] }), module.metrics);
       return true;
     } catch {
       return false;
@@ -161,17 +176,53 @@ export interface PointsDraft {
 
 const text = (n: number | null): string => (n === null ? "" : String(n));
 
-/** The stored rule if it is one the engine's schema takes, else null (absent, `null`, or a hand-edited row). */
+/** The stored rule if it is one the engine's schema takes, else null (absent, `null`, or a hand-edited row). W2d: the
+ *  outcome-keyed shape only (`parseStoredPointsRule`, PS-9f) — the W2d migration converted every W2c `{base, …}` row. */
 export function storedPointsRule(stored: unknown): PointsRule | null {
-  const parsed = PointsRule.safeParse(stored);
-  return parsed.success ? parsed.data : null;
+  return parseStoredPointsRule(stored);
 }
 
-/** The draft a stage opens with: its own rule when it stores one, else the division's base numbers behind a checked
- *  "Use the division's points". */
-export function draftFromStored(module: AnySportModule, divisionConfig: unknown, stored: unknown): PointsDraft {
+/**
+ * W2d final review I1 (controller ruling, 2026-10-26) - the rule a stage PINNED at generate pays while it stores no rule of
+ * its own: its pin's points (`stages.table_rules_pinned.points`, read by the page through the one loader). A division points
+ * save after the pin lands but never reaches the stage (`rule-locks.ts`), so the live division is NOT what it plays. Null
+ * when the stage stores its own rule (that rule is what it plays), when it is not pinned (it reads the live layers), and
+ * for a pin the schema refuses (never half-read).
+ */
+export function pinInForce(stored: unknown, pinned: unknown): PointsRule | null {
+  return storedPointsRule(stored) === null ? storedPointsRule(pinned) : null;
+}
+
+/** Whose points a stage plays: its own rule, its pin's (I1), else the live division's. */
+export type PointsBasis = "own" | "pin" | "division";
+export function pointsBasis(stored: unknown, pinned: unknown): PointsBasis {
+  if (storedPointsRule(stored) !== null) return "own";
+  return pinInForce(stored, pinned) === null ? "division" : "pin";
+}
+
+/** The boxes of a rule: its regulation win / draw / loss, its walkover row and its bonuses (what the editor can say). */
+function draftOfRule(rule: PointsRule, useDivision: boolean): PointsDraft {
+  return {
+    useDivision,
+    win: String(rule.win.regulation),
+    // A rule with no draw pays none; the box shows the 0 a sport that cannot draw sends (`ruleFromDraft`).
+    draw: String(rule.draw ?? 0),
+    loss: String(rule.loss.regulation),
+    walkoverW: rule.forfeit === undefined ? "" : String(rule.forfeit.winnerPoints),
+    walkoverL: rule.forfeit === undefined ? "" : String(rule.forfeit.loserPoints),
+    awardW: rule.forfeit?.awardScore === undefined ? "" : String(rule.forfeit.awardScore[0]),
+    awardL: rule.forfeit?.awardScore === undefined ? "" : String(rule.forfeit.awardScore[1]),
+    bonuses: rule.bonuses.map((b) => ({ when: b.when, param: b.param === undefined ? "" : String(b.param), points: String(b.points) })),
+  };
+}
+
+/** The draft a stage opens with: its own rule when it stores one, else what it plays without one behind a checked "Use the
+ *  division's points" - its PIN's points once pinned (I1: `pinInForce`), else the division's live base numbers. */
+export function draftFromStored(module: AnySportModule, divisionConfig: unknown, stored: unknown, pinned: unknown = null): PointsDraft {
   const rule = storedPointsRule(stored);
   if (rule === null) {
+    const pin = storedPointsRule(pinned);
+    if (pin !== null) return draftOfRule(pin, true);
     const b = divisionBasePoints(module, divisionConfig);
     return {
       useDivision: true,
@@ -185,17 +236,7 @@ export function draftFromStored(module: AnySportModule, divisionConfig: unknown,
       bonuses: [],
     };
   }
-  return {
-    useDivision: false,
-    win: String(rule.base.win),
-    draw: String(rule.base.draw),
-    loss: String(rule.base.loss),
-    walkoverW: rule.forfeit === undefined ? "" : String(rule.forfeit.winnerPoints),
-    walkoverL: rule.forfeit === undefined ? "" : String(rule.forfeit.loserPoints),
-    awardW: rule.forfeit?.awardScore === undefined ? "" : String(rule.forfeit.awardScore[0]),
-    awardL: rule.forfeit?.awardScore === undefined ? "" : String(rule.forfeit.awardScore[1]),
-    bonuses: rule.bonuses.map((b) => ({ when: b.when, param: b.param === undefined ? "" : String(b.param), points: String(b.points) })),
-  };
+  return draftOfRule(rule, false);
 }
 
 /** A number typed in a box: blank is NOT zero (`Number("")` is 0, which would store a rule nobody wrote). */
@@ -253,7 +294,7 @@ export function ruleFromDraft(module: AnySportModule, draft: PointsDraft): RuleF
     winnerPoints === null || loserPoints === null
       ? undefined
       : { winnerPoints, loserPoints, ...(score === undefined ? {} : { awardScore: score }) };
-  return { ok: true, rule: { base: { win, draw, loss }, bonuses, ...(forfeit === undefined ? {} : { forfeit }) } };
+  return { ok: true, rule: { ...legacyEquivalent(win, draw, loss), bonuses, ...(forfeit === undefined ? {} : { forfeit }) } };
 }
 
 /** A value with its object keys sorted, for comparing a rule to what jsonb gave back (jsonb reorders keys). */
@@ -271,12 +312,13 @@ export function draftIsDirty(module: AnySportModule, draft: PointsDraft, stored:
 }
 
 /**
- * The words of the rule a Save would store (or, for "Use the division's points", the division's own base), in the public
- * line's clauses (`pointsLine`, Task 16): the walkover SCORE is said only where the sport's table reads it. Empty when the
- * draft is not a rule yet.
+ * The words of the rule a Save would store (or, for "Use the division's points", what the stage plays without a rule: the
+ * `pinned` rule in force, I1 - pass `pinInForce`'s answer - else the division's own base), in the public line's clauses
+ * (`pointsLine`, Task 16): the walkover SCORE is said only where the sport's table reads it. Empty when the draft is not a
+ * rule yet.
  */
-export function previewClauses(module: AnySportModule, divisionConfig: unknown, draft: PointsDraft): PointsClause[] {
-  const next = ruleFromDraft(module, draft.useDivision ? { ...draftFromStored(module, divisionConfig, null), useDivision: false } : draft);
+export function previewClauses(module: AnySportModule, divisionConfig: unknown, draft: PointsDraft, pinned: unknown = null): PointsClause[] {
+  const next = ruleFromDraft(module, draft.useDivision ? { ...draftFromStored(module, divisionConfig, null, pinned), useDivision: false } : draft);
   if (!next.ok || next.rule === null) return [];
   return pointsLine(next.rule, { awardReaches: offersWalkoverScore(module) });
 }

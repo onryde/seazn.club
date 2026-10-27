@@ -297,7 +297,9 @@ describe("boardgame: standingsDelta for an outcome nobody played out", () => {
 describe("boardgame: declarations a table and a pad read", () => {
   it("the Swiss cascade is the full FIDE order (chess.md §4)", () => {
     expect(BOARDGAME_TIEBREAKERS).toEqual(["points", "buchholz_cut1", "buchholz", "sberger", "direct", "wins", "lots"]);
-    expect(boardgame.defaultTiebreakers).toEqual(BOARDGAME_TIEBREAKERS);
+    // W2d asks the order per stage kind; a Swiss stage keeps this one (SPEC §5.10, OC1). The round-robin order is
+    // boardgame.test.ts's (BG-TB-1).
+    expect(boardgame.defaultTiebreakers("swiss", cfg)).toEqual(BOARDGAME_TIEBREAKERS);
   });
 
   it("the standings metrics: wins is shown, the colour tallies are pairing metadata and hidden", () => {

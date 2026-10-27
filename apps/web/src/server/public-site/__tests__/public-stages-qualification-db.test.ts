@@ -28,7 +28,11 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages, overrideStandings } from "@/server/usecases/stages";
 import { GENERIC_CONFIG, seedOrg } from "@/server/usecases/__tests__/_seed";
+import { parseStoredPointsRule, pointsRuleBounds } from "@seazn/engine/competition";
+import { resolveLatestModule } from "@/server/engine-db";
 import { getPublicDivision } from "../data";
+import { EVERY_OUTCOME, boundsInForce, divisionPointsBounds, stageQualMeta } from "../qualification-view";
+import { dropScene, sceneRowCounts, sceneSubscriptionId } from "./_stage-rules-scene";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -340,7 +344,7 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
   it("swiss rounds and the stage points rule are published; rounds only for a swiss stage", async () => {
     const d = await division();
     const points = {
-      base: { win: 3, draw: 1, loss: 0 },
+      win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
       bonuses: [
         { when: "win_margin_gte", param: 3, points: 1 },
         { when: "draw", points: 0.5 },
@@ -366,12 +370,14 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
   it("points_rule publishes only the keys PointsRule reads, at every level", async () => {
     const d = await division();
     const clean = {
-      base: { win: 3, draw: 1, loss: 0 },
+      win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
       bonuses: [{ when: "win_margin_gte", param: 3, points: 1 }],
       forfeit: { winnerPoints: 3, loserPoints: 0 },
     };
     const withJunk = {
-      base: { ...clean.base, note: "base junk" },
+      ...clean,
+      win: { ...clean.win, note: "win junk" },
+      loss: { ...clean.loss, note: "loss junk" },
       bonuses: [{ ...clean.bonuses[0], memo: "bonus junk" }],
       forfeit: { ...clean.forfeit, secret: "forfeit junk" },
       internal: { owner: "top-level junk" },
@@ -383,6 +389,49 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
       select config -> 'points' as points from stages where division_id = ${d.divisionId}`;
     expect(stored!.points, "premise: the raw junk is stored").toEqual(withJunk);
     expect((await view(d.divisionId))[0]!.points_rule).toEqual(clean);
+  });
+
+  // W2d V475: the function rebuilds `points_rule` from BOTH stored shapes. Each rule is written by raw SQL — the stage
+  // door is not under test here (Task 10 owns it), the rebuild is — so every key the outcome-keyed PointsRule reads
+  // is asked at once, with junk beside it at every level.
+  it("W2d V475: every key the outcome-keyed rule reads is published (ot, so, unplayed, soBonus, tie, noResult, a set map), junk is not, and a legacy `base` is not any more (W2d Task 9 retired it with the engine's read)", async () => {
+    const d = await division();
+    const result = {
+      win: { regulation: 3, ot: 2, so: 1.5 },
+      loss: { regulation: 0, ot: 1, so: 0.5, unplayed: -1 },
+      draw: 1, tie: 1, noResult: 0.5, shootoutAs: "result", unit: "half",
+      bySetScore: { "3-0": [3, 0], "3-2": [2, 1], "*": [3, 0] },
+      bonuses: [{ when: "win_margin_gte", param: 3, points: 1 }],
+      forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] },
+    };
+    const dpb = { win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, soBonus: 2, shootoutAs: "draw_plus_bonus", unit: "whole", bonuses: [] };
+    const legacy = { base: { win: 2, draw: 1, loss: 0 }, bonuses: [] };
+    const junk = (rule: Record<string, unknown>) => ({
+      ...rule,
+      ...(rule.win ? { win: { ...(rule.win as object), note: "win junk" } } : {}),
+      ...(rule.loss ? { loss: { ...(rule.loss as object), note: "loss junk" } } : {}),
+      ...(rule.bySetScore ? { bySetScore: { ...(rule.bySetScore as object), x: [9, 9], "3-1 ": [9, 9], "": [9, 9] } } : {}),
+      ...(rule.base ? { base: { ...(rule.base as object), note: "base junk" } } : {}),
+      internal: { owner: "top-level junk" },
+    });
+    const rules = [result, dpb, legacy];
+    await createStages(d.auth, d.divisionId, rules.map((_, i) => ({ seq: i + 1, kind: "league", name: `L${i + 1}`, config: {} })) as never);
+    const ids = await sql<{ id: string }[]>`select id from stages where division_id = ${d.divisionId} order by seq`;
+    expect(ids.length, "premise: one stage per rule").toBe(rules.length);
+    let checked = 0;
+    for (const [i, rule] of rules.entries()) {
+      await sql`update stages set config = config || ${sql.json({ points: junk(rule) } as never)} where id = ${ids[i]!.id}`;
+      checked++;
+    }
+    expect(checked).toBe(3);
+    const published = (await view(d.divisionId)).map((r) => r.points_rule);
+    // The legacy row keeps only the keys the outcome-keyed rule reads: its bonuses, never its `base`.
+    expect(published).toEqual([result, dpb, { bonuses: [] }]);
+    // and each published rule reads back, through the engine's own stored-rule read, as the rule that was saved — the
+    // legacy one as no rule on both sides (no stored row holds the shape after the migration, Task 7)
+    for (const [i, rule] of rules.entries()) expect(parseStoredPointsRule(published[i]), `L${i + 1}`).toEqual(parseStoredPointsRule(rule));
+    expect(parseStoredPointsRule(legacy), "premise: the engine reads the legacy shape as no rule").toBeNull();
+    expect(parseStoredPointsRule(published[0])?.bySetScore, "premise: the set map survives the read").toEqual(result.bySetScore);
   });
 
   // Cross-stage feeds (Jul3/08 §9) wire a FIXTURE's winner or loser into a
@@ -687,7 +736,7 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
   // them (a reader that forgets one hands the builder `undefined`).
   it("getPublicDivision and embedDivisionData both carry the columns (and the embed the division config)", async () => {
     const d = await division();
-    const points = { base: { win: 2, draw: 1, loss: 0 } };
+    const points = { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" };
     await createStages(d.auth, d.divisionId, [
       { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 4, points } },
       { seq: 2, kind: "knockout", name: "Finals", config: {}, progression: prog([{ kind: "rankRange", from: 1, to: 2 }]) },
@@ -711,5 +760,73 @@ describe.skipIf(!HAS_DB)("public_stages_v — qualification columns (V414)", () 
     if (!embed.ok) return;
     expect(embed.data.stages[0]).toMatchObject(expected);
     expect(embed.data.division.config).toMatchObject({ resultMode: "score", allowDraws: true });
+  });
+
+  // W2d PF-3, as T9 review m3 ruled it: the pin reaches each public reader as the one loader's `table_rules` (no SQL
+  // column publishes the table's rule any more). A reader that dropped it would hand qualification nothing, and the bounds
+  // would be none; one that re-derived it would read the division's points, equal to the pin's at pin time and wrong
+  // after a division points edit on a started stage. So the pin here pays differently from the division, and the bounds
+  // are read through EACH reader's own row.
+  it("W2d PF-3: getPublicDivision AND embedDivisionData carry the loader's rules, so a started stage's PIN reaches qualification's bounds through both (never the sport's, never a SQL column)", async () => {
+    const d = await division();
+    // Committed (the readers use the module's own connection), so the scene is deleted afterwards and counted gone.
+    const subscriptionId = await sceneSubscriptionId(d.auth);
+    let standing: Record<string, number> = {};
+    try {
+      await createStages(d.auth, d.divisionId, [
+        { seq: 1, kind: "league", name: "League", config: {} },
+        { seq: 2, kind: "knockout", name: "Finals", config: {}, progression: prog([{ kind: "rankRange", from: 1, to: 2 }]) },
+      ] as never);
+      const [{ id: leagueId }] = await sql<{ id: string }[]>`select id from stages where division_id = ${d.divisionId} and seq = 1`;
+      const pinPoints = {
+        win: { regulation: 5 }, loss: { regulation: 1 }, draw: 2, tie: 2, noResult: 2,
+        shootoutAs: "result", unit: "whole", bonuses: [],
+      };
+      await sql`update stages set status = 'active', table_rules_pinned_at = now(), table_rules_pinned = ${sql.json({
+        points: pinPoints,
+        tiebreakers: ["points", "wins"],
+        crossGroup: ["points", "diff", "for", "wins"],
+        sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" },
+      })} where id = ${leagueId}`;
+      const parsed = parseStoredPointsRule(pinPoints);
+      expect(parsed, "premise: today's reader takes the pin's points").not.toBeNull();
+      const pinBounds = pointsRuleBounds(parsed!, EVERY_OUTCOME);
+      const generic = resolveLatestModule("generic");
+
+      const page = await getPublicDivision(d.orgSlug, d.compSlug, d.divSlug);
+      expect(page, "premise: the division page resolves").not.toBeNull();
+      const embed = await embedDivisionData(d.divisionId);
+      expect(embed.ok, "premise: the embed resolves on Pro").toBe(true);
+      if (!embed.ok) return;
+
+      let checked = 0;
+      for (const [reader, stages, cfg] of [
+        ["getPublicDivision", page!.stages, page!.division.config],
+        ["embedDivisionData", embed.data.stages, embed.data.division.config],
+      ] as const) {
+        const league = stages.find((st) => st.id === leagueId);
+        expect(league, `${reader}: the league`).toBeDefined();
+        expect(Object.hasOwn(league!, "table_points_rule"), `${reader}: no SQL column carries the table's rule`).toBe(false);
+        expect(league!.table_rules?.points, `${reader}: the pin's points, from the loader`).toEqual(parsed);
+        expect(league!.points_rule ?? null, `${reader}: no own rule`).toBeNull();
+        const sportBounds = divisionPointsBounds(generic, cfg);
+        expect(sportBounds, `premise (${reader}): the division's own bounds differ from the pin's`).not.toEqual(pinBounds);
+        // as `divisionQualification` builds it: the row's V414 meta, the loader's rule in force
+        const meta = { ...stageQualMeta(league!), tablePointsRule: league!.table_rules!.points };
+        expect(boundsInForce(meta, sportBounds), `${reader}: qualification's bounds`).toEqual(pinBounds);
+        expect(boundsInForce(stageQualMeta(league!), sportBounds), `${reader}: the row alone carries no pin`).toEqual(sportBounds);
+        checked++;
+      }
+      expect(checked).toBe(2);
+      standing = await sceneRowCounts(d.auth, subscriptionId);
+    } finally {
+      await dropScene(d.auth);
+    }
+    expect(standing, "premise: the scene stood").toMatchObject({
+      organizations: 1, competitions: 1, divisions: 1, stages: 2, subscriptions: 1, users: 1,
+    });
+    expect(await sceneRowCounts(d.auth, subscriptionId), "nothing of the scene is left behind").toEqual({
+      organizations: 0, competitions: 0, divisions: 0, stages: 0, fixtures: 0, entrants: 0, subscriptions: 0, users: 0,
+    });
   });
 });

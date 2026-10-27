@@ -201,15 +201,15 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
     // A TABLE stage: since W2c Task 13 a bracket stage's points are refused at every door (it ranks no table).
     const template = SLAM_STAGE_TEMPLATE({
       kind: "league",
-      points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] },
+      points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] },
     });
     const result = await instantiateTemplate(auth, template, {
       name: `Points ${randomUUID().slice(0, 6)}`,
       ends_on: "2030-12-31",
     });
-    const [stage] = await sql<{ config: { points?: { base?: { win?: number } } } }[]>`
+    const [stage] = await sql<{ config: { points?: { win?: { regulation?: number } } } }[]>`
       select config from stages where id = ${result.divisions[0]!.stages[0]!.id}`;
-    expect(stage!.config.points?.base?.win).toBe(3);
+    expect(stage!.config.points?.win?.regulation).toBe(3);
   });
 
   it("the template door asks a stage's points the stage PUT's questions (W2c Task 13): a bracket stage's points and an unreached walkover score are refused, writing nothing", async () => {
@@ -218,7 +218,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
     const before = await competitionCount(auth.orgId);
     // SLAM_STAGE_TEMPLATE's own stage is a KNOCKOUT: it ranks no table, so it takes no points.
     await expect(
-      instantiateTemplate(auth, SLAM_STAGE_TEMPLATE({ points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [] } }), {
+      instantiateTemplate(auth, SLAM_STAGE_TEMPLATE({ points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] } }), {
         name: `KO points ${randomUUID().slice(0, 6)}`,
         ends_on: "2030-12-31",
       }),
@@ -235,7 +235,7 @@ describe.skipIf(!HAS_DB)("createFromTemplate (D1a, P4)", () => {
         auth,
         SLAM_STAGE_TEMPLATE({
           kind: "league",
-          points: { base: { win: 3, draw: 1, loss: 0 }, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } },
+          points: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } },
         }),
         { name: `Award ${randomUUID().slice(0, 6)}`, ends_on: "2030-12-31" },
       ),
@@ -583,7 +583,7 @@ describe.skipIf(!HAS_DB)(
       const before = await competitionCount(auth.orgId);
       const template = SLAM_STAGE_TEMPLATE({
         points: {
-          base: { win: 3, draw: 1, loss: 0 },
+          win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
           bonuses: [{ when: "win_margin_gte", param: 2, points: 1 }],
         },
       });

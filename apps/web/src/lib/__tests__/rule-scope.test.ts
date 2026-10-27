@@ -46,6 +46,7 @@ describe("rule-scope — web reads the engine declaration (D2)", () => {
     // Sound AND complete, against the engine's helpers (never rule-scope's own filter): a field is in a form iff each key
     // it edits is one of that form's keys for the cell. Counted per form: zero checked is a failure.
     let cells = 0;
+    let pointsKeyCells = 0;
     const placed = { stage: 0, match: 0, points: 0 };
     for (const m of builtinModules)
       for (const kind of [null, ...StageKind.options])
@@ -61,12 +62,17 @@ describe("rule-scope — web reads the engine declaration (D2)", () => {
             expect(keysOf(got), `${m.key}/${kind}/${variant} ${form}`).toEqual(keysOf(want));
             placed[form] += got.length;
           }
+          if (pointsKeysFor(m, kind, variant).length > 0) pointsKeyCells++;
           cells++;
         }
     expect(cells).toBe(builtinModules.reduce((n, m) => n + (StageKind.options.length + 1) * (Object.keys(m.variants).length + 1), 0));
     expect(placed.stage, "stage fields placed").toBeGreaterThan(0);
     expect(placed.match, "match fields placed").toBeGreaterThan(0);
-    expect(placed.points, "points fields placed").toBeGreaterThan(0);
+    // W2d PS-1: no field edits a points key since football's shoot-out pair retired (the stage's Points section owns them),
+    // so the points arm places nothing — asserted, not assumed, over cells that DO declare points keys (the absence is a real
+    // claim, not an empty key set). A points field added later reds here: restore the `> 0` guard with it.
+    expect(pointsKeyCells, "cells declaring points keys").toBeGreaterThan(0);
+    expect(placed.points, "points fields placed (none since W2d PS-1)").toBe(0);
   });
 
   it("X-SR-1 spec §4.1 Q5: each sport's match form is its match keys' editors, in table order (rows typed from the spec)", () => {
@@ -117,11 +123,19 @@ describe("rule-scope — web reads the engine declaration (D2)", () => {
     expect(pointsFieldsFor(ctx)).toEqual([]);
   });
 
-  it("X-SR-1 football: the shoot-out points pair is a POINTS form field, in neither the stage nor the match form (ST-G8 screen)", () => {
+  it("X-SR-1 football: no field edits a points key (the shoot-out pair retired, W2d PS-1), so the points form is empty and the stage form holds no points key", () => {
     const ctx: RuleContext = { module: mod("football"), stageKind: "league", variant: null };
-    expect(keysOf(pointsFieldsFor(ctx))).toEqual(["shootoutWin", "shootoutLoss"]);
-    expect(keysOf(stageFieldsFor(ctx))).not.toContain("shootoutWin");
-    expect(keysOf(stageFieldsFor(ctx))).not.toContain("shootoutLoss");
+    const pointsKeys = pointsKeysFor(ctx.module, ctx.stageKind, ctx.variant);
+    // The engine still declares football's table points (soBonus among them), so an empty points FORM is a real claim:
+    // the stage's Points section edits them, never a match-rules field.
+    expect(pointsKeys, "football declares points keys").toContain("points");
+    // ...and its schema keeps `soBonus` while the retired pair no longer survives a parse.
+    const parsed = ctx.module.configSchema.parse({ points: { win: 3, draw: 1, loss: 0, soBonus: 1, shootoutWin: 2, shootoutLoss: 1 } });
+    expect((parsed as { points: Record<string, number> }).points).toEqual({ win: 3, draw: 1, loss: 0, soBonus: 1 });
+    expect(pointsFieldsFor(ctx)).toEqual([]);
+    const stageFields = stageFieldsFor(ctx);
+    expect(stageFields.length, "the stage form is not empty").toBeGreaterThan(0);
+    for (const f of stageFields) for (const k of f.edits) expect(pointsKeys, `${f.key} edits ${k}, a points key`).not.toContain(k);
     inOrder(keysOf(stageFieldsFor(ctx)), ["halfMinutes", "extraTime", "shootout", "teamSize", "maxSubs", "subWindows", "sinBinMinutes"]);
     // A sport whose points keys have no field yet answers an empty points form rather than a crash.
     expect(pointsFieldsFor({ module: mod("tennis"), stageKind: "league", variant: null })).toEqual([]);

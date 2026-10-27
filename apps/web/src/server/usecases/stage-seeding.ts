@@ -30,10 +30,13 @@ import {
   type SourcedSlot,
   type StandingsRow,
   type TakeRule,
+  type NewLotsDraw,
 } from "@seazn/engine/competition";
 import { EngineError } from "@seazn/engine/core";
 import { HttpError } from "@/lib/errors";
-import { poolCount, POOL_KEYS, BRACKET_KINDS, loadBracketFixtures, americanoPlacementTables } from "./stages";
+import { loadCrossGroupRules } from "@/server/engine-db/competition";
+import { persistLotsDraws } from "@/server/engine-db/table-rules";
+import { poolCount, POOL_KEYS, BRACKET_KINDS, REAL_TABLE_KINDS, loadBracketFixtures, americanoPlacementTables } from "./stages";
 
 type Tx = postgres.TransactionSql;
 
@@ -277,9 +280,27 @@ export async function sourcesToTables(
         ? await americanoPlacementTables(tx, source.id, target.division_id)
         : await sourceStandingsTables(tx, source);
     const bracket = BRACKET_KINDS.has(source.kind) ? await loadBracketFixtures(tx, source.id) : undefined;
-    tables.push({ pools, ...(bracket ? { bracket } : {}) });
+    // W2d T12 (spec §5.9, X-TB-7): the source's pinned cross-group order and stored draws — as tablesForCompletedStage.
+    const crossGroup = REAL_TABLE_KINDS.has(source.kind) ? await loadCrossGroupRules(tx, source.id) : undefined;
+    tables.push({ pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) });
   }
   return { shapes, tables, resolved };
+}
+
+/** W2d T12 (spec §5.9, X-TB-7): store the cross-group draws best-Nth made, each under its source stage's pool null
+ *  (`stage_lots_draws.pool_id` null; a pooled stage has no "" table of its own, and a one-pool source never ties across
+ *  groups), where `loadCrossGroupRules` reads them back — so a re-proposal or a re-complete seats the same order. The
+ *  caller holds the division lock. */
+export async function persistCrossGroupDraws(
+  tx: Tx,
+  sources: readonly { id: string }[],
+  draws: readonly (NewLotsDraw & { readonly sourceIndex: number })[],
+): Promise<void> {
+  for (const { sourceIndex, ...draw } of draws) {
+    const source = sources[sourceIndex];
+    if (source === undefined) throw new Error(`a cross-group draw names source ${sourceIndex}, which the progression does not have`);
+    await persistLotsDraws(tx, source.id, null, [draw]);
+  }
 }
 
 /** seed -> every "<fixtureId>:home" | "<fixtureId>:away" slot carrying that

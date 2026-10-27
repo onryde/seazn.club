@@ -26,6 +26,7 @@
 // exact key set).
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 
 // `unstable_cache` is a Next server-runtime API with no incrementalCache
 // outside a real request — passthrough, never a memoising double.
@@ -39,6 +40,7 @@ import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createStages } from "@/server/usecases/stages";
 import { listStageQualificationMeta } from "../stage-qualification";
+import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import { GENERIC_CONFIG, seedOrg } from "./_seed";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -88,7 +90,7 @@ async function division(visibility: "public" | "private") {
   return { auth, divisionId: div.id };
 }
 
-const POINTS = { base: { win: 2, draw: 1, loss: 0 } };
+const POINTS = { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" };
 
 /** Swiss (4 rounds, its own points rule) → Finals taking 1..4; the Finals
  *  carries an organiser rank override (`has_rank_overrides` true). */
@@ -142,13 +144,18 @@ describe.skipIf(!HAS_DB)("listStageQualificationMeta (R1a — the console's V414
       expect(pub.map((r) => r.id), "premise: the view publishes every stage").toEqual(scene.stages.map((s) => s.id));
       const console_ = await listStageQualificationMeta(scene.auth, scene.stages.map((s) => s.id));
       expect([...console_.keys()].sort()).toEqual(pub.map((r) => r.id).sort());
+      // W2d Task 9: the public document's table rules for the same stages — the one loader both read through.
+      const docs = await stageTableRulesDocs(sql, pub.map((r) => r.id));
       for (const row of pub) {
         // The view publishes every one of the function's columns…
         expect(Object.keys(row), `stage ${row.id}`).toEqual(expect.arrayContaining(columns));
         // …and the console returns exactly those, with the same values: no
-        // extra key, no missing one.
-        expect(Object.keys(console_.get(row.id) ?? {}).sort(), `stage ${row.id}`).toEqual([...columns].sort());
-        expect(console_.get(row.id), `stage ${row.id}`).toEqual(pick(row, columns));
+        // extra key, no missing one — plus the stage's table rules (W2d Task 9).
+        const { table_rules, ...meta } = console_.get(row.id) ?? { table_rules: undefined };
+        expect(Object.keys(meta).sort(), `stage ${row.id}`).toEqual([...columns].sort());
+        expect(meta, `stage ${row.id}`).toEqual(pick(row, columns));
+        expect(table_rules, `stage ${row.id}: its table rules are read`).toBeTruthy();
+        expect(table_rules, `stage ${row.id}: the public document's rules`).toEqual(docs[row.id]);
       }
       compared.push(...pub);
     }
@@ -159,7 +166,8 @@ describe.skipIf(!HAS_DB)("listStageQualificationMeta (R1a — the console's V414
     expect(compared.some((r) => r.qualify_per_group === true)).toBe(true);
     expect(compared.some((r) => r.next_stage_name === "Finals")).toBe(true);
     expect(compared.some((r) => r.swiss_rounds === 4)).toBe(true);
-    expect(compared.some((r) => JSON.stringify(r.points_rule) === JSON.stringify(POINTS))).toBe(true);
+    // jsonb orders an object's keys its own way (by length, then bytes): compared as values, never as key order.
+    expect(compared.some((r) => isDeepStrictEqual(r.points_rule, POINTS))).toBe(true);
     expect(compared.some((r) => r.has_rank_overrides === true)).toBe(true);
   });
 
@@ -171,7 +179,11 @@ describe.skipIf(!HAS_DB)("listStageQualificationMeta (R1a — the console's V414
     expect([...got.keys()]).toEqual([swiss!.id]);
     // Exactly the function's own row for the stage…
     const [own] = await sql<Record<string, unknown>[]>`select * from stage_qualification_meta(${swiss!.id})`;
-    expect(got.get(swiss!.id)).toEqual(pick(own!, await functionColumns()));
+    const { table_rules, ...meta } = got.get(swiss!.id) ?? { table_rules: undefined };
+    expect(meta).toEqual(pick(own!, await functionColumns()));
+    // …and its table rules (W2d Task 9), read under the same tenant: the loader's.
+    expect(table_rules).toEqual((await stageTableRulesDocs(sql, [swiss!.id]))[swiss!.id]);
+    expect(table_rules, "premise: the rules are read").toBeTruthy();
     // …which is the scene's cut, not an empty one.
     expect(got.get(swiss!.id)).toMatchObject({
       qualify_count: 4,

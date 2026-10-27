@@ -30,8 +30,23 @@ export interface StandingsRow {
   // (spec 05 §4, doc 09 §2 tie-explanation popover). Written by the ranking
   // pass for every row that needed a tiebreaker beyond the cascade's primary
   // key; the finest rule that applied wins. Rides into standings_snapshots.
-  tieBreak?: { key: string; with: EntrantId[] };
+  // `note` (W2d): on a residual tie, why a conditional step did not split it.
+  // `drawnAt` (W2d §5.8): on a lots row ordered by a STORED draw, the date the
+  // DB stamped on it ("Drawn by lots on {date}"); absent for a draw not yet stored.
+  tieBreak?: { key: string; with: EntrantId[]; note?: TieBreakNote; drawnAt?: string };
+  /** W2d (spec §5.8 step 1, anti-goal 3): true on every row of a table with no
+   *  counted fixture — no leader, no row marked first. Absent otherwise. */
+  level?: boolean;
 }
+
+/** W2d (spec §2.3 anti-goal 2): why a conditional cascade step left a tie
+ *  unsplit — the tie popover says it instead of the step silently doing nothing.
+ *  Kept only on a residual tie (lots / seed). `h2h_two_not_applicable`: `h2h_two`
+ *  met a class that is not two (any later split clears it, a later `h2h_two` may
+ *  apply). `h2h_incomplete` (W2d §5.6 "ST-G12", X-TB-8): a head-to-head step met a
+ *  class whose mini-schedule is incomplete; a later split does not clear it — no
+ *  later step re-runs the head-to-head for those rows. */
+export type TieBreakNote = "h2h_two_not_applicable" | "h2h_incomplete";
 
 // The two deltas a decided fixture contributes, in [home, away] order (the pair
 // a SportModule.standingsDelta returns). The pair also names both entrants of

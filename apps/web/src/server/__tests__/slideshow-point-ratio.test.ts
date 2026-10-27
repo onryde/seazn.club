@@ -1,12 +1,14 @@
 // The slideshow standings slide carries the "Pts ratio" column the normal
 // standings table shows — and ONLY under the condition the normal table shows
-// it: the division's cascade (its own override, else the pinned module's
-// default) names `point_ratio` (`standingsColumns` / `DERIVED_METRICS`).
+// it: the stage's order (W2d Task 9: its table rules from the one loader, its
+// pin, else the division's override, else the module's default) names
+// `point_ratio` (`standingsColumns` / `DERIVED_METRICS`).
 //
-// The slide used to hardcode #, entrant, P, W, D, L, Pts, so a badminton, table
-// tennis, volleyball or carrom division — whose cascades all rank on
-// `point_ratio` — showed a table on the wall that left out the number the tie
-// was decided on, while the same division's public page printed it.
+// The slide used to hardcode #, entrant, P, W, D, L, Pts, so a division whose
+// cascade ranks on `point_ratio` (volleyball and carrom by default; badminton and
+// table tennis too until W2d's signed defaults, spec §5.10) showed a table on the
+// wall that left out the number the tie was decided on, while the same
+// division's public page printed it.
 //
 // Conventions (RULES.md, test-case design):
 //  - the "which sports get the column" question is answered by the REAL normal
@@ -24,7 +26,8 @@
 // which self-skips without one, like every DB-backed suite here.
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
-import { ratioText, type StandingsRow } from "@seazn/engine/competition";
+import { ratioText, validateCascade, type StandingsRow } from "@seazn/engine/competition";
+import type { TiebreakerKey } from "@seazn/engine/sport";
 import { sql } from "@/lib/db";
 import { buildPublicDivisionSlides, buildDivisionSlides, type Slide, type StandingsSlideRow } from "../slideshow-data";
 import { buildTableView, type TableViewInput } from "../public-site/standings-view";
@@ -33,6 +36,7 @@ import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages } from "@/server/usecases/stages";
+import { defaultOrderOf } from "@seazn/engine/testkit";
 
 type StandingsSlide = Extract<Slide, { kind: "standings" }>;
 
@@ -64,14 +68,18 @@ const snapshotRows = LEDGER.map((l, i) => ({
 
 const entrants = LEDGER.map((l) => ({ id: l.id, display_name: l.name }));
 
-function publicInput(division: {
-  sport_key?: string;
-  module_version?: string;
-  tiebreakers?: string[] | null;
-}) {
+/** `order` is the stage's table-rules order as the public loader hands it over (`PublicStage.table_rules`, W2d Task 9);
+ *  absent: a hand-built input (or a stage the loader refused) that carries none. */
+function publicInput(
+  division: {
+    sport_key?: string;
+    module_version?: string;
+  },
+  order?: readonly string[],
+) {
   return {
     division: { id: "d1", name: "Open", ...division },
-    stages: [{ id: "sl", kind: "league", name: "League" }],
+    stages: [{ id: "sl", kind: "league", name: "League", ...(order === undefined ? {} : { table_rules: { tiebreakers: order } }) }],
     pools: [],
     fixtures: [],
     standings: [{ stage_id: "sl", pool_id: null, rows: snapshotRows }],
@@ -79,8 +87,8 @@ function publicInput(division: {
   };
 }
 
-async function standingsSlide(division: Parameters<typeof publicInput>[0]): Promise<StandingsSlide> {
-  const slides = await buildPublicDivisionSlides(publicInput(division));
+async function standingsSlide(division: Parameters<typeof publicInput>[0], order?: readonly string[]): Promise<StandingsSlide> {
+  const slides = await buildPublicDivisionSlides(publicInput(division, order));
   const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
   if (!slide) throw new Error("no standings slide built");
   return slide;
@@ -121,14 +129,15 @@ const tableHasRatio = (view: ReturnType<typeof normalTable>) => view.columns.som
 
 describe("slideshow standings slide — the Pts ratio column (public /present)", () => {
   // ---- the empty case first --------------------------------------------------
-  it("a division that names no module and no cascade gets no ratio column (the slide as it always was)", async () => {
+  it("a division that names no module and a stage with no order gets no ratio column (the slide as it always was)", async () => {
     const slide = await standingsSlide({});
     expect(slideShowsRatio(slide)).toBe(false);
     for (const r of slide.rows) expect(Object.keys(r).sort()).toEqual(["drawn", "lost", "name", "played", "points", "rank", "won"]);
   });
 
   it("an unknown (retired) module build degrades to no column — it never throws, like the division page", async () => {
-    const slide = await standingsSlide({ sport_key: "no-such-sport", module_version: "9.9.9", tiebreakers: null });
+    // The loader refuses (and omits) a stage whose module this build cannot resolve, so it arrives with no order.
+    const slide = await standingsSlide({ sport_key: "no-such-sport", module_version: "9.9.9" });
     expect(slideShowsRatio(slide)).toBe(false);
   });
 
@@ -137,8 +146,8 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
     const withRatio: string[] = [];
     const without: string[] = [];
     for (const m of builtinModules) {
-      const slide = await standingsSlide({ sport_key: m.key, module_version: m.version, tiebreakers: null });
-      const table = normalTable(m, m.defaultTiebreakers);
+      const slide = await standingsSlide({ sport_key: m.key, module_version: m.version }, defaultOrderOf(m));
+      const table = normalTable(m, defaultOrderOf(m));
       expect({ sport: m.key, slide: slideShowsRatio(slide) }).toEqual({ sport: m.key, slide: tableHasRatio(table) });
       (tableHasRatio(table) ? withRatio : without).push(m.key);
     }
@@ -148,35 +157,35 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
     expect(without.length).toBeGreaterThan(0);
   });
 
-  it("a division's OWN cascade override wins over the module default, in both directions", async () => {
-    const ranksOnRatio = builtinModules.find((m) => m.defaultTiebreakers.includes("point_ratio"));
-    const doesNot = builtinModules.find((m) => !m.defaultTiebreakers.includes("point_ratio"));
+  it("the STAGE's order decides, not the module default, in both directions", async () => {
+    const ranksOnRatio = builtinModules.find((m) => defaultOrderOf(m).includes("point_ratio"));
+    const doesNot = builtinModules.find((m) => !defaultOrderOf(m).includes("point_ratio"));
     if (!ranksOnRatio || !doesNot) throw new Error("the shipped modules no longer split on point_ratio");
 
     // Positive: a sport that never ranks on it, told to, gets the column.
     const added = ["points", "wins", "point_ratio"];
-    const addedSlide = await standingsSlide({ sport_key: doesNot.key, module_version: doesNot.version, tiebreakers: added });
+    const addedSlide = await standingsSlide({ sport_key: doesNot.key, module_version: doesNot.version }, added);
     expect(slideShowsRatio(addedSlide)).toBe(true);
     expect(tableHasRatio(normalTable(doesNot, added))).toBe(true);
 
     // Negative pair: a sport that ranks on it by default, told not to, loses it.
     const dropped = ["points", "wins"];
-    const droppedSlide = await standingsSlide({ sport_key: ranksOnRatio.key, module_version: ranksOnRatio.version, tiebreakers: dropped });
+    const droppedSlide = await standingsSlide({ sport_key: ranksOnRatio.key, module_version: ranksOnRatio.version }, dropped);
     expect(slideShowsRatio(droppedSlide)).toBe(false);
     expect(tableHasRatio(normalTable(ranksOnRatio, dropped))).toBe(false);
   });
 
   // ---- the value -------------------------------------------------------------
   it("each row's ratio is the engine's text for its OWN points pair, the normal table's cell, to two decimals", async () => {
-    const m = builtinModules.find((x) => x.defaultTiebreakers.includes("point_ratio"));
+    const m = builtinModules.find((x) => defaultOrderOf(x).includes("point_ratio"));
     if (!m) throw new Error("no shipped module ranks on point_ratio");
-    const slide = await standingsSlide({ sport_key: m.key, module_version: m.version, tiebreakers: null });
+    const slide = await standingsSlide({ sport_key: m.key, module_version: m.version }, defaultOrderOf(m));
 
     // Hand-computed, differing from every neighbouring pair's ratio.
     expect(slide.rows.map((r) => r.pointRatio)).toEqual(LEDGER.map((l) => l.want));
 
     // And the normal table prints the very same text in its point_ratio cell.
-    const table = normalTable(m, m.defaultTiebreakers);
+    const table = normalTable(m, defaultOrderOf(m));
     const col = table.columns.findIndex((c) => c.key === "point_ratio");
     expect(col).toBeGreaterThan(-1);
     const cellOf = (id: string) => table.rows.find((r) => r.entrantId === id)!.cells[col];
@@ -184,8 +193,8 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
   });
 
   it("the structural cells are untouched by the new column (rank, name, P/W/D/L/Pts)", async () => {
-    const m = builtinModules.find((x) => x.defaultTiebreakers.includes("point_ratio"))!;
-    const withCol = await standingsSlide({ sport_key: m.key, module_version: m.version, tiebreakers: null });
+    const m = builtinModules.find((x) => defaultOrderOf(x).includes("point_ratio"))!;
+    const withCol = await standingsSlide({ sport_key: m.key, module_version: m.version }, defaultOrderOf(m));
     const without = await standingsSlide({});
     const structural = (rows: StandingsSlideRow[]) =>
       rows.map((r) => [r.rank, r.name, r.played, r.won, r.drawn, r.lost, r.points]);
@@ -194,11 +203,11 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
   });
 
   it("a snapshot row with NO metrics object at all prints the table's dash under the ratio and does not throw", async () => {
-    const m = builtinModules.find((x) => x.defaultTiebreakers.includes("point_ratio"))!;
+    const m = builtinModules.find((x) => defaultOrderOf(x).includes("point_ratio"))!;
     // A row as a hand-built input or a pre-ledger snapshot carries it: no `metrics` key.
     const bare = { entrantId: "e1", played: 0, won: 0, drawn: 0, lost: 0, points: 0, rank: 1 };
     const withLedger = { ...bare, entrantId: "e2", rank: 2, metrics: { points_won: 63, points_lost: 42 } };
-    const input = publicInput({ sport_key: m.key, module_version: m.version, tiebreakers: null });
+    const input = publicInput({ sport_key: m.key, module_version: m.version }, defaultOrderOf(m));
     const slides = await buildPublicDivisionSlides({
       ...input,
       standings: [{ stage_id: "sl", pool_id: null, rows: [bare, withLedger] }],
@@ -254,8 +263,19 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
     return { auth, division, stage: stage! };
   }
 
-  it("a badminton division's board carries the ratio, computed from its snapshot's points ledger", async () => {
-    const { auth, division } = await seededDivision("badminton", "bwf", {});
+  // The sport is the first shipped module whose DEFAULT order ranks on point_ratio, read off the engine (badminton by
+  // name until W2d's §5.10 order, BWF 16.2, which ranks on the point DIFFERENCE instead), under its first variant.
+  const ratioSport = () => {
+    const m = builtinModules.find((x) => defaultOrderOf(x).includes("point_ratio"));
+    if (!m) throw new Error("no shipped module ranks on point_ratio by default (the pair below proves nothing)");
+    const variant = Object.keys(m.variants)[0];
+    if (variant === undefined) throw new Error(`${m.key} declares no variant`);
+    return { m, variant };
+  };
+
+  it("a division whose sport ranks on point_ratio by default carries the ratio, computed from its snapshot's points ledger", async () => {
+    const { m, variant } = ratioSport();
+    const { auth, division } = await seededDivision(m.key, variant, {});
     const slides = await buildDivisionSlides(auth, division.id, "Open");
     const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
     expect(slide, "a standings slide").toBeDefined();
@@ -270,25 +290,48 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
     expect(slideShowsRatio(slide!)).toBe(false);
   });
 
-  // The division's own cascade is read by the organiser builder's SELECT. Both
-  // directions, on the same snapshot rows, so a select that stopped reading
-  // `tiebreakers` (falling back to the module default) fails one of the pair.
+  // The division's own cascade reaches a PENDING stage's order through the one
+  // loader (`stageTableRulesDocs`, W2d Task 9: an unpinned stage reads its live
+  // layers). Both directions, on the same snapshot rows, so a builder that
+  // stopped reading the stage's rules (falling back to the module default, or to
+  // no order) fails one of the pair.
+  // The sport is the first shipped module whose DEFAULT order never ranks on point_ratio yet which records what the ratio
+  // reads (points_won, points_lost), read off the engine: `validateCascade`, which W2d T10 asks of the order a new stage
+  // inherits (`refuseNewStageTable`). generic records neither, so its own order naming point_ratio is refused at the stage
+  // create. point_ratio goes in AHEAD of the terminal drawing of lots, under the sport's first variant.
+  const addedRatioSport = () => {
+    for (const m of builtinModules) {
+      const variant = Object.keys(m.variants)[0];
+      const order = defaultOrderOf(m);
+      if (variant === undefined || order.includes("point_ratio") || order.at(-1) !== "lots") continue;
+      const added = [...order.slice(0, -1), "point_ratio", "lots"] as TiebreakerKey[];
+      const cfg = m.configSchema.parse(m.variants[variant]);
+      if (validateCascade(added, { module: m, cfg, stageKind: "league", crossGroup: false }).length === 0) return { m, variant, added };
+    }
+    throw new Error("no shipped module records point_ratio's inputs without ranking on it (the case below proves nothing)");
+  };
+
   it("a division whose OWN cascade adds point_ratio to a sport that never ranks on it gets the column, with its values", async () => {
-    const generic = builtinModules.find((m) => m.key === "generic")!;
-    expect(generic.defaultTiebreakers, "generic's default cascade").not.toContain("point_ratio");
-    const added = [...generic.defaultTiebreakers, "point_ratio"];
-    const { auth, division } = await seededDivision("generic", "score", GENERIC_CONFIG, added);
+    const { m, variant, added } = addedRatioSport();
+    expect(defaultOrderOf(m), `${m.key}'s default cascade`).not.toContain("point_ratio");
+    expect(added, "the own order adds point_ratio").toContain("point_ratio");
+    // Why not generic (the case before W2d T10): it records no points ledger, so the engine refuses point_ratio there.
+    const generic = builtinModules.find((x) => x.key === "generic")!;
+    const genericAdded = [...defaultOrderOf(generic).slice(0, -1), "point_ratio", "lots"] as TiebreakerKey[];
+    const genericCfg = generic.configSchema.parse(GENERIC_CONFIG);
+    expect(validateCascade(genericAdded, { module: generic, cfg: genericCfg, stageKind: "league", crossGroup: false }).map((r) => r.key), "generic refuses it").toEqual(["point_ratio"]);
+    const { auth, division } = await seededDivision(m.key, variant, {}, added);
     const slides = await buildDivisionSlides(auth, division.id, "Open");
     const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
     expect(slide, "a standings slide").toBeDefined();
     expect(slide!.rows.map((r) => r.pointRatio)).toEqual(LEDGER.map((l) => l.want));
   });
 
-  it("a division whose OWN cascade drops point_ratio from badminton loses the column (same rows as the badminton case above)", async () => {
-    const badminton = builtinModules.find((m) => m.key === "badminton")!;
-    expect(badminton.defaultTiebreakers, "badminton's default cascade").toContain("point_ratio");
-    const dropped = badminton.defaultTiebreakers.filter((k) => k !== "point_ratio");
-    const { auth, division } = await seededDivision("badminton", "bwf", {}, dropped);
+  it("a division whose OWN cascade drops point_ratio from a sport that ranks on it loses the column (same rows as the ratio-sport case above)", async () => {
+    const { m, variant } = ratioSport();
+    expect(defaultOrderOf(m), `${m.key}'s default cascade`).toContain("point_ratio");
+    const dropped = defaultOrderOf(m).filter((k) => k !== "point_ratio");
+    const { auth, division } = await seededDivision(m.key, variant, {}, dropped);
     const slides = await buildDivisionSlides(auth, division.id, "Open");
     const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
     expect(slide, "a standings slide").toBeDefined();

@@ -8,9 +8,9 @@ import type { EntrantId, StageKind } from "../core/types.ts";
 import { foldResults, foldStandings, type FixtureResult } from "./standings.ts";
 import { applyRankLocks, type RankLock } from "./points.ts";
 import type { StandingsDelta } from "../core/types.ts";
-import type { PoolTable, SourceTables as StageTables } from "./progression.ts";
-import type { TiebreakerKey } from "../sport/module.ts";
-import { buildSwissTable, rankStandings } from "./tiebreakers.ts";
+import type { CrossGroupRules, PoolTable, SourceTables as StageTables } from "./progression.ts";
+import type { TableRules } from "./table-rules.ts";
+import { buildSwissTable, membersKeyOf, rankStandings, type MembersKey, type NewLotsDraw, type RankContext, type StoredLotsDraw } from "./tiebreakers.ts";
 
 // spec 02 §6 fixture statuses that matter to a stage's completion/ranking.
 export type FixtureStatus = "scheduled" | "in_play" | "decided" | "void" | "walkover";
@@ -68,8 +68,14 @@ export interface TableStage {
   id: string;
   kind: Extract<StageKind, "league" | "group" | "swiss">;
   entrants: readonly EntrantId[];
-  cascade: readonly TiebreakerKey[];
-  h2hRecursive?: boolean;
+  /** W2d (spec §5.4, §6 E1): the stage's effective table rules (`resolveTableRules`). The table ranks by
+   *  `rules.tiebreakers`; `points` and `crossGroup` ride along for the caller that pays and the progression that compares
+   *  groups — `completeTableStage` folds the deltas it is handed and never re-pays them. */
+  rules: TableRules;
+  /** W2d (B2, HK-TB-1): which wins the `wins` step counts — the module's `winsCount`. Absent = every win. */
+  winsCount?: RankContext["winsCount"];
+  /** W2d (B5): a result's GAME points, for `sberger` and `direct` on a non-Swiss stage. Absent = the table points. */
+  gamePoints?: RankContext["gamePoints"];
   swiss?: boolean; // assemble the Swiss ledger for buchholz/sberger/direct
   seeds?: ReadonlyMap<EntrantId, number>;
   rngSeed?: number;
@@ -82,6 +88,33 @@ export interface TableStage {
   rankLocks?: readonly RankLock[];
   /** Circular-H2H mode for ≥3-way ties (Jul3/05 §5). */
   h2hScope?: "mini_table" | "overall";
+  /** W2d (spec §5.8): the stage's stored lots draws, by pool (a fixture's
+   *  `poolId`, "" for none — the key completeTableStage names its pools by),
+   *  then by the tied set's members key. A draw belongs to its pool. */
+  lotsDraws?: ReadonlyMap<string, ReadonlyMap<MembersKey, StoredLotsDraw>>;
+  /** W2d (spec §5.6 "ST-G12", X-TB-8): every fixture the stage schedules, decided or not, as [home, away] — one entry per
+   *  fixture (`RankContext.scheduledPairs`). A head-to-head step needs the tied class's mini-schedule complete. Absent or
+   *  empty = every mini-schedule complete, as before W2d. Not read on a Swiss stage (no round-robin schedule; B1). */
+  scheduledPairs?: RankContext["scheduledPairs"];
+  /** W2d (IH-TB-2): the sport's partial-schedule order (`SportModule.partialScheduleOrder`). Absent = the block does not
+   *  split a class whose mini-schedule is incomplete. */
+  partialScheduleOrder?: RankContext["partialScheduleOrder"];
+}
+
+/** W2d (spec §5.9, ST-G4, X-TB-7): how this stage compares entrants from DIFFERENT groups (best-Nth) — its effective
+ *  `crossGroup` order (pinned with the stage), with the seeds, `winsCount` and rngSeed its keys read, and the cross-group
+ *  draws stored for it. Those live in the stage-wide pool "" (`stage_lots_draws.pool_id` null): a cross-group tie holds
+ *  one entrant per group, so its members key never meets a group's own tie, and a pooled stage has no "" table of its
+ *  own (T5 review G3). The one reading of a stage for `SourceTables.crossGroup`. */
+export function crossGroupRulesOf(stage: TableStage): CrossGroupRules {
+  const lotsDraws = stage.lotsDraws?.get("");
+  return {
+    order: stage.rules.crossGroup,
+    ...(lotsDraws === undefined ? {} : { lotsDraws }),
+    ...(stage.seeds === undefined ? {} : { seeds: stage.seeds }),
+    ...(stage.rngSeed === undefined ? {} : { rngSeed: stage.rngSeed }),
+    ...(stage.winsCount === undefined ? {} : { winsCount: stage.winsCount }),
+  };
 }
 
 export interface BracketStage {
@@ -102,7 +135,10 @@ export type DivisionEvent =
   | { type: "stage_opened"; stageId: string }
   | { type: "stage_completed"; stageId: string; finalRanks: EntrantId[] }
   | { type: "rank_lock_required"; stageId: string; group: EntrantId[] }
-  | { type: "rank_lock"; stageId: string; method: "lots"; group: EntrantId[] }
+  // W2d (spec §5.8, PS-5b): `order` and `drawnAt` are the STORED draw's. A draw
+  // made in this call has no date yet, so it emits rank_lock_required alone and
+  // goes back in `newLotsDraws`; the lock follows once the draw is stored.
+  | { type: "rank_lock"; stageId: string; method: "lots"; group: EntrantId[]; order: EntrantId[]; drawnAt: string }
   | {
       type: "entrant_withdrawn";
       stageId: string;
@@ -131,7 +167,7 @@ function poolOf(fixture: TableFixture): string {
 // league / group: every fixture decided or void (group pools all complete is
 // the same condition — pools only partition the fixtures). swiss: the first
 // `rounds` rounds all settled.
-export function isTableStageComplete(stage: TableStage, fixtures: readonly TableFixture[]): boolean {
+export function isTableStageComplete(stage: Pick<TableStage, "kind" | "rounds">, fixtures: readonly TableFixture[]): boolean {
   if (fixtures.length === 0) return false;
   if (stage.kind === "swiss") {
     const rounds = stage.rounds ?? 0;
@@ -205,13 +241,16 @@ function entrantsOfPool(
 export interface CompletedTableStage {
   events: DivisionEvent[];
   tables: StageTables;
+  /** W2d (spec §5.8): the lots drawn now, each tagged with its pool, for the caller to store. */
+  newLotsDraws: ReadonlyArray<NewLotsDraw & { readonly pool: string }>;
 }
 
 // Fold + rank each pool of a completed table stage. Emits stage_completed
-// {finalRanks}, plus rank_lock_required + rank_lock for any tie the cascade
-// left to a drawing of lots (spec 05 §3/§4.4). finalRanks interleaves pools by
-// rank (all pool winners, then all runners-up, …) — the cross-pool seeding
-// order (spec 05 §2.3).
+// {finalRanks}, plus rank_lock_required for any tie the cascade left to a
+// drawing of lots (spec 05 §3/§4.4), and rank_lock for one whose draw is stored
+// (W2d §5.8). A pool with no counted fixture is an empty table: no lots, every
+// row level. finalRanks interleaves pools by rank (all pool winners, then all
+// runners-up, …) — the cross-pool seeding order (spec 05 §2.3).
 export function completeTableStage(
   stage: TableStage,
   fixtures: readonly TableFixture[],
@@ -220,6 +259,7 @@ export function completeTableStage(
   const single = pools.length === 1;
   const events: DivisionEvent[] = [];
   const poolTables: PoolTable[] = [];
+  const newLotsDraws: (NewLotsDraw & { readonly pool: string })[] = [];
 
   for (const pool of pools) {
     const poolFixtures = single ? fixtures : fixtures.filter((fixture) => poolOf(fixture) === pool);
@@ -237,14 +277,29 @@ export function completeTableStage(
       openings.length > 0 || awardDeltas.length > 0
         ? foldStandings(entrants, [...openings, ...results.flat(), ...awardDeltas])
         : foldResults(entrants, results);
+    // W2d §5.8 step 1: the pool's table is empty when nothing in it counts — no
+    // counted result, no sit-out award, and no carried opening that holds
+    // something (an opening is the fold of counted fixtures in its source stage;
+    // one with nothing played and no points carries no table — a points-mode
+    // carry plays 0 by construction, so its points are what it carries).
+    const carried = openings.filter((d) => d.played > 0 || d.points !== 0);
+    const countedFixtures = results.length + awardDeltas.length + carried.length;
+    const poolDraws = stage.lotsDraws?.get(pool);
     const ranked = rankStandings(rows, {
-      cascade: stage.cascade,
+      cascade: stage.rules.tiebreakers,
       results,
-      h2hRecursive: stage.h2hRecursive === true,
+      countedFixtures,
+      ...(stage.winsCount === undefined ? {} : { winsCount: stage.winsCount }),
+      ...(stage.gamePoints === undefined ? {} : { gamePoints: stage.gamePoints }),
+      ...(poolDraws === undefined ? {} : { lotsDraws: poolDraws }),
       ...(stage.seeds === undefined ? {} : { seeds: stage.seeds }),
       ...(stage.rngSeed === undefined ? {} : { rngSeed: stage.rngSeed }),
       ...(stage.h2hScope === undefined ? {} : { h2hScope: stage.h2hScope }),
       ...(stage.swiss === true ? { swiss: buildSwissTable(entrants, results, awardDeltas) } : {}),
+      // ST-G12 reads a round robin's schedule; a Swiss stage pairs round by round and has none (Swiss stays W3, D7 —
+      // and production's one competition, a Swiss one, does not move, B1).
+      ...(stage.scheduledPairs === undefined || stage.kind === "swiss" ? {} : { scheduledPairs: stage.scheduledPairs }),
+      ...(stage.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: stage.partialScheduleOrder }),
     });
     // Manual override wins — it is the final structural word (Jul3/05 §8).
     if (stage.rankLocks !== undefined && stage.rankLocks.length > 0) {
@@ -254,8 +309,14 @@ export function completeTableStage(
 
     for (const group of ranked.lotsGroups) {
       events.push({ type: "rank_lock_required", stageId: stage.id, group });
-      events.push({ type: "rank_lock", stageId: stage.id, method: "lots", group });
+      // The lock carries the stored draw's order and date (PS-5b): the engine
+      // has no clock, so a draw made just now waits for its stored row.
+      const drawn = poolDraws?.get(membersKeyOf(group));
+      if (drawn !== undefined) {
+        events.push({ type: "rank_lock", stageId: stage.id, method: "lots", group, order: [...drawn.order], drawnAt: drawn.drawnAt });
+      }
     }
+    for (const draw of ranked.newLotsDraws) newLotsDraws.push({ pool, ...draw });
     poolTables.push({ pool, rows: ranked.rows, results });
   }
 
@@ -266,6 +327,7 @@ export function completeTableStage(
   return {
     events,
     tables: { pools: poolTables, ...(overall === undefined ? {} : { overall }) },
+    newLotsDraws,
   };
 }
 
@@ -447,7 +509,7 @@ const EXPUNGES_EARLY_WITHDRAWAL: Readonly<Record<TableStage["kind"], boolean>> =
 // full schedule, including result-less pending fixtures). Swiss always
 // AWARDS — see EXPUNGES_EARLY_WITHDRAWAL.
 export function withdrawTableEntrant(
-  stage: TableStage,
+  stage: Pick<TableStage, "id" | "kind">,
   entrantId: EntrantId,
   fixtures: {
     played: readonly TableFixture[]; // decided games this entrant appears in

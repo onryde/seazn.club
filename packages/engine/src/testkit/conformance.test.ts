@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import { forfeitOf, type CoreEv, type EventEnvelope } from "../core/events.ts";
 import type { MatchOutcome, StandingsDelta } from "../core/types.ts";
-import type { ModuleEvent, SportModule } from "../sport/module.ts";
+import { winMethodTable, type ModuleEvent, type SportModule } from "../sport/module.ts";
 import { conformanceSuite } from "./conformance.ts";
 import { defaultLineupPair, lineupFromCatalog } from "./helpers.ts";
 
@@ -191,8 +191,15 @@ const coinflip: SportModule<CoinCfg, CoinEv, CoinState> = {
     { key: "against", label: "Flips lost", direction: "asc" },
     { key: "diff", label: "Flip difference", direction: "desc" },
   ],
-  defaultTiebreakers: ["points", "diff", "lots"],
+  defaultTiebreakers: () => ["points", "diff", "lots"],
+  primaryTableKey: "points",
   supportsDraws: (_cfg, stage) => stage === "league" || stage === "group" || stage === "swiss",
+  // W2d — the fake writes `regulation` and `timeout` wins, both in regulation; a draw stands in a table.
+  ...winMethodTable("coinflip", { regulation: "regulation", timeout: "regulation" }),
+  reachableDecidedIn: () => new Set(["regulation"] as const),
+  reachableResultKinds: (_cfg, stage) => new Set(stage === "league" || stage === "group" || stage === "swiss" ? (["draw"] as const) : []),
+  shootoutAs: "result",
+  tablePointsRule: () => ({ win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole", bonuses: [] }),
   bracketDeciders: () => ({}),
   declaredPointsSets: () => [2],
   matchPointsBounds: () => ({ max: 2, min: 0, winFloor: 2, lossCeil: 0, winsOnly: false }), // a draw pays 1

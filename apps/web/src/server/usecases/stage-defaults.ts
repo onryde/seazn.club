@@ -19,7 +19,8 @@ import { HttpError } from "@/lib/errors";
 import { TOP_LEVEL_STAGE_DECIDERS } from "@/lib/top-level-stage-deciders";
 import { STAGE_DECIDER_MOVED } from "@/server/api-v1/schemas";
 import { storedStageRules } from "@/lib/stage-decider-off";
-import { refuseStagePoints, refuseUnsettableKeys, setsBestOf, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
+import { randomInt } from "node:crypto";
+import { refuseStagePoints, refuseUnsettableKeys, stageRulesProblem, stageSaveRefusal } from "./stage-rules-merge";
 
 const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof v === "object" && !Array.isArray(v);
 
@@ -33,9 +34,17 @@ const isObj = (v: unknown): v is Record<string, unknown> => v !== null && typeof
  */
 export const sentPoints = (config: Record<string, unknown> | undefined): unknown => config?.points ?? undefined;
 
-/** `config` as the door stores it: a null `points` is not stored (the stage PUT deletes the key, never stores a null). */
+/** `config` as the door stores it: a null `points` is not stored (the stage PUT deletes the key, never stores a null), nor
+ *  (W2d Task 10) a null own order — null is "inherit", which is the key's absence. */
+const NULL_IS_ABSENT: ReadonlySet<string> = new Set(["points", "tiebreakers", "crossGroupTiebreakers"]);
 const withoutNullPoints = (config: Record<string, unknown>): Record<string, unknown> =>
-  config.points === null ? Object.fromEntries(Object.entries(config).filter(([k]) => k !== "points")) : config;
+  Object.fromEntries(Object.entries(config).filter(([k, v]) => !(v === null && NULL_IS_ABSENT.has(k))));
+
+/** W2d Task 10 (spec §5.4 "Storage", §5.8) — a new stage's lots seed, when the door sends none: a random 31-bit integer,
+ *  stored in `config.rngSeed`, so a drawing of lots on this stage is its own (never the shared seed 0 every stage read
+ *  while the key was usually absent). A seed sent is kept. */
+const withRngSeed = (config: Record<string, unknown>): Record<string, unknown> =>
+  config.rngSeed === undefined || config.rngSeed === null ? { ...config, rngSeed: randomInt(0, 2 ** 31) } : config;
 
 /** W2c Task 13b (R-13b-1; D3) — every whole decider any sport declares, refused at a stage config's TOP level. The
  *  engine-derived set lives in `lib/top-level-stage-deciders.ts`, shared with the API schema's named refusals, so the
@@ -73,13 +82,14 @@ export function withStageDefaults(
  * nothing: VALIDATION (400, `field`) for a decider at the config's top level (`shootout`, `extraTime`, `overtime`, …: any
  * the engine declares, `TOP_LEVEL_DECIDERS`; moved to `config.rules`), from any caller; UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (400) for a key sent that the sport never declares or this kind and
  * variant cannot set; CONFIG_INVALID (422, the engine's `issues`) when the division's config under the rules the stage
- * would store is one the sport refuses; POINTS_MAP_INCOMPLETE (422) when the rules sent move `bestOf` past what the
- * division's points table answers. The merged parse runs on the rules as STORED (the preset or the carry included), so a
- * preset the division cannot take is refused at the door rather than at the first whistle.
+ * would store is one the sport refuses. The merged parse runs on the rules as STORED (the preset or the carry included),
+ * so a preset the division cannot take is refused at the door rather than at the first whistle. (Whether the stage's
+ * points pay every set score its rules reach is the table guard's coverage question, asked by the caller over the
+ * config this returns: `refuseNewStageTable`, W2d Task 10.)
  *
  * W2c Task 13 (ST-G8): `config.points` is asked the stage PUT's points questions too (`refuseStagePoints`): RULE_NOT_SETTABLE
- * on a bracket kind or for a walkover score the sport's table never reads, 422 POINTS_RULE_INEXPRESSIBLE where the
- * division's points split, CONFIG_INVALID for metrics the sport does not emit. Stored as sent, as before.
+ * on a bracket kind or for a walkover score the sport's table never reads, CONFIG_INVALID for metrics the sport does not
+ * emit. Stored as sent, as before. W2d Task 10: a config with no `rngSeed` is given one (`withRngSeed`).
  */
 export function validatedStageConfig(
   module: AnySportModule,
@@ -103,10 +113,10 @@ export function validatedStageConfig(
   refuseUnsettableKeys(module, sportKey, kind, variant, divisionConfig, Object.keys(sent));
   const out = withStageDefaults(module, kind, variant, config, carried);
   if (isObj(out.rules)) {
-    const problem = stageRulesProblem(module, divisionConfig, out.rules, setsBestOf(sent));
+    const problem = stageRulesProblem(module, divisionConfig, out.rules);
     if (problem !== null) throw stageSaveRefusal(problem, sportKey);
   }
   const points = sentPoints(config);
-  if (points !== undefined) refuseStagePoints(module, kind, divisionConfig, PointsRule.parse(points));
-  return out;
+  if (points !== undefined) refuseStagePoints(module, kind, PointsRule.parse(points));
+  return withRngSeed(out);
 }

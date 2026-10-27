@@ -121,7 +121,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
       name: "L",
       config: {
         points: {
-          base: { win: 5, draw: 3, loss: 0 },
+          win: { regulation: 5 }, draw: 3, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
           bonuses: [{ when: "score_ratio_gte", param: 0.5, points: 1 }],
         },
       },
@@ -145,7 +145,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
       name: "L",
       config: {
         points: {
-          base: { win: 3, draw: 1, loss: 0 },
+          win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
           bonuses: [],
           forfeit: { winnerPoints: 3, loserPoints: -1 },
         },
@@ -248,7 +248,7 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
     ).rejects.toMatchObject({ featureKey: "tiebreakers.custom" });
   });
 
-  it("carry-over seeds Phase 2 with prior points; bonuses are gated at stage create", async () => {
+  it("carry-over seeds Phase 2 with prior points; a Community org creates a stage with bonuses (all scoring is free)", async () => {
     const { auth } = await seedOrg();
     const { division, entrants } = await seedDivision(auth, ["A", "B", "C", "D"]);
     const [g, final] = await createStages(auth, division.id, [
@@ -298,27 +298,27 @@ describe.skipIf(!HAS_DB)("custom points & rank control (Jul3/05)", () => {
       where division_id = ${division.id} and type = 'standings_carried'`;
     expect(ev!.n).toBe(1);
 
-    // Pro gates at stage create
+    // A stage's own bonus points ask no gate (W2d T10 fix round 1, I4: the
+    // owner's standing rule, all scoring is free): a Community org stores them.
     const { auth: freeAuth } = await seedOrg("community");
-    await denyFeature(freeAuth.orgId, "standings.custom_points");
     const { division: freeDiv } = await seedDivision(freeAuth, ["A", "B"]);
-    await expect(
-      createStages(freeAuth, freeDiv.id, {
-        seq: 1,
-        kind: "league",
-        name: "L",
-        config: {
-          points: {
-            base: { win: 5, draw: 3, loss: 0 },
-            bonuses: [{ when: "draw", points: 1 }],
-          },
+    const [bonusStage] = await createStages(freeAuth, freeDiv.id, {
+      seq: 1,
+      kind: "league",
+      name: "L",
+      config: {
+        points: {
+          win: { regulation: 5 }, draw: 3, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
+          bonuses: [{ when: "draw", points: 1 }],
         },
-      }),
-    ).rejects.toMatchObject({ featureKey: "standings.custom_points" });
+      },
+    });
+    const [stored] = await sql<{ config: { points?: { bonuses?: unknown[] } } }[]>`select config from stages where id = ${bonusStage!.id}`;
+    expect(stored!.config.points?.bonuses, "the bonus was stored").toEqual([{ when: "draw", points: 1 }]);
     // Carry-over is free on every plan since V471 ("all stages are free",
-    // owner ruling 2026-10-20), so — like custom points above since V393 —
-    // only an explicit deny override shuts its gate. The SAME carry pair is
-    // refused under the deny and accepted on a plain community org.
+    // owner ruling 2026-10-20), so only an explicit deny override shuts its
+    // gate. The SAME carry pair is refused under the deny and accepted on a
+    // plain community org.
     const carryPair = () => [
       { seq: 1, kind: "league" as const, name: "L", config: {} },
       {

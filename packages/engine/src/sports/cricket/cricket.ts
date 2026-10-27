@@ -30,7 +30,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -4035,9 +4035,12 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     { key: "ties", label: "T", direction: "desc" },
     { key: "no_results", label: "NR", direction: "desc" },
   ],
-  // spec §2.6 — ICC-style cascade; `nrr` is resolved from the integer ledger
-  // by the competition engine at rank time (cross-multiplication).
-  defaultTiebreakers: ["points", "wins", "nrr", "h2h_points", "seed"],
+  // spec §2.6 — ICC-style cascade (C2 16.10.4); `nrr` is resolved from the integer ledger
+  // by the competition engine at rank time (cross-multiplication). W2d (spec §5.10, CK-TB-1): a round robin ends in
+  // lots after the seed (deviation: the ICC stops at the pre-event ranking, RBS:454); the Swiss order is unchanged (OC1).
+  defaultTiebreakers: (kind) =>
+    kind === "swiss" ? ["points", "wins", "nrr", "h2h_points", "seed"] : ["points", "wins", "nrr", "h2h_points", "seed", "lots"],
+  primaryTableKey: "points", // W2d (D11): the table ranks on points first.
 
   // Draw exists only in 2-innings cricket and only survives table play
   // (X-DR-1, ruling 78; americano offered per W2a plan finding 15).
@@ -4050,6 +4053,27 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   // M-3: without a super over a tied innings pair is a tie. With one, a tied super over is played again only under the
   // `repeat` policy; `boundary_count` still ties on equal boundaries and `shared` stands as a tie (`decideTie`).
   canEndLevel: (cfg) => !cfg.superOver || cfg.superOverStillTied !== "repeat",
+  // W2d (spec §5.2, D4; X-PT-2) — the win methods this fold writes (`decideAfterClose`, the DLS par, the super over and
+  // its boundary count) and how each was decided: the super over is cricket's shoot-out (author's call, D4).
+  ...winMethodTable("cricket", { regulation: "regulation", dls: "regulation", innings: "regulation", super_over: "so", boundary_count: "so" }),
+  reachableDecidedIn: (cfg) => new Set<DecidedIn>(cfg.superOver ? ["regulation", "so"] : ["regulation"]),
+  // In a table: a tie (it stands without a super over and survives an abandoned one), a no result (an abandon short of a
+  // result), and a draw only where one stands, two innings a side (D10(c)). A bracket holds every level result (ruling 79).
+  reachableResultKinds: (cfg, stage) =>
+    new Set<"draw" | "tie" | "noResult">(DRAW_KINDS.has(stage) ? ["tie", "noResult", ...(cricket.supportsDraws(cfg, stage) ? (["draw"] as const) : [])] : []),
+  shootoutAs: "result",
+  // W2d (spec §5.10; CK-PT-1, CK-PT-2) — W2, tie 1, NR 1, L0 from `points`; a two-innings draw (only there: inningsPerSide
+  // 2) pays `points.draw`, else 1 (D10(c): no longer the tie's points). A super-over win pays a win.
+  tablePointsRule: (cfg) => ({
+    win: { regulation: cfg.points.win },
+    loss: { regulation: cfg.points.loss },
+    tie: cfg.points.tie,
+    noResult: cfg.points.noResult,
+    ...(cfg.inningsPerSide === 2 ? { draw: cfg.points.draw ?? 1 } : {}),
+    shootoutAs: cricket.shootoutAs,
+    unit: "whole",
+    bonuses: [],
+  }),
 
   // W2c X-SR-6, CK-SO-1 (spec §4.2) — the preset a NEW bracket stage should start with: the super over ON, wherever the
   // schema takes one (`ruleKeys.superOver.appliesTo` is the one declaration of which variants: a two-innings test match

@@ -377,7 +377,7 @@ describe("carrom: board validation", () => {
   });
 
   it("declares the house-standard cascade (carrom.md §4)", () => {
-    expect(carrom.defaultTiebreakers).toEqual(CARROM_TIEBREAKERS);
+    expect(carrom.defaultTiebreakers("league", carrom.configSchema.parse({}))).toEqual(CARROM_TIEBREAKERS);
     expect(CARROM_TIEBREAKERS).toEqual([
       "points",
       "wins",

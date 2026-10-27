@@ -74,7 +74,7 @@ const readers = (): AnySportModule[] => builtinModules.filter((m) => m.awardScor
 /** A real stage points rule whose forfeit row awards `awardScore`, and what it offers a fold of `module` (`forfeitAwardOffer`: undefined
  *  where the award never reaches the sport's table). */
 const offerOf = (module: AnySportModule, awardScore: [number, number]): GoldenFoldOptions | undefined => {
-  const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore } });
+  const rule = PointsRule.parse({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 3, loserPoints: 0, awardScore } });
   const forfeitAward = forfeitAwardOffer(rule, module);
   return forfeitAward === undefined ? undefined : { forfeitAward };
 };
@@ -513,7 +513,7 @@ describe("the committed corpora reach every fold-option story, and the award is 
     let reached = 0;
     forEachSport(({ module, key }) => {
       const streams = readCorpus(key).streams.filter((s) => s.foldOptions !== undefined);
-      const rule = PointsRule.parse({ base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [9, 4] } });
+      const rule = PointsRule.parse({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [9, 4] } });
       const offer = forfeitAwardOffer(rule, module);
       if (offer === undefined) expect(streams, `${key}: no offer, no stream`).toEqual([]);
       else {

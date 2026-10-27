@@ -2,6 +2,7 @@
 // (division events, withdrawal). PROMPT-08 §1.
 import { describe, expect, it } from "vitest";
 import type { StandingsDelta } from "../core/types.ts";
+import { tableRulesOf as rulesOf } from "../testkit/helpers.ts";
 import type { FixtureResult } from "./standings.ts";
 import {
   bracketRanks,
@@ -36,11 +37,12 @@ function fb(home: string, away: string, hg: number, ag: number): FixtureResult {
   ];
 }
 
+// W2d T8: a TableStage carries its TableRules (`rulesOf`); completion ranks by the order alone.
 const leagueStage: TableStage = {
   id: "s1",
   kind: "league",
   entrants: ["X", "Y", "Z"],
-  cascade: ["points", "diff", "for", "lots"],
+  rules: rulesOf(["points", "diff", "for", "lots"]),
   rngSeed: 5,
 };
 
@@ -81,7 +83,7 @@ describe("completion predicates (spec 05 §1)", () => {
       kind: "swiss",
       swiss: true,
       entrants: ["A", "B", "C"],
-      cascade: ["points", "wins", "lots"],
+      rules: rulesOf(["points", "wins", "lots"]),
       rounds: 1,
       rngSeed: 1,
     };
@@ -126,7 +128,7 @@ describe("completeTableStage — division events (spec 05 §3/§5)", () => {
       id: "grp",
       kind: "group",
       entrants: ["A1", "A2", "B1", "B2"],
-      cascade: ["points", "diff", "for", "lots"],
+      rules: rulesOf(["points", "diff", "for", "lots"]),
     };
     const fixtures: TableFixture[] = [
       { id: "a", poolId: "A", status: "decided", result: fb("A1", "A2", 2, 0) },
@@ -141,15 +143,21 @@ describe("completeTableStage — division events (spec 05 §3/§5)", () => {
 
   it("emits rank_lock_required + rank_lock when the cascade exhausts to lots", () => {
     const fixtures: TableFixture[] = [{ id: "f", status: "decided", result: fb("X", "Y", 1, 1) }];
-    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y"], cascade: ["points", "lots"], rngSeed: 2 };
+    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y"], rules: rulesOf(["points", "lots"]), rngSeed: 2 };
+    // W2d T5 (spec §5.8, PS-5b): rank_lock carries the STORED draw's order and date, so it needs a stored draw; an
+    // unstored one emits rank_lock_required alone and is returned for storing (lots-stored.test.ts owns the rest).
     const { events } = completeTableStage(stage, fixtures);
     expect(events).toContainEqual({ type: "rank_lock_required", stageId: "s", group: ["X", "Y"] });
-    expect(events).toContainEqual({ type: "rank_lock", stageId: "s", method: "lots", group: ["X", "Y"] });
+    expect(events.some((e) => e.type === "rank_lock")).toBe(false);
+    const lotsDraws = new Map([["", new Map([["X,Y", { order: ["Y", "X"], drawnAt: "2026-10-24 09:00:00+00" }]])]]);
+    const stored = completeTableStage({ ...stage, lotsDraws }, fixtures);
+    expect(stored.events).toContainEqual({ type: "rank_lock_required", stageId: "s", group: ["X", "Y"] });
+    expect(stored.events).toContainEqual({ type: "rank_lock", stageId: "s", method: "lots", group: ["X", "Y"], order: ["Y", "X"], drawnAt: "2026-10-24 09:00:00+00" });
   });
 
   it("marks lot-decided rows as rankLocked", () => {
     const fixtures: TableFixture[] = [{ id: "f", status: "decided", result: fb("X", "Y", 2, 2) }];
-    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y"], cascade: ["points", "lots"], rngSeed: 2 };
+    const stage: TableStage = { id: "s", kind: "league", entrants: ["X", "Y"], rules: rulesOf(["points", "lots"]), rngSeed: 2 };
     const { tables } = completeTableStage(stage, fixtures);
     expect(tables.overall?.every((r) => r.rankLocked === true)).toBe(true);
   });
@@ -237,7 +245,7 @@ describe("bracketRanks — page_playoff (L3/#414, spec 2026-07-19)", () => {
 });
 
 describe("withdrawal policies (spec 05 §5)", () => {
-  const stage: TableStage = { id: "s", kind: "league", entrants: ["W", "A", "B", "C"], cascade: ["points", "lots"] };
+  const stage: TableStage = { id: "s", kind: "league", entrants: ["W", "A", "B", "C"], rules: rulesOf(["points", "lots"]) };
 
   it("void_remaining EXPUNGES when the entrant has played < 50%", () => {
     const { events, updates } = withdrawTableEntrant(stage, "W", {

@@ -4,6 +4,7 @@
 // console; the iframe never needs touching again.
 import { notFound } from "next/navigation";
 import { resolveModule } from "@/server/engine-db";
+import { tableOrderOf } from "@/server/engine-db/table-rules";
 import { embedDivisionData } from "@/server/embed-data";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
@@ -64,12 +65,10 @@ export default async function EmbedWidgetPage({ params }: Props) {
   });
 
   let metricSpecs: MetricSpecLike[] = [];
-  let cascade: readonly string[] = [];
   let module_: AnySportModule | null = null;
   try {
     module_ = resolveModule(division.sport_key, division.module_version);
     metricSpecs = module_.metrics;
-    cascade = division.tiebreakers ?? module_.defaultTiebreakers;
   } catch {
     // retired module build — structural columns only
   }
@@ -200,7 +199,6 @@ export default async function EmbedWidgetPage({ params }: Props) {
       fixtures: await qualificationFixtures(fixtures, module_, stages),
       entrantStatuses,
       entrantNames,
-      cascade,
     });
     body = (
       <div className="space-y-5">
@@ -209,6 +207,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
           // the query hands them over in no particular order.
           const snaps = standings.filter((s) => s.stage_id === stage.id).sort(byPoolOrder(pools));
           if (snaps.length === 0) return null;
+          // W2d Task 9: the order THIS stage ranks by (its pin, else its live layers — `loadTableRules`); a stage the
+          // loader refused gets no caption.
+          const cascade = tableOrderOf(stage.table_rules);
           return snaps.map((snap) => (
             <StandingsTable
               key={`${stage.id}-${snap.pool_id ?? "overall"}`}

@@ -11,11 +11,11 @@ import "server-only";
 // each has its own test in __tests__/qualification-view.test.ts.
 import {
   FOR_KEYS,
-  PointsRule,
   SETTLED_FIXTURE_STATUSES,
   isTableStageComplete,
   isUnplayedForfeit,
   metricKeyOf,
+  parseStoredPointsRule,
   pointsRuleBounds,
   qualificationStatus,
   tieDecidingKey,
@@ -23,6 +23,7 @@ import {
   tieRival,
   tieWhatIf,
   withdrawTableEntrant,
+  type OutcomeKey,
   type QualStatus,
   type QualificationInput,
   type StandingsRow,
@@ -36,6 +37,7 @@ import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import type { TKey } from "@/lib/i18n-runtime";
 import { tableWithdrawalInputs } from "@/lib/table-withdrawal";
 import { completionEngineStatus, rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
+import { EVERY_OUTCOME } from "@/server/engine-db/table-rules";
 import type { QualRowT, QualTableT } from "./competition-hub-schema";
 import { tieBreakRule } from "./standings-view";
 
@@ -46,10 +48,17 @@ export interface StageQualMeta {
   qualifyPerGroup: boolean;
   nextStageName: string | null;
   swissRounds: number | null;
+  /** The stage's OWN PointsRule (`points_rule`, V414), or null. What the format line prints; never the pin, and never
+   *  what the table or this view reads (W2d T9: a rule-scored forfeit reads `tablePointsRule`, the rule in force). */
   pointsRule: unknown;
   /** V414 (ruling M1): the organiser pinned ranks on this stage. NOT a row's
    *  `rankLocked`, which the engine also sets on every tie settled by lots. */
   hasRankOverrides: boolean;
+  /** W2d T9: the rule the TABLE is paid by — the one loader's (`stageTableRulesDocs`: the pin, else the live layers),
+   *  set by `divisionQualification`; null until it is (no SQL column publishes it: T9 review m3). The per-match bounds
+   *  read this one (`boundsInForce`; null gives none, never the sport's), and so does a rule-scored forfeit
+   *  (`ruleScoreReaches`, T7 carry: never the own rule). */
+  tablePointsRule: unknown;
 }
 
 /** snake→camel for `stage_qualification_meta`'s columns — the public view row
@@ -69,6 +78,8 @@ export function stageQualMeta(row: {
     swissRounds: row.swiss_rounds,
     pointsRule: row.points_rule ?? null,
     hasRankOverrides: row.has_rank_overrides === true,
+    // the loader's, set by `divisionQualification` — never a column of the row (T9 review m3)
+    tablePointsRule: null,
   };
 }
 
@@ -93,7 +104,7 @@ export interface QualFixture {
    *  settle, never held. Absent reads as a plain abandon. */
   no_result?: boolean;
   /** W2c X-PT-1: was anything played before its forfeit — `playRecorded` of its ledger under the division's module, the
-   *  fact the standings fold hands `applyPointsRule` (`engine-db/forfeit-played.ts`, read by `qualificationFixtures`).
+   *  fact the standings fold hands `payout` (`engine-db/forfeit-played.ts`, read by `qualificationFixtures`).
    *  Loaded only under a stage rule that scores forfeits, for a two-seated forfeit; false where it is not loaded (and a
    *  bye's is false: it has no ledger). Read by `ruleScoreReaches` and by `ledgerless` (an award after play is a real
    *  match, fix round 1 M-1). */
@@ -166,7 +177,14 @@ export interface QualificationViewInput {
    *  (`ruleScoreInAverage`, read off `stage.meta.pointsRule`); elsewhere this
    *  flag decides. */
   awardAddsToLedger: boolean;
+  /** The order the table is ranked by — since W2d T9 the stage's own (`loadTableRules`: its pin, else its live layers). */
   cascade: readonly string[];
+  /** W2d T9: the outcomes the stage's cfg reaches (the loader's `reachable`): the rule's bounds range over them
+   *  (`pointsRuleBounds`). Absent: every outcome (wider, never narrower). */
+  reachable?: ReadonlySet<OutcomeKey>;
+  /** W2d T9 (P25, D11): the sport's primary table measure (`primaryTableKey`). An order that starts with it — or with
+   *  `points` — decides places on a measure the view can bound; absent: "points". */
+  primary?: AnySportModule["primaryTableKey"];
   entrantNames: Readonly<Record<string, string>>;
   msg: (key: TKey, vars?: Record<string, string | number>) => string;
   plural: (key: string, count: number, vars?: Record<string, string | number>) => string;
@@ -214,7 +232,7 @@ function countedIn(kind: string, f: QualFixture): boolean {
  *  the credit is the walkover's 0–0 and this over-counts it — the view holds no score to tell; and `played` is read only
  *  under a stage rule that scores forfeits (`qualificationFixtures`), so without one an award after play stays out, as
  *  before W2c. And a double walkover, always (X-DW-4, Loop R M-13): it credits nothing in any sport — no forfeit score,
- *  and no stage rule's award score (`applyPointsRule` pays it as no forfeit) — so whatever either flag says, it adds
+ *  and no stage rule's award score (`payout` pays it as no forfeit) — so whatever either flag says, it adds
  *  nothing to the ledger. The what-if's average match leaves these out. */
 function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: boolean, meta: StageQualMeta): boolean {
   const kind = outcomeKind(f);
@@ -227,18 +245,19 @@ function ledgerless(f: QualFixture, awardAddsToLedger: boolean, ruleInAverage: b
 
 /** A stage PointsRule (V414's `points_rule`, published as `meta.pointsRule`) with a SET `forfeit.awardScore`: the only
  *  rule whose score can reach a fixture (`ruleScoreReaches`), so the only one whose fixtures' played facts are read
- *  (`qualificationFixtures`). An award of 0–0 is a score like any other: `applyPointsRule` writes whatever is set, so a
+ *  (`qualificationFixtures`). An award of 0–0 is a score like any other: `payout` writes whatever is set, so a
  *  0–0 replaces the sport's credit (a football walkover's 3–0 becomes 0–0) and the what-if must read it (fix round 2).
  *  Read off the stage, not by the caller, so a caller cannot forget it. A rule that does not parse scores nothing (and
  *  gives no view: `boundsInForce` refuses it). */
 export function pointsRuleScoresForfeits(pointsRule: unknown): boolean {
+  // (W2d T9: the caller hands the rule in FORCE — the loader's — never the stage's own.)
   if (pointsRule === null || pointsRule === undefined) return false;
-  const parsed = PointsRule.safeParse(pointsRule);
-  return parsed.success && parsed.data.forfeit?.awardScore !== undefined;
+  const parsed = parseStoredPointsRule(pointsRule);
+  return parsed?.forfeit?.awardScore !== undefined;
 }
 
 /**
- * W2c X-PT-1 — does the stage rule's awarded score land on this fixture? Exactly where `applyPointsRule` writes it (the
+ * W2c X-PT-1 — does the stage rule's awarded score land on this fixture? Exactly where `payout` writes it (the
  * one rule, two readers: `qualification-points-parity.test.ts`): a rule with a set `forfeit.awardScore` (0–0 too), over a
  * forfeit with nothing played — the engine's own `isUnplayedForfeit` on the fixture's `played` fact (a walkover
  * whatever its ledger reads; any other reason only when nothing was played) — and never a bye: a one-sided award is
@@ -249,7 +268,8 @@ export function ruleScoreReaches(
   f: Pick<QualFixture, "outcome" | "played" | "home_entrant_id" | "away_entrant_id">,
   meta: StageQualMeta,
 ): boolean {
-  if (!pointsRuleScoresForfeits(meta.pointsRule) || isOneSidedAwardBye(f)) return false;
+  // W2d T9 (T7 carry): the rule the table is paid by — `payout` writes ITS award — never the stage's own.
+  if (!pointsRuleScoresForfeits(meta.tablePointsRule) || isOneSidedAwardBye(f)) return false;
   return outcomeKind(f) !== undefined && isUnplayedForfeit(f.outcome as MatchOutcome, f.played);
 }
 
@@ -331,14 +351,28 @@ function headline(s: QualStatus, i: QualificationViewInput, next: string, n: num
   }
 }
 
-/** The per-match bounds in force: a stage PointsRule replaces the sport's. A
- *  rule that does not parse gives none — never the sport's bounds instead. */
-function boundsInForce(i: QualificationViewInput): MatchPointsBounds | null {
-  const rule = i.stage.meta.pointsRule;
-  if (rule === null || rule === undefined) return i.bounds;
-  const parsed = PointsRule.safeParse(rule);
-  return parsed.success ? pointsRuleBounds(parsed.data) : null;
+/** W2d: every outcome a stage rule can name — ONE copy, the loader's (`table-rules.ts`, fix round 1 m6). Where the view
+ *  holds no module or cfg to narrow it to the stage's reachable outcomes (`reachableOutcomes`), the bounds range over all
+ *  of them: wider, never narrower, than the table can pay (R3: cautious, never wrong). */
+export { EVERY_OUTCOME };
+
+/** The per-match bounds in force: the rule the table is paid by (`tablePointsRule`: since W2d T9 the loader's — the pin,
+ *  else the live layers) replaces the sport's, ranging over the outcomes the stage reaches (`reachable`; absent: every
+ *  outcome). A rule that does not parse gives none — never the sport's bounds instead. */
+export function boundsInForce(
+  meta: StageQualMeta,
+  sportBounds: MatchPointsBounds | null,
+  reachable: ReadonlySet<OutcomeKey> = EVERY_OUTCOME,
+): MatchPointsBounds | null {
+  const rule = meta.tablePointsRule;
+  if (rule === null || rule === undefined) return sportBounds;
+  const parsed = parseStoredPointsRule(rule);
+  return parsed === null ? null : pointsRuleBounds(parsed, reachable);
 }
+
+/** W2d T9: a table ranked on wins first is a race in wins — each match pays one win or none, whatever its rule pays in
+ *  points (a forfeit's award is a win; a no result, a tie, a double walkover pay none). */
+const WINS_BOUNDS: MatchPointsBounds = { max: 1, min: 0, winFloor: 1, lossCeil: 0, winsOnly: true };
 
 /** F1 — would this departed entrant's table withdrawal VOID results the table
  *  counts? The policy (usecases/withdrawal.ts) expunges a league/group entrant
@@ -354,7 +388,8 @@ function withdrawalVoidsResults(stageId: string, kind: string, entrantId: string
   const mine = fixtures.filter((f) => f.stage_id === stageId && seats(f, entrantId));
   const { played, pending } = tableWithdrawalInputs(entrantId, mine);
   const result = withdrawTableEntrant(
-    { id: stageId, kind: kind as "league" | "group" | "swiss", entrants: [entrantId], cascade: [] },
+    // W2d T8: the policy reads the stage's id and kind alone (`withdrawTableEntrant`'s parameter), no field or rules.
+    { id: stageId, kind: kind as "league" | "group" | "swiss" },
     entrantId,
     { played, pending },
   );
@@ -372,9 +407,15 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   if (meta.hasRankOverrides) return null; // M1: the organiser, not the cascade, orders this table
   if (!meta.qualifyPerGroup && i.poolId !== null) return null; // Review Focus 5: an overall cut
   if (i.rows.length === 0) return null;
-  if (i.cascade[0] !== "points") return null; // Review Focus 4: points do not decide places
-  const perMatch = boundsInForce(i);
-  if (perMatch === null) return null;
+  // Review Focus 4: the table's first measure must decide places — `points`, or the sport's primary measure (W2d T9,
+  // carry 6: `wins` for volleyball, badminton and tennis, `primaryTableKey`). A wins-first table races in wins.
+  const primary = i.primary ?? "points";
+  const first = i.cascade[0];
+  if (first !== "points" && first !== primary) return null;
+  const pointsBounds = boundsInForce(meta, i.bounds, i.reachable);
+  if (pointsBounds === null) return null;
+  const byWins = first === "wins";
+  const perMatch = byWins ? WINS_BOUNDS : pointsBounds;
 
   const isSwiss = i.stage.kind === "swiss";
   const settled = (f: QualFixture) => settledIn(i.stage.kind, f);
@@ -474,7 +515,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   // false Out. (Through stays sound either way: an extra rival only makes it
   // more cautious.)
   const engine: QualificationInput = {
-    rows: ordered.map((r) => ({ entrantId: r.entrantId, points: r.points, active: active.get(r.entrantId) === true })),
+    rows: ordered.map((r) => ({ entrantId: r.entrantId, points: byWins ? r.won : r.points, active: active.get(r.entrantId) === true })),
     remaining: new Map(ordered.map((r) => [r.entrantId, remainingOf(r.entrantId)])),
     perMatch,
     cut,
@@ -482,11 +523,9 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
       (f) => statusIn(i.stage.kind, f) === "decided" && f.home_entrant_id !== null && f.away_entrant_id !== null,
     ),
     complete: isTableStageComplete(
+      // W2d T8: the predicate reads the stage's kind and Swiss rounds alone (`isTableStageComplete`'s parameter).
       {
-        id: i.stage.id,
         kind: i.stage.kind as "league" | "group" | "swiss",
-        entrants: [],
-        cascade: [],
         ...(isSwiss ? { rounds: meta.swissRounds! } : {}),
       },
       engineFx,
@@ -499,11 +538,12 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
   const orderedIds = ordered.map((r) => r.entrantId);
   const cascade = i.cascade as readonly TiebreakerKey[];
   // What-if OQ1: `wins` cannot split a points tie when every point came from
-  // wins at one rate — read from the bounds IN FORCE, and confirmed on the
-  // table itself, since a carry-over opening pays points no match paid (the
-  // carry mode is not public; `points = winFloor × won` on every row is).
-  const winsOnly = perMatch.winsOnly && i.rows.every((r) => r.points === r.won * perMatch.winFloor);
-  const decidingKey = tieDecidingKey(cascade, { winsOnly });
+  // wins at one rate — read from the RULE's bounds in force (not the race's: a wins-first table's twin step is
+  // `points`, which the same fact makes useless), and confirmed on the table itself, since a carry-over opening pays
+  // points no match paid (the carry mode is not public; `points = winFloor × won` on every row is).
+  const winsOnly = pointsBounds.winsOnly && i.rows.every((r) => r.points === r.won * pointsBounds.winFloor);
+  // W2d P25 / T9: the what-if names the sport's primary step (`primaryTableKey`), as the gate above does.
+  const decidingKey = tieDecidingKey(cascade, { winsOnly, primary });
 
   /** The entrant's next match has no opponent seat (T2-C1): a bye it cannot lose. */
   const nextIsBye = (id: string): boolean => {
@@ -521,7 +561,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     // The average match counts only matches with a ledger (T3-⚠3).
     const ruleInAverage = ruleScoreInAverage(r, decidingKey);
     const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger, ruleInAverage, meta)).length;
-    const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly });
+    const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly, primary });
     if (w === null) return null;
     const name = i.entrantNames[rival.entrantId] ?? rival.entrantId;
     const vars = { rival: name, rule: tieBreakRule(w.key, i.msg, r, ordered, [rival.entrantId]) };

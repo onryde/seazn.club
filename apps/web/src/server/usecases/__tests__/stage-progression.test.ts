@@ -268,11 +268,10 @@ describe.skipIf(!HAS_DB)("D4a/P5 — bestNth position-key collision (F3 round-3 
     //   Pool A: E1 beats E6 2-0   Pool B: E2 beats E5 2-0   Pool C: E3 beats E4 2-1
     // nth:1 candidates (winners, cross-pool): E1(diff+2), E2(diff+2) TIE,
     // E3(diff+1) distinct — position:1 ties E1 against E2. WHICH of the two
-    // is the SELECTED qualifier is not under this test's control:
-    // crossGroupOrder (progression.ts) calls rankStandings without a `seeds`
-    // context, so the tiebreak fallback sorts by raw entrant-id string, not
-    // tournament seed — the test asks the proposal which one won rather than
-    // assuming.
+    // is the SELECTED qualifier is not under this test's control: best-Nth
+    // compares by the source's pinned cross-group order, which ends in a
+    // stored lots draw (W2d T12, spec §5.9) — the test asks the proposal which
+    // one won rather than assuming.
     // nth:2 candidates (losers, cross-pool): E6(diff-2), E5(diff-2) tied with
     // each other but NOT selected (count:1 only takes position:1), E4(diff-1)
     // ranks BEST among losers — position:1 is E4 alone, no tie.
@@ -368,11 +367,10 @@ describe.skipIf(!HAS_DB)("D4a/P5 — bestNth position-key collision (F3 round-3 
     expect([...tie.entrantIds].sort()).toEqual([e.get(1)!, e.get(2)!].sort());
 
     // WHICH of E1/E2 actually became the nth:1/position:1 qualifier depends
-    // on rankStandings' seed/id tiebreak fallback — bestNth's crossGroupOrder
-    // (progression.ts) calls rankStandings without a `seeds` context, so ties
-    // break by raw entrant-id string, not by the tournament seed number this
-    // test otherwise controls. Ask the proposal which one qualified rather
-    // than assuming E1 wins.
+    // on the cross-group lots draw (W2d T12: the source's pinned cross-group
+    // order ends in lots, drawn from the stage's rngSeed and stored), not on
+    // the tournament seed number this test otherwise controls. Ask the
+    // proposal which one qualified rather than assuming E1 wins.
     const selected = proposal.computed.qualifiers.find((q) => q.entrantId === e.get(1) || q.entrantId === e.get(2))!;
     expect(selected).toBeDefined();
     const e4Slot = proposal.computed.qualifiers.find((q) => q.entrantId === e.get(4))!.destinationSlot;

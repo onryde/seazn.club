@@ -16,9 +16,10 @@
 //
 // The (a) and (b) gates are KEPT as code: an `org_entitlement_overrides` row can
 // still cap stages or switch carry-over off for one organisation, the same lever
-// every other freed key keeps (`formats.double_elim`, `cricket.dls`,
-// `standings.custom_points`). The last block proves that lever still shuts, so
-// the kept code is not dead.
+// every other freed key keeps (`formats.double_elim`, `cricket.dls`; not
+// `standings.custom_points`, whose gate W2d T10 fix round 1 deleted under the
+// owner's "all scoring is free"). The last block proves that lever still shuts,
+// so the kept code is not dead.
 //
 // Single sport (generic) on purpose: every gate here reads a stage's kind and
 // config or a division flag, never its sport (format-gates.ts, divisions.ts).

@@ -39,7 +39,7 @@ import {
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { feedLabels, type FeedRow } from "@/lib/schedule-board";
 import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
-import { parseRoundRoleKey } from "@seazn/engine/competition";
+import { parseRoundRoleKey, type PointsRule } from "@seazn/engine/competition";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 // Per-stage rules row (design §T5, D7; W2c Task 17). The fields come from the engine's `ruleKeys` through
 // `stage-rules/stage-rule-fields.tsx`, which renders the SAME `RuleFieldControl` the division builder and Settings tab
@@ -328,6 +328,11 @@ interface Props {
    *  panel deriving the lock from it would offer an Edit button whose save
    *  comes back 409. */
   formatLockedStageIds?: string[];
+  /** W2d final review I1: stage id → the points its PIN pays, for the pinned table stages (`listPinnedStagePoints`,
+   *  usecases/stage-qualification.ts, the one loader). A pinned stage's points card says these when it has no rule of its
+   *  own, never `divisionConfig`: a division points save after the pin never reaches the stage. Optional like
+   *  `formatLockedStageIds`: absent, every card reads the live division (an unpinned stage's answer). */
+  pinnedStagePoints?: Record<string, PointsRule>;
   /** Competition timezone (schedule settings) — every time renders in it. */
   tz: string;
   /** The GOVERNING venue clock (`settings.orgTz`, #448), resolved server-side.
@@ -495,7 +500,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1290,6 +1295,7 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     pointsDict={pointsDict}
                     stageConfig={stage.config}
                     locked={formatLockedStageIds.includes(stage.id)}
+                    pinnedPoints={pinnedStagePoints[stage.id] ?? null}
                     canEdit={canEdit}
                     onSaved={() => router.refresh()}
                     onSeeFixtures={() => showStageFixtures(stage.id)}
@@ -2265,6 +2271,7 @@ function StageFormatRow({
   pointsDict,
   stageConfig,
   locked,
+  pinnedPoints,
   canEdit,
   onSaved,
   onSeeFixtures,
@@ -2279,6 +2286,8 @@ function StageFormatRow({
   pointsDict: Dict | undefined;
   stageConfig: Record<string, unknown>;
   locked: boolean;
+  /** I1: the points this stage's pin pays (`pinnedStagePoints`), null while it reads the live layers. */
+  pinnedPoints: PointsRule | null;
   canEdit: boolean;
   onSaved: () => void;
   /** The lock line's link: show this stage's fixtures in the run sheet. */
@@ -2542,10 +2551,13 @@ function StageFormatRow({
       <StagePointsSection
         stageId={stageId}
         module={sportModule}
+        kind={kind}
+        stageConfig={stageConfig}
         divisionConfig={divisionConfig}
         stored={stageConfig.points}
         pointsDict={pointsDict}
         readOnly={readOnly}
+        pinned={pinnedPoints}
         onSaved={onSaved}
       />
     )}

@@ -1,0 +1,272 @@
+[
+  {
+    "id": "t1-decidedinof-unknown-regulation",
+    "file": "packages/engine/src/sport/module.ts",
+    "find": "if (decided === undefined) {",
+    "replace": "if (decided === undefined) { return \"regulation\"; /*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "an unknown method throws CONFIG_INVALID"
+      }
+    ]
+  },
+  {
+    "id": "t1-icehockey-so-always",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "...(cfg.shootout !== null ? ([\"so\"] as const) : []),",
+    "replace": "...(true /*MUT*/ ? ([\"so\"] as const) : []),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "ice hockey IIHF reaches"
+      }
+    ]
+  },
+  {
+    "id": "t1-decidedinfor-nonwin-null",
+    "file": "packages/engine/src/competition/decided-in.ts",
+    "find": "if (outcome == null || outcome.kind !== \"win\") return null;",
+    "replace": "if (outcome == null /*MUT*/) return null;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "decidedInFor is null for draw, tie, no_result"
+      }
+    ]
+  },
+  {
+    "id": "t1-decidedinfor-no-method-regulation",
+    "file": "packages/engine/src/competition/decided-in.ts",
+    "find": "if (outcome.method === undefined) return \"regulation\";",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "decidedInFor reads a win that names no method as regulation"
+      }
+    ]
+  },
+  {
+    "id": "t1-shared-win-methods-dropped",
+    "file": "packages/engine/src/sport/module.ts",
+    "find": "for (const method of SHARED_WIN_METHODS) table.set(method, \"regulation\");",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "every sport declares the kernel"
+      }
+    ]
+  },
+  {
+    "id": "t1-period-extra-time-undeclared",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "...winMethodTable(preset.key, { regulation: \"regulation\", extra_time: \"ot\", shootout: \"so\", abandoned: \"regulation\" }),",
+    "replace": "...winMethodTable(preset.key, { regulation: \"regulation\", /*MUT*/ shootout: \"so\", abandoned: \"regulation\" }),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sport/outcome-methods-source.test.ts"
+        ],
+        "name": "every win method literal in a module"
+      }
+    ]
+  },
+  {
+    "id": "t1-football-ot-never",
+    "file": "packages/engine/src/sports/football/football.ts",
+    "find": "...(cfg.extraTime.enabled ? ([\"ot\"] as const) : [])",
+    "replace": "...(false /*MUT*/ ? ([\"ot\"] as const) : [])",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "football league reaches"
+      }
+    ]
+  },
+  {
+    "id": "t1-period-b2-booked-draw-dropped",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "(preset.shootoutAs === \"draw_plus_bonus\" && cfg.shootout !== null)",
+    "replace": "(false /*MUT*/)",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "a draw is reachable exactly where the sport"
+      }
+    ]
+  },
+  {
+    "id": "t1-period-bracket-draw",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "DRAW_KINDS.has(stage) && (drawStands(cfg) ||",
+    "replace": "(/*MUT*/ drawStands(cfg) ||",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "a bracket stage reaches no level result"
+      }
+    ]
+  },
+  {
+    "id": "t1-cricket-bracket-tie",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "new Set<\"draw\" | \"tie\" | \"noResult\">(DRAW_KINDS.has(stage) ? [\"tie\", \"noResult\",",
+    "replace": "new Set<\"draw\" | \"tie\" | \"noResult\">(true /*MUT*/ ? [\"tie\", \"noResult\",",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "a bracket stage reaches no level result"
+      }
+    ]
+  },
+  {
+    "id": "t1-cricket-draw-always",
+    "file": "packages/engine/src/sports/cricket/cricket.ts",
+    "find": "...(cricket.supportsDraws(cfg, stage) ? ([\"draw\"] as const) : [])",
+    "replace": "...(true /*MUT*/ ? ([\"draw\"] as const) : [])",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "cricket reaches tie and noResult"
+      }
+    ]
+  },
+  {
+    "id": "t1-boardgame-rungs-ignored",
+    "file": "packages/engine/src/sports/boardgame/boardgame.ts",
+    "find": "cfg.tiebreak === true && effectiveRungs(cfg).length > 0 ? [\"regulation\", \"so\"]",
+    "replace": "cfg.tiebreak === true /*MUT*/ ? [\"regulation\", \"so\"]",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "boardgame reaches so exactly where a drawn game cannot end level"
+      }
+    ]
+  },
+  {
+    "id": "t1-setscores-bestof-not-majority",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "const won = majority(cfg.bestOf);",
+    "replace": "const won = cfg.bestOf /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "volleyball bestOf 5 reaches set scores"
+      }
+    ]
+  },
+  {
+    "id": "t1-unplayed-loss-every-set-sport",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "...(preset.declaresUnplayedLoss === true ? { declaresUnplayedLoss: true as const } : {}),",
+    "replace": "...({ declaresUnplayedLoss: true as const } /*MUT*/),",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "only table tennis declares an unplayed loss"
+      }
+    ]
+  },
+  {
+    "id": "t1-winscount-every-period-sport",
+    "file": "packages/engine/src/sports/period/kernel.ts",
+    "find": "...(preset.winsCount === undefined ? {} : { winsCount: preset.winsCount }),",
+    "replace": "winsCount: \"regulation\" as const /*MUT*/,",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "hockey declares winsCount"
+      }
+    ]
+  },
+  {
+    "id": "t1-refusal-message-empty",
+    "file": "packages/engine/src/sport/module.ts",
+    "find": "`${sport} writes no win method \"${method}\"`",
+    "replace": "\"\" /*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "an unknown method throws CONFIG_INVALID"
+      }
+    ]
+  },
+  {
+    "id": "t1-refusal-data-empty",
+    "file": "packages/engine/src/sport/module.ts",
+    "find": "{ sport, method });",
+    "replace": "{} /*MUT*/);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "an unknown method throws CONFIG_INVALID"
+      }
+    ]
+  },
+  {
+    "id": "t1-hockey-winscount-dropped",
+    "file": "packages/engine/src/sports/hockey/hockey.ts",
+    "find": "winsCount: \"regulation\",",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/decided-in.test.ts"
+        ],
+        "name": "hockey declares winsCount"
+      }
+    ]
+  }
+]

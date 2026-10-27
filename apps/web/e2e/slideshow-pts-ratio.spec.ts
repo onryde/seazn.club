@@ -5,9 +5,9 @@ import enUi from "../src/dictionaries/en/ui.json" with { type: "json" };
 import { TAG, apiJson, addEntrantsViaApi, createStageAndGenerate } from "./helpers";
 
 // The organiser noticeboard's standings slide carries the normal table's
-// "Pts ratio" column when the division ranks on `point_ratio` (badminton, table
-// tennis, volleyball, carrom by default), and is the slide it always was when
-// it does not.
+// "Pts ratio" column when the division ranks on `point_ratio` (volleyball and
+// carrom by default, or any division given an order that names it), and is the
+// slide it always was when it does not.
 //
 // The unit suites pin the builder (`slideshow-point-ratio.test.ts`), the board's
 // grid and type (`slideshow-tv-rows.test.tsx`) and the public kiosk's page
@@ -83,12 +83,18 @@ async function seed(request: APIRequestContext) {
 
   // Badminton: one league match, scored 21-0, 21-0 through the ledger, so the
   // winner's points ledger is 42 won / 0 lost (an unbeaten ratio) and the
-  // loser's is 0 won / 42 lost.
+  // loser's is 0 won / 42 lost. Ranked by the division's OWN order, which names
+  // `point_ratio`: badminton's default did until W2d's signed order (spec
+  // §5.10, BWF 16.2 ranks on the point DIFFERENCE). It opens on badminton's
+  // primary measure and closes on `lots`, as spec §5.5 rule 1 requires (the
+  // division create validates it from W2d Task 10 on); the stage pins it at
+  // generate.
   const badminton = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
     name: "MS",
     sport_key: "badminton",
     variant_key: "bwf",
     config: {},
+    tiebreakers: ["wins", "point_ratio", "lots"],
   });
   expect(badminton.status, JSON.stringify(badminton.error)).toBe(201);
   const badmintonId = badminton.data!.id;
@@ -189,7 +195,7 @@ test.describe("organiser slideshow: the standings slide's Pts ratio column", () 
     }
   });
 
-  test("a badminton division's board headers the column and prints each row's ratio (unbeaten is the infinity sign)", async ({ page }, testInfo) => {
+  test("a badminton division ranked on point_ratio: its board headers the column and prints each row's ratio (unbeaten is the infinity sign)", async ({ page }, testInfo) => {
     const table = await standingsTable(page, seeded.badmintonId, "Ratio League");
     // For the ∞ glyph: it is not in every face the board's display font ships.
     await testInfo.attach("ratio-board-1280", { body: await page.locator("main").screenshot(), contentType: "image/png" });

@@ -55,7 +55,7 @@
 //   and the ledgerless reading of a real walkover on real reads too.
 import { describe, expect, it } from "vitest";
 import { foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "@seazn/engine/core";
-import { defaultLineupPair, makeEnvelope } from "@seazn/engine/testkit";
+import { defaultLineupPair, defaultOrderOf, makeEnvelope } from "@seazn/engine/testkit";
 import {
   PointsRule,
   pointsRuleBounds,
@@ -69,6 +69,8 @@ import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
 import { plural, t, type TKey } from "@/lib/i18n-runtime";
 import {
+  EVERY_OUTCOME,
+  boundsInForce,
   buildQualificationView,
   divisionAwardAddsToLedger,
   divisionPointsBounds,
@@ -88,13 +90,18 @@ const moduleOf = (key: string) => {
 };
 const GENERIC = moduleOf("generic");
 const BADMINTON = moduleOf("badminton");
+/** A badminton stage ranked POINTS-first, off the engine: its Swiss order (OC1), which is also the pre-W2d league default
+ *  a stage active at the W2d deploy keeps in its pin (spec §5.10: the new defaults reach only stages not yet active, B1).
+ *  Since W2d its league default is wins-first (BWF 16.2), where `wins` is the race itself, not a step after points — so
+ *  the points-first scenes below hand the stage this order as its own. */
+const BADMINTON_POINTS_FIRST = [...defaultOrderOf(BADMINTON, "swiss")];
 const ICEHOCKEY = moduleOf("icehockey");
 const FOOTBALL = moduleOf("football");
 const CFG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
 const BOUNDS = divisionPointsBounds(GENERIC, CFG)!;
 const W = BOUNDS.winFloor;
 /** The generic module's own cascade: `diff` decides a tie on points. */
-const CASCADE = [...GENERIC.defaultTiebreakers];
+const CASCADE = [...defaultOrderOf(GENERIC)];
 const NAMES: Record<string, string> = { A: "Ada", B: "Bo", C: "Cy", D: "Di", E: "Ed" };
 
 type Dict = typeof en;
@@ -177,6 +184,7 @@ const META: StageQualMeta = {
   swissRounds: null,
   pointsRule: null,
   hasRankOverrides: false,
+  tablePointsRule: null,
 };
 
 const LOCALES = new Map<Dict, "en" | "es" | "fr" | "nl">([
@@ -201,7 +209,14 @@ function input(scene: Scene, over: Partial<QualificationViewInput> = {}, dict: D
     stage: {
       id: "S",
       kind: scene.kind,
-      meta: { ...META, ...(scene.kind === "swiss" ? { swissRounds: 3 } : {}), ...scene.meta },
+      // A stage whose own rule pays its table unless the scene says otherwise (the loader's rule in force, T9: the pin,
+      // else the own rule), so a scene that sets only `pointsRule` gets it for both.
+      meta: {
+        ...META,
+        ...(scene.kind === "swiss" ? { swissRounds: 3 } : {}),
+        ...scene.meta,
+        tablePointsRule: scene.meta && "tablePointsRule" in scene.meta ? scene.meta.tablePointsRule : (scene.meta?.pointsRule ?? null),
+      },
     },
     poolId: scene.poolId ?? null,
     rows: scene.rows,
@@ -340,7 +355,7 @@ function after3(left: 1 | 2, m: Partial<Record<"A" | "B" | "C" | "D", [number, n
 
 // ---------------------------------------------------------------------------
 describe("stageQualMeta / divisionPointsBounds", () => {
-  it("maps the V414 columns, defaulting a null per-group flag to false", () => {
+  it("maps the V414 columns, defaulting a null per-group flag to false; the table's rule is never read off the row — the loader's alone (T9 review m3)", () => {
     expect(
       stageQualMeta({
         qualify_count: 4,
@@ -350,17 +365,29 @@ describe("stageQualMeta / divisionPointsBounds", () => {
         points_rule: undefined,
         has_rank_overrides: true,
       }),
-    ).toEqual({ qualifyCount: 4, qualifyPerGroup: false, nextStageName: "Cup", swissRounds: 5, pointsRule: null, hasRankOverrides: true });
-    expect(
-      stageQualMeta({
-        qualify_count: null,
-        qualify_per_group: true,
-        next_stage_name: null,
-        swiss_rounds: null,
-        points_rule: { base: {} },
-        has_rank_overrides: false,
-      }),
-    ).toEqual({ qualifyCount: null, qualifyPerGroup: true, nextStageName: null, swissRounds: null, pointsRule: { base: {} }, hasRankOverrides: false });
+    ).toEqual({ qualifyCount: 4, qualifyPerGroup: false, nextStageName: "Cup", swissRounds: 5, pointsRule: null, hasRankOverrides: true, tablePointsRule: null });
+    // a row that still carries a `table_points_rule` key (a stale reader) does not reach the rule the table is paid by
+    const stale = {
+      qualify_count: null,
+      qualify_per_group: true,
+      next_stage_name: null,
+      swiss_rounds: null,
+      points_rule: { win: { regulation: 2 } },
+      has_rank_overrides: false,
+      table_points_rule: { win: { regulation: 4 } },
+    };
+    expect(stageQualMeta(stale)).toEqual({ qualifyCount: null, qualifyPerGroup: true, nextStageName: null, swissRounds: null, pointsRule: { win: { regulation: 2 } }, hasRankOverrides: false, tablePointsRule: null });
+  });
+  it("W2d PF-3: the per-match bounds read the rule the TABLE is paid by (a started stage's pin), never the stage's own rule", () => {
+    // A pinned stage with no rule of its own: the pin's bounds, not the sport's.
+    const pin = { win: { regulation: 4 }, draw: 2, loss: { regulation: 1 }, shootoutAs: "result", unit: "whole" };
+    const pinBounds = pointsRuleBounds(PointsRule.parse(pin), EVERY_OUTCOME);
+    expect(pinBounds, "premise: the pin's bounds are not the sport's").not.toEqual(BOUNDS);
+    expect(boundsInForce({ ...META, pointsRule: null, tablePointsRule: pin }, BOUNDS)).toEqual(pinBounds);
+    // An own rule the table is NOT paid by (no table rule): the sport's bounds, whatever the own rule says.
+    expect(boundsInForce({ ...META, pointsRule: pin, tablePointsRule: null }, BOUNDS)).toEqual(BOUNDS);
+    // An unparsable table rule gives none, never the sport's instead.
+    expect(boundsInForce({ ...META, pointsRule: null, tablePointsRule: { win: "three" } }, BOUNDS)).toBeNull();
   });
   it("bounds come from the module's own declaration; no module or an unparsable cfg gives none", () => {
     expect(BOUNDS).toEqual(GENERIC.matchPointsBounds(GENERIC.configSchema.parse(CFG)));
@@ -479,7 +506,7 @@ describe("no status — stated first, each with its positive pair", () => {
   });
   it("a malformed stage PointsRule → no status (never the sport's bounds instead); a valid one shows", () => {
     expect(view({ ...swiss4(), meta: { pointsRule: { base: { win: "three" } } } })).toBeNull();
-    expect(view({ ...swiss4(), meta: { pointsRule: { base: { win: 3, draw: 1, loss: 0 } } } })).not.toBeNull();
+    expect(view({ ...swiss4(), meta: { pointsRule: { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" } } })).not.toBeNull();
   });
   it("a Swiss stage without a declared round count; with one it shows", () => {
     expect(view({ ...swiss4(), meta: { swissRounds: null } })).toBeNull();
@@ -623,6 +650,113 @@ describe("no status — stated first, each with its positive pair", () => {
   });
 });
 
+// W2d Task 9 (carry 6; spec D11, X-TB-3): the "ranked first" gate keys on the sport's OWN first measure
+// (`primaryTableKey`), not on `points` alone. Volleyball, badminton and tennis rank on matches won first (FIVB V3-1, BWF
+// 16.2.1, ATP C.3-1): a table led by `wins` is a qualification table there, and its race is run in wins (a win adds 1, a
+// loss 0), never in points. Every shipped sport is swept, counted.
+describe("W2d T9: the table's first measure is the sport's primaryTableKey (carry 6)", () => {
+  /** A Swiss of four, two of three rounds played, whose POINTS do not follow its wins (an FIVB-like 3-2 win pays 2, a
+   *  2-3 loss pays 1): A 2W 4pts, B 1W 4pts, C 1W 3pts, D 0W 2pts. Read in wins it is swiss4; in points it is not. */
+  const splitScene = (): Scene => ({
+    ...swiss4(),
+    rows: [
+      row("A", 1, 2, 2, [6, 4], { points: 4 }),
+      row("B", 2, 1, 2, [5, 3], { points: 4 }),
+      row("C", 3, 1, 2, [4, 5], { points: 3 }),
+      row("D", 4, 0, 2, [4, 6], { points: 2 }),
+    ],
+  });
+  /** The rulebook's wins table as a points rule: a win adds 1, anything else 0 — its bounds are the engine's own. */
+  const WINS_RULE_BOUNDS = pointsRuleBounds(
+    PointsRule.parse({ win: { regulation: 1 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" }),
+    EVERY_OUTCOME,
+  );
+  const engineOn = (measure: "won" | "points", perMatch: NonNullable<typeof BOUNDS>) => {
+    const res = qualificationStatus({
+      rows: splitScene().rows.map((r) => ({ entrantId: r.entrantId, points: r[measure], active: true })),
+      remaining: new Map(["A", "B", "C", "D"].map((id) => [id, 1])),
+      perMatch,
+      cut: 2,
+      anyPlayed: true,
+      complete: false,
+    })!;
+    return ["A", "B", "C", "D"].map((id) => res.get(id)?.status.kind ?? null);
+  };
+  const statusesOf = (v: QualificationView) => ["A", "B", "C", "D"].map((id) => v.rows[id]?.status ?? null);
+
+  it("the sports whose table ranks on matches won first are badminton, tennis and volleyball (their rulebooks), every other on points", () => {
+    const wins = builtinModules.filter((m) => m.primaryTableKey === "wins").map((m) => m.key).sort();
+    expect(wins).toEqual(["badminton", "tennis", "volleyball"]);
+    expect(builtinModules.filter((m) => m.primaryTableKey === "points").length, "anti-vacuity: the points sports").toBeGreaterThan(0);
+  });
+
+  it("premise: the split scene reads differently in wins than in points, so a race run in the wrong measure is seen", () => {
+    expect(engineOn("won", WINS_RULE_BOUNDS!)).not.toEqual(engineOn("points", BOUNDS));
+  });
+
+  it("a wins table races on the wins table's bounds (a win adds 1), never the points rule's (a generic win pays 3): two 2-0 leaders with a round to go are clear of rivals who can reach 1 — every wins sport, counted", () => {
+    // Swiss of four, two of three rounds played: A and B 2-0 (they have not met), C and D 0-2.
+    const clear = (): Scene => ({
+      kind: "swiss",
+      rows: [
+        row("A", 1, 2, 2, [4, 0], { points: 6 }),
+        row("B", 2, 2, 2, [4, 1], { points: 6 }),
+        row("C", 3, 0, 2, [1, 4], { points: 0 }),
+        row("D", 4, 0, 2, [0, 4], { points: 0 }),
+      ],
+      fixtures: [won(1, "A", "C"), won(1, "B", "D"), won(2, "A", "D"), won(2, "B", "C"), open(3, null, null), open(3, null, null)],
+    });
+    const race = (perMatch: NonNullable<typeof BOUNDS>) => {
+      const res = qualificationStatus({
+        rows: clear().rows.map((r) => ({ entrantId: r.entrantId, points: r.won, active: true })),
+        remaining: new Map(["A", "B", "C", "D"].map((id) => [id, 1])),
+        perMatch,
+        cut: 2,
+        anyPlayed: true,
+        complete: false,
+      })!;
+      return ["A", "B", "C", "D"].map((id) => res.get(id)?.status.kind ?? null);
+    };
+    // premise: the bounds differ, and the wins race reads differently under them
+    expect(BOUNDS.max, "the points rule's per-match max").toBeGreaterThan(WINS_RULE_BOUNDS!.max);
+    expect(race(WINS_RULE_BOUNDS!)).not.toEqual(race(BOUNDS));
+    let checked = 0;
+    for (const m of builtinModules.filter((x) => x.primaryTableKey === "wins")) {
+      const v = must(view(clear(), { primary: m.primaryTableKey, cascade: [m.primaryTableKey, "diff"] }));
+      expect(statusesOf(v), `${m.key}: the race in wins, on the wins bounds`).toEqual(race(WINS_RULE_BOUNDS!));
+      checked++;
+    }
+    expect(checked, "the wins sports").toBe(3);
+  });
+
+  it("every sport: led by its primary it shows (in wins: the wins race); led by a step that is neither points nor its primary it shows none", () => {
+    let checked = 0;
+    let byWins = 0;
+    for (const m of builtinModules) {
+      const primary = m.primaryTableKey;
+      const other = primary === "wins" ? "points" : "wins";
+      const led = view(splitScene(), { primary, cascade: [primary, "diff"] });
+      expect(led, `${m.key}: led by its primary (${primary})`).not.toBeNull();
+      expect(view(splitScene(), { primary, cascade: ["diff", primary] }), `${m.key}: led by diff`).toBeNull();
+      if (primary === "wins") {
+        // the race in wins — the engine on the rows' wins under the wins table's bounds, not on their points
+        expect(statusesOf(led!), `${m.key}: the wins race`).toEqual(engineOn("won", WINS_RULE_BOUNDS!));
+        // `points` first is always a points table, and races in points
+        const byPoints = must(view(splitScene(), { primary, cascade: ["points", "wins"] }));
+        expect(statusesOf(byPoints), `${m.key}: led by points`).toEqual(engineOn("points", BOUNDS));
+        byWins++;
+      } else {
+        expect(statusesOf(led!), `${m.key}: the points race`).toEqual(engineOn("points", BOUNDS));
+        // `wins` first is not this sport's first measure: no status
+        expect(view(splitScene(), { primary, cascade: [other, "points"] }), `${m.key}: led by ${other}`).toBeNull();
+      }
+      checked++;
+    }
+    expect(checked, "every shipped sport").toBe(builtinModules.length);
+    expect(byWins, "the wins sports swept").toBe(3);
+  });
+});
+
 describe("statuses equal the engine's on the derived input", () => {
   it("R4: A is 'Win and in', never Through; the line sits after place 2", () => {
     const v = must(view(swiss4()));
@@ -689,12 +823,12 @@ describe("statuses equal the engine's on the derived input", () => {
   });
   it("Review Focus 2: a stage points rule overrides the sport's bounds", () => {
     // A +W win bonus lifts every rival's best case, so A's one win no longer settles it.
-    const rule = { base: { win: W, draw: 1, loss: 0 }, bonuses: [{ when: "win_margin_gte", param: 1, points: W }] };
+    const rule = { win: { regulation: W }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [{ when: "win_margin_gte", param: 1, points: W }] };
     const ruled = must(view({ ...swiss4(), meta: { pointsRule: rule } }));
     const engine = qualificationStatus({
       rows: swiss4().rows.map((r) => ({ entrantId: r.entrantId, points: r.points, active: true })),
       remaining: new Map(["A", "B", "C", "D"].map((id) => [id, 1])),
-      perMatch: pointsRuleBounds(PointsRule.parse(rule)),
+      perMatch: pointsRuleBounds(PointsRule.parse(rule), EVERY_OUTCOME),
       cut: 2,
       anyPlayed: true,
       complete: false,
@@ -775,8 +909,8 @@ describe("a departed row's unplayed fixtures (final review I1)", () => {
     // League of five: r1 D>A, C>B; r2 D>C, B>A; r3 B>E; D–B, D–E, A–C, A–E,
     // C–E to play. D (10, 2 of 4 played: award mode) can still be forfeited
     // twice, to 8 — below B's best (6 + 3 = 9).
-    const rule = { base: { win: 3, draw: 1, loss: 0 }, forfeit: { winnerPoints: 3, loserPoints: -1 } };
-    expect(pointsRuleBounds(PointsRule.parse(rule)).min).toBe(-1); // precondition, off the rule
+    const rule = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", forfeit: { winnerPoints: 3, loserPoints: -1 } };
+    expect(pointsRuleBounds(PointsRule.parse(rule), EVERY_OUTCOME).min).toBe(-1); // precondition, off the rule
     const scene = (db: QualFixture, de: QualFixture, bPts: number, bPlayed: number): Scene => ({
       kind: "league",
       meta: { qualifyCount: 1, pointsRule: rule },
@@ -1114,7 +1248,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
   });
   // Loop R M-13 (X-DW-4): a double walkover credits NOTHING — no score to either side, in every sport, whatever the
-  // division's walkover credits (`applyPointsRule` and the folds pay it nothing) — so it is a match the average leaves
+  // division's walkover credits (`payout` and the folds pay it nothing) — so it is a match the average leaves
   // out, as it leaves out a no-result. Swept over every sport whose engine folds a both-sides forfeit to a double
   // walkover, the outcome being the engine's own fold, never typed; `awardAddsToLedger` is each sport's own reading, so
   // a sport whose WALKOVER would count (ice hockey's 5–0) is in the sweep too. D's 14 goals then came from ONE match and
@@ -1235,7 +1369,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   });
 
   // A stage PointsRule's `forfeit.awardScore` (V414 publishes it as
-  // meta.pointsRule): `applyPointsRule` writes it to for/against/diff on a
+  // meta.pointsRule): `payout` writes it to for/against/diff on a
   // forfeit with NOTHING PLAYED — never a bye, never an award after play
   // (W2c X-PT-1; `ruleScoreReaches`, parity with the fold in
   // qualification-points-parity.test.ts). So under such a rule an unplayed
@@ -1244,7 +1378,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   // having to say so (the generic module's awardAddsToLedger stays false).
   // Each pair is the same scene under the same rule minus its awardScore.
   const scoredRule = (awardScore?: [number, number]) => ({
-    base: { win: W, draw: 1, loss: 0 },
+    win: { regulation: W }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
     bonuses: [],
     forfeit: { winnerPoints: W, loserPoints: 0, ...(awardScore ? { awardScore } : {}) },
   });
@@ -1257,7 +1391,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(scored.whatIfAssumption).toBeNull();
     const unscored = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule() } })).rows.D!;
     expect(unscored.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides: win your next match by 8 or more to finish ahead.`);
-    // A SET forfeit score of 0–0 is a score like any other (fix round 2): `applyPointsRule` writes it over the sport's
+    // A SET forfeit score of 0–0 is a score like any other (fix round 2): `payout` writes it over the sport's
     // credit, so the walkover is a 0–0 ledger match — the rows (which it adds nothing to) are unchanged, and the match
     // counts in the average exactly as an ordinary result between B and D would.
     const nil = must(view({ ...o, fixtures, meta: { pointsRule: scoredRule([0, 0]) } })).rows.D!;
@@ -1320,7 +1454,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
   });
 
   // Fix round 2: the rule's score counts only where the what-if READS it.
-  // `applyPointsRule` writes it to `for`/`against`/`diff` alone; `metricOf`
+  // `payout` writes it to `for`/`against`/`diff` alone; `metricOf`
   // reads a sport's own `gf`/`ga`/`gd` first, and a ratio key reads neither.
   // Counting an award the average cannot see only shrinks the average — so
   // each scene below prints what the same table prints with no rule at all.
@@ -1335,7 +1469,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     points,
     metrics,
   });
-  /** What `applyPointsRule` adds for a scored forfeit. */
+  /** What `payout` adds for a scored forfeit. */
   const ruleAward = (mine: number, theirs: number): Metrics => ({ for: mine, against: theirs, diff: mine - theirs });
 
   // W2c X-PT-1: the rule pays a bye no score, so a bye's row never carries the rule's for/against/diff — the scene's
@@ -1418,7 +1552,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const d = must(view({ kind: "league", rows, fixtures, meta: { pointsRule: scoredRule([3, 0]) } }, over)).rows.D!;
     expect(d.whatIf).toMatch(new RegExp(`^If you finish level on points with Bo, ${word("goals")} decides[.:]`));
   });
-  it("a badminton walkover credits its sets (BD-WO-1): set ratio reads them, so the walkover is IN the average, rule or no rule", () => {
+  it("a badminton walkover credits its sets (BD-WO-1): on a points-first stage, set ratio reads them, so the walkover is IN the average, rule or no rule", () => {
     // open4 with r1's A–D a walkover: r1 C 2–1 B; r2 A 2–0 C, B 2–1 D. Before W2b a badminton walkover credited
     // nothing, so Di's sets (1–2) were ONE real match's and a win by 2 fit it (3.5/2.5 > 1) — "win by 2". W2b
     // Task 13 (ruling 108, X-WO-1): the walkover credits the table the engine's own sets (`forfeitCredit`, read
@@ -1432,7 +1566,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     expect(cw.sets_won, "premise: the walkover credits sets").toBeGreaterThan(0);
     // Wins only, as badminton's own bounds are — else `wins` decides, not set ratio.
     const winsOnlyRule = {
-      base: { win: bw, draw: 0, loss: 0 },
+      win: { regulation: bw }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole",
       bonuses: [],
       forfeit: { winnerPoints: bw, loserPoints: 0, awardScore: [3, 0] as [number, number] },
     };
@@ -1444,7 +1578,9 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       ledgerRow("D", 4, 0, 2, 0, { ...sets(1 + cl.sets_won!, 2 + cl.sets_lost!), ...(scored ? ruleAward(0, 3) : {}) }),
     ];
     const fixtures = [walkover(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), won(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
-    const over = { cascade: [...BADMINTON.defaultTiebreakers], bounds: BB, awardAddsToLedger: divisionAwardAddsToLedger(BADMINTON, {}) };
+    // A points-first badminton order (a pinned pre-W2d stage's), whose step after `wins` is set ratio.
+    expect(BADMINTON_POINTS_FIRST.slice(0, 3), "premise: points, then wins, then set ratio").toEqual(["points", "wins", "set_ratio"]);
+    const over = { cascade: BADMINTON_POINTS_FIRST, bounds: BB, awardAddsToLedger: divisionAwardAddsToLedger(BADMINTON, {}) };
     const target = "If you finish level on points with Bo, set ratio decides: win your next match by 2 or more to finish ahead.";
     const plain = must(view({ kind: "league", rows: rows(false), fixtures }, over)).rows.D!;
     expect(plain.whatIf).not.toBe(target);
@@ -1457,7 +1593,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const stale = must(view({ kind: "league", rows: rows(false), fixtures }, { ...over, awardAddsToLedger: false })).rows.D!;
     expect(stale.whatIf).not.toBe(plain.whatIf);
   });
-  it("winsOnly from the bounds IN FORCE: badminton skips `wins` for set ratio", () => {
+  it("winsOnly from the bounds IN FORCE: badminton (a points-first stage) skips `wins` for set ratio", () => {
     const bb = divisionPointsBounds(BADMINTON, {})!;
     expect(bb.winsOnly).toBe(true);
     const bw = bb.winFloor;
@@ -1469,7 +1605,8 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
       row("C", 3, 1, 2, [0, 0], { points: bw, metrics: sets(2, 3) }),
       row("D", 4, 0, 2, [0, 0], { points: 0, metrics: sets(1, 4) }),
     ];
-    const cascade = [...BADMINTON.defaultTiebreakers];
+    const cascade = BADMINTON_POINTS_FIRST;
+    expect(cascade.slice(0, 3), "premise: points, then wins, then set ratio").toEqual(["points", "wins", "set_ratio"]);
     const d = must(view({ ...s, rows }, { bounds: bb, cascade })).rows.D!;
     expect(d.whatIf).toContain("set ratio decides");
     // Points that did not come from wins at one rate (carry-over) put `wins` back.
@@ -1482,7 +1619,7 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     const cascade = ["points", "wins", "diff"];
     const plain = must(view(open4(), { cascade })).rows.D!;
     expect(plain.whatIf).toBe("If you finish level on points with Bo, wins decides. Now: you 0, Bo 1.");
-    const winsOnly = { base: { win: W, draw: 0, loss: 0 }, bonuses: [] };
+    const winsOnly = { win: { regulation: W }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] };
     const ruled = must(view({ ...open4(), meta: { pointsRule: winsOnly } }, { cascade })).rows.D!;
     expect(ruled.whatIf).toContain(`${RULE} decides`);
   });
@@ -1494,8 +1631,8 @@ describe("what-if (§3.4) — a target only when the tying result is known and t
     // unscored rule's "win by 8" (the scene above) for a scored one.
     const o = open4({ D: [6, 8], B: [7, 2] });
     const fixtures = [won(1, "A", "D"), won(1, "C", "B"), won(2, "A", "C"), walkover(2, "B", "D"), open(3, "A", "B"), open(3, "C", "D")];
-    const rule = { ...scoredRule([3, 0]), base: { win: W, draw: 0, loss: 0 } };
-    expect(pointsRuleBounds(PointsRule.parse(rule)).winsOnly).toBe(true); // precondition, off the rule
+    const rule = { ...scoredRule([3, 0]), win: { regulation: W }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole" };
+    expect(pointsRuleBounds(PointsRule.parse(rule), EVERY_OUTCOME).winsOnly).toBe(true); // precondition, off the rule
     const d = must(view({ ...o, fixtures, meta: { pointsRule: rule } }, { cascade: ["points", "wins", "diff"] })).rows.D!;
     expect(d.whatIf).toBe(`If you finish level on points with Bo, ${RULE} decides. Now: you -2, Bo +5.`);
     expect(d.whatIfAssumption).toBeNull();

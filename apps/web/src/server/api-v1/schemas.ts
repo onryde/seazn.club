@@ -326,6 +326,9 @@ export const TiebreakerKeyS = z.enum([
   "points", "wins", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "nrr",
   "set_ratio", "game_ratio", "board_ratio", "point_ratio", "buchholz",
   "buchholz_cut1", "sberger", "direct", "fair_play", "seed", "lots",
+  // W2d (spec §5.6; Task 4's keys, moved here by PS-2c): the BWF/ITTF/ATP/FIH/IIHF steps and the h2h block modifiers.
+  "set_diff", "point_diff", "h2h_two", "h2h_wins", "h2h_set_ratio", "h2h_point_ratio", "h2h_reapply", "h2h_exclusion",
+  "matches_played", "field_goals",
 ]);
 
 /** V364 first-class eligibility: gender category badge/gate (evaluated in
@@ -591,9 +594,16 @@ export const RefusedFieldS = z.object({
   stageName: z.string(),
 });
 
-/** PATCH /divisions/{id}'s 200: the division as saved, and what was refused beside it (applied per field). */
+/** W2d Task 10 (spec §5.4) — a started stage that kept its pinned table rules while this save moved what its live layers
+ *  would give (the division's order, the points its sport layer pays). */
+export const KeptPinnedStageS = z.object({ stageId: Uuid, name: z.string() });
+
+/** PATCH /divisions/{id}'s 200: the division as saved, what was refused beside it (applied per field), and the pinned
+ *  stages the save did not reach (W2d: a started stage is pinned, so a division order or points change is never refused
+ *  for it; it is listed here instead). */
 export const PatchedDivision = Division.extend({
   refused: z.array(RefusedFieldS),
+  stagesKeptPinned: z.array(KeptPinnedStageS),
 });
 
 // ---------------------------------------------------------------------------

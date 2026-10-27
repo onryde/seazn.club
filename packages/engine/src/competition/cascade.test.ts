@@ -3,12 +3,17 @@ import { describe, expect, it } from "vitest";
 import fc from "fast-check";
 import type { StandingsDelta } from "../core/types.ts";
 import type { TiebreakerKey } from "../sport/module.ts";
+// single-sport: the validation cases below are football's own ledger (gf/ga/gd, fair_play), as they always were; the per-sport sweeps are cascade-rules.test.ts
+import { football } from "../sports/football/index.ts";
+import { validateCascade, type CascadeContext } from "./cascade-rules.ts";
 import { foldResults, type FixtureResult, type StandingsRow } from "./standings.ts";
-import { buildSwissTable, rankStandings, validateCascade } from "./tiebreakers.ts";
+import { buildSwissTable, rankStandings } from "./tiebreakers.ts";
 
 // The two football presets under test (spec 04 §1.6): H2H-first vs GD-first.
 const FIFA2026: TiebreakerKey[] = ["points", "h2h_points", "h2h_diff", "h2h_for", "diff", "for", "fair_play", "lots"];
 const CLASSIC: TiebreakerKey[] = ["points", "diff", "for", "h2h_points", "h2h_diff", "h2h_for", "fair_play", "lots"];
+// UEFA 20.01(d): the FIFA block closed by the re-application modifier (W2d PS-9d — the `h2hRecursive` flag's cases).
+const UEFA: TiebreakerKey[] = ["points", "h2h_points", "h2h_diff", "h2h_for", "h2h_reapply", "diff", "for", "fair_play", "lots"];
 
 // Football-shaped decided fixture (gf/ga/gd ledger, 3/1/0 points).
 function fb(home: string, away: string, hg: number, ag: number): FixtureResult {
@@ -29,9 +34,9 @@ function fb(home: string, away: string, hg: number, ag: number): FixtureResult {
   ];
 }
 
-function rankOrder(entrants: string[], results: FixtureResult[], cascade: TiebreakerKey[], opts: { h2hRecursive?: boolean } = {}): string[] {
+function rankOrder(entrants: string[], results: FixtureResult[], cascade: TiebreakerKey[]): string[] {
   const rows = foldResults(entrants, results);
-  return rankStandings(rows, { cascade, results, h2hRecursive: opts.h2hRecursive === true, rngSeed: 1 }).rows.map((r) => r.entrantId);
+  return rankStandings(rows, { cascade, results, rngSeed: 1 }).rows.map((r) => r.entrantId);
 }
 
 // ---------------------------------------------------------------------------
@@ -70,7 +75,7 @@ describe("FIFA 2026 H2H-first vs classic GD-first (golden — spec 05 §4, PROMP
 // UEFA recursive vs FIFA fall-through (spec 05 §4.2, PROMPT-08 §3).
 // ---------------------------------------------------------------------------
 
-describe("h2hRecursive — UEFA re-application vs FIFA fall-through (spec 05 §4.2)", () => {
+describe("h2h_reapply — UEFA re-application vs FIFA fall-through (spec 05 §4.2; W2d PS-9d, was h2hRecursive)", () => {
   // A,B,C,D level on 6 pts (jobber games equalise). The 4-way h2h splits into
   // {A,B} over {C,D} and leaves each pair level on h2h pts/GD/GF. UEFA re-runs
   // the head-to-head among just the pair (A beat B, C beat D). FIFA falls
@@ -92,17 +97,17 @@ describe("h2hRecursive — UEFA re-application vs FIFA fall-through (spec 05 §4
     fb("D", "Jd", 1, 0), // D wins 1-0 → overall GD 0
   ];
 
-  it("UEFA (recursive) ranks the pair by their direct game", () => {
-    expect(rankOrder(entrants, results, FIFA2026, { h2hRecursive: true }).slice(0, 4)).toEqual(["A", "B", "C", "D"]);
+  it("UEFA (h2h_reapply after the block) ranks the pair by their direct game", () => {
+    expect(rankOrder(entrants, results, UEFA).slice(0, 4)).toEqual(["A", "B", "C", "D"]);
   });
 
-  it("FIFA (fall-through) ranks the still-level pair by overall criteria", () => {
-    expect(rankOrder(entrants, results, FIFA2026, { h2hRecursive: false }).slice(0, 4)).toEqual(["B", "A", "C", "D"]);
+  it("FIFA (no modifier, fall-through) ranks the still-level pair by overall criteria", () => {
+    expect(rankOrder(entrants, results, FIFA2026).slice(0, 4)).toEqual(["B", "A", "C", "D"]);
   });
 
-  it("the flag changes the result on the same fixtures", () => {
-    const uefa = rankOrder(entrants, results, FIFA2026, { h2hRecursive: true });
-    const fifa = rankOrder(entrants, results, FIFA2026, { h2hRecursive: false });
+  it("the h2h_reapply modifier changes the result on the same fixtures", () => {
+    const uefa = rankOrder(entrants, results, UEFA);
+    const fifa = rankOrder(entrants, results, FIFA2026);
     expect(uefa).not.toEqual(fifa);
   });
 });
@@ -220,32 +225,33 @@ describe("buchholz / direct comparators from the Swiss ledger", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Cascade validation (spec 05 §4.1).
+// Cascade validation (spec 05 §4.1; W2d spec §5.5 — cascade-rules.ts returns the refusals instead of throwing the first).
 // ---------------------------------------------------------------------------
 
-describe("validateCascade rejects unsupported keys (spec 05 §4.1)", () => {
-  const footballMetrics = [
-    { key: "gf", label: "GF", direction: "desc" as const },
-    { key: "ga", label: "GA", direction: "asc" as const },
-    { key: "gd", label: "GD", direction: "desc" as const },
-    { key: "fair_play", label: "FP", direction: "desc" as const },
-  ];
+describe("validateCascade refuses unsupported keys (spec 05 §4.1, W2d §5.5)", () => {
+  const league: CascadeContext = { module: football, cfg: football.configSchema.parse({}), stageKind: "league", crossGroup: false };
 
   it("accepts a cascade whose metrics the sport maintains", () => {
-    expect(() => validateCascade(FIFA2026, { metrics: footballMetrics })).not.toThrow();
+    expect(validateCascade(FIFA2026, league)).toEqual([]);
   });
 
-  it("rejects nrr when the NRR ledger is absent", () => {
-    expect(() => validateCascade(["points", "nrr"], { metrics: footballMetrics })).toThrow(/NRR/);
+  it("refuses nrr when the NRR ledger is absent", () => {
+    expect(validateCascade(["points", "nrr", "lots"], league)).toEqual([
+      { index: 1, key: "nrr", reason: "sport", need: "runs_for, balls_faced_eff, runs_against, balls_bowled_eff" },
+    ]);
   });
 
-  it("rejects set_ratio without sets won/lost", () => {
-    expect(() => validateCascade(["points", "set_ratio"], { metrics: footballMetrics })).toThrow(/sets won\/lost/);
+  it("refuses set_ratio without sets won/lost", () => {
+    expect(validateCascade(["points", "set_ratio", "lots"], league)).toEqual([
+      { index: 1, key: "set_ratio", reason: "sport", need: "sets_won, sets_lost" },
+    ]);
   });
 
-  it("rejects buchholz unless a Swiss ledger is assembled", () => {
-    expect(() => validateCascade(["points", "buchholz"], { metrics: [] })).toThrow(/Swiss ledger/);
-    expect(() => validateCascade(["points", "buchholz"], { metrics: [], swiss: true })).not.toThrow();
+  it("refuses buchholz unless the stage is Swiss (the only stage that assembles its ledger)", () => {
+    expect(validateCascade(["points", "buchholz", "lots"], league)).toEqual([
+      { index: 1, key: "buchholz", reason: "stage_format", need: "swiss" },
+    ]);
+    expect(validateCascade(["points", "buchholz", "lots"], { ...league, stageKind: "swiss" })).toEqual([]);
   });
 });
 

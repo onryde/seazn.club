@@ -45,7 +45,7 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   FidelityBand,
@@ -1450,6 +1450,11 @@ export interface NestedPreset {
   variants: Record<string, Partial<NestedParams>>;
   positions: PositionCatalog;
   defaultTiebreakers: TiebreakerKey[];
+  // W2d (spec §5.10, OC1) — a Swiss stage's order, unchanged by W2d (W3 owns Swiss orders); `defaultTiebreakers` above is
+  // the round-robin, league and group order. Required, so a new sport states both.
+  swissTiebreakers: TiebreakerKey[];
+  // W2d (D11; X-TB-3) — the module's `primaryTableKey`; stated per sport (tennis ranks on wins, ATP C.3-1).
+  primaryTableKey: "points" | "wins";
   officialLabel: { scorer: string };
   entrantModel?: EntrantModel;
   playerStats?: PlayerStatsModel; // Jul3/07 §3 — unlocked by person attribution
@@ -1805,10 +1810,11 @@ function applyPointForReplay(state: NestedState, side: Side): NestedState {
 }
 
 /**
- * Games won so far, closed sets plus the set in progress — VERBATIM the
- * formula `sideMetrics`'s own `gamesOf` uses inside `makeNestedModule`
- * (below), duplicated because that one is a closure over `opponent`, not a
- * standalone export. Keep the two in sync if either changes.
+ * Games won so far, closed sets plus the set in progress — the formula
+ * `sideMetrics`'s own `gamesOf` used inside `makeNestedModule` (below) before
+ * W2d. They now differ on purpose in ONE place: the table's `gamesOf` credits a
+ * won match tie-break as one game to its winner (TN-TB-2, RB2A-11), while this
+ * player-stat count still reads a match tie-break as no games.
  */
 function nestedGamesOf(state: NestedState, side: Side): number {
   return (
@@ -2063,8 +2069,13 @@ export function makeNestedModule(
 
   const sideMetrics = (state: NestedState, side: Side): Record<string, number> => {
     const opp = opponent(side);
+    // W2d (SPEC §5.10, TN-TB-2; RB2A-11, ATP Rulebook 4.02): on the TABLE a won match tie-break counts as one set
+    // and one game to its winner and none to the loser — its points are not games. Its winner is the side the set was
+    // banked to (`applySetSummary`: the higher score, else away — a level one replays only from a tolerant read), so
+    // the game follows `sets_won`. (Player stats' `nestedGamesOf` keeps its own count: it is not the table's game %.)
+    const mtbGameOf = (set: ClosedSet, s: Side): number => ((set.home > set.away ? "home" : "away") === s ? 1 : 0);
     const gamesOf = (s: Side): number =>
-      state.sets.reduce((sum, set) => sum + (set.mtb === true ? 0 : set[s]), 0) + state.games[s];
+      state.sets.reduce((sum, set) => sum + (set.mtb === true ? mtbGameOf(set, s) : set[s]), 0) + state.games[s];
     return {
       sets_won: state.setsWon[side],
       sets_lost: state.setsWon[opp],
@@ -2301,11 +2312,25 @@ export function makeNestedModule(
     },
 
     metrics: METRICS,
-    defaultTiebreakers: preset.defaultTiebreakers,
+    defaultTiebreakers: (kind) => [...(kind === "swiss" ? preset.swissTiebreakers : preset.defaultTiebreakers)],
+    primaryTableKey: preset.primaryTableKey,
 
     supportsDraws(_cfg, _stage: StageKind) {
       return false; // v6/00 §4 — tennis never draws
     },
+    // W2d (spec §5.2; X-PT-2) — a match is won in regulation and never ends level (`supportsDraws` above).
+    ...winMethodTable(preset.key, { regulation: "regulation" }),
+    reachableDecidedIn: () => new Set<DecidedIn>(["regulation"]),
+    reachableResultKinds: () => new Set<"draw" | "tie" | "noResult">(),
+    shootoutAs: "result",
+    // W2d (spec §5.3, §5.10) — `points` as a rule: tennis 2/0, no draw.
+    tablePointsRule: (cfg) => ({
+      win: { regulation: cfg.points.win },
+      loss: { regulation: cfg.points.loss },
+      shootoutAs: "result",
+      unit: "whole",
+      bonuses: [],
+    }),
 
     // W2a: none — a tennis match always produces a winner (spec §5.2)
     bracketDeciders: () => ({}),

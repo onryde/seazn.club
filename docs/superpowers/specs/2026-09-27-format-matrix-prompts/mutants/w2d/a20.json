@@ -1,0 +1,107 @@
+[
+  {
+    "id": "a20-overall-scope-after-the-guard",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "  if (run.h2hScope === \"overall\" && cls.length >= 3) return [cls];\n  // W2d (ST-G12): the block reads a mini-table only when it is complete. (A\n  // re-applied or excluded sub-group of a complete class is complete.)\n  if (!scheduleComplete(cls, run)) return partialSchedule(cls, run);\n",
+    "replace": "  // W2d (ST-G12): the block reads a mini-table only when it is complete. (A\n  // re-applied or excluded sub-group of a complete class is complete.)\n  if (!scheduleComplete(cls, run)) return partialSchedule(cls, run);\n  if (run.h2hScope === \"overall\" && cls.length >= 3) return [cls];\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/partial-schedule.test.ts"
+        ],
+        "name": "X-TB-8 D3: a stage ranking ≥3-way ties on overall metrics"
+      }
+    ]
+  },
+  {
+    "id": "a20-overall-scope-on-pairs",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "  if (run.h2hScope === \"overall\" && cls.length >= 3) return [cls];\n",
+    "replace": "  if (run.h2hScope === \"overall\" && cls.length >= 2) return [cls];\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/partial-schedule.test.ts"
+        ],
+        "name": "X-TB-8 D3: 'overall' covers ties of three or more only"
+      }
+    ]
+  },
+  {
+    "id": "a20-r1-pointsmap-refusal-names-stored-keys",
+    "file": "packages/engine/src/sports/setbased/kernel.ts",
+    "find": "{ keys: [...storedKeys] }",
+    "replace": "{ keys: Object.keys(cfg.pointsMap) }",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/sports/setbased/setbased.test.ts"
+        ],
+        "name": "the table rule refuses a map that prices no set score, naming the keys STORED"
+      }
+    ]
+  },
+  {
+    "id": "a20-r1-forfeit-reads-the-absentee",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "  if (game.unplayed || game.opponent === null) return virtualOpponentScore(row, index);\n",
+    "replace": "  if (false || game.opponent === null) return virtualOpponentScore(row, index);\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/tiebreakers-md1.test.ts"
+        ],
+        "name": "a FORFEIT against a real opponent"
+      }
+    ]
+  },
+  {
+    "id": "a20-r1-unflagged-bye-looks-up-null",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "  if (game.unplayed || game.opponent === null) return virtualOpponentScore(row, index);\n",
+    "replace": "  if (game.unplayed || false) return virtualOpponentScore(row, index);\n",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/tiebreakers-md1.test.ts"
+        ],
+        "name": "a BYE written without the unplayed flag"
+      }
+    ]
+  },
+  {
+    "id": "a20-r1-negative-cut-guard-off",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "  if (cut < 0) throw new EngineError(",
+    "replace": "  if (false) throw new EngineError(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/tiebreakers-md1.test.ts"
+        ],
+        "name": "buchholz refuses a negative cut"
+      }
+    ]
+  },
+  {
+    "id": "a20-r1-duplicate-entrant-guard-off",
+    "file": "packages/engine/src/competition/tiebreakers.ts",
+    "find": "    if (seen.has(row.entrantId)) throw new EngineError(",
+    "replace": "    if (false) throw new EngineError(",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/tiebreakers-md1.test.ts"
+        ],
+        "name": "rankStandings refuses a table naming an entrant twice"
+      }
+    ]
+  }
+]

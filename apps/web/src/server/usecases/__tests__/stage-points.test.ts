@@ -4,22 +4,23 @@
 // omitted `points` leaves it as stored (the rules arm's merge semantics, Task 11). One validation for every door that
 // writes a stage's points (this PUT, and `createStages` / `replaceStages` / templates through `validatedStageConfig`):
 //  - a bracket kind has no table: RULE_NOT_SETTABLE, field `points`;
-//  - a division whose points a rule cannot say (Q1, the engine's `pointsRuleExpressible`): 422 POINTS_RULE_INEXPRESSIBLE,
-//    its split keys in `extra.keys` so a client can say them in the reader's language;
+//  - W2d Task 10 (W2d spec §5.4, §10): a rule that does not pay an outcome the stage can end in (`coverage` over
+//    `reachableOutcomes`; cricket's tie): 422 POINTS_OUTCOME_UNCOVERED, the outcomes in `extra.uncovered` so a client can
+//    say them in the reader's language. W2c's Q1 ("inexpressible" divisions) is retired: the rule is outcome-keyed now;
 //  - a walkover score that does not reach this sport's table (batch-3 I3, the engine's `pointsRuleAwardReachesTable`):
 //    RULE_NOT_SETTABLE, field `points.forfeit.awardScore`;
 //  - a rule naming metrics the sport does not emit: CONFIG_INVALID (`validatePointsRule`);
-//  - bonuses or a forfeit row without `standings.custom_points`: 402 (ONE gate, `assertCustomPointsAllowed`);
+//  - no entitlement gate: bonuses and a forfeit row are free on every plan (W2d T10 fix round 1, I4: all scoring is free);
 //  - a started stage: STAGE_FORMAT_LOCKED, monotonic across a void.
-// And the division save re-asks Q1 for every UNSTARTED stage that carries points.
+// And the division save re-asks coverage for every stage whose matches its config reaches (cause, not state).
 //
-// Expected values come from the engine's own declarations (`pointsRuleExpressible`, `pointsRuleAwardReachesTable`,
+// Expected values come from the engine's own declarations (`coverage`, `reachableOutcomes`, `pointsRuleAwardReachesTable`,
 // `metrics`, the kind sets, the variants) and the rule each test declares, never from the code under test. Real Postgres
 // required; skipped without DATABASE_URL.
 import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { BRACKET_KINDS, DRAW_KINDS, StageKind } from "@seazn/engine/core";
-import { pointsRuleAwardReachesTable, pointsRuleExpressible } from "@seazn/engine/competition";
+import { PointsRule, coverage, pointsRuleAwardReachesTable, reachableOutcomes } from "@seazn/engine/competition";
 import { deciderKeysFor, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
@@ -40,6 +41,7 @@ import { putStageRules } from "../stage-rules";
 import { createStages, generateStageFixtures, getStandings, replaceStages } from "../stages";
 import { formatLockedStageIds } from "../stage-rules";
 import { makeUser } from "./_seed";
+import { RULEBOOK_SPLITS } from "@/components/v2/stage-rules/__tests__/_points-split-rulebook";
 import { movingFragment } from "./_stage-probe";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -52,7 +54,7 @@ afterAll(async () => {
   await client?.end();
 });
 
-const base = { base: { win: 3, draw: 1, loss: 0 } };
+const base = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const };
 // Not a margin bonus: badminton emits no for/against, so `validatePointsRule` refuses a margin bonus there (its own arm
 // below). `forfeit_loss` pays on any sport.
 const withBonus = { ...base, bonuses: [{ when: "forfeit_loss" as const, points: 1 }] };
@@ -72,15 +74,6 @@ async function seedOrg(plan: "pro" | "community" | "enterprise" = "pro"): Promis
   return { orgId, via: "session", userId: owner.id, role: "owner", keyId: null };
 }
 
-/** V393 granted `standings.custom_points` to Community, so no plan withholds it: a DENY override is the one lever that
- *  takes it away (custom-points.test.ts), and it beats the plan. */
-async function denyFeature(orgId: string, featureKey: string): Promise<void> {
-  await sql`
-    insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
-    values (${orgId}, ${featureKey}, false, 'test')
-    on conflict (org_id, feature_key) do update set bool_value = false`;
-  await invalidateOrgEntitlements(orgId);
-}
 
 const mod = (key: string): AnySportModule => {
   const m = builtinModules.find((x) => x.key === key);
@@ -132,6 +125,11 @@ const stageCount = async (divisionId: string): Promise<number> =>
 /** The variant's config as the division stores it (`createDivision` stores the PARSED preset). */
 const variantCfg = (m: AnySportModule, variant: string): unknown => m.configSchema.parse(m.variants[variant]);
 
+/** W2d T10 — the engine's own answer: what a league stage on `cfg` can end in that `rule` does not pay. */
+const unpaid = (m: AnySportModule, cfg: unknown, rule: unknown) => coverage(PointsRule.parse(rule), reachableOutcomes(m, m.configSchema.parse(cfg), "league"));
+/** Volleyball (W2d spec §5.4's live case): a stage's own set-score table for the FIVB best-of-5, every score named. */
+const FIVB_OWN: PointsRule = { win: { regulation: 3 }, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], bySetScore: { "3-0": [3, 0], "3-1": [3, 0], "3-2": [2, 1] } };
+
 describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
   it("empty: {points: null} on a stage with none is a no-op, and leaves the stage's rules as stored", async () => {
     const auth = await seedOrg("pro");
@@ -155,12 +153,12 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
     const out = await putStageRules(auth, s, { points: base });
     expect(out.points, "the save answers with the stored rule").toMatchObject(base);
     expect((await stageConfig(s)).points).toMatchObject(base);
-    await putStageRules(auth, s, { points: { base: { win: 2, draw: 1, loss: 0 } } });
-    expect((await stageConfig(s)).points).toMatchObject({ base: { win: 2 } });
+    await putStageRules(auth, s, { points: { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const } });
+    expect((await stageConfig(s)).points).toMatchObject({ win: { regulation: 2 } });
     // A rules-only save keeps the points; a points-only save keeps the rules.
     const moving = movingFragment(mod("badminton"), "short", "league")!;
     await putStageRules(auth, s, { rules: moving.frag });
-    expect((await stageConfig(s)).points, "a rules save left the points").toMatchObject({ base: { win: 2 } });
+    expect((await stageConfig(s)).points, "a rules save left the points").toMatchObject({ win: { regulation: 2 } });
     await putStageRules(auth, s, { points: base });
     expect((await stageConfig(s)).rules, "a points save left the rules").toEqual(moving.frag);
     // `{rules: null}` clears the rules ONLY.
@@ -202,112 +200,100 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
     expect(bracket + table).toBe(StageKind.options.length);
   }, 60_000);
 
-  it("Q1 an inexpressible division refuses by name (ice hockey OT/SO points), naming its split keys; a variant that splits nothing accepts", async () => {
+  it("W2d T10: a stage that can end in an outcome its points do not pay is refused by name (cricket's tie, 422 POINTS_OUTCOME_UNCOVERED); the rule that pays it is stored", async () => {
+    // W2c's Q1 cases (ice hockey OT / SO "inexpressible", the parsed-cfg read, the every-variant sweep) are retired with
+    // the engine's expressibility check: an outcome-keyed rule says them all. Their successor is coverage, swept below.
     const auth = await seedOrg("pro");
-    const ih = mod("icehockey");
-    const want = pointsRuleExpressible(variantCfg(ih, "iihf"));
-    expect(want.ok, "premise: the engine declares iihf's points inexpressible").toBe(false);
-    const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
+    const cr = mod("cricket");
+    const want = unpaid(cr, variantCfg(cr, "t20"), base);
+    expect(want.ok === false && want.uncovered, "premise: the engine says a T20 league can end tied, which `base` does not pay").toEqual(["tie"]);
+    const { divisionId } = await seedDivision(auth, "cricket", "t20");
     const s = await seedStage(auth, divisionId, 1, "league");
-    await expect(putStageRules(auth, s, { points: base })).rejects.toMatchObject({
-      status: 422,
-      code: "POINTS_RULE_INEXPRESSIBLE",
-      extra: { keys: want.ok ? [] : want.keys },
-    });
+    await expect(putStageRules(auth, s, { points: base })).rejects.toMatchObject({ status: 422, code: "POINTS_OUTCOME_UNCOVERED", extra: { uncovered: ["tie"] } });
     expect(Object.hasOwn(await stageConfig(s), "points")).toBe(false);
-    // The positive pair, same sport: recreational splits nothing.
-    expect(pointsRuleExpressible(variantCfg(ih, "recreational")).ok, "premise").toBe(true);
-    const rec = await seedDivision(auth, "icehockey", "recreational");
-    const s2 = await seedStage(auth, rec.divisionId, 1, "league");
-    await putStageRules(auth, s2, { points: base });
-    expect((await stageConfig(s2)).points).toMatchObject(base);
+    // The positive pair, same stage: the rule that pays a tie.
+    const pays = { ...base, tie: 1 };
+    expect(unpaid(cr, variantCfg(cr, "t20"), pays).ok, "premise").toBe(true);
+    await putStageRules(auth, s, { points: pays });
+    expect((await stageConfig(s)).points).toMatchObject(pays);
+    // And ice hockey's iihf (W2c's inexpressible case) takes a rule that states its overtime; the plain one would pay an
+    // overtime win as regulation's and is refused (fix round 1 I2, its own describe below).
+    const ih = await seedDivision(auth, "icehockey", "iihf");
+    const s2 = await seedStage(auth, ih.divisionId, 1, "league");
+    await expect(putStageRules(auth, s2, { points: base })).rejects.toMatchObject({ status: 422, code: "POINTS_SPLIT_FLATTENED" });
+    const stated = { ...base, win: { regulation: 3, ot: 2 }, loss: { regulation: 0, ot: 1 } };
+    await putStageRules(auth, s2, { points: stated });
+    expect((await stageConfig(s2)).points).toMatchObject(stated);
   });
 
-  it("Q1 asks the division cfg AS THE ENGINE PARSES IT: a stored config with no points (a legacy or raw-seeded row) still refuses where the schema's defaults split", async () => {
-    // The engine reads a division's cfg through its configSchema (defaults applied), so a stored row that names no
-    // points plays the schema's default points. Reading the raw row would find no split key and accept a rule the
-    // division's own fold then contradicts.
-    const auth = await seedOrg("pro");
-    const ih = mod("icehockey");
-    const want = pointsRuleExpressible(ih.configSchema.parse({}));
-    expect(want.ok, "premise: ice hockey's schema defaults split the points").toBe(false);
-    expect(pointsRuleExpressible({}).ok, "premise: the raw empty row reads as expressible").toBe(true);
-    const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
-    const s = await seedStage(auth, divisionId, 1, "league");
-    const updated = await sql`update divisions set config = '{}'::jsonb where id = ${divisionId}`;
-    expect(updated.count, "premise: the division row now stores no points").toBe(1);
-    await expect(putStageRules(auth, s, { points: base })).rejects.toMatchObject({
-      status: 422,
-      code: "POINTS_RULE_INEXPRESSIBLE",
-      extra: { keys: want.ok ? [] : want.keys },
-    });
-    expect(Object.hasOwn(await stageConfig(s), "points")).toBe(false);
-  });
-
-  it("Q1 every sport x every variant: refused exactly where the engine says a rule cannot express the division's points (counted)", async () => {
+  it("W2d T10 every sport x every variant: refused exactly where the engine's coverage says the stage can end unpaid, else (fix round 1 I2) where the rulebooks split an outcome the flat `base` would flatten (counted)", async () => {
     const auth = await seedOrg("pro");
     let refused = 0;
+    let flattened = 0;
     let accepted = 0;
     let variants = 0;
     for (const m of builtinModules as readonly AnySportModule[]) {
       for (const variant of Object.keys(m.variants)) {
         variants++;
-        const want = pointsRuleExpressible(variantCfg(m, variant));
+        const want = unpaid(m, variantCfg(m, variant), base);
+        // The rulebooks' per-outcome splits (a flat rule carries a tie and a no result itself, so those two are not).
+        const splits = (RULEBOOK_SPLITS[`${m.key}/${variant}`] ?? []).filter((r) => r !== "tie" && r !== "noResult");
         const { divisionId } = await seedDivision(auth, m.key, variant);
         const s = await seedStage(auth, divisionId, 1, "league");
-        if (want.ok) {
+        if (want.ok && splits.length > 0) {
+          await expect(putStageRules(auth, s, { points: base }), `${m.key}/${variant}`).rejects.toMatchObject({
+            code: "POINTS_SPLIT_FLATTENED",
+            extra: { splits },
+          });
+          expect(Object.hasOwn(await stageConfig(s), "points"), `${m.key}/${variant}: nothing stored`).toBe(false);
+          flattened++;
+        } else if (want.ok) {
           await putStageRules(auth, s, { points: base });
           expect((await stageConfig(s)).points, `${m.key}/${variant}`).toMatchObject(base);
           accepted++;
         } else {
+          expect(want.inapplicable, `${m.key}/${variant}: \`base\` keeps no set-score table`).toEqual([]);
           await expect(putStageRules(auth, s, { points: base }), `${m.key}/${variant}`).rejects.toMatchObject({
-            code: "POINTS_RULE_INEXPRESSIBLE",
-            extra: { keys: want.keys },
+            code: "POINTS_OUTCOME_UNCOVERED",
+            extra: { uncovered: [...want.uncovered] },
           });
           refused++;
         }
       }
     }
-    expect(refused + accepted).toBe(variants);
-    expect(refused, "anti-vacuity: some variant refuses").toBeGreaterThan(0);
+    expect(refused + flattened + accepted).toBe(variants);
+    expect(refused, "anti-vacuity: some variant refuses (cricket)").toBeGreaterThan(0);
+    expect(flattened, "every rulebook split the flat rule covers is refused (iihf, indoor, table tennis, fih-shootout)").toBe(
+      Object.entries(RULEBOOK_SPLITS).filter(([, r]) => r.some((x) => x !== "tie" && x !== "noResult")).length,
+    );
     expect(accepted, "anti-vacuity: some variant accepts").toBeGreaterThan(0);
   }, 120_000);
 
-  it("Review Focus 3: bonuses and forfeit points need standings.custom_points; the base sentence is free (X-PT-1)", async () => {
-    const denied = await seedOrg("community");
-    await denyFeature(denied.orgId, "standings.custom_points");
-    const { divisionId } = await seedDivision(denied, "badminton", "short");
-    const s = await seedStage(denied, divisionId, 1, "league");
-    await putStageRules(denied, s, { points: base }); // the base sentence is free
+  it("all scoring is free: a Community org saves the base sentence, then a bonus, then a forfeit row, each stored whole (W2d T10 fix round 1, I4; X-PT-1)", async () => {
+    const free = await seedOrg("community");
+    const { divisionId } = await seedDivision(free, "badminton", "short");
+    const s = await seedStage(free, divisionId, 1, "league");
+    await putStageRules(free, s, { points: base });
     expect((await stageConfig(s)).points).toMatchObject(base);
-    await expect(putStageRules(denied, s, { points: withBonus })).rejects.toMatchObject({ status: 402, featureKey: "standings.custom_points" });
-    await expect(putStageRules(denied, s, { points: withForfeit })).rejects.toMatchObject({ status: 402, featureKey: "standings.custom_points" });
-    const kept = (await stageConfig(s)).points as { bonuses?: unknown[]; forfeit?: unknown };
-    expect(kept.bonuses ?? [], "a refused save wrote nothing: no bonus").toEqual([]);
-    expect(kept.forfeit, "a refused save wrote nothing: no forfeit row").toBeUndefined();
-    const pro = await seedOrg("pro");
-    const d2 = await seedDivision(pro, "badminton", "short");
-    const s2 = await seedStage(pro, d2.divisionId, 1, "league");
-    await putStageRules(pro, s2, { points: withBonus }); // the granted state
-    expect((await stageConfig(s2)).points).toMatchObject({ bonuses: [{ when: "forfeit_loss" }] });
-    await putStageRules(pro, s2, { points: withForfeit });
-    expect((await stageConfig(s2)).points).toMatchObject({ forfeit: withForfeit.forfeit });
+    await putStageRules(free, s, { points: withBonus });
+    expect((await stageConfig(s)).points).toMatchObject({ bonuses: [{ when: "forfeit_loss" }] });
+    await putStageRules(free, s, { points: withForfeit });
+    expect((await stageConfig(s)).points, "a second save replaces the rule whole").toMatchObject({ forfeit: withForfeit.forfeit });
   });
 
-  it("a stage that is not there answers 404 before the gate's 402 — another org's stage too (fix round 1)", async () => {
+  it("a stage that is not there answers 404 — another org's stage too (fix round 1)", async () => {
     const denied = await seedOrg("community");
-    await denyFeature(denied.orgId, "standings.custom_points");
-    // The gate is asked of a body that WOULD 402 (a forfeit row, the feature denied): the missing stage must win.
     await expect(putStageRules(denied, randomUUID(), { points: withForfeit })).rejects.toMatchObject({ status: 404 });
     const other = await seedOrg("pro");
     const { divisionId } = await seedDivision(other, "badminton", "short");
     const theirs = await seedStage(other, divisionId, 1, "league");
     await expect(putStageRules(denied, theirs, { points: withForfeit })).rejects.toMatchObject({ status: 404 });
     expect(Object.hasOwn(await stageConfig(theirs), "points"), "nothing written on the other org's stage").toBe(false);
-    // The positive pair: the denied org's OWN stage still answers the gate's 402.
+    // The positive pair: the org's OWN stage takes the same body.
     const own = await seedDivision(denied, "badminton", "short");
     const mine = await seedStage(denied, own.divisionId, 1, "league");
-    await expect(putStageRules(denied, mine, { points: withForfeit })).rejects.toMatchObject({ status: 402 });
+    await putStageRules(denied, mine, { points: withForfeit });
+    expect((await stageConfig(mine)).points).toMatchObject({ forfeit: withForfeit.forfeit });
   });
 
   it("after the stage starts, points lock (STAGE_FORMAT_LOCKED), and stay locked after a void", async () => {
@@ -348,13 +334,21 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
 
   it("batch-3 I3: a walkover score is refused where it does not reach the sport's table, stored where it does — every sport (counted)", async () => {
     const auth = await seedOrg("pro");
-    const scored = { ...base, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] as [number, number] } };
+    // Fix round 1 I2: a rule that STATES its loss not played is not flat, so the walkover-score question is asked of it on
+    // every sport — a flat one is refused where the sport pays an outcome apart (IIHF, table tennis: its own describe).
+    const stated = { regulation: 0, unplayed: 0 };
+    const scored = { ...base, loss: stated, forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] as [number, number] } };
+    const forfeitOnly = { ...withForfeit, loss: stated };
     let reached = 0;
     let unreached = 0;
+    const skipped: string[] = [];
     for (const m of builtinModules as readonly AnySportModule[]) {
-      // The first variant a rule can express at all (cricket's never can: its every preset refuses first, Q1).
-      const variant = Object.keys(m.variants).find((v) => pointsRuleExpressible(variantCfg(m, v)).ok);
-      if (variant === undefined) continue;
+      // The first variant whose stage `base` pays in full (W2d T10: cricket's every preset can end tied, unpaid by `base`).
+      const variant = Object.keys(m.variants).find((v) => unpaid(m, variantCfg(m, v), base).ok);
+      if (variant === undefined) {
+        skipped.push(m.key);
+        continue;
+      }
       const { divisionId } = await seedDivision(auth, m.key, variant);
       const s = await seedStage(auth, divisionId, 1, "league");
       if (pointsRuleAwardReachesTable(m)) {
@@ -368,13 +362,14 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
           extra: { field: "points.forfeit.awardScore" },
         });
         // The same forfeit row without a score is that sport's to take.
-        await putStageRules(auth, s, { points: withForfeit });
+        await putStageRules(auth, s, { points: forfeitOnly });
         expect((await stageConfig(s)).points, `${m.key}: the forfeit row alone`).toMatchObject({ forfeit: withForfeit.forfeit });
         unreached++;
       }
     }
     expect(reached, "a goal sport takes it").toBeGreaterThan(0);
     expect(unreached, "a set sport refuses it").toBeGreaterThan(0);
+    expect(skipped, "skipped only where every variant can end tied (cricket)").toEqual(["cricket"]);
   }, 60_000);
 
   it("the table moves with the save: a Swiss bye already on the table is re-paid under the new points, and again when they are cleared (X-PT-1)", async () => {
@@ -385,6 +380,9 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
     await generateStageFixtures(auth, s); // mint the shells
     await generateStageFixtures(auth, s); // seat round 1 (its bye award is written here, with no event)
     expect(await formatLockedStageIds(auth, divisionId), "premise: a bye is no play, the stage is unstarted").not.toContain(s);
+    // Fix round 1 m6: generating pinned the stage (W2d §5.1), so this save is the PINNED stage's own-points arm, the re-pin.
+    const pinOf = async () => (await sql<{ pin: unknown }[]>`select table_rules_pinned as pin from stages where id = ${s}`)[0]?.pin;
+    expect(await pinOf(), "premise: the generated stage is pinned").not.toBeNull();
     // The bye row: `home = winner, away = null`, an award outcome (swiss-delete-entrant.test.ts).
     const [bye] = await sql<{ home_entrant_id: string | null; outcome: unknown }[]>`
       select home_entrant_id, outcome from fixtures where stage_id = ${s} and round_no = 1 and ext_key like '%-bye'`;
@@ -394,26 +392,28 @@ describe.skipIf(!HAS_DB)("ST-G8 stage points (server)", () => {
       ((await getStandings(auth, s)).rows as { entrantId: string; points: number }[]).find((r) => r.entrantId === byeWinner)?.points;
     const own = await pointsOf();
     expect(typeof own, "premise: the bye is on the table").toBe("number");
-    const rule = { base: { win: 1, draw: 0, loss: 0 }, forfeit: { winnerPoints: 5, loserPoints: 0 } };
+    const rule = { win: { regulation: 1 }, draw: 0, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, forfeit: { winnerPoints: 5, loserPoints: 0 } };
     expect(own, "premise: the rule's row differs from the sport's own").not.toBe(rule.forfeit.winnerPoints);
     await putStageRules(auth, s, { points: rule });
     expect(await pointsOf(), "a bye pays the rule's forfeit row").toBe(rule.forfeit.winnerPoints);
+    expect(await pinOf(), "the save re-pinned the stage with its own points").toMatchObject({ points: { forfeit: rule.forfeit }, sources: { points: "stage" } });
     await putStageRules(auth, s, { points: null });
     expect(await pointsOf(), "cleared: the sport's own bye credit again").toBe(own);
   }, 60_000);
 });
 
 describe.skipIf(!HAS_DB)("ST-G8 the create door asks the same questions, writing nothing", () => {
-  it("createStages refuses an inexpressible division, a bracket kind and an unreached award score; the batch writes no stage", async () => {
+  it("createStages refuses a rule that leaves an outcome unpaid (W2d T10), a bracket kind and an unreached award score; the batch writes no stage", async () => {
     const auth = await seedOrg("pro");
-    const ih = await seedDivision(auth, "icehockey", "iihf");
+    const cr = await seedDivision(auth, "cricket", "t20");
+    const want = unpaid(mod("cricket"), variantCfg(mod("cricket"), "t20"), base);
     await expect(
-      createStages(auth, ih.divisionId, [
+      createStages(auth, cr.divisionId, [
         { seq: 1, kind: "league", name: "A", config: {}, progression: null },
         { seq: 2, kind: "league", name: "B", config: { points: base }, progression: null },
       ]),
-    ).rejects.toMatchObject({ status: 422, code: "POINTS_RULE_INEXPRESSIBLE" });
-    expect(await stageCount(ih.divisionId)).toBe(0);
+    ).rejects.toMatchObject({ status: 422, code: "POINTS_OUTCOME_UNCOVERED", extra: { stage_name: "B", uncovered: want.ok ? [] : [...want.uncovered] } });
+    expect(await stageCount(cr.divisionId)).toBe(0);
     const bd = await seedDivision(auth, "badminton", "short");
     await expect(
       createStages(auth, bd.divisionId, { seq: 1, kind: "knockout", name: "KO", config: { points: base }, progression: null }),
@@ -446,13 +446,13 @@ describe.skipIf(!HAS_DB)("ST-G8 the create door asks the same questions, writing
       }),
     ).rejects.toMatchObject({ code: "RULE_NOT_SETTABLE", extra: { field: "points.forfeit.awardScore" } });
     expect(await stageIds(bd.divisionId), "both refusals left the original stage, same id").toEqual(before);
-    const ih = await seedDivision(auth, "icehockey", "iihf");
-    await seedStage(auth, ih.divisionId, 1, "league");
-    const ihBefore = await stageIds(ih.divisionId);
+    const cr = await seedDivision(auth, "cricket", "t20");
+    await seedStage(auth, cr.divisionId, 1, "league");
+    const crBefore = await stageIds(cr.divisionId);
     await expect(
-      replaceStages(auth, ih.divisionId, { seq: 1, kind: "league", name: "L", config: { points: base }, progression: null }),
-    ).rejects.toMatchObject({ status: 422, code: "POINTS_RULE_INEXPRESSIBLE" });
-    expect(await stageIds(ih.divisionId)).toEqual(ihBefore);
+      replaceStages(auth, cr.divisionId, { seq: 1, kind: "league", name: "L", config: { points: base }, progression: null }),
+    ).rejects.toMatchObject({ status: 422, code: "POINTS_OUTCOME_UNCOVERED", extra: { uncovered: ["tie"] } });
+    expect(await stageIds(cr.divisionId)).toEqual(crBefore);
   });
 });
 
@@ -489,7 +489,7 @@ describe.skipIf(!HAS_DB)("R-T13-1 replaceStages carries a matched slot's own poi
     expect(pts.get(1)).toMatchObject(withForfeit);
     expect(pts.get(2) ?? null).toBeNull();
     // A body's own points win over the carry (the rule is one sentence: replaced whole).
-    const other = { base: { win: 2, draw: 1, loss: 0 } };
+    const other = { win: { regulation: 2 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const };
     await replaceStages(auth, divisionId, [league(1, "Pool", { points: other }), league(2, "New")]);
     const replaced = (await pointsBySeq(divisionId)).get(1) as { base?: unknown; forfeit?: unknown } | null;
     expect(replaced).toMatchObject(other);
@@ -499,46 +499,28 @@ describe.skipIf(!HAS_DB)("R-T13-1 replaceStages carries a matched slot's own poi
     expect((await pointsBySeq(divisionId)).get(1) ?? null, "a kind change dropped them").toBeNull();
   });
 
-  it("grandfathered: a carried forfeit row survives Apply for an org that has since lost standings.custom_points; the same rule SENT is 402 (fix round 2)", async () => {
+  it("W2d T10: a carried rule that no longer pays what the division now reaches (a legacy row) is refused and the delete rolls back; cleared, Apply lands", async () => {
     const auth = await seedOrg("pro");
-    const { divisionId } = await seedDivision(auth, "badminton", "short");
+    const vb = mod("volleyball");
+    const indoor = variantCfg(vb, "indoor") as Record<string, unknown>;
+    const bo3 = { ...indoor, bestOf: 3 };
+    expect(unpaid(vb, indoor, FIVB_OWN).ok, "premise: the FIVB table pays a best-of-5").toBe(true);
+    const want = unpaid(vb, bo3, FIVB_OWN);
+    expect(want.ok === false && want.uncovered, "premise: a best-of-3 ends 2-0 or 2-1, which it does not pay").toEqual(["set:2-0", "set:2-1"]);
+    const { divisionId } = await seedDivision(auth, "volleyball", "indoor");
     const s = await seedStage(auth, divisionId, 1, "league");
-    await putStageRules(auth, s, { points: withForfeit }); // saved while the plan granted it
-    await denyFeature(auth.orgId, "standings.custom_points"); // the plan no longer does
-    // The organiser's stored setting rides the Apply (R-T12-4's meaning): not re-gated, as the rules carry is not.
-    await replaceStages(auth, divisionId, league(1, "Pool"));
-    const carried = await pointsBySeq(divisionId);
-    expect(carried.size).toBe(1);
-    expect(carried.get(1), "the carried forfeit row survived").toMatchObject(withForfeit);
-    // The same rule SENT in the body is a new choice, and asks the gate.
-    const before = await stageIds(divisionId);
-    await expect(replaceStages(auth, divisionId, league(1, "Pool", { points: withForfeit }))).rejects.toMatchObject({
-      status: 402,
-      featureKey: "standings.custom_points",
-    });
-    expect(await stageIds(divisionId), "the 402 left the stage as it was").toEqual(before);
-  });
-
-  it("a carried rule the division can no longer express is refused and the delete rolls back, the stages untouched; cleared, Apply lands", async () => {
-    const auth = await seedOrg("pro");
-    const ih = mod("icehockey");
-    expect(pointsRuleExpressible(variantCfg(ih, "recreational")).ok, "premise").toBe(true);
-    const want = pointsRuleExpressible(variantCfg(ih, "iihf"));
-    expect(want.ok, "premise").toBe(false);
-    const { divisionId } = await seedDivision(auth, "icehockey", "recreational");
-    const s = await seedStage(auth, divisionId, 1, "league");
-    await putStageRules(auth, s, { points: base });
-    // A row the division save would now refuse (Q1), as a legacy row holds it: the division plays iihf's split points.
-    const moved = await sql`update divisions set variant_key = 'iihf', config = ${sql.json(variantCfg(ih, "iihf") as never)} where id = ${divisionId}`;
+    await putStageRules(auth, s, { points: FIVB_OWN });
+    // A row the division save would now refuse (below), as a legacy row holds it: the division plays best of 3.
+    const moved = await sql`update divisions set config = ${sql.json(bo3 as never)} where id = ${divisionId}`;
     expect(moved.count).toBe(1);
     const before = await stageIds(divisionId);
     await expect(replaceStages(auth, divisionId, league(1, "Pool"))).rejects.toMatchObject({
       status: 422,
-      code: "POINTS_RULE_INEXPRESSIBLE",
-      extra: { keys: want.ok ? [] : want.keys },
+      code: "POINTS_OUTCOME_UNCOVERED",
+      extra: { stage_name: "Pool", uncovered: ["set:2-0", "set:2-1"] },
     });
     expect(await stageIds(divisionId), "refused, the delete rolled back: the same stage row").toEqual(before);
-    expect((await stageConfig(s)).points).toMatchObject(base);
+    expect((await stageConfig(s)).points).toMatchObject(FIVB_OWN);
     // Sequence: the organiser clears the stage's points, and the same Apply lands.
     await putStageRules(auth, s, { points: null });
     await replaceStages(auth, divisionId, league(1, "Pool"));
@@ -547,120 +529,72 @@ describe.skipIf(!HAS_DB)("R-T13-1 replaceStages carries a matched slot's own poi
   });
 });
 
-describe.skipIf(!HAS_DB)("ST-G8 the division save re-asks Q1 for every unstarted stage with its own points", () => {
-  const SPLIT = "fih-shootout";
-  const PLAIN = "fih-outdoor";
+describe.skipIf(!HAS_DB)("W2d T10 the division save re-asks coverage for every stage its config reaches (cause, not state)", () => {
+  const vb = mod("volleyball");
+  const indoor = (): Record<string, unknown> => variantCfg(vb, "indoor") as Record<string, unknown>;
 
-  it("premise: hockey's fih-shootout splits its points and fih-outdoor does not (the engine's declaration)", () => {
-    const hk = mod("hockey");
-    expect(pointsRuleExpressible(variantCfg(hk, SPLIT)).ok).toBe(false);
-    expect(pointsRuleExpressible(variantCfg(hk, PLAIN)).ok).toBe(true);
-  });
-
-  it("a variant change to a split the stage's points cannot express is refused naming the stage; cleared, it lands; with no stage points it lands", async () => {
+  it("a config save that makes a set score reachable the stage's own table does not pay is refused naming the stage; cleared, it lands; with no stage points it lands", async () => {
     const auth = await seedOrg("pro");
-    const want = pointsRuleExpressible(variantCfg(mod("hockey"), SPLIT));
-    const { divisionId } = await seedDivision(auth, "hockey", PLAIN);
+    const cfg = indoor();
+    const bo3 = { ...cfg, bestOf: 3 };
+    const want = unpaid(vb, bo3, FIVB_OWN);
+    expect(want.ok === false && want.uncovered, "premise").toEqual(["set:2-0", "set:2-1"]);
+    expect(unpaid(vb, bo3, PointsRule.parse(vb.tablePointsRule(vb.configSchema.parse(bo3), "league"))).ok, "premise: the division's own map pays a best-of-3 (its \"*\")").toBe(true);
+    const { divisionId } = await seedDivision(auth, "volleyball", "indoor");
     const s = await seedStage(auth, divisionId, 1, "league");
-    await putStageRules(auth, s, { points: base });
-    await expect(patchDivision(auth, divisionId, { variant_key: SPLIT })).rejects.toMatchObject({
+    await putStageRules(auth, s, { points: FIVB_OWN });
+    await expect(patchDivision(auth, divisionId, { config: bo3 })).rejects.toMatchObject({
       status: 422,
-      code: "POINTS_RULE_INEXPRESSIBLE",
-      extra: { stage_id: s, stage_name: "S1", keys: want.ok ? [] : want.keys },
+      code: "POINTS_OUTCOME_UNCOVERED",
+      extra: { stage_id: s, stage_name: "S1", uncovered: ["set:2-0", "set:2-1"] },
     });
-    const [still] = await sql<{ variant_key: string }[]>`select variant_key from divisions where id = ${divisionId}`;
-    expect(still!.variant_key, "the refusal rolled the save back").toBe(PLAIN);
+    const [still] = await sql<{ config: { bestOf: number } }[]>`select config from divisions where id = ${divisionId}`;
+    expect(still!.config.bestOf, "the refusal rolled the save back").toBe(5);
     // Sequence: the organiser clears the stage's points, and the same save lands.
     await putStageRules(auth, s, { points: null });
-    const out = await patchDivision(auth, divisionId, { variant_key: SPLIT });
-    expect(out.variant_key).toBe(SPLIT);
-    // And the PUT now refuses on the new variant.
-    await expect(putStageRules(auth, s, { points: base })).rejects.toMatchObject({ code: "POINTS_RULE_INEXPRESSIBLE" });
-    // The positive pair: a division whose stages carry no points changes variant freely.
-    const other = await seedDivision(auth, "hockey", PLAIN);
+    const out = await patchDivision(auth, divisionId, { config: bo3 });
+    expect((out.config as { bestOf: number }).bestOf).toBe(3);
+    // And the PUT now refuses the best-of-5 table on the new format.
+    await expect(putStageRules(auth, s, { points: FIVB_OWN })).rejects.toMatchObject({ code: "POINTS_OUTCOME_UNCOVERED" });
+    // The positive pair: a division whose stages carry no points changes format freely.
+    const other = await seedDivision(auth, "volleyball", "indoor");
     await seedStage(auth, other.divisionId, 1, "league");
-    await expect(patchDivision(auth, other.divisionId, { variant_key: SPLIT })).resolves.toMatchObject({ variant_key: SPLIT });
+    expect(((await patchDivision(auth, other.divisionId, { config: bo3 })).config as { bestOf: number }).bestOf).toBe(3);
   });
 
-  it("a config save adding a split is refused the same way; a started stage (its points locked, the division's never reaching it) is not asked", async () => {
+  it("a PINNED stage is asked too (the format reaches its matches, the pin does not move); a STARTED one is the format lock's", async () => {
     const auth = await seedOrg("pro");
-    const hk = mod("hockey");
-    const plain = variantCfg(hk, PLAIN) as { points: Record<string, number> };
-    const split = { ...plain, points: { ...plain.points, shootoutWin: 2, shootoutLoss: 1 } };
-    expect(pointsRuleExpressible(split).ok, "premise: the edit splits the points").toBe(false);
-    const { divisionId } = await seedDivision(auth, "hockey", PLAIN);
-    const s = await seedStage(auth, divisionId, 1, "league");
-    await putStageRules(auth, s, { points: base });
-    // The positive pair first: a config save that splits nothing lands over the same stage's points, which stay stored.
-    const plainer = { ...plain, points: { ...plain.points, win: plain.points.win! + 1 } };
-    expect(pointsRuleExpressible(plainer).ok, "premise: the edit splits nothing").toBe(true);
-    const landed = await patchDivision(auth, divisionId, { config: plainer });
-    expect((landed.config as { points: Record<string, number> }).points.win).toBe(plain.points.win! + 1);
-    expect((await stageConfig(s)).points).toMatchObject(base);
-    await expect(patchDivision(auth, divisionId, { config: split })).rejects.toMatchObject({ code: "POINTS_RULE_INEXPRESSIBLE", extra: { stage_id: s } });
-    // Started: the stage's own rule replaces the division's points (STAGE_POINTS_REPLACES) and can no longer be cleared.
-    const started = await seedDivision(auth, "hockey", PLAIN, 2);
-    const s2 = await seedStage(auth, started.divisionId, 1, "league");
-    await putStageRules(auth, s2, { points: base });
-    await generateStageFixtures(auth, s2);
-    const [f] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${s2} limit 1`;
+    const bo3 = { ...indoor(), bestOf: 3 };
+    const pinned = await seedDivision(auth, "volleyball", "indoor", 2);
+    const s = await seedStage(auth, pinned.divisionId, 1, "league");
+    await putStageRules(auth, s, { points: FIVB_OWN });
+    await generateStageFixtures(auth, s);
+    await expect(patchDivision(auth, pinned.divisionId, { config: bo3 })).rejects.toMatchObject({ code: "POINTS_OUTCOME_UNCOVERED", extra: { stage_id: s } });
+    const [f] = await sql<{ id: string }[]>`select id from fixtures where stage_id = ${s} limit 1`;
     await appendEvent(auth.orgId, f!.id, 0, { type: "core.start", payload: {} });
-    expect(await formatLockedStageIds(auth, started.divisionId), "premise: started").toContain(s2);
-    const out = await patchDivision(auth, started.divisionId, { config: split });
-    expect((out.config as { points: Record<string, number> }).points.shootoutWin).toBe(2);
+    expect(await formatLockedStageIds(auth, pinned.divisionId), "premise: started").toContain(s);
+    await expect(patchDivision(auth, pinned.divisionId, { config: bo3 })).rejects.toMatchObject({ code: "DIVISION_FORMAT_LOCKED" });
   }, 60_000);
 
-  it("a save that did not cause the split is not blamed for it: an unrelated edit passes over a legacy stage; a NEW split key still refuses (fix round 1)", async () => {
+  it("a save that did not cause the gap is not blamed for it: an unrelated edit passes over a legacy stage already missing 3-2; an edit ADDING unpaid scores still refuses", async () => {
     const auth = await seedOrg("pro");
-    const ih = mod("icehockey");
-    const iihf = variantCfg(ih, "iihf") as { points: Record<string, number>; periods: { count: number; minutes: number } };
-    const already = pointsRuleExpressible(iihf);
-    expect(already.ok, "premise: iihf already splits its points").toBe(false);
-    const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
+    const cfg = indoor() as Record<string, unknown> & { setTo: number };
+    const short: PointsRule = { ...FIVB_OWN, bySetScore: { "3-0": [3, 0], "3-1": [3, 0] } };
+    const already = unpaid(vb, cfg, short);
+    expect(already.ok === false && already.uncovered, "premise: the legacy table misses 3-2").toEqual(["set:3-2"]);
+    const { divisionId } = await seedDivision(auth, "volleyball", "indoor");
     const s = await seedStage(auth, divisionId, 1, "league");
-    // A legacy stage: points stored over a division that already splits (no door writes this now; a row from before can).
-    const legacy = await sql`update stages set config = config || ${sql.json({ points: base } as never)} where id = ${s}`;
+    // A legacy stage: a table no door writes now (the PUT refuses it); a row from before can hold it.
+    const legacy = await sql`update stages set config = config || ${sql.json({ points: short } as never)} where id = ${s}`;
     expect(legacy.count).toBe(1);
-    // The unrelated edit: the period length. The split keys are exactly the ones already there.
-    const longer = { ...iihf, periods: { ...iihf.periods, minutes: iihf.periods.minutes + 5 } };
-    expect(pointsRuleExpressible(longer), "premise: the same split, the same keys").toEqual(already);
+    // The unrelated edit: the set target. The unpaid scores are exactly the ones already there.
+    const longer = { ...cfg, setTo: cfg.setTo - 4 };
+    expect(unpaid(vb, longer, short), "premise: the same gap").toEqual(already);
     const out = await patchDivision(auth, divisionId, { config: longer });
-    expect((out.config as typeof iihf).periods.minutes).toBe(iihf.periods.minutes + 5);
-    // The positive pair, same stage: a save that ADDS a split key the division did not have is refused, naming the stage.
-    const wider = { ...longer, points: { ...longer.points, shootoutWin: 2 } };
-    const next = pointsRuleExpressible(wider);
-    expect(next.ok === false && !already.ok && next.keys.some((k) => !already.keys.includes(k)), "premise: a new split key").toBe(true);
-    await expect(patchDivision(auth, divisionId, { config: wider })).rejects.toMatchObject({
-      status: 422, code: "POINTS_RULE_INEXPRESSIBLE", extra: { stage_id: s },
-    });
-  });
-
-  it("the removal arm: a save whose split keys are a strict subset of the standing ones passes; a new key from there still refuses (fix round 2)", async () => {
-    const auth = await seedOrg("pro");
-    const ih = mod("icehockey");
-    const iihf = variantCfg(ih, "iihf") as { points: Record<string, number> };
-    const three = { ...iihf, points: { ...iihf.points, shootoutWin: 2 } };
-    const standing = pointsRuleExpressible(three);
-    const fewer = pointsRuleExpressible(iihf);
-    expect(
-      !standing.ok && !fewer.ok && fewer.keys.length < standing.keys.length && fewer.keys.every((k) => standing.keys.includes(k)),
-      "premise: iihf's split keys are a strict subset of the standing ones",
-    ).toBe(true);
-    const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
-    const s = await seedStage(auth, divisionId, 1, "league");
-    // Legacy rows, as a pre-Task-13 division and stage hold them: three split keys, and the stage's own points over them.
-    const div = await sql`update divisions set config = ${sql.json(three as never)} where id = ${divisionId}`;
-    const st = await sql`update stages set config = config || ${sql.json({ points: base } as never)} where id = ${s}`;
-    expect([div.count, st.count]).toEqual([1, 1]);
-    // The removal: the save drops `shootoutWin`, splitting LESS than the division already does.
-    const out = await patchDivision(auth, divisionId, { config: iihf });
-    expect(Object.hasOwn((out.config as typeof iihf).points, "shootoutWin"), "the key is gone").toBe(false);
-    // The pair, from there: adding a key the division does not split now (`shootoutLoss`) is refused, naming the stage.
-    const added = { ...iihf, points: { ...iihf.points, shootoutLoss: 1 } };
-    const next = pointsRuleExpressible(added);
-    expect(!next.ok && !fewer.ok && next.keys.some((k) => !fewer.keys.includes(k)), "premise: a new split key").toBe(true);
-    await expect(patchDivision(auth, divisionId, { config: added })).rejects.toMatchObject({
-      status: 422, code: "POINTS_RULE_INEXPRESSIBLE", extra: { stage_id: s },
+    expect((out.config as typeof cfg).setTo).toBe(cfg.setTo - 4);
+    // The positive pair, same stage: a save that makes NEW scores reachable is refused, naming only those.
+    await expect(patchDivision(auth, divisionId, { config: { ...longer, bestOf: 3 } })).rejects.toMatchObject({
+      status: 422, code: "POINTS_OUTCOME_UNCOVERED", extra: { stage_id: s, uncovered: ["set:2-0", "set:2-1"] },
     });
   });
 });
@@ -684,40 +618,117 @@ const ES = es as unknown as Record<string, string>;
 const msgEs = (key: string, vars: Record<string, string | number> = {}) =>
   ES[key]!.replace(/\{(\w+)\}/g, (h, name: string) => (name in vars ? String(vars[name]) : h));
 
+describe.skipIf(!HAS_DB)("W2d T10 fix round 1 I2: a FLAT rule over a sport that pays an outcome its own way is refused, typed (defence in depth)", () => {
+  // The editor never sends one there (it shows "can't be set per stage yet"); this is the server holding the same line for
+  // any other caller. Expected splits are the rulebooks' (`_points-split-rulebook.ts`), never the guard's own answer: IIHF
+  // pays an overtime/shoot-out win 2 and its loss 1, FIVB a 3-2 result 2/1, ITTF a loss not played 0 against a played one's 1.
+  const IIHF_SPLITS = ["otWin", "otLoss"];
+
+  it("ice hockey (IIHF): the editor's flat 3/0 is refused 422 POINTS_SPLIT_FLATTENED naming the splits, nothing stored; asked twice, the same; a rule that states its overtime lands; clearing lands; plain 3/1/0 on generic lands", async () => {
+    const auth = await seedOrg("community");
+    const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
+    const s = await seedStage(auth, divisionId, 1, "league");
+    const flat = { ...base, tie: 0, noResult: 0, bonuses: [] };
+    for (const attempt of [1, 2]) {
+      await expect(putStageRules(auth, s, { points: flat }), `attempt ${attempt}`).rejects.toMatchObject({
+        status: 422,
+        code: "POINTS_SPLIT_FLATTENED",
+        extra: { splits: IIHF_SPLITS },
+      });
+      expect((await stageConfig(s)).points ?? null, `attempt ${attempt}: nothing stored`).toBeNull();
+    }
+    // An API caller who means one amount says so per outcome: it is not flat, so it is the caller's choice and lands.
+    const stated = { ...flat, win: { regulation: 3, ot: 3 }, loss: { regulation: 0, ot: 0 } };
+    await putStageRules(auth, s, { points: stated });
+    expect((await stageConfig(s)).points, "the stated rule is stored").toMatchObject({ win: { regulation: 3, ot: 3 } });
+    await putStageRules(auth, s, { points: null });
+    expect((await stageConfig(s)).points ?? null, "clearing flattens nothing").toBeNull();
+    // The positive pair: a sport the flat rule says whole.
+    const g = await seedDivision(auth, "generic", "score");
+    const gs = await seedStage(auth, g.divisionId, 1, "league");
+    await putStageRules(auth, gs, { points: flat });
+    expect((await stageConfig(gs)).points, "generic 3/1/0 lands").toMatchObject({ win: { regulation: 3 } });
+  });
+
+  it("another sport and another door: table tennis's loss not played on the stage PUT; indoor volleyball's 3-2 on createStages, the batch writing no stage", async () => {
+    const auth = await seedOrg("community");
+    const tt = await seedDivision(auth, "tabletennis", "bo5");
+    const ts = await seedStage(auth, tt.divisionId, 1, "league");
+    const flatTt = { win: { regulation: 2 }, loss: { regulation: 1 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] };
+    await expect(putStageRules(auth, ts, { points: flatTt })).rejects.toMatchObject({ status: 422, code: "POINTS_SPLIT_FLATTENED", extra: { splits: ["unplayed"] } });
+    const vb = await seedDivision(auth, "volleyball", "indoor");
+    const flatVb = { win: { regulation: 3 }, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] };
+    await expect(
+      createStages(auth, vb.divisionId, [
+        { seq: 1, kind: "league", name: "A", config: {}, progression: null },
+        { seq: 2, kind: "league", name: "B", config: { points: flatVb }, progression: null },
+      ]),
+    ).rejects.toMatchObject({ status: 422, code: "POINTS_SPLIT_FLATTENED", extra: { stage_name: "B", splits: ["pointsMap"] } });
+    expect(await stageCount(vb.divisionId), "the batch wrote nothing").toBe(0);
+    // The same door takes the stage's own set-score table (it is not flat).
+    const [own] = await createStages(auth, vb.divisionId, { seq: 1, kind: "league", name: "A", config: { points: FIVB_OWN }, progression: null });
+    expect((await stageConfig(own!.id)).points, "FIVB's own table lands").toMatchObject({ bySetScore: FIVB_OWN.bySetScore });
+  });
+
+  it("cricket's tie and no result are not splits a flat rule loses (it carries both): a flat rule naming them lands; the editor's state is what keeps its 0s off cricket", async () => {
+    const auth = await seedOrg("community");
+    const { divisionId } = await seedDivision(auth, "cricket", "t20");
+    const s = await seedStage(auth, divisionId, 1, "league");
+    const icc = { win: { regulation: 2 }, loss: { regulation: 0 }, tie: 1, noResult: 1, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] };
+    await putStageRules(auth, s, { points: icc });
+    expect((await stageConfig(s)).points, "a flat cricket rule lands").toMatchObject({ tie: 1, noResult: 1 });
+  });
+});
+
 describe.skipIf(!HAS_DB)("ST-G8 over the real HTTP route", () => {
-  it("Q1: 422 POINTS_RULE_INEXPRESSIBLE carries the split keys, and a client says it in the reader's language with the fields named", async () => {
+  it("W2d T10: 422 POINTS_OUTCOME_UNCOVERED carries the outcomes, and a client says it in the reader's language", async () => {
     const auth = await seedOrg("enterprise");
     const secret = await keyFor(auth);
-    const want = pointsRuleExpressible(variantCfg(mod("icehockey"), "iihf"));
-    const keys = want.ok ? [] : [...want.keys];
-    expect(keys.length, "premise").toBeGreaterThan(0);
+    const { divisionId } = await seedDivision(auth, "cricket", "t20");
+    const s = await seedStage(auth, divisionId, 1, "league");
+    const res = await putRulesRoute(keyed(secret, "PUT", `/stages/${s}/rules`, { points: base }), ctx(s));
+    const body = (await res.json()) as Body;
+    expect(res.status).toBe(422);
+    expect(body.error).toMatchObject({ code: "POINTS_OUTCOME_UNCOVERED", uncovered: ["tie"] });
+    expect(body.error!.message).toBe(ruleErrorMessage("POINTS_OUTCOME_UNCOVERED", { uncovered: ["tie"] }));
+    expect(body.error!.message, "the English says the outcome in words, not its key").toContain(msg("rules.err.outcome.tie" as never));
+    const text = ruleRefusalText(body.error!.code, body.error, msgEs as never);
+    expect(text, "the client can say it").not.toBeNull();
+    expect(text).toBe(msgEs("rules.err.pointsOutcomeUncovered", { outcome: msgEs("rules.err.outcome.tie") }));
+    expect(text).not.toBe(body.error!.message);
+    expect(ruleRefusalText(body.error!.code, body.error, msg), "the en client sentence IS the server's").toBe(body.error!.message);
+  });
+
+  it("fix round 1 I2: over HTTP a flat rule on IIHF ice hockey is 422 POINTS_SPLIT_FLATTENED with its splits, and a client says it in the reader's language", async () => {
+    const auth = await seedOrg("enterprise");
+    const secret = await keyFor(auth);
     const { divisionId } = await seedDivision(auth, "icehockey", "iihf");
     const s = await seedStage(auth, divisionId, 1, "league");
     const res = await putRulesRoute(keyed(secret, "PUT", `/stages/${s}/rules`, { points: base }), ctx(s));
     const body = (await res.json()) as Body;
     expect(res.status).toBe(422);
-    expect(body.error).toMatchObject({ code: "POINTS_RULE_INEXPRESSIBLE", keys });
-    expect(body.error!.message).toBe(ruleErrorMessage("POINTS_RULE_INEXPRESSIBLE", { keys }));
-    for (const k of keys) expect(body.error!.message, `the English names ${k} by its label, not its key`).not.toContain(k);
+    expect(body.error).toMatchObject({ code: "POINTS_SPLIT_FLATTENED", splits: ["otWin", "otLoss"] });
+    expect(body.error!.message).toBe(ruleErrorMessage("POINTS_SPLIT_FLATTENED", { splits: ["otWin", "otLoss"] }));
     const text = ruleRefusalText(body.error!.code, body.error, msgEs as never);
-    expect(text, "the client can say it").not.toBeNull();
-    expect(text).not.toBe(body.error!.message);
-    expect(text).toBe(ruleRefusalText(body.error!.code, body.error, msgEs as never));
+    expect(text, "the client can say it").toBe(
+      msgEs("rules.err.pointsRuleInexpressible", {
+        reason: msgEs("rules.err.pointsSplit", { fields: [msgEs("rules.err.pointsSplit.otWin"), msgEs("rules.err.pointsSplit.otLoss")].join(", ") }),
+      }),
+    );
     expect(ruleRefusalText(body.error!.code, body.error, msg), "the en client sentence IS the server's").toBe(body.error!.message);
   });
 
-  it("Review Focus 3: 402 PAYMENT_REQUIRED names standings.custom_points; the base rule lands 200 with the stored rule in the answer (X-PT-1)", async () => {
+  it("over HTTP the base rule lands 200 with the stored rule in the answer, and so does a bonus rule (X-PT-1; all scoring is free)", async () => {
     const auth = await seedOrg("enterprise");
     const secret = await keyFor(auth);
-    await denyFeature(auth.orgId, "standings.custom_points");
     const { divisionId } = await seedDivision(auth, "badminton", "short");
     const s = await seedStage(auth, divisionId, 1, "league");
-    const refused = await putRulesRoute(keyed(secret, "PUT", `/stages/${s}/rules`, { points: withBonus }), ctx(s));
-    expect(refused.status).toBe(402);
-    expect(((await refused.json()) as Body).error).toMatchObject({ code: "PAYMENT_REQUIRED", feature_key: "standings.custom_points" });
     const ok = await putRulesRoute(keyed(secret, "PUT", `/stages/${s}/rules`, { points: base }), ctx(s));
     expect(ok.status).toBe(200);
     expect(((await ok.json()) as Body).data).toMatchObject({ points: base, rules: null });
+    const bonus = await putRulesRoute(keyed(secret, "PUT", `/stages/${s}/rules`, { points: withBonus }), ctx(s));
+    expect(bonus.status).toBe(200);
+    expect(((await bonus.json()) as Body).data).toMatchObject({ points: { bonuses: [{ when: "forfeit_loss" }] } });
   });
 
   it("the body: {} is refused; an unknown key is refused; a top-level decider is refused NAMING the key and where to set it (M-6), on the PUT and on POST /stages", async () => {
@@ -835,14 +846,14 @@ describe.skipIf(!HAS_DB)("M6 config.points: null at create and replace means no 
     expect((await stageConfig(kept!.id)).points).toMatchObject(base);
   });
 
-  it("the null asks no gate: an org denied standings.custom_points creates and replaces with it, and the rule it would need is still 402", async () => {
+  it("the null: createStages and replaceStages take `points: null` (no points for this slot) and store none", async () => {
     const auth = await seedOrg("pro");
-    await denyFeature(auth.orgId, "standings.custom_points");
     const { divisionId } = await seedDivision(auth, "badminton", "short");
     await createStages(auth, divisionId, league(1, "Pool", { points: null }));
     await replaceStages(auth, divisionId, league(1, "Pool", { points: null }));
-    expect((await stageIds(divisionId)).length).toBe(1);
-    await expect(replaceStages(auth, divisionId, league(1, "Pool", { points: withForfeit }))).rejects.toMatchObject({ status: 402 });
+    const ids = await stageIds(divisionId);
+    expect(ids.length).toBe(1);
+    expect(await storedKeys(ids[0]!), "no null stored").not.toContain("points");
   });
 
   it("Apply: a body's null clears the carried points; a body that says nothing still carries them (the pair)", async () => {

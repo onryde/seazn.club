@@ -13,6 +13,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { appendEvent, rebuildState, recomputeStandings, verifyStateConsistency } from "../index";
+import { pinStageTableRules } from "../table-rules";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -91,6 +92,16 @@ async function snapshotOf(fixtureId: string) {
   const [row] = await sql<{ config_snapshot: unknown; config_snapshot_at: Date | null }[]>`
     select config_snapshot, config_snapshot_at from fixtures where id = ${fixtureId}`;
   return row;
+}
+
+/** Start the stage as the product's activation writers do (W2d T9, fix round 1 m4): `active`, and its table rules pinned
+ *  in the same transaction. The table tests below run on a STARTED stage — the only kind whose fixtures are played in the
+ *  product — so they pin, never the raw rig's pending stage. */
+async function startStage(stageId: string): Promise<void> {
+  await sql.begin(async (tx) => {
+    await tx`update stages set status = 'active' where id = ${stageId}`;
+    await pinStageTableRules(tx, stageId);
+  });
 }
 
 async function setDivisionConfig(divisionId: string, config: unknown): Promise<void> {
@@ -263,8 +274,9 @@ describe.skipIf(!HAS_DB)("fixture config snapshot (V347)", () => {
     // `division.config` for every fixture in the stage. So lowering `points.w`
     // after matches were played, agreed and published still rewrote the table
     // for them — the exact harm the migration comment and
-    // `content/help/divisions/settings.md` promise is gone.
+    // `content/help/divisions/settings.md` promise is gone. Since W2d the started stage's pin pays every fixture.
     const s = await seed({});
+    await startStage(s.stageId);
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
     const scored = await appendEvent(s.orgId, s.fixtureId, 1, {
       type: "generic.result",
@@ -282,12 +294,13 @@ describe.skipIf(!HAS_DB)("fixture config snapshot (V347)", () => {
     expect(after).toEqual(before);
   });
 
-  it("standings for an UNSCORED fixture still follow live config", async () => {
-    // The other half of the same rule, and the reason the fix has to go through
-    // `resolveFixtureCfg` rather than "always read the column": a fixture with no
-    // events has nothing to protect, and the organiser's edit must apply to it.
-    // A per-fixture resolver gets both; a blanket freeze gets only the first.
+  it("an UNSCORED fixture still folds under live config, and a started stage's table pays it by the PIN (W2d: never per-fixture points)", async () => {
+    // V347's other half, as W2d rules it. The FOLD of a fixture with no events still follows the live config — it has
+    // nothing to protect, and the organiser's edit applies to it (`resolveFixtureCfg` freezes it on its first append).
+    // The TABLE does not move with the edit: a started stage is paid by the rule it was pinned with, for every fixture
+    // (ruling 12, "never per-fixture points"; W2d X-TB-2).
     const s = await seed({});
+    await startStage(s.stageId);
     await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
     const scored = await appendEvent(s.orgId, s.fixtureId, 1, {
       type: "generic.result",
@@ -301,17 +314,22 @@ describe.skipIf(!HAS_DB)("fixture config snapshot (V347)", () => {
       values (${s.stageId}, ${s.divisionId}, 2, 1, ${s.away}, ${s.home})
       returning id`;
 
-    await setDivisionConfig(s.divisionId, { ...GENERIC_SCORE_DRAWS, points: { w: 1, d: 0, l: 0 } });
+    const edited = { ...GENERIC_SCORE_DRAWS, points: { w: 1, d: 0, l: 0 } };
+    await setDivisionConfig(s.divisionId, edited);
     await appendEvent(s.orgId, laterFixtureId, 0, { type: "core.start", payload: {} });
     await appendEvent(s.orgId, laterFixtureId, 1, {
       type: "generic.result",
       payload: { p1Score: 3, p2Score: 0 },
     });
 
-    // 3 for the frozen win, 1 for the one played under the new table.
+    // the fold followed the live config: the later fixture froze the EDITED one on its first append
+    expect((await snapshotOf(laterFixtureId))?.config_snapshot, "the unscored fixture folded under the edit").toMatchObject({ points: edited.points });
+    expect((await snapshotOf(s.fixtureId))?.config_snapshot, "the played one kept its own").toMatchObject({ points: GENERIC_SCORE_DRAWS.points });
+    // the table pays both wins by the pin (the division's points when the stage started), not the edit
     const rows = await recomputeStandings(s.orgId, s.stageId);
-    expect(rows.find((r) => r.entrantId === s.home)?.points).toBe(3);
-    expect(rows.find((r) => r.entrantId === s.away)?.points).toBe(1);
+    expect(rows.find((r) => r.entrantId === s.home)?.points, "the first win, by the pin").toBe(GENERIC_SCORE_DRAWS.points.w);
+    expect(rows.find((r) => r.entrantId === s.away)?.points, "the later win, by the pin — not the edit's 1").toBe(GENERIC_SCORE_DRAWS.points.w);
+    expect(edited.points.w, "premise: the edit pays a win differently").not.toBe(GENERIC_SCORE_DRAWS.points.w);
   });
 
   it("a stage config edit does not reach back either", async () => {

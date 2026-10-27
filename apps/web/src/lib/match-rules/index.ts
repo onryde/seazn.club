@@ -182,8 +182,7 @@ export function clearedSequenceKeys(sportKey: string, values: Record<string, str
  * own `read` the inverse, once, instead of a caller hand-listing keys per
  * sport (R3.5/Task Q: `ruleValues` used to never hydrate at all, so every
  * field showed blank on reopen no matter what was saved — most visibly
- * Task I's shootoutWin/shootoutLoss, since a blank pair reads as "unset"
- * and the engine gate requires both to be defined for the split to apply).
+ * Task I's shoot-out points pair, retired in W2d).
  */
 export function hydrateRuleValues(sportKey: string, config: unknown): Record<string, string> {
   const cfg = (config ?? {}) as Record<string, unknown>;

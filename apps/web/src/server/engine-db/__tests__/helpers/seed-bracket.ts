@@ -81,6 +81,11 @@ export async function seedBracket(opts: {
    *  - anything else: exactly those rules.
    *  Raw SQL on purpose: a test may seed rules the endpoint would refuse. */
   stageRules?: Record<string, unknown> | "division";
+  /** W2d T9 — the stage's own points rule (`stages.config.points`), written straight onto the row AFTER `createStages` and
+   *  BEFORE the fixtures are generated, so the pin written at activation (spec §5.4, OC2) carries it. Raw SQL on purpose:
+   *  a test may seed a rule the stage door would refuse (a set sport's walkover `awardScore`, an ot/so split W2c could
+   *  not express). A rule written after the generate would never reach the table: the stage is pinned by then. */
+  stagePoints?: Record<string, unknown>;
 }): Promise<SeededBracket> {
   const variant = declaredVariant(opts.sport, opts.variant);
   const sportModule = builtinModules.find((x) => x.key === opts.sport)!;
@@ -143,6 +148,10 @@ export async function seedBracket(opts: {
         ? await sql`update stages set config = config - 'rules' where id = ${stage!.id}`
         : await sql`update stages set config = config || ${sql.json({ rules: opts.stageRules } as never)} where id = ${stage!.id}`;
     if (n.count !== 1) throw new Error("seedBracket: the stage rules were not written"); // R13
+  }
+  if (opts.stagePoints !== undefined) {
+    const n = await sql`update stages set config = config || ${sql.json({ points: opts.stagePoints } as never)} where id = ${stage!.id}`;
+    if (n.count !== 1) throw new Error("seedBracket: the stage points were not written");
   }
   await generateStageFixtures(auth, stage!.id);
   // swiss: the first generate plants empty round shells; the second pairs round 1 (stages.ts swissGen).

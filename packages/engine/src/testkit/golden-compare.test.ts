@@ -57,7 +57,7 @@ describe("stateMismatch — cfg is a subset, everything else is exact", () => {
 
   it("allows a new key nested inside a recorded cfg object", () => {
     const actual = replayed((s) => {
-      ((s.cfg as Record<string, unknown>).points as Record<string, unknown>).shootoutWin = 2;
+      ((s.cfg as Record<string, unknown>).points as Record<string, unknown>).soBonus = 2;
     });
     expect(stateMismatch(actual, recorded, "cfg")).toBeNull();
   });

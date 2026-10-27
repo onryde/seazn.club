@@ -4,9 +4,28 @@ import type { CoreEv, EventEnvelope } from "../core/events.ts";
 import { mulberry32 } from "../core/rng.ts";
 import type { Lineup, LineupPair, LineupSlot } from "../core/types.ts";
 import type { PositionCatalog } from "../sport/catalog.ts";
-import type { ModuleEvent, SportModule } from "../sport/module.ts";
+import type { AnySportModule, ModuleEvent, SportModule, TableStageKind, TiebreakerKey } from "../sport/module.ts";
+import { declaredCfgs } from "./declared-cfgs.ts";
+import { PointsRule } from "../competition/points.ts";
+import { defaultCrossGroup, type TableRules } from "../competition/table-rules.ts";
 
 export const TEST_INSTANT = "2026-01-01T00:00:00.000Z";
+
+// A win pays 3, a draw 1, a loss 0, in regulation.
+const THREE_ONE_ZERO = PointsRule.parse({ win: { regulation: 3 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole" });
+
+/** W2d T8 — a sport's default tie-break order for a stage kind (a league unless named), asked under its first declared
+ *  cfg (`declaredCfgs`): what a test reads where it once read the `defaultTiebreakers` list. */
+export function defaultOrderOf(module: AnySportModule, kind: TableStageKind = "league"): TiebreakerKey[] {
+  return module.defaultTiebreakers(kind, declaredCfgs(module)[0]!.cfg);
+}
+
+/** W2d T8 — the TableRules a hand-built TableStage carries: it ranks by `tiebreakers`, and compares across groups by
+ *  that order without its head-to-head steps (`defaultCrossGroup`, spec §5.9). Completing a stage never reads `points`
+ *  (each fixture brings the delta it was paid), so a test that only completes one may leave it at 3-1-0. */
+export function tableRulesOf(tiebreakers: readonly TiebreakerKey[], points: PointsRule = THREE_ONE_ZERO): TableRules {
+  return { points, tiebreakers, crossGroup: defaultCrossGroup(tiebreakers) };
+}
 
 export function makeEnvelope(seq: number, event: ModuleEvent, voids?: string): EventEnvelope {
   return {

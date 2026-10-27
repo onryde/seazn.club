@@ -140,7 +140,7 @@ describe("fold", () => {
     expect(code).toBe("NON_MONOTONIC_TIME");
   });
 
-  it("declaredPoints delegates to standingsDelta: a win gives the winner more, a draw gives equal points", () => {
+  it("declaredPoints pays the sport's table rule: a win gives the winner more, a draw gives equal points", () => {
     const m = sportModule("generic");
     const cfg = resolveSportCfg("generic", "score");
     const win = declaredPoints(m, cfg, { kind: "league" }, H, A, generateStream(req("score", { kind: "win", winner: "away" })))!;
@@ -152,7 +152,7 @@ describe("fold", () => {
 
   // Generic's default points are {w:3,d:1,l:0}, the very table a lazy
   // implementation would type. Only a cfg whose points differ can tell
-  // delegation to standingsDelta from a typed 3/1/0 (R9, class 19).
+  // reading the sport's rule under the cfg from a typed 3/1/0 (R9, class 19).
   it("declaredPoints follows the cfg's own points, not a typed 3/1/0 table", () => {
     const m = sportModule("generic");
     const cfg = resolveSportCfg("generic", "score", { points: { w: 5, d: 2, l: 1 } });
@@ -163,6 +163,29 @@ describe("fold", () => {
     expect(at({ kind: "win", winner: "away" })).toMatchObject({ home: pts.l, away: pts.w });
     expect(at({ kind: "draw" })).toMatchObject({ home: pts.d, away: pts.d });
     expect(at({ kind: "forfeit", by: "away", reason: "walkover", at: "before_start" })).toMatchObject({ home: pts.w, away: pts.l });
+  });
+
+  // The single-sport scope below is itself guarded: D6 lets a sport declare a "loss, not played" value, and the spec
+  // names table tennis as the only one. A second declaring sport owes its own rulebook row here.
+  it("table tennis is the only sport that declares a loss not played (D6), so the ITTF row below is the whole sweep", () => {
+    const declaring = builtinModules.filter((m) => (m as { declaresUnplayedLoss?: true }).declaresUnplayedLoss === true).map((m) => m.key);
+    expect(builtinModules.length).toBeGreaterThan(1); // anti-vacuity: the registry was read
+    expect(declaring).toEqual(["tabletennis"]);
+  });
+
+  // Single-sport (D6: table tennis alone declares a loss not played). The values are ITTF Handbook 3.7.5.1 (spec D6,
+  // TT-PT-1): a match winner 2, a loser who plays 1, a loser who fails to play or complete the match 0. Before W2d the
+  // table paid standingsDelta's 2/0, and so did this declaration; the product's table now pays the stage's table rule
+  // (W2d T9: `payout` always), so a played loss that this declared as 0 reads as "table 13, declared Σ 12" in I3.
+  it("declaredPoints pays table tennis's ITTF 3.7.5.1 table: W 2, a played loss 1, an unplayed loss 0 (D6)", () => {
+    const m = sportModule("tabletennis");
+    const cfg = resolveSportCfg("tabletennis", "bo5");
+    const at = (outcome: StreamRequest["outcome"]) =>
+      declaredPoints(m, cfg, { kind: "league" }, H, A, generateStream({ sportKey: "tabletennis", cfg, stageKind: "league", home: H, away: A, outcome }));
+    expect(at({ kind: "win", winner: "home" })).toMatchObject({ home: 2, away: 1, forOutcome: { kind: "win", winner: H } });
+    expect(at({ kind: "win", winner: "away" })).toMatchObject({ home: 1, away: 2 });
+    expect(at({ kind: "forfeit", by: "away", reason: "walkover", at: "before_start" })).toMatchObject({ home: 2, away: 0 });
+    expect(at({ kind: "forfeit", by: "home", reason: "retired", at: "after_start" })).toMatchObject({ home: 0, away: 2 });
   });
 });
 

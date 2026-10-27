@@ -1,0 +1,487 @@
+[
+  {
+    "id": "t2-a-dpb-books-won-lost",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "const booked: StandingsDelta = shootoutDraw ? { ...delta, won: 0, drawn: 1, lost: 0 } : delta;",
+    "replace": "const booked: StandingsDelta = /*MUT*/ delta;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "FB-PT-1 X-PT-4 a shoot-out under draw_plus_bonus books drawn"
+      }
+    ]
+  },
+  {
+    "id": "t2-b-sobonus-default-zero",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "return levelPayout(rule, \"draw\") + (delta.won === 1 ? (rule.soBonus ?? 1) : 0);",
+    "replace": "return levelPayout(rule, \"draw\") + (delta.won === 1 ? (rule.soBonus ?? 0 /*MUT*/) : 0);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "B2 soBonus absent defaults to 1"
+      }
+    ]
+  },
+  {
+    "id": "t2-c-star-counts-explicit",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "const flat = map !== undefined && distinctPairs(map) <= 1 && Object.hasOwn(map, \"*\");",
+    "replace": "const flat = map !== undefined && /*MUT*/ Object.hasOwn(map, \"*\");",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "VB-PT-3"
+      }
+    ]
+  },
+  {
+    "id": "t2-d-unplayed-ignored",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (!bye && rule.loss.unplayed !== undefined) return rule.loss.unplayed;",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "X-WO-1"
+      }
+    ]
+  },
+  {
+    "id": "t2-decidedin-guard",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if ((outcome.kind === \"win\") !== (decidedIn !== null)) {",
+    "replace": "if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "decidedIn is present exactly for a win"
+      }
+    ]
+  },
+  {
+    "id": "t2-refine-so-under-dpb",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (rule[side].so !== undefined) {",
+    "replace": "if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "the rule refuses a field its shoot-out booking can never pay"
+      }
+    ]
+  },
+  {
+    "id": "t2-refine-sobonus-under-result",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "} else if (rule.soBonus !== undefined) {",
+    "replace": "} else if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "the rule refuses a field its shoot-out booking can never pay"
+      }
+    ]
+  },
+  {
+    "id": "t2-one-mapper",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "kind === \"no_result\" ? \"noResult\" : kind",
+    "replace": "/*MUT*/ kind",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "the one mapper"
+      }
+    ]
+  },
+  {
+    "id": "t2-star-beats-exact",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "const pair = Object.hasOwn(map, score) ? map[score] : Object.hasOwn(map, \"*\") ? map[\"*\"] : undefined;",
+    "replace": "const pair = /*MUT*/ Object.hasOwn(map, \"*\") ? map[\"*\"] : Object.hasOwn(map, score) ? map[score] : undefined;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "VB-PT-2 bySetScore"
+      }
+    ]
+  },
+  {
+    "id": "t2-coverage-dpb-needs-draw",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (rule.shootoutAs === \"draw_plus_bonus\" && rule.draw === undefined) miss(\"draw\");",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "X-PT-3 a draw_plus_bonus rule with no draw payout is uncovered"
+      }
+    ]
+  },
+  {
+    "id": "t2-coverage-level-key",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (rule[key] === undefined) miss(key);",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "cricket: a rule with no tie is uncovered"
+      }
+    ]
+  },
+  {
+    "id": "t2-reach-unplayed-dropped",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (module.declaresUnplayedLoss === true) out.add(\"loss.unplayed\");",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "table tennis reaches loss.unplayed"
+      }
+    ]
+  },
+  {
+    "id": "t2-reach-unplayed-everywhere",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (module.declaresUnplayedLoss === true) out.add(\"loss.unplayed\");",
+    "replace": "if (true /*MUT*/) out.add(\"loss.unplayed\");",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "football group with shootout on"
+      },
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "table tennis reaches loss.unplayed"
+      }
+    ]
+  },
+  {
+    "id": "t2-validate-f11-literal-keys",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "return DIFF_KEYS.some((k) => keys.has(k)) || FOR_KEYS.some((k, i) => keys.has(k) && keys.has(AGAINST_KEYS[i]!));",
+    "replace": "return /*MUT*/ keys.has(\"diff\") || (keys.has(\"for\") && keys.has(\"against\"));",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "F11 a win_margin_gte bonus reads"
+      }
+    ]
+  },
+  {
+    "id": "t2-noresult-default-dropped",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (key === \"noResult\") return rule.noResult ?? 0;",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "CK-PT-1 cricket"
+      }
+    ]
+  },
+  {
+    "id": "t2-uncovered-pays-zero",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (value === undefined) throw uncoveredOutcome(key);",
+    "replace": "if (value === undefined) return 0 /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "a draw under a rule with no draw throws"
+      }
+    ]
+  },
+  {
+    "id": "t2-parse-legacy-dropped",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "return old.success ? legacyPointsRule(old.data) : null;",
+    "replace": "return null /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "PS-9f parseStoredPointsRule reads the outcome-keyed shape"
+      }
+    ]
+  },
+  {
+    "id": "t2-display-metric-dropped",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (outcome.kind === \"win\" && !award && d !== \"regulation\") {",
+    "replace": "if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "FB-PT-1 X-PT-4 a shoot-out under draw_plus_bonus books drawn"
+      }
+    ]
+  },
+  {
+    "id": "t2-bychain-so-dropped",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (d === \"so\" && side.so !== undefined) return side.so;",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "IH-PT-1"
+      }
+    ]
+  },
+  {
+    "id": "t2-bychain-ot-dropped",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (d !== \"regulation\" && side.ot !== undefined) return side.ot;",
+    "replace": "/*MUT*/",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "IH-PT-1"
+      }
+    ]
+  },
+  {
+    "id": "t2-bounds-dpb-sobonus",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "soWon.push(rule.draw + (rule.soBonus ?? 1));",
+    "replace": "soWon.push(rule.draw /*MUT*/);",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "pointsRuleBounds"
+      }
+    ]
+  },
+  {
+    "id": "t2-web-fold-decidedin-regulation",
+    "file": "apps/web/src/server/engine-db/competition.ts",
+    "find": "        decidedInFor(sportModule, f.outcome as MatchOutcome),\n",
+    "replace": "        (f.outcome as MatchOutcome).kind === \"win\" ? \"regulation\" : null, /*MUT*/\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/server/engine-db/__tests__/payout-decided-in-db.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t2-web-points-line-legacy",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "  if (base !== undefined) return base;\n",
+    "replace": "  /*MUT*/\n",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts"
+        ],
+        "name": "a stored W2c rule"
+      }
+    ]
+  },
+  {
+    "id": "t2-web-editor-tie-noresult",
+    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+    "find": "draw, tie: 0, noResult: 0, shootoutAs: \"result\"",
+    "replace": "draw, /*MUT*/ shootoutAs: \"result\"",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+        ]
+      }
+    ]
+  },
+  {
+    "id": "t2-bench-legacy-refused",
+    "file": "tools/bench/lib/validate-pack.ts",
+    "find": "    pointsRule = parseStoredPointsRule(pointsRuleRaw);\n",
+    "replace": "    pointsRule = PointsRule.safeParse(pointsRuleRaw).data ?? null; /*MUT*/\n",
+    "killers": [
+      {
+        "cwd": ".",
+        "files": [
+          "tools/bench/lib/__tests__/validate-pack.test.ts"
+        ],
+        "name": "applies the stage's own points rule"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-i1-inapplicable-dropped",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "map !== undefined && decided && !setScores ? [\"bySetScore\"] : []",
+    "replace": "/*MUT*/ []",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "I1 a bySetScore map is refused"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-i2-key-is-played-score",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "return `${setsToWin}-${l}`;",
+    "replace": "return `${w}-${l}` /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "I2 FIVB 6.4.3 a settled abandon"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-i2-malformed-allowed",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "if (l >= setsToWin || w > setsToWin) {",
+    "replace": "if (false /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.test.ts"
+        ],
+        "name": "I2 FIVB 6.4.3 a settled abandon"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-m4-loss-chain-regulation",
+    "file": "packages/engine/src/competition/points.ts",
+    "find": "delta.lost === 1 ? byChain(rule.loss, d) : 0;",
+    "replace": "delta.lost === 1 ? byChain(rule.loss, \"regulation\" /*MUT*/) : 0;",
+    "killers": [
+      {
+        "cwd": "packages/engine",
+        "files": [
+          "src/competition/points-w2d.property.test.ts"
+        ],
+        "name": "per-fixture total"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-m5-so-win-skips-ot",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "const w = or(win?.so, or(win?.ot, win?.regulation));",
+    "replace": "const w = or(win?.so, win?.regulation) /*MUT*/;",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts"
+        ],
+        "name": "W2d M5: a shoot-out booked as a result"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-m5-ot-gate-win-only",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "if (win?.ot !== undefined || loss?.ot !== undefined) {",
+    "replace": "if (win?.ot !== undefined /*MUT*/) {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts"
+        ],
+        "name": "W2d M5: an overtime split is said"
+      }
+    ]
+  },
+  {
+    "id": "t2-fr1-m5-map-says-splits",
+    "file": "apps/web/src/lib/points-line.ts",
+    "find": "    out.push(...sets);\n  } else {",
+    "replace": "    out.push(...sets);\n    out.push(...splitClauses(r)); /*MUT*/\n  } else {",
+    "killers": [
+      {
+        "cwd": "apps/web",
+        "files": [
+          "src/lib/__tests__/points-line.test.ts"
+        ],
+        "name": "W2d M5: a set-score map is the whole table"
+      }
+    ]
+  }
+]

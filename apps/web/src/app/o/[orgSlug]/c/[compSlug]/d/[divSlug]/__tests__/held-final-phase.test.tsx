@@ -71,6 +71,14 @@ vi.mock("@/server/usecases/competition-desk", async (importOriginal) => ({
   listFixturesAwaitingSettle: deskSpies.listFixturesAwaitingSettle,
 }));
 vi.mock("@/server/usecases/entrants", () => ({ listEntrants: vi.fn(async () => []) }));
+// W2d final review I1: the card's pins come from one loader; a spy here, the real meta reader kept (importOriginal).
+const qualSpies = vi.hoisted(() => ({
+  listPinnedStagePoints: vi.fn<(auth: unknown, stageIds: readonly string[]) => Promise<Record<string, unknown>>>(async () => ({})),
+}));
+vi.mock("@/server/usecases/stage-qualification", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/server/usecases/stage-qualification")>()),
+  listPinnedStagePoints: qualSpies.listPinnedStagePoints,
+}));
 vi.mock("@/server/usecases/schedule", () => ({
   getScheduleSettings: vi.fn(async () => ({ config: {}, tz: "UTC" })),
 }));
@@ -87,7 +95,7 @@ vi.mock("@/server/engine-db", () => ({
     entrantModel: null,
     positions: { groups: [], roles: [] },
     metrics: [],
-    defaultTiebreakers: [],
+    defaultTiebreakers: () => [],
   })),
 }));
 vi.mock("@/server/usecases/discipline", () => ({
@@ -230,5 +238,29 @@ describe("the fixtures tab hands the stage points section its words (W2c Task 18
     const props = find(await renderTab(), StagesPanel)!.props as PanelProps;
     expect(props.pointsDict, "the seam is wired: the preview has words to resolve against").toEqual({ "format.points.base": PUBLIC_DICT["format.points.base"] });
     expect(Object.hasOwn(props.ruleDict!, "format.points.base"), "the chips do not carry the points clauses").toBe(false);
+  });
+});
+
+// W2d final review I1 (controller ruling, 2026-10-26): a stage pinned at generate pays its pin, which a division points save
+// never reaches, so the fixtures tab reads each table stage's pin through the one loader and hands it to the panel - the
+// card's source, never `division.config`. A knockout carries no card (no table), so it is not asked about.
+describe("the fixtures tab hands the stage points card each pinned stage's points (W2d final review I1)", () => {
+  const LEAGUE = { id: "stage-lg", name: "Pool A", kind: "league", seq: 1, status: "active", config: {}, progression: null };
+  const PIN = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "draw_plus_bonus", unit: "whole", bonuses: [] };
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([LEAGUE, { ...KO_STAGE, seq: 2 }]);
+    stagesSpies.getSeedProposal.mockReset();
+    stagesSpies.getStageRosterDrift.mockReset().mockResolvedValue({ ghosts: [], unplaced: [] });
+    fixtureSpies.listDivisionFixtures.mockReset().mockResolvedValue([]);
+    deskSpies.listFixturesAwaitingSettle.mockReset().mockResolvedValue(new Set());
+    qualSpies.listPinnedStagePoints.mockReset().mockResolvedValue({ [LEAGUE.id]: PIN });
+  });
+
+  it("the loader is asked about the table stage (never the knockout), once, and its answer is what StagesPanel gets", async () => {
+    const props = find(await renderTab(), StagesPanel)!.props as { pinnedStagePoints?: unknown };
+    expect(qualSpies.listPinnedStagePoints).toHaveBeenCalledTimes(1);
+    expect(qualSpies.listPinnedStagePoints.mock.calls[0]![1], "the table stages only").toEqual([LEAGUE.id]);
+    expect(props.pinnedStagePoints, "the seam is wired: the card has the pin").toEqual({ [LEAGUE.id]: PIN });
   });
 });

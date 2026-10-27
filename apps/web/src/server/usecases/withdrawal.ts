@@ -334,10 +334,8 @@ export async function withdrawEntrantCascade(
           {
             id: stage.id,
             kind: stage.kind as "league" | "group" | "swiss",
-            // The policy only counts involvement — field and cascade are
-            // irrelevant to it, but the type carries them for the rankers.
-            entrants: [entrantId],
-            cascade: [],
+            // The policy only counts involvement: it reads the stage's id and
+            // kind alone (W2d T8 narrowed its parameter to those two).
           },
           entrantId,
           { played, pending },

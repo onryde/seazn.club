@@ -781,7 +781,9 @@ const BADMINTON_DIVISION: PackInput["divisions"][number] = {
   // rather than typed in twice — pack-schema.ts's own bidirectional
   // compile-check (`TIEBREAKER_KEYS_ARE_ENGINE_KEYS`) is what makes this
   // legal on a pack.
-  tiebreakers: badminton.defaultTiebreakers,
+  // W2d T8: the default asked for a league under the variant's cfg (every default is kind- and cfg-independent until
+  // Task 11).
+  tiebreakers: badminton.defaultTiebreakers("league", badminton.configSchema.parse(badminton.variants[BADMINTON_VARIANT])),
   stages: [BADMINTON_STAGE],
   // The SAME object d-tiny carries — see `TINY_SCHEDULE_CONFIG`. Sharing it
   // is what makes "both divisions are scheduled onto the same two courts"

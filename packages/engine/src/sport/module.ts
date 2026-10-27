@@ -3,7 +3,7 @@
 // declaredPointsSets; arbitraryEvent/coarsen hooks from spec 03 §6 + §9.6).
 import { z } from "zod";
 import { EngineError } from "../core/errors.ts";
-import type { CoreEv, EventEnvelope, FoldableModule, FoldContext } from "../core/events.ts";
+import { SETTLE_METHODS, settledMethod, type CoreEv, type EventEnvelope, type FoldableModule, type FoldContext } from "../core/events.ts";
 import type { LineupPolicy, SquadState } from "../core/lineup.ts";
 import type { MatchPosition } from "../core/position.ts";
 import type { Rng } from "../core/rng.ts";
@@ -22,6 +22,7 @@ import type {
   StandingsDelta,
 } from "../core/types.ts";
 import type { PositionCatalog } from "./catalog.ts";
+import type { PointsRule } from "../competition/points.ts";
 import type { DocSection } from "../exports/types.ts";
 import { resolvePayloadPath, type PlayerStatsModel } from "../stats/stats.ts";
 import type { EntrantModel } from "./entrant-model.ts";
@@ -62,7 +63,27 @@ export type TiebreakerKey =
   | "direct"
   | "fair_play"
   | "seed"
-  | "lots";
+  | "lots"
+  // W2d (spec §5.6) — BWF/ITTF/ATP/FIH/IIHF keys and the h2h block modifiers.
+  | "set_diff"
+  | "point_diff"
+  | "h2h_two"
+  | "h2h_wins"
+  | "h2h_set_ratio"
+  | "h2h_point_ratio"
+  | "h2h_reapply"
+  | "h2h_exclusion"
+  | "matches_played"
+  | "field_goals";
+
+/** W2d (spec §5.6 "ST-G12", IH-TB-2) — a key of a sport's partial-schedule order (`SportModule.partialScheduleOrder`): a
+ *  plain tie-break key, `lots` last, or the internal `fewest_played` (fewer games played ranks higher, IIHF RBG:349-350).
+ *  `fewest_played` is never a `TiebreakerKey`: no stage order holds it and the editor never offers it. */
+export type PartialScheduleKey = TiebreakerKey | "fewest_played";
+
+/** W2d (spec §5.4, PS-7c) — the stage kinds that keep a table: the round robins, Swiss and americano (core/types.ts
+ *  `DRAW_KINDS`). A sport's default tie-break order is asked per kind (`defaultTiebreakers`). */
+export type TableStageKind = Extract<StageKind, "league" | "group" | "swiss" | "americano">;
 
 // A type + payload pair before persistence stamps the envelope fields
 // (id/seq/recordedAt) — what generators and coarsen produce.
@@ -654,7 +675,7 @@ export function stampAttributionRequired(
  *  layer scores a bye through `standingsDelta` as an `award` win
  *  (apps/web engine-db/competition.ts `awardByeDelta`). That layer applies a
  *  stage's PointsRule ON TOP of every pair, byes and played fixtures alike
- *  (`applyPointsRule`), which overrides these sport bounds; the rule's own
+ *  (`payout`), which overrides these sport bounds; the rule's own
  *  bounds are `pointsRuleBounds` (standings plan, Task 2).
  *  `winFloor` is what ANY win (OT, shoot-out, 3-2) is guaranteed to pay;
  *  `lossCeil` is the most ANY loss can still pay. A forecast that promised
@@ -751,6 +772,44 @@ export interface RuleKeyFact {
 }
 /** Key = a cfg path: top-level ("bestOf") or dotted to a leaf ("overtime.minutes"). Most specific wins. */
 export type RuleKeys = Readonly<Record<string, RuleKeyFact>>;
+
+/**
+ * W2d (spec §5.2, D4) — how a WON match was decided: in regulation, in overtime (football's extra time, an overtime
+ * period), or by a shoot-out (penalties, the GWS, a cricket super over or boundary count, a chess tie-break rung). Only a
+ * `win` carries one; `decidedInFor` (competition/decided-in.ts) reads it off a stored outcome.
+ */
+export type DecidedIn = "regulation" | "ot" | "so";
+
+/**
+ * W2d (X-PT-2) — the win methods a ledger can hold for EVERY sport besides the sport's own: the kernel's settle, which
+ * `outcomeOf` writes as `settled_<method>` whatever the sport (core/events.ts `settledMethod`), and the two methods a win
+ * stored before W2b can carry (`walkover`, `forfeit`), which `forfeitShaped` still reads as awards. None of them is an
+ * overtime or a shoot-out, so each is decided in regulation.
+ */
+export const SHARED_WIN_METHODS: readonly string[] = Object.freeze([...SETTLE_METHODS.map(settledMethod), "walkover", "forfeit"]);
+
+/**
+ * W2d (X-PT-2) — a sport's `outcomeMethods` and `decidedInOf` from ONE table, so the list and the lookup cannot drift: the
+ * sport's own methods, then `SHARED_WIN_METHODS`, each of those in regulation. `decidedInOf` answers a declared method only;
+ * any other string, a prototype key included, is refused CONFIG_INVALID and never read as regulation.
+ */
+export function winMethodTable(
+  sport: string,
+  own: Readonly<Record<string, DecidedIn>>,
+): Pick<AnySportModule, "outcomeMethods" | "decidedInOf"> {
+  const table = new Map<string, DecidedIn>(Object.entries(own));
+  for (const method of SHARED_WIN_METHODS) table.set(method, "regulation");
+  return {
+    outcomeMethods: Object.freeze([...table.keys()]),
+    decidedInOf(method) {
+      const decided = table.get(method);
+      if (decided === undefined) {
+        throw new EngineError("CONFIG_INVALID", `${sport} writes no win method "${method}"`, { sport, method });
+      }
+      return decided;
+    },
+  };
+}
 
 // spec 03 §3. Extends the kernel's FoldableModule (spec 03 §2) so every
 // SportModule folds through foldMatch unchanged.
@@ -935,14 +994,71 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
    * W2c X-PT-1 (gap a) — the metrics that ARE this sport's match score: its spelling of `for` / `against` / `diff`, one
    * of the tie-break alias triples (tiebreakers.ts FOR_KEYS / AGAINST_KEYS / DIFF_KEYS). A stage PointsRule's
    * `forfeit.awardScore` lands here too, REPLACING the sport's credit, on a forfeit with nothing played
-   * (`applyPointsRule`): the tie-breaks read these before the generic keys, so a rule writing only those never reached
+   * (`payout`): the tie-breaks read these before the generic keys, so a rule writing only those never reached
    * such a table. Absent where the table keeps no score an awarded one can stand in for — the set sports, carrom and the
    * board games (no score triple at all), and cricket (its runs are NRR operands beside the balls; a walkover credits
    * none, CK-WO-2) — which `pointsRuleAwardReachesTable` reports. Held to `metrics` by points-w2c.test.ts.
    */
   awardScoreKeys?: AwardScoreKeys;
-  defaultTiebreakers: TiebreakerKey[]; // sport's official cascade (doc 05 §4)
+  /** W2d (spec §5.4, §5.10; PS-7c) — the sport's official tie-break order (doc 05 §4) for a TABLE stage of `kind`, under
+   *  `cfg`: the stage's merged cfg (division ⊕ stage.rules) as the sport's schema parses it. Asked by the one resolver,
+   *  `resolveTableRules` (competition/table-rules.ts), and only when neither the stage nor its division sets an order.
+   *  A fresh list the caller owns. From Task 11 a Swiss stage keeps its pre-W2d order (OC1); football reads `cfg` (PS-7c). */
+  defaultTiebreakers(kind: TableStageKind, cfg: Cfg): TiebreakerKey[];
+  /** W2d (spec §5.10; FB-TB-2, HK-PT-2, BG-PT-1) — the named points rules and tie-break orders a TABLE stage of
+   *  `stageKind` may pick instead of the sport's default (the stage editor's preset menu). Fresh arrays the caller owns.
+   *  Absent = the sport offers none. Each preset order passes `validateCascade` and each rule covers
+   *  `reachableOutcomes` under every declared cfg (defaults-sweep.test.ts), except a fair-play order under a cfg that
+   *  does not track fair play, which the editor refuses at that step (D8). */
+  tablePresets?(stageKind: TableStageKind): TablePresets;
+  /** W2d (spec §5.5 rule 1, D11; X-TB-3) — the sport's primary table measure: step 0 of every non-Swiss tie-break order
+   *  (`validateCascade`), the stage editor's pinned first row. `wins` for volleyball, badminton and tennis (FIVB V3-1,
+   *  BWF 16.2.1, ATP C.3-1), `points` for every other sport. Required, so a new sport states its own. */
+  readonly primaryTableKey: "points" | "wins";
   supportsDraws(cfg: Cfg, stage: StageKind): boolean; // knockout football: no
+
+  // W2d (spec §5.2, D4, B2, D6; X-PT-2) — the outcome vocabulary the table reads. `outcomeMethods` and `decidedInOf` come
+  // from ONE table (`winMethodTable`); the §13.4 sweep holds `decidedInOf` total over the list and a source scan holds the
+  // list to every method the fold writes (sport/outcome-methods-source.test.ts).
+  /** Every `win.method` this sport's ledger can hold: what its fold writes, plus `SHARED_WIN_METHODS`. */
+  readonly outcomeMethods: readonly string[];
+  /** How a win by `method` was decided. A method the sport does not declare throws CONFIG_INVALID (a guard: never read as
+   *  regulation). */
+  decidedInOf(method: string): DecidedIn;
+  /** The decidedIn values a stage of this format can produce under `cfg` (its overtime, shoot-out, super over, rungs);
+   *  always holds `regulation`. */
+  reachableDecidedIn(cfg: Cfg, stageKind: StageKind): ReadonlySet<DecidedIn>;
+  /** The level results a TABLE can pay under `cfg`: a draw the sport stands (`supportsDraws`), or a shoot-out booked as one
+   *  (`shootoutAs: "draw_plus_bonus"`); cricket's tie and no result. Empty in a bracket kind, which holds every level
+   *  result for the organiser's settle (ruling 79). */
+  reachableResultKinds(cfg: Cfg, stageKind: StageKind): ReadonlySet<"draw" | "tie" | "noResult">;
+  /** Set sports only (their table pays by set score): every `W-L` a match of `cfg.bestOf` can end, the winner's majority
+   *  against each losing count below it. */
+  reachableSetScores?(cfg: Cfg): readonly `${number}-${number}`[];
+  /** B2 — how a shoot-out-decided TABLE match is booked: a draw for both sides plus the winner's bonus (FIFA, FIH), or a
+   *  win and a loss (IIHF's GWS, cricket's super over, chess's rungs). In a knockout the shoot-out only decides who
+   *  advances. */
+  readonly shootoutAs: "draw_plus_bonus" | "result";
+  /** HK-TB-1 (B2) — which wins the `wins` tie-break counts. Absent = every win; FIH counts regulation wins only. */
+  readonly winsCount?: "all" | "regulation";
+  /** W2d (spec §5.6 "ST-G12", IH-TB-2; X-TB-8) — the order a TABLE ranks a tied class by, in place of the head-to-head
+   *  block, when the class's mini-schedule is incomplete (a fixture among them is still to be decided). IIHF: fewest games
+   *  played, goal difference, goals for, seed, lots (RBG:349-350). Absent = the block does not split such a class, which
+   *  carries the note `h2h_incomplete` (the author's call, AUD-ST:71). Plain keys and `fewest_played`, `lots` last only
+   *  (`rankStandings` refuses anything else). */
+  readonly partialScheduleOrder?: readonly PartialScheduleKey[];
+  /** D6 (X-WO-1 amended) — the sport pays a separate "loss, not played" (table tennis: played L 1, unplayed L 0). Absent
+   *  everywhere else, so `loss.unplayed` is reachable nowhere else (PS-7a). */
+  readonly declaresUnplayedLoss?: true;
+  /**
+   * W2d (spec §5.3 "The sport's default, as a rule", §5.10; X-PT-2, X-PT-3) — the points a TABLE stage of `stageKind`
+   * pays under `cfg` when the stage sets no rule of its own, as an outcome-keyed `PointsRule` built from the sport's own
+   * cfg keys (football's `points`, the period kernel's `otWin/otLoss`, cricket's `tie/noResult/draw`, a set sport's
+   * `pointsMap`, chess's `scoring` in half-points, generic's `w/d/l`). `shootoutAs` is the sport's own (above). It pays
+   * exactly what `standingsDelta` pays, every cfg × reachable outcome, except the signed changes (D6, D10(a)(c), B2) —
+   * table-points-parity.test.ts sweeps it against `standingsDelta`, and it covers `reachableOutcomes` (`coverage`).
+   */
+  tablePointsRule(cfg: Cfg, stageKind: StageKind): PointsRule;
   // W2a (spec §5.2, ruling 76) — the cfg changes a BRACKET stage applies on top
   // of the resolved cfg (resolveFixtureCfg merges it by stage kind; the V347
   // freeze then carries it). `{}` is a legal declaration.
@@ -994,3 +1110,30 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
 // Registry-facing view — the generics are the module author's business.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type AnySportModule = SportModule<any, any, any>;
+
+/** W2d (spec §5.10) — a sport's table presets for one stage kind (`SportModule.tablePresets`). */
+export interface TablePresets {
+  readonly points: readonly { readonly id: string; readonly rule: PointsRule }[];
+  readonly tiebreakers: readonly { readonly id: string; readonly keys: readonly TiebreakerKey[] }[];
+}
+
+/**
+ * W2d (D8, PS-7c; FB-TB-4) — THE reading of "this cfg tracks fair play", for the default order (football's
+ * `defaultTiebreakers` omits its `fair_play` step without it) and for `validateCascade` (which refuses the step without
+ * it) alike, so the default can never hold a step the validator refuses. Read as the sport's schema parses the cfg, so a
+ * stored partial cfg reads football's declared default (on) rather than "absent"; a cfg the schema refuses is read as
+ * given; only `fairPlay: true` tracks. Lives here, not in competition/, because a sport file may not value-import
+ * competition/ (the phone closure, test/boundary-gate.test.ts).
+ */
+export function tracksFairPlay(module: Pick<AnySportModule, "configSchema">, cfg: unknown): boolean {
+  const parsed = module.configSchema.safeParse(cfg);
+  const read: unknown = parsed.success ? parsed.data : cfg;
+  return typeof read === "object" && read !== null && (read as { fairPlay?: unknown }).fairPlay === true;
+}
+
+/**
+ * A `bySetScore` key (`PointsRule`, competition/points.ts, which re-exports it): a set score "W-L", or "*" for every score
+ * the map does not name (SC-S9). Lives here, not in competition/, for the reason `tracksFairPlay` does: the set kernel
+ * reads it, and a sport file may not value-import competition/ (the phone closure, test/boundary-gate.test.ts).
+ */
+export const SET_SCORE_KEY = /^(\d+-\d+|\*)$/;

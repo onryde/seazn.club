@@ -441,3 +441,55 @@ function buildFromGenerator(mod: Mod, cfg: SetBasedCfg, seed: number, maxEvents:
 conformanceSuite(volleyball);
 conformanceSuite(badminton);
 conformanceSuite(tabletennis);
+
+// ---------------------------------------------------------------------------
+// W2d Task 10 (Task 8 carry 2) — a points-table key that is no set score ("W-L" or "*", `SET_SCORE_KEY`) is one the
+// payer never reads (`matchPoints`, `cleanSweepPair`): the bounds and the declared points sets range over what the table
+// can PAY, so they leave it out. The write paths refuse such a key (web `refuseStrayPointsMapKeys`); a stored one is
+// read tolerantly. A map that prices no set score at all keeps the old reading (every value): it pays nothing anyway.
+// Every set sport and every variant it ships (counted).
+// ---------------------------------------------------------------------------
+describe("W2d T10: a points-table key that is no set score never reaches the bounds or the declared points sets", () => {
+  it("every set sport x variant: a stray key's pair moves neither declaredPointsSets nor matchPointsBounds (counted)", () => {
+    const STRAY: [number, number] = [97, 41]; // a pair no shipped table pays: any reading of it shows
+    let checked = 0;
+    for (const m of [badminton, tabletennis, volleyball]) {
+      for (const [variant, preset] of Object.entries(m.variants)) {
+        const clean = m.configSchema.parse(preset);
+        expect(Object.values(clean.pointsMap).flat(), `${m.key}/${variant}: premise, no shipped pair is the stray one`).not.toContain(97);
+        const stray = { ...clean, pointsMap: { ...clean.pointsMap, bonus: STRAY } } as SetBasedCfg;
+        expect([...m.declaredPointsSets(stray)].sort(), `${m.key}/${variant}: points sets`).toEqual([...m.declaredPointsSets(clean)].sort());
+        expect(m.matchPointsBounds(stray), `${m.key}/${variant}: bounds`).toEqual(m.matchPointsBounds(clean));
+        expect(m.matchPointsBounds(stray).max, `${m.key}/${variant}: the stray value is not the max`).not.toBe(97);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: set sport variants checked").toBeGreaterThanOrEqual(3);
+  });
+
+  it("the table rule refuses a map that prices no set score, naming the keys STORED — not the empty map left after the stray ones are skipped (every set sport, counted)", () => {
+    // A20 fix round 1 (controller ruling on kernel.ts' refusal): the payload is what the organiser saved, so the editor
+    // and the API can name the stray key. Expected keys are the stored map's own, from this test's input.
+    const stored: readonly Record<string, [number, number]>[] = [{ junk: [9, 9] }, { odd: [5, 2], bonus: [1, 0] }, {}];
+    let refused = 0;
+    for (const m of [badminton, tabletennis, volleyball]) {
+      const clean = m.configSchema.parse(Object.values(m.variants)[0]);
+      for (const pointsMap of stored) {
+        const cfg = { ...clean, pointsMap };
+        expect(() => m.tablePointsRule(cfg, "league"), `${m.key} ${JSON.stringify(pointsMap)}`).toThrowError(
+          expect.objectContaining({ code: "CONFIG_INVALID", data: { keys: Object.keys(pointsMap) } }),
+        );
+        refused++;
+      }
+      // the positive pair: the variant's own map prices its set scores and is no refusal
+      expect(() => m.tablePointsRule(clean, "league"), `${m.key}: shipped map`).not.toThrow();
+    }
+    expect(refused, "anti-vacuity: stored maps refused").toBe(3 * stored.length);
+  });
+
+  it("a map that prices no set score is read as before (every value): the tolerant read, never a throw", () => {
+    const cfg = { ...volleyball.configSchema.parse(volleyball.variants.indoor), pointsMap: { odd: [5, 2] as [number, number] } };
+    expect([...volleyball.declaredPointsSets(cfg)]).toEqual([7]);
+    expect(volleyball.matchPointsBounds(cfg)).toMatchObject({ max: 5, winFloor: 5, lossCeil: 2 });
+  });
+});

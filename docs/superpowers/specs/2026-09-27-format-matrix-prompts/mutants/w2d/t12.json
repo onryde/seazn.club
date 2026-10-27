@@ -1,0 +1,790 @@
+[
+ {
+  "id": "t12-undecided-pair-counts-as-complete",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  return scheduled === resultsAmong(ids, run.results ?? []).length;",
+  "replace": "  return scheduled === scheduled;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 IIHF partial schedule"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 another sport"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/partial-schedule-db.test.ts"
+    ],
+    "name": "X-TB-8 generic"
+   }
+  ]
+ },
+ {
+  "id": "t12-no-schedule-reads-incomplete",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  if (run.schedule === undefined) return true;",
+  "replace": "  if (run.schedule === undefined) return false;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "empty: a class of one"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 IIHF partial schedule"
+   }
+  ]
+ },
+ {
+  "id": "t12-block-guard-dropped",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  if (!scheduleComplete(cls, run)) return partialSchedule(cls, run);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 IIHF partial schedule"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 another sport"
+   }
+  ]
+ },
+ {
+  "id": "t12-h2h-two-guard-dropped",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "\"the match between them\".\n    if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);",
+  "replace": "\"the match between them\".",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 badminton"
+   }
+  ]
+ },
+ {
+  "id": "t12-direct-guard-dropped",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "has not played out its meetings does not split.\n          if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);",
+  "replace": "has not played out its meetings does not split.",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 chess's direct"
+   }
+  ]
+ },
+ {
+  "id": "t12-partial-order-ignored",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  if (run.partial === undefined) return classes;",
+  "replace": "  return classes;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 IIHF partial schedule"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 the partial order's seed step"
+   }
+  ]
+ },
+ {
+  "id": "t12-partial-split-untraced",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "      if (groups.length > 1) markTieBreak(group, step.key, run);\n      return groups;\n    });\n  }\n  return current;",
+  "replace": "      return groups;\n    });\n  }\n  return current;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 IIHF partial schedule"
+   }
+  ]
+ },
+ {
+  "id": "t12-fewest-played-reversed",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "sgn(b.played - a.played)",
+  "replace": "sgn(a.played - b.played)",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 IIHF partial schedule"
+   }
+  ]
+ },
+ {
+  "id": "t12-partial-lots-anywhere",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "if (i !== order.length - 1) throw why(\"must be last\");",
+  "replace": "if (false) throw why(\"must be last\");",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 a partial-schedule order is plain keys"
+   }
+  ]
+ },
+ {
+  "id": "t12-partial-h2h-key-accepted",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "if (cmp === undefined) throw why(\"is not a plain key",
+  "replace": "if (cmp === undefined) return void why(\"is not a plain key",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 a partial-schedule order is plain keys"
+   }
+  ]
+ },
+ {
+  "id": "t12-schedule-unchecked",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  if (schedule !== undefined) checkSchedule(schedule, ctx.results ?? []);",
+  "replace": "  if (false) checkSchedule(schedule, ctx.results ?? []);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 a counted result the schedule does not hold"
+   }
+  ]
+ },
+ {
+  "id": "t12-schedule-overcount-allowed",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "    owed.set(key, left - 1);",
+  "replace": "    owed.set(key, left);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 a counted result the schedule does not hold"
+   }
+  ]
+ },
+ {
+  "id": "t12-empty-schedule-is-a-schedule",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "ctx.scheduledPairs !== undefined && ctx.scheduledPairs.length > 0 ? ctx.scheduledPairs : undefined",
+  "replace": "ctx.scheduledPairs",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "empty: a class of one"
+   }
+  ]
+ },
+ {
+  "id": "t12-incomplete-note-not-sticky",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "    if (run.notes.get(row.entrantId) !== \"h2h_incomplete\") run.notes.delete(row.entrantId);",
+  "replace": "    run.notes.delete(row.entrantId);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 a class the partial order leaves level"
+   }
+  ]
+ },
+ {
+  "id": "t12-incomplete-note-unset",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  for (const row of cls) run.notes.set(row.entrantId, \"h2h_incomplete\");",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 another sport"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/partial-schedule-db.test.ts"
+    ],
+    "name": "X-TB-8 generic"
+   }
+  ]
+ },
+ {
+  "id": "t12-sberger-without-ledger-is-level",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": ": compareMetric(a, b, SBERGER_KEYS);",
+  "replace": ": 0;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 chess"
+   }
+  ]
+ },
+ {
+  "id": "t12-pre-w2d-list-key-blanked",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "PRE_W2D_CROSS_GROUP: readonly TiebreakerKey[] = [\"points\", \"diff\", \"for\", \"wins\"];",
+  "replace": "PRE_W2D_CROSS_GROUP: readonly TiebreakerKey[] = [\"\", \"diff\", \"for\", \"wins\"];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 a pinned stage's crossGroup"
+   }
+  ]
+ },
+ {
+  "id": "t12-pre-w2d-list-emptied",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "PRE_W2D_CROSS_GROUP: readonly TiebreakerKey[] = [\"points\", \"diff\", \"for\", \"wins\"];",
+  "replace": "PRE_W2D_CROSS_GROUP: readonly TiebreakerKey[] = [];",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 a pinned stage's crossGroup"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-hardcoded-order",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "crossGroupOrder(candidates, rules?.order ?? PRE_W2D_CROSS_GROUP, rules?.lotsDraws, {",
+  "replace": "crossGroupOrder(candidates, PRE_W2D_CROSS_GROUP, rules?.lotsDraws, {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 two badminton runners-up"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-stored-draws-unread",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "rules?.order ?? PRE_W2D_CROSS_GROUP, rules?.lotsDraws, {",
+  "replace": "rules?.order ?? PRE_W2D_CROSS_GROUP, undefined, {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 a second call"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-new-draws-dropped",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "        for (const draw of ranked.newLotsDraws) newLotsDraws.push({ sourceIndex: slot.sourceIndex, ...draw });\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 the first time"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-seeds-dropped",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "          ...(rules?.seeds === undefined ? {} : { seeds: rules.seeds }),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 the source's seeds reach the cross-group residual"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-rng-seed-dropped",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "          ...(rules?.rngSeed === undefined ? {} : { rngSeed: rules.rngSeed }),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 the first time"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-wins-count-dropped",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "          ...(rules?.winsCount === undefined ? {} : { winsCount: rules.winsCount }),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 FIH"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-h2h-key-allowed",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "    if (isHeadToHeadKey(key)) {",
+  "replace": "    if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 the cross-group order never applies"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-level-dropped",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "  for (const row of ranked.rows) if (level.has(row.entrantId)) row.level = true;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 candidates from empty tables"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-all-level-draws-lots",
+  "file": "packages/engine/src/competition/progression.ts",
+  "find": "    ...(level.size === rows.length ? { countedFixtures: 0 } : {}),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 candidates from empty tables"
+   }
+  ]
+ },
+ {
+  "id": "t12-stage-schedule-dropped",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "      ...(stage.scheduledPairs === undefined || stage.kind === \"swiss\" ? {} : { scheduledPairs: stage.scheduledPairs }),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 IIHF partial schedule"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 another sport"
+   }
+  ]
+ },
+ {
+  "id": "t12-swiss-stage-reads-schedule",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "      ...(stage.scheduledPairs === undefined || stage.kind === \"swiss\" ? {} : { scheduledPairs: stage.scheduledPairs }),",
+  "replace": "      ...(stage.scheduledPairs === undefined ? {} : { scheduledPairs: stage.scheduledPairs }),",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 B1 Swiss"
+   }
+  ]
+ },
+ {
+  "id": "t12-swiss-schedule-accepted",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  if (schedule !== undefined && ctx.swiss !== undefined) {",
+  "replace": "  if (false) {",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 a Swiss table handed a schedule"
+   }
+  ]
+ },
+ {
+  "id": "t12-stage-partial-order-dropped",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "      ...(stage.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: stage.partialScheduleOrder }),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 IIHF partial schedule"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-rules-wrong-pool",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "  const lotsDraws = stage.lotsDraws?.get(\"\");",
+  "replace": "  const lotsDraws = stage.lotsDraws?.get(\"P1\");",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "crossGroup"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 a second call"
+   }
+  ]
+ },
+ {
+  "id": "t12-cross-group-rules-hardcoded-order",
+  "file": "packages/engine/src/competition/stage.ts",
+  "find": "    order: stage.rules.crossGroup,",
+  "replace": "    order: [\"points\", \"diff\", \"for\", \"wins\"],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/cross-group-w2d.test.ts"
+    ],
+    "name": "X-TB-7 two badminton runners-up"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "crossGroup"
+   }
+  ]
+ },
+ {
+  "id": "t12-kernel-drops-partial-order",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "...(preset.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: preset.partialScheduleOrder })",
+  "replace": "...({})",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "premise: ice hockey declares"
+   }
+  ]
+ },
+ {
+  "id": "t12-icehockey-partial-order-reordered",
+  "file": "packages/engine/src/sports/icehockey/icehockey.ts",
+  "find": "partialScheduleOrder: [\"fewest_played\", \"diff\", \"for\", \"seed\", \"lots\"],",
+  "replace": "partialScheduleOrder: [\"diff\", \"fewest_played\", \"for\", \"seed\", \"lots\"],",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "premise: ice hockey declares"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 IIHF partial schedule"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-void-stays-scheduled",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "    if (status === \"void\" || !f.home_entrant_id || !f.away_entrant_id) continue;",
+  "replace": "    if (!f.home_entrant_id || !f.away_entrant_id) continue;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/scheduled-pairs.test.ts"
+    ],
+    "name": "X-TB-8 every seated fixture"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/scheduled-pairs.test.ts"
+    ],
+    "name": "X-TB-8 after a withdrawal"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-unfilled-seat-scheduled",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "    if (status === \"void\" || !f.home_entrant_id || !f.away_entrant_id) continue;",
+  "replace": "    if (status === \"void\") continue;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/scheduled-pairs.test.ts"
+    ],
+    "name": "X-TB-8 every seated fixture"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-missing-status-passes",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "    if (status === undefined) throw new Error(`fixture ${f.id} has no engine status",
+  "replace": "    if (status === undefined && false) throw new Error(`fixture ${f.id} has no engine status",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/scheduled-pairs.test.ts"
+    ],
+    "name": "a fixture with no engine status"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-schedule-not-passed",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "    scheduledPairs: scheduledPairsOf(inputs.fixtures, inputs.tableFixtures),",
+  "replace": "    scheduledPairs: [],",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/partial-schedule-db.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 ice hockey"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/partial-schedule-db.test.ts"
+    ],
+    "name": "X-TB-8 generic"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-partial-order-not-passed",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "    ...(inputs.module.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: inputs.module.partialScheduleOrder }),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/partial-schedule-db.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 ice hockey"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-cross-group-draws-unread",
+  "file": "apps/web/src/server/engine-db/competition.ts",
+  "find": "  return crossGroupRulesOf(toTableStage(inputs, await loadLotsDraws(tx, stageId)));",
+  "replace": "  return crossGroupRulesOf(toTableStage(inputs, new Map()));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "crossGroup"
+   }
+  ]
+ },
+ {
+  "id": "t12-public-fewest-played-unlabelled",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "  fewest_played: \"table.tieBreak.fewest_played\",\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view.test.ts"
+    ],
+    "name": "X-TB-8 every key"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-completed-stage-drops-cross-group",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "  return { pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) };",
+  "replace": "  return { pools, ...(bracket ? { bracket } : {}) /*MUT*/ };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup, the whole way: a stage SAVE"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup seedNextStage: best-Nth seats"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-proposal-drops-cross-group",
+  "file": "apps/web/src/server/usecases/stage-seeding.ts",
+  "find": "    tables.push({ pools, ...(bracket ? { bracket } : {}), ...(crossGroup ? { crossGroup } : {}) });",
+  "replace": "    tables.push({ pools, ...(bracket ? { bracket } : {}) /*MUT*/ });",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup, the whole way: the setup-timing proposal"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup computeSeedProposal: the setup-timing proposal"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-seed-next-stage-draw-not-stored",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    await persistCrossGroupDraws(tx, resolvedSources, newLotsDraws);",
+  "replace": "    /*MUT*/ void newLotsDraws;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup seedNextStage: a cross-group tie only lots"
+   }
+  ]
+ },
+ {
+  "id": "t12-web-proposal-draw-not-stored",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    await persistCrossGroupDraws(tx, resolved, newLotsDraws);",
+  "replace": "    /*MUT*/ void newLotsDraws;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/table-rules-pin.test.ts"
+    ],
+    "name": "X-TB-7 crossGroup computeSeedProposal: a cross-group tie only lots"
+   }
+  ]
+ }
+]

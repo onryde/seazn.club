@@ -37,9 +37,10 @@ import {
   type StageKind,
   type StandingsDelta,
 } from "../../core/types.ts";
+import type { PointsRule } from "../../competition/points.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
-import { boundsFrom, stampAttributionRequired } from "../../sport/module.ts";
+import { SET_SCORE_KEY, boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import {
   personsForEntrant,
@@ -1522,6 +1523,11 @@ export interface SetBasedPreset {
   // shared comparator registry (PROMPT-08) resolves them uniformly.
   unitLabel: { one: string; many: string };
   defaultTiebreakers: TiebreakerKey[];
+  // W2d (spec §5.10, OC1) — a Swiss stage's order, unchanged by W2d (W3 owns Swiss orders); `defaultTiebreakers` above is
+  // the round-robin, league and group order. Required, so a new sport states both.
+  swissTiebreakers: TiebreakerKey[];
+  // W2d (D11; X-TB-3) — the module's `primaryTableKey`; stated per sport (volleyball and badminton rank on wins).
+  primaryTableKey: "points" | "wins";
   officialLabel: { scorer: string };
   coarseEventType: "set.summary" | "game.summary";
   /**
@@ -1557,6 +1563,13 @@ export interface SetBasedPreset {
    */
   serve: SetBasedServeRotation;
   entrantModel?: EntrantModel;
+  // W2d (D6, X-WO-1 amended) — the sport's laws book an unplayed match as a loss (table tennis, PS-7a); omitted = no.
+  declaresUnplayedLoss?: true;
+  /**
+   * W2d (spec §5.3, §5.10; D6, D10(a)) — the sport's own table points where they are not its `pointsMap` read as a rule
+   * (`fromMap`, `setBasedPointsMapRule`): volleyball's explicit FIVB maps, table tennis's 2/1/0. Omitted = `fromMap`.
+   */
+  tablePointsRule?: (cfg: SetBasedCfg, fromMap: PointsRule) => PointsRule;
   // W4 (#407) — which interruptions THIS sport's scoresheet carries. A sport
   // that does not declare one refuses the event outright rather than silently
   // recording a fact its laws have no concept of (badminton has no timeouts
@@ -2186,6 +2199,15 @@ function mergePlayerStats(
 export type SetBasedModule = SportModule<SetBasedCfg, SetBasedEv, SetBasedState> &
   SetBasedServeSource;
 
+/** Same keys, same pairs: a cfg's `pointsMap` is a shipped map (whatever order its keys were written in). */
+export function samePointsMap(a: Readonly<Record<string, PointsPair>>, b: Readonly<Record<string, PointsPair>>): boolean {
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((k) => Object.hasOwn(b, k) && a[k]![0] === b[k]![0] && a[k]![1] === b[k]![1])
+  );
+}
+
 export function makeSetBasedModule(
   preset: SetBasedPreset,
   /** The module this call returns, as the caller's own binding (`makeSetBasedModule({...}, () => volleyball)`, as tennis
@@ -2291,9 +2313,18 @@ export function makeSetBasedModule(
         }
       : undefined;
 
-  // A bye's points = a clean-sweep win pair: "*" (or the first entry). A forfeit pays its credited score (X-WO-1).
+  // A bye's points = a clean-sweep win pair: "*" (or the first set-score entry: a key that is no set score is never
+  // read, review N-1). A forfeit pays its credited score (X-WO-1).
   const cleanSweepPair = (cfg: SetBasedCfg): PointsPair =>
-    cfg.pointsMap["*"] ?? Object.values(cfg.pointsMap)[0] ?? [1, 0];
+    cfg.pointsMap["*"] ?? Object.entries(cfg.pointsMap).find(([key]) => SET_SCORE_KEY.test(key))?.[1] ?? [1, 0];
+
+  // W2d Task 10 (Task 8 carry 2): the pairs the table can PAY — those under a set-score key (`SET_SCORE_KEY`), the only
+  // keys `matchPoints` and `cleanSweepPair` read. A map that prices none is read whole, as before: it pays no match at all
+  // (`matchPoints` refuses each), so its bounds are never consulted on a payout, and a tolerant read must not throw.
+  const pricedPairs = (cfg: SetBasedCfg): readonly PointsPair[] => {
+    const priced = Object.entries(cfg.pointsMap).filter(([key]) => SET_SCORE_KEY.test(key)).map(([, pair]) => pair);
+    return priced.length > 0 ? priced : Object.values(cfg.pointsMap);
+  };
 
   // pointsMap lookup for a decided match: exact "W-L", else "*".
   const matchPoints = (cfg: SetBasedCfg, winnerSets: number, loserSets: number): PointsPair => {
@@ -2302,6 +2333,46 @@ export function makeSetBasedModule(
     const wildcard = cfg.pointsMap["*"];
     if (wildcard !== undefined) return wildcard;
     invalid(`no pointsMap entry for set score ${winnerSets}-${loserSets}`);
+  };
+
+  /** The final set scores `bestOf` can end on: the winner's majority against each losing count below it. */
+  const finalSetScores = (cfg: SetBasedCfg): `${number}-${number}`[] => {
+    const won = majority(cfg.bestOf);
+    return Array.from({ length: won }, (_, lost) => `${won}-${lost}` as const);
+  };
+
+  /**
+   * W2d (spec §5.3; X-PT-2, D10(a)) — `pointsMap` as a table points rule that pays exactly what `standingsDelta` pays: a
+   * flat map (one distinct pair, under "*") as it stands; any other map spelled out for every final score `bestOf` can
+   * end (its exact pair, else "*"), because `coverage` counts "*" toward no score of a map that pays two pairs. A score
+   * the map prices neither way stays out, so `coverage` names it (`standingsDelta` throws on it). The win and the loss
+   * pay the clean-sweep pair, a bye's. A key that is no set score ("W-L" or "*", `SET_SCORE_KEY`) is one the payer never
+   * reads (`matchPoints` for a match, `cleanSweepPair` for a bye) and PointsRule refuses: skipped. A map left pricing no
+   * score at all is refused, as the payer refuses its every match (review M-4, N-1).
+   */
+  const setBasedPointsMapRule = (cfg: SetBasedCfg, storedKeys: readonly string[]): PointsRule => {
+    const map = cfg.pointsMap;
+    if (Object.keys(map).length === 0) {
+      throw new EngineError("CONFIG_INVALID", "pointsMap prices no set score: name a \"W-L\" score or \"*\"", { keys: [...storedKeys] });
+    }
+    const flat = new Set(Object.values(map).map(([w, l]) => `${w}:${l}`)).size <= 1 && Object.hasOwn(map, "*");
+    const bySetScore: Record<string, PointsPair> = {};
+    // A flat map stays as it stands: `bySetScore` left empty takes the map itself below.
+    if (!flat) {
+      for (const score of finalSetScores(cfg)) {
+        const pair = map[score] ?? map["*"];
+        if (pair !== undefined) bySetScore[score] = pair;
+      }
+    }
+    const [win, loss] = cleanSweepPair(cfg);
+    return {
+      win: { regulation: win },
+      loss: { regulation: loss },
+      shootoutAs: "result",
+      bySetScore: Object.keys(bySetScore).length > 0 ? bySetScore : { ...map },
+      unit: "whole",
+      bonuses: [],
+    };
   };
 
   const sideMetrics = (state: SetBasedState, side: Side): Record<string, number> => ({
@@ -2601,10 +2672,28 @@ export function makeSetBasedModule(
     },
 
     metrics: makeMetrics(preset.unitLabel),
-    defaultTiebreakers: preset.defaultTiebreakers,
+    defaultTiebreakers: (kind) => [...(kind === "swiss" ? preset.swissTiebreakers : preset.defaultTiebreakers)],
+    primaryTableKey: preset.primaryTableKey,
 
     supportsDraws(_cfg, _stage: StageKind) {
       return false;
+    },
+    // W2d (spec §5.2; X-PT-2) — a match is won on sets, in regulation, and never ends level (`supportsDraws` above).
+    ...winMethodTable(preset.key, { regulation: "regulation" }),
+    reachableDecidedIn: () => new Set<DecidedIn>(["regulation"]),
+    reachableResultKinds: () => new Set<"draw" | "tie" | "noResult">(),
+    // The table pays by set score (`pointsMap`): the winner's majority of `bestOf` against each losing count below it.
+    reachableSetScores: (cfg) => finalSetScores(cfg),
+    shootoutAs: "result",
+    ...(preset.declaresUnplayedLoss === true ? { declaresUnplayedLoss: true as const } : {}),
+    // W2d (spec §5.3) — the `pointsMap` as a rule, paying what `standingsDelta` pays (X-PT-2), unless the sport declares
+    // its own (`preset.tablePointsRule`).
+    tablePointsRule: (cfg) => {
+      // A key that is no set score is skipped before anything reads the map (review M-4): the sport's own table reads
+      // the map the payer prices, so the shipped map with a stray key is still the shipped map.
+      const priced = { ...cfg, pointsMap: Object.fromEntries(Object.entries(cfg.pointsMap).filter(([key]) => SET_SCORE_KEY.test(key))) };
+      const fromMap = setBasedPointsMapRule(priced, Object.keys(cfg.pointsMap)); // the refusal names the keys stored
+      return preset.tablePointsRule === undefined ? fromMap : preset.tablePointsRule(priced, fromMap);
     },
 
     // W2a: none — a set-based match always produces a winner (spec §5.2)
@@ -2613,11 +2702,11 @@ export function makeSetBasedModule(
     // §9.3 — every decided fixture pays a pointsMap value-sum (a forfeit pays its
     // credited score's pair, a bye the clean-sweep pair — both pointsMap values).
     declaredPointsSets(cfg) {
-      return [...new Set(Object.values(cfg.pointsMap).map(([w, l]) => w + l))];
+      return [...new Set(pricedPairs(cfg).map(([w, l]) => w + l))];
     },
 
     matchPointsBounds(cfg) {
-      const pairs = Object.values(cfg.pointsMap) as readonly (readonly [number, number])[];
+      const pairs = pricedPairs(cfg) as readonly (readonly [number, number])[];
       return boundsFrom(pairs.map((p) => p[0]), pairs.map((p) => p[1]));
     },
 

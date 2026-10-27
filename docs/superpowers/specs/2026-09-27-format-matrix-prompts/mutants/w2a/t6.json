@@ -137,8 +137,8 @@
   {
     "id": "competition-delta-kind-dropped",
     "file": "apps/web/src/server/engine-db/competition.ts",
-    "find": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f,\n          division.config,\n          { kind: stage.kind, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        f.state,",
-    "replace": "        f.outcome as MatchOutcome,\n        resolveFixtureCfg(\n          f,\n          division.config,\n          { kind: null, config: stage.config as Record<string, unknown> | null },\n          sportModule,\n        ),\n        ctx,\n        f.state,",
+    "find": "      const fixtureCfg = resolveFixtureCfg(\n        f,\n        division.config,\n        { kind: stage.kind, config: stage.config as Record<string, unknown> | null },\n        sportModule,\n      );",
+    "replace": "      const fixtureCfg = resolveFixtureCfg(\n        f,\n        division.config,\n        { kind: null, config: stage.config as Record<string, unknown> | null },\n        sportModule,\n      );",
     "killers": [
       {
         "cwd": "apps/web",
