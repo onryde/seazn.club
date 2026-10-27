@@ -1,33 +1,34 @@
 "use client";
 
-// W2c Task 18 (S3, ST-G8; owner pick A on mockup S3) - a table stage's OWN points: win / draw / loss as a sentence, the
-// walkover row and bonuses behind "More", and a live preview in the public line's words. It sits beside the stage format
-// row (its own PUT arm, `{points}`) and follows the same lock: a started stage, or a viewer, reads it and cannot change it.
+// W2c Task 18 (S3, ST-G8; owner pick A on mockup S3) - a table stage's OWN points, with the walkover row and bonuses behind
+// "More" and a live preview in the public line's words. It sits beside the stage format row (its own PUT arm, `{points}`)
+// and follows the same lock: a started stage, or a viewer, reads it and cannot change it.
+//
+// W2d Task 16 (spec §9 "Points section, widened"): ONE ROW PER OUTCOME THE STAGE CAN REACH (`pointsRows` over the engine's
+// `reachableOutcomes`) — overtime and shoot-out rows, B2's "after a shoot-out: counts as a draw; the winner gets +[1]",
+// a row per set score where the rule pays a set table, a loss not played (ITTF), a tie and a no result (ICC) — and the
+// sport's preset chips (`tablePresets`). The editor says every split, so W2d Task 10 fix round 1 I2's "can't be set per
+// stage yet" state is gone: what the server would refuse (POINTS_OUTCOME_UNCOVERED, POINTS_SPLIT_FLATTENED) is said
+// inline, in its own words, before Save (`draftRefusal`). Only a stage whose sport rule cannot be read at all (a cfg the
+// sport refuses) is fail-closed, with no inputs.
 //
 // WHAT IT OFFERS IS WHAT THE SERVER TAKES (every question is `stage-points-model.ts`'s, which asks the engine):
-//   - the editor's boxes are a FLAT rule (one amount per win and per loss), so a stage whose sport pays an outcome its own
-//     way (IIHF's overtime 2/1, FIVB's 3-2, ICC's tie and no result, ITTF's loss not played, FIH's shoot-out bonus) gets
-//     "can't be set per stage yet" with the reason and NO inputs (W2d Task 10 fix round 1, I2, owner 2026-10-26:
-//     `pointsEditorFits`, over the engine's payout) - a Save there would flatten that outcome onto the win or the loss. A
-//     rule the stage STORES anyway is read beside the reason, with "Use the division's points" to clear it (`{points:
-//     null}` flattens nothing). The server refuses a flat rule there too (POINTS_SPLIT_FLATTENED), as defence in depth;
-//   - everywhere else, the editor; a rule that does not pay every outcome the stage reaches is refused by the server
-//     (POINTS_OUTCOME_UNCOVERED), said in its own words beside the inputs;
-//   - scoring is free on every plan (owner, 2026-10-19: "all scoring are free", V393 gives community `custom_points`), so
-//     the section asks no plan question; the server's gate stays and a 402 is said in the server's own words;
-//   - the walkover SCORE is shown only where the sport's table reads it (batch-3 I3: the server REFUSES it elsewhere, so a
-//     shown input there would be a save that fails);
+//   - scoring is free on every plan (owner, 2026-10-19), so the section asks no plan question; a 402 is said in the
+//     server's own words;
+//   - the walkover SCORE is shown only where the sport's table reads it (batch-3 I3);
 //   - bonus kinds are those the sport's metrics can feed.
 // Save sends ONLY `{points}`: the endpoint's body is strict, and an omitted `rules` arm is left as stored.
 //
 // W2d final review I1 (controller ruling, 2026-10-26): a stage PINNED at generate pays its pin, and a division points save
 // after that lands but never reaches it. With no rule of its own, such a stage's card says and previews the PIN's points,
-// in words that say they were fixed when it started ("stagePoints.startedPoints"), and its editor prefills from the pin -
-// never "the division's points" over a number the table does not pay. An unpinned stage reads the live division, as before.
+// in words that say they were fixed when it started ("stagePoints.startedPoints"), its checkbox reads "Keep the points it
+// started with" (PR B carry: never "Use the division's points" over a number the table does not pay), and its editor
+// prefills from the pin. An unpinned stage reads the live layers.
 import { Fragment, useState, type ReactNode } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
 import { PhoneDisclosure } from "@/components/v2/phone-disclosure";
+import type { OutcomeKey } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { Dict } from "@/lib/i18n-constants";
 import type { MessageKey } from "@/lib/messages";
@@ -35,19 +36,24 @@ import { ruleRefusalText } from "@/lib/rule-errors";
 import { rulesLineText } from "@/lib/rules-line";
 import {
   PARAM_BONUS_KINDS,
-  divisionBasePoints,
   draftFromStored,
   draftIsDirty,
+  draftOfPreset,
+  draftRefusal,
   offeredBonusKinds,
   offersWalkoverScore,
   pinInForce,
   pointsBasis,
-  pointsEditorFits,
+  pointsPresets,
+  pointsRows,
+  presetActive,
   previewClauses,
   ruleFromDraft,
+  stagePointsContext,
   storedPointsRule,
   type BonusWhen,
   type PointsDraft,
+  type PointsRow,
 } from "./stage-points-model";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -102,6 +108,56 @@ export function failureText(err: unknown, msg: Msg): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+/** A number in points as a reader writes it: a half as "½" (chess's 1½, spec §9), never "1.5". */
+export function pointsText(n: number): string {
+  const whole = Math.trunc(n);
+  if (Math.abs(n - whole) !== 0.5) return String(n);
+  return `${n < 0 && whole === 0 ? "-" : ""}${whole === 0 ? "" : whole}½`;
+}
+
+/** The row's words, each outcome key its own message: the dictionary holds one entry per key. */
+const ROW_LABEL: Record<Exclude<OutcomeKey, `set:${string}`>, MessageKey> = {
+  "win.regulation": "stagePoints.row.win",
+  "win.ot": "stagePoints.row.winOt",
+  "win.so": "stagePoints.row.winSo",
+  "loss.regulation": "stagePoints.row.loss",
+  "loss.ot": "stagePoints.row.lossOt",
+  "loss.so": "stagePoints.row.lossSo",
+  "loss.unplayed": "stagePoints.row.lossUnplayed",
+  draw: "stagePoints.row.draw",
+  tie: "stagePoints.row.tie",
+  noResult: "stagePoints.row.noResult",
+};
+const isSetRow = (key: OutcomeKey): key is `set:${number}-${number}` => key.startsWith("set:");
+const setScore = (key: `set:${number}-${number}`): string => key.slice("set:".length);
+const rowTestId = (key: OutcomeKey): string => `stage-points-row-${key.replace(/[.:]/g, "-")}`;
+
+/** The rows as words: what the stage plays (read-only, inheriting, or a viewer). */
+function RowsList({ rows, unit, msg }: { rows: readonly PointsRow[]; unit: "whole" | "half"; msg: Msg }) {
+  const shown = rows.filter((r) => r.shown);
+  if (shown.length === 0) return null;
+  const pts = (n: number) => pointsText(unit === "half" ? n / 2 : n);
+  return (
+    <ul className="divide-y divide-slate-100 rounded-md border border-slate-200 bg-white text-sm text-slate-800" data-testid="stage-points-rows">
+      {shown.map((r) => {
+        let words: string;
+        if (isSetRow(r.key)) {
+          words = msg("stagePoints.row.set", { score: setScore(r.key), w: r.pair === null ? "—" : pts(r.pair[0]), l: r.pair === null ? "—" : pts(r.pair[1]) });
+        } else if (r.drawPlusBonus !== null) {
+          words = msg("stagePoints.row.soDraw", { bonus: pts(r.drawPlusBonus) });
+        } else {
+          words = `${msg(ROW_LABEL[r.key])}: ${r.value === null ? "—" : pts(r.value)}`;
+        }
+        return (
+          <li key={r.key} className="px-3 py-2" data-testid={rowTestId(r.key)} data-uncovered={r.value === null ? "true" : undefined}>
+            {words}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
 interface Saved {
   /** The row's `stage.config.points` prop when the save landed: while the prop is still this value the page has not
    *  re-read the stage since, and `points` is newer than it (the stage rules row's `SavedStageRules` pattern). */
@@ -123,7 +179,7 @@ export function StagePointsSection({
 }: {
   stageId: string;
   module: AnySportModule;
-  /** The stage's kind and its own config (its `rules` move the outcomes it reaches): what the editor is asked to fit. */
+  /** The stage's kind and its own config (its `rules` move the outcomes it reaches): the rows the editor shows. */
   kind: string;
   stageConfig: unknown;
   divisionConfig: Record<string, unknown>;
@@ -139,26 +195,25 @@ export function StagePointsSection({
   onSaved: () => void;
 }) {
   const msg = useMsg();
+  const stage = { kind, config: stageConfig };
   const [saved, setSaved] = useState<Saved | null>(null);
   const unread = saved !== null && saved.against === stored;
   const inForce = unread ? saved.points : stored;
   // I1: the pin as old as the page's props. Until the page re-reads after a save it says nothing: a cleared rule was re-pinned
-  // to the live division (`repinStageOwnRules`), and an own rule outranks any pin.
+  // to the live layers (`repinStageOwnRules`), and an own rule outranks any pin.
   const pin = pinInForce(inForce, unread ? null : pinned);
   const basis = pointsBasis(inForce, pin);
-  const [draft, setDraft] = useState<PointsDraft>(() => draftFromStored(module, divisionConfig, stored, pinned));
+  const [draft, setDraft] = useState<PointsDraft>(() => draftFromStored(module, divisionConfig, stored, pinned, stage));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const fit = pointsEditorFits(module, divisionConfig, { kind, config: stageConfig });
+  const ctx = stagePointsContext(module, divisionConfig, stage);
 
-  const heading = (
-    <span className="text-xs font-semibold text-slate-800">{msg("stagePoints.title")}</span>
-  );
+  const heading = <span className="text-xs font-semibold text-slate-800">{msg("stagePoints.title")}</span>;
   const shell = (children: ReactNode) => (
     <section
       aria-label={msg("stagePoints.title")}
       data-testid={`stage-points-${stageId}`}
-      data-stage-points-state={!fit.fits ? "inexpressible" : readOnly ? "readonly" : "editor"}
+      data-stage-points-state={ctx === null ? "inexpressible" : readOnly ? "readonly" : "editor"}
       data-stage-points-basis={basis}
       className="border-b border-slate-100 px-4 py-3"
     >
@@ -169,7 +224,7 @@ export function StagePointsSection({
   const ownRule = storedPointsRule(inForce);
   const preview = (d: PointsDraft): string => {
     if (pointsDict === undefined) return "";
-    const clauses = previewClauses(module, divisionConfig, d, pin);
+    const clauses = previewClauses(module, divisionConfig, d, pin, stage);
     return clauses.length === 0 ? "" : rulesLineText(pointsDict, clauses);
   };
 
@@ -182,8 +237,8 @@ export function StagePointsSection({
       const out = await apiV1<{ points?: unknown }>(`/api/v1/stages/${stageId}/rules`, { method: "PUT", json: { points } });
       const landed = out.points ?? null;
       setSaved({ against: stored, points: landed });
-      // No pin: a cleared rule now plays the live division (the re-pin), an own one itself.
-      setDraft(draftFromStored(module, divisionConfig, landed));
+      // No pin: a cleared rule now plays the live layers (the re-pin), an own one itself.
+      setDraft(draftFromStored(module, divisionConfig, landed, null, stage));
       onSaved();
     } catch (err) {
       setError(failureText(err, msg));
@@ -192,12 +247,10 @@ export function StagePointsSection({
     }
   }
 
-  // Fix round 1 I2: the reason, in the reader's words, and no inputs. A rule the stage STORES anyway is not hidden behind the
-  // reason (it is what the stage plays): it is read, and an editable stage can clear it - the one change that flattens
-  // nothing. The server stays the authority (a flat rule there is POINTS_SPLIT_FLATTENED).
-  if (!fit.fits) {
-    const reason = ruleRefusalText("POINTS_SPLIT_FLATTENED", { splits: fit.reasons }, msg);
-    const own = ownRule === null ? "" : preview(draftFromStored(module, divisionConfig, inForce));
+  // Fail-closed: the sport cannot read this stage's cfg, so there is no rule and no outcome to ask. The general sentence and
+  // no inputs; a rule the stage STORES anyway is read, and an editable stage can clear it (`{points: null}`).
+  if (ctx === null) {
+    const own = ownRule === null ? "" : preview(draftFromStored(module, divisionConfig, inForce, null, stage));
     return shell(
       <div className="space-y-2">
         {heading}
@@ -206,7 +259,7 @@ export function StagePointsSection({
           data-testid="stage-points-inexpressible"
           className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs leading-snug text-slate-700"
         >
-          {reason ?? msg("stagePoints.inexpressible")}
+          {msg("stagePoints.inexpressible")}
         </p>
         {ownRule !== null && (
           <div className="space-y-2">
@@ -240,15 +293,20 @@ export function StagePointsSection({
     );
   }
 
+  /** What the stage plays now: its own rule, its pin's, else the sport's own for the stage. */
+  const playing = ownRule ?? pin ?? ctx.rule;
+  const playingRows = pointsRows(ctx.reachable, playing);
+
   // A started stage, or a viewer: what the stage plays, in words. No control.
   if (readOnly) {
-    const text = preview(draftFromStored(module, divisionConfig, inForce, pin));
+    const text = preview(draftFromStored(module, divisionConfig, inForce, pin, stage));
     return shell(
-      <div className="space-y-1">
+      <div className="space-y-2">
         {heading}
         <p className="text-xs text-slate-600" data-testid="stage-points-readonly">
           {msg(basis === "own" ? "stagePoints.ownPoints" : basis === "pin" ? "stagePoints.startedPoints" : "stagePoints.divisionPoints")}
         </p>
+        <RowsList rows={playingRows} unit={playing.unit} msg={msg} />
         {text !== "" && (
           <p className="text-xs text-slate-700" data-testid="stage-points-preview">
             {text}
@@ -261,24 +319,128 @@ export function StagePointsSection({
   const patch = (p: Partial<PointsDraft>) => setDraft((d) => ({ ...d, ...p }));
   const built = ruleFromDraft(module, draft);
   const problem = built.ok ? null : built.problem;
+  const refusal = draftRefusal(module, divisionConfig, stage, draft);
+  const refusalText =
+    refusal === null
+      ? null
+      : refusal.code === "POINTS_OUTCOME_UNCOVERED"
+        ? ruleRefusalText(refusal.code, { uncovered: refusal.uncovered }, msg)
+        : ruleRefusalText(refusal.code, { splits: refusal.splits }, msg);
   const dirty = draftIsDirty(module, draft, inForce);
-  const canDraw = divisionBasePoints(module, divisionConfig).draw !== null;
   const previewText = preview(draft);
   const reaches = offersWalkoverScore(module);
+  const presets = pointsPresets(module, kind);
+  // The rows' shape (which are shown) is the draft's rule where it is one, else what the stage plays: the draft never
+  // changes a rule's shape except through a preset, which is always a rule.
+  const editRows = pointsRows(ctx.reachable, built.ok && built.rule !== null ? built.rule : playing);
 
   const save = () => {
-    if (built.ok) void write(built.rule);
+    if (built.ok && refusal === null) void write(built.rule);
   };
 
-  const baseBoxes = (
-    <p className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-slate-800" data-testid="stage-points-sentence">
-      {slotted(msg, canDraw ? "stagePoints.sentence" : "stagePoints.sentenceNoDraw", {
-        win: <NumberBox value={draft.win} onChange={(win) => patch({ win })} label={msg("stagePoints.win")} testId="stage-points-win" disabled={saving} />,
-        draw: <NumberBox value={draft.draw} onChange={(draw) => patch({ draw })} label={msg("stagePoints.draw")} testId="stage-points-draw" disabled={saving} />,
-        loss: <NumberBox value={draft.loss} onChange={(loss) => patch({ loss })} label={msg("stagePoints.loss")} testId="stage-points-loss" disabled={saving} />,
-      })}
-    </p>
+  const box = (field: keyof PointsDraft & string, testId: string, label: string, placeholder?: string) => (
+    <NumberBox
+      value={draft[field] as string}
+      onChange={(raw) => patch({ [field]: raw } as Partial<PointsDraft>)}
+      label={label}
+      testId={testId}
+      disabled={saving}
+      placeholder={placeholder}
+    />
   );
+  const setBox = (score: string, side: 0 | 1) => {
+    const label = msg(side === 0 ? "stagePoints.row.setW" : "stagePoints.row.setL", { score });
+    return (
+      <NumberBox
+        value={draft.sets[score]?.[side] ?? ""}
+        onChange={(raw) => {
+          const pair: [string, string] = [...(draft.sets[score] ?? ["", ""])] as [string, string];
+          pair[side] = raw;
+          patch({ sets: { ...draft.sets, [score]: pair } });
+        }}
+        label={label}
+        testId={`stage-points-set-${score}-${side === 0 ? "w" : "l"}`}
+        disabled={saving}
+        placeholder={side === 0 ? draft.win : draft.loss}
+      />
+    );
+  };
+
+  /** One editable row: its words and its box(es). */
+  const editRow = (r: PointsRow): ReactNode => {
+    if (isSetRow(r.key)) {
+      const score = setScore(r.key);
+      return slotted(msg, "stagePoints.row.set", { w: setBox(score, 0), l: setBox(score, 1) }, { score });
+    }
+    if (r.drawPlusBonus !== null) {
+      return slotted(msg, "stagePoints.row.soDraw", { bonus: box("soBonus", "stage-points-so-bonus", msg("stagePoints.row.soBonus"), "1") });
+    }
+    const label = msg(ROW_LABEL[r.key]);
+    const field: Record<Exclude<OutcomeKey, `set:${string}`>, [keyof PointsDraft & string, string, string | undefined]> = {
+      "win.regulation": ["win", "stage-points-win", undefined],
+      "win.ot": ["winOt", "stage-points-win-ot", draft.win],
+      "win.so": ["winSo", "stage-points-win-so", draft.winOt || draft.win],
+      "loss.regulation": ["loss", "stage-points-loss", undefined],
+      "loss.ot": ["lossOt", "stage-points-loss-ot", draft.loss],
+      "loss.so": ["lossSo", "stage-points-loss-so", draft.lossOt || draft.loss],
+      "loss.unplayed": ["lossUnplayed", "stage-points-loss-unplayed", draft.loss],
+      draw: ["draw", "stage-points-draw", undefined],
+      tie: ["tie", "stage-points-tie", undefined],
+      noResult: ["noResult", "stage-points-no-result", "0"],
+    };
+    const [name, testId, placeholder] = field[r.key];
+    return (
+      <>
+        <span className="min-w-0 flex-1">{label}</span>
+        {box(name, testId, label, placeholder)}
+      </>
+    );
+  };
+
+  const rowsEditor = (
+    <ul className="divide-y divide-slate-200/70 text-sm text-slate-800" data-testid="stage-points-rows">
+      {editRows
+        .filter((r) => r.shown)
+        .map((r) => {
+          const uncovered = built.ok && r.value === null;
+          return (
+            <li
+              key={r.key}
+              data-testid={rowTestId(r.key)}
+              data-uncovered={uncovered ? "true" : undefined}
+              className={`flex flex-wrap items-center gap-x-2 gap-y-1 py-1.5 ${uncovered ? "text-red-700" : ""}`}
+            >
+              {editRow(r)}
+            </li>
+          );
+        })}
+    </ul>
+  );
+
+  const presetChips =
+    presets.length === 0 ? null : (
+      <div className="flex flex-wrap items-center gap-2" role="group" aria-label={msg("stagePoints.presets")} data-testid="stage-points-presets">
+        <span className="text-xs text-slate-600">{msg("stagePoints.presets")}</span>
+        {presets.map((p) => {
+          const on = presetActive(module, draft, p.rule);
+          return (
+            <button
+              key={p.id}
+              type="button"
+              aria-pressed={on}
+              data-testid={`stage-points-preset-${p.id}`}
+              disabled={saving}
+              onClick={() => setDraft(draftOfPreset(module, divisionConfig, stage, p.rule))}
+              className={`min-h-11 rounded-full border px-3 text-xs font-medium ${
+                on ? "border-purple-700 bg-purple-700 text-white" : "border-slate-300 bg-white text-slate-700 hover:border-purple-400"
+              }`}
+            >
+              {msg(`stagePoints.preset.${p.id}` as MessageKey)}
+            </button>
+          );
+        })}
+      </div>
+    );
 
   const offered = offeredBonusKinds(module, divisionConfig);
   const addBonus = (when: BonusWhen) => patch({ bonuses: [...draft.bonuses, { when, param: "", points: "" }] });
@@ -290,33 +452,15 @@ export function StagePointsSection({
       <div className="space-y-2" data-testid="stage-points-walkover">
         <p className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-slate-800">
           {slotted(msg, "stagePoints.walkover", {
-            w: (
-              <NumberBox
-                value={draft.walkoverW}
-                onChange={(walkoverW) => patch({ walkoverW })}
-                label={msg("stagePoints.walkoverW")}
-                testId="stage-points-walkover-w"
-                disabled={saving}
-                placeholder={draft.win}
-              />
-            ),
-            l: (
-              <NumberBox
-                value={draft.walkoverL}
-                onChange={(walkoverL) => patch({ walkoverL })}
-                label={msg("stagePoints.walkoverL")}
-                testId="stage-points-walkover-l"
-                disabled={saving}
-                placeholder={draft.loss}
-              />
-            ),
+            w: box("walkoverW", "stage-points-walkover-w", msg("stagePoints.walkoverW"), draft.win),
+            l: box("walkoverL", "stage-points-walkover-l", msg("stagePoints.walkoverL"), draft.loss),
           })}
         </p>
         {reaches && (
           <p className="flex flex-wrap items-center gap-x-2 gap-y-2 text-sm text-slate-800" data-testid="stage-points-award">
             {slotted(msg, "stagePoints.walkoverScore", {
-              w: <NumberBox value={draft.awardW} onChange={(awardW) => patch({ awardW })} label={msg("stagePoints.awardW")} testId="stage-points-award-w" disabled={saving} />,
-              l: <NumberBox value={draft.awardL} onChange={(awardL) => patch({ awardL })} label={msg("stagePoints.awardL")} testId="stage-points-award-l" disabled={saving} />,
+              w: box("awardW", "stage-points-award-w", msg("stagePoints.awardW")),
+              l: box("awardL", "stage-points-award-l", msg("stagePoints.awardL")),
             })}
           </p>
         )}
@@ -391,7 +535,8 @@ export function StagePointsSection({
             disabled={saving}
             onChange={(e) => patch({ useDivision: e.target.checked })}
           />
-          {msg("stagePoints.useDivision")}
+          {/* PR B carry: a pinned stage with no rule of its own plays its PIN, not the division's points. */}
+          {msg(basis === "pin" ? "stagePoints.keepStarted" : "stagePoints.useDivision")}
         </label>
       </div>
 
@@ -400,6 +545,8 @@ export function StagePointsSection({
           {msg("stagePoints.startedPoints")}
         </p>
       )}
+
+      {draft.useDivision && <RowsList rows={playingRows} unit={playing.unit} msg={msg} />}
 
       {previewText !== "" && (
         <p
@@ -412,7 +559,8 @@ export function StagePointsSection({
 
       {!draft.useDivision && (
         <div className="space-y-3 rounded-lg border border-slate-200 bg-slate-50/60 px-3 py-3">
-          {baseBoxes}
+          {presetChips}
+          {rowsEditor}
           <PhoneDisclosure
             summary={msg("stagePoints.more")}
             showLabel={msg("stagePoints.moreShow")}
@@ -429,13 +577,19 @@ export function StagePointsSection({
         </p>
       )}
 
+      {refusalText !== null && !draft.useDivision && (
+        <p role="alert" className="text-xs text-red-600" data-testid="stage-points-refusal">
+          {refusalText}
+        </p>
+      )}
+
       {(dirty || !draft.useDivision) && (
         <div className="flex flex-wrap items-center gap-3">
           <button
             type="button"
             className="btn btn-primary min-h-11 px-3 py-1.5 text-xs"
             data-testid="stage-points-save"
-            disabled={saving || !dirty || problem !== null}
+            disabled={saving || !dirty || problem !== null || refusal !== null}
             onClick={save}
           >
             {saving ? msg("schedule.working") : msg("stagePoints.save")}

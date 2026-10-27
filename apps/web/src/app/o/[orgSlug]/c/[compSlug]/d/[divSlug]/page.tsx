@@ -14,7 +14,7 @@ import { requireDivisionPage } from "@/server/page-auth";
 import { getDivision, listVariantOptions } from "@/server/usecases/divisions";
 import { divisionConsumesSlotOnArchive } from "@/server/usecases/division-slots";
 import { getCompetition } from "@/server/usecases/competitions";
-import { listStages, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
+import { listStages, listStagesWithTableRules, getStandings, getSeedProposal, getStageRosterDrift } from "@/server/usecases/stages";
 import { listPinnedStagePoints, listStageQualificationMeta, type StageQualMetaRow } from "@/server/usecases/stage-qualification";
 import { stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
 import { divisionQualification, qualificationFixtures } from "@/server/public-site/division-qualification";
@@ -444,6 +444,14 @@ export default async function DivisionPage({
   // Read for the stages the card is mounted on (`stageTakesPoints`), for an organiser and a viewer alike (both see it).
   const pinnedStagePoints =
     tab === "fixtures" ? await listPinnedStagePoints(auth, stages.filter((s) => stageTakesPoints(s.kind)).map((s) => s.id)) : {};
+  // W2d Task 15: each table stage's tie-break order as GET /divisions/{id}/stages serves it (the one loader, Task 13) — the
+  // Tie-breaks section's order, source, pin and sport default. A stage whose rules do not read is absent (no section).
+  const stageTableRules =
+    tab === "fixtures"
+      ? Object.fromEntries(
+          (await listStagesWithTableRules(auth, id)).flatMap((s) => (s.tableRules !== null && stageTakesPoints(s.kind) ? [[s.id, s.tableRules] as const] : [])),
+        )
+      : {};
   const stageNames = Object.fromEntries(stages.map((s) => [s.id, s.name]));
   // Badge chips on standings rows (v3/03 §5) — resolved once per render.
   // PROMPT-62: the bracket panel on the fixtures tab shows them too.
@@ -917,6 +925,7 @@ export default async function DivisionPage({
               pointsDict={pointsDict}
               formatLockedStageIds={formatLockedStages}
               pinnedStagePoints={pinnedStagePoints}
+              stageTableRules={stageTableRules}
               tz={scheduleSettings.tz}
               // The GOVERNING clock, resolved here exactly as the schedule page
               // resolves it for the board: `ScheduleSettingsWire` serves only

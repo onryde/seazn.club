@@ -882,7 +882,11 @@ test("generic bonus editor: the margin bonuses are offered where the sport feeds
   await expect.poll(async () => ((await storedPoints(request, divisionId, stageId)) as { bonuses: unknown[] } | null)?.bonuses, { timeout: STEP_MS }).toEqual([]);
 });
 
-test("ice hockey: a division that scores overtime separately gets the can't-set-per-stage state - the reason, no input, nothing sent (W2d T10 fix round 1 I2); the server refuses a flat stage rule there; a stored own rule is read beside the reason and clears; the plain variant keeps the editor", async ({ page, request }) => {
+// W2d Task 16 retired fix round 1 I2's "can't be set per stage yet" state: the widened section states every split the sport
+// pays apart (spec §9 "Points section, widened"), so IIHF's overtime is two boxes, a save sends the split, and the server's
+// flat-over-split guard (POINTS_SPLIT_FLATTENED) is said INLINE when a draft would still drop one. The numbers are the
+// rulebook's (IIHF 3-2-1-0: a regulation win 3, an overtime or shoot-out win 2 and its loss 1, a regulation loss 0).
+test("ice hockey (IIHF): the editor states the overtime split - its boxes open at the rulebook's 3/2/1/0, a save sends the split and the server stores it; a box left empty is refused inline before Save; the server still refuses a flat rule; a stored flat rule is said inline and clears; the plain variant keeps the editor", async ({ page, request }) => {
   test.setTimeout(180_000);
   const m = builtinModules.find((x) => x.key === "icehockey")!;
   const variants = Object.keys(m.variants);
@@ -892,7 +896,8 @@ test("ice hockey: a division that scores overtime separately gets the can't-set-
   expect(split, "premise: the rulebooks split an ice-hockey variant (iihf)").toBeDefined();
   expect(plain, "premise: and one they do not").toBeDefined();
   const reasons = RULEBOOK_SPLITS[`icehockey/${split}`]!;
-  // The sentence the product renders, read off the en dictionary (W2c's copy, restored).
+  const IIHF = { win: 3, winOt: 2, lossOt: 1, loss: 0 };
+  // The refusal the product renders, read off the en dictionary.
   const sentence = L["rules.err.pointsRuleInexpressible"]!.replace(
     "{reason}",
     L["rules.err.pointsSplit"]!.replace("{fields}", reasons.map((r) => L[`rules.err.pointsSplit.${r}`]!).join(", ")),
@@ -901,43 +906,65 @@ test("ice hockey: a division that scores overtime separately gets the can't-set-
   await page.goto(await divisionPath(request, a.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
   const section = sectionOf(page, a.stageId);
-  // The editor's boxes are a flat rule: a Save here would pay an overtime win as regulation's. So: the reason, and nothing to send.
-  await expect(section).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: STEP_MS });
-  await expect(section.getByTestId("stage-points-inexpressible")).toHaveText(sentence);
-  await expect(section.locator("input, select, button"), "no control: nothing can be sent").toHaveCount(0);
+  await expect(section).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(section.getByTestId("stage-points-inexpressible"), "the not-yet state is gone").toHaveCount(0);
+  // Inheriting: what the stage plays, row by row - the overtime rows are there.
+  await expect(section.getByTestId("stage-points-row-win-ot")).toContainText(L["stagePoints.row.winOt"]!);
+  await expect(section.getByTestId("stage-points-row-loss-ot")).toContainText(L["stagePoints.row.lossOt"]!);
+  await section.getByTestId("stage-points-use-division").uncheck();
+  await expect(section.getByTestId("stage-points-win")).toHaveValue(String(IIHF.win));
+  await expect(section.getByTestId("stage-points-win-ot")).toHaveValue(String(IIHF.winOt));
+  await expect(section.getByTestId("stage-points-loss-ot")).toHaveValue(String(IIHF.lossOt));
+  await expect(section.getByTestId("stage-points-loss")).toHaveValue(String(IIHF.loss));
+  await expect(section.getByTestId("stage-points-refusal"), "the sport's own split: nothing to refuse").toHaveCount(0);
   await expectNoHorizontalScroll(page);
-  await shootSection(page, section, "split-state");
-  // Defence in depth: the server refuses the flat rule the editor would have sent, typed, and stores nothing.
-  const rule = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, tie: 0, noResult: 0, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] };
-  const refused = await apiJson<unknown>(request, `/api/v1/stages/${a.stageId}/rules`, "PUT", { points: rule });
+  await shootSection(page, section, "split-editor");
+
+  // A box left empty would pay an overtime win as regulation's: the server's refusal, said before Save, and Save is off.
+  await section.getByTestId("stage-points-win-ot").fill("");
+  await expect(section.getByTestId("stage-points-refusal")).toHaveText(sentence);
+  await expect(section.getByTestId("stage-points-save")).toBeDisabled();
+  // Filled again, moved off the sport's numbers: the save sends the split and the server stores it.
+  await section.getByTestId("stage-points-win-ot").fill(String(IIHF.winOt));
+  await section.getByTestId("stage-points-win").fill("4");
+  await expect(section.getByTestId("stage-points-refusal")).toHaveCount(0);
+  const put = nextPointsPut(page, a.stageId);
+  await section.getByTestId("stage-points-save").click();
+  const sent = (await put).postDataJSON() as { points: { win: Record<string, number>; loss: Record<string, number> } };
+  expect([sent.points.win.regulation, sent.points.win.ot, sent.points.loss.ot, sent.points.loss.regulation], "the split is in the body").toEqual([4, IIHF.winOt, IIHF.lossOt, IIHF.loss]);
+  await expect.poll(async () => ((await storedPoints(request, a.divisionId, a.stageId)) as { win?: { ot?: number } } | null)?.win?.ot, { timeout: STEP_MS }).toBe(IIHF.winOt);
+
+  // Defence in depth: the server refuses a flat rule from any other caller, typed, and keeps what is stored.
+  const flat = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, tie: 0, noResult: 0, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] };
+  const refused = await apiJson<unknown>(request, `/api/v1/stages/${a.stageId}/rules`, "PUT", { points: flat });
   expect(refused.status, "a flat rule over IIHF's split").toBe(422);
   expect(refused.error, "typed, naming the splits").toMatchObject({ code: "POINTS_SPLIT_FLATTENED", splits: [...reasons] });
-  expect(await storedPoints(request, a.divisionId, a.stageId), "nothing stored").toBeNull();
+  expect(((await storedPoints(request, a.divisionId, a.stageId)) as { win?: { ot?: number } } | null)?.win?.ot, "the split rule kept").toBe(IIHF.winOt);
 
-  // A stage that STORES its own rule anyway (an API caller's, or a row from before): read beside the reason, and it clears.
+  // A stage that STORES a flat rule anyway (a row from before the guard): its boxes open at it, the refusal says why it
+  // cannot be saved as it is, and ticking back to the division's points clears it.
   const own = { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } };
   await withDb(async (sql) => {
     await sql`update stages set config = config || ${sql.json({ points: own })} where id = ${a.stageId}`;
   });
   await page.reload({ waitUntil: "load" });
   const stored = sectionOf(page, a.stageId);
-  await expect(stored).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: STEP_MS });
-  await expect(stored.getByTestId("stage-points-inexpressible")).toHaveText(sentence);
-  await expect(stored.getByTestId("stage-points-readonly")).toHaveText(L["stagePoints.ownPoints"]!);
-  await expect(stored.getByTestId("stage-points-preview"), "the rule it plays, in the public line's words").toHaveText(rulesLineText(PUB, pointsLine(own, { awardReaches: pointsRuleAwardReachesTable(m) })));
-  await expect(stored.locator("input, select"), "still no input").toHaveCount(0);
+  await expect(stored).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(stored).toHaveAttribute("data-stage-points-basis", "own");
+  await expect(stored.getByTestId("stage-points-use-division")).not.toBeChecked();
+  await expect(stored.getByTestId("stage-points-win")).toHaveValue(String(own.win.regulation));
+  await expect(stored.getByTestId("stage-points-refusal")).toHaveText(sentence);
   await expectNoHorizontalScroll(page);
-  await shootSection(page, stored, "stored-split");
+  await shootSection(page, stored, "stored-flat");
+  await stored.getByTestId("stage-points-use-division").check();
   const clearPut = nextPointsPut(page, a.stageId);
-  await stored.getByTestId("stage-points-clear").click();
+  await stored.getByTestId("stage-points-save").click();
   expect((await clearPut).postDataJSON(), "the clear sends the strict body, points null").toEqual({ points: null });
   await expect.poll(() => storedPoints(request, a.divisionId, a.stageId), { timeout: STEP_MS }).toBeNull();
-  await page.reload({ waitUntil: "load" });
-  await expect(sectionOf(page, a.stageId).getByTestId("stage-points-clear"), "a reload: nothing stored, nothing to clear").toHaveCount(0, { timeout: STEP_MS });
-  await expect(sectionOf(page, a.stageId)).toHaveAttribute("data-stage-points-state", "inexpressible");
   const b = await seedStage(request, "icehockey", { kind: "league", label: "points-plain", variant: plain });
   await page.goto(await divisionPath(request, b.divisionId, "?tab=fixtures"), { waitUntil: "load" });
-  await expect(sectionOf(page, b.stageId), "the positive pair: no split, the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(sectionOf(page, b.stageId), "the plain variant: the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(sectionOf(page, b.stageId).getByTestId("stage-points-row-win-ot"), "and no overtime row of its own").toHaveCount(0);
 });
 
 test("a knockout stage has no points section (no table to rank), a league of the same division does", async ({ page, request }) => {

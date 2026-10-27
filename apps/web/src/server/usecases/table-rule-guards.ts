@@ -13,8 +13,9 @@ import "server-only";
 //  2b. (fix round 1 I2, owner 2026-10-26) a FLAT rule — one amount per win and per loss — written to a stage whose sport
 //     pays an outcome it reaches its own way (IIHF's overtime, FIVB's 3-2, ITTF's loss not played, FIH's shoot-out bonus;
 //     `sportPointsSplits`, lib/stage-points-splits.ts, over the engine's payout) would pay that outcome as a plain win or
-//     loss: 422 POINTS_SPLIT_FLATTENED naming the splits in `extra.splits`. The stage points editor never sends one (it
-//     shows "can't be set per stage yet" there); this is the server holding the same line for any caller. A rule that
+//     loss: 422 POINTS_SPLIT_FLATTENED naming the splits in `extra.splits`. The stage points editor never sends one (since
+//     W2d Task 16 it states every split, and says this refusal inline before Save); this is the server holding the same
+//     line for any caller. A rule that
 //     states the outcome (`win.ot`, `loss.unplayed`, `bySetScore`, …) is the caller's choice and is never refused for it.
 //     (Task 13, N2/N3) The rule sent or carried is asked too (`flattenedSplits`, the editor's own fit), with the award
 //     after play among the outcomes (fix round 1 I1): no flat rule pays a split sport's every outcome, so it is refused;

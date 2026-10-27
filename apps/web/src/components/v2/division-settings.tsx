@@ -39,7 +39,7 @@ import {
   refusedLines,
   type RefusedLine,
 } from "./division-settings-locks";
-import { refusedFieldsOf, type RefusedField } from "@/lib/rule-errors";
+import { keptPinnedOf, refusedFieldsOf, type KeptPinnedStage, type RefusedField } from "@/lib/rule-errors";
 import {
   STAGE_TEMPLATES,
   applyStandingsCarry,
@@ -617,6 +617,9 @@ export function DivisionSettings({
   // landed and the list what did not); a 409 is a save where nothing landed (the red error, plus the list).
   const [refusedList, setRefusedList] = useState<RefusedField[]>([]);
   const [partialSave, setPartialSave] = useState(false);
+  // W2d (PR B carry, I3): the pinned stages the last rules save did not reach (`stagesKeptPinned`). The save landed; each
+  // such stage keeps the points and order it started with, which the notice says beside "Rules saved".
+  const [keptPinned, setKeptPinned] = useState<KeptPinnedStage[]>([]);
   // Which save the notices belong to: the rules save (inside the Format group, directly under its Save) or any other (the foot
   // of the page, where they always were). One home per save, so each notice - and its testid - renders once.
   const [rulesSave, setRulesSave] = useState(false);
@@ -691,6 +694,7 @@ export function DivisionSettings({
     setNotice(null);
     setRefusedList([]);
     setPartialSave(false);
+    setKeptPinned([]);
     setRulesSave(rules);
     try {
       const refused = await fn();
@@ -782,6 +786,15 @@ export function DivisionSettings({
         <p role="status" className="rounded-md bg-emerald-50 px-3 py-2 text-xs text-emerald-700">
           {notice}
         </p>
+      )}
+      {keptPinned.length > 0 && (
+        <ul role="status" className="space-y-0.5 rounded-md bg-slate-50 px-3 py-2 text-xs text-slate-700" data-testid="division-kept-pinned">
+          {keptPinned.map((k) => (
+            <li key={k.stageId} data-testid={`division-kept-pinned-${k.stageId}`}>
+              {msg("divset.keptPinned", { stage: k.name })}
+            </li>
+          ))}
+        </ul>
       )}
       {partialSave && refusedList.length > 0 && (
         <div role="status" className="rounded-md bg-amber-50 px-3 py-2 text-xs text-amber-800" data-testid="division-partial-save">
@@ -886,6 +899,7 @@ export function DivisionSettings({
         method: "PATCH",
         json: { variant_key: variantKey, config: override },
       });
+      setKeptPinned(keptPinnedOf(saved));
       return refusedFieldsOf(saved) ?? [];
     }, msg("divset.notice.rulesSaved"), true);
 

@@ -53,6 +53,9 @@ import { DecidersNotice } from "@/components/v2/stage-rules/deciders-off-notice"
 import { StageRuleFields } from "@/components/v2/stage-rules/stage-rule-fields";
 import { StagePointsSection } from "@/components/v2/stage-rules/stage-points-section";
 import { stageTakesPoints } from "@/components/v2/stage-rules/stage-points-model";
+import { StageTiebreaksSection, stageLikeOf } from "@/components/v2/stage-rules/stage-tiebreaks-section";
+import { stagePooled, takesBestNthFrom } from "@/components/v2/stage-rules/stage-tiebreaks-model";
+import type { StageTableRules } from "@/server/api-v1/schemas";
 import { isStagePreset, resolvedStageCfg, stageFormatSaveFragment, stageSummaryClauses } from "@/components/v2/stage-rules/stage-row-model";
 import { Modal } from "@/components/modal";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
@@ -333,6 +336,10 @@ interface Props {
    *  own, never `divisionConfig`: a division points save after the pin never reaches the stage. Optional like
    *  `formatLockedStageIds`: absent, every card reads the live division (an unpinned stage's answer). */
   pinnedStagePoints?: Record<string, PointsRule>;
+  /** W2d Task 15: stage id → its table rules as the API serves them (`listStagesWithTableRules`, the one loader): the order it
+   *  ranks by, the layer it came from, its pin and the sport's default. The Tie-breaks section is mounted for a table stage
+   *  that has one; absent (a stage whose rules do not read), it shows none rather than a guessed order (R3). */
+  stageTableRules?: Record<string, StageTableRules>;
   /** Competition timezone (schedule settings) — every time renders in it. */
   tz: string;
   /** The GOVERNING venue clock (`settings.orgTz`, #448), resolved server-side.
@@ -500,7 +507,7 @@ export function boardSlotOptionsFor(
  *  whole panel every second. */
 const RUN_SHEET_NOW_TICK_MS = 60_000;
 
-export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null }: Props) {
+export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divSlug, stages, fixtures, entrantNames, activeEntrantIds, entrantSeeds, venues = [], rosterDrift = {}, canEdit, sportKey, variantKey = null, divisionConfig = {}, ruleDict, pointsDict, formatLockedStageIds = [], pinnedStagePoints = {}, stageTableRules = {}, tz, orgTz, canExport, phase, matchMinutes = DEFAULT_MATCH_MINUTES, viewerPlan, streamStates, awaitingSettle, onlinePlay, onlineAwaitsStart = false, arbiterHref = null }: Props) {
   const msg = useMsg();
   // Owner-approved redesign, "Option A" (Task 10 follow-up) — the stage
   // card body's fixtures-progress summary, below. `useMsgPlural`, the
@@ -1296,6 +1303,13 @@ export function StagesPanel({ divisionId, competitionId, orgSlug, compSlug, divS
                     stageConfig={stage.config}
                     locked={formatLockedStageIds.includes(stage.id)}
                     pinnedPoints={pinnedStagePoints[stage.id] ?? null}
+                    tiebreaks={
+                      stageTableRules[stage.id] === undefined
+                        ? null
+                        : stageLikeOf(stage, stageTableRules[stage.id]!, stagePooled(stage), takesBestNthFrom(stage, stages))
+                    }
+                    stageName={stage.name}
+                    formatLockedStageIds={formatLockedStageIds}
                     canEdit={canEdit}
                     onSaved={() => router.refresh()}
                     onSeeFixtures={() => showStageFixtures(stage.id)}
@@ -2272,6 +2286,9 @@ function StageFormatRow({
   stageConfig,
   locked,
   pinnedPoints,
+  tiebreaks,
+  stageName,
+  formatLockedStageIds,
   canEdit,
   onSaved,
   onSeeFixtures,
@@ -2288,6 +2305,10 @@ function StageFormatRow({
   locked: boolean;
   /** I1: the points this stage's pin pays (`pinnedStagePoints`), null while it reads the live layers. */
   pinnedPoints: PointsRule | null;
+  /** W2d Task 15: the stage as the Tie-breaks section reads it, null where its table rules do not read. */
+  tiebreaks: ReturnType<typeof stageLikeOf> | null;
+  stageName: string;
+  formatLockedStageIds: readonly string[];
   canEdit: boolean;
   onSaved: () => void;
   /** The lock line's link: show this stage's fixtures in the run sheet. */
@@ -2558,6 +2579,20 @@ function StageFormatRow({
         pointsDict={pointsDict}
         readOnly={readOnly}
         pinned={pinnedPoints}
+        onSaved={onSaved}
+      />
+    )}
+    {/* W2d Task 15 (spec §9): the stage's tie-break order, after the Points section, on a table stage whose rules read. Its
+        lock is the server's own (`formatLockedStageIds`): editable from generate until the first score (OC2). */}
+    {stageTakesPoints(kind) && tiebreaks !== null && (
+      <StageTiebreaksSection
+        stage={tiebreaks}
+        stageName={stageName}
+        module={sportModule}
+        divisionConfig={divisionConfig}
+        stageConfig={stageConfig}
+        formatLockedStageIds={formatLockedStageIds}
+        canEdit={canEdit}
         onSaved={onSaved}
       />
     )}

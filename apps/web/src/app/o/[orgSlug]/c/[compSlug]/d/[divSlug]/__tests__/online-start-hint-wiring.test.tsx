@@ -35,6 +35,8 @@ const queue = vi.hoisted(() => ({
 vi.mock("@/server/page-auth", () => pageAuth);
 vi.mock("@/server/usecases/stages", () => ({
   listStages: vi.fn(async () => []),
+  // W2d Task 15: the page reads every stage's table rules (the Tie-breaks section) on the fixtures tab.
+  listStagesWithTableRules: vi.fn(async () => []),
   getStandings: vi.fn(async () => ({ rows: [] })),
   getSeedProposal: vi.fn(),
   getStageRosterDrift: vi.fn(async () => ({ ghosts: [], unplaced: [] })),

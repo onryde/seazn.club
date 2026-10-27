@@ -41,6 +41,8 @@ const scene = vi.hoisted(() => ({
 }));
 const stagesSpies = vi.hoisted(() => ({
   listStages: vi.fn(async () => scene.stages),
+  // W2d Task 15: the page reads every stage's table rules (the Tie-breaks section) on the fixtures tab.
+  listStagesWithTableRules: vi.fn(async () => []),
   getStandings: vi.fn(async (_auth: unknown, stageId: string, poolId?: string) => scene.snaps[`${stageId}:${poolId ?? ""}`] ?? { rows: [] }),
   getSeedProposal: vi.fn(),
   getStageRosterDrift: vi.fn(),
