@@ -7,82 +7,30 @@
 process.env.STRIPE_SECRET_KEY ??= "sk_test_fixture_never_real";
 
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
 
-// Mock the email module so nothing sends and we can spy on every path. All four
-// billing-group senders are provided: billing-groups.ts imports the transfer
-// pair too, and an unmocked import would be undefined.
-const {
-  sendGroupOrgRemovedEmail,
-  sendGroupOrgLeftEmail,
-  sendTransferOfferEmail,
-  sendTransferCompleteEmail,
-} = vi.hoisted(() => ({
+// Mock the detach senders so nothing sends and we can spy on every path; the rest of the module is the real one (importOriginal).
+const { sendGroupOrgRemovedEmail, sendGroupOrgLeftEmail } = vi.hoisted(() => ({
   sendGroupOrgRemovedEmail: vi.fn<
     (to: string, payerName: string, orgName: string, ridesOutUntil: string | null, link: string, locale?: string) => Promise<boolean>
   >(async () => true),
   sendGroupOrgLeftEmail: vi.fn<
     (to: string, orgName: string, seatFreed: boolean, link: string, locale?: string) => Promise<boolean>
   >(async () => true),
-  sendTransferOfferEmail: vi.fn(async () => true),
-  sendTransferCompleteEmail: vi.fn(async () => true),
 }));
-vi.mock("@/lib/email", () => ({
+vi.mock("@/lib/email", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/email")>()),
   sendGroupOrgRemovedEmail,
   sendGroupOrgLeftEmail,
-  sendTransferOfferEmail,
-  sendTransferCompleteEmail,
 }));
 
 import { sql } from "@/lib/db";
 import { detachOrgFromGroup } from "@/server/usecases/billing-groups";
+import { seedDetachableGroup as seedLiveGroup } from "./_money-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-const uniq = () => randomUUID().slice(0, 8);
-
-async function makeUser(name: string): Promise<{ id: string; email: string }> {
-  const email = `dnu-${uniq()}@test.local`;
-  const [{ id }] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, email_verified)
-    values (${email}, ${name}, true) returning id`;
-  return { id, email };
-}
-
-/** A paying pro group (status active, a paid-through period) but NO live Stripe
- *  subscription — so syncGroupQuantity returns before any Stripe call and the
- *  test needs no fixture. The payer owns the primary org; a SECOND org is owned
- *  by someone else, so detaching it is a genuine cross-party removal. */
-async function seedLiveGroup() {
-  const payer = await makeUser("Dana Payer");
-  const owner = await makeUser("Ola Owner");
-  const [{ id: groupId }] = await sql<{ id: string }[]>`
-    insert into subscriptions
-      (owner_user_id, plan_key, status, quantity_paid, current_period_end, status_changed_at)
-    values (${payer.id}, 'pro', 'active', 2, now() + interval '20 days', now())
-    returning id`;
-  const s1 = uniq();
-  const [{ id: primaryId }] = await sql<{ id: string }[]>`
-    insert into organizations (name, slug, created_by, subscription_id, created_at)
-    values (${`Primary ${s1}`}, ${`primary-${s1}`}, ${payer.id}, ${groupId}, now() - interval '1 hour')
-    returning id`;
-  await sql`insert into org_members (org_id, user_id, role) values (${primaryId}, ${payer.id}, 'owner')`;
-  const s2 = uniq();
-  const orgName = `Northside ${s2}`;
-  const [{ id: orgId }] = await sql<{ id: string }[]>`
-    insert into organizations (name, slug, created_by, subscription_id, created_at)
-    values (${orgName}, ${`northside-${s2}`}, ${owner.id}, ${groupId}, now())
-    returning id`;
-  await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${owner.id}, 'owner')`;
-  return { payer, owner, groupId, orgId, primaryId, orgName };
-}
 
 beforeEach(() => {
-  for (const m of [
-    sendGroupOrgRemovedEmail,
-    sendGroupOrgLeftEmail,
-    sendTransferOfferEmail,
-    sendTransferCompleteEmail,
-  ]) {
+  for (const m of [sendGroupOrgRemovedEmail, sendGroupOrgLeftEmail]) {
     m.mockReset();
     m.mockResolvedValue(true);
   }

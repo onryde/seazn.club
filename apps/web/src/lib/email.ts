@@ -462,18 +462,17 @@ export async function orgInviteEmail(args: { orgName: string; link: string }, lo
   return inviteTemplate(args.orgName, args.link, dict);
 }
 
-/** A payer offered a whole billing group to this recipient (billing-group
- *  transfer). The recipient adds their own card to take it over; the link goes
- *  to the billing settings of an org they can reach in the group. */
-export async function sendTransferOfferEmail(
-  to: string,
-  payerName: string,
-  groupName: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** A payer offered a whole billing group to this recipient (billing-group transfer), RENDERED and not sent. The recipient adds their own
+ *  card to take it over; the link goes to the billing settings of an org they can reach in the group. `offerGroupTransfer`
+ *  (billing-groups.ts) queues what this returns on the email outbox (kind `group_transfer_offer`, NOT transactional, as the direct
+ *  sender was: the suppression list applies, to the recipient's account) in the transaction that makes the offer live, in the
+ *  recipient's language. Nothing sends it directly. */
+export async function transferOfferEmail(
+  args: { payerName: string; groupName: string; link: string },
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...transferOfferTemplate(payerName, groupName, link, dict) });
+  return transferOfferTemplate(args.payerName, args.groupName, args.link, dict);
 }
 
 /** A payer handed a whole billing group to this recipient on the IMMEDIATE

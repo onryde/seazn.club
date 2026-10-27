@@ -13,7 +13,8 @@ import "server-only";
 // SOFTWARE has no effect on money in or out. Nothing in this file touches it.
 import type Stripe from "stripe";
 import type postgres from "postgres";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
+import { deferred } from "@/lib/deferred";
 import { HttpError } from "@/lib/errors";
 import { getStripe } from "@/lib/stripe";
 import { log } from "@/server/logger";
@@ -34,11 +35,12 @@ import { hasLiveSubscription, isTerminalStripeStatus } from "@/lib/subscription-
 import { intervalForPrice } from "@/lib/billing-manage";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import {
-  sendTransferOfferEmail,
+  transferOfferEmail,
   sendTransferCompleteEmail,
   sendGroupOrgRemovedEmail,
   sendGroupOrgLeftEmail,
 } from "@/lib/email";
+import { dispatchNow, enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
 
 interface GroupRow {
   id: string;
@@ -1515,20 +1517,14 @@ export async function offerGroupTransfer(args: {
       throw err;
     }
     if (!si.client_secret) throw new HttpError(500, "Stripe returned no client secret");
-    await sql`
-      update billing_group_transfers set setup_intent_id = ${si.id} where id = ${claim.id}`;
-
-    // BEST-EFFORT notification. The offer is already committed above; email is a
-    // convenience, so a send failure (or a missing RESEND key, or a query blip)
-    // must never surface as a failed transfer. Everything below is swallowed.
-    await notifyTransferOfferRecipient({
-      subscriptionId,
-      actorUserId,
-      recipientId: recipient.id,
-      recipientEmail: recipient.email,
-    }).catch((err) => {
-      log.error({ err }, "billing-groups: transfer-offer email failed (best-effort)");
+    // The offer goes live (its intent id on the claim) and the recipient's notice is queued in ONE transaction: committed <=> queued.
+    // A refused enqueue fails the offer (D1). The request makes the first attempt, after commit.
+    const queued = await sql.begin(async (tx) => {
+      await tx`
+        update billing_group_transfers set setup_intent_id = ${si.id} where id = ${claim.id}`;
+      return queueTransferOffer(tx, { subscriptionId, actorUserId, recipient });
     });
+    if (queued) deferred(() => dispatchNow([queued]));
 
     return {
       status: "pending_card",
@@ -1967,6 +1963,9 @@ async function finishHandover(
   await syncPaymentMethodFlagForSubscription(group.id);
 }
 
+/** An org the notice links to: its slug for the link, its name for the human group label, its default language for D4. */
+type ReachableOrg = { slug: string; name: string; default_locale: string | null };
+
 /**
  * An org IN THE GROUP the recipient can actually open, for the notification link.
  *
@@ -1978,26 +1977,27 @@ async function finishHandover(
  * human group label; null when the group has no live org at all.
  */
 async function recipientReachableOrg(
+  db: Tx | typeof sql,
   subscriptionId: string,
   recipientId: string,
-): Promise<{ slug: string; name: string } | null> {
-  const [mine] = await sql<{ slug: string; name: string }[]>`
-    select o.slug, o.name from organizations o
+): Promise<ReachableOrg | null> {
+  const [mine] = await db<ReachableOrg[]>`
+    select o.slug, o.name, o.default_locale from organizations o
       join org_members m on m.org_id = o.id
      where o.subscription_id = ${subscriptionId} and o.deleted_at is null
        and m.user_id = ${recipientId}
      order by o.created_at limit 1`;
   if (mine) return mine;
-  const [primary] = await sql<{ slug: string; name: string }[]>`
-    select slug, name from organizations
+  const [primary] = await db<ReachableOrg[]>`
+    select slug, name, default_locale from organizations
      where subscription_id = ${subscriptionId} and deleted_at is null
      order by created_at limit 1`;
   return primary ?? null;
 }
 
 /** Human name for the outgoing payer, with a neutral fallback. */
-async function payerDisplayName(actorUserId: string): Promise<string> {
-  const [payer] = await sql<{ display_name: string }[]>`
+async function payerDisplayName(db: Tx | typeof sql, actorUserId: string): Promise<string> {
+  const [payer] = await db<{ display_name: string }[]>`
     select display_name from users where id = ${actorUserId}`;
   return payer?.display_name || "The current payer";
 }
@@ -2053,7 +2053,7 @@ async function notifyDetachParties(args: {
         : null;
       await sendGroupOrgRemovedEmail(
         to.email,
-        await payerDisplayName(payerId),
+        await payerDisplayName(sql, payerId),
         orgName,
         until,
         billingSettingsLink(orgSlug),
@@ -2071,21 +2071,34 @@ async function notifyDetachParties(args: {
   }
 }
 
-/** Fire the transfer-OFFER email to the recipient (live-sub path, two-phase).
- *  Best-effort: the caller wraps this so nothing here can fail the offer. Links
- *  to an org the recipient can reach in the group (see recipientReachableOrg),
- *  and uses that org's name as the human label for the group. */
-async function notifyTransferOfferRecipient(args: {
-  subscriptionId: string;
-  actorUserId: string;
-  recipientId: string;
-  recipientEmail: string;
-}): Promise<void> {
-  const { subscriptionId, actorUserId, recipientId, recipientEmail } = args;
-  const org = await recipientReachableOrg(subscriptionId, recipientId);
-  if (!org) return; // no reachable org → no meaningful link to send.
-  const payerName = await payerDisplayName(actorUserId);
-  await sendTransferOfferEmail(recipientEmail, payerName, org.name, billingSettingsLink(org.slug));
+/**
+ * Queue the transfer-OFFER notice to the recipient (live-sub path, two-phase) on `tx`, the transaction that makes the offer live: kind
+ * `group_transfer_offer`, ref `subscription / <group id>`, no organisation (a group can span several), addressed to the recipient's
+ * account, in their language (D4: the account's, then the default of the org the link points at), NOT transactional (as the sender
+ * never was), with the bound expiry. Links to an org the recipient can reach in the group (see recipientReachableOrg), and uses that
+ * org's name as the human label for the group. Returns the row's id, or null when the group has no live org to link to. A refused
+ * enqueue throws, failing the offer (D1).
+ */
+async function queueTransferOffer(
+  tx: Tx,
+  args: { subscriptionId: string; actorUserId: string; recipient: { id: string; email: string } },
+): Promise<string | null> {
+  const { subscriptionId, actorUserId, recipient } = args;
+  const org = await recipientReachableOrg(tx, subscriptionId, recipient.id);
+  if (!org) return null; // no reachable org → no meaningful link to send.
+  const locale = await recipientLocale(tx, { pick: null, userId: recipient.id, orgDefault: org.default_locale });
+  const payerName = await payerDisplayName(tx, actorUserId);
+  return enqueueEmail(tx, {
+    kind: "group_transfer_offer",
+    refType: "subscription",
+    refId: subscriptionId,
+    orgId: null,
+    to: recipient.email,
+    recipientUserId: recipient.id,
+    ...(await transferOfferEmail({ payerName, groupName: org.name, link: billingSettingsLink(org.slug) }, locale)),
+    transactional: false,
+    expiresAt: expiryWithin(null),
+  });
 }
 
 /** Fire the transfer-COMPLETE email to the recipient (community / immediate
@@ -2099,9 +2112,9 @@ async function notifyTransferCompleteRecipient(args: {
   recipientEmail: string;
 }): Promise<void> {
   const { subscriptionId, actorUserId, recipientId, recipientEmail } = args;
-  const org = await recipientReachableOrg(subscriptionId, recipientId);
+  const org = await recipientReachableOrg(sql, subscriptionId, recipientId);
   if (!org) return;
-  const payerName = await payerDisplayName(actorUserId);
+  const payerName = await payerDisplayName(sql, actorUserId);
   await sendTransferCompleteEmail(recipientEmail, payerName, org.name, billingSettingsLink(org.slug));
 }
 

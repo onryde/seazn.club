@@ -1,11 +1,14 @@
 // Follow-ups to the billing-group transfer notifications (PR #227):
 //
-//  1. The offer email link must target an org the RECIPIENT can actually reach —
+//  1. The offer notice's link must target an org the RECIPIENT can actually reach —
 //     an org IN THE GROUP they are a member of — not the group's oldest org,
 //     which they may not be able to open.
 //  2. The COMMUNITY (immediate) handover path must also email the recipient, with
 //     a DIFFERENT, informational message ("you now pay for this group"). It must
 //     be best-effort: a throw cannot fail the transfer.
+//
+// The offer notice is queued on the email outbox (phase 3 wave 4, kind `group_transfer_offer`); its builder `transferOfferEmail` is
+// WRAPPED, never replaced, so the spy reads the link the real render was given. Only the outbox transport is a double.
 //
 // Own fixture port (12119) so it never contends with the other transfer suites.
 process.env.STRIPE_SECRET_KEY ??= "sk_test_fixture_never_real";
@@ -13,18 +16,22 @@ process.env.STRIPE_MOCK_HOST = "127.0.0.1";
 process.env.STRIPE_MOCK_PORT = "12119";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { randomUUID } from "node:crypto";
 
-// Mock the email module so no real send happens and we can spy/steer BOTH sends.
-const { sendTransferOfferEmail, sendTransferCompleteEmail } = vi.hoisted(() => ({
-  sendTransferOfferEmail: vi.fn<
-    (to: string, payerName: string, groupName: string, link: string, locale?: string) => Promise<boolean>
-  >(async () => true),
+// The offer's builder, wrapped; the complete notice's direct sender, steered.
+const { mail, sendTransferCompleteEmail } = vi.hoisted(() => ({
+  mail: { offer: vi.fn<typeof import("@/lib/email").transferOfferEmail>() },
   sendTransferCompleteEmail: vi.fn<
     (to: string, payerName: string, groupName: string, link: string, locale?: string) => Promise<boolean>
   >(async () => true),
 }));
-vi.mock("@/lib/email", () => ({ sendTransferOfferEmail, sendTransferCompleteEmail }));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  mail.offer.mockImplementation(actual.transferOfferEmail);
+  return { ...actual, transferOfferEmail: mail.offer, sendTransferCompleteEmail };
+});
+// The outbox's one network seam: captured, never sent.
+const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
 
 import { sql } from "@/lib/db";
 import { offerGroupTransfer } from "@/server/usecases/billing-groups";
@@ -32,73 +39,19 @@ import {
   startStripeFixtureServer,
   type StripeFixtureServer,
 } from "../../../../e2e/stripe-fixture-server";
+import { stubOutboxEnv } from "./_invite-mail";
+import { seedCommunityGroup, seedLiveGroupTwoOrgs as seedLiveGroupTwoOrgsRows } from "./_money-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
-const uniq = () => randomUUID().slice(0, 8);
 let fixture: StripeFixtureServer;
-
-async function makeUser(name = "Payer"): Promise<{ id: string; email: string }> {
-  const email = `fnu-${uniq()}@test.local`;
-  const [{ id }] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, email_verified)
-    values (${email}, ${name}, true) returning id`;
-  return { id, email };
-}
 
 /** A live pro group with TWO orgs: the OLDEST (primary) org owned by the payer,
  *  and a NEWER org the recipient is a member of. The recipient-reachable link
  *  must pick the newer, recipient-owned org — proving it is not just "oldest". */
 async function seedLiveGroupTwoOrgs() {
-  const payer = await makeUser("Dana Payer");
-  const heir = await makeUser("Rae Heir");
-  const customer = "cus_" + uniq();
-  fixture.setSetupIntentCustomer(customer);
-
-  const [{ id: groupId }] = await sql<{ id: string }[]>`
-    insert into subscriptions
-      (owner_user_id, plan_key, status, quantity_paid, stripe_subscription_id,
-       stripe_customer_id, current_period_end, status_changed_at)
-    values (${payer.id}, 'pro', 'active', 1, ${"sub_" + uniq()}, ${customer},
-            now() + interval '20 days', now())
-    returning id`;
-
-  // Primary / oldest org — recipient is NOT a member of it.
-  const s1 = uniq();
-  const primarySlug = `primary-${s1}`;
-  await sql`
-    insert into organizations (name, slug, created_by, subscription_id, created_at)
-    values (${`Primary ${s1}`}, ${primarySlug}, ${payer.id}, ${groupId}, now() - interval '1 hour')`;
-
-  // Newer org the recipient owns.
-  const s2 = uniq();
-  const recipSlug = `recip-${s2}`;
-  const [{ id: recipOrg }] = await sql<{ id: string }[]>`
-    insert into organizations (name, slug, created_by, subscription_id, created_at)
-    values (${`Recip ${s2}`}, ${recipSlug}, ${heir.id}, ${groupId}, now())
-    returning id`;
-  await sql`insert into org_members (org_id, user_id, role) values (${recipOrg}, ${heir.id}, 'owner')`;
-
-  return { payer, heir, groupId, primarySlug, recipSlug };
-}
-
-/** A COMMUNITY group (no live Stripe subscription) the payer owns, with one org
- *  the recipient owns — the immediate-handover path requires the recipient to
- *  already own an org in the group. */
-async function seedCommunityGroup() {
-  const payer = await makeUser("Dana Payer");
-  const heir = await makeUser("Rae Heir");
-  const [{ id: groupId }] = await sql<{ id: string }[]>`
-    insert into subscriptions (owner_user_id, plan_key, status, quantity_paid, status_changed_at)
-    values (${payer.id}, 'community', 'active', 1, now())
-    returning id`;
-  const s = uniq();
-  const slug = `community-${s}`;
-  const [{ id: orgId }] = await sql<{ id: string }[]>`
-    insert into organizations (name, slug, created_by, subscription_id)
-    values (${`Community ${s}`}, ${slug}, ${heir.id}, ${groupId})
-    returning id`;
-  await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${heir.id}, 'owner')`;
-  return { payer, heir, groupId, slug };
+  const g = await seedLiveGroupTwoOrgsRows();
+  fixture.setSetupIntentCustomer(g.customer);
+  return g;
 }
 
 beforeAll(async () => {
@@ -113,8 +66,9 @@ afterAll(async () => {
   await client?.end();
 });
 beforeEach(() => {
-  sendTransferOfferEmail.mockReset();
-  sendTransferOfferEmail.mockResolvedValue(true);
+  stubOutboxEnv();
+  mail.offer.mockClear();
+  transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_fnu_${crypto.randomUUID()}` }));
   sendTransferCompleteEmail.mockReset();
   sendTransferCompleteEmail.mockResolvedValue(true);
 });
@@ -130,11 +84,14 @@ describe.skipIf(!HAS_DB)("Follow-up 1: offer email link targets a recipient-reac
     });
     expect(res.status).toBe("pending_card");
 
-    expect(sendTransferOfferEmail).toHaveBeenCalledTimes(1);
-    const [to, , , link] = sendTransferOfferEmail.mock.calls[0];
-    expect(to).toBe(heir.email);
+    expect(mail.offer).toHaveBeenCalledTimes(1);
+    const [{ link }] = mail.offer.mock.calls[0]!;
     expect(link).toContain(`/o/${recipSlug}/settings/billing`);
     expect(link).not.toContain(primarySlug);
+    // ...and the notice carrying it is the recipient's.
+    const [row] = await sql<{ recipient_user_id: string | null }[]>`
+      select recipient_user_id from email_outbox where kind = 'group_transfer_offer' and ref_type = 'subscription' and ref_id = ${groupId}`;
+    expect(row?.recipient_user_id).toBe(heir.id);
   });
 });
 
@@ -151,7 +108,7 @@ describe.skipIf(!HAS_DB)("Follow-up 2: community handover emails the recipient",
     expect(res.owner_user_id).toBe(heir.id);
 
     // Informational email, not the offer email.
-    expect(sendTransferOfferEmail).not.toHaveBeenCalled();
+    expect(mail.offer).not.toHaveBeenCalled();
     expect(sendTransferCompleteEmail).toHaveBeenCalledTimes(1);
     const [to, payerName, , link] = sendTransferCompleteEmail.mock.calls[0];
     expect(to).toBe(heir.email);

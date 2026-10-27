@@ -77,6 +77,9 @@
 //   - match_report_submitted: the real `submitMyReport` of a claimed official's draft, in an organisation whose owner's account is `fr`:
 //     the notice is queued to the owner's account in the submit's own transaction, once per member, and the request makes the first
 //     attempt.
+//   - group_transfer_offer: the real `offerGroupTransfer` of a live billing group to the owner of one of its orgs, whose account is `es`
+//     (the SetupIntent is the Stripe mock's): the notice is queued to the recipient's account in the transaction that makes the offer
+//     live, with no organisation, and the request makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -126,10 +129,17 @@ vi.mock("@/lib/auth", async (importOriginal) => {
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
 // The payment reminder's sweep mints a Checkout session and the refund receipt's refund is a Stripe refund: Stripe is the second network seam.
+// The billing-group transfer offer mints a SetupIntent before it queues its notice.
 const stripeMock = vi.hoisted(() => {
   const checkoutCreate = vi.fn();
   const refundCreate = vi.fn();
-  return { checkoutCreate, refundCreate, stripe: { checkout: { sessions: { create: checkoutCreate } }, refunds: { create: refundCreate } } };
+  const setupIntentCreate = vi.fn();
+  return {
+    checkoutCreate,
+    refundCreate,
+    setupIntentCreate,
+    stripe: { checkout: { sessions: { create: checkoutCreate } }, refunds: { create: refundCreate }, setupIntents: { create: setupIntentCreate } },
+  };
 });
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
@@ -162,7 +172,8 @@ import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFoot
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
 import { refreshDiscipline } from "@/server/usecases/scoring";
 import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
-import { seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { offerGroupTransfer } from "@/server/usecases/billing-groups";
+import { seedLiveGroup, seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
@@ -306,6 +317,10 @@ beforeEach(() => {
   deliverMock.mockImplementation(async () => ({ ok: true, providerId: `re_${RUN}_${randomUUID()}` }));
   stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({ id: `cs_${RUN}_${randomUUID().slice(0, 8)}`, url: "https://checkout.stripe.test/session" }));
   stripeMock.refundCreate.mockReset().mockImplementation(async () => ({ id: `re_${RUN}_${randomUUID().slice(0, 8)}` }));
+  stripeMock.setupIntentCreate.mockReset().mockImplementation(async () => {
+    const id = `seti_${RUN}_${randomUUID().slice(0, 8)}`;
+    return { id, client_secret: `${id}_secret` };
+  });
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -1245,6 +1260,26 @@ async function matchReportSubmittedScenario(): Promise<KindScenario> {
   };
 }
 
+/** The payer of a live billing group offers it to the owner of one of its orgs, whose account is `es` (the org's default is `en`): the
+ *  real offer mints a SetupIntent (the Stripe mock's) and makes the offer live, the notice is queued to the recipient's account in that
+ *  transaction, and the request makes the first attempt after commit. Both accounts are at RUN addresses, so they are found. */
+async function groupTransferOfferScenario(): Promise<KindScenario> {
+  const g = await seedLiveGroup({ heirLocale: "es", orgDefaultLocale: "en", prefix: RUN });
+  made.orgIds.push(g.orgId);
+  made.userIds.push(g.payer.id, g.heir.id);
+  return {
+    locale: "es",
+    subjectKey: "transferOffer.subject",
+    subjectVars: {},
+    recipient: g.heir.email,
+    firstAttempt: "request",
+    run: async () => {
+      const out = await offerGroupTransfer({ actorUserId: g.payer.id, subscriptionId: g.groupId, newOwnerUserId: g.heir.id });
+      expect(out.status, "premise: the real offer went live").toBe("pending_card");
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1387,6 +1422,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", matchReport.subjectKey, matchReport.subjectVars),
     );
 
+    const transferOffer = await groupTransferOfferScenario();
+    expect(dictionarySubject("es", transferOffer.subjectKey, transferOffer.subjectVars)).not.toBe(
+      dictionarySubject("en", transferOffer.subjectKey, transferOffer.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1419,6 +1459,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         suspension_confirmed: suspensionConfirmed,
         suspension_served: suspensionServed,
         match_report_submitted: matchReport,
+        group_transfer_offer: transferOffer,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

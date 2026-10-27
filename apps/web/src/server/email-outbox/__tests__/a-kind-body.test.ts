@@ -35,6 +35,9 @@
 //    served notice through `refreshDiscipline` on a decided fixture that serves the ban; it waits for the worker, queued.
 //  - The report notice is driven through the real `submitMyReport` of a claimed official (a unique name, the positive pair) on a football
 //    division: one row per owner and admin, judged once the request's refused (503) first attempt is over.
+//  - The billing-group transfer offer is driven through the real `offerGroupTransfer` of a live group to the owner of one of its orgs.
+//    It mints a SetupIntent before it queues its notice: while that producer runs, and only then, Stripe is a stub that answers that one
+//    call (every other producer meets the real `getStripe`, as before). Judged once the request's refused (503) first attempt is over.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -48,12 +51,26 @@ import { NOT_YET_MOVED } from "./_kind-senders";
 vi.mock("@/server/email-outbox/transport", () => ({
   deliver: async () => ({ ok: false as const, reason: "http" as const, status: 503, errorName: "service_unavailable", detail: "later" }),
 }));
+const stripeSeam = vi.hoisted(() => ({ offering: false }));
+vi.mock("@/lib/stripe", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/stripe")>();
+  const offerStub = {
+    setupIntents: {
+      create: async () => {
+        const id = `seti_akb_${crypto.randomUUID().slice(0, 8)}`;
+        return { id, client_secret: `${id}_secret` };
+      },
+    },
+  } as unknown as ReturnType<typeof real.getStripe>;
+  return { ...real, getStripe: () => (stripeSeam.offering ? offerStub : real.getStripe()) };
+});
 
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { handleRegistrationCheckoutCompleted, handleRegistrationDispute } from "@/server/usecases/registrations";
 import { handleSponsorDispute } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
-import { seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { seedLiveGroup, seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { offerGroupTransfer } from "@/server/usecases/billing-groups";
 import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
@@ -243,6 +260,18 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       const report = await submitMyReport(ref.userId, fixtureOfficialId);
       // The notice names the official who filed the report.
       return { rowIds: await attemptedRowIdsOf("match_report_submitted", "match_report", report.id), positive: literal(officialName) };
+    },
+    group_transfer_offer: async () => {
+      const g = await seedLiveGroup({ prefix: "akb" });
+      stripeSeam.offering = true;
+      try {
+        const out = await offerGroupTransfer({ actorUserId: g.payer.id, subscriptionId: g.groupId, newOwnerUserId: g.heir.id });
+        expect(out.status, "premise: the real offer went live").toBe("pending_card");
+      } finally {
+        stripeSeam.offering = false;
+      }
+      // The notice names the group by the org the recipient can reach.
+      return { rowIds: await attemptedRowIdsOf("group_transfer_offer", "subscription", g.groupId), positive: literal(g.orgName) };
     },
   };
 
