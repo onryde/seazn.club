@@ -1000,7 +1000,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     // `completed`, keeping the stored `stopped` — and the destroy's confirmation then lands on the completed row (C27, no throw).
     // Before F-A this row stayed `ending` until ENDING_TIMEOUT_SECONDS.
     const done = (await currentSession(r.auth, r.fixtureId, r.deps))!;
-    expect(r.runner.destroyed).toContain(machine);
+    expect(r.runner.destroyed).toEqual([machine]);                               // exactly one force, of THIS Machine
     expect(done).toMatchObject({ state: "completed", endReason: "stopped" });
     expect((await r.row(sessionId)).runner_state).toBe("destroyed");
   });
@@ -1099,15 +1099,25 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       for (const via of ["stopping", "exited"] as const) {
         const { r, sessionId, machine } = await stoppedAndUnread(via);
         const warn = vi.spyOn(log, "warn").mockImplementation((() => {}) as never);
+        sentry.captureError.mockClear();
         try {
-          const t = traced(r, async () => { throw Object.assign(new Error("fly: 503"), { status: 503 }); });
+          const failure = Object.assign(new Error("fly: 503"), { status: 503 });
+          const t = traced(r, async () => { throw failure; });
           const done = await reconcileSession(sessionId, t.deps);
           expect(done, `${via}: ended, not stuck`).toMatchObject({ state: "completed", endReason: "stopped" });
           expect(t.calls, `${via}: the failed look is not retried, the force follows`).toEqual(["observe", "destroy"]);
           expect(r.runner.destroyed, `${via}`).toEqual([machine]);
           expect(await forceDestroys(sessionId), `${via}`).toBe(1);
           expect(await r.row(sessionId), `${via}`).toMatchObject({ state: "completed", runner_state: "destroyed" });
-          expect(warn.mock.calls.some(([o]) => (o as { sid?: string } | undefined)?.sid === sessionId), `${via}: the failed look is logged, not swallowed`).toBe(true);
+          // Reported, not only logged: the sibling ingest read reports (N1). The context names the session, its Machine and the
+          // attempt — an id, never a URL or key — and the force that follows raises no destroy alarm of its own.
+          const reports = sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.runner_observe_pre_grace");
+          expect(reports, `${via}: exactly one report of the failed look`).toHaveLength(1);
+          expect(reports[0]![0], `${via}: the provider's own error`).toBe(failure);
+          expect(reports[0]![1], `${via}`).toEqual({ orgId: r.auth.orgId, route: "relay.runner_observe_pre_grace", extra: { sessionId, machineId: machine, attempt: 1 } });
+          expect(JSON.stringify(reports[0]![1]), `${via}: no URL in the report`).not.toMatch(/https?:/);
+          expect(sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.force_destroy"), `${via}: the force itself succeeded`).toEqual([]);
+          expect(warn.mock.calls.some(([o]) => (o as { sessionId?: string } | undefined)?.sessionId === sessionId), `${via}: the failed look is logged, not swallowed`).toBe(true);
         } finally {
           warn.mockRestore();
         }
@@ -1117,30 +1127,40 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     });
 
     it("SEQUENCE: a second read after the observed completion writes nothing and asks the provider nothing", async () => {
-      const { r, sessionId, machine } = await stoppedAndUnread("stopping");
-      r.runner.setObserved(machine, "destroyed", CLEAN_STOP_EXIT);
-      const t = traced(r);
-      await reconcileSession(sessionId, t.deps);
-      const before = { events: await eventCount(sessionId), row: await r.row(sessionId) };
-      expect(before.events, "the first read wrote its ledger rows (the second must add none)").toBeGreaterThan(0);
-      r.tick(PAST_GRACE_MS);                                                      // and again, a further grace later
-      const again = await reconcileSession(sessionId, t.deps);
-      expect(again).toMatchObject({ state: "completed", endReason: "stopped" });
-      expect(await eventCount(sessionId)).toBe(before.events);
-      expect(await r.row(sessionId)).toEqual(before.row);
-      expect(t.calls, "no further provider call: the destroyed runner is not looked at again").toEqual(["observe"]);
-      expect(r.runner.destroyed).toEqual([]);
+      let checked = 0;
+      for (const via of ["stopping", "exited"] as const) {
+        const { r, sessionId, machine } = await stoppedAndUnread(via);
+        r.runner.setObserved(machine, "destroyed", CLEAN_STOP_EXIT);
+        const t = traced(r);
+        await reconcileSession(sessionId, t.deps);
+        const before = { events: await eventCount(sessionId), row: await r.row(sessionId) };
+        expect(before.events, `${via}: the first read wrote its ledger rows (the second must add none)`).toBeGreaterThan(0);
+        r.tick(PAST_GRACE_MS);                                                    // and again, a further grace later
+        const again = await reconcileSession(sessionId, t.deps);
+        expect(again, `${via}`).toMatchObject({ state: "completed", endReason: "stopped" });
+        expect(await eventCount(sessionId), `${via}`).toBe(before.events);
+        expect(await r.row(sessionId), `${via}`).toEqual(before.row);
+        expect(t.calls, `${via}: no further provider call: the destroyed runner is not looked at again`).toEqual(["observe"]);
+        expect(r.runner.destroyed, `${via}`).toEqual([]);
+        checked++;
+      }
+      expect(checked).toBe(2);
     });
 
     it("the expiry's other callers get the same order: applyExpiry alone (a holder's tick, the start gate) observes before it forces", async () => {
-      const { r, sessionId, machine } = await stoppedAndUnread("stopping");
-      r.runner.setObserved(machine, "destroyed", CLEAN_STOP_EXIT);
-      const t = traced(r);
-      const done = await applyExpiry(sessionId, t.deps);
-      expect(done).toMatchObject({ state: "completed", endReason: "stopped" });
-      expect(t.calls).toEqual(["observe"]);
-      expect(await forceDestroys(sessionId)).toBe(0);
-      expect((await runnerRows(sessionId)).map((x) => x.type)).not.toContain("grace_expired");
+      let checked = 0;
+      for (const via of ["stopping", "exited"] as const) {
+        const { r, sessionId, machine } = await stoppedAndUnread(via);
+        r.runner.setObserved(machine, "destroyed", CLEAN_STOP_EXIT);
+        const t = traced(r);
+        const done = await applyExpiry(sessionId, t.deps);
+        expect(done, `${via}`).toMatchObject({ state: "completed", endReason: "stopped" });
+        expect(t.calls, `${via}`).toEqual(["observe"]);
+        expect(await forceDestroys(sessionId), `${via}`).toBe(0);
+        expect((await runnerRows(sessionId)).map((x) => x.type), `${via}`).not.toContain("grace_expired");
+        checked++;
+      }
+      expect(checked).toBe(2);
     });
 
     it("INSIDE the grace the expiry is not due: a read asks the provider ONE thing (the reconcile's own observation) — nothing ahead of it, nothing destroyed", async () => {
