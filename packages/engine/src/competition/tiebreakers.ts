@@ -440,8 +440,9 @@ interface RunContext extends RankContext {
   // in game points. Built once per call, and only when the cascade has sberger.
   readonly poolLedger: SwissTable | undefined;
   // Why a conditional step left a class unsplit (anti-goal 2), by entrant.
-  // A later split clears it (markTieBreak), except `h2h_incomplete`; a residual
-  // tie keeps it.
+  // A later split clears it (markTieBreak), except `h2h_incomplete`, which every
+  // later trace carries until a head-to-head step answers it (`h2hAnswered`); a
+  // residual tie keeps it.
   readonly notes: Map<EntrantId, TieBreakNote>;
   // W2d (ST-G12): `scheduledPairs` when it says anything (non-empty), else
   // undefined — every mini-schedule complete.
@@ -544,13 +545,16 @@ function groupBySort(cls: StandingsRow[], cmp: RunComparator, run: RunContext): 
 // Record on every row of a just-split tie group which cascade rule separated
 // it (doc 09 §2 tie-explanation popover). Later, finer splits overwrite — the
 // snapshot keeps the finest rule that applied to each row. A split answers any
-// earlier "could not split" note, so the note goes.
+// earlier "could not split" note, so the note goes — except `h2h_incomplete`.
 function markTieBreak(cls: readonly StandingsRow[], key: string, run: RunContext): void {
   const ids = cls.map((row) => row.entrantId);
   for (const row of cls) {
-    row.tieBreak = { key, with: ids.filter((id) => id !== row.entrantId) };
-    // W2d (ST-G12): a skipped head-to-head stays unanswered — no later step re-runs it for these rows.
-    if (run.notes.get(row.entrantId) !== "h2h_incomplete") run.notes.delete(row.entrantId);
+    // W2d (ST-G12; anti-goal 2, spec §5.6): a head-to-head step skipped for an incomplete mini-schedule stays unanswered
+    // — no later step re-runs it for these rows — so whatever splits them instead (fewest played, GD, seed, any step
+    // that is not head-to-head) says so on the trace. A head-to-head step that runs answers it first (`h2hAnswered`).
+    const incomplete = run.notes.get(row.entrantId) === "h2h_incomplete";
+    row.tieBreak = { key, with: ids.filter((id) => id !== row.entrantId), ...(incomplete ? { note: "h2h_incomplete" as const } : {}) };
+    if (!incomplete) run.notes.delete(row.entrantId);
   }
 }
 
@@ -688,6 +692,12 @@ function h2hIncomplete(cls: StandingsRow[], run: RunContext): StandingsRow[][] {
   return [cls];
 }
 
+// W2d T17 (anti-goal 2): a head-to-head step that runs on a COMPLETE mini-schedule answers an earlier skip — its class
+// (a strict part of the skipped one) has played every meeting — so "not complete" no longer explains these rows.
+function h2hAnswered(cls: readonly StandingsRow[], run: RunContext): void {
+  for (const row of cls) if (run.notes.get(row.entrantId) === "h2h_incomplete") run.notes.delete(row.entrantId);
+}
+
 // W2d (IH-TB-2): the block's class has an incomplete mini-schedule. The sport's
 // partial-schedule order ranks it (IIHF RBG:349-350), each split traced as the
 // block's own would be; whatever stays level goes on down the stage's order,
@@ -730,6 +740,7 @@ function h2hBlock(
   // W2d (ST-G12): the block reads a mini-table only when it is complete. (A
   // re-applied or excluded sub-group of a complete class is complete.)
   if (!scheduleComplete(cls, run)) return partialSchedule(cls, run);
+  h2hAnswered(cls, run);
   if (modifier === "h2h_exclusion") return h2hExclusion(cls, keys, run);
   const ordered = h2hPass(cls, keys, run);
   if (modifier !== "h2h_reapply") return ordered;
@@ -797,6 +808,7 @@ function h2hTwo(cls: StandingsRow[], explain: boolean, run: RunContext): Standin
   if (cls.length === 2) {
     // W2d (ST-G12): a match between them still to be decided — the matches so far are not "the match between them".
     if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);
+    h2hAnswered(cls, run);
     const mini = miniTable(cls, run);
     const groups = groupBySort(mini.rows, COMPARATORS.points, run);
     if (groups.length > 1) {
@@ -864,6 +876,7 @@ function refine(classes: StandingsRow[][], steps: readonly Step[], run: RunConte
           if (cls.length <= 1) return [cls];
           // W2d (ST-G12): direct encounter among a tied set that has not played out its meetings does not split.
           if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);
+          h2hAnswered(cls, run);
           const groups = directRefine(cls, run);
           if (explain && groups.length > 1) markTieBreak(cls, "direct", run);
           return groups;

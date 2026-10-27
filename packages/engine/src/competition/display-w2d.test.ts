@@ -200,6 +200,12 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
     // A split paid on the LOSER's side alone is still paid (two for any win, one for a loss beyond regulation): apart.
     const loserOnly = PointsRule.parse({ win: { regulation: 2 }, loss: { regulation: 0, ot: 1 }, shootoutAs: "result", unit: "whole" });
     expect(tableLayoutOf(loserOnly, reach).apart).toEqual(["ot", "so"]);
+    // A set-score map pays by set score, never by decision (SC-S9; `payout` reads `bySetScore` before the OT chain): the
+    // same OT split beside a map is never paid, so never a column — even where the stage can reach an OT decision.
+    const bySets = PointsRule.parse({ win: { regulation: 3, ot: 2 }, loss: { regulation: 0, ot: 1 }, bySetScore: { "*": [3, 0] }, shootoutAs: "result", unit: "whole" });
+    expect(tableLayoutOf(bySets, reach).apart).toEqual([]);
+    const { bySetScore: _map, ...withoutMap } = bySets;
+    expect(tableLayoutOf(withoutMap, reach).apart, "the pair: the same rule without its map pays the split").toEqual(["ot", "so"]);
   });
 
   it("a column per new key in the order: set_diff, point_diff, field_goals, SB (round robin), game ratio — only when the key is in the effective order (ST-G29)", () => {
@@ -247,7 +253,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
     expect(checked).toBe(3);
   });
 
-  it("X-TB-6 an empty table renders every rank '–', no leader row, no qualification chip", () => {
+  it("X-TB-6 an empty table is level: every rank prints '–' (the leader row and chips are the web tables' — standings-view-w2d)", () => {
     // empty case first: a stage with no counted fixture is level on every row (anti-goal 3)
     const cfg = icehockey.configSchema.parse({});
     const rule = icehockey.tablePointsRule(cfg, "league");

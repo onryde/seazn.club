@@ -209,10 +209,12 @@ describe("W2d T12 — IIHF partial schedule (X-TB-8, IH-TB-2)", () => {
     expect(rows.map((r) => [r.entrantId, r.points, r.played, r.metrics.gd])).toEqual([
       ["A", 3, 1, 3], ["B", 3, 1, 1], ["C", 3, 2, 3], ["D", 0, 2, -7],
     ]);
-    // The trace: C left the class on fewest played, A and B were split by goal difference.
-    expect(rowOf(rows, "C").tieBreak).toStrictEqual({ key: "fewest_played", with: ["A", "B"] });
-    expect(rowOf(rows, "A").tieBreak).toStrictEqual({ key: "diff", with: ["B"] });
-    expect(rowOf(rows, "B").tieBreak).toStrictEqual({ key: "diff", with: ["A"] });
+    // The trace: C left the class on fewest played, A and B were split by goal difference — and each says head-to-head
+    // was not complete (W2d T17 fix 1: anti-goal 2, spec:113-115, and §5.6, spec:480 — the popover states why the
+    // head-to-head step did not split; T12 pinned these without the note).
+    expect(rowOf(rows, "C").tieBreak).toStrictEqual({ key: "fewest_played", with: ["A", "B"], note: "h2h_incomplete" });
+    expect(rowOf(rows, "A").tieBreak).toStrictEqual({ key: "diff", with: ["B"], note: "h2h_incomplete" });
+    expect(rowOf(rows, "B").tieBreak).toStrictEqual({ key: "diff", with: ["A"], note: "h2h_incomplete" });
     // The wrong readings differ. Without the guard the IIHF block reads the one meeting it has (B beat C: B 3 h2h
     // points, A and C none), so B leads — a team placed above A, whom it has not played — and the re-applied block
     // leaves A and C to overall GD (+3 each) and GF (C 5, A 3): B, C, A. A plain skip (the generic rule) would rank
@@ -226,19 +228,20 @@ describe("W2d T12 — IIHF partial schedule (X-TB-8, IH-TB-2)", () => {
     // half-played class by fewest played, then GD: A (+3) above B (+1), traced to `diff`, not drawn by lots.
     const rows = rank({ ...IIHF_HALF, order: ["points", "h2h_points", "lots"] });
     expect(ids(rows)).toEqual(["A", "B", "C", "D"]);
-    expect(rowOf(rows, "A").tieBreak).toStrictEqual({ key: "diff", with: ["B"] });
+    expect(rowOf(rows, "A").tieBreak).toStrictEqual({ key: "diff", with: ["B"], note: "h2h_incomplete" }); // spec:113-115, :480
   });
 
   it("X-TB-8 IH-TB-2 a class the partial order leaves level goes to lots and keeps the 'h2h_incomplete' note", () => {
     // A beat D 2-0; B beat C 2-0; C beat D 4-0. A and B: one game each, GD +2, GF 2, no seeds — level through the partial
-    // order down to lots; C (two played) is split off on fewest played and carries no note.
+    // order down to lots; C (two played) is split off on fewest played, and says head-to-head was not complete too
+    // (T17 fix 1: spec:113-115, :480 — T12 pinned C without the note).
     const rows = rank({ module: icehockey, decided: [goals("A", "D", 2, 0), goals("B", "C", 2, 0), goals("C", "D", 4, 0)], pending: [["A", "B"], ["A", "C"], ["B", "D"]] });
     const drawn = declaredDraw(7, ["A", "B"]);
     expect(ids(rows)).toEqual([...drawn, "C", "D"]);
     for (const id of ["A", "B"]) {
       expect(rowOf(rows, id).tieBreak, id).toStrictEqual({ key: "lots", with: ["A", "B"].filter((x) => x !== id), note: "h2h_incomplete" });
     }
-    expect(rowOf(rows, "C").tieBreak).toStrictEqual({ key: "fewest_played", with: ["A", "B"] });
+    expect(rowOf(rows, "C").tieBreak).toStrictEqual({ key: "fewest_played", with: ["A", "B"], note: "h2h_incomplete" });
   });
 
   it("X-TB-8 IH-TB-2 the partial order's seed step: two level on played, GD and GF are ordered by seed", () => {
@@ -248,7 +251,7 @@ describe("W2d T12 — IIHF partial schedule (X-TB-8, IH-TB-2)", () => {
       seeds: { B: 1, A: 2, C: 3, D: 4 },
     });
     expect(ids(rows)).toEqual(["B", "A", "C", "D"]);
-    expect(rowOf(rows, "B").tieBreak).toStrictEqual({ key: "seed", with: ["A"] });
+    expect(rowOf(rows, "B").tieBreak).toStrictEqual({ key: "seed", with: ["A"], note: "h2h_incomplete" }); // spec:113-115, :480
   });
 
   it("X-TB-8 a complete mini-schedule uses the h2h block as usual (the positive pair)", () => {
@@ -302,8 +305,9 @@ describe("W2d T12 — IIHF partial schedule (X-TB-8, IH-TB-2)", () => {
     expect(rows.map((r) => [r.entrantId, r.points, r.played, r.metrics.gd])).toEqual([
       ["C", 6, 2, 3], ["A", 3, 1, 1], ["B", 3, 2, 3], ["E", 0, 1, -4], ["D", 0, 2, -3],
     ]);
-    expect(rowOf(rows, "A").tieBreak).toStrictEqual({ key: "fewest_played", with: ["B"] });
-    expect(rowOf(rows, "E").tieBreak).toStrictEqual({ key: "fewest_played", with: ["D"] });
+    // T17 fix 1 (spec:113-115, :480): the partial order split each pair, and the trace says head-to-head was not complete.
+    expect(rowOf(rows, "A").tieBreak).toStrictEqual({ key: "fewest_played", with: ["B"], note: "h2h_incomplete" });
+    expect(rowOf(rows, "E").tieBreak).toStrictEqual({ key: "fewest_played", with: ["D"], note: "h2h_incomplete" });
     // The wrong reading — 'overall' applied to a pair, which skips the block — leaves overall GD to decide: B (+3) above
     // A (+1), D (−3) above E (−4). Without the schedule the block finds no meeting between them and gives the same answer.
     expect(ids(rank({
@@ -348,13 +352,54 @@ describe("W2d T12 — every other sport: the step does not split (X-TB-8, author
     // to the end, so lots (the declared draw) orders them, and each carries the note.
     const drawn = declaredDraw(7, ["A", "B"]);
     expect(ids(rows)).toEqual(["C", ...drawn, "D"]);
-    expect(rowOf(rows, "C").tieBreak).toStrictEqual({ key: "for", with: ["A", "B"] });
+    // T17 fix 1 (spec:113-115, :480): C left the class on goals scored, and its trace says head-to-head was not complete.
+    expect(rowOf(rows, "C").tieBreak).toStrictEqual({ key: "for", with: ["A", "B"], note: "h2h_incomplete" });
     for (const id of ["A", "B"]) {
       expect(rowOf(rows, id).tieBreak, id).toStrictEqual({ key: "lots", with: ["A", "B"].filter((x) => x !== id), note: "h2h_incomplete" });
     }
     // The wrong reading — the block on the one meeting it has (B beat C) — puts B first, a team placed above A, whom it
     // has not yet played.
     expect(ids(rank({ ...FOOTBALL_HALF, schedule: "none" }))).toEqual(["B", "C", "A", "D"]);
+  });
+
+  it("X-TB-8 T17 fix 1: a later head-to-head step that runs on a COMPLETE mini-schedule answers the note (spec:113-115) — h2h_two, direct and the block, counted", () => {
+    // A beat B 1-0, B beat C 2-0, C beat D 1-0; A–C, A–D and B–D to play. A, B, C on 3 (FIFA 3/1/0); among them A–C is
+    // still to play, so the first head-to-head step does not split the three and each is noted. GD: A +1, B +1, C −1 —
+    // C leaves on goal difference, still noted (anti-goal 2). A and B have played their one match: the second
+    // head-to-head step runs on a complete mini-schedule, A won it — split on head-to-head, and the note is answered (no
+    // "not complete" beside a step that did apply). Each order is a pin (B1: never re-validated), the one way two
+    // head-to-head steps share an order.
+    const derived = resolveTableRules({
+      module: football, stageKind: "league", mergedCfg: cfgOf(football),
+      stageOwn: { points: null, tiebreakers: null, crossGroup: null }, divisionTiebreakers: null, pinned: null,
+    });
+    const orders: readonly [readonly TiebreakerKey[], string][] = [
+      [["points", "h2h_points", "diff", "h2h_two", "lots"], "h2h_two"],
+      [["points", "h2h_points", "diff", "direct", "lots"], "direct"],
+      [["points", "direct", "diff", "h2h_points", "lots"], "h2h_points"],
+    ];
+    let checked = 0;
+    for (const [order, answeredBy] of orders) {
+      const pinned: TableRulesPin = {
+        points: derived.points, tiebreakers: [...order], crossGroup: [],
+        sources: { points: "migrated", tiebreakers: "migrated", crossGroup: "migrated" },
+      };
+      const scene: Scene = {
+        module: football, decided: [goals("A", "B", 1, 0), goals("B", "C", 2, 0), goals("C", "D", 1, 0)],
+        pending: [["A", "C"], ["A", "D"], ["B", "D"]], pinned,
+      };
+      const rows = rank(scene);
+      expect(rows.map((r) => [r.entrantId, r.points, r.metrics.gd]), answeredBy).toEqual([["A", 3, 1], ["B", 3, 1], ["C", 3, -1], ["D", 0, -1]]);
+      expect(rowOf(rows, "C").tieBreak, answeredBy).toStrictEqual({ key: "diff", with: ["A", "B"], note: "h2h_incomplete" });
+      expect(rowOf(rows, "A").tieBreak, answeredBy).toStrictEqual({ key: answeredBy, with: ["B"] });
+      expect(rowOf(rows, "B").tieBreak, answeredBy).toStrictEqual({ key: answeredBy, with: ["A"] });
+      // The pair: A–B scheduled twice (the second still to play) — the second step cannot run on it either, so the class
+      // goes on to lots, still noted.
+      const twice = rank({ ...scene, pending: [...scene.pending, ["B", "A"]] });
+      for (const id of ["A", "B"]) expect(rowOf(twice, id).tieBreak, `${answeredBy} ${id}`).toMatchObject({ key: "lots", note: "h2h_incomplete" });
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every answering step").toBe(3);
   });
 
   it("X-TB-8 a double round robin's second leg still owed leaves the mini-schedule incomplete (one schedule entry per fixture)", () => {
@@ -368,7 +413,9 @@ describe("W2d T12 — every other sport: the step does not split (X-TB-8, author
     const secondLegs: (readonly [EntrantId, EntrantId])[] = [["B", "A"], ["C", "B"], ["A", "C"], ["D", "A"], ["D", "B"], ["D", "C"]];
     const doubleRoundRobin = rank({ module: football, decided: firstLegs, pending: secondLegs });
     expect(ids(doubleRoundRobin)).toEqual(["B", "A", "C", "D"]);
-    expect(rowOf(doubleRoundRobin, "B").tieBreak?.key).toBe("diff");
+    expect(rowOf(doubleRoundRobin, "B").tieBreak).toStrictEqual({ key: "diff", with: ["A", "C"], note: "h2h_incomplete" });
+    // The single round robin's block ran on a complete schedule: no note (the positive pair).
+    for (const row of singleRoundRobin) expect(row.tieBreak?.note, row.entrantId).toBeUndefined();
   });
 
   it("X-TB-8 badminton's h2h_two: two tied who have met in one of two scheduled matches are not split by it ('h2h_incomplete')", () => {
@@ -380,11 +427,12 @@ describe("W2d T12 — every other sport: the step does not split (X-TB-8, author
     // Their one meeting is their whole schedule: BWF 16.2.2, the winner of their match — A.
     expect(ids(once).slice(1, 3)).toEqual(["A", "B"]);
     expect(rowOf(once, "A").tieBreak?.key).toBe("h2h_two");
+    expect(rowOf(once, "A").tieBreak?.note, "their match decided: head-to-head answered").toBeUndefined();
     // A second A–B match still to play: the match between them is not decided, so h2h_two does not split them, and BWF
     // 16.2.3's games difference does: B (0) above A (−1).
     const twice = rank({ module: badminton, decided, pending: [["A", "D"], ["C", "D"], ["B", "A"]] });
     expect(ids(twice).slice(1, 3)).toEqual(["B", "A"]);
-    expect(rowOf(twice, "B").tieBreak?.key).toBe("set_diff");
+    expect(rowOf(twice, "B").tieBreak).toStrictEqual({ key: "set_diff", with: ["A"], note: "h2h_incomplete" });
   });
 
   it("X-TB-8 chess's direct encounter: a tied set that has not all met is not split by it", () => {
@@ -394,7 +442,7 @@ describe("W2d T12 — every other sport: the step does not split (X-TB-8, author
     // beat D (0) → A first, B and C level to lots.
     const rows = rank({ module: boardgame, decided: [chess("A", "B", "h"), chess("B", "D", "h"), chess("C", "D", "h")], pending: [["A", "C"], ["B", "C"], ["A", "D"]] });
     expect(ids(rows)[0]).toBe("A");
-    expect(rowOf(rows, "A").tieBreak?.key).toBe("sberger");
+    expect(rowOf(rows, "A").tieBreak).toMatchObject({ key: "sberger", note: "h2h_incomplete" });
     for (const id of ["B", "C"]) expect(rowOf(rows, id).tieBreak?.note, id).toBe("h2h_incomplete");
     // The wrong reading: direct on the one meeting among them (A beat B) splits A off by direct encounter.
     expect(rowOf(rank({ module: boardgame, decided: [chess("A", "B", "h"), chess("B", "D", "h"), chess("C", "D", "h")], pending: [["A", "C"], ["B", "C"], ["A", "D"]], schedule: "none" }), "A").tieBreak?.key).toBe("direct");

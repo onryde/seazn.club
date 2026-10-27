@@ -64,8 +64,10 @@ describe.skipIf(!HAS_DB)("W2d T12: the web fold ranks a half-played round robin 
     expect(rows.map((r) => [r.points, r.played])).toEqual([[3, 1], [3, 1], [3, 2], [0, 2]]);
     // Fewest played: A and B (1) above C (2); then GD: A (+3) above B (+1).
     expect(rows.map((r) => r.entrantId)).toEqual([A, B, C, D]);
-    expect(byId(rows, C).tieBreak).toEqual({ key: "fewest_played", with: [A, B] });
-    expect(byId(rows, A).tieBreak).toEqual({ key: "diff", with: [B] });
+    // T17 fix 1 (spec anti-goal 2, spec:113-115; §5.6, spec:480): the class has not all met, and a later step split it —
+    // the stored row says head-to-head is not complete (T12 pinned these note-free; that was the spec's anti-goal).
+    expect(byId(rows, C).tieBreak).toEqual({ key: "fewest_played", with: [A, B], note: "h2h_incomplete" });
+    expect(byId(rows, A).tieBreak).toEqual({ key: "diff", with: [B], note: "h2h_incomplete" });
     // Played out: A beat B 1-0, C beat A 2-0, B beat D 5-0 — the mini-schedule among A, B and C is complete,
     // all three on 6, and the IIHF block decides: H2H GD C +1, B 0, A −1.
     await hockey(s.auth, s.stageId, A, B, 1, 0);
@@ -75,6 +77,8 @@ describe.skipIf(!HAS_DB)("W2d T12: the web fold ranks a half-played round robin 
     expect(done.slice(0, 3).map((r) => r.points)).toEqual([6, 6, 6]);
     expect(done.map((r) => r.entrantId)).toEqual([C, B, A, D]);
     expect(byId(done, C).tieBreak?.key).toBe("h2h_diff");
+    // The block ran on a complete mini-schedule and answered: no row keeps the note.
+    expect(done.filter((r) => r.tieBreak?.note === "h2h_incomplete")).toEqual([]);
   }, 240_000);
 
   it("X-TB-8 generic: the block is skipped for a class whose meetings are still to play, and the stored row says why ('h2h_incomplete')", async () => {

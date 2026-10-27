@@ -180,12 +180,12 @@ export const LEVEL_RANK = "–";
 
 /** A table with no counted fixture: `rankStandings` marks every row `level` (anti-goal 3). No rows is no table — never a
  *  level one. */
-export function isLevelTable(rows: readonly StandingsRow[]): boolean {
+export function isLevelTable(rows: readonly Pick<StandingsRow, "level">[]): boolean {
   return rows.length > 0 && rows.every((r) => r.level === true);
 }
 
 /** The rank cell's text: `LEVEL_RANK` on a level table, else the row's place (empty when the ranking pass left none). */
-export function rankText(row: StandingsRow, level: boolean): string {
+export function rankText(row: Pick<StandingsRow, "rank">, level: boolean): string {
   if (level) return LEVEL_RANK;
   return row.rank === undefined ? "" : `${row.rank}`;
 }

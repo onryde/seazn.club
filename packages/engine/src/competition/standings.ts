@@ -41,11 +41,12 @@ export interface StandingsRow {
 
 /** W2d (spec §2.3 anti-goal 2): why a conditional cascade step left a tie
  *  unsplit — the tie popover says it instead of the step silently doing nothing.
- *  Kept only on a residual tie (lots / seed). `h2h_two_not_applicable`: `h2h_two`
- *  met a class that is not two (any later split clears it, a later `h2h_two` may
- *  apply). `h2h_incomplete` (W2d §5.6 "ST-G12", X-TB-8): a head-to-head step met a
- *  class whose mini-schedule is incomplete; a later split does not clear it — no
- *  later step re-runs the head-to-head for those rows. */
+ *  `h2h_two_not_applicable`: `h2h_two` met a class that is not two — kept only on a
+ *  residual tie (lots / seed): any later split clears it, a later `h2h_two` may
+ *  apply. `h2h_incomplete` (W2d §5.6 "ST-G12", X-TB-8): a head-to-head step met a
+ *  class whose mini-schedule is incomplete — kept on every later trace of those rows,
+ *  whatever splits them (anti-goal 2: fewest played, GD, seed, lots), until a later
+ *  head-to-head step runs on a complete mini-schedule and answers it. */
 export type TieBreakNote = "h2h_two_not_applicable" | "h2h_incomplete";
 
 // The two deltas a decided fixture contributes, in [home, away] order (the pair
