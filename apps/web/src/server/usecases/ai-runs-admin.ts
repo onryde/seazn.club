@@ -230,7 +230,7 @@ export const MEDIAN_WINDOW_DAYS = 30;
  *  cost trips `shouldAlertOnRunCost` against the trailing 30-day median for
  *  its phase. Never throws — a check failure must not fail an AI run that
  *  already succeeded (same discipline as every other post-commit alert in
- *  this codebase, e.g. `sendCreditPackGrantFailedAlertEmail`'s call site).
+ *  this codebase, e.g. `alertCreditPackGrantFailed`'s call sites).
  *  Silent (no email attempted) when `STAFF_ALERT_EMAIL` is unset, matching
  *  every other alert in `billing-events.ts`/`pass-credit.ts`. */
 export async function maybeAlertExpensiveRun(opts: {

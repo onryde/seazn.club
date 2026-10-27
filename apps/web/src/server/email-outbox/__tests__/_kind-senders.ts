@@ -37,7 +37,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendPassCreditReversalIncompleteAlertEmail",
   "sendPassRungMismatchAlertEmail",
   "sendPassUnknownCompetitionAlertEmail",
-  "sendSizePackGrantFailedAlertEmail",
   "sendStaffDisputeAlertEmail",
   "sendStreamCreditClawbackAlertEmail",
   "sendStreamCreditGrantFailedAlertEmail",
@@ -53,7 +52,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
   // Wave 5, in the spec's table order.
-  "staff_size_pack_grant_failed",
   "staff_stream_credit_grant_failed",
   "staff_pass_credit_reversal_incomplete",
   "staff_pass_rung_mismatch",
@@ -113,7 +111,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   funnel_reminder: null,
   staff_registration_refund_failed: null,
   staff_credit_pack_grant_failed: null,
-  staff_size_pack_grant_failed: "sendSizePackGrantFailedAlertEmail",
+  staff_size_pack_grant_failed: null,
   staff_stream_credit_grant_failed: "sendStreamCreditGrantFailedAlertEmail",
   staff_pass_credit_reversal_incomplete: "sendPassCreditReversalIncompleteAlertEmail",
   staff_pass_rung_mismatch: "sendPassRungMismatchAlertEmail",

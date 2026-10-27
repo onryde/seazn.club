@@ -62,7 +62,8 @@ import {
   creditPackGrantFailedAlertEmail,
   type CreditPackGrantFailedAlertEmail,
   sendStreamCreditClawbackAlertEmail,
-  sendSizePackGrantFailedAlertEmail,
+  sizePackGrantFailedAlertEmail,
+  type SizePackGrantFailedAlertEmail,
   sendExtraOrgRepriceFailedAlertEmail,
   sendPassUnknownCompetitionAlertEmail,
   sendConnectBankAlertEmail,
@@ -207,6 +208,20 @@ export async function alertCreditPackGrantFailed(
     refType,
     id: opts.sessionId,
     render: () => creditPackGrantFailedAlertEmail(opts),
+  });
+}
+
+/**
+ * Staff alert: a buyer paid for a size pack and no cap was lifted (phase 3 wave 5, kind `staff_size_pack_grant_failed`). Queued on the
+ * email outbox through `queueStaffAlert`, once per Checkout Session (`checkout_session` / `session.id`), from `grantSizePackAddon`.
+ * Never throws (the writer's Q1 catch): the webhook ACKs either way, and a human must grant this manually.
+ */
+export async function alertSizePackGrantFailed(opts: SizePackGrantFailedAlertEmail): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_size_pack_grant_failed",
+    refType: "checkout_session",
+    id: opts.sessionId,
+    render: () => sizePackGrantFailedAlertEmail(opts),
   });
 }
 
@@ -528,17 +543,13 @@ async function grantSizePackAddon(session: Stripe.Checkout.Session): Promise<voi
       { sessionId: session.id, targetOrgId, sizePackKey },
       "billing: size_pack session paid but ungranted — no usable snapshot and no resolvable size_pack_key",
     );
-    const alertTo = process.env.STAFF_ALERT_EMAIL;
-    if (alertTo) {
-      void sendSizePackGrantFailedAlertEmail({
-        to: alertTo,
-        sessionId: session.id,
-        targetOrgId,
-        competitionId: targetCompetitionId,
-        sizePackKey,
-        reason: "no snapshot and no resolvable size_pack_key",
-      }).catch(() => {});
-    }
+    await alertSizePackGrantFailed({
+      sessionId: session.id,
+      targetOrgId,
+      competitionId: targetCompetitionId,
+      sizePackKey,
+      reason: "no snapshot and no resolvable size_pack_key",
+    });
     return;
   }
 

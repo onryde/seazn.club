@@ -721,7 +721,6 @@ export function creditPackGrantFailedAlertEmail(opts: CreditPackGrantFailedAlert
 }
 
 export interface SizePackGrantFailedAlertEmail {
-  to: string;
   sessionId: string;
   targetOrgId: string;
   competitionId?: string;
@@ -734,10 +733,11 @@ export interface SizePackGrantFailedAlertEmail {
  *  metadata, and the catalog fallback could not resolve one either — the buyer
  *  paid but the cap-lift could not be safely determined, so nothing was granted
  *  rather than risking a wrong lift. A human must inspect and grant manually.
- *  Ops-only, no user-facing i18n (mirrors sendCreditPackGrantFailedAlertEmail). */
-export async function sendSizePackGrantFailedAlertEmail(
-  opts: SizePackGrantFailedAlertEmail,
-): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors creditPackGrantFailedAlertEmail).
+ *
+ *  RENDERED and not sent: `alertSizePackGrantFailed` (billing-events.ts) queues what this returns on the email outbox through
+ *  `queueStaffAlert` (kind `staff_size_pack_grant_failed`), once per Checkout Session. Nothing sends it directly. */
+export function sizePackGrantFailedAlertEmail(opts: SizePackGrantFailedAlertEmail): EmailContent {
   const subject = `Size pack purchase could not be granted: ${opts.sessionId}`;
   const bodyText =
     `A paid size-pack checkout session (${opts.sessionId}, org ${opts.targetOrgId}` +
@@ -761,7 +761,7 @@ export async function sendSizePackGrantFailedAlertEmail(
     footerNote: "Automated staff alert — size pack webhook (P3 T3b).",
   });
   const text = `${bodyText}\n\nSession: ${opts.sessionId} · org ${opts.targetOrgId} · reason: ${opts.reason}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface StreamCreditGrantFailedAlertEmail {

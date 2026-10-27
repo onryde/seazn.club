@@ -9,9 +9,17 @@
 // assert on the resolver (getLimit), plus the catalog CRUD routes' staff gate
 // and the checkout usecase's comp-scoped purchase gate (IDOR).
 //
+// A paid pack that cannot be granted pages staff (phase 3 wave 5, kind
+// `staff_size_pack_grant_failed`): queued on the email outbox to
+// STAFF_ALERT_EMAIL, once per Checkout Session. Its tests read the row
+// (`staffRows`) with their own staff address, and assert the writer dropped
+// nothing (no STAFF_ALERT_QUEUE_FAILED line, no Sentry issue); the builder is a
+// call-through spy, and the subject is the sender's inline English, typed from
+// its source.
+//
 // Real Postgres required; skipped without DATABASE_URL. Run against the fresh
 // v17 schema: DATABASE_URL=$(cat /tmp/v17_base_url) DB_SCHEMA=seazn_club_v17.
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 
@@ -59,7 +67,21 @@ vi.mock("@/lib/admin", async (orig) => ({
   logStaffAction: vi.fn(async () => {}),
 }));
 
+// The size-pack staff alert's builder, observed (call-through), and Sentry's issue capture (call-through).
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, sizePackGrantFailedAlertEmail: vi.fn(actual.sizePackGrantFailedAlertEmail) };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
+
 import { sql } from "@/lib/db";
+import { sizePackGrantFailedAlertEmail } from "@/lib/email";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
+import { staffAlertDrops, staffRows } from "./_money-fixtures";
 import { createOrgForUser } from "@/lib/auth";
 import { walletIdFor } from "@/lib/credits";
 import { getLimit } from "@/lib/entitlements";
@@ -242,6 +264,69 @@ describe.skipIf(!HAS_DB)("size-pack add-on — webhook → resolver", () => {
       select count(*)::int as n from org_addons
        where wallet_id = ${walletId} and status = 'active'`;
     expect(n).toBe(1);
+  });
+});
+
+describe.skipIf(!HAS_DB)("size-pack add-on — a paid pack that cannot be granted pages staff", () => {
+  const RUN = `spa-${uniq()}`;
+  const KIND = "staff_size_pack_grant_failed";
+  /** A paid session whose metadata has no snapshot and names a size pack the catalog does not have: nothing can be granted. */
+  const ungrantable = (targetOrgId: string, targetCompId: string) =>
+    sizePackEvent({ targetOrgId, targetCompId, sizePackKey: "nope", featureKey: null, deltaEach: null });
+  const sessionOf = (event: Stripe.Event): string => (event.data.object as { id: string }).id;
+
+  beforeEach(() => {
+    vi.mocked(sizePackGrantFailedAlertEmail).mockClear();
+    vi.mocked(captureError).mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+  afterAll(async () => {
+    if (!HAS_DB) return;
+    await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
+  });
+
+  it("a paid size-pack session with no usable snapshot and no catalog entry queues one alert", async () => {
+    const staff = `staff-${RUN}-${uniq()}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    const errors = vi.spyOn(log, "error");
+    const org = await createOrgForUser(await makeUser(), "SizePack Ungranted");
+    const comp = await makeComp(org.id);
+    const event = ungrantable(org.id, comp);
+    const sessionId = sessionOf(event);
+
+    await processStripeEvent(event);
+
+    expect(await getLimit(org.id, FEATURE, comp), "premise: nothing was granted").toBe(planBase);
+    expect(await staffRows(KIND, "checkout_session", sessionId)).toEqual([
+      { ref_id: sessionId, dedupe_key: sessionId, status: "queued", recipient: staff, subject: `Size pack purchase could not be granted: ${sessionId}` },
+    ]);
+    expect(sizePackGrantFailedAlertEmail, "what the alert says").toHaveBeenCalledWith({
+      sessionId,
+      targetOrgId: org.id,
+      competitionId: comp,
+      sizePackKey: "nope",
+      reason: "no snapshot and no resolvable size_pack_key",
+    });
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("a redelivered session pages once", async () => {
+    const staff = `staff-${RUN}-${uniq()}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    const errors = vi.spyOn(log, "error");
+    const org = await createOrgForUser(await makeUser(), "SizePack Redelivered");
+    const comp = await makeComp(org.id);
+    const event = ungrantable(org.id, comp);
+
+    await processStripeEvent(event);
+    await processStripeEvent(event); // Stripe's "at least once" redelivery
+
+    expect(sizePackGrantFailedAlertEmail, "premise: both deliveries reached the alert").toHaveBeenCalledTimes(2);
+    expect(await staffRows(KIND, "checkout_session", sessionOf(event))).toMatchObject([{ ref_id: sessionOf(event), status: "queued", recipient: staff }]);
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "the redelivery was deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
   });
 });
 

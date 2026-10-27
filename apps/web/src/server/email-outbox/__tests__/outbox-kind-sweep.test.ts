@@ -97,6 +97,8 @@
 //     the first attempt. The subject is the sender's inline English (spec F2), a literal typed from its source.
 //   - staff_credit_pack_grant_failed: the real `alertCreditPackGrantFailed` (both its sites, the paid session and the refunded charge,
 //     call it; credit-pack-refund.test.ts drives both to a row), for a Checkout Session, the same way.
+//   - staff_size_pack_grant_failed: the real `alertSizePackGrantFailed` (its one site, `grantSizePackAddon`, calls it;
+//     size-pack-addon.test.ts drives it to a row through the webhook), the same way.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -188,7 +190,7 @@ import {
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
-import { alertCreditPackGrantFailed, processStripeEvent } from "@/server/usecases/billing-events";
+import { alertCreditPackGrantFailed, alertSizePackGrantFailed, processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
@@ -1160,6 +1162,30 @@ function creditPackGrantFailedScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for a paid size-pack session that lifted no cap, to this run's STAFF_ALERT_EMAIL: no org, no account, and the
+ *  worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function sizePackGrantFailedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const sessionId = `cs_${RUN}_size_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Size pack purchase could not be granted: ${sessionId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertSizePackGrantFailed({
+        sessionId,
+        targetOrgId: randomUUID(),
+        competitionId: randomUUID(),
+        sizePackKey: "nope",
+        reason: "no snapshot and no resolvable size_pack_key",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
  *  request makes the first attempt. */
 async function emailChangeConfirmationScenario(): Promise<KindScenario> {
@@ -1727,6 +1753,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         funnel_reminder: funnelReminder,
         staff_registration_refund_failed: registrationRefundFailedScenario(),
         staff_credit_pack_grant_failed: creditPackGrantFailedScenario(),
+        staff_size_pack_grant_failed: sizePackGrantFailedScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
