@@ -19,6 +19,11 @@
 //     shown input there would be a save that fails);
 //   - bonus kinds are those the sport's metrics can feed.
 // Save sends ONLY `{points}`: the endpoint's body is strict, and an omitted `rules` arm is left as stored.
+//
+// W2d final review I1 (controller ruling, 2026-10-26): a stage PINNED at generate pays its pin, and a division points save
+// after that lands but never reaches it. With no rule of its own, such a stage's card says and previews the PIN's points,
+// in words that say they were fixed when it started ("stagePoints.startedPoints"), and its editor prefills from the pin -
+// never "the division's points" over a number the table does not pay. An unpinned stage reads the live division, as before.
 import { Fragment, useState, type ReactNode } from "react";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
 import { useMsg } from "@/components/i18n/dict-provider";
@@ -35,6 +40,8 @@ import {
   draftIsDirty,
   offeredBonusKinds,
   offersWalkoverScore,
+  pinInForce,
+  pointsBasis,
   pointsEditorFits,
   previewClauses,
   ruleFromDraft,
@@ -111,6 +118,7 @@ export function StagePointsSection({
   stored,
   pointsDict,
   readOnly,
+  pinned = null,
   onSaved,
 }: {
   stageId: string;
@@ -125,12 +133,20 @@ export function StagePointsSection({
   pointsDict: Dict | undefined;
   /** A started stage (the S4 lock) or a viewer: the section reads, nothing writes. */
   readOnly: boolean;
+  /** I1: the points the stage's PIN pays (`listPinnedStagePoints`, the one loader's pin), or null/absent for a stage still
+   *  reading the live layers. */
+  pinned?: unknown;
   onSaved: () => void;
 }) {
   const msg = useMsg();
   const [saved, setSaved] = useState<Saved | null>(null);
-  const inForce = saved !== null && saved.against === stored ? saved.points : stored;
-  const [draft, setDraft] = useState<PointsDraft>(() => draftFromStored(module, divisionConfig, stored));
+  const unread = saved !== null && saved.against === stored;
+  const inForce = unread ? saved.points : stored;
+  // I1: the pin as old as the page's props. Until the page re-reads after a save it says nothing: a cleared rule was re-pinned
+  // to the live division (`repinStageOwnRules`), and an own rule outranks any pin.
+  const pin = pinInForce(inForce, unread ? null : pinned);
+  const basis = pointsBasis(inForce, pin);
+  const [draft, setDraft] = useState<PointsDraft>(() => draftFromStored(module, divisionConfig, stored, pinned));
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fit = pointsEditorFits(module, divisionConfig, { kind, config: stageConfig });
@@ -143,6 +159,7 @@ export function StagePointsSection({
       aria-label={msg("stagePoints.title")}
       data-testid={`stage-points-${stageId}`}
       data-stage-points-state={!fit.fits ? "inexpressible" : readOnly ? "readonly" : "editor"}
+      data-stage-points-basis={basis}
       className="border-b border-slate-100 px-4 py-3"
     >
       {children}
@@ -152,7 +169,7 @@ export function StagePointsSection({
   const ownRule = storedPointsRule(inForce);
   const preview = (d: PointsDraft): string => {
     if (pointsDict === undefined) return "";
-    const clauses = previewClauses(module, divisionConfig, d);
+    const clauses = previewClauses(module, divisionConfig, d, pin);
     return clauses.length === 0 ? "" : rulesLineText(pointsDict, clauses);
   };
 
@@ -165,6 +182,7 @@ export function StagePointsSection({
       const out = await apiV1<{ points?: unknown }>(`/api/v1/stages/${stageId}/rules`, { method: "PUT", json: { points } });
       const landed = out.points ?? null;
       setSaved({ against: stored, points: landed });
+      // No pin: a cleared rule now plays the live division (the re-pin), an own one itself.
       setDraft(draftFromStored(module, divisionConfig, landed));
       onSaved();
     } catch (err) {
@@ -224,12 +242,12 @@ export function StagePointsSection({
 
   // A started stage, or a viewer: what the stage plays, in words. No control.
   if (readOnly) {
-    const text = preview(draftFromStored(module, divisionConfig, inForce));
+    const text = preview(draftFromStored(module, divisionConfig, inForce, pin));
     return shell(
       <div className="space-y-1">
         {heading}
         <p className="text-xs text-slate-600" data-testid="stage-points-readonly">
-          {msg(ownRule === null ? "stagePoints.divisionPoints" : "stagePoints.ownPoints")}
+          {msg(basis === "own" ? "stagePoints.ownPoints" : basis === "pin" ? "stagePoints.startedPoints" : "stagePoints.divisionPoints")}
         </p>
         {text !== "" && (
           <p className="text-xs text-slate-700" data-testid="stage-points-preview">
@@ -376,6 +394,12 @@ export function StagePointsSection({
           {msg("stagePoints.useDivision")}
         </label>
       </div>
+
+      {basis === "pin" && draft.useDivision && (
+        <p className="text-xs text-slate-600" data-testid="stage-points-started">
+          {msg("stagePoints.startedPoints")}
+        </p>
+      )}
 
       {previewText !== "" && (
         <p

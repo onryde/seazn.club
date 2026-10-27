@@ -10,6 +10,7 @@ import { StageKind } from "@seazn/engine/core";
 import { PointsRule, legacyPointsRule, payout, pointsRuleAwardReachesTable } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { refuseStagePoints } from "@/server/usecases/stage-rules-merge";
+import { pointsLine } from "@/lib/points-line";
 import {
   BONUS_KINDS,
   PARAM_BONUS_KINDS,
@@ -19,6 +20,8 @@ import {
   offeredBonusKinds,
   offersWalkoverScore,
   parseNumber,
+  pinInForce,
+  pointsBasis,
   pointsEditorFits,
   previewClauses,
   ruleFromDraft,
@@ -426,5 +429,70 @@ describe("W2d T10 fix round 1 I2: the editor keeps a can't-set-per-stage state w
       bracket++;
     }
     expect(bracket, "bracket kinds checked").toBeGreaterThan(0);
+  });
+});
+
+// W2d final review I1 (controller ruling, 2026-10-26): a stage is PINNED at generate, and a division points save after that
+// lands ("Saved") but never reaches it (`rule-locks.ts` lets it through; the pin keeps the table paying the pinned rule). So a
+// pinned stage with no rule of its own opens, previews and prefills from its PIN, never from the live division. Expected
+// values: the pin is the engine's own rule for the division as it was (`tablePointsRule`), the live number is the one the
+// test stores, and each case has a right answer that differs from the wrong one's.
+describe("W2d final review I1: a pinned stage with no rule of its own plays its pin, never the live division", () => {
+  const FOOTBALL_CFG = football.variants["11-a-side"] as Record<string, unknown>;
+  /** What generate pinned: football's own table rule for the division as it stood (11-a-side's declared 3/1/0, FIFA). */
+  const PIN = PointsRule.parse(football.tablePointsRule(football.configSchema.parse(FOOTBALL_CFG), "league"));
+  /** The division after a points save the pin never sees: win 2. */
+  const LIVE = { ...FOOTBALL_CFG, points: { ...(parsedCfg(football, FOOTBALL_CFG).points as Record<string, number>), win: 2 } };
+  const LIVE_POINTS = parsedCfg(football, LIVE).points as { win: number; draw: number; loss: number };
+  const AWARD = pointsRuleAwardReachesTable(football);
+
+  it("premise: the pin pays win 3 and the live division win 2 (the right answer differs from the wrong one)", () => {
+    expect(PIN.win.regulation).toBe(3);
+    expect(LIVE_POINTS.win).toBe(2);
+  });
+
+  it("the draft opens inheriting at the PIN's numbers; the same stage unpinned opens at the live division's", () => {
+    const pinned = draftFromStored(football, LIVE, null, PIN);
+    expect(pinned.useDivision, "nothing of its own: it inherits").toBe(true);
+    expect([pinned.win, pinned.draw, pinned.loss]).toEqual([String(PIN.win.regulation), String(PIN.draw), String(PIN.loss.regulation)]);
+    const unpinned = draftFromStored(football, LIVE, null);
+    expect([unpinned.win, unpinned.draw, unpinned.loss], "the positive pair: no pin, the live division").toEqual([String(LIVE_POINTS.win), String(LIVE_POINTS.draw), String(LIVE_POINTS.loss)]);
+  });
+
+  it("the inheriting preview says the PIN's points (win 3), never the live division's (win 2); unpinned it says the live 2", () => {
+    const checked = draftFromStored(football, LIVE, null, PIN);
+    expect(previewClauses(football, LIVE, checked, PIN)).toEqual(pointsLine(editorRule(PIN.win.regulation, PIN.draw!, PIN.loss.regulation), { awardReaches: AWARD }));
+    expect(previewClauses(football, LIVE, checked, PIN)).not.toEqual(previewClauses(football, LIVE, checked));
+    expect(previewClauses(football, LIVE, draftFromStored(football, LIVE, null))).toEqual(pointsLine(editorRule(LIVE_POINTS.win, LIVE_POINTS.draw, LIVE_POINTS.loss), { awardReaches: AWARD }));
+  });
+
+  it("an own rule outranks the pin; the pin is in force only while the stage stores none (and an unreadable pin is none)", () => {
+    const own = editorRule(5, 2, 1);
+    expect(pinInForce(own, PIN), "own rule: the pin says nothing").toBeNull();
+    expect(pinInForce(null, PIN)).toEqual(PIN);
+    expect(pinInForce(undefined, PIN), "absent is no rule too").toEqual(PIN);
+    expect(pinInForce(null, null), "unpinned").toBeNull();
+    expect(pinInForce(null, { win: "three" }), "a pin the schema refuses is read as none (never half-read)").toBeNull();
+    expect(pointsBasis(own, PIN)).toBe("own");
+    expect(pointsBasis(null, PIN)).toBe("pin");
+    expect(pointsBasis(null, null)).toBe("division");
+    const opened = draftFromStored(football, LIVE, own, PIN);
+    expect([opened.useDivision, opened.win], "an own rule opens as itself").toEqual([false, "5"]);
+  });
+
+  it("sweep: on every division the registry ships, a pinned stage with no rule opens and previews at its pin's numbers, not the division's (counted)", () => {
+    // A pin with numbers no shipped division declares, so a draft read from the division instead is visible on every row.
+    const pin = PointsRule.parse({ win: { regulation: 7 }, loss: { regulation: 2 }, draw: 5, shootoutAs: "result", unit: "whole", bonuses: [] });
+    let checked = 0;
+    for (const { m, variant, cfg } of DIVISIONS) {
+      const live = draftFromStored(m, cfg, null);
+      expect(live.win, `${m.key}/${variant}: premise, the division's own win is not the pin's`).not.toBe("7");
+      const d = draftFromStored(m, cfg, null, pin);
+      expect([d.useDivision, d.win, d.draw, d.loss], `${m.key}/${variant}`).toEqual([true, "7", "5", "2"]);
+      expect(previewClauses(m, cfg, d, pin), `${m.key}/${variant}: the preview`).toEqual(pointsLine(editorRule(7, 5, 2), { awardReaches: pointsRuleAwardReachesTable(m) }));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: divisions checked").toBeGreaterThan(0);
+    expect(checked, "every division swept").toBe(DIVISIONS.length);
   });
 });

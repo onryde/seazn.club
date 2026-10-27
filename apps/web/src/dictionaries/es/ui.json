@@ -6659,6 +6659,7 @@
   "stagePoints.useDivision": "Usar los puntos de la división",
   "stagePoints.divisionPoints": "Esta fase juega con los puntos de la división.",
   "stagePoints.ownPoints": "Esta fase tiene sus propios puntos.",
+  "stagePoints.startedPoints": "Esta fase mantiene los puntos con los que empezó. Los cambios en los puntos de la división no le afectan.",
   "stagePoints.inexpressible": "Los puntos de esta división aún no se pueden ajustar por fase",
   "stagePoints.win": "Victoria",
   "stagePoints.draw": "Empate",

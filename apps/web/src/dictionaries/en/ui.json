@@ -6659,6 +6659,7 @@
   "stagePoints.useDivision": "Use the division's points",
   "stagePoints.divisionPoints": "This stage plays the division's points.",
   "stagePoints.ownPoints": "This stage has its own points.",
+  "stagePoints.startedPoints": "This stage keeps the points it started with. Changes to the division's points don't reach it.",
   "stagePoints.inexpressible": "This division's points can't be set per stage yet",
   "stagePoints.win": "Win",
   "stagePoints.draw": "Draw",

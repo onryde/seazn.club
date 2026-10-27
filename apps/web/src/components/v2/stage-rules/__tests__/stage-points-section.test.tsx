@@ -8,7 +8,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
-import { pointsRuleAwardReachesTable, type PointsRule } from "@seazn/engine/competition";
+import { PointsRule, legacyPointsRule, pointsRuleAwardReachesTable } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
@@ -36,7 +36,7 @@ function render(
   m: AnySportModule,
   variant: string,
   stored: unknown,
-  over: { readOnly?: boolean; pointsDict?: Dict; kind?: string; stageConfig?: Record<string, unknown>; divisionConfig?: Record<string, unknown> } = {},
+  over: { readOnly?: boolean; pointsDict?: Dict; kind?: string; stageConfig?: Record<string, unknown>; divisionConfig?: Record<string, unknown>; pinned?: unknown } = {},
 ): string {
   return renderToStaticMarkup(
     <DictProvider dict={enUi as Dict} locale="en">
@@ -49,6 +49,7 @@ function render(
         stored={stored}
         pointsDict={"pointsDict" in over ? over.pointsDict : POINTS_DICT}
         readOnly={over.readOnly ?? false}
+        pinned={over.pinned}
         onSaved={() => undefined}
       />
     </DictProvider>,
@@ -358,6 +359,68 @@ describe("pointsLineDict carries every key the preview can emit", () => {
     for (const key of keys) {
       expect(Object.hasOwn(POINTS_DICT, key), `${key} is in the slice`).toBe(true);
       expect(Object.hasOwn(enPublic, key), `${key} is in public.json`).toBe(true);
+    }
+  });
+});
+
+// W2d final review I1 (controller ruling, 2026-10-26): a stage pinned at generate keeps paying its pin after a division
+// points save lands, so its card must say the PIN's points, in words that say they were fixed when it started - never "the
+// division's points" over a number the table does not pay. Expected: the pin is football's own table rule for the division
+// as it stood (11-a-side's 3/1/0), the live division is the one the test stores (win 2), the words are the en dictionary's.
+describe("W2d final review I1: a pinned stage's card says the pin's points and that they were fixed at the start", () => {
+  const CFG = football.variants["11-a-side"] as Record<string, unknown>;
+  const PIN = PointsRule.parse(football.tablePointsRule(football.configSchema.parse(CFG), "league"));
+  type Flat = { win: number; draw: number; loss: number };
+  const LIVE_POINTS: Flat = { ...(football.configSchema.parse(CFG) as { points: Flat }).points, win: 2 };
+  const LIVE = { ...CFG, points: LIVE_POINTS };
+  const say = (win: number, draw: number, loss: number) =>
+    rulesLineText(POINTS_DICT, pointsLine(legacyPointsRule({ base: { win, draw, loss } }), { awardReaches: pointsRuleAwardReachesTable(football) }));
+  const PIN_WORDS = say(PIN.win.regulation, PIN.draw!, PIN.loss.regulation);
+  const LIVE_WORDS = say(LIVE_POINTS.win, LIVE_POINTS.draw, LIVE_POINTS.loss);
+  const previewOf = (html: string): string => {
+    const at = html.indexOf('data-testid="stage-points-preview"');
+    expect(at, "a preview is on the card").toBeGreaterThan(-1);
+    return text(html.slice(html.indexOf(">", at) + 1, html.indexOf("</p>", at))).trim();
+  };
+
+  it("premise: the pin pays win 3, the live division win 2, and the two read differently", () => {
+    expect(PIN.win.regulation).toBe(3);
+    expect(LIVE_POINTS.win).toBe(2);
+    expect(PIN_WORDS).not.toBe(LIVE_WORDS);
+  });
+
+  it("read-only (a started stage): the pin's 3 under the started wording - never 2, never the division wording; unpinned it is the live 2 under the division wording", () => {
+    const pinned = render(football, "11-a-side", null, { readOnly: true, divisionConfig: LIVE, pinned: PIN });
+    expect(pinned).toContain('data-stage-points-basis="pin"');
+    expect(text(tagOf(pinned, "stage-points-readonly") + pinned.slice(pinned.indexOf('data-testid="stage-points-readonly"')))).toContain(UI["stagePoints.startedPoints"]!);
+    expect(text(pinned)).not.toContain(UI["stagePoints.divisionPoints"]!);
+    expect(previewOf(pinned)).toBe(PIN_WORDS);
+    const unpinned = render(football, "11-a-side", null, { readOnly: true, divisionConfig: LIVE });
+    expect(unpinned, "the positive pair").toContain('data-stage-points-basis="division"');
+    expect(text(unpinned)).toContain(UI["stagePoints.divisionPoints"]!);
+    expect(text(unpinned)).not.toContain(UI["stagePoints.startedPoints"]!);
+    expect(previewOf(unpinned)).toBe(LIVE_WORDS);
+  });
+
+  it("the editor (pinned, not yet scored): the inheriting preview is the pin's 3 with the started line; unpinned it is the live 2 with none", () => {
+    const pinned = render(football, "11-a-side", null, { divisionConfig: LIVE, pinned: PIN });
+    expect(pinned).toContain('data-stage-points-state="editor"');
+    expect(tagOf(pinned, "stage-points-use-division")).toContain('checked=""');
+    expect(text(tagOf(pinned, "stage-points-started") + pinned.slice(pinned.indexOf('data-testid="stage-points-started"')))).toContain(UI["stagePoints.startedPoints"]!);
+    expect(previewOf(pinned)).toBe(PIN_WORDS);
+    expect(has(pinned, "stage-points-save"), "inheriting the pin: nothing to save").toBe(false);
+    const unpinned = render(football, "11-a-side", null, { divisionConfig: LIVE });
+    expect(has(unpinned, "stage-points-started"), "the positive pair: no started line").toBe(false);
+    expect(previewOf(unpinned)).toBe(LIVE_WORDS);
+  });
+
+  it("an own rule outranks the pin: the own wording and the own rule's words, on the editor and read-only", () => {
+    const own: PointsRule = { ...HEAD, win: { regulation: 5 }, bonuses: [] };
+    for (const readOnly of [true, false]) {
+      const html = render(football, "11-a-side", own, { readOnly, divisionConfig: LIVE, pinned: PIN });
+      expect(html, `readOnly=${readOnly}`).toContain('data-stage-points-basis="own"');
+      expect(has(html, "stage-points-started"), `readOnly=${readOnly}: no started line`).toBe(false);
+      expect(previewOf(html)).toBe(rulesLineText(POINTS_DICT, pointsLine(own, { awardReaches: true })));
     }
   });
 });

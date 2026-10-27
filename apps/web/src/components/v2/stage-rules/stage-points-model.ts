@@ -182,11 +182,47 @@ export function storedPointsRule(stored: unknown): PointsRule | null {
   return parseStoredPointsRule(stored);
 }
 
-/** The draft a stage opens with: its own rule when it stores one, else the division's base numbers behind a checked
- *  "Use the division's points". */
-export function draftFromStored(module: AnySportModule, divisionConfig: unknown, stored: unknown): PointsDraft {
+/**
+ * W2d final review I1 (controller ruling, 2026-10-26) - the rule a stage PINNED at generate pays while it stores no rule of
+ * its own: its pin's points (`stages.table_rules_pinned.points`, read by the page through the one loader). A division points
+ * save after the pin lands but never reaches the stage (`rule-locks.ts`), so the live division is NOT what it plays. Null
+ * when the stage stores its own rule (that rule is what it plays), when it is not pinned (it reads the live layers), and
+ * for a pin the schema refuses (never half-read).
+ */
+export function pinInForce(stored: unknown, pinned: unknown): PointsRule | null {
+  return storedPointsRule(stored) === null ? storedPointsRule(pinned) : null;
+}
+
+/** Whose points a stage plays: its own rule, its pin's (I1), else the live division's. */
+export type PointsBasis = "own" | "pin" | "division";
+export function pointsBasis(stored: unknown, pinned: unknown): PointsBasis {
+  if (storedPointsRule(stored) !== null) return "own";
+  return pinInForce(stored, pinned) === null ? "division" : "pin";
+}
+
+/** The boxes of a rule: its regulation win / draw / loss, its walkover row and its bonuses (what the editor can say). */
+function draftOfRule(rule: PointsRule, useDivision: boolean): PointsDraft {
+  return {
+    useDivision,
+    win: String(rule.win.regulation),
+    // A rule with no draw pays none; the box shows the 0 a sport that cannot draw sends (`ruleFromDraft`).
+    draw: String(rule.draw ?? 0),
+    loss: String(rule.loss.regulation),
+    walkoverW: rule.forfeit === undefined ? "" : String(rule.forfeit.winnerPoints),
+    walkoverL: rule.forfeit === undefined ? "" : String(rule.forfeit.loserPoints),
+    awardW: rule.forfeit?.awardScore === undefined ? "" : String(rule.forfeit.awardScore[0]),
+    awardL: rule.forfeit?.awardScore === undefined ? "" : String(rule.forfeit.awardScore[1]),
+    bonuses: rule.bonuses.map((b) => ({ when: b.when, param: b.param === undefined ? "" : String(b.param), points: String(b.points) })),
+  };
+}
+
+/** The draft a stage opens with: its own rule when it stores one, else what it plays without one behind a checked "Use the
+ *  division's points" - its PIN's points once pinned (I1: `pinInForce`), else the division's live base numbers. */
+export function draftFromStored(module: AnySportModule, divisionConfig: unknown, stored: unknown, pinned: unknown = null): PointsDraft {
   const rule = storedPointsRule(stored);
   if (rule === null) {
+    const pin = storedPointsRule(pinned);
+    if (pin !== null) return draftOfRule(pin, true);
     const b = divisionBasePoints(module, divisionConfig);
     return {
       useDivision: true,
@@ -200,18 +236,7 @@ export function draftFromStored(module: AnySportModule, divisionConfig: unknown,
       bonuses: [],
     };
   }
-  return {
-    useDivision: false,
-    win: String(rule.win.regulation),
-    // A rule with no draw pays none; the box shows the 0 a sport that cannot draw sends (`ruleFromDraft`).
-    draw: String(rule.draw ?? 0),
-    loss: String(rule.loss.regulation),
-    walkoverW: rule.forfeit === undefined ? "" : String(rule.forfeit.winnerPoints),
-    walkoverL: rule.forfeit === undefined ? "" : String(rule.forfeit.loserPoints),
-    awardW: rule.forfeit?.awardScore === undefined ? "" : String(rule.forfeit.awardScore[0]),
-    awardL: rule.forfeit?.awardScore === undefined ? "" : String(rule.forfeit.awardScore[1]),
-    bonuses: rule.bonuses.map((b) => ({ when: b.when, param: b.param === undefined ? "" : String(b.param), points: String(b.points) })),
-  };
+  return draftOfRule(rule, false);
 }
 
 /** A number typed in a box: blank is NOT zero (`Number("")` is 0, which would store a rule nobody wrote). */
@@ -287,12 +312,13 @@ export function draftIsDirty(module: AnySportModule, draft: PointsDraft, stored:
 }
 
 /**
- * The words of the rule a Save would store (or, for "Use the division's points", the division's own base), in the public
- * line's clauses (`pointsLine`, Task 16): the walkover SCORE is said only where the sport's table reads it. Empty when the
- * draft is not a rule yet.
+ * The words of the rule a Save would store (or, for "Use the division's points", what the stage plays without a rule: the
+ * `pinned` rule in force, I1 - pass `pinInForce`'s answer - else the division's own base), in the public line's clauses
+ * (`pointsLine`, Task 16): the walkover SCORE is said only where the sport's table reads it. Empty when the draft is not a
+ * rule yet.
  */
-export function previewClauses(module: AnySportModule, divisionConfig: unknown, draft: PointsDraft): PointsClause[] {
-  const next = ruleFromDraft(module, draft.useDivision ? { ...draftFromStored(module, divisionConfig, null), useDivision: false } : draft);
+export function previewClauses(module: AnySportModule, divisionConfig: unknown, draft: PointsDraft, pinned: unknown = null): PointsClause[] {
+  const next = ruleFromDraft(module, draft.useDivision ? { ...draftFromStored(module, divisionConfig, null, pinned), useDivision: false } : draft);
   if (!next.ok || next.rule === null) return [];
   return pointsLine(next.rule, { awardReaches: offersWalkoverScore(module) });
 }

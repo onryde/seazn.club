@@ -7038,6 +7038,7 @@ export type DictionaryKey =
   | "stagePoints.save"
   | "stagePoints.sentence"
   | "stagePoints.sentenceNoDraw"
+  | "stagePoints.startedPoints"
   | "stagePoints.title"
   | "stagePoints.useDivision"
   | "stagePoints.walkover"
