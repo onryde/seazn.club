@@ -276,6 +276,8 @@ describe.skipIf(!HAS_DB)("the solo sign-up assignment email rides the outbox (DB
     await vi.waitFor(async () => {
       const [r] = await rowsTo(w.email);
       if (!r || r.attempts < 1) throw new Error("the request's attempt has not been made yet");
+      // `attempts` is counted when the row is claimed into `sending`, before the provider's answer returns it to `queued`.
+      if (r.status === "sending") throw new Error("the request's attempt is still in flight");
     }, { timeout: 10_000, interval: 50 });
     const [retrying] = await rowsTo(w.email);
     expect(retrying).toMatchObject({ status: "queued", attempts: 1 });
