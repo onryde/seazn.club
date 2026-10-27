@@ -31,6 +31,7 @@ These are the owner's own answers in this session's chat. Items marked *(my call
 | D12 | **Public match page embeds the YouTube player** (click-to-play facade, `youtube-nocookie`, "Open on YouTube" link under it) for API-connected matches; pasted-key matches keep the link. | "yes" (2026-10-27) |
 | D13 | **Part labels only when a match has 2+ parts**; a single part shows the player alone. | "hope that we don't display part 1 like that always, only when more than one part" |
 | D14 | UI layouts: Directory = Option A connect flow + Option B channel rows; fixture panel = Option B; public page = D12. | "Option A but 4 from Option B" → clarified "1"; "Fixture stream panel Option B" |
+| D15 | Each broadcast stores YouTube's **actual start and end time** (filled when Seazn ends it), for R4 sponsors-on-stream's "watch this moment" replay link. | "if we can, then yes?" (2026-10-27) |
 
 Accepted without objection in playback (owner "Ok"), originally proposed by this author:
 - made-for-kids asked at connect, default **No** *(my call)*;
