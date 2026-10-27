@@ -352,7 +352,7 @@ export function appOrigin(): string {
  *  (the auto apply and the manual set), one per official with an address, in the official's language. Nothing sends it directly. */
 export async function officialAssignedEmail(args: Omit<OfficialAssignedArgs, "meUrl">, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return officialAssignedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
+  return officialAssignedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict, locale);
 }
 
 /** D12 (T19): the organiser opened the round - sent once per player, per board, per pairing. RENDERED here and not sent: the
@@ -377,7 +377,7 @@ export async function officialAssignmentChangedEmail(
   locale: Locale,
 ): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return officialAssignmentChangedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
+  return officialAssignmentChangedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict, locale);
 }
 
 /** A confirmed suspension (SPEC-1) — CTA to the /me suspensions card. Claimed

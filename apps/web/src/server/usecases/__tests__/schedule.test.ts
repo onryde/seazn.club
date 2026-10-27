@@ -6,6 +6,8 @@
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import enEmails from "@/dictionaries/en/emails.json";
+import nlEmails from "@/dictionaries/nl/emails.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import { EngineError } from "@seazn/engine/core";
@@ -965,6 +967,9 @@ describe.skipIf(!HAS_DB)("the change notice goes through the email outbox (offic
   const appoint = (orgId: string, fixtureId: string, officialId: string, roleKey: string, response = "accepted") =>
     sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
         values (${orgId}, ${fixtureId}, ${officialId}, ${roleKey}, ${response})`;
+  /** A match time as Intl writes it for the BCP 47 `tag` in `zone`, the zone named after it (the notices' shape). */
+  const whenIn = (tag: string, at: Date | string, zone: string) =>
+    `${new Date(at).toLocaleString(tag, { timeZone: zone, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} (${zone})`;
 
   beforeEach(() => {
     stubOutboxEnv();
@@ -1063,8 +1068,11 @@ describe.skipIf(!HAS_DB)("the change notice goes through the email outbox (offic
 
   it("F5: the change notice's label is in the official's language", async () => {
     const { auth } = await seedOfficialsOrg("pro");
-    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
+    const zone = "Europe/Amsterdam";
+    await sql`update organizations set default_locale = 'fr', timezone = ${zone} where id = ${auth.orgId}`;
     const { division } = await seedFutureDivision(auth);
+    // Premise: the org's zone is the venue zone (no division override), so the expected times below are in it.
+    expect(await sql`select 1 from schedule_settings where division_id = ${division.id} and tz is not null`).toHaveLength(0);
     const fixture = await firstFixture(division.id);
     // Claimed: the account's language is Dutch, the org's is French.
     const [user] = await sql<{ id: string }[]>`
@@ -1084,7 +1092,8 @@ describe.skipIf(!HAS_DB)("the change notice goes through the email outbox (offic
       dictionarySubject("fr", "officialChanged.subject", { orgName: name }),
     );
 
-    await moveFixture(auth, fixture.id, { scheduled_at: kickoffIn(2 * 60 * MIN) });
+    const kickoff = kickoffIn(2 * 60 * MIN);
+    await moveFixture(auth, fixture.id, { scheduled_at: kickoff });
 
     const rows = await settledNoticesOf(auth.orgId);
     expect(rows.map((r) => [r.recipient, r.recipient_user_id, r.subject])).toEqual([
@@ -1093,6 +1102,24 @@ describe.skipIf(!HAS_DB)("the change notice goes through the email outbox (offic
     expect(mail.changed.mock.calls.map((c) => [c[1], c[0].label])).toEqual([
       ["nl", `${fixture.home} ${nlUi["schedule.vs"]} ${fixture.away}`],
     ]);
+
+    // The role and both times are in the official's language too (expected text from the dictionaries on disk and
+    // Intl). Premise: each differs from the English, so English in the email is seen.
+    expect(whenIn("nl-NL", kickoff, zone)).not.toBe(whenIn("en-GB", kickoff, zone));
+    expect(nlEmails["officialRole.referee"]).not.toBe(enEmails["officialRole.referee"]);
+    expect(nlEmails["officialEmail.tbc"]).not.toBe(enEmails["officialEmail.tbc"]);
+    const moved = (await mail.changed.mock.results[0]!.value) as { text: string; html: string };
+    expect(moved.text, "now: the new time").toContain(whenIn("nl-NL", kickoff, zone));
+    expect(moved.text, "was: the old time").toContain(whenIn("nl-NL", fixture.scheduled_at, zone));
+    expect(moved.html, "the role").toContain(nlEmails["officialRole.referee"]);
+
+    // Unscheduled: "now" reads "TBC" in the official's language.
+    mail.changed.mockClear();
+    await moveFixture(auth, fixture.id, { scheduled_at: null });
+    expect((await settledNoticesOf(auth.orgId)).map((r) => r.status), "the unscheduling replaced the first notice").toEqual(["replaced", "sent"]);
+    const unscheduled = (await mail.changed.mock.results[0]!.value) as { text: string; html: string };
+    expect(unscheduled.text, "now: TBC").toContain(nlEmails["officialEmail.tbc"]);
+    expect(unscheduled.text, "was: the time it had").toContain(whenIn("nl-NL", kickoff, zone));
   });
 });
 

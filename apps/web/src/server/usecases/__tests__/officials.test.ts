@@ -3,6 +3,9 @@
 // required; skipped without DATABASE_URL.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import enEmails from "@/dictionaries/en/emails.json";
+import frEmails from "@/dictionaries/fr/emails.json";
+import nlEmails from "@/dictionaries/nl/emails.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import { sql } from "@/lib/db";
@@ -651,6 +654,9 @@ describe.skipIf(!HAS_DB)("the assignment notice goes through the email outbox (o
     )[0]!.seq;
   const address = (tag: string) => `${tag}-${randomUUID().slice(0, 8)}@example.com`;
   const assign = (fixtureId: string, officialId: string) => ({ fixture_id: fixtureId, official_id: officialId, role_key: "referee", locked: false });
+  /** A match time as Intl writes it for the BCP 47 `tag` in `zone`, the zone named after it (the notices' shape). */
+  const whenIn = (tag: string, at: Date | string, zone: string) =>
+    `${new Date(at).toLocaleString(tag, { timeZone: zone, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} (${zone})`;
 
   beforeEach(() => {
     stubOutboxEnv();
@@ -814,8 +820,11 @@ describe.skipIf(!HAS_DB)("the assignment notice goes through the email outbox (o
 
   it("F5: an official's labels and email share the official's language", async () => {
     const { auth } = await seedOrg("pro");
-    await sql`update organizations set default_locale = 'fr' where id = ${auth.orgId}`;
-    const { fixtures } = await seedScheduledDivision(auth);
+    const zone = "Europe/Amsterdam";
+    await sql`update organizations set default_locale = 'fr', timezone = ${zone} where id = ${auth.orgId}`;
+    const { division, fixtures } = await seedScheduledDivision(auth);
+    // Premise: the org's zone is the venue zone (no division override), so the expected times below are in it.
+    expect(await sql`select 1 from schedule_settings where division_id = ${division.id} and tz is not null`).toHaveLength(0);
     // A: claimed, the account's language is Dutch. B: unclaimed, so the org's French.
     const [user] = await sql<{ id: string }[]>`
       insert into users (email, display_name, email_verified, locale)
@@ -858,5 +867,28 @@ describe.skipIf(!HAS_DB)("the assignment notice goes through the email outbox (o
     expect(built("Claimed Ref")?.[0].fixtures.map((f) => f.label)).toEqual([`${names!.home} ${nlUi["schedule.vs"]} ${names!.away}`]);
     expect(built("Unclaimed Ref")?.[1]).toBe("fr");
     expect(built("Unclaimed Ref")?.[0].fixtures.map((f) => f.label)).toEqual([`${names!.home} ${frUi["schedule.vs"]} ${names!.away}`]);
+
+    // The role and the match time are in the official's language too (expected text from the dictionaries on disk and
+    // Intl). Premise: each differs from the English, so English in the email is seen.
+    const [{ scheduled_at: at }] = await sql<{ scheduled_at: Date }[]>`select scheduled_at from fixtures where id = ${fixtures[0]!.id}`;
+    expect(whenIn("nl-NL", at, zone)).not.toBe(whenIn("en-GB", at, zone));
+    expect(whenIn("fr-FR", at, zone)).not.toBe(whenIn("en-GB", at, zone));
+    expect(nlEmails["officialRole.referee"]).not.toBe(enEmails["officialRole.referee"]);
+    expect(frEmails["officialRole.referee"]).not.toBe(enEmails["officialRole.referee"]);
+    expect(nlEmails["officialEmail.tbc"]).not.toBe(enEmails["officialEmail.tbc"]);
+    /** The email the builder rendered for this official (the latest one built). */
+    const rendered = async (official: string) => {
+      const i = mail.assigned.mock.calls.findLastIndex((c) => c[0].officialName === official);
+      expect(i, `${official}'s notice was built`).toBeGreaterThanOrEqual(0);
+      return (await mail.assigned.mock.results[i]!.value) as { text: string; html: string };
+    };
+    expect((await rendered("Claimed Ref")).text).toContain(`${nlEmails["officialRole.referee"]} · ${whenIn("nl-NL", at, zone)}`);
+    expect((await rendered("Unclaimed Ref")).text).toContain(`${frEmails["officialRole.referee"]} · ${whenIn("fr-FR", at, zone)}`);
+
+    // An unscheduled match reads "TBC" in the official's language.
+    await sql`update fixtures set scheduled_at = null where id = ${fixtures[1]!.id}`;
+    await patchFixtureOfficials(auth, fixtures[1]!.id, { set: [{ official_id: claimed!.id, role_key: "referee", locked: false }] });
+    expect(await settledNoticesOf(auth.orgId), "the new assignment's notice").toHaveLength(3);
+    expect((await rendered("Claimed Ref")).text).toContain(`${nlEmails["officialRole.referee"]} · ${nlEmails["officialEmail.tbc"]}`);
   });
 });
