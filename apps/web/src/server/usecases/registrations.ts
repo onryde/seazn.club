@@ -31,7 +31,7 @@ import {
   refundIssuedEmail,
   disputeAlertEmail,
   disputeLostEmail,
-  sendRegistrationRefundFailedAlertEmail,
+  registrationRefundFailedAlertEmail,
 } from "@/lib/email";
 import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
@@ -56,6 +56,7 @@ import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./disput
 import { orgOwnerRecipient } from "./org-owner";
 import { createSystemClaimInvite } from "./person-claims";
 import { queueClaimInviteEmail } from "./claim-invite-mail";
+import { queueStaffAlert } from "./staff-alert";
 // The entrant status flip inside `withdrawCore` is raw SQL, so `patchEntrant`'s
 // own hook cannot fire — this is what refreshes a seeding draft that still
 // names the registrant (review finding F3).
@@ -3344,6 +3345,7 @@ async function confirmPaidRegistration(
       currency: outcome.reg.currency,
       paymentIntentId: outcome.intent,
       reason: errText(err),
+      mode: outcome.kind,
     });
   }
 }
@@ -4794,15 +4796,23 @@ function errText(err: unknown): string {
  * right alongside this) is written and never read outside tests — without
  * this, the failure is invisible until the registrant complains.
  *
- * NEVER THROWS, and gated on STAFF_ALERT_EMAIL before anything else — the
- * same discipline as maybeAlertOrgRepriceFailed (billing-events.ts) /
- * maybeAlertOrgAllowance (extra-orgs.ts), which this deliberately mirrors.
- * Every call site sits on a refund's OWN failure path, so an alert that
- * threw would turn "a refund failed" into "the webhook/request fails and
- * retries forever" — telemetry strictly worse than the fault it reports.
- * Awaited rather than fire-and-forget: this path is rare, nothing here is
- * user-facing latency a registrant/organiser is waiting on, and a floating
- * promise cannot be tested honestly.
+ * Queued on the email outbox through `queueStaffAlert` (phase 3 wave 5, kind
+ * `staff_registration_refund_failed`), on the pool and never on the refund's
+ * own record transaction (R2: every caller is in its catch, after that
+ * transaction is gone). The writer owns the STAFF_ALERT_EMAIL gate and the
+ * never-throws discipline (Q1): every call site sits on a refund's OWN
+ * failure path, so an alert that threw would turn "a refund failed" into "the
+ * webhook/request fails and retries forever" — telemetry strictly worse than
+ * the fault it reports. Awaited rather than fire-and-forget: this path is
+ * rare, nothing here is user-facing latency a registrant/organiser is waiting
+ * on, and a floating promise cannot be tested honestly.
+ *
+ * Once per registration, `mode` and amount (plan P-W5-7): `mode` is the one
+ * the caller's audit row already writes (`late`/`duplicate` from the
+ * webhook, `auto` from a withdrawal, `auto_pool_deadline` from the sweep,
+ * `reject` from a rejection). A webhook replay or a sweep re-run that fails
+ * the same unmoved refund again pages once; a different amount (the state
+ * moved) pages again.
  *
  * Goes to the PLATFORM OPERATOR only (owner ruling) — never the organiser or
  * the registrant. The usual causes (a restricted connected account, a
@@ -4811,8 +4821,8 @@ function errText(err: unknown): string {
  * alerting them would produce alarm with no remedy. An organiser-facing
  * console surface is out of scope here.
  *
- * Exported so the never-throws contract can be tested DIRECTLY rather than
- * through a caller's own catch, which would hide a missing wrapper.
+ * Returns the queued row's id, or null (unset address, a replay, or a drop
+ * the writer logged). Exported so the contract is tested DIRECTLY.
  */
 export async function maybeAlertRegistrationRefundFailed(opts: {
   registrationId: string;
@@ -4822,17 +4832,16 @@ export async function maybeAlertRegistrationRefundFailed(opts: {
   currency: string;
   paymentIntentId: string | null;
   reason: string;
-}): Promise<void> {
-  try {
-    const alertTo = process.env.STAFF_ALERT_EMAIL;
-    if (!alertTo) return;
-    await sendRegistrationRefundFailedAlertEmail({ to: alertTo, ...opts });
-  } catch (err) {
-    log.error(
-      { registrationId: opts.registrationId, orgId: opts.orgId, err },
-      "registrations: refund-failed alert failed",
-    );
-  }
+  mode: "late" | "duplicate" | "auto" | "auto_pool_deadline" | "reject";
+}): Promise<string | null> {
+  const { mode, ...alert } = opts;
+  return queueStaffAlert({
+    kind: "staff_registration_refund_failed",
+    refType: "registration",
+    id: opts.registrationId,
+    suffix: `${mode}:${opts.amountCents}`,
+    render: () => registrationRefundFailedAlertEmail(alert),
+  });
 }
 
 export interface ResolvedRefundPolicy {
@@ -5185,6 +5194,7 @@ async function withdrawCore(reg: RegistrationWithGroupRow, actorId: string | nul
         currency: locked.currency,
         paymentIntentId: locked.payment_intent_id,
         reason: errText(err),
+        mode: "auto",
       });
     }
   }
@@ -5795,6 +5805,7 @@ export async function sweepRegistrations(
           currency: locked.currency,
           paymentIntentId: locked.payment_intent_id,
           reason: errText(err),
+          mode: "auto_pool_deadline",
         });
       }
     }

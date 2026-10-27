@@ -35,7 +35,7 @@ export type OutboxMessage = {
   /** Non-secret data a kind's hooks need later (ids, stamps). Never a token, never a body. */
   meta?: Record<string, string>;
   /** The account this email is for, when `OUTBOX_KIND_FACTS[kind].to` is `account`: the address is then resolved from the
-   *  account at send time, and the replace rule matches by this id. A literal-address kind must NOT carry one
+   *  account at send time, and the replace rule matches by this id. A literal-address or staff kind must NOT carry one
    *  (`OutboxKindMismatchError`). */
   recipientUserId?: string;
 };
@@ -117,7 +117,8 @@ export function expiryWithin(deadline: Date | null, nowMs: number = Date.now()):
 /**
  * The one insert both writers share. Throws, BEFORE any statement, so the caller's transaction refuses as a whole:
  *  - `OutboxExpiryTooLongError` when `expiresAt` is more than `MAX_EXPIRY_MS` from now (or not a date);
- *  - `OutboxKindMismatchError` when a literal-address kind carries `recipientUserId`;
+ *  - `OutboxKindMismatchError` when a kind not addressed to an account (a literal-address or a staff kind) carries
+ *    `recipientUserId`;
  *  - `OutboxKeyUnavailableError` when the box can send mail but cannot seal the body.
  * A past `expiresAt` is accepted: that row simply ends `expired`, unsent. Returns the client-made id and how many rows the
  * statement wrote (`on conflict do nothing` writes none when a unique index already holds the row).
@@ -145,7 +146,7 @@ async function insertQueued(db: Tx | typeof sql, m: OutboxMessage, dedupeKey: st
 
 /**
  * Insert one queued row on `db` and return its id (client-made). Throws, BEFORE any statement, on an expiry past the bound, a
- * literal kind that carries an account id, or a box that cannot seal the body (see `insertQueued`). Throws
+ * literal or staff kind that carries an account id, or a box that cannot seal the body (see `insertQueued`). Throws
  * `OutboxInsertSkippedError` when the insert wrote nothing: a row with no once-key is never legitimately skipped.
  */
 export async function enqueueEmail(db: Tx | typeof sql, m: OutboxMessage): Promise<string> {

@@ -881,6 +881,16 @@ The controller rules on P-W5-1 to P-W5-26, or puts them to the owner, before T2.
    (P-W5-7).
 10. Two funnel schedulers both block on one draft's row lock under heavy load: the second waits, then matches nothing
     (correct, just slow).
+11. Two overlapping stuck-event sweeps can both bump one row's failure count (the bump is unconditional,
+    pre-existing), taking it from attempt 2 to 4 past the park: that row is never alerted.
+12. `earnGrantVolumeToday` has no upper day bound, so the earn-volume site tests prove the key and the gate, not the
+    count. Pre-existing; not owed by this wave.
+13. The "lib/email.ts sends nothing itself" scan matches the deleted names, not every shape of a new sender (a renamed
+    `post(`); the allowlist scan and the import pins carry the rest. Hardening it is test tooling beyond this plan.
+14. `scripts/ci-local.sh` sets neither `CRON_SECRET` nor `STAFF_ALERT_EMAIL`, so a local run of it reds the two new e2e
+    assertions; e2e runs by CI dispatch only.
+15. Long-lived local test DBs accumulate extra-org riders until the stale-price sweep's 500-row window is full; CI's
+    fresh DB never does.
 
 ## Phase 4 still owes (hand-off)
 

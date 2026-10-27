@@ -1,6 +1,7 @@
 // Money fixtures (phase 3 wave 2): sponsor orders (Batch B), Event Pass orgs and trialing billing groups (Batch D), shared by the outbox
-// tests, the kind sweep and the older suites they came from. Real Postgres rows only; nothing here calls a usecase. Every address a fixture
-// makes starts with `prefix`, so a caller whose cleanup finds its rows by address (the kind sweep's RUN prefix) can hand its own in.
+// tests, the kind sweep and the older suites they came from; and (wave 5) the staff-alert rows a site test reads back. Real Postgres
+// rows only; nothing here calls a usecase. Every address a fixture makes starts with `prefix`, so a caller whose cleanup finds its rows
+// by address (the kind sweep's RUN prefix) can hand its own in.
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import type { PassKey } from "@/lib/currency";
@@ -8,6 +9,7 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { Locale } from "@/lib/i18n-constants";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { STAFF_ALERT_QUEUE_FAILED } from "../staff-alert";
 
 /**
  * A Pro organisation that may sell sponsorship (`sponsors.monetize`), Connect-live (an account that can take charges, so the checkout's
@@ -351,4 +353,33 @@ export async function cleanUpSponsorOrgs(orgIds: readonly string[], userIds: rea
     await sql`delete from subscriptions where owner_user_id = any(${userIds as string[]}::uuid[])`;
     await sql`delete from users where id = any(${userIds as string[]}::uuid[])`;
   }
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// Staff alerts (phase 3 wave 5, T4-T6). A staff alert has no org and no account: it is a row to `STAFF_ALERT_EMAIL`, whose ref IS its
+// once-key (`<id>` or `<id>:<suffix>`, P-W5-1). A site test stubs that variable with its own per-run address, drives a real call site,
+// and reads the rows back here.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+export type StaffRow = { ref_id: string; dedupe_key: string | null; status: string; recipient: string; subject: string };
+
+/** The `kind` rows of `refType` about `id` (the id the alert is about: a row UUID or a Stripe id; ids carry no `:`), whatever their
+ *  suffix, to ANY recipient, oldest first. Filtered by the test's own id, never by kind alone: the test database is shared. */
+export const staffRows = (kind: string, refType: string, id: string) =>
+  sql<StaffRow[]>`
+    select ref_id, dedupe_key, status, recipient, subject from email_outbox
+     where kind = ${kind} and ref_type = ${refType} and split_part(ref_id, ':', 1) = ${id}
+     order by created_at, id`;
+
+/** What `queueStaffAlert`'s catch left while a test ran (I2): its one log line and its Sentry issue. The writer answers `null` for an
+ *  unset address, a replay and a drop alike, and only these tell a drop apart, so a site test that expects its alert to be queued (or
+ *  deduplicated) asserts both are zero. `logError` is a spy on the logger's `error`; `capture` is the suite's `captureError` mock. */
+export function staffAlertDrops(
+  logError: { mock: { calls: unknown[][] } },
+  capture: { mock: { calls: unknown[][] } },
+): { logged: number; issues: number } {
+  return {
+    logged: logError.mock.calls.filter((c) => c[1] === STAFF_ALERT_QUEUE_FAILED).length,
+    issues: capture.mock.calls.filter((c) => (c[1] as { route?: unknown } | undefined)?.route === "staff-alert").length,
+  };
 }

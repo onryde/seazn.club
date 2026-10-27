@@ -1,8 +1,8 @@
 // The outbox's one network seam, and the only module the tests replace (`vi.mock("@/server/email-outbox/transport")`).
 //
 // Rulings R5 and R8: the attempt asks `checkSendable` FIRST (API key, suppression), opens the sealed body only if the
-// answer is yes, and then calls this. So this does NOT gate again, and it does not wrap `sendWithResult`: that would
-// re-check the list the attempt already consulted. The key travels as its own argument, never inside the message, so a
+// answer is yes, and then calls this. So this does NOT gate again (no gate-then-deliver in one call): that would re-check
+// the list the attempt already consulted. The key travels as its own argument, never inside the message, so a
 // message can be logged or compared in a test without carrying a credential.
 import { deliver as postToResend, type DeliverResult } from "@/lib/email";
 import { SEND_TIMEOUT_MS } from "./constants";

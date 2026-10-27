@@ -3,13 +3,16 @@
 // passed requireStaff). One row per architect run from the competition audit
 // ledger; the payload columns arrived with the cost work, so pre-existing rows
 // surface as nulls rather than being filtered out.
+import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { aiRunUnitNoun } from "@/lib/ai-pricing";
-// lib/credits is a leaf w.r.t. server/usecases (it imports only other lib
-// modules), so reading it here closes no import cycle.
+// lib/credits imports no usecase that imports this file (its one runtime usecase
+// import, staff-alert, reaches neither credits nor this file), so reading it
+// here closes no import cycle.
 import { EARN_GRANT_DAILY_ALERT_THRESHOLD, earnGrantVolumeToday } from "@/lib/credits";
-import { sendAiRunCostAlertEmail } from "@/lib/email";
+import { aiRunCostAlertEmail } from "@/lib/email";
+import { queueStaffAlert, staffAlertsOn } from "@/server/usecases/staff-alert";
 
 /**
  * Every event type that IS an architect run. This list is the join key between
@@ -230,9 +233,16 @@ export const MEDIAN_WINDOW_DAYS = 30;
  *  cost trips `shouldAlertOnRunCost` against the trailing 30-day median for
  *  its phase. Never throws — a check failure must not fail an AI run that
  *  already succeeded (same discipline as every other post-commit alert in
- *  this codebase, e.g. `sendCreditPackGrantFailedAlertEmail`'s call site).
- *  Silent (no email attempted) when `STAFF_ALERT_EMAIL` is unset, matching
- *  every other alert in `billing-events.ts`/`pass-credit.ts`. */
+ *  this codebase, e.g. `alertCreditPackGrantFailed`'s call sites): the median
+ *  read is caught here, and the queue logs and reports its own failure.
+ *  Silent (no query, no alert) when `STAFF_ALERT_EMAIL` is unset, matching
+ *  every other alert in `billing-events.ts`/`pass-credit.ts`.
+ *
+ *  Queued on the email outbox (kind `staff_ai_run_cost`) once per RUN, under a
+ *  ref minted here (P-W5-6): a run has no id of its own (the ledger inserts
+ *  return none), its cost is final, and nothing replays it, so the once-key
+ *  never repeats by design; a double press is two runs and two alerts.
+ *  Resolves to the row's id, or null when nothing was queued. */
 export async function maybeAlertExpensiveRun(opts: {
   orgId: string;
   competitionId?: string;
@@ -249,38 +259,44 @@ export async function maybeAlertExpensiveRun(opts: {
    *  the alert and the audit trail cannot disagree about the run's size.
    *  Nullable by contract (see `AiRunCostAlertEmail.packUnits`). */
   packUnits?: number | null;
-}): Promise<void> {
+}): Promise<string | null> {
+  // Cheap guards FIRST. `competition_events` is the audit ledger and carries
+  // no index on (type, created_at), so the median query is a scan — running
+  // it before these checks would make every production AI run pay for a
+  // baseline that can never be used (STAFF_ALERT_EMAIL is unset in the
+  // normal case, and a costless run has nothing to compare).
+  const costUsd = opts.costUsd;
+  if (!staffAlertsOn() || costUsd == null) return null;
+  const eventType =
+    opts.phase === "schedule" ? "schedule.ai_generated" : "schedule.ai_officials_generated";
+  let median: number | null;
   try {
-    // Cheap guards FIRST. `competition_events` is the audit ledger and carries
-    // no index on (type, created_at), so the median query is a scan — running
-    // it before these checks would make every production AI run pay for a
-    // baseline that can never be used (STAFF_ALERT_EMAIL is unset in the
-    // normal case, and a costless run has nothing to compare).
-    const alertTo = process.env.STAFF_ALERT_EMAIL;
-    const costUsd = opts.costUsd;
-    if (!alertTo || costUsd == null) return;
-    const eventType =
-      opts.phase === "schedule" ? "schedule.ai_generated" : "schedule.ai_officials_generated";
-    const median = await medianRunCostUsd(eventType, MEDIAN_WINDOW_DAYS);
-    if (median == null || !shouldAlertOnRunCost(costUsd, median)) return;
-    await sendAiRunCostAlertEmail({
-      to: alertTo,
-      orgId: opts.orgId,
-      ...(opts.competitionId ? { competitionId: opts.competitionId } : {}),
-      phase: opts.phase,
-      model: opts.model,
-      costUsd,
-      medianUsd: median,
-      windowDays: MEDIAN_WINDOW_DAYS,
-      // Forwarded only when the caller actually has them — an omitted mode or
-      // size must reach the copy as absent, never as "" or 0 (0 units is a
-      // real, empty pack and would be rendered as one).
-      ...(opts.mode ? { mode: opts.mode } : {}),
-      ...(opts.packUnits != null ? { packUnits: opts.packUnits } : {}),
-    });
+    median = await medianRunCostUsd(eventType, MEDIAN_WINDOW_DAYS);
   } catch (err) {
     log.error({ err, orgId: opts.orgId }, "ai-runs: expensive-run alert check failed");
+    return null;
   }
+  if (median == null || !shouldAlertOnRunCost(costUsd, median)) return null;
+  return queueStaffAlert({
+    kind: "staff_ai_run_cost",
+    refType: "ai_run",
+    id: randomUUID(),
+    render: () =>
+      aiRunCostAlertEmail({
+        orgId: opts.orgId,
+        ...(opts.competitionId ? { competitionId: opts.competitionId } : {}),
+        phase: opts.phase,
+        model: opts.model,
+        costUsd,
+        medianUsd: median,
+        windowDays: MEDIAN_WINDOW_DAYS,
+        // Forwarded only when the caller actually has them — an omitted mode or
+        // size must reach the copy as absent, never as "" or 0 (0 units is a
+        // real, empty pack and would be rendered as one).
+        ...(opts.mode ? { mode: opts.mode } : {}),
+        ...(opts.packUnits != null ? { packUnits: opts.packUnits } : {}),
+      }),
+  });
 }
 
 // ---------------------------------------------------------------------------

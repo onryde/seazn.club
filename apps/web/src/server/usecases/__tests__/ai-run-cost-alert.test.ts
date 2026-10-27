@@ -19,16 +19,33 @@
 // anything a mocked run produces, and the phase -> event-type map is pinned by
 // comparing the emailed median against a freshly-read median for BOTH types
 // rather than against a hardcoded number.
-import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+//
+// The alert is queued on the email outbox (phase 3 wave 5, kind
+// `staff_ai_run_cost`) to this suite's own STAFF_ALERT_EMAIL, under a ref
+// minted for the run (P-W5-6: a run has no id of its own, its cost is final,
+// and a double press is two runs and two costs), so the tests read the rows
+// queued to that address. The builder is a spy that calls through, so what the
+// alert SAYS is read where it enters the mail; Sentry's issue capture is
+// observed (call-through) so a test can assert the writer dropped nothing. The
+// worker never runs here: the transport is stubbed.
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 vi.mock("@/lib/email", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/email")>();
-  return { ...actual, sendAiRunCostAlertEmail: vi.fn().mockResolvedValue(true) };
+  return { ...actual, aiRunCostAlertEmail: vi.fn(actual.aiRunCostAlertEmail) };
 });
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn() }));
 
-import { sql } from "@/lib/db";
-import { sendAiRunCostAlertEmail } from "@/lib/email";
+import { sql, statementCount } from "@/lib/db";
+import { aiRunCostAlertEmail } from "@/lib/email";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
+import { staffAlertDrops, type StaffRow } from "./_money-fixtures";
 import {
   AI_RUN_COST_ALERT_MULTIPLE,
   AI_RUN_MEDIAN_MIN_SAMPLE,
@@ -41,6 +58,24 @@ import {
 } from "../ai-runs-admin";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+const KIND = "staff_ai_run_cost";
+const RUN = `arc-${randomUUID().slice(0, 8)}`;
+const costAlert = vi.mocked(aiRunCostAlertEmail);
+let staff = "";
+let errors: ReturnType<typeof vi.spyOn>;
+/** What the writer's never-throws catch left (I2): an alert that was queued or deduplicated left nothing. */
+const drops = () => staffAlertDrops(errors, vi.mocked(captureError));
+/** The AI-run alerts queued to THIS test's staff address, oldest first. Found by address, not by ref: each run's ref is a UUID
+ *  minted inside the alert (P-W5-6), which the test cannot know in advance. */
+const myRows = () =>
+  sql<StaffRow[]>`
+    select ref_id, dedupe_key, status, recipient, subject from email_outbox
+     where kind = ${KIND} and recipient = ${staff}
+     order by created_at, id`;
+/** A v4 UUID: the fresh ref `randomUUID()` mints. */
+const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+/** The subject, the builder's inline English typed from its source. */
+const costSubject = (costUsd: number, orgId: string) => `Expensive AI run: $${costUsd.toFixed(4)} (org ${orgId})`;
 
 /** Comfortably over the min-sample floor so a stray concurrent row can never
  *  drag a seeded window back under it. */
@@ -49,6 +84,12 @@ const SEED_N = 25;
  *  mocked schedule run records, so "the emailed median is the OFFICIALS one"
  *  is detectable by range alone. */
 const OFFICIALS_COST = 0.000001;
+/** Schedule baseline cost: far above the officials seed and far below the $50
+ *  run every test pages, so the alert trips on any realistic shared median. A
+ *  whole baseline (SEED_N of these) stays under a dollar because
+ *  ai-margin-report.test.ts runs beside this file and asserts its per-phase
+ *  COGS deltas stay under $1; a 25 x $0.50 baseline landed inside its window. */
+const SCHEDULE_COST = 0.01;
 
 type RunEventType = "schedule.ai_generated" | "schedule.ai_officials_generated";
 
@@ -116,15 +157,25 @@ async function qualifyingRows(type: RunEventType, days: number): Promise<number>
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
   const g = globalThis as { _sql?: { end(): Promise<void> } };
   const client = g._sql;
   g._sql = undefined;
   await client?.end();
 });
 
+beforeEach(() => {
+  // Reset, not clear: back to the real builder, so a once-only throw a red test left unconsumed cannot leak into the next.
+  costAlert.mockReset();
+  vi.mocked(captureError).mockClear();
+  errors = vi.spyOn(log, "error");
+  // This test's own staff address: CI sets none, and the database is shared.
+  staff = `staff-${RUN}-${randomUUID().slice(0, 8)}@x.test`;
+  vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+});
 afterEach(() => {
-  vi.mocked(sendAiRunCostAlertEmail).mockClear();
-  delete process.env.STAFF_ALERT_EMAIL;
+  errors.mockRestore();
+  vi.unstubAllEnvs();
 });
 
 describe("shouldAlertOnRunCost (pure, v17 gap #295)", () => {
@@ -201,31 +252,48 @@ describe.skipIf(!HAS_DB)("medianRunCostUsd (v17 gap #295)", () => {
 });
 
 describe.skipIf(!HAS_DB)("maybeAlertExpensiveRun (v17 gap #295)", () => {
-  it("never emails when STAFF_ALERT_EMAIL is unset, even for an extreme cost", async () => {
-    delete process.env.STAFF_ALERT_EMAIL;
-    await maybeAlertExpensiveRun({
-      orgId: randomUUID(),
-      phase: "schedule",
-      model: "claude-sonnet-5",
-      costUsd: 50,
-    });
-    expect(sendAiRunCostAlertEmail).not.toHaveBeenCalled();
+  it("unset: the median is never read", async () => {
+    // Cheap guards FIRST: the median is a scan of the audit ledger, and with no
+    // address set (the normal case) no alert can go anywhere, so the run must
+    // not pay for it. The positive pair is the same call with the address set:
+    // it reads the median and queues the alert.
+    await seedRuns("schedule.ai_generated", SCHEDULE_COST, SEED_N);
+    const orgId = randomUUID();
+    const run = { orgId, phase: "schedule" as const, model: "claude-sonnet-5", costUsd: 50 };
+
+    vi.stubEnv("STAFF_ALERT_EMAIL", "");
+    const before = statementCount();
+    expect(await maybeAlertExpensiveRun(run)).toBeNull();
+    expect(statementCount() - before, "no statement at all: neither the median nor an insert").toBe(0);
+    expect(costAlert).not.toHaveBeenCalled();
+
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    const set = statementCount();
+    expect(await maybeAlertExpensiveRun(run), "premise: with the address set the same run is paged").toEqual(expect.any(String));
+    expect(statementCount() - set, "the median read and the insert").toBeGreaterThanOrEqual(2);
+    expect(await myRows()).toHaveLength(1);
   });
 
-  it("alerts when a run's cost is astronomically above the trailing median", async () => {
-    await seedRuns("schedule.ai_generated", 0.5, SEED_N);
-    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+  it("an expensive run pages once, with a fresh ref", async () => {
+    await seedRuns("schedule.ai_generated", SCHEDULE_COST, SEED_N);
     const orgId = randomUUID();
-    await maybeAlertExpensiveRun({
+
+    const id = await maybeAlertExpensiveRun({
       orgId,
       competitionId: "comp-1",
       phase: "schedule",
       model: "claude-sonnet-5",
       costUsd: 50, // no realistic AI run (SPEC-2 §6: worst ~$0.47) gets near this
     });
-    expect(sendAiRunCostAlertEmail).toHaveBeenCalledTimes(1);
-    const args = vi.mocked(sendAiRunCostAlertEmail).mock.calls[0]![0];
-    expect(args.to).toBe("ops@seazn.test");
+
+    const rows = await myRows();
+    expect(rows).toEqual([
+      { ref_id: expect.stringMatching(UUID_V4), dedupe_key: rows[0]?.ref_id, status: "queued", recipient: staff, subject: costSubject(50, orgId) },
+    ]);
+    // The ref is the run's own, minted for it: not the org, not the competition, not the row.
+    expect([orgId, "comp-1", id]).not.toContain(rows[0]!.ref_id);
+    expect(costAlert, "what the alert says").toHaveBeenCalledTimes(1);
+    const args = costAlert.mock.calls[0]![0];
     expect(args.orgId).toBe(orgId);
     expect(args.competitionId).toBe("comp-1");
     expect(args.phase).toBe("schedule");
@@ -233,6 +301,25 @@ describe.skipIf(!HAS_DB)("maybeAlertExpensiveRun (v17 gap #295)", () => {
     expect(args.costUsd).toBe(50);
     expect(args.medianUsd).toBeGreaterThan(0);
     expect(args.windowDays).toBe(MEDIAN_WINDOW_DAYS);
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("two expensive runs are two alerts", async () => {
+    // A double press is two runs and two costs: the same org, phase, model and
+    // cost twice must page twice, and the second must not replace the first
+    // while it waits (P-W5-1).
+    await seedRuns("schedule.ai_generated", SCHEDULE_COST, SEED_N);
+    const run = { orgId: randomUUID(), phase: "schedule" as const, model: "claude-sonnet-5", costUsd: 50 };
+
+    await maybeAlertExpensiveRun(run);
+    await maybeAlertExpensiveRun(run);
+
+    const rows = await myRows();
+    expect(rows.map((r) => r.status)).toEqual(["queued", "queued"]);
+    expect(rows.map((r) => r.subject)).toEqual([costSubject(50, run.orgId), costSubject(50, run.orgId)]);
+    expect(rows.every((r) => UUID_V4.test(r.ref_id)), "each under a ref of its own").toBe(true);
+    expect(new Set(rows.map((r) => r.ref_id)).size).toBe(2);
+    expect(drops(), "both queued, nothing dropped").toEqual({ logged: 0, issues: 0 });
   });
 
   it("forwards the run's mode and pack_units to the email (v17 gap #295 fold)", async () => {
@@ -241,8 +328,7 @@ describe.skipIf(!HAS_DB)("maybeAlertExpensiveRun (v17 gap #295)", () => {
     // regenerate or a nudge, pack_units says whether the cost is proportionate.
     // Both are pass-through only — the MEDIAN stays pooled across modes (see
     // the pooled-baseline note in the copy), so nothing here narrows it.
-    await seedRuns("schedule.ai_generated", 0.5, SEED_N);
-    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+    await seedRuns("schedule.ai_generated", SCHEDULE_COST, SEED_N);
     await maybeAlertExpensiveRun({
       orgId: randomUUID(),
       phase: "schedule",
@@ -251,10 +337,11 @@ describe.skipIf(!HAS_DB)("maybeAlertExpensiveRun (v17 gap #295)", () => {
       costUsd: 50,
       packUnits: 40,
     });
-    expect(sendAiRunCostAlertEmail).toHaveBeenCalledTimes(1);
-    const args = vi.mocked(sendAiRunCostAlertEmail).mock.calls[0]![0];
+    expect(costAlert).toHaveBeenCalledTimes(1);
+    const args = costAlert.mock.calls[0]![0];
     expect(args.mode).toBe("regenerate");
     expect(args.packUnits).toBe(40);
+    expect(await myRows()).toHaveLength(1);
   });
 
   it("omits mode/pack_units rather than inventing them when the caller has none", async () => {
@@ -262,17 +349,17 @@ describe.skipIf(!HAS_DB)("maybeAlertExpensiveRun (v17 gap #295)", () => {
     // size — the email must receive nothing rather than a zero it would render
     // as a real, empty pack.
     await seedRuns("schedule.ai_officials_generated", OFFICIALS_COST, SEED_N);
-    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
     await maybeAlertExpensiveRun({
       orgId: randomUUID(),
       phase: "officials",
       model: "claude-sonnet-5",
       costUsd: 50,
     });
-    expect(sendAiRunCostAlertEmail).toHaveBeenCalledTimes(1);
-    const args = vi.mocked(sendAiRunCostAlertEmail).mock.calls[0]![0];
+    expect(costAlert).toHaveBeenCalledTimes(1);
+    const args = costAlert.mock.calls[0]![0];
     expect(args.mode).toBeUndefined();
     expect(args.packUnits).toBeUndefined();
+    expect(await myRows()).toHaveLength(1);
   });
 
   it("compares an officials run against the OFFICIALS baseline, not the schedule one", async () => {
@@ -282,15 +369,14 @@ describe.skipIf(!HAS_DB)("maybeAlertExpensiveRun (v17 gap #295)", () => {
     // read, a range only the officials seed can satisfy, and a proof that the
     // schedule baseline really is somewhere else entirely.
     await seedRuns("schedule.ai_officials_generated", OFFICIALS_COST, SEED_N);
-    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
     await maybeAlertExpensiveRun({
       orgId: randomUUID(),
       phase: "officials",
       model: "claude-sonnet-5",
       costUsd: 50,
     });
-    expect(sendAiRunCostAlertEmail).toHaveBeenCalledTimes(1);
-    const args = vi.mocked(sendAiRunCostAlertEmail).mock.calls[0]![0];
+    expect(costAlert).toHaveBeenCalledTimes(1);
+    const args = costAlert.mock.calls[0]![0];
     const officialsMedian = await medianRunCostUsd(
       "schedule.ai_officials_generated",
       MEDIAN_WINDOW_DAYS,
@@ -302,27 +388,31 @@ describe.skipIf(!HAS_DB)("maybeAlertExpensiveRun (v17 gap #295)", () => {
     expect(scheduleMedian).toBeGreaterThan(0.001); // …and the schedule baseline does not
   });
 
-  it("never throws — a check failure is swallowed", async () => {
+  it("never throws — an alert that cannot be queued is logged and dropped, and the run is unaffected", async () => {
     await seedRuns("schedule.ai_officials_generated", OFFICIALS_COST, SEED_N);
-    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
-    vi.mocked(sendAiRunCostAlertEmail).mockRejectedValueOnce(new Error("boom"));
+    costAlert.mockImplementationOnce(() => {
+      throw new Error("boom");
+    });
     await expect(
       maybeAlertExpensiveRun({ orgId: randomUUID(), phase: "officials", model: "x", costUsd: 50 }),
-    ).resolves.toBeUndefined();
-    // The send really was attempted — otherwise this would pass vacuously
+    ).resolves.toBeNull();
+    // The render really was attempted — otherwise this would pass vacuously
     // without ever entering the catch.
-    expect(sendAiRunCostAlertEmail).toHaveBeenCalledTimes(1);
+    expect(costAlert).toHaveBeenCalledTimes(1);
+    expect(await myRows()).toEqual([]);
+    expect(drops(), "the drop is logged and reported, once").toEqual({ logged: 1, issues: 1 });
   });
 
   it("does nothing for a null cost (nothing to compare)", async () => {
-    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
-    await maybeAlertExpensiveRun({
+    const id = await maybeAlertExpensiveRun({
       orgId: randomUUID(),
       phase: "schedule",
       model: "x",
       costUsd: null,
     });
-    expect(sendAiRunCostAlertEmail).not.toHaveBeenCalled();
+    expect(id).toBeNull();
+    expect(costAlert).not.toHaveBeenCalled();
+    expect(await myRows()).toEqual([]);
   });
 });
 
@@ -339,10 +429,9 @@ describe.skipIf(!HAS_DB)("maybeAlertExpensiveRun (v17 gap #295)", () => {
 // later suite (which is exactly how this defect was discovered).
 describe.skipIf(!HAS_DB)("malformed cost_usd must not disable the readers (v17 gap #295)", () => {
   it("does not silently kill the expensive-run alert", async () => {
-    await seedRuns("schedule.ai_generated", 0.5, SEED_N);
+    await seedRuns("schedule.ai_generated", SCHEDULE_COST, SEED_N);
     const { compId } = await seedRawRun("schedule.ai_generated", { cost_usd: "expensive" });
     try {
-      process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
       // Before the guard this threw PostgresError: invalid input syntax for
       // type numeric: "expensive".
       const median = await medianRunCostUsd("schedule.ai_generated", MEDIAN_WINDOW_DAYS);
@@ -356,7 +445,7 @@ describe.skipIf(!HAS_DB)("malformed cost_usd must not disable the readers (v17 g
         model: "claude-sonnet-5",
         costUsd: 50,
       });
-      expect(sendAiRunCostAlertEmail).toHaveBeenCalledTimes(1);
+      expect(await myRows()).toHaveLength(1);
     } finally {
       await sql`delete from competition_events where competition_id = ${compId}`;
     }
@@ -409,20 +498,10 @@ describe.skipIf(!HAS_DB)("malformed cost_usd must not disable the readers (v17 g
   });
 });
 
-// The module-level vi.mock above swaps sendAiRunCostAlertEmail out for everyone
-// importing @/lib/email, which is what the wiring tests need — but it also
-// means the real renderer would otherwise ship with zero coverage. Pull the
-// unmocked implementation straight out of vi.importActual for this block
-// (cheaper and less surprising than a second test file that would need its own
-// DB/mocking setup). `send()` returns false without RESEND_API_KEY, so these
-// exercise the full render path with no network.
-describe("sendAiRunCostAlertEmail (real render, v17 gap #295)", () => {
-  const realSend = async (opts: Parameters<typeof sendAiRunCostAlertEmail>[0]) => {
-    const actual = await vi.importActual<typeof import("@/lib/email")>("@/lib/email");
-    return actual.sendAiRunCostAlertEmail(opts);
-  };
+// The builder's render, called directly (the module mock above is a spy that calls through to it): the two median branches,
+// a multiple and none, render without throwing. The copy itself is asserted in lib/__tests__/ai-run-cost-alert-email.test.ts.
+describe("aiRunCostAlertEmail (real render, v17 gap #295)", () => {
   const base = {
-    to: "ops@seazn.test",
     orgId: "org-1",
     competitionId: "comp-1",
     phase: "schedule" as const,
@@ -431,25 +510,15 @@ describe("sendAiRunCostAlertEmail (real render, v17 gap #295)", () => {
     windowDays: MEDIAN_WINDOW_DAYS,
   };
 
-  it("renders and returns false with no provider configured (no network, no throw)", async () => {
-    const key = process.env.RESEND_API_KEY;
-    delete process.env.RESEND_API_KEY;
-    try {
-      await expect(realSend({ ...base, medianUsd: 0.25 })).resolves.toBe(false);
-    } finally {
-      if (key !== undefined) process.env.RESEND_API_KEY = key;
-    }
+  it("renders the subject and the multiple when there is a median", () => {
+    const mail = aiRunCostAlertEmail({ ...base, medianUsd: 0.25 });
+    expect(mail.subject).toBe(costSubject(50, "org-1"));
+    expect(mail.text).toContain("200.0x the trailing 30-day schedule median");
   });
 
-  it("renders the no-multiple branch (medianUsd <= 0) without dividing by zero", async () => {
-    const key = process.env.RESEND_API_KEY;
-    delete process.env.RESEND_API_KEY;
-    try {
-      await expect(
-        realSend({ ...base, competitionId: undefined, phase: "officials", medianUsd: 0 }),
-      ).resolves.toBe(false);
-    } finally {
-      if (key !== undefined) process.env.RESEND_API_KEY = key;
-    }
+  it("renders the no-multiple branch (medianUsd <= 0) without dividing by zero", () => {
+    const mail = aiRunCostAlertEmail({ ...base, competitionId: undefined, phase: "officials", medianUsd: 0 });
+    expect(mail.text).not.toMatch(/Infinity|NaN/);
+    expect(mail.text).not.toContain("x the trailing");
   });
 });

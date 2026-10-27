@@ -11,6 +11,7 @@ import { log } from "@/server/logger";
 import {
   linkStripeCustomerForGroup,
   linkStripeCustomer,
+  alertPassUnknownCompetition,
   passKeyForSession,
   passSessionRungMatchesPrice,
   pinBillingCurrency,
@@ -57,19 +58,22 @@ import {
 import { getStripe } from "@/lib/stripe";
 import {
   passRevokedEmail,
-  sendStaffDisputeAlertEmail,
-  sendStuckEventsAlertEmail,
-  sendCreditPackGrantFailedAlertEmail,
-  sendStreamCreditClawbackAlertEmail,
-  sendSizePackGrantFailedAlertEmail,
-  sendExtraOrgRepriceFailedAlertEmail,
-  sendPassUnknownCompetitionAlertEmail,
-  sendConnectBankAlertEmail,
+  staffDisputeAlertEmail,
+  stuckEventsAlertEmail,
+  creditPackGrantFailedAlertEmail,
+  type CreditPackGrantFailedAlertEmail,
+  streamCreditClawbackAlertEmail,
+  sizePackGrantFailedAlertEmail,
+  type SizePackGrantFailedAlertEmail,
+  extraOrgRepriceFailedAlertEmail,
+  type ExtraOrgRepriceFailedAlertEmail,
+  connectBankAlertEmail,
   trialEndingEmail,
 } from "@/lib/email";
 import type { PassRevokedArgs, StaffDisputeAlertArgs } from "@/lib/email-templates";
 import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
 import { orgOwnerRecipient } from "@/server/usecases/org-owner";
+import { queueStaffAlert, staffAlertsOn } from "@/server/usecases/staff-alert";
 import {
   handleRegistrationCheckoutAsyncPaymentFailed,
   handleRegistrationCheckoutCompleted,
@@ -189,6 +193,39 @@ async function ownerDistinctId(orgId: string): Promise<string> {
 // Event handlers
 // ---------------------------------------------------------------------------
 
+/**
+ * Staff alert: a buyer paid for an AI credit pack and holds nothing (phase 3 wave 5, kind `staff_credit_pack_grant_failed`). Queued on
+ * the email outbox through `queueStaffAlert`, once per Stripe object (P-W5-10): the Checkout Session that paid and could not be granted
+ * (ref type `checkout_session`, from `handleCheckoutCompleted`), or the refunded charge that found no pack_purchase row to claw back
+ * (ref type `charge`, from `handlePackChargeRefunded`). Both ids are Stripe's, so the two cannot collide. Never throws (the writer's
+ * Q1 catch): both callers ACK the webhook either way, and nothing here is retryable into a better outcome.
+ */
+export async function alertCreditPackGrantFailed(
+  refType: "checkout_session" | "charge",
+  opts: CreditPackGrantFailedAlertEmail,
+): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_credit_pack_grant_failed",
+    refType,
+    id: opts.sessionId,
+    render: () => creditPackGrantFailedAlertEmail(opts),
+  });
+}
+
+/**
+ * Staff alert: a buyer paid for a size pack and no cap was lifted (phase 3 wave 5, kind `staff_size_pack_grant_failed`). Queued on the
+ * email outbox through `queueStaffAlert`, once per Checkout Session (`checkout_session` / `session.id`), from `grantSizePackAddon`.
+ * Never throws (the writer's Q1 catch): the webhook ACKs either way, and a human must grant this manually.
+ */
+export async function alertSizePackGrantFailed(opts: SizePackGrantFailedAlertEmail): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_size_pack_grant_failed",
+    refType: "checkout_session",
+    id: opts.sessionId,
+    render: () => sizePackGrantFailedAlertEmail(opts),
+  });
+}
+
 async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   // Entry-fee checkouts (PROMPT-20a) share the endpoint; kind disambiguates.
   // Re-keyed to the GROUP (RS003 W3a mint / W3b webhook): a session now
@@ -295,16 +332,12 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
           { sessionId: session.id, orgId, packKey },
           "billing: credit_pack session paid but ungranted — no credits snapshot and no resolvable pack_key",
         );
-        const alertTo = process.env.STAFF_ALERT_EMAIL;
-        if (alertTo) {
-          void sendCreditPackGrantFailedAlertEmail({
-            to: alertTo,
-            sessionId: session.id,
-            orgId,
-            packKey,
-            reason: "no credits snapshot and no resolvable pack_key",
-          }).catch(() => {});
-        }
+        await alertCreditPackGrantFailed("checkout_session", {
+          sessionId: session.id,
+          orgId,
+          packKey,
+          reason: "no credits snapshot and no resolvable pack_key",
+        });
       }
     }
     return;
@@ -398,19 +431,15 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
           },
           "billing: event pass paid but the competition does not exist in this database — acked, not retried",
         );
-        const alertTo = process.env.STAFF_ALERT_EMAIL;
-        if (alertTo) {
-          void sendPassUnknownCompetitionAlertEmail({
-            to: alertTo,
-            sessionId: session.id,
-            orgId,
-            competitionId,
-            passKey,
-            paymentIntent:
-              typeof session.payment_intent === "string" ? session.payment_intent : null,
-            source: "webhook",
-          }).catch(() => {});
-        }
+        await alertPassUnknownCompetition({
+          sessionId: session.id,
+          orgId,
+          competitionId,
+          passKey,
+          paymentIntent:
+            typeof session.payment_intent === "string" ? session.payment_intent : null,
+          source: "webhook",
+        });
         return;
       }
       // Second owner / second tab paid for an already-passed comp — send it
@@ -511,17 +540,13 @@ async function grantSizePackAddon(session: Stripe.Checkout.Session): Promise<voi
       { sessionId: session.id, targetOrgId, sizePackKey },
       "billing: size_pack session paid but ungranted — no usable snapshot and no resolvable size_pack_key",
     );
-    const alertTo = process.env.STAFF_ALERT_EMAIL;
-    if (alertTo) {
-      void sendSizePackGrantFailedAlertEmail({
-        to: alertTo,
-        sessionId: session.id,
-        targetOrgId,
-        competitionId: targetCompetitionId,
-        sizePackKey,
-        reason: "no snapshot and no resolvable size_pack_key",
-      }).catch(() => {});
-    }
+    await alertSizePackGrantFailed({
+      sessionId: session.id,
+      targetOrgId,
+      competitionId: targetCompetitionId,
+      sizePackKey,
+      reason: "no snapshot and no resolvable size_pack_key",
+    });
     return;
   }
 
@@ -1334,37 +1359,36 @@ function errText(err: unknown): string {
 /**
  * Best-effort staff alert (v17 gap #293, Task 4b): a billing group's
  * extra-organisation rider is stuck on a price that is NOT its plan's rate.
+ * Queued on the email outbox (kind `staff_extra_org_reprice_failed`) to
+ * STAFF_ALERT_EMAIL through `queueStaffAlert`.
  *
- * NEVER THROWS, and gated on STAFF_ALERT_EMAIL before anything else — the same
- * discipline as maybeAlertOrgAllowance (extra-orgs.ts), which this deliberately
- * mirrors. It sits on the webhook's failure path, so an alert that threw would
- * turn "the rate is stale" into "the whole webhook fails and retries for ever",
- * i.e. the telemetry would become a strictly worse outcome than the fault it
- * reports. Awaited rather than fire-and-forget: this path is rare, a webhook has
- * no user waiting on it, and a floating promise cannot be tested honestly.
+ * NEVER THROWS, and gated on STAFF_ALERT_EMAIL before anything else — both are
+ * the writer's (Q1). It sits on the webhook's failure path, so an alert that
+ * threw would turn "the rate is stale" into "the whole webhook fails and
+ * retries for ever", i.e. the telemetry would become a strictly worse outcome
+ * than the fault it reports. Awaited rather than fire-and-forget: this path is
+ * rare, a webhook has no user waiting on it, and a floating promise cannot be
+ * tested honestly.
+ *
+ * Once per rider per UTC DAY (Q2, P-W5-4): ref type `subscription`, keyed
+ * `<group>:<item, or "plan" when none could be named>:<yyyy-mm-dd>`. The daily
+ * sweep nags on purpose (a money fault should nag until someone acts), so the
+ * webhook and the sweep together page a stuck rider once a day: a same-day cron
+ * retry or webhook replay pages nothing more, and tomorrow's pass pages again.
+ * Two stuck riders of one group are two pages, neither replacing the other
+ * (P-W5-1). Null when nothing was queued.
  *
  * Exported so the never-throws contract can be tested DIRECTLY rather than
  * through the caller's own catch, which would hide a missing wrapper.
  */
-export async function maybeAlertOrgRepriceFailed(opts: {
-  subscriptionId: string;
-  stripeSubscriptionId: string;
-  planKey: string;
-  itemId: string | null;
-  currentPriceId: string | null;
-  expectedPriceId: string | null;
-  reason: string;
-}): Promise<void> {
-  try {
-    const alertTo = process.env.STAFF_ALERT_EMAIL;
-    if (!alertTo) return;
-    await sendExtraOrgRepriceFailedAlertEmail({ to: alertTo, ...opts });
-  } catch (err) {
-    log.error(
-      { subscriptionId: opts.subscriptionId, err },
-      "billing: extra-org re-price alert failed",
-    );
-  }
+export async function maybeAlertOrgRepriceFailed(opts: ExtraOrgRepriceFailedAlertEmail): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_extra_org_reprice_failed",
+    refType: "subscription",
+    id: opts.subscriptionId,
+    suffix: `${opts.itemId ?? "plan"}:${new Date().toISOString().slice(0, 10)}`,
+    render: () => extraOrgRepriceFailedAlertEmail(opts),
+  });
 }
 
 /** One live extra-org rider found on a price that is NOT its group's plan rate
@@ -1655,7 +1679,7 @@ export async function sweepStaleOrgAddonPrices(limit = 500): Promise<{
   }
 
   // Logged for EVERY mismatch (the record when staff email is not configured);
-  // emailed for the first ORG_PRICE_SWEEP_ALERT_CAP only.
+  // paged for the first ORG_PRICE_SWEEP_ALERT_CAP only.
   for (const m of mismatches) {
     log.error(
       {
@@ -1671,11 +1695,14 @@ export async function sweepStaleOrgAddonPrices(limit = 500): Promise<{
       "billing: stale extra-org rider",
     );
   }
-  // The env is re-read here rather than left to maybeAlertOrgRepriceFailed's own
-  // gate so the returned `alerted` counts what was actually attempted; a counter
-  // that incremented on a call the callee no-ops would report sends that never
-  // happened, and this number is what a cron response is judged on.
-  if (process.env.STAFF_ALERT_EMAIL) {
+  // The writer's own question (`staffAlertsOn`: the address, trimmed, blank is
+  // unset) is asked here too, rather than left to the writer's gate, so the
+  // returned `alerted` counts what was actually attempted; a counter that
+  // incremented on a call the callee no-ops would report alerts that were never
+  // attempted, and this number is what a cron response is judged on. It counts
+  // ATTEMPTS: a same-day pass whose rider was already paged today attempts again
+  // and the once-key holds (Q2).
+  if (staffAlertsOn()) {
     for (const m of mismatches.slice(0, ORG_PRICE_SWEEP_ALERT_CAP)) {
       await maybeAlertOrgRepriceFailed({
         subscriptionId: m.subscriptionId,
@@ -2110,19 +2137,15 @@ async function handlePackChargeRefunded(charge: Stripe.Charge): Promise<void> {
     { chargeId: charge.id, intent },
     "billing: credit_pack charge refunded but no pack_purchase ledger row found — nothing to claw back (was it ever granted?)",
   );
-  const alertTo = process.env.STAFF_ALERT_EMAIL;
-  if (alertTo) {
-    void sendCreditPackGrantFailedAlertEmail({
-      to: alertTo,
-      sessionId: charge.id,
-      orgId: pi.metadata?.org_id ?? "unknown",
-      packKey: pi.metadata?.pack_key,
-      reason: "refunded pack charge has no pack_purchase ledger row to claw back",
-    }).catch(() => {});
-  }
+  await alertCreditPackGrantFailed("charge", {
+    sessionId: charge.id,
+    orgId: pi.metadata?.org_id ?? "unknown",
+    packKey: pi.metadata?.pack_key,
+    reason: "refunded pack charge has no pack_purchase ledger row to claw back",
+  });
 }
 
-/** The three shapes `sendStreamCreditClawbackAlertEmail` is sent for. Named
+/** The three reasons `streamCreditClawbackAlertEmail` is rendered with. Named
  *  constants rather than inline strings so the alert's reason is one authority
  *  and a test can assert the one it expects without retyping the sentence. */
 const STREAM_CLAWBACK_REASON = {
@@ -2171,8 +2194,11 @@ async function handleStreamPackChargeRefunded(charge: Stripe.Charge): Promise<vo
       { chargeId: charge.id, intent, orgId: match.orgId, purchased: match.purchased },
       "billing: match-credit charge partially refunded — no automatic claw-back, staff alerted",
     );
-    alertStreamClawback({
-      chargeId: charge.id,
+    await alertStreamClawback({
+      shape: "partial",
+      refType: "charge",
+      refId: charge.id,
+      amountRefunded: charge.amount_refunded,
       orgId: match.orgId,
       purchased: match.purchased,
       clawedBack: 0,
@@ -2192,8 +2218,10 @@ async function handleStreamPackChargeRefunded(charge: Stripe.Charge): Promise<vo
     // fully-spent pack (which writes no row at all, V410's `delta <> 0`) still
     // alerts — that is precisely the case a human most needs to see.
     if (res.clawedBack < res.purchased) {
-      alertStreamClawback({
-        chargeId: charge.id,
+      await alertStreamClawback({
+        shape: "short",
+        refType: "charge",
+        refId: charge.id,
         orgId: res.orgId ?? "unknown",
         purchased: res.purchased,
         clawedBack: res.clawedBack,
@@ -2221,29 +2249,62 @@ async function handleStreamPackChargeRefunded(charge: Stripe.Charge): Promise<vo
     { chargeId: charge.id, intent },
     "billing: stream_credits charge refunded but no purchase ledger row found — nothing to claw back (was it ever granted?)",
   );
-  alertStreamClawback({
-    chargeId: charge.id,
+  await alertStreamClawback({
+    shape: "ungranted",
+    refType: "charge",
+    refId: charge.id,
     orgId: pi.metadata?.org_id ?? "unknown",
     reason: STREAM_CLAWBACK_REASON.ungranted,
   });
 }
 
-/** STAFF_ALERT_EMAIL guard + fire-and-forget, at the CALL SITE (the builder
- *  itself reads no env). ONE helper for all four call sites — the three in
- *  `handleStreamPackChargeRefunded` above (partial, short refund, ungranted)
- *  and the short lost-dispute one in `handlePlatformDispute` below — so the
- *  guard cannot be forgotten on one of them; `void … .catch(() => {})` so an
- *  alerting hiccup can never undo a claw-back or block the ACK. */
-function alertStreamClawback(args: {
-  chargeId: string;
+/** What `alertStreamClawback` is told: the incident's shape, with the ref type and fields that shape is keyed by. */
+export type StreamClawbackAlert = {
+  refId: string;
   orgId: string;
   purchased?: number;
   clawedBack?: number;
   reason: string;
-}): void {
-  const alertTo = process.env.STAFF_ALERT_EMAIL;
-  if (!alertTo) return;
-  void sendStreamCreditClawbackAlertEmail({ to: alertTo, ...args }).catch(() => {});
+} & (
+  | { shape: "partial"; refType: "charge"; amountRefunded: number }
+  | { shape: "short" | "ungranted"; refType: "charge" }
+  | { shape: "lost"; refType: "dispute" }
+);
+
+/** The staff alert for a match-credit claw-back that needs a human: queued on
+ *  the email outbox (kind `staff_stream_credit_clawback`) to STAFF_ALERT_EMAIL
+ *  through `queueStaffAlert`, which never throws, so an alerting hiccup can
+ *  never undo a claw-back or block the ACK. ONE function for all four call
+ *  sites — the three in `handleStreamPackChargeRefunded` above (partial, short
+ *  refund, ungranted) and the short lost-dispute one in `handlePlatformDispute`
+ *  below.
+ *
+ *  Once per incident (P-W5-9): `<charge>:partial:<amount refunded>`,
+ *  `<charge>:short` and `<charge>:ungranted` under ref type `charge`, and
+ *  `<dispute>:lost` under `dispute`. A redelivery pages nothing more, while a
+ *  partial refund and then the full refund of one charge are two incidents and
+ *  two pages, neither replacing the other (P-W5-1). Null when nothing was
+ *  queued.
+ *
+ *  The argument is a union on `shape`, so tsc holds each shape to the ref type
+ *  its sites pass (a lost dispute is keyed by the dispute, every refund shape
+ *  by the charge) and a partial refund cannot be queued without the amount its
+ *  key carries (`partial:undefined` is unrepresentable, not merely unreached). */
+export async function alertStreamClawback(a: StreamClawbackAlert): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_stream_credit_clawback",
+    refType: a.refType,
+    id: a.refId,
+    suffix: a.shape === "partial" ? `partial:${a.amountRefunded}` : a.shape,
+    render: () =>
+      streamCreditClawbackAlertEmail({
+        chargeId: a.refId,
+        orgId: a.orgId,
+        purchased: a.purchased,
+        clawedBack: a.clawedBack,
+        reason: a.reason,
+      }),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2271,15 +2332,19 @@ async function disputeCustomerId(dispute: Stripe.Dispute): Promise<string | null
   return null;
 }
 
-/** Staff notification for a PLATFORM-charge dispute: an email to
- *  STAFF_ALERT_EMAIL (skipped when unset) plus a best-effort staff_audit_log
- *  breadcrumb. staff_audit_log.actor_id is NOT NULL (FK users) and a webhook
- *  dispute has no staff actor, so the row is attributed to the accountable
- *  superadmin and skipped when none exists (e.g. tests) — the same actorless
- *  limitation sponsors.ts documents. Never throws: the flag / downgrade /
- *  revoke is the source of truth and must not be undone by an alerting hiccup,
- *  and the email is fire-and-forget. */
-async function notifyStaffDispute(
+/** Staff notification for a PLATFORM-charge dispute: a best-effort
+ *  staff_audit_log breadcrumb plus an alert queued on the email outbox (kind
+ *  `staff_dispute_alert`, to STAFF_ALERT_EMAIL, nothing when unset), once per
+ *  dispute PHASE (`<dispute>:created`, `<dispute>:closed`): a redelivered
+ *  event pages nothing more, and a dispute's close is a second alert that does
+ *  not replace its open. Rendered in the platform locale (en), whatever the
+ *  org's own language. staff_audit_log.actor_id is NOT NULL (FK users) and a
+ *  webhook dispute has no staff actor, so the row is attributed to the
+ *  accountable superadmin and skipped when none exists (e.g. tests) — the same
+ *  actorless limitation sponsors.ts documents. Never throws: the flag /
+ *  downgrade / revoke is the source of truth and must not be undone by an
+ *  alerting hiccup (the queue logs and reports its own failure). */
+export async function notifyStaffDispute(
   kind: StaffDisputeAlertArgs["kind"],
   orgId: string,
   dispute: Stripe.Dispute,
@@ -2309,18 +2374,25 @@ async function notifyStaffDispute(
     /* breadcrumb is best-effort — never block the ACK */
   }
 
-  const to = process.env.STAFF_ALERT_EMAIL;
-  if (!to) return;
-  void sendStaffDisputeAlertEmail({
-    to,
-    kind,
-    orgName,
-    phase,
-    status: dispute.status,
-    amountCents: dispute.amount,
-    currency: dispute.currency,
-    disputeId: dispute.id,
-  }).catch(() => {});
+  await queueStaffAlert({
+    kind: "staff_dispute_alert",
+    refType: "dispute",
+    id: dispute.id,
+    suffix: phase,
+    render: () =>
+      staffDisputeAlertEmail(
+        {
+          kind,
+          orgName,
+          phase,
+          status: dispute.status,
+          amountCents: dispute.amount,
+          currency: dispute.currency,
+          disputeId: dispute.id,
+        },
+        "en",
+      ),
+  });
 }
 
 /**
@@ -2404,8 +2476,10 @@ async function handlePlatformDispute(
           "billing: match-credit pack clawed back on a lost dispute",
         );
         if (res.matched && res.clawedBack < res.purchased) {
-          alertStreamClawback({
-            chargeId: dispute.id,
+          await alertStreamClawback({
+            shape: "lost",
+            refType: "dispute",
+            refId: dispute.id,
             orgId: res.orgId ?? stream.orgId,
             purchased: res.purchased,
             clawedBack: res.clawedBack,
@@ -2506,9 +2580,9 @@ async function handleConnectPayout(event: Stripe.Event): Promise<void> {
  * billing banner); the staff-facing half is an English ops email, because a
  * removed bank account on an org with live entry fees is money piling up that
  * a human may have to chase. The email follows the existing ops-alert
- * convention in this file — `STAFF_ALERT_EMAIL`, English-only, never throws —
- * so it owes no dictionary work, and a failure to alert must not fail the
- * webhook and strand the DB write behind a retry loop.
+ * convention in this file — `STAFF_ALERT_EMAIL`, English-only, never throws
+ * (`alertConnectBankRemoved`) — so it owes no dictionary work, and a failure to
+ * alert must not fail the webhook and strand the DB write behind a retry loop.
  */
 async function handleExternalAccountChanged(event: Stripe.Event): Promise<void> {
   const accountId = event.account;
@@ -2538,19 +2612,29 @@ async function handleExternalAccountChanged(event: Stripe.Event): Promise<void> 
   // receives those stops being read — which would cost us the `.deleted`
   // alert that actually matters. The org still gets its banner either way.
   if (!deleted) return;
-  const to = process.env.STAFF_ALERT_EMAIL;
-  if (!to) return;
-  try {
-    await sendConnectBankAlertEmail({
-      to,
-      orgId: org.id,
-      orgName: org.name,
-      accountId,
-      detail,
-    });
-  } catch (err) {
-    log.error({ org_id: org.id, err }, "connect: bank-removed staff alert failed");
-  }
+  await alertConnectBankRemoved({ eventId: event.id, orgId: org.id, orgName: org.name, accountId, detail });
+}
+
+/** The staff alert for a connected org's DELETED bank account, queued on the
+ *  email outbox (kind `staff_connect_bank_changed`, to STAFF_ALERT_EMAIL,
+ *  nothing when unset) once per Stripe EVENT: a redelivered event pages nothing
+ *  more, and the club removing a second bank account is a second event and a
+ *  second alert. Never throws (the queue logs and reports its own failure).
+ *  Resolves to the row's id, or null when nothing was queued. */
+export async function alertConnectBankRemoved(a: {
+  eventId: string;
+  orgId: string;
+  orgName: string;
+  accountId: string;
+  detail: string;
+}): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_connect_bank_changed",
+    refType: "stripe_event",
+    id: a.eventId,
+    render: () =>
+      connectBankAlertEmail({ orgId: a.orgId, orgName: a.orgName, accountId: a.accountId, detail: a.detail }),
+  });
 }
 
 /**
@@ -2959,9 +3043,13 @@ export async function ledgerByIds(ids: string[]): Promise<Map<string, LedgerRow>
  * replay-idempotent by contract, so replaying a `received` row is always safe.
  *
  * A row is retried up to 3 times; on the 3rd-attempt row it is PARKED
- * (replay_attempts bumped to 4, which the `< 4` filter excludes from every
- * future sweep) and staff are alerted ONCE, so the sweep stays quiet instead of
- * hammering a permanently-broken event. Stripe calls stay OUTSIDE any sql.begin.
+ * (replay_attempts set to 4, which the `< 4` filter excludes from every future
+ * sweep) and staff are alerted ONCE, so the sweep stays quiet instead of
+ * hammering a permanently-broken event. The park is the transition (R6): it
+ * moves the row from 3 to 4 or matches nothing, so of two overlapping passes
+ * (the cron is `retry: true`) only the one that parked it counts `alerted` and
+ * pages; the alert's once-key (`<event>:parked`) backs that up. Stripe calls
+ * stay OUTSIDE any sql.begin.
  */
 export async function sweepStuckEvents(limit = 25): Promise<{
   replayed: number;
@@ -2979,19 +3067,18 @@ export async function sweepStuckEvents(limit = 25): Promise<{
   let replayed = 0,
     failed = 0,
     alerted = 0;
-  const alertTo = process.env.STAFF_ALERT_EMAIL;
   for (const row of rows) {
-    // Cap reached: park it (bump to 4 → never selected again) and alert once.
+    // Cap reached: park it (3 → 4, never selected again) and alert once. A pass
+    // whose park matches nothing lost the row to an overlapping pass, which
+    // counts and pages it.
     if (row.replay_attempts >= 3) {
-      await sql`update billing_events set replay_attempts = replay_attempts + 1 where id = ${row.id}`;
-      alerted++;
-      if (alertTo) {
-        void sendStuckEventsAlertEmail({
-          to: alertTo,
-          eventId: row.id,
-          eventType: row.type,
-          attempts: row.replay_attempts + 1,
-        }).catch(() => {});
+      const parked = await sql`
+        update billing_events set replay_attempts = 4
+         where id = ${row.id} and replay_attempts = 3
+        returning id`;
+      if (parked.length > 0) {
+        alerted++;
+        await alertStuckEventParked({ eventId: row.id, eventType: row.type, attempts: row.replay_attempts + 1 });
       }
       continue;
     }
@@ -3007,6 +3094,26 @@ export async function sweepStuckEvents(limit = 25): Promise<{
     }
   }
   return { replayed, failed, alerted };
+}
+
+/** The staff alert for a webhook event the sweep has just PARKED: queued on the
+ *  email outbox (kind `staff_stuck_events`, to STAFF_ALERT_EMAIL, nothing when
+ *  unset) once per event (`<event>:parked`), so a pass that re-reaches the alert
+ *  for the same event pages nothing more. Never throws (the queue logs and
+ *  reports its own failure). Resolves to the row's id, or null when nothing was
+ *  queued. */
+export async function alertStuckEventParked(a: {
+  eventId: string;
+  eventType: string;
+  attempts: number;
+}): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_stuck_events",
+    refType: "stripe_event",
+    id: a.eventId,
+    suffix: "parked",
+    render: () => stuckEventsAlertEmail({ eventId: a.eventId, eventType: a.eventType, attempts: a.attempts }),
+  });
 }
 
 /** Stuck rows outside the live window: received, never processed. */

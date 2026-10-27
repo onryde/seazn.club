@@ -7,7 +7,8 @@
 // calls back from that same mock (it imports `deliver` from the same module). It refuses to run against the real transport.
 //
 // Nothing here knows what a kind's email says: the subject it expects is read from the `emails` dictionary on disk, in the locale the
-// scenario declares, so a producer that drops the locale, or a dictionary key that moves, is seen.
+// scenario declares, so a producer that drops the locale, or a dictionary key that moves, is seen. A kind whose subject is not in the
+// dictionary (the staff alerts' inline English, spec F2) gives it as a literal instead, typed from the sender's source by the caller.
 import { vi } from "vitest";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -26,7 +27,7 @@ import { runOutboxTick } from "../worker";
 export const REQUEST_ATTEMPT_WAIT_MS = FIRST_ATTEMPT_WINDOW_MS + 5_000;
 
 /** One kind's way into the outbox. `run` drives the real producer (a route, a usecase, a sweep); everything else is what the spec says
- *  the result must be. */
+ *  the result must be. The subject is a dictionary key; a kind whose subject is not one gives a `LiteralKindScenario` instead. */
 export type KindScenario = {
   /** The language the mail must be rendered in. */
   locale: Locale;
@@ -34,12 +35,26 @@ export type KindScenario = {
   subjectKey: string;
   /** The `{name}` values of that subject. */
   subjectVars: Record<string, string>;
+  /** Never given here: a keyed scenario's subject is the dictionary's. */
+  subjectLiteral?: undefined;
   /** The run-unique address this scenario mails; the harness finds the kind's rows by it (case-insensitively). */
   recipient: string;
   /** Who makes the first attempt: the request that wrote the row (`dispatchNow`), or the retry worker (the row must wait for it). */
   firstAttempt: "request" | "worker";
   run: () => Promise<void>;
 };
+
+/** A scenario for a kind whose subject is not a dictionary key (a staff alert's inline English, spec F2): `subjectLiteral` is the
+ *  subject itself, a frozen literal typed from the sender's current source, never read from the code under test. */
+export type LiteralKindScenario = Omit<KindScenario, "subjectKey" | "subjectVars" | "subjectLiteral"> & {
+  subjectLiteral: string;
+  subjectKey?: undefined;
+  subjectVars?: undefined;
+};
+
+/** What the sweep takes. The types allow exactly one of `subjectKey` and `subjectLiteral`; a cast or a spread can still give both or
+ *  neither, so `forEachOutboxKind` refuses that by kind before any scenario runs. */
+export type AnyKindScenario = KindScenario | LiteralKindScenario;
 
 /** The spec's legend per kind: [to, transactional]. `account` (A) = an account, resolved at send; `literal` (L) = a literal address;
  *  `staff` (S) = the staff address. Typed from the spec by the caller, never taken from constants.ts. */
@@ -145,22 +160,22 @@ export async function assertNothingMoreToSend(kind: OutboxKind, ids: readonly st
  * Sweep every kind in `OUTBOX_KINDS` that is not listed in `opts.notYetMoved`, each through its scenario's real producer.
  *
  * Checked up front, before any scenario runs: every kind is either listed as not yet moved or has a scenario (`no scenario for outbox
- * kind <k>`), a kind is not both (a stale list entry would silently skip a sweep that now exists), the list names only kinds, and
- * the legend has an entry for every kind that will be swept.
+ * kind <k>`), a kind is not both (a stale list entry would silently skip a sweep that now exists), the list names only kinds, the
+ * legend has an entry for every kind that will be swept, and each scenario gives exactly one of `subjectKey` and `subjectLiteral`.
  *
  * Then, per kind: run the producer; find its rows by kind and recipient (at least one); judge each row against the legend (its
  * `transactional` flag, and `recipient_user_id` non-null exactly when the kind is an account's); see the first attempt through
  * (`request`: wait for the rows to leave `queued`/`sending`; `worker`: they must still be `queued` with no attempt, then one tick
  * sends them); require every row `sent` with its body gone; the transport reached exactly once per row under `email-outbox/<id>`,
- * addressed to the recipient, with the subject the dictionary gives in the scenario's locale; and a second call (`dispatchNow` again, and a
- * tick over rows made to look due) that sends nothing and changes no row.
+ * addressed to the recipient, with the scenario's literal subject or else the one the dictionary gives in its locale; and a second
+ * call (`dispatchNow` again, and a tick over rows made to look due) that sends nothing and changes no row.
  *
  * Returns how many kinds were swept and which. Zero is the CALLER's failure to refuse: a harness that swept nothing proves nothing.
  *
  * `requestWaitMs` is for the harness's own test of its wait; a real sweep leaves it at `REQUEST_ATTEMPT_WAIT_MS`.
  */
 export async function forEachOutboxKind(
-  scenarios: Partial<Record<OutboxKind, KindScenario>>,
+  scenarios: Partial<Record<OutboxKind, AnyKindScenario>>,
   opts: { notYetMoved: readonly OutboxKind[]; specFacts: KindFacts; requestWaitMs?: number },
 ): Promise<{ checked: number; kinds: OutboxKind[] }> {
   transportCalls(); // refuses a real transport before anything runs
@@ -178,8 +193,10 @@ export async function forEachOutboxKind(
       if (scenarios[k]) fail(k, "it has a scenario but is listed in notYetMoved; remove it from the list so it is swept");
       continue;
     }
-    if (!scenarios[k]) throw new Error(`no scenario for outbox kind ${k}`);
+    const s = scenarios[k];
+    if (!s) throw new Error(`no scenario for outbox kind ${k}`);
     if (!opts.specFacts[k]) throw new Error(`no spec fact for outbox kind ${k}`);
+    if ((s.subjectKey !== undefined) === (s.subjectLiteral !== undefined)) fail(k, "give subjectKey or subjectLiteral, exactly one");
   }
 
   const kinds: OutboxKind[] = [];
@@ -226,19 +243,20 @@ export async function forEachOutboxKind(
       await runOutboxTick({ onlyIds: ids, sleep: async () => undefined });
     }
 
-    // The outcome, row by row.
-    const expectedSubject = dictionarySubject(s.locale, s.subjectKey, s.subjectVars);
+    // The outcome, row by row. The subject is the scenario's literal when it gives one, else the dictionary's (exactly one is given).
+    const expectedSubject = s.subjectLiteral !== undefined ? s.subjectLiteral : dictionarySubject(s.locale, s.subjectKey, s.subjectVars);
+    const subjectSource = s.subjectLiteral !== undefined ? "the scenario's literal subject" : `the ${s.locale} dictionary's ${s.subjectKey}`;
     for (const r of await rowsById(ids)) {
       if (r.status !== "sent") fail(k, `row ${r.id} ended ${r.status} (last_error ${JSON.stringify(r.last_error)}), expected sent`);
       if (!r.cleared) fail(k, `row ${r.id} is sent but still holds its sealed body`);
       if (r.subject !== expectedSubject) {
-        fail(k, `row ${r.id} was queued with subject ${JSON.stringify(r.subject)}, the ${s.locale} dictionary's ${s.subjectKey} is ${JSON.stringify(expectedSubject)}`);
+        fail(k, `row ${r.id} was queued with subject ${JSON.stringify(r.subject)}, ${subjectSource} is ${JSON.stringify(expectedSubject)}`);
       }
       const calls = transportCalls().filter((c) => c.idempotencyKey === idempotencyKey(r.id));
       if (calls.length !== 1) fail(k, `row ${r.id} reached the transport ${calls.length} times, expected exactly once`);
       const call = calls[0]!;
       if (call.subject !== expectedSubject) {
-        fail(k, `row ${r.id} was sent with subject ${JSON.stringify(call.subject)}, the ${s.locale} dictionary's ${s.subjectKey} is ${JSON.stringify(expectedSubject)}`);
+        fail(k, `row ${r.id} was sent with subject ${JSON.stringify(call.subject)}, ${subjectSource} is ${JSON.stringify(expectedSubject)}`);
       }
       if (call.to.toLowerCase() !== s.recipient.toLowerCase()) fail(k, `row ${r.id} was sent to another address than the scenario's recipient`);
     }

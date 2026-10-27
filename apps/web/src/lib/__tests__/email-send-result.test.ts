@@ -1,15 +1,19 @@
-// sendWithResult — the typed result behind email.ts's private send().
+// deliver and checkSendable — the two halves of a send, which only the email
+// outbox calls (attempt.ts asks the gate, transport.ts makes the request).
 //
-// Task 2 of the email outbox (phase 1). The outbox needs three things the old
-// boolean could not give it: Resend's message id (to store as provider_id), a
-// status + error NAME on failure (so a 429 retries, a 422 is terminal, and the
-// two 409s split), and a bounded wait (so a hung socket cannot pin a lease).
-// It also needs the Idempotency-Key header so a retry after a lost response
-// cannot double-send.
+// Task 2 of the email outbox (phase 1) built them. The outbox needs three things
+// the old boolean sender could not give it: Resend's message id (to store as
+// provider_id), a status + error NAME on failure (so a 429 retries, a 422 is
+// terminal, and the two 409s split), and a bounded wait (so a hung socket cannot
+// pin a lease). It also needs the Idempotency-Key header so a retry after a lost
+// response cannot double-send.
 //
-// The other half of the contract is what must NOT move: every one of the ~50
-// existing senders still resolves a boolean, logs the same lines, and puts the
-// same request on the wire — no Idempotency-Key, no AbortSignal, no `tags`.
+// The other half of the contract is what must NOT move: with no options the
+// request on the wire is the one every direct sender made, and the log lines are
+// the same — no Idempotency-Key, no AbortSignal, no `tags`. Phase 3 wave 5 moved
+// the last direct sender to the outbox and deleted the boolean sender and its
+// typed form, so the wire tests below call `deliver` (with the key the gate
+// would have handed back) and the gate tests call `checkSendable`.
 //
 // No DB: `@/lib/db` is mocked so isSuppressed reads a stubbed row, and `fetch`
 // is a stub. Single transport, no sport involved (so no registry sweep).
@@ -21,9 +25,6 @@ vi.mock("@/lib/db", () => ({ sql: sqlMock }));
 import {
   checkSendable,
   deliver,
-  sendAiRunCostAlertEmail,
-  sendFunnelReminderEmail,
-  sendWithResult,
   type SendOptions,
 } from "../email";
 
@@ -77,15 +78,15 @@ afterEach(() => {
   else process.env.RESEND_API_KEY = OLD_KEY;
 });
 
-describe("sendWithResult — the request on the wire", () => {
+describe("deliver — the request on the wire", () => {
   it("sends Idempotency-Key exactly when given, and no such header for today's callers", async () => {
-    await sendWithResult({ ...msg, idempotencyKey: "3b241101-e2bb-4255-8caf-4136c566a962" });
+    await deliver({ ...msg, idempotencyKey: "3b241101-e2bb-4255-8caf-4136c566a962" }, KEY);
     const withKey = lastCall();
     expect(withKey.url).toBe("https://api.resend.com/emails");
     expect(withKey.init.headers["Idempotency-Key"]).toBe("3b241101-e2bb-4255-8caf-4136c566a962");
 
     // The legacy shape: exactly the two headers it always had.
-    await sendWithResult(msg);
+    await deliver(msg, KEY);
     expect(lastCall().init.headers).toEqual({
       Authorization: `Bearer ${KEY}`,
       "Content-Type": "application/json",
@@ -93,28 +94,28 @@ describe("sendWithResult — the request on the wire", () => {
 
     // Sequence: a key on call 1 must not leak into call 2, and an empty key is
     // "not given" (Resend would 400 an empty header and the send would die).
-    await sendWithResult({ ...msg, idempotencyKey: "" });
+    await deliver({ ...msg, idempotencyKey: "" }, KEY);
     expect(Object.keys(lastCall().init.headers)).not.toContain("Idempotency-Key");
   });
 
   it("tags go out as Resend's [{ name, value }] array, and no tags key otherwise", async () => {
-    await sendWithResult({ ...msg, tags: { kind: "magic_link", outbox_id: "abc-1" } });
+    await deliver({ ...msg, tags: { kind: "magic_link", outbox_id: "abc-1" } }, KEY);
     expect(lastCall().body.tags).toEqual([
       { name: "kind", value: "magic_link" },
       { name: "outbox_id", value: "abc-1" },
     ]);
 
-    await sendWithResult(msg);
+    await deliver(msg, KEY);
     expect("tags" in lastCall().body).toBe(false);
-    await sendWithResult({ ...msg, tags: {} });
+    await deliver({ ...msg, tags: {} }, KEY);
     expect("tags" in lastCall().body).toBe(false);
   });
 
   it("an omitted timeoutMs passes no signal; a given one passes a live AbortSignal", async () => {
-    await sendWithResult(msg);
+    await deliver(msg, KEY);
     expect(lastCall().init.signal).toBeUndefined();
 
-    await sendWithResult({ ...msg, timeoutMs: 8000 });
+    await deliver({ ...msg, timeoutMs: 8000 }, KEY);
     const { signal } = lastCall().init;
     expect(signal).toBeInstanceOf(AbortSignal);
     expect(signal?.aborted).toBe(false);
@@ -123,7 +124,7 @@ describe("sendWithResult — the request on the wire", () => {
   it("the payload is byte-for-byte today's: from, to, subject, html, text, reply_to", async () => {
     process.env.EMAIL_REPLY_TO = "help@example.test";
     try {
-      await sendWithResult({ ...msg, idempotencyKey: "k", tags: { a: "b" }, timeoutMs: 100 });
+      await deliver({ ...msg, idempotencyKey: "k", tags: { a: "b" }, timeoutMs: 100 }, KEY);
       // idempotencyKey / timeoutMs are transport, never body fields.
       expect(Object.keys(lastCall().body).sort()).toEqual(
         ["from", "html", "reply_to", "subject", "tags", "text", "to"].sort(),
@@ -141,10 +142,10 @@ describe("sendWithResult — the request on the wire", () => {
   });
 });
 
-describe("sendWithResult — success", () => {
+describe("deliver — success", () => {
   it("2xx returns the provider id from the JSON body's `id`", async () => {
     fetchMock.mockImplementation(async () => json(200, { id: "re_123" }));
-    expect(await sendWithResult(msg)).toEqual({ ok: true, providerId: "re_123" });
+    expect(await deliver(msg, KEY)).toEqual({ ok: true, providerId: "re_123" });
   });
 
   it("2xx without a usable id is still ok, providerId null", async () => {
@@ -160,12 +161,12 @@ describe("sendWithResult — success", () => {
     expect(bodies.length).toBeGreaterThan(0);
     for (const [label, make] of bodies) {
       fetchMock.mockImplementationOnce(async () => make() as Response);
-      expect(await sendWithResult(msg), label).toEqual({ ok: true, providerId: null });
+      expect(await deliver(msg, KEY), label).toEqual({ ok: true, providerId: null });
     }
   });
 });
 
-describe("sendWithResult — failure", () => {
+describe("deliver — failure", () => {
   it("non-2xx returns the status and Resend's error `name`; a non-JSON body gives errorName null", async () => {
     // Names come from Resend's documented error shape {statusCode,name,message}.
     const cases: Array<[number, unknown, string | null]> = [
@@ -183,7 +184,7 @@ describe("sendWithResult — failure", () => {
     for (const [status, payload, errorName] of cases) {
       const text = typeof payload === "string" ? payload : JSON.stringify(payload);
       fetchMock.mockImplementationOnce(async () => new Response(text, { status }));
-      const r = await sendWithResult(msg);
+      const r = await deliver(msg, KEY);
       expect(r, `${status} ${text}`).toEqual({ ok: false, reason: "http", status, errorName, detail: text });
     }
     expect(cases.length).toBeGreaterThan(0);
@@ -204,7 +205,7 @@ describe("sendWithResult — failure", () => {
           { status: 422 },
         ),
     );
-    expect(await sendWithResult(msg)).toEqual({
+    expect(await deliver(msg, KEY)).toEqual({
       ok: false,
       reason: "http",
       status: 422,
@@ -217,18 +218,18 @@ describe("sendWithResult — failure", () => {
     fetchMock.mockImplementationOnce(async () =>
       json(409, { statusCode: 409, name: "concurrent_idempotent_requests", message: "m" }),
     );
-    const concurrent = await sendWithResult(msg);
+    const concurrent = await deliver(msg, KEY);
     fetchMock.mockImplementationOnce(async () =>
       json(409, { statusCode: 409, name: "invalid_idempotent_request", message: "m" }),
     );
-    const invalid = await sendWithResult(msg);
+    const invalid = await deliver(msg, KEY);
     expect(concurrent).toMatchObject({ reason: "http", status: 409, errorName: "concurrent_idempotent_requests" });
     expect(invalid).toMatchObject({ reason: "http", status: 409, errorName: "invalid_idempotent_request" });
   });
 
   it("keeps today's console.error line for a non-2xx", async () => {
     fetchMock.mockImplementation(async () => new Response("boom", { status: 500 }));
-    await sendWithResult(msg);
+    await deliver(msg, KEY);
     expect(error).toHaveBeenCalledWith(`[email] send failed (500) to ${msg.to}: boom`);
   });
 
@@ -285,14 +286,13 @@ describe("sendWithResult — failure", () => {
       expect(line.length).toBe(prefix.length + 200);
     });
 
-    it("the option is off by default and for sendWithResult: today's lines are unchanged (the two pins above stay green)", async () => {
+    it("the option is off by default: today's lines are unchanged (the two pins above stay green)", async () => {
       fetchMock.mockImplementation(async () => new Response("boom", { status: 500 }));
       await deliver(msg, KEY);
       await deliver(msg, KEY, {});
       await deliver(msg, KEY, { logDetail: true });
-      await sendWithResult(msg);
       const lines = (error.mock.calls as unknown[][]).map((c) => String(c[0]));
-      expect(lines).toEqual(Array(4).fill(`[email] send failed (500) to ${msg.to}: boom`));
+      expect(lines).toEqual(Array(3).fill(`[email] send failed (500) to ${msg.to}: boom`));
     });
   });
 
@@ -300,7 +300,7 @@ describe("sendWithResult — failure", () => {
     fetchMock.mockImplementation(async () => {
       throw new TypeError("fetch failed");
     });
-    expect(await sendWithResult(msg)).toEqual({ ok: false, reason: "network", detail: "fetch failed" });
+    expect(await deliver(msg, KEY)).toEqual({ ok: false, reason: "network", detail: "fetch failed" });
     expect(error).toHaveBeenCalledWith(`[email] send error to ${msg.to}:`, expect.any(TypeError));
   });
 
@@ -322,7 +322,7 @@ describe("sendWithResult — failure", () => {
     ];
     for (const [label, err, detail] of cases) {
       fetchMock.mockImplementationOnce(() => Promise.reject(err));
-      expect(await sendWithResult(msg), label).toEqual({ ok: false, reason: "network", detail });
+      expect(await deliver(msg, KEY), label).toEqual({ ok: false, reason: "network", detail });
     }
     expect(cases.length).toBe(5);
   });
@@ -335,7 +335,7 @@ describe("sendWithResult — failure", () => {
     ];
     for (const [thrown, detail] of cases) {
       fetchMock.mockImplementationOnce(() => Promise.reject(thrown));
-      expect(await sendWithResult(msg), String(thrown)).toEqual({ ok: false, reason: "network", detail });
+      expect(await deliver(msg, KEY), String(thrown)).toEqual({ ok: false, reason: "network", detail });
     }
     expect(cases.length).toBe(3);
   });
@@ -354,23 +354,23 @@ describe("sendWithResult — failure", () => {
           });
         }),
     );
-    const r = await sendWithResult({ ...msg, timeoutMs: 20 });
+    const r = await deliver({ ...msg, timeoutMs: 20 }, KEY);
     expect(r).toEqual({ ok: false, reason: "network", detail: "timeout" });
   });
 
   it("never throws on a bad timeoutMs: it comes back as a network failure", async () => {
-    // AbortSignal.timeout(-1) throws a RangeError. send() has always promised
+    // AbortSignal.timeout(-1) throws a RangeError. A send has always promised
     // never to throw; a programming error in an option must not break that.
-    const r = await sendWithResult({ ...msg, timeoutMs: -1 });
+    const r = await deliver({ ...msg, timeoutMs: -1 }, KEY);
     expect(r).toMatchObject({ ok: false, reason: "network" });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
-describe("sendWithResult — the gate (no key, suppression)", () => {
+describe("checkSendable — the gate (no key, suppression)", () => {
   it("no RESEND_API_KEY: no_api_key, fetch never called, the 'would send' warning kept", async () => {
     delete process.env.RESEND_API_KEY;
-    expect(await sendWithResult({ ...msg, transactional: false })).toEqual({ ok: false, reason: "no_api_key" });
+    expect(await checkSendable({ ...msg, transactional: false })).toEqual({ ok: false, reason: "no_api_key" });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(`[email] RESEND_API_KEY not set — would send "${msg.subject}" to ${msg.to}`);
     // Today's order: the key check comes first, so the suppression table is not touched.
@@ -379,30 +379,31 @@ describe("sendWithResult — the gate (no key, suppression)", () => {
 
   it("non-transactional to a suppressed address: suppressed, fetch never called", async () => {
     sqlMock.mockResolvedValue([{ id: "sup-1" }]);
-    expect(await sendWithResult({ ...msg, transactional: false })).toEqual({ ok: false, reason: "suppressed" });
+    expect(await checkSendable({ ...msg, transactional: false })).toEqual({ ok: false, reason: "suppressed" });
     expect(fetchMock).not.toHaveBeenCalled();
     expect(warn).toHaveBeenCalledWith(`[email] suppressed: ${msg.to}`);
     // It asked about THIS recipient (the tagged-template's first value).
     expect(sqlMock.mock.calls[0]?.[1]).toBe(msg.to);
   });
 
-  it("a transactional send to a suppressed address still goes out and never asks the table", async () => {
+  it("a transactional message to a suppressed address is sendable and never asks the table", async () => {
     sqlMock.mockResolvedValue([{ id: "sup-1" }]);
-    expect(await sendWithResult({ ...msg, transactional: true })).toEqual({ ok: true, providerId: "re_123" });
+    expect(await checkSendable({ ...msg, transactional: true })).toEqual({ ok: true, apiKey: KEY });
     expect(sqlMock).not.toHaveBeenCalled();
   });
 
   it("a suppression lookup that throws counts as not suppressed (today's .catch)", async () => {
     sqlMock.mockRejectedValue(new Error("db down"));
-    expect(await sendWithResult({ ...msg, transactional: false })).toEqual({ ok: true, providerId: "re_123" });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(await checkSendable({ ...msg, transactional: false })).toEqual({ ok: true, apiKey: KEY });
+    // Premise: the lookup really was asked, and threw.
+    expect(sqlMock).toHaveBeenCalledTimes(1);
   });
 
   it("an omitted `transactional` is non-transactional (suppression applies)", async () => {
     sqlMock.mockResolvedValue([{ id: "sup-1" }]);
     const { transactional: _t, ...unflagged } = msg;
     void _t;
-    expect(await sendWithResult(unflagged)).toEqual({ ok: false, reason: "suppressed" });
+    expect(await checkSendable(unflagged)).toEqual({ ok: false, reason: "suppressed" });
   });
 });
 
@@ -438,6 +439,7 @@ describe("checkSendable / deliver — the seam the outbox's attemptClaimed uses"
         for (const suppressed of [true, false]) {
           process.env.RESEND_API_KEY = KEY;
           if (!hasKey) delete process.env.RESEND_API_KEY;
+          sqlMock.mockReset();
           sqlMock.mockResolvedValue(suppressed ? [{ id: "sup-1" }] : []);
           fetchMock.mockClear();
 
@@ -445,11 +447,13 @@ describe("checkSendable / deliver — the seam the outbox's attemptClaimed uses"
             ? { ok: false, reason: "no_api_key" }
             : !transactional && suppressed
               ? { ok: false, reason: "suppressed" }
-              : { ok: true, providerId: "re_123" };
+              : { ok: true, apiKey: KEY };
 
           const label = `key=${hasKey} transactional=${transactional} suppressed=${suppressed}`;
-          expect(await sendWithResult({ ...msg, transactional }), label).toEqual(expected);
-          expect(fetchMock.mock.calls.length, `${label} fetch calls`).toBe(expected.ok ? 1 : 0);
+          expect(await checkSendable({ ...msg, transactional }), label).toEqual(expected);
+          // The list is asked only past the key, and only for non-transactional mail; the gate never reaches the wire.
+          expect(sqlMock.mock.calls.length, `${label} suppression lookups`).toBe(hasKey && !transactional ? 1 : 0);
+          expect(fetchMock.mock.calls.length, `${label} fetch calls`).toBe(0);
           checked++;
         }
       }
@@ -458,41 +462,46 @@ describe("checkSendable / deliver — the seam the outbox's attemptClaimed uses"
   });
 });
 
-describe("regression — existing senders resolve a boolean exactly as before", () => {
+describe("regression — the gate then deliver, with today's logging, is what a direct sender did", () => {
+  // Every direct sender of lib/email.ts was `checkSendable` then `deliver` with no options (through a private boolean sender), and the
+  // outbox's attempt is the same two calls. Phase 3 moved every sender to the outbox and wave 5 deleted the boolean sender, so this
+  // block pins the two calls themselves: the answer on 2xx, on a 500 and with no key, the request on the wire when no option is given,
+  // and today's log line for a network error. Expected values come from the spec ("Sending"), the
+  // stubbed fetch and Resend's documented request shape, never from the code under test.
   const to = "someone@example.test";
-  // The representative transactional sender. It was the verification email until that moved to the outbox (wave 3); the funnel
-  // reminder is transactional too and keeps its direct sender until the outbox takes it.
-  const reminder = { competitionName: "Spring Open", sport: "Badminton", link: "https://seazn.test/start/claim?token=t1" };
+  const transactional: SendOptions = { to, subject: "Registration refund failed", html: "<p>alert</p>", text: "alert", transactional: true };
+  const plain: SendOptions = { to, subject: "Weekly digest", html: "<p>digest</p>", text: "digest" };
 
-  it("sendFunnelReminderEmail: true on 2xx, false on 500, false on no key", async () => {
-    expect(await sendFunnelReminderEmail(to, reminder)).toBe(true);
+  /** What a direct sender did: the gate, then (only when sendable) the request, with no options. */
+  async function gateThenDeliver(m: SendOptions): Promise<boolean> {
+    const gate = await checkSendable(m);
+    if (!gate.ok) return false;
+    return (await deliver(m, gate.apiKey)).ok;
+  }
+
+  it("ok on 2xx, not ok on a 500, and blocked before fetch with no key", async () => {
+    expect(await gateThenDeliver(transactional)).toBe(true);
 
     fetchMock.mockImplementationOnce(async () => new Response("boom", { status: 500 }));
-    expect(await sendFunnelReminderEmail(to, reminder)).toBe(false);
+    expect(await gateThenDeliver(transactional)).toBe(false);
 
     fetchMock.mockClear();
     delete process.env.RESEND_API_KEY;
-    expect(await sendFunnelReminderEmail(to, reminder)).toBe(false);
+    expect(await checkSendable(transactional)).toEqual({ ok: false, reason: "no_api_key" });
+    expect(await gateThenDeliver(transactional)).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("existing senders put today's request on the wire: no Idempotency-Key, no signal, no tags", async () => {
-    // One transactional sender and one alert sender: the two routes into send().
-    expect(await sendFunnelReminderEmail(to, reminder)).toBe(true);
-    const transactional = lastCall();
-    expect(await sendAiRunCostAlertEmail({
-      to,
-      orgId: "org-1",
-      model: "claude-sonnet-5",
-      costUsd: 0.5,
-      medianUsd: 0.05,
-      windowDays: 30,
-      phase: "schedule",
-    })).toBe(true);
-    const alert = lastCall();
+  it("with no options, today's request goes on the wire: no Idempotency-Key, no signal, no tags", async () => {
+    // A transactional message and a non-transactional one: the gate's two routes to the request.
+    expect(await gateThenDeliver(transactional)).toBe(true);
+    const first = lastCall();
+    expect(await gateThenDeliver(plain)).toBe(true);
+    const second = lastCall();
     expect(fetchMock).toHaveBeenCalledTimes(2);
 
-    for (const call of [transactional, alert]) {
+    let checked = 0;
+    for (const call of [first, second]) {
       expect(call.init.headers).toEqual({
         Authorization: `Bearer ${KEY}`,
         "Content-Type": "application/json",
@@ -500,14 +509,16 @@ describe("regression — existing senders resolve a boolean exactly as before", 
       expect(call.init.signal).toBeUndefined();
       expect("tags" in call.body).toBe(false);
       expect(call.init.method).toBe("POST");
+      checked++;
     }
+    expect(checked, "anti-vacuity: both requests were judged").toBe(2);
   });
 
-  it("a network error resolves false, and logs today's line", async () => {
+  it("a network error is not ok, and logs today's line (with the recipient: the default logging)", async () => {
     fetchMock.mockImplementation(async () => {
       throw new TypeError("fetch failed");
     });
-    expect(await sendFunnelReminderEmail(to, reminder)).toBe(false);
+    expect(await gateThenDeliver(transactional)).toBe(false);
     expect(error).toHaveBeenCalledWith(`[email] send error to ${to}:`, expect.any(TypeError));
   });
 });

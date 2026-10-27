@@ -20,9 +20,23 @@ import { log } from "@/server/logger";
 import { getStripe } from "@/lib/stripe";
 import { HttpError } from "@/lib/errors";
 import { linkStripeCustomer, pinBillingCurrency } from "@/lib/billing";
-import { sendStreamCreditGrantFailedAlertEmail } from "@/lib/email";
+import { streamCreditGrantFailedAlertEmail, type StreamCreditGrantFailedAlertEmail } from "@/lib/email";
 import { streamPack } from "@/lib/stream-credit-packs";
 import { recordPurchase } from "@/server/usecases/stream-credits";
+import { queueStaffAlert } from "@/server/usecases/staff-alert";
+
+/** Page staff that a completed match-credit session granted nothing: queued on the email outbox (kind
+ *  `staff_stream_credit_grant_failed`) to STAFF_ALERT_EMAIL, once per Checkout Session — a redelivery of the same
+ *  refusal is the same incident. Never throws (`queueStaffAlert` logs and reports a drop); null when nothing was
+ *  queued. Only the webhook calls it (N4: `alertStaff`). */
+export async function alertStreamCreditGrantFailed(opts: StreamCreditGrantFailedAlertEmail): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_stream_credit_grant_failed",
+    refType: "checkout_session",
+    id: opts.sessionId,
+    render: () => streamCreditGrantFailedAlertEmail(opts),
+  });
+}
 
 /**
  * Grant a `kind: "stream_credits"` session's credits to `orgId` — the session's own IMMUTABLE `metadata.org_id`, which
@@ -106,7 +120,7 @@ async function fulfilStreamCreditsOutcome(
         delta: credits,
         stripeEventId: session.id,
         link,
-      }).catch((err: unknown) => {
+      }).catch(async (err: unknown) => {
         if (err instanceof HttpError && err.code === "stripe_event_org_mismatch") {
           log.error(
             { orgId, sessionId: session.id, credits },
@@ -116,15 +130,13 @@ async function fulfilStreamCreditsOutcome(
           // remaining trail — page a human, exactly as the donor branches do
           // (billing-events.ts's credit_pack, pass and size_pack limbs). The buyer was
           // charged and holds nothing; only a manual grant fixes it.
-          const alertTo = process.env.STAFF_ALERT_EMAIL;
-          if (alertStaff && alertTo) {
-            void sendStreamCreditGrantFailedAlertEmail({
-              to: alertTo,
+          if (alertStaff) {
+            await alertStreamCreditGrantFailed({
               sessionId: session.id,
               orgId,
               packRaw: session.metadata?.pack,
               reason: "checkout session id already recorded for another organisation",
-            }).catch(() => {});
+            });
           }
           return null;
         }
@@ -145,15 +157,13 @@ async function fulfilStreamCreditsOutcome(
       );
       // Same reasoning as the mismatch limb above: acknowledged, unretryable,
       // and invisible to everyone unless somebody is told.
-      const alertTo = process.env.STAFF_ALERT_EMAIL;
-      if (alertStaff && alertTo) {
-        void sendStreamCreditGrantFailedAlertEmail({
-          to: alertTo,
+      if (alertStaff) {
+        await alertStreamCreditGrantFailed({
           sessionId: session.id,
           orgId,
           packRaw: session.metadata?.pack,
           reason: "no credits snapshot and no resolvable pack",
-        }).catch(() => {});
+        });
       }
       return "refused";
     }

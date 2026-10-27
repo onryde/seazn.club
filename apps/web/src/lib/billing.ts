@@ -18,9 +18,11 @@ import { planItem } from "@/lib/subscription-items";
 import { creditPassTowardSubscription } from "@/server/usecases/pass-credit";
 import { grantPassStreamCredits } from "@/server/usecases/stream-credits";
 import {
-  sendPassRungMismatchAlertEmail,
-  sendPassUnknownCompetitionAlertEmail,
+  passRungMismatchAlertEmail,
+  passUnknownCompetitionAlertEmail,
+  type PassUnknownCompetitionAlertEmail,
 } from "@/lib/email";
+import { queueStaffAlert } from "@/server/usecases/staff-alert";
 
 /**
  * Checkout branding (verified against API 2026-06-24.dahlia). Kept in code
@@ -1421,20 +1423,21 @@ export async function competitionHasRefusedPassPayment(competitionId: string): P
 }
 
 /**
- * Best-effort staff alert for a refused mint (v17 gap #326). NEVER THROWS,
- * and gated on STAFF_ALERT_EMAIL before anything else — the same shape as
- * `maybeAlertOrgAllowance` (server/usecases/extra-orgs.ts) and
- * `maybeAlertOrgRepriceFailed` (server/usecases/billing-events.ts), which this
- * deliberately mirrors. Ops-only: `sendPassRungMismatchAlertEmail` carries no
- * i18n, like every other staff alert in lib/email.ts.
+ * Staff alert for a refused mint (v17 gap #326): queued on the email outbox
+ * (kind `staff_pass_rung_mismatch`) to STAFF_ALERT_EMAIL through
+ * `queueStaffAlert`, once per Checkout Session — the webhook and
+ * reconcile-on-return meet the same session, and a refresh of the return URL
+ * re-runs reconcile. Two floors: the caller's refusal row (`inserted ||
+ * writeFailed`) keeps a conflicting call from reaching here at all, and the
+ * session's once-key holds when the row could not be written. Ops-only:
+ * `passRungMismatchAlertEmail` carries no i18n, like every other staff alert
+ * in lib/email.ts.
  *
- * The own try/catch is not redundant with the caller's: it sits on the webhook's
+ * NEVER THROWS (the writer logs and reports a drop): it sits on the webhook's
  * path, where a throw would turn "one pass was not granted" into "this webhook
- * fails and retries for ever", i.e. the telemetry would be a strictly worse
- * outcome than the fault it reports.
- *
- * Exported so the never-throws contract can be tested DIRECTLY rather than
- * through a caller's own catch, which would hide a missing wrapper.
+ * fails and retries for ever". Null when nothing was queued. Exported so that
+ * contract can be tested DIRECTLY rather than through a caller's own catch,
+ * which would hide a missing wrapper.
  */
 export async function maybeAlertPassRungMismatch(opts: {
   sessionId: string;
@@ -1445,17 +1448,29 @@ export async function maybeAlertPassRungMismatch(opts: {
   expectedPriceId: string;
   actualPriceId: string | null;
   paymentIntent: string | null;
-}): Promise<void> {
-  try {
-    const alertTo = process.env.STAFF_ALERT_EMAIL;
-    if (!alertTo) return;
-    await sendPassRungMismatchAlertEmail({ to: alertTo, ...opts });
-  } catch (err) {
-    console.error(
-      `[billing] pass rung mismatch alert failed (session ${opts.sessionId})`,
-      err,
-    );
-  }
+}): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_pass_rung_mismatch",
+    refType: "checkout_session",
+    id: opts.sessionId,
+    render: () => passRungMismatchAlertEmail(opts),
+  });
+}
+
+/**
+ * Staff alert for a paid Event Pass naming a competition this database does not
+ * hold: queued on the email outbox (kind `staff_pass_unknown_competition`) to
+ * STAFF_ALERT_EMAIL through `queueStaffAlert`, once per Checkout Session — the
+ * webhook and reconcile-on-return both reach it for one payment, and the first
+ * path's alert is the one page. Never throws; null when nothing was queued.
+ */
+export async function alertPassUnknownCompetition(a: PassUnknownCompetitionAlertEmail): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_pass_unknown_competition",
+    refType: "checkout_session",
+    id: a.sessionId,
+    render: () => passUnknownCompetitionAlertEmail(a),
+  });
 }
 
 /**
@@ -1527,19 +1542,15 @@ export async function reconcilePassCheckout(
         `reconcilePassCheckout: competition ${competitionId} does not exist in this ` +
           `database — org ${orgId} session ${sessionId} rung ${passKey}; pass NOT recorded`,
       );
-      const alertTo = process.env.STAFF_ALERT_EMAIL;
-      if (alertTo) {
-        void sendPassUnknownCompetitionAlertEmail({
-          to: alertTo,
-          sessionId,
-          orgId,
-          competitionId,
-          passKey,
-          paymentIntent:
-            typeof session.payment_intent === "string" ? session.payment_intent : null,
-          source: "reconcile",
-        }).catch(() => {});
-      }
+      await alertPassUnknownCompetition({
+        sessionId,
+        orgId,
+        competitionId,
+        passKey,
+        paymentIntent:
+          typeof session.payment_intent === "string" ? session.payment_intent : null,
+        source: "reconcile",
+      });
       return false;
     }
     // Reconcile-on-return can land a second owner's payment; refund it (the

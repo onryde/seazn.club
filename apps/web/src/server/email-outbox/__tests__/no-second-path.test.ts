@@ -4,12 +4,14 @@
 // over has to be the ONLY one, and has to stay free of app rendering. This file keeps these claims, by reading the source (no runner,
 // no database):
 //
-//  1. Allowlist. The `send*` exports of lib/email.ts are exactly the typed list in _kind-senders.ts (49 at the start of wave 1, one fewer per kind that has moved). A new `send*` is a new direct
-//     sender, and adding one is a decision this test makes someone take on purpose. Each kind that moves to the outbox (T8-T12) deletes
-//     its `send*` in the same commit as it adds its enqueue, and removes its name there.
+//  1. Allowlist. The `send*` exports of lib/email.ts are exactly the typed list in _kind-senders.ts (49 at the start of wave 1, one fewer
+//     per kind that has moved). A new `send*` is a new direct sender, and adding one is a decision this test makes someone take on
+//     purpose. Each kind that moved to the outbox deleted its `send*` in the same commit as it added its enqueue, and removed its name
+//     there. Wave 5 moved the last (the list is empty: the spec's 49 less 49) and deleted the private boolean sender and its typed form
+//     with it, so lib/email.ts now sends nothing itself: it exports no `send*` at all, and only the outbox calls its two halves.
 //  2. Imports. Nothing outside the outbox's tests, lib/email.ts itself and that module's own unit test imports `deliver`,
-//     `sendWithResult`, `checkSendable` or `claimOne` - from lib/email, from the transport, or by any path to either (an alias, a
-//     relative path, a re-export, a namespace import, a dynamic import).
+//     `checkSendable` or `claimOne` - from lib/email, from the transport, or by any path to either (an alias, a relative path, a
+//     re-export, a namespace import, a dynamic import).
 //  3. The outbox's own production files are pinned file by file, not exempted by directory: the only two that touch the gated
 //     names are attempt.ts (the gate and the transport) and transport.ts (the wire function), and no outbox file imports anything else
 //     from lib/email (a render builder in dispatch or the worker is exactly what phase 4 cannot carry across). Those two may CALL what
@@ -59,19 +61,25 @@ const allFiles = (): string[] => walk(SRC).map(rel).sort();
 // 1. The allowlist
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-/** The outbox's own typed sender: exported, but not one of the direct `send*` mails the allowlist is about. */
-const OUTBOX_SENDER = "sendWithResult";
-
 /** The exported `send*` names of a module's source: `export [async] function sendX` and `export const sendX`. */
 function senderExports(source: string): string[] {
   const names: string[] = [];
   for (const m of source.matchAll(/^export\s+(?:async\s+)?function\s+(send\w*)/gm)) names.push(m[1]!);
   for (const m of source.matchAll(/^export\s+const\s+(send\w*)\b/gm)) names.push(m[1]!);
-  return names.filter((n) => n !== OUTBOX_SENDER);
+  return names;
 }
 
+/** A private boolean sender of the shape lib/email.ts kept until wave 5 (`async function send(opts) {...}`): not exported, so the
+ *  allowlist cannot see it, and one caller away from a direct mail. */
+const PRIVATE_SEND = /\bfunction\s+send\s*\(/;
+/** The typed sender lib/email.ts exported until wave 5 (gate, then deliver, in one call), named anywhere in the file. */
+const TYPED_SENDER = /\bsendWithResult\b/;
+
+/** The names of every `export [async] function` in a source: the same line form senderExports reads, without the `send` prefix. */
+const exportedFunctions = (source: string): string[] => [...source.matchAll(/^export\s+(?:async\s+)?function\s+(\w+)/gm)].map((m) => m[1]!);
+
 describe("1. the send* allowlist", () => {
-  it("the matcher reads every form a new sender would take, and leaves the outbox's own sender and private helpers alone", () => {
+  it("the matcher reads every form a new sender would take, the typed sender among them, and leaves private helpers alone", () => {
     const src = [
       `export async function sendNewThingEmail(a: string) {}`,
       `export function sendSyncOne() {}`,
@@ -84,16 +92,44 @@ describe("1. the send* allowlist", () => {
       `// export async function sendInAComment() {}`,
       `  export async function sendIndented() {}`,
     ].join("\n");
-    // The last two lines are not at the start of a line (a comment, indentation): a real export is never either.
-    expect(senderExports(src).sort()).toEqual(["sendArrow", "sendNewThingEmail", "sendSyncOne", "sendTyped"]);
+    // The last two lines are not at the start of a line (a comment, indentation): a real export is never either. Wave 5 deleted the
+    // typed sender, so it is no longer set aside: an export of it is a sender like any other.
+    expect(senderExports(src).sort()).toEqual(["sendArrow", "sendNewThingEmail", "sendSyncOne", "sendTyped", "sendWithResult"]);
   });
 
   it("lib/email.ts exports exactly the typed list (the spec's 49, less one for each kind that has moved to the outbox), none added and none dropped", () => {
-    const found = senderExports(read("lib/email.ts"));
+    const source = read("lib/email.ts");
+    const found = senderExports(source);
     expect(new Set(found).size, "premise: no name is exported twice").toBe(found.length);
     expect(SENDER_ALLOWLIST, "the spec says 49 send* exports at the start of wave 1; each kind that moves takes its own with it").toHaveLength(allowlistLengthFor(NOT_YET_MOVED.length));
-    expect(found.length, "anti-vacuity: the file was read and its senders found").toBeGreaterThan(0);
+    // Every kind has moved: the spec's 49 less 49.
+    expect(allowlistLengthFor(NOT_YET_MOVED.length), "the spec's 49 less 49").toBe(0);
+    expect(SENDER_ALLOWLIST).toHaveLength(0);
+    // Anti-vacuity: the allowlist is empty and so is `found`, so the positive control is the file's other exports, read by the SAME
+    // line form with only the `send` prefix dropped. A file that was not read, or a line form that matches no export, finds neither.
+    const exported = exportedFunctions(source);
+    expect(exported, `anti-vacuity: ${exported.length} exported functions read, the outbox's two halves among them`).toEqual(
+      expect.arrayContaining(["deliver", "checkSendable"]),
+    );
     expect([...found].sort()).toEqual([...SENDER_ALLOWLIST].sort());
+  });
+
+  it("after wave 5 lib/email.ts sends nothing itself: no send* export, no private send(), no sendWithResult", () => {
+    // The two patterns read the forms they exist for (a negative needs its positive pair), and not the names that stay.
+    expect("async function send(opts: SendOptions): Promise<boolean> {", "the private sender's form").toMatch(PRIVATE_SEND);
+    expect("export async function sendWithResult(opts: SendOptions) {", "the typed sender's form").toMatch(TYPED_SENDER);
+    for (const legal of ["async function sendable(", "export async function deliver(", "export async function checkSendable(", "// resend this"]) {
+      expect(legal, legal).not.toMatch(PRIVATE_SEND);
+      expect(legal, legal).not.toMatch(TYPED_SENDER);
+    }
+
+    const source = read("lib/email.ts");
+    expect(senderExports(source), "no send* export").toEqual([]);
+    expect(source, "no private send()").not.toMatch(PRIVATE_SEND);
+    expect(source, "no sendWithResult, defined, called or named").not.toMatch(TYPED_SENDER);
+    // The positive pair: the file was read, and the two halves only the outbox calls are still there.
+    expect(source).toContain("export async function deliver");
+    expect(source).toContain("export async function checkSendable");
   });
 
   it("the allowlist has no duplicate", () => {
@@ -105,9 +141,10 @@ describe("1. the send* allowlist", () => {
 // 2. The imports
 // ---------------------------------------------------------------------------------------------------------------------------------
 
-/** The things only the outbox may call: the transport's wire function, the typed sender, the gate (key, suppression), and the
- *  worker's claim (the one statement that takes a due row; a second claimer is a second dispatcher). */
-const GATED_NAMES: readonly string[] = ["deliver", "sendWithResult", "checkSendable", "claimOne"];
+/** The things only the outbox may call: the transport's wire function, the gate (key, suppression), and the worker's claim (the one
+ *  statement that takes a due row; a second claimer is a second dispatcher). The typed sender that joined the first two in one call
+ *  was deleted in wave 5 (section 1 holds it out of lib/email.ts). */
+const GATED_NAMES: readonly string[] = ["deliver", "checkSendable", "claimOne"];
 const GATED = GATED_NAMES.join("|");
 
 /** A module specifier as a path under src/ with no extension and no trailing /index, or null for a package or a path outside src/. */
@@ -478,16 +515,16 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
       "named, from lib/email": `import { deliver } from "@/lib/email";`,
       "named, from the transport": `import { deliver } from "@/server/email-outbox/transport";`,
       "the gate": `import { checkSendable } from "@/lib/email";`,
-      "the typed sender": `import { sendWithResult } from "@/lib/email";`,
+      "the gate, aliased": `import { checkSendable as gate } from "@/lib/email";`,
       "the worker's claim": `import { claimOne } from "@/server/email-outbox/worker";`,
       "aliased": `import { deliver as post } from "@/lib/email";`,
       "among others": `import { sendInviteEmail, deliver } from "@/lib/email";`,
-      "after an inline type": `import { type SendOptions, sendWithResult } from "@/lib/email";`,
+      "after an inline type": `import { type SendOptions, checkSendable } from "@/lib/email";`,
       "multi-line": `import {\n  sendInviteEmail,\n  checkSendable,\n} from "@/lib/email";`,
       "relative path": `import { deliver } from "../../lib/email";`,
       "relative path with an extension": `import { deliver } from "../../lib/email.ts";`,
       "through the outbox index": `import { deliver } from "@/server/email-outbox";`,
-      "through another outbox module": `import { sendWithResult } from "@/server/email-outbox/attempt";`,
+      "through another outbox module": `import { checkSendable } from "@/server/email-outbox/attempt";`,
       "a re-export by name": `export { deliver } from "@/lib/email";`,
       "a re-export under another name": `export { deliver as rawSend } from "@/server/email-outbox/transport";`,
       "a re-export of everything": `export * from "@/lib/email";`,
@@ -508,11 +545,11 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
       "a dynamic import, bound then destructured": `const m = await import("@/lib/email");\nconst { deliver } = m;`,
       "a dynamic import, bound then handed on": `const m = await import("@/lib/email");\nuse(m);`,
       "a dynamic import, assigned later": `let m;\nm = await import("@/lib/email");\nm.deliver(x, k);`,
-      "a dynamic import, read off the call": `const send = (await import("@/lib/email")).sendWithResult;`,
+      "a dynamic import, read off the call": `const send = (await import("@/lib/email")).checkSendable;`,
       "a dynamic import, called off the call": `await (await import("@/lib/email")).deliver(m, k);`,
       "a dynamic import, in a then": `import("@/lib/email").then(({ deliver }) => deliver(m, k));`,
       "a require": `const { checkSendable } = require("../../lib/email");`,
-      "an actual-module load": `const actual = await vi.importActual<typeof import("@/lib/email")>("@/lib/email");\nactual.sendWithResult(o);`,
+      "an actual-module load": `const actual = await vi.importActual<typeof import("@/lib/email")>("@/lib/email");\nactual.checkSendable(o);`,
       "on one line with another statement": `import a from "b"; import { deliver } from "@/lib/email";`,
       "after a block comment on the same line": `/* the sender */ import { deliver } from "@/lib/email";`,
       "an apostrophe in a comment inside the clause": `import {\n  sendInviteEmail, // don't\n  deliver,\n} from "@/lib/email";`,
@@ -523,13 +560,13 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
       // the function body or the typed parameter instead of the binding (the bound name then resolves to `opts`, which nothing uses).
       "a dynamic import in a function body, destructured": `async function f() {\n  const { deliver } = await import("@/lib/email");\n  return deliver;\n}`,
       "a dynamic import after a typed parameter, bound then used": `async function f(opts: T) {\n  const m = await import("@/lib/email");\n  m.deliver(x);\n}`,
-      "a dynamic import in an arrow with a typed parameter": `const f = async (opts: Opts) => {\n  const m = await import("@/lib/email");\n  await m.sendWithResult(o);\n};`,
+      "a dynamic import in an arrow with a typed parameter": `const f = async (opts: Opts) => {\n  const m = await import("@/lib/email");\n  await m.checkSendable(o);\n};`,
       "a dynamic import in a method with a typed parameter and return": `class A {\n  async go(opts: T): Promise<void> {\n    const m = await import("@/lib/email");\n    await m.checkSendable(o);\n  }\n}`,
       "a dynamic import after a typed parameter with an object default": `async function f(opts: { a: number } = { a: 1 }) {\n  const { deliver } = await import("@/lib/email");\n}`,
       "a dynamic import in a nested block": `async function f(ok: boolean) {\n  if (ok) {\n    const { claimOne } = await import("@/server/email-outbox/worker");\n  }\n}`,
       "a vi.mock factory, importActual destructured": `vi.mock("@/x", async () => {\n  const { deliver } = await vi.importActual("@/lib/email");\n  return { deliver };\n});`,
       "a vi.mock factory, importActual bound then used": `vi.mock("@/x", async () => {\n  const actual = await vi.importActual("@/lib/email");\n  return { send: actual.deliver };\n});`,
-      "a vi.mock factory, a generic importActual destructured": `vi.mock("@/x", async () => {\n  const { sendWithResult } = await vi.importActual<typeof import("@/lib/email")>("@/lib/email");\n  return {};\n});`,
+      "a vi.mock factory, a generic importActual destructured": `vi.mock("@/x", async () => {\n  const { checkSendable } = await vi.importActual<typeof import("@/lib/email")>("@/lib/email");\n  return {};\n});`,
       "a vi.mock factory, a require": `vi.mock("@/x", () => {\n  const { checkSendable } = require("@/lib/email");\n  return {};\n});`,
       "a require in a function body, with a rest": `function f() {\n  const { ...rest } = require("@/lib/email");\n  return rest;\n}`,
       "a dynamic import in a function body, assigned to an outer let": `let m;\nasync function f(opts: T) {\n  m = await import("@/lib/email");\n  m.deliver(x);\n}`,
@@ -623,7 +660,7 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
       "destructured": `const { deliver } = await import("@/lib/email");`,
       "destructured and renamed": `const { deliver: post, sendInviteEmail } = await import("@/lib/email");`,
       "destructured from a require": `const { checkSendable } = require("../../lib/email");`,
-      "destructured from an importActual": `const { sendWithResult } = await vi.importActual("@/lib/email");`,
+      "destructured from an importActual": `const { checkSendable } = await vi.importActual("@/lib/email");`,
       "destructured from a generic importActual": `const { claimOne } = await vi.importActual<typeof import("@/server/email-outbox/worker")>("@/server/email-outbox/worker");`,
       "destructured with an annotation": `const { deliver }: Mail = await import("@/lib/email");`,
       "destructured by let": `let { deliver } = await import("@/lib/email");`,
@@ -632,10 +669,10 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
       "destructured with a rest": `const { sendInviteEmail, ...rest } = await import("@/lib/email");`,
       "bound then used": `const m = await import("@/server/email-outbox/transport");\n  m.deliver(x, k);`,
       "bound then indexed": `const m = await import("@/lib/email");\n  await m["checkSendable"](o);`,
-      "bound by importActual": `const actual = await vi.importActual<typeof import("@/lib/email")>("@/lib/email");\n  actual.sendWithResult(o);`,
+      "bound by importActual": `const actual = await vi.importActual<typeof import("@/lib/email")>("@/lib/email");\n  actual.checkSendable(o);`,
       "bound with an annotation": `const m: typeof import("@/lib/email") = await import("@/lib/email");\n  m.deliver(x, k);`,
       "bound then spread": `const m = await import("@/lib/email");\n  const all = { ...m };`,
-      "read off the call": `const send = (await import("@/lib/email")).sendWithResult;`,
+      "read off the call": `const send = (await import("@/lib/email")).checkSendable;`,
       "called off the call": `await (await import("@/lib/email")).deliver(m, k);`,
       "picked in a then": `import("@/lib/email").then(({ deliver }) => deliver(m, k));`,
       "a require, bound then used": `const m = require("@/lib/email");\n  m.deliver(x);`,
@@ -745,7 +782,7 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
     const transport = scanImports(read("server/email-outbox/transport.ts"), "server/email-outbox/transport.ts");
     expect(transport.offences).toEqual(["imports deliver from @/lib/email"]);
     const own = scanImports(read("lib/__tests__/email-send-result.test.ts"), "lib/__tests__/email-send-result.test.ts");
-    expect(own.offences.map((o) => o.replace(/ from .*/, "")).sort()).toEqual(["imports checkSendable", "imports deliver", "imports sendWithResult"]);
+    expect(own.offences.map((o) => o.replace(/ from .*/, "")).sort()).toEqual(["imports checkSendable", "imports deliver"]);
   });
 
   it("the exemption for lib/email.ts's own unit test is exact and still needed", () => {
@@ -773,7 +810,7 @@ describe("2. nothing outside the outbox imports the gated functions", () => {
     for (const f of scanned) expect(exempt(f), `${f} is scanned`).toBe(false);
   });
 
-  it("no file under src/ outside lib/email.ts, its unit test and the outbox's tests imports deliver, sendWithResult, checkSendable or claimOne", () => {
+  it("no file under src/ outside lib/email.ts, its unit test and the outbox's tests imports deliver, checkSendable or claimOne", () => {
     // The outbox's production files are in this walk: each is held to its pin (below) and nothing else may import the names at all.
     const files = allFiles().filter((r) => !exempt(r) && !isOutboxProduction(r));
     const offenders: string[] = [];

@@ -3,11 +3,12 @@ import { getStripe } from "@/lib/stripe";
 import { sql } from "@/lib/db";
 import { deferred } from "@/lib/deferred";
 import { HttpError } from "@/lib/errors";
-import { sendExtraOrgAllowanceAlertEmail } from "@/lib/email";
+import { extraOrgAllowanceAlertEmail } from "@/lib/email";
 import { hasLiveSubscription } from "@/lib/subscription-status";
 import { capacityBasis, MAX_EXTRA_ORGS, ridersInUse } from "@/lib/billing-group";
 import { log } from "@/server/logger";
 import { requireBillingOwner } from "@/server/usecases/billing-manage";
+import { queueStaffAlert, staffAlertsOn } from "@/server/usecases/staff-alert";
 import {
   ORG_ADDON_FEATURE_KEY,
   orgAddonForPlan,
@@ -266,7 +267,7 @@ export async function setExtraOrgs(
   }
 
   // Enterprise watch (v17 gap #293 Q2). Registered as TAIL WORK: it costs a
-  // query and an email send, and the buyer's request must not wait on staff
+  // query and an outbox insert, and the buyer's request must not wait on staff
   // telemetry — nor can it fail for it (deferred swallows, and
   // maybeAlertOrgAllowance is wrapped in its own right). Deliberately AFTER
   // the Stripe mutation succeeded: an alert about a purchase that did not
@@ -366,10 +367,14 @@ export function shouldAlertOnOrgAllowance(opts: {
 /**
  * Best-effort staff alert (v17 gap #293): a purchase just took a billing
  * group's TOTAL organisation allowance to ORG_ALLOWANCE_ALERT_THRESHOLD or
- * more. NEVER THROWS — a telemetry failure must not fail a purchase Stripe has
+ * more. Queued on the email outbox (kind `staff_extra_org_allowance`) once per
+ * group and count: the key is `<group>:<extraOrgs>` (P-W5-16), so a
+ * double-submitted purchase to one count pages once, and a later purchase to a
+ * higher count is a new key and pages again. Returns the queued row's id, or
+ * null. NEVER THROWS — a telemetry failure must not fail a purchase Stripe has
  * already accepted (the same discipline as maybeAlertExpensiveRun and every
- * other post-commit alert here). Silent when `STAFF_ALERT_EMAIL` is unset,
- * matching every other alert in billing-events.ts / ai-runs-admin.ts.
+ * other post-commit alert here; `queueStaffAlert` logs and drops an alert it
+ * cannot queue). Silent when `STAFF_ALERT_EMAIL` is unset, before any query.
  *
  * Exported so the never-throws contract can be tested DIRECTLY rather than
  * through deferred()'s own swallow, which would hide a missing wrapper.
@@ -380,51 +385,58 @@ export async function maybeAlertOrgAllowance(opts: {
   planKey: string;
   extraOrgs: number;
   previousExtraOrgs: number;
-}): Promise<void> {
-  try {
-    // Cheap guards FIRST: the common case is an unconfigured alert address or
-    // an ordinary small purchase, and neither should pay for a query.
-    const alertTo = process.env.STAFF_ALERT_EMAIL;
-    if (!alertTo) return;
-    if (opts.extraOrgs <= opts.previousExtraOrgs) return;
+}): Promise<string | null> {
+  // Cheap guards FIRST: the common case is an unconfigured alert address or
+  // an ordinary small purchase, and neither should pay for a query.
+  if (!staffAlertsOn()) return null;
+  if (opts.extraOrgs <= opts.previousExtraOrgs) return null;
 
-    // The plan's own cap, READ rather than assumed: hardcoding "pro 5" here
-    // would make the threshold silently wrong the day a base cap moves.
-    const [row] = await sql<{ int_value: number | null }[]>`
+  // The plan's own cap, READ rather than assumed: hardcoding "pro 5" here
+  // would make the threshold silently wrong the day a base cap moves.
+  let row: { int_value: number | null } | undefined;
+  try {
+    [row] = await sql<{ int_value: number | null }[]>`
       select int_value from plan_entitlements
        where plan_key = ${opts.planKey} and feature_key = 'orgs.max_owned'`;
-    // No row at all means this plan grants the feature nothing — not
-    // "unlimited". Only an explicit NULL int_value is unlimited.
-    if (!row) return;
-    const baseCap = row.int_value;
-    if (
-      !shouldAlertOnOrgAllowance({
-        baseCap,
-        extraOrgs: opts.extraOrgs,
-        previousExtraOrgs: opts.previousExtraOrgs,
-      })
-    ) {
-      return;
-    }
-    // shouldAlertOnOrgAllowance already answers false for a null (unlimited)
-    // baseCap — this is a narrowing for the compiler, not a second rule.
-    if (baseCap === null) return;
-
-    await sendExtraOrgAllowanceAlertEmail({
-      to: alertTo,
-      subscriptionId: opts.subscriptionId,
-      orgId: opts.orgId,
-      planKey: opts.planKey,
-      baseCap,
-      extraOrgs: opts.extraOrgs,
-      previousExtraOrgs: opts.previousExtraOrgs,
-      totalAllowance: baseCap + opts.extraOrgs,
-      threshold: ORG_ALLOWANCE_ALERT_THRESHOLD,
-    });
   } catch (err) {
     log.error(
       { err, subscriptionId: opts.subscriptionId },
       "billing: extra-org allowance alert failed",
     );
+    return null;
   }
+  // No row at all means this plan grants the feature nothing — not
+  // "unlimited". Only an explicit NULL int_value is unlimited.
+  if (!row) return null;
+  const baseCap = row.int_value;
+  if (
+    !shouldAlertOnOrgAllowance({
+      baseCap,
+      extraOrgs: opts.extraOrgs,
+      previousExtraOrgs: opts.previousExtraOrgs,
+    })
+  ) {
+    return null;
+  }
+  // shouldAlertOnOrgAllowance already answers false for a null (unlimited)
+  // baseCap — this is a narrowing for the compiler, not a second rule.
+  if (baseCap === null) return null;
+
+  return queueStaffAlert({
+    kind: "staff_extra_org_allowance",
+    refType: "subscription",
+    id: opts.subscriptionId,
+    suffix: String(opts.extraOrgs),
+    render: () =>
+      extraOrgAllowanceAlertEmail({
+        subscriptionId: opts.subscriptionId,
+        orgId: opts.orgId,
+        planKey: opts.planKey,
+        baseCap,
+        extraOrgs: opts.extraOrgs,
+        previousExtraOrgs: opts.previousExtraOrgs,
+        totalAllowance: baseCap + opts.extraOrgs,
+        threshold: ORG_ALLOWANCE_ALERT_THRESHOLD,
+      }),
+  });
 }

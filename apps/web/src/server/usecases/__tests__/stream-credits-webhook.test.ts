@@ -10,7 +10,8 @@
 // nothing, returns false, and the handler is never reached. The LEDGER ROW
 // COUNT is asserted directly rather than inferred from the balance, because a
 // second row carrying a compensating delta would leave the balance unchanged.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { seedOrg } from "./_rig";
@@ -18,18 +19,30 @@ import { runEvent } from "../billing-events";
 import { creditBalance } from "../stream-credits";
 import { type StreamCreditPack, streamPack } from "@/lib/stream-credit-packs";
 import { buildRelayCheckoutParams } from "@/lib/relay-checkout";
-import { sendStreamCreditGrantFailedAlertEmail } from "@/lib/email";
+import { streamCreditGrantFailedAlertEmail } from "@/lib/email";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
+import { staffAlertDrops, staffRows } from "./_money-fixtures";
 
 // The staff alert is the only thing that tells a HUMAN a customer paid and
 // holds nothing — every other paid-but-ungranted branch in billing-events.ts
-// pairs its `log.error` with one. Mocked rather than stubbed at the transport
-// so the assertion is on the call the branch makes, not on whether an SMTP
-// env happens to be configured in this process.
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendStreamCreditGrantFailedAlertEmail: vi.fn(async () => true),
-}));
-const alertMock = vi.mocked(sendStreamCreditGrantFailedAlertEmail);
+// pairs its `log.error` with one. It is queued on the email outbox (phase 3
+// wave 5, kind `staff_stream_credit_grant_failed`, once per Checkout Session)
+// to this suite's own STAFF_ALERT_EMAIL, so the tests read its row
+// (`staffRows`). The builder is a spy that calls through (what the alert says
+// is read where it enters the mail), and Sentry's issue capture is observed
+// (call-through) so a test can assert the writer dropped nothing.
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, streamCreditGrantFailedAlertEmail: vi.fn(actual.streamCreditGrantFailedAlertEmail) };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
+const alertMock = vi.mocked(streamCreditGrantFailedAlertEmail);
+const KIND = "staff_stream_credit_grant_failed";
+const RUN = `scw-${randomUUID().slice(0, 8)}`;
 
 // Linking a Stripe customer onto a billing group re-derives the card flag, and
 // that re-derivation makes a REAL Stripe round trip
@@ -104,12 +117,23 @@ function completed(orgId: string, sessionId: string, credits: string): Stripe.Ev
 }
 
 describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => {
+  /** This test's own staff address: CI sets none, and the database is shared. */
+  let staff = "";
+  let errors: ReturnType<typeof vi.spyOn>;
   beforeEach(() => {
     alertMock.mockClear();
-    vi.stubEnv("STAFF_ALERT_EMAIL", "billing-ops@example.test");
+    vi.mocked(captureError).mockClear();
+    staff = `staff-${RUN}-${randomUUID().slice(0, 8)}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    errors = vi.spyOn(log, "error");
   });
   afterEach(() => {
     vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+  afterAll(async () => {
+    if (!HAS_DB) return;
+    await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
   });
 
   it("writes ONE purchase row for the snapshotted credits, carrying the Stripe link; a redelivery claims nothing and writes none", async () => {
@@ -365,7 +389,7 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
     },
   );
 
-  it("a paid session with neither a usable snapshot nor a resolvable pack is ACKed and grants NOTHING — never a zero-credit row", async () => {
+  it("the webhook's session with no snapshot and no pack queues one alert (ACKed, and grants NOTHING — never a zero-credit row)", async () => {
     const { auth } = await seedOrg();
     const sid = `cs_test_nopack_${auth.orgId.slice(0, 8)}`;
     const ev = completed(auth.orgId, sid, "");
@@ -377,15 +401,19 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
       select count(*)::text as n from org_stream_credits where org_id = ${auth.orgId}`;
     expect(rows[0]!.n).toBe("0");
     // …and a HUMAN is told, because nothing else will ever notice. The log line
-    // alone is what the donor branch (credit_pack, :267) was given an alert to
-    // stop relying on.
-    expect(alertMock).toHaveBeenCalledTimes(1);
-    expect(alertMock.mock.calls[0]![0]).toMatchObject({
-      to: "billing-ops@example.test",
+    // alone is what the donor branch (credit_pack) was given an alert to stop
+    // relying on. One row, keyed by the session; the subject is the sender's
+    // inline English, typed from its source.
+    expect(await staffRows(KIND, "checkout_session", sid)).toEqual([
+      { ref_id: sid, dedupe_key: sid, status: "queued", recipient: staff, subject: `Match credits could not be granted: ${sid}` },
+    ]);
+    expect(alertMock, "what the alert says").toHaveBeenCalledWith({
       sessionId: sid,
       orgId: auth.orgId,
       packRaw: "7",
+      reason: "no credits snapshot and no resolvable pack",
     });
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
   });
 
   // The guard the donor carries, mutatable on its own: no address configured is
@@ -398,8 +426,10 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
     const ev = completed(auth.orgId, sid, "");
     (ev.data.object as unknown as { metadata: Record<string, string> }).metadata.pack = "7";
     expect(await runEvent(ev)).toBe(true);
-    expect(alertMock).not.toHaveBeenCalled();
+    expect(alertMock, "nothing was rendered").not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "checkout_session", sid), "no row, to any recipient").toHaveLength(0);
     expect(await creditBalance(sql, auth.orgId)).toBe(0);
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "unset is not a drop").toEqual({ logged: 0, issues: 0 });
   });
 
   // recordPurchase THROWS a 409 `stripe_event_org_mismatch` when the Checkout
@@ -408,7 +438,7 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
   // retrying it can succeed, so it must be ACKed. Let it reach the webhook's
   // generic error path and Stripe redelivers the same event for days while the
   // ledger stays unchanged and nobody is paged by anything but the volume.
-  it("a Checkout Session id already recorded for ANOTHER org is acknowledged, not retried, and writes nothing", async () => {
+  it("the org-mismatch refusal pages once across two deliveries (acknowledged, not retried, and writes nothing)", async () => {
     const first = (await seedOrg()).auth;
     const second = (await seedOrg()).auth;
     const sid = `cs_test_crossorg_${first.orgId.slice(0, 8)}`;
@@ -418,24 +448,38 @@ describe.skipIf(!HAS_DB)("checkout.session.completed → stream credits", () => 
     // A DIFFERENT Stripe event (so runEvent's own claim does not swallow it)
     // carrying the SAME session id but the second org's metadata.
     const collide = completed(second.orgId, sid, "5");
-    (collide as unknown as { id: string }).id = `evt_crossorg_${second.orgId.slice(0, 8)}`;
+    const collideId = `evt_crossorg_${second.orgId.slice(0, 8)}`;
+    (collide as unknown as { id: string }).id = collideId;
     await expect(runEvent(collide)).resolves.toBe(true);
     expect(await creditBalance(sql, second.orgId)).toBe(0);
     expect(await creditBalance(sql, first.orgId)).toBe(5);
     // `processed_at` set is what tells Stripe to stop: runEvent stamps it only
     // after the handler returned without throwing.
     const [row] = await sql<{ processed_at: string | null }[]>`
-      select processed_at from billing_events where id = ${`evt_crossorg_${second.orgId.slice(0, 8)}`}`;
+      select processed_at from billing_events where id = ${collideId}`;
     expect(row!.processed_at).not.toBeNull();
+
+    // The second delivery: a crashed attempt's row (unprocessed, its lease run
+    // out) is taken over and the handler runs again — and refuses again.
+    await sql`update billing_events set processed_at = null, processing_started_at = now() - interval '11 minutes' where id = ${collideId}`;
+    await expect(runEvent(collide), "premise: the redelivery ran the handler again").resolves.toBe(true);
+    expect(await creditBalance(sql, second.orgId)).toBe(0);
+
     // ACKed means Stripe stops asking — so this limb is the OTHER
-    // paid-but-ungranted exit, and it owes the same staff alert. Exactly once,
-    // and for the SECOND org: the first org's purchase succeeded.
-    expect(alertMock).toHaveBeenCalledTimes(1);
-    expect(alertMock.mock.calls[0]![0]).toMatchObject({
-      to: "billing-ops@example.test",
+    // paid-but-ungranted exit, and it owes the same staff alert. ONE page for
+    // the session across both deliveries, about the SECOND org: the first
+    // org's purchase succeeded.
+    expect(alertMock, "premise: both deliveries reached the alert").toHaveBeenCalledTimes(2);
+    expect(alertMock).toHaveBeenCalledWith({
       sessionId: sid,
       orgId: second.orgId,
+      packRaw: "5",
+      reason: "checkout session id already recorded for another organisation",
     });
+    expect(await staffRows(KIND, "checkout_session", sid)).toEqual([
+      { ref_id: sid, dedupe_key: sid, status: "queued", recipient: staff, subject: `Match credits could not be granted: ${sid}` },
+    ]);
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "the redelivery was deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
   });
 
   // The OTHER direction of the same guard, and the reason it is scoped to one

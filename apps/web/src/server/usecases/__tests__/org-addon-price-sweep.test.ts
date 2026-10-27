@@ -26,13 +26,10 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
-const { itemRetrieveSpy, pricesListSpy, repriceAlertSpy } = vi.hoisted(() => ({
+const { itemRetrieveSpy, pricesListSpy } = vi.hoisted(() => ({
   itemRetrieveSpy: vi.fn(),
   pricesListSpy:
     vi.fn<(args: { lookup_keys: string[]; limit?: number }) => Promise<{ data: { id: string }[] }>>(),
-  // Typed with the one field the assertions read, so `mock.calls[n][0]` is a
-  // real argument rather than the empty tuple a zero-arity `vi.fn()` infers.
-  repriceAlertSpy: vi.fn<(opts: { itemId: string | null }) => Promise<boolean>>(async () => true),
 }));
 vi.mock("@/lib/stripe", () => ({
   getStripe: () => ({
@@ -40,14 +37,26 @@ vi.mock("@/lib/stripe", () => ({
     prices: { list: pricesListSpy },
   }),
 }));
-// Partial mock: billing-events.ts imports a dozen senders from this module, so
-// only the one the sweep raises is replaced.
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendExtraOrgRepriceFailedAlertEmail: repriceAlertSpy,
-}));
+// The staff alert is queued on the email outbox (phase 3 wave 5, kind
+// `staff_extra_org_reprice_failed`, once per rider per UTC day: Q2, P-W5-4) to
+// this suite's own STAFF_ALERT_EMAIL, so the tests read its rows (`staffRows`).
+// The builder is a spy that calls through, so what the alert says is read where
+// it enters the mail; Sentry's issue capture is observed (call-through) so a
+// test can assert the writer dropped nothing.
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, extraOrgRepriceFailedAlertEmail: vi.fn(actual.extraOrgRepriceFailedAlertEmail) };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
 
 import { sql } from "@/lib/db";
+import { extraOrgRepriceFailedAlertEmail } from "@/lib/email";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
+import { staffAlertDrops, staffRows } from "./_money-fixtures";
 import { createOrgForUser } from "@/lib/auth";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import {
@@ -59,6 +68,32 @@ import { sweepStaleOrgAddonPrices } from "../billing-events";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
+const repriceAlertSpy = vi.mocked(extraOrgRepriceFailedAlertEmail);
+const KIND = "staff_extra_org_reprice_failed";
+const RUN = `oaps-${uniq()}`;
+/** The UTC day of an instant, `yyyy-mm-dd` — the day part of the once-key (Q2, P-W5-4). */
+const utcDay = (at: Date): string => at.toISOString().slice(0, 10);
+/** The literal subject, typed from the sender's source. */
+const repriceSubject = (groupId: string): string => `Extra-org rider stuck on the wrong price (group ${groupId})`;
+/** This test's own staff address and its `log.error` spy, both set in `beforeEach`. */
+let staff = "";
+let errors: ReturnType<typeof vi.spyOn>;
+const drops = () => staffAlertDrops(errors, vi.mocked(captureError));
+/** One queued reprice row to this test's address, keyed `<group>:<item>:<day>`. */
+const repriceRow = (groupId: string, itemId: string, day: string) => ({
+  ref_id: `${groupId}:${itemId}:${day}`,
+  dedupe_key: `${groupId}:${itemId}:${day}`,
+  status: "queued",
+  recipient: staff,
+  subject: repriceSubject(groupId),
+});
+/** Pin the clock (Date only: the database and its timers keep real time) so a pass cannot straddle UTC midnight; restored in
+ *  `afterEach`. */
+const pinClock = (at: Date): Date => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(at);
+  return at;
+};
 
 /** The live price id this suite pretends `stripe:sync` produced for a plan.
  *  Derived from the lookup key so two entries can never collide. */
@@ -143,8 +178,12 @@ beforeEach(async () => {
   itemRetrieveSpy.mockReset();
   pricesListSpy.mockReset();
   repriceAlertSpy.mockClear();
+  vi.mocked(captureError).mockClear();
   vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_sweep332");
-  vi.stubEnv("STAFF_ALERT_EMAIL", "ops@seazn.club");
+  // This test's own staff address: CI sets none, and the database is shared.
+  staff = `staff-${RUN}-${uniq()}@x.test`;
+  vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+  errors = vi.spyOn(log, "error");
   // The synced catalog: every lookup key resolves to its own live price id.
   pricesListSpy.mockImplementation(async (args) => ({
     data: [{ id: livePriceFor(args.lookup_keys[0]!) }],
@@ -157,10 +196,15 @@ beforeEach(async () => {
   );
   if (HAS_DB) await clearOwnRiders();
 });
-afterEach(() => vi.unstubAllEnvs());
+afterEach(() => {
+  vi.useRealTimers();
+  errors.mockRestore();
+  vi.unstubAllEnvs();
+});
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
   const g = globalThis as { _sql?: { end(): Promise<void> } };
   const client = g._sql;
   g._sql = undefined;
@@ -217,7 +261,7 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
   });
 
   it("stays silent on a converged rider — no mismatch, no alert", async () => {
-    const { itemId } = await seedRider("pro");
+    const { groupId, itemId } = await seedRider("pro");
     itemRetrieveSpy.mockImplementation(async (id: string) =>
       itemOn(id, livePriceFor(proEntry.lookupKey)),
     );
@@ -227,6 +271,7 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
     expect(mine(res.mismatches)).toEqual([]);
     const alertedItems = repriceAlertSpy.mock.calls.map((c) => c[0].itemId);
     expect(alertedItems).not.toContain(itemId);
+    expect(await staffRows(KIND, "subscription", groupId), "no page, to any recipient").toHaveLength(0);
   });
 
   it("flags an unsynced catalog as unresolved and never guesses a price", async () => {
@@ -311,7 +356,7 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
   });
 
   it("counts a vanished item separately and does not alert on it", async () => {
-    const { itemId } = await seedRider("pro");
+    const { groupId, itemId } = await seedRider("pro");
     itemRetrieveSpy.mockImplementation(async (id: string) => {
       if (id !== itemId) return itemOn(id, livePriceFor(proEntry.lookupKey));
       throw Object.assign(new Error("No such subscription item"), { code: "resource_missing" });
@@ -323,6 +368,7 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
     expect(mine(res.mismatches)).toEqual([]);
     const alertedItems = repriceAlertSpy.mock.calls.map((c) => c[0].itemId);
     expect(alertedItems).not.toContain(itemId);
+    expect(await staffRows(KIND, "subscription", groupId), "no page, to any recipient").toHaveLength(0);
   });
 
   it("a Stripe read failure is unreadable, not a mismatch — it never invents one", async () => {
@@ -357,7 +403,7 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
 
   it("reports without alerting when STAFF_ALERT_EMAIL is unset", async () => {
     vi.stubEnv("STAFF_ALERT_EMAIL", "");
-    const { itemId } = await seedRider("pro");
+    const { groupId, itemId } = await seedRider("pro");
     itemRetrieveSpy.mockImplementation(async (id: string) =>
       itemOn(id, id === itemId ? SUPERSEDED_PRICE_ID : livePriceFor(proEntry.lookupKey)),
     );
@@ -367,6 +413,26 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
     expect(mine(res.mismatches)).toHaveLength(1);
     expect(res.alerted).toBe(0);
     expect(repriceAlertSpy).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "subscription", groupId), "no row, to any recipient").toHaveLength(0);
+    expect(drops(), "unset is not a drop").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("a blank (whitespace-only) STAFF_ALERT_EMAIL is unset: `alerted` counts no attempt the writer would no-op", async () => {
+    // The writer trims the address and treats blank as unset (staff-alert.ts), so a counter that read the raw variable would report
+    // pages that were never attempted. The positive pair is the stranded-rider test above (a set address, alerted >= 1).
+    vi.stubEnv("STAFF_ALERT_EMAIL", "   ");
+    const { groupId, itemId } = await seedRider("pro");
+    itemRetrieveSpy.mockImplementation(async (id: string) =>
+      itemOn(id, id === itemId ? SUPERSEDED_PRICE_ID : livePriceFor(proEntry.lookupKey)),
+    );
+
+    const res = await sweepStaleOrgAddonPrices();
+
+    expect(mine(res.mismatches), "premise: the rider is reported").toHaveLength(1);
+    expect(res.alerted).toBe(0);
+    expect(repriceAlertSpy).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "subscription", groupId), "no row, to any recipient").toHaveLength(0);
+    expect(drops(), "blank is not a drop").toEqual({ logged: 0, issues: 0 });
   });
 
   it("does nothing at all without a Stripe key", async () => {
@@ -400,5 +466,103 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
 
     expect(res.checked).toBe(1);
     expect(res.total).toBeGreaterThan(res.checked);
+  });
+
+  // ---- The staff page: once per rider per UTC day (Q2, P-W5-4). The sweep
+  // runs daily and repeats its alerts on purpose — a money fault should nag
+  // until someone acts — so the key carries the day: a same-day retry pages
+  // nothing more, and tomorrow's pass pages again.
+
+  /** These riders are stranded on the superseded price, and they are examined FIRST: the pass alerts on its first
+   *  ORG_PRICE_SWEEP_ALERT_CAP mismatches in `created_at` order, and a sibling suite's older rider on a plan with no SKU is a
+   *  mismatch this file's stubs cannot clear, so a fresh row could otherwise land past the cap. Every other item reads converged. */
+  const strandFirst = async (...stale: string[]) => {
+    for (const [i, id] of stale.entries()) {
+      await sql`update org_addons set created_at = ${new Date(Date.UTC(2000, 0, 1 + i))} where stripe_item_id = ${id}`;
+    }
+    itemRetrieveSpy.mockImplementation(async (id: string) =>
+      itemOn(id, stale.includes(id) ? SUPERSEDED_PRICE_ID : livePriceFor(proEntry.lookupKey)),
+    );
+  };
+
+  it("a stale rider pages once", async () => {
+    const { groupId, stripeSubId, itemId } = await seedRider("pro", 2);
+    await strandFirst(itemId);
+    const day = utcDay(pinClock(new Date()));
+
+    await sweepStaleOrgAddonPrices();
+
+    expect(await staffRows(KIND, "subscription", groupId)).toEqual([repriceRow(groupId, itemId, day)]);
+    expect(repriceAlertSpy, "what the alert says").toHaveBeenCalledWith({
+      subscriptionId: groupId,
+      stripeSubscriptionId: stripeSubId,
+      planKey: "pro",
+      itemId,
+      currentPriceId: SUPERSEDED_PRICE_ID,
+      expectedPriceId: livePriceFor(proEntry.lookupKey),
+      reason: expect.stringContaining("reconciliation sweep"),
+    });
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("the same day's second pass pages nothing more", async () => {
+    const { groupId, itemId } = await seedRider("pro");
+    await strandFirst(itemId);
+    const day = utcDay(pinClock(new Date()));
+
+    const first = await sweepStaleOrgAddonPrices();
+    const second = await sweepStaleOrgAddonPrices();
+
+    const reached = repriceAlertSpy.mock.calls.filter((c) => c[0].itemId === itemId);
+    expect(reached, "premise: both passes reached the alert").toHaveLength(2);
+    // `alerted` counts attempts, not rows: the second pass attempted, and the key held.
+    expect(first.alerted).toBeGreaterThanOrEqual(1);
+    expect(second.alerted).toBeGreaterThanOrEqual(1);
+    expect(await staffRows(KIND, "subscription", groupId)).toEqual([repriceRow(groupId, itemId, day)]);
+    expect(drops(), "deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("the next day's pass pages again (Q2)", async () => {
+    const { groupId, itemId } = await seedRider("pro");
+    await strandFirst(itemId);
+    const today = pinClock(new Date());
+
+    await sweepStaleOrgAddonPrices();
+    const tomorrow = new Date(today.getTime() + 24 * 60 * 60 * 1000);
+    vi.setSystemTime(tomorrow);
+    await sweepStaleOrgAddonPrices();
+
+    expect(utcDay(tomorrow), "premise: the second pass runs on another UTC day").not.toBe(utcDay(today));
+    expect(await staffRows(KIND, "subscription", groupId)).toEqual([
+      repriceRow(groupId, itemId, utcDay(today)),
+      repriceRow(groupId, itemId, utcDay(tomorrow)),
+    ]);
+    expect(drops(), "both queued, nothing dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("two stale riders in one pass are two alerts", async () => {
+    // P-W5-1: two mispriced riders on ONE subscription share a kind, a group and
+    // a recipient. With the group alone as the ref, the replace trigger would let
+    // the second supersede the first while it waits for the worker.
+    const { groupId, itemId: a } = await seedRider("pro");
+    const b = `${ITEM_PREFIX}${uniq()}`;
+    await sql`
+      insert into org_addons
+        (wallet_id, target_org_id, target_competition_id, feature_key, delta_each, qty,
+         stripe_item_id, status)
+      values (${groupId}, null, null, ${ORG_ADDON_FEATURE_KEY}, ${ORG_ADDON_DELTA_EACH},
+              1, ${b}, 'active')`;
+    await strandFirst(a, b);
+    const day = utcDay(pinClock(new Date()));
+
+    const res = await sweepStaleOrgAddonPrices();
+
+    expect(mine(res.mismatches).map((m) => m.itemId).sort(), "premise: both riders were found stale").toEqual([a, b].sort());
+    const rows = await staffRows(KIND, "subscription", groupId);
+    // Both queued: neither is `replaced`.
+    expect([...rows].sort((x, y) => x.ref_id.localeCompare(y.ref_id))).toEqual(
+      [repriceRow(groupId, a, day), repriceRow(groupId, b, day)].sort((x, y) => x.ref_id.localeCompare(y.ref_id)),
+    );
+    expect(drops(), "both queued, nothing dropped").toEqual({ logged: 0, issues: 0 });
   });
 });

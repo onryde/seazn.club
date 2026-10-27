@@ -305,6 +305,7 @@ export async function rejectRegistration(
           currency: result.refundable!.currency,
           paymentIntentId: result.refundable!.payment_intent_id,
           reason: err instanceof Error ? err.message : String(err),
+          mode: "reject",
         });
       }
     }

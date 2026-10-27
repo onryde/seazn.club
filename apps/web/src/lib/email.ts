@@ -105,15 +105,18 @@ export async function suppress(
 }
 
 // ---------------------------------------------------------------------------
-// Core send — never throws.
+// Core send — never throws. Only the email outbox calls it.
 //
-// `send()` (private, below) stays the boolean every existing sender uses.
-// `sendWithResult` is the typed form the email outbox calls: it also carries an
-// Idempotency-Key, Resend's message id, the status + error name on failure and
-// an optional timeout. Both are built from the same two halves, which the
-// outbox's attemptClaimed calls directly so the rules live in one place:
+// Every email is queued through `enqueueEmail*` (server/email-outbox) and sent
+// by the outbox, which replaces, retries, seals and resolves the address at send
+// time. This file sends nothing itself: its builders render a mail and return
+// it. A send is two halves, and only the outbox calls them, so the rules live
+// in one place (no-second-path.test.ts holds every other file off them):
 //   - checkSendable: is this send allowed at all (API key, suppression)?
-//   - deliver:       POST to Resend, no re-check.
+//                    Asked by the outbox's attempt (attempt.ts), first.
+//   - deliver:       POST to Resend, no re-check, with the Idempotency-Key,
+//                    tags and timeout the outbox passes. Called through the
+//                    outbox's transport (transport.ts) only.
 // Suppression applies to non-transactional mail only (pass transactional=true
 // to bypass the list for critical auth emails like the sign-in link).
 // ---------------------------------------------------------------------------
@@ -196,9 +199,9 @@ function errorNameOf(text: string): string | null {
 
 /** What a failed request writes to the server log. */
 export interface DeliverLogging {
-  /** Default true: today's lines, which carry the recipient and Resend's raw response text (that text can echo what was
-   *  sent, a sign-in link included). The email outbox passes false (ruling R8): it logs the status and Resend's error
-   *  NAME only. Every other caller keeps today's lines byte for byte. */
+  /** Default true: the recipient and Resend's raw response text (that text can echo what was sent, a sign-in link
+   *  included). The email outbox, now the only production caller, passes false (ruling R8): it logs the status and
+   *  Resend's error NAME only. The default survives for tests alone; phase 4's split drops it. */
   logDetail?: boolean;
 }
 
@@ -268,17 +271,6 @@ export async function deliver(opts: SendOptions, apiKey: string, logging: Delive
     if (!logDetail) console.error(`[email] send error: ${detail.replace(/[^\x20-\x7e]/g, "?").slice(0, 200)}`);
     return { ok: false, reason: "network", detail };
   }
-}
-
-/** Gate, then deliver. The typed result the email outbox is built on. */
-export async function sendWithResult(opts: SendOptions): Promise<SendResult> {
-  const gate = await checkSendable(opts);
-  if (!gate.ok) return gate;
-  return deliver(opts, gate.apiKey);
-}
-
-async function send(opts: SendOptions): Promise<boolean> {
-  return (await sendWithResult(opts)).ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -415,14 +407,12 @@ export async function suspensionServedEmail(args: Omit<SuspensionServedArgs, "me
   return suspensionServedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
 }
 
-/** One-shot +24h funnel reminder (v3/07 §6). */
-export async function sendFunnelReminderEmail(
-  to: string,
-  args: FunnelEmailArgs,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The one +24h funnel reminder (v3/07 §6), RENDERED and not sent. The funnel's cron sweep (`api/funnel/remind`) queues what this
+ *  returns on the email outbox (kind `funnel_reminder`, transactional: the link signs its holder in), in the transaction that claims
+ *  the draft, in the language the visitor started it in; the worker makes the first attempt. Nothing sends it directly. */
+export async function funnelReminderEmail(args: FunnelEmailArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...funnelReminderTemplate(args, dict) });
+  return funnelReminderTemplate(args, dict);
 }
 
 /** The confirm-your-new-address link, RENDERED and not sent. The email-change request (`api/auth/change-email`) queues what this
@@ -630,25 +620,16 @@ export async function passRevokedEmail(args: PassRevokedArgs, locale: Locale): P
   return passRevokedTemplate(args, dict);
 }
 
-export interface StaffDisputeAlertEmail extends StaffDisputeAlertArgs {
-  to: string;
-  locale?: Locale;
-}
-
-/** Internal staff alert (payments-hardening Task 7): a PLATFORM charge — a
- *  subscription invoice or an Event Pass — was disputed. Transactional: staff
- *  must always receive it (bypasses the suppression list); the platform locale
- *  is en. */
-export async function sendStaffDisputeAlertEmail(
-  opts: StaffDisputeAlertEmail,
-): Promise<boolean> {
-  const { to, locale = "en", ...args } = opts;
+/** Internal staff alert (payments-hardening Task 7): a PLATFORM charge — a subscription invoice, a match-credit pack or an Event Pass —
+ *  was disputed. RENDERED here, in the platform locale (en) unless a caller says otherwise; it is queued on the email outbox by
+ *  `notifyStaffDispute` (billing-events.ts, kind `staff_dispute_alert`, transactional: staff must always receive it), once per dispute
+ *  phase; nothing sends it directly. */
+export async function staffDisputeAlertEmail(args: StaffDisputeAlertArgs, locale: Locale = "en"): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...staffDisputeAlertTemplate(args, dict) });
+  return staffDisputeAlertTemplate(args, dict);
 }
 
 export interface StuckEventsAlertEmail {
-  to: string;
   /** The Stripe event id (e.g. evt_…) that could not be auto-replayed. */
   eventId: string;
   eventType: string;
@@ -659,10 +640,12 @@ export interface StuckEventsAlertEmail {
 /** Internal staff alert (payments-hardening Task 11, P1-7): a webhook event
  *  failed auto-replay `attempts` times and is now PARKED — the sweep caps
  *  attempts and never re-selects it, so a human must inspect and replay it from
- *  /admin/billing-events. Fires exactly once per event. Platform-locale (en)
- *  and built inline — this is an ops-only alert with no user-facing i18n.
- *  Transactional so it bypasses the suppression list. */
-export async function sendStuckEventsAlertEmail(opts: StuckEventsAlertEmail): Promise<boolean> {
+ *  /admin/billing-events. Platform-locale (en) and built inline — this is an
+ *  ops-only alert with no user-facing i18n. RENDERED here; it is queued on the
+ *  email outbox by `alertStuckEventParked` (billing-events.ts, kind
+ *  `staff_stuck_events`, transactional), once per event, by the sweep pass
+ *  whose park moved it; nothing sends it directly. */
+export function stuckEventsAlertEmail(opts: StuckEventsAlertEmail): EmailContent {
   const subject = `Stuck webhook event needs review: ${opts.eventId}`;
   const bodyText =
     `Stripe event ${opts.eventId} (${opts.eventType}) failed auto-replay ${opts.attempts} times ` +
@@ -678,11 +661,11 @@ export async function sendStuckEventsAlertEmail(opts: StuckEventsAlertEmail): Pr
     footerNote: "Automated staff alert — webhook auto-replay cron (P1-7).",
   });
   const text = `${bodyText}\n\nEvent: ${opts.eventId} (${opts.eventType}) · attempts ${opts.attempts}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface CreditPackGrantFailedAlertEmail {
-  to: string;
+  /** The Stripe object a staffer opens: the Checkout Session that paid, or the refunded charge when a refund found no grant. */
   sessionId: string;
   orgId: string;
   packKey?: string;
@@ -695,10 +678,11 @@ export interface CreditPackGrantFailedAlertEmail {
  *  also could not resolve) — the buyer paid but the wallet grant could not be
  *  safely determined, so nothing was granted rather than risking a silent
  *  wrong amount. A human must inspect and grant manually. Built inline, no
- *  user-facing i18n — same ops-only pattern as `sendStuckEventsAlertEmail`. */
-export async function sendCreditPackGrantFailedAlertEmail(
-  opts: CreditPackGrantFailedAlertEmail,
-): Promise<boolean> {
+ *  user-facing i18n — same ops-only pattern as `stuckEventsAlertEmail`.
+ *
+ *  RENDERED and not sent: `alertCreditPackGrantFailed` (billing-events.ts) queues what this returns on the email outbox through
+ *  `queueStaffAlert` (kind `staff_credit_pack_grant_failed`), once per session or charge. Nothing sends it directly. */
+export function creditPackGrantFailedAlertEmail(opts: CreditPackGrantFailedAlertEmail): EmailContent {
   const subject = `Credit pack purchase could not be granted: ${opts.sessionId}`;
   const bodyText =
     `A paid credit-pack checkout session (${opts.sessionId}, org ${opts.orgId}` +
@@ -718,11 +702,10 @@ export async function sendCreditPackGrantFailedAlertEmail(
     footerNote: "Automated staff alert — credit pack webhook (P3 T1).",
   });
   const text = `${bodyText}\n\nSession: ${opts.sessionId} · org ${opts.orgId} · reason: ${opts.reason}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface SizePackGrantFailedAlertEmail {
-  to: string;
   sessionId: string;
   targetOrgId: string;
   competitionId?: string;
@@ -735,10 +718,11 @@ export interface SizePackGrantFailedAlertEmail {
  *  metadata, and the catalog fallback could not resolve one either — the buyer
  *  paid but the cap-lift could not be safely determined, so nothing was granted
  *  rather than risking a wrong lift. A human must inspect and grant manually.
- *  Ops-only, no user-facing i18n (mirrors sendCreditPackGrantFailedAlertEmail). */
-export async function sendSizePackGrantFailedAlertEmail(
-  opts: SizePackGrantFailedAlertEmail,
-): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors creditPackGrantFailedAlertEmail).
+ *
+ *  RENDERED and not sent: `alertSizePackGrantFailed` (billing-events.ts) queues what this returns on the email outbox through
+ *  `queueStaffAlert` (kind `staff_size_pack_grant_failed`), once per Checkout Session. Nothing sends it directly. */
+export function sizePackGrantFailedAlertEmail(opts: SizePackGrantFailedAlertEmail): EmailContent {
   const subject = `Size pack purchase could not be granted: ${opts.sessionId}`;
   const bodyText =
     `A paid size-pack checkout session (${opts.sessionId}, org ${opts.targetOrgId}` +
@@ -762,11 +746,10 @@ export async function sendSizePackGrantFailedAlertEmail(
     footerNote: "Automated staff alert — size pack webhook (P3 T3b).",
   });
   const text = `${bodyText}\n\nSession: ${opts.sessionId} · org ${opts.targetOrgId} · reason: ${opts.reason}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface StreamCreditGrantFailedAlertEmail {
-  to: string;
   sessionId: string;
   orgId: string;
   /** The `pack` size the session named, when it named one at all. */
@@ -785,12 +768,14 @@ export interface StreamCreditGrantFailedAlertEmail {
  *  MATCH credits, not the AI credit wallet — a separate ledger
  *  (`org_stream_credits`) and a separate remedy (the /admin Match credits
  *  panel's grant, capped at 50 per action). Kept as its own builder rather
- *  than reusing `sendCreditPackGrantFailedAlertEmail` precisely so the subject
+ *  than reusing `creditPackGrantFailedAlertEmail` precisely so the subject
  *  line does not send whoever triages it to the wrong balance.
- *  Ops-only, no user-facing i18n (mirrors the two builders above). */
-export async function sendStreamCreditGrantFailedAlertEmail(
-  opts: StreamCreditGrantFailedAlertEmail,
-): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors the two builders above).
+ *
+ *  RENDERED and not sent: `alertStreamCreditGrantFailed` (stream-credits-checkout.ts) queues what this returns on the
+ *  email outbox through `queueStaffAlert` (kind `staff_stream_credit_grant_failed`), once per Checkout Session. Nothing
+ *  sends it directly. */
+export function streamCreditGrantFailedAlertEmail(opts: StreamCreditGrantFailedAlertEmail): EmailContent {
   const subject = `Match credits could not be granted: ${opts.sessionId}`;
   const bodyText =
     `A completed match-credit checkout session (${opts.sessionId}, org ${opts.orgId}` +
@@ -812,11 +797,10 @@ export async function sendStreamCreditGrantFailedAlertEmail(
     footerNote: "Automated staff alert — match credits webhook (streaming R1).",
   });
   const text = `${bodyText}\n\nSession: ${opts.sessionId} · org ${opts.orgId} · reason: ${opts.reason}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface StreamCreditClawbackAlertEmail {
-  to: string;
   /** The Stripe object a staffer opens: the refunded charge, or the dispute id
    *  when a lost chargeback is what triggered the claw-back. */
   chargeId: string;
@@ -842,18 +826,19 @@ export interface StreamCreditClawbackAlertEmail {
  *     proportion is a judgement call.
  *   * a refunded charge with NO match-credit purchase row — nothing to reverse.
  *
- *  NOT a reuse of `sendStreamCreditGrantFailedAlertEmail`: that subject says
+ *  NOT a reuse of `streamCreditGrantFailedAlertEmail`: that subject says
  *  credits could not be GRANTED and its body tells the reader to grant them
  *  manually, which is exactly backwards here. Its own doc comment records that
  *  it was kept separate from the AI-wallet builder so the subject does not send
  *  triage to the wrong balance; the same argument separates this one from it.
  *
- *  Ops-only, no user-facing i18n (mirrors the builders above). Guarded at the
- *  CALL SITE on STAFF_ALERT_EMAIL and fired `void … .catch(() => {})`, so it can
- *  never block the webhook ACK. */
-export async function sendStreamCreditClawbackAlertEmail(
-  opts: StreamCreditClawbackAlertEmail,
-): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors the builders above).
+ *
+ *  RENDERED and not sent: `alertStreamClawback` (billing-events.ts) queues what this returns on the email outbox through
+ *  `queueStaffAlert` (kind `staff_stream_credit_clawback`), once per incident — `<charge>:partial:<amount refunded>`,
+ *  `<charge>:short`, `<charge>:ungranted` or `<dispute>:lost` — and never throws, so it can never block the webhook ACK.
+ *  Nothing sends it directly. */
+export function streamCreditClawbackAlertEmail(opts: StreamCreditClawbackAlertEmail): EmailContent {
   const subject = `Match credits claw-back needs review: ${opts.chargeId}`;
   const movement =
     opts.purchased === undefined
@@ -882,11 +867,10 @@ export async function sendStreamCreditClawbackAlertEmail(
     footerNote: "Automated staff alert — match credits webhook (streaming R1).",
   });
   const text = `${bodyText}\n\nCharge: ${opts.chargeId} · org ${opts.orgId} · reason: ${opts.reason}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface StreamPackPriceDriftAlertEmail {
-  to: string;
   /** The pack's lookup key — what `stripe:sync` and the checkout both resolve by. */
   lookupKey: string;
   /** The live price whose amounts differ from the table. */
@@ -899,10 +883,11 @@ export interface StreamPackPriceDriftAlertEmail {
  *  Stripe price charging something other than `lib/stream-credit-packs.ts`, the table the Phone tab's tiles quote, so
  *  EVERY checkout for that pack is refused (502) until they agree — nobody is charged a price they were not quoted.
  *  `pnpm stripe:sync` owns these prices (Addendum S), so the usual cause is a hand-edit in the Stripe dashboard; the
- *  remedy is to re-run stripe:sync (it re-mints the price to the table) or fix the table. Sent once per drifted price
- *  per server process (lib/relay-checkout.ts), never per refused checkout.
- *  Ops-only, no user-facing i18n (mirrors the builders above). */
-export async function sendStreamPackPriceDriftAlertEmail(opts: StreamPackPriceDriftAlertEmail): Promise<boolean> {
+ *  remedy is to re-run stripe:sync (it re-mints the price to the table) or fix the table.
+ *  Ops-only, no user-facing i18n (mirrors the builders above). RENDERED here; it is queued on the email outbox by
+ *  `alertStreamPackPriceDrift` (lib/relay-checkout.ts, kind `staff_stream_pack_price_drift`), once per drifted price per
+ *  UTC day, never per refused checkout; nothing sends it directly. */
+export function streamPackPriceDriftAlertEmail(opts: StreamPackPriceDriftAlertEmail): EmailContent {
   const subject = `Match-credit pack price differs from the table: ${opts.lookupKey}`;
   const bodyText =
     `The live Stripe price ${opts.priceId} for ${opts.lookupKey} does not charge what ` +
@@ -920,11 +905,10 @@ export async function sendStreamPackPriceDriftAlertEmail(opts: StreamPackPriceDr
     footerNote: "Automated staff alert — match-credit checkout drift guard (streaming R1).",
   });
   const text = `${bodyText}\n\nlookup key: ${opts.lookupKey} · price: ${opts.priceId} · drift: ${opts.drift}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface PassCreditReversalIncompleteAlertEmail {
-  to: string;
   orgId: string;
   orgName: string;
   competitionName: string;
@@ -956,10 +940,12 @@ export interface PassCreditReversalIncompleteAlertEmail {
  *  an Event Pass was refunded but its pass-to-Pro subscription credit could
  *  not be fully (or, in the "undetermined" case, at all) reversed. A human
  *  needs the exact numbers and the reason, not just "something is off".
- *  Ops-only, no user-facing i18n (mirrors sendCreditPackGrantFailedAlertEmail). */
-export async function sendPassCreditReversalIncompleteAlertEmail(
-  opts: PassCreditReversalIncompleteAlertEmail,
-): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors creditPackGrantFailedAlertEmail).
+ *
+ *  RENDERED and not sent: `alertPassCreditReversalIncomplete` (pass-credit.ts) queues what this returns on the email outbox
+ *  through `queueStaffAlert` (kind `staff_pass_credit_reversal_incomplete`), once per payment intent. Nothing sends it
+ *  directly. */
+export function passCreditReversalIncompleteAlertEmail(opts: PassCreditReversalIncompleteAlertEmail): EmailContent {
   const absorbed = opts.grantedMinor - opts.reversedMinor;
   const undetermined = opts.reason === "undetermined";
   // Ops-only copy, so this is not translated — but it must still name the rung,
@@ -1010,11 +996,10 @@ export async function sendPassCreditReversalIncompleteAlertEmail(
     `${bodyText}\n\norg: ${opts.orgName} (${opts.orgId}) · competition: ${opts.competitionName} · ` +
     `granted ${opts.grantedMinor} ${opts.currency} · reversed ${opts.reversedMinor} ${opts.currency}` +
     (undetermined ? "" : ` · absorbed ${absorbed} ${opts.currency}`);
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface PassRungMismatchAlertEmail {
-  to: string;
   /** The checkout session that was refused. The whole investigation starts
    *  here: it names the price, the customer and the payment intent. */
   sessionId: string;
@@ -1046,15 +1031,16 @@ export interface PassRungMismatchAlertEmail {
  *  for (or charged them for one they will not get). Nothing about which side is
  *  wrong can be inferred from here, so the mint refuses rather than guessing,
  *  exactly like the "undetermined" arm of
- *  `sendPassCreditReversalIncompleteAlertEmail`. A human must decide whether to
+ *  `passCreditReversalIncompleteAlertEmail`. A human must decide whether to
  *  refund the charge or grant the pass by hand, and then fix the desync (a
  *  stale `stripe:sync`, a price id edited in the Dashboard, a new rung wired to
  *  the wrong lookup key). The buyer has been charged and holds nothing —
  *  this is urgent. Ops-only, no user-facing i18n (mirrors
- *  sendCreditPackGrantFailedAlertEmail). */
-export async function sendPassRungMismatchAlertEmail(
-  opts: PassRungMismatchAlertEmail,
-): Promise<boolean> {
+ *  creditPackGrantFailedAlertEmail).
+ *
+ *  RENDERED and not sent: `maybeAlertPassRungMismatch` (lib/billing.ts) queues what this returns on the email outbox
+ *  through `queueStaffAlert` (kind `staff_pass_rung_mismatch`), once per Checkout Session. Nothing sends it directly. */
+export function passRungMismatchAlertEmail(opts: PassRungMismatchAlertEmail): EmailContent {
   const subject = `Event Pass NOT granted — price/rung mismatch: ${opts.sessionId}`;
   const what =
     opts.reason === "line_items"
@@ -1103,11 +1089,10 @@ export async function sendPassRungMismatchAlertEmail(
     `rung ${opts.passKey} · refused because ${opts.reason} · expected ${opts.expectedPriceId} · ` +
     `actual ${opts.actualPriceId ?? "(no single line item)"} · ` +
     `payment intent ${opts.paymentIntent ?? "(none)"}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface PassUnknownCompetitionAlertEmail {
-  to: string;
   /** The checkout session that paid. Names the price, the customer and the
    *  payment intent — the whole investigation starts here. */
   sessionId: string;
@@ -1119,8 +1104,8 @@ export interface PassUnknownCompetitionAlertEmail {
   paymentIntent: string | null;
   /** Which path hit it. The webhook is Stripe's own delivery; the reconcile is
    *  the buyer sitting on the return page. Both can arrive, and which one came
-   *  first changes nothing about the diagnosis — but a responder reading two
-   *  alerts for one payment should be able to see that is what happened. */
+   *  first changes nothing about the diagnosis; the session pages once, so the
+   *  one alert names the path that got there first. */
   source: "webhook" | "reconcile";
 }
 
@@ -1139,10 +1124,12 @@ export interface PassUnknownCompetitionAlertEmail {
  *  a responder makes it. The event is ACKed either way: no retry can conjure
  *  the missing row, and leaving it unacked buys a three-day retry storm
  *  instead of an answer. Ops-only, no user-facing i18n (mirrors
- *  sendCreditPackGrantFailedAlertEmail). */
-export async function sendPassUnknownCompetitionAlertEmail(
-  opts: PassUnknownCompetitionAlertEmail,
-): Promise<boolean> {
+ *  creditPackGrantFailedAlertEmail).
+ *
+ *  RENDERED and not sent: `alertPassUnknownCompetition` (lib/billing.ts) queues what this returns on the email outbox
+ *  through `queueStaffAlert` (kind `staff_pass_unknown_competition`), once per Checkout Session. Nothing sends it
+ *  directly. */
+export function passUnknownCompetitionAlertEmail(opts: PassUnknownCompetitionAlertEmail): EmailContent {
   const subject = `Event Pass NOT granted — unknown competition: ${opts.competitionId}`;
   const bodyText =
     `A paid Event Pass (session ${opts.sessionId}, org ${opts.orgId}) named competition ` +
@@ -1176,11 +1163,10 @@ export async function sendPassUnknownCompetitionAlertEmail(
     `${bodyText}\n\n${decide}\n\nSession: ${opts.sessionId} · org ${opts.orgId} · ` +
     `competition ${opts.competitionId} · rung ${opts.passKey} · source ${opts.source} · ` +
     `payment intent ${opts.paymentIntent ?? "(none)"}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface AiRunCostAlertEmail {
-  to: string;
   orgId: string;
   competitionId?: string;
   phase: "schedule" | "officials";
@@ -1209,9 +1195,12 @@ export interface AiRunCostAlertEmail {
  *  above AI_RUN_COST_ALERT_MULTIPLE x the trailing median for its
  *  phase — the exact trigger SPEC-2 §5.1 named for revisiting the flat
  *  1-credit-per-run price. Ops-only, no user-facing i18n (mirrors
- *  sendStuckEventsAlertEmail). Not deduped — a run class that keeps tripping
- *  this is the point, not a bug to suppress. */
-export async function sendAiRunCostAlertEmail(opts: AiRunCostAlertEmail): Promise<boolean> {
+ *  stuckEventsAlertEmail). Not deduped — a run class that keeps tripping
+ *  this is the point, not a bug to suppress. RENDERED here; it is queued on
+ *  the email outbox by `maybeAlertExpensiveRun` (ai-runs-admin.ts, kind
+ *  `staff_ai_run_cost`), once per run, under a ref minted for the run;
+ *  nothing sends it directly. */
+export function aiRunCostAlertEmail(opts: AiRunCostAlertEmail): EmailContent {
   const multiple = opts.medianUsd > 0 ? opts.costUsd / opts.medianUsd : null;
   const subject = `Expensive AI run: $${opts.costUsd.toFixed(4)} (org ${opts.orgId})`;
   // Size clause. `packUnits` is nullable (pre-wave rows have no such key), and
@@ -1258,11 +1247,10 @@ export async function sendAiRunCostAlertEmail(opts: AiRunCostAlertEmail): Promis
   const text =
     `${bodyText}\n\norg: ${opts.orgId} · phase: ${opts.phase} · model: ${opts.model} · ` +
     `cost $${opts.costUsd.toFixed(4)} · median $${opts.medianUsd.toFixed(4)}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface EarnGrantVolumeAlertEmail {
-  to: string;
   count: number;
   threshold: number;
 }
@@ -1272,10 +1260,12 @@ export interface EarnGrantVolumeAlertEmail {
  *  across every wallet) crossed the daily alert threshold — the backstop
  *  for the publish-with-division gate, in case the gate itself is being
  *  worked (many throwaway orgs each publishing one bare competition).
- *  Ops-only, no user-facing i18n (mirrors sendStuckEventsAlertEmail). Fires
- *  at most once per cron poll, not deduped across days — a persistent high
- *  day repeats the alert, which is the point. */
-export async function sendEarnGrantVolumeAlertEmail(opts: EarnGrantVolumeAlertEmail): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors stuckEventsAlertEmail). RENDERED
+ *  here; it is queued on the email outbox by `checkEarnGrantVolumeAlert`
+ *  (lib/credits.ts, kind `staff_earn_grant_volume`) once per UTC day, keyed
+ *  by the day — a persistent high volume repeats the alert the next day,
+ *  which is the point; nothing sends it directly. */
+export function earnGrantVolumeAlertEmail(opts: EarnGrantVolumeAlertEmail): EmailContent {
   const subject = `Earn-grant volume alert: ${opts.count} today (threshold ${opts.threshold})`;
   const bodyText =
     `${opts.count} earn_grant credit rows have landed today, at or above the alert threshold of ` +
@@ -1294,11 +1284,10 @@ export async function sendEarnGrantVolumeAlertEmail(opts: EarnGrantVolumeAlertEm
     footerNote: "Automated staff alert — daily billing-grant cron (v17 gap #296).",
   });
   const text = `${bodyText}\n\nearn_grant rows today: ${opts.count} · threshold: ${opts.threshold}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface ExtraOrgAllowanceAlertEmail {
-  to: string;
   /** The billing GROUP (subscriptions.id) — the thing that holds the orgs. */
   subscriptionId: string;
   /** The org whose payer made the purchase; the entry point for a sales
@@ -1325,12 +1314,12 @@ export interface ExtraOrgAllowanceAlertEmail {
  *  group at this size "becomes an enterprise conversation rather than a silent
  *  reseller"; this is that conversation being started while the customer is
  *  actively expanding, instead of a sweep noticing weeks later.
- *  Ops-only, no user-facing i18n (mirrors sendEarnGrantVolumeAlertEmail). Not
- *  deduped: a group that keeps adding organisations is exactly the one to keep
- *  hearing about. */
-export async function sendExtraOrgAllowanceAlertEmail(
-  opts: ExtraOrgAllowanceAlertEmail,
-): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors earnGrantVolumeAlertEmail). RENDERED
+ *  here; it is queued on the email outbox by `maybeAlertOrgAllowance`
+ *  (extra-orgs.ts, kind `staff_extra_org_allowance`) once per group and count:
+ *  a group that keeps adding organisations is exactly the one to keep hearing
+ *  about, and each new count is a new key. Nothing sends it directly. */
+export function extraOrgAllowanceAlertEmail(opts: ExtraOrgAllowanceAlertEmail): EmailContent {
   const subject = `Large billing group: ${opts.totalAllowance} organisations (group ${opts.subscriptionId})`;
   const bodyText =
     `A ${opts.planKey} billing group just raised its extra-organisation add-on from ` +
@@ -1359,11 +1348,10 @@ export async function sendExtraOrgAllowanceAlertEmail(
   const text =
     `${bodyText}\n\nbilling group: ${opts.subscriptionId} · plan: ${opts.planKey} · ` +
     `base ${opts.baseCap} + ${opts.extraOrgs} extra = ${opts.totalAllowance} (threshold ${opts.threshold})`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface ExtraOrgRepriceFailedAlertEmail {
-  to: string;
   /** The billing GROUP (subscriptions.id) — what a human looks up first. */
   subscriptionId: string;
   /** The Stripe subscription the rider rides, so the item is reachable in the
@@ -1404,12 +1392,13 @@ export interface ExtraOrgRepriceFailedAlertEmail {
  * daily reconciliation sweep and an /admin mismatch list are tracked as #332;
  * until they land, THIS is the entire safety net.
  *
- * Never blocks and never retries — the webhook has already ACKed by design.
- * Ops-only, no user-facing i18n (mirrors sendExtraOrgAllowanceAlertEmail).
+ * Never blocks the webhook; queued on the outbox, whose worker delivers and retries it.
+ * Ops-only, no user-facing i18n (mirrors extraOrgAllowanceAlertEmail).
+ *
+ * RENDERED and not sent: `maybeAlertOrgRepriceFailed` (billing-events.ts) queues what this returns on the email outbox through
+ * `queueStaffAlert` (kind `staff_extra_org_reprice_failed`), once per rider per UTC day. Nothing sends it directly.
  */
-export async function sendExtraOrgRepriceFailedAlertEmail(
-  opts: ExtraOrgRepriceFailedAlertEmail,
-): Promise<boolean> {
+export function extraOrgRepriceFailedAlertEmail(opts: ExtraOrgRepriceFailedAlertEmail): EmailContent {
   const subject = `Extra-org rider stuck on the wrong price (group ${opts.subscriptionId})`;
   const bodyText =
     `The extra-organisation add-on for a ${opts.planKey} billing group could not be moved onto that ` +
@@ -1440,11 +1429,10 @@ export async function sendExtraOrgRepriceFailedAlertEmail(
     `${bodyText}\n\nbilling group: ${opts.subscriptionId} · stripe sub: ${opts.stripeSubscriptionId} · ` +
     `plan: ${opts.planKey} · item: ${opts.itemId ?? "(none)"} · ` +
     `price ${opts.currentPriceId ?? "(unknown)"} -> ${opts.expectedPriceId ?? "(unresolved)"}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface RegistrationRefundFailedAlertEmail {
-  to: string;
   /** The entry that should have been refunded but was not — what a human
    *  looks up first. */
   registrationId: string;
@@ -1472,11 +1460,12 @@ export interface RegistrationRefundFailedAlertEmail {
  * are Connect/platform-level and not something an organiser can act on;
  * alerting them would produce alarm with no remedy.
  *
- * Ops-only, no user-facing i18n (mirrors sendExtraOrgRepriceFailedAlertEmail).
+ * Ops-only, no user-facing i18n (mirrors extraOrgRepriceFailedAlertEmail).
+ *
+ * RENDERED and not sent: `maybeAlertRegistrationRefundFailed` (registrations.ts) queues what this returns on the email outbox through
+ * `queueStaffAlert` (kind `staff_registration_refund_failed`), once per registration, mode and amount. Nothing sends it directly.
  */
-export async function sendRegistrationRefundFailedAlertEmail(
-  opts: RegistrationRefundFailedAlertEmail,
-): Promise<boolean> {
+export function registrationRefundFailedAlertEmail(opts: RegistrationRefundFailedAlertEmail): EmailContent {
   const amount = money(opts.amountCents, opts.currency);
   const subject = `Registration refund failed — ${amount} still owed (registration ${opts.registrationId})`;
   const bodyText =
@@ -1505,7 +1494,7 @@ export async function sendRegistrationRefundFailedAlertEmail(
   const text =
     `${bodyText}\n\nregistration: ${opts.registrationId} · org: ${opts.orgId} · competition: ${opts.competitionId} · ` +
     `amount: ${amount} · payment intent: ${opts.paymentIntentId ?? "(none)"} · reason: ${opts.reason}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface TrialEndingEmailArgs {
@@ -1539,7 +1528,6 @@ export async function trialEndingEmail(args: TrialEndingEmailArgs, locale: Local
 }
 
 export interface ConnectBankAlertEmail {
-  to: string;
   orgId: string;
   orgName: string;
   /** The connected account (acct_…) the bank account was removed from. */
@@ -1553,9 +1541,12 @@ export interface ConnectBankAlertEmail {
  *  settling. The org sees its own banner; this is the ops half, because money
  *  piling up on a club's connected balance is something a human may have to
  *  chase. Platform-locale (en) and built inline — ops-only, no user-facing
- *  i18n, same convention as `sendStuckEventsAlertEmail`. Only `.deleted` sends
- *  here; `.updated` is too chatty to page anyone with. */
-export async function sendConnectBankAlertEmail(opts: ConnectBankAlertEmail): Promise<boolean> {
+ *  i18n, same convention as `stuckEventsAlertEmail`. RENDERED here; it is
+ *  queued on the email outbox by `alertConnectBankRemoved` (billing-events.ts,
+ *  kind `staff_connect_bank_changed`), once per Stripe event, and only for
+ *  `.deleted` (`.updated` is too chatty to page anyone with); nothing sends it
+ *  directly. */
+export function connectBankAlertEmail(opts: ConnectBankAlertEmail): EmailContent {
   const subject = `Connect bank account removed: ${opts.orgName}`;
   const bodyText =
     `The destination bank account on ${opts.orgName}'s connected Stripe account was deleted. ` +
@@ -1577,7 +1568,7 @@ export async function sendConnectBankAlertEmail(opts: ConnectBankAlertEmail): Pr
   const text =
     `${bodyText}\n\norg: ${opts.orgName} (${opts.orgId}) · stripe account: ${opts.accountId} · ` +
     `removed: ${opts.detail}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 /** True when Resend is configured. */

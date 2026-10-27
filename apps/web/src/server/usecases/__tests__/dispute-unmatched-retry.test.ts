@@ -6,14 +6,9 @@
 // the ledger keeps the event unprocessed and the stuck-event sweeper (or a
 // manual /admin/billing-events replay) re-runs it once the money row knows its
 // intent. Real Postgres required; skipped without DATABASE_URL.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
-
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendStaffDisputeAlertEmail: vi.fn().mockResolvedValue(true),
-}));
 
 import { sql } from "@/lib/db";
 import { processStripeEvent } from "@/server/usecases/billing-events";

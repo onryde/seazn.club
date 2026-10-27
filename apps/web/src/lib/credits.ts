@@ -15,7 +15,7 @@ import { PaymentRequiredError } from "@/lib/errors";
 // cached snapshot carrying a `>= 0` CHECK that makes oversell impossible
 // atomically; `balance()` here reads the authoritative running sum.
 import { sql } from "@/lib/db";
-import { sendEarnGrantVolumeAlertEmail } from "@/lib/email";
+import { earnGrantVolumeAlertEmail } from "@/lib/email";
 // #290: resolves the grant sweep's plan via the SAME resolver every other
 // entitlement read uses (orgPlanKey). This creates a deliberate two-file
 // import cycle — entitlements.ts already imports walletIdFor from THIS
@@ -32,6 +32,7 @@ import { orgPlanKey } from "@/lib/entitlements";
 // in pass-credit.ts, which reaches back here — whereas `import type` is erased
 // at compile and cannot cycle. Keep it type-only.
 import type { AdjustmentAction } from "@/server/usecases/admin-adjustments-log";
+import { queueStaffAlert, staffAlertsOn } from "@/server/usecases/staff-alert";
 
 type Tx = postgres.TransactionSql;
 /** Anything the ledger's tagged-template queries can run against: the shared
@@ -1602,20 +1603,36 @@ export function shouldAlertOnEarnGrantVolume(
 
 /**
  * Best-effort staff alert (v17 gap #296): checks today's earn_grant volume
- * against EARN_GRANT_DAILY_ALERT_THRESHOLD and emails STAFF_ALERT_EMAIL when
- * crossed. Never throws — called from the daily billing-grant cron
- * alongside the real monthly grant sweep, and a check failure here must
- * never fail that grant. Silent (no email attempted) when STAFF_ALERT_EMAIL
- * is unset, matching every other alert in this codebase.
+ * against EARN_GRANT_DAILY_ALERT_THRESHOLD and queues a staff alert when
+ * crossed (kind `staff_earn_grant_volume`, on the email outbox), once per UTC
+ * day: the key is the day itself (P-W5-15), the one staff key with no row or
+ * Stripe id, because the alert is global by nature. The cron runs daily with
+ * `retry: true`, so a retry or a second pass the same day finds the key taken
+ * and pages nothing more; the next high day pages again. Returns the queued
+ * row's id, or null.
+ *
+ * Never throws — called from the daily billing-grant cron alongside the real
+ * monthly grant sweep, and a check failure here must never fail that grant
+ * (`queueStaffAlert` logs and drops an alert it cannot queue). Cheap guard
+ * first: with no STAFF_ALERT_EMAIL (the normal case) the volume is never
+ * counted.
  */
-export async function checkEarnGrantVolumeAlert(): Promise<void> {
+export async function checkEarnGrantVolumeAlert(): Promise<string | null> {
+  if (!staffAlertsOn()) return null;
+  // One instant for the count and the key, so a pass that straddles UTC midnight cannot count one day and key the other.
+  const dayStart = utcDayStart();
+  let count: number;
   try {
-    const count = await earnGrantVolumeToday();
-    if (!shouldAlertOnEarnGrantVolume(count)) return;
-    const alertTo = process.env.STAFF_ALERT_EMAIL;
-    if (!alertTo) return;
-    await sendEarnGrantVolumeAlertEmail({ to: alertTo, count, threshold: EARN_GRANT_DAILY_ALERT_THRESHOLD });
+    count = await earnGrantVolumeToday(dayStart);
   } catch (err) {
     console.error("[credits] earn_grant volume alert check failed", err);
+    return null;
   }
+  if (!shouldAlertOnEarnGrantVolume(count)) return null;
+  return queueStaffAlert({
+    kind: "staff_earn_grant_volume",
+    refType: "utc_day",
+    id: dayStart.toISOString().slice(0, 10),
+    render: () => earnGrantVolumeAlertEmail({ count, threshold: EARN_GRANT_DAILY_ALERT_THRESHOLD }),
+  });
 }

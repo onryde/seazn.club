@@ -89,17 +89,72 @@
 //   - group_org_left: the real `detachOrgFromGroup` by the owner of an org in a paying group (release), whose payer's account has no
 //     language and whose remaining org is `nl`: the notice is queued to the payer's account in the detach's own transaction, in the
 //     detached org, and the request makes the first attempt.
+//   - funnel_reminder: the cron POST of app/api/funnel/remind/route.ts (the cron secret is the stubbed `CRON_SECRET`, carried by the
+//     `next/headers` stand-in) over a day-old draft a Dutch visitor started: no account and no organisation, so the draft's own language
+//     (Q3); the claim of the draft and its row are one transaction on the pool, and the worker makes the first attempt.
+//   - staff_registration_refund_failed: the real `maybeAlertRegistrationRefundFailed` (every one of its four sites calls it, and each
+//     is driven to a row by a suite of its own: the withdrawal (`auto`), the late payment (`late`) and the pool-deadline sweep
+//     (`auto_pool_deadline`) in registrations.test.ts, the rejection (`reject`) in registration-approval.test.ts; `duplicate` is the
+//     late payment's call with another `outcome.kind`, a value no suite drives) with this run's STAFF_ALERT_EMAIL: no org, no
+//     account, the writer on the pool, and the worker makes the first attempt. The subject is the sender's inline English (spec F2), a
+//     literal typed from its source.
+//   - staff_credit_pack_grant_failed: the real `alertCreditPackGrantFailed` (both its sites, the paid session and the refunded charge,
+//     call it; credit-pack-refund.test.ts drives both to a row), for a Checkout Session, the same way.
+//   - staff_size_pack_grant_failed: the real `alertSizePackGrantFailed` (its one site, `grantSizePackAddon`, calls it;
+//     size-pack-addon.test.ts drives it to a row through the webhook), the same way.
+//   - staff_stream_credit_grant_failed: the real `alertStreamCreditGrantFailed` (both ungranted limbs of the webhook's
+//     `stream_credits` branch call it; stream-credits-webhook.test.ts drives both to a row, and the return-page reconcile never
+//     pages), the same way.
+//   - staff_pass_credit_reversal_incomplete: the real `alertPassCreditReversalIncomplete` (its one site, `reversePassCreditOnRefund`,
+//     calls it after the reversal commits; pass-credit-refund-reversal.test.ts drives it to a row), for an undetermined reversal of a
+//     redemption whose org and competition this database does not hold, the same way.
+//   - staff_pass_rung_mismatch: the real `maybeAlertPassRungMismatch` (its one site, `refusePassMint`, reached from the webhook and
+//     from reconcile-on-return, calls it; pass-checkout-plan-gate.test.ts drives both to a row), for a Checkout Session, the same way.
+//   - staff_pass_unknown_competition: the real `alertPassUnknownCompetition` (both its sites, the webhook and reconcile-on-return,
+//     call it; billing-pass-unknown-competition.test.ts drives both to one row), for a Checkout Session, the same way.
+//   - staff_stream_credit_clawback: the real `alertStreamClawback` (its four sites, the partial, short and ungranted refunds and the
+//     short lost dispute, call it; stream-credits-clawback.test.ts drives each to a row), for a partial refund of a charge, the same way.
+//   - staff_extra_org_reprice_failed: the real `maybeAlertOrgRepriceFailed` (its four sites, the webhook's three convergence failures
+//     and the daily stale-price sweep, call it; extra-org-addon.test.ts drives the three and org-addon-price-sweep.test.ts the sweep,
+//     each to a row), for one rider of a billing group, the same way.
+//   - staff_dispute_alert: the real `notifyStaffDispute` (its three sites in `handlePlatformDispute`, the Event Pass, match-credit pack
+//     and subscription branches, call it; platform-dispute.test.ts drives the pass and subscription branches to a row and
+//     stream-credits-clawback.test.ts the pack branch's render), for a `created` subscription dispute. Unlike the other staff alerts its
+//     subject IS a dictionary key, rendered in the platform locale (en) whatever the org's own language.
+//   - staff_connect_bank_changed: the real `alertConnectBankRemoved` (its one site, `handleExternalAccountChanged`, calls it for a
+//     DELETED external account only; billing-events-payout-health.test.ts drives it to a row through the webhook), for a Stripe event,
+//     the same way as the literal-subject alerts above.
+//   - staff_stuck_events: the real `alertStuckEventParked` (its one site, the park in `sweepStuckEvents`, calls it for the pass whose
+//     park moved the row; billing-events-sweep.test.ts drives the sweep to a row, and two overlapping passes to one), for a Stripe
+//     event, the same way. Not the sweep itself: it is global over billing_events, and that suite clears and counts the same working
+//     set, so a sweep run here would race it under CI's parallel files.
+//   - staff_stream_pack_price_drift: the real `alertStreamPackPriceDrift` (its one site, the drift guard in
+//     `resolveStreamPackPriceId`, awaits it before refusing the checkout; relay-checkout-drift-alert.test.ts drives the real
+//     `createRelayCheckout` to a row), for a drifted Stripe price, the same way.
+//   - staff_ai_run_cost: the real `maybeAlertExpensiveRun` (its three deferred callers, the schedule, joint-schedule and officials
+//     runs, call it after the run's ledger row; ai-run-cost-alert.test.ts drives it to a row), for an officials run costing far over a
+//     seeded trailing median (25 runs of this run's own organisation, which the clean-up removes), the same way. Its ref is a UUID
+//     minted for the run (P-W5-6).
+//   - staff_earn_grant_volume: the real `checkEarnGrantVolumeAlert` (its one caller, the daily billing-grant cron, awaits it;
+//     earn-grant-volume-alert.test.ts drives it to a row), over today's earn grants with 20 seeded, the same way. Its key is today's
+//     UTC day itself (P-W5-15), so the scenario clears a row an earlier sweep left today, and its subject's count is the number the
+//     producer handed the builder (a call-through spy on `earnGrantVolumeAlertEmail`; the count moves with neighbouring suites).
+//   - staff_extra_org_allowance: the real `maybeAlertOrgAllowance` (its one site, `setExtraOrgs`, defers it after the Stripe mutation;
+//     extra-org-addon.test.ts drives a purchase to a row), for a `pro` group bought to 25 organisations, the same way. Its key is the
+//     group and the count (P-W5-16), and the plan's base is read from plan_entitlements, as the producer reads it.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
 // moved, each kind task (wave 2, T2-T9) added the scenario and deleted the entry, and T10 closed the list again. Wave 3's T1 registered
 // its eight kinds the same way, each kind task (wave 3, T2-T4) added the scenario and deleted the entry, and T4c closed the list again.
-// Wave 4's T1 registered its nine kinds the same way: they are in NOT_YET_MOVED until each kind task (wave 4, T2-T4) adds the scenario
-// and deletes the entry, and the last move closes the list again. The sweep covers every kind the list does not name. A kind that is
+// Wave 4's T1 registered its nine kinds the same way, each kind task (wave 4, T2-T4) added the scenario and deleted the entry, and the
+// last move closed the list again. Wave 5's T1 registered its seventeen the same way, its kind tasks (T3-T6) moved them, and T7 closed
+// the lists: all 51 kinds are swept. The sweep covers every kind the list does not name. A kind that is
 // neither moved nor listed fails by name, and so does a kind that is listed while it has a scenario (a stale entry would skip the
 // sweep), and so do the three lists when they disagree.
 //
-// Sport: not applicable. These emails do not vary by sport (spec, Test strategy 4).
+// Sport: not applicable here (spec, Test strategy 4). The one body that names a sport, funnel_reminder, has its two-sport
+// case in app/api/funnel/remind/__tests__/route.test.ts.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
@@ -111,8 +166,10 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),
   rateLimit: vi.fn(async () => {}),
 }));
+// The funnel reminder's producer is a cron route: its secret is the stubbed CRON_SECRET (beforeEach), carried here.
+const CRON = vi.hoisted(() => `cron-ks-${Math.random().toString(36).slice(2)}`);
 vi.mock("next/headers", () => ({
-  headers: async () => new Headers({ "x-forwarded-for": "203.0.113.78" }),
+  headers: async () => new Headers({ "x-forwarded-for": "203.0.113.78", "x-cron-secret": CRON }),
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
 }));
 // Wave 3's account mail comes from signed-in routes (a staff press, an email change). Their scenario sets who is signed in for its own
@@ -133,6 +190,12 @@ vi.mock("@/lib/auth", async (importOriginal) => {
       return { user: session.user as User, role };
     }),
   };
+});
+// The earn-grant volume alert's subject carries a platform-wide count that neighbouring suites move, so its scenario reads the count
+// the producer handed the builder. Everything else in lib/email.ts is the real module.
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, earnGrantVolumeAlertEmail: vi.fn(actual.earnGrantVolumeAlertEmail) };
 });
 // The one network seam. The harness reads this same mock back (it imports `deliver` from the same module).
 const deliverMock = vi.hoisted(() => vi.fn());
@@ -155,6 +218,8 @@ vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as resendVerificationPost } from "@/app/api/admin/users/[id]/resend-verification/route";
 import { POST as funnelStartPost } from "@/app/api/funnel/start/route";
+import { POST as funnelRemindPost } from "@/app/api/funnel/remind/route";
+import { createFunnelDraft } from "@/lib/funnel";
 import { POST as changeEmailPost } from "@/app/api/auth/change-email/route";
 import { DELETE as deleteAccount } from "@/app/api/users/me/route";
 import { POST as orgInvitePost } from "@/app/api/orgs/[id]/invites/route";
@@ -171,11 +236,26 @@ import {
   handleRegistrationDispute,
   putRegistrationSettings,
   refundRegistration,
+  maybeAlertRegistrationRefundFailed,
   sweepRegistrations,
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
-import { processStripeEvent } from "@/server/usecases/billing-events";
+import {
+  alertConnectBankRemoved,
+  alertCreditPackGrantFailed,
+  alertSizePackGrantFailed,
+  alertStreamClawback,
+  alertStuckEventParked,
+  maybeAlertOrgRepriceFailed,
+  notifyStaffDispute,
+  processStripeEvent,
+} from "@/server/usecases/billing-events";
+import { alertStreamPackPriceDrift, StreamPackPriceDriftError } from "@/lib/relay-checkout";
+import { maybeAlertExpensiveRun } from "@/server/usecases/ai-runs-admin";
+import { checkEarnGrantVolumeAlert } from "@/lib/credits";
+import { maybeAlertOrgAllowance } from "@/server/usecases/extra-orgs";
+import { earnGrantVolumeAlertEmail } from "@/lib/email";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
@@ -183,15 +263,28 @@ import { refreshDiscipline } from "@/server/usecases/scoring";
 import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
 import { detachOrgFromGroup, offerGroupTransfer } from "@/server/usecases/billing-groups";
 import { seedCommunityGroup, seedDetachableGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { alertStreamCreditGrantFailed } from "@/server/usecases/stream-credits-checkout";
+import { alertPassCreditReversalIncomplete } from "@/server/usecases/pass-credit";
+import { alertPassUnknownCompetition, maybeAlertPassRungMismatch } from "@/lib/billing";
 import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
-import { REQUEST_ATTEMPT_WAIT_MS, assertNothingMoreToSend, dictionarySubject, forEachOutboxKind, type KindFacts, type KindScenario } from "./_kind-harness";
+import {
+  REQUEST_ATTEMPT_WAIT_MS,
+  assertNothingMoreToSend,
+  dictionarySubject,
+  forEachOutboxKind,
+  type AnyKindScenario,
+  type KindFacts,
+  type KindScenario,
+  type LiteralKindScenario,
+} from "./_kind-harness";
 import { allowlistLengthFor, KIND_DIRECT_SENDER, NOT_YET_MOVED, SENDER_ALLOWLIST } from "./_kind-senders";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+const earnAlert = vi.mocked(earnGrantVolumeAlertEmail);
 const RUN = `ks-${randomUUID().slice(0, 8)}`;
 const KEK = "ab".repeat(32);
 const MIN = 60_000;
@@ -239,6 +332,24 @@ const SPEC_KINDS = [
   "group_transfer_complete",
   "group_org_removed",
   "group_org_left",
+  // Wave 5, in the table's row order: the funnel reminder, then the sixteen staff alerts.
+  "funnel_reminder",
+  "staff_registration_refund_failed",
+  "staff_credit_pack_grant_failed",
+  "staff_size_pack_grant_failed",
+  "staff_stream_credit_grant_failed",
+  "staff_pass_credit_reversal_incomplete",
+  "staff_pass_rung_mismatch",
+  "staff_pass_unknown_competition",
+  "staff_stream_credit_clawback",
+  "staff_extra_org_reprice_failed",
+  "staff_dispute_alert",
+  "staff_connect_bank_changed",
+  "staff_stuck_events",
+  "staff_stream_pack_price_drift",
+  "staff_ai_run_cost",
+  "staff_earn_grant_volume",
+  "staff_extra_org_allowance",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -280,6 +391,24 @@ const SPEC_FACTS: KindFacts = {
   group_transfer_complete: ["account", false],
   group_org_removed: ["account", false],
   group_org_left: ["account", false],
+  // Wave 5: the funnel reminder is L, the sixteen staff alerts S; all seventeen are T (their senders pass `transactional: true`).
+  funnel_reminder: ["literal", true],
+  staff_registration_refund_failed: ["staff", true],
+  staff_credit_pack_grant_failed: ["staff", true],
+  staff_size_pack_grant_failed: ["staff", true],
+  staff_stream_credit_grant_failed: ["staff", true],
+  staff_pass_credit_reversal_incomplete: ["staff", true],
+  staff_pass_rung_mismatch: ["staff", true],
+  staff_pass_unknown_competition: ["staff", true],
+  staff_stream_credit_clawback: ["staff", true],
+  staff_extra_org_reprice_failed: ["staff", true],
+  staff_dispute_alert: ["staff", true],
+  staff_connect_bank_changed: ["staff", true],
+  staff_stuck_events: ["staff", true],
+  staff_stream_pack_price_drift: ["staff", true],
+  staff_ai_run_cost: ["staff", true],
+  staff_earn_grant_volume: ["staff", true],
+  staff_extra_org_allowance: ["staff", true],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -322,6 +451,7 @@ afterAll(async () => {
 beforeEach(() => {
   vi.stubEnv("EMAIL_OUTBOX_KEK", KEK);
   vi.stubEnv("RESEND_API_KEY", "re_test_sweep");
+  vi.stubEnv("CRON_SECRET", CRON);
   deliverMock.mockReset();
   deliverMock.mockImplementation(async () => ({ ok: true, providerId: `re_${RUN}_${randomUUID()}` }));
   stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({ id: `cs_${RUN}_${randomUUID().slice(0, 8)}`, url: "https://checkout.stripe.test/session" }));
@@ -336,12 +466,13 @@ afterEach(() => {
 });
 
 describe("the spec's lists (no database)", () => {
-  it("the spec lists thirty-four kinds and the code's registry is exactly them, in the spec's order", () => {
+  it("the spec lists fifty-one kinds and the code's registry is exactly them, in the spec's order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
-    expect(SPEC_KINDS).toHaveLength(34);
+    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51."
+    expect(SPEC_KINDS).toHaveLength(51);
   });
 
-  it("the legend has NINETEEN literal kinds, FIFTEEN account kinds and no staff kind", () => {
+  it("the legend has TWENTY literal kinds, FIFTEEN account kinds and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -365,6 +496,8 @@ describe("the spec's lists (no database)", () => {
       // Wave 4: the two official notices are literal addresses.
       "official_assigned",
       "official_assignment_changed",
+      // Wave 5: the funnel reminder goes to the draft's address.
+      "funnel_reminder",
     ]);
     expect(by("account")).toEqual([
       "chess_invite",
@@ -384,10 +517,27 @@ describe("the spec's lists (no database)", () => {
       "group_org_removed",
       "group_org_left",
     ]);
-    expect(by("staff"), "waves 1 to 4 have no staff kind").toEqual([]);
-    // Each kind keeps its sender's flag: the two phase-1 kinds, the trial-ending notice, seven of wave 3's eight and five of wave 4's
-    // nine are transactional; the registration, refund, dispute, sponsor and pass mails, the org invite and the four billing-group
-    // mails are not.
+    expect(by("staff"), "the sixteen staff alerts are wave 5's, in the table's row order").toEqual([
+      "staff_registration_refund_failed",
+      "staff_credit_pack_grant_failed",
+      "staff_size_pack_grant_failed",
+      "staff_stream_credit_grant_failed",
+      "staff_pass_credit_reversal_incomplete",
+      "staff_pass_rung_mismatch",
+      "staff_pass_unknown_competition",
+      "staff_stream_credit_clawback",
+      "staff_extra_org_reprice_failed",
+      "staff_dispute_alert",
+      "staff_connect_bank_changed",
+      "staff_stuck_events",
+      "staff_stream_pack_price_drift",
+      "staff_ai_run_cost",
+      "staff_earn_grant_volume",
+      "staff_extra_org_allowance",
+    ]);
+    // Each kind keeps its sender's flag: the two phase-1 kinds, the trial-ending notice, seven of wave 3's eight, five of wave 4's
+    // nine and all seventeen of wave 5 are transactional; the registration, refund, dispute, sponsor and pass mails, the org invite
+    // and the four billing-group mails are not.
     expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toEqual([
       "magic_link",
       "chess_invite",
@@ -405,7 +555,27 @@ describe("the spec's lists (no database)", () => {
       "suspension_confirmed",
       "suspension_served",
       "match_report_submitted",
+      // Wave 5: all seventeen.
+      "funnel_reminder",
+      "staff_registration_refund_failed",
+      "staff_credit_pack_grant_failed",
+      "staff_size_pack_grant_failed",
+      "staff_stream_credit_grant_failed",
+      "staff_pass_credit_reversal_incomplete",
+      "staff_pass_rung_mismatch",
+      "staff_pass_unknown_competition",
+      "staff_stream_credit_clawback",
+      "staff_extra_org_reprice_failed",
+      "staff_dispute_alert",
+      "staff_connect_bank_changed",
+      "staff_stuck_events",
+      "staff_stream_pack_price_drift",
+      "staff_ai_run_cost",
+      "staff_earn_grant_volume",
+      "staff_extra_org_allowance",
     ]);
+    // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T.
+    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(32);
   });
 
   it("the not-yet-moved list names only spec kinds, once each, in the registry's order, none of waves 1 to 4, and leaves at least one kind to sweep", () => {
@@ -446,9 +616,11 @@ describe("the spec's lists (no database)", () => {
     }
     expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
     // Which kinds are unmoved is NOT_YET_MOVED's alone (the test above holds its shape, and holds every kind of waves 1 to 4 out of it);
-    // the loop holds it to the map and the allowlist kind by kind. Wave 4's last move emptied the list, but `expect(NOT_YET_MOVED)
-    // .toEqual([])` and "none still names a direct sender" are NOT put back here: wave 5 is stacked on wave 4 and appends its own kinds
-    // to the list, so wave 5's closing task restores both, as wave 3's T4c left them, once its own kinds have moved.
+    // the loop holds it to the map and the allowlist kind by kind. Wave 5 moved the last of its kinds (T6) and its closing task (T7)
+    // closed the lists, as wave 3's T4c left them: every one of the spec's 51 kinds is on the outbox. The moved side is what the loop
+    // above judged for all of them; the unmoved side has no member to judge until a later phase registers a kind early.
+    expect(NOT_YET_MOVED, "waves 1 to 5 are closed: every kind has moved to the outbox").toEqual([]);
+    expect(Object.values(KIND_DIRECT_SENDER).filter((x) => x !== null), "and none still names a direct sender").toEqual([]);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
     const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
     expect(new Set(senders).size, "no two kinds share a direct sender").toBe(senders.length);
@@ -459,6 +631,9 @@ describe("the spec's lists (no database)", () => {
       SENDER_ALLOWLIST.length,
       `${NOT_YET_MOVED.length} kinds are still unmoved, so the allowlist holds ${allowlistLengthFor(NOT_YET_MOVED.length)} senders: a moved kind's send* was left behind (or a sender was dropped for a kind that has not moved)`,
     ).toBe(allowlistLengthFor(NOT_YET_MOVED.length));
+    // And every kind has moved: the spec's 49 less 49.
+    expect(allowlistLengthFor(NOT_YET_MOVED.length), "the spec's 49 less 49").toBe(0);
+    expect(SENDER_ALLOWLIST).toEqual([]);
   });
 
   it("the harness waits for a request's own attempt longer than the longest a correct dispatchNow can still be working", () => {
@@ -990,6 +1165,436 @@ function funnelClaimScenario(): KindScenario {
   };
 }
 
+/** The real +24h cron sweep of the funnel over a day-old draft a Dutch visitor started (`funnel_drafts.locale`, written at /start: Q3):
+ *  no account and no organisation, so the draft's own language; the worker makes the first attempt. */
+function funnelReminderScenario(): KindScenario {
+  const recipient = address();
+  const competitionName = `Sweep Reminder ${RUN}`;
+  return {
+    locale: "nl",
+    subjectKey: "funnelReminder.subject",
+    subjectVars: { competitionName },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const draft = await createFunnelDraft(recipient, { name: competitionName, sport: "Badminton", entrants: 8 }, sql, "nl");
+      await sql`update funnel_drafts set created_at = now() - interval '25 hours' where id = ${draft.id}`;
+      const res = await funnelRemindPost(new Request("https://sweep.test/api/funnel/remind", { method: "POST" }));
+      expect(res.status, "premise: the real cron route answered 200").toBe(200);
+    },
+  };
+}
+
+/** The real staff alert for a failed registration refund, to this run's STAFF_ALERT_EMAIL (stubbed for the run; the worker reads the
+ *  address off the row): no org, no account, and the worker makes the first attempt. The subject is the sender's inline English with
+ *  `money(1234, "gbp")` in en-GB, typed from its source. */
+function registrationRefundFailedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const registrationId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Registration refund failed — £12.34 still owed (registration ${registrationId})`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await maybeAlertRegistrationRefundFailed({
+        registrationId,
+        orgId: randomUUID(),
+        competitionId: randomUUID(),
+        amountCents: 1234,
+        currency: "gbp",
+        paymentIntentId: `pi_${RUN}_refund_failed`,
+        reason: "connected account restricted",
+        mode: "auto",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a paid credit-pack session that could not be granted, to this run's STAFF_ALERT_EMAIL: no org, no account,
+ *  and the worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function creditPackGrantFailedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const sessionId = `cs_${RUN}_pack_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Credit pack purchase could not be granted: ${sessionId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertCreditPackGrantFailed("checkout_session", {
+        sessionId,
+        orgId: randomUUID(),
+        packKey: "nope",
+        reason: "no credits snapshot and no resolvable pack_key",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a paid size-pack session that lifted no cap, to this run's STAFF_ALERT_EMAIL: no org, no account, and the
+ *  worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function sizePackGrantFailedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const sessionId = `cs_${RUN}_size_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Size pack purchase could not be granted: ${sessionId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertSizePackGrantFailed({
+        sessionId,
+        targetOrgId: randomUUID(),
+        competitionId: randomUUID(),
+        sizePackKey: "nope",
+        reason: "no snapshot and no resolvable size_pack_key",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a paid match-credit session that granted nothing, to this run's STAFF_ALERT_EMAIL: no org, no account,
+ *  and the worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function streamCreditGrantFailedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const sessionId = `cs_${RUN}_stream_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Match credits could not be granted: ${sessionId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertStreamCreditGrantFailed({
+        sessionId,
+        orgId: randomUUID(),
+        packRaw: "7",
+        reason: "no credits snapshot and no resolvable pack",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a refunded Event Pass credit that could not be reversed, to this run's STAFF_ALERT_EMAIL: no org, no
+ *  account, and the worker makes the first attempt. The subject is the sender's inline English for the undetermined reason, typed
+ *  from its source. */
+function passCreditReversalIncompleteScenario(): LiteralKindScenario {
+  const recipient = address();
+  const intent = `pi_${RUN}_rev_${randomUUID().slice(0, 8)}`;
+  const orgId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Pass credit reversal skipped — needs manual review — org ${orgId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertPassCreditReversalIncomplete({
+        intent,
+        passKey: "event_pass",
+        redemption: { org_id: orgId, competition_id: randomUUID(), amount_minor: 2500, currency: "gbp" },
+        reverseAmount: 0,
+        unsafe: true,
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a paid Event Pass session whose rung and price disagree, to this run's STAFF_ALERT_EMAIL: no org, no
+ *  account, and the worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function passRungMismatchScenario(): LiteralKindScenario {
+  const recipient = address();
+  const sessionId = `cs_${RUN}_rung_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Event Pass NOT granted — price/rung mismatch: ${sessionId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await maybeAlertPassRungMismatch({
+        sessionId,
+        orgId: randomUUID(),
+        competitionId: randomUUID(),
+        passKey: "event_pass_l",
+        reason: "price_mismatch",
+        expectedPriceId: "price_test_pass_l",
+        actualPriceId: "price_test_pass",
+        paymentIntent: `pi_${RUN}_rung`,
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a paid Event Pass naming a competition this database does not hold, to this run's STAFF_ALERT_EMAIL:
+ *  no org, no account, and the worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function passUnknownCompetitionScenario(): LiteralKindScenario {
+  const recipient = address();
+  const sessionId = `cs_${RUN}_unkcomp_${randomUUID().slice(0, 8)}`;
+  const competitionId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Event Pass NOT granted — unknown competition: ${competitionId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertPassUnknownCompetition({
+        sessionId,
+        orgId: randomUUID(),
+        competitionId,
+        passKey: "event_pass",
+        paymentIntent: `pi_${RUN}_unkcomp`,
+        source: "webhook",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a partially refunded match-credit charge, to this run's STAFF_ALERT_EMAIL: no org, no account, and the
+ *  worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function streamCreditClawbackScenario(): LiteralKindScenario {
+  const recipient = address();
+  const chargeId = `ch_${RUN}_claw_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Match credits claw-back needs review: ${chargeId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertStreamClawback({
+        shape: "partial",
+        refType: "charge",
+        refId: chargeId,
+        amountRefunded: 500,
+        orgId: randomUUID(),
+        purchased: 5,
+        clawedBack: 0,
+        reason: "partial refund — no automatic claw-back",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for an extra-organisation rider stuck on the wrong price, to this run's STAFF_ALERT_EMAIL: no org, no account,
+ *  and the worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function extraOrgRepriceFailedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const subscriptionId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Extra-org rider stuck on the wrong price (group ${subscriptionId})`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await maybeAlertOrgRepriceFailed({
+        subscriptionId,
+        stripeSubscriptionId: `sub_${RUN}_reprice`,
+        planKey: "pro",
+        itemId: `si_${RUN}_reprice`,
+        currentPriceId: "price_superseded",
+        expectedPriceId: "price_current",
+        reason: "Stripe rejected the item update: price_currency_mismatch",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a connected org's deleted bank account, to this run's STAFF_ALERT_EMAIL: no org row, no account, and the
+ *  worker makes the first attempt. The subject is the builder's inline English, typed from its source. */
+function connectBankChangedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const orgName = `Bank Org ${RUN} ${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Connect bank account removed: ${orgName}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertConnectBankRemoved({
+        eventId: `evt_${RUN}_bank_${randomUUID().slice(0, 8)}`,
+        orgId: randomUUID(),
+        orgName,
+        accountId: `acct_${RUN}_bank`,
+        detail: "bank_account ba_sweep ••••1234",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a webhook event the stuck-event sweep has parked, to this run's STAFF_ALERT_EMAIL: no org, no account, and
+ *  the worker makes the first attempt. The subject is the builder's inline English, typed from its source. */
+function stuckEventsScenario(): LiteralKindScenario {
+  const recipient = address();
+  const eventId = `evt_${RUN}_stuck_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Stuck webhook event needs review: ${eventId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertStuckEventParked({ eventId, eventType: "invoice.paid", attempts: 4 });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a match-credit pack whose live price drifted from the table, to this run's STAFF_ALERT_EMAIL: no org, no
+ *  account, and the worker makes the first attempt. The subject is the builder's inline English, typed from its source. */
+function streamPackPriceDriftScenario(): LiteralKindScenario {
+  const recipient = address();
+  return {
+    locale: "en",
+    subjectLiteral: "Match-credit pack price differs from the table: seazn_stream_pack_5",
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      await alertStreamPackPriceDrift(
+        new StreamPackPriceDriftError("seazn_stream_pack_5", `price_${RUN}_drift_${randomUUID().slice(0, 8)}`, "eur: live 1, table 2925"),
+      );
+    },
+  };
+}
+
+/** The real staff alert for an AI run that cost far over its phase's trailing median, to this run's STAFF_ALERT_EMAIL: no org on the
+ *  row, no account, and the worker makes the first attempt. The baseline is 25 officials runs at a millionth of a dollar, seeded
+ *  under this run's own organisation (a median needs 20); a $50 run is orders over anything a mocked run records. The subject is
+ *  the builder's inline English, typed from its source. */
+function aiRunCostScenario(): LiteralKindScenario {
+  const recipient = address();
+  const orgId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Expensive AI run: $50.0000 (org ${orgId})`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const [org] = await sql<{ id: string }[]>`
+        insert into organizations (id, name, slug)
+        values (${orgId}, ${`AI Run Org ${RUN}`}, ${`ai-run-org-${RUN}-${randomUUID().slice(0, 8)}`}) returning id`;
+      made.orgIds.push(org!.id);
+      const [comp] = await sql<{ id: string }[]>`
+        insert into competitions (org_id, name, slug, visibility, branding)
+        values (${orgId}, 'AI Run Comp', ${`ai-run-comp-${RUN}`}, 'private', '{}') returning id`;
+      await sql`
+        insert into competition_events (competition_id, org_id, type, payload)
+        select ${comp!.id}::uuid, ${orgId}::uuid, 'schedule.ai_officials_generated', ${sql.json({ cost_usd: 0.000001 })}::jsonb
+          from generate_series(1, 25)`;
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await maybeAlertExpensiveRun({ orgId, phase: "officials", model: "claude-sonnet-5", costUsd: 50 });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a day whose earn grants crossed the threshold, to this run's STAFF_ALERT_EMAIL: no org, no account, and the
+ *  worker makes the first attempt. The key is today's UTC day itself (P-W5-15), global by nature, so a sweep that already ran today
+ *  on this database holds it and is cleared first; earn-grant-volume-alert.test.ts keeps to days of its own for the same reason. The
+ *  count in the subject is every earn grant since today began, which neighbouring suites move while this runs, so it is the number
+ *  the producer handed the builder (a call-through spy); the rest of the subject is the builder's inline English, typed from its
+ *  source. */
+function earnGrantVolumeScenario(): LiteralKindScenario {
+  const recipient = address();
+  const s: LiteralKindScenario = {
+    locale: "en",
+    subjectLiteral: "(the count the producer read, set by run)",
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const day = new Date().toISOString().slice(0, 10);
+      await sql`delete from email_outbox where kind = 'staff_earn_grant_volume' and dedupe_key = ${day}`;
+      await sql`
+        insert into ai_credit_ledger (wallet_id, delta, source, bucket, balance_after, idempotency_key)
+        select gen_random_uuid(), 10, 'earn_grant', 'pack', 10, ${`${RUN}-earn-`} || g from generate_series(1, 20) as g`;
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      earnAlert.mockClear();
+      const id = await checkEarnGrantVolumeAlert();
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+      expect(earnAlert, "premise: the builder rendered it once").toHaveBeenCalledTimes(1);
+      const { count, threshold } = earnAlert.mock.calls[0]![0];
+      expect(count, "premise: the seeded day is over the threshold").toBeGreaterThanOrEqual(20);
+      s.subjectLiteral = `Earn-grant volume alert: ${count} today (threshold ${threshold})`;
+    },
+  };
+  return s;
+}
+
+/** The real staff alert for a billing group a purchase took to the threshold of 25 organisations, to this run's STAFF_ALERT_EMAIL: no
+ *  org on the row, no account, and the worker makes the first attempt. The group needs no row (the alert names it and reads only the
+ *  plan's base). The subject is the builder's inline English, typed from its source; the purchase is the threshold less the plan's
+ *  base, read from plan_entitlements as the producer reads it. */
+function extraOrgAllowanceScenario(): LiteralKindScenario {
+  const recipient = address();
+  const groupId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Large billing group: 25 organisations (group ${groupId})`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const [plan] = await sql<{ int_value: number | null }[]>`
+        select int_value from plan_entitlements where plan_key = 'pro' and feature_key = 'orgs.max_owned'`;
+      expect(plan?.int_value, "premise: the pro plan has a finite base").toEqual(expect.any(Number));
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await maybeAlertOrgAllowance({
+        subscriptionId: groupId,
+        orgId: randomUUID(),
+        planKey: "pro",
+        extraOrgs: 25 - plan!.int_value!,
+        previousExtraOrgs: 0,
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
+/** The real staff alert for a platform-charge dispute, to this run's STAFF_ALERT_EMAIL, for a `created` subscription dispute of an org
+ *  that speaks French: the alert is in the platform locale (en) all the same, it names the org, and the worker makes the first
+ *  attempt. */
+async function staffDisputeAlertScenario(): Promise<KindScenario> {
+  const recipient = address();
+  const orgName = `Dispute Org ${RUN} ${randomUUID().slice(0, 8)}`;
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug, default_locale)
+    values (${orgName}, ${`dispute-org-${RUN}-${randomUUID().slice(0, 8)}`}, 'fr') returning id`;
+  made.orgIds.push(orgId);
+  return {
+    locale: "en",
+    subjectKey: "staffDisputeAlert.subject",
+    subjectVars: { orgName, kind: dictionarySubject("en", "staffDisputeAlert.kind.subscription", {}) },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      await notifyStaffDispute(
+        "subscription",
+        orgId,
+        { id: `dp_${RUN}_${randomUUID().slice(0, 8)}`, status: "needs_response", amount: 1900, currency: "gbp" } as Stripe.Dispute,
+        "created",
+      );
+    },
+  };
+}
+
 /** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
  *  request makes the first attempt. */
 async function emailChangeConfirmationScenario(): Promise<KindScenario> {
@@ -1513,6 +2118,18 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const orgLeft = await groupOrgLeftScenario();
     expect(dictionarySubject("nl", orgLeft.subjectKey, orgLeft.subjectVars)).not.toBe(dictionarySubject("en", orgLeft.subjectKey, orgLeft.subjectVars));
 
+    const funnelReminder = funnelReminderScenario();
+    expect(dictionarySubject("nl", funnelReminder.subjectKey, funnelReminder.subjectVars)).not.toBe(
+      dictionarySubject("en", funnelReminder.subjectKey, funnelReminder.subjectVars),
+    );
+
+    // The staff alert's language is the platform's, never the org's: the French subject is a different sentence, so a producer that
+    // took the org's locale would fail the English one below.
+    const staffDispute = await staffDisputeAlertScenario();
+    expect(dictionarySubject("fr", staffDispute.subjectKey, staffDispute.subjectVars)).not.toBe(
+      dictionarySubject("en", staffDispute.subjectKey, staffDispute.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1549,12 +2166,30 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         group_transfer_complete: transferComplete,
         group_org_removed: orgRemoved,
         group_org_left: orgLeft,
+        funnel_reminder: funnelReminder,
+        staff_registration_refund_failed: registrationRefundFailedScenario(),
+        staff_credit_pack_grant_failed: creditPackGrantFailedScenario(),
+        staff_size_pack_grant_failed: sizePackGrantFailedScenario(),
+        staff_stream_credit_grant_failed: streamCreditGrantFailedScenario(),
+        staff_pass_credit_reversal_incomplete: passCreditReversalIncompleteScenario(),
+        staff_pass_rung_mismatch: passRungMismatchScenario(),
+        staff_pass_unknown_competition: passUnknownCompetitionScenario(),
+        staff_stream_credit_clawback: streamCreditClawbackScenario(),
+        staff_extra_org_reprice_failed: extraOrgRepriceFailedScenario(),
+        staff_dispute_alert: staffDispute,
+        staff_connect_bank_changed: connectBankChangedScenario(),
+        staff_stuck_events: stuckEventsScenario(),
+        staff_stream_pack_price_drift: streamPackPriceDriftScenario(),
+        staff_ai_run_cost: aiRunCostScenario(),
+        staff_earn_grant_volume: earnGrantVolumeScenario(),
+        staff_extra_org_allowance: extraOrgAllowanceScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 
     const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
-    expect(out.checked, "anti-vacuity: every kind the spec lists that has moved was swept").toBe(SPEC_KINDS.length - NOT_YET_MOVED.length);
+    // The spec's count, typed: "With `magic_link` and `chess_invite` that is 51." Every kind has moved, so every one was swept.
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(51);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
   }, 60_000);
@@ -1604,7 +2239,7 @@ const sendsInRequest =
     await dispatchNow([id]);
   };
 
-const swept = (scenarios: Partial<Record<OutboxKind, KindScenario>>, facts: KindFacts = SPEC_FACTS, notYetMoved?: readonly OutboxKind[]) =>
+const swept = (scenarios: Partial<Record<OutboxKind, AnyKindScenario>>, facts: KindFacts = SPEC_FACTS, notYetMoved?: readonly OutboxKind[]) =>
   forEachOutboxKind(scenarios, { notYetMoved: notYetMoved ?? except(...(Object.keys(scenarios) as OutboxKind[])), specFacts: facts });
 
 describe.skipIf(!HAS_DB)("the harness judges what it says it judges (DB)", () => {
@@ -1666,6 +2301,52 @@ describe.skipIf(!HAS_DB)("the harness judges what it says it judges (DB)", () =>
     // The right key in the wrong locale: the English row is not the Spanish dictionary's.
     const wrongLocale = handMade({ locale: "es", run: sendsInRequest() });
     await expect(swept({ magic_link: wrongLocale })).rejects.toThrow(/magic_link[\s\S]*subject/);
+  });
+
+  it("a scenario's literal subject is judged against the row and the call", async () => {
+    // A staff alert's subject is inline English, not a dictionary key (spec F2): its scenario names the subject literally.
+    const literal = `Staff probe ${RUN} ${randomUUID().slice(0, 8)}`;
+    const byLiteral = (subjectLiteral: string, run: (to: string) => Promise<void>): LiteralKindScenario => ({
+      ...handMade({ run }),
+      subjectKey: undefined,
+      subjectVars: undefined,
+      subjectLiteral,
+    });
+    // The row and the mail both say the literal: it passes.
+    await expect(swept({ magic_link: byLiteral(literal, sendsInRequest({ subject: literal })) })).resolves.toMatchObject({
+      checked: 1,
+      kinds: ["magic_link"],
+    });
+    // Another literal than the one the row was written with fails.
+    await expect(swept({ magic_link: byLiteral(`${literal} (another)`, sendsInRequest({ subject: literal })) })).rejects.toThrow(
+      /magic_link[\s\S]*subject/,
+    );
+    // The call is judged too: the row is edited for the send and restored after it, so only the mail disagrees with the literal.
+    const sentWrong = byLiteral(literal, async (to) => {
+      const id = await enqueueEmail(sql, row({ to, subject: literal }));
+      await sql`update email_outbox set subject = 'edited for the send' where id = ${id}`;
+      await dispatchNow([id]);
+      await sql`update email_outbox set subject = ${literal} where id = ${id}`;
+    });
+    await expect(swept({ magic_link: sentWrong })).rejects.toThrow(/magic_link[\s\S]*was sent with subject/);
+  });
+
+  it("a scenario that gives both subjectKey and subjectLiteral, or neither, fails by kind", async () => {
+    // Refused up front, before any scenario runs: a valid first kind's producer is never called.
+    const firstRun = vi.fn(sendsInRequest());
+    const valid = handMade({ run: firstRun });
+    const chess = { kind: "chess_invite", refType: "fixture_seat" } as const;
+    // Both and neither are type errors, so each is built the way a careless spread or cast would build it.
+    const both = { ...handMade({ run: sendsInRequest(chess) }), subjectLiteral: "Also a literal" } as unknown as AnyKindScenario;
+    await expect(swept({ magic_link: valid, chess_invite: both })).rejects.toThrow(
+      /^outbox kind chess_invite: give subjectKey or subjectLiteral, exactly one$/,
+    );
+    const neither = { ...handMade({ run: sendsInRequest(chess) }), subjectKey: undefined, subjectVars: undefined } as unknown as AnyKindScenario;
+    await expect(swept({ magic_link: valid, chess_invite: neither })).rejects.toThrow(
+      /^outbox kind chess_invite: give subjectKey or subjectLiteral, exactly one$/,
+    );
+    expect(firstRun, "no scenario ran: the check is made before the first producer").not.toHaveBeenCalled();
+    expect(deliverMock).not.toHaveBeenCalled();
   });
 
   it("the mail is addressed to the scenario's recipient: an account that moved after the write and before the send is seen", async () => {

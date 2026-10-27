@@ -9,33 +9,57 @@
 // Postgres ends up holding.
 //
 // DB parts skipped without DATABASE_URL, same as billing-events.test.ts.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 
-// The bank-removed staff alert is asserted as a send, so that sender is mocked
-// here. Declared before the import of the module under test so the mock is in
-// place. The trial warning's whole purpose is to REACH A PERSON: it is queued on
-// the email outbox (phase 3 wave 2, email 10), so its row is what gets asserted.
-type ConnectBankAlertEmail = import("@/lib/email").ConnectBankAlertEmail;
-
-// The body reads `opts` so the recorded call is typed all the way through.
-const sendConnectBankAlertEmail = vi.fn(async (opts: ConnectBankAlertEmail) => Boolean(opts.to));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendConnectBankAlertEmail,
-}));
+// Both emails here are queued on the email outbox, so their rows are what gets
+// asserted. The bank-removed staff alert (phase 3 wave 5, kind
+// `staff_connect_bank_changed`, once per Stripe event) goes to this suite's own
+// STAFF_ALERT_EMAIL; its builder is a spy that calls through, so what the alert
+// SAYS is read where it enters the mail, and Sentry's issue capture is observed
+// (call-through) so a test can assert the writer dropped nothing. The trial
+// warning's whole purpose is to REACH A PERSON (phase 3 wave 2, email 10).
+// Declared before the import of the module under test so the mocks are in place.
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, connectBankAlertEmail: vi.fn(actual.connectBankAlertEmail) };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
 // The outbox's one network seam (the worker never runs here: the warning waits for it).
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: vi.fn() }));
 
 const { sql } = await import("@/lib/db");
 const { HANDLED_EVENT_TYPES, CONNECT_SCOPED_EVENT_TYPES, processStripeEvent } =
   await import("../billing-events");
-const { seedTrialingGroup } = await import("./_money-fixtures");
+const { seedTrialingGroup, staffAlertDrops, staffRows } = await import("./_money-fixtures");
 const { stubOutboxEnv } = await import("./_invite-mail");
 const { dictionarySubject } = await import("@/server/email-outbox/__tests__/_kind-harness");
+const { connectBankAlertEmail } = await import("@/lib/email");
+const { captureError } = await import("@/lib/sentry");
+const { log } = await import("@/server/logger");
 
 const HAS_DB = !!process.env.DATABASE_URL;
+
+const bankAlert = vi.mocked(connectBankAlertEmail);
+const BANK_KIND = "staff_connect_bank_changed";
+const RUN = `ph-${randomUUID().slice(0, 8)}`;
+let staff = "";
+let errors: ReturnType<typeof vi.spyOn>;
+/** What the writer's never-throws catch left (I2): an alert that was queued or deduplicated left nothing. */
+const drops = () => staffAlertDrops(errors, vi.mocked(captureError));
+/** One queued bank-removed alert to this test's staff address, keyed by the Stripe event. The subject is the builder's inline
+ *  English, typed from its source. */
+const bankRow = (eventId: string, orgName: string) => ({
+  ref_id: eventId,
+  dedupe_key: eventId,
+  status: "queued",
+  recipient: staff,
+  subject: `Connect bank account removed: ${orgName}`,
+});
 
 /** The five events this wave added, as the brief specifies them. Kept as a
  *  literal on purpose: it is the CONTRACT against the two live Stripe
@@ -83,7 +107,7 @@ function payout(over: Partial<Stripe.Payout> = {}): Stripe.Payout {
 
 /** A connected org with a Stripe account id, which is the only thing the
  *  payout/bank writers key on. */
-async function connectedOrg(): Promise<{ orgId: string; accountId: string; ownerId: string }> {
+async function connectedOrg(): Promise<{ orgId: string; accountId: string; ownerId: string; orgName: string }> {
   const suffix = randomUUID().slice(0, 8);
   const accountId = `acct_${suffix}${randomUUID().slice(0, 8)}`;
   const [owner] = await sql<{ id: string }[]>`
@@ -93,7 +117,7 @@ async function connectedOrg(): Promise<{ orgId: string; accountId: string; owner
     insert into organizations (name, slug, created_by, stripe_account_id)
     values (${`Payout ${suffix}`}, ${`payout-${suffix}`}, ${owner!.id}, ${accountId})
     returning id`;
-  return { orgId: org!.id, accountId, ownerId: owner!.id };
+  return { orgId: org!.id, accountId, ownerId: owner!.id, orgName: `Payout ${suffix}` };
 }
 
 async function alertRow(orgId: string) {
@@ -124,6 +148,7 @@ async function seedAlert(orgId: string, alert: string, at: Date, detail = "seede
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await sql`delete from email_outbox where kind = ${BANK_KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
   const client = globalForDb._sql;
   globalForDb._sql = undefined;
@@ -148,9 +173,6 @@ describe("HANDLED_EVENT_TYPES (pure)", () => {
 });
 
 describe.skipIf(!HAS_DB)("payout health — payout.failed / payout.paid", () => {
-  beforeEach(() => {
-    sendConnectBankAlertEmail.mockClear();
-  });
 
   it("payout.failed raises payout_failed and records Stripe's failure code", async () => {
     const { orgId, accountId } = await connectedOrg();
@@ -237,28 +259,32 @@ describe.skipIf(!HAS_DB)("payout health — payout.failed / payout.paid", () => 
 
 describe.skipIf(!HAS_DB)("payout health — external account changes", () => {
   beforeEach(() => {
-    sendConnectBankAlertEmail.mockClear();
+    bankAlert.mockClear();
+    vi.mocked(captureError).mockClear();
+    // This test's own staff address: CI sets none, and the database is shared.
+    staff = `staff-${RUN}-${randomUUID().slice(0, 8)}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    errors = vi.spyOn(log, "error");
+  });
+  afterEach(() => {
+    errors.mockRestore();
+    vi.unstubAllEnvs();
   });
 
   it("account.external_account.deleted raises bank_removed and pages staff", async () => {
-    const { orgId, accountId } = await connectedOrg();
-    process.env.STAFF_ALERT_EMAIL = "ops@test.local";
-    await processStripeEvent(
-      event({
-        type: "account.external_account.deleted",
-        account: accountId,
-        object: { id: "ba_deleted1", object: "bank_account", last4: "6789" },
-      }),
-    );
+    const { orgId, accountId, orgName } = await connectedOrg();
+    const ev = event({
+      type: "account.external_account.deleted",
+      account: accountId,
+      object: { id: "ba_deleted1", object: "bank_account", last4: "6789" },
+    });
+    await processStripeEvent(ev);
     const row = await alertRow(orgId);
     expect(row.stripe_payout_alert).toBe("bank_removed");
     expect(row.stripe_payout_alert_detail).toContain("ba_deleted1");
-    expect(sendConnectBankAlertEmail).toHaveBeenCalledTimes(1);
-    expect(sendConnectBankAlertEmail.mock.calls[0]![0]).toMatchObject({
-      to: "ops@test.local",
-      orgId,
-      accountId,
-    });
+    expect(bankAlert).toHaveBeenCalledTimes(1);
+    expect(bankAlert.mock.calls[0]![0]).toMatchObject({ orgId, accountId });
+    expect(await staffRows(BANK_KIND, "stripe_event", ev.id)).toEqual([bankRow(ev.id, orgName)]);
   });
 
   it("account.external_account.updated raises bank_changed and does NOT page staff", async () => {
@@ -266,7 +292,6 @@ describe.skipIf(!HAS_DB)("payout health — external account changes", () => {
     // pair for the negative assertion on the email: the handler demonstrably
     // ran, so "no email" is a decision and not a no-op.
     const { orgId, accountId } = await connectedOrg();
-    process.env.STAFF_ALERT_EMAIL = "ops@test.local";
     await processStripeEvent(
       event({
         type: "account.external_account.updated",
@@ -275,7 +300,82 @@ describe.skipIf(!HAS_DB)("payout health — external account changes", () => {
       }),
     );
     expect((await alertRow(orgId)).stripe_payout_alert).toBe("bank_changed");
-    expect(sendConnectBankAlertEmail).not.toHaveBeenCalled();
+    expect(bankAlert).not.toHaveBeenCalled();
+  });
+
+  it("a deleted external account pages once under the event", async () => {
+    const { orgId, accountId, orgName } = await connectedOrg();
+    const ev = event({
+      type: "account.external_account.deleted",
+      account: accountId,
+      object: { id: "ba_gone", object: "bank_account", last4: "4321" },
+    });
+
+    await processStripeEvent(ev);
+
+    expect(await staffRows(BANK_KIND, "stripe_event", ev.id)).toEqual([bankRow(ev.id, orgName)]);
+    expect(bankAlert, "what the alert says").toHaveBeenCalledWith({
+      orgId,
+      orgName,
+      accountId,
+      detail: "bank_account ba_gone ••••4321",
+    });
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("the same event redelivered pages nothing more", async () => {
+    const { accountId, orgName } = await connectedOrg();
+    const ev = event({
+      type: "account.external_account.deleted",
+      account: accountId,
+      object: { id: "ba_twice", object: "bank_account", last4: "5555" },
+    });
+
+    await processStripeEvent(ev);
+    await processStripeEvent(ev);
+
+    expect(bankAlert, "premise: the redelivery reached the alert again").toHaveBeenCalledTimes(2);
+    expect(await staffRows(BANK_KIND, "stripe_event", ev.id)).toEqual([bankRow(ev.id, orgName)]);
+    expect(drops(), "deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("a second removal on the same account is a second event, and a second alert", async () => {
+    // The once-key is the Stripe EVENT, not the account: the club removing one
+    // bank account and then its replacement is two things a human must see.
+    const { accountId, orgName } = await connectedOrg();
+    const first = event({
+      type: "account.external_account.deleted",
+      account: accountId,
+      object: { id: "ba_one", object: "bank_account", last4: "1000" },
+    });
+    const second = event({
+      type: "account.external_account.deleted",
+      account: accountId,
+      object: { id: "ba_two", object: "bank_account", last4: "2000" },
+    });
+
+    await processStripeEvent(first);
+    await processStripeEvent(second);
+
+    expect(await staffRows(BANK_KIND, "stripe_event", first.id)).toEqual([bankRow(first.id, orgName)]);
+    expect(await staffRows(BANK_KIND, "stripe_event", second.id)).toEqual([bankRow(second.id, orgName)]);
+  });
+
+  it("an updated external account pages nothing", async () => {
+    // The existing `.updated` guard, read as a row: STAFF_ALERT_EMAIL is set,
+    // the org's banner moved (the handler ran), and nothing is queued.
+    const { orgId, accountId } = await connectedOrg();
+    const ev = event({
+      type: "account.external_account.updated",
+      account: accountId,
+      object: { id: "ba_edit", object: "bank_account", last4: "7777" },
+    });
+
+    await processStripeEvent(ev);
+
+    expect((await alertRow(orgId)).stripe_payout_alert, "premise: the handler ran").toBe("bank_changed");
+    expect(await staffRows(BANK_KIND, "stripe_event", ev.id)).toEqual([]);
+    expect(drops()).toEqual({ logged: 0, issues: 0 });
   });
 
   it("a routine bank edit does NOT bury a standing payout_failed", async () => {

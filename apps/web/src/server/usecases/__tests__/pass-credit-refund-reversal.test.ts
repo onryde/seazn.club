@@ -21,7 +21,16 @@
 // `listBalanceTransactions` and `customers.retrieve` both read back whatever
 // the test seeded directly plus whatever `createBalanceTransaction` (this
 // code's own reversal call) has since appended.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+//
+// The staff alert (`alertPassCreditReversalIncomplete`) is queued on the email
+// outbox (phase 3 wave 5, kind `staff_pass_credit_reversal_incomplete`, once
+// per payment intent: `<intent>:reversal`) to this suite's own
+// STAFF_ALERT_EMAIL, so the tests read its row (`staffRows`). The builder is a
+// spy that calls through (what the alert says is read where it enters the
+// mail), and Sentry's issue capture is observed (call-through) so a test can
+// assert the writer dropped nothing. Sport: not applicable (no staff alert
+// names a sport).
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 interface FakeBalanceTxn {
@@ -49,20 +58,35 @@ vi.mock("@/lib/email", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/email")>();
   return {
     ...actual,
-    sendPassCreditReversalIncompleteAlertEmail: vi.fn().mockResolvedValue(true),
+    passCreditReversalIncompleteAlertEmail: vi.fn(actual.passCreditReversalIncompleteAlertEmail),
   };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
 });
 
 import { sql } from "@/lib/db";
-import { sendPassCreditReversalIncompleteAlertEmail } from "@/lib/email";
+import { passCreditReversalIncompleteAlertEmail } from "@/lib/email";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
 import {
   PASS_CREDIT_INTENT_KEY,
+  alertPassCreditReversalIncomplete,
   creditPassTowardSubscription,
   groupAlreadyRedeemed,
   reversePassCreditOnRefund,
 } from "../pass-credit";
+import { staffAlertDrops, staffRows } from "./_money-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+const KIND = "staff_pass_credit_reversal_incomplete";
+const RUN = `pcr-${randomUUID().slice(0, 8)}`;
+/** The builder, observed: what each alert said, in call order. */
+const alertMock = vi.mocked(passCreditReversalIncompleteAlertEmail);
+/** This test's own staff address: CI sets none, and the database is shared. */
+let staff = "";
+let errors: ReturnType<typeof vi.spyOn>;
 const uniq = () => randomUUID().slice(0, 12);
 const orgIds: string[] = [];
 
@@ -173,12 +197,21 @@ beforeEach(() => {
     ledger.push(params);
     return { id: `cbtxn_${uniq()}` };
   });
-  vi.mocked(sendPassCreditReversalIncompleteAlertEmail).mockClear();
-  process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+  alertMock.mockClear();
+  vi.mocked(captureError).mockClear();
+  staff = `staff-${RUN}-${uniq()}@x.test`;
+  vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+  errors = vi.spyOn(log, "error");
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
 });
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
   if (orgIds.length) {
     await sql`delete from competitions where org_id = any(${orgIds})`;
     const groups = await sql<{ subscription_id: string }[]>`
@@ -214,7 +247,8 @@ describe.skipIf(!HAS_DB)("reversePassCreditOnRefund", () => {
     const row = await redemptionRow(intent);
     expect(row?.reversed_at).not.toBeNull();
     expect(row?.reversed_minor).toBe(2500);
-    expect(sendPassCreditReversalIncompleteAlertEmail).not.toHaveBeenCalled();
+    expect(alertMock).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "payment_intent", intent), "a clean reversal pages nobody").toHaveLength(0);
   });
 
   it("reverses only the UNSPENT remainder — NOT the naive full amount", async () => {
@@ -239,11 +273,14 @@ describe.skipIf(!HAS_DB)("reversePassCreditOnRefund", () => {
     const row = await redemptionRow(intent);
     expect(row?.reversed_minor).toBe(1000);
     // The other 1500 was absorbed — staff needs to know.
-    expect(sendPassCreditReversalIncompleteAlertEmail).toHaveBeenCalledTimes(1);
-    const alertArgs = vi.mocked(sendPassCreditReversalIncompleteAlertEmail).mock.calls[0]![0];
+    expect(alertMock).toHaveBeenCalledTimes(1);
+    const alertArgs = alertMock.mock.calls[0]![0];
     expect(alertArgs.grantedMinor).toBe(2500);
     expect(alertArgs.reversedMinor).toBe(1000);
     expect(alertArgs.reason).toBe("consumed");
+    expect(await staffRows(KIND, "payment_intent", intent)).toEqual([
+      { ref_id: `${intent}:reversal`, dedupe_key: `${intent}:reversal`, status: "queued", recipient: staff, subject: `Pass credit reversal incomplete — org ${orgId}` },
+    ]);
   });
 
   it("reverses NOTHING when the credit is fully spent, but still alerts", async () => {
@@ -265,10 +302,11 @@ describe.skipIf(!HAS_DB)("reversePassCreditOnRefund", () => {
     expect(row?.reversed_minor).toBe(0);
     // The entire grant was absorbed — this is exactly the case staff most
     // needs to hear about.
-    expect(sendPassCreditReversalIncompleteAlertEmail).toHaveBeenCalledTimes(1);
-    const alertArgs = vi.mocked(sendPassCreditReversalIncompleteAlertEmail).mock.calls[0]![0];
+    expect(alertMock).toHaveBeenCalledTimes(1);
+    const alertArgs = alertMock.mock.calls[0]![0];
     expect(alertArgs.reversedMinor).toBe(0);
     expect(alertArgs.reason).toBe("consumed");
+    expect(await staffRows(KIND, "payment_intent", intent)).toMatchObject([{ ref_id: `${intent}:reversal`, status: "queued", recipient: staff }]);
   });
 
   it("no-ops when no redemption row exists for this intent", async () => {
@@ -281,7 +319,8 @@ describe.skipIf(!HAS_DB)("reversePassCreditOnRefund", () => {
     expect(stripeMock.listBalance).not.toHaveBeenCalled();
     expect(stripeMock.retrieveCustomer).not.toHaveBeenCalled();
     expect(stripeMock.createBalance).not.toHaveBeenCalled();
-    expect(sendPassCreditReversalIncompleteAlertEmail).not.toHaveBeenCalled();
+    expect(alertMock).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "payment_intent", intent)).toHaveLength(0);
   });
 
   it("no-ops when the redemption was already reversed (webhook replay)", async () => {
@@ -337,11 +376,78 @@ describe.skipIf(!HAS_DB)("reversePassCreditOnRefund", () => {
     expect(row?.reversed_minor).toBe(0);
     expect(row?.reversal_undetermined_at).not.toBeNull();
 
-    expect(sendPassCreditReversalIncompleteAlertEmail).toHaveBeenCalledTimes(1);
-    const alertArgs = vi.mocked(sendPassCreditReversalIncompleteAlertEmail).mock.calls[0]![0];
+    expect(alertMock).toHaveBeenCalledTimes(1);
+    const alertArgs = alertMock.mock.calls[0]![0];
     expect(alertArgs.reason).toBe("undetermined");
     expect(alertArgs.reversedMinor).toBe(0);
     expect(alertArgs.grantedMinor).toBe(2500);
+  });
+
+  it("an undetermined reversal queues one alert under the intent", async () => {
+    const customerId = "cus_" + uniq();
+    const { orgId, subscriptionId } = await seedOrgAndSubscription(customerId);
+    const intent = "pi_" + uniq();
+    ledger.push(grantEntry(intent));
+    ledger.push({ amount: -500, currency: "gbp" }); // unrelated credit -> unsafe
+    const competitionId = await seedRedemption({ subscriptionId, orgId, intent, amountMinor: 2500 });
+    const [names] = await sql<{ org: string; comp: string }[]>`
+      select o.name as org, c.name as comp from organizations o, competitions c
+      where o.id = ${orgId} and c.id = ${competitionId}`;
+
+    await reversePassCreditOnRefund(intent, "event_pass_l");
+
+    // One row, keyed by the payment intent the redemption is keyed by; the
+    // subject is the sender's undetermined literal, typed from its source.
+    expect(await staffRows(KIND, "payment_intent", intent)).toEqual([
+      {
+        ref_id: `${intent}:reversal`,
+        dedupe_key: `${intent}:reversal`,
+        status: "queued",
+        recipient: staff,
+        subject: `Pass credit reversal skipped — needs manual review — org ${orgId}`,
+      },
+    ]);
+    // The org and competition names are read when the alert renders: the
+    // fixture's own names, not the "unknown" fallback.
+    expect(alertMock, "what the alert says").toHaveBeenCalledWith({
+      passKey: "event_pass_l",
+      orgId,
+      orgName: names!.org,
+      competitionName: names!.comp,
+      grantedMinor: 2500,
+      reversedMinor: 0,
+      currency: "gbp",
+      reason: "undetermined",
+    });
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("a redelivered refund after the reversal pages nothing more", async () => {
+    const customerId = "cus_" + uniq();
+    const { orgId, subscriptionId } = await seedOrgAndSubscription(customerId);
+    const intent = "pi_" + uniq();
+    ledger.push(grantEntry(intent));
+    ledger.push({ amount: -500, currency: "gbp" }); // unrelated credit -> unsafe
+    await seedRedemption({ subscriptionId, orgId, intent, amountMinor: 2500 });
+
+    await reversePassCreditOnRefund(intent, "event_pass");
+    await reversePassCreditOnRefund(intent, "event_pass");
+
+    // The transition (`reversed_at is null … returning`) runs once: the
+    // redelivery never reaches the alert at all.
+    expect(alertMock, "only the first delivery rendered an alert").toHaveBeenCalledTimes(1);
+    expect(await staffRows(KIND, "payment_intent", intent)).toMatchObject([{ ref_id: `${intent}:reversal`, status: "queued", recipient: staff }]);
+
+    // The key is the second floor, held on its own: the alert itself, reached
+    // again for the same intent, is the same incident and queues nothing.
+    const [redemption] = await sql<{ org_id: string; competition_id: string; amount_minor: number; currency: string }[]>`
+      select org_id, competition_id, amount_minor, currency from pass_credit_redemptions where payment_intent = ${intent}`;
+    await expect(
+      alertPassCreditReversalIncomplete({ intent, passKey: "event_pass", redemption: redemption!, reverseAmount: 0, unsafe: true }),
+      "the same intent again is the same incident",
+    ).resolves.toBeNull();
+    expect(await staffRows(KIND, "payment_intent", intent), "still one row").toHaveLength(1);
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
   });
 
   it("fails closed (treated as unsafe) when the balance-activity read itself fails", async () => {
@@ -365,8 +471,8 @@ describe.skipIf(!HAS_DB)("reversePassCreditOnRefund", () => {
     expect(row?.reversed_at).not.toBeNull();
     expect(row?.reversed_minor).toBe(0);
     expect(row?.reversal_undetermined_at).not.toBeNull();
-    expect(sendPassCreditReversalIncompleteAlertEmail).toHaveBeenCalledTimes(1);
-    const alertArgs = vi.mocked(sendPassCreditReversalIncompleteAlertEmail).mock.calls[0]![0];
+    expect(alertMock).toHaveBeenCalledTimes(1);
+    const alertArgs = alertMock.mock.calls[0]![0];
     expect(alertArgs.reason).toBe("undetermined");
   });
 
@@ -386,7 +492,8 @@ describe.skipIf(!HAS_DB)("reversePassCreditOnRefund", () => {
 
     await Promise.all([reversePassCreditOnRefund(intent, "event_pass"), reversePassCreditOnRefund(intent, "event_pass")]);
 
-    expect(sendPassCreditReversalIncompleteAlertEmail).toHaveBeenCalledTimes(1);
+    expect(alertMock).toHaveBeenCalledTimes(1);
+    expect(await staffRows(KIND, "payment_intent", intent), "one page for the one winner").toHaveLength(1);
     const row = await redemptionRow(intent);
     expect(row?.reversed_minor).toBe(1000);
   });
@@ -444,7 +551,8 @@ describe.skipIf(!HAS_DB)("reversePassCreditOnRefund", () => {
     const row = await redemptionRow(intent);
     expect(row?.reversed_minor).toBe(2500);
     expect(row?.reversal_undetermined_at).toBeNull();
-    expect(sendPassCreditReversalIncompleteAlertEmail).not.toHaveBeenCalled();
+    expect(alertMock).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "payment_intent", intent), "no write-off was paged").toHaveLength(0);
     // …and the money moved once.
     expect(stripeMock.createBalance).toHaveBeenCalledTimes(1);
   });

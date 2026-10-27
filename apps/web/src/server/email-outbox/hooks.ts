@@ -36,8 +36,9 @@ export type KindHook = {
 /** One entry per kind (the type makes a new kind a compile error here). The sign-in link needs no hook; the chess invite
  *  releases its seat stamp once every email for the stamp has ended badly, and the worker re-drives a release that was never
  *  applied (R9). The five registration and refund kinds have no side effect to apply when a mail ends badly (spec §1), and nor
- *  have wave 2's ten money mails, wave 3's eight account and invite mails or wave 4's nine officials, discipline, report and
- *  billing-group mails: each body renders at enqueue time and nothing waits on its outcome (phase-4 note). */
+ *  have wave 2's ten money mails, wave 3's eight account and invite mails, wave 4's nine officials, discipline, report and
+ *  billing-group mails or wave 5's funnel reminder and sixteen staff alerts: each body renders at enqueue time and nothing waits on
+ *  its outcome (phase-4 note). */
 export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   magic_link: {},
   chess_invite: { onEndedBadly: chessInviteEndedBadly, findUnapplied: findUnappliedChessEndings },
@@ -73,6 +74,23 @@ export const KIND_HOOKS: Record<OutboxKind, KindHook> = {
   group_transfer_complete: {},
   group_org_removed: {},
   group_org_left: {},
+  funnel_reminder: {},
+  staff_registration_refund_failed: {},
+  staff_credit_pack_grant_failed: {},
+  staff_size_pack_grant_failed: {},
+  staff_stream_credit_grant_failed: {},
+  staff_pass_credit_reversal_incomplete: {},
+  staff_pass_rung_mismatch: {},
+  staff_pass_unknown_competition: {},
+  staff_stream_credit_clawback: {},
+  staff_extra_org_reprice_failed: {},
+  staff_dispute_alert: {},
+  staff_connect_bank_changed: {},
+  staff_stuck_events: {},
+  staff_stream_pack_price_drift: {},
+  staff_ai_run_cost: {},
+  staff_earn_grant_volume: {},
+  staff_extra_org_allowance: {},
 };
 
 /** Does this kind have a hook to run for a row that ended badly? (A kind with none is not "skipped" when a tick runs out of
