@@ -619,7 +619,7 @@ const msgEs = (key: string, vars: Record<string, string | number> = {}) =>
   ES[key]!.replace(/\{(\w+)\}/g, (h, name: string) => (name in vars ? String(vars[name]) : h));
 
 describe.skipIf(!HAS_DB)("W2d T10 fix round 1 I2: a FLAT rule over a sport that pays an outcome its own way is refused, typed (defence in depth)", () => {
-  // The editor never sends one there (it shows "can't be set per stage yet"); this is the server holding the same line for
+  // The editor never sends one there (W2d Task 16: it states every split); this is the server holding the same line for
   // any other caller. Expected splits are the rulebooks' (`_points-split-rulebook.ts`), never the guard's own answer: IIHF
   // pays an overtime/shoot-out win 2 and its loss 1, FIVB a 3-2 result 2/1, ITTF a loss not played 0 against a played one's 1.
   const IIHF_SPLITS = ["otWin", "otLoss"];

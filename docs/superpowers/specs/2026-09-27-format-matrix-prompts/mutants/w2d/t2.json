@@ -351,20 +351,6 @@
     ]
   },
   {
-    "id": "t2-web-editor-tie-noresult",
-    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
-    "find": "draw, tie: 0, noResult: 0, shootoutAs: \"result\"",
-    "replace": "draw, /*MUT*/ shootoutAs: \"result\"",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
-        ]
-      }
-    ]
-  },
-  {
     "id": "t2-bench-legacy-refused",
     "file": "tools/bench/lib/validate-pack.ts",
     "find": "    pointsRule = parseStoredPointsRule(pointsRuleRaw);\n",

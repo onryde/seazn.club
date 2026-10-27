@@ -11,6 +11,8 @@ import { PointsRule, legacyPointsRule, payout, pointsRuleAwardReachesTable } fro
 import type { AnySportModule } from "@seazn/engine/sport";
 import { refuseStagePoints } from "@/server/usecases/stage-rules-merge";
 import { pointsLine } from "@/lib/points-line";
+import { flattenedSplits, sportStageRule, splitsLost } from "@/lib/stage-points-splits";
+import { liveStageCfg } from "@/lib/stage-decider-off";
 import {
   BONUS_KINDS,
   PARAM_BONUS_KINDS,
@@ -22,10 +24,11 @@ import {
   parseNumber,
   pinInForce,
   pointsBasis,
-  pointsEditorFits,
+  pointsRows,
   previewClauses,
   ruleFromDraft,
   stageTakesPoints,
+  stagePointsContext,
   storedPointsRule,
   type PointsDraft,
 } from "../stage-points-model";
@@ -39,6 +42,8 @@ const sport = (key: string): AnySportModule => {
 const generic = sport("generic");
 const badminton = sport("badminton");
 const football = sport("football");
+/** A league stage with no rules of its own: the stage most sweeps open (W2d T16: the draft reads the STAGE's rule). */
+const LEAGUE = { kind: "league", config: {} } as const;
 
 /** Every (sport, variant, division config) the registry ships: the config a division of that variant stores. */
 const DIVISIONS = builtinModules.flatMap((m) => Object.keys(m.variants).map((variant) => ({ m, variant, cfg: m.variants[variant] as Record<string, unknown> })));
@@ -71,12 +76,12 @@ const editorRule = (win: number, draw: number, loss: number): PointsRule => lega
 const plain = (): PointsRule => editorRule(BASE.win, BASE.draw, BASE.loss);
 
 describe("stage points model (I9 killers for t18)", () => {
-  it("W2d T10: the server's points door (`refuseStagePoints`: the kind and metrics questions) takes the plain rule on every division the registry ships (counted); which divisions keep the EDITOR is `pointsEditorFits`'s (fix round 1 I2, below)", () => {
+  it("W2d T10: the server's points door (`refuseStagePoints`: the kind and metrics questions) takes the plain rule on every division the registry ships (counted); every division opens the EDITOR (W2d T16 retired fix round 1 I2's state, below)", () => {
     // The W2c answer was "inexpressible" for ice hockey, hockey's shoot-out, cricket and indoor volleyball (Q1), asked by
     // this door. W2d retired that question here (spec §5.3: those divisions' points are outcome-keyed now); the door asks
-    // only what a rule is on any division. Fix round 1 I2 (owner 2026-10-26) keeps the editor's own "not yet" state, and the
-    // stage save's flat-over-split refusal, beside it (`table-rule-guards.ts`): neither is this door. The sweep counts the
-    // divisions W2c split, by their own config, so it witnesses them.
+    // only what a rule is on any division. The stage save's flat-over-split refusal (`table-rule-guards.ts`) is not this
+    // door: the editor says it inline (`draftRefusal`, T16). The sweep counts the divisions W2c split, by their own
+    // config, so it witnesses them.
     let swept = 0;
     let wasSplit = 0;
     for (const { m, variant, cfg } of DIVISIONS) {
@@ -127,16 +132,16 @@ describe("stage points model (I9 killers for t18)", () => {
 
   it("every rule the section builds is one the server takes: every division, with a walkover pair, a score, and every offered bonus kind", () => {
     let saved = 0;
-    let blank = 0;
+    let twoPair = 0;
     let bonusesChecked = 0;
     for (const { m, variant, cfg } of DIVISIONS) {
-      const draft = draftFromStored(m, cfg, null);
-      if (draft.win === "") {
-        // W2d T10: a division whose map pays two different pairs has no one win to start from, so the boxes open blank (the
-        // organiser types them; a blank box is not zero, below). Counted, and only for such a map, from its own config.
-        expect(twoPairMap(m, cfg), `${m.key}/${variant}: blank only for a two-pair map`).toBe(true);
-        blank++;
-        continue;
+      const draft = draftFromStored(m, cfg, null, null, LEAGUE);
+      // W2d T16 (carry from T10: the volleyball indoor editor opened BLANK): the draft is the rule the stage plays, so a
+      // division whose map pays two different pairs opens on its set table, never on empty boxes.
+      expect(draft.win, `${m.key}/${variant}: never blank`).not.toBe("");
+      if (twoPairMap(m, cfg)) {
+        expect(Object.keys(draft.sets).length, `${m.key}/${variant}: a two-pair map opens its set rows`).toBeGreaterThan(1);
+        twoPair++;
       }
       const offered = offeredBonusKinds(m, cfg);
       const filled: PointsDraft = {
@@ -156,7 +161,8 @@ describe("stage points model (I9 killers for t18)", () => {
       saved++;
       bonusesChecked += built.rule.bonuses.length;
     }
-    expect(saved + blank, "every division swept").toBe(DIVISIONS.length);
+    expect(saved, "every division swept").toBe(DIVISIONS.length);
+    expect(twoPair, "including the two-pair maps that used to open blank").toBeGreaterThan(0);
     expect(saved, "divisions saved").toBeGreaterThan(10);
     expect(bonusesChecked, "bonus rows swept").toBeGreaterThan(0);
   });
@@ -239,11 +245,15 @@ describe("stage points model (I9 killers for t18)", () => {
     expect(divisionBasePoints(badminton, { pointsMap: { "2-0": [3, 0], "2-1": [3, 0] } }), "the same pair twice is one pair").toEqual({ win: 3, draw: null, loss: 0 });
   });
 
-  it("an unchecked 'Use the division's points' starts from the division's numbers, and a sport that cannot draw sends draw 0", () => {
-    const d = draftFromStored(badminton, badminton.variants.bwf, null);
-    expect(d).toMatchObject({ useDivision: true, win: "2", draw: "0", loss: "0" });
+  it("an unchecked 'Use the division's points' starts from the rule the stage plays (the sport's own for the stage, W2d T16), and a sport that cannot draw sends no draw", () => {
+    // W2d T16 flips W2c's "draw 0" (the flat editor had no word for "none"): the outcome-keyed rule says no draw by leaving
+    // it out, as the sport's own rule does. Expected: the engine's declaration (`tablePointsRule`), never the model's.
+    const sportRule = PointsRule.parse(badminton.tablePointsRule(badminton.configSchema.parse(badminton.variants.bwf), "league"));
+    expect(sportRule.draw, "premise: badminton's own rule pays no draw").toBeUndefined();
+    const d = draftFromStored(badminton, badminton.variants.bwf, null, null, LEAGUE);
+    expect(d).toMatchObject({ useDivision: true, win: "2", draw: "", loss: "0" });
     const built = ruleFromDraft(badminton, { ...d, useDivision: false });
-    expect(built).toEqual({ ok: true, rule: editorRule(2, 0, 0) });
+    expect(built).toEqual({ ok: true, rule: sportRule });
   });
 
   it("round trip: a stored rule opens as the draft that rebuilds it (key order is not part of it)", () => {
@@ -253,7 +263,7 @@ describe("stage points model (I9 killers for t18)", () => {
       [badminton, { ...editorRule(2, 0, 0), forfeit: { winnerPoints: 3, loserPoints: 1 } }],
     ];
     for (const [m, rule] of rules) {
-      const draft = draftFromStored(m, {}, rule);
+      const draft = draftFromStored(m, {}, rule, null, LEAGUE);
       expect(draft.useDivision).toBe(false);
       const out = ruleFromDraft(m, draft);
       expect(out.ok && out.rule !== null && !draftIsDirty(m, draft, rule), `${m.key}: not dirty after opening`).toBe(true);
@@ -267,13 +277,13 @@ describe("stage points model (I9 killers for t18)", () => {
     expect(parseNumber("0")).toBe(0);
     expect(parseNumber("-1.5")).toBe(-1.5);
     expect(parseNumber("abc")).toBeNull();
-    const d = { ...draftFromStored(football, football.variants["11-a-side"], null), useDivision: false };
+    const d = { ...draftFromStored(football, football.variants["11-a-side"], null, null, LEAGUE), useDivision: false };
     expect(ruleFromDraft(football, { ...d, loss: "" })).toEqual({ ok: false, problem: "number" });
     expect(ruleFromDraft(football, { ...d, loss: "0" }).ok).toBe(true);
   });
 
   it("the walkover row is both numbers or neither; a score alone pays the base win and loss; the score never leaves a sport that does not read it", () => {
-    const d = { ...draftFromStored(football, football.variants["11-a-side"], null), useDivision: false };
+    const d = { ...draftFromStored(football, football.variants["11-a-side"], null, null, LEAGUE), useDivision: false };
     expect(ruleFromDraft(football, d)).toMatchObject({ ok: true, rule: { win: { regulation: BASE.win }, draw: BASE.draw, loss: { regulation: BASE.loss } } });
     expect((ruleFromDraft(football, d) as { rule: PointsRule }).rule.forfeit, "no walkover row by default").toBeUndefined();
     expect(ruleFromDraft(football, { ...d, walkoverW: "4" })).toEqual({ ok: false, problem: "walkover" });
@@ -281,7 +291,7 @@ describe("stage points model (I9 killers for t18)", () => {
     expect(ruleFromDraft(football, { ...d, walkoverW: "4", walkoverL: "0" })).toMatchObject({ ok: true, rule: { forfeit: { winnerPoints: 4, loserPoints: 0 } } });
     expect(ruleFromDraft(football, { ...d, awardW: "3" })).toEqual({ ok: false, problem: "score" });
     expect(ruleFromDraft(football, { ...d, awardW: "3", awardL: "0" })).toMatchObject({ ok: true, rule: { forfeit: { winnerPoints: 3, loserPoints: 0, awardScore: [3, 0] } } });
-    const set = { ...draftFromStored(badminton, badminton.variants.bwf, null), useDivision: false, awardW: "21", awardL: "0" };
+    const set = { ...draftFromStored(badminton, badminton.variants.bwf, null, null, LEAGUE), useDivision: false, awardW: "21", awardL: "0" };
     const noRow = ruleFromDraft(badminton, set) as { rule: PointsRule };
     expect(noRow.rule.forfeit, "a score on a set sport is dropped, and with it the row it would have created").toBeUndefined();
     const withRow = ruleFromDraft(badminton, { ...set, walkoverW: "3", walkoverL: "0" }) as { rule: PointsRule };
@@ -289,7 +299,7 @@ describe("stage points model (I9 killers for t18)", () => {
   });
 
   it("a threshold kind needs its number; a kind that reads none sends none; a bonus needs its points", () => {
-    const d = { ...draftFromStored(generic, generic.variants.win_loss, null), useDivision: false };
+    const d = { ...draftFromStored(generic, generic.variants.win_loss, null, null, LEAGUE), useDivision: false };
     const rule = (bonuses: PointsDraft["bonuses"]) => ruleFromDraft(generic, { ...d, bonuses });
     expect(rule([{ when: "loss_margin_lte", param: "", points: "1" }])).toEqual({ ok: false, problem: "bonus" });
     expect(rule([{ when: "loss_margin_lte", param: "7", points: "" }])).toEqual({ ok: false, problem: "bonus" });
@@ -300,12 +310,12 @@ describe("stage points model (I9 killers for t18)", () => {
 
   it("'Use the division's points' is points: null, and it is dirty only against a stored rule", () => {
     const own: PointsRule = plain();
-    const inherit = draftFromStored(football, football.variants["11-a-side"], null);
+    const inherit = draftFromStored(football, football.variants["11-a-side"], null, null, LEAGUE);
     expect(ruleFromDraft(football, inherit)).toEqual({ ok: true, rule: null });
     expect(draftIsDirty(football, inherit, null), "nothing stored, nothing changed").toBe(false);
     expect(draftIsDirty(football, inherit, undefined)).toBe(false);
     expect(draftIsDirty(football, inherit, own), "a stored rule, 'use the division' checked: a save clears it").toBe(true);
-    const opened = draftFromStored(football, football.variants["11-a-side"], own);
+    const opened = draftFromStored(football, football.variants["11-a-side"], own, null, LEAGUE);
     expect(draftIsDirty(football, opened, own)).toBe(false);
     expect(draftIsDirty(football, { ...opened, win: "4" }, own)).toBe(true);
     expect(draftIsDirty(football, { ...opened, win: "" }, own), "an invalid draft is never 'unchanged'").toBe(true);
@@ -313,14 +323,14 @@ describe("stage points model (I9 killers for t18)", () => {
     // jsonb gives keys back in its own order
     expect(draftIsDirty(football, opened, { bonuses: [], unit: "whole", shootoutAs: "result", noResult: 0, tie: 0, loss: { regulation: 0 }, draw: 1, win: { regulation: 3 } })).toBe(false);
     // W2d: a stored W2c row (`base`) reads through `legacyPointsRule`, so an untouched one is not dirty either.
-    expect(draftIsDirty(football, draftFromStored(football, football.variants["11-a-side"], { base: BASE, bonuses: [] }), { base: BASE, bonuses: [] })).toBe(false);
+    expect(draftIsDirty(football, draftFromStored(football, football.variants["11-a-side"], { base: BASE, bonuses: [] }, null, LEAGUE), { base: BASE, bonuses: [] })).toBe(false);
   });
 
   it("a stored row the schema refuses reads as NO rule: the stage inherits rather than opening on garbage", () => {
     const junk: unknown[] = [undefined, null, 5, "rule", [], {}, { bonuses: [] }, { win: { regulation: "x" }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [] }, { base: BASE, bonuses: "none" }];
     for (const stored of junk) {
       expect(storedPointsRule(stored), JSON.stringify(stored)).toBeNull();
-      expect(draftFromStored(football, football.variants["11-a-side"], stored).useDivision, `${JSON.stringify(stored)} opens inheriting`).toBe(true);
+      expect(draftFromStored(football, football.variants["11-a-side"], stored, null, LEAGUE).useDivision, `${JSON.stringify(stored)} opens inheriting`).toBe(true);
     }
     expect(junk.length, "rows tried").toBeGreaterThan(5);
     expect(storedPointsRule(plain()), "and a real rule is still a rule").not.toBeNull();
@@ -331,12 +341,14 @@ describe("stage points model (I9 killers for t18)", () => {
 
   it("the preview says the walkover score only where the sport's table reads it, and nothing for a draft that is not a rule yet", () => {
     const forfeit = { walkoverW: "4", walkoverL: "1", awardW: "3", awardL: "0" };
-    const goal = { ...draftFromStored(football, football.variants["11-a-side"], null), useDivision: false, ...forfeit };
-    const set = { ...draftFromStored(badminton, badminton.variants.bwf, null), useDivision: false, ...forfeit };
-    expect(previewClauses(football, {}, goal).map((c) => c.key)).toEqual(["format.points.base", "format.points.forfeit", "format.points.forfeitScore"]);
-    expect(previewClauses(badminton, {}, set).map((c) => c.key), "another sport family").toEqual(["format.points.base", "format.points.forfeit"]);
-    expect(previewClauses(football, {}, { ...goal, win: "" })).toEqual([]);
-    expect(previewClauses(football, football.variants["11-a-side"], draftFromStored(football, football.variants["11-a-side"], null)).map((c) => c.key), "inheriting: the division's base").toEqual(["format.points.base"]);
+    const goal = { ...draftFromStored(football, football.variants["11-a-side"], null, null, LEAGUE), useDivision: false, ...forfeit };
+    const set = { ...draftFromStored(badminton, badminton.variants.bwf, null, null, LEAGUE), useDivision: false, ...forfeit };
+    expect(previewClauses(football, {}, goal, null, LEAGUE).map((c) => c.key)).toEqual(["format.points.base", "format.points.forfeit", "format.points.forfeitScore"]);
+    // W2d T16: badminton's draft is its own rule, whose one-pair set table IS the payout (pointsLine says the map, "any
+    // other score", never the win / loss it overrides). W2c said a flat base here.
+    expect(previewClauses(badminton, {}, set, null, LEAGUE).map((c) => c.key), "another sport family").toEqual(["format.points.setScoreOther", "format.points.forfeit"]);
+    expect(previewClauses(football, {}, { ...goal, win: "" }, null, LEAGUE)).toEqual([]);
+    expect(previewClauses(football, football.variants["11-a-side"], draftFromStored(football, football.variants["11-a-side"], null, null, LEAGUE), null, LEAGUE).map((c) => c.key), "inheriting: the division's base").toEqual(["format.points.base"]);
   });
 
   it("anti-vacuity: the registry the sweeps walk is the engine's, and it is not small", () => {
@@ -345,87 +357,82 @@ describe("stage points model (I9 killers for t18)", () => {
   });
 });
 
-describe("W2d T10 fix round 1 I2: the editor keeps a can't-set-per-stage state where its flat rule would flatten the sport's own (owner 2026-10-26)", () => {
-  const fit = (m: AnySportModule, cfg: unknown, kind = "league", config: Record<string, unknown> = {}) => pointsEditorFits(m, cfg, { kind, config });
-
-  it("named: ice hockey (IIHF's 3-2-1-0), indoor volleyball (FIVB's 3-2 = 2/1) and cricket (ICC's tie and no result) get the state with their reasons; a plain 3/1/0 sport (generic) keeps the editor", () => {
-    const ih = sport("icehockey");
-    const vb = sport("volleyball");
-    const cr = sport("cricket");
-    expect(fit(ih, ih.variants.iihf), "ice hockey").toEqual({ fits: false, reasons: ["otWin", "otLoss"] });
-    expect(fit(vb, vb.variants.indoor), "indoor volleyball").toEqual({ fits: false, reasons: ["pointsMap"] });
-    expect(fit(cr, cr.variants.t20), "cricket").toEqual({ fits: false, reasons: ["tie", "noResult"] });
-    // The positive pair, on the sport whose 3/1/0 the editor's boxes were built for.
-    const plainCfg = generic.variants.score as Record<string, unknown>;
-    expect((generic.configSchema.parse(plainCfg) as { points: unknown }).points, "premise: generic pays 3/1/0").toEqual({ w: 3, d: 1, l: 0 });
-    expect(fit(generic, plainCfg), "generic").toEqual({ fits: true });
-  });
-
-  it("sweep: every (sport, variant) the registry ships × every table stage kind — the state exactly on the divisions the rulebooks split, with their reasons; the editor on the rest (counted, both sides > 0, every rulebook row reached)", () => {
+// W2d Task 16 retired fix round 1 I2's "can't be set per stage yet" state (`pointsEditorFits`, deleted): the editor now
+// says every split, so the divisions it used to keep out open the editor on a rule that STATES what the rulebooks split.
+// `RULEBOOK_SPLITS` is the rulebooks' table (never the code under test); the editor's own round trip and inline refusals
+// are in `stage-points-w2d-model.test.ts`.
+describe("W2d T16: the I2 not-yet state is retired — the editor says every split the rulebooks make", () => {
+  it("sweep: every (sport, variant) × every table stage kind opens the editor; the opened rule pays every outcome as the sport does and the server's flat-over-split guard takes it; on the divisions the rulebooks split, W2c's three boxes (win / draw / loss, tie and no result 0) lose exactly the rulebook's splits, so the T16 draft is what says them; every other division's points the three boxes said whole (counted, both sides > 0, every rulebook row reached)", () => {
     let checked = 0;
-    let state = 0;
-    let editor = 0;
+    let split = 0;
+    let whole = 0;
     const reached = new Set<string>();
     for (const { m, variant, cfg } of DIVISIONS) {
       const id = `${m.key}/${variant}`;
       for (const kind of TABLE_KINDS) {
+        const stage = { kind, config: {} };
+        const ctx = stagePointsContext(m, cfg, stage);
+        expect(ctx, `${id} ${kind}: the editor opens`).not.toBeNull();
+        if (ctx === null) continue;
+        const built = ruleFromDraft(m, { ...draftFromStored(m, cfg, null, null, stage), useDivision: false });
+        expect(built.ok && built.rule !== null, `${id} ${kind}: the opened draft is a rule`).toBe(true);
+        if (!built.ok || built.rule === null) continue;
+        expect(flattenedSplits(m, ctx.cfg, kind, built.rule), `${id} ${kind}: the server takes it`).toEqual([]);
+        // What W2c's editor would have saved from the same numbers: one win, one draw (0 where none), one loss, tie and
+        // no result 0 (`legacyPointsRule`, the engine's reading of the three boxes).
+        const w2c = editorRule(built.rule.win.regulation, built.rule.draw ?? 0, built.rule.loss.regulation);
+        const sportOwn = sportStageRule(m, liveStageCfg(cfg, stage, m), kind)!;
+        expect(splitsLost(m, sportOwn, built.rule), `${id} ${kind}: the T16 draft pays as the sport pays`).toEqual({ differs: false, reasons: [] });
         const want = RULEBOOK_SPLITS[id];
-        const got = fit(m, cfg, kind);
         if (want === undefined) {
-          expect(got, `${id} ${kind}: the editor`).toEqual({ fits: true });
-          editor++;
+          expect(splitsLost(m, sportOwn, w2c), `${id} ${kind}: the three boxes said it whole`).toEqual({ differs: false, reasons: [] });
+          whole++;
         } else {
-          expect(got, `${id} ${kind}: the state, named`).toEqual({ fits: false, reasons: [...want] });
+          expect(splitsLost(m, sportOwn, w2c), `${id} ${kind}: the three boxes lose the rulebook's splits, by name`).toEqual({ differs: true, reasons: [...want] });
           reached.add(id);
-          state++;
+          split++;
         }
         checked++;
       }
     }
     expect(checked, "every division × every table kind").toBe(DIVISIONS.length * TABLE_KINDS.length);
     expect(TABLE_KINDS.length, "anti-vacuity: table kinds").toBeGreaterThan(1);
-    expect(state, "the state was reached").toBe(Object.keys(RULEBOOK_SPLITS).length * TABLE_KINDS.length);
-    expect(editor, "and the editor").toBeGreaterThan(0);
+    expect(split, "the split divisions").toBe(Object.keys(RULEBOOK_SPLITS).length * TABLE_KINDS.length);
+    expect(whole, "and the rest").toBeGreaterThan(0);
     expect([...reached].sort(), "every rulebook row is a division the registry ships").toEqual(Object.keys(RULEBOOK_SPLITS).sort());
   });
 
-  it("it follows the division's config, not the sport's name: ice hockey's recreational variant keeps the editor, and so does an IIHF division edited to pay overtime like regulation; an empty config reads the sport's defaults", () => {
-    const ih = sport("icehockey");
-    expect(fit(ih, ih.variants.recreational), "recreational: no overtime split").toEqual({ fits: true });
-    const iihf = ih.configSchema.parse(ih.variants.iihf) as { points: Record<string, number> };
-    const flat = { ...iihf, points: { ...iihf.points, otWin: iihf.points.win!, otLoss: iihf.points.loss! } };
-    expect(fit(ih, flat), "IIHF paying an overtime win and loss as regulation's").toEqual({ fits: true });
-    expect(fit(ih, iihf), "the same division as shipped (the positive pair)").toEqual({ fits: false, reasons: ["otWin", "otLoss"] });
-    // A second call answers the same (pure): no state carried between asks.
-    expect(fit(ih, iihf), "asked twice").toEqual(fit(ih, iihf));
-    const empty = fit(ih, {});
-    expect(empty, "the empty config: the sport's defaults decide").toEqual(fit(ih, ih.configSchema.parse({})));
-  });
-
-  it("the STAGE's own rules are read, not the division's alone: a hockey league stage that switches FIH's shoot-out on (its division has none) gets the state; the same stage without it keeps the editor", () => {
+  it("the STAGE's own rules are read, not the division's alone: a hockey league stage that switches FIH's shoot-out on (its division has none) gets the draw-plus-bonus row; the same stage without it has no shoot-out row", () => {
     const hk = sport("hockey");
     const outdoor = hk.variants["fih-outdoor"];
     const shootout = (hk.configSchema.parse(hk.variants["fih-shootout"]) as { shootout: unknown }).shootout;
     expect(shootout, "premise: FIH's shoot-out, from the sport's own variant").toBeDefined();
-    expect(fit(hk, outdoor, "league", {}), "no shoot-out on the table: the editor").toEqual({ fits: true });
-    expect(fit(hk, outdoor, "league", { rules: { shootout } }), "the stage's shoot-out: booked drawn plus a bonus").toEqual({ fits: false, reasons: ["soBonus"] });
+    const plainStage = stagePointsContext(hk, outdoor, { kind: "league", config: {} })!;
+    expect(pointsRows(plainStage.reachable, plainStage.rule).some((r) => r.key.endsWith(".so")), "no shoot-out on the table").toBe(false);
+    const so = stagePointsContext(hk, outdoor, { kind: "league", config: { rules: { shootout } } })!;
+    const row = pointsRows(so.reachable, so.rule).find((r) => r.key === "win.so");
+    expect([row?.shown, row?.drawPlusBonus], "the stage's shoot-out: booked drawn plus the winner's bonus (B2)").toEqual([true, 1]);
+    expect(draftFromStored(hk, outdoor, null, null, { kind: "league", config: { rules: { shootout } } }).shootoutAs).toBe("draw_plus_bonus");
   });
 
-  it("fail-closed: a division config the sport refuses leaves no sport rule to compare against - the state, no reason named (never the editor)", () => {
+  it("fail-closed: a division config the sport refuses leaves no rule to read — no context, a blank inheriting draft (the section shows no inputs); asked twice, the same", () => {
     const ih = sport("icehockey");
     const refused = { ...(ih.variants.iihf as Record<string, unknown>), periods: "many" };
     expect(ih.configSchema.safeParse(refused).success, "premise: the sport refuses this config").toBe(false);
-    expect(fit(ih, refused)).toEqual({ fits: false, reasons: [] });
-    const recreational = { ...(ih.variants.recreational as Record<string, unknown>), periods: "many" };
-    expect(fit(ih, recreational), "even on the variant whose editor fits").toEqual({ fits: false, reasons: [] });
+    expect(stagePointsContext(ih, refused, LEAGUE)).toBeNull();
+    const d = draftFromStored(ih, refused, null, null, LEAGUE);
+    expect([d.useDivision, d.win, d.loss, Object.keys(d.sets).length]).toEqual([true, "", "", 0]);
+    expect(draftFromStored(ih, refused, null, null, LEAGUE)).toEqual(d);
+    // The positive pair: the variant as shipped opens on its own numbers.
+    expect(draftFromStored(ih, ih.variants.iihf, null, null, LEAGUE).win).toBe("3");
   });
 
-  it("a stage kind with no table is never asked (the section is not mounted there): fits", () => {
+  it("a stage kind with no table has no context (the section is not mounted there)", () => {
     const ih = sport("icehockey");
     let bracket = 0;
     for (const kind of StageKind.options) {
       if (stageTakesPoints(kind)) continue;
-      expect(fit(ih, ih.variants.iihf, kind), kind).toEqual({ fits: true });
+      expect(stagePointsContext(ih, ih.variants.iihf, { kind, config: {} }), kind).toBeNull();
       bracket++;
     }
     expect(bracket, "bracket kinds checked").toBeGreaterThan(0);
@@ -452,18 +459,18 @@ describe("W2d final review I1: a pinned stage with no rule of its own plays its 
   });
 
   it("the draft opens inheriting at the PIN's numbers; the same stage unpinned opens at the live division's", () => {
-    const pinned = draftFromStored(football, LIVE, null, PIN);
+    const pinned = draftFromStored(football, LIVE, null, PIN, LEAGUE);
     expect(pinned.useDivision, "nothing of its own: it inherits").toBe(true);
     expect([pinned.win, pinned.draw, pinned.loss]).toEqual([String(PIN.win.regulation), String(PIN.draw), String(PIN.loss.regulation)]);
-    const unpinned = draftFromStored(football, LIVE, null);
+    const unpinned = draftFromStored(football, LIVE, null, null, LEAGUE);
     expect([unpinned.win, unpinned.draw, unpinned.loss], "the positive pair: no pin, the live division").toEqual([String(LIVE_POINTS.win), String(LIVE_POINTS.draw), String(LIVE_POINTS.loss)]);
   });
 
   it("the inheriting preview says the PIN's points (win 3), never the live division's (win 2); unpinned it says the live 2", () => {
-    const checked = draftFromStored(football, LIVE, null, PIN);
-    expect(previewClauses(football, LIVE, checked, PIN)).toEqual(pointsLine(editorRule(PIN.win.regulation, PIN.draw!, PIN.loss.regulation), { awardReaches: AWARD }));
-    expect(previewClauses(football, LIVE, checked, PIN)).not.toEqual(previewClauses(football, LIVE, checked));
-    expect(previewClauses(football, LIVE, draftFromStored(football, LIVE, null))).toEqual(pointsLine(editorRule(LIVE_POINTS.win, LIVE_POINTS.draw, LIVE_POINTS.loss), { awardReaches: AWARD }));
+    const checked = draftFromStored(football, LIVE, null, PIN, LEAGUE);
+    expect(previewClauses(football, LIVE, checked, PIN, LEAGUE)).toEqual(pointsLine(editorRule(PIN.win.regulation, PIN.draw!, PIN.loss.regulation), { awardReaches: AWARD }));
+    expect(previewClauses(football, LIVE, checked, PIN, LEAGUE)).not.toEqual(previewClauses(football, LIVE, checked, null, LEAGUE));
+    expect(previewClauses(football, LIVE, draftFromStored(football, LIVE, null, null, LEAGUE), null, LEAGUE)).toEqual(pointsLine(editorRule(LIVE_POINTS.win, LIVE_POINTS.draw, LIVE_POINTS.loss), { awardReaches: AWARD }));
   });
 
   it("an own rule outranks the pin; the pin is in force only while the stage stores none (and an unreadable pin is none)", () => {
@@ -476,7 +483,7 @@ describe("W2d final review I1: a pinned stage with no rule of its own plays its 
     expect(pointsBasis(own, PIN)).toBe("own");
     expect(pointsBasis(null, PIN)).toBe("pin");
     expect(pointsBasis(null, null)).toBe("division");
-    const opened = draftFromStored(football, LIVE, own, PIN);
+    const opened = draftFromStored(football, LIVE, own, PIN, LEAGUE);
     expect([opened.useDivision, opened.win], "an own rule opens as itself").toEqual([false, "5"]);
   });
 
@@ -485,11 +492,11 @@ describe("W2d final review I1: a pinned stage with no rule of its own plays its 
     const pin = PointsRule.parse({ win: { regulation: 7 }, loss: { regulation: 2 }, draw: 5, shootoutAs: "result", unit: "whole", bonuses: [] });
     let checked = 0;
     for (const { m, variant, cfg } of DIVISIONS) {
-      const live = draftFromStored(m, cfg, null);
+      const live = draftFromStored(m, cfg, null, null, LEAGUE);
       expect(live.win, `${m.key}/${variant}: premise, the division's own win is not the pin's`).not.toBe("7");
-      const d = draftFromStored(m, cfg, null, pin);
+      const d = draftFromStored(m, cfg, null, pin, LEAGUE);
       expect([d.useDivision, d.win, d.draw, d.loss], `${m.key}/${variant}`).toEqual([true, "7", "5", "2"]);
-      expect(previewClauses(m, cfg, d, pin), `${m.key}/${variant}: the preview`).toEqual(pointsLine(editorRule(7, 5, 2), { awardReaches: pointsRuleAwardReachesTable(m) }));
+      expect(previewClauses(m, cfg, d, pin, LEAGUE), `${m.key}/${variant}: the preview`).toEqual(pointsLine(editorRule(7, 5, 2), { awardReaches: pointsRuleAwardReachesTable(m) }));
       checked++;
     }
     expect(checked, "anti-vacuity: divisions checked").toBeGreaterThan(0);

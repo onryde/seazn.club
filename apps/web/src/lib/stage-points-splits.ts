@@ -6,9 +6,8 @@
 // sport added to the engine is asked the same question.
 //
 // Two readers, one answer:
-//  - the editor (`components/v2/stage-rules/stage-points-model.ts` `pointsEditorFits`): where its flat rule would pay an
-//    outcome the stage reaches other than the sport does, the section shows "can't be set per stage yet" and sends nothing
-//    (a Save would flatten that outcome onto the win or the loss);
+//  - the editor (`components/v2/stage-rules/stage-points-model.ts` `draftRefusal`, W2d Task 16): its boxes state every
+//    split the sport pays apart, and a draft that would still flatten one (a box left empty) is refused inline before Save;
 //  - the server's defence in depth (`server/usecases/table-rule-guards.ts`): a flat rule written to a stage whose sport
 //    pays an outcome its own way is refused 422 POINTS_SPLIT_FLATTENED, naming the splits (`sportPointsSplits`).
 // It reads the SPORT's rule for the stage, never a stage's pinned rules (those are the loader's, `engine-db/table-rules.ts`).
@@ -191,7 +190,7 @@ export function sportPointsSplits(module: AnySportModule, cfg: unknown, kind: st
 
 /**
  * W2d Task 13 (N2, N3) — the splits a FLAT `rule` written to a stage of `kind` under `cfg` would flatten: the server's
- * POINTS_SPLIT_FLATTENED answer, the editor's (`pointsEditorFits`) asked of the rule actually sent. Empty where there is
+ * POINTS_SPLIT_FLATTENED answer, the editor's (`draftRefusal`) asked of the rule actually sent. Empty where there is
  * nothing to refuse: a rule that is not flat (it states its splits), a stage whose sport pays nothing apart
  * (`sportPointsSplits` empty: a flat rule says its points whole), and a flat rule that pays every outcome the stage
  * reaches as the sport does. Otherwise the sport's splits (`sportPointsSplits`), as the refusal has always named them.
