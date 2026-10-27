@@ -236,7 +236,7 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsCheckout — the return render l
       expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
     });
 
-    it("the org-mismatch limb (the session id already recorded for another org): reconcile logs and sends 0 alerts; the webhook sends 1", async () => {
+    it("the org-mismatch limb (the session id already recorded for another org): reconcile logs and pages nothing; the webhook pages once", async () => {
       const first = (await seedOrg()).auth;
       const second = (await seedOrg()).auth;
       const sid = `cs_test_rec_mismatch_${first.orgId.slice(0, 8)}`;

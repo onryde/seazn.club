@@ -703,6 +703,7 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
     const { orgId, compId } = await seedMintBuyer();
     await priceBothRungs();
     withAlertAddress();
+    const logged = vi.spyOn(log, "error");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const session = paidSession(orgId, compId, "event_pass_l", {
@@ -744,7 +745,9 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
         actualPriceId: "price_test_pass",
         paymentIntent: session.payment_intent,
       });
+      expect(staffAlertDrops(logged, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
     } finally {
+      logged.mockRestore();
       errors.mockRestore();
       restoreAlertAddress();
     }
@@ -1098,6 +1101,7 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
     const { orgId, compId } = await seedMintBuyer();
     await priceBothRungs();
     withAlertAddress();
+    const logged = vi.spyOn(log, "error");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const session = paidSession(orgId, compId, "event_pass_l", {
@@ -1116,10 +1120,12 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       // reached the alert at all, and one row was queued.
       expect(alertMock, "only the inserting visit reached the alert").toHaveBeenCalledTimes(1);
       expect(await staffRows(KIND, "checkout_session", session.id)).toHaveLength(1);
+      expect(staffAlertDrops(logged, vi.mocked(captureError)), "the one alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
       // ...and the refusal itself is unchanged on every visit — the dedupe must
       // quieten the email, not weaken the guard.
       expect(await passKeyHeld(compId)).toBeNull();
     } finally {
+      logged.mockRestore();
       errors.mockRestore();
       restoreAlertAddress();
     }
@@ -1136,6 +1142,7 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
     const { orgId } = await seedMintBuyer();
     await priceBothRungs();
     withAlertAddress();
+    const logged = vi.spyOn(log, "error");
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       const session = paidSession(orgId, "not-a-uuid", "event_pass_l", {
@@ -1152,7 +1159,10 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       expect(await staffRows(KIND, "checkout_session", session.id)).toEqual([
         { ref_id: session.id, dedupe_key: session.id, status: "queued", recipient: staff, subject: rungSubject(session.id) },
       ]);
+      // The second call's null is the once-key, not a drop: a silent drop on it would also leave one row.
+      expect(staffAlertDrops(logged, vi.mocked(captureError)), "deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
     } finally {
+      logged.mockRestore();
       errors.mockRestore();
       restoreAlertAddress();
     }

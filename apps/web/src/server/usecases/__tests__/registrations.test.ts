@@ -5230,6 +5230,63 @@ describe.skipIf(!HAS_DB)("RS012: sweepRegistrations pool-deadline pass", () => {
     expect(refundedAudits[0]!.payload.amount_cents).toBe(500);
   });
 
+  it("a pool-deadline refund that fails queues one staff alert keyed by registration, mode and amount (and the withdrawal still stands)", async () => {
+    // The sweep's own refund site (the `auto_pool_deadline` catch), driven to a row through the real sweep. Only THIS entry's refund
+    // rejects: the sweep is global, and another suite's due entry must not take the rejection.
+    const { orgId, competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
+    const solo = await seedSoloSignUp(competition, division, settings);
+    await handleRegistrationCheckoutCompleted(fakeSession(solo.registration.id, 500));
+    const paid = await loadWithGroup(solo.registration.id);
+    expect(paid.entry_payment_intent_id, "premise: the paid entry carries the intent the refund is made against").toBeTruthy();
+    stripeMock.refundCreate.mockClear();
+    stripeMock.refundCreate.mockImplementation(async (args: { payment_intent?: string }) => {
+      if (args.payment_intent === paid.entry_payment_intent_id) throw new Error("connected account restricted");
+      return { id: "re_test_1" };
+    });
+    const staff = `staff-${randomUUID().slice(0, 8)}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    const errors = vi.spyOn(log, "error");
+    try {
+      const res = await sweepRegistrations("https://test.local");
+      expect(res.poolDeadlinePassed, "premise: the sweep withdrew the entry").toBeGreaterThanOrEqual(1);
+      expect(stripeMock.refundCreate, "premise: the refund was really attempted").toHaveBeenCalledWith(
+        expect.objectContaining({ payment_intent: paid.entry_payment_intent_id, amount: 500 }),
+      );
+
+      // The withdrawal stands, and the refund really never landed: the alert reports a real gap.
+      const row = await loadWithGroup(solo.registration.id);
+      expect(row.status).toBe("withdrawn");
+      expect(row.refunded_cents).toBe(0);
+      const failed = await auditRows(solo.registration.id, "registration.refund_failed");
+      expect(failed.map((a) => a.payload.mode)).toEqual(["auto_pool_deadline"]);
+      expect(settings.currency, "premise: the rig's currency, which the subject's literal is typed in").toBe("gbp");
+
+      // Keyed `<registration>:auto_pool_deadline:<remaining>` (P-W5-7); the subject is the sender's literal with `money(500, "gbp")`.
+      expect(await staffRows("staff_registration_refund_failed", "registration", solo.registration.id)).toEqual([
+        {
+          ref_id: `${solo.registration.id}:auto_pool_deadline:500`,
+          dedupe_key: `${solo.registration.id}:auto_pool_deadline:500`,
+          status: "queued",
+          recipient: staff,
+          subject: `Registration refund failed — £5.00 still owed (registration ${solo.registration.id})`,
+        },
+      ]);
+      expect(registrationRefundFailedAlertEmail, "what the alert says").toHaveBeenCalledWith({
+        registrationId: solo.registration.id,
+        orgId,
+        competitionId: competition.id,
+        amountCents: 500,
+        currency: "gbp",
+        paymentIntentId: paid.payment_intent_id,
+        reason: "connected account restricted",
+      });
+      expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+    } finally {
+      errors.mockRestore();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("an already-assigned solo sign-up past the same deadline is untouched", async () => {
     const { owner, competition, division, settings } = await poolRig({ closesAt: "2020-01-01T00:00:00Z" });
     const solo = await seedSoloSignUp(competition, division, settings);

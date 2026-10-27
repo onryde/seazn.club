@@ -92,9 +92,12 @@
 //   - funnel_reminder: the cron POST of app/api/funnel/remind/route.ts (the cron secret is the stubbed `CRON_SECRET`, carried by the
 //     `next/headers` stand-in) over a day-old draft a Dutch visitor started: no account and no organisation, so the draft's own language
 //     (Q3); the claim of the draft and its row are one transaction on the pool, and the worker makes the first attempt.
-//   - staff_registration_refund_failed: the real `maybeAlertRegistrationRefundFailed` (every one of its four sites calls it; their own
-//     suites drive them to a row) with this run's STAFF_ALERT_EMAIL: no org, no account, the writer on the pool, and the worker makes
-//     the first attempt. The subject is the sender's inline English (spec F2), a literal typed from its source.
+//   - staff_registration_refund_failed: the real `maybeAlertRegistrationRefundFailed` (every one of its four sites calls it, and each
+//     is driven to a row by a suite of its own: the withdrawal (`auto`), the late payment (`late`) and the pool-deadline sweep
+//     (`auto_pool_deadline`) in registrations.test.ts, the rejection (`reject`) in registration-approval.test.ts; `duplicate` is the
+//     late payment's call with another `outcome.kind`, a value no suite drives) with this run's STAFF_ALERT_EMAIL: no org, no
+//     account, the writer on the pool, and the worker makes the first attempt. The subject is the sender's inline English (spec F2), a
+//     literal typed from its source.
 //   - staff_credit_pack_grant_failed: the real `alertCreditPackGrantFailed` (both its sites, the paid session and the refunded charge,
 //     call it; credit-pack-refund.test.ts drives both to a row), for a Checkout Session, the same way.
 //   - staff_size_pack_grant_failed: the real `alertSizePackGrantFailed` (its one site, `grantSizePackAddon`, calls it;

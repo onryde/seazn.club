@@ -234,6 +234,7 @@ describe.skipIf(!HAS_DB)("webhook — paid pass naming an unknown competition", 
       paymentIntent: "pi_ack",
       source: "webhook",
     });
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
 
     // Not a duplicate: nothing to send back. A refund here would return a
     // payment that may be perfectly valid for another environment's database.

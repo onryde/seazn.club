@@ -69,7 +69,7 @@ describe("match-credit claw-back alert", () => {
   });
 
   it("does NOT tell the reader to grant credits — this is the opposite direction", async () => {
-    // The grant-failure builder (sendStreamCreditGrantFailedAlertEmail) exists
+    // The grant-failure builder (streamCreditGrantFailedAlertEmail) exists
     // and says "inspect and grant manually". Reusing it here would send whoever
     // triages a claw-back to add credits to an account that just took its money
     // back, which is why this is a separate builder.
