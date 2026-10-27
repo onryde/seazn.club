@@ -2228,8 +2228,8 @@ interface GenerateWrite {
   outcome: GenerateOutcome;
   divisionId: string;
   competitionId: string;
-  /** Swiss Pair next: how many shells were seated this pass (0 on mint). */
-  swissSeatedCount?: number;
+  /** The stage's kind: whether it has a table to refold after the write (`REAL_TABLE_KINDS`). */
+  kind: string;
 }
 
 /** What a Generate press may ask for beyond "generate". */
@@ -2594,6 +2594,9 @@ async function generateStageFixturesWrite(
     });
     if (pre?.seeded) {
       const write = await generateProgressionSetupFixtures(auth, stageId);
+      // No refold here (W2d concern 2 ruling): a `timing: "setup"` stage's fixtures are placeholders that name no
+      // entrant, so its fold has no row — there is no table to show until the seeding fills the seats, never a table of
+      // placeholders. The refold below (`REAL_TABLE_KINDS`) is the main path's.
       const outcome = write.outcome;
       await fireStageRevalidate(auth.orgId, stageId);
       if (outcome.created > 0) {
@@ -3103,15 +3106,19 @@ async function generateStageFixturesWrite(
       },
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
-      swissSeatedCount,
+      kind: stage.kind,
     };
   });
   const outcome = write.outcome;
-  // Pair next seats bye awards without score_events — same snapshot trap as
-  // Unpair. Recompute whenever a Swiss round was seated so the table shows
-  // the bye win immediately (Finn/Gus), not after the next real match.
-  if ((write.swissSeatedCount ?? 0) > 0) {
-    await recomputeStandings(auth.orgId, stageId);
+  // W2d concern 2 (spec §5.7, anti-goal 3; owner 2026-10-27): a table stage's table exists from the generate that
+  // created its fixtures — LEVEL, every rank "–", no leader — so a visitor sees the table the organiser's Standings read
+  // would otherwise write lazily (`getStandings`), never "No standings yet" for the same state. The kinds are the ones
+  // scoring refolds on a result (`REAL_TABLE_KINDS`): a bracket has no table. `created` counts a Swiss seating too, so
+  // Pair next still refolds the bye awards it seats without score_events (same snapshot trap as Unpair: the bye win
+  // shows at once, Finn/Gus). `skipEmpty`: a fold that places nobody is no table and is not written — a Swiss mint's
+  // shells seat nobody, and a pooled group's pool membership comes from results (`entrantsOfPool`).
+  if (outcome.created > 0 && REAL_TABLE_KINDS.has(write.kind)) {
+    await recomputeStandings(auth.orgId, stageId, undefined, { skipEmpty: true });
   }
   await fireStageRevalidate(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.
@@ -3926,6 +3933,7 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       outcome: { created, existing: gen.length - created, fixtures },
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
+      kind: stage.kind,
     };
   });
 }

@@ -693,11 +693,18 @@ async function writeSnapshot(
  * to that key — including "no poolId given" on a pooled stage, which has no
  * overall table to return. `getStandings` (the only caller that reads it)
  * surfaces that as an empty table rather than a wrong one.
+ *
+ * `skipEmpty` (W2d concern 2): a pool whose fold has no row is no table (the engine's `isLevelTable`: "No rows is no
+ * table"), and is not written. The generate's refold passes it (usecases/stages.ts): its fixtures may seat nobody yet (a
+ * Swiss mint's shells), and a pooled stage's pool membership comes from results (`entrantsOfPool`), so before the first
+ * one every pool folds to nothing. Written, either would replace the public page's "No standings yet" with a table of
+ * no rows.
  */
 export async function recomputeStandings(
   orgId: string,
   stageId: string,
   poolId?: string,
+  opts: { skipEmpty?: boolean } = {},
 ): Promise<readonly StandingsRow[]> {
   return withTenant(orgId, async (tx) => {
     const inputs = await loadStageInputs(tx, stageId);
@@ -708,6 +715,7 @@ export async function recomputeStandings(
     // table re-ranked from the stored rows (§5.8), so the snapshot is the stored order.
     const { tables } = await rankWithStoredLots(tx, inputs);
     for (const pool of tables.pools) {
+      if (opts.skipEmpty === true && pool.rows.length === 0) continue;
       await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
     }
     const target = tables.pools.find((p) => (p.pool || null) === (poolId ?? null));

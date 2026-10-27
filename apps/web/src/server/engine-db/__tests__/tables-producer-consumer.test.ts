@@ -383,7 +383,7 @@ const named = (letters: string, ids: readonly string[]): Record<string, string> 
   Object.fromEntries([...letters].map((l, i) => [l, ids[i]!]));
 
 describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real producer to real consumer", () => {
-  for (const door of DOORS) twoDoors(door, `${door.tag}empty case first: a generated stage is pinned by the real generate and the public read has no table before a result`, async () => {
+  for (const door of DOORS) twoDoors(door, `${door.tag}empty case first: a generated stage is pinned by the real generate and the public read serves its level table before a result`, async () => {
     // single-sport: the empty case is sport-blind (no result is written); generic is the rig's sport.
     const s = await publicScene(door, { sport: "generic", variant: "score", entrants: 3 });
     const p = await pinOf(s.stageId);
@@ -396,9 +396,13 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
       tiebreakers: generic.defaultTiebreakers("league", generic.configSchema.parse(GENERIC_CONFIG)),
       sources: { tiebreakers: "sport", points: "sport" },
     });
-    expect((await door.tables(s.slugs)).filter((x) => x.stage_id === s.stageId), "no table before a result").toEqual([]);
+    // W2d concern 2 (spec §5.7, anti-goal 3): the generate wrote the stage's table — LEVEL, every entrant, no place.
+    const tables = (await door.tables(s.slugs)).filter((x) => x.stage_id === s.stageId);
+    expect(tables.map((x) => x.pool_id), "one table before a result (the stage's)").toEqual([null]);
+    expect(tables[0]!.rows.map((r) => r.entrantId).sort(), "every entrant has a row").toEqual([...s.entrants].sort());
+    expect(tables[0]!.rows.every((r) => r.level === true), "every row level: nothing counted").toBe(true);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stage_lots_draws where stage_id = ${s.stageId}`;
-    expect(n, "no drawing of lots without a table, and none by a read").toBe(0);
+    expect(n, "a level table draws no lots (anti-goal 3), and a read draws none").toBe(0);
   });
 
   for (const door of DOORS) twoDoors(door, `${door.tag}FB-PT-1 football group, shootout on: football.shootout.kick in the SHOOTOUT phase → public row D for both, winner 2 points, loser 1, wins 0 (RB2B-7)`, async () => {

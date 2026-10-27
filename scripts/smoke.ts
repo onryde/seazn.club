@@ -7555,10 +7555,11 @@ async function w2dTablesSuite(): Promise<void> {
       return { ...read, reads };
     };
     const allLevel = (rows: readonly PubRow[]) => rows.length === 6 && rows.every((r) => r.level === true);
-    // No snapshot exists until a result lands or the organiser reads the table (the authed read computes the first one,
-    // usecases/stages.ts): the organiser's read first, then the public one — both level, nothing counted yet.
-    const organiserLevel = allLevel(await table());
+    // W2d concern 2 (spec §5.7): the generate wrote the stage's LEVEL table, so the visitor reads it with no organiser read
+    // first — the public read BEFORE the organiser's (which would otherwise write it lazily, usecases/stages.ts
+    // `getStandings`); then the organiser's, the same. Both level, nothing counted yet.
     const levelRead = await publicSettled(allLevel);
+    const organiserLevel = allLevel(await table());
 
     const firstResults = [await result(id.A, id.C, 1, 0), await result(id.B, id.D, 1, 0)];
     const read1 = await settled((rows) => pts(rows, id.A) === 3 && pts(rows, id.B) === 3 && pts(rows, id.C) === 0 && pts(rows, id.D) === 0);
@@ -7589,7 +7590,7 @@ async function w2dTablesSuite(): Promise<void> {
     const levelOk = organiserLevel && allLevel(levelRead.rows);
     const drawnOk = drawnAtOk(drawnRead.rows, ab, abDraws1) && drawnAtOk(drawnRead.rows, cd, cdDraws1) && drawnRead.rows.every((r) => r.level !== true);
     w2dCheck(
-      `w2d: public standings carry drawnAt and level — every row level before a result (read ${levelRead.reads}×), the lots rows' drawnAt the stored draws' after (read ${drawnRead.reads}×)` +
+      `w2d: public standings carry drawnAt and level — every row level before a result, with no organiser read first (read ${levelRead.reads}×), the lots rows' drawnAt the stored draws' after (read ${drawnRead.reads}×)` +
         (levelOk && drawnOk ? "" : ` — level ${levelRead.status} ${JSON.stringify(levelRead.rows)}; drawn ${drawnRead.status} ${JSON.stringify(drawnRead.rows)}`),
       levelRead.status === 200 && levelOk && drawnRead.status === 200 && drawnOk,
     );
