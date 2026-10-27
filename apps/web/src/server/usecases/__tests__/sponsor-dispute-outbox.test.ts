@@ -498,6 +498,35 @@ describe.skipIf(!HAS_DB)("a sponsorship dispute that closes won tells the org ow
     expect(await rowsOf(LOST, [id]), "and no loss was recorded").toHaveLength(0);
   });
 
+  it("an inquiry closed after the organiser switched the placement off leaves it off", async () => {
+    // The inquiry leaves the placement live, so the organiser may switch it off on reading the alert. The close clears the dispute; it
+    // brings back only a placement the dispute parked, never one the organiser chose to hide.
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const id = newDisputeId();
+
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
+    await patchSponsor(ownerAuth(o), o.sponsorId!, { status: "inactive" });
+    await expect(handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_closed" }), "closed")).resolves.toBe(true);
+
+    const after = await orderState(o.orderId);
+    expect(after.disputed_at, "the dispute is over: the flag is cleared").toBeNull();
+    expect(after.sponsor_status, "and the placement stays off").toBe("inactive");
+  });
+
+  it("an inquiry that parked its placement before inquiries stopped parking comes back on its close", async () => {
+    // Inquiries opened before this change parked the placement at `created`; their `warning_closed` can arrive up to 120 days later.
+    // That earlier park is staged as the old `created` left it: the order flagged, the placement 'pending'.
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const id = newDisputeId();
+
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
+    await sql`update sponsors set status = 'pending' where id = ${o.sponsorId}`;
+    expect((await consoleRow(o)).dispute_parked, "premise: the placement reads as parked by the dispute").toBe(true);
+
+    await expect(handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_closed" }), "closed")).resolves.toBe(true);
+    expect((await orderState(o.orderId)).sponsor_status, "the close brings it back").toBe("active");
+  });
+
   it("an inquiry answered with a full refund closes with the placement still down and no won notice", async () => {
     // Stripe names a full refund as one of the two ways to resolve an inquiry (docs: disputes/how-disputes-work, "Inquiries"). The
     // refund takes the placement down (charge.refunded); the inquiry's later `warning_closed` must not put a refunded sponsor back on

@@ -1087,8 +1087,8 @@ export async function handleSponsorDispute(
 
   // An inquiry (opened as `warning_needs_response`) that the bank drops without a chargeback closes `warning_closed`: no money was
   // ever taken, which is a win in all but name. Without this arm the flag stayed for good, and with it the organiser's refusal to
-  // reactivate by hand (`patchSponsor` refuses while the flag is set). An inquiry no longer parks its placement, but one opened before
-  // that change did, and this brings it back. It reuses the won notice and its key.
+  // reactivate by hand. An inquiry no longer parks its placement, but one opened before that change did, and this brings it back. It
+  // reuses the won notice and its key.
   if (dispute.status === "won" || dispute.status === "warning_closed") {
     const recipient = await sponsorDisputeRecipient(order.org_id, order.org_default_locale);
     // ONE transaction clears the flag and queues the owner's notice (R1),
@@ -1120,8 +1120,13 @@ export async function handleSponsorDispute(
           dedupeKey: onceKey(kind, "dispute", dispute.id, "won"),
         });
       }
+      // Only a placement the dispute parked comes back ('pending' is the
+      // park marker, and the 409 holds it while parked): an inquiry leaves
+      // the placement live, and one the organiser switched off during it
+      // stays off.
       if (stillPaid && order.sponsor_id) {
-        await tx`update sponsors set status = 'active' where id = ${order.sponsor_id}`;
+        await tx`update sponsors set status = 'active'
+                 where id = ${order.sponsor_id} and status = 'pending'`;
       }
     });
     bustPublicSponsors(order.org_id);
