@@ -287,8 +287,8 @@
   {
     "id": "t9-slideshow-organiser",
     "file": "apps/web/src/server/slideshow-data.ts",
-    "find": "stageShape(metricSpecs, tableRules[stage.id]?.tiebreakers)",
-    "replace": "stageShape(metricSpecs, [] /*MUT*/)",
+    "find": "stageShape(metricSpecs, tableRules[stage.id])",
+    "replace": "stageShape(metricSpecs, { tiebreakers: [] } /*MUT*/)",
     "killers": [
       {
         "cwd": "apps/web",
@@ -302,7 +302,7 @@
   {
     "id": "t9-slideshow-public",
     "file": "apps/web/src/server/slideshow-data.ts",
-    "find": "stageShape(metricSpecs, stage.table_rules?.tiebreakers)",
+    "find": "stageShape(metricSpecs, stage.table_rules)",
     "replace": "stageShape(metricSpecs, undefined /*MUT*/)",
     "killers": [
       {
@@ -316,8 +316,8 @@
   {
     "id": "t9-slideshow-public-ratio",
     "file": "apps/web/src/server/slideshow-data.ts",
-    "find": "stageShape(metricSpecs, stage.table_rules?.tiebreakers)",
-    "replace": "stageShape(metricSpecs, [...(stage.table_rules?.tiebreakers ?? []), \"point_ratio\"] /*MUT*/)",
+    "find": "stageShape(metricSpecs, stage.table_rules)",
+    "replace": "stageShape(metricSpecs, { ...stage.table_rules, tiebreakers: [...(stage.table_rules?.tiebreakers ?? []), \"point_ratio\"] } /*MUT*/)",
     "killers": [
       {
         "cwd": "apps/web",
@@ -330,7 +330,7 @@
   {
     "id": "t9-console-caption",
     "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
-    "find": "{tableOrderOf(stageOrder(stage.id)).map((key, i) => (",
+    "find": "{tableOrderOf(rules).map((key, i) => (",
     "replace": "{([] as string[] /*MUT*/).map((key, i) => (",
     "killers": [
       {

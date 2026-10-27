@@ -232,7 +232,7 @@
  {
   "id": "t12-incomplete-note-not-sticky",
   "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "    if (run.notes.get(row.entrantId) !== \"h2h_incomplete\") run.notes.delete(row.entrantId);",
+  "find": "    if (!incomplete) run.notes.delete(row.entrantId);",
   "replace": "    run.notes.delete(row.entrantId);",
   "killers": [
    {

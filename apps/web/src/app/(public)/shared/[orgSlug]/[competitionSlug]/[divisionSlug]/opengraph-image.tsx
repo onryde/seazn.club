@@ -31,7 +31,10 @@ export default async function Image({ params }: Props) {
     ? await sql<{ youth: boolean }[]>`select youth from divisions where id = ${data.division.id}`
     : [];
 
-  const rows = (data?.standings[0]?.rows ?? []) as StandingsSnapshotRow[];
+  const table = data?.standings[0];
+  const rows = (table?.rows ?? []) as StandingsSnapshotRow[];
+  // W2d T17: the table's own stage's rules — how its points print (RB2B-17).
+  const rules = data?.stages.find((s) => s.id === table?.stage_id)?.table_rules ?? null;
   // The crest reaches satori as BYTES. Handed the URL, satori would make the
   // request itself — server-side, on a public route, to whatever host the
   // org's logo points at — and would draw an uploaded `.webp` as an empty box.
@@ -49,8 +52,10 @@ export default async function Image({ params }: Props) {
       entrantId: r.entrantId,
       played: r.played,
       points: r.points,
+      ...(r.level === true ? { level: true } : {}),
     })),
     names: Object.fromEntries((data?.entrants ?? []).map((e) => [e.id, e.display_name])),
+    rules,
   });
   const theme = model.theme;
 
@@ -116,11 +121,11 @@ export default async function Image({ params }: Props) {
                     style={{
                       display: "flex",
                       width: 44,
-                      color: i === 0 ? theme.accent : theme.muted,
+                      color: row.leader ? theme.accent : theme.muted,
                       fontWeight: 800,
                     }}
                   >
-                    {row.rank ?? "–"}
+                    {row.rank}
                   </div>
                   <div style={{ display: "flex", fontWeight: 700 }}>{row.name}</div>
                 </div>

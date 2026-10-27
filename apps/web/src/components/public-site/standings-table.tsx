@@ -18,24 +18,30 @@
 // the builder's (`buildQualificationView`). Without it the table renders
 // exactly as it did before (pinned by a captured golden).
 import {
-  DERIVED_METRICS,
   derivedMetricText,
+  isLevelTable,
+  rankText,
   type StandingsRow,
 } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
-import {
-  standingsColumns,
-  formatMetric,
-  type MetricSpecLike,
-} from "@/lib/public-site";
+import type { MetricSpecLike } from "@/lib/public-site";
 import type { Dict } from "@/lib/i18n-constants";
 import { t, type TKey } from "@/lib/i18n-runtime";
-import { columnHeader, ratioNote, tieBreakRule } from "@/server/public-site/standings-view";
+import { formatPublicInstant } from "@/lib/public-date-locale";
+import {
+  cellText,
+  columnHeader,
+  ratioNote,
+  tableColumns,
+  tableLayoutFor,
+  tieNoteText,
+  type TableRulesLike,
+} from "@/server/public-site/standings-view";
 import type { QualificationView } from "@/server/public-site/qualification-view";
 import type { QualRowT } from "@/server/public-site/competition-hub-schema";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import { StandingsPopover } from "./standings-popover";
-import { QualCutRow, QualLegend, QualMarker, QualPopoverBody } from "./qualification-bits";
+import { QualCutRow, QualLegend, QualMarker, QualPopoverBody, TieNoteText } from "./qualification-bits";
 
 /**
  * Every way OUT of a competing field, and the chip each one prints.
@@ -100,6 +106,13 @@ interface Props {
    *  for THIS table (its stage and pool). Absent or null: the table renders
    *  exactly as before — no marker, no cut line, no legend (golden-pinned). */
   qualification?: QualificationView | null;
+  /** W2d T17: THIS table's stage rules (`StageTableRulesDoc`): its result columns — IIHF's OTW/OTL — and how its points
+   *  print (chess's half-points). Absent or null: W and L as folded, whole points (a stage the loader refused). */
+  rules?: TableRulesLike | null;
+  /** The locale and zone the page prints a date in (the lots note's "Drawn by lots on {date}"): the org's on the
+   *  public page and the embed, the viewer's in the console. Absent: en, UTC. */
+  locale?: string;
+  tz?: string;
 }
 
 export function StandingsTable({
@@ -111,11 +124,21 @@ export function StandingsTable({
   entrantStatuses,
   caption,
   dict,
-  qualification,
+  qualification: qualificationIn,
+  rules,
+  locale = "en",
+  tz = "UTC",
 }: Props) {
   const msg = (key: TKey, vars?: Record<string, string | number>) => t(dict, key, vars);
-  const columns = standingsColumns(metricSpecs, cascade, rows, DERIVED_METRICS);
+  const layout = tableLayoutFor(rules);
+  const columns = tableColumns(metricSpecs, cascade, rows, layout);
   const ranked = [...rows].sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99));
+  // X-TB-6 (anti-goal 3): a table with no counted fixture is level — every rank the level dash, no leader row, no
+  // medal, and no qualification marker, cut line or legend (nobody is through on a table nobody has played).
+  const level = isLevelTable(rows);
+  const qualification = level ? null : qualificationIn;
+  const leader = (row: StandingsRow) => !level && row.rank === 1;
+  const dateOf = (iso: string) => formatPublicInstant(locale, tz, iso, { dateStyle: "medium" });
   // Podium chips are fixed vocabulary (gold/silver/bronze) — deliberately NOT
   // org-themeable, so a red-branded org still reads gold as first place.
   const medal: Record<number, string> = {
@@ -124,15 +147,25 @@ export function StandingsTable({
     3: "bg-orange-300 text-orange-950",
   };
   // Fixed-size cell for every rank so podium chips and plain numbers line up.
-  const rankChip = (rank: number | undefined) => (
-    <span
-      className={`inline-flex h-5 w-5 items-center justify-center rounded-full font-display text-[12px] font-bold ${
-        rank && medal[rank] ? medal[rank] : "text-ink-muted"
-      }`}
-    >
-      {rank}
-    </span>
-  );
+  const rankChip = (row: StandingsRow) => {
+    const rank = level ? undefined : row.rank;
+    return (
+      <span
+        className={`inline-flex h-5 w-5 items-center justify-center rounded-full font-display text-[12px] font-bold ${
+          rank && medal[rank] ? medal[rank] : "text-ink-muted"
+        }`}
+      >
+        {level ? (
+          <>
+            <span aria-hidden="true">{rankText(row, true)}</span>
+            <span className="sr-only">{msg("table.level")}</span>
+          </>
+        ) : (
+          rank
+        )}
+      </span>
+    );
+  };
 
   // A derived cell prints the engine's text; a ratio with a ledger behind it
   // also opens onto the two totals it divides. `ratioNote` is null for every
@@ -157,13 +190,12 @@ export function StandingsTable({
 
   // The snapshot's tie trace, in the page's language — what a tied row's rank
   // explains, whether or not the table has a cut.
+  // W2d T17: and, each on its own line, why a step did not apply and when a stored drawing of lots was made. A level
+  // table shows none (X-TB-6, anti-goal 3): its rows still carry the ranking pass's trace ("split on seeding"), which
+  // would explain a place the table does not print — the tie trigger below is gated on `!level`, and a level table has
+  // no qualification popover to hold one.
   const tieNote = (row: StandingsRow): string | null =>
-    row.tieBreak
-      ? msg("table.tieBreak", {
-          with: row.tieBreak.with.map((id) => entrantNames[id] ?? "—").join(", "),
-          rule: tieBreakRule(row.tieBreak.key, msg, row, rows),
-        })
-      : null;
+    tieNoteText(row, rows, msg, (id) => entrantNames[id] ?? "—", dateOf);
 
   // A row with a qualification status: its rank opens ONE popover holding the
   // status headline, what a loss would do, the tie note when the row is tied,
@@ -180,7 +212,7 @@ export function StandingsTable({
       className="-my-2.5 inline-flex items-center gap-1 whitespace-nowrap py-2.5"
       trigger={
         <>
-          {rankChip(row.rank)}
+          {rankChip(row)}
           <QualMarker status={qual.status} />
         </>
       }
@@ -246,7 +278,7 @@ export function StandingsTable({
                 key={row.entrantId}
                 data-qual={qual?.status}
                 className={`border-b border-zinc-100 last:border-0 ${
-                  row.rank === 1 ? "bg-amber-50/60" : ""
+                  leader(row) ? "bg-amber-50/60" : ""
                 }`}
               >
                 {/* Rank column frozen inside the scroll container (v3/02 §3.3)
@@ -275,12 +307,12 @@ export function StandingsTable({
                     flipped the same way, measured on open (`data-side`). */}
                 <td
                   className={`sticky left-0 z-10 py-2.5 pl-4 pr-2 tabular-nums has-[[data-open]]:z-20 ${
-                    row.rank === 1 ? "bg-amber-50" : "bg-surface"
+                    leader(row) ? "bg-amber-50" : "bg-surface"
                   }`}
                 >
                   {qual ? (
                     qualRank(row, qual)
-                  ) : row.tieBreak ? (
+                  ) : row.tieBreak && !level ? (
                     // `-my-2.5 py-2.5`: the button's hit area takes in the cell's
                     // vertical padding (a 40px band, not the 20px chip) without
                     // making the row any taller; a row a wrapped name has made
@@ -296,15 +328,15 @@ export function StandingsTable({
                       className="-my-2.5 inline-flex items-start whitespace-nowrap py-2.5"
                       trigger={
                         <>
-                          {rankChip(row.rank)}
+                          {rankChip(row)}
                           <span aria-hidden="true" className="text-[10px] text-accent">*</span>
                         </>
                       }
                     >
-                      {tieNote(row)}
+                      <TieNoteText text={tieNote(row) ?? ""} />
                     </StandingsPopover>
                   ) : (
-                    rankChip(row.rank)
+                    rankChip(row)
                   )}
                 </td>
                 {/* An Out row reads muted, as its marker does (spec §5). */}
@@ -368,11 +400,7 @@ export function StandingsTable({
                         : "text-zinc-600"
                     }`}
                   >
-                    {col.kind === "derived"
-                      ? derivedCell(row, col.key)
-                      : col.kind === "structural"
-                        ? formatMetric(row[col.key as "played" | "won" | "drawn" | "lost" | "points"])
-                        : formatMetric(row.metrics[col.key], col.decimals)}
+                    {col.kind === "derived" ? derivedCell(row, col.key) : cellText(row, col, layout)}
                   </td>
                 ))}
               </tr>

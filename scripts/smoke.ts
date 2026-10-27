@@ -7392,7 +7392,9 @@ async function w2cStageRulesSuite(): Promise<void> {
  * of the table across a later recompute give the same order. A generic league of six under 3/1/0: A beats C and B beats
  * D, leaving A and B level on every step before lots (they have not met), and likewise C and D; E–F's later draw
  * recomputes the table without touching either class. Own fresh owner; needs DATABASE_URL (the pin read). Every check is
- * counted, and a run that checked nothing fails. SMOKE_ONLY=w2dTables runs it alone (SELECTABLE_SUITES).
+ * counted, and a run that checked nothing fails. SMOKE_ONLY=w2dTables runs it alone (SELECTABLE_SUITES). PR B Task 17
+ * (PS-9e): the competition is public, and its PUBLIC standings carry what the public table prints — `level` on every row
+ * before a result counts, and a lots-decided row's `tieBreak.drawnAt`, the stored draw's own instant.
  */
 async function w2dTablesSuite(): Promise<void> {
   const url = process.env.DATABASE_URL;
@@ -7404,7 +7406,8 @@ async function w2dTablesSuite(): Promise<void> {
     prepare: !url.includes(":6543"),
     max: 1,
   });
-  const EXPECTED_CHECKS = 12;
+  // 9 (W2b/W2d base) + 3 (Task 14, §13: a stage's own rules to the public table) + 1 (Task 17, PS-9e: drawnAt and level).
+  const EXPECTED_CHECKS = 13;
   let checked = 0;
   const w2dCheck = (label: string, cond: boolean) => {
     checked++;
@@ -7414,7 +7417,8 @@ async function w2dTablesSuite(): Promise<void> {
     const owner = newSession();
     const who = await signIn(owner, `delivered+w2d_${tag}@resend.dev`);
     // Public by default (V396/T15): the suite's one competition is within the free plan's public cap, so its tables are
-    // served on the public standings route (Task 14's §13 read).
+    // served on the public standings route (Task 14's §13 read, and Task 17's drawnAt / level read). No explicit
+    // visibility: Task 14's check reads the DEFAULT.
     const comp = v1data<{ id: string; slug: string; visibility: string }>(
       await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2d Tables ${tag}` }),
     );
@@ -7526,11 +7530,35 @@ async function w2dTablesSuite(): Promise<void> {
     };
     const classOrder = (rows: readonly Row[], members: readonly string[]) => rows.map((r) => r.entrantId).filter((e) => members.includes(e));
     const draws = (members: readonly string[]) =>
-      sql<{ id: string; drawn_order: string[]; superseded_at: Date | null }[]>`
-        select id, drawn_order, superseded_at from stage_lots_draws
+      sql<{ id: string; drawn_order: string[]; drawn_at: Date; superseded_at: Date | null }[]>`
+        select id, drawn_order, drawn_at, superseded_at from stage_lots_draws
         where stage_id = ${stageId} and members_key = ${[...members].sort().join(",")}`;
     const ab = [id.A, id.B];
     const cd = [id.C, id.D];
+    // W2d T17 (PS-9e): the public standings, anonymous. The public read is cached (its data window), so a bounded
+    // poll, its reads counted.
+    type PubRow = { entrantId: string; level?: boolean; tieBreak?: { key: string; drawnAt?: string } };
+    const orgSlug = ((await call(owner, "/api/orgs")) as { slug: string }[])[0]?.slug ?? "";
+    const divSlug = v1data<{ slug: string } | undefined>(await v1(owner, `/api/v1/divisions/${divId}`))?.slug ?? "";
+    const publicRows = async () => {
+      const r = await v1(newSession(), `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/divisions/${divSlug}/standings`);
+      const data = (r.json as { data?: { standings?: { stage_id: string; rows: PubRow[] }[] } } | null)?.data;
+      return { status: r.status, rows: data?.standings?.find((st) => st.stage_id === stageId)?.rows ?? [] };
+    };
+    const publicSettled = async (ready: (rows: readonly PubRow[]) => boolean) => {
+      let read = await publicRows();
+      let reads = 1;
+      for (; reads < 45 && !ready(read.rows); reads++) {
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+        read = await publicRows();
+      }
+      return { ...read, reads };
+    };
+    const allLevel = (rows: readonly PubRow[]) => rows.length === 6 && rows.every((r) => r.level === true);
+    // No snapshot exists until a result lands or the organiser reads the table (the authed read computes the first one,
+    // usecases/stages.ts): the organiser's read first, then the public one — both level, nothing counted yet.
+    const organiserLevel = allLevel(await table());
+    const levelRead = await publicSettled(allLevel);
 
     const firstResults = [await result(id.A, id.C, 1, 0), await result(id.B, id.D, 1, 0)];
     const read1 = await settled((rows) => pts(rows, id.A) === 3 && pts(rows, id.B) === 3 && pts(rows, id.C) === 0 && pts(rows, id.D) === 0);
@@ -7549,6 +7577,21 @@ async function w2dTablesSuite(): Promise<void> {
       "w2d: the losers' tie (C and D, 0 points, −1 each) is drawn and stored the same way" +
         (drawnAsStored(read1, cd, cdDraws1) ? "" : ` — draws ${JSON.stringify(cdDraws1)}`),
       drawnAsStored(read1, cd, cdDraws1),
+    );
+    // The lots rows' drawnAt is the stored draw's instant, for both classes; nobody is level once a result counts.
+    const drawnAtOk = (rows: readonly PubRow[], members: readonly string[], stored: readonly { drawn_at: Date }[]) =>
+      stored.length === 1 &&
+      members.every((e) => {
+        const at = rows.find((r) => r.entrantId === e)?.tieBreak?.drawnAt;
+        return at !== undefined && new Date(at).getTime() === stored[0].drawn_at.getTime();
+      });
+    const drawnRead = await publicSettled((rows) => drawnAtOk(rows, ab, abDraws1) && drawnAtOk(rows, cd, cdDraws1));
+    const levelOk = organiserLevel && allLevel(levelRead.rows);
+    const drawnOk = drawnAtOk(drawnRead.rows, ab, abDraws1) && drawnAtOk(drawnRead.rows, cd, cdDraws1) && drawnRead.rows.every((r) => r.level !== true);
+    w2dCheck(
+      `w2d: public standings carry drawnAt and level — every row level before a result (read ${levelRead.reads}×), the lots rows' drawnAt the stored draws' after (read ${drawnRead.reads}×)` +
+        (levelOk && drawnOk ? "" : ` — level ${levelRead.status} ${JSON.stringify(levelRead.rows)}; drawn ${drawnRead.status} ${JSON.stringify(drawnRead.rows)}`),
+      levelRead.status === 200 && levelOk && drawnRead.status === 200 && drawnOk,
     );
 
     // Reload across a recompute: E–F drawn moves the table and leaves both classes as they were.

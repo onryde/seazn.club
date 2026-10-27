@@ -35,6 +35,7 @@ import type { AnySportModule, MatchPointsBounds, TiebreakerKey } from "@seazn/en
 import { inTheField } from "@/lib/entrant-field";
 import { isOneSidedAwardBye } from "@/lib/fixture-bye";
 import type { TKey } from "@/lib/i18n-runtime";
+import type { DictionaryKey } from "@/lib/i18n-keys";
 import { tableWithdrawalInputs } from "@/lib/table-withdrawal";
 import { completionEngineStatus, rowAwaitsSettle } from "@/server/engine-db/recorded-abandon";
 import { EVERY_OUTCOME } from "@/server/engine-db/table-rules";
@@ -400,6 +401,26 @@ function withdrawalVoidsResults(stageId: string, kind: string, entrantId: string
   return mode !== "expunge" || played.length > 0;
 }
 
+
+/** The what-if sentences, by the measure the table races in (W2d P25, T17). Spelled out, like `TIE_BREAK_MSG_KEYS`. */
+type WhatIfKey = "winBy" | "loseByAtMost" | "anyWin" | "safe" | "rule" | "ruleValues";
+export const WHAT_IF_POINTS_KEYS = {
+  winBy: "table.qual.whatIf.winBy",
+  loseByAtMost: "table.qual.whatIf.loseByAtMost",
+  anyWin: "table.qual.whatIf.anyWin",
+  safe: "table.qual.whatIf.safe",
+  rule: "table.qual.whatIf.rule",
+  ruleValues: "table.qual.whatIf.ruleValues",
+} as const satisfies Record<WhatIfKey, DictionaryKey>;
+export const WHAT_IF_WINS_KEYS = {
+  winBy: "table.qual.whatIfWins.winBy",
+  loseByAtMost: "table.qual.whatIfWins.loseByAtMost",
+  anyWin: "table.qual.whatIfWins.anyWin",
+  safe: "table.qual.whatIfWins.safe",
+  rule: "table.qual.whatIfWins.rule",
+  ruleValues: "table.qual.whatIfWins.ruleValues",
+} as const satisfies Record<WhatIfKey, DictionaryKey>;
+
 export function buildQualificationView(i: QualificationViewInput): QualificationView | null {
   const { meta } = i.stage;
   if (!QUAL_TABLE_KINDS.has(i.stage.kind)) return null;
@@ -552,6 +573,10 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     return first !== undefined && (first.home_entrant_id === null || first.away_entrant_id === null);
   };
 
+  // W2d P25 (T17): the what-if says what the two would be level ON — the table's first measure: "level on wins" for a
+  // wins-first table (volleyball, badminton, tennis, D11), never "level on points" over a race run in wins.
+  const whatIfKeys = byWins ? WHAT_IF_WINS_KEYS : WHAT_IF_POINTS_KEYS;
+
   function whatIf(r: StandingsRow, status: QualStatus, ifYouLose: QualStatus | null): { text: string; assumption: string | null } | null {
     // A rival still playing (review fix 1): a departed row across the line is
     // skipped, and when only departed rows are in reach there is no what-if.
@@ -572,8 +597,8 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
       return {
         text:
           mine !== null && theirs !== null
-            ? i.msg("table.qual.whatIf.ruleValues", { ...vars, mine, theirs })
-            : i.msg("table.qual.whatIf.rule", vars),
+            ? i.msg(whatIfKeys.ruleValues, { ...vars, mine, theirs })
+            : i.msg(whatIfKeys.rule, vars),
         assumption: null,
       };
     };
@@ -586,7 +611,7 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     // meet next, so only the rule and today's values.
     const meetNext = tableFx.some((f) => !settled(f) && seats(f, r.entrantId) && seats(f, rival.entrantId));
     if (meetNext) return rule();
-    if (w.kind === "safe") return { text: i.msg("table.qual.whatIf.safe", vars), assumption };
+    if (w.kind === "safe") return { text: i.msg(whatIfKeys.safe, vars), assumption };
     // Which result leaves the two level on points: a win-and-in row ties only
     // by losing; a row a loss puts out ties only by winning. Otherwise unknown.
     // (With one match left, the gate above, a Win k row is always k = 1.)
@@ -599,11 +624,11 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
           : null;
     if (scenario === "win") {
       return w.margin >= 1
-        ? { text: i.msg("table.qual.whatIf.winBy", { ...vars, m: w.margin }), assumption }
-        : { text: i.msg("table.qual.whatIf.anyWin", vars), assumption };
+        ? { text: i.msg(whatIfKeys.winBy, { ...vars, m: w.margin }), assumption }
+        : { text: i.msg(whatIfKeys.anyWin, vars), assumption };
     }
     if (scenario === "loss" && w.margin < 0) {
-      return { text: i.msg("table.qual.whatIf.loseByAtMost", { ...vars, m: -w.margin }), assumption };
+      return { text: i.msg(whatIfKeys.loseByAtMost, { ...vars, m: -w.margin }), assumption };
     }
     return rule();
   }

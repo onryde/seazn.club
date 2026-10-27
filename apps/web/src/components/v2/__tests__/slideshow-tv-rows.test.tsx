@@ -385,10 +385,23 @@ describe("K-2: the standings slide already gives its free space to the team name
     division: "Cup",
     caption: "Table",
     rows: [
-      { rank: 1, name: "North Harbour Rovers", played: 3, won: 3, drawn: 0, lost: 0, points: 9 },
-      { rank: 2, name: "West", played: 3, won: 1, drawn: 0, lost: 2, points: 3 },
+      { rank: "1", name: "North Harbour Rovers", played: 3, won: 3, drawn: 0, lost: 0, points: "9" },
+      { rank: "2", name: "West", played: 3, won: 1, drawn: 0, lost: 2, points: "3" },
     ],
+    level: false,
   };
+
+  it("W2d T17 fix 1 (X-TB-6): a level slide draws no row as first — no accent bar, no accent chip; a played one does", () => {
+    const BAR = "absolute inset-y-0 left-0 w-1 rounded-l-lg bg-accent";
+    const CHIP = "rounded-md bg-accent font-display";
+    const played = board(standings);
+    expect(played).toContain(BAR);
+    expect(played).toContain(CHIP);
+    const level = board({ ...standings, level: true, rows: standings.rows.map((r) => ({ ...r, rank: "–", points: "0" })) });
+    expect(level).not.toContain(BAR);
+    expect(level).not.toContain(CHIP);
+    expect(level.match(/>–</g)?.length, "every rank prints the level dash").toBe(2);
+  });
 
   it("the header and every row share one template whose only growing track is the team name", () => {
     const html = board(standings);
@@ -411,13 +424,14 @@ describe("the standings slide's Pts ratio column (layout half)", () => {
   /** The template the slide had before the column existed. The "exactly as
    *  before" claim is this literal, so it is typed on purpose. */
   const TEMPLATE_BEFORE = "4rem_minmax(0,1fr)_repeat(4,4rem)_7rem";
-  const played = { played: 3, won: 3, drawn: 0, lost: 0, points: 9 };
+  const played = { played: 3, won: 3, drawn: 0, lost: 0, points: "9" };
   const slide = (ratios: (string | undefined)[]): Slide => ({
     kind: "standings",
     division: "Cup",
     caption: "Table",
+    level: false,
     rows: ratios.map((pointRatio, i) => ({
-      rank: i + 1,
+      rank: `${i + 1}`,
       name: ["North Harbour Rovers", "West", "Ghana"][i]!,
       ...played,
       ...(pointRatio !== undefined ? { pointRatio } : {}),
@@ -573,7 +587,8 @@ describe("the standings slide's Pts ratio column (layout half)", () => {
     kind: "standings",
     division: "Cup",
     caption: "Table",
-    rows: [{ rank: 1, name, ...played, ...(pointRatio !== undefined ? { pointRatio } : {}) }],
+    rows: [{ rank: "1", name, ...played, ...(pointRatio !== undefined ? { pointRatio } : {}) }],
+    level: false,
   });
   /** What the name needs on one line (`truncate`), from the rendered name cell. */
   function namePx(html: string, name: string): number {

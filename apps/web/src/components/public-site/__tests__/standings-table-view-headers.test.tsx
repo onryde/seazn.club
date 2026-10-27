@@ -40,6 +40,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import { RATIO_LEDGERS, type StandingsRow } from "@seazn/engine/competition";
 import { StandingsTableView } from "../standings-table-view";
 import { defaultOrderOf } from "@seazn/engine/testkit";
+import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
 
 /** Painted width (px) of each header word, measured in Chromium — see above. */
 const MEASURED: Readonly<Record<string, number>> = {
@@ -56,6 +57,11 @@ const MEASURED: Readonly<Record<string, number>> = {
   "DS": 16.3, "SB": 16.2, "DV": 16.2, "SR": 16.1, "En": 16, "BP": 16, "Ég": 15.9, "de": 15.8,
   "GF": 15.7, "DT": 14.9, "PJ": 14.3, "W": 11.5, "N": 8.8, "G": 8.5, "A": 8.4, "V": 8.4, "D": 8.3,
   "P": 7.9, "E": 7.3, "J": 7.3, "L": 7, "T": 7,
+  // W2d T17 (ST-G29, IH-PT-1): the new columns' words, measured the same way on the built app, 2026-10-27 (the same
+  // run re-read "Difference" 72.9, "Overwinningen" 100, "Pts" 22.3, "GD" 16.9 — the values above).
+  "campo": 43.3, "champ": 43, "Veldd.": 41.6, "Saldo": 39.5, "saldo": 39.5, "Game": 34.3, "Diff.": 28.3, "OTW": 26.8,
+  "diff": 26.1, "GPr": 24.3, "PPr": 23.4, "pts": 22.3, "OTL": 22.1, "Dif.": 21.3, "WV": 19.7, "VV": 16.6, "GV": 16.5,
+  "DP": 16.3, "VP": 15.9, "FG": 15.7, "RJ": 15.5, "G.": 11.6, "B.": 11.2,
 };
 
 const LOCALES = { en, es, fr, nl } as unknown as Record<string, Dict>;
@@ -230,8 +236,15 @@ const MD_CARD_PX = 768 - 2 * 16 - 2;
 
 /** Every built-in sport's table at its WIDEST: its default cascade's columns,
  *  every displayed metric recorded, a draw so `D` shows, three-digit totals
- *  and a ratio in every derived cell. */
+ *  and a ratio in every derived cell. W2d T17: under the sport's own stage
+ *  rules — so IIHF books OTW/OTL — and a draw only where those rules can
+ *  produce a level result (`reachable`, the engine's own declaration): a
+ *  tennis row never draws, so its table never shows `D`. */
 function widestView(sport: (typeof builtinModules)[number], dict: Dict): TableViewT {
+  // the sport's defaults, or (generic: no defaults parse) its first declared variant
+  const cfg = sport.configSchema.safeParse({}).success ? {} : Object.values(sport.variants)[0];
+  const rules = unpinnedRulesDoc({ module: sport, divisionConfig: cfg });
+  const drawn = rules.reachable.some((k) => k === "draw" || k === "tie" || k === "noResult") ? 1 : 0;
   const ledgers = new Set<string>([...sport.metrics.map((m) => m.key), ...Object.values(RATIO_LEDGERS).flat()]);
   const metrics = Object.fromEntries([...ledgers].map((k) => [k, /lost|against/.test(k) ? 45 : 123]));
   const row = (id: string, rank: number): StandingsRow => ({
@@ -239,7 +252,7 @@ function widestView(sport: (typeof builtinModules)[number], dict: Dict): TableVi
     rank,
     played: 12,
     won: 10,
-    drawn: 1,
+    drawn,
     lost: 1,
     points: 123,
     metrics: { ...metrics, balls_faced_eff: 600, balls_bowled_eff: 600, buchholz: 12.5, buchholz_cut1: 10.5, sberger: 45.25 },
@@ -248,6 +261,9 @@ function widestView(sport: (typeof builtinModules)[number], dict: Dict): TableVi
     id: "t",
     division: { id: "d1", slug: "div", name: "Div" },
     caption: "League",
+    // W2d T17: the sport's own stage rules, so a table that counts overtime apart (IIHF) books its OTW/OTL columns too
+    rules,
+    dateOf: () => null,
     fullHref: "/x",
     metricSpecs: sport.metrics,
     cascade: defaultOrderOf(sport),
@@ -273,6 +289,17 @@ describe("hub table: from md up no sport's table in any locale is wider than its
     const carrom = builtinModules.find((m) => m.key === "carrom")!;
     const cols = widestView(carrom, nl as unknown as Dict).columns.map((c) => c.key);
     expect(cols).toEqual(expect.arrayContaining(["set_ratio", "board_ratio", "point_ratio"]));
+    // W2d T17: ice hockey's widest table carries its OTW/OTL columns, tennis its game ratio (ST-G29)
+    const ih = widestView(builtinModules.find((m) => m.key === "icehockey")!, nl as unknown as Dict).columns.map((c) => c.key);
+    expect(ih).toEqual(expect.arrayContaining(["otw", "otl"]));
+    const tennis = widestView(builtinModules.find((m) => m.key === "tennis")!, nl as unknown as Dict).columns.map((c) => c.key);
+    expect(tennis).toEqual(expect.arrayContaining(["set_ratio", "game_ratio"]));
+    // a draw where the rules can produce one: football's widest table shows D, tennis's does not
+    expect(widestView(builtinModules.find((m) => m.key === "football")!, nl as unknown as Dict).columns.map((c) => c.key)).toContain("drawn");
+    expect(tennis).not.toContain("drawn");
+    let drawing = 0;
+    for (const m of builtinModules) if (widestView(m, en as unknown as Dict).columns.some((c) => c.key === "drawn")) drawing++;
+    expect(drawing, "anti-vacuity: the sports that can draw still sweep their D column").toBeGreaterThan(0);
   });
 
   it(`every locale × every built-in sport: the md floor fits the ${MD_CARD_PX}px card`, () => {

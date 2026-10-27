@@ -226,6 +226,9 @@ export default async function EmbedWidgetPage({ params }: Props) {
               }
               dict={dict}
               qualification={qualificationFor(stage, snap)}
+              rules={stage.table_rules}
+              locale={orgLocale}
+              tz={tz}
             />
           ));
         })}

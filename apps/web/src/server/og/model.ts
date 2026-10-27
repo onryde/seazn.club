@@ -7,6 +7,8 @@ import "server-only";
 import { resolvePublicTheme, publicBrandColor } from "@/lib/public-theme";
 import { msg } from "@/lib/messages";
 import { resolveSlotLabel, type SlotLabelLookup } from "@/lib/slot-label";
+import { isLevelTable, LEVEL_RANK, pointsText, rankText } from "@seazn/engine/competition";
+import { tableLayoutFor, type TableRulesLike } from "@/server/public-site/standings-view";
 
 export interface OgTheme {
   /** Card background (court slab). */
@@ -43,10 +45,14 @@ export function ogTheme(...brandings: unknown[]): OgTheme {
 }
 
 export interface StandingsCardRow {
-  rank: number | null;
+  /** As the public table prints it (`rankText`): the place, or "–" on a level table (X-TB-6). */
+  rank: string;
   name: string;
   played: number;
-  points: number;
+  /** As the public table prints it (`pointsText` under the stage's unit): chess's half-points read "1½" (RB2B-17). */
+  points: string;
+  /** The row drawn as first: the top row of a table that has one — never on a level table (anti-goal 3). */
+  leader: boolean;
 }
 
 export interface StandingsCardModel {
@@ -76,8 +82,10 @@ interface StandingsInput {
   branding: unknown[];
   youth: boolean;
   entrantKind: string | null;
-  rows: { rank: number | null; entrantId: string; played: number; points: number }[];
+  rows: { rank: number | null; entrantId: string; played: number; points: number; level?: boolean }[];
   names: Record<string, string>;
+  /** W2d T17: the stage's loaded rules (`PublicStage.table_rules`) — how its points print. Null: none (whole points). */
+  rules: TableRulesLike | null;
 }
 
 export function standingsCardModel(input: StandingsInput): StandingsCardModel {
@@ -95,15 +103,20 @@ export function standingsCardModel(input: StandingsInput): StandingsCardModel {
   if (input.youth && input.entrantKind !== "team") {
     return { ...base, rows: [], fallbackKey: "og.standings.youth" };
   }
+  // W2d T17 (RB2B-17, X-TB-6): the public table's own helpers — its unit, its level test, its rank text.
+  const unit = tableLayoutFor(input.rules).unit;
+  const level = isLevelTable(input.rows);
   const rows = input.rows
     .slice()
     .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
     .slice(0, 6)
-    .map((r) => ({
-      rank: r.rank,
+    .map((r, i) => ({
+      // A row the ranking pass left without a place keeps the card's "–" (as before W2d).
+      rank: r.rank === null ? LEVEL_RANK : rankText({ rank: r.rank }, level),
       name: input.names[r.entrantId] ?? "—",
       played: r.played,
-      points: r.points,
+      points: pointsText(r.points, unit),
+      leader: !level && i === 0,
     }));
   return {
     ...base,

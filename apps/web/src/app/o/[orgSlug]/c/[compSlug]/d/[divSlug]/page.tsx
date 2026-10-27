@@ -97,7 +97,8 @@ import { isChessSport } from "@/lib/chess-individual-only";
 import type { StandingsRow } from "@seazn/engine/competition";
 import type { MetricSpecLike } from "@/lib/public-site";
 import { localizedTieBreakLabel } from "@/lib/tiebreak-label";
-import { sportLedgerFamily } from "@/server/public-site/standings-view";
+import { sportLedgerFamily, stageOrderNote } from "@/server/public-site/standings-view";
+import { formatPublicInstant } from "@/lib/public-date-locale";
 
 const TABS = ["entrants", "fixtures", "standings", "stats"] as const;
 // v8: editors get a Settings tab (general/format/sharing/danger).
@@ -994,6 +995,9 @@ export default async function DivisionPage({
                         caption={caption}
                         dict={publicDict}
                         qualification={qualification}
+                        rules={stageOrder(stage.id)}
+                        locale={locale}
+                        tz={scheduleSettings.tz}
                       />
                       {poolFixtures.length > 0 && (
                         <details>
@@ -1020,30 +1024,38 @@ export default async function DivisionPage({
                     </div>
                   );
                 })}
-                {/* Cascade trace (doc 05 §4): the exact tie-break order in force. */}
-                <p className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500">
-                  {t(dict, "div.detail.tiebreak.label")}{" "}
-                  {tableOrderOf(stageOrder(stage.id)).map((key, i) => (
-                    <span key={key}>
-                      {i > 0 && " → "}
-                      <span className="text-slate-500">
-                        {localizedTieBreakLabel(
-                          dict,
-                          key,
-                          key === "diff" || key === "for" ? sportLedgerFamily(sportModule.metrics, key) : undefined,
-                        )}
+                {/* Cascade trace (doc 05 §4): the exact tie-break order in force, per stage — and (W2d T17) where it came
+                    from and whether it is pinned (X-TB-2). A stage the loader refused has no rules: no caption. */}
+                {(() => {
+                  const rules = stageOrder(stage.id);
+                  const note = stageOrderNote(rules, (key, vars) => t(dict, key, vars), (iso) =>
+                    formatPublicInstant(locale, scheduleSettings.tz, iso, { dateStyle: "medium" }),
+                  );
+                  if (note === null) return null;
+                  return (
+                    <p
+                      data-testid={`stage-order-caption-${stage.id}`}
+                      className="mt-3 border-t border-slate-100 pt-3 text-xs text-slate-500"
+                    >
+                      {t(dict, "div.detail.tiebreak.label")}{" "}
+                      {tableOrderOf(rules).map((key, i) => (
+                        <span key={`${key}-${i}`}>
+                          {i > 0 && " → "}
+                          <span className="text-slate-500">
+                            {localizedTieBreakLabel(
+                              dict,
+                              key,
+                              key === "diff" || key === "for" ? sportLedgerFamily(sportModule.metrics, key) : undefined,
+                            )}
+                          </span>
+                        </span>
+                      ))}
+                      <span data-testid={`stage-order-source-${stage.id}`} className="mt-1 block">
+                        {note.source} {note.pinned}
                       </span>
-                    </span>
-                  ))}
-                  {" "}
-                  {/* the sport's order reads "default"; the stage's or the division's "override"; a B1-migrated pin names
-                      no layer (Task 17 owns the caption) */}
-                  {stageOrder(stage.id)?.sources.tiebreakers === "sport"
-                    ? t(dict, "div.detail.tiebreak.default")
-                    : stageOrder(stage.id)?.sources.tiebreakers === "stage" || stageOrder(stage.id)?.sources.tiebreakers === "division"
-                      ? t(dict, "div.detail.tiebreak.override")
-                      : null}
-                </p>
+                    </p>
+                  );
+                })()}
               </section>
             ))}
           </div>

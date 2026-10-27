@@ -266,7 +266,7 @@ export interface RoundRecapDraftInput {
    *  score nobody played (the TV and the hub draw it the same way). Both absent: byte-identical. */
   results: { homeName: string; homeScore: string; awayName: string; awayScore: string; tag?: string | null; creditsNobody?: boolean }[];
   /** Top of the table (caller slices top-N). */
-  standings: { position: number; name: string; played: number; points: number }[];
+  standings: { position: number; name: string; played: number; /** As the public table prints it ("1½"). */ points: string }[];
   /** P3 — optional, same byte-identical-when-absent contract as
    *  ResultDraftInput.enrichment. */
   enrichment?: RecapEnrichment;
@@ -332,7 +332,8 @@ export function roundRecapDraft(input: RoundRecapDraftInput): { title: string; b
 export interface DigestStandingsSection {
   divisionName: string;
   /** Caller slices top-N (design: top 3). */
-  top3: { position: number; name: string; points: number }[];
+  /** `points` as the public table prints it ("1½" — RB2B-17). */
+  top3: { position: number; name: string; points: string }[];
   /** Largest positive rank delta window-over-window (enrichment.ts's
    *  biggestClimber) — absent when nobody climbed, there is no prior
    *  snapshot, or the climb was tied and therefore ambiguous. */

@@ -6479,3 +6479,95 @@ test("arbiter round column: below md the column leads the page; from md it is th
       `control set ${here!.length} at ${width}px vs ${desk!.length} at 1280 (column ${inColumn(here!).length} vs ${inColumn(desk!).length}, waiting list ${inWaiting(here!).length} vs ${inWaiting(desk!).length})`,
   );
 });
+
+// ── W2d Task 17: the public table's new columns at every width ─────────────────────────────────────────────────────────
+//
+// SPEC §5.7 (IIHF OTW/OTL, RBG:343-344; chess half-points, D10(b)). One ice hockey league of three under IIHF rules, seeded
+// through the real event route: Ash beats Birch in overtime (an OTW for Ash, an OTL for Birch) and Birch beats Cedar in
+// regulation. Both public tables — the division page and the hub's Table tab — print OTW and OTL at this width, and the
+// OT result is in its own column, not in W. Nothing scrolls the page sideways; the division table's own sideways scroll
+// is a reachable rail (a tab stop with a name, AGENTS class 23), never clipped content. This block seeds its own league
+// and reads nothing an earlier test left (the file is serial: a red here is a floor for the count, class 21). Its helpers
+// are imported inside the test, so the file's import block is untouched.
+test("W2d T17 public standings: IIHF OTW/OTL columns on both public tables, no horizontal page scroll", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const kit = await import("./spectator-w2-kit");
+  const org = await kit.activeOrgSlug(request);
+  const competition = await kit.publicCompetition(request, { name: `T17 OTW ${TAG} ${width}`, orgId: org.id });
+  const div = await kit.division(request, competition.id, { name: "IIHF", sport_key: "icehockey", variant_key: "iihf" });
+  const names = [`Ash Otw ${TAG}`, `Birch Otw ${TAG}`, `Cedar Otw ${TAG}`];
+  const created = await addEntrantsViaApi(request, div.id, names, "team");
+  expect(created.status, "the field was created").toBe(201);
+  const [ash, birch, cedar] = created.ids as [string, string, string];
+  const fixtures = await kit.leagueFixtures(request, div.id);
+  const fx = (x: string, y: string) => {
+    const f = fixtures.find((r) => [r.home_entrant_id, r.away_entrant_id].sort().join() === [x, y].sort().join());
+    expect(f, "a fixture pairs them").toBeDefined();
+    return f!.id;
+  };
+  const game = async (fixtureId: string, regulation: string[], overtime: string | null) => {
+    const s = await kit.eventStream(request, fixtureId);
+    await s.post("core.start", {});
+    await s.post("icehockey.period.advance", { to: "P2" });
+    for (const by of regulation) await s.post("icehockey.goal", { by });
+    await s.post("icehockey.period.advance", { to: "P3" });
+    await s.post("icehockey.period.advance", { to: "FT" });
+    if (overtime !== null) await s.post("icehockey.goal", { by: overtime });
+  };
+  await game(fx(ash, birch), [ash, birch], ash); // 2-1 in overtime
+  await game(fx(birch, cedar), [birch, birch, cedar], null); // 2-1 in regulation
+  const otw = kit.dictString("en", "table.abbr.otw");
+  const otl = kit.dictString("en", "table.abbr.otl");
+
+  // ── the division page ──
+  await page.goto(`/shared/${org.slug}/${competition.slug}/${div.slug}?tab=standings`, { waitUntil: "load" });
+  const panel = page.locator("#panel-standings");
+  await expect(panel).toBeVisible();
+  const headers = await panel.locator('thead th span[aria-hidden="true"]').allInnerTexts();
+  expect(headers, `the division table's header letters at ${width}px`).toEqual(expect.arrayContaining([otw, otl]));
+  const cellsOf = async (name: string) =>
+    panel.locator("tbody tr", { hasText: name }).first().locator("td").allInnerTexts();
+  const col = (key: string) => headers.indexOf(key);
+  // the header letters are the data columns only (# and Team carry none); a body row is td(rank), th(name), then a td per
+  // data column — so data column i is td i + 1
+  expect(col(otw), "premise: OTW is a column").toBeGreaterThanOrEqual(0);
+  const ashCells = await cellsOf(names[0]!);
+  expect(ashCells[col(otw) + 1]?.trim(), "Ash's overtime win is in OTW").toBe("1");
+  expect(ashCells[col("W") + 1]?.trim(), "…and not in W").toBe("0");
+  const birchCells = await cellsOf(names[1]!);
+  expect(birchCells[col(otl) + 1]?.trim(), "Birch's overtime loss is in OTL").toBe("1");
+  expect(birchCells[col("W") + 1]?.trim(), "Birch's regulation win is in W").toBe("1");
+  await expectNoHorizontalScroll(page);
+  const { clipped, scrollable } = await overflowingIn(page, "#panel-standings", "table,div,span,th,td", "the standings panel was not in the DOM");
+  expect(clipped, `the division table clips content at ${width}px`).toEqual([]);
+  for (const box of scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
+  // Anti-vacuity (T17 fix 1, m6): at 320 the division table's nine columns do not fit, so the loop above checked a rail.
+  if (width <= 320) expect(scrollable.length, "anti-vacuity: the 320 division table scrolls in a rail the loop checked").toBeGreaterThanOrEqual(1);
+
+  // ── the hub's Table tab ──
+  await page.goto(`/shared/${org.slug}/${competition.slug}?tab=table`, { waitUntil: "load" });
+  const hub = page.getByTestId("mh-tab-panel-table");
+  await expect(hub).toBeVisible();
+  // T17 fix 1 (m2): on a phone the split table shows GP and Pts and folds W · OTW · OTL · L behind "Show all columns";
+  // from md up nothing folds. Points stays on screen, inside the table's box, without a swipe (AGENTS #22: open the fold
+  // only when its toggle is visible — at 768/834 it is md:hidden).
+  const pts = hub.locator('th[data-col="points"]').first();
+  await expect(pts).toBeVisible();
+  const box = await hub.getByTestId(/-scroll$/).first().boundingBox();
+  const ptsBox = await pts.boundingBox();
+  expect(box && ptsBox, "the hub table and its Points header have boxes").toBeTruthy();
+  expect(ptsBox!.x + ptsBox!.width, `Points ends inside the table's box at ${width}px`).toBeLessThanOrEqual(box!.x + box!.width + 0.5);
+  const more = hub.locator('[data-testid$="-more"]').first();
+  if (await more.isVisible()) {
+    await expect(hub.locator('th[data-col="otw"]').first(), "folded on a phone until asked").toBeHidden();
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+  }
+  await expect(hub.locator('th[data-col="otw"]').first()).toBeVisible();
+  await expect(hub.locator('th[data-col="otl"]').first()).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  console.log(`[t17-otw ${width}px] division headers ${headers.join(" ")}; Ash ${ashCells.join(" ")}; scrollable ${scrollable.length}`);
+});

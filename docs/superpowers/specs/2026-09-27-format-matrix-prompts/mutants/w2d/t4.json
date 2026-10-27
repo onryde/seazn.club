@@ -46,9 +46,9 @@
  },
  {
   "id": "t4-field-goals-subtracts-own-goals",
-  "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "return ledgerOf(row, [\"gf\"]) - ledgerOf(row, [\"goals_pc\"]) - ledgerOf(row, [\"goals_stroke\"]);",
-  "replace": "return ledgerOf(row, [\"gf\"]) - ledgerOf(row, [\"goals_pc\"]) - ledgerOf(row, [\"goals_stroke\"]) - ledgerOf(row, [\"goals_og\"]);",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "  return metric(row, \"gf\") - metric(row, \"goals_pc\") - metric(row, \"goals_stroke\");",
+  "replace": "  return metric(row, \"gf\") - metric(row, \"goals_pc\") - metric(row, \"goals_stroke\") - metric(row, \"goals_og\");",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -159,7 +159,7 @@
  {
   "id": "t4-split-keeps-stale-note",
   "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "    if (run.notes.get(row.entrantId) !== \"h2h_incomplete\") run.notes.delete(row.entrantId);",
+  "find": "    if (!incomplete) run.notes.delete(row.entrantId);",
   "replace": "    void run.notes;",
   "killers": [
    {
@@ -248,9 +248,9 @@
  },
  {
   "id": "t4-difference-absent-reads-zero",
-  "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
-  "replace": "return (w ?? 0) - (l ?? 0);",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "  return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
+  "replace": "  return (w ?? 0) - (l ?? 0);",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -263,9 +263,9 @@
  },
  {
   "id": "t4-difference-one-half-is-absent",
-  "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
-  "replace": "return w === undefined || l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "  return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
+  "replace": "  return w === undefined || l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -503,9 +503,9 @@
  },
  {
   "id": "t4-field-goals-keep-strokes",
-  "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "return ledgerOf(row, [\"gf\"]) - ledgerOf(row, [\"goals_pc\"]) - ledgerOf(row, [\"goals_stroke\"]);",
-  "replace": "return ledgerOf(row, [\"gf\"]) - ledgerOf(row, [\"goals_pc\"]);",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "  return metric(row, \"gf\") - metric(row, \"goals_pc\") - metric(row, \"goals_stroke\");",
+  "replace": "  return metric(row, \"gf\") - metric(row, \"goals_pc\");",
   "killers": [
    {
     "cwd": "packages/engine",
@@ -533,9 +533,9 @@
  },
  {
   "id": "t4-difference-lost-half-alone",
-  "file": "packages/engine/src/competition/tiebreakers.ts",
-  "find": "return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
-  "replace": "return w === undefined ? undefined : (w ?? 0) - (l ?? 0);",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "  return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);",
+  "replace": "  return w === undefined ? undefined : (w ?? 0) - (l ?? 0);",
   "killers": [
    {
     "cwd": "packages/engine",

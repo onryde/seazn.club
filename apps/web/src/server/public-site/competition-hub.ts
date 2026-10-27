@@ -38,6 +38,7 @@ import { disambiguatedShorts, matchPhase, matchStrength, setBreakdown } from "@/
 import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import { playerLinkId, resolvePersonDisplayName } from "@/lib/name-display";
 import { renderProse } from "@/lib/prose";
+import { formatPublicInstant } from "@/lib/public-date-locale";
 import { publicRoundNamer } from "./feeder-slot-label";
 import { decidedOutcomeText, playerStatLabel, shootoutScoreFromDetail, tiebreakScoreFromDetail } from "@/lib/scoring-vocab";
 import { doubleWalkoverNextWinner, forfeitLedgerOfReason, forfeitTag, forfeitWords, unseatedForfeitLoser, type ForfeitWords } from "@/lib/forfeit-tag";
@@ -954,6 +955,9 @@ export async function loadCompetitionHub(
             updatedAt: snap.updated_at,
             msg,
             qualification: qualificationFor(stage, snap),
+            // W2d T17: the stage's column layout (OTW/OTL, half-points) and the lots note's date, in the org's locale
+            rules: stage.table_rules ?? null,
+            dateOf: (iso) => formatPublicInstant(locale, tz, iso, { dateStyle: "medium" }),
           }),
         );
       }

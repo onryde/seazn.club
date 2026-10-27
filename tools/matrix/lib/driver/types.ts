@@ -104,7 +104,7 @@ export interface ChallengeOut { readonly fixture_id: string; readonly ladder_ord
 export interface AmericanoViewOut { readonly mode: "americano" | "mexicano"; readonly rounds: readonly { round_no: number; matches: readonly { fixture_id: string; status: string; team1: { entrant_id: string }; team2: { entrant_id: string } }[] }[]; readonly leaderboard: readonly { person_id: string; points: number; games: number }[] }
 /** `won`/`drawn`/`lost`/`metrics` (W2b, X-WO-1): the row as the product's standings answer carries it (engine
  *  StandingsRow) — what the forfeit-credit scenarios isolate a match's credit from. Optional: a fake may omit them. */
-export interface StandingsRowWire { entrantId: string; rank: number; points?: number; played?: number; won?: number; drawn?: number; lost?: number; metrics?: Record<string, number> }
+export interface StandingsRowWire { entrantId: string; rank: number; points?: number; played?: number; won?: number; drawn?: number; lost?: number; metrics?: Record<string, number>; /** W2d T13/T17: true on every row of a table with no counted result. */ level?: boolean }
 export interface StandingsOut { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }
 export interface PublicStandingsOut { division_id: string; standings: { stage_id: string; pool_id: string | null; rows: StandingsRowWire[] }[] }
 export interface FixtureStateOut { status: string; last_seq: number; outcome: unknown }
