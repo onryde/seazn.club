@@ -3,7 +3,8 @@
 // Every other worker test scopes its tick with `onlyIds` (the seam that keeps parallel files off each other's rows), so the branch
 // the cron route takes - `runOutboxTick()` with NO scope - never ran in a test: a "make the scope safe" edit that defaulted it to
 // `[]` made the retention a permanent no-op and left every test green. This file runs that branch for real: `runOutboxTick` with no
-// options but the clock, against rows older than RETENTION_DAYS, and requires them gone.
+// options but the clock, against rows older than RETENTION_DAYS, and requires them gone. The recipient scrub (step 7a) has the same
+// unscoped branch, so it is driven here too.
 //
 // An unscoped tick claims, expires and purges ANY row in its table, which in the shared test database would reach into other files'
 // rows. So this file gives its own pool its own schema: DB_SCHEMA is set before `@/lib/db` creates the pool (the pool's search_path
@@ -112,6 +113,31 @@ describe.skipIf(!HAS_DB)("the production tick (no scope) purges the retention, i
     expect(report).toMatchObject({ expired: 1, purged: 1 });
     const left = await sql<{ id: string; status: string }[]>`select id, status from email_outbox where id = any(${[id, oldOne]}::uuid[])`;
     expect(left).toEqual([{ id, status: "expired" }]);
+  });
+
+  it("the production tick also scrubs an ended deletion notice's address, and leaves a notice still waiting to be sent alone", async () => {
+    // Step 7a on the unscoped branch: every other scrub test passes `onlyIds`, so a no-op unscoped scrub stayed green (Task 3 review I2).
+    // The placeholder is typed from the rule (the deleted account's `deleted-<id>@deleted.invalid`), not from the statement.
+    const [endedAccount, waitingAccount, ended, waiting] = [randomUUID(), randomUUID(), randomUUID(), randomUUID()];
+    const waitingTo = `${RUN}-waiting@x.test`;
+    await sql`
+      insert into email_outbox
+        (id, kind, ref_type, ref_id, org_id, recipient, subject, transactional, status, attempts, expires_at)
+      values
+        (${ended}, 'account_deletion', 'user', ${endedAccount}, null, ${`${RUN}-ended@x.test`}, 's', true, 'sent', 1, now() + interval '1 hour'),
+        (${waiting}, 'account_deletion', 'user', ${waitingAccount}, null, ${waitingTo}, 's', true, 'queued', 0, now() + interval '1 hour')`;
+    await sql`update email_outbox set next_attempt_at = now() + interval '1 hour' where id = ${waiting}`;
+
+    const report = await tick();
+
+    expect(report.scrubbed, "the tick reports the one ended notice it scrubbed").toBe(1);
+    const rows = await sql<{ id: string; recipient: string; status: string }[]>`
+      select id, recipient, status from email_outbox where id = any(${[ended, waiting]}::uuid[]) order by recipient`;
+    expect(Object.fromEntries(rows.map((r) => [r.id, [r.status, r.recipient]]))).toEqual({
+      [ended]: ["sent", `deleted-${endedAccount}@deleted.invalid`],
+      [waiting]: ["queued", waitingTo],
+    });
+    expect((await tick()).scrubbed, "the empty case: the next tick has nothing left to scrub").toBe(0);
   });
 
   it("a backlog beyond PURGE_BATCH drains PURGE_BATCH a tick (the production tick is bounded too)", async () => {

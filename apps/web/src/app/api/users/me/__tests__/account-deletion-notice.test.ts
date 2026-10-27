@@ -36,7 +36,7 @@ vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }
 
 import { sql } from "@/lib/db";
 import { DELETE } from "@/app/api/users/me/route";
-import { RETRYABLE_STATUSES, SCRUBBED_WHEN_ENDED, enqueueEmail, type OutboxKind } from "@/server/email-outbox";
+import { OUTBOX_STATUSES, RETRYABLE_STATUSES, SCRUBBED_WHEN_ENDED, enqueueEmail, type OutboxKind } from "@/server/email-outbox";
 import { runOutboxTick } from "@/server/email-outbox/worker";
 import { scrubEndedStatement } from "@/server/email-outbox/status";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
@@ -190,6 +190,60 @@ describe.skipIf(!HAS_DB)("deleting an account queues the deletion notice on the 
     const again = await tick(notice.id);
     expect(again.scrubbed, "the sequence: a second tick has nothing left to scrub").toBe(0);
     expect(await rowOf(notice.id), "and changes nothing").toEqual(scrubbed);
+  });
+
+  it("every way a notice can end gives up its address; a notice that can still be sent (queued or sending) keeps it", async () => {
+    // "Ended" is every status a row cannot be sent from, not just `sent`: by the next tick a sent notice is usually `delivered` (the
+    // provider's webhook), and some end `bounced`, `dead`, `expired`, `suppressed`... Each status is staged once for each kind of
+    // SCRUBBED_WHEN_ENDED, on one deleted account (each at its own address, so the replace rule pairs none of them). The two statuses a row
+    // may still be sent from are typed from the spec ("a row may hold a body only while it is queued or sending"); every other status of
+    // OUTBOX_STATUSES has ended.
+    const STILL_SENDABLE = ["queued", "sending"] as const;
+    expect([...RETRYABLE_STATUSES].sort(), "premise: the declaration agrees with the spec").toEqual([...STILL_SENDABLE].sort());
+    const endedStatuses = OUTBOX_STATUSES.filter((s) => !(STILL_SENDABLE as readonly string[]).includes(s));
+    const { userId } = await deleteAndWaitForNotice("en");
+    const placeholder = await emailOf(userId);
+
+    const ended: { id: string; kind: OutboxKind; status: string }[] = [];
+    const kept: { id: string; kind: OutboxKind; status: string; to: string }[] = [];
+    for (const kind of SCRUBBED_WHEN_ENDED) {
+      for (const status of endedStatuses) {
+        const id = await seedRow(kind, userId, address(`${kind}-${status}`));
+        await sql`update email_outbox set status = ${status}, body_sealed = null, attempts = 1 where id = ${id}`;
+        ended.push({ id, kind, status });
+      }
+      const queuedTo = address(`${kind}-queued`);
+      const queued = await seedRow(kind, userId, queuedTo);
+      await sql`update email_outbox set next_attempt_at = now() + interval '1 hour' where id = ${queued}`;
+      kept.push({ id: queued, kind, status: "queued", to: queuedTo });
+      const sendingTo = address(`${kind}-sending`);
+      const sending = await seedRow(kind, userId, sendingTo);
+      await sql`update email_outbox set status = 'sending', lease_until = now() + interval '1 hour', attempts = 1 where id = ${sending}`;
+      kept.push({ id: sending, kind, status: "sending", to: sendingTo });
+    }
+
+    const report = await runOutboxTick({ onlyIds: [...ended, ...kept].map((r) => r.id), sleep: async () => undefined });
+
+    let checked = 0;
+    for (const r of ended) {
+      const row = await rowOf(r.id);
+      expect(row.status, `premise: the tick left ${r.kind} ${r.status} as it was`).toBe(r.status);
+      expect(row.recipient, `${r.kind} ended ${r.status}: the row holds the deleted account's placeholder`).toBe(placeholder);
+      checked++;
+    }
+    for (const r of kept) {
+      const row = await rowOf(r.id);
+      expect(row.status, `premise: the tick left ${r.kind} ${r.status} as it was`).toBe(r.status);
+      expect(row.recipient, `${r.kind} ${r.status}: a notice that can still be sent keeps the address it must be sent to`).toBe(r.to);
+      checked++;
+    }
+    expect(report.scrubbed, "the tick reports every ended row, and only those").toBe(ended.length);
+    expect(ended.length, "anti-vacuity: every ended status of every scrubbed kind was staged").toBe(
+      SCRUBBED_WHEN_ENDED.length * endedStatuses.length,
+    );
+    expect(kept.length, "and both statuses a row may still be sent from").toBe(SCRUBBED_WHEN_ENDED.length * STILL_SENDABLE.length);
+    expect(checked, "anti-vacuity: rows checked").toBe(ended.length + kept.length);
+    expect(checked).toBeGreaterThan(0);
   });
 
   it("a notice still waiting to be sent keeps its address", async () => {
