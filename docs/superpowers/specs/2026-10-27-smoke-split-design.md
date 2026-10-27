@@ -67,3 +67,12 @@ My calls (minor; flag if you disagree):
 - New grouped suites are NOT added to `SELECTABLE_SUITES` (they need `SmokeCtx`); `smoke-select.ts` stays untouched.
 - Entry point and exit-code logic stay in the index; the manifest write happens in a `finally`, so a failing run still
   writes it.
+
+## Owner ruling 2026-10-27: option B (supersedes the grouping goal above)
+- The ~1,100 inline lines of `main()` are NOT regrouped. They move unchanged into `scripts/smoke/suites/core.ts`
+  (name is the builder's call); its 35 shared locals stay local to that one function, so no `SmokeCtx` is needed.
+- `index.ts` calls `core` and the 28 existing suites in today's exact order. `core` is not added to `SELECTABLE_SUITES`.
+- The move is mechanical again: the manifest diff (names, order, per-suite counts) is a full proof, with `core`
+  recorded as one entry. The per-section baseline in the earlier answers is dropped.
+- Known cost: `core.ts` stays ~1,100 lines and keeps attracting new inline checks. Regrouping is a possible later PR.
+- My call (not the owner's): two PRs, in order. (1) emitter + diff script, no behaviour change; (2) the split.
