@@ -15,7 +15,7 @@ import "server-only";
 // No retry and no logging here: the callers own backoff and they log codes.
 import { GOOGLE_AUTH_URL, GOOGLE_TOKEN_URL, googleConfigured } from "@/lib/oauth";
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
-import { YouTubeError, type BroadcastLife, type YoutubeErrorCode, type YouTubePort } from "./port";
+import { YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type YoutubeErrorCode, type YouTubePort } from "./port";
 
 const API = "https://www.googleapis.com/youtube/v3";
 /** OAuth 2.0 token revocation (…/oauth2/web-server, "Token revocation"). Google's example puts `token` in the query string; we
@@ -79,6 +79,12 @@ const camel = (snake: string): string => snake.replace(/_([a-z])/g, (_, c: strin
 
 const asRecord = (v: unknown): Record<string, unknown> | null => (v !== null && typeof v === "object" && !Array.isArray(v) ? (v as Record<string, unknown>) : null);
 const nonEmpty = (v: unknown): string | null => (typeof v === "string" && v !== "" ? v : null);
+/** An ISO 8601 timestamp string as a Date; anything else (absent, not a string, not a date) is null. */
+const isoDate = (v: unknown): Date | null => {
+  if (typeof v !== "string") return null;   // "" and any unparseable string are Invalid Date: the NaN check below
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
 
 /** What a failed response says, reduced to the two tokens we may keep: a Data API `reason` (letters only) or an OAuth `error`
  *  (`[a-z_]`). Anything else — a message, a description, a body — is read and DISCARDED here. A parse failure is not an error:
@@ -318,14 +324,19 @@ export class GoogleYouTube implements YouTubePort {
     await api(at, "POST", "liveBroadcasts/bind", { query: { id: broadcastId, streamId, part: "id" } });
   }
 
-  async broadcastLife(at: string, broadcastId: string): Promise<BroadcastLife> {
-    const items = parseBody(await api(at, "GET", "liveBroadcasts", { query: { part: "status", id: broadcastId } })).items;
+  /** liveBroadcasts.list(part=status,snippet, id): the life cycle from `status.lifeCycleStatus`, and the instants YouTube says it
+   *  ACTUALLY started and ended from `snippet.actualStartTime` / `actualEndTime` (ISO 8601; the resource page says they are only
+   *  there once the broadcast is live / complete). A time that is absent, or not a date, is `null`: it is informational, and a
+   *  malformed one must never keep the end step from reading the life cycle. */
+  async broadcastLife(at: string, broadcastId: string): Promise<BroadcastLifeInfo> {
+    const items = parseBody(await api(at, "GET", "liveBroadcasts", { query: { part: "status,snippet", id: broadcastId } })).items;
     const row = (Array.isArray(items) ? items : []).map(asRecord).find((i) => i?.id === broadcastId);
-    if (!row) return "absent";
+    if (!row) return { life: "absent", actualStartAt: null, actualEndAt: null };
     const life = asRecord(row.status)?.lifeCycleStatus;
     // A value Google never documented is refused, not guessed at: the caller would act on it (delete, complete).
     if (typeof life !== "string" || !Object.hasOwn(LIFE, life)) throw new YouTubeError("youtube_unavailable", "unknownLifeCycleStatus");
-    return LIFE[life]!;
+    const snippet = asRecord(row.snippet);
+    return { life: LIFE[life]!, actualStartAt: isoDate(snippet?.actualStartTime), actualEndAt: isoDate(snippet?.actualEndTime) };
   }
 
   /** liveBroadcasts.transition(complete). `redundantTransition` (403) is YouTube saying it is already there: that resolves. */
@@ -357,7 +368,9 @@ export class GoogleYouTube implements YouTubePort {
     try {
       items = parseBody(await api(at, "GET", "videos", { query: { part: "id", id: [...asked].join(",") } })).items;
     } catch (e) {
-      if (!(e instanceof YouTubeError && e.code === "youtube_not_found")) throw e;
+      // ONLY Google's `videoNotFound` is "that video is missing": another not-found reason (liveBroadcastNotFound, …) is not about
+      // these ids and is thrown, not read as an answer.
+      if (!(e instanceof YouTubeError && e.reason === "videoNotFound")) throw e;
       if (asked.size === 1) return new Set();
       const found = new Set<string>();
       for (const id of asked) for (const present of await this.existingVideos(at, [id])) found.add(present);

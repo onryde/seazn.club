@@ -79,3 +79,24 @@ describe("YOUTUBE_TOKEN_KEK in both .env.example files", () => {
     expect(checked, "the sweep read both files").toBe(2);
   });
 });
+
+// YouTube Connect: YOUTUBE_DRIVER picks the fake or the live Google driver. A template that carried `fake` would put a copy on
+// stg or prod serving a fake channel, so both templates assign it BLANK and say what blank means.
+describe("YOUTUBE_DRIVER in both .env.example files", () => {
+  const FILES = { "apps/web/.env.example": EXAMPLE, ".env.example": path.resolve(__dirname, "../../../../../.env.example") };
+
+  it("each template assigns it blank (never `fake`), and the comment above says blank is live in production and the fake is for local and ci only", () => {
+    let checked = 0;
+    for (const [name, file] of Object.entries(FILES)) {
+      const text = fs.readFileSync(file, "utf8");
+      const vars = assignments(text);
+      expect(vars.has("YOUTUBE_DRIVER"), `${name} names YOUTUBE_DRIVER`).toBe(true);
+      expect(vars.get("YOUTUBE_DRIVER"), `${name}: blank, so a copied template is live in production`).toBe("");
+      const above = text.slice(0, text.indexOf("\nYOUTUBE_DRIVER=")).split("\n").slice(-4).join("\n");
+      expect(above, `${name}: says blank means live in production`).toMatch(/LIVE in production/);
+      expect(above, `${name}: says the fake is for local and ci`).toMatch(/ENV_NAME is local or ci/);
+      checked++;
+    }
+    expect(checked, "the sweep read both files").toBe(2);
+  });
+});

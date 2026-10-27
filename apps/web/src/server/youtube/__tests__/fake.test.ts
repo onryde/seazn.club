@@ -45,6 +45,16 @@ async function boundPair(f: FakeYouTube, at: string) {
   await f.bind(at, broadcastId, streamId);
   return { streamId, broadcastId };
 }
+/** Whether a refresh token is dead: its next accessToken is youtube_reconnect_needed (any other outcome is alive; any other error fails the test). */
+const isDead = (f: FakeYouTube) => async (rt: string): Promise<boolean> => {
+  try {
+    await f.accessToken(rt);
+    return false;
+  } catch (e) {
+    if (e instanceof YouTubeError && e.code === "youtube_reconnect_needed") return true;
+    throw e;
+  }
+};
 async function rejection(p: Promise<unknown> | (() => unknown)): Promise<unknown> {
   try {
     await (typeof p === "function" ? p() : p);
@@ -58,16 +68,16 @@ describe("auto-start and auto-stop", () => {
   it("a bound broadcast goes live when video arrives, and auto-stop is OFF — it stays live after videoOff", async () => {
     const { f, at } = await rig();
     const { streamId, broadcastId } = await boundPair(f, at);
-    expect(await f.broadcastLife(at, broadcastId), "PREMISE: bound, no video yet").toBe("ready");
+    expect((await f.broadcastLife(at, broadcastId)).life, "PREMISE: bound, no video yet").toBe("ready");
     f.videoOn(streamId);
-    expect(await f.broadcastLife(at, broadcastId)).toBe("live");
+    expect((await f.broadcastLife(at, broadcastId)).life).toBe("live");
     f.videoOff(streamId);
-    expect(await f.broadcastLife(at, broadcastId), "enableAutoStop=false: no video does not end it").toBe("live");
+    expect((await f.broadcastLife(at, broadcastId)).life, "enableAutoStop=false: no video does not end it").toBe("live");
     f.videoOn(streamId);
-    expect(await f.broadcastLife(at, broadcastId)).toBe("live");
+    expect((await f.broadcastLife(at, broadcastId)).life).toBe("live");
     expect(f.liveBroadcastCount(), "video coming back is not a second live broadcast").toBe(1);
     await f.complete(at, broadcastId);
-    expect(await f.broadcastLife(at, broadcastId), "only complete() ends it").toBe("complete");
+    expect((await f.broadcastLife(at, broadcastId)).life, "only complete() ends it").toBe("complete");
   });
 
   it("video with nothing bound starts nothing, and a broadcast that never saw video never starts", async () => {
@@ -75,10 +85,10 @@ describe("auto-start and auto-stop", () => {
     const { streamId } = await f.insertStream(at, { title: "key" });
     const { broadcastId } = await f.insertBroadcast(at, bcast());
     f.videoOn(streamId);
-    expect(await f.broadcastLife(at, broadcastId), "created and unbound: video on a key starts nothing").toBe("created");
+    expect((await f.broadcastLife(at, broadcastId)).life, "created and unbound: video on a key starts nothing").toBe("created");
     f.videoOff(streamId);
     await f.bind(at, broadcastId, streamId);
-    expect(await f.broadcastLife(at, broadcastId), "bound with the video already off").toBe("ready");
+    expect((await f.broadcastLife(at, broadcastId)).life, "bound with the video already off").toBe("ready");
     expect(f.liveBroadcastCount()).toBe(0);
   });
 
@@ -88,17 +98,96 @@ describe("auto-start and auto-stop", () => {
     f.videoOn(streamId);
     const { broadcastId } = await f.insertBroadcast(at, bcast());
     await f.bind(at, broadcastId, streamId);
-    expect(await f.broadcastLife(at, broadcastId)).toBe("live");
+    expect((await f.broadcastLife(at, broadcastId)).life).toBe("live");
   });
 
   it("autoVideo: every bind leaves the broadcast live, as if video had arrived (e2e has no ingest to watch)", async () => {
     const { f, at } = await rig();
     f.setAutoVideo(true);
     const { broadcastId } = await boundPair(f, at);
-    expect(await f.broadcastLife(at, broadcastId)).toBe("live");
+    expect((await f.broadcastLife(at, broadcastId)).life).toBe("live");
     f.setAutoVideo(false);
     const second = await boundPair(f, at);
-    expect(await f.broadcastLife(at, second.broadcastId), "autoVideo off again: ready until video arrives").toBe("ready");
+    expect((await f.broadcastLife(at, second.broadcastId)).life, "autoVideo off again: ready until video arrives").toBe("ready");
+  });
+});
+
+// D15: youtube_broadcasts.actual_start_at / actual_end_at. liveBroadcasts `snippet.actualStartTime` is set once the broadcast
+// goes live and `actualEndTime` once it is complete (https://developers.google.com/youtube/v3/live/docs/liveBroadcasts); the fake
+// reads them off its injected clock, so the instants below are the test's own, never the fake's.
+describe("broadcastLife reports the actual start and end instants", () => {
+  const clock = () => {
+    let t = START.getTime();
+    return { now: () => new Date(t), set: (ms: number) => { t = START.getTime() + ms; } };
+  };
+
+  it("nothing before it happens: created, ready and absent report no start and no end", async () => {
+    const c = clock();
+    const f = new FakeYouTube({ now: c.now });
+    const at = await f.accessToken("1//rt-actual-0");
+    const { streamId } = await f.insertStream(at, { title: "k" });
+    const { broadcastId } = await f.insertBroadcast(at, bcast());
+    expect(await f.broadcastLife(at, broadcastId), "created").toEqual({ life: "created", actualStartAt: null, actualEndAt: null });
+    await f.bind(at, broadcastId, streamId);
+    expect(await f.broadcastLife(at, broadcastId), "ready").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null });
+    expect(await f.broadcastLife(at, "no-such-broadcast"), "absent").toEqual({ life: "absent", actualStartAt: null, actualEndAt: null });
+  });
+
+  it("video arriving stamps the start (the clock then, not later reads); complete stamps the end; neither moves afterwards", async () => {
+    const c = clock();
+    const f = new FakeYouTube({ now: c.now });
+    const at = await f.accessToken("1//rt-actual-1");
+    const { streamId, broadcastId } = await boundPair(f, at);
+    c.set(5 * 60_000);   // 12:05 — video arrives
+    f.videoOn(streamId);
+    c.set(9 * 60_000);   // 12:09 — a read, not an event
+    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "live", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: null });
+    f.videoOff(streamId); c.set(10 * 60_000); f.videoOn(streamId);   // video returns: not a second start
+    expect((await f.broadcastLife(at, broadcastId)).actualStartAt, "the first start stands").toEqual(new Date("2026-10-27T12:05:00Z"));
+    c.set(50 * 60_000);   // 12:50 — the end step (inside the access token's hour)
+    await f.complete(at, broadcastId);
+    c.set(55 * 60_000);
+    await f.complete(at, broadcastId);   // a second complete resolves (Google: redundantTransition) and moves nothing
+    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "complete", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z") });
+    expect(f.inspectBroadcast(broadcastId), "the control view shows the same instants").toMatchObject({ actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z") });
+  });
+
+  it("the other ways to go live stamp the start too: binding to a key already carrying video, and autoVideo", async () => {
+    const c = clock();
+    const f = new FakeYouTube({ now: c.now });
+    const at = await f.accessToken("1//rt-actual-2");
+    const { streamId } = await f.insertStream(at, { title: "k" });
+    f.videoOn(streamId);
+    const { broadcastId } = await f.insertBroadcast(at, bcast());
+    c.set(2 * 60_000);
+    await f.bind(at, broadcastId, streamId);
+    expect((await f.broadcastLife(at, broadcastId)).actualStartAt, "bind to a live key").toEqual(new Date("2026-10-27T12:02:00Z"));
+    f.setAutoVideo(true);
+    c.set(3 * 60_000);
+    const auto = await boundPair(f, at);
+    expect((await f.broadcastLife(at, auto.broadcastId)).actualStartAt, "autoVideo").toEqual(new Date("2026-10-27T12:03:00Z"));
+  });
+
+  it("complete on a broadcast that never went live is refused (invalidTransition) and stamps no end: a bound, ready broadcast has no start and no end", async () => {
+    const c = clock();
+    const f = new FakeYouTube({ now: c.now });
+    const at = await f.accessToken("1//rt-actual-3");
+    const { broadcastId } = await boundPair(f, at);
+    const err = await rejection(f.complete(at, broadcastId));
+    expect(err, "complete needs a live broadcast").toBeInstanceOf(YouTubeError);
+    expect((err as YouTubeError).reason).toBe("invalidTransition");
+    expect(await f.broadcastLife(at, broadcastId), "a refused complete stamps nothing").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null });
+  });
+
+  it("the instants are copies: mutating a returned Date does not move the fake's record", async () => {
+    const c = clock();
+    const f = new FakeYouTube({ now: c.now });
+    const at = await f.accessToken("1//rt-actual-4");
+    const { streamId, broadcastId } = await boundPair(f, at);
+    f.videoOn(streamId);
+    const first = (await f.broadcastLife(at, broadcastId)).actualStartAt!;
+    first.setUTCFullYear(1999);
+    expect((await f.broadcastLife(at, broadcastId)).actualStartAt, "a second read is unchanged").toEqual(START);
   });
 });
 
@@ -114,11 +203,11 @@ describe("Google's documented limits", () => {
     expect(refused).toBeInstanceOf(YouTubeError);
     expect((refused as YouTubeError).code).toBe("youtube_limit_reached");
     expect(f.liveBroadcastCount(), "the refusal changed nothing").toBe(10);
-    expect(await f.broadcastLife(at, pairs[10]!.broadcastId)).toBe("ready");
+    expect((await f.broadcastLife(at, pairs[10]!.broadcastId)).life).toBe("ready");
     // The twin that makes the 10 a LIMIT and not a count of everything: a slot freed by complete() is reusable.
     await f.complete(at, pairs[0]!.broadcastId);
     f.videoOn(pairs[10]!.streamId);
-    expect(await f.broadcastLife(at, pairs[10]!.broadcastId)).toBe("live");
+    expect((await f.broadcastLife(at, pairs[10]!.broadcastId)).life).toBe("live");
     expect(f.liveBroadcastCount(), "10 live again, not 11").toBe(10);
   });
 
@@ -131,7 +220,7 @@ describe("Google's documented limits", () => {
     expect(f.liveBroadcastCount(f.channelOf("1//rt-a"))).toBe(10);
     const onB = await boundPair(f, atB);
     f.videoOn(onB.streamId);   // a global cap of 10 would refuse this as the 11th
-    expect(await f.broadcastLife(atB, onB.broadcastId)).toBe("live");
+    expect((await f.broadcastLife(atB, onB.broadcastId)).life).toBe("live");
     expect(f.liveBroadcastCount(), "11 live in all").toBe(11);
     expect(f.liveBroadcastCount(f.channelOf("1//rt-b"))).toBe(1);
     const overA = await boundPair(f, atA);
@@ -152,7 +241,7 @@ describe("Google's documented limits", () => {
     const eleventh = await boundPair(f, at2);
     expect(() => f.videoOn(eleventh.streamId)).toThrow(YouTubeError);
     // The same channel is visible to both tokens (the twin of the cross-channel refusals below).
-    expect(await f.broadcastLife(at2, (await f.insertBroadcast(at1, bcast())).broadcastId)).toBe("created");
+    expect((await f.broadcastLife(at2, (await f.insertBroadcast(at1, bcast())).broadcastId)).life).toBe("created");
   });
 
   it("with autoVideo on, the 11th bind resolves and the broadcast stays ready (YouTube will not start it) — no throw from bind", async () => {
@@ -162,7 +251,7 @@ describe("Google's documented limits", () => {
     for (let i = 0; i < 10; i++) lives.push(await boundPair(f, at));
     expect(f.liveBroadcastCount()).toBe(10);
     const eleventh = await boundPair(f, at);
-    expect(await f.broadcastLife(at, eleventh.broadcastId)).toBe("ready");
+    expect((await f.broadcastLife(at, eleventh.broadcastId)).life).toBe("ready");
     expect(f.liveBroadcastCount()).toBe(10);
   });
 
@@ -177,7 +266,7 @@ describe("Google's documented limits", () => {
     expect(refused).toBeInstanceOf(YouTubeError);
     expect((refused as YouTubeError).code).toBe("youtube_limit_reached");
     expect(f.boundOpenCount(streamId)).toBe(3);
-    expect(await f.broadcastLife(at, ids[3]!), "the refused one is still unbound").toBe("created");
+    expect((await f.broadcastLife(at, ids[3]!)).life, "the refused one is still unbound").toBe("created");
     // Twins: another key takes it; and a slot on THIS key is freed by a completed or a deleted broadcast.
     const other = await f.insertStream(at, { title: "other" });
     await f.bind(at, ids[3]!, other.streamId);
@@ -228,7 +317,7 @@ describe("token death", () => {
     same.killToken("1//rt-old");
     const reconnected = await same.accessToken((await grant(same)).refreshToken);
     same.videoOn(kept.streamId);
-    expect(await same.broadcastLife(reconnected, kept.broadcastId), "the new token reaches the broadcast that kept running").toBe("live");
+    expect((await same.broadcastLife(reconnected, kept.broadcastId)).life, "the new token reaches the broadcast that kept running").toBe("live");
   });
 
   it("revoke(refreshToken) is Google's revocation: the token is dead afterwards; revoking an unknown token resolves", async () => {
@@ -237,6 +326,75 @@ describe("token death", () => {
     expect(((await rejection(f.accessToken(rt))) as YouTubeError).code).toBe("youtube_reconnect_needed");
     await expect(f.revoke("never-seen")).resolves.toBeUndefined();
     await expect(f.accessToken("1//never-seen-2"), "an untouched token is still good").resolves.toEqual(expect.any(String));
+  });
+
+  // Google: revoking a token invalidates the user's whole grant to the client (…/oauth2/web-server, "Token revocation"), so a
+  // disconnect of ONE club must read, in the fake, as every token of that Google account dying — what live does.
+  it("revoke kills the WHOLE grant: every refresh token of the same account — on the same channel (a reconnect), or reporting the same non-null subject on another channel — and no other account's", async () => {
+    const f = new FakeYouTube();
+    const mint = async (o: { sub?: string | null; channel?: string } = {}) => {
+      const g = await grant(f, { before: (state) => { if (o.sub !== undefined) f.setGoogleSub(o.sub, state); if (o.channel) f.setChannels([{ id: o.channel, title: "C" }], state); } });
+      return g.refreshToken;
+    };
+    const dead = isDead(f);
+    // (a) the same channel, derived subjects: a reconnect that was never revoked
+    const a1 = await mint({ channel: "UCsameChannelAAAAAAAAAAA" });
+    const a2 = await mint({ channel: "UCsameChannelAAAAAAAAAAA" });
+    // (b) one person, two clubs: different channels, ONE subject
+    const b1 = await mint({ sub: "acct-two-clubs", channel: "UCclubOneBBBBBBBBBBBBB" });
+    const b2 = await mint({ sub: "acct-two-clubs", channel: "UCclubTwoBBBBBBBBBBBBB" });
+    // (d) a reconnect of an account that reports NO subject: only the channel says they are one account
+    const d1 = await mint({ sub: null, channel: "UCnoSubSameChannelDDDDD" });
+    const d2 = await mint({ sub: null, channel: "UCnoSubSameChannelDDDDD" });
+    // (c) bystanders: another account on its own channel, and a no-subject grant on another channel
+    const other = await mint();
+    const noSubA = await mint({ sub: null, channel: "UCnoSubAAAAAAAAAAAAAAAA" });
+    const noSubB = await mint({ sub: null, channel: "UCnoSubBBBBBBBBBBBBBBBB" });
+    // PREMISE: every token is alive before anything is revoked (so 'dead after' can fail)
+    let alive = 0;
+    for (const rt of [a1, a2, b1, b2, d1, d2, other, noSubA, noSubB]) { expect(await dead(rt), "alive before").toBe(false); alive++; }
+    expect(alive, "PREMISE: nine grants").toBe(9);
+
+    await f.revoke(a1);
+    expect([await dead(a1), await dead(a2)], "same channel: the whole account is revoked").toEqual([true, true]);
+    for (const rt of [b1, b2, d1, d2, other, noSubA, noSubB]) expect(await dead(rt), "another account lives").toBe(false);
+
+    await f.revoke(d1);
+    expect([await dead(d1), await dead(d2)], "same channel, no subject: still one account (a reconnect)").toEqual([true, true]);
+    for (const rt of [b1, b2, other, noSubA, noSubB]) expect(await dead(rt), "bystanders live").toBe(false);
+
+    await f.revoke(b2);
+    expect([await dead(b1), await dead(b2)], "same non-null subject on different channels: one grant").toEqual([true, true]);
+    for (const rt of [other, noSubA, noSubB]) expect(await dead(rt), "bystanders still live").toBe(false);
+
+    await f.revoke(noSubA);
+    expect(await dead(noSubA), "the revoked token itself").toBe(true);
+    expect(await dead(noSubB), "NULL subjects never match each other: no subject is not one account").toBe(false);
+    expect(await dead(other)).toBe(false);
+
+    // a reconnect AFTER the revoke is a new grant and works, on the same channel too
+    const fresh = await mint({ channel: "UCsameChannelAAAAAAAAAAA" });
+    expect(await dead(fresh), "reconnect after revoke").toBe(false);
+  });
+
+  it("killToken stays PER-TOKEN: killing one refresh token leaves the same account's other tokens alive (T14's one dead grant, not a revoke)", async () => {
+    const f = new FakeYouTube();
+    const channel = [{ id: "UCsameChannelKKKKKKKKKKK", title: "K" }];
+    const one = await grant(f, { before: (state) => f.setChannels(channel, state) });
+    const two = await grant(f, { before: (state) => f.setChannels(channel, state) });
+    f.killToken(one.refreshToken);
+    expect(((await rejection(f.accessToken(one.refreshToken))) as YouTubeError).code).toBe("youtube_reconnect_needed");
+    await expect(f.accessToken(two.refreshToken), "the twin on the same channel is untouched").resolves.toEqual(expect.any(String));
+  });
+
+  it("revoke logs as one 'revoke' call and is injectable like the rest (failNext('revoke') leaves every token alive)", async () => {
+    const f = new FakeYouTube();
+    const g = await grant(f);
+    f.failNext("revoke", "youtube_unavailable", "backendError");
+    await rejection(f.revoke(g.refreshToken));
+    await expect(f.accessToken(g.refreshToken), "the failed revoke killed nothing").resolves.toEqual(expect.any(String));
+    await f.revoke(g.refreshToken);
+    expect(f.calls.filter((c) => c.method === "revoke")).toHaveLength(2);
   });
 
   it("an access token the fake never issued is refused like an expired one", async () => {
@@ -585,7 +743,7 @@ describe("the rest of the port's behaviour", () => {
     const { broadcastId } = await f.insertBroadcast(at, { title: "Final", description: "Court 1", scheduledStart: START, privacy: "public", madeForKids: true });
     expect(f.inspectBroadcast(broadcastId)).toEqual({
       channelId: f.channelOf("1//rt-main"), title: "Final", description: "Court 1", scheduledStart: START, privacy: "public", madeForKids: true,
-      streamId: null, life: "created",
+      streamId: null, life: "created", actualStartAt: null, actualEndAt: null,
     });
     expect(f.inspectBroadcast("nope")).toBeNull();
   });
@@ -609,7 +767,7 @@ describe("the rest of the port's behaviour", () => {
     f.videoOn(streamId);
     await f.complete(at, broadcastId);
     await expect(f.complete(at, broadcastId), "the second call").resolves.toBeUndefined();
-    expect(await f.broadcastLife(at, broadcastId)).toBe("complete");
+    expect((await f.broadcastLife(at, broadcastId)).life).toBe("complete");
     expect(((await rejection(f.complete(at, "nope"))) as YouTubeError).code).toBe("youtube_not_found");
   });
 
@@ -617,14 +775,14 @@ describe("the rest of the port's behaviour", () => {
     const { f, at } = await rig();
     const { streamId, broadcastId } = await boundPair(f, at);
     await f.deleteBroadcast(at, broadcastId);
-    expect(await f.broadcastLife(at, broadcastId)).toBe("absent");
+    expect((await f.broadcastLife(at, broadcastId)).life).toBe("absent");
     await expect(f.deleteBroadcast(at, broadcastId), "second delete").resolves.toBeUndefined();
     await expect(f.deleteBroadcast(at, "never-existed")).resolves.toBeUndefined();
     expect(f.streamsCount()).toBe(1);
     await f.deleteStream(at, streamId);
     expect(f.streamsCount()).toBe(0);
     await expect(f.deleteStream(at, streamId), "second delete").resolves.toBeUndefined();
-    expect(await f.broadcastLife(at, "never-existed")).toBe("absent");
+    expect((await f.broadcastLife(at, "never-existed")).life).toBe("absent");
   });
 
   it("existingVideos: only the ids that exist; empty in, empty out; 50 ids are fine and 51 throw WITHOUT being a call; deleteVideo removes one", async () => {
@@ -635,7 +793,7 @@ describe("the rest of the port's behaviour", () => {
     expect(await f.existingVideos(at, [])).toEqual(new Set());
     f.deleteVideo(a);
     expect(await f.existingVideos(at, [a, b]), "a video deleted on YouTube is gone").toEqual(new Set([b]));
-    expect(await f.broadcastLife(at, a)).toBe("absent");
+    expect((await f.broadcastLife(at, a)).life).toBe("absent");
     const fifty = Array.from({ length: 50 }, (_, i) => `id${i}`);
     await expect(f.existingVideos(at, fifty)).resolves.toEqual(new Set());
     const before = f.calls.length;
@@ -700,8 +858,8 @@ describe("channels belong to grants: a token cannot reach another channel's reso
 
   it("broadcastLife reads absent for another channel's broadcast; complete is not_found and changes nothing; the owner can complete", async () => {
     const { f, atA, atB, a } = await twoChannels();
-    expect(await f.broadcastLife(atB, a.broadcastId)).toBe("absent");
-    expect(await f.broadcastLife(atA, a.broadcastId)).toBe("live");
+    expect((await f.broadcastLife(atB, a.broadcastId)).life).toBe("absent");
+    expect((await f.broadcastLife(atA, a.broadcastId)).life).toBe("live");
     expect(await code(f.complete(atB, a.broadcastId))).toBe("youtube_not_found");
     expect(f.inspectBroadcast(a.broadcastId)?.life, "B's attempt did not end A's broadcast").toBe("live");
     await f.complete(atA, a.broadcastId);
@@ -749,8 +907,8 @@ describe("channels belong to grants: a token cannot reach another channel's reso
     await expect(f.insertBroadcast(atA, bcast())).resolves.toBeDefined();
     // autoVideo scoped to A.
     f.setAutoVideo(true, { channelId: chA });
-    expect(await f.broadcastLife(atA, (await boundPair(f, atA)).broadcastId)).toBe("live");
-    expect(await f.broadcastLife(atB, (await boundPair(f, atB)).broadcastId), "B did not get autoVideo").toBe("ready");
+    expect((await f.broadcastLife(atA, (await boundPair(f, atA)).broadcastId)).life).toBe("live");
+    expect((await f.broadcastLife(atB, (await boundPair(f, atB)).broadcastId)).life, "B did not get autoVideo").toBe("ready");
   });
 
   it("a scoped failure is not taken by a call that carries no channel (authorizeUrl), and is still there for its own channel", async () => {
@@ -762,7 +920,7 @@ describe("channels belong to grants: a token cannot reach another channel's reso
     expect(await code(f.insertStream(atA, { title: "k" }))).toBe("youtube_unavailable");
   });
 
-  it("handles name channels: channelOfHandle is the token's channel, an unknown handle is not_found, and pinChannelsTo shares the channel with exactly ONE grant", async () => {
+  it("handles name channels: channelOfHandle is the token's channel, an unknown handle is not_found, and pinChannelsTo puts exactly ONE later grant (the state's) on that channel and account", async () => {
     const f = new FakeYouTube();
     const handle = f.tokenHandle("1//rt-a");
     expect(f.channelOfHandle(handle)).toBe(f.channelOf("1//rt-a"));
@@ -813,7 +971,7 @@ describe("reset", () => {
     check("the constructor's channels are back", (await f.listMyChannels(await f.accessToken("1//rt-fresh")))[0]!.id === pinned[0]!.id);
     const at2 = await f.accessToken(rt);
     check("live switches are back to enabled (global and scoped)", (await f.liveEnabled(at2)) === "enabled");
-    check("autoVideo is off (global and scoped)", (await f.broadcastLife(at2, (await boundPair(f, at2)).broadcastId)) === "ready");
+    check("autoVideo is off (global and scoped)", ((await f.broadcastLife(at2, (await boundPair(f, at2)).broadcastId)).life) === "ready");
     check("a state from before is unknown, so what was bound to it is gone", (() => { try { f.issueCode("state-bound"); return false; } catch (e) { return e instanceof YouTubeError; } })());
     check("the same state string authorized again carries neither the scope nor the channels bound before", await (async () => {
       f.authorizeUrl({ state: "state-bound", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
@@ -871,7 +1029,7 @@ describe("OAuth exchange realism (PKCE, redirect, single use, granted scope)", (
     expect((await grant(f)).refreshToken, "two grants are two tokens").not.toBe(g.refreshToken);
   });
 
-  it("every refusal is invalid_grant (youtube_reconnect_needed): wrong verifier, another redirect URI, unknown code, empty code, empty verifier, replayed code", async () => {
+  it("refusals follow the live driver: a wrong or empty verifier, an unknown, empty or replayed code are invalid_grant (reconnect_needed); ANOTHER redirect URI is redirect_uri_mismatch (unavailable)", async () => {
     const f = new FakeYouTube();
     const issue = () => {
       const state = `s-${++stateSeq}`;
@@ -880,24 +1038,29 @@ describe("OAuth exchange realism (PKCE, redirect, single use, granted scope)", (
     };
     const used = issue();
     await f.exchangeCode({ code: used, codeVerifier: VERIFIER, redirectUri: REDIRECT });
-    const rows: [string, { code: string; codeVerifier: string; redirectUri: string }][] = [
-      ["a verifier whose S256 is not the challenge", { code: issue(), codeVerifier: `${VERIFIER}x`, redirectUri: REDIRECT }],
-      ["another verifier of the right length", { code: issue(), codeVerifier: "a".repeat(43), redirectUri: REDIRECT }],
-      ["a different redirect URI", { code: issue(), codeVerifier: VERIFIER, redirectUri: "https://evil.example.test/callback" }],
-      ["the same origin, another path", { code: issue(), codeVerifier: VERIFIER, redirectUri: `${REDIRECT}/` }],
-      ["a code the fake never issued", { code: "fake-code-999999", codeVerifier: VERIFIER, redirectUri: REDIRECT }],
-      ["an empty code", { code: "", codeVerifier: VERIFIER, redirectUri: REDIRECT }],
-      ["an empty verifier", { code: issue(), codeVerifier: "", redirectUri: REDIRECT }],
-      ["a replayed code", { code: used, codeVerifier: VERIFIER, redirectUri: REDIRECT }],
+    const grantRefused = ["youtube_reconnect_needed", "invalidGrant"];
+    // Google's token endpoint: invalid_grant for the code and the verifier; redirect_uri_mismatch is Seazn's own configuration
+    // (google.ts maps it to youtube_unavailable: reconnecting cannot help), so the fake says the same.
+    const mismatch = ["youtube_unavailable", "redirectUriMismatch"];
+    const rows: [string, { code: string; codeVerifier: string; redirectUri: string }, string[]][] = [
+      ["a verifier whose S256 is not the challenge", { code: issue(), codeVerifier: `${VERIFIER}x`, redirectUri: REDIRECT }, grantRefused],
+      ["another verifier of the right length", { code: issue(), codeVerifier: "a".repeat(43), redirectUri: REDIRECT }, grantRefused],
+      ["a different redirect URI", { code: issue(), codeVerifier: VERIFIER, redirectUri: "https://evil.example.test/callback" }, mismatch],
+      ["the same origin, another path", { code: issue(), codeVerifier: VERIFIER, redirectUri: `${REDIRECT}/` }, mismatch],
+      ["a code the fake never issued", { code: "fake-code-999999", codeVerifier: VERIFIER, redirectUri: REDIRECT }, grantRefused],
+      ["an empty code", { code: "", codeVerifier: VERIFIER, redirectUri: REDIRECT }, grantRefused],
+      ["an empty verifier", { code: issue(), codeVerifier: "", redirectUri: REDIRECT }, grantRefused],
+      ["a replayed code", { code: used, codeVerifier: VERIFIER, redirectUri: REDIRECT }, grantRefused],
+      ["a replayed code from another redirect URI (the code is checked first)", { code: used, codeVerifier: VERIFIER, redirectUri: "https://evil.example.test/callback" }, grantRefused],
     ];
     let checked = 0;
-    for (const [name, args] of rows) {
+    for (const [name, args, want] of rows) {
       const err = await rejection(f.exchangeCode(args));
       expect(err, name).toBeInstanceOf(YouTubeError);
-      expect([(err as YouTubeError).code, (err as YouTubeError).reason], name).toEqual(["youtube_reconnect_needed", "invalidGrant"]);
+      expect([(err as YouTubeError).code, (err as YouTubeError).reason], name).toEqual(want);
       checked++;
     }
-    expect(checked, "all refusals exercised").toBe(8);
+    expect(checked, "all refusals exercised").toBe(9);
   });
 
   it("an EMPTY verifier is refused even when the recorded challenge is the S256 of the empty string (no real verifier is empty)", async () => {
@@ -965,39 +1128,63 @@ describe("OAuth exchange realism (PKCE, redirect, single use, granted scope)", (
     expect(() => f.setGrantedScope(readonly, "never-authorized"), "an unknown state").toThrow(YouTubeError);
   });
 
-  it("the Google subject is bound to ONE state: null makes that grant's googleSub null (T18's no-sub branch), a string gives grants the SAME account, and it is spent by one grant", async () => {
+  it("the Google subject is DISTINCT per grant by default; null and a string are state-bound overrides, each spent by one grant", async () => {
     const f = new FakeYouTube();
-    const dflt = (await grant(f)).googleSub;
-    expect(dflt, "PREMISE: an unset grant reports a subject").toEqual(expect.any(String));
-    expect((await grant(f, { before: (state) => f.setGoogleSub(null, state) })).googleSub, "null: no subject").toBeNull();
-    expect((await grant(f)).googleSub, "the next connect is back to the default: the control was spent").toBe(dflt);
-    // The SAME account on two connections (an admin of two clubs): both report it, and neither is the default.
-    const a = await grant(f, { before: (state) => f.setGoogleSub("acct-777", state) });
-    const b = await grant(f, { before: (state) => f.setGoogleSub("acct-777", state) });
-    expect([a.googleSub, b.googleSub]).toEqual(["acct-777", "acct-777"]);
-    expect(a.refreshToken, "two grants, one account").not.toBe(b.refreshToken);
-    expect((await grant(f)).googleSub, "and a third, unset, is not that account").toBe(dflt);
+    const [a, b] = [await grant(f), await grant(f)];
+    expect(a.googleSub, "PREMISE: an unset grant reports a subject").toEqual(expect.any(String));
+    expect(b.googleSub).toEqual(expect.any(String));
+    expect(a.googleSub, "two connections are two Google accounts").not.toBe(b.googleSub);
+    expect((await grant(f, { before: (state) => f.setGoogleSub(null, state) })).googleSub, "null: no subject (T18's no-sub branch)").toBeNull();
+    const after = (await grant(f)).googleSub;
+    expect(after, "the next connect derives a subject again: the control was spent").toEqual(expect.any(String));
+    expect([a.googleSub, b.googleSub], "and it is a new account").not.toContain(after);
+    // The SAME account on two connections (an admin of two clubs): both report it, and neither is a derived one.
+    const x = await grant(f, { before: (state) => f.setGoogleSub("acct-777", state) });
+    const y = await grant(f, { before: (state) => f.setGoogleSub("acct-777", state) });
+    expect([x.googleSub, y.googleSub]).toEqual(["acct-777", "acct-777"]);
+    expect(x.refreshToken, "two grants, one account").not.toBe(y.refreshToken);
+    const third = (await grant(f)).googleSub;
+    expect(third, "a third, unset, is not that account").toEqual(expect.any(String));
+    expect(third).not.toBe("acct-777");
     // A code issued BEFORE the control keeps the subject it was issued with; another state is never touched.
     f.authorizeUrl({ state: "s-early", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
     f.authorizeUrl({ state: "s-other", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
     const early = f.issueCode("s-early");
     f.setGoogleSub(null, "s-early");
-    expect((await f.exchangeCode({ code: early, codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub).toBe(dflt);
-    expect((await f.exchangeCode({ code: f.issueCode("s-other"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub, "another state is untouched").toBe(dflt);
+    expect((await f.exchangeCode({ code: early, codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub, "issued before: keeps a derived subject").toEqual(expect.any(String));
+    expect((await f.exchangeCode({ code: f.issueCode("s-other"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub, "another state is untouched").toEqual(expect.any(String));
     expect((await f.exchangeCode({ code: f.issueCode("s-early"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub, "its next code carries it").toBeNull();
-    expect((await f.exchangeCode({ code: f.issueCode("s-early"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub, "and only that one: it was spent").toBe(dflt);
+    expect((await f.exchangeCode({ code: f.issueCode("s-early"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub, "and only that one: it was spent").toEqual(expect.any(String));
     expect(() => f.setGoogleSub(null, "never-authorized"), "an unknown state").toThrow(YouTubeError);
   });
 
-  it("a reset drops a subject bound to a state (the state is unknown afterwards, and the same string authorized again is the default)", async () => {
+  it("a reconnect pinned to a handle's channel is the SAME account: it carries that grant's subject (derived, a string, or null); setGoogleSub on the state overrides it, in either order", async () => {
     const f = new FakeYouTube();
-    const dflt = (await grant(f)).googleSub;
+    const reconnect = (handle: string, also?: (state: string) => void) => grant(f, { before: (state) => { f.pinChannelsTo(handle, state); also?.(state); } });
+    const first = await grant(f);
+    const h1 = f.tokenHandle(first.refreshToken);
+    expect((await reconnect(h1)).googleSub, "derived: the same one").toBe(first.googleSub);
+    expect((await grant(f)).googleSub, "while an unpinned connect is another account").not.toBe(first.googleSub);
+    const named = await grant(f, { before: (state) => f.setGoogleSub("acct-9", state) });
+    expect((await reconnect(f.tokenHandle(named.refreshToken))).googleSub, "an overridden subject is carried").toBe("acct-9");
+    const none = await grant(f, { before: (state) => f.setGoogleSub(null, state) });
+    expect((await reconnect(f.tokenHandle(none.refreshToken))).googleSub, "so is 'no subject'").toBeNull();
+    // the override beats the pin, called before or after it
+    expect((await reconnect(h1, (state) => f.setGoogleSub("override-after", state))).googleSub).toBe("override-after");
+    expect((await reconnect(h1, (state) => f.setGoogleSub(null, state))).googleSub, "null overrides too").toBeNull();
+    const early = await grant(f, { before: (state) => { f.setGoogleSub("override-before", state); f.pinChannelsTo(h1, state); } });
+    expect(early.googleSub, "set BEFORE the pin: still wins").toBe("override-before");
+    expect(f.channelOf(early.refreshToken), "and the pin's channel still applies").toBe(f.channelOf(first.refreshToken));
+  });
+
+  it("a reset drops a subject bound to a state (the state is unknown afterwards, and the same string authorized again derives its own)", async () => {
+    const f = new FakeYouTube();
     f.authorizeUrl({ state: "st-reset-sub", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
     f.setGoogleSub(null, "st-reset-sub");
     f.reset();
     expect(() => f.issueCode("st-reset-sub")).toThrow(YouTubeError);
     f.authorizeUrl({ state: "st-reset-sub", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
-    expect((await f.exchangeCode({ code: f.issueCode("st-reset-sub"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub).toBe(dflt);
+    expect((await f.exchangeCode({ code: f.issueCode("st-reset-sub"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub).toEqual(expect.any(String));
   });
 });
 
@@ -1091,7 +1278,7 @@ describe("id-free counts and a revoked broadcast (for T10 / T14)", () => {
     f.videoOn(streamId);
     expect(f.liveBroadcastCount()).toBe(1);
     f.revokeBroadcast(broadcastId);
-    expect(await f.broadcastLife(at, broadcastId)).toBe("revoked");
+    expect((await f.broadcastLife(at, broadcastId)).life).toBe("revoked");
     expect(f.liveBroadcastCount(), "frees the live slot").toBe(0);
     expect(f.boundOpenCount(streamId), "frees the key slot").toBe(0);
     expect(((await rejection(f.complete(at, broadcastId))) as YouTubeError).reason, "a revoked broadcast cannot be completed").toBe("invalidTransition");
@@ -1137,5 +1324,110 @@ describe("access tokens expire after 3600 s of the injected clock", () => {
       checked++;
     }
     expect(checked, "the ten at-taking methods").toBe(10);
+  });
+});
+
+// T17 prep (health and refresh sweeps): the sweep's spec writes a SEALED refresh token into its own database, so the fake must
+// be told which channel and which Google account that token is — and then rename the channel, or take it away, on demand.
+describe("seedGrant, renameChannel and removeChannel", () => {
+  const listed = async (f: FakeYouTube, rt: string) => f.listMyChannels(await f.accessToken(rt));
+
+  it("seedGrant makes the grant behind a token the test minted: its channel and title are what listMyChannels says, and the token works", async () => {
+    const f = new FakeYouTube();
+    f.seedGrant({ refreshToken: "1//seeded-one", channelId: "UCseededChannelAAAAAAAAA", channelTitle: "Seeded Club" });
+    expect(await listed(f, "1//seeded-one")).toEqual([{ id: "UCseededChannelAAAAAAAAA", title: "Seeded Club" }]);
+    expect(f.channelOf("1//seeded-one")).toBe("UCseededChannelAAAAAAAAA");
+    const at = await f.accessToken("1//seeded-one");
+    const { broadcastId } = await f.insertBroadcast(at, bcast());
+    expect(f.inspectBroadcast(broadcastId)?.channelId, "what it makes belongs to the seeded channel").toBe("UCseededChannelAAAAAAAAA");
+    // twin: an unseeded 1// token still gets a channel of its own, not the seeded one
+    expect((await listed(f, "1//never-seeded"))[0]!.id).not.toBe("UCseededChannelAAAAAAAAA");
+  });
+
+  it("seedGrant refuses a shape Google never issues, a missing channel, and a token that already has a grant — and a refused seed changes nothing", async () => {
+    const f = new FakeYouTube();
+    const good = { refreshToken: "1//ok-seed", channelId: "UCokChannelAAAAAAAAAAAAA", channelTitle: "OK" };
+    const refused: [string, Parameters<FakeYouTube["seedGrant"]>[0]][] = [
+      ["no 1// prefix", { ...good, refreshToken: "rt-plain" }],
+      ["only the prefix", { ...good, refreshToken: "1//" }],
+      ["empty token", { ...good, refreshToken: "" }],
+      ["empty channel id", { ...good, channelId: "" }],
+      ["empty title", { ...good, channelTitle: "" }],
+    ];
+    let checked = 0;
+    for (const [name, args] of refused) {
+      expect(() => f.seedGrant(args), name).toThrow();
+      checked++;
+    }
+    expect(checked, "five refusals").toBe(5);
+    expect(f.calls, "refused seeds are not port calls").toHaveLength(0);
+    await expect(listed(f, "1//plain-after"), "and nothing was created by them").resolves.toHaveLength(1);
+
+    f.seedGrant(good);
+    expect(() => f.seedGrant({ ...good, channelId: "UCotherChannelAAAAAAAAAA" }), "a second seed of the same token").toThrow(/already has a grant/);
+    expect((await listed(f, "1//ok-seed"))[0]!.id, "the first grant stands").toBe("UCokChannelAAAAAAAAAAAAA");
+    // a token the fake already saw (lazily seeded by a use) is also a token with a grant
+    await listed(f, "1//used-first");
+    expect(() => f.seedGrant({ ...good, refreshToken: "1//used-first" })).toThrow(/already has a grant/);
+  });
+
+  it("seedGrant's account: omitted sub is distinct per seed, a shared sub is ONE account (revoke kills both), null has none (nothing matches it)", async () => {
+    const f = new FakeYouTube();
+    const seed = (rt: string, channelId: string, sub?: string | null) =>
+      f.seedGrant({ refreshToken: rt, channelId, channelTitle: "C", ...(sub === undefined ? {} : { sub }) });
+    const dead = isDead(f);
+    seed("1//d1", "UCderivedAAAAAAAAAAAAAAA"); seed("1//d2", "UCderivedBBBBBBBBBBBBBBB");
+    seed("1//s1", "UCsharedAAAAAAAAAAAAAAAA", "acct-shared"); seed("1//s2", "UCsharedBBBBBBBBBBBBBBBB", "acct-shared");
+    seed("1//n1", "UCnoneAAAAAAAAAAAAAAAAAA", null); seed("1//n2", "UCnoneBBBBBBBBBBBBBBBBBB", null);
+    await f.revoke("1//d1");
+    expect([await dead("1//d1"), await dead("1//d2")], "two derived subjects are two accounts").toEqual([true, false]);
+    await f.revoke("1//s1");
+    expect([await dead("1//s1"), await dead("1//s2")], "one named subject is one account").toEqual([true, true]);
+    await f.revoke("1//n1");
+    expect([await dead("1//n1"), await dead("1//n2")], "null is no account").toEqual([true, false]);
+  });
+
+  it("two seeds may name ONE channel (a reconnect): they share it, and a rename reaches both", async () => {
+    const f = new FakeYouTube();
+    f.seedGrant({ refreshToken: "1//rc-old", channelId: "UCreconnectedAAAAAAAAAA", channelTitle: "Before" });
+    f.seedGrant({ refreshToken: "1//rc-new", channelId: "UCreconnectedAAAAAAAAAA", channelTitle: "Before" });
+    f.renameChannel("UCreconnectedAAAAAAAAAA", "After");
+    expect([(await listed(f, "1//rc-old"))[0]!.title, (await listed(f, "1//rc-new"))[0]!.title]).toEqual(["After", "After"]);
+    f.renameChannel("UCreconnectedAAAAAAAAAA", "After again");
+    expect((await listed(f, "1//rc-new"))[0], "the id never moves; the latest rename wins").toEqual({ id: "UCreconnectedAAAAAAAAAA", title: "After again" });
+  });
+
+  it("renameChannel moves only the channel it names, also for a grant that came through OAuth, and refuses an id nobody lists", async () => {
+    const f = new FakeYouTube();
+    f.seedGrant({ refreshToken: "1//r1", channelId: "UCrenameOneAAAAAAAAAAAA", channelTitle: "One" });
+    f.seedGrant({ refreshToken: "1//r2", channelId: "UCrenameTwoAAAAAAAAAAAA", channelTitle: "Two" });
+    const oauth = await grant(f, { before: (state) => f.setChannels([{ id: "UCoauthChannelAAAAAAAAAA", title: "Via OAuth" }], state) });
+    f.renameChannel("UCoauthChannelAAAAAAAAAA", "Renamed OAuth");
+    expect((await listed(f, oauth.refreshToken))[0]!.title).toBe("Renamed OAuth");
+    expect((await listed(f, "1//r1"))[0]!.title, "another channel untouched").toBe("One");
+    expect((await listed(f, "1//r2"))[0]!.title).toBe("Two");
+    for (const id of ["UCnobodyListsThisAAAAAAA", ""]) {
+      const err = await rejection(async () => f.renameChannel(id, "X"));
+      expect(err, id).toBeInstanceOf(YouTubeError);
+      expect([(err as YouTubeError).code, (err as YouTubeError).reason]).toEqual(["youtube_not_found", "unknownChannel"]);
+    }
+  });
+
+  it("removeChannel takes the channel out of every grant that listed it: a one-channel grant becomes the no-channel account, the rest are untouched, a second remove is refused", async () => {
+    const f = new FakeYouTube();
+    f.seedGrant({ refreshToken: "1//x1", channelId: "UCgoneAAAAAAAAAAAAAAAAA", channelTitle: "Gone" });
+    f.seedGrant({ refreshToken: "1//x2", channelId: "UCgoneAAAAAAAAAAAAAAAAA", channelTitle: "Gone" });
+    f.seedGrant({ refreshToken: "1//x3", channelId: "UCstaysAAAAAAAAAAAAAAAA", channelTitle: "Stays" });
+    const at = await f.accessToken("1//x1");
+    const { broadcastId } = await f.insertBroadcast(at, bcast());   // PREMISE: it could create before the removal
+    f.removeChannel("UCgoneAAAAAAAAAAAAAAAAA");
+    expect(await listed(f, "1//x1")).toEqual([]);
+    expect(await listed(f, "1//x2"), "every grant that listed it").toEqual([]);
+    expect(await listed(f, "1//x3")).toEqual([{ id: "UCstaysAAAAAAAAAAAAAAAA", title: "Stays" }]);
+    const err = await rejection(f.insertStream(await f.accessToken("1//x1"), { title: "k" }));
+    expect([(err as YouTubeError).code, (err as YouTubeError).reason], "the account is the no-channel one now").toEqual(["youtube_unavailable", "youtubeSignupRequired"]);
+    expect(f.inspectBroadcast(broadcastId), "what it already made is untouched").not.toBeNull();
+    const again = await rejection(async () => f.removeChannel("UCgoneAAAAAAAAAAAAAAAAA"));
+    expect((again as YouTubeError).reason, "removing it twice is a typo, not a no-op").toBe("unknownChannel");
   });
 });

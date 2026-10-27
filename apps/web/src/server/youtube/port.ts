@@ -53,6 +53,16 @@ export class YouTubeError extends Error {
  *  does not know (deleted, or never there). */
 export type BroadcastLife = "created" | "ready" | "testing" | "live" | "complete" | "revoked" | "absent";
 
+/** What YouTube says about a broadcast: its place in the life cycle, and the instants it ACTUALLY started and ended (liveBroadcasts
+ *  `snippet.actualStartTime` — "only available once the broadcast's state is live" — and `snippet.actualEndTime` — "only
+ *  available once ... complete"; developers.google.com/youtube/v3/live/docs/liveBroadcasts). `null` while YouTube has not said, and
+ *  for `absent`. The end step stores them as `actual_start_at` / `actual_end_at` (spec §0 D15). */
+export interface BroadcastLifeInfo {
+  life: BroadcastLife;
+  actualStartAt: Date | null;
+  actualEndAt: Date | null;
+}
+
 export interface YouTubePort {
   readonly mode: "fake" | "live";
   authorizeUrl(a: { state: string; codeChallenge: string; redirectUri: string }): string;
@@ -69,7 +79,7 @@ export interface YouTubePort {
     a: { title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy; madeForKids: boolean },
   ): Promise<{ broadcastId: string }>;
   bind(at: string, broadcastId: string, streamId: string): Promise<void>;
-  broadcastLife(at: string, broadcastId: string): Promise<BroadcastLife>;
+  broadcastLife(at: string, broadcastId: string): Promise<BroadcastLifeInfo>;
   /** A broadcast that is already complete resolves. */
   complete(at: string, broadcastId: string): Promise<void>;
   /** A broadcast that is already absent resolves. */

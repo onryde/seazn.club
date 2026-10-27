@@ -378,7 +378,7 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
     }
   });
 
-  it("broadcastLife: GET liveBroadcasts?part=status&id=…; reads status.lifeCycleStatus; no item at all is 'absent'", async () => {
+  it("broadcastLife: GET liveBroadcasts?part=status,snippet&id=…; reads status.lifeCycleStatus; no item at all is 'absent'", async () => {
     // Google's lifeCycleStatus values: created, ready, testStarting, testing, liveStarting, live, complete, revoked.
     const rows: [string, string][] = [
       ["created", "created"], ["ready", "ready"], ["testStarting", "testing"], ["testing", "testing"],
@@ -388,16 +388,16 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
     for (const [google, want] of rows) {
       sent = [];
       handler = () => res(200, { items: [{ id: "bc1", status: { lifeCycleStatus: google } }] });
-      expect(await driver().broadcastLife(AT, "bc1"), google).toBe(want);
+      expect((await driver().broadcastLife(AT, "bc1")).life, google).toBe(want);
       const u = new URL(sent[0]!.url);
-      expect([sent[0]!.method, u.pathname, u.searchParams.get("part"), u.searchParams.get("id")]).toEqual(["GET", "/youtube/v3/liveBroadcasts", "status", "bc1"]);
+      expect([sent[0]!.method, u.pathname, u.searchParams.get("part"), u.searchParams.get("id")]).toEqual(["GET", "/youtube/v3/liveBroadcasts", "status,snippet", "bc1"]);
       checked++;
     }
     expect(checked).toBe(rows.length);
     handler = () => res(200, { items: [] });
-    expect(await driver().broadcastLife(AT, "bc1"), "empty items").toBe("absent");
+    expect((await driver().broadcastLife(AT, "bc1")).life, "empty items").toBe("absent");
     handler = () => res(200, { kind: "youtube#liveBroadcastListResponse" });
-    expect(await driver().broadcastLife(AT, "bc1"), "no items key").toBe("absent");
+    expect((await driver().broadcastLife(AT, "bc1")).life, "no items key").toBe("absent");
   });
 
   it("broadcastLife: a status Google never documented is refused (youtube_unavailable / unknownLifeCycleStatus), not guessed", async () => {
@@ -486,6 +486,94 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
   });
 });
 
+// D15 (youtube_broadcasts.actual_start_at / actual_end_at): liveBroadcasts `snippet.actualStartTime` is set once the broadcast is
+// live and `actualEndTime` once it is complete, both ISO 8601 (https://developers.google.com/youtube/v3/live/docs/liveBroadcasts),
+// so `broadcastLife` asks for `snippet` as well and reads them. Wire strings are typed here from that page.
+describe("broadcastLife reports the actual start and end (B2 fix I4)", () => {
+  const item = (lifeCycleStatus: string, snippet?: Record<string, unknown>) => ({ id: "bc1", status: { lifeCycleStatus }, ...(snippet ? { snippet } : {}) });
+
+  it("reads snippet.actualStartTime and actualEndTime as instants: live has a start and no end; complete has both; created, ready and revoked have neither", async () => {
+    const rows: [string, ReturnType<typeof item>, { life: string; start: string | null; end: string | null }][] = [
+      ["created", item("created", { title: "t" }), { life: "created", start: null, end: null }],
+      ["ready", item("ready", { title: "t", scheduledStartTime: "2026-10-27T12:00:00.000Z" }), { life: "ready", start: null, end: null }],
+      ["testing", item("testing", { title: "t" }), { life: "testing", start: null, end: null }],
+      ["live", item("live", { actualStartTime: "2026-10-27T12:05:00.000Z" }), { life: "live", start: "2026-10-27T12:05:00.000Z", end: null }],
+      ["liveStarting", item("liveStarting", { actualStartTime: "2026-10-27T12:05:00Z" }), { life: "live", start: "2026-10-27T12:05:00.000Z", end: null }],
+      ["complete", item("complete", { actualStartTime: "2026-10-27T12:05:00.000Z", actualEndTime: "2026-10-27T12:50:30.250Z" }), { life: "complete", start: "2026-10-27T12:05:00.000Z", end: "2026-10-27T12:50:30.250Z" }],
+      ["revoked, never live", item("revoked", {}), { life: "revoked", start: null, end: null }],
+      ["no snippet at all", item("live"), { life: "live", start: null, end: null }],
+    ];
+    let checked = 0;
+    for (const [name, wire, want] of rows) {
+      handler = () => res(200, { items: [wire] });
+      const got = await driver().broadcastLife(AT, "bc1");
+      expect([name, got.life, got.actualStartAt?.toISOString() ?? null, got.actualEndAt?.toISOString() ?? null]).toEqual([name, want.life, want.start, want.end]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every row read").toBe(rows.length);
+    handler = () => res(200, { items: [] });
+    expect(await driver().broadcastLife(AT, "bc1"), "absent: no instants").toEqual({ life: "absent", actualStartAt: null, actualEndAt: null });
+  });
+
+  it("an instant Google sends in a shape it should not (a bad string, a number, null, an empty string) is NULL, and the life is still read — the end step must not stop on it", async () => {
+    const bad: unknown[] = ["not-a-date", "", 1_798_000_000_000, null, { iso: "2026-10-27T12:05:00Z" }, "2026-13-45T99:99:99Z", "yesterday"];
+    let checked = 0;
+    for (const v of bad) {
+      handler = () => res(200, { items: [item("complete", { actualStartTime: v, actualEndTime: v })] });
+      const got = await driver().broadcastLife(AT, "bc1");
+      expect([JSON.stringify(v), got.life, got.actualStartAt, got.actualEndAt]).toEqual([JSON.stringify(v), "complete", null, null]);
+      checked++;
+    }
+    expect(checked).toBe(bad.length);
+    // the positive pair: a good instant beside a bad one is kept, so the null above is the parse and not a blanket drop
+    handler = () => res(200, { items: [item("complete", { actualStartTime: "2026-10-27T12:05:00.000Z", actualEndTime: "garbage" })] });
+    const half = await driver().broadcastLife(AT, "bc1");
+    expect([half.actualStartAt?.toISOString(), half.actualEndAt]).toEqual(["2026-10-27T12:05:00.000Z", null]);
+  });
+
+  it("a status Google never documented is still refused even when the snippet carries instants", async () => {
+    handler = () => res(200, { items: [item("mystery", { actualStartTime: "2026-10-27T12:05:00Z" })] });
+    const err = (await rejection(driver().broadcastLife(AT, "bc1"))) as YouTubeError;
+    expect([err.code, err.reason]).toEqual(["youtube_unavailable", "unknownLifeCycleStatus"]);
+  });
+
+  it("agrees with the fake: the same broadcast, at the same moments, reads as the same {life, actualStartAt, actualEndAt} through both drivers", async () => {
+    let t = new Date("2026-10-27T12:00:00Z").getTime();
+    const fake = new FakeYouTube({ now: () => new Date(t) });
+    const at = await fake.accessToken("1//parity");
+    const { streamId } = await fake.insertStream(at, { title: "k" });
+    const { broadcastId } = await fake.insertBroadcast(at, { title: "t", description: "", scheduledStart: new Date(t), privacy: "unlisted", madeForKids: false });
+    // What YouTube would put on the wire for the fake's own state, written from the docs: the status, and the two instants once they exist.
+    const wireOf = (): ReturnType<typeof item> => {
+      const v = fake.inspectBroadcast(broadcastId)!;
+      return {
+        ...item(v.life, {
+          ...(v.actualStartAt ? { actualStartTime: v.actualStartAt.toISOString() } : {}),
+          ...(v.actualEndAt ? { actualEndTime: v.actualEndAt.toISOString() } : {}),
+        }),
+        id: broadcastId,
+      };
+    };
+    const compare = async (name: string, want: { life: string; start: string | null; end: string | null }) => {
+      const viaFake = await fake.broadcastLife(at, broadcastId);
+      handler = () => res(200, { items: [wireOf()] });
+      const viaGoogle = await driver().broadcastLife(AT, broadcastId);
+      expect(viaGoogle, `${name}: driver = fake`).toEqual(viaFake);
+      // and both are the TYPED expectation, so two agreeing wrong answers cannot pass
+      expect([name, viaFake.life, viaFake.actualStartAt?.toISOString() ?? null, viaFake.actualEndAt?.toISOString() ?? null]).toEqual([name, want.life, want.start, want.end]);
+    };
+    await compare("created", { life: "created", start: null, end: null });
+    await fake.bind(at, broadcastId, streamId);
+    await compare("ready", { life: "ready", start: null, end: null });
+    t += 5 * 60_000; fake.videoOn(streamId);
+    t += 4 * 60_000;
+    await compare("live", { life: "live", start: "2026-10-27T12:05:00.000Z", end: null });
+    t += 41 * 60_000; await fake.complete(at, broadcastId);
+    t += 5 * 60_000;
+    await compare("complete", { life: "complete", start: "2026-10-27T12:05:00.000Z", end: "2026-10-27T12:50:00.000Z" });
+  });
+});
+
 describe("existingVideos and Google's 404 videoNotFound (fix round 1, I1)", () => {
   const idOf = (req: Sent): string => new URL(req.url).searchParams.get("id") ?? "";
 
@@ -496,6 +584,36 @@ describe("existingVideos and Google's 404 videoNotFound (fix round 1, I1)", () =
     // The positive pair: a 404 with some other reason is NOT 'missing'; it is thrown.
     handler = () => apiError(404, "somethingNew");
     expect(((await rejection(driver().existingVideos(AT, ["aaa"]))) as YouTubeError).code).toBe("youtube_unavailable");
+  });
+
+  it("only `videoNotFound` is 'missing': a 404 with ANOTHER reason (liveBroadcastNotFound and liveStreamNotFound map to youtube_not_found; channelNotFound is unmapped) is thrown as it maps, on a batch (not split) and on a single id", async () => {
+    // The old guard (`code === youtube_not_found`) forgave liveBroadcastNotFound and liveStreamNotFound too, so a wrong-resource 404
+    // would have read as "the video was deleted" and purged a live link. Expected codes: the spec's table (§6.2), typed here.
+    const others: [string, string][] = [
+      ["liveBroadcastNotFound", "youtube_not_found"], ["liveStreamNotFound", "youtube_not_found"], ["channelNotFound", "youtube_unavailable"],
+    ];
+    let checked = 0;
+    for (const [reason, code] of others) {
+      sent = [];
+      handler = () => apiError(404, reason);
+      const batch = (await rejection(driver().existingVideos(AT, ["aaa", "bbb"]))) as YouTubeError;
+      expect([reason, batch.code, batch.reason], "thrown with its own mapping").toEqual([reason, code, reason]);
+      expect(sent, `${reason}: not re-asked per id`).toHaveLength(1);
+      sent = [];
+      const single = (await rejection(driver().existingVideos(AT, ["aaa"]))) as YouTubeError;
+      expect([reason, single.reason]).toEqual([reason, reason]);
+      // during the fallback too: the batch says videoNotFound, then one id's own call says something else
+      sent = [];
+      handler = (req) => (idOf(req).includes(",") ? apiError(404, "videoNotFound") : idOf(req) === "bbb" ? apiError(404, reason) : res(200, { items: [{ id: idOf(req) }] }));
+      const mid = (await rejection(driver().existingVideos(AT, ["aaa", "bbb", "ccc"]))) as YouTubeError;
+      expect([reason, mid.code, mid.reason]).toEqual([reason, code, reason]);
+      expect(sent.map(idOf), "stops at the id whose call failed").toEqual(["aaa,bbb,ccc", "aaa", "bbb"]);
+      checked++;
+    }
+    expect(checked).toBe(others.length);
+    // the positive pair: videoNotFound itself is forgiven (an empty set), so the throw above is the reason and not the 404
+    handler = () => apiError(404, "videoNotFound");
+    expect([...(await driver().existingVideos(AT, ["aaa"]))]).toEqual([]);
   });
 
   it("a 404 on a BATCH is never read as 'all missing': it is re-asked one id per call, and only the id whose own call is a 404 is absent", async () => {
@@ -557,10 +675,10 @@ describe("existingVideos and Google's 404 videoNotFound (fix round 1, I1)", () =
 describe("guards that need their own killing test (fix round 1, Mb)", () => {
   it("broadcastLife answers only for the broadcast it was asked about: an item with another id is 'absent', not that item's life", async () => {
     handler = () => res(200, { items: [{ id: "someone-elses-broadcast", status: { lifeCycleStatus: "live" } }] });
-    expect(await driver().broadcastLife(AT, "bc1")).toBe("absent");
+    expect((await driver().broadcastLife(AT, "bc1")).life).toBe("absent");
     // the positive pair: the same body with the asked id IS read
     handler = () => res(200, { items: [{ id: "someone-elses-broadcast", status: { lifeCycleStatus: "complete" } }, { id: "bc1", status: { lifeCycleStatus: "live" } }] });
-    expect(await driver().broadcastLife(AT, "bc1"), "the matching item among others").toBe("live");
+    expect((await driver().broadcastLife(AT, "bc1")).life, "the matching item among others").toBe("live");
   });
 
   it("insertStream needs all three of the stream id, the ingestion address and the stream name: each one missing alone is malformedResponse", async () => {
@@ -627,6 +745,24 @@ describe("refusal order agrees with the fake (fix round 1, Mc: the fake follows 
     expect(sent, "nor did the driver").toHaveLength(0);
     // the positive pair: a non-empty list DOES check the token, in the fake
     await expect(fake.existingVideos("not-an-access-token", ["aaa"])).rejects.toBeInstanceOf(YouTubeError);
+  });
+
+  it("a redirect URI that is not the one authorized is youtube_unavailable / redirectUriMismatch in BOTH (Seazn's own configuration: reconnecting cannot help); a bad code or verifier stays invalid_grant (reconnect_needed)", async () => {
+    const fake = new FakeYouTube();
+    const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";   // RFC 7636 appendix B
+    const challenge = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+    const issue = (state: string) => { fake.authorizeUrl({ state, codeChallenge: challenge, redirectUri: REDIRECT }); return fake.issueCode(state); };
+    const viaFake = (await rejection(fake.exchangeCode({ code: issue("st-redirect"), codeVerifier: verifier, redirectUri: `${REDIRECT}/elsewhere` }))) as YouTubeError;
+    handler = () => oauthError(400, "redirect_uri_mismatch", "Bad Request");
+    const viaGoogle = (await rejection(driver().exchangeCode({ code: CODE, codeVerifier: VERIFIER, redirectUri: `${REDIRECT}/elsewhere` }))) as YouTubeError;
+    expect([viaFake.code, viaFake.reason], "typed from the OAuth error table, not from either driver").toEqual(["youtube_unavailable", "redirectUriMismatch"]);
+    expect([viaGoogle.code, viaGoogle.reason], "the driver says the same").toEqual([viaFake.code, viaFake.reason]);
+    // the positive pair: invalid_grant is the other answer, in both
+    const badFake = (await rejection(fake.exchangeCode({ code: issue("st-bad-verifier"), codeVerifier: `${verifier}x`, redirectUri: REDIRECT }))) as YouTubeError;
+    handler = () => oauthError(400, "invalid_grant", "Bad Request");
+    const badGoogle = (await rejection(driver().exchangeCode({ code: CODE, codeVerifier: VERIFIER, redirectUri: REDIRECT }))) as YouTubeError;
+    expect([badFake.code, badFake.reason]).toEqual(["youtube_reconnect_needed", "invalidGrant"]);
+    expect([badGoogle.code, badGoogle.reason]).toEqual([badFake.code, badFake.reason]);
   });
 
   it("a bad title is refused as invalidTitle BEFORE eligibility: on a channel-less account, a not-enabled channel and a blocked channel, alike in the fake and the driver", async () => {

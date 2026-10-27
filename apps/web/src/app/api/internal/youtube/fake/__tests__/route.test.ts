@@ -108,11 +108,11 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     const { streamId } = await fake.insertStream(at, { title: "k" });
     const { broadcastId } = await fake.insertBroadcast(at, bcast());
     await fake.bind(at, broadcastId, streamId);
-    expect(await fake.broadcastLife(at, broadcastId), "autoVideo on: the bind left it live").toBe("live");
+    expect((await fake.broadcastLife(at, broadcastId)).life, "autoVideo on: the bind left it live").toBe("live");
     expect((await call({ op: "autoVideo", on: false })).status).toBe(200);
     const second = await fake.insertBroadcast(at, bcast());
     await fake.bind(at, second.broadcastId, streamId);
-    expect(await fake.broadcastLife(at, second.broadcastId), "autoVideo off: back to ready (the key has no video)").toBe("ready");
+    expect((await fake.broadcastLife(at, second.broadcastId)).life, "autoVideo off: back to ready (the key has no video)").toBe("ready");
   });
 
   it("failNext / setLive / autoVideo with a tokenHandle touch only that grant's channel", async () => {
@@ -133,11 +133,11 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     const keyB = await fake.insertStream(atB, { title: "k" });
     await fake.bind(atA, onA.broadcastId, keyA.streamId);
     await fake.bind(atB, onB.broadcastId, keyB.streamId);
-    expect([await fake.broadcastLife(atA, onA.broadcastId), await fake.broadcastLife(atB, onB.broadcastId)]).toEqual(["live", "ready"]);
+    expect([(await fake.broadcastLife(atA, onA.broadcastId)).life, (await fake.broadcastLife(atB, onB.broadcastId)).life]).toEqual(["live", "ready"]);
     expect((await call({ op: "setLive", state: "blocked", tokenHandle: "fake-th-unknown" })).status, "an unknown handle").toBe(404);
   });
 
-  it("pinChannels: the grant of THAT state lands on the handle's channel (an e2e reconnect); the next connect and another state do not", async () => {
+  it("pinChannels: the ONE grant of THAT state lands on the handle's channel and Google account (an e2e reconnect); a state nobody pinned, and a later connect, do not", async () => {
     const fake = theFake();
     const handle = fake.tokenHandle("1//rt-first");
     const connect = async (state: string) => {
@@ -148,12 +148,12 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     expect((await call({ op: "pinChannels", tokenHandle: handle, state: "st-pinned" })).status).toBe(200);
     expect(await connect("st-other"), "a state nobody pinned is a fresh channel").not.toBe(fake.channelOf("1//rt-first"));
     expect(await connect("st-pinned"), "the pinned state shares the first grant's channel").toBe(fake.channelOf("1//rt-first"));
-    expect(await connect("st-after"), "and the pin was spent by that one grant").not.toBe(fake.channelOf("1//rt-first"));
+    expect(await connect("st-after"), "a later connect on another state is a fresh channel again: the pin was spent by its state's one grant").not.toBe(fake.channelOf("1//rt-first"));
     expect((await call({ op: "pinChannels", tokenHandle: "fake-th-unknown", state: "st-after" })).status, "an unknown handle").toBe(404);
     expect((await call({ op: "pinChannels", tokenHandle: handle, state: "never-authorized" })).status, "an unknown state").toBe(404);
   });
 
-  it("issueCode mints a code for an authorized state (the fake authorize hop's job) and grantScope sets the scope the next codes carry", async () => {
+  it("issueCode mints a code for an authorized state (the fake authorize hop's job); grantScope sets the scope of that state's NEXT code only, null clears it", async () => {
     const fake = theFake();
     const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";   // RFC 7636 appendix B
     const redirectUri = "https://app.example.test/api/youtube/connect/callback";
@@ -176,7 +176,7 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     expect((await call({ op: "grantScope", scope: "openid", state: "never-authorized" })).status, "an unknown state").toBe(404);
   });
 
-  it("grantSub sets the Google account subject the grant of ONE state reports: null is the no-sub branch, a string is a shared account, spent by that grant", async () => {
+  it("grantSub sets the Google account subject the grant of ONE state reports: null is the no-sub branch, a string is a shared account, spent by that grant; an untouched grant has its own", async () => {
     const fake = theFake();
     const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";   // RFC 7636 appendix B
     const redirectUri = "https://app.example.test/api/youtube/connect/callback";
@@ -185,15 +185,79 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
       return (await fake.exchangeCode({ code, codeVerifier: verifier, redirectUri })).googleSub;
     };
     for (const st of ["st-sub-a", "st-sub-b", "st-sub-c"]) fake.authorizeUrl({ state: st, codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", redirectUri });
-    const dflt = await exchange("st-sub-c");
-    expect(dflt, "PREMISE: an unset grant reports a subject").toEqual(expect.any(String));
+    const untouched = await exchange("st-sub-c");
+    expect(untouched, "PREMISE: an unset grant reports a subject").toEqual(expect.any(String));
     expect((await call({ op: "grantSub", sub: null, state: "st-sub-a" })).status).toBe(200);
     expect(await exchange("st-sub-a"), "null: the grant reports no subject").toBeNull();
-    expect(await exchange("st-sub-a"), "spent by that one grant").toBe(dflt);
+    const afterNull = await exchange("st-sub-a");
+    expect(afterNull, "spent by that one grant: the next one reports a subject again").toEqual(expect.any(String));
+    expect(afterNull, "and it is its own account, not the untouched one's").not.toBe(untouched);
     expect((await call({ op: "grantSub", sub: "acct-42", state: "st-sub-b" })).status).toBe(200);
     expect(await exchange("st-sub-b"), "a string is the account").toBe("acct-42");
-    expect(await exchange("st-sub-c"), "another state was never touched").toBe(dflt);
+    expect(await exchange("st-sub-b"), "spent: the next is derived, not acct-42").not.toBe("acct-42");
     expect((await call({ op: "grantSub", sub: null, state: "never-authorized" })).status, "an unknown state").toBe(404);
+  });
+
+  // T17 prep: the sweep spec seals its OWN refresh token into its own database; the fake must learn which channel and account it is.
+  it("seedGrant: a token the spec minted gets the channel and title it names, and the op answers {op} and nothing of the request", async () => {
+    const fake = theFake();
+    const body = { op: "seedGrant", refreshToken: "1//spec-minted-token-001", channelId: "UCseedRouteChannelAAAAAA", channelTitle: "Seeded FC" };
+    const res = await call(body);
+    expect(res.status).toBe(200);
+    const text = JSON.stringify(await dataOf(res));
+    expect(JSON.parse(text)).toEqual({ op: "seedGrant" });
+    for (const secret of [body.refreshToken, body.channelId, "Seeded FC"]) expect(text, "nothing of the request comes back").not.toContain(secret);
+    const at = await fake.accessToken(body.refreshToken);
+    expect(await fake.listMyChannels(at)).toEqual([{ id: body.channelId, title: "Seeded FC" }]);
+    // the account: an explicit sub is carried (two seeds with one sub are one account), null has none
+    expect((await call({ ...body, refreshToken: "1//spec-minted-token-002", channelId: "UCseedRouteChannelBBBBBB", sub: "acct-route" })).status).toBe(200);
+    expect((await call({ ...body, refreshToken: "1//spec-minted-token-003", channelId: "UCseedRouteChannelCCCCCC", sub: "acct-route" })).status).toBe(200);
+    expect((await call({ ...body, refreshToken: "1//spec-minted-token-004", channelId: "UCseedRouteChannelDDDDDD", sub: null })).status).toBe(200);
+    await fake.revoke("1//spec-minted-token-002");
+    await expect(fake.accessToken("1//spec-minted-token-003"), "one sub, one account: revoked with its twin").rejects.toMatchObject({ code: "youtube_reconnect_needed" });
+    await expect(fake.accessToken(body.refreshToken), "the derived-sub grant is another account").resolves.toBeDefined();
+    await expect(fake.accessToken("1//spec-minted-token-004"), "and so is the no-sub grant").resolves.toBeDefined();
+  });
+
+  it("seedGrant is refused: a second seed of the same token is 409 and changes nothing; a bad shape (no 1// prefix, just the prefix, empty id or title, extra key) is 400", async () => {
+    const fake = theFake();
+    const good = { op: "seedGrant", refreshToken: "1//spec-minted-token-100", channelId: "UCseedRefusedChannelAAAA", channelTitle: "First" };
+    expect((await call(good)).status).toBe(200);
+    const again = await call({ ...good, channelId: "UCseedRefusedChannelBBBB", channelTitle: "Second" });
+    expect(again.status).toBe(409);
+    expect(JSON.stringify(await again.json()), "the refusal names none of the request").not.toMatch(/spec-minted|UCseedRefused|Second/);
+    expect(await fake.listMyChannels(await fake.accessToken(good.refreshToken)), "the first grant stands").toEqual([{ id: good.channelId, title: "First" }]);
+    const spy = vi.spyOn(fake, "seedGrant");
+    const bad: unknown[] = [
+      { ...good, refreshToken: "rt-no-prefix" },
+      { ...good, refreshToken: "1//" },
+      { ...good, refreshToken: "" },
+      { ...good, refreshToken: 7 },
+      { ...good, channelId: "" },
+      { ...good, channelTitle: "" },
+      { ...good, sub: "" },
+      { ...good, sub: 7 },
+      { ...good, extra: 1 },
+      { op: "seedGrant", channelId: good.channelId, channelTitle: "T" },
+    ];
+    let checked = 0;
+    for (const b of bad) { expect((await call(b)).status, JSON.stringify(b)).toBe(400); checked++; }
+    expect(checked).toBe(bad.length);
+    expect(spy, "a refused body never reaches the fake").not.toHaveBeenCalled();
+  });
+
+  it("seedGrant is behind the same gate as every op: live mode, or stg, is a 404 and seeds nothing", async () => {
+    for (const [driver, envName, nodeEnv] of [["live", "ci", "test"], ["fake", "stg", "production"], ["fake", "prod", "production"]] as const) {
+      vi.stubEnv("YOUTUBE_DRIVER", driver);
+      vi.stubEnv("ENV_NAME", envName);
+      vi.stubEnv("NODE_ENV", nodeEnv);
+      const fake = new FakeYouTube();
+      setYoutubeDriverForTest(fake);
+      const spy = vi.spyOn(fake, "seedGrant");
+      const res = await call({ op: "seedGrant", refreshToken: "1//gate-token", channelId: "UCgateChannelAAAAAAAAAA", channelTitle: "G" });
+      expect(res.status, `${driver}/${envName}`).toBe(404);
+      expect(spy).not.toHaveBeenCalled();
+    }
   });
 
   it("reset clears the fake: a killed token lives again, streams and broadcasts are gone, handles are unknown", async () => {
@@ -237,14 +301,14 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     const { broadcastId } = await fake.insertBroadcast(at, bcast());
     await fake.bind(at, broadcastId, streamId);
     expect((await call({ op: "videoOn", streamId })).status).toBe(200);
-    expect(await fake.broadcastLife(at, broadcastId)).toBe("live");
+    expect((await fake.broadcastLife(at, broadcastId)).life).toBe("live");
     expect((await call({ op: "videoOff", streamId })).status).toBe(200);
-    expect(await fake.broadcastLife(at, broadcastId), "auto-stop is off").toBe("live");
+    expect((await fake.broadcastLife(at, broadcastId)).life, "auto-stop is off").toBe("live");
     expect((await call({ op: "videoOn", streamId: "nope" })).status).toBe(404);
     expect((await call({ op: "videoOff", streamId: "nope" })).status).toBe(404);
     expect((await call({ op: "deleteVideo", videoId: "nope" })).status).toBe(404);
     expect((await call({ op: "deleteVideo", videoId: broadcastId })).status).toBe(200);
-    expect(await fake.broadcastLife(at, broadcastId)).toBe("absent");
+    expect((await fake.broadcastLife(at, broadcastId)).life).toBe("absent");
   });
 
   it("videoOn past the channel's 10 is refused 409 with YouTube's own code, and the fake is unchanged", async () => {
@@ -276,7 +340,7 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
 
   it("a body that is not one of the ops is 400 and changes nothing: unknown op, extra key, wrong type, bad code, bad method, not JSON", async () => {
     const fake = theFake();
-    const spies = [vi.spyOn(fake, "setChannels"), vi.spyOn(fake, "failNext"), vi.spyOn(fake, "killHandle"), vi.spyOn(fake, "videoOn"), vi.spyOn(fake, "reset"), vi.spyOn(fake, "issueCode"), vi.spyOn(fake, "setGrantedScope"), vi.spyOn(fake, "setGoogleSub")];
+    const spies = [vi.spyOn(fake, "setChannels"), vi.spyOn(fake, "failNext"), vi.spyOn(fake, "killHandle"), vi.spyOn(fake, "videoOn"), vi.spyOn(fake, "reset"), vi.spyOn(fake, "issueCode"), vi.spyOn(fake, "setGrantedScope"), vi.spyOn(fake, "setGoogleSub"), vi.spyOn(fake, "seedGrant")];
     const bad: unknown[] = [
       { op: "dropDatabase" },
       {},
@@ -301,6 +365,7 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
       { op: "grantSub", sub: "", state: "st" },
       { op: "grantSub", sub: 7, state: "st" },
       { op: "grantSub", state: "st" },
+      { op: "seedGrant", refreshToken: "rt-no-prefix", channelId: "UCx", channelTitle: "X" },
       { op: "issueCode" },
       { op: "pinChannels" },
       { op: "setLive", state: "blocked", tokenHandle: 7 },
@@ -333,6 +398,7 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
       issueCode: { op: "issueCode", state: "st-sweep" },
       grantScope: { op: "grantScope", scope: null, state: "st-sweep" },
       grantSub: { op: "grantSub", sub: null, state: "st-sweep" },
+      seedGrant: { op: "seedGrant", refreshToken: "1//rt-for-seed", channelId: "UCsweepSeedAAAAAAAAAAAA", channelTitle: "Sweep" },
       reset: { op: "reset" },   // last: it clears what the rest set up
     };
     let checked = 0;
@@ -340,14 +406,18 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
       expect((await call(body)).status, op).toBe(200);
       checked++;
     }
-    expect(checked, "13 ops here; the 14th, `state`, has its own DB-backed suite").toBe(13);
+    expect(checked, "14 ops here; the 15th, `state`, has its own DB-backed suite").toBe(14);
   });
 });
 
 describe.skipIf(!HAS_DB)("POST /api/internal/youtube/fake — state (real Postgres)", () => {
   const KEYS = ["YOUTUBE_TOKEN_KEK", "RELAY_KEK"] as const;
-  const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
-  beforeAll(() => { for (const k of KEYS) process.env[k] = randomBytes(32).toString("hex"); });
+  // Captured when the suite RUNS (beforeAll), not when the file is collected: a skipped or reordered suite restores what it saw.
+  let saved: Record<string, string | undefined> = {};
+  beforeAll(() => {
+    saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
+    for (const k of KEYS) process.env[k] = randomBytes(32).toString("hex");
+  });
   afterAll(() => {
     for (const k of KEYS) {
       if (saved[k] === undefined) delete process.env[k];

@@ -12,15 +12,21 @@ const NOT_FOUND = "Not found";
 const Channel = z.object({ id: z.string().min(1).max(64), title: z.string().min(1).max(200) }).strict();
 const Id = z.string().min(1).max(128);
 
-/** The ops (plan R6, extended by fix rounds 1 and 2). Every id they take is a HANDLE or an id the product already shows (a stream
- *  id, a video id, a fixture id, an OAuth state) — never a refresh token or a stream key, which an e2e test must not be able to
- *  read or supply.
+/** The ops (plan R6, extended by fix rounds 1 and 2 and by T17's prep). Every id they take is a HANDLE or an id the product
+ *  already shows (a stream id, a video id, a fixture id, an OAuth state) — never a stream key, and no op ever RETURNS a token. The
+ *  one op that takes a refresh token is `seedGrant`, and the token is one the calling test minted itself (see below).
  *
  *  PARALLEL-SAFE ops name what they touch: a `tokenHandle` (`failNext`, `setLive`, `autoVideo` then scope to that grant's CHANNEL,
  *  so one org's walkthrough does not change another's), an OAuth `state` (`setChannels`, `pinChannels`, `grantScope`, `grantSub`: spent by the
  *  one grant that state mints), or one resource (`videoOn`, `videoOff`, `deleteVideo`, `killToken`, `issueCode`, `state`).
  *  SERIAL-ONLY ops name nothing and act on the whole fake: `reset`, and `failNext` / `setLive` / `autoVideo` WITHOUT a
- *  `tokenHandle`. T20 calls those only from serial setup, never from a spec that runs beside others. */
+ *  `tokenHandle`. T20 calls those only from serial setup, never from a spec that runs beside others.
+ *
+ *  `seedGrant` is SETUP-ONLY too: a spec that writes its OWN `1//`-shaped refresh token into its own database (the health and
+ *  refresh sweeps, T17) tells the fake which channel and Google account that token is, BEFORE the token is first used (a token the
+ *  fake has already seen has a grant, and the seed is refused with a 409). It takes the token, never returns one, and the channel
+ *  ids must be unique to the spec (two seeds naming one channel are a reconnect). Renaming or removing a seeded channel
+ *  (`renameChannel`, `removeChannel`) is a FakeYouTube method the unit tests drive; no op exposes them yet. */
 const Handle = Id;
 const State = z.string().min(1).max(512);
 const Body = z.discriminatedUnion("op", [
@@ -39,6 +45,10 @@ const Body = z.discriminatedUnion("op", [
   z.object({ op: z.literal("issueCode"), state: State }).strict(),
   z.object({ op: z.literal("grantScope"), scope: z.string().min(1).max(512).nullable(), state: State }).strict(),
   z.object({ op: z.literal("grantSub"), sub: z.string().min(1).max(255).nullable(), state: State }).strict(),
+  z.object({
+    op: z.literal("seedGrant"), refreshToken: z.string().startsWith("1//").min(4).max(512), channelId: Channel.shape.id, channelTitle: Channel.shape.title,
+    sub: z.string().min(1).max(255).nullable().optional(),
+  }).strict(),
   z.object({ op: z.literal("reset") }).strict(),
   z.object({ op: z.literal("state"), fixtureId: z.uuid() }).strict(),
 ]);
@@ -78,6 +88,7 @@ export async function POST(req: Request) {
         case "grantScope": fake.setGrantedScope(body.scope, body.state); return { op: body.op };
         // The Google account subject the one grant of this state reports; null = a youtube-only token with no `sub` (T18's branch).
         case "grantSub": fake.setGoogleSub(body.sub, body.state); return { op: body.op };
+        case "seedGrant": seed(fake, body); return { op: body.op };
         case "reset": fake.reset(); return { op: body.op };
         case "state": return await fixtureState(fake, body.fixtureId);
       }
@@ -91,6 +102,17 @@ export async function POST(req: Request) {
       throw err;
     }
   });
+}
+
+/** The fake refuses a seed over an existing grant with a plain Error whose message names no part of the request; the op says 409
+ *  and nothing else (the token, the channel and the account never come back). */
+function seed(fake: FakeYouTube, b: { refreshToken: string; channelId: string; channelTitle: string; sub?: string | null }): void {
+  try {
+    fake.seedGrant(b);
+  } catch (err) {
+    if (err instanceof Error && !(err instanceof YouTubeError)) throw new HttpError(409, "The fake YouTube refused", "grant_exists");
+    throw err;
+  }
 }
 
 /** A handle names a grant, and a grant acts on one channel: that channel is the scope. No handle: no scope. */
