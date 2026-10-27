@@ -25,6 +25,7 @@ import "server-only";
 // W2d Task 9: each row also carries the stage's TABLE rules (`table_rules`) from the one loader
 // (`stageTableRulesDocs`), read in the same tenant transaction — the order the console ranks, captions and qualifies each
 // table by, as the public document carries it.
+import type { PointsRule } from "@seazn/engine/competition";
 import { withTenant } from "@/lib/db";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -50,4 +51,19 @@ export async function listStageQualificationMeta(
     tableRules: await stageTableRulesDocs(tx, stageIds),
   }));
   return new Map(rows.map(({ stage_id, ...meta }) => [stage_id, { ...meta, table_rules: tableRules[stage_id] ?? null }]));
+}
+
+/**
+ * W2d final review I1 (controller ruling, 2026-10-26) - stage id → the points its PIN pays, for the given stages of the
+ * caller's org that are pinned (`table_rules_pinned`, written at generate). The organiser console's stage points card reads
+ * these, never the live `division.config`: a division points save after the pin lands (`rule-locks.ts`) but never reaches
+ * the stage, so the live division is not what its table pays. Read through the one loader (`stageTableRulesDocs`: a pinned
+ * stage's rules ARE its pin, `pinnedAt` set exactly when it is pinned, V474's pair check), under withTenant like the meta
+ * above. A stage still reading the live layers (pending) is absent, and so is one the loader refused (logged there): the
+ * card then reads the live division, as it did before W2d.
+ */
+export async function listPinnedStagePoints(auth: AuthCtx, stageIds: readonly string[]): Promise<Record<string, PointsRule>> {
+  if (stageIds.length === 0) return {};
+  const docs = await withTenant(auth.orgId, (tx) => stageTableRulesDocs(tx, stageIds));
+  return Object.fromEntries(Object.entries(docs).flatMap(([id, doc]) => (doc.pinnedAt === null ? [] : [[id, doc.points] as const])));
 }

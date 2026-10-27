@@ -12,6 +12,7 @@ import { StagesPanel } from "@/components/v2/stages-panel";
 import { BRACKET_KINDS, DRAW_KINDS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import enPublic from "@/dictionaries/en/public.json";
+import enUi from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { pointsLine } from "@/lib/points-line";
 import { pointsLineDict, rulesLineText } from "@/lib/rules-line";
@@ -152,5 +153,55 @@ describe("what the page hands the panel reaches the section", () => {
     }
     // The positive pair: unlocked and editable has the controls.
     expect(panel({ stages: stageOf("league", { points: STORED }) })).toContain('data-testid="stage-points-save"');
+  });
+});
+
+// W2d final review I1 (controller ruling, 2026-10-26): the page hands the panel each pinned stage's PIN points
+// (`pinnedStagePoints`), and the panel must hand them to THAT stage's section - the seam a section test cannot see. The pin
+// is the engine's own table rule for the division as it stood (football's 4/2/1 here, the panel's default division); the
+// live division the panel is handed has moved to win 2, so a section still reading `divisionConfig` is visible.
+describe("I1: the page's pinned points reach the pinned stage's section, and only it", () => {
+  const AT_PIN = { points: { win: 4, draw: 2, loss: 1 } };
+  const m = builtinModules.find((x) => x.key === "football")!;
+  const PIN = m.tablePointsRule(m.configSchema.parse(AT_PIN) as never, "league");
+  const LIVE = { points: { win: 2, draw: 2, loss: 1 } };
+  const UI_EN = enUi as Record<string, string>;
+  const words = (win: number, draw: number, loss: number) =>
+    rulesLineText(POINTS_DICT, pointsLine({ win: { regulation: win }, draw, loss: { regulation: loss }, tie: 0, noResult: 0, shootoutAs: "result", unit: "whole", bonuses: [] }, { awardReaches: true }));
+  const OTHER = "22222222-2222-4222-8222-222222222222";
+
+  it("premise: the pin pays win 4, the live division 2", () => {
+    expect(PIN.win.regulation).toBe(4);
+    expect(words(4, 2, 1)).not.toBe(words(2, 2, 1));
+  });
+
+  it("a started pinned stage reads the pin's 4 under the started wording; the panel's other stage (no pin) reads the live 2 under the division's", () => {
+    const html = panel({
+      stages: [...stageOf("league"), { id: OTHER, seq: 2, kind: "league", name: "Other", config: {}, progression: null, status: "pending" }],
+      divisionConfig: LIVE,
+      pointsDict: POINTS_DICT,
+      formatLockedStageIds: [STAGE_ID, OTHER],
+      pinnedStagePoints: { [STAGE_ID]: PIN },
+    });
+    const sectionOf = (id: string) => {
+      const at = html.indexOf(`data-testid="stage-points-${id}"`);
+      expect(at, `${id}'s section`).toBeGreaterThan(-1);
+      return html.slice(html.lastIndexOf("<section", at), html.indexOf("</section>", at));
+    };
+    const pinned = sectionOf(STAGE_ID);
+    expect(pinned).toContain('data-stage-points-basis="pin"');
+    expect(text(pinned)).toContain(UI_EN["stagePoints.startedPoints"]!);
+    expect(text(pinned)).toContain(words(4, 2, 1));
+    expect(text(pinned), "never the division's new number").not.toContain(words(2, 2, 1));
+    const other = sectionOf(OTHER);
+    expect(other, "the positive pair: no pin handed, the live division").toContain('data-stage-points-basis="division"');
+    expect(text(other)).toContain(UI_EN["stagePoints.divisionPoints"]!);
+    expect(text(other)).toContain(words(2, 2, 1));
+  });
+
+  it("absent (another tab, or an older page), every section reads the live division", () => {
+    const html = panel({ divisionConfig: LIVE, pointsDict: POINTS_DICT });
+    expect(html).toContain('data-stage-points-basis="division"');
+    expect(html).not.toContain('data-stage-points-basis="pin"');
   });
 });
