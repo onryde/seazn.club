@@ -6,7 +6,6 @@
     "apps/web/src/components/public-site/__tests__/standings-table-locale.test.tsx:badminton": 1,
     "apps/web/src/components/public-site/__tests__/standings-table-locale.test.tsx:cricket": 1,
     "apps/web/src/components/public-site/__tests__/standings-table-locale.test.tsx:volleyball": 1,
-    "apps/web/src/components/public-site/__tests__/standings-table-view-headers.test.tsx:carrom": 1,
     "apps/web/src/components/v2/__tests__/division-settings-standings-points.test.tsx:cricket": 3,
     "apps/web/src/components/v2/__tests__/division-settings-standings-points.test.tsx:football": 2,
     "apps/web/src/components/v2/__tests__/division-settings-standings-points.test.tsx:generic": 1,

@@ -19,9 +19,9 @@ import { cfgOf, tableRulesOf } from "./_table-rules-fixture";
 const sport = (key: string): AnySportModule => builtinModules.find((m) => m.key === key)!;
 const UI = enUi as Record<string, string>;
 const ID = "22222222-2222-4222-8222-222222222222";
-const football = sport("football");
-const boardgame = sport("boardgame");
-const badminton = sport("badminton");
+const football = sport("football"); // single-sport: named orders (FIFA 2026 / UEFA / Classic); the every-sport sweeps are below
+const boardgame = sport("boardgame"); // single-sport: chess's Swiss order keeps its own shape (OC1)
+const badminton = sport("badminton"); // single-sport: a sport with no named order (one reset button)
 
 function render(
   m: AnySportModule,

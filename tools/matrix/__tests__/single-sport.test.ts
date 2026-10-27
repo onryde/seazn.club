@@ -960,10 +960,15 @@ describe("single-sport scanner (R26)", { timeout: meter.budget }, () => {
       "packages/engine/src/competition/tiebreak-rule-award-alias.test.ts:cricket",
       "packages/engine/src/competition/tie-what-if.test.ts:carrom",
       "apps/web/src/components/public-site/__tests__/standings-table-locale.test.tsx:badminton",
-      "apps/web/src/components/public-site/__tests__/standings-table-view-headers.test.tsx:carrom",
       "apps/web/src/components/v2/__tests__/division-settings-standings-points.test.tsx:tennis",
       "apps/web/src/server/engine-db/__tests__/pooled-standings-null-snapshot.test.ts:generic",
     ]) expect({ key, counted: (counts[key] ?? 0) > 0 }).toEqual({ key, counted: true });
+    // The headers test's carrom `.find` pick is still FOUND, and now SWEPT: W2d T17 put a registry sweep in its test block
+    // (the drawing-sports count), so the scan drops it (a swept pin is not a pin) and it no longer counts.
+    const HEADERS = "apps/web/src/components/public-site/__tests__/standings-table-view-headers.test.tsx";
+    const carrom = pinsIn(readFileSync(resolve(REPO, HEADERS), "utf8"), HEADERS).filter((p) => p.sport === "carrom");
+    expect(carrom.map((p) => p.swept), "the carrom pick is found, and swept").toEqual([true]);
+    expect(r.pins.some((p) => p.file === HEADERS && p.sport === "carrom"), "…so the scan drops it").toBe(false);
     const committed = loadBaseline(REPO);
     expect(checkRatchet(counts, committed.pins)).toEqual({ added: [], rose: [], lowered: [] });
     expect(scanSingleSport(REPO)).toEqual(r);

@@ -197,6 +197,7 @@ describe("pool order on the pages that draw one standings table per pool", () =>
   // W2d T17: each table prints by its OWN stage's rules (IIHF's OTW/OTL, chess's half-points) and dates a lots draw in
   // the org's language and zone — so both pages hand the table the stage's `table_rules`, the org locale and the zone.
   it("W2d T17: both pages hand each table its stage's rules, the org's locale and the division's zone", async () => {
+    // single-sport: what the pages hand the table (rules, locale, zone) is sport-agnostic; the page fixture's division is generic
     const rules = unpinnedRulesDoc({
       module: builtinModules.find((m) => m.key === "generic")!,
       kind: "group",

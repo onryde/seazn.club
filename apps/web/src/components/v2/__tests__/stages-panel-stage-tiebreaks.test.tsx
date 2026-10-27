@@ -25,9 +25,10 @@ vi.mock("@/components/ui/confirm-provider", () => ({
 const UI = enUi as Record<string, string>;
 const A = "11111111-1111-4111-8111-111111111111";
 const B = "33333333-3333-4333-8333-333333333333";
-const football = builtinModules.find((m) => m.key === "football")!;
+const football = builtinModules.find((m) => m.key === "football")!; // single-sport: the MOUNT is under test; the section's sport sweeps are stage-tiebreaks-section.test.tsx
 
 function panel(over: Record<string, unknown> = {}): string {
+  // single-sport: the panel's sportKey only names the module the mount reads; the section's sport sweeps are elsewhere
   return renderToStaticMarkup(
     <StagesPanel
       divisionId="d1"

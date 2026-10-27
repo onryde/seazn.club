@@ -161,6 +161,7 @@ const byId = (rows: readonly StandingsRow[], id: string) => rows.find((r) => r.e
 
 describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
   it("IH-PT-1 IIHF prints OTW/OTL as OT+SO sums; recreational prints GP W D L (RBG:343-344)", () => {
+    // single-sport: ice hockey is the shipped sport whose table splits OTW/OTL (RBG:343-344); every sport's layout is swept in display-w2d.test.ts
     const ih = sport("icehockey");
     const doc = docOf(ih, "iihf");
     const rows = tableOf(doc, ["A", "B", "C", "D", "E"], [
@@ -202,6 +203,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
   });
 
   it("BG-PT-1 chess 3 half-points print '1½' (D10(b), RB2B-17) — a round robin with its SB column", () => {
+    // single-sport: chess is the half-point sport (FIDE 1 / ½ / 0, D10(b))
     const bg = sport("boardgame");
     const doc = docOf(bg);
     expect(doc.tiebreakers, "premise: a chess round robin ranks on Sonneborn–Berger").toContain("sberger");
@@ -244,7 +246,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
     }
     expect(checked).toBe(5);
     // The English headers are the engine's labels; every locale has its own word.
-    const bd = sport("badminton");
+    const bd = sport("badminton"); // single-sport: badminton's order carries set and point difference (BWF 16.2)
     const headers = buildTableView(input(docOf(bd), bd, [])).columns;
     expect(headers.filter((c) => derivedKeys.has(c.key)).map((c) => [c.abbr, c.title])).toEqual([
       [en["table.abbr.setDiff"], en["table.col.setDiff"]],
@@ -255,7 +257,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
     expect(own.tiebreakers, "premise: the division's order is the stage's").toEqual(["wins", "set_diff", "lots"]);
     expect(buildTableView(input(own, bd, [])).columns.map((c) => c.key).filter((k) => derivedKeys.has(k))).toEqual(["set_diff"]);
     // HK-TB-2's column prints field goals: goals less penalty-corner and penalty-stroke goals.
-    const hk = sport("hockey");
+    const hk = sport("hockey"); // single-sport: hockey is the field-goals sport (FIH GTR App. 3, HK-TB-2)
     const hkDoc = docOf(hk);
     const hkRow: StandingsRow = { entrantId: "A", rank: 1, played: 1, won: 1, drawn: 0, lost: 0, points: 3, metrics: { gf: 5, ga: 1, gd: 4, goals_pc: 2, goals_stroke: 1 } };
     const hkView = buildTableView(input(hkDoc, hk, [hkRow]));
@@ -263,6 +265,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
   });
 
   it("X-TB-6 an empty table renders every rank '–', no leader row, no qualification chip", () => {
+    // single-sport: a level table is the ranking pass's, not a sport's: football here, chess below as the other sport
     // empty case first: nothing counted yet — every row level (anti-goal 3)
     const fb = sport("football");
     const doc = docOf(fb);
@@ -311,6 +314,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
   });
 
   it("X-TB-4 a lots-decided row's popover says 'Drawn by lots on {date}' from tieBreak.drawnAt", () => {
+    // single-sport: lots ends every order; football's default reaches it with a pair that never met
     const fb = sport("football");
     const doc = docOf(fb);
     // A and B both beat C 1-0 and drew each other 0-0: level on every step before lots.
@@ -350,6 +354,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
   });
 
   it("anti-goal 2 a class of three on a badminton h2h_two step: the popover says head-to-head applies between two only (note h2h_two_not_applicable), and a class of two shows no such note (the positive pair)", () => {
+    // single-sport: badminton's order carries h2h_two (BWF 16.2.3); the engine's partial-schedule sweep covers the other sports
     const bd = sport("badminton");
     const doc = docOf(bd);
     expect(doc.tiebreakers.filter((k) => k === "h2h_two").length, "premise: BWF's order re-asks head-to-head for two").toBeGreaterThan(0);
@@ -409,6 +414,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
   // and §5.6 (spec:480): when a tied pair has not met and a LATER step splits them (here goal difference), the table says
   // head-to-head is not complete. FIFA 2026 (football's default): points, then the head-to-head block, then GD.
   it("head-to-head not complete, through the ranking pass: football's GD split carries the note on both rows, in every locale", () => {
+    // single-sport: football's default (FIFA 2026) ranks head-to-head before GD; the note's other sports are partial-schedule.test.ts's
     const fb = sport("football");
     const doc = docOf(fb);
     expect(doc.tiebreakers.slice(0, 2), "premise: football ranks head-to-head before goal difference").toEqual(["points", "h2h_points"]);
@@ -446,6 +452,7 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
   });
 
   it("the division caption is per stage and says where its order came from and that it is pinned", () => {
+    // single-sport: the caption reads the stage's rules doc (source, pin), not the sport
     const fb = sport("football");
     const live = docOf(fb);
     const uiMsg = (dict: Record<string, string>) => (k: string, v?: Record<string, string | number>) => t(dict as unknown as Dict, k, v);

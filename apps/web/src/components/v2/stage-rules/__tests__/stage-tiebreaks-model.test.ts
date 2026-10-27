@@ -33,9 +33,9 @@ const sport = (key: string): AnySportModule => {
   if (!m) throw new Error(`no builtin module ${key}`);
   return m;
 };
-const football = sport("football");
-const badminton = sport("badminton");
-const boardgame = sport("boardgame");
+const football = sport("football"); // single-sport: named orders and an h2h block; the add-step check sweeps the registry
+const badminton = sport("badminton"); // single-sport: a sport with no named orders (reset offers the sport default only)
+const boardgame = sport("boardgame"); // single-sport: chess — its primary pinned first, a Swiss order, named orders
 
 /** The table stage kinds (`TableStageKind`), Swiss apart: §5.5 rule 1's first/last shape binds every one of them. */
 const NON_SWISS: readonly TableStageKind[] = ["league", "group", "americano"];
