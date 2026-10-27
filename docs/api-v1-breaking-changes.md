@@ -7,6 +7,46 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-27 — a hockey goal must record its type
+
+FIH ranks level teams on field goals (GTR Appendix 3), so a hockey table can
+only break that tie if every goal says what kind it was. The scoring endpoint
+now refuses a `hockey.goal` that does not.
+
+**What changed.** `POST /api/v1/fixtures/{id}/events` with `type:
+"hockey.goal"` (FIH hockey, every variant) and no `payload.kind` was accepted
+and is now refused. Ice hockey's `icehockey.goal` and every other sport's goal
+are unchanged: their type stays optional.
+
+| Field | Before | Now |
+|---|---|---|
+| `payload.kind` on `hockey.goal` — `POST /api/v1/fixtures/{id}/events` | optional | required: one of the division's `goalKinds`, by default `"fg"` (field goal), `"pc"` (penalty corner), `"stroke"` (penalty stroke), `"og"` (own goal, credited to the other side) |
+
+**What replaces it.** Send the goal's `kind`. A client that has no way to know
+the goal's type should send `"fg"`, which is what an untyped goal was always
+counted as.
+
+**What a consumer sees.** An untyped hockey goal now fails with a 422 and
+nothing is written:
+
+```json
+{ "ok": false, "error": { "code": "GOAL_KIND_REQUIRED", "message": "a goal in this sport must record its type" }, "requestId": "…" }
+```
+
+Key on `error.code`, not on the message text.
+
+**No data migration was required.** Only a NEW write is judged. Untyped goals
+already in a match's ledger still replay, and count as field goals, so a match
+in progress at the change stays readable. A void of such a goal is accepted.
+The pinning test is
+`apps/web/src/server/engine-db/__tests__/legacy-untyped-hockey-goal.test.ts`.
+
+**Why in place.** This lands in v1 rather than under a new version path
+because no client outside the web app uses the API yet (owner, 2026-10-27).
+
+**Background.** W2d (tables and tie-breaks), rule HK-TB-2;
+`docs/superpowers/specs/2026-09-27-format-matrix-prompts/`.
+
 ## 2026-08-17 — the z3 solver leaves the contract
 
 The scheduling stack finished moving onto the CP-SAT placement service. The
