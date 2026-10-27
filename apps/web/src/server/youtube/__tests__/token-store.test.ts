@@ -14,7 +14,7 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { sql, statementCount } from "@/lib/db";
-import { openWith, seal } from "@/server/relay/crypto";
+import { fingerprintYoutubeChannel, openWith, seal } from "@/server/relay/crypto";
 import { seedOrg } from "@/server/usecases/__tests__/_rig";
 import {
   YoutubeTokenUnreadableError, insertConnectionWithToken, openToken, replaceConnectionToken, revokeConnection, sealPendingToken,
@@ -92,6 +92,31 @@ type ConnRow = {
 };
 const rowOf = async (id: string): Promise<ConnRow> =>
   (await sql<ConnRow[]>`select status, revoked_at, status_since, last_error_code, refresh_token_enc from org_youtube_connections where id = ${id}`)[0]!;
+
+/** What a revoke leaves in place of the channel's name on the destination row (global-constraints / DP III.E.4). A literal
+ *  typed here, not imported: the test must fail if the code's constant drifts. */
+const DISCONNECTED_LABEL = "YouTube channel (disconnected)";
+
+type ChannelRow = { channel_id: string | null; channel_title: string | null };
+const channelOf = async (id: string): Promise<ChannelRow> =>
+  (await sql<ChannelRow[]>`select channel_id, channel_title from org_youtube_connections where id = ${id}`)[0]!;
+
+type TargetRow = { archived_at: Date | null; label: string; dest_fingerprint: string | null; youtube_connection_id: string | null };
+const targetOf = async (id: string): Promise<TargetRow> =>
+  (await sql<TargetRow[]>`select archived_at, label, dest_fingerprint, youtube_connection_id from org_stream_targets where id = ${id}`)[0]!;
+/** The ACTIVE destination rows of an org for one channel fingerprint (the partial unique index's own population). */
+const activeTargetsFor = async (orgId: string, fingerprint: string): Promise<string[]> =>
+  (await sql<{ id: string }[]>`
+    select id from org_stream_targets where org_id = ${orgId} and dest_fingerprint = ${fingerprint} and archived_at is null order by id`).map((r) => r.id);
+
+/** The destination row a connect leaves behind (spec §5.2): kind youtube, the channel's title as its label, the channel's
+ *  keyed fingerprint, and NO key of its own. T8 writes it for real; this is the same shape, written raw. */
+async function targetFor(orgId: string, connectionId: string, channelId: string, label: string): Promise<string> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into org_stream_targets (org_id, kind, label, youtube_connection_id, dest_fingerprint)
+    values (${orgId}, 'youtube', ${label}, ${connectionId}, ${fingerprintYoutubeChannel(channelId)}) returning id`;
+  return row!.id;
+}
 
 const NO_SUCH_ORG = () => randomUUID();
 
@@ -284,10 +309,127 @@ describe.skipIf(!HAS_DB)("token-store — the connection's refresh token, sealed
     expect(await revokeConnection(sql, a.orgId, randomUUID()), "a missing id").toBe(false);
     expect((await rowOf(c.connectionId)).status, "the foreign attempt changed nothing").toBe("connected");
     expect(await openToken(sql, a.orgId, c.connectionId), "and the token still opens").toBe(c.input.refreshToken);
+    expect(await channelOf(c.connectionId), "and the channel is still named").toEqual({ channel_id: c.input.channelId, channel_title: "Token FC" });
     await sql`update org_youtube_connections set status = 'reconnect_needed', last_error_code = 'invalid_grant' where id = ${c.connectionId}`;
     expect(await revokeConnection(sql, a.orgId, c.connectionId)).toBe(true);
     const row = await rowOf(c.connectionId);
     expect({ status: row.status, last_error_code: row.last_error_code, token: row.refresh_token_enc }).toEqual({ status: "revoked", last_error_code: "invalid_grant", token: null });
+    expect(await channelOf(c.connectionId), "a reconnect_needed row's channel is scrubbed too").toEqual({ channel_id: null, channel_title: null });
+  });
+
+  it("revokeConnection ARCHIVES the destination row and scrubs the channel's id and title in the same statement: label becomes the fixed constant, the fingerprint (history) is kept", async () => {
+    const r = await rig();
+    const c = await r.connect({ channelTitle: "Forest Rovers TV" });
+    const t = await targetFor(r.orgId, c.connectionId, c.input.channelId, "Forest Rovers TV");
+    const fp = fingerprintYoutubeChannel(c.input.channelId);
+    // a second row of the same connection, archived long ago under the channel's name: it must be scrubbed too, but its archive time stands
+    const [old] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, youtube_connection_id, archived_at)
+      values (${r.orgId}, 'youtube', 'Forest Rovers TV (old)', ${c.connectionId}, '2026-01-01T00:00:00.000Z') returning id`;
+    // the positive pair FIRST: before the revoke the destination is live and names the channel, so every change below is the revoke's
+    expect(await channelOf(c.connectionId)).toEqual({ channel_id: c.input.channelId, channel_title: "Forest Rovers TV" });
+    expect(await targetOf(t)).toEqual({ archived_at: null, label: "Forest Rovers TV", dest_fingerprint: fp, youtube_connection_id: c.connectionId });
+
+    expect(await revokeConnection(sql, r.orgId, c.connectionId)).toBe(true);
+
+    expect(await channelOf(c.connectionId), "the channel's id and title do not outlive the revoke").toEqual({ channel_id: null, channel_title: null });
+    const conn = await rowOf(c.connectionId);
+    expect({ status: conn.status, token: conn.refresh_token_enc }).toEqual({ status: "revoked", token: null });
+    const target = await targetOf(t);
+    expect(target.archived_at, "the destination is archived").toBeInstanceOf(Date);
+    expect(target.archived_at!.getTime(), "in the same statement as the revoke (one transaction timestamp)").toBe(conn.revoked_at!.getTime());
+    expect(target.label).toBe(DISCONNECTED_LABEL);
+    expect(target.dest_fingerprint, "the keyed fingerprint stays: it identifies no one and history keys on it").toBe(fp);
+    expect(target.youtube_connection_id).toBe(c.connectionId);
+    const earlier = await targetOf(old!.id);
+    expect(earlier.archived_at!.toISOString(), "an already-archived row keeps its own archive time").toBe("2026-01-01T00:00:00.000Z");
+    expect(earlier.label, "and is scrubbed as well").toBe(DISCONNECTED_LABEL);
+    // the raw rows hold no trace of the name (the label was the only other copy of it on these two tables)
+    const left = await sql<{ n: number }[]>`
+      select (select count(*) from org_youtube_connections where id = ${c.connectionId} and (channel_title ilike '%Forest%' or channel_id = ${c.input.channelId}))::int
+           + (select count(*) from org_stream_targets where org_id = ${r.orgId} and label ilike '%Forest%')::int as n`;
+    expect(left[0]!.n).toBe(0);
+  });
+
+  it("SEQUENCE: connect channel X, revoke, connect X again in the same org — the second destination is inserted (no 23505) and is the only ACTIVE one; revoking the OLD id again leaves it alone", async () => {
+    const r = await rig();
+    const first = await r.connect({ channelTitle: "Forest Rovers TV" });
+    const t1 = await targetFor(r.orgId, first.connectionId, first.input.channelId, "Forest Rovers TV");
+    const fp = fingerprintYoutubeChannel(first.input.channelId);
+    // the premise the archive exists for: while the first destination is live, a second one for the channel IS refused, by name
+    await expect(targetFor(r.orgId, first.connectionId, first.input.channelId, "again")).rejects.toMatchObject({
+      code: "23505", constraint_name: "org_stream_targets_org_dest_fingerprint",
+    });
+    expect(await activeTargetsFor(r.orgId, fp)).toEqual([t1]);
+
+    expect(await revokeConnection(sql, r.orgId, first.connectionId)).toBe(true);
+    const again = await r.connect({ channelId: first.input.channelId, channelTitle: "Forest Rovers TV" });
+    const t2 = await targetFor(r.orgId, again.connectionId, first.input.channelId, "Forest Rovers TV");
+    expect(t2).not.toBe(t1);
+    expect(await activeTargetsFor(r.orgId, fp), "the new destination is the only active one for the channel").toEqual([t2]);
+    expect((await targetOf(t1)).archived_at, "the old one stays archived").toBeInstanceOf(Date);
+
+    // revoking the OLD connection a second time reaches neither the new connection nor its destination
+    expect(await revokeConnection(sql, r.orgId, first.connectionId)).toBe(false);
+    expect(await activeTargetsFor(r.orgId, fp)).toEqual([t2]);
+    expect(await targetOf(t2)).toMatchObject({ archived_at: null, label: "Forest Rovers TV" });
+    expect(await channelOf(again.connectionId)).toEqual({ channel_id: first.input.channelId, channel_title: "Forest Rovers TV" });
+    expect(await openToken(sql, r.orgId, again.connectionId)).toBe(again.input.refreshToken);
+  });
+
+  it("a SECOND revoke returns false and writes nothing: the archived destination keeps its time and constant label, the connection its first revoke", async () => {
+    const r = await rig();
+    const c = await r.connect({ channelTitle: "Forest Rovers TV" });
+    const t = await targetFor(r.orgId, c.connectionId, c.input.channelId, "Forest Rovers TV");
+    expect(await revokeConnection(sql, r.orgId, c.connectionId)).toBe(true);
+    // backdate: the second call's now() could not be told from the first's at millisecond resolution, so move both marks far from "now"
+    await sql`update org_stream_targets set archived_at = '2026-02-02T02:02:02.000Z' where id = ${t}`;
+    await sql`update org_youtube_connections set revoked_at = '2026-02-02T02:02:02.000Z', status_since = '2026-02-02T02:02:02.000Z' where id = ${c.connectionId}`;
+
+    expect(await revokeConnection(sql, r.orgId, c.connectionId)).toBe(false);
+
+    expect((await targetOf(t)).archived_at!.toISOString()).toBe("2026-02-02T02:02:02.000Z");
+    expect((await targetOf(t)).label).toBe(DISCONNECTED_LABEL);
+    expect((await rowOf(c.connectionId)).revoked_at!.toISOString()).toBe("2026-02-02T02:02:02.000Z");
+    expect(await channelOf(c.connectionId)).toEqual({ channel_id: null, channel_title: null });
+  });
+
+  it("org A's revoke never touches org B's row for the same channel — and a wrong-org revoke of B's connection changes nothing", async () => {
+    const a = await rig();
+    const b = await rig();
+    const ca = await a.connect({ channelTitle: "Forest Rovers TV" });
+    const ta = await targetFor(a.orgId, ca.connectionId, ca.input.channelId, "Forest Rovers TV");
+    expect(await revokeConnection(sql, a.orgId, ca.connectionId)).toBe(true);
+    // org A let go of the channel, so org B may take it: the same channel id, the same fingerprint input, the same title
+    const cb = await b.connect({ channelId: ca.input.channelId, channelTitle: "Forest Rovers TV" });
+    const tb = await targetFor(b.orgId, cb.connectionId, ca.input.channelId, "Forest Rovers TV");
+    const bBefore = { channel: await channelOf(cb.connectionId), target: await targetOf(tb) };
+    expect(bBefore.channel).toEqual({ channel_id: ca.input.channelId, channel_title: "Forest Rovers TV" });
+    expect(bBefore.target.archived_at).toBeNull();
+
+    // A's second revoke, and A naming B's connection id: both are refused (false) and B's rows are byte-for-byte what they were
+    expect(await revokeConnection(sql, a.orgId, ca.connectionId), "A's own, again").toBe(false);
+    expect(await revokeConnection(sql, a.orgId, cb.connectionId), "A naming B's connection").toBe(false);
+    expect({ channel: await channelOf(cb.connectionId), target: await targetOf(tb) }).toEqual(bBefore);
+    expect((await rowOf(cb.connectionId)).status).toBe("connected");
+    expect(await openToken(sql, b.orgId, cb.connectionId)).toBe(cb.input.refreshToken);
+    // and A's archived row is still archived under the constant (the positive pair: the refusals above were not an empty table)
+    expect(await targetOf(ta)).toMatchObject({ label: DISCONNECTED_LABEL });
+    expect((await targetOf(ta)).archived_at).toBeInstanceOf(Date);
+  });
+
+  it("the archive leg is org-scoped on its own: a destination row of ANOTHER org that names this connection is not archived or relabelled (FKs do not tie a target's org to its connection's)", async () => {
+    const a = await rig();
+    const b = await rig();
+    const ca = await a.connect({ channelTitle: "Forest Rovers TV" });
+    const ta = await targetFor(a.orgId, ca.connectionId, ca.input.channelId, "Forest Rovers TV");
+    // a mis-tenanted row: org B's destination pointing at org A's connection (nothing in the schema forbids it)
+    const [stray] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, youtube_connection_id)
+      values (${b.orgId}, 'youtube', 'B destination', ${ca.connectionId}) returning id`;
+    expect(await revokeConnection(sql, a.orgId, ca.connectionId)).toBe(true);
+    expect((await targetOf(ta)).archived_at, "A's own destination is archived").toBeInstanceOf(Date);
+    expect(await targetOf(stray!.id), "B's row is untouched").toMatchObject({ archived_at: null, label: "B destination" });
   });
 
   it("replaceConnectionToken on a reconnect_needed row: the NEW token opens (the old does not), status connected, status_since moves, last_error_code cleared; a second replace wins again", async () => {

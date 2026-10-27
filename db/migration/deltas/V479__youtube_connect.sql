@@ -32,7 +32,8 @@
 --   refresh_token_enc  (connections, pending)  sealed under YOUTUBE_TOKEN_KEK; owner server/youtube/token-store.ts (T2)
 --   pool_rtmp_enc      (stream keys)           sealed under RELAY_KEK in rtmp_enc's {url, streamKey} shape; owner
 --                                              server/relay/secret-columns.ts (T2)
--- Neither column has a writer in THIS task. Errors are stored as CODES (last_error_code), never a Google response body.
+-- Each has exactly ONE writer, the file named beside it (token-store.ts and secret-columns.ts, both T2; enc-boundary.test.ts
+-- holds every other file to that). Errors are stored as CODES (last_error_code), never a Google response body.
 --
 -- ─── Foreign keys and what a delete does ───────────────────────────────────────────────────────────────────────────
 -- A deleted org takes its connections, pending grants, keys and broadcasts with it (on delete cascade on org_id; the
@@ -47,8 +48,12 @@
 create table org_youtube_connections (
   id                uuid primary key default gen_random_uuid(),
   org_id            uuid not null references organizations(id) on delete cascade,
-  channel_id        text not null,
-  channel_title     text not null,
+  -- The channel's id and title are Authorized Data (Google API Services User Data Policy, DP III.E.4): after an in-app
+  -- revoke they are deleted within 7 days. Seazn does it in the revoke statement itself (token-store.ts revokeConnection),
+  -- which is why both columns are nullable. The live_has_channel CHECK below keeps a LIVE row from ever lacking them: a null
+  -- is a revoked row's, nothing else's. A revoked row's destination keeps `dest_fingerprint` (a keyed HMAC, no channel id).
+  channel_id        text null,
+  channel_title     text null,
   -- The Google subject of the account that granted access (the sign-in routes' google_sub is a different thing).
   google_sub        text null,
   -- The sealed refresh token (YOUTUBE_TOKEN_KEK). Present exactly while the connection is not revoked: the first
@@ -79,12 +84,17 @@ create table org_youtube_connections (
   -- writer of these three columns is one token-store statement, so a half-revoke is refused instead of stored (ruling R1).
   -- A live row that lost its token (a 30-day purge of a dead grant) must therefore become `revoked` in the same statement.
   constraint org_youtube_connections_revoked_no_token check ((status = 'revoked') = (refresh_token_enc is null)),
-  constraint org_youtube_connections_revoked_at check ((status = 'revoked') = (revoked_at is not null))
+  constraint org_youtube_connections_revoked_at check ((status = 'revoked') = (revoked_at is not null)),
+  -- Only a revoked row may have lost its channel's name (the purge above). A live one without an id or a title would
+  -- reach the directory's list and the one-live-channel index below with a hole in it.
+  constraint org_youtube_connections_live_has_channel
+    check (status = 'revoked' or (channel_id is not null and channel_title is not null))
 );
 
 -- A channel is live in at most ONE org (owner rule: it keeps the 10-stream cap counted in one place). `reconnect_needed`
 -- still HOLDS the channel — a dead grant is revoked, not abandoned — and revoked rows are history, so any number of
--- them sit beside the live one. The index name is what a 23505 reports and what the connect callback matches on.
+-- them sit beside the live one (a revoked row's channel_id is NULL after a revoke, and NULLs are distinct anyway). The
+-- index name is what a 23505 reports and what the connect callback matches on.
 create unique index org_youtube_connections_one_live_channel
   on org_youtube_connections (channel_id)
   where status <> 'revoked';
@@ -120,8 +130,9 @@ create table youtube_connect_pending (
 
   constraint youtube_connect_pending_default_privacy_check check (default_privacy in ('unlisted', 'public', 'private'))
 );
--- The daily sweep that purges expired grants (a sealed token must not outlive its 10 minutes). The table is tiny and
--- short-lived, so org_id / user_id / connection_id carry no index of their own.
+-- The daily sweep that deletes expired grants: a grant is dead 10 minutes after it is made (the callback refuses an
+-- expired row), but its row, and any sealed token on it, is removed by the sweep, so it can linger up to a day. The
+-- table is tiny and short-lived, so org_id / user_id / connection_id carry no index of their own.
 create index youtube_connect_pending_expires_idx on youtube_connect_pending (expires_at);
 
 alter table youtube_connect_pending enable row level security;

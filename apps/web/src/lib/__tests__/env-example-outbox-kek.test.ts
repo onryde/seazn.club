@@ -55,3 +55,27 @@ describe("apps/web/.env.example, copied as it stands", () => {
     expect((caught as OutboxKeyUnavailableError).code).toBe("EMAIL_OUTBOX_KEK_SAMPLE");
   });
 });
+
+// YouTube Connect: a connected channel's refresh token is sealed under YOUTUBE_TOKEN_KEK, a key of its own. Both templates
+// must document it, and BLANK — unlike the outbox key there is no published sample (nothing refuses one in production, so
+// a sample copied to stg would seal every channel's token under a key anyone can read).
+describe("YOUTUBE_TOKEN_KEK in both .env.example files", () => {
+  const FILES = { "apps/web/.env.example": EXAMPLE, ".env.example": path.resolve(__dirname, "../../../../../.env.example") };
+
+  it("each template assigns it, blank, with the generate command beside it; and neither carries the outbox's published key", () => {
+    const published = assignments(fs.readFileSync(EXAMPLE, "utf8")).get("EMAIL_OUTBOX_KEK");
+    expect(published, "premise: the outbox sample exists, so 'not the sample' below can fail").toMatch(/^[0-9a-f]{64}$/);
+    let checked = 0;
+    for (const [name, file] of Object.entries(FILES)) {
+      const text = fs.readFileSync(file, "utf8");
+      const vars = assignments(text);
+      expect(vars.has("YOUTUBE_TOKEN_KEK"), `${name} names YOUTUBE_TOKEN_KEK`).toBe(true);
+      expect(vars.get("YOUTUBE_TOKEN_KEK"), `${name}: blank, never a sample`).toBe("");
+      expect(vars.get("YOUTUBE_TOKEN_KEK")).not.toBe(published);
+      const above = text.slice(0, text.indexOf("\nYOUTUBE_TOKEN_KEK=")).split("\n").slice(-4).join("\n");
+      expect(above, `${name}: the comment above it says how to generate one`).toMatch(/openssl rand -hex 32/);
+      checked++;
+    }
+    expect(checked, "the sweep read both files").toBe(2);
+  });
+});

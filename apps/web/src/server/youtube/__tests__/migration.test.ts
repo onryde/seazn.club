@@ -88,9 +88,10 @@ async function connection(
   return row!.id;
 }
 
-/** Set a connection to revoked the way T2's token store will: ONE statement, all three columns. */
+/** Set a connection to revoked the way T2's token store does: ONE statement — the token, the status, revoked_at, and the
+ *  channel's id and title (DP III.E.4: they do not outlive an in-app revoke). */
 async function revoke(connectionId: string): Promise<void> {
-  await sql`update org_youtube_connections set refresh_token_enc = null, status = 'revoked', revoked_at = now() where id = ${connectionId}`;
+  await sql`update org_youtube_connections set refresh_token_enc = null, status = 'revoked', revoked_at = now(), channel_id = null, channel_title = null where id = ${connectionId}`;
 }
 
 async function key(w: Pick<World, "orgId">, connectionId: string, slot: number, liveStreamId = `ls-${slot}-${uniq()}`): Promise<string> {
@@ -447,7 +448,9 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
     // Revoked rows are history: any number of them beside the live one, and beside each other.
     await expect(connection(o1, { channel: ch, status: "revoked" })).resolves.toBeTruthy();
     await expect(connection(o1, { channel: ch, status: "revoked" })).resolves.toBeTruthy();
-    expect(await countOf("org_youtube_connections", "channel_id", ch)).toBe(4);
+    // Four rows were made for this channel, but the first was revoked through `revoke`, which scrubs the channel (a revoke
+    // leaves the id behind for no one): so three still carry it — the live one and the two revoked rows inserted holding it.
+    expect(await countOf("org_youtube_connections", "channel_id", ch)).toBe(3);
   });
 
   it("revoked ⇔ no token and revoked ⇔ revoked_at: all four directions refused BY NAME; both consistent shapes (and the third status) accepted", async () => {
@@ -470,6 +473,36 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
     await expect(sql`update org_youtube_connections set status = 'revoked', revoked_at = now() where id = ${c}`).rejects.toMatchObject(noToken);
     await expect(sql`update org_youtube_connections set status = 'revoked', refresh_token_enc = null where id = ${c}`).rejects.toMatchObject(revokedAt);
     await expect(revoke(c)).resolves.toBeUndefined();
+  });
+
+  it("a LIVE connection must name its channel: a null channel_id or channel_title is refused BY NAME for connected and reconnect_needed; a revoked row may hold neither, or both", async () => {
+    const w = await world();
+    const named = { code: "23514", constraint_name: "org_youtube_connections_live_has_channel" };
+    const raw = (o: { status: "connected" | "reconnect_needed" | "revoked"; id: string | null; title: string | null }) => sql`
+      insert into org_youtube_connections (org_id, channel_id, channel_title, refresh_token_enc, granted_scope, consent_by, consent_at,
+                                           consent_version, status, created_by, revoked_at)
+      values (${w.orgId}, ${o.id}, ${o.title}, ${o.status === "revoked" ? null : FAKE_ENVELOPE()}, ${SCOPE}, ${w.userId}, now(), 1, ${o.status}, ${w.userId},
+              ${o.status === "revoked" ? new Date() : null})`;
+    let refused = 0;
+    for (const status of ["connected", "reconnect_needed"] as const) {
+      await expect(raw({ status, id: null, title: "Club channel" }), `${status}, no id`).rejects.toMatchObject(named);
+      await expect(raw({ status, id: `UC${uniq()}`, title: null }), `${status}, no title`).rejects.toMatchObject(named);
+      await expect(raw({ status, id: null, title: null }), `${status}, neither`).rejects.toMatchObject(named);
+      refused += 3;
+    }
+    expect(refused).toBe(6);
+    // the positive pairs: live and named is accepted; revoked is accepted with neither, and with both (history may keep them)
+    await expect(raw({ status: "connected", id: `UC${uniq()}`, title: "Club channel" })).resolves.toBeDefined();
+    await expect(raw({ status: "reconnect_needed", id: `UC${uniq()}`, title: "Club channel" })).resolves.toBeDefined();
+    await expect(raw({ status: "revoked", id: null, title: null })).resolves.toBeDefined();
+    await expect(raw({ status: "revoked", id: `UC${uniq()}`, title: "Club channel" })).resolves.toBeDefined();
+    // the SEQUENCE: a live row scrubbed WITHOUT being revoked is refused (the revoke must be one statement), and many scrubbed rows coexist (nulls are distinct)
+    const c = await connection(w);
+    await expect(sql`update org_youtube_connections set channel_id = null, channel_title = null where id = ${c}`).rejects.toMatchObject(named);
+    await expect(revoke(c)).resolves.toBeUndefined();
+    await expect(revoke(await connection(w))).resolves.toBeUndefined();
+    const [n] = await sql<{ n: number }[]>`select count(*)::int as n from org_youtube_connections where org_id = ${w.orgId} and status = 'revoked' and channel_id is null`;
+    expect(n!.n, "scrubbed revoked rows sit side by side: the raw one and the two revoked through revoke()").toBe(3);
   });
 
   it("the closed sets: each legal status and privacy is accepted (counted), an unlisted one is refused by name — on connections and on pending", async () => {

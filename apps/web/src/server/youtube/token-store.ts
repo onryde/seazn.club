@@ -10,7 +10,8 @@ import "server-only";
 // A CHECK cannot be deferred, so a revoke written as "null the token" and then "set the status" is refused by the
 // database half-way. Each writer below therefore changes the token, the status and revoked_at in ONE statement, and no
 // other file writes `status = 'revoked'` or the token. T8 (connect save), T17 (dead-grant purge) and T18 (disconnect) call
-// these; none of them may write the columns itself.
+// these; none of them may write the columns itself. The revoke statement also nulls the channel's id and title and archives
+// the connection's destination row under a fixed label (DP III.E.4: nothing identifying outlives an in-app revoke).
 //
 // Secrets: no function here puts a token, a sealed envelope or its bytes in a message, a log line or a thrown error. A
 // missing or malformed YOUTUBE_TOKEN_KEK throws the KEK's own sentence (crypto.ts), which names the variable and never
@@ -92,17 +93,38 @@ export async function replaceConnectionToken(tx: Exec, orgId: string, connection
   return rows.length === 1;
 }
 
-/** Revoke: the token is cleared AND the row becomes `revoked` with `revoked_at` — ONE statement, because V479's checks
- *  refuse any other shape (R1). `status_since` moves with the status. `last_error_code` is kept: the cause a dead grant
- *  was revoked for is history. False when the row is already revoked (its first revoke's time and cause stand), another
- *  org's, or missing. This clears OUR copy only; revoking the grant at Google is the caller's separate, outside-the-lock
- *  call (global-constraints: no row lock is held across a Google call). */
+/** What the destination row's label becomes when its connection is revoked: the channel's title is Authorized Data and must
+ *  not outlive the revoke (DP III.E.4, spec §3.4), and the label is the only other place Seazn copied it. */
+const DISCONNECTED_LABEL = "YouTube channel (disconnected)";
+
+/** Revoke: ONE statement that (1) clears the token and makes the row `revoked` with `revoked_at` — V479's checks refuse any
+ *  other shape (R1); `status_since` moves with the status; `last_error_code` is kept (the cause a dead grant was revoked for
+ *  is history) — (2) nulls the channel's id and title (Authorized Data: deleted within 7 days of an in-app revoke, so done
+ *  here, inline; only a revoked row may lack them, V479 `live_has_channel`), and (3) ARCHIVES the connection's destination
+ *  row(s) under a fixed, non-identifying label. The archive is what frees the channel's fingerprint (V427's partial unique
+ *  index is on ACTIVE rows) so the same channel can be connected again, and what keeps Remove/Rename of a dead destination
+ *  from answering "use Disconnect". `dest_fingerprint` stays: it is a keyed HMAC and history keys on it. An already-archived
+ *  row keeps its own archive time. The CTEs are one statement, so a half-revoke cannot be observed.
+ *
+ *  False when the connection is already revoked (its first revoke's time, cause and archive stand — and nothing is touched,
+ *  since the archive leg only follows a row that THIS call revoked), another org's, or missing. This clears OUR copy only;
+ *  revoking the grant at Google is the caller's separate, outside-the-lock call (global-constraints: no row lock is held
+ *  across a Google call). */
 export async function revokeConnection(tx: Exec, orgId: string, connectionId: string): Promise<boolean> {
   const rows = await tx<{ id: string }[]>`
-    update org_youtube_connections
-       set refresh_token_enc = null, status = 'revoked', status_since = now(), revoked_at = now()
-     where id = ${connectionId} and org_id = ${orgId} and status <> 'revoked'
-    returning id`;
+    with revoked as (
+      update org_youtube_connections
+         set refresh_token_enc = null, status = 'revoked', status_since = now(), revoked_at = now(),
+             channel_id = null, channel_title = null
+       where id = ${connectionId} and org_id = ${orgId} and status <> 'revoked'
+      returning id
+    ), archived as (
+      update org_stream_targets
+         set archived_at = coalesce(archived_at, now()), label = ${DISCONNECTED_LABEL}
+       where youtube_connection_id in (select id from revoked) and org_id = ${orgId}
+      returning id
+    )
+    select id from revoked`;
   return rows.length === 1;
 }
 
