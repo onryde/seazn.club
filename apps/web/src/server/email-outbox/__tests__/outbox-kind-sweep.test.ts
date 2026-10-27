@@ -135,6 +135,10 @@
 //     runs, call it after the run's ledger row; ai-run-cost-alert.test.ts drives it to a row), for an officials run costing far over a
 //     seeded trailing median (25 runs of this run's own organisation, which the clean-up removes), the same way. Its ref is a UUID
 //     minted for the run (P-W5-6).
+//   - staff_earn_grant_volume: the real `checkEarnGrantVolumeAlert` (its one caller, the daily billing-grant cron, awaits it;
+//     earn-grant-volume-alert.test.ts drives it to a row), over today's earn grants with 20 seeded, the same way. Its key is today's
+//     UTC day itself (P-W5-15), so the scenario clears a row an earlier sweep left today, and its subject's count is the number the
+//     producer handed the builder (a call-through spy on `earnGrantVolumeAlertEmail`; the count moves with neighbouring suites).
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -181,6 +185,12 @@ vi.mock("@/lib/auth", async (importOriginal) => {
       return { user: session.user as User, role };
     }),
   };
+});
+// The earn-grant volume alert's subject carries a platform-wide count that neighbouring suites move, so its scenario reads the count
+// the producer handed the builder. Everything else in lib/email.ts is the real module.
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, earnGrantVolumeAlertEmail: vi.fn(actual.earnGrantVolumeAlertEmail) };
 });
 // The one network seam. The harness reads this same mock back (it imports `deliver` from the same module).
 const deliverMock = vi.hoisted(() => vi.fn());
@@ -238,6 +248,8 @@ import {
 } from "@/server/usecases/billing-events";
 import { alertStreamPackPriceDrift, StreamPackPriceDriftError } from "@/lib/relay-checkout";
 import { maybeAlertExpensiveRun } from "@/server/usecases/ai-runs-admin";
+import { checkEarnGrantVolumeAlert } from "@/lib/credits";
+import { earnGrantVolumeAlertEmail } from "@/lib/email";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
@@ -266,6 +278,7 @@ import {
 import { allowlistLengthFor, KIND_DIRECT_SENDER, NOT_YET_MOVED, SENDER_ALLOWLIST } from "./_kind-senders";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+const earnAlert = vi.mocked(earnGrantVolumeAlertEmail);
 const RUN = `ks-${randomUUID().slice(0, 8)}`;
 const KEK = "ab".repeat(32);
 const MIN = 60_000;
@@ -1482,6 +1495,38 @@ function aiRunCostScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for a day whose earn grants crossed the threshold, to this run's STAFF_ALERT_EMAIL: no org, no account, and the
+ *  worker makes the first attempt. The key is today's UTC day itself (P-W5-15), global by nature, so a sweep that already ran today
+ *  on this database holds it and is cleared first; earn-grant-volume-alert.test.ts keeps to days of its own for the same reason. The
+ *  count in the subject is every earn grant since today began, which neighbouring suites move while this runs, so it is the number
+ *  the producer handed the builder (a call-through spy); the rest of the subject is the builder's inline English, typed from its
+ *  source. */
+function earnGrantVolumeScenario(): LiteralKindScenario {
+  const recipient = address();
+  const s: LiteralKindScenario = {
+    locale: "en",
+    subjectLiteral: "(the count the producer read, set by run)",
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const day = new Date().toISOString().slice(0, 10);
+      await sql`delete from email_outbox where kind = 'staff_earn_grant_volume' and dedupe_key = ${day}`;
+      await sql`
+        insert into ai_credit_ledger (wallet_id, delta, source, bucket, balance_after, idempotency_key)
+        select gen_random_uuid(), 10, 'earn_grant', 'pack', 10, ${`${RUN}-earn-`} || g from generate_series(1, 20) as g`;
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      earnAlert.mockClear();
+      const id = await checkEarnGrantVolumeAlert();
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+      expect(earnAlert, "premise: the builder rendered it once").toHaveBeenCalledTimes(1);
+      const { count, threshold } = earnAlert.mock.calls[0]![0];
+      expect(count, "premise: the seeded day is over the threshold").toBeGreaterThanOrEqual(20);
+      s.subjectLiteral = `Earn-grant volume alert: ${count} today (threshold ${threshold})`;
+    },
+  };
+  return s;
+}
+
 /** The real staff alert for a platform-charge dispute, to this run's STAFF_ALERT_EMAIL, for a `created` subscription dispute of an org
  *  that speaks French: the alert is in the platform locale (en) all the same, it names the org, and the worker makes the first
  *  attempt. */
@@ -2096,6 +2141,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_stuck_events: stuckEventsScenario(),
         staff_stream_pack_price_drift: streamPackPriceDriftScenario(),
         staff_ai_run_cost: aiRunCostScenario(),
+        staff_earn_grant_volume: earnGrantVolumeScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

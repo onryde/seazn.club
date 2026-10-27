@@ -1259,7 +1259,6 @@ export function aiRunCostAlertEmail(opts: AiRunCostAlertEmail): EmailContent {
 }
 
 export interface EarnGrantVolumeAlertEmail {
-  to: string;
   count: number;
   threshold: number;
 }
@@ -1269,10 +1268,12 @@ export interface EarnGrantVolumeAlertEmail {
  *  across every wallet) crossed the daily alert threshold — the backstop
  *  for the publish-with-division gate, in case the gate itself is being
  *  worked (many throwaway orgs each publishing one bare competition).
- *  Ops-only, no user-facing i18n (mirrors stuckEventsAlertEmail). Fires
- *  at most once per cron poll, not deduped across days — a persistent high
- *  day repeats the alert, which is the point. */
-export async function sendEarnGrantVolumeAlertEmail(opts: EarnGrantVolumeAlertEmail): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors stuckEventsAlertEmail). RENDERED
+ *  here; it is queued on the email outbox by `checkEarnGrantVolumeAlert`
+ *  (lib/credits.ts, kind `staff_earn_grant_volume`) once per UTC day, keyed
+ *  by the day — a persistent high volume repeats the alert the next day,
+ *  which is the point; nothing sends it directly. */
+export function earnGrantVolumeAlertEmail(opts: EarnGrantVolumeAlertEmail): EmailContent {
   const subject = `Earn-grant volume alert: ${opts.count} today (threshold ${opts.threshold})`;
   const bodyText =
     `${opts.count} earn_grant credit rows have landed today, at or above the alert threshold of ` +
@@ -1291,7 +1292,7 @@ export async function sendEarnGrantVolumeAlertEmail(opts: EarnGrantVolumeAlertEm
     footerNote: "Automated staff alert — daily billing-grant cron (v17 gap #296).",
   });
   const text = `${bodyText}\n\nearn_grant rows today: ${opts.count} · threshold: ${opts.threshold}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface ExtraOrgAllowanceAlertEmail {
@@ -1322,7 +1323,7 @@ export interface ExtraOrgAllowanceAlertEmail {
  *  group at this size "becomes an enterprise conversation rather than a silent
  *  reseller"; this is that conversation being started while the customer is
  *  actively expanding, instead of a sweep noticing weeks later.
- *  Ops-only, no user-facing i18n (mirrors sendEarnGrantVolumeAlertEmail). Not
+ *  Ops-only, no user-facing i18n (mirrors earnGrantVolumeAlertEmail). Not
  *  deduped: a group that keeps adding organisations is exactly the one to keep
  *  hearing about. */
 export async function sendExtraOrgAllowanceAlertEmail(
