@@ -202,6 +202,9 @@ code-facts F1–F12, docs-facts §7, and this spec's own reads (marked "spec").
 | P24 | Football `fair_play` with `fairPlay:false` is refused or ignored | It is emitted as 0 for every side, so the key is inert | `football.ts:1724` (spec) |
 | P25 | The tie what-if works for every sport | It returns null unless `points` is the first key, so a wins-first order loses it | `competition/tie-what-if.ts:54-60` (spec) |
 | P26 | One place resolves a division's cascade | Six files each resolve `tiebreakers ?? defaultTiebreakers` themselves | §6 rows W1–W6 (spec) |
+| P27 | A football shoot-out is scored with `football.penalty` kicks (§5.2, §13.5, brief Task 14) | `football.penalty` is an in-play penalty kick awarded to a side. A shoot-out kick is `football.shootout.kick`, applied in the SHOOTOUT phase | `football.ts:340-341,464-465,2233-2236` (T14) |
+| P28 | The stage activation writers are `usecases/stages.ts:2813` and `:3644` (§5.4, §6 W13, §13.5) | The lines moved. The two `pinStageTableRules` calls in the activating transactions are now at `:3051` and `:3889` | `usecases/stages.ts:3051,3889` (T14) |
+| P29 | The public standings serve the order's `source` and `pinnedAt` (§13 Smoke, brief Task 14) | `PublicDivisionStandings` serves rows only. `source` and `pinnedAt` come from the authed `GET /stages/{id}` `tableRules`, so the smoke reads them there (an authed read, a deviation from the brief's "public standings") and reads the order from the public route | `api-v1/schemas.ts:1441,1487-1492`; `scripts/smoke.ts:7576-7579` (T14) |
 
 ## 5. Engine design
 
