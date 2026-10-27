@@ -35,7 +35,10 @@ import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 const { sendOfficialAssignedEmail } = vi.hoisted(() => ({
   sendOfficialAssignedEmail: vi.fn().mockResolvedValue(true),
 }));
-vi.mock("@/lib/email", () => ({ sendOfficialAssignedEmail }));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, sendOfficialAssignedEmail };
+});
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
