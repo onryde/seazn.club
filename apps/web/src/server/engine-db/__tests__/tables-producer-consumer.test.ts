@@ -15,7 +15,9 @@
 // real recompute), the stage and fixture rules PUTs, the division PATCH, the served pin (`GET /stages/{id}`) and the
 // public `GET …/divisions/{divisionSlug}/standings`, validated against its documented schema. One case body serves both
 // doors (`DOORS`), so the expected values are written once: the usecase door keeps A14's titles (t14.json's killers name
-// them), the API door's titles carry "API v1: ". HK-TB-2 (typed hockey goals) is not here: its producer is Task 18.
+// them), the API door's titles carry "API v1: ". The loop is counted: the last case checks every declared API case ran to
+// its end and every route handler was driven (`API_CASES`, `twoDoors`). HK-TB-2 (typed hockey goals, field goals) is
+// here, through both doors; Task 18 owns only the pad's goal-kind chips and the strict refusal.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 // `unstable_cache` is a Next server-runtime API with no incrementalCache outside a real request — passthrough, never a
@@ -25,14 +27,20 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
 }));
 // The API door's session (the desk-route pattern, as w2d-api.test.ts drives it): the caller is the scene's owner; the
-// route, its auth door and the usecases behind it are real. The usecase door never reads either.
-const authState = vi.hoisted(() => ({ userId: "" }));
+// route, its auth door and the usecases behind it are real. The usecase door never reads either. An anonymous call
+// (`userId` "") has NO session, as the real `requireUser` reads one: it throws the real `AuthError` and `getCurrentUser`
+// answers null, and each `requireUser` is counted so the public read can witness it never asked (m2).
+const authState = vi.hoisted(() => ({ userId: "", requireUserCalls: 0 }));
 vi.mock("@/lib/auth", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/auth")>();
   return {
     ...actual,
-    requireUser: async () => ({ id: authState.userId }),
-    getCurrentUser: async () => ({ id: authState.userId }),
+    requireUser: async () => {
+      authState.requireUserCalls++;
+      if (authState.userId === "") throw new actual.AuthError("Not authenticated");
+      return { id: authState.userId };
+    },
+    getCurrentUser: async () => (authState.userId === "" ? null : { id: authState.userId }),
     getActiveOrgId: async () => null,
   };
 });
@@ -129,6 +137,18 @@ interface Door {
 }
 
 const byRank = (a: StandingsSnapshotRow, b: StandingsSnapshotRow) => (a.rank ?? 0) - (b.rank ?? 0);
+/** Served rows read per door (anti-vacuity for `inRankOrder`). */
+const ranked = new Map<string, number>();
+/** A served table in its rank order. The documented schema makes `rank` optional and says nothing of the rows' ORDER, so
+ *  the order a consumer reads is `rank`, never the array's (no order claim on the route): every served row must carry
+ *  one, the ranks are the places 1..n (the ranker's positional rank), and each row is counted. */
+function inRankOrder(tag: string, rows: readonly StandingsSnapshotRow[]): StandingsSnapshotRow[] {
+  for (const r of rows) expect(typeof r.rank, `${tag}a served row carries its rank (${r.entrantId})`).toBe("number");
+  const sorted = [...rows].sort(byRank);
+  expect(sorted.map((r) => r.rank), `${tag}the ranks are the places 1..n`).toEqual(sorted.map((_, i) => i + 1));
+  ranked.set(tag, (ranked.get(tag) ?? 0) + rows.length);
+  return sorted;
+}
 
 /** A usecase's answer as the API would carry it: its value, or its refusal's status, code and extra. */
 async function answered(run: () => Promise<unknown>): Promise<Answer> {
@@ -163,7 +183,7 @@ const USECASE: Door = {
   tables: async (slugs) => {
     const data = await getPublicDivision(...slugs);
     if (data === null) throw new Error("the public read found no division");
-    return data.standings.map((t) => ({ stage_id: t.stage_id, pool_id: t.pool_id, rows: [...t.rows].sort(byRank) }));
+    return data.standings.map((t) => ({ stage_id: t.stage_id, pool_id: t.pool_id, rows: inRankOrder("", t.rows) }));
   },
 };
 
@@ -173,8 +193,12 @@ interface Envelope {
   error: { code: string; message: string; [k: string]: unknown } | undefined;
 }
 type Handler<P> = (req: Request, ctx: { params: Promise<P> }) => Promise<Response>;
-/** One request through a real route handler, as the scene's owner (`auth.userId` is the session), its envelope read back. */
+/** Requests per route handler (anti-vacuity for the two-door loop: the last case requires every handler driven). */
+const hits = new Map<unknown, number>();
+/** One request through a real route handler, as the scene's owner (`auth.userId` is the session) or, with `auth` null,
+ *  anonymously (no session at all), its envelope read back. */
 async function call<P>(auth: AuthCtx | null, handler: Handler<P>, params: P, method: string, path: string, body?: unknown): Promise<Envelope> {
+  hits.set(handler, (hits.get(handler) ?? 0) + 1);
   authState.userId = auth?.userId ?? "";
   const req = new Request(`https://test.local/api/v1${path}`, {
     method,
@@ -222,19 +246,35 @@ const API: Door = {
     return { pinnedAt: rules.tiebreakers.pinnedAt, tiebreakers: rules.tiebreakers.keys, sources: { tiebreakers: rules.tiebreakers.source, points: rules.points.source } };
   },
   tables: async ([orgSlug, slug, divisionSlug]) => {
-    // Anonymous: the public route has no auth door.
+    // Anonymous: no session at all (`call(null, …)`), and the route never asks for one — a `requireUser` here would throw
+    // (the mock's AuthError) and is counted besides.
     const path = `/public/orgs/${orgSlug}/competitions/${slug}/divisions/${divisionSlug}/standings`;
+    const asked = authState.requireUserCalls;
     const r = ok(await call(null, publicStandingsRoute, { orgSlug, slug, divisionSlug }, "GET", path), "GET public standings");
-    return S.PublicDivisionStandings.parse(r.data).standings.map((t) => {
-      const rows = t.rows as StandingsSnapshotRow[];
-      // The wire's order IS the ranking an API consumer reads, so it is never re-sorted here — it must already be the rank order.
-      expect(rows.map((x) => x.entrantId), "the public route serves the table in rank order").toEqual([...rows].sort(byRank).map((x) => x.entrantId));
-      return { stage_id: t.stage_id, pool_id: t.pool_id, rows };
-    });
+    expect(authState.requireUserCalls - asked, "the public read never asks for a user").toBe(0);
+    return S.PublicDivisionStandings.parse(r.data).standings.map((t) => ({
+      stage_id: t.stage_id,
+      pool_id: t.pool_id,
+      rows: inRankOrder("API v1: ", t.rows as StandingsSnapshotRow[]),
+    }));
   },
 };
 
 const DOORS: readonly Door[] = [USECASE, API];
+
+/** The API v1 cases the brief declares (task-14 brief Step 1, spec §13.5), in registration order: one per case, two for
+ *  ice hockey's OT and GWS, HK-TB-1's FIH shoot-out and winsCount, and B5's SB and direct. */
+const API_CASES = ["empty case first", "FB-PT-1", "IH-PT-1", "IH-PT-1", "CK-PT-1", "TT-PT-1", "HK-TB-1", "HK-TB-1", "HK-TB-2", "B5", "B5", "X-TB-2"] as const;
+const apiTitles: string[] = [];
+let apiRan = 0;
+/** One case through one door, counted: the API door's titles are registered, and a case counts as run only at its end. */
+function twoDoors(door: Door, title: string, body: () => Promise<void>): void {
+  if (door === API) apiTitles.push(title);
+  it(title, async () => {
+    await body();
+    if (door === API) apiRan++;
+  });
+}
 
 interface PublicScene extends TableScene {
   stageId: string;
@@ -343,7 +383,7 @@ const named = (letters: string, ids: readonly string[]): Record<string, string> 
   Object.fromEntries([...letters].map((l, i) => [l, ids[i]!]));
 
 describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real producer to real consumer", () => {
-  for (const door of DOORS) it(`${door.tag}empty case first: a generated stage is pinned by the real generate and the public read has no table before a result`, async () => {
+  for (const door of DOORS) twoDoors(door, `${door.tag}empty case first: a generated stage is pinned by the real generate and the public read has no table before a result`, async () => {
     // single-sport: the empty case is sport-blind (no result is written); generic is the rig's sport.
     const s = await publicScene(door, { sport: "generic", variant: "score", entrants: 3 });
     const p = await pinOf(s.stageId);
@@ -361,7 +401,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect(n, "no drawing of lots without a table, and none by a read").toBe(0);
   });
 
-  for (const door of DOORS) it(`${door.tag}FB-PT-1 football group, shootout on: football.shootout.kick in the SHOOTOUT phase → public row D for both, winner 2 points, loser 1, wins 0 (RB2B-7)`, async () => {
+  for (const door of DOORS) twoDoors(door, `${door.tag}FB-PT-1 football group, shootout on: football.shootout.kick in the SHOOTOUT phase → public row D for both, winner 2 points, loser 1, wins 0 (RB2B-7)`, async () => {
     // single-sport: FB-PT-1 is football's own row (a group-stage shoot-out, booked draw-plus-bonus).
     const cfg = { ...variantCfg("football", "11-a-side"), shootout: true };
     const s = await publicScene(door, {
@@ -420,7 +460,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     },
   ];
   for (const door of DOORS) for (const c of IH_CASES) {
-    it(`${door.tag}IH-PT-1 icehockey ${c.name} → OTW/OTL ledgers and IIHF 3-2-1-0 points 2/1 on the public rows (RBG:343-344)`, async () => {
+    twoDoors(door, `${door.tag}IH-PT-1 icehockey ${c.name} → OTW/OTL ledgers and IIHF 3-2-1-0 points 2/1 on the public rows (RBG:343-344)`, async () => {
       // single-sport: IH-PT-1 is ice hockey's own row (IIHF splits regulation, overtime and the GWS).
       const s = await publicScene(door, { sport: "icehockey", variant: "iihf", entrants: 2 });
       const [H, A] = s.entrants as [string, string];
@@ -438,7 +478,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     });
   }
 
-  for (const door of DOORS) it(`${door.tag}CK-PT-1 a cricket tie → 1 point each on the public table; a win beside it pays 2 and its loser 0`, async () => {
+  for (const door of DOORS) twoDoors(door, `${door.tag}CK-PT-1 a cricket tie → 1 point each on the public table; a win beside it pays 2 and its loser 0`, async () => {
     // single-sport: CK-PT-1 is cricket's own row (2/1/1/0: win, tie, no result, loss).
     const s = await publicScene(door, { sport: "cricket", variant: "t20", entrants: 3 });
     const [A, B, C] = s.entrants as [string, string, string];
@@ -464,7 +504,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect(rowOf(rows, loserOfAC).points - (loserOfAC === A ? 1 : 0), "the loss pays 0").toBe(0);
   });
 
-  for (const door of DOORS) it(`${door.tag}TT-PT-1 a table-tennis walkover → the loser's row gets 0, a played loser 1`, async () => {
+  for (const door of DOORS) twoDoors(door, `${door.tag}TT-PT-1 a table-tennis walkover → the loser's row gets 0, a played loser 1`, async () => {
     // single-sport: TT-PT-1 is table tennis's own row (ITTF 2/1/0: a played loss pays 1, an unplayed one 0).
     const s = await publicScene(door, { sport: "tabletennis", variant: "bo5", entrants: 3 });
     const [A, B, C] = s.entrants as [string, string, string];
@@ -476,7 +516,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect(rowOf(rows, C).points, "not a played loser's 1").not.toBe(rowOf(rows, B).points);
   });
 
-  for (const door of DOORS) it(`${door.tag}HK-TB-1 FIH: a team with more REGULATION wins ranks above one level on points whose points include a shoot-out win (booked a draw, B2)`, async () => {
+  for (const door of DOORS) twoDoors(door, `${door.tag}HK-TB-1 FIH: a team with more REGULATION wins ranks above one level on points whose points include a shoot-out win (booked a draw, B2)`, async () => {
     // single-sport: HK-TB-1 is hockey's own order (FIH GTR App. 3) with its draw-plus-bonus shoot-out (HK-PT-2).
     const s = await publicScene(door, { sport: "hockey", variant: "fih-shootout", entrants: 4 });
     const t = named("ABCD", s.entrants);
@@ -506,7 +546,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect(order(rows, t)).toEqual(["D", "A", "B", "C"]);
   });
 
-  for (const door of DOORS) it(`${door.tag}HK-TB-1 winsCount 'regulation' reaches the web rank call: an OVERTIME win is not a match won, so A (one regulation win) ranks above B (one overtime win) though B's goal difference is the better`, async () => {
+  for (const door of DOORS) twoDoors(door, `${door.tag}HK-TB-1 winsCount 'regulation' reaches the web rank call: an OVERTIME win is not a match won, so A (one regulation win) ranks above B (one overtime win) though B's goal difference is the better`, async () => {
     // single-sport: HK-TB-1 ("matches won: regulation wins only", B2) is hockey's; hockey is the one sport that declares
     // `winsCount: "regulation"`. A shoot-out win is booked a draw (the case above), so only an overtime win can reach
     // the W column: a hockey division whose cfg plays overtime (the period kernel's own `overtime` key).
@@ -535,6 +575,53 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect(order(rows, t)).toEqual(["D", "A", "B", "C"]);
   });
 
+  for (const door of DOORS) twoDoors(door, `${door.tag}HK-TB-2 hockey goals typed fg / pc / stroke / og: two teams level on points, matches won, goal difference, goals for and head-to-head rank by FIELD GOALS (gf − goals_pc − goals_stroke; the own goal counts as a field goal), and the public rows carry goals_pc and goals_stroke (FIH GTR App. 3, RBG:204, :236-237)`, async () => {
+    // single-sport: HK-TB-2 is hockey's own key — the one sport that types every goal (B3) and ranks on field goals.
+    const hk = mod("hockey");
+    const cfg = hk.configSchema.parse(variantCfg("hockey", "fih-outdoor")) as { goalKinds: string[]; overtime: unknown; shootout: unknown };
+    expect([[...cfg.goalKinds].sort(), cfg.overtime, cfg.shootout], "premise: FIH outdoor types fg / pc / stroke / og, and a draw stands").toEqual([["fg", "og", "pc", "stroke"], null, null]);
+    // The cascade as the rulebook states it (RBG:236-237, FIH GTR App. 3 §1–2): points → matches won → GD → GF → H2H (two
+    // teams: the match between them) → field goals → lots.
+    expect(hk.defaultTiebreakers("league", cfg as never), "premise: the engine declares FIH's cascade").toEqual([
+      "points", "wins", "diff", "for", "h2h_points", "h2h_wins", "h2h_diff", "h2h_for", "field_goals", "lots",
+    ]);
+    const s = await publicScene(door, { sport: "hockey", variant: "fih-outdoor", entrants: 3 });
+    const t = named("ABC", s.entrants);
+    const toFt = (goals: Record<string, unknown>[]): Ev[] => [
+      { type: "core.start" },
+      ...goals.map((payload): Ev => ({ type: "hockey.goal", payload })),
+      { type: "hockey.period.advance", payload: { to: "Q2" } },
+      { type: "hockey.period.advance", payload: { to: "Q3" } },
+      { type: "hockey.period.advance", payload: { to: "Q4" } },
+      { type: "hockey.period.advance", payload: { to: "FT" } },
+    ];
+    // The level match last: every table along the way splits A and B on a key before lots (after B–C they are level
+    // to goals for and have not met — field goals again), so no drawing of lots is ever stored for them.
+    // A 2-0 C: a field goal, and an own goal struck by C's player (`by` names the striker's side; it credits A).
+    const ac = await play(door, s.auth, s.stageId, t.A!, t.C!, toFt([{ by: "H", kind: "fg" }, { by: "A", kind: "og" }]));
+    // B 2-0 C: a penalty corner and a penalty stroke.
+    const bc = await play(door, s.auth, s.stageId, t.B!, t.C!, toFt([{ by: "H", kind: "pc" }, { by: "H", kind: "stroke" }]));
+    // A 1-1 B, a field goal each.
+    const ab = await play(door, s.auth, s.stageId, t.A!, t.B!, toFt([{ by: "H", kind: "fg" }, { by: "A", kind: "fg" }]));
+    expect([ab.outcome?.kind, ac.outcome?.winner, bc.outcome?.winner], "rig: a draw, then A's and B's wins").toEqual(["draw", t.A, t.B]);
+    const rows = await publicRows(door, s);
+    const [A, B] = [rowOf(rows, t.A!), rowOf(rows, t.B!)];
+    // FIH 3/1/0: A and B a draw and a win each — 4 points, one match won, GD 3 − 1 = +2, GF 3 — and their own match a
+    // 1-1 draw, so the head-to-head block is level as well.
+    const keys = (r: StandingsSnapshotRow) => [r.points, r.won, r.metrics["gd"], r.metrics["gf"]];
+    expect({ A: keys(A), B: keys(B) }, "level on every key before field goals").toEqual({ A: [4, 1, 2, 3], B: [4, 1, 2, 3] });
+    // The goals by kind (B3, RBG:214) reach the public row: B's two are a penalty corner and a stroke, A's none.
+    expect([B.metrics["goals_pc"], B.metrics["goals_stroke"]], "B's goals by kind").toEqual([1, 1]);
+    expect([A.metrics["goals_pc"] ?? 0, A.metrics["goals_stroke"] ?? 0], "A's goals by kind").toEqual([0, 0]);
+    // HK-TB-2: field goals A 1 + 1 + the own goal = 3, B 1 + 0 + 0 = 1 → A above B. Counting every goal (gf) leaves them
+    // level on 3 and sends them to a drawing of lots, which may well put A first: the key and the absent draw witness it
+    // (deterministically, where the order alone is a coin).
+    expect(order(rows, t)).toEqual(["A", "B", "C"]);
+    expect([A.tieBreak?.key, B.tieBreak?.key], "field goals split them").toEqual(["field_goals", "field_goals"]);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stage_lots_draws where stage_id = ${s.stageId}`;
+    expect(n, "no drawing of lots").toBe(0);
+  });
+
   /** FIDE results in a 3/1/0 round robin: "1-0" home wins, "0-1" away wins, "½-½" a draw. */
   type Chess = [string, string, "1-0" | "0-1" | "½-½"];
   async function playChess(door: Door, s: PublicScene, t: Record<string, string>, games: readonly Chess[]): Promise<number> {
@@ -560,7 +647,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     sql<{ members: string[]; drawn_order: string[] }[]>`
       select members, drawn_order from stage_lots_draws where stage_id = ${stageId} and superseded_at is null order by members_key`;
 
-  for (const door of DOORS) it(`${door.tag}B5 chess round robin under the 3/1/0 preset: Sonneborn-Berger reads the game points 1/½/0, not the 3/1/0 table points — A and E, level on table points, split as FIDE's SB arithmetic says (gamePoints reaches the web rank call)`, async () => {
+  for (const door of DOORS) twoDoors(door, `${door.tag}B5 chess round robin under the 3/1/0 preset: Sonneborn-Berger reads the game points 1/½/0, not the 3/1/0 table points — A and E, level on table points, split as FIDE's SB arithmetic says (gamePoints reaches the web rank call)`, async () => {
     // single-sport: B5 / BG-TB-3 is chess's: chess is the sport whose game points (1/½/0) differ from a table preset's.
     const s = await publicScene(door, {
       sport: "boardgame",
@@ -594,7 +681,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect(rowOf(rows, t.A!).tieBreak?.key, "A's place is SB's too").toBe("sberger");
   });
 
-  for (const door of DOORS) it(`${door.tag}B5 chess round robin under the 3/1/0 preset: direct encounter reads the game points too — P and Q level among the four on 7, where the table points would split them`, async () => {
+  for (const door of DOORS) twoDoors(door, `${door.tag}B5 chess round robin under the 3/1/0 preset: direct encounter reads the game points too — P and Q level among the four on 7, where the table points would split them`, async () => {
     // single-sport: B5 / BG-TB-3 is chess's (see above). The order is an own one the write path validates — points,
     // direct, lots — so direct's reading alone decides: FIDE's default puts `wins` after direct, which splits P and Q the
     // same way whichever points direct read.
@@ -627,7 +714,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect([rowOf(rows, t.P!).tieBreak?.key, rowOf(rows, t.Q!).tieBreak?.key], "lots, not direct, split them").toEqual(["lots", "lots"]);
   });
 
-  for (const door of DOORS) it(`${door.tag}X-TB-2 the pin comes from the real generate${door === API ? " (POST /stages/{id}/generate)" : ""}; with the division's live points moved off it, the override refusal (${door === API ? "PUT /fixtures/{id}/rules" : "the real fixture-rules usecase"}) and the public table both follow the PIN; the lock comes from the real first event${door === API ? " (POST /fixtures/{id}/events)" : ""}; a division order saved after activation never reaches the public table`, async () => {
+  for (const door of DOORS) twoDoors(door, `${door.tag}X-TB-2 the pin comes from the real generate${door === API ? " (POST /stages/{id}/generate)" : ""}; with the division's live points moved off it, the override refusal (${door === API ? "PUT /fixtures/{id}/rules" : "the real fixture-rules usecase"}) and the public table both follow the PIN; the lock comes from the real first event${door === API ? " (POST /fixtures/{id}/events)" : ""}; a division order saved after activation never reaches the public table`, async () => {
     // single-sport: the override refusal needs a match-scope format key whose change adds outcomes the pinned rule does
     // not pay — volleyball's best-of (VB-PT-3); generic has no match-scope key.
     const vb = mod("volleyball");
@@ -866,6 +953,9 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     return { pin, seats, W1: f1.home, W2: f2.home, crossDraws: draws.length };
   };
 
+  // Usecase door only: X-TB-7 is not one of Task 14's API cases (brief Step 1). Its order saves (`PUT /stages/{id}/rules`,
+  // `PATCH /divisions/{id}`) and the generate and start are driven through the wire above (B5, X-TB-2); the reader here
+  // is the pin's derived cross-group order, which best-Nth reads inside `completeStage` and the seed proposal.
   it("X-TB-7 the cross-group door in PR A is an ORDER save: a stage's own order or its division's, saved while the stage is pending (its generate pins it), derives the order the pin carries (source 'derived') and best-Nth seats by it — completeStage and the setup-timing proposal", async () => {
     // single-sport: X-TB-7 is sport-blind (the order minus its head-to-head steps); generic's goals ledgers make the two
     // derived orders disagree on one result each.
@@ -908,5 +998,18 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect([rowOf(rows, t.A!).metrics["sets_won"], rowOf(rows, t.A!).metrics["sets_lost"]], "A's games: 2 + 1 + 2 credited, 1 + 2 lost").toEqual([5, 3]);
     expect(order(rows, t)).toEqual(["A", "B", "C", "D"]);
     expect(rowOf(rows, t.A!).tieBreak?.key, "A is first on the game difference").toBe("set_diff");
+  });
+
+  it("the two-door loop is counted: every declared API v1 case registered and ran to its end, every route handler was driven, and every served row carried its rank", () => {
+    // Anti-vacuity for the loop above: runs with the whole file (a `-t` selection that skips the cases reads it short).
+    expect(apiTitles.length, "the API cases registered").toBe(API_CASES.length);
+    expect(apiTitles.map((title, i) => title.startsWith(`${API.tag}${API_CASES[i]}`)), "in the declared order").toEqual(API_CASES.map(() => true));
+    expect(apiRan, "the API cases that ran to their end").toBe(API_CASES.length);
+    expect(apiRan).toBeGreaterThan(0);
+    const handlers = { generateRoute, getStageRoute, putStageRulesRoute, startRoute, patchDivisionRoute, eventsRoute, putFixtureRulesRoute, publicStandingsRoute };
+    expect(Object.fromEntries(Object.entries(handlers).map(([k, h]) => [k, (hits.get(h) ?? 0) > 0])), "every route handler driven").toEqual(
+      Object.fromEntries(Object.keys(handlers).map((k) => [k, true])),
+    );
+    expect([ranked.get("") ?? 0, ranked.get(API.tag) ?? 0].every((x) => x > 0), "served rows read by both doors").toBe(true);
   });
 });
