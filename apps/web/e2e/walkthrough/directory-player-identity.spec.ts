@@ -1,6 +1,14 @@
 import { test, expect, type Page } from "@playwright/test";
 import { failOnNativeDialog, loginUi } from "../helpers";
 import { dismissConsent, freshOrg, stamp, waitForHydration } from "../directory-kit";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** Notice copy read from the dictionary the page renders from, never retyped here (the `readFileSync` shape of
+ *  scheduling-officials-handoff.spec.ts: Playwright's loader supplies no JSON import attribute). */
+const UI_EN: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
 
 /**
  * The organiser's identity journey on /directory?tab=players, driven by hand.
@@ -237,8 +245,13 @@ test("a claim link is not transferable, and a withdrawn or spent one never comes
       "the mailer accepted this invite, so no link is shown — this spec needs the send-failure fallback",
     ).toHaveCount(0);
     // The fallback is CI's path too, not just this machine's: e2e.yml sets no
-    // RESEND_API_KEY, and lib/email.ts's send() returns false when it is unset
-    // (officials-directory.spec.ts already leans on exactly this).
+    // RESEND_API_KEY, so the invite email's first attempt through the email
+    // outbox cannot go out (the row ends `dead`) and `email_sent` is false
+    // (officials-directory.spec.ts already leans on exactly this). The notice
+    // says the email may arrive late, not that it failed: the outbox keeps it.
+    const notSent = UI_EN["claim.invite.sendFailed"];
+    expect(notSent, "claim.invite.sendFailed missing from en/ui.json").toBeTruthy();
+    await expect(dialog.getByText(notSent!, { exact: true })).toBeVisible();
     const link = (await dialog.getByTestId("claim-link").textContent())?.trim();
     if (!link) throw new Error("no claim link rendered");
     await done.click();

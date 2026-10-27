@@ -554,8 +554,9 @@ test.describe("the officials handoff, both people driven", () => {
     await row.getByRole("button", { name: requireEn("officials.invite"), exact: true }).click();
     await row.getByLabel(requireEn("officials.inviteEmail"), { exact: true }).fill(officialEmail);
     await row.getByRole("button", { name: requireEn("officials.inviteSend"), exact: true }).click();
-    // This env's RESEND_API_KEY is blank — send always fails, so the
-    // one-time claim link is the only path to the official.
+    // This env has no RESEND_API_KEY, so the invite email's first attempt
+    // through the email outbox cannot go out (the row ends `dead`) and
+    // `email_sent` is false: the one-time claim link is the path to the official.
     await expect(row.getByText(requireEn("officials.inviteEmailFailed"))).toBeVisible({ timeout: 20_000 });
 
     const claimCode = row.locator("code");

@@ -108,6 +108,24 @@ test.describe("player accounts (PROMPT-53)", () => {
     expect(invite.status).toBe(201);
     claimUrl = invite.data!.claim_url;
     expect(claimUrl).toContain("/claim/pc_");
+
+    // The invite's email is ONE `claim_invite` row, ref Ada's person, written with
+    // the claim. Its first attempt was made in the request, so it is no longer
+    // waiting and holds no body (no Resend key here: `dead`).
+    const inviteMail = await withDb(
+      (sql) => sql<{ status: string; hasBody: boolean }[]>`
+        select status, body_sealed is not null as "hasBody"
+          from email_outbox
+         where kind = 'claim_invite' and ref_type = 'person' and ref_id = ${ada.id}`,
+    );
+    expect(
+      {
+        count: inviteMail.length,
+        waiting: inviteMail.filter((r) => r.status === "queued" || r.status === "sending").length,
+        withBody: inviteMail.filter((r) => r.hasBody).length,
+      },
+      "one claim invite email for Ada, its first attempt made, no body kept",
+    ).toEqual({ count: 1, waiting: 0, withBody: 0 });
   });
 
   test("player: claim via magic link and land on /me", async () => {

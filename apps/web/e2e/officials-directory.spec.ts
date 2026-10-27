@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { test, expect } from "@playwright/test";
 import {
   apiJson,
@@ -9,7 +11,14 @@ import {
   TAG,
   divisionPath,
   seedVenueWithCourts,
+  withDb,
 } from "./helpers";
+
+/** Notice copy read from the dictionary the page renders from, never retyped here (the `readFileSync` shape of
+ *  walkthrough/scheduling-officials-handoff.spec.ts: Playwright's loader supplies no JSON import attribute). */
+const UI_EN: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
 
 // v11.1 follow-up: officials roster management (add / invite / bulk-invite)
 // moved from a division's Officials tab to the org-wide Directory → Officials
@@ -53,7 +62,7 @@ test("directory Officials tab: role chips replace free text — multi-select on 
   await expect(row.getByText("judge", { exact: true })).toBeVisible();
 });
 
-test("directory Officials tab: invite falls back to a copyable claim link", async ({ page }) => {
+test("directory Officials tab: invite falls back to a copyable claim link", async ({ page, request }) => {
   const name = `Kofi Ref ${TAG}`;
 
   await page.goto("/directory?tab=officials");
@@ -66,10 +75,34 @@ test("directory Officials tab: invite falls back to a copyable claim link", asyn
   await row.getByLabel("Email", { exact: true }).fill(`delivered+ref_${TAG}@resend.dev`);
   await row.getByRole("button", { name: "Send invite" }).click();
 
-  // this worktree's RESEND_API_KEY is blank — send always fails, so the
-  // one-time claim link is the only path to the official.
-  await expect(row.getByText(/Email failed to send/i)).toBeVisible({ timeout: 20_000 });
+  // This server has no Resend key, so the invite email's first attempt cannot go
+  // out: the notice says it may arrive late, and the one-time claim link is the
+  // sure path to the official.
+  const notSent = UI_EN["officials.inviteEmailFailed"];
+  expect(notSent, "officials.inviteEmailFailed missing from en/ui.json").toBeTruthy();
+  await expect(row.getByText(notSent!, { exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(row.getByText(/\/claim\/pc_/)).toBeVisible();
+
+  // The invite's email is ONE `official_invite` row, ref the official, written
+  // with the claim. Its first attempt was made in the request, so it is no
+  // longer waiting and holds no body.
+  const officials = await apiJson<{ id: string; display_name: string }[]>(request, "/api/v1/officials");
+  const officialId = officials.data?.find((o) => o.display_name === name)?.id;
+  expect(officialId, `no official named "${name}" in GET /api/v1/officials`).toBeTruthy();
+  const inviteMail = await withDb(
+    (sql) => sql<{ status: string; hasBody: boolean }[]>`
+      select status, body_sealed is not null as "hasBody"
+        from email_outbox
+       where kind = 'official_invite' and ref_type = 'official' and ref_id = ${officialId!}`,
+  );
+  expect(
+    {
+      count: inviteMail.length,
+      waiting: inviteMail.filter((r) => r.status === "queued" || r.status === "sending").length,
+      withBody: inviteMail.filter((r) => r.hasBody).length,
+    },
+    "one invite email for the official, its first attempt made, no body kept",
+  ).toEqual({ count: 1, waiting: 0, withBody: 0 });
 });
 
 test("directory Officials tab: edit roles on an existing official", async ({ page, request }) => {
