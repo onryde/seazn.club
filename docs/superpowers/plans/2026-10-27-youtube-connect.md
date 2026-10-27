@@ -637,6 +637,9 @@ smoke `youtube: connect without consent is refused` (T21).
 
 ### Task 8: Connections usecase, Directory projection, v1 routes
 
+> **Post-T3 amendment:** document `YOUTUBE_USE_DISCONNECT` (422) on stream-targets PATCH and add a 422 to DELETE in
+> `openapi.ts` (:653, :802), then `npm run openapi:gen` drift-clean.
+
 > **Post-T2 amendment:** `takePendingToken` does not check `expires_at`; T8 checks expiry in the SAME transaction as
 > the take and refuses an expired pending grant.
 
@@ -731,6 +734,12 @@ regression `directory-stream-destinations.spec.ts` unchanged.
 
 ### Task 10: The prepare module
 
+> **Post-T3 amendment (key reuse):** a pooled key is FREE only if no open broadcast is bound to it **and** its last
+> session has no unreleased output (`output_uid is not null and output_released_at is null`) and no runner not
+> confirmed gone — otherwise a failed release at Stop leaves a publisher on the key and a reuse makes two publishers
+> push to one key (the hazard the removed target guard covered). Test: A's release fails at Stop, A's broadcast
+> ends, B's pick takes a DIFFERENT key; positive pair: released ⇒ same key reused.
+
 **Files:**
 - Create: `apps/web/src/server/youtube/{prepare,title}.ts`
 - Test: `apps/web/src/server/youtube/__tests__/prepare.test.ts`, `title.test.ts`
@@ -812,6 +821,11 @@ it("org B's fixture cannot be prepared on org A's API target → 404, zero port 
 `youtube: reconnect-needed refusal` (T21).
 
 ### Task 11: Wire prepare into admission and `add_output`
+
+> **Post-T3 amendment:** admission writes `api_backed` from the LOCKED target row (`youtube_connection_id is not
+> null`), so the session flag and the target agree; test two concurrent API starts on one target ⇒ both admitted
+> (no 23505 → `target_in_use holder:null`). Tighten T3's API-door tests (`refusedAsHeld`) to assert the real
+> post-door outcome once prepare is wired.
 
 > **Post-T2 amendment:** `readPooledKey` raising `TargetSecretUnreadableError(keyId,"youtube")` must NOT reach the
 > pasted-key `unreadableRefusal` ("replace the key" is meaningless for an API row). Map it to `youtube_unavailable`
@@ -1017,6 +1031,9 @@ it("orgIds: [] is refused", …);
 `youtube: stream-tick answers` (T21).
 
 ### Task 15: Tick wiring and cadence
+
+> **Post-T3 amendment:** `expireTargetHolders` no longer covers API sessions (holderRows is pasted-only); the tick
+> must expire stuck API sessions — test one.
 
 **Files:**
 - Modify: `apps/web/src/app/api/cron/stream-tick/route.ts`; `apps/web/src/server/usecases/stream-sessions.ts` (`tickOpenSessions` gains `budgetMs?: number`, default `STREAM_TICK_BUDGET_MS`)
