@@ -144,10 +144,10 @@ async function endSession(s: { request: Page["request"]; fixtureId: string; sid:
                                  ended_at = now()
                            where id = ${s.sid} and state not in ('completed', 'failed')`),
     );
-  // An ENDED composed session keeps the camera's match reserved until the daily sweep's camera pass deletes its
+  // An ENDED composed session keeps the minutes its camera ran reserved until the daily sweep's camera pass deletes its
   // recordings (`storageReservations`, R2004). The fake ingest has nothing to delete, so this case writes what that
-  // pass writes, for ITS OWN session only, before it gives its keys back — or the next composed start anywhere on the
-  // server is refused `storage_exhausted` for a day.
+  // pass writes, for ITS OWN session only, before it gives its keys back — or the next composed starts anywhere on the
+  // server see a pool that never frees up.
   await withDb((sql) => sql`update fixture_stream_inputs set recordings_deleted_at = now()
                              where session_id = ${s.sid} and role = 'camera' and recordings_deleted_at is null`);
 }
