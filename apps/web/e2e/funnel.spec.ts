@@ -161,3 +161,69 @@ test("a start from the French page queues the claim email in French", async ({ b
     await ctx.close();
   }
 });
+
+/**
+ * The +24 h reminder through the REAL cron route (email outbox phase 3 wave 5): a draft the visitor never claims, aged 25 h
+ * in SQL (the route's due filter is `created_at < now() - 24 h`), is claimed by `POST /api/funnel/remind` and gets ONE
+ * `funnel_reminder` row about it — left to the worker (`queued`: a cron has no one waiting, so no attempt in the request),
+ * transactional, addressed to the visitor's address and to no account (there is none yet). A second run finds the draft
+ * stamped and queues nothing more.
+ *
+ * The start names `fr`, and the draft remembers it (P-W5-17), so the reminder's subject is the French one: the premise that
+ * it differs from the English subject keeps a reminder that fell back to `en` visible. API only (no dev claim link), so it
+ * runs on production targets and in CI.
+ */
+test("a day-old draft gets one queued reminder from the cron route, and a second run adds none", async ({ request }) => {
+  const enSubject = need(EMAILS_EN, "funnelReminder.subject", "en/emails.json");
+  const frSubject = need(EMAILS_FR, "funnelReminder.subject", "fr/emails.json");
+  expect(frSubject, "premise: the French reminder subject differs from the English one").not.toBe(enSubject);
+  // The route answers 503 without a secret on the server, and the header needs the same value here: the job sets it once.
+  const cronSecret = process.env.CRON_SECRET;
+  expect(cronSecret, "the e2e job must set CRON_SECRET (one value for the server and this runner)").toBeTruthy();
+
+  const name = `Funnel Remind ${TAG}`;
+  const email = `delivered+e2e-funnel-remind-${TAG}@resend.dev`;
+  const started = await request.post("/api/funnel/start", {
+    data: { email, locale: "fr", name, sport: "Badminton", entrants: 8 },
+  });
+  expect(started.status(), "the start stores the draft").toBe(200);
+
+  const draftId = await withDb(async (sql) => {
+    const [draft] = await sql<{ id: string; locale: string | null }[]>`
+      select id, locale from funnel_drafts where email = ${email} order by created_at desc limit 1`;
+    expect(draft, `the start stored no draft for ${email}`).toBeTruthy();
+    expect(draft!.locale, "premise: the draft remembers the language the start named").toBe("fr");
+    await sql`update funnel_drafts set created_at = now() - interval '25 hours' where id = ${draft!.id}`;
+    return draft!.id;
+  });
+
+  const reminders = () =>
+    withDb((sql) =>
+      sql<
+        { status: string; transactional: boolean; recipient: string; recipient_user_id: string | null; subject: string }[]
+      >`
+        select status, transactional, recipient, recipient_user_id, subject
+          from email_outbox
+         where kind = 'funnel_reminder' and ref_type = 'funnel_draft' and ref_id = ${draftId}`,
+    );
+  const remind = () => request.post("/api/funnel/remind", { headers: { "x-cron-secret": cronSecret! } });
+
+  const first = await remind();
+  expect(first.status(), "the cron route runs with the job's secret").toBe(200);
+  const firstBody = (await first.json()) as { data?: { sent?: number } };
+  expect(firstBody.data?.sent ?? 0, "the run queued at least this draft's reminder").toBeGreaterThanOrEqual(1);
+  const rows = await reminders();
+  expect(rows, "one funnel_reminder row for the draft").toHaveLength(1);
+  expect(rows[0]).toEqual({
+    status: "queued",
+    transactional: true,
+    recipient: email,
+    recipient_user_id: null,
+    subject: frSubject.replaceAll("{competitionName}", name),
+  });
+
+  // The draft is stamped: a second run (the next cron tick, or a second scheduler) adds nothing.
+  const second = await remind();
+  expect(second.status(), "a second cron run answers 200").toBe(200);
+  expect(await reminders(), "a second run queues no second reminder").toHaveLength(1);
+});

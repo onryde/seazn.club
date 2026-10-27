@@ -651,6 +651,10 @@ jobs:
       # Anything unusable falls back to the shipped hour, whose own test is
       # pinned on the default and so untouched by this override.
       SITEMAP_REVALIDATE_SECONDS: "20"
+      # P-W5-21 (email outbox wave 5): payments-hardening.spec.ts asserts the staff_dispute_alert row, queued only when set.
+      # `.invalid` never resolves (RFC 2606), and CI has no Resend key, so nothing is ever sent to it. Job level, so the
+      # server and the Playwright runner read one value.
+      STAFF_ALERT_EMAIL: staff-alerts@e2e.invalid
       # Payments-hardening e2e (payments-hardening.spec.ts): signed synthetic
       # webhooks hit the REAL /api/webhooks/stripe route. constructEvent needs a
       # non-empty STRIPE_SECRET_KEY (any value — signature verification uses the

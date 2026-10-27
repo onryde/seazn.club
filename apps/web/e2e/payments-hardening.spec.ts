@@ -166,6 +166,8 @@ interface SeededOrg {
   ownerEmail: string;
   /** The owner's account: an owner-addressed outbox row must name it. */
   ownerId: string;
+  /** The org's name as seeded: a staff alert's subject names it. */
+  orgName: string;
 }
 
 /** Org with its own fresh owner (never the shared Pro user → no budget impact).
@@ -189,11 +191,12 @@ async function seedOrg(opts: {
       values (${ownerEmail}, ${"PH Owner " + tag}, true)
       returning id`;
     const orgSlug = `ph-org-${TAG}-${tag}`;
+    const orgName = `PH Org ${tag}`;
     const [{ id: orgId }] = await sql<{ id: string }[]>`
       insert into organizations
         (name, slug, status, created_by, stripe_charges_enabled, stripe_account_id,
          stripe_payouts_enabled, stripe_requirements_due)
-      values (${"PH Org " + tag}, ${orgSlug}, 'active', ${ownerId},
+      values (${orgName}, ${orgSlug}, 'active', ${ownerId},
               ${opts.chargesEnabled ?? false},
               ${opts.connected ? `acct_e2e_${tag}` : null},
               ${opts.payoutsEnabled ?? true},
@@ -215,7 +218,7 @@ async function seedOrg(opts: {
         returning id`;
       await sql`update organizations set subscription_id = ${group.id} where id = ${orgId}`;
     }
-    return { orgId, orgSlug, ownerEmail, ownerId };
+    return { orgId, orgSlug, ownerEmail, ownerId, orgName };
   });
 }
 
@@ -813,6 +816,11 @@ test.describe("T7 · platform disputes truth-up entitlements", () => {
     page,
     request,
   }) => {
+    // P-W5-21: the staff page below is queued only when the server has an address. A job without one must red here,
+    // never skip: a skipped check would read as "staff are paged" while nothing proves it.
+    const staffAddress = process.env.STAFF_ALERT_EMAIL;
+    expect(staffAddress, "P-W5-21: the e2e job must set STAFF_ALERT_EMAIL").toBeTruthy();
+
     const customer = uid("cus");
     const org = await seedOrg({
       plan: "pro",
@@ -822,17 +830,16 @@ test.describe("T7 · platform disputes truth-up entitlements", () => {
     const did = uid("dp");
 
     // Charge is EXPANDED with the customer (keyless — no charge retrieve needed).
-    const created = await postSignedEvent(
-      request,
-      stripeEvent("charge.dispute.created", {
-        id: did,
-        status: "needs_response",
-        amount: 1900,
-        currency: "gbp",
-        payment_intent: uid("pi"),
-        charge: { customer },
-      }),
-    );
+    // ONE event object, reused verbatim by the replay below (Stripe redelivers the SAME event id).
+    const createdEvent = stripeEvent("charge.dispute.created", {
+      id: did,
+      status: "needs_response",
+      amount: 1900,
+      currency: "gbp",
+      payment_intent: uid("pi"),
+      charge: { customer },
+    });
+    const created = await postSignedEvent(request, createdEvent);
     expect(created.status()).toBe(200);
 
     // Flag set (DB) …
@@ -844,6 +851,29 @@ test.describe("T7 · platform disputes truth-up entitlements", () => {
     expect(flagged.disputed_at).not.toBeNull();
     expect(flagged.dispute_id).toBe(did);
     expect(flagged.plan_key).toBe("pro");
+
+    // … and staff are paged through the email outbox (phase 3 wave 5): ONE staff_dispute_alert row whose ref is its
+    // once-key (`<dispute>:created`), to STAFF_ALERT_EMAIL, left to the worker (a webhook has no one waiting, so no
+    // attempt in the request), with the English subject (staff alerts render in the platform locale) naming the org.
+    const subjectTpl = EMAILS_EN["staffDisputeAlert.subject"];
+    const kindLabel = EMAILS_EN["staffDisputeAlert.kind.subscription"];
+    expect(subjectTpl, "premise: the EN catalogue has the staff dispute subject").toBeTruthy();
+    expect(kindLabel, "premise: the EN catalogue has the subscription kind's label").toBeTruthy();
+    const staffPages = () => outboxRows("staff_dispute_alert", "dispute", `${did}:created`);
+    const paged = await staffPages();
+    expect(paged, "the created delivery queues one staff_dispute_alert row").toHaveLength(1);
+    expect(paged[0]).toMatchObject({
+      recipient: staffAddress,
+      recipient_user_id: null,
+      status: "queued",
+      transactional: true,
+      subject: subjectTpl!.replace("{kind}", kindLabel!).replace("{orgName}", org.orgName),
+    });
+
+    // Replay the IDENTICAL created event: it ACKs, and staff are not paged twice.
+    const replay = await postSignedEvent(request, createdEvent);
+    expect(replay.status()).toBe(200);
+    expect(await staffPages(), "the replayed created queues no second staff_dispute_alert row").toHaveLength(1);
 
     // … and the billing UI is still Pro.
     await loginAsOwner(page, org.ownerEmail);
