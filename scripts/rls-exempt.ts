@@ -58,6 +58,17 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   "fixture_stream_pairings",
   // The phone-beat history (24 h retention); non-tenant sql only, zero policies, R1.
   "fixture_stream_phone_beats",
+  // YouTube Connect (V478, spec §5): V410's pattern — RLS FORCEd, ZERO policies, no trg_set_org, no app_user grant.
+  // Every reader and writer is on the privileged `sql` client with `org_id = $org` in the statement; organisers see
+  // projections (the directory's connection list, the fixture panel), never a row.
+  // The connected channel and its sealed refresh token (YOUTUBE_TOKEN_KEK); a tenant must never read a credential.
+  "org_youtube_connections",
+  // The OAuth round-trip's intent and, after a multi-channel grant, the sealed token; 10-minute life, callback-only.
+  "youtube_connect_pending",
+  // The per-connection pool of YouTube stream keys, sealed under RELAY_KEK; a tenant must never read a stream key.
+  "youtube_stream_keys",
+  // One row per YouTube broadcast Seazn created; the end step and the Go-live prepare run on the privileged client.
+  "youtube_broadcasts",
   // Capture record upload (V437, spec 2026-10-12 §9): V410's pattern — RLS FORCEd, ZERO policies, no trg_set_org, no
   // app_user grant; the phone route writes it through the non-tenant client (the tok is its auth) and only staff read
   // it, in /admin (P7). Its link table capture_record_sessions has no org_id, so the guard never selects it; it is

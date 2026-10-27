@@ -103,20 +103,30 @@ async function retire(connectionId: string, slot: number): Promise<void> {
 
 async function broadcast(
   w: Pick<World, "orgId">,
-  o: { connection: string; fixture: string; key: string | null; state: string; reservedUntil?: boolean; completedAt?: Date; id?: string },
+  o: {
+    connection: string; fixture: string; key: string | null; state: string; reservedUntil?: boolean; id?: string; privacy?: string;
+    /** Default: a real video id. Pass null for a broadcast that never reached YouTube. */
+    ytId?: string | null;
+    /** Default: now for a `complete` row (a part must know when it finished), null for every other state. */
+    completedAt?: Date | null;
+  },
 ): Promise<string> {
   const reservedUntil = o.reservedUntil ?? o.state === "reserved";
+  const ytId = o.ytId === undefined ? `yt-${uniq()}` : o.ytId;
+  const completedAt = o.completedAt === undefined ? (o.state === "complete" ? new Date() : null) : o.completedAt;
   const [row] = await sql<{ id: string }[]>`
     insert into youtube_broadcasts (id, org_id, connection_id, fixture_id, key_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at)
-    values (${o.id ?? randomUUID()}, ${w.orgId}, ${o.connection}, ${o.fixture}, ${o.key}, ${`yt-${uniq()}`}, 'Match', 'unlisted', ${o.state},
-            ${reservedUntil ? new Date(Date.now() + 5 * 60_000) : null}, ${o.completedAt ?? null})
+    values (${o.id ?? randomUUID()}, ${w.orgId}, ${o.connection}, ${o.fixture}, ${o.key}, ${ytId}, 'Match', ${o.privacy ?? "unlisted"}, ${o.state},
+            ${reservedUntil ? new Date(Date.now() + 5 * 60_000) : null}, ${completedAt})
     returning id`;
   return row!.id;
 }
 
 async function setState(broadcastId: string, state: string): Promise<void> {
+  // The way the end step will write it: a complete row gets its finish time in the SAME statement.
   await sql`update youtube_broadcasts set state = ${state},
-              reserved_until = case when ${state} = 'reserved' then now() + interval '5 minutes' else null end
+              reserved_until = case when ${state} = 'reserved' then now() + interval '5 minutes' else null end,
+              completed_at = case when ${state} = 'complete' then now() else completed_at end
             where id = ${broadcastId}`;
 }
 
@@ -144,13 +154,14 @@ async function target(w: Pick<World, "orgId">, o: { rtmp: boolean; connectionId:
 /** A raw session insert whose NOT NULL snapshot facts come from the fixture's own division (migration-shape's rule). */
 async function session(
   w: World,
-  o: { fixture: string; target: string; broadcast: string | null; state?: string },
+  // `apiBacked` defaults to "names a broadcast": the flag is what exempts a session from the pasted one-per-target rule.
+  o: { fixture: string; target: string; broadcast: string | null; state?: string; apiBacked?: boolean },
 ): Promise<string> {
   const [row] = await sql<{ id: string }[]>`
     insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
-                                         sport_key, competition_id, division_id, entitlement_via_override, youtube_broadcast_id)
+                                         sport_key, competition_id, division_id, entitlement_via_override, youtube_broadcast_id, api_backed)
     select ${o.fixture}, ${w.orgId}, 'passthrough', ${o.state ?? "live"}, ${o.target}, ${w.userId}, now(),
-           d.sport_key, d.competition_id, f.division_id, true, ${o.broadcast}
+           d.sport_key, d.competition_id, f.division_id, true, ${o.broadcast}, ${o.apiBacked ?? o.broadcast !== null}
       from fixtures f join divisions d on d.id = f.division_id where f.id = ${o.fixture}
     returning id`;
   return row!.id;
@@ -231,6 +242,57 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
     }
     expect(accepted).toBe(TERMINAL_STATES.length);
     expect(accepted).toBeGreaterThan(0);
+  });
+
+  it("deleting the broadcasts of two active API sessions on one target succeeds and leaves both sessions active, in every active state (the FK's set null cannot move a session under the pasted rule)", async () => {
+    const w = await world(2);
+    const [fA, fB] = w.fixtures as [string, string];
+    const c = await connection(w);
+    const api = await target(w, { rtmp: false, connectionId: c });
+    const [kA, kB] = [await key(w, c, 1), await key(w, c, 2)];
+    let checked = 0;
+    for (const state of ACTIVE_STATES) {
+      const bA = await broadcast(w, { connection: c, fixture: fA, key: kA, state: "live" });
+      const bB = await broadcast(w, { connection: c, fixture: fB, key: kB, state: "live" });
+      const sA = await session(w, { fixture: fA, target: api, broadcast: bA, state });
+      const sB = await session(w, { fixture: fB, target: api, broadcast: bB, state });
+      // ONE statement removes both rows, so both sessions' broadcast ids are nulled in the same FK action: if either
+      // fell back under the pasted index, the other would collide with it and this statement would fail with 23505.
+      await expect(sql`delete from youtube_broadcasts where id in ${sql([bA, bB])}`, state).resolves.toBeDefined();
+      const left = await sql<{ id: string; state: string; youtube_broadcast_id: string | null; api_backed: boolean }[]>`
+        select id, state, youtube_broadcast_id, api_backed from fixture_stream_sessions where id in ${sql([sA, sB])}`;
+      expect(left.length, `${state}: both sessions survive`).toBe(2);
+      for (const r of left) expect(r, `${state}`).toMatchObject({ state, youtube_broadcast_id: null, api_backed: true });
+      await sql`delete from fixture_stream_sessions where org_id = ${w.orgId}`;
+      checked++;
+    }
+    expect(checked, "the ACTIVE_STATES loop checked nothing").toBe(ACTIVE_STATES.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("api_backed: NOT NULL default false (an existing session is a pasted one); a session naming a broadcast must carry it; one admitted before its broadcast row exists is exempt too", async () => {
+    const [shape] = await sql<{ data_type: string; is_nullable: string; column_default: string | null }[]>`
+      select data_type, is_nullable, column_default from information_schema.columns
+       where table_schema = current_schema() and table_name = 'fixture_stream_sessions' and column_name = 'api_backed'`;
+    expect(shape).toEqual({ data_type: "boolean", is_nullable: "NO", column_default: "false" });
+    const w = await world(3);
+    const [f1, f2, f3] = w.fixtures as [string, string, string];
+    const c = await connection(w);
+    const api = await target(w, { rtmp: false, connectionId: c });
+    const b = await broadcast(w, { connection: c, fixture: f1, key: await key(w, c, 1), state: "live" });
+    await expect(session(w, { fixture: f1, target: api, broadcast: b, apiBacked: false })).rejects.toMatchObject({
+      code: "23514", constraint_name: "fixture_stream_sessions_broadcast_implies_api_backed",
+    });
+    // The positive pair, and the converse that is NOT required: api_backed with no broadcast (yet, or any more).
+    await expect(session(w, { fixture: f1, target: api, broadcast: b, apiBacked: true })).resolves.toBeTruthy();
+    await expect(session(w, { fixture: f2, target: api, broadcast: null, apiBacked: true })).resolves.toBeTruthy();
+    await expect(session(w, { fixture: f3, target: api, broadcast: null, apiBacked: true }), "two api_backed sessions, neither naming a broadcast").resolves.toBeTruthy();
+    // ...whereas a session that is NOT api_backed on that target is still exclusive against another one that is not.
+    await sql`delete from fixture_stream_sessions where org_id = ${w.orgId}`;
+    await session(w, { fixture: f2, target: api, broadcast: null, apiBacked: false });
+    await expect(session(w, { fixture: f3, target: api, broadcast: null, apiBacked: false })).rejects.toMatchObject({
+      code: "23505", constraint_name: "fixture_stream_sessions_one_active_target",
+    });
   });
 
   // ---- youtube_broadcasts: one open per fixture, one open per key ------------------------------------------------------
@@ -429,6 +491,83 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
       values (${randomUUID()}, ${w.orgId}, ${w.userId}, ${privacy}, false, 1, now(), now() + interval '10 minutes')`;
     await expect(pending("friends")).rejects.toMatchObject({ code: "23514", constraint_name: "youtube_connect_pending_default_privacy_check" });
     for (const privacy of PRIVACIES) await expect(pending(privacy), privacy).resolves.toBeTruthy();
+  });
+
+  it("a broadcast's privacy is a closed set: each legal value is accepted (counted), an unlisted one is refused by name", async () => {
+    const w = await world(1);
+    const [f] = w.fixtures as [string];
+    const c = await connection(w);
+    let accepted = 0;
+    // `failed` rows are not open, so one fixture and no key hold all three.
+    for (const privacy of PRIVACIES) { await expect(broadcast(w, { connection: c, fixture: f, key: null, state: "failed", privacy }), privacy).resolves.toBeTruthy(); accepted++; }
+    expect(accepted).toBe(PRIVACIES.length);
+    expect(accepted).toBeGreaterThan(0);
+    await expect(broadcast(w, { connection: c, fixture: f, key: null, state: "failed", privacy: "friends" })).rejects.toMatchObject({
+      code: "23514", constraint_name: "youtube_broadcasts_privacy_check",
+    });
+  });
+
+  it("last_error_code holds a CODE: [a-z_:]{1,64} is accepted, anything shaped like a Google body or a credential is refused by name — on connections and on broadcasts", async () => {
+    const w = await world(1);
+    const [f] = w.fixtures as [string];
+    const c = await connection(w);
+    const b = await broadcast(w, { connection: c, fixture: f, key: null, state: "failed" });
+    const good = ["invalid_grant", "quota_exceeded", "youtube:rate_limited", "x", "x".repeat(64)];
+    const bad = [
+      '{"error":{"code":401,"message":"Invalid Credentials"}}',   // a Google error body
+      "Invalid Credentials",                                       // prose
+      "invalid grant",                                             // a space
+      "INVALID_GRANT",                                             // upper case
+      "ya29.a0AfH6SMB-not-a-real-token",                           // a credential's alphabet: digits, dots, hyphens, mixed case
+      "ya29.a0af-not-a-real-token-123",                            // the same in lower case: digits, dots and hyphens alone are not a code
+      "x".repeat(65),                                              // one past the cap
+      "",                                                          // empty is not a code
+    ];
+    const writers = {
+      org_youtube_connections: { name: "org_youtube_connections_last_error_code_shape", put: (v: string | null) => sql`update org_youtube_connections set last_error_code = ${v} where id = ${c}` },
+      youtube_broadcasts: { name: "youtube_broadcasts_last_error_code_shape", put: (v: string | null) => sql`update youtube_broadcasts set last_error_code = ${v} where id = ${b}` },
+    };
+    let accepted = 0, refused = 0;
+    for (const [table, wr] of Object.entries(writers)) {
+      for (const v of good) { await expect(wr.put(v), `${table} accepts ${v.slice(0, 20)}`).resolves.toBeDefined(); accepted++; }
+      await expect(wr.put(null), `${table} accepts no error`).resolves.toBeDefined();
+      for (const v of bad) {
+        await expect(wr.put(v), `${table} refuses ${v.slice(0, 20)}`).rejects.toMatchObject({ code: "23514", constraint_name: wr.name });
+        refused++;
+      }
+    }
+    expect(accepted, "accepted writes").toBe(good.length * 2);
+    expect(refused, "refused writes").toBe(bad.length * 2);
+    // Nothing the refused writes tried is stored: the last accepted value stands.
+    const [conn] = await sql<{ last_error_code: string | null }[]>`select last_error_code from org_youtube_connections where id = ${c}`;
+    expect(conn!.last_error_code).toBeNull();
+  });
+
+  it("a COMPLETE broadcast has both a finish time and a video id (both directions refused by name, on insert and on the state flip); every other state may hold neither", async () => {
+    const w = await world(1);
+    const [f] = w.fixtures as [string];
+    const c = await connection(w);
+    const k = await key(w, c, 1);
+    const facts = { code: "23514", constraint_name: "youtube_broadcasts_complete_has_facts" };
+    await expect(broadcast(w, { connection: c, fixture: f, key: k, state: "complete", completedAt: null })).rejects.toMatchObject(facts);
+    await expect(broadcast(w, { connection: c, fixture: f, key: k, state: "complete", ytId: null })).rejects.toMatchObject(facts);
+    await expect(broadcast(w, { connection: c, fixture: f, key: k, state: "complete", ytId: null, completedAt: null })).rejects.toMatchObject(facts);
+    await expect(broadcast(w, { connection: c, fixture: f, key: k, state: "complete" }), "both present").resolves.toBeTruthy();
+    await sql`delete from youtube_broadcasts where org_id = ${w.orgId}`;
+    // Every state but complete may hold neither fact (a row that never reached YouTube, or has not finished).
+    let accepted = 0;
+    for (const state of BROADCAST_STATES.filter((x) => x !== "complete")) {
+      await expect(broadcast(w, { connection: c, fixture: f, key: k, state, ytId: null, completedAt: null }), state).resolves.toBeTruthy();
+      await sql`delete from youtube_broadcasts where org_id = ${w.orgId}`;
+      accepted++;
+    }
+    expect(accepted).toBe(BROADCAST_STATES.length - 1);
+    // The flip: an open row cannot become complete without its finish time, nor without a video id.
+    const noVideo = await broadcast(w, { connection: c, fixture: f, key: k, state: "live", ytId: null });
+    await expect(sql`update youtube_broadcasts set state = 'complete', completed_at = now() where id = ${noVideo}`).rejects.toMatchObject(facts);
+    const noTime = await broadcast(w, { connection: c, fixture: f, key: await key(w, c, 2), state: "ending" });
+    await expect(sql`update youtube_broadcasts set state = 'complete' where id = ${noTime}`).rejects.toMatchObject(facts);
+    await expect(setState(noTime, "complete")).resolves.toBeUndefined();
   });
 
   // ---- youtube_connect_pending --------------------------------------------------------------------------------------------
@@ -676,7 +815,9 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
     for (const s of ACTIVE_STATES) { expect(one, s).toContain(`'${s}'`); seen++; }
     for (const s of TERMINAL_STATES) { expect(one, s).not.toContain(`'${s}'`); seen++; }
     expect(seen).toBe(ACTIVE_STATES.length + TERMINAL_STATES.length);
-    expect(one).toContain("youtube_broadcast_id IS NULL");
+    // The exemption is the flag the session carries, NOT its broadcast: a set-null on the broadcast must not move it.
+    expect(one).toContain("NOT api_backed");
+    expect(one).not.toContain("youtube_broadcast_id");
 
     // The end step's scan (the V470 email_outbox_due_idx pattern): next_attempt_at NULLS FIRST, then created_at, over the OPEN states.
     const due = await def("youtube_broadcasts", "youtube_broadcasts_open_due_idx");
@@ -688,5 +829,7 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
     expect(parts).toMatch(/USING btree \(fixture_id, completed_at\) WHERE \(state = 'complete'::text\)/);
     // The connection read (spec §5.1: "one live connection per (org, channel)" is read by org).
     expect(await def("org_youtube_connections", "org_youtube_connections_org_idx")).toMatch(/USING btree \(org_id\)$/);
+    // The key's any-state reads and FK walk (the per-key unique is partial on the open states): keyless rows stay out.
+    expect(await def("youtube_broadcasts", "youtube_broadcasts_key_idx")).toMatch(/USING btree \(key_id\) WHERE \(key_id IS NOT NULL\)$/);
   });
 });

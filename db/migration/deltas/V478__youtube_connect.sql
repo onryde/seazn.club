@@ -12,7 +12,7 @@
 --   youtube_stream_keys       the per-connection pool of YouTube liveStreams, at most 10 live (spec §5.3)
 --   youtube_broadcasts        one row per YouTube broadcast Seazn creates (spec §5.4)
 --   org_stream_targets        a destination is now EITHER a pasted key (rtmp_enc) OR a connection (spec §5.2)
---   fixture_stream_sessions   youtube_broadcast_id; the one-active-session-per-target index narrows to pasted rows
+--   fixture_stream_sessions   api_backed + youtube_broadcast_id; the one-active-session-per-target index narrows to pasted rows
 --   public_fixture_youtube_parts_v   the public match page's "Part 1 / Part 2" list, with public_fixtures_v's redaction
 --
 -- Greenfield (RULES.md §Schema): no backfill, no data-copy. Production holds no row that any statement below could
@@ -62,7 +62,7 @@ create table org_youtube_connections (
   status            text not null,
   status_since      timestamptz not null default now(),
   last_health_at    timestamptz null,
-  -- A code, never a token or a Google response body: [a-z_:]{1,64}.
+  -- A code, never a token or a Google response body: [a-z_:]{1,64} (the shape CHECK below refuses anything else).
   last_error_code   text null,
   created_by        uuid not null references users(id) on delete restrict,
   created_at        timestamptz not null default now(),
@@ -70,6 +70,9 @@ create table org_youtube_connections (
 
   constraint org_youtube_connections_default_privacy_check check (default_privacy in ('unlisted', 'public', 'private')),
   constraint org_youtube_connections_status_check check (status in ('connected', 'reconnect_needed', 'revoked')),
+  -- global-constraints: errors are stored as CODES. A response body (JSON, spaces, braces, a message echoing a token)
+  -- cannot match, so the column cannot become a place a Google body or a credential lands. NULL passes (no error).
+  constraint org_youtube_connections_last_error_code_shape check (last_error_code ~ '^[a-z_:]{1,64}$'),
   -- Both directions of "revoked ⇔ no token" and "revoked ⇔ revoked_at", IMMEDIATE (CHECK cannot be deferred): every
   -- writer of these three columns is one token-store statement, so a half-revoke is refused instead of stored (ruling R1).
   -- A live row that lost its token (a 30-day purge of a dead grant) must therefore become `revoked` in the same statement.
@@ -163,6 +166,7 @@ create table youtube_broadcasts (
   -- The YouTube broadcast id, which is also the video id. Null until the broadcast is created on YouTube.
   yt_broadcast_id text null,
   title           text not null,
+  -- The visibility the broadcast was created with (the connection's default_privacy, or the organiser's choice).
   privacy         text not null,
   state           text not null,
   -- Set exactly while state = 'reserved': the grace window a bound broadcast waits for the stream to arrive.
@@ -172,14 +176,19 @@ create table youtube_broadcasts (
   completed_at    timestamptz null,
   -- The 30-day rule (DP III.E.4): when Seazn last refreshed this row's YouTube data.
   refreshed_at    timestamptz not null default now(),
-  -- A code, never a Google response body.
+  -- A code, never a Google response body: [a-z_:]{1,64} (the shape CHECK below refuses anything else).
   last_error_code text null,
   attempts        int not null default 0,
   next_attempt_at timestamptz null,
   created_at      timestamptz not null default now(),
 
+  constraint youtube_broadcasts_privacy_check check (privacy in ('unlisted', 'public', 'private')),
   constraint youtube_broadcasts_state_check check (state in ('created', 'bound', 'reserved', 'live', 'ending', 'complete', 'failed')),
-  constraint youtube_broadcasts_reserved_until check ((state = 'reserved') = (reserved_until is not null))
+  constraint youtube_broadcasts_reserved_until check ((state = 'reserved') = (reserved_until is not null)),
+  -- A COMPLETE broadcast is a replay part: it must know when it finished (the part's order) and which video it is (the
+  -- part's link). Without this a complete row with a null id would reach the match page as a null video_id.
+  constraint youtube_broadcasts_complete_has_facts check (state <> 'complete' or (completed_at is not null and yt_broadcast_id is not null)),
+  constraint youtube_broadcasts_last_error_code_shape check (last_error_code ~ '^[a-z_:]{1,64}$')
 );
 
 -- At most one OPEN broadcast per fixture. `ending` is deliberately NOT open here: a Stop followed by a restart may
@@ -200,10 +209,14 @@ create index youtube_broadcasts_open_due_idx
 create index youtube_broadcasts_parts_idx
   on youtube_broadcasts (fixture_id, completed_at)
   where state = 'complete';
--- The FKs the partial indexes above cannot serve: a fixture delete walks its broadcasts (any state), and a disconnect
--- reads a connection's broadcasts. last_session_id carries none — a session is deleted only with its org.
+-- The FKs the partial indexes above cannot serve: a fixture delete walks its broadcasts (any state), a disconnect
+-- reads a connection's broadcasts, and a key row's delete walks the broadcasts that named it. last_session_id carries
+-- none — a session is deleted only with its org.
 create index youtube_broadcasts_fixture_idx on youtube_broadcasts (fixture_id);
 create index youtube_broadcasts_connection_idx on youtube_broadcasts (connection_id);
+-- Any-state reads of a key's broadcasts and the FK walk when a key row goes (the per-key unique above is partial on the
+-- open states only, so it cannot serve either); keyless rows never name a key.
+create index youtube_broadcasts_key_idx on youtube_broadcasts (key_id) where key_id is not null;
 
 alter table youtube_broadcasts enable row level security;
 alter table youtube_broadcasts force  row level security;
@@ -230,8 +243,16 @@ create index org_stream_targets_youtube_connection_idx
 -- ─── 6. fixture_stream_sessions: the one-active-per-target rule narrows to pasted rows ─────────────────────────────
 -- V421: one active session per TARGET row. That is right for a pasted key (YouTube takes one broadcast per key) and
 -- wrong for a connection, where one channel streams several matches at once — four courts live at once is the case the
--- key pool exists for. An API session names its broadcast, and exclusivity moves to the KEY (section 4). The predicate
--- keeps V421's five ACTIVE states (domain/session.ts ACTIVE_STATES, still the one authority) and adds the exemption.
+-- key pool exists for. Exclusivity for an API session moves to the KEY (section 4's per-key index).
+--
+-- The exemption is a flag the session CARRIES, not the presence of its broadcast. The first draft keyed the predicate on
+-- `youtube_broadcast_id is null`, and the FK below is `on delete set null`: deleting an API session's broadcast (the
+-- fixture's cascade, an org purge) put a still-ACTIVE session back inside the index, and two such sessions on one
+-- destination then failed the FK action itself with a 23505. `api_backed` is written once, at admission, and never changes,
+-- so a broadcast row going away cannot move a session across the predicate. The predicate keeps V421's five ACTIVE
+-- states (domain/session.ts ACTIVE_STATES, still the one authority) and adds `and not api_backed`.
+--
+-- Default false: every existing row is a pasted-key session and stays exclusive per target.
 --
 -- Drop and recreate share this migration's transaction (Flyway), and DROP INDEX takes the table's ACCESS EXCLUSIVE lock
 -- until commit, so there is no window in which two active sessions can land on one pasted target.
@@ -239,13 +260,20 @@ create index org_stream_targets_youtube_connection_idx
 -- The new index can only fail if a database already holds two active sessions on one pasted target — V421's own
 -- index forbids exactly that, so none can. This migration MUST NOT delete or repair rows to get itself applied.
 alter table fixture_stream_sessions
+  add column api_backed boolean not null default false;
+alter table fixture_stream_sessions
   add column youtube_broadcast_id uuid null references youtube_broadcasts(id) on delete set null;
+-- A session that names a broadcast is api_backed. The converse is not required: it stays api_backed after its broadcast
+-- row goes (the set null above), and a session may be admitted before its broadcast row exists.
+alter table fixture_stream_sessions
+  add constraint fixture_stream_sessions_broadcast_implies_api_backed
+    check (youtube_broadcast_id is null or api_backed);
 
 drop index fixture_stream_sessions_one_active_target;
 create unique index fixture_stream_sessions_one_active_target
   on fixture_stream_sessions (target_id)
   where state in ('requested','provisioning','warming','live','ending')
-    and youtube_broadcast_id is null;
+    and not api_backed;
 
 -- The session of a broadcast, and the set-null walk when a broadcast is deleted (V431 m-2: a FK owes an index to walk).
 create index fixture_stream_sessions_youtube_broadcast_idx
