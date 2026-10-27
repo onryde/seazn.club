@@ -1,7 +1,7 @@
 // The organiser steps every scenario shares, and the Recorder that turns what
 // the harness did and saw into an ObservedRun. Expected values are derived
-// (R9): points from the module's standingsDelta over the folded stream, draw
-// reachability from supportsDraws.
+// (R9): points from the sport's table rule paid on the folded stream (fold.ts
+// tableContribution, W2d T9), draw reachability from supportsDraws.
 import { EngineError, SETTLE_METHODS, forbidsLevelResult, type MatchOutcome, type StageCtx, type StageKind } from "@seazn/engine/core";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 import { stagesForRow, type StagePostBody } from "../catalogue.ts";

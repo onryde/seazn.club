@@ -3,14 +3,17 @@
 // of validate-pack.ts:451-525 — seq from 1, strict from seq 1, empty-slot
 // lineups (loadLineupPair returns slots:[] for a fixture with no lineup rows).
 import {
+  DRAW_KINDS,
   foldMatchWithStoppage,
   outcomeOf,
+  playRecorded,
   type EventEnvelope,
   type LineupPair,
   type MatchOutcome,
   type StageCtx,
 } from "@seazn/engine/core";
-import type { AnySportModule } from "@seazn/engine/sport";
+import { decidedInFor, payout, resolveTableRules, setsToWinOf, type FixtureResult } from "@seazn/engine/competition";
+import type { AnySportModule, TableStageKind } from "@seazn/engine/sport";
 import type { StreamEvent } from "./streams/types.ts";
 
 export const FOLD_OPTIONS = { strictFromSeq: 1 } as const;
@@ -70,9 +73,55 @@ export interface DeclaredPoints {
   readonly forOutcome: MatchOutcome;
 }
 
-/** What the sport DECLARES this stream is worth in the table: standingsDelta
- *  over the folded state. Null while undecided. Invariant I3 compares the
- *  product's table with Σ of these (R9: derived, never typed). */
+export interface TableContribution {
+  readonly pair: FixtureResult;
+  readonly outcome: MatchOutcome;
+}
+
+/** What one posted stream contributes to a TABLE row pair, as the product pays it. Null while undecided.
+ *
+ *  W2d T9 (X-TB-1, X-PT-2): the table no longer reads `standingsDelta`'s points — every table stage pays its table
+ *  RULE, through `payout` (engine-db/competition.ts). So the contribution is the sport's own ledger pair, paid under
+ *  the sport's rule for a stage of this kind under `cfg` (`resolveTableRules` with no stage, division or pin layer: the
+ *  harness posts no stage `points` — I3 abstains on one — and the pin a stage takes at activation is that same rule),
+ *  with the stream's own "was anything played" fact (`playRecorded`, as the product reads it off the stored ledger).
+ *  Where the rule pays what `standingsDelta` paid nothing moves; table tennis's D6 (a played loss 1, an unplayed loss
+ *  0) is the signed change that does. A bracket kind reads as a league, as the product's `tableStageKindOf` does. The
+ *  one harness implementation: I3's declaration and the W2b credit checks' local delta both read it. */
+export function tableContribution(
+  module: AnySportModule,
+  cfg: unknown,
+  ctx: StageCtx,
+  home: string,
+  away: string,
+  events: readonly StreamEvent[],
+): TableContribution | null {
+  const folded = foldStream(module, cfg, home, away, events);
+  if (folded.outcome === null) return null;
+  const ledger = module.standingsDelta(folded.outcome, cfg, ctx, folded.state);
+  const stageKind: TableStageKind = DRAW_KINDS.has(ctx.kind) ? (ctx.kind as TableStageKind) : "league";
+  const rule = resolveTableRules({
+    module,
+    stageKind,
+    mergedCfg: cfg,
+    stageOwn: { points: null, tiebreakers: null, crossGroup: null },
+    divisionTiebreakers: null,
+    pinned: null,
+  }).points;
+  const pair = payout(
+    folded.outcome,
+    decidedInFor(module, folded.outcome),
+    ledger,
+    playRecorded(envelopes("matrix", events), module),
+    rule,
+    module.awardScoreKeys,
+    setsToWinOf(module, cfg),
+  );
+  return { pair, outcome: folded.outcome };
+}
+
+/** What the sport DECLARES this stream is worth in the table: `tableContribution`'s points. Null while undecided.
+ *  Invariant I3 compares the product's table with Σ of these (R9: derived, never typed). */
 export function declaredPoints(
   module: AnySportModule,
   cfg: unknown,
@@ -81,8 +130,8 @@ export function declaredPoints(
   away: string,
   events: readonly StreamEvent[],
 ): DeclaredPoints | null {
-  const folded = foldStream(module, cfg, home, away, events);
-  if (folded.outcome === null) return null;
-  const [h, a] = module.standingsDelta(folded.outcome, cfg, ctx, folded.state);
-  return { home: h.points, away: a.points, forOutcome: folded.outcome };
+  const c = tableContribution(module, cfg, ctx, home, away, events);
+  if (c === null) return null;
+  const [h, a] = c.pair;
+  return { home: h.points, away: a.points, forOutcome: c.outcome };
 }
