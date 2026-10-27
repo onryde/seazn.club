@@ -57,10 +57,13 @@ const save = vi.hoisted(() => ({ fn: vi.fn() }));
 vi.mock("@/server/youtube/connections", () => ({ saveConnectionFromGrant: save.fn }));
 
 import { sql } from "@/lib/db";
+import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { HttpError } from "@/lib/errors";
+import { YOUTUBE_CONSENT_VERSION } from "@/lib/youtube";
 import { pkceChallenge } from "@/server/external-play/pkce";
 import { log } from "@/server/logger";
 import { openWith } from "@/server/relay/crypto";
+import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { setYoutubeDriverForTest } from "@/server/youtube/driver";
 import { FakeYouTube } from "@/server/youtube/fake";
 import { GoogleYouTube } from "@/server/youtube/google";
@@ -96,6 +99,7 @@ beforeEach(() => {
   session.user = null;
   vi.stubEnv("YOUTUBE_DRIVER", "fake");
   vi.stubEnv("ENV_NAME", "ci");
+  vi.stubEnv("RELAY_DRIVERS", "fake");   // a deployment that can start a stream: the start's relay gate is open unless a test closes it
   // The redirect URI and the Origin comparison derive from the request unless these say otherwise.
   for (const k of ["OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "YOUTUBE_REDIRECT_URI", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]) vi.stubEnv(k, undefined);
   fake = new FakeYouTube();
@@ -106,6 +110,7 @@ afterEach(() => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   setYoutubeDriverForTest(null);
+  setRelayDriversForTest(null);
 });
 
 // ---- rows ---------------------------------------------------------------------------------------------------------------------------
@@ -115,7 +120,13 @@ const newUser = async (): Promise<string> =>
 const channelId = () => `UC${randomUUID().replace(/-/g, "").slice(0, 22)}`;
 
 interface Rig { orgId: string; userId: string }
-/** An org with `userId` a member of it under `role`. */
+async function grantFeature(orgId: string, key: string, value: boolean): Promise<void> {
+  await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason) values (${orgId}, ${key}, ${value}, 'youtube connect routes')
+            on conflict (org_id, feature_key) do update set bool_value = ${value}`;
+  await invalidateOrgEntitlements(orgId);
+}
+/** An org with `userId` a member of it under `role`. It carries the plan's own streaming entitlements (V426: the stream panel and
+ *  the relay are on for every plan), which is what the Directory's Streaming tab — the page that posts the start — requires. */
 async function rig(role: "owner" | "admin" | "viewer" = "owner"): Promise<Rig> {
   const { auth } = await seedOrg();
   const userId = await newUser();
@@ -139,14 +150,15 @@ const connectionCount = async (orgId: string): Promise<number> =>
 const sha256Hex = (s: string) => createHash("sha256").update(s).digest("hex");
 
 /** A LIVE connection (the fake knows its grant, so a revoke of it is observable). */
-async function liveConnection(r: Rig, o: { channel?: string; sub?: string | null; token?: string } = {}) {
+async function liveConnection(r: Rig, o: { channel?: string; sub?: string | null; token?: string; consentVersion?: number; consentAt?: Date } = {}) {
   const channel = o.channel ?? channelId();
   const refreshToken = o.token ?? `1//seed-${randomBytes(12).toString("hex")}`;
   fake.seedGrant({ refreshToken, channelId: channel, channelTitle: "Seeded FC", ...(o.sub !== undefined ? { sub: o.sub } : {}) });
   const { connectionId } = await sql.begin((tx) =>
     insertConnectionWithToken(tx, {
       orgId: r.orgId, channelId: channel, channelTitle: "Seeded FC", googleSub: o.sub ?? null, grantedScope: YOUTUBE_SCOPE, defaultPrivacy: "unlisted",
-      madeForKids: false, consentBy: r.userId, consentAt: new Date(), consentVersion: 1, createdBy: r.userId, refreshToken,
+      madeForKids: false, consentBy: r.userId, consentAt: o.consentAt ?? new Date(), consentVersion: o.consentVersion ?? YOUTUBE_CONSENT_VERSION,
+      createdBy: r.userId, refreshToken,
     }));
   return { connectionId, channel, refreshToken };
 }
@@ -274,7 +286,7 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     const rows = await pendingRows(r.orgId);
     expect(rows).toHaveLength(1);
     const row = rows[0]!;
-    expect(row.consent_version).toBe(1);
+    expect(row.consent_version).toBe(YOUTUBE_CONSENT_VERSION);
     expect(row.user_id, "consent_by = the user who ticked").toBe(r.userId);
     expect(row.default_privacy).toBe("public");
     expect(row.made_for_kids).toBe(true);
@@ -373,6 +385,90 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     expect((await pendingRows(r.orgId))[0]!.connection_id).toBe(mine.connectionId);
   });
 
+  it("the start is for an org the Directory's Streaming tab is offered to: the relay switched off, the stream panel switched off (the relay alone is not enough), both off, or a deployment that cannot stream -> a landing, no pending row, no cookie, nobody sent to Google; otherwise it goes ahead", async () => {
+    const refusals: [string, (r: Rig) => Promise<void>, string][] = [
+      ["the relay switched off for the org", async (r) => { await grantFeature(r.orgId, "streaming.relay", false); }, "forbidden"],
+      ["the stream panel switched off, the relay left on", async (r) => { await grantFeature(r.orgId, "streaming.overlay", false); }, "forbidden"],
+      ["both switched off", async (r) => {
+        await grantFeature(r.orgId, "streaming.overlay", false);
+        await grantFeature(r.orgId, "streaming.relay", false);
+      }, "forbidden"],
+      ["entitled, on a deployment with no relay", async () => { setRelayDriversForTest(disabledRelayDrivers()); }, "not_configured"],
+    ];
+    let checked = 0;
+    for (const [name, setUp, lands] of refusals) {
+      const r = await rig();
+      await setUp(r);
+      const res = await START(startReq(form(r)));
+      expect(landed(res), name).toEqual(LANDS(lands));
+      expect(await pendingRows(r.orgId), `${name}: no pending row`).toEqual([]);
+      expect(jar.values.size, `${name}: no cookie`).toBe(0);
+      expect(callsOf("authorizeUrl"), `${name}: no authorize URL was built`).toBe(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four refusals").toBe(4);
+
+    // The sequence: the same deployment once it can stream, and the same org once its relay is back on, goes ahead.
+    setRelayDriversForTest(null);
+    const r = await rig();
+    await grantFeature(r.orgId, "streaming.relay", false);
+    expect(landed(await START(startReq(form(r)))).youtube, "relay off").toBe("forbidden");
+    await grantFeature(r.orgId, "streaming.relay", true);
+    const ok = await START(startReq(form(r)));
+    expect(ok.status).toBe(303);
+    expect(new URL(ok.headers.get("location")!).pathname).toBe("/api/youtube/connect/fake-authorize");
+    expect(await pendingRows(r.orgId)).toHaveLength(1);
+  });
+
+  it("consent is once per CONNECTION (D7): a reconnect of a connection consented to the current text needs no tick and carries that consent forward; older wording, a first connect and a ticked-wrong box still need it", async () => {
+    const r = await rig();
+    const consentedAt = new Date("2026-09-01T10:00:00.000Z");
+    const current = await liveConnection(r, { consentAt: consentedAt });
+    const older = await liveConnection(r, { consentVersion: YOUTUBE_CONSENT_VERSION - 1, consentAt: consentedAt });
+    const foreign = await liveConnection(await rig());
+    session.user = { id: r.userId };
+
+    const start = async (fields: Record<string, string | undefined>) => {
+      jar.values.clear();
+      const before = (await pendingRows(r.orgId)).length;
+      const res = await START(startReq(form(r, fields)));
+      const rows = await pendingRows(r.orgId);
+      return { res, added: rows.length - before, row: rows[rows.length - 1]! };
+    };
+
+    // a) current text, no tick: goes ahead, and the pending row carries the connection's own consent record.
+    const carried = await start({ connectionId: current.connectionId, consent: undefined });
+    expect(carried.res.status).toBe(303);
+    expect(carried.added).toBe(1);
+    expect(carried.row.connection_id).toBe(current.connectionId);
+    expect(carried.row.consent_version).toBe(YOUTUBE_CONSENT_VERSION);
+    expect(carried.row.consent_at.getTime(), "the consent given a month ago, not now").toBe(consentedAt.getTime());
+
+    // b) current text, ticked anyway: the consent is recorded again, now.
+    const ticked = await start({ connectionId: current.connectionId });
+    expect(ticked.res.status).toBe(303);
+    expect(ticked.row.consent_at.getTime()).toBeGreaterThan(consentedAt.getTime() + 24 * 3600 * 1000);
+
+    // c) older wording, no tick: refused, nothing written. d) older wording, ticked: goes ahead on the CURRENT version.
+    const stale = await start({ connectionId: older.connectionId, consent: undefined });
+    expect(stale.res.status).toBe(400);
+    expect(stale.added).toBe(0);
+    expect(jar.values.size, "no cookie").toBe(0);
+    const reTicked = await start({ connectionId: older.connectionId });
+    expect(reTicked.res.status).toBe(303);
+    expect(reTicked.row.consent_version, "the text they ticked now, not the one they saw before").toBe(YOUTUBE_CONSENT_VERSION);
+
+    // e) a first connect with no tick: refused. f) a value that is not "1" is malformed even where the tick is not needed.
+    const first = await start({ consent: undefined });
+    expect([first.res.status, first.added]).toEqual([400, 0]);
+    const wrong = await start({ connectionId: current.connectionId, consent: "0" });
+    expect([wrong.res.status, wrong.added]).toEqual([400, 0]);
+
+    // g) another org's connection is no carried consent: 404, as ever.
+    const theirs = await start({ connectionId: foreign.connectionId, consent: undefined });
+    expect([theirs.res.status, theirs.added]).toEqual([404, 0]);
+  });
+
   it("refuses BEFORE sending anyone to Google when a key the callback needs is unusable (YOUTUBE_TOKEN_KEK or RELAY_KEK, unset or malformed): not_configured, no pending row, no cookie, no authorize built", async () => {
     const r = await rig();
     const faults: [string, string, string | undefined][] = [
@@ -389,6 +485,7 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
       vi.unstubAllEnvs();
       vi.stubEnv("YOUTUBE_DRIVER", "fake");
       vi.stubEnv("ENV_NAME", "ci");
+      vi.stubEnv("RELAY_DRIVERS", "fake");
     }
     // The positive pair: with both keys usable the same request goes to the authorize URL.
     expect((await START(startReq(form(r)))).status).toBe(303);
@@ -792,6 +889,29 @@ describe.skipIf(!HAS_DB)("reconnect", () => {
 });
 
 // =====================================================================================================================================
+describe.skipIf(!HAS_DB)("GET /api/youtube/connect/callback — a failure before any grant exists", () => {
+  it("the driver cannot be built (a misspelt YOUTUBE_DRIVER): the house error response (JSON, ok:false, no landing, no secret), not a rejection — and the cookies are spent, nothing exchanged or stored", async () => {
+    const r = await rig();
+    const f = await begin(r);
+    const { url } = await hop(f.state);
+    const code = new URL(url).searchParams.get("code")!;
+    setYoutubeDriverForTest(null);
+    vi.stubEnv("YOUTUBE_DRIVER", "fakee");
+
+    const res = await CALLBACK(callbackReq(url));
+    expect(res.status).toBe(500);
+    expect(res.headers.get("location"), "not a landing: nothing was decided").toBeNull();
+    const text = await res.text();
+    expect(JSON.parse(text)).toMatchObject({ ok: false, error: expect.stringContaining("YOUTUBE_DRIVER") });
+    for (const secret of [code, f.verifier, f.state]) expect(text.includes(secret), "no secret in the body").toBe(false);
+    expect(jar.values.size, "both cookies were spent on arrival").toBe(0);
+    expect(callsOf("exchangeCode")).toBe(0);
+    expect(await connectionCount(r.orgId)).toBe(0);
+    expect(save.fn).not.toHaveBeenCalled();
+  });
+});
+
+// =====================================================================================================================================
 describe.skipIf(!HAS_DB)("a grant is never revoked while a live connection uses it (controller ruling, 2026-10-27)", () => {
   it("other_org: the channel is live in ANOTHER org -> other_org and the new token is NOT revoked, the other org's connection is untouched, our pending row is dropped", async () => {
     const other = await rig();
@@ -860,6 +980,51 @@ describe.skipIf(!HAS_DB)("a grant is never revoked while a live connection uses 
       }
     }
     expect(checked, "anti-vacuity: 2 refusals x 3 holders").toBe(6);
+  });
+
+  it("the grant's channels cannot be READ (YouTube did not answer): that is not 'no channel' and not a reason to revoke — on the main path (unavailable) and on a refusal that must look (scope_missing), held or not; the holder's token still works", async () => {
+    const paths: [string, (state: string) => void, string][] = [
+      ["the main path", () => {}, "unavailable"],
+      ["a scope_missing refusal", (state) => fake.setGrantedScope("https://www.googleapis.com/auth/userinfo.email", state), "scope_missing"],
+    ];
+    // A holder connection on the grant's channel, with NO sub: only the channel list could have told the route it is in use.
+    const holders: [string, boolean][] = [["its channel is live in another org", true], ["nothing holds it", false]];
+    let checked = 0;
+    for (const [pathName, shape, lands] of paths) {
+      for (const [holderName, held] of holders) {
+        const label = `${pathName} / ${holderName}`;
+        const r = await rig();
+        const f = await begin(r);
+        const ch = channelId();
+        fake.setChannels([{ id: ch, title: "Held FC" }], f.state);
+        shape(f.state);
+        const holder = held ? await liveConnection(await rig(), { channel: ch, sub: null }) : null;
+        session.user = { id: r.userId };
+        jar.values.set(STATE_COOKIE, f.state);
+        jar.values.set(VERIFIER_COOKIE, f.verifier);
+        const exchange = vi.spyOn(fake, "exchangeCode");
+        fake.failNext("listMyChannels", "youtube_unavailable");
+        const revokesBefore = callsOf("revoke");
+        const { res } = await finish(f);
+        expect(landed(res), label).toEqual(LANDS(lands));
+        expect(callsOf("revoke") - revokesBefore, `${label}: a grant whose channels are unknown is not revoked`).toBe(0);
+        expect(await isDead(await minted(exchange)), `${label}: the grant is still alive`).toBe(false);
+        if (holder) await expect(fake.accessToken(holder.refreshToken), `${label}: the holder's token still works`).resolves.toEqual(expect.any(String));
+        expect(await connectionCount(r.orgId), `${label}: nothing connected`).toBe(0);
+        expect(await pendingRows(r.orgId), `${label}: the pending row (and its sealed token) is dropped`).toEqual([]);
+        exchange.mockRestore();
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 paths x 2 holders").toBe(4);
+
+    // The positive pair: the same flow with the channels readable and nobody holding the grant IS revoked.
+    const r = await rig();
+    const f = await begin(r);
+    fake.setChannels([], f.state);
+    const revokesBefore = callsOf("revoke");
+    expect(landed((await finish(f)).res)).toEqual(LANDS("no_channel"));
+    expect(callsOf("revoke") - revokesBefore).toBe(1);
   });
 });
 
@@ -950,6 +1115,20 @@ describe.skipIf(!HAS_DB)("GET /api/youtube/connect/fake-authorize — the hop CI
     expect(url.includes("evil.example")).toBe(false);
     // The code works: the callback redeems it (PKCE verifier from the cookie).
     expect(landed(await CALLBACK(callbackReq(url))).youtube).toBe("connected");
+  });
+
+  it("404: the gate env says fake, but this process's driver is NOT the fake — a code is never minted (the driver check stands alone); with the fake back, the same state mints", async () => {
+    const r = await rig();
+    const f = await begin(r);
+    setYoutubeDriverForTest(new GoogleYouTube());   // YOUTUBE_DRIVER=fake and ENV_NAME=ci are still set by beforeEach
+    const minting = vi.spyOn(fake, "issueCode");
+    const refused = (await hop(f.state)).res;
+    expect(refused.status).toBe(404);
+    expect(refused.headers.get("location")).toBeNull();
+    expect(minting).not.toHaveBeenCalled();
+    setYoutubeDriverForTest(fake);
+    expect((await hop(f.state)).res.status).toBe(303);
+    expect(minting).toHaveBeenCalledTimes(1);
   });
 
   it("an unknown or missing state is refused (404 / 400) and mints nothing", async () => {

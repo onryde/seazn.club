@@ -1,7 +1,7 @@
 import { cookies } from "next/headers";
 import { requireUser } from "@/lib/auth";
 import { HttpError } from "@/lib/errors";
-import { redirectLocal } from "@/lib/http";
+import { handler, redirectLocal } from "@/lib/http";
 import { YOUTUBE_OAUTH_STATE_COOKIE, YOUTUBE_OAUTH_VERIFIER_COOKIE, youtubeRedirectUri } from "@/lib/oauth";
 import { EDITOR_ROLES } from "@/lib/types";
 import { YOUTUBE_SCOPE, youtubeLanding, type YoutubeLandingCode } from "@/lib/youtube";
@@ -23,21 +23,27 @@ function failureOf(err: unknown): { failure: string; reason?: string } {
   return { failure: err instanceof Error ? err.name : "unknown" };
 }
 
-/** The ids of the channels this grant can act on, or none when they cannot be read. Only used to decide whether a grant we are
- *  refusing may be revoked, so "cannot read" degrades to "no channel known" and the Google-account test alone decides. */
-async function channelIdsOf(port: YouTubePort, refreshToken: string): Promise<string[]> {
+/** The ids of the channels this grant can act on, or NULL when they cannot be read. Only used to decide whether a grant we are
+ *  refusing may be revoked, and "cannot read" is not "none": a grant whose channels are unknown might be the one a live
+ *  connection (any org) runs on, and revoking it would kill that connection. So null means the grant is left alone. */
+async function channelIdsOf(port: YouTubePort, refreshToken: string): Promise<string[] | null> {
   try {
     return (await port.listMyChannels(await port.accessToken(refreshToken))).map((c) => c.id);
   } catch {
-    return [];
+    return null;
   }
 }
 
 /** Google redirects here (a GET) after consent: spend the state, redeem the code with the PKCE verifier, check the user, the
  *  scope and the channels, and either connect, ask for a pick, or refuse — and on a refusal give the grant back at Google, unless
- *  a live connection already uses it. Every exit is a landing; nothing here is a 500 and no URL it builds carries the code, a
- *  token or the verifier. */
+ *  a live connection already uses it (or its channels cannot be read, so whether one does is unknown). Every exit once the
+ *  grant exists is a landing; a failure before that (the database, the driver) is the house error response, in `handler`, with
+ *  the request's id on its log line. No URL it builds carries the code, a token or the verifier. */
 export async function GET(req: Request) {
+  return handler(() => callback(req));
+}
+
+async function callback(req: Request): Promise<Response> {
   const url = new URL(req.url);
   const code = url.searchParams.get("code");
   const state = url.searchParams.get("state");
@@ -90,13 +96,19 @@ export async function GET(req: Request) {
 
   // From here a grant exists at Google. Every exit that does not store it goes through `refuse`, which gives the grant back —
   // unless a live connection (in ANY org) holds the grant's channel or its Google account: revoking that grant would kill
-  // that connection. Best effort and never throws: a failed revoke leaves an unused entry in the user's Google permissions.
-  let channelIds: string[] | null = null;
+  // that connection. And unless the grant's channels cannot be read: then whether a connection holds it is unknown, and an
+  // unrevoked grant is only an unused entry in the user's Google permissions, where a revoked one may be a dead connection.
+  // Best effort and never throws.
+  let channelIds: string[] | null | undefined;   // undefined: not read yet; null: could not be read
   const refuse = async (outcome: YoutubeLandingCode): Promise<Response> => {
     try {
       await dropPending(pending.id);
-      channelIds ??= await channelIdsOf(port, refreshToken);
-      if (!(await grantInUse(channelIds, googleSub))) await port.revoke(refreshToken);
+      if (channelIds === undefined) channelIds = await channelIdsOf(port, refreshToken);
+      if (channelIds === null) {
+        log.warn({ orgId: pending.orgId, outcome }, "youtube connect callback: the grant's channels are unknown, so it was NOT revoked");
+      } else if (!(await grantInUse(channelIds, googleSub))) {
+        await port.revoke(refreshToken);
+      }
     } catch (err) {
       log.error({ orgId: pending.orgId, ...failureOf(err) }, "youtube connect callback: the refused grant could not be cleaned up");
     }
@@ -115,11 +127,13 @@ export async function GET(req: Request) {
     try {
       channels = await port.listMyChannels(await port.accessToken(refreshToken));
     } catch (err) {
+      // YouTube did not answer (or the grant is unusable): that is not "no channel", and it is not a reason to revoke.
       log.warn({ orgId: pending.orgId, ...failureOf(err) }, "youtube connect callback: the grant's channels could not be read");
-      channelIds = [];
-      return await refuse("expired");
+      channelIds = null;
+      return await refuse("unavailable");
     }
-    channelIds = channels.map((c) => c.id);
+    const grantChannelIds = channels.map((c) => c.id);
+    channelIds = grantChannelIds;
     if (channels.length === 0) return await refuse("no_channel");
 
     // A reconnect is for THE connection's channel: the grant may list several, and it need not be first.
@@ -127,7 +141,7 @@ export async function GET(req: Request) {
     if (pending.connectionId) {
       const target = await reconnectTarget(pending.orgId, pending.connectionId);
       if (!target) return await refuse("expired");   // disconnected between the start and now
-      if (!channelIds.includes(target.channelId)) return await refuse("different_channel");
+      if (!grantChannelIds.includes(target.channelId)) return await refuse("different_channel");
       channelId = target.channelId;
     }
 

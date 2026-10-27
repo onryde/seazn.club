@@ -10,6 +10,7 @@ import { EDITOR_ROLES } from "@/lib/types";
 import { YOUTUBE_CONSENT_VERSION, YOUTUBE_PRIVACIES, youtubeLanding } from "@/lib/youtube";
 import { pkceChallenge, pkceVerifier } from "@/server/external-play/pkce";
 import { log } from "@/server/logger";
+import { relayOffer } from "@/server/stream-panel-context";
 import { PENDING_LIFETIME_SECONDS, insertPending, reconnectTarget, unusableConnectKeys } from "@/server/youtube/connect-flow";
 import { youtubeDriver } from "@/server/youtube/driver";
 import { YouTubeError } from "@/server/youtube/port";
@@ -24,13 +25,13 @@ const OAUTH_COOKIE_OPTS = {
   maxAge: PENDING_LIFETIME_SECONDS,
 };
 
-/** The consent form (plan T7). An empty string is an absent field, so an unticked box or a blank select is "missing", never a
- *  value. `consent` must be exactly "1" (D7: the box is ticked once per connection, before Google is asked). */
+/** The connect form (plan T7). An empty string is an absent field, so an unticked box or a blank select is "missing", never a
+ *  value. A `consent` that is present must be exactly "1"; whether it is REQUIRED depends on the connection (D7, below). */
 const ConnectForm = z.object({
   orgId: z.uuid(),
   privacy: z.enum(YOUTUBE_PRIVACIES),
   madeForKids: z.enum(["0", "1", "true", "false"]).optional(),
-  consent: z.literal("1"),
+  consent: z.literal("1").optional(),
   connectionId: z.uuid().optional(),
 });
 
@@ -62,7 +63,19 @@ export async function POST(req: Request) {
     const role = await getOrgRole(body.orgId, user.id);
     if (!role) throw new HttpError(404, "Not found");
     if (!(EDITOR_ROLES as readonly string[]).includes(role)) throw new HttpError(403, "Only an owner or admin can connect YouTube");
-    if (body.connectionId && !(await reconnectTarget(body.orgId, body.connectionId))) throw new HttpError(404, "Not found");
+
+    // The Directory's Streaming tab is listed only to an org entitled to the relay, on a deployment that can start a stream
+    // (directory/page.tsx, via `relayOffer`); this asks the same question, so a hand-made POST gets what the tab would not offer.
+    const offer = await relayOffer(body.orgId);
+    if (!offer.relayEntitled) return redirectLocal(youtubeLanding("forbidden"), 303);
+    if (offer.relayDisabled) return redirectLocal(youtubeLanding("not_configured"), 303);
+
+    // D7: ONE consent per connection. A reconnect of a connection whose consent is on the CURRENT text needs no new tick (its
+    // own record is carried forward); a first connect, or a connection consented to older wording, must tick the box.
+    const target = body.connectionId ? await reconnectTarget(body.orgId, body.connectionId) : null;
+    if (body.connectionId && !target) throw new HttpError(404, "Not found");
+    const consentCarried = target !== null && target.consentVersion === YOUTUBE_CONSENT_VERSION;
+    if (!consentCarried && body.consent !== "1") throw new HttpError(400, "Consent is required");
 
     // A grant made while the callback cannot seal it would be orphaned live at Google: refuse BEFORE sending anyone there.
     const unusable = unusableConnectKeys();
@@ -87,7 +100,11 @@ export async function POST(req: Request) {
 
     await insertPending({
       state, orgId: body.orgId, userId: user.id, connectionId: body.connectionId ?? null, privacy: body.privacy,
-      madeForKids: body.madeForKids === "1" || body.madeForKids === "true", consentVersion: YOUTUBE_CONSENT_VERSION, now: new Date(),
+      madeForKids: body.madeForKids === "1" || body.madeForKids === "true", now: new Date(),
+      // Ticked now: consent to the current text, now. Carried: the connection's own record, unchanged.
+      ...(body.consent === "1" || !target
+        ? { consentVersion: YOUTUBE_CONSENT_VERSION }
+        : { consentVersion: target.consentVersion, consentAt: target.consentAt }),
     });
 
     const jar = await cookies();

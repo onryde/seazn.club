@@ -29,13 +29,15 @@ const stateHash = (state: string): string => createHash("sha256").update(state).
 export async function insertPending(a: {
   state: string; orgId: string; userId: string; connectionId: string | null; privacy: YoutubePrivacy; madeForKids: boolean;
   consentVersion: number; now: Date;
+  /** When the consent was given, if not now: a reconnect that carries the connection's own consent forward (D7). */
+  consentAt?: Date;
 }): Promise<{ id: string }> {
   const expiresAt = new Date(a.now.getTime() + PENDING_LIFETIME_SECONDS * 1000);
   const [row] = await sql<{ id: string }[]>`
     insert into youtube_connect_pending (
       state_hash, org_id, user_id, connection_id, default_privacy, made_for_kids, consent_version, consent_at, expires_at
     ) values (
-      ${stateHash(a.state)}, ${a.orgId}, ${a.userId}, ${a.connectionId}, ${a.privacy}, ${a.madeForKids}, ${a.consentVersion}, ${a.now}, ${expiresAt}
+      ${stateHash(a.state)}, ${a.orgId}, ${a.userId}, ${a.connectionId}, ${a.privacy}, ${a.madeForKids}, ${a.consentVersion}, ${a.consentAt ?? a.now}, ${expiresAt}
     ) returning id`;
   return { id: row!.id };
 }
@@ -80,12 +82,16 @@ export async function roleNow(orgId: string, userId: string): Promise<OrgRole | 
   return row?.role ?? null;
 }
 
-/** The live connection a reconnect is for: this org's, not revoked. Its channel is the only channel the new grant may be for.
- *  Null for a missing, another org's or a revoked connection — one answer, so a foreign id is no oracle. */
-export async function reconnectTarget(orgId: string, connectionId: string): Promise<{ channelId: string } | null> {
-  const [row] = await sql<{ channel_id: string | null }[]>`
-    select channel_id from org_youtube_connections where id = ${connectionId} and org_id = ${orgId} and status <> 'revoked'`;
-  return row?.channel_id ? { channelId: row.channel_id } : null;
+/** The live connection a reconnect is for: this org's, not revoked. Its channel is the only channel the new grant may be for;
+ *  its consent record is what a reconnect may carry forward (D7: one consent per connection). Null for a missing, another
+ *  org's or a revoked connection — one answer, so a foreign id is no oracle. */
+export async function reconnectTarget(
+  orgId: string, connectionId: string,
+): Promise<{ channelId: string; consentVersion: number; consentAt: Date } | null> {
+  const [row] = await sql<{ channel_id: string | null; consent_version: number; consent_at: Date }[]>`
+    select channel_id, consent_version, consent_at from org_youtube_connections
+     where id = ${connectionId} and org_id = ${orgId} and status <> 'revoked'`;
+  return row?.channel_id ? { channelId: row.channel_id, consentVersion: row.consent_version, consentAt: row.consent_at } : null;
 }
 
 /** Does a live connection, in ANY org, already use this grant? Revoking a grant at Google ends every token of that Google

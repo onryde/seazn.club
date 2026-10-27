@@ -61,6 +61,7 @@ export const YOUTUBE_LANDING_CODES = [
   "expired",
   "not_configured",
   "forbidden",
+  "unavailable",
 ] as const;
 export type YoutubeLandingCode = (typeof YOUTUBE_LANDING_CODES)[number];
 
