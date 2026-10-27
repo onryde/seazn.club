@@ -39,6 +39,10 @@ export const DESTINATION_NOT_ALLOWED = "DESTINATION_NOT_ALLOWED";
 export const TARGET_UNREADABLE = "TARGET_UNREADABLE";
 export const STREAM_KEY_EMPTY = "STREAM_KEY_EMPTY";
 export const DESTINATION_LABEL_EMPTY = "DESTINATION_LABEL_EMPTY";
+/** YouTube Connect (plan P9, spec §6.8): Rename, Replace key and Remove are refused 422 on an API-backed destination (a
+ *  connected channel). It has no key of its own to replace and is not a row the organiser removes — Disconnect is the one
+ *  way out. The Directory never offers those controls on such a row; this is what a caller that bypasses it is told. */
+export const YOUTUBE_USE_DISCONNECT = "YOUTUBE_USE_DISCONNECT";
 
 /**
  * The fixture's saved destination CHOICE (`fixture_stream_settings.target_chosen`, V431 / plan R-1), as the ONE server reader

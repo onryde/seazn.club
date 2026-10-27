@@ -1,8 +1,8 @@
 import "server-only";
 // server/usecases/stream-target-holders.ts — ONE answer to "which session holds this destination", read by the
 // Directory list (`inUse`), Go live's refusal (`target_in_use`, stream-sessions.ts `targetHolderFor`), and Replace key /
-// Remove (`TARGET_IN_USE`). Spec §5.3 + §5.5. Held = an ACTIVE session references the target; this org's only (the
-// target join is the tenancy floor).
+// Remove (`TARGET_IN_USE`). Spec §5.3 + §5.5. Held = an ACTIVE session references a PASTED-key target (YouTube Connect:
+// an API-backed target is never held, spec §5.2); this org's only (the target join is the tenancy floor).
 import { sql, type Tx } from "@/lib/db";
 import { routes } from "@/lib/routes";
 import type { StreamTargetHolder } from "@/server/api-v1/schemas";
@@ -56,6 +56,10 @@ export async function holderRows(
       left join competitions comp on comp.id = d.competition_id
       left join organizations o on o.id = comp.org_id
      where t.org_id = ${q.orgId}
+       -- YouTube Connect (spec §5.2): the destination is the unit of exclusivity for PASTED rows only. One channel streams
+       -- several matches at once, so no session on an API-backed target (a connection, not a key) holds it; exclusivity for
+       -- those moves to the pooled key (§5.4). Decided by the TARGET's source, not by anything the session carries.
+       and t.youtube_connection_id is null
        and s.state in ${exec([...ACTIVE_STATES])}
        and (${targetId}::uuid is null or s.target_id = ${targetId}::uuid)
        and (${notFixtureId}::uuid is null or s.fixture_id is distinct from ${notFixtureId}::uuid)

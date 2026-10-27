@@ -18,8 +18,10 @@ import { HttpError } from "@/lib/errors";
 import { STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, checkDestination } from "@/lib/stream-destinations";
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { log } from "@/server/logger";
-import { fingerprintDestination, seal } from "../crypto";
+import { fingerprintDestination, openWith, seal, sealWith } from "../crypto";
+import { insertConnectionWithToken, revokeConnection } from "@/server/youtube/token-store";
 import {
+  ApiBackedTargetError, insertPooledKey, readPooledKey,
   KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, StreamTargetVanishedError, TargetSecretUnreadableError, archiveStreamTarget, insertStreamTarget, keyHintOf,
   lockStreamTarget, readCameraPlayback, readFirstInput, readInputBySlot, readKeyHints, readTargetSecret, replaceTargetKey, storeInputCredentials,
   storePlaybackCredentials,
@@ -820,5 +822,315 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
     expect(err).toBeInstanceOf(StreamTargetVanishedError);
     expect(err).toBeInstanceOf(HttpError);
     expect(err).toMatchObject({ status: 409 });
+  });
+});
+
+// YouTube Connect (plan T2). The pooled-key envelope and the API-row refusal. `pool_rtmp_enc` is sealed under RELAY_KEK in
+// `rtmp_enc`'s {url, streamKey} shape (spec §5.3), so a pooled key reaches `add_output` through the same code a pasted one
+// does. The connection a key hangs off is written by its real producer, token-store's insertConnectionWithToken (R1).
+describe.skipIf(!HAS_DB)("YouTube Connect T2 — pooled keys and API-backed destination rows", () => {
+  // Snapshotted inside beforeAll (collection-time snapshots miss whatever an earlier beforeAll set; crypto.test.ts's did).
+  let savedYt: string | undefined;
+  beforeAll(() => {
+    savedYt = process.env.YOUTUBE_TOKEN_KEK;
+    process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
+  });
+  afterAll(() => {
+    if (savedYt === undefined) delete process.env.YOUTUBE_TOKEN_KEK;
+    else process.env.YOUTUBE_TOKEN_KEK = savedYt;
+  });
+
+  const ingest = () => ({ url: "rtmps://a.rtmps.youtube.com:443/live2", streamKey: `pk-${secret65()}` });
+
+  async function newUser(): Promise<string> {
+    const [row] = await sql<{ id: string }[]>`insert into users (email, display_name) values (${`pool-${randomUUID()}@example.test`}, 'Pool Tester') returning id`;
+    return row!.id;
+  }
+
+  /** An org with one connected YouTube channel, written by token-store's real producer. */
+  async function ytRig() {
+    const { auth } = await seedOrg();
+    const userId = await newUser();
+    const { connectionId } = await sql.begin((tx) =>
+      insertConnectionWithToken(tx, {
+        orgId: auth.orgId, channelId: `UC${randomUUID().replace(/-/g, "").slice(0, 22)}`, channelTitle: "Pool FC", googleSub: null,
+        grantedScope: "https://www.googleapis.com/auth/youtube", defaultPrivacy: "unlisted", madeForKids: false,
+        consentBy: userId, consentAt: new Date(), consentVersion: 1, createdBy: userId, refreshToken: `1//rt-${randomUUID()}`,
+      }),
+    );
+    return { orgId: auth.orgId, connectionId };
+  }
+
+  const withKek = async <T,>(value: string | undefined, body: () => Promise<T>): Promise<T> => {
+    const saved = process.env.RELAY_KEK;
+    if (value === undefined) delete process.env.RELAY_KEK;
+    else process.env.RELAY_KEK = value;
+    try {
+      return await body();
+    } finally {
+      if (saved === undefined) delete process.env.RELAY_KEK;
+      else process.env.RELAY_KEK = saved;
+    }
+  };
+  const KEK_FAULTS = [{ name: "unset", value: undefined, says: /RELAY_KEK is not set/ }, { name: "malformed", value: "zz".repeat(32), says: /RELAY_KEK must be exactly 64 hex/ }] as const;
+
+  it("insertPooledKey → readPooledKey round-trips {url, streamKey}; the row carries the org, connection, slot and liveStream id it was given; the raw column holds no plaintext", async () => {
+    const r = await ytRig();
+    const k = ingest();
+    // slot 7 and a liveStream id that is neither the default nor the first: a hard-coded 1 or a swapped column would show.
+    const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 7, liveStreamId: "ls-seven", ingest: k }));
+    expect(keyId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId))).toEqual(k);
+    const [row] = await sql<{ org_id: string; connection_id: string; slot: number; live_stream_id: string; retired_at: Date | null; pool_rtmp_enc: Uint8Array }[]>`
+      select org_id, connection_id, slot, live_stream_id, retired_at, pool_rtmp_enc from youtube_stream_keys where id = ${keyId}`;
+    expect({ org_id: row!.org_id, connection_id: row!.connection_id, slot: row!.slot, live_stream_id: row!.live_stream_id, retired_at: row!.retired_at })
+      .toEqual({ org_id: r.orgId, connection_id: r.connectionId, slot: 7, live_stream_id: "ls-seven", retired_at: null });
+    expect(holds(row!.pool_rtmp_enc, k.streamKey), "the stream key is not in the clear").toBe(false);
+    expect(holds(row!.pool_rtmp_enc, k.url), "the ingestion url is not in the clear").toBe(false);
+    // sealed under RELAY_KEK, as the plan says — and NOT under the YouTube token key
+    expect(JSON.parse(openWith("RELAY_KEK", row!.pool_rtmp_enc))).toEqual(k);
+    expect(() => openWith("YOUTUBE_TOKEN_KEK", row!.pool_rtmp_enc)).toThrow();
+  });
+
+  it("the sealed JSON is EXACTLY {url, streamKey} — a caller's extra fields never reach the envelope", async () => {
+    const r = await ytRig();
+    const k = ingest();
+    const wide = { ...k, ingestionAddress: "rtmp://leak.example/x", extra: "must-not-be-sealed" };
+    const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 1, liveStreamId: "ls-1", ingest: wide }));
+    const [row] = await sql<{ pool_rtmp_enc: Uint8Array }[]>`select pool_rtmp_enc from youtube_stream_keys where id = ${keyId}`;
+    expect(Object.keys(JSON.parse(openWith("RELAY_KEK", row!.pool_rtmp_enc))).sort()).toEqual(["streamKey", "url"]);
+  });
+
+  it("another org's keyId is 'not found' — exactly as a random id is — and never TargetSecretUnreadableError; the owner still opens it", async () => {
+    const a = await ytRig();
+    const b = await ytRig();
+    const k = ingest();
+    const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: a.orgId, connectionId: a.connectionId, slot: 1, liveStreamId: "ls-a", ingest: k }));
+    expect(await sql.begin((tx) => readPooledKey(tx, a.orgId, keyId)), "the owner").toEqual(k);
+    const foreign = await sql.begin((tx) => readPooledKey(tx, b.orgId, keyId)).then(() => null, (e: unknown) => e);
+    const missing = await sql.begin((tx) => readPooledKey(tx, a.orgId, randomUUID())).then(() => null, (e: unknown) => e);
+    for (const [name, err] of [["foreign", foreign], ["missing", missing]] as const) {
+      expect(err, name).toBeInstanceOf(Error);
+      expect(err, name).not.toBeInstanceOf(TargetSecretUnreadableError);
+      expect((err as Error).message, name).toMatch(/not found/);
+      expect((err as Error).message, name).not.toContain(k.streamKey);
+    }
+    // one sentence for both: the foreign case is no oracle for "this id exists under another org"
+    expect((foreign as Error).message.replace(keyId, "ID")).toBe((missing as Error).message.replace(/[0-9a-f-]{36}/, "ID"));
+  });
+
+  it("insertPooledKey: a connection that is not THIS org's is refused and writes no row (the key's org and its connection's org cannot disagree)", async () => {
+    const a = await ytRig();
+    const b = await ytRig();
+    const count = async () => (await sql<{ n: number }[]>`select count(*)::int as n from youtube_stream_keys where connection_id = ${a.connectionId} or org_id = ${b.orgId}`)[0]!.n;
+    const before = await count();
+    await expect(sql.begin((tx) => insertPooledKey(tx, { orgId: b.orgId, connectionId: a.connectionId, slot: 1, liveStreamId: "ls-x", ingest: ingest() })))
+      .rejects.toThrow(/not found/);
+    expect(await count(), "nothing was written").toBe(before);
+    // the accepted twin: the owner's own org writes
+    await sql.begin((tx) => insertPooledKey(tx, { orgId: a.orgId, connectionId: a.connectionId, slot: 1, liveStreamId: "ls-x", ingest: ingest() }));
+    expect(await count()).toBe(before + 1);
+  });
+
+  it("a REVOKED connection takes no new key and its keys no longer open — 'not found', the same sentence as a missing key; connected and reconnect_needed connections work (only 'revoked' refuses)", async () => {
+    const r = await ytRig();
+    const k = ingest();
+    const rows = async () => (await sql<{ n: number }[]>`select count(*)::int as n from youtube_stream_keys where connection_id = ${r.connectionId}`)[0]!.n;
+    // before the revoke: pooling works and the key opens (so each refusal below is the revoke's doing, not an empty table)
+    const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 1, liveStreamId: "ls-live", ingest: k }));
+    expect(await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId))).toEqual(k);
+    // reconnect_needed is NOT revoked: a dead grant still holds its keys until the 30-day purge revokes it
+    await sql`update org_youtube_connections set status = 'reconnect_needed' where id = ${r.connectionId}`;
+    expect(await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId)), "reconnect_needed still opens").toEqual(k);
+    await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 2, liveStreamId: "ls-rn", ingest: ingest() }));
+    expect(await rows()).toBe(2);
+
+    expect(await revokeConnection(sql, r.orgId, r.connectionId)).toBe(true);
+    const read = await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId)).then(() => null, (e: unknown) => e);
+    const missing = await sql.begin((tx) => readPooledKey(tx, r.orgId, randomUUID())).then(() => null, (e: unknown) => e);
+    expect(read, "revoked: the key does not open").toBeInstanceOf(Error);
+    expect(read).not.toBeInstanceOf(TargetSecretUnreadableError);
+    expect((read as Error).message).toMatch(/not found/);
+    expect((read as Error).message).not.toContain(k.streamKey);
+    expect((read as Error).message.replace(keyId, "ID"), "one sentence for revoked and missing").toBe((missing as Error).message.replace(/[0-9a-f-]{36}/, "ID"));
+    expect(await rows(), "the revoke did not delete the key rows").toBe(2);
+
+    const err = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 3, liveStreamId: "ls-after", ingest: ingest() })).then(() => null, (e: unknown) => e);
+    expect(err, "a revoked connection takes no new key").toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/not found/);
+    expect(await rows(), "and the refused insert wrote nothing").toBe(2);
+  });
+
+  it("insertPooledKey refuses an empty url or stream key by name — the message echoes neither field — and writes nothing; a missing RELAY_KEK writes nothing either", async () => {
+    const r = await ytRig();
+    const rows = async () => (await sql<{ n: number }[]>`select count(*)::int as n from youtube_stream_keys where connection_id = ${r.connectionId}`)[0]!.n;
+    const good = ingest();
+    let checked = 0;
+    for (const bad of [{ url: "", streamKey: good.streamKey }, { url: good.url, streamKey: "" }]) {
+      const msg = await messageOf(sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 1, liveStreamId: "ls-e", ingest: bad })));
+      expect(msg).toMatch(/non-empty/);
+      expect(msg).not.toContain(good.streamKey);
+      expect(msg).not.toContain(good.url);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    let faults = 0;
+    for (const f of KEK_FAULTS) {
+      const msg = await withKek(f.value, () => messageOf(sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 1, liveStreamId: "ls-e", ingest: good }))));
+      expect(msg, f.name).toMatch(f.says);
+      expect(msg, f.name).not.toContain(good.streamKey);
+      faults++;
+    }
+    expect(faults).toBe(KEK_FAULTS.length);
+    expect(await rows(), "no refusal wrote a row").toBe(0);
+    await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 1, liveStreamId: "ls-e", ingest: good }));
+    expect(await rows(), "the accepted twin writes").toBe(1);
+  });
+
+  it("readPooledKey: an envelope that will not open under a VALID KEK is TargetSecretUnreadableError{targetId: keyId, kind: 'youtube'} — damaged, foreign-KEK, not-JSON, missing field — naming no key", async () => {
+    const r = await ytRig();
+    const k = ingest();
+    const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 1, liveStreamId: "ls-u", ingest: k }));
+    const good = (await sql<{ pool_rtmp_enc: Uint8Array }[]>`select pool_rtmp_enc from youtube_stream_keys where id = ${keyId}`)[0]!.pool_rtmp_enc;
+    const flipped = Buffer.from(good);
+    flipped[flipped.length - 1] ^= 0x01;
+    const damages: [string, Buffer][] = [
+      ["a flipped body byte", flipped],
+      ["bytes that are no envelope", Buffer.from("sealed-under-another-kek")],
+      ["sealed under another KEK", sealWith("YOUTUBE_TOKEN_KEK", JSON.stringify(k))],
+      ["opens but is not JSON", seal("not json at all")],
+      ["opens but has no streamKey", seal(JSON.stringify({ url: k.url }))],
+    ];
+    let checked = 0;
+    for (const [name, bytes] of damages) {
+      await sql`update youtube_stream_keys set pool_rtmp_enc = ${bytes} where id = ${keyId}`;
+      const err = await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId)).then(() => null, (e: unknown) => e);
+      expect(err, name).toBeInstanceOf(TargetSecretUnreadableError);
+      expect(err, name).toMatchObject({ targetId: keyId, kind: "youtube" });
+      expect((err as Error).message, name).not.toContain(k.streamKey);
+      expect((err as Error).message, name).not.toContain(k.url);
+      checked++;
+    }
+    expect(checked).toBe(damages.length);
+    // the accepted twin: restored, it opens again
+    await sql`update youtube_stream_keys set pool_rtmp_enc = ${good} where id = ${keyId}`;
+    expect(await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId))).toEqual(k);
+  });
+
+  it("readPooledKey: an unset or malformed RELAY_KEK rethrows the KEK's own error — never TargetSecretUnreadableError (the deployment's fault, not the key's)", async () => {
+    const r = await ytRig();
+    const k = ingest();
+    const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 1, liveStreamId: "ls-k", ingest: k }));
+    let checked = 0;
+    for (const f of KEK_FAULTS) {
+      const err = await withKek(f.value, () => sql.begin((tx) => readPooledKey(tx, r.orgId, keyId)).then(() => null, (e: unknown) => e));
+      expect(err, f.name).toBeInstanceOf(Error);
+      expect(err, f.name).not.toBeInstanceOf(TargetSecretUnreadableError);
+      expect((err as Error).message, f.name).toMatch(f.says);
+      checked++;
+    }
+    expect(checked).toBe(KEK_FAULTS.length);
+    expect(await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId)), "the KEK restored").toEqual(k);
+  });
+
+  /** An API-backed destination row: no rtmp_enc, a connection FK (spec §5.2). Written without naming the sealed column. */
+  async function apiTarget(orgId: string, connectionId: string, archived = false): Promise<string> {
+    const [row] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, youtube_connection_id, archived_at)
+      values (${orgId}, 'youtube', 'API row', ${connectionId}, ${archived ? new Date() : null}) returning id`;
+    return row!.id;
+  }
+
+  it("readTargetSecret on an API-backed row throws ApiBackedTargetError{targetId} — never a decrypt error — and neither the message nor the error carries any pooled key", async () => {
+    const r = await ytRig();
+    const pooled = ingest();
+    await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 1, liveStreamId: "ls-api", ingest: pooled }));
+    const targetId = await apiTarget(r.orgId, r.connectionId);
+    const err = await sql.begin((tx) => readTargetSecret(tx, r.orgId, targetId)).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ApiBackedTargetError);
+    expect(err).not.toBeInstanceOf(TargetSecretUnreadableError);
+    expect(err).toMatchObject({ targetId, name: "ApiBackedTargetError" });
+    expect(Object.keys(err as object).filter((k) => k !== "name").sort(), "carries the target id and nothing else (`name` is the class label)").toEqual(["targetId"]);
+    const text = `${(err as Error).message} ${JSON.stringify(err)} ${(err as Error).stack}`;
+    for (const secret of [pooled.streamKey, pooled.url]) expect(text).not.toContain(secret);
+    // The refusal comes BEFORE any decrypt: with no KEK at all it is still this error, not the KEK's own sentence.
+    let checked = 0;
+    for (const f of KEK_FAULTS) {
+      const e2 = await withKek(f.value, () => sql.begin((tx) => readTargetSecret(tx, r.orgId, targetId)).then(() => null, (e: unknown) => e));
+      expect(e2, f.name).toBeInstanceOf(ApiBackedTargetError);
+      checked++;
+    }
+    expect(checked).toBe(KEK_FAULTS.length);
+  });
+
+  it("an API-backed row is no oracle: another org's and an ARCHIVED API row read 'not found' (the org and archive checks come before the API refusal); a pasted row still opens", async () => {
+    const a = await ytRig();
+    const b = await ytRig();
+    const live = await apiTarget(a.orgId, a.connectionId);
+    const gone = await apiTarget(a.orgId, a.connectionId, true);
+    for (const [name, orgId, id] of [["another org's", b.orgId, live], ["an archived", a.orgId, gone]] as const) {
+      const err = await sql.begin((tx) => readTargetSecret(tx, orgId, id)).then(() => null, (e: unknown) => e);
+      expect(err, name).toBeInstanceOf(Error);
+      expect(err, name).not.toBeInstanceOf(ApiBackedTargetError);
+      expect((err as Error).message, name).toMatch(/not found/);
+    }
+    const r = await rig();
+    expect(await sql.begin((tx) => readTargetSecret(tx, r.orgId, r.targetId)), "a pasted row is unchanged").toEqual(r.target);
+  });
+
+  // YouTube Connect T3 (carried from T2): an API-backed row has no envelope, so the two readers/writers that opened
+  // `rtmp_enc` blindly must filter or refuse it — a hint read must not depend on the KEK for a row with nothing sealed, and
+  // Replace key must never re-seal onto a row the exactly-one-source check forbids a key on.
+  /** A pasted destination in the preset's canonical form (the T2 pool's `ingest()` carries an explicit port). */
+  const pastedDest = (streamKey = secret65()) => ({ url: "rtmps://a.rtmps.youtube.com/live2", streamKey });
+
+  it("readKeyHints: an API-backed row has NO entry (not a null one) while the pasted rows beside it keep theirs — and an org holding only API rows reads its hints with no RELAY_KEK at all", async () => {
+    const r = await ytRig();
+    const api = await apiTarget(r.orgId, r.connectionId);
+    const gone = await apiTarget(r.orgId, r.connectionId, true);
+    // Only API rows: nothing to open, so the KEK is not consulted — an unset or malformed one must not fail the read.
+    let checked = 0;
+    for (const f of KEK_FAULTS) {
+      const hints = await withKek(f.value, () => sql.begin((tx) => readKeyHints(tx, r.orgId)));
+      expect(hints.size, `${f.name} KEK, API rows only`).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(KEK_FAULTS.length);
+    // Beside pasted rows: the good one hints, the unopenable one is a null hint (unchanged), the API row is absent.
+    const good = await sql.begin((tx) => insertStreamTarget(tx, { orgId: r.orgId, kind: "youtube", label: "good", watchUrl: null, rtmp: pastedDest("abcd-1234-efgh-5678-ijkl") }));
+    const [bad] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, rtmp_enc) values (${r.orgId}, 'youtube', 'bad', ${Buffer.from("not-a-real-envelope")}) returning id`;
+    const hints = await sql.begin((tx) => readKeyHints(tx, r.orgId));
+    expect(hints.get(good.id)).toBe("ijkl".slice(-KEY_HINT_CHARS));
+    expect(hints.get(bad!.id), "an unopenable PASTED envelope is still a row with a null hint").toBeNull();
+    expect(hints.has(api), "an API row has no entry").toBe(false);
+    expect(hints.has(gone), "an archived API row has none either").toBe(false);
+    expect(hints.size).toBe(2);
+  });
+
+  it("replaceTargetKey on an API-backed row throws ApiBackedTargetError{targetId} — before any decrypt, KEK or no KEK — and writes nothing: the row stays keyless and keeps its connection; another org's and an archived API row are still 'not_found'; a pasted row replaces (positive pair)", async () => {
+    const a = await ytRig();
+    const b = await ytRig();
+    const api = await apiTarget(a.orgId, a.connectionId);
+    const gone = await apiTarget(a.orgId, a.connectionId, true);
+    const state = async (id: string) => (await sql<{ keyless: boolean; connection: string | null; fingerprint: string | null }[]>`
+      select rtmp_enc is null as keyless, youtube_connection_id as connection, dest_fingerprint as fingerprint from org_stream_targets where id = ${id}`)[0]!;
+    const before = await state(api);
+    expect(before, "premise: a keyless API row").toEqual({ keyless: true, connection: a.connectionId, fingerprint: null });
+    let checked = 0;
+    for (const f of [{ name: "valid", value: process.env.RELAY_KEK }, ...KEK_FAULTS]) {
+      const err = await withKek(f.value, () => sql.begin((tx) => replaceTargetKey(tx, a.orgId, api, secret65())).then(() => null, (e: unknown) => e));
+      expect(err, f.name).toBeInstanceOf(ApiBackedTargetError);
+      expect(err, f.name).toMatchObject({ targetId: api });
+      expect(await state(api), `${f.name}: unchanged`).toEqual(before);
+      checked++;
+    }
+    expect(checked).toBe(1 + KEK_FAULTS.length);
+    // No oracle: the org and archive filters answer first.
+    expect(await sql.begin((tx) => replaceTargetKey(tx, b.orgId, api, secret65())), "another org's").toEqual({ ok: false, reason: "not_found" });
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, gone, secret65())), "an archived one").toEqual({ ok: false, reason: "not_found" });
+    // The positive pair: a pasted row in the same org replaces.
+    const t = await sql.begin((tx) => insertStreamTarget(tx, { orgId: a.orgId, kind: "youtube", label: "pasted", watchUrl: null, rtmp: pastedDest() }));
+    expect(await sql.begin((tx) => replaceTargetKey(tx, a.orgId, t.id, secret65()))).toEqual({ ok: true, changed: true });
   });
 });

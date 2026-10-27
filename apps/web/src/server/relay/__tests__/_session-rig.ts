@@ -85,18 +85,50 @@ export async function holdRig(): Promise<{ auth: AuthCtx; fixtureId: string; tar
   return { auth, fixtureId, targetId: await rigTarget(auth.orgId) };
 }
 
-/** A session on `targetId` in `state`, written raw: only the READ of held-ness is under test, never `decide`. `exec`
- *  lets a row-lock test write the session INSIDE the transaction that holds the lock; `rigUser()` stays on the pool (its
- *  user row is committed before the session names it). */
-export async function sessionOnTarget(orgId: string, fixtureId: string, targetId: string, state: string, exec: Tx | typeof sql = sql): Promise<string> {
+/** YouTube Connect (spec §5.2): an API-backed destination — a `connected` channel connection and the kind `youtube` row
+ *  that points at it. The row seals NO key of its own (its keys live in the pool), so it is the "other source" the
+ *  exactly-one-source check admits. Written raw, like `rigTarget`: this rig names the columns so a usecase test need not.
+ *  The connection's refresh token is a fake envelope nothing here opens (V479's `revoked <=> no token` only needs it
+ *  present), and the channel id is unique per call (one live connection per channel). */
+export async function rigApiTarget(orgId: string, label = "API rig"): Promise<{ targetId: string; connectionId: string }> {
+  const userId = await rigUser();
+  const [conn] = await sql<{ id: string }[]>`
+    insert into org_youtube_connections (org_id, channel_id, channel_title, refresh_token_enc, granted_scope, default_privacy,
+                                         consent_by, consent_at, consent_version, status, created_by)
+    values (${orgId}, ${`UC${randomUUID().replace(/-/g, "").slice(0, 22)}`}, 'Rig channel', ${Buffer.from("not-a-real-envelope")},
+            'https://www.googleapis.com/auth/youtube', 'unlisted', ${userId}, now(), 1, 'connected', ${userId})
+    returning id`;
+  const [target] = await sql<{ id: string }[]>`
+    insert into org_stream_targets (org_id, kind, label, youtube_connection_id)
+    values (${orgId}, 'youtube', ${label}, ${conn!.id}) returning id`;
+  return { targetId: target!.id, connectionId: conn!.id };
+}
+
+async function insertRigSession(
+  orgId: string, fixtureId: string, targetId: string, state: string, apiBacked: boolean, exec: Tx | typeof sql,
+): Promise<string> {
   const createdBy = await rigUser();
   const [s] = await exec<{ id: string }[]>`
-    insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override)
-    select f.id, ${orgId}, 'passthrough', ${state}, ${targetId}, ${createdBy}, d.sport_key, d.competition_id, f.division_id, true
+    insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, sport_key, competition_id, division_id, entitlement_via_override, api_backed)
+    select f.id, ${orgId}, 'passthrough', ${state}, ${targetId}, ${createdBy}, d.sport_key, d.competition_id, f.division_id, true, ${apiBacked}
       from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}
     returning id`;
   if (!s) throw new Error(`sessionOnTarget: no fixture ${fixtureId}`);
   return s.id;
+}
+
+/** A session on `targetId` in `state`, written raw: only the READ of held-ness is under test, never `decide`. `exec`
+ *  lets a row-lock test write the session INSIDE the transaction that holds the lock; `rigUser()` stays on the pool (its
+ *  user row is committed before the session names it). A pasted-key session (`api_backed` false). */
+export async function sessionOnTarget(orgId: string, fixtureId: string, targetId: string, state: string, exec: Tx | typeof sql = sql): Promise<string> {
+  return insertRigSession(orgId, fixtureId, targetId, state, false, exec);
+}
+
+/** The same raw session with `api_backed` TRUE — what admission writes for a session on an API-backed destination
+ *  (set once, at admission, never changed). Several of these may be active on one destination (V479's index narrows to
+ *  `not api_backed`); two on a PASTED destination would be refused, so a caller seats them on `rigApiTarget` rows. */
+export async function apiSessionOnTarget(orgId: string, fixtureId: string, targetId: string, state: string, exec: Tx | typeof sql = sql): Promise<string> {
+  return insertRigSession(orgId, fixtureId, targetId, state, true, exec);
 }
 
 export interface StreamRig {

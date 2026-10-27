@@ -5,8 +5,8 @@
 // reader which rows share a stream key, and a repeated wrap IV under the one
 // long-lived KEK is GCM nonce reuse); and RELAY_KEK is exactly 64 hex chars.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createHash, createHmac, randomBytes } from "node:crypto";
-import { fingerprintDestination, hasValidKek, type KekName, open, openWith, seal, sealWith } from "../crypto";
+import { createHash, createHmac, hkdfSync, randomBytes } from "node:crypto";
+import { fingerprintDestination, fingerprintYoutubeChannel, hasValidKek, type KekName, open, openWith, seal, sealWith } from "../crypto";
 
 // The developer's KEK (from .env.local) is put back afterwards, or removed when there was none — never assigned
 // `undefined`, which Node stores as the string "undefined". It is never printed: no assertion here reads it.
@@ -272,6 +272,129 @@ describe("fingerprintDestination (A19/A19b)", () => {
     expect(msg).not.toContain("SECRET");
     withKek(undefined, () => {
       expect(messageOf(() => fingerprintDestination(FB, "FB-1"))).toContain("RELAY_KEK is not set");
+    });
+  });
+});
+
+// YouTube Connect (spec §7, plan T2): a channel's refresh token is sealed under its OWN key. A leaked RELAY_KEK opens
+// pooled stream keys; it must not also open every connected channel's refresh token, and the reverse.
+describe("sealWith/openWith — YOUTUBE_TOKEN_KEK (YouTube Connect §7)", () => {
+  const others: KekName[] = ["RELAY_KEK", "DEVICE_LINK_KEK", "LICHESS_TOKEN_KEK", "EMAIL_OUTBOX_KEK"];
+  // Snapshotted INSIDE beforeAll, never in the describe body: the body runs at COLLECTION, before this file's own
+  // top-level beforeAll has set RELAY_KEK, so a body-time snapshot records "no RELAY_KEK" and the afterAll below would
+  // then DELETE the file's key out from under every describe that follows (CI sets none: 4 fingerprint cases went red).
+  let savedYt: string | undefined;
+  let savedOthers: Record<string, string | undefined> = {};
+  beforeAll(() => {
+    savedYt = process.env.YOUTUBE_TOKEN_KEK;
+    savedOthers = Object.fromEntries(others.map((k) => [k, process.env[k]]));
+    process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
+    // every other envelope key present and valid, so "does not open under X" is about X's VALUE, never about X being unset
+    for (const k of others) process.env[k] = randomBytes(32).toString("hex");
+  });
+  afterAll(() => {
+    if (savedYt === undefined) delete process.env.YOUTUBE_TOKEN_KEK;
+    else process.env.YOUTUBE_TOKEN_KEK = savedYt;
+    for (const k of others) {
+      if (savedOthers[k] === undefined) delete process.env[k];
+      else process.env[k] = savedOthers[k];
+    }
+  });
+
+  it("round-trips a refresh token, including the characters Google's tokens carry (/, -, _)", () => {
+    const token = `1//0g-${randomBytes(24).toString("base64url")}/_x`;
+    expect(openWith("YOUTUBE_TOKEN_KEK", sealWith("YOUTUBE_TOKEN_KEK", token))).toBe(token);
+  });
+
+  it("a blob sealed under YOUTUBE_TOKEN_KEK opens under NONE of the other four keys, and none of theirs opens under it", () => {
+    const blob = sealWith("YOUTUBE_TOKEN_KEK", "1//refresh");
+    let checked = 0;
+    for (const k of others) {
+      expect(() => openWith(k, blob), `${k} must not open a YouTube token`).toThrow();
+      expect(() => openWith("YOUTUBE_TOKEN_KEK", sealWith(k, "x")), `YOUTUBE_TOKEN_KEK must not open a ${k} blob`).toThrow();
+      // the positive pair, per key: each opens its own blob
+      expect(openWith(k, sealWith(k, "own"))).toBe("own");
+      checked++;
+    }
+    expect(checked).toBe(others.length);
+    expect(openWith("YOUTUBE_TOKEN_KEK", blob)).toBe("1//refresh");
+  });
+
+  it("a flipped byte in the body throws instead of returning a plausible wrong token", () => {
+    const blob = sealWith("YOUTUBE_TOKEN_KEK", "1//refresh");
+    blob[blob.length - 1] ^= 0x01;
+    expect(() => openWith("YOUTUBE_TOKEN_KEK", blob)).toThrow();
+  });
+
+  it("names YOUTUBE_TOKEN_KEK when it is missing or malformed — never RELAY_KEK — and the message holds no token", () => {
+    const TOKEN = "1//SECRET-REFRESH-TOKEN";
+    withKey("YOUTUBE_TOKEN_KEK", undefined, () => {
+      expect(() => sealWith("YOUTUBE_TOKEN_KEK", TOKEN)).toThrow(/YOUTUBE_TOKEN_KEK is not set/);
+      const msg = messageOf(() => sealWith("YOUTUBE_TOKEN_KEK", TOKEN));
+      expect(msg).not.toContain("RELAY_KEK");
+      expect(msg).not.toContain("SECRET");
+      expect(hasValidKek("YOUTUBE_TOKEN_KEK")).toBe(false);
+    });
+    withKey("YOUTUBE_TOKEN_KEK", "abcd", () => {
+      expect(() => sealWith("YOUTUBE_TOKEN_KEK", TOKEN)).toThrow(/YOUTUBE_TOKEN_KEK must be exactly 64 hex/);
+      expect(hasValidKek("YOUTUBE_TOKEN_KEK")).toBe(false);
+    });
+    expect(hasValidKek("YOUTUBE_TOKEN_KEK"), "the accepted twin: a valid key").toBe(true);
+  });
+});
+
+// YouTube Connect (spec §5.2, plan T2): an API-backed destination row has no stream key to fingerprint, so its
+// `dest_fingerprint` is derived from the CHANNEL id. HKDF info is the plan's literal; the expected values below are
+// recomputed here from that literal with node:crypto, not read back from the function under test.
+describe("fingerprintYoutubeChannel (YouTube Connect §5.2)", () => {
+  const CHANNEL = "UCx5XG1OV2P6uZZ5FSM9Ttw";
+  const INFO = "seazn/stream-destination-fingerprint/youtube-channel/v1";
+  const DEST_INFO = "seazn/stream-destination-fingerprint/v1";
+  const hmacUnder = (info: string, msg: string): string =>
+    createHmac("sha256", Buffer.from(hkdfSync("sha256", Buffer.from(process.env.RELAY_KEK!, "hex"), Buffer.alloc(0), info, 32))).update(msg).digest("hex");
+
+  it("is 64 lower-hex and stable, and equals HMAC-SHA256 over the channel id under HKDF(RELAY_KEK, the plan's info literal)", () => {
+    const fp = fingerprintYoutubeChannel(CHANNEL);
+    expect(fp).toMatch(/^[0-9a-f]{64}$/);
+    expect(fingerprintYoutubeChannel(CHANNEL)).toBe(fp);
+    expect(fp).toBe(hmacUnder(INFO, CHANNEL));
+  });
+
+  it("differs per channel and per KEK (it is keyed), and is not the destination fingerprint's key reused", () => {
+    const fp = fingerprintYoutubeChannel(CHANNEL);
+    expect(fingerprintYoutubeChannel(`${CHANNEL}x`)).not.toBe(fp);
+    expect(fingerprintYoutubeChannel(CHANNEL.toLowerCase())).not.toBe(fp);
+    withKek(randomBytes(32).toString("hex"), () => {
+      expect(fingerprintYoutubeChannel(CHANNEL)).not.toBe(fp);
+    });
+    // The wrong-info mutant: the same HMAC under the DESTINATION fingerprint's derived key reads differently.
+    expect(fp).not.toBe(hmacUnder(DEST_INFO, CHANNEL));
+  });
+
+  it("never equals a fingerprintDestination output over the same text, in either field, for any stream platform's url", () => {
+    const fp = fingerprintYoutubeChannel(CHANNEL);
+    const urls = [
+      "rtmp://a.rtmp.youtube.com/live2",
+      "rtmps://live-api-s.facebook.com/rtmp/",
+      "rtmps://a.rtmps.youtube.com/live2",
+      "rtmps://live.twitch.tv/app",
+    ];
+    let checked = 0;
+    for (const url of urls) {
+      expect(fingerprintDestination(url, CHANNEL), `${url} as url + channel as key`).not.toBe(fp);
+      checked++;
+    }
+    // …and the bare-text forms an HMAC over the same string would take under the destination's own key
+    expect(fp).not.toBe(hmacUnder(DEST_INFO, JSON.stringify([CHANNEL])));
+    expect(fp).not.toBe(hmacUnder(DEST_INFO, JSON.stringify([CHANNEL, ""])));
+    expect(checked).toBe(urls.length);
+  });
+
+  it("refuses an empty channel id by name (an empty id would give every blank channel one fingerprint); a missing KEK refuses the way seal does", () => {
+    expect(() => fingerprintYoutubeChannel("")).toThrow(/empty/);
+    expect(fingerprintYoutubeChannel("U"), "the accepted twin: a one-character id still fingerprints").toMatch(/^[0-9a-f]{64}$/);
+    withKek(undefined, () => {
+      expect(messageOf(() => fingerprintYoutubeChannel(CHANNEL))).toContain("RELAY_KEK is not set");
     });
   });
 });

@@ -1,4 +1,4 @@
-// server/relay/crypto.ts — AES-256-GCM envelope (design §6.2), keyed by RELAY_KEK (stream keys), DEVICE_LINK_KEK (device-link secrets, scorer sheets §4.1), LICHESS_TOKEN_KEK (Lichess tokens) or EMAIL_OUTBOX_KEK (queued email bodies).
+// server/relay/crypto.ts — AES-256-GCM envelope (design §6.2), keyed by RELAY_KEK (stream keys), DEVICE_LINK_KEK (device-link secrets, scorer sheets §4.1), LICHESS_TOKEN_KEK (Lichess tokens), EMAIL_OUTBOX_KEK (queued email bodies) or YOUTUBE_TOKEN_KEK (YouTube channel refresh tokens).
 // The ONLY module that turns a plaintext credential into a *_enc column value and back
 // (enc-boundary.test.ts holds every other file to that). Layout, one buffer:
 //
@@ -32,16 +32,21 @@ const HEADER_LEN = 1 + IV_LEN + KEY_LEN + TAG_LEN + IV_LEN + TAG_LEN; // 89
  *  or a pasted trailing newline. Neither message echoes the value. */
 const KEK_HEX = /^[0-9a-f]{64}$/i;
 
-/** The four envelope keys. Separate on purpose (scorer sheets §4.1; chess
- *  design §3.1; email outbox, owner ruling R13): a leaked RELAY_KEK opens stream
- *  keys, a leaked DEVICE_LINK_KEK opens printed scoring QRs, a leaked
- *  LICHESS_TOKEN_KEK opens players' Lichess tokens, a leaked EMAIL_OUTBOX_KEK
- *  opens queued email bodies (sign-in links) — and none of them opens another.
+/** The five envelope keys. Separate on purpose (scorer sheets §4.1; chess
+ *  design §3.1; email outbox, owner ruling R13; YouTube Connect §7): a leaked
+ *  RELAY_KEK opens stream keys, a leaked DEVICE_LINK_KEK opens printed scoring
+ *  QRs, a leaked LICHESS_TOKEN_KEK opens players' Lichess tokens, a leaked
+ *  EMAIL_OUTBOX_KEK opens queued email bodies (sign-in links), a leaked
+ *  YOUTUBE_TOKEN_KEK opens connected channels' refresh tokens — and none of
+ *  them opens another.
  *  The Lichess one is the sharpest: that token can submit moves in games that
  *  are not ours, so it must not ride on a key that is also printed on paper.
+ *  The YouTube one is its twin: a refresh token acts as the channel (it can
+ *  create and end broadcasts there), so it must not ride on the key that opens
+ *  every pooled stream key.
  *  The outbox has its own so that rotating the Lichess key can never strand
  *  queued email. */
-export type KekName = "RELAY_KEK" | "DEVICE_LINK_KEK" | "LICHESS_TOKEN_KEK" | "EMAIL_OUTBOX_KEK";
+export type KekName = "RELAY_KEK" | "DEVICE_LINK_KEK" | "LICHESS_TOKEN_KEK" | "EMAIL_OUTBOX_KEK" | "YOUTUBE_TOKEN_KEK";
 
 function kek(name: KekName): Buffer {
   const hex = process.env[name];
@@ -130,4 +135,26 @@ export function fingerprintDestination(url: string, streamKey: string): string {
   if (identity === null) throw new Error("stream destination is not dialable; it has no fingerprint");
   const key = Buffer.from(hkdfSync("sha256", kek("RELAY_KEK"), Buffer.alloc(0), FINGERPRINT_INFO, KEY_LEN));
   return createHmac("sha256", key).update(JSON.stringify([identity, streamKey])).digest("hex");
+}
+
+/** HKDF `info` for the YouTube channel fingerprint key (plan T2). A DIFFERENT info from `FINGERPRINT_INFO`, so the two
+ *  derived keys differ and a channel fingerprint can never equal a `fingerprintDestination` output for any input. */
+const YOUTUBE_CHANNEL_FINGERPRINT_INFO = "seazn/stream-destination-fingerprint/youtube-channel/v1";
+
+/**
+ * An API-backed destination's fingerprint (YouTube Connect spec §5.2): the same keyed construction as
+ * `fingerprintDestination`, over the CHANNEL id, because a connection has no url + stream key of its own (its keys live
+ * in the pool). It fills `org_stream_targets.dest_fingerprint` for the connection's destination row, so V421's
+ * `(org_id, dest_fingerprint)` unique index still means "one destination, one row" for API rows.
+ *
+ * HMAC-SHA256, 64 lower-hex, under a key DERIVED from RELAY_KEK by HKDF with its own `info` (never the envelope key
+ * itself, never `fingerprintDestination`'s derived key). Keyed because the column is plaintext: a bare hash of a channel
+ * id would let anyone holding the table confirm which channels a club has connected. An empty id is refused (it would
+ * give every blank channel one fingerprint). Rotating RELAY_KEK changes every fingerprint, as it already does for
+ * pasted destinations — a rotation owes the one re-fingerprint pass.
+ */
+export function fingerprintYoutubeChannel(channelId: string): string {
+  if (channelId.length === 0) throw new Error("youtube channel id is empty; it has no fingerprint");
+  const key = Buffer.from(hkdfSync("sha256", kek("RELAY_KEK"), Buffer.alloc(0), YOUTUBE_CHANNEL_FINGERPRINT_INFO, KEY_LEN));
+  return createHmac("sha256", key).update(channelId).digest("hex");
 }
