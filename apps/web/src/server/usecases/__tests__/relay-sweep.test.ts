@@ -562,12 +562,15 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
   });
 
   it("headroom below one retained match → warned with the number; reservations are included; a roomy pool is NOT warned (the differential pair)", async () => {
-    const r = await rig();   // one warming session reserves MAX_DURATION_MINUTES
-    r.ingest.storage = { totalStorageMinutes: 450, totalStorageMinutesLimit: 1000, videoCount: 1 };
+    const r = await rig();   // one warming session reserves a buffer (E1), at least
+    const mineNow = async () => (await storageReservations(sql, r.deps.now())).find((x) => x.sessionId === r.sessionId)?.minutes ?? 0;
+    // 900 of 1000 used leaves 100 minutes: under one retained match (MAX_DURATION_MINUTES) whatever the rig reserves.
+    r.ingest.storage = { totalStorageMinutes: 900, totalStorageMinutesLimit: 1000, videoCount: 1 };
     const warn = vi.spyOn(log, "warn");
     try {
       const tight = await sweep(r);
-      expect(tight.headroomMinutes).toBeLessThanOrEqual(1000 - 450 - MAX_DURATION_MINUTES);   // this rig's own reservation is in it
+      expect(await mineNow(), "PREMISE: this rig's own session holds a reservation").toBeGreaterThan(0);
+      expect(tight.headroomMinutes).toBeLessThanOrEqual(1000 - 900 - await mineNow());   // this rig's own reservation is in it
       expect(tight.headroomMinutes).toBeLessThan(MAX_DURATION_MINUTES);
       const warned = warn.mock.calls.filter(([, msg]) => typeof msg === "string" && /headroom below one retained match/.test(msg));
       expect(warned).toHaveLength(1);
@@ -578,12 +581,45 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
       const roomy = await sweep(r);
       // Upper bounds only: other files' sessions reserve from the same pool concurrently, and a bracket read before and
       // after the sweep is NOT sound — a foreign session can start after the first read and end before the second.
-      expect(roomy.headroomMinutes).toBeLessThanOrEqual(ROOMY_STORAGE_MINUTES - MAX_DURATION_MINUTES);
+      expect(roomy.headroomMinutes).toBeLessThanOrEqual(ROOMY_STORAGE_MINUTES - await mineNow());
       expect(roomy.headroomMinutes).toBeGreaterThanOrEqual(MAX_DURATION_MINUTES);
       expect(warn.mock.calls.filter(([, msg]) => typeof msg === "string" && /headroom below/.test(msg))).toHaveLength(0);
     } finally {
       warn.mockRestore();
     }
+  });
+
+  // Owner ruling 2026-10-26 (E1): a reservation no longer guarantees a full booking, so the pool can be outgrown. The sweep
+  // REPORTS it once per pass (`relay.storage_overcommitted`, numbers only) and carries on — it never ends a running stream.
+  it("E1: a pool the reservations have OUTGROWN is reported once per sweep pass as relay.storage_overcommitted — numbers only — and the sweep carries on; a pool with room reports nothing (the positive pair)", async () => {
+    const r = await rig();
+    const overcommit = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.storage_overcommitted");
+    // 990 of 1000 used leaves 10: under the rig's own buffer (>= 30), so the headroom is negative whatever else is reserved.
+    r.ingest.storage = { totalStorageMinutes: 990, totalStorageMinutesLimit: 1000, videoCount: 1 };
+    sentry.captureError.mockClear();
+    const first = await sweep(r);
+    expect(first.headroomMinutes, "PREMISE: the pool is outgrown").toBeLessThan(0);
+    expect(first.videosListed, "the sweep went on to retention after the report").toBeDefined();
+    expect(overcommit(), "once for this pass").toHaveLength(1);
+    const [err, ctx] = overcommit()[0]! as [Error, { route: string; orgId?: string; extra: Record<string, unknown> }];
+    expect(err).toBeInstanceOf(Error);
+    expect(ctx.extra, "NUMBERS ONLY — exactly these keys").toEqual({
+      source: "sweep", headroomMinutes: first.headroomMinutes, usedMinutes: 990, limitMinutes: 1000,
+      reservedMinutes: 1000 - 990 - first.headroomMinutes, reservingSessions: expect.any(Number),
+    });
+    expect(ctx.extra.reservingSessions as number, "at least this rig's own session").toBeGreaterThanOrEqual(1);
+    expect(ctx.orgId, "no org rides along").toBeUndefined();
+    for (const id of [r.sessionId, r.orgId, r.fixtureId]) expect(JSON.stringify(ctx), "no id in the report").not.toContain(id);
+    expect((await r.state()).state, "a running stream is never touched by the report").toBe("warming");
+    // The second call: a second pass over the same pool reports again — once per pass, not once per day or per process.
+    await sweep(r);
+    expect(overcommit(), "once per pass: two passes, two reports").toHaveLength(2);
+    // The positive pair: room in the pool → silent.
+    sentry.captureError.mockClear();
+    r.ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
+    const roomy = await sweep(r);
+    expect(roomy.headroomMinutes).toBeGreaterThan(0);
+    expect(overcommit()).toHaveLength(0);
   });
 
   it("G7: Cloudflare's FRACTIONAL storage minutes reach the integer columns conservatively — used rounds UP, the limit rounds DOWN — instead of 22P02-ing the sweep", async () => {
@@ -1307,6 +1343,10 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
     expect(rows.map((x) => x.role), "premise: a composed session holds a camera and a programme input").toEqual(["camera", "programme"]);
     return { camera: rows[0]!, programme: rows[1]! };
   }
+  /** How long every session below RAN, in minutes — set on the row once it has ended (owner ruling 2026-10-26, "C": an ended
+   *  composed session keeps the camera's share for the minutes it ran). Neither 0 nor the booking, so a reservation that
+   *  fell back to either reads wrong here; the sweep tests below only need the share to be HELD, and now see which figure. */
+  const RAN_MINUTES = 23;
   /** A composed rig gone live, its recordings made, then ended through the real stop. */
   async function endedComposed(videos: { camera: string[]; programme: string[] }) {
     const r = await rig("composed");
@@ -1317,6 +1357,9 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
     await stopSession(r.auth, r.fixtureId, r.sessionId, r.deps);
     await currentSession(r.auth, r.fixtureId, r.deps);
     expect((await r.state()).state, "premise: the session ended").toBe("completed");
+    // The rig's clock is frozen, so the session "ran" 0 ms; date its warming RAN_MINUTES before its end.
+    await sql`update fixture_stream_sessions set warming_at = ended_at - make_interval(mins => ${RAN_MINUTES}) where id = ${r.sessionId}`;
+    expect(RAN_MINUTES, "premise: the span is neither nothing nor the booking").toBeLessThan(MAX_DURATION_MINUTES);
     return { r, cameraId: camera.ingest_input_id, programmeId: programme.ingest_input_id };
   }
   const reservedFor = async (r: Rig) => (await storageReservations(sql, r.deps.now())).filter((x) => x.sessionId === r.sessionId).map((x) => x.minutes);
@@ -1326,7 +1369,7 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
 
   it("A's recordings go at the FIRST sweep after the end and B's are kept; the camera row is marked; a second sweep asks the provider nothing; the reservation is released only by that delete", async () => {
     const { r, cameraId, programmeId } = await endedComposed({ camera: ["va1", "va2"], programme: ["vb1"] });
-    expect(await reservedFor(r), "ended, A not yet deleted: the camera's share is still reserved").toEqual([MAX_DURATION_MINUTES]);
+    expect(await reservedFor(r), "ended, A not yet deleted: the camera's share is still reserved").toEqual([RAN_MINUTES]);
     const listed = vi.spyOn(r.ingest, "listInputVideos");
     const first = await sweep(r);
     expect(camera1c(first)).toEqual({ cleared: 1, deleted: 2, deferred: 0, refused: 0 });
@@ -1353,7 +1396,7 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
     expect(camera1c(first)).toEqual({ cleared: 0, deleted: 1, deferred: 1, refused: 0 });
     expect(r.ingest.deletedVideos, "va1 went; va2 is still finalising").toEqual(["va1"]);
     expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at, "unmarked: tomorrow retries").toBeNull();
-    expect(await reservedFor(r), "release only after the delete").toEqual([MAX_DURATION_MINUTES]);
+    expect(await reservedFor(r), "release only after the delete").toEqual([RAN_MINUTES]);
     r.tick(DAY_MS);
     const second = await sweep(r);
     expect(camera1c(second)).toEqual({ cleared: 1, deleted: 1, deferred: 0, refused: 0 });
@@ -1374,7 +1417,7 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
     expect(camera1c(first)).toEqual({ cleared: 0, deleted: 1, deferred: 1, refused: 0 });
     expect(r.ingest.deletedVideos).toEqual(["va1"]);
     expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at, "unmarked: tomorrow retries").toBeNull();
-    expect(await reservedFor(r), "release only after the delete").toEqual([MAX_DURATION_MINUTES]);
+    expect(await reservedFor(r), "release only after the delete").toEqual([RAN_MINUTES]);
     expect(sentry.captureError.mock.calls.filter(([, c]) => (c as { route?: string }).route === "relay.sweep.camera_recordings"), "the failure is reported").toHaveLength(1);
     r.tick(DAY_MS);
     const second = await sweep(r, { ingest: flaky });
@@ -1392,7 +1435,7 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
     expect(camera1c(first), "the page's two deleted, nothing deferred or refused").toEqual({ cleared: 0, deleted: 2, deferred: 0, refused: 0 });
     expect(first.cameraListingsTruncated).toBe(1);
     expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at, "a full page is never the whole set: unmarked").toBeNull();
-    expect(await reservedFor(r)).toEqual([MAX_DURATION_MINUTES]);
+    expect(await reservedFor(r)).toEqual([RAN_MINUTES]);
     r.tick(DAY_MS);
     const second = await sweep(r, { ingest: small });
     expect(camera1c(second)).toEqual({ cleared: 1, deleted: 1, deferred: 0, refused: 0 });
@@ -1409,7 +1452,7 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
     expect(camera1c(first)).toEqual({ cleared: 0, deleted: 0, deferred: 0, refused: 0 });
     expect(first.videosListed, "retention still listed").toBeGreaterThan(0);
     expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at).toBeNull();
-    expect(await reservedFor(r)).toEqual([MAX_DURATION_MINUTES]);
+    expect(await reservedFor(r)).toEqual([RAN_MINUTES]);
     expect(camera1c(await sweep(r))).toEqual({ cleared: 1, deleted: 1, deferred: 0, refused: 0 });
   });
 
@@ -1433,7 +1476,7 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
       refused: [{ videoId: "vb1", videoInput: programmeId }, { videoId: "vb2", videoInput: programmeId }] } });
     expect(await refusalRows(r.sessionId), "the ledger remembers the report").toBe(1);
     expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at).toBeNull();
-    expect(await reservedFor(r)).toEqual([MAX_DURATION_MINUTES]);
+    expect(await reservedFor(r)).toEqual([RAN_MINUTES]);
     // The next day: still refused, still unmarked — and SILENT (the second call, the state transition the rule is about).
     r.tick(DAY_MS);
     const again = await sweep(r, { ingest: mixed });
@@ -1459,7 +1502,7 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
         expect(camera1c(res), `session ${nth} day ${day}`).toEqual({ cleared: 0, deleted: 0, deferred: 0, refused: 1 });
         expect(r.ingest.deletedVideos, "never deleted").toEqual([]);
         expect((await inputsOf(r.sessionId)).camera.recordings_deleted_at, "never marked").toBeNull();
-        expect(await reservedFor(r)).toEqual([MAX_DURATION_MINUTES]);
+        expect(await reservedFor(r)).toEqual([RAN_MINUTES]);
         checked++;
       }
       expect(refusalReports(), `one report per session — ${nth} after session ${nth}`).toHaveLength(nth);

@@ -726,7 +726,7 @@ const STREAM_SESSION_CREATE_ERRORS = {
   }),
   422: STREAM_SESSION_CREATE_422,
   503: scopedErrorEnvelope({
-    headroomMinutes: { type: "integer", description: "On storage_exhausted (503): recording minutes left once every active session's reservation is subtracted — below one session's maximum duration" },
+    headroomMinutes: { type: "integer", description: "On storage_exhausted (503): recording minutes left once every active session's reservation is subtracted — below what the refused start would itself reserve (one recording's buffer for passthrough, two for composed)" },
   }),
 };
 

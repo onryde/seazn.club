@@ -21,7 +21,7 @@ import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import { StreamLostCountdown } from "@/server/api-v1/schemas";
 import {
   MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, POLL_FAR_SECONDS, POLL_NEAR_SECONDS,
-  RECONNECT_QUIET_SECONDS, WARMING_TIMEOUT_MINUTES,
+  RECONNECT_QUIET_SECONDS, RESERVATION_BUFFER_MINUTES, WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
 import { OPEN_SESSION_MAX_POLL_SECONDS } from "@/server/relay/domain/poll-seconds";
 import { RECORDINGS_PER_SESSION } from "@/server/relay/domain/credits";
@@ -1642,20 +1642,31 @@ describe.skipIf(!HAS_DB)("R2008: a COMPOSED live stream whose camera is gone for
     expect(await readsOf(r), "an ending session is not judged, so nothing was read").toBe(0);
   });
 
-  it("the money and the storage are what any composed end gets: no refund, one consume, and the reservation after the end is the one an organiser's Stop leaves — the camera's share, one recording", async () => {
+  /** The whole minutes a session ran from warming to its end, rounded UP — worked out in SQL from the two columns, not by the
+   *  production read it checks (owner ruling 2026-10-26, "C": an ended composed session keeps the minutes its camera ran). */
+  const ranMinutes = async (sid: string) =>
+    (await sql<{ ran: number }[]>`select ceil(extract(epoch from (ended_at - warming_at)) / 60.0)::int as ran from fixture_stream_sessions where id = ${sid}`)[0]!.ran;
+
+  it("the money and the storage are what any composed end gets: no refund, one consume, and the reservation after the end is the one an organiser's Stop leaves — the camera's share, one recording, for the minutes it ran", async () => {
     const lostOne = await composedLive();
     lostOne.tick(MIN); await lostOne.beat("reconnecting");
     const stopped = await composedLive();
-    expect((await storageReservations(sql, lostOne.deps.now())).find((x) => x.sessionId === lostOne.sessionId)?.minutes, "PREMISE: running = every recording it makes")
-      .toBe(RECORDINGS_PER_SESSION.composed * MAX_DURATION_MINUTES);
+    expect((await storageReservations(sql, lostOne.deps.now())).find((x) => x.sessionId === lostOne.sessionId)?.minutes,
+      "PREMISE: running = every recording it makes, each holding the one minute it has run plus the buffer (E1)")
+      .toBe(RECORDINGS_PER_SESSION.composed * (1 + RESERVATION_BUFFER_MINUTES));
     lostOne.tick(LOST_MS); await hold(lostOne);
     expect(await tickOf(lostOne)).toMatchObject({ endReason: "phone_lost" });
     await stopSession(stopped.auth, stopped.fixtureId, stopped.sessionId, stopped.deps);
     await settled(lostOne);
     await settled(stopped);
     const reserved = async (r: Composed) => (await storageReservations(sql, r.deps.now())).find((x) => x.sessionId === r.sessionId)?.minutes;
-    expect(await reserved(lostOne), "the camera's share is kept until the daily sweep deletes A's recording").toBe(MAX_DURATION_MINUTES);
-    expect(await reserved(lostOne), "phone_lost reserves what a Stop does").toBe(await reserved(stopped));
+    // The two sessions ran DIFFERENT spans (a phone-lost end waited out its countdown; a Stop ended at once), so each keeps
+    // what IT ran — the differential a constant reservation could not make. The rule is one rule whatever ended the session.
+    expect(await ranMinutes(lostOne.sessionId), "PREMISE: the phone-lost session ran past the countdown").toBeGreaterThanOrEqual(PHONE_LOST_LIVE_MINUTES);
+    expect(await ranMinutes(stopped.sessionId), "PREMISE: the stopped one ran far less").toBeLessThan(await ranMinutes(lostOne.sessionId));
+    expect(await reserved(lostOne), "the camera's share is kept until the daily sweep deletes A's recording — for the minutes it ran").toBe(await ranMinutes(lostOne.sessionId));
+    expect(await reserved(stopped), "a Stop leaves the same rule's figure").toBe(await ranMinutes(stopped.sessionId));
+    expect(await reserved(lostOne), "…and it is not the retired full match").toBeLessThan(MAX_DURATION_MINUTES);
     expect(await netSpend(lostOne.sessionId)).toBe(await netSpend(stopped.sessionId));
     expect(await netSpend(lostOne.sessionId)).toBe(-1);
     expect(await refunds(lostOne.sessionId)).toBe(0);
@@ -1937,8 +1948,14 @@ describe.skipIf(!HAS_DB)("R2008: a COMPOSED live stream whose camera is gone for
     await stopSession(stopped.auth, stopped.fixtureId, stopped.sessionId, stopped.deps);
     await settled(stopped);
     const reserved = async (r: Waiting) => (await storageReservations(sql, r.deps.now())).find((x) => x.sessionId === r.sessionId)?.minutes;
-    expect(await reserved(never), "the camera's share is kept until the daily sweep deletes A's recording").toBe(MAX_DURATION_MINUTES);
-    expect(await reserved(never), "the same share a Stop leaves").toBe(await reserved(stopped));
+    // Owner ruling 2026-10-26 ("C"): the share is the minutes the session ran, each by the one rule — worked out in SQL from
+    // the two columns. The two ran different spans (the never-live one waited out its limit), so a constant could not agree.
+    const ran = async (r: Waiting) =>
+      (await sql<{ ran: number }[]>`select ceil(extract(epoch from (ended_at - warming_at)) / 60.0)::int as ran from fixture_stream_sessions where id = ${r.sessionId}`)[0]!.ran;
+    expect(await ran(never), "PREMISE: the never-live session ran past its limit, the stopped one just before it").toBeGreaterThan(0);
+    expect(await reserved(never), "the camera's share is kept until the daily sweep deletes A's recording — for the minutes it ran").toBe(await ran(never));
+    expect(await reserved(stopped), "a Stop leaves the same rule's figure").toBe(await ran(stopped));
+    expect(await reserved(never), "…never the retired full match").toBeLessThan(MAX_DURATION_MINUTES);
     const legacy = await composedWaiting();
     await asLegacy(legacy);
     legacy.tick(LOST_MS * 3); await hold(legacy, "waiting");

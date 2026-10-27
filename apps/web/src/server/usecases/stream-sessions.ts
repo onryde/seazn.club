@@ -44,7 +44,7 @@ import {
   type Ask10Phone, cameraEvidenceMatters, composedCameraLost, composedCameraWatched, composedNeverLive, livePhoneLost, lostCountdown, programmePhaseRowMatters,
   warmingPhoneLost,
 } from "@/server/relay/domain/phone-lost";
-import { headroomAfterReservations, reservationMinutes } from "@/server/relay/domain/credits";
+import { elapsedMinutesSince, endedCameraReservationMinutes, headroomAfterReservations, reservationMinutes } from "@/server/relay/domain/credits";
 import { composedUnavailable, relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import {
@@ -1070,35 +1070,79 @@ export function storageUsageForColumns(u: StorageUsage): StorageUsage {
 
 /** C3 + R2004: every session's claim on the one recording pool, per session (exported for its test — the pool is the
  *  whole database's, so a test reads its OWN rows out of this, never the sum).
- *   - a RUNNING session reserves a full match per recording it makes (`reservationMinutes`): one for passthrough, two
- *     for composed — owner ruling 2026-10-18, option (a): the camera (A) keeps recording so the phone's delivery watch
- *     keeps its HLS, and the programme (B) records the product;
- *   - an ENDED composed session keeps the camera's share (ONE match) until the daily sweep has deleted A's recordings
- *     (`fixture_stream_inputs.recordings_deleted_at`, written by the daily sweep's camera pass, phase 1c) — the ruling's "released once A's
- *     recording is deleted". Bounded by the retention horizon (ended + RECORDING_RETENTION_DAYS): by then retention has
- *     deleted every recording that old, so a delete that never succeeds cannot hold the pool forever. A camera input
- *     the provider never made recorded nothing and reserves nothing. Conservative by construction: once the recording
- *     is finalised Cloudflare's own usage counts it too, so for up to a day an ended composed match is counted twice —
- *     an under-statement of the room, never an over-statement.
+ *
+ *  THE START the rules below count from is `warming_at` — the instant the session entered `warming`, i.e. the inputs were
+ *  provisioned and the camera's credentials issued. It is the earliest instant the camera input CAN record: a phone can
+ *  publish to input A as soon as it is paired, which is during warming and BEFORE the session goes live (`started_at`
+ *  would under-count a composed session's camera by its whole warming time — up to WARMING_TIMEOUT_MINUTES, 10, past
+ *  which the session fails), and `first_ingest_at` is never written for a composed session at all (only the passthrough
+ *  poll writes it). Counting from `warming_at` can over-count the programme input B by at most that warming window and a
+ *  passthrough input (which records only while connected) likewise — an over-statement of a few minutes, never an
+ *  under-statement of the camera. A session with no `warming_at` has no start: running, that is elapsed 0 (the buffer
+ *  only — it has not begun); ended, it is unreadable and falls back to the WHOLE booking (never 0).
+ *
+ *   - a RUNNING session reserves, per recording it makes (`reservationMinutes`; one for passthrough, two for composed —
+ *     owner ruling 2026-10-18, option (a): the camera (A) keeps recording so the phone's delivery watch keeps its HLS, and
+ *     the programme (B) records the product), `min(maxDurationMinutes, ceil(minutes since the start) + RESERVATION_BUFFER_MINUTES)`
+ *     — owner ruling 2026-10-26 (E1, "30 mins buffer"). This AMENDS the 2026-10-18 ruling's "a full match per recording
+ *     while it runs": the reservation rolls with the stream instead of claiming 2 × 300 the moment it starts, so a new
+ *     start needs only RECORDINGS_PER_SESSION × 30 (composed 60, passthrough 30) of headroom. The price is that a
+ *     reservation no longer guarantees a full booking, so the pool CAN be overcommitted by streams that run long together;
+ *     that is reported (`reportStorageOvercommit`) and never enforced against a running stream;
+ *   - an ENDED composed session keeps the camera's share until the daily sweep has deleted A's recordings
+ *     (`fixture_stream_inputs.recordings_deleted_at`, written by the daily sweep's camera pass, phase 1c) — the 2026-10-18
+ *     ruling's "released once A's recording is deleted", which STANDS. Owner ruling 2026-10-26 ("C") amends HOW MUCH it
+ *     keeps: only the minutes the session actually ran (start to `ended_at`), rounded UP to a whole minute and capped at
+ *     the booking (`endedCameraReservationMinutes`) — not a whole match, so a 6-minute stream no longer holds 300 until
+ *     the sweep (owner, stg 2026-10-26: 70.6 of 1000 minutes used and "Go live" refused for storage). A missing or
+ *     unreadable instant is the whole booking, never 0. Bounded by the retention horizon (ended + RECORDING_RETENTION_DAYS):
+ *     by then retention has deleted every recording that old, so a delete that never succeeds cannot hold the pool
+ *     forever. A camera input the provider never made recorded nothing and reserves nothing. Conservative by
+ *     construction: once the recording is finalised Cloudflare's own usage counts it too, so for up to a day an ended
+ *     composed match is counted twice — an under-statement of the room, never an over-statement.
  *  An ended passthrough session reserves nothing (its recording is in Cloudflare's usage), as before. */
 export async function storageReservations(exec: Tx | typeof sql, now: Date): Promise<{ sessionId: string; minutes: number }[]> {
   const rows = await exec<Row[]>`select ${cols()} from fixture_stream_sessions where state in ${sql([...ACTIVE_STATES])}`;
   const running = rows
     .map(toSession)
     .filter((s) => { const x = evaluate(s, now).kind; return x === "none" || x === "stale_beat" || x === "grace_expired"; })   // a Machine being replaced or flushed still records
-    .map((s) => ({ sessionId: s.id, minutes: reservationMinutes(s.mode, s.maxDurationMinutes) }));
+    .map((s) => ({ sessionId: s.id, minutes: reservationMinutes(s.mode, s.maxDurationMinutes, elapsedMinutesSince(s.warmingAt, now)) }));
   const horizon = new Date(now.getTime() - RECORDING_RETENTION_DAYS * 86_400_000);
-  const cameras = await exec<{ id: string; max_duration_minutes: number }[]>`
-    select s.id, s.max_duration_minutes from fixture_stream_sessions s
+  const cameras = await exec<{ id: string; max_duration_minutes: number; warming_at: string | null; ended_at: string | null }[]>`
+    select s.id, s.max_duration_minutes, s.warming_at, s.ended_at from fixture_stream_sessions s
      where s.mode = 'composed' and s.state in ${sql([...TERMINAL_STATES])}
        and coalesce(s.ended_at, s.created_at) > ${horizon}
        and exists (select 1 from fixture_stream_inputs i
                     where i.session_id = s.id and i.role = 'camera' and i.ingest_input_id is not null and i.recordings_deleted_at is null)`;
-  return [...running, ...cameras.map((c) => ({ sessionId: c.id, minutes: c.max_duration_minutes }))];
+  return [...running, ...cameras.map((c) => ({ sessionId: c.id, minutes: endedCameraReservationMinutes(d(c.warming_at), d(c.ended_at), c.max_duration_minutes) }))];
 }
 
-export async function storageHeadroomMinutes(exec: Tx | typeof sql, usage: StorageUsage, now: Date): Promise<number> {
-  return headroomAfterReservations(usage, (await storageReservations(exec, now)).map((r) => r.minutes));
+/** Owner ruling 2026-10-26 (E1): the pool's reading when the reservations outrun it. Pure of the database so the report's
+ *  numbers are its test's to pin. NUMBERS ONLY — minutes and a count; no session, org or fixture id rides along. */
+export function reportStorageOvercommit(a: { source: "admission" | "sweep"; usage: StorageUsage; reservedMinutes: number; reservingSessions: number; headroomMinutes: number }): void {
+  log.warn({ source: a.source, headroomMinutes: a.headroomMinutes, usedMinutes: a.usage.totalStorageMinutes, limitMinutes: a.usage.totalStorageMinutesLimit,
+    reservedMinutes: a.reservedMinutes, reservingSessions: a.reservingSessions }, "relay storage: the reservations exceed the pool — overcommitted");
+  captureError(new Error("relay storage overcommitted: reservations exceed the recording pool"), { route: "relay.storage_overcommitted", extra: {
+    source: a.source, headroomMinutes: a.headroomMinutes, usedMinutes: a.usage.totalStorageMinutes, limitMinutes: a.usage.totalStorageMinutesLimit,
+    reservedMinutes: a.reservedMinutes, reservingSessions: a.reservingSessions } });
+}
+
+/** limit − used − Σ reservations. `source`, when given, names the pass reading it (an admission or the daily sweep), and a
+ *  NEGATIVE result is then reported ONCE for that read as `relay.storage_overcommitted` (E1: a reservation no longer
+ *  guarantees a full booking, so streams that run long together can outgrow the pool). Reporting never throws, never
+ *  refuses and never touches a running stream — the headroom is returned either way. */
+export async function storageHeadroomMinutes(exec: Tx | typeof sql, usage: StorageUsage, now: Date, source?: "admission" | "sweep"): Promise<number> {
+  const reservations = await storageReservations(exec, now);
+  const headroom = headroomAfterReservations(usage, reservations.map((r) => r.minutes));
+  if (source !== undefined && headroom < 0) {
+    try {
+      reportStorageOvercommit({ source, usage, headroomMinutes: headroom, reservingSessions: reservations.length,
+        reservedMinutes: reservations.reduce((n, r) => n + r.minutes, 0) });
+    } catch (err) {
+      log.error({ err: String(err) }, "relay storage: the overcommit report itself failed — the headroom is returned regardless");
+    }
+  }
+  return headroom;
 }
 
 async function fixtureContext(fixtureId: string): Promise<{ orgId: string; competitionId: string }> {
@@ -1617,7 +1661,7 @@ export async function startBroadcast(
     // Remove take the same lock, so a Remove cannot interleave with this Go live. An archived target is absent here
     // (`archived_at is null`), so `admit` answers the existing 404 target_not_found shape.
     const targetBelongsToOrg = await lockStreamTarget(tx, orgId, body.targetId);
-    const headroom = await storageHeadroomMinutes(tx, usage, deps.now());
+    const headroom = await storageHeadroomMinutes(tx, usage, deps.now(), "admission");   // E1: a negative reading is reported, never enforced on a running stream
     const snapshot = { source: "admission" as const, usedMinutes: usage.totalStorageMinutes, limitMinutes: usage.totalStorageMinutesLimit,
       reservedMinutes: usage.totalStorageMinutesLimit - usage.totalStorageMinutes - headroom, headroomMinutes: headroom, takenAt: deps.now() };
     const verdict = admit({
