@@ -734,7 +734,7 @@
       "reason": "An admitted walkover's state has no sets (rulings 112, 114; set-kernel events refuse outside \"live\"; 6,000 admitted walkovers measured), so `state.sets.length === 0` already makes `next` null for it."
     },
     {
-      "mutant": "src/competition/points.ts:159:39 ConditionalExpression → true",
+      "mutant": "src/competition/points.ts:160:39 ConditionalExpression → true",
       "original": "outcome.kind === \"win\"",
       "line": "return outcome.kind === \"award\" || (outcome.kind === \"win\" && (outcome.method === \"walkover\" || outcome.method === \"forfeit\"));",
       "reason": "The guard exists for TypeScript narrowing only: past the award arm the remaining MatchOutcome kinds (draw, tie, no_result, double_walkover; core/types.ts:169-197) declare no `method`, so the method test is already false for every one of them and the mutant answers the same (W2c Task 9)."
@@ -788,151 +788,151 @@
       "reason": "`reason === \"\"` is false for every reason that reaches this line, exactly as `reason === \"bye\"` is: a held forfeitAward comes only from a core.forfeit, whose reason is one of the four FORFEIT_REASONS (CoreForfeit refuses `bye`: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'), so neither form ever returns null here."
     },
     {
-      "mutant": "src/competition/points.ts:631:7 ConditionalExpression → false",
+      "mutant": "src/competition/points.ts:652:7 ConditionalExpression → false",
       "original": "locks.length === 0",
       "line": "if (locks.length === 0) return [...ranked];",
       "reason": "With no locks the mutant re-stamps every row `{...row, rank}` from a free list of 1..n in table order, and every ranked row already carries exactly that rank (rankStandings writes `row.rank = index + 1`, tiebreakers.ts), so the rows are equal (competition/points-md1.test.ts, 'the empty case', passes under it); the one production caller, stage.ts:307, calls only with `poolLocks.length > 0`."
     },
     {
-      "mutant": "src/competition/points.ts:640:9 LogicalOperator → rank < 1 && rank > n",
+      "mutant": "src/competition/points.ts:661:9 LogicalOperator → rank < 1 && rank > n",
       "original": "rank < 1 || rank > n",
       "line": "if (rank < 1 || rank > n || out[rank - 1] !== null) {",
       "reason": "The last operand already refuses every rank outside 1..n: `out` holds null at indices 0..n-1 only, so for any other rank (below 1, above n, fractional, NaN) `out[rank - 1]` is undefined and `!== null` throws the same CONFIG_INVALID; the range test is redundant, so weakening it changes nothing."
     },
     {
-      "mutant": "src/competition/points.ts:640:21 ConditionalExpression → false",
+      "mutant": "src/competition/points.ts:661:21 ConditionalExpression → false",
       "original": "rank > n",
       "line": "if (rank < 1 || rank > n || out[rank - 1] !== null) {",
       "reason": "A rank above n reads `out[rank - 1]` past the array's end, which is undefined, so `out[rank - 1] !== null` throws the same CONFIG_INVALID without it (competition/points-md1.test.ts, 'a lock outside 1..n ...', rank n + 1)."
     },
     {
-      "mutant": "src/competition/points.ts:372:37 StringLiteral → \"\"",
+      "mutant": "src/competition/points.ts:373:37 StringLiteral → \"\"",
       "original": "\"regulation\"",
       "line": "const d: DecidedIn = decidedIn ?? \"regulation\";",
       "reason": "The fallback is taken only for an outcome that is not a win (the guard above throws unless decidedIn is present exactly for a win). For such an outcome `d` is read once, by the shoot-out booking's `d === \"so\"`, which is false for both \"regulation\" and \"\" — neither equals \"so\"; every other reader is a win's: `byChain` is reached only by a non-award win (the switch returns every draw, tie, no result and double walkover, the award branch every award) and the display metric is written only on a win. So \"\" and \"regulation\" pay and book alike."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:759:75 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/competition/tiebreakers.ts:762:75 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "const rows = foldResults(ids, resultsAmong(new Set(ids), run.results ?? []));",
       "reason": "Only with no `results` in the rank context (the h2h mini-table). resultsAmong then filters [\"Stryker was here\"]: its callback destructures the string, so `home` is \"S\", whose `.entrantId` is undefined, and the group (a Set of entrant-id strings) never holds undefined, so the filter returns [] exactly as it did from [] and the mini-table folds no result either way."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:772:11 ConditionalExpression → false",
+      "mutant": "src/competition/tiebreakers.ts:775:11 ConditionalExpression → false",
       "original": "group.length <= 1",
       "line": "if (group.length <= 1) return [group];",
       "reason": "A mini-table group of one without the shortcut goes to groupBySort, which sorts a one-row array (no comparator call) and returns [[row]]; `groups.length > 1` is then false, so nothing is marked and the same single group comes back. Only the shortcut is lost."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:772:11 EqualityOperator → group.length < 1",
+      "mutant": "src/competition/tiebreakers.ts:775:11 EqualityOperator → group.length < 1",
       "original": "group.length <= 1",
       "line": "if (group.length <= 1) return [group];",
       "reason": "A group is never empty (groupBySort and mini.rows never yield []), so `< 1` is the `→ false` mutant above: a group of one goes to groupBySort, comes back as [[row]] unmarked, the same result."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:777:9 ConditionalExpression → false",
+      "mutant": "src/competition/tiebreakers.ts:780:9 ConditionalExpression → false",
       "original": "miniClasses.every((group) => group.length === 1)",
       "line": "if (miniClasses.every((group) => group.length === 1)) break;",
       "reason": "The early exit from h2hPass's key loop once every mini group is a single row. Without it the remaining keys still run, but every group of one returns itself at `group.length <= 1` (no comparator call, no mark), so miniClasses and the result are unchanged; only iterations are spent."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:777:27 ArrowFunction → () => undefined",
+      "mutant": "src/competition/tiebreakers.ts:780:27 ArrowFunction → () => undefined",
       "original": "(group) => group.length === 1",
       "line": "if (miniClasses.every((group) => group.length === 1)) break;",
       "reason": "`every` with a predicate returning undefined is false for any non-empty miniClasses (it never is empty), so this is the `→ false` mutant of the same line: the loop runs the remaining keys over groups of one, each returned unchanged and unmarked."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:777:38 ConditionalExpression → false",
+      "mutant": "src/competition/tiebreakers.ts:780:38 ConditionalExpression → false",
       "original": "group.length === 1",
       "line": "if (miniClasses.every((group) => group.length === 1)) break;",
       "reason": "The predicate always false makes `every` false (miniClasses is never empty), so the early exit never fires: the remaining keys run over groups of one, each returned unchanged and unmarked at `group.length <= 1`; same result."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:804:7 ConditionalExpression → false",
+      "mutant": "src/competition/tiebreakers.ts:807:7 ConditionalExpression → false",
       "original": "cls.length <= 1",
       "line": "if (cls.length <= 1) return [cls];",
       "reason": "h2hTwo on a class of one: without the early return the class is not two, so the row gets the 'h2h_two_not_applicable' note and comes back unchanged. That note is read only by markResidual, which runs on classes of two or more after the cascade; classes only shrink, so a row once alone is never in one again (markTieBreak only deletes notes). The note is never read."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:804:7 EqualityOperator → cls.length < 1",
+      "mutant": "src/competition/tiebreakers.ts:807:7 EqualityOperator → cls.length < 1",
       "original": "cls.length <= 1",
       "line": "if (cls.length <= 1) return [cls];",
       "reason": "`< 1` and `<= 1` agree on every length but 1. On a class of one the mutant falls past the return: the class is not two, so the lone row gets the 'h2h_two_not_applicable' note and comes back unchanged. Only markResidual reads notes, on classes of two or more after the cascade, and classes only split, so a lone row is never in one again: the note is never read."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:835:37 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/competition/tiebreakers.ts:839:37 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "const scored = (row?.games ?? []).reduce(",
       "reason": "Only for a tied entrant missing from the Swiss ledger. The reduce then visits one string instead of no game: `!game.unplayed` holds (undefined), `game.opponent !== null` holds (undefined), and `ids.has(undefined)` is false (ids holds entrant-id strings), so the sum stays 0, as the empty card gave."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:843:59 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/competition/tiebreakers.ts:847:59 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "for (const result of resultsAmong(ids, run.results ?? [])) {",
       "reason": "NoCoverage: the literal is evaluated only when `direct` runs off-Swiss with no `results`, which no test does. resultsAmong then filters [\"Stryker was here\"]: its callback destructures the string, so `home` is \"S\", whose `.entrantId` is undefined, and the group (a Set of entrant-id strings) never holds undefined, so the filter returns [] exactly as it did from [], so the loop body never runs and every direct score stays 0 either way."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:882:15 ConditionalExpression → false",
+      "mutant": "src/competition/tiebreakers.ts:887:15 ConditionalExpression → false",
       "original": "cls.length <= 1",
       "line": "if (cls.length <= 1) return [cls];",
       "reason": "Every class reaching the plain step has at least one row: rankStandings starts refine with no class at all when there are no rows (W2d T4 N1, so zero rows now give lotsGroups [], tested), and every step only splits a class into non-empty groups. On a class of one the mutant sends it to groupBySort, whose one-row sort calls no comparator and returns [[row]]; `groups.length > 1` is false, so nothing is marked and the same class comes back."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:896:60 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/competition/tiebreakers.ts:901:60 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "const scored = resultsAmong(new Set(ids), ctx.results ?? []).map((result): FixtureResult => {",
       "reason": "NoCoverage: the literal is evaluated only when sberger ranks a round robin with no `results`, which no test does. resultsAmong then filters [\"Stryker was here\"]: its callback destructures the string, so `home` is \"S\", whose `.entrantId` is undefined, and the group (a Set of entrant-id strings) never holds undefined, so the filter returns [] exactly as it did from [], so the pool ledger is buildSwissTable(ids, []) either way."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:523:10 ConditionalExpression → true",
+      "mutant": "src/competition/tiebreakers.ts:516:10 ConditionalExpression → true",
       "original": "key !== undefined",
       "line": "return key !== undefined && H2H_KEYS.has(key);",
       "reason": "TypeScript narrowing for `H2H_KEYS.has(key)`: with it true, an absent key (parseCascade looks one past the end with `cascade[i + 1]`) reaches `H2H_KEYS.has(undefined)`, which is false (the set holds key strings), so the answer is the same false."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:527:10 ConditionalExpression → true",
+      "mutant": "src/competition/tiebreakers.ts:520:10 ConditionalExpression → true",
       "original": "key !== undefined",
       "line": "return key !== undefined && MODIFIERS.has(key);",
       "reason": "TypeScript narrowing for `MODIFIERS.has(key)`: with it true, the absent key one past the cascade's end reaches `MODIFIERS.has(undefined)`, which is false (the set holds the two modifier strings), so the answer is the same false."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:595:25 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/competition/tiebreakers.ts:591:25 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "const steps: Step[] = [];",
       "reason": "parseCascade's step list then starts with a string, which refine alone reads: `\"Stryker was here\".index > 0` is false and its `.kind` (undefined) matches no case of the switch, so that step does nothing and the real steps follow it unchanged."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:837:29 ConditionalExpression → true",
+      "mutant": "src/competition/tiebreakers.ts:841:29 ConditionalExpression → true",
       "original": "game.opponent !== null",
       "line": "!game.unplayed && game.opponent !== null && ids.has(game.opponent) ? sum + game.scored : sum,",
       "reason": "TypeScript narrowing for `ids.has(game.opponent)`: with it true, a null opponent (a bye) reaches `ids.has(null)`, which is false (ids holds entrant-id strings), so the game is skipped exactly as the guard skipped it. (The conjuncts were ordered `!game.unplayed` first so this key names only this mutant.)"
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:857:9 ConditionalExpression → false",
+      "mutant": "src/competition/tiebreakers.ts:861:9 ConditionalExpression → false",
       "original": "current.every((cls) => cls.length === 1)",
       "line": "if (current.every((cls) => cls.length === 1)) break;",
       "reason": "Without the early exit, refine runs the remaining steps over classes that are all single rows, and every step returns a class of one unchanged and unmarked: `lots` does nothing here, a block step skips it (`cls.length > 1`), h2hTwo, `direct` and a plain key return it at `cls.length <= 1`. The classes, the traces and the notes are the same; only the loop is spent."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:857:23 ArrowFunction → () => undefined",
+      "mutant": "src/competition/tiebreakers.ts:861:23 ArrowFunction → () => undefined",
       "original": "(cls) => cls.length === 1",
       "line": "if (current.every((cls) => cls.length === 1)) break;",
       "reason": "`every` with a predicate returning undefined is false for the never-empty class list, so this is the `→ false` mutant of the same line. Without the early exit, refine runs the remaining steps over classes that are all single rows, and every step returns a class of one unchanged and unmarked: `lots` does nothing here, a block step skips it (`cls.length > 1`), h2hTwo, `direct` and a plain key return it at `cls.length <= 1`. The classes, the traces and the notes are the same; only the loop is spent."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:857:32 ConditionalExpression → false",
+      "mutant": "src/competition/tiebreakers.ts:861:32 ConditionalExpression → false",
       "original": "cls.length === 1",
       "line": "if (current.every((cls) => cls.length === 1)) break;",
       "reason": "The predicate always false makes `every` false (the class list is never empty), so the early exit never fires. Without the early exit, refine runs the remaining steps over classes that are all single rows, and every step returns a class of one unchanged and unmarked: `lots` does nothing here, a block step skips it (`cls.length > 1`), h2hTwo, `direct` and a plain key return it at `cls.length <= 1`. The classes, the traces and the notes are the same; only the loop is spent."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:860:12 StringLiteral → \"\"",
+      "mutant": "src/competition/tiebreakers.ts:864:12 StringLiteral → \"\"",
       "original": "\"lots\"",
       "line": "case \"lots\":",
       "reason": "The `lots` case of refine's switch only breaks (lots is drawn after the cascade, in rankStandings). With its label changed no case matches a lots step, and a switch with no matching case also does nothing, so the step is the same no-op."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:882:15 EqualityOperator → cls.length < 1",
+      "mutant": "src/competition/tiebreakers.ts:887:15 EqualityOperator → cls.length < 1",
       "original": "cls.length <= 1",
       "line": "if (cls.length <= 1) return [cls];",
       "reason": "`< 1` and `<= 1` agree on every length but 1. On a class of one the mutant sends it to groupBySort, which returns [[row]] without a comparator call, `groups.length > 1` is false, and the same class comes back unmarked: the `→ false` row's case."
@@ -1016,13 +1016,13 @@
       "reason": "A stage with no partial-schedule order: the mutant passes `partialScheduleOrder: undefined` to rankStandings, which parses it only when `ctx.partialScheduleOrder !== undefined` — the same as an absent key (W2d T12; Timeout under load, equivalent by reading)."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:649:26 StringLiteral → \"\"",
+      "mutant": "src/competition/tiebreakers.ts:645:26 StringLiteral → \"\"",
       "original": "\"plain\"",
       "line": "steps.push({ kind: \"plain\", index: i, key, cmp: FEWEST_PLAYED });",
       "reason": "A partial-schedule step's `kind` is never read: partialSchedule iterates `run.partial` using only `step.cmp` and `step.key` (the discriminant matters to refine's own Steps, which never hold these), so `kind: \"\"` ranks and traces the same (W2d T12)."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:654:24 StringLiteral → \"\"",
+      "mutant": "src/competition/tiebreakers.ts:650:24 StringLiteral → \"\"",
       "original": "\"plain\"",
       "line": "steps.push({ kind: \"plain\", index: i, key: key as PlainKey, cmp });",
       "reason": "A partial-schedule step's `kind` is never read: partialSchedule iterates `run.partial` using only `step.cmp` and `step.key`, so `kind: \"\"` ranks and traces the same (W2d T12)."
@@ -1034,7 +1034,7 @@
       "reason": "A period sport with no partial-schedule order: the mutant writes `partialScheduleOrder: undefined` onto the module; every reader (toTableStage, completeTableStage, rankStandings, the premise sweep) tests `=== undefined`, the same as an absent key (W2d T12)."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:688:57 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/competition/tiebreakers.ts:684:57 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "return scheduled === resultsAmong(ids, run.results ?? []).length;",
       "reason": "The `?? []` arm runs only for a schedule handed with no `results` (nothing counted yet). resultsAmong keeps an entry only when both of its sides' entrantIds are in the class, and a string's characters have no entrantId, so [\"Stryker was here\"] counts no result, as `[]` does (W2d T12)."
@@ -1088,79 +1088,79 @@
       "reason": "W2d T20 MD-1. compareRatio is reached only through groupBySort. Its sort asks the comparator through `-sgn(cmp(later, earlier))`: V8's TimSort (a port of CPython's listsort) compares an element only against an EARLIER one and moves it only on a negative answer, so 0 in place of -1 for 'later is smaller' keeps the same order. The grouping pass then compares neighbours best-first, where lhs < rhs never holds. Measured (scratch probe, 20,000 random inputs of 2-300 rows): 0 groupings differ; the probe with a genuinely wrong comparator differs in 56,923 of 120,000 checks. Guard (A20 r1): tiebreakers-md1.test.ts \"this runtime's sort asks the comparator only (later, earlier) and reads only whether the answer is negative\" (3,000 inputs, every comparator call checked, with a control) turns red if the runtime's sort contract changes; this row is then re-checked, never kept."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:548:7 ConditionalExpression → true",
+      "mutant": "src/competition/tiebreakers.ts:541:7 ConditionalExpression → true",
       "original": "current.length > 0",
       "line": "if (current.length > 0) groups.push(current);",
       "reason": "W2d T20 MD-1. After the loop `current` holds the last row and is empty only when `cls` is. No caller passes an empty class: refine's plain and direct steps return a class of one first, h2hPass skips groups of one, h2hExclusion and h2hTwo sort a mini-table with one row per member of a class of two or more, partialSchedule refines the class the block handed it and the non-empty groups groupBySort itself returned, and rankStandings starts refine with no class at all when there are no rows. So the push of an empty group never happens."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:548:7 EqualityOperator → current.length >= 0",
+      "mutant": "src/competition/tiebreakers.ts:541:7 EqualityOperator → current.length >= 0",
       "original": "current.length > 0",
       "line": "if (current.length > 0) groups.push(current);",
       "reason": "W2d T20 MD-1. `>= 0` is the `→ true` mutant of the same line: it adds an empty group only when `current` is empty after the loop, which needs an empty class, and no caller of groupBySort passes one (see 548:7 → true)."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:872:15 ConditionalExpression → false",
+      "mutant": "src/competition/tiebreakers.ts:876:15 ConditionalExpression → false",
       "original": "cls.length <= 1",
       "line": "if (cls.length <= 1) return [cls];",
       "reason": "W2d T20 MD-1. refine's direct step on a class of one, past the shortcut: scheduleComplete counts no scheduled pair and no result among one entrant (a pair needs two members), so it is complete; directRefine groupBySorts the one row into [[row]], and `groups.length > 1` is false, so nothing is marked: the same [cls]. The same shape as the recorded plain-step row at :880 and h2hTwo's at :802."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:872:15 EqualityOperator → cls.length < 1",
+      "mutant": "src/competition/tiebreakers.ts:876:15 EqualityOperator → cls.length < 1",
       "original": "cls.length <= 1",
       "line": "if (cls.length <= 1) return [cls];",
       "reason": "W2d T20 MD-1. `< 1` and `<= 1` agree on every length but 1 (a class is never empty: rankStandings starts refine with no class when there are no rows), and on a class of one the direct step returns the same [cls] (see 872:15 → false)."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:922:12 EqualityOperator → a.entrantId <= b.entrantId",
+      "mutant": "src/competition/tiebreakers.ts:927:12 EqualityOperator → a.entrantId <= b.entrantId",
       "original": "a.entrantId < b.entrantId",
       "line": "return a.entrantId < b.entrantId ? -1 : a.entrantId > b.entrantId ? 1 : 0;",
       "reason": "W2d T20 MD-1. `<=` differs from `<` only for two rows with the SAME entrantId: a ranked table holds one row per entrant (stage tables are folded one row per entrant id), and the sort never compares an element with itself. Guard (A20 r1): rankStandings refuses a table naming an entrant twice (CONFIG_INVALID; tiebreakers-md1.test.ts \"rankStandings refuses a table naming an entrant twice\"), so one row per entrant is enforced, not assumed."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:922:45 ConditionalExpression → true",
+      "mutant": "src/competition/tiebreakers.ts:927:45 ConditionalExpression → true",
       "original": "a.entrantId > b.entrantId",
       "line": "return a.entrantId < b.entrantId ? -1 : a.entrantId > b.entrantId ? 1 : 0;",
       "reason": "W2d T20 MD-1. The second test is reached only when `a.entrantId < b.entrantId` is false; with one row per entrant that means a > b, where the original also returns 1. Guard (A20 r1): rankStandings refuses a table naming an entrant twice (CONFIG_INVALID; tiebreakers-md1.test.ts \"rankStandings refuses a table naming an entrant twice\"), so one row per entrant is enforced, not assumed."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:922:45 EqualityOperator → a.entrantId >= b.entrantId",
+      "mutant": "src/competition/tiebreakers.ts:927:45 EqualityOperator → a.entrantId >= b.entrantId",
       "original": "a.entrantId > b.entrantId",
       "line": "return a.entrantId < b.entrantId ? -1 : a.entrantId > b.entrantId ? 1 : 0;",
       "reason": "W2d T20 MD-1. Reached only when a.entrantId >= b.entrantId already; with one row per entrant a > b, so `>=` and `>` are both true and both return 1. Guard (A20 r1): rankStandings refuses a table naming an entrant twice (CONFIG_INVALID; tiebreakers-md1.test.ts \"rankStandings refuses a table naming an entrant twice\"), so one row per entrant is enforced, not assumed."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:922:45 ConditionalExpression → false",
+      "mutant": "src/competition/tiebreakers.ts:927:45 ConditionalExpression → false",
       "original": "a.entrantId > b.entrantId",
       "line": "return a.entrantId < b.entrantId ? -1 : a.entrantId > b.entrantId ? 1 : 0;",
       "reason": "W2d T20 MD-1. Returns 0 where the original returns 1 (a's id after b's). bySeedThenId is only the comparator of `[...cls].sort(bySeedThenId(ctx))`: V8's TimSort (a port of CPython's listsort) compares an element only against an EARLIER one and moves it only on a negative answer, so 0 in place of +1 for 'later sorts after' keeps the same order. Measured (scratch probe, 20,000 random inputs of 2-300 rows, duplicate and missing seeds): 0 orders differ; the probe with a wrong comparator differs. Guard (A20 r1): tiebreakers-md1.test.ts \"this runtime's sort asks the comparator only (later, earlier) and reads only whether the answer is negative\" (3,000 inputs, every comparator call checked, with a control) turns red if the runtime's sort contract changes; this row is then re-checked, never kept."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:922:45 EqualityOperator → a.entrantId <= b.entrantId",
+      "mutant": "src/competition/tiebreakers.ts:927:45 EqualityOperator → a.entrantId <= b.entrantId",
       "original": "a.entrantId > b.entrantId",
       "line": "return a.entrantId < b.entrantId ? -1 : a.entrantId > b.entrantId ? 1 : 0;",
       "reason": "W2d T20 MD-1. Reached only when a.entrantId >= b.entrantId, so with one row per entrant `<=` is false there and returns 0 where the original returns 1: the 922:45 → false mutant, which V8's TimSort (compares later against earlier, moves only on a negative answer) sorts identically. Measured with the same probe: 0 orders differ. Guard (A20 r1): tiebreakers-md1.test.ts \"this runtime's sort asks the comparator only (later, earlier) and reads only whether the answer is negative\" (3,000 inputs, every comparator call checked, with a control) turns red if the runtime's sort contract changes; this row is then re-checked, never kept. Guard (A20 r1): rankStandings refuses a table naming an entrant twice (CONFIG_INVALID; tiebreakers-md1.test.ts \"rankStandings refuses a table naming an entrant twice\"), so one row per entrant is enforced, not assumed."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:1074:5 CallExpression → ;",
+      "mutant": "src/competition/tiebreakers.ts:1079:5 CallExpression → ;",
       "original": "scoreOf.set(id, 0);",
       "line": "scoreOf.set(id, 0);",
       "reason": "W2d T20 MD-1. Every read of scoreOf falls back with `?? 0` (the result push, the award, the returned score), so an entrant whose 0 was never set reads 0 all the same. Equivalent for every input."
     },
     {
-      "mutant": "src/competition/tiebreakers.ts:1106:34 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/competition/tiebreakers.ts:1111:34 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "games: cards.get(entrant) ?? [],",
       "reason": "W2d T20 MD-1. NoCoverage: `cards` is given an empty card for every entrant before any result is read, so `cards.get(entrant)` is never undefined and the `?? []` arm never runs."
     },
     {
-      "mutant": "src/competition/points.ts:501:9 ConditionalExpression → true",
+      "mutant": "src/competition/points.ts:522:9 ConditionalExpression → true",
       "original": "key.startsWith(\"win.\")",
       "line": "if (key.startsWith(\"win.\")) decided = true;",
       "reason": "W2d T20 MD-1. `decided` is set inside the loop, so on the empty reachable set it stays false either way. On any other set the only producer, reachableOutcomes (coverage's one production caller, table-rule-guards.ts), adds `win.<d>` beside every `loss.<d>`, and every sport's every stage kind and declared cfg reaches at least one win (the registry sweep in points-w2d.test.ts), so the original also sets it true. Only a hand-built set of level results alone, which no stage has, separates them."
     },
     {
-      "mutant": "src/competition/points.ts:501:24 StringLiteral → \"\"",
+      "mutant": "src/competition/points.ts:522:24 StringLiteral → \"\"",
       "original": "\"win.\"",
       "line": "if (key.startsWith(\"win.\")) decided = true;",
       "reason": "W2d T20 MD-1. `key.startsWith(\"\")` is always true: the 501:9 `→ true` mutant of the same line. `decided` then turns true on the first reachable key; the original turns true on the first `win.` key, and every reachable set a stage can have holds one (the registry sweep in points-w2d.test.ts), so after the loop both are true; on the empty set the loop never runs and both stay false."
