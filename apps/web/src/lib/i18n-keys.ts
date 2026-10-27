@@ -2244,6 +2244,7 @@ export type DictionaryKey =
   | "engineError.EXPEDITE_WRONG_WINNER"
   | "engineError.FORFEIT_REASON_WRONG_PHASE"
   | "engineError.GAME_AWARD_DURING_TIEBREAK"
+  | "engineError.GOAL_KIND_REQUIRED"
   | "engineError.INVALID_EVENT"
   | "engineError.LEVEL_RESULT_IN_BRACKET"
   | "engineError.LEVEL_RESULT_SEATED"

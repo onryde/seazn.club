@@ -42,6 +42,8 @@ export const ENGINE_HTTP_STATUS: Readonly<Record<EngineErrorCode, number>> = Obj
   STAGE_SEAT_DEPARTED: 409,
   // W2c (D7) — a malformed Armageddon (it names no Black), like INVALID_EVENT: the scorer re-sends it complete.
   TIEBREAK_COLOUR_REQUIRED: 422,
+  // W2d T18 (PS-7d) — a hockey goal without its type: the scorer re-sends it typed.
+  GOAL_KIND_REQUIRED: 422,
 });
 
 /** The `?? 422` of http.ts:158 — what the product answers an EngineError whose

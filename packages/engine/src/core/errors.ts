@@ -93,6 +93,11 @@ export const EngineErrorCode = z.enum([
   "LINEUP_NOT_SUPPORTED",
   // W2c BG-KO-2 (D7): a boardgame.tiebreak Armageddon that does not say who had Black. data.rung names the rung.
   "TIEBREAK_COLOUR_REQUIRED",
+  // W2d T18 (HK-TB-2, B3; owner PS-7d 2026-10-24): a goal written without its type in a sport whose ranking reads it (FIH
+  // hockey's field goals). The WRITE path's refusal only (`sports/period/kernel.ts` applyGoal): a ledger that already holds
+  // an untyped goal still folds, and that goal counts as a field goal. Named, not CONFIG_INVALID, because the scorer sees
+  // it. data.goalKinds lists the kinds the sport records. Appended last, existing order frozen.
+  "GOAL_KIND_REQUIRED",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 

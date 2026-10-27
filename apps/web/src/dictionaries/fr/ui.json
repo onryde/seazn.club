@@ -4123,6 +4123,7 @@
   "engineError.STAGE_SEAT_DEPARTED": "Une place de cette phase revient à un participant qui s'est retiré. Enregistrez le forfait dans ce match pour terminer la phase.",
   "engineErrorReason.STAGE_SEAT_DEPARTED.seat_departed": "{entrant} s'est retiré mais occupe encore une place dans {match}. Enregistrez le forfait dans {match} pour terminer la phase.",
   "engineError.TIEBREAK_COLOUR_REQUIRED": "Indiquez qui avait les noirs.",
+  "engineError.GOAL_KIND_REQUIRED": "Indiquez le type de but : but de champ, corner de pénalité ou stroke.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named": "Ce motif ne peut pas être enregistré {phase}. Autorisé ici : {allowed}.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak": "Un double forfait ne peut pas être enregistré pendant le départage : la partie a été jouée. Autorisé ici, pour un seul camp : {allowed}.",
   "forfeit.phase.pre": "avant le début du match",
