@@ -135,6 +135,7 @@ const BODY_VERDICTS: Record<string, true | string> = {
   "api/v1/fixtures/[id]/external-play/arbiter": "the body names the entrant side; the arbiter's token is minted and returned, never received",
   "api/v1/fixtures/[id]/external-play/room/act": "the body is the move; the player's token stays server-side",
   "api/v1/fixtures/[id]/external-play/room": "the body is the held participant's id; `token` is a comment about the seat's token",
+  "api/internal/youtube/fake": "control ops for the FAKE YouTube: handles, stream and video ids, OAuth states. The one op that takes a token, `seedGrant`, takes a `1//` refresh token the calling test minted itself for the fake and never echoes it; the route is 404 unless YOUTUBE_DRIVER=fake and ENV_NAME is local or ci, where no real credential exists",
 };
 
 /** The route directory (`api/v1/public/registrations/[id]/withdraw`) as a URL path, every dynamic segment filled in. */
