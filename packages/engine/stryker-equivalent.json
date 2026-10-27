@@ -584,13 +584,13 @@
       "reason": "nestedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2817:58 StringLiteral → \"\"",
+      "mutant": "src/sports/period/kernel.ts:2840:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = periodForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "periodForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2818:135 BooleanLiteral → true",
+      "mutant": "src/sports/period/kernel.ts:2841:135 BooleanLiteral → true",
       "original": "false",
       "line": "const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side, false), credit, side) });",
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; the double-walkover credit lays 0 over every key that ledger carries (and excludes them), so the played values are never observable."
@@ -686,43 +686,43 @@
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and carrom's board summary and adjustment refuse outside phase \"live\", so an admitted walkover's state has no games and gamesWon 0-0: reading them adds nothing."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2404:38 ConditionalExpression → true",
+      "mutant": "src/sports/period/kernel.ts:2427:38 ConditionalExpression → true",
       "original": "awardReasonOf(outcome) !== \"bye\"",
       "line": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2404:65 StringLiteral → \"\"",
+      "mutant": "src/sports/period/kernel.ts:2427:65 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2633:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2656:9 ConditionalExpression → false",
       "original": "preset.abandonOptions === undefined",
       "line": "...(preset.abandonOptions === undefined ? {} : { abandonOptions: preset.abandonOptions }),",
       "reason": "Both builtin period presets declare a list (hockey.ts, icehockey.ts; makePeriodModule has no other production caller), so the condition is already false for every builtin; for a hand-built preset with none the mutant gives the module an own `abandonOptions: undefined`, and every reader reads `module.abandonOptions ?? []` (web match-rules/shared.ts, stage-row-model.ts, describe-rules.ts; the engine reads the preset, not the module), so the offer is the same empty list (period.test.ts 'a preset that declares no abandon list' passes under it)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2634:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2657:9 ConditionalExpression → false",
       "original": "preset.stageDefaults === undefined",
       "line": "...(preset.stageDefaults === undefined ? {} : { stageDefaults: preset.stageDefaults }),",
       "reason": "Both builtin period presets declare stageDefaults (hockey.ts, icehockey.ts; makePeriodModule has no other production caller), so the condition is already false for every builtin; for a hand-built preset with none the mutant gives the module an own `stageDefaults: undefined`, and its only reader, rule-keys.ts `m.stageDefaults?.(kind, variant) ?? {}`, reads that exactly as an absent key (the same shape as kernel.ts:2612:9 above; Survived over the 3,527-test related run, W2c Task 22)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2877:46 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2900:46 ConditionalExpression → false",
       "original": "cfg.points.otWin === undefined",
       "line": "win: { regulation: cfg.points.win, ...(cfg.points.otWin === undefined ? {} : { ot: cfg.points.otWin }) },",
       "reason": "With no otWin the mutant writes `win.ot: undefined` into the table rule instead of leaving the key out; PointsRule declares `ot` optional and its one reader, points.ts `byChain`'s `side.ot !== undefined`, falls through to `regulation` for undefined exactly as for an absent key (JSON drops it; W2d Task 3)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2878:48 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2901:48 ConditionalExpression → false",
       "original": "cfg.points.otLoss === undefined",
       "line": "loss: { regulation: cfg.points.loss, ...(cfg.points.otLoss === undefined ? {} : { ot: cfg.points.otLoss }) },",
       "reason": "With no otLoss the mutant writes `loss.ot: undefined` into the table rule instead of leaving the key out; PointsRule declares `ot` optional and its one reader, points.ts `byChain`'s `side.ot !== undefined`, falls through to `regulation` for undefined exactly as for an absent key (JSON drops it; W2d Task 3)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2880:54 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2903:54 ConditionalExpression → false",
       "original": "cfg.points.soBonus === undefined",
       "line": "...(preset.shootoutAs !== \"draw_plus_bonus\" || cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),",
       "reason": "Reached only for a draw_plus_bonus sport (a result sport short-circuits to {} first): with no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined`, and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key; W2d Task 3, re-keyed in fix round 1 M-3)."
@@ -956,7 +956,7 @@
       "reason": "With the test false the spread always passes `gamePoints: stage.gamePoints`, which is undefined exactly when the original passes no `gamePoints` key. rankStandings reads it in one place, `ctx.gamePoints === undefined ? <table points> : ctx.gamePoints(result)` (tiebreakers.ts gamePointsOf), which takes the table-points branch for an absent key and an undefined value alike. Every ranking is the same. W2d T8."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2839:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2862:9 ConditionalExpression → false",
       "original": "preset.tablePresets === undefined",
       "line": "...(preset.tablePresets === undefined ? {} : { tablePresets: preset.tablePresets }),",
       "reason": "The twin of :2630:9 and :2631:9 above. Hockey declares `tablePresets` and ice hockey does not (spec §5.10: hockey's Pro League points are the period family's only preset), so the mutant gives the ice hockey module an own `tablePresets: undefined` beside an absent key. Every reader calls it as `module.tablePresets?.(kind)` (defaults-sweep.test.ts, tables-rulebook.test.ts; module.ts types it optional, and no production code reads it before T15's editor), which answers undefined for both, and nothing tests `\"tablePresets\" in` or `hasOwn`. Survived its re-run at load ~40 over 4,529 related tests (W2d T11 review I1); the first run's \"Killed\" was a 30 s test timeout under load ~160."
@@ -1028,7 +1028,7 @@
       "reason": "A partial-schedule step's `kind` is never read: partialSchedule iterates `run.partial` using only `step.cmp` and `step.key`, so `kind: \"\"` ranks and traces the same (W2d T12)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2872:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2895:9 ConditionalExpression → false",
       "original": "preset.partialScheduleOrder === undefined",
       "line": "...(preset.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: preset.partialScheduleOrder }),",
       "reason": "A period sport with no partial-schedule order: the mutant writes `partialScheduleOrder: undefined` onto the module; every reader (toTableStage, completeTableStage, rankStandings, the premise sweep) tests `=== undefined`, the same as an absent key (W2d T12)."
@@ -1172,7 +1172,7 @@
       "reason": "W2d T20 MD-1. sgn then answers 0 for every negative. sgn is module-local and feeds only comparators, and every comparator is consumed only by groupBySort (COMPARATORS, FEWEST_PLAYED and the score comparator alike; no other caller). Its sort asks `-sgn(cmp(a, b))`, which is negative exactly when cmp(a, b) > 0 under both versions (a negative cmp reads +1 or -0, neither negative), and V8's TimSort (a port of CPython's listsort) compares an element only against an EARLIER one and moves it only on a negative answer, so the order is the same. The grouping pass then reads `sgn(cmp(prev, row)) !== 0` on neighbours already best-first, where cmp is never negative (each comparator is antisymmetric), so a split happens exactly when cmp > 0 in both. Same probe as compareRatio's 0-for--1 row (20,000 random inputs): 0 groupings differ. In the whole-file run it reported Timeout under load; the low-load re-run reports Survived. Guard (A20 r1): tiebreakers-md1.test.ts \"this runtime's sort asks the comparator only (later, earlier) and reads only whether the answer is negative\" (3,000 inputs, every comparator call checked, with a control) turns red if the runtime's sort contract changes; this row is then re-checked, never kept."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2871:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2894:9 ConditionalExpression → false",
       "original": "preset.winsCount === undefined",
       "line": "...(preset.winsCount === undefined ? {} : { winsCount: preset.winsCount }),",
       "reason": "W2d T20 MD-1. For a preset with no winsCount (every period sport but hockey) the mutant writes `winsCount: undefined` on the module where the original writes no key. Every reader of a module's winsCount asks `=== undefined` before copying it on (stage.ts, progression.ts, web engine-db/competition.ts, testkit/simulation.ts, tools/bench validate-pack.ts) or `=== \"regulation\"` (tiebreakers.ts winsOf, simulation.ts's wins-first refusal), and none enumerates the module's keys (`git grep -n winsCount` over packages/engine/src, apps/web/src, tools: no `in`, `hasOwn` or `Object.keys` read). An undefined own property reads exactly as an absent one at each, so no ranking changes. Static (module build time): Stryker ran every related test and none sees it."
