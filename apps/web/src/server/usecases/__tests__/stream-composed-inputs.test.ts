@@ -19,7 +19,7 @@ import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { TARGET_UNREADABLE } from "@/lib/stream-destinations";
-import { MAX_DURATION_MINUTES, RECORDING_RETENTION_DAYS, RESERVATION_BUFFER_MINUTES, WARMING_TIMEOUT_MINUTES } from "@/server/relay/config";
+import { FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS, RESERVATION_BUFFER_MINUTES, WARMING_TIMEOUT_MINUTES } from "@/server/relay/config";
 import { RECORDINGS_PER_SESSION } from "@/server/relay/domain/credits";
 import { FakeIngest, FakeRecorder, FakeRunner } from "@/server/relay/fakes";
 import type { IngestCreateSpec, ProviderCallRecorder } from "@/server/relay/ports";
@@ -368,6 +368,11 @@ describe.skipIf(!HAS_DB)("R2004 + E1 + C: storage reservations (owner rulings 20
   const MAX = MAX_DURATION_MINUTES;
   const MODES = [["passthrough", PASSTHROUGH_RECORDINGS], ["composed", COMPOSED_RECORDINGS]] as const;
   const minutesAfter = (from: Date, minutes: number) => new Date(from.getTime() + minutes * 60_000);
+  // Review I1 of PR #1041: an ended session's recordings are still FINALISING for the grace after `ended_at`. `pastGrace` is the
+  // first moment (one second beyond it) where only the camera's share is left; `insideGrace` the last (one second before it).
+  const GRACE_MS = FINALISATION_GRACE_SECONDS * 1000;
+  const pastGrace = (ended: Date) => new Date(ended.getTime() + GRACE_MS + 1000);
+  const insideGrace = (ended: Date) => new Date(ended.getTime() + GRACE_MS - 1000);
 
   /** This test's own sessions' reservations, read through the admission's own read — never the whole pool. */
   const mine = async (ids: string[], now: Date) =>
@@ -424,13 +429,16 @@ describe.skipIf(!HAS_DB)("R2004 + E1 + C: storage reservations (owner rulings 20
       expect(await minutesOf(id, minutesAfter(w, MAX - B + 1)), `${mode} past the cap, still running`).toBe(n * MAX);
       // Past the booking's wall clock (measured from started_at) the policy has ended it: it reserves nothing.
       expect(await minutesOf(id, minutesAfter(w, MAX + 5)), `${mode} expired by the wall clock`).toBeNull();
-      // A session with no warming_at has not begun: the buffer only (the empty case), never the elapsed since its creation.
+      // A session with no warming_at has not begun: the buffer only (the empty case), never the elapsed since its creation -
+      // read minutes AFTER it was created, where "elapsed since creation" would be a different number (review m2).
       await timeline(id, { state: "provisioning", warmingAt: null });
       const [{ created }] = await sql<{ created: Date }[]>`select created_at as created from fixture_stream_sessions where id = ${id}`;
-      expect(await minutesOf(id, created), `${mode} provisioning, no warming_at`).toBe(n * B);
-      checked += 12;
+      expect(await minutesOf(id, created), `${mode} provisioning, no warming_at, at creation`).toBe(n * B);
+      const nearTimeout = new Date(created.getTime() + (PROVISION_TIMEOUT_SECONDS - 60) * 1000);   // still inside the provision timeout, so still running
+      expect(await minutesOf(id, nearTimeout), `${mode} provisioning, no warming_at, ${PROVISION_TIMEOUT_SECONDS - 60} s after creation`).toBe(n * B);
+      checked += 13;
     }
-    expect(checked, "anti-vacuity: 12 cases in each of two modes").toBe(24);
+    expect(checked, "anti-vacuity: 13 cases in each of two modes").toBe(26);
   });
 
   it("C — an ENDED composed session reserves the minutes its camera ran, rounded UP and capped at the booking: 6 -> 6, 59.2 -> 60, over the booking -> the booking; ended passthrough nothing; the same session re-read as it is re-dated (the sequence)", async () => {
@@ -441,62 +449,94 @@ describe.skipIf(!HAS_DB)("R2004 + E1 + C: storage reservations (owner rulings 20
     for (const [ran, want] of [[6, 6], [59.2, 60], [60, 60], [1, 1], [MAX - 1, MAX - 1], [MAX, MAX], [MAX + 1, MAX], [MAX * 2, MAX]] as const) {
       const ended = minutesAfter(w, ran);
       await timeline(id, { state: "completed", warmingAt: w, startedAt: w, endedAt: ended });
-      expect(await minutesOf(id, ended), `ran ${ran} min`).toBe(want);
+      // Read PAST the finalisation grace, where only the camera's share is left (the grace itself has its own test below).
+      expect(await minutesOf(id, pastGrace(ended)), `ran ${ran} min`).toBe(want);
       checked++;
     }
     // A FAILED session is ended too, and keeps the same share.
     const failedAt = minutesAfter(w, 6);
     await sql`update fixture_stream_sessions set state = 'failed', fail_reason = 'machine_crash', ended_at = ${failedAt} where id = ${id}`;
-    expect(await minutesOf(id, failedAt), "failed after 6 min").toBe(6);
+    expect(await minutesOf(id, pastGrace(failedAt)), "failed after 6 min").toBe(6);
     checked++;
     // The booking is the session's OWN: a 90-minute booking that ran 100 minutes reserves 90.
     await sql`update fixture_stream_sessions set max_duration_minutes = 90, state = 'completed', fail_reason = null, ended_at = ${minutesAfter(w, 100)} where id = ${id}`;
-    expect(await minutesOf(id, minutesAfter(w, 100)), "a 90-minute booking that ran 100").toBe(90);
+    expect(await minutesOf(id, pastGrace(minutesAfter(w, 100))), "a 90-minute booking that ran 100").toBe(90);
     checked++;
     await sql`update fixture_stream_sessions set max_duration_minutes = ${MAX} where id = ${id}`;
     // The differential the old rule could not make: the answer moves with the span, not a constant.
     await timeline(id, { state: "completed", warmingAt: w, startedAt: w, endedAt: minutesAfter(w, 7) });
-    const seven = await minutesOf(id, minutesAfter(w, 7));
+    const seven = await minutesOf(id, pastGrace(minutesAfter(w, 7)));
     await timeline(id, { state: "completed", warmingAt: w, startedAt: w, endedAt: minutesAfter(w, 8) });
-    expect(await minutesOf(id, minutesAfter(w, 8)), "8 minutes holds more than 7").toBeGreaterThan(seven!);
+    expect(await minutesOf(id, pastGrace(minutesAfter(w, 8))), "8 minutes holds more than 7").toBeGreaterThan(seven!);
     checked++;
     expect(checked, "anti-vacuity: eight spans, the failed end, the shorter booking, the differential").toBe(11);
   });
 
-  it("C — a MISSING instant is the whole booking, never zero: no warming_at, no ended_at, an end BEFORE the start; and the release is unchanged — a deleted camera, no camera input at the provider, past the retention horizon: nothing", async () => {
+  it("C — a session that NEVER WARMED recorded nothing and reserves ZERO (review m3); a warmed one whose END is missing, or before its start, is the whole booking; and the release is unchanged — a deleted camera, no camera input at the provider, past the retention horizon: nothing", async () => {
     const r = await rig();
     const id = await startMade(r, "composed");
     const w = await warmingAtOf(id);
     const ended = minutesAfter(w, 6);
+    // Never warmed (stopped or failed while provisioning): nothing was ever served a credential, so nothing recorded.
     await timeline(id, { state: "completed", warmingAt: null, startedAt: w, endedAt: ended });
-    expect(await minutesOf(id, ended), "no start").toBe(MAX);
+    expect(await minutesOf(id, ended), "no start, inside the grace").toBeNull();
+    expect(await minutesOf(id, pastGrace(ended)), "no start, past the grace").toBeNull();
     const [{ created }] = await sql<{ created: Date }[]>`select created_at as created from fixture_stream_sessions where id = ${id}`;
     await timeline(id, { state: "completed", warmingAt: w, startedAt: w, endedAt: null });
     expect(await minutesOf(id, minutesAfter(created, 1)), "no end (the horizon reads created_at)").toBe(MAX);
     await timeline(id, { state: "completed", warmingAt: ended, startedAt: ended, endedAt: w });
-    expect(await minutesOf(id, ended), "an end before the start").toBe(MAX);
+    expect(await minutesOf(id, pastGrace(w)), "an end before the start").toBe(MAX);
     // The release rules, unchanged by the amount.
     await timeline(id, { state: "completed", warmingAt: w, startedAt: w, endedAt: ended });
-    expect(await minutesOf(id, ended), "PREMISE: ended 6 minutes after warming").toBe(6);
+    expect(await minutesOf(id, pastGrace(ended)), "PREMISE: ended 6 minutes after warming").toBe(6);
     const horizon = minutesAfter(ended, RECORDING_RETENTION_DAYS * 24 * 60);
     expect(await minutesOf(id, new Date(horizon.getTime() - 1000)), "still inside the horizon").toBe(6);
     expect(await minutesOf(id, new Date(horizon.getTime() + 1000)), "past it: released").toBeNull();
     await sql`update fixture_stream_inputs set recordings_deleted_at = ${ended} where session_id = ${id} and role = 'camera'`;
-    expect(await minutesOf(id, ended), "released only once the camera's recordings are deleted — AFTER the delete").toBeNull();
+    expect(await minutesOf(id, pastGrace(ended)), "released only once the camera's recordings are deleted — AFTER the delete").toBeNull();
     await sql`update fixture_stream_inputs set recordings_deleted_at = null where session_id = ${id} and role = 'camera'`;
-    expect(await minutesOf(id, ended), "unmarked again: held again (the sequence)").toBe(6);
+    expect(await minutesOf(id, pastGrace(ended)), "unmarked again: held again (the sequence)").toBe(6);
     await sql`update fixture_stream_inputs set ingest_input_id = null where session_id = ${id} and role = 'camera'`;
-    expect(await minutesOf(id, ended), "no camera input at the provider: nothing recorded, nothing reserved").toBeNull();
+    expect(await minutesOf(id, pastGrace(ended)), "no camera input at the provider: nothing recorded, nothing reserved").toBeNull();
   });
 
-  it("an ended PASSTHROUGH session reserves nothing (its recording is in Cloudflare's usage), whatever it ran", async () => {
+  it("I1 — an ended COMPOSED session keeps BOTH recordings' span while they finalise (the camera and the programme), the camera alone after the grace: just inside, exactly at, just after; and the camera's release does not end the programme's", async () => {
+    const r = await rig();
+    const id = await startMade(r, "composed");
+    const w = await warmingAtOf(id);
+    const ran = 23;
+    const ended = minutesAfter(w, ran);
+    await timeline(id, { state: "completed", warmingAt: w, startedAt: w, endedAt: ended });
+    let checked = 0;
+    expect(await minutesOf(id, ended), "the instant it ends").toBe(COMPOSED_RECORDINGS * ran); checked++;
+    expect(await minutesOf(id, insideGrace(ended)), "one second inside the grace").toBe(COMPOSED_RECORDINGS * ran); checked++;
+    expect(await minutesOf(id, new Date(ended.getTime() + GRACE_MS)), "exactly at the grace: closed, the programme is in Cloudflare's usage").toBe(ran); checked++;
+    expect(await minutesOf(id, pastGrace(ended)), "one second after").toBe(ran); checked++;
+    // The camera's release is its own: deleted inside the grace leaves the programme alone; deleted after it leaves nothing.
+    await sql`update fixture_stream_inputs set recordings_deleted_at = ${ended} where session_id = ${id} and role = 'camera'`;
+    expect(await minutesOf(id, insideGrace(ended)), "camera deleted, inside the grace: the programme alone").toBe(ran); checked++;
+    expect(await minutesOf(id, pastGrace(ended)), "camera deleted, after the grace: nothing").toBeNull(); checked++;
+    // A session that never warmed recorded nothing - inside the grace either.
+    await timeline(id, { state: "completed", warmingAt: null, startedAt: null, endedAt: ended });
+    expect(await minutesOf(id, ended), "never warmed, inside the grace").toBeNull(); checked++;
+    expect(checked, "anti-vacuity: seven boundary reads").toBe(7);
+  });
+
+  it("I1 — an ended PASSTHROUGH session keeps its ONE recording's span while it finalises (the hole that predates the rolling rule), nothing after the grace: just inside, exactly at, just after", async () => {
     const p = await rig();
     const id = await startMade(p, "passthrough");
     const w = await warmingAtOf(id);
     expect(await minutesOf(id, w), "PREMISE: running, it reserved").toBe(PASSTHROUGH_RECORDINGS * B);
-    const ended = minutesAfter(w, 6);
+    const ran = 6;
+    const ended = minutesAfter(w, ran);
     await timeline(id, { state: "completed", warmingAt: w, startedAt: w, endedAt: ended });
-    expect(await minutesOf(id, ended)).toBeNull();
+    expect(await minutesOf(id, ended), "the instant it ends").toBe(PASSTHROUGH_RECORDINGS * ran);
+    expect(await minutesOf(id, insideGrace(ended)), "one second inside the grace").toBe(PASSTHROUGH_RECORDINGS * ran);
+    expect(await minutesOf(id, new Date(ended.getTime() + GRACE_MS)), "exactly at the grace: closed, the recording is in Cloudflare's usage").toBeNull();
+    expect(await minutesOf(id, pastGrace(ended)), "one second after: nothing, whatever it ran").toBeNull();
+    // Never warmed: nothing recorded, so nothing to finalise.
+    await timeline(id, { state: "completed", warmingAt: null, startedAt: null, endedAt: ended });
+    expect(await minutesOf(id, ended), "never warmed, inside the grace").toBeNull();
   });
 
   // ---- Admission, end to end. Every row below is seated at a clock ~800 days out, far past every other file's rows (which the
@@ -544,10 +584,11 @@ describe.skipIf(!HAS_DB)("R2004 + E1 + C: storage reservations (owner rulings 20
     const far = FAR_MS();
     const a = await endedComposed(far, 23);
     const b = await endedComposed(a.ended.getTime(), 6);   // back to back: the second starts the minute the first ended
-    expect(await mine([a.id, b.id], b.ended), "PREMISE: the two ended sessions hold exactly the minutes they ran").toEqual([
+    // Read once their recordings have finalised (past the grace after the second ended): only the cameras' shares remain.
+    expect(await mine([a.id, b.id], pastGrace(b.ended)), "PREMISE: the two ended sessions hold exactly the minutes they ran").toEqual([
       { sessionId: a.id, minutes: 23 }, { sessionId: b.id, minutes: 6 },
     ]);
-    const n = await rig({ clock: b.ended.getTime() });
+    const n = await rig({ clock: pastGrace(b.ended).getTime() });
     const started = await startAgainstPool(n, [a.id, b.id], STG_LIMIT - STG_USED);
     expect(started, "a refusal is a red: the pool had room").toHaveProperty("sessionId");
     const sessionId = (started as { sessionId: string }).sessionId;
@@ -589,12 +630,34 @@ describe.skipIf(!HAS_DB)("R2004 + E1 + C: storage reservations (owner rulings 20
     // headroom beyond usage = (what the two ended sessions hold) + (the start's reservation): the threshold exactly.
     const exact = ranTotal + need;
     expect(exact, "PREMISE: the old reservation (a match each) would not fit this pool at all").toBeLessThan(2 * MAX + need);
-    const tight = await rig({ clock: b.ended.getTime() });
+    const tight = await rig({ clock: pastGrace(b.ended).getTime() });   // past the grace: only the cameras' shares are left
     const refused = await startAgainstPool(tight, [a.id, b.id], exact - 1);
     expect(refused, "one minute short").toMatchObject({ refusal: { status: 503, code: "storage_exhausted", extra: { headroomMinutes: need - 1 } } });
     const started = await startAgainstPool(tight, [a.id, b.id], exact);
     expect(started, "exactly enough admits").toHaveProperty("sessionId");
     expect((await sessionRow((started as { sessionId: string }).sessionId))!.reserved_minutes, "admitted at the buffers").toBe(need);
+  });
+
+  it("I1 — the pool's edge INSIDE the finalisation grace: the next match starts the second the last one ends, and the programme that is still finalising is reserved too - the same pool that admits it past the grace refuses it inside", async () => {
+    const far = FAR_MS();
+    const a = await endedComposed(far, 23);
+    const b = await endedComposed(a.ended.getTime(), 6);
+    const need = COMPOSED_RECORDINGS * B;
+    // At the instant b ends: a ended 6 minutes ago (past its grace, its camera alone: 23), b is finalising (both recordings: 2 x 6).
+    const justEnded = new Date(b.ended.getTime() + 1000);
+    expect(await mine([a.id, b.id], justEnded), "PREMISE: a is camera-only, b is finalising").toEqual([
+      { sessionId: a.id, minutes: 23 }, { sessionId: b.id, minutes: COMPOSED_RECORDINGS * 6 },
+    ]);
+    const exactInside = 23 + COMPOSED_RECORDINGS * 6 + need;
+    const exactAfter = 23 + 6 + need;
+    expect(exactInside, "PREMISE: the grace is what moves the threshold").toBeGreaterThan(exactAfter);
+    const quick = await rig({ clock: justEnded.getTime() });
+    // A pool sized for the camera-only figure (what the pool would say PAST the grace) is refused while b is still finalising...
+    const refused = await startAgainstPool(quick, [a.id, b.id], exactAfter);
+    expect(refused, "sized for the post-grace figure: refused inside the grace").toMatchObject({ refusal: { status: 503, code: "storage_exhausted", extra: { headroomMinutes: need - (exactInside - exactAfter) } } });
+    // ...and exactly the inside figure admits.
+    const started = await startAgainstPool(quick, [a.id, b.id], exactInside);
+    expect(started, "sized for the inside figure: admits").toHaveProperty("sessionId");
   });
 });
 

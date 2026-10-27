@@ -26,7 +26,7 @@ import { STREAM_POLL_MS } from "@/lib/stream-session-view";
 import {
   AUTO_STOP_AFTER_RESULT_SECONDS, CLOUDFLARE_STORED_MICROS_PER_MINUTE, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH,
-  CODE_GRACE_AFTER_FINISH_MINUTES, MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
+  CODE_GRACE_AFTER_FINISH_MINUTES, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, PHONE_LOST_LIVE_MINUTES, PHONE_SILENT_FLOOR_SECONDS, RECONNECT_QUIET_SECONDS, RUNNER_DEFAULT_GUEST,
   RECORDING_RETENTION_DAYS, RELAY_HEARTBEAT_INTERVAL_MS, RELAY_OVERLAY_DELAY_DEFAULT_MS,
   RUNNER_DEFAULT_REGION, SAMPLES_PER_SESSION_CAP, WARMING_TIMEOUT_MINUTES, relayEnvironment, relayOutputProfile, tunable,
 } from "@/server/relay/config";
@@ -44,7 +44,7 @@ import {
   type Ask10Phone, cameraEvidenceMatters, composedCameraLost, composedCameraWatched, composedNeverLive, livePhoneLost, lostCountdown, programmePhaseRowMatters,
   warmingPhoneLost,
 } from "@/server/relay/domain/phone-lost";
-import { elapsedMinutesSince, endedCameraReservationMinutes, headroomAfterReservations, reservationMinutes } from "@/server/relay/domain/credits";
+import { elapsedMinutesSince, endedReservationMinutes, headroomAfterReservations, reservationMinutes } from "@/server/relay/domain/credits";
 import { composedUnavailable, relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import {
@@ -1078,8 +1078,9 @@ export function storageUsageForColumns(u: StorageUsage): StorageUsage {
  *  which the session fails), and `first_ingest_at` is never written for a composed session at all (only the passthrough
  *  poll writes it). Counting from `warming_at` can over-count the programme input B by at most that warming window and a
  *  passthrough input (which records only while connected) likewise — an over-statement of a few minutes, never an
- *  under-statement of the camera. A session with no `warming_at` has no start: running, that is elapsed 0 (the buffer
- *  only — it has not begun); ended, it is unreadable and falls back to the WHOLE booking (never 0).
+ *  under-statement of the camera. A session with no `warming_at` has no start because it never warmed: running, that is
+ *  elapsed 0 (the buffer only — it has not begun); ended, it recorded nothing and reserves 0 (review of PR #1041, m3).
+ *  A warmed session whose `ended_at` is missing is the unreadable case, and falls back to the WHOLE booking (never 0).
  *
  *   - a RUNNING session reserves, per recording it makes (`reservationMinutes`; one for passthrough, two for composed —
  *     owner ruling 2026-10-18, option (a): the camera (A) keeps recording so the phone's delivery watch keeps its HLS, and
@@ -1094,13 +1095,21 @@ export function storageUsageForColumns(u: StorageUsage): StorageUsage {
  *     ruling's "released once A's recording is deleted", which STANDS. Owner ruling 2026-10-26 ("C") amends HOW MUCH it
  *     keeps: only the minutes the session actually ran (start to `ended_at`), rounded UP to a whole minute and capped at
  *     the booking (`endedCameraReservationMinutes`) — not a whole match, so a 6-minute stream no longer holds 300 until
- *     the sweep (owner, stg 2026-10-26: 70.6 of 1000 minutes used and "Go live" refused for storage). A missing or
- *     unreadable instant is the whole booking, never 0. Bounded by the retention horizon (ended + RECORDING_RETENTION_DAYS):
- *     by then retention has deleted every recording that old, so a delete that never succeeds cannot hold the pool
- *     forever. A camera input the provider never made recorded nothing and reserves nothing. Conservative by
- *     construction: once the recording is finalised Cloudflare's own usage counts it too, so for up to a day an ended
- *     composed match is counted twice — an under-statement of the room, never an over-statement.
- *  An ended passthrough session reserves nothing (its recording is in Cloudflare's usage), as before. */
+ *     the sweep (owner, stg 2026-10-26: 70.6 of 1000 minutes used and "Go live" refused for storage). A warmed session
+ *     whose end is missing or unreadable is the whole booking, never 0. Bounded by the retention horizon (ended +
+ *     RECORDING_RETENTION_DAYS): by then retention has deleted every recording that old, so a delete that never succeeds
+ *     cannot hold the pool forever. A camera input the provider never made recorded nothing and reserves nothing. Once the
+ *     camera's recording is finalised Cloudflare's own usage counts it too, so until the sweep deletes it a composed match's
+ *     camera is counted twice — an under-statement of the room;
+ *   - for the FINALISATION GRACE after `ended_at` (`FINALISATION_GRACE_SECONDS`, the ingest hold window) EVERY recording of
+ *     an ended session keeps its span reserved — composed twice (the camera and the programme), passthrough once (review I1
+ *     of PR #1041, owner-directed 2026-10-26). R0 F2: an in-progress recording is counted by NOTHING in `storage-usage`; its
+ *     minutes land in one lump when Cloudflare finalises it, that long after the input disconnects. Without this window
+ *     the programme (and a passthrough recording) vanished from the pool at the instant a match ended and reappeared in
+ *     Cloudflare's usage ~3 minutes later — exactly while the next match's start is being admitted. After it the programme
+ *     and the passthrough recording are in the usage and stop reserving, and only the composed camera remains, as above.
+ *     Everything is counted from the same `warming_at` span (`endedReservationMinutes`), an over-statement for the
+ *     programme (which starts after the camera) and for a passthrough input, never an under-statement. */
 export async function storageReservations(exec: Tx | typeof sql, now: Date): Promise<{ sessionId: string; minutes: number }[]> {
   const rows = await exec<Row[]>`select ${cols()} from fixture_stream_sessions where state in ${sql([...ACTIVE_STATES])}`;
   const running = rows
@@ -1108,13 +1117,24 @@ export async function storageReservations(exec: Tx | typeof sql, now: Date): Pro
     .filter((s) => { const x = evaluate(s, now).kind; return x === "none" || x === "stale_beat" || x === "grace_expired"; })   // a Machine being replaced or flushed still records
     .map((s) => ({ sessionId: s.id, minutes: reservationMinutes(s.mode, s.maxDurationMinutes, elapsedMinutesSince(s.warmingAt, now)) }));
   const horizon = new Date(now.getTime() - RECORDING_RETENTION_DAYS * 86_400_000);
-  const cameras = await exec<{ id: string; max_duration_minutes: number; warming_at: string | null; ended_at: string | null }[]>`
-    select s.id, s.max_duration_minutes, s.warming_at, s.ended_at from fixture_stream_sessions s
-     where s.mode = 'composed' and s.state in ${sql([...TERMINAL_STATES])}
-       and coalesce(s.ended_at, s.created_at) > ${horizon}
-       and exists (select 1 from fixture_stream_inputs i
-                    where i.session_id = s.id and i.role = 'camera' and i.ingest_input_id is not null and i.recordings_deleted_at is null)`;
-  return [...running, ...cameras.map((c) => ({ sessionId: c.id, minutes: endedCameraReservationMinutes(d(c.warming_at), d(c.ended_at), c.max_duration_minutes) }))];
+  // An ENDED session is read when its recordings are still finalising (any mode: `ended_at` newer than the grace) or when it is
+  // a composed one whose camera recording is still held. The amount is the domain's (`endedReservationMinutes`); a session that
+  // reserves nothing (never warmed, or past the grace with the camera released) is absent from the read.
+  const finalisingSince = new Date(now.getTime() - FINALISATION_GRACE_SECONDS * 1000);
+  const ended = await exec<{ id: string; mode: "passthrough" | "composed"; max_duration_minutes: number; warming_at: string | null; ended_at: string | null; camera_held: boolean }[]>`
+    select * from (
+      select s.id, s.mode, s.max_duration_minutes, s.warming_at, s.ended_at,
+             exists (select 1 from fixture_stream_inputs i
+                      where i.session_id = s.id and i.role = 'camera' and i.ingest_input_id is not null and i.recordings_deleted_at is null) as camera_held
+        from fixture_stream_sessions s
+       where s.state in ${sql([...TERMINAL_STATES])} and coalesce(s.ended_at, s.created_at) > ${horizon}
+    ) t
+     where t.ended_at > ${finalisingSince} or (t.mode = 'composed' and t.camera_held)`;
+  const settled = ended
+    .map((e) => ({ sessionId: e.id, minutes: endedReservationMinutes({
+      mode: e.mode, warmingAt: d(e.warming_at), endedAt: d(e.ended_at), maxDurationMinutes: e.max_duration_minutes, now, cameraHeld: e.camera_held }) }))
+    .filter((r) => r.minutes > 0);
+  return [...running, ...settled];
 }
 
 /** Owner ruling 2026-10-26 (E1): the pool's reading when the reservations outrun it. Pure of the database so the report's

@@ -380,9 +380,18 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       // Raw headroom (limit − used) is ownReserved + the measured foreign baseline; the three rows reserve all of the
       // headroom that is left after the foreign baseline, leaving 0.
       const pool = { used: 100, headroomBeforeOwn: ownReserved };
+      sentry.captureError.mockClear();
       const refused = await admitAgainstPool(r, { ...pool, ownReserved });
       expect(refused.snapshot.headroom, "the admission's own figure: the three reservations took it all").toBe(pool.headroomBeforeOwn - ownReserved);
       expect(refused.made).toBeNull();
+      // Review m1 of PR #1041: exactly 0 headroom is a full pool, not an overcommitted one - only NEGATIVE headroom alarms
+      // (owner: "headroom NEGATIVE"). A drifting foreign baseline may make an earlier attempt read negative and report; a report
+      // that carries a headroom of 0 or more is the `<= 0` mutant.
+      const zeroOrMore = sentry.captureError.mock.calls.filter(([, ctx]) => {
+        const c = ctx as { route?: string; extra?: { headroomMinutes?: number } };
+        return c.route === "relay.storage_overcommitted" && (c.extra?.headroomMinutes ?? -1) >= 0;
+      });
+      expect(zeroOrMore, "no overcommit report for a pool with exactly 0 headroom").toHaveLength(0);
       expect(refused.refusal).toMatchObject({ status: 503, code: "storage_exhausted" });
       const [{ n }] = await sql<{ n: number }[]>`
         select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId} and not (id = any(${refused.retired}::uuid[]))`;

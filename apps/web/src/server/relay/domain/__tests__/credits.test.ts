@@ -3,9 +3,10 @@
 // ever see it). C3's arithmetic is pure here so the differential is a
 // millisecond test, and Task 10's DB test proves the SAME function is wired.
 import { describe, expect, it } from "vitest";
-import { CREDIT_REUSE_HOURS, FREE_RESTARTS_PER_WINDOW, MAX_DURATION_MINUTES, NEVER_LIVE_REFUNDS_PER_WINDOW, RESERVATION_BUFFER_MINUTES } from "../../config";
+import { CREDIT_REUSE_HOURS, FINALISATION_GRACE_SECONDS, FREE_RESTARTS_PER_WINDOW, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, NEVER_LIVE_REFUNDS_PER_WINDOW, RESERVATION_BUFFER_MINUTES } from "../../config";
+import { FakeIngest } from "../../fakes";
 import {
-  InsufficientCredits, RECORDINGS_PER_SESSION, credit, debit, elapsedMinutesSince, endedCameraReservationMinutes, headroomAfterReservations,
+  InsufficientCredits, RECORDINGS_PER_SESSION, credit, debit, elapsedMinutesSince, endedCameraReservationMinutes, endedReservationMinutes, headroomAfterReservations,
   neverLiveRefundCapped, reservationMinutes, restartIsFree, withinReuseWindow,
 } from "../credits";
 
@@ -117,11 +118,12 @@ describe("endedCameraReservationMinutes (the 2026-10-26 ended rule)", () => {
     expect(endedCameraReservationMinutes(t0, after(MAX * 10), MAX)).toBe(MAX);
     expect(endedCameraReservationMinutes(t0, after(100), 90), "the session's own booking").toBe(90);
   });
-  it("a MISSING timestamp is the whole booking (conservative), never zero: no start, no end, neither", () => {
-    expect(endedCameraReservationMinutes(null, after(6), MAX), "no start").toBe(MAX);
-    expect(endedCameraReservationMinutes(t0, null, MAX), "no end").toBe(MAX);
-    expect(endedCameraReservationMinutes(null, null, MAX), "neither").toBe(MAX);
-    expect(endedCameraReservationMinutes(null, null, 90), "the session's own booking").toBe(90);
+  it("a camera that NEVER WARMED recorded nothing and reserves ZERO (review m3), whatever the end; a missing END of a warmed one is the whole booking (an unknown span is never zero)", () => {
+    expect(endedCameraReservationMinutes(null, after(6), MAX), "never warmed, ended").toBe(0);
+    expect(endedCameraReservationMinutes(null, null, MAX), "never warmed, no end").toBe(0);
+    expect(endedCameraReservationMinutes(null, null, 90), "never warmed, own booking").toBe(0);
+    expect(endedCameraReservationMinutes(t0, null, MAX), "warmed, end not recorded").toBe(MAX);
+    expect(endedCameraReservationMinutes(t0, null, 90), "warmed, end not recorded, the session's own booking").toBe(90);
   });
   it("an unreadable span is the whole booking too (an end BEFORE the start, an invalid date); a span of exactly zero is a real measurement of zero", () => {
     expect(endedCameraReservationMinutes(after(6), t0, MAX), "end before start").toBe(MAX);
@@ -133,6 +135,73 @@ describe("endedCameraReservationMinutes (the 2026-10-26 ended rule)", () => {
     for (const bad of [-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => endedCameraReservationMinutes(t0, after(6), bad), String(bad)).toThrow(/endedCameraReservationMinutes: maxDurationMinutes must be a whole non-negative number/);
     }
+  });
+});
+
+// Review I1 (PR #1041): an in-progress recording is counted by NOTHING (R0 F2); its minutes land in one lump when Cloudflare
+// finalises it. So for the finalisation grace after `ended_at`, an ended session keeps EVERY recording's span reserved:
+// composed 2 x (the camera and the programme), passthrough 1. After it, composed keeps the camera alone until the
+// recordings are deleted, and passthrough nothing.
+describe("endedReservationMinutes (the finalisation grace)", () => {
+  const MAX = MAX_DURATION_MINUTES;
+  const GRACE_MS = FINALISATION_GRACE_SECONDS * 1000;
+  const start = new Date("2026-10-26T09:00:00Z");
+  const ran = 23;
+  const end = new Date(start.getTime() + ran * 60_000);
+  const at = (msAfterEnd: number) => new Date(end.getTime() + msAfterEnd);
+  const base = { warmingAt: start, endedAt: end, maxDurationMinutes: MAX, cameraHeld: true };
+
+  it("the grace is the hold window the ingest port itself declares (not a typed figure), and a real, positive span of time", () => {
+    expect(FINALISATION_GRACE_SECONDS).toBe(new FakeIngest().capabilities.holdWindowSeconds.rtmps);
+    expect(FINALISATION_GRACE_SECONDS).toBe(INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS);
+    expect(FINALISATION_GRACE_SECONDS).toBeGreaterThan(0);
+  });
+
+  it("COMPOSED: every recording's span while finalising (just inside), the camera alone just after - the boundary row, both neighbours", () => {
+    const n = RECORDINGS_PER_SESSION.composed;
+    expect(endedReservationMinutes({ ...base, mode: "composed", now: end }), "the instant it ends").toBe(n * ran);
+    expect(endedReservationMinutes({ ...base, mode: "composed", now: at(GRACE_MS - 1000) }), "one second inside").toBe(n * ran);
+    expect(endedReservationMinutes({ ...base, mode: "composed", now: at(GRACE_MS) }), "exactly at the grace: closed").toBe(ran);
+    expect(endedReservationMinutes({ ...base, mode: "composed", now: at(GRACE_MS + 1000) }), "one second after").toBe(ran);
+    expect(endedReservationMinutes({ ...base, mode: "composed", now: at(GRACE_MS * 100) }), "long after").toBe(ran);
+  });
+
+  it("PASSTHROUGH: its one recording's span while finalising (just inside), NOTHING just after", () => {
+    const n = RECORDINGS_PER_SESSION.passthrough;
+    expect(endedReservationMinutes({ ...base, mode: "passthrough", now: end }), "the instant it ends").toBe(n * ran);
+    expect(endedReservationMinutes({ ...base, mode: "passthrough", now: at(GRACE_MS - 1000) }), "one second inside").toBe(n * ran);
+    expect(endedReservationMinutes({ ...base, mode: "passthrough", now: at(GRACE_MS) }), "exactly at the grace: closed").toBe(0);
+    expect(endedReservationMinutes({ ...base, mode: "passthrough", now: at(GRACE_MS + 1000) }), "one second after").toBe(0);
+  });
+
+  it("the camera's own release is independent of the grace: deleted camera + inside the grace is the programme alone; deleted + after is nothing", () => {
+    const deleted = { ...base, mode: "composed" as const, cameraHeld: false };
+    expect(endedReservationMinutes({ ...deleted, now: at(GRACE_MS - 1000) })).toBe(ran);
+    expect(endedReservationMinutes({ ...deleted, now: at(GRACE_MS + 1000) })).toBe(0);
+  });
+
+  it("a session that NEVER WARMED recorded nothing: zero in both modes, inside the grace too (review m3)", () => {
+    for (const mode of ["composed", "passthrough"] as const) {
+      expect(endedReservationMinutes({ ...base, mode, warmingAt: null, now: end }), `${mode} never warmed, inside`).toBe(0);
+      expect(endedReservationMinutes({ ...base, mode, warmingAt: null, now: at(GRACE_MS + 1000) }), `${mode} never warmed, after`).toBe(0);
+    }
+  });
+
+  it("the span keeps the C rules inside the grace too: rounded UP, capped at the booking, a zero span is zero", () => {
+    const n = RECORDINGS_PER_SESSION.composed;
+    const lasting = (minutes: number) => ({ ...base, mode: "composed" as const, endedAt: new Date(start.getTime() + minutes * 60_000), now: new Date(start.getTime() + minutes * 60_000) });
+    expect(endedReservationMinutes(lasting(59.2))).toBe(n * 60);
+    expect(endedReservationMinutes(lasting(MAX + 50))).toBe(n * MAX);
+    expect(endedReservationMinutes(lasting(0))).toBe(0);
+  });
+
+  it("an END THAT WAS NEVER RECORDED has no grace to be inside: composed keeps the camera's whole booking, passthrough nothing", () => {
+    expect(endedReservationMinutes({ ...base, mode: "composed", endedAt: null, now: end })).toBe(MAX);
+    expect(endedReservationMinutes({ ...base, mode: "passthrough", endedAt: null, now: end })).toBe(0);
+  });
+
+  it("a booking that is not a whole non-negative number is refused by name", () => {
+    expect(() => endedReservationMinutes({ ...base, mode: "composed", maxDurationMinutes: 1.5, now: end })).toThrow(/endedCameraReservationMinutes: maxDurationMinutes must be a whole non-negative number/);
   });
 });
 

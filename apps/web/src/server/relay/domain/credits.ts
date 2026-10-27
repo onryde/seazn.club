@@ -1,7 +1,7 @@
 // server/relay/domain/credits.ts — the match-credit value object (design §5.2).
 // PURE. `debit` is FS10 in memory (owner ruling 1 keeps the CHECK too): a
 // consume that would overdraw is refused before any row is written.
-import { CREDIT_REUSE_HOURS, RESERVATION_BUFFER_MINUTES } from "../config";
+import { CREDIT_REUSE_HOURS, FINALISATION_GRACE_SECONDS, RESERVATION_BUFFER_MINUTES } from "../config";
 
 export class InsufficientCredits extends Error {
   constructor(readonly balance: number, readonly amount: number) { super(`insufficient credits: ${balance} < ${amount}`); }
@@ -75,19 +75,41 @@ export function elapsedMinutesSince(from: Date | null, now: Date): number {
   return Math.max(0, (now.getTime() - from.getTime()) / 60_000);
 }
 
-/** Owner ruling 2026-10-26 ("C"): the storage minutes an ENDED composed session's camera input still reserves until the daily
- *  sweep deletes its recordings — the minutes it actually ran, rounded UP to a whole minute and capped at the booking. A span
- *  that cannot be read (either instant missing or invalid, or the end before the start) is the WHOLE booking: conservative,
- *  never zero. A span of exactly zero is a real measurement and reserves zero. The booking itself must be a whole
- *  non-negative number, refused by name. */
-export function endedCameraReservationMinutes(startedAt: Date | null, endedAt: Date | null, maxDurationMinutes: number): number {
+/** Owner ruling 2026-10-26 ("C"): the storage minutes ONE recording of an ended session reserves — the minutes the session
+ *  actually ran, rounded UP to a whole minute and capped at the booking. Counted from `warmingAt`, so a session that never
+ *  warmed (`null`: stopped or failed while provisioning, no credential ever served) recorded NOTHING and reserves zero (review
+ *  of PR #1041, m3; the legacy sessions that predate the column are older than the recording horizon, so a null inside it
+ *  means "never warmed"). A warmed session whose END was not recorded, or whose span cannot be read (an end before the start,
+ *  an invalid date), is the WHOLE booking: an unknown span is conservative, never zero. A span of exactly zero is a real
+ *  measurement and reserves zero. The booking itself must be a whole non-negative number, refused by name. */
+export function endedCameraReservationMinutes(warmingAt: Date | null, endedAt: Date | null, maxDurationMinutes: number): number {
   if (!Number.isInteger(maxDurationMinutes) || maxDurationMinutes < 0) {
     throw new RangeError(`endedCameraReservationMinutes: maxDurationMinutes must be a whole non-negative number, got ${maxDurationMinutes}`);
   }
-  if (startedAt === null || endedAt === null) return maxDurationMinutes;
-  const spanMs = endedAt.getTime() - startedAt.getTime();
+  if (warmingAt === null) return 0;
+  if (endedAt === null) return maxDurationMinutes;
+  const spanMs = endedAt.getTime() - warmingAt.getTime();
   if (!Number.isFinite(spanMs) || spanMs < 0) return maxDurationMinutes;
   return Math.min(maxDurationMinutes, Math.ceil(spanMs / 60_000));
+}
+
+/** Review I1 of PR #1041 (owner-directed 2026-10-26): what an ENDED session reserves at `now`.
+ *
+ *  An in-progress recording is counted by NOTHING — `storage-usage` shows it only when Cloudflare finalises it, one hold window
+ *  after the input disconnects (R0 F2; `FINALISATION_GRACE_SECONDS`). The programme (composed B) and a passthrough input
+ *  disconnect at the session's end, so for the grace after `endedAt` EVERY recording keeps its span reserved: composed twice
+ *  (the camera A and the programme B), passthrough once. After it the programme and the passthrough recording are in
+ *  Cloudflare's usage and stop reserving; the camera alone keeps its span until its recordings are deleted (`cameraHeld`:
+ *  the camera input was made and not yet marked `recordings_deleted_at`), as the ruling of 2026-10-26 (C) says.
+ *  An `endedAt` that was never recorded has no grace to be inside (composed keeps the camera's whole booking, passthrough
+ *  nothing). The span is `endedCameraReservationMinutes`: zero for a session that never warmed. */
+export function endedReservationMinutes(a: {
+  mode: "passthrough" | "composed"; warmingAt: Date | null; endedAt: Date | null; maxDurationMinutes: number; now: Date; cameraHeld: boolean;
+}): number {
+  const span = endedCameraReservationMinutes(a.warmingAt, a.endedAt, a.maxDurationMinutes);
+  const finalising = a.endedAt !== null && a.now.getTime() < a.endedAt.getTime() + FINALISATION_GRACE_SECONDS * 1000;
+  if (a.mode === "passthrough") return finalising ? span : 0;
+  return (a.cameraHeld ? span : 0) + (finalising ? span : 0);
 }
 
 /** C3: limit − used − Σ reservations. Poll-then-admit is unsound, not imprecise. */

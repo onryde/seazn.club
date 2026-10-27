@@ -31,11 +31,12 @@ import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { IngestProvider, RunnerProvider } from "@/server/relay/ports";
 import { pairPresentPhone, rigUser } from "@/server/relay/__tests__/_session-rig";
 import {
-  AUTO_STOP_AFTER_RESULT_SECONDS, CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, PHONE_LOST_LIVE_MINUTES,
+  AUTO_STOP_AFTER_RESULT_SECONDS, CLOUDFLARE_STORED_MICROS_PER_MINUTE, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FINALISATION_GRACE_SECONDS, MAX_DURATION_MINUTES, PHONE_BEAT_RETENTION_HOURS, PHONE_LOST_LIVE_MINUTES,
   PROVISION_TIMEOUT_SECONDS, RECORDING_RETENTION_DAYS,
   REQUESTED_TIMEOUT_SECONDS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, SAMPLE_RETENTION_DAYS, STALE_HEARTBEAT_SECONDS, WARMING_TIMEOUT_MINUTES,
   relayEnvironment,
 } from "@/server/relay/config";
+import { RECORDINGS_PER_SESSION } from "@/server/relay/domain/credits";
 import { machineNameFor } from "@/server/relay/domain/runner";
 import { type FailReason, TERMINAL_STATES } from "@/server/relay/domain/session";
 import { mintRelayToken } from "@/server/relay/tokens";
@@ -1362,14 +1363,19 @@ describe.skipIf(!HAS_DB)("R2004: an ended composed session's CAMERA recordings (
     expect(RAN_MINUTES, "premise: the span is neither nothing nor the booking").toBeLessThan(MAX_DURATION_MINUTES);
     return { r, cameraId: camera.ingest_input_id, programmeId: programme.ingest_input_id };
   }
-  const reservedFor = async (r: Rig) => (await storageReservations(sql, r.deps.now())).filter((x) => x.sessionId === r.sessionId).map((x) => x.minutes);
+  /** This rig's session's reservation, read `secondsAfterEnd` after it ended (the rig's clock is frozen at the end). Default: one
+   *  second PAST the finalisation grace, where only the camera's share is left (review I1 of PR #1041: inside the grace every
+   *  recording of the session keeps its span reserved). */
+  const reservedFor = async (r: Rig, secondsAfterEnd = FINALISATION_GRACE_SECONDS + 1) =>
+    (await storageReservations(sql, new Date(r.deps.now().getTime() + secondsAfterEnd * 1000))).filter((x) => x.sessionId === r.sessionId).map((x) => x.minutes);
   const camera1c = (res: Awaited<ReturnType<typeof sweep>>) => ({
     cleared: res.cameraInputsCleared, deleted: res.cameraRecordingsDeleted, deferred: res.cameraRecordingsDeferred, refused: res.cameraRecordingsRefused,
   });
 
   it("A's recordings go at the FIRST sweep after the end and B's are kept; the camera row is marked; a second sweep asks the provider nothing; the reservation is released only by that delete", async () => {
     const { r, cameraId, programmeId } = await endedComposed({ camera: ["va1", "va2"], programme: ["vb1"] });
-    expect(await reservedFor(r), "ended, A not yet deleted: the camera's share is still reserved").toEqual([RAN_MINUTES]);
+    expect(await reservedFor(r, 0), "just ended: the camera AND the programme are still finalising, every recording's span is reserved").toEqual([RECORDINGS_PER_SESSION.composed * RAN_MINUTES]);
+    expect(await reservedFor(r), "past the grace, A not yet deleted: the camera's share is still reserved").toEqual([RAN_MINUTES]);
     const listed = vi.spyOn(r.ingest, "listInputVideos");
     const first = await sweep(r);
     expect(camera1c(first)).toEqual({ cleared: 1, deleted: 2, deferred: 0, refused: 0 });

@@ -25,6 +25,14 @@
 export const INGEST_TIMEOUT_SECONDS = 180;
 /** R0 §4a: 182.8 s and 183.5 s against a configured 180; 12.2 s at 10; 63.1 s at 60. */
 export const HOLD_SLACK_SECONDS = 3;
+/** How long after a session ends its recordings are still being FINALISED — and so are counted by nothing. R0 F2: an in-progress
+ *  recording contributes NOTHING to `storage-usage`; its minutes land in one lump when Cloudflare finalises it, which is the hold
+ *  window after the input disconnects (`INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS`, the very figure the ingest port declares
+ *  as `holdWindowSeconds.rtmps`). A programme (composed B) or a passthrough input disconnects at the session's end, so for this
+ *  long after `ended_at` the pool owes it a reservation (domain/credits.ts `endedReservationMinutes`). No margin on top: usage is
+ *  read live at every admission and at the sweep, so there is no polling gap to cover, and the camera (A) stays reserved
+ *  after this window regardless. */
+export const FINALISATION_GRACE_SECONDS = INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS;
 
 /** C1: Cloudflare rejects 1 and 7 with HTTP 400 code 10060; the valid range is
  *  30–1096 days. The product's 3-day promise is OUR sweep (RECORDING_RETENTION_DAYS). */
@@ -44,9 +52,10 @@ export const MAX_DURATION_MINUTES = 300;
 /** Owner ruling 2026-10-26 ("E1, 30 mins buffer"): a RUNNING session's claim on the recording pool is rolling, not a full
  *  match up front. Each recording it makes reserves `min(maxDurationMinutes, ceil(elapsed minutes) + RESERVATION_BUFFER_MINUTES)`
  *  (domain/credits.ts `reservationMinutes`), so a stream just admitted holds the buffer alone — `RECORDINGS_PER_SESSION × 30`,
- *  the admission threshold — and grows as it runs, to a full booking at most. The buffer is the sweep-to-sweep headroom the
- *  reservation owes the stream between two reads of the pool. A reservation no longer guarantees a full 5 h, so the pool can
- *  be overcommitted; that is reported (`relay.storage_overcommitted`), never enforced against a running stream. */
+ *  the admission threshold — and grows as it runs, to a full booking at most. The buffer is the growth a reservation allows
+ *  between two reads of the pool (admissions read it live, the daily sweep reads it once more). A reservation no longer
+ *  guarantees a full 5 h, so the pool can be overcommitted; that is reported (`relay.storage_overcommitted`), never enforced
+ *  against a running stream. */
 export const RESERVATION_BUFFER_MINUTES = 30;
 /** §6.6: job/page tokens expire at max_duration + 30 min. */
 export const TOKEN_GRACE_MINUTES = 30;
