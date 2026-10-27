@@ -91,6 +91,9 @@ const QUERY_VERDICTS: Record<string, true | string> = {
   "api/auth/google/callback/route.ts:state": OAUTH_STATE,
   "api/auth/lichess/callback/route.ts:code": `${OAUTH_CODE} (Lichess: the PKCE code_verifier, in an httpOnly cookie)`,
   "api/auth/lichess/callback/route.ts:state": OAUTH_STATE,
+  "api/youtube/connect/callback/route.ts:code": `${OAUTH_CODE} (YouTube Connect: the PKCE code_verifier, in an httpOnly cookie, and Google's client secret)`,
+  "api/youtube/connect/callback/route.ts:state": `${OAUTH_STATE}, and single-use: the pending row it keys is spent by the first callback`,
+  "api/youtube/connect/fake-authorize/route.ts:state": `${OAUTH_STATE}. The fake hop (CI only: 404 unless YOUTUBE_DRIVER=fake under ENV_NAME local or ci) mints a code only for a state the fake itself recorded`,
   "admin/overlay-gallery/page.tsx:code": "a staff-only stress input: a team's short name for the overlay gallery, not a credential",
 };
 
@@ -205,6 +208,8 @@ describe("each verdict is what the scrubber does", () => {
 describe("the OAuth reason is true of the callbacks' source (a comment is a hypothesis)", () => {
   const google = fs.readFileSync(path.join(APP_DIR, "api/auth/google/callback/route.ts"), "utf8");
   const lichess = fs.readFileSync(path.join(APP_DIR, "api/auth/lichess/callback/route.ts"), "utf8");
+  const youtube = fs.readFileSync(path.join(APP_DIR, "api/youtube/connect/callback/route.ts"), "utf8");
+  const youtubeDriver = fs.readFileSync(path.join(APP_DIR, "../server/youtube/google.ts"), "utf8");
   it("Google: the code is redeemed with the client secret, and the state must equal the httpOnly cookie", () => {
     expect(google).toMatch(/client_secret:\s*process\.env\.GOOGLE_CLIENT_SECRET/);
     expect(google).toMatch(/grant_type:\s*"authorization_code"/);
@@ -218,13 +223,23 @@ describe("the OAuth reason is true of the callbacks' source (a comment is a hypo
     expect(lichess).toMatch(/jar\.get\(LICHESS_OAUTH_STATE_COOKIE\)/);
     expect(lichess).toMatch(/state !== expectedState/);
   });
+  it("YouTube Connect: the code is redeemed with the verifier from an httpOnly cookie AND the client secret (both inside the driver), and the state must equal the cookie", () => {
+    // The route hands the verifier to the port; the driver is what puts it, with the client secret, in the token request.
+    expect(youtube).toMatch(/codeVerifier:\s*verifier/);
+    expect(youtube).toMatch(/jar\.get\(YOUTUBE_OAUTH_VERIFIER_COOKIE\)/);
+    expect(youtube).toMatch(/jar\.get\(YOUTUBE_OAUTH_STATE_COOKIE\)/);
+    expect(youtube).toMatch(/state !== expectedState/);
+    expect(youtubeDriver).toMatch(/code_verifier:\s*a\.codeVerifier/);
+    expect(youtubeDriver).toMatch(/client_secret:\s*c\.secret/);
+    expect(youtubeDriver).toMatch(/grant_type:\s*"authorization_code"/);
+  });
   it("both cookies are httpOnly where the start routes set them (the value never reaches page JS)", () => {
-    const starts = ["api/auth/google/route.ts", "api/auth/lichess/route.ts"];
+    const starts = ["api/auth/google/route.ts", "api/auth/lichess/route.ts", "api/youtube/connect/route.ts"];
     for (const start of starts) {
       const text = fs.readFileSync(path.join(APP_DIR, start), "utf8");
       expect(text, start).toMatch(/httpOnly:\s*true/);
       expect(text, start).toMatch(/jar\.set\(/);
     }
-    expect(starts).toHaveLength(2);
+    expect(starts).toHaveLength(3);
   });
 });
