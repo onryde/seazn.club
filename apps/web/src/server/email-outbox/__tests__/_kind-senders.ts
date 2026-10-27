@@ -1,6 +1,12 @@
 // Three lists that must move together, kept in one place so a kind task edits one file and a test (outbox-kind-sweep.test.ts, "the
 // three lists agree") fails when one of them is left behind. Each is TYPED here from the spec and from lib/email.ts, never derived
-// from the others or from the code under test:
+// from the others or from the code under test.
+//
+// END STATE (phase 3 wave 5, T7): every one of the spec's 51 kinds is on the outbox. SENDER_ALLOWLIST and NOT_YET_MOVED are empty
+// and every KIND_DIRECT_SENDER entry is null: the spec's 49 direct senders less the 49 phase-3 kinds that took one each. lib/email.ts
+// exports no `send*` and keeps no private sender (no-second-path.test.ts); `checkSendable` and `deliver` stay, called only by the
+// outbox. The sweep asserts both lists empty and its count at the spec's 51. A later phase that registers a kind before its producer
+// moves follows the rule below; one that ADDS a direct sender has to change the spec's count first.
 //
 //  - SENDER_ALLOWLIST: the direct `send*` exports of lib/email.ts (no-second-path.test.ts checks it against the file, exactly).
 //  - NOT_YET_MOVED: the kinds whose producer still mails through one of those (outbox-kind-sweep.test.ts sweeps the others).
@@ -26,16 +32,17 @@ export const SENDERS_AT_START = 49;
 /** The two phase-1 kinds. Their senders had left lib/email.ts before the spec counted its 49, so moving them took nothing from that count. */
 export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess_invite"];
 
-/** The `send*` exports of lib/email.ts as of the start of phase 3 wave 1 (spec: "49 send* exports"), copied once from the file.
- *  `sendWithResult` is the outbox's own typed sender and is not among them. */
+/** The `send*` exports of lib/email.ts still to move. The spec counted 49 at the start of phase 3 wave 1; each kind task took its own
+ *  with it, and wave 5's last move emptied the list (T7 also deleted the private boolean sender and its typed form, so lib/email.ts
+ *  exports no `send*` at all). */
 export const SENDER_ALLOWLIST: readonly string[] = [];
 
 /** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12). Wave 2's T1 listed its ten kinds before their
  *  producers moved, each kind task (T2-T9) deleted its own, and T10 closed the list again. Wave 3's T1 listed its eight kinds the same
  *  way, each kind task (T2-T4) deleted its own, and the last move (T4c) closed the list again. Wave 4's T1 listed its nine kinds the same
- *  way, in the spec's table order: each kind task (T2-T4) deletes its own, and the last move closes the list again. Wave 5's T1 appended
- *  its seventeen after them, in the spec's table order, and each of its kind tasks (T3-T6) deletes its own. The sweep covers every kind
- *  not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
+ *  way, in the spec's table order: each kind task (T2-T4) deleted its own, and the last move closed the list again. Wave 5's T1 appended
+ *  its seventeen after them, in the spec's table order, each of its kind tasks (T3-T6) deleted its own, and T7 closed the list for the
+ *  end of phase 3. The sweep covers every kind not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [];
 
 /** For every kind, the direct sender its producer still calls (null = the kind has moved: nothing direct is left for it). */

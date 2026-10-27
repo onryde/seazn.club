@@ -105,15 +105,18 @@ export async function suppress(
 }
 
 // ---------------------------------------------------------------------------
-// Core send — never throws.
+// Core send — never throws. Only the email outbox calls it.
 //
-// `send()` (private, below) stays the boolean every existing sender uses.
-// `sendWithResult` is the typed form the email outbox calls: it also carries an
-// Idempotency-Key, Resend's message id, the status + error name on failure and
-// an optional timeout. Both are built from the same two halves, which the
-// outbox's attemptClaimed calls directly so the rules live in one place:
+// Every email is queued through `enqueueEmail*` (server/email-outbox) and sent
+// by the outbox, which replaces, retries, seals and resolves the address at send
+// time. This file sends nothing itself: its builders render a mail and return
+// it. A send is two halves, and only the outbox calls them, so the rules live
+// in one place (no-second-path.test.ts holds every other file off them):
 //   - checkSendable: is this send allowed at all (API key, suppression)?
-//   - deliver:       POST to Resend, no re-check.
+//                    Asked by the outbox's attempt (attempt.ts), first.
+//   - deliver:       POST to Resend, no re-check, with the Idempotency-Key,
+//                    tags and timeout the outbox passes. Called through the
+//                    outbox's transport (transport.ts) only.
 // Suppression applies to non-transactional mail only (pass transactional=true
 // to bypass the list for critical auth emails like the sign-in link).
 // ---------------------------------------------------------------------------
@@ -268,20 +271,6 @@ export async function deliver(opts: SendOptions, apiKey: string, logging: Delive
     if (!logDetail) console.error(`[email] send error: ${detail.replace(/[^\x20-\x7e]/g, "?").slice(0, 200)}`);
     return { ok: false, reason: "network", detail };
   }
-}
-
-/** Gate, then deliver. The typed result the email outbox is built on. */
-export async function sendWithResult(opts: SendOptions): Promise<SendResult> {
-  const gate = await checkSendable(opts);
-  if (!gate.ok) return gate;
-  return deliver(opts, gate.apiKey);
-}
-
-// No caller is left: every kind is on the outbox (phase 3 wave 5 moved the last). Kept until wave 5's T7 deletes it with the
-// closing assertions, by that task's ruling; the disable goes with it.
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-async function send(opts: SendOptions): Promise<boolean> {
-  return (await sendWithResult(opts)).ok;
 }
 
 // ---------------------------------------------------------------------------

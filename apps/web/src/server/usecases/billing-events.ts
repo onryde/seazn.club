@@ -73,7 +73,7 @@ import {
 import type { PassRevokedArgs, StaffDisputeAlertArgs } from "@/lib/email-templates";
 import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
 import { orgOwnerRecipient } from "@/server/usecases/org-owner";
-import { queueStaffAlert } from "@/server/usecases/staff-alert";
+import { queueStaffAlert, staffAlertsOn } from "@/server/usecases/staff-alert";
 import {
   handleRegistrationCheckoutAsyncPaymentFailed,
   handleRegistrationCheckoutCompleted,
@@ -1695,13 +1695,14 @@ export async function sweepStaleOrgAddonPrices(limit = 500): Promise<{
       "billing: stale extra-org rider",
     );
   }
-  // The env is re-read here rather than left to the staff-alert writer's own
-  // gate so the returned `alerted` counts what was actually attempted; a counter
-  // that incremented on a call the callee no-ops would report alerts that were
-  // never attempted, and this number is what a cron response is judged on. It
-  // counts ATTEMPTS: a same-day pass whose rider was already paged today
-  // attempts again and the once-key holds (Q2).
-  if (process.env.STAFF_ALERT_EMAIL) {
+  // The writer's own question (`staffAlertsOn`: the address, trimmed, blank is
+  // unset) is asked here too, rather than left to the writer's gate, so the
+  // returned `alerted` counts what was actually attempted; a counter that
+  // incremented on a call the callee no-ops would report alerts that were never
+  // attempted, and this number is what a cron response is judged on. It counts
+  // ATTEMPTS: a same-day pass whose rider was already paged today attempts again
+  // and the once-key holds (Q2).
+  if (staffAlertsOn()) {
     for (const m of mismatches.slice(0, ORG_PRICE_SWEEP_ALERT_CAP)) {
       await maybeAlertOrgRepriceFailed({
         subscriptionId: m.subscriptionId,

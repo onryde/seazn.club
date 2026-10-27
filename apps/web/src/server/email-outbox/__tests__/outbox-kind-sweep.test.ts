@@ -147,8 +147,9 @@
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
 // moved, each kind task (wave 2, T2-T9) added the scenario and deleted the entry, and T10 closed the list again. Wave 3's T1 registered
 // its eight kinds the same way, each kind task (wave 3, T2-T4) added the scenario and deleted the entry, and T4c closed the list again.
-// Wave 4's T1 registered its nine kinds the same way: they are in NOT_YET_MOVED until each kind task (wave 4, T2-T4) adds the scenario
-// and deletes the entry, and the last move closes the list again. The sweep covers every kind the list does not name. A kind that is
+// Wave 4's T1 registered its nine kinds the same way, each kind task (wave 4, T2-T4) added the scenario and deleted the entry, and the
+// last move closed the list again. Wave 5's T1 registered its seventeen the same way, its kind tasks (T3-T6) moved them, and T7 closed
+// the lists: all 51 kinds are swept. The sweep covers every kind the list does not name. A kind that is
 // neither moved nor listed fails by name, and so does a kind that is listed while it has a scenario (a stale entry would skip the
 // sweep), and so do the three lists when they disagree.
 //
@@ -614,9 +615,11 @@ describe("the spec's lists (no database)", () => {
     }
     expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
     // Which kinds are unmoved is NOT_YET_MOVED's alone (the test above holds its shape, and holds every kind of waves 1 to 4 out of it);
-    // the loop holds it to the map and the allowlist kind by kind. Wave 4's last move emptied the list, but `expect(NOT_YET_MOVED)
-    // .toEqual([])` and "none still names a direct sender" are NOT put back here: wave 5 is stacked on wave 4 and appends its own kinds
-    // to the list, so wave 5's closing task restores both, as wave 3's T4c left them, once its own kinds have moved.
+    // the loop holds it to the map and the allowlist kind by kind. Wave 5 moved the last of its kinds (T6) and its closing task (T7)
+    // closed the lists, as wave 3's T4c left them: every one of the spec's 51 kinds is on the outbox. The moved side is what the loop
+    // above judged for all of them; the unmoved side has no member to judge until a later phase registers a kind early.
+    expect(NOT_YET_MOVED, "waves 1 to 5 are closed: every kind has moved to the outbox").toEqual([]);
+    expect(Object.values(KIND_DIRECT_SENDER).filter((x) => x !== null), "and none still names a direct sender").toEqual([]);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
     const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
     expect(new Set(senders).size, "no two kinds share a direct sender").toBe(senders.length);
@@ -627,6 +630,9 @@ describe("the spec's lists (no database)", () => {
       SENDER_ALLOWLIST.length,
       `${NOT_YET_MOVED.length} kinds are still unmoved, so the allowlist holds ${allowlistLengthFor(NOT_YET_MOVED.length)} senders: a moved kind's send* was left behind (or a sender was dropped for a kind that has not moved)`,
     ).toBe(allowlistLengthFor(NOT_YET_MOVED.length));
+    // And every kind has moved: the spec's 49 less 49.
+    expect(allowlistLengthFor(NOT_YET_MOVED.length), "the spec's 49 less 49").toBe(0);
+    expect(SENDER_ALLOWLIST).toEqual([]);
   });
 
   it("the harness waits for a request's own attempt longer than the longest a correct dispatchNow can still be working", () => {
@@ -2181,7 +2187,8 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     );
 
     const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
-    expect(out.checked, "anti-vacuity: every kind the spec lists that has moved was swept").toBe(SPEC_KINDS.length - NOT_YET_MOVED.length);
+    // The spec's count, typed: "With `magic_link` and `chess_invite` that is 51." Every kind has moved, so every one was swept.
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept").toBe(51);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
   }, 60_000);

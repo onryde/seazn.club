@@ -417,6 +417,24 @@ describe.skipIf(!HAS_DB)("sweepStaleOrgAddonPrices (#332)", () => {
     expect(drops(), "unset is not a drop").toEqual({ logged: 0, issues: 0 });
   });
 
+  it("a blank (whitespace-only) STAFF_ALERT_EMAIL is unset: `alerted` counts no attempt the writer would no-op", async () => {
+    // The writer trims the address and treats blank as unset (staff-alert.ts), so a counter that read the raw variable would report
+    // pages that were never attempted. The positive pair is the stranded-rider test above (a set address, alerted >= 1).
+    vi.stubEnv("STAFF_ALERT_EMAIL", "   ");
+    const { groupId, itemId } = await seedRider("pro");
+    itemRetrieveSpy.mockImplementation(async (id: string) =>
+      itemOn(id, id === itemId ? SUPERSEDED_PRICE_ID : livePriceFor(proEntry.lookupKey)),
+    );
+
+    const res = await sweepStaleOrgAddonPrices();
+
+    expect(mine(res.mismatches), "premise: the rider is reported").toHaveLength(1);
+    expect(res.alerted).toBe(0);
+    expect(repriceAlertSpy).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "subscription", groupId), "no row, to any recipient").toHaveLength(0);
+    expect(drops(), "blank is not a drop").toEqual({ logged: 0, issues: 0 });
+  });
+
   it("does nothing at all without a Stripe key", async () => {
     vi.stubEnv("STRIPE_SECRET_KEY", "");
     await seedRider("pro");

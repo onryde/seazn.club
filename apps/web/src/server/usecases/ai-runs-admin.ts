@@ -7,8 +7,9 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { aiRunUnitNoun } from "@/lib/ai-pricing";
-// lib/credits is a leaf w.r.t. server/usecases (it imports only other lib
-// modules), so reading it here closes no import cycle.
+// lib/credits imports no usecase that imports this file (its one usecase
+// import, staff-alert, reaches neither credits nor this file), so reading it
+// here closes no import cycle.
 import { EARN_GRANT_DAILY_ALERT_THRESHOLD, earnGrantVolumeToday } from "@/lib/credits";
 import { aiRunCostAlertEmail } from "@/lib/email";
 import { queueStaffAlert, staffAlertsOn } from "@/server/usecases/staff-alert";
