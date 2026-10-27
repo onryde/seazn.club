@@ -11,11 +11,18 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Page } from "@playwright/test";
+import { legacyPointsRule, pointsRuleAwardReachesTable } from "@seazn/engine/competition";
+import { builtinModules } from "@seazn/engine/sports";
 import { TAG, apiJson, divisionPath } from "./helpers";
 import { dismissCookieBanner } from "./scorepad-a11y-kit";
 import { SPORT_RULES } from "../src/lib/match-rules";
+import { pointsLine } from "../src/lib/points-line";
+import { rulesLineText } from "../src/lib/rules-line";
 
 const L = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+/** The public dictionary: the stage points card's preview is the public stage line's own words (`format.points.*`). */
+const PUB = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/public.json", import.meta.url)), "utf8")) as Record<string, string>;
+const GENERIC = builtinModules.find((m) => m.key === "generic")!;
 /** A dictionary sentence with its {holes} filled. */
 const say = (key: string, vars: Record<string, string | number> = {}): string =>
   L[key]!.replace(/\{(\w+)\}/g, (hole, name: string) => (name in vars ? String(vars[name]) : hole));
@@ -165,26 +172,77 @@ test("badminton: a started stage's fields and variant are read-only with their l
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
-// Another sport family: generic keeps points in the TABLE, so its boxes lock with the table sentence.
+// Another sport family: generic keeps points in the TABLE. W2d loosened W2c's lock on them into the pin (design
+// 2026-10-20-format-matrix-w2d-design.md §5.4 "What changes after the pin": the points keys a stage rule replaces "stop
+// raising DIVISION_TABLE_RULES_LOCKED"; §10's table: that code is "now only for scoring/awardScore"; §11 item 4: W2c's lock
+// tests are rewritten, not worked around). So the boxes stay open once a match has started, a save of them lands and never
+// reaches the stage pinned at generate, and the stage's points card says the PIN's points (W2d final review I1).
 // ---------------------------------------------------------------------------------------------------------------------
-test("generic: the standings points boxes and the rule fields lock with their own sentences once a match has started", async ({ page, request }) => {
-  test.setTimeout(150_000);
-  const rig = await seedLeague(request, "generic", "score", "generic-lines");
+test("generic: once a match has started the rule fields lock with their own sentence, the points boxes stay open, and a points save never reaches the pinned stage's card", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const rig = await seedLeague(request, "generic", "score", "generic-lines"); // generated: Pool A is pinned now (W2d §5.4)
+  // What the pin took at generate: the division's points as stored then (nothing has changed them yet).
+  const atPin = await storedConfig(request, rig.divisionId);
+  const pinned = atPin.points as { w: number; d: number; l: number };
+  expect([pinned.w, pinned.d, pinned.l].every((n) => typeof n === "number"), "premise: generic stores w/d/l points").toBe(true);
+  const sentence = (p: { w: number; d: number; l: number }) =>
+    rulesLineText(PUB, pointsLine(legacyPointsRule({ base: { win: p.w, draw: p.d, loss: p.l } }), { awardReaches: pointsRuleAwardReachesTable(GENERIC) }));
   await startDivision(request, rig.divisionId);
+
+  // I1, before any score: a division points save lands and never reaches the pinned stage, so its editor reads the PIN -
+  // the started line, the pin's sentence, and (unchecked) boxes prefilled with the pin's numbers, never the division's new win.
+  const early = pinned.w + 1;
+  const patched = await apiJson(request, `/api/v1/divisions/${rig.divisionId}`, "PATCH", { config: { ...atPin, points: { ...pinned, w: early } } });
+  expect(patched.status, `division points save before the first score: ${JSON.stringify(patched.error)}`).toBe(200);
+  await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const editor = page.getByTestId(`stage-points-${rig.stageId}`);
+  await expect(editor, "not scored yet: the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(editor).toHaveAttribute("data-stage-points-basis", "pin");
+  await expect(editor.getByTestId("stage-points-started")).toHaveText(L["stagePoints.startedPoints"]!);
+  await expect(editor.getByTestId("stage-points-preview")).toHaveText(sentence(pinned));
+  await editor.getByTestId("stage-points-use-division").uncheck();
+  await expect(editor.getByTestId("stage-points-win"), "the boxes start at the pin's win, not the division's new one").toHaveValue(String(pinned.w));
+  await expect(editor.getByTestId("stage-points-loss")).toHaveValue(String(pinned.l));
+  await expect(editor.getByTestId("stage-points-started"), "own points being typed: no started line").toHaveCount(0);
+  await editor.getByTestId("stage-points-use-division").check(); // nothing saved: the stage keeps its pin
+
   await startMatch(request, rig.fixtureIds[0]!);
   await openFormat(page, request, rig.divisionId);
 
-  const points = page.getByTestId("division-locked-points");
-  await expect(points).toBeVisible({ timeout: STEP_MS });
-  await expect(points).toContainText(say("ruleLock.DIVISION_TABLE_RULES_LOCKED", { stage: "Pool A" }));
-  for (const box of [L["divset.win"]!, L["divset.draw"]!, L["divset.loss"]!]) {
-    await expect(page.getByRole("spinbutton", { name: box }), `${box} is read-only`).toBeDisabled();
-  }
+  // The rule fields and the variant keep W2c's lock, with their own sentence (unchanged by W2d: §5.4 touches the points keys only).
   for (const f of SPORT_RULES.generic!) {
-    await expect(page.getByTestId(`division-locked-${f.key}`), `${f.key} carries its lock line`).toBeVisible();
+    await expect(page.getByTestId(`division-locked-${f.key}`), `${f.key} carries its lock line`).toBeVisible({ timeout: STEP_MS });
     await expect(page.getByTestId(`division-locked-${f.key}`)).toContainText(say("ruleLock.DIVISION_FORMAT_LOCKED", { stage: "Pool A" }));
   }
   await expect(page.getByTestId("division-locked-variant_key")).toBeVisible();
+
+  // W2d §5.4 / §10 (replaces W2c's DIVISION_TABLE_RULES_LOCKED line and read-only boxes here): no points lock line, and the
+  // boxes are editable. Their only lock keys left are `scoring`/`awardScore`, which have no box on this form (generic has
+  // neither); their refusal is division-locks.test.ts's (awardScore, DIVISION_TABLE_RULES_LOCKED).
+  await expect(page.getByTestId("division-locked-points"), "no points lock line once a match has started").toHaveCount(0);
+  await expect(page.getByText(say("ruleLock.DIVISION_TABLE_RULES_LOCKED", { stage: "Pool A" })), "the table sentence is said nowhere").toHaveCount(0);
+  for (const box of [L["divset.win"]!, L["divset.draw"]!, L["divset.loss"]!]) {
+    await expect(page.getByRole("spinbutton", { name: box }), `${box} is editable`).toBeEnabled();
+  }
+
+  // ...and a save of them lands: "saved" is said, and the division stores the new win.
+  const moved = pinned.w + 2;
+  await page.getByRole("spinbutton", { name: L["divset.win"]! }).fill(String(moved));
+  await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
+  await expect(page.getByText(L["divset.notice.rulesSaved"]!)).toBeVisible({ timeout: STEP_MS });
+  await expect.poll(async () => ((await storedConfig(request, rig.divisionId)).points as { w: number }).w, { timeout: STEP_MS }).toBe(moved);
+
+  // I1: the pinned stage's points card says what its TABLE pays - the pin's points, in the words that say they were fixed
+  // when it started - never the division's new win. The sentence is the public line's own words for the editor's rule.
+  expect(sentence(pinned), "premise: the pin and the moved points read differently").not.toBe(sentence({ ...pinned, w: moved }));
+  await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  const card = page.getByTestId(`stage-points-${rig.stageId}`);
+  await expect(card, "a match has started: the card reads").toHaveAttribute("data-stage-points-state", "readonly", { timeout: STEP_MS });
+  await expect(card).toHaveAttribute("data-stage-points-basis", "pin");
+  await expect(card.getByTestId("stage-points-readonly")).toHaveText(L["stagePoints.startedPoints"]!);
+  await expect(card.getByTestId("stage-points-preview")).toHaveText(sentence(pinned));
+  await expect(card.getByText(L["stagePoints.divisionPoints"]!), "never 'the division's points'").toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
