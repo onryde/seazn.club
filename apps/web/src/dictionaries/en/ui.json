@@ -5810,7 +5810,7 @@
   "stream.error.no_credits": "You need a match credit to go live.",
   "stream.error.overlay_required": "Phone streaming needs the overlay tier.",
   "stream.error.active_session": "A stream is already running for this match.",
-  "stream.error.storage_exhausted": "Recording storage is full right now. Try again later.",
+  "stream.error.storage_exhausted": "Streaming capacity is full right now. Try again in a little while.",
   "stream.error.ingest_unavailable": "The streaming service is unavailable. Try again in a minute.",
   "stream.error.composed_unavailable": "Score overlay streaming isn't available yet. Go live with the camera only.",
   "stream.error.unknown": "That did not start. Try again.",
