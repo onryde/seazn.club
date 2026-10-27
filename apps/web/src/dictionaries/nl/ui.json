@@ -505,7 +505,7 @@
   "claim.invite.send": "Uitnodiging verzenden",
   "claim.invite.sending": "Verzenden…",
   "claim.invite.sent": "Uitnodiging gemaild naar {email}.",
-  "claim.invite.sendFailed": "De e-mail kon niet worden verzonden — kopieer de link hieronder en deel hem zelf met ze.",
+  "claim.invite.sendFailed": "De e-mail is niet meteen verstuurd. Hij kan later aankomen, of helemaal niet — kopieer de link hieronder en deel hem zelf met ze.",
   "claim.invite.linkNote": "De link werkt 14 dagen en wordt hier maar één keer getoond. Wie hem opent, moet inloggen met het uitgenodigde adres.",
   "claim.invited": "Uitnodiging in afwachting",
   "claim.revoke": "Uitnodiging intrekken",

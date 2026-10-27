@@ -505,7 +505,7 @@
   "claim.invite.send": "Envoyer l'invitation",
   "claim.invite.sending": "Envoi…",
   "claim.invite.sent": "Invitation envoyée par e-mail à {email}.",
-  "claim.invite.sendFailed": "L'e-mail n'a pas pu être envoyé — copiez le lien ci-dessous et partagez-le vous-même avec lui.",
+  "claim.invite.sendFailed": "L'e-mail n'est pas parti tout de suite. Il peut arriver en retard, ou pas du tout — copiez le lien ci-dessous et partagez-le vous-même avec lui.",
   "claim.invite.linkNote": "Le lien est valable 14 jours et n'est affiché ici qu'une seule fois. Celui qui l'ouvre doit se connecter avec l'adresse invitée.",
   "claim.invited": "Invitation en attente",
   "claim.revoke": "Retirer l'invitation",

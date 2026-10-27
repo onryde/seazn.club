@@ -6,9 +6,10 @@ import {
   getOpenClaim,
   revokeClaimInvite,
 } from "@/server/usecases/person-claims";
-import { sendClaimInviteEmail } from "@/lib/email";
 import { routes } from "@/lib/routes";
 import { baseUrl } from "@/lib/oauth";
+import { omit } from "@/lib/omit";
+import { dispatchNow } from "@/server/email-outbox";
 
 type Ctx = { params: Promise<{ id: string }> };
 
@@ -16,27 +17,30 @@ type Ctx = { params: Promise<{ id: string }> };
  *  only (enforced in the usecase); the claim_url embeds the one-time CONSOLE
  *  secret. The invite EMAIL carries a different secret (`emailSecret`) that
  *  signs the invitee in with one tap — it goes into the mail and nowhere else:
- *  never into this response, never into a log. Email delivery is best-effort —
- *  the console shows the copyable link + QR. */
+ *  never into this response, never into a log. The mail is queued on the email
+ *  outbox in the claim's own transaction (kind `claim_invite`, ref = the
+ *  person, to the address as typed), and the first attempt is made here after
+ *  commit; the console keeps the copyable link + QR as the fallback. */
 export async function POST(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
     const { email } = await parseBody(req, CreateClaimInvite);
     const auth = await requireResourceAuth(req, "person", id, "write");
-    const { secret, emailSecret, person_name, org_name, ...claim } = await createClaimInvite(
+    const invite = await createClaimInvite(
       auth,
       id,
       email.trim().toLowerCase(), // as the officials invite does: accounts are matched case-insensitively later
+      { kind: "claim_invite", refType: "person", refId: id, origin: baseUrl(req), to: email },
     );
-    const claim_url = `${baseUrl(req)}${routes.claim(secret)}`;
-    const emailClaimUrl = `${baseUrl(req)}${routes.claim(emailSecret)}`;
+    // Every field the console must not see is taken out: both secrets (the console one goes out only inside claim_url), the names the
+    // mail is written with, and the outbox row.
+    const claim = omit(invite, "secret", "emailSecret", "person_name", "org_name", "outboxId");
+    const { outboxId } = invite;
+    const claim_url = `${baseUrl(req)}${routes.claim(invite.secret)}`;
     // Email is the primary channel (owner decision 2026-07-13); the console
-    // shows the send outcome honestly and keeps the copyable link as fallback.
-    const email_sent = await sendClaimInviteEmail(email, {
-      orgName: org_name,
-      personName: person_name,
-      claimUrl: emailClaimUrl,
-    });
+    // shows the first attempt's outcome honestly (the outbox keeps retrying a
+    // mail that did not go straight away) and keeps the copyable link.
+    const email_sent = outboxId !== null && (await dispatchNow([outboxId])).get(outboxId) === "sent";
     return reply(201, { ...claim, claim_url, email_sent });
   });
 }

@@ -38,8 +38,12 @@ const stripeMock = vi.hoisted(() => {
 
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
-// Observe two direct senders without touching the rest of the email module
+// Observe one direct sender without touching the rest of the email module
 // (send() is a no-op without RESEND_API_KEY either way).
+//
+// The RS008 claim invite is not here either: it is queued on the email outbox
+// (kind `claim_invite`) in the transaction that mints the claim, so the
+// invite-sweep tests below read its rows.
 //
 // The registration confirmation is NOT here any more: it no longer goes through a
 // sender in this module. It is rendered (`registrationEmail`), queued on the email
@@ -58,10 +62,6 @@ const emailMock = vi.hoisted(() => ({
   // TRIGGER it, not exercise its own template rendering (that lives in
   // registration-refund-alert.test.ts).
   registrationRefundFailedAlert: vi.fn().mockResolvedValue(true),
-  // RS008: the system claim-invite mail — observed directly (bare vi.fn,
-  // a no-op without RESEND_API_KEY anyway), so the invite-sweep tests can
-  // count sends deterministically.
-  claimInvite: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
@@ -69,7 +69,6 @@ vi.mock("@/lib/email", async (importOriginal) => {
     ...actual,
     disputeLostEmail: vi.fn(actual.disputeLostEmail),
     sendRegistrationRefundFailedAlertEmail: emailMock.registrationRefundFailedAlert,
-    sendClaimInviteEmail: emailMock.claimInvite,
   };
 });
 
@@ -437,7 +436,6 @@ beforeEach(() => {
   vi.mocked(disputeLostEmail).mockClear();
   emailMock.registrationRefundFailedAlert.mockClear();
   transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_rs_${randomUUID()}` }));
-  emailMock.claimInvite.mockReset().mockResolvedValue(true);
 });
 
 afterEach(() => {
@@ -3741,7 +3739,23 @@ describe.skipIf(!HAS_DB)("RS003 W3b: group checkout webhook", () => {
 // there), same "raw fixture, not a full submit" convention
 // registration-materialise.test.ts's own seedPlayerEntry/seedPerson use.
 // ---------------------------------------------------------------------------
+/** RS008's system claim invites, read off the email outbox (kind `claim_invite`, ref = the person the claim is for). The mail is
+ *  queued in the transaction that mints the claim and attempted right after, through the outbox's one network seam (`transport`). */
+const claimInvitesFor = (personId: string) =>
+  sql<{ id: string; recipient: string; status: string }[]>`
+    select id, recipient, status from email_outbox
+     where kind = 'claim_invite' and ref_type = 'person' and ref_id = ${personId}
+     order by created_at, id`;
+const claimInvitesOfOrg = (orgId: string) =>
+  sql<{ id: string }[]>`select id from email_outbox where kind = 'claim_invite' and org_id = ${orgId}`;
+
 describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)", () => {
+  beforeEach(() => stubOutboxEnv());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   async function seedEntrantWithPlayers(
     orgId: string,
     divisionId: string,
@@ -3799,9 +3813,10 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
 
     await inviteUnclaimedMembers(orgId, entrantId);
 
-    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1);
-    const [, args] = emailMock.claimInvite.mock.calls[0]!;
-    expect(args).toMatchObject({ personName: "Sam Captain" });
+    expect(await claimInvitesOfOrg(orgId), "one invite in the org").toHaveLength(1);
+    const invites = await claimInvitesFor(personIdByName.get("Sam Captain")!);
+    expect(invites, "and it is Sam's").toHaveLength(1);
+    expect(invites[0]).toMatchObject({ recipient: "sam@test.local", status: "sent" });
     const claims = await sql<{ person_id: string; email: string }[]>`
       select person_id, email from person_claims where person_id = ${personIdByName.get("Sam Captain")!}`;
     expect(claims).toHaveLength(1);
@@ -3821,9 +3836,13 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
 
     await inviteUnclaimedMembers(orgId, entrantId);
 
-    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1);
-    const [, args] = emailMock.claimInvite.mock.calls[0]!;
-    const mailedToken = /\/claim\/(pc_[A-Za-z0-9_-]+)/.exec((args as { claimUrl: string }).claimUrl)![1]!;
+    const invites = await claimInvitesFor(personIdByName.get("Sam Signin")!);
+    expect(invites).toHaveLength(1);
+    const mailed = transport.deliver.mock.calls
+      .map((c) => c[0] as { text: string; idempotencyKey: string })
+      .filter((m) => m.idempotencyKey === `email-outbox/${invites[0]!.id}`);
+    expect(mailed, "the invite reached the transport once").toHaveLength(1);
+    const mailedToken = /\/claim\/(pc_[A-Za-z0-9_-]+)/.exec(mailed[0]!.text)![1]!;
     const sha256 = (x: string) => createHash("sha256").update(x, "utf8").digest("hex");
     const [row] = await sql<{ token_hash: string; email_token_hash: string | null }[]>`
       select token_hash, email_token_hash from person_claims
@@ -3852,7 +3871,7 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
 
     await inviteUnclaimedMembers(orgId, entrantId);
 
-    expect(emailMock.claimInvite).not.toHaveBeenCalled();
+    expect(await claimInvitesOfOrg(orgId)).toEqual([]);
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from person_claims where person_id = ${personIdByName.get("Already Linked")!}`;
     expect(n).toBe(0);
@@ -3866,7 +3885,7 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     ]);
 
     await expect(inviteUnclaimedMembers(orgId, entrantId)).resolves.toBeUndefined();
-    expect(emailMock.claimInvite).not.toHaveBeenCalled();
+    expect(await claimInvitesOfOrg(orgId)).toEqual([]);
   });
 
   it("a second sweep of the SAME entrant sends no additional invite — the open-claim guard", async () => {
@@ -3877,9 +3896,9 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     ]);
 
     await inviteUnclaimedMembers(orgId, entrantId);
-    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1);
+    expect(await claimInvitesFor(personIdByName.get("Invited Once")!)).toHaveLength(1);
     await inviteUnclaimedMembers(orgId, entrantId);
-    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1); // still one
+    expect(await claimInvitesFor(personIdByName.get("Invited Once")!)).toHaveLength(1); // still one
 
     const claims = await sql<{ id: string; revoked_at: string | null }[]>`
       select id, revoked_at from person_claims where person_id = ${personIdByName.get("Invited Once")!}`;
@@ -3903,15 +3922,15 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     const personId = personIdByName.get("Expired Invite")!;
 
     await inviteUnclaimedMembers(orgId, entrantId);
-    expect(emailMock.claimInvite).toHaveBeenCalledTimes(1);
+    expect(await claimInvitesFor(personId)).toHaveLength(1);
     // Backdate the invite past its window, WITHOUT touching claimed_at/
     // revoked_at — the exact "open, but expired" shape this fix targets.
     await sql`update person_claims set expires_at = now() - interval '1 day' where person_id = ${personId}`;
 
     // A sweep while the (now-expired) invite is still nominally "open" must
-    // send a brand NEW one, not skip silently forever.
+    // send a brand NEW one, not skip silently forever. Its mail supersedes the stale one's (same person, same address: the replace rule).
     await inviteUnclaimedMembers(orgId, entrantId);
-    expect(emailMock.claimInvite).toHaveBeenCalledTimes(2);
+    expect((await claimInvitesFor(personId)).map((r) => r.status)).toEqual(["replaced", "sent"]);
 
     const claims = await sql<{ revoked_at: string | null; expires_at: string }[]>`
       select revoked_at, expires_at from person_claims where person_id = ${personId} order by created_at`;
@@ -3922,7 +3941,7 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     // And a THIRD sweep, while the fresh one is still live, correctly skips
     // again — the fix does not turn every sweep into a resend.
     await inviteUnclaimedMembers(orgId, entrantId);
-    expect(emailMock.claimInvite).toHaveBeenCalledTimes(2);
+    expect(await claimInvitesFor(personId)).toHaveLength(2);
   });
 
   it("a person who is ALREADY claimed by the time of a later sweep gets no invite, even though the row is still 'granted'", async () => {
@@ -3939,7 +3958,7 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
 
     await inviteUnclaimedMembers(orgId, entrantId);
 
-    expect(emailMock.claimInvite).not.toHaveBeenCalled();
+    expect(await claimInvitesOfOrg(orgId)).toEqual([]);
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from person_claims where person_id = ${personIdByName.get("Claims Later")!}`;
     expect(n).toBe(0);
@@ -3950,7 +3969,7 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
     const { division } = await rig(asOwner(orgId, ownerId));
     const { entrantId } = await seedEntrantWithPlayers(orgId, division.id, []);
     await expect(inviteUnclaimedMembers(orgId, entrantId)).resolves.toBeUndefined();
-    expect(emailMock.claimInvite).not.toHaveBeenCalled();
+    expect(await claimInvitesOfOrg(orgId)).toEqual([]);
   });
 });
 
@@ -3960,7 +3979,7 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
 // inviteUnclaimedMembers cannot be mocked here (a same-file call binds
 // directly, not through the module's live-binding export — vi.mock cannot
 // intercept it); these prove the REAL end-to-end wiring instead, via the
-// mocked @/lib/email boundary and vi.waitFor (the call is fire-and-forget,
+// claim invite's outbox row and vi.waitFor (the call is fire-and-forget,
 // not awaited by production code, so the assertion must tolerate the
 // microtask gap). markRegistrationPaidOffline/confirmRegistrationWaived
 // carry the IDENTICAL one-line wiring (same `if (row.entrant_id) void
@@ -3968,6 +3987,16 @@ describe.skipIf(!HAS_DB)("inviteUnclaimedMembers (RS008 — claim-invite sweep)"
 // reading the diff) and are not separately re-proven end-to-end here.
 // ---------------------------------------------------------------------------
 describe.skipIf(!HAS_DB)("RS008: confirmRegistration/confirmPaidRegistration fire the claim-invite sweep", () => {
+  beforeEach(() => stubOutboxEnv());
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  /** The registration's own player, once materialised: the person its claim invite is about. */
+  const personOf = async (registrationId: string) =>
+    (await sql<{ person_id: string | null }[]>`select person_id from registration_players where registration_id = ${registrationId}`)[0]!.person_id;
+
   it("confirmRegistration invites a granted, emailed, unlinked player once materialised", async () => {
     const { orgId, ownerId } = await seedOrg("pro");
     const owner = asOwner(orgId, ownerId);
@@ -3995,9 +4024,10 @@ describe.skipIf(!HAS_DB)("RS008: confirmRegistration/confirmPaidRegistration fir
 
     await confirmRegistration(owner, registration.id);
 
-    await vi.waitFor(() => expect(emailMock.claimInvite).toHaveBeenCalledTimes(1));
-    const [, args] = emailMock.claimInvite.mock.calls[0]!;
-    expect(args).toMatchObject({ personName: "Confirm Sweep Person" });
+    const personId = await personOf(registration.id);
+    expect(personId, "premise: confirming materialised the player's person").not.toBeNull();
+    await vi.waitFor(async () => expect(await claimInvitesFor(personId!)).toHaveLength(1));
+    expect((await claimInvitesFor(personId!))[0]!.recipient).toBe("confirmsweep@test.local");
   });
 
   it("confirmPaidRegistration (via the checkout webhook) invites too", async () => {
@@ -4015,9 +4045,12 @@ describe.skipIf(!HAS_DB)("RS008: confirmRegistration/confirmPaidRegistration fir
 
     await handleRegistrationCheckoutCompleted(fakeSession(registration.id, 500));
 
-    await vi.waitFor(() => expect(emailMock.claimInvite).toHaveBeenCalledTimes(1));
-    const [, args] = emailMock.claimInvite.mock.calls[0]!;
-    expect(args).toMatchObject({ personName: "Webhook Sweep Person" });
+    await vi.waitFor(async () => {
+      const personId = await personOf(registration.id);
+      expect(personId, "the webhook materialised the player's person").not.toBeNull();
+      expect(await claimInvitesFor(personId!)).toHaveLength(1);
+    });
+    expect((await claimInvitesFor((await personOf(registration.id))!))[0]!.recipient).toBe("webhooksweep@test.local");
   });
 });
 

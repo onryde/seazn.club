@@ -56,6 +56,10 @@
 //   - org_invite: the route POST of app/api/orgs/[id]/invites/route.ts, an email invite by the owner of an `fr` organisation (signed in
 //     through the session stand-in): the invite and its row are one transaction on the pool, in the organisation's language, and the
 //     request makes the first attempt.
+//   - claim_invite: the route POST of app/api/v1/persons/[id]/claim-invites/route.ts, the organiser of an `es` organisation (signed in
+//     through the session stand-in) inviting an unclaimed person: the claim and its row are one tenant transaction, in the organisation's
+//     language, and the request makes the first attempt. (The registration paths reach the same helper; claim-invite-outbox.test.ts
+//     drives two of them.)
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -117,6 +121,8 @@ import { POST as funnelStartPost } from "@/app/api/funnel/start/route";
 import { POST as changeEmailPost } from "@/app/api/auth/change-email/route";
 import { DELETE as deleteAccount } from "@/app/api/users/me/route";
 import { POST as orgInvitePost } from "@/app/api/orgs/[id]/invites/route";
+import { POST as claimInvitePost } from "@/app/api/v1/persons/[id]/claim-invites/route";
+import { createPerson } from "@/server/usecases/persons";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { assignSoloSignUp } from "@/server/usecases/registration-assign";
@@ -213,7 +219,6 @@ const SPEC_FACTS: KindFacts = {
 /** Wave 3's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
  *  kind task (T2-T4) deletes it from NOT_YET_MOVED, and here. The last move (T4c) empties both. */
 const WAVE_3_UNMOVED: readonly OutboxKind[] = [
-  "claim_invite",
   "official_invite",
 ];
 
@@ -967,6 +972,37 @@ async function orgInviteScenario(): Promise<KindScenario> {
   };
 }
 
+/** The organiser of an organisation whose default language is `es` invites an unclaimed person to claim their profile: the person has no
+ *  account to follow, so the invite is in the org's language, and the request makes the first attempt. */
+async function claimInviteScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("community");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const [org] = await sql<{ name: string }[]>`update organizations set default_locale = 'es' where id = ${orgId} returning name`;
+  const person = await createPerson(asOwner(orgId, ownerId), { full_name: "Sweep Claimant", consent: {} } as never);
+  const recipient = address();
+  return {
+    locale: "es",
+    subjectKey: "claimInvite.subject",
+    subjectVars: { orgName: org!.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await signedInAs(ownerId, () =>
+        claimInvitePost(
+          new Request(`https://sweep.test/api/v1/persons/${person.id}/claim-invites`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: recipient }),
+          }),
+          { params: Promise.resolve({ id: person.id }) },
+        ),
+      );
+      expect(res.status, "premise: the real route answered 201").toBe(201);
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1074,6 +1110,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", orgInvite.subjectKey, orgInvite.subjectVars),
     );
 
+    const claimInvite = await claimInviteScenario();
+    expect(dictionarySubject("es", claimInvite.subjectKey, claimInvite.subjectVars)).not.toBe(
+      dictionarySubject("en", claimInvite.subjectKey, claimInvite.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1099,6 +1140,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         email_change_notice: notice,
         account_deletion: deletion,
         org_invite: orgInvite,
+        claim_invite: claimInvite,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

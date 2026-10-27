@@ -319,14 +319,19 @@ export async function funnelClaimEmail(args: FunnelEmailArgs, locale: Locale): P
   return funnelClaimTemplate(args, dict);
 }
 
-/** Player-account claim invite (PROMPT-53). */
-export async function sendClaimInviteEmail(
-  to: string,
-  args: ClaimInviteArgs,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** Player-account claim invite (PROMPT-53), RENDERED and not sent. `queueClaimInviteEmail` (server/usecases/claim-invite-mail.ts) queues
+ *  what this returns on the email outbox (kind `claim_invite`, transactional), in the transaction that mints the claim whose EMAIL
+ *  secret it carries, from the organiser's console and from every registration path. Nothing sends it directly. */
+export async function claimInviteEmail(args: ClaimInviteArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...claimInviteTemplate(args, dict) });
+  return claimInviteTemplate(args, dict);
+}
+
+/** Officiating claim invite (PROMPT-57), RENDERED and not sent: the claim invite's rail with officiating copy. `queueClaimInviteEmail`
+ *  queues what this returns on the email outbox (kind `official_invite`, transactional). */
+export async function officialInviteEmail(args: OfficialInviteArgs, locale: Locale): Promise<EmailContent> {
+  const dict = await getDictionary(locale, "emails");
+  return officialInviteTemplate(args, dict);
 }
 
 /** Origin for officiating emails fired from request-less paths — same
@@ -341,7 +346,7 @@ export function appOrigin(): string {
   ).replace(/\/$/, "");
 }
 
-/** Officiating claim invite (PROMPT-57) — same rail as sendClaimInviteEmail,
+/** Officiating claim invite (PROMPT-57) — same rail as claimInviteEmail,
  *  officiating copy. Officials default to en (no stored locale). */
 export async function sendOfficialInviteEmail(
   to: string,

@@ -32,7 +32,6 @@ import {
   disputeAlertEmail,
   disputeLostEmail,
   sendRegistrationRefundFailedAlertEmail,
-  sendClaimInviteEmail,
 } from "@/lib/email";
 import type { RegistrationEmailArgs } from "@/lib/email-templates";
 import { routes } from "@/lib/routes";
@@ -56,6 +55,7 @@ import { assertNotFrozen, frozenCompetitionIds } from "./entitlement-freeze";
 import { recoverDisputedTransfer as recoverDisputedTransferCore } from "./dispute-recovery";
 import { orgOwnerRecipient } from "./org-owner";
 import { createSystemClaimInvite } from "./person-claims";
+import { queueClaimInviteEmail } from "./claim-invite-mail";
 // The entrant status flip inside `withdrawCore` is raw SQL, so `patchEntrant`'s
 // own hook cannot fire — this is what refreshes a seeding draft that still
 // names the registrant (review finding F3).
@@ -1546,6 +1546,12 @@ export async function notifyPromoted(
  * an automatic sweep that can run many times for the same person). Never
  * throws — a mail-provider hiccup, or any other failure here, must never
  * break the registration flow that triggered it.
+ *
+ * The claim and its invite email are one transaction of this function's own
+ * (opened after the registration's has committed): the email goes on the
+ * outbox (kind `claim_invite`, ref = the person) with the claim it carries,
+ * so a refused enqueue rolls the claim back too and the next convergence
+ * invites again. The first attempt is made right after that commits.
  */
 async function maybeInviteClaim(orgId: string, personId: string, email: string): Promise<void> {
   try {
@@ -1573,17 +1579,25 @@ async function maybeInviteClaim(orgId: string, personId: string, email: string):
         and expires_at > now()
       limit 1`;
     if (openClaim) return;
-    const invite = await createSystemClaimInvite(sql, orgId, personId, email);
-    if (!invite) return;
-    // The EMAIL secret, not the console one: this mail is the invite's only
-    // channel (no organiser console shows it), and opening it signs the player
-    // in and claims in one tap. `invite.secret` is never used.
-    const claimUrl = `${fallbackOrigin()}${routes.claim(invite.emailSecret)}`;
-    await sendClaimInviteEmail(email, {
-      orgName: invite.org_name,
-      personName: invite.person_name,
-      claimUrl,
+    const outboxId = await sql.begin(async (tx) => {
+      const invite = await createSystemClaimInvite(tx, orgId, personId, email);
+      if (!invite) return null;
+      // The EMAIL secret, not the console one: this mail is the invite's only
+      // channel (no organiser console shows it), and opening it signs the player
+      // in and claims in one tap. `invite.secret` is never used.
+      return queueClaimInviteEmail(tx, {
+        kind: "claim_invite",
+        refType: "person",
+        refId: personId,
+        orgId,
+        to: email,
+        claimUrl: `${fallbackOrigin()}${routes.claim(invite.emailSecret)}`,
+        personName: invite.person_name,
+        orgName: invite.org_name,
+        expiresAt: new Date(invite.expires_at),
+      });
     });
+    if (outboxId !== null) await dispatchNow([outboxId]);
   } catch (err) {
     log.error({ err, event: "registration.claim_invite_failed", org_id: orgId, person_id: personId }, "RS008 claim invite failed");
   }
