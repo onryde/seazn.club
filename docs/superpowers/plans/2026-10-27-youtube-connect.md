@@ -334,7 +334,7 @@ Go live` (T20); smoke `youtube: stream-tick answers` (T21).
   - `token-store.ts` owns **every** statement that names `refresh_token_enc` (R1), so T1's revoked checks hold within one statement each:
     - `insertConnectionWithToken(tx, a: { orgId: string; channelId: string; channelTitle: string; googleSub: string | null; grantedScope: string; defaultPrivacy: YoutubePrivacy; madeForKids: boolean; consentBy: string; consentAt: Date; consentVersion: number; createdBy: string; refreshToken: string }): Promise<{ connectionId: string }>` (status `connected`);
     - `replaceConnectionToken(tx, orgId: string, connectionId: string, refreshToken: string): Promise<boolean>` (token, `status = 'connected'`, `status_since = now()`, `last_error_code = null`; false when there is no non-revoked row of this org);
-    - `revokeConnection(tx, orgId: string, connectionId: string): Promise<boolean>`: ONE statement, `refresh_token_enc = null, status = 'revoked', revoked_at = now()` (false when already revoked or not this org's);
+    - `revokeConnection(tx, orgId: string, connectionId: string): Promise<boolean>`: ONE statement, `refresh_token_enc = null, status = 'revoked', revoked_at = now()`, `channel_id`/`channel_title` nulled, and the connection's `org_stream_targets` row(s) archived (`coalesce(archived_at, now())`) with label `'YouTube channel (disconnected)'` (B1 batch-review ruling B1-R1/R2; false when already revoked or not this org's);
     - `sealPendingToken(tx, pendingId: string, refreshToken: string): Promise<void>` and `takePendingToken(tx, orgId: string, pendingId: string): Promise<string | null>`;
     - `openToken(exec, orgId: string, connectionId: string): Promise<string | null>`: null for a missing row, another org's row, or a revoked one (one pinned behaviour).
     T8, T17 and T18 call these; no other file writes `status = 'revoked'` or the token.
@@ -1134,7 +1134,7 @@ it("RF5: live blocked → the Directory view's liveState 'blocked'", …);
 it("refresh: rows refreshed 26 days ago → videos.list called in batches of ≤ 50 (120 rows → 3 calls: 50, 50, 20); present → refreshed_at now", …);   // 50: Google's per-call id cap
 it("refresh: a video deleted on YouTube → row deleted AND fixtures.stream_url cleared when it pointed at that video; a club's own link untouched", …);   // §9.2
 it("refresh: rows refreshed 24 days ago are not called (EMPTY batch → zero calls, checked reported)", …);
-it("dead grant: reconnect_needed for 31 days → purge (broadcast rows of the connection gone, its stream_urls cleared, token cleared + status revoked through token-store's revokeConnection, R1); 29 days → untouched", …);   // 30: DP III.E.4
+it("dead grant: reconnect_needed for 31 days → purge (broadcast rows of the connection gone, its stream_urls cleared, token cleared + status revoked + destination archived through token-store's revokeConnection, R1/B1-R1); 29 days → untouched", …);   // 30: DP III.E.4
 it("relay-disabled deployment → the YouTube daily pass still runs (answer carries youtube{…})", …);
 ```
 
@@ -1158,7 +1158,7 @@ Smoke `youtube: relay-sweep answers` (T21).
 export async function disconnectYoutube(auth: AuthCtx, orgId: string, connectionId: string, port: YouTubePort): Promise<{ revokedAtGoogle: boolean; keysDeleted: number; purged: { broadcasts: number; streamUrlsCleared: number } }>;
 // tx1: lock connection; any broadcast in ('reserved','bound','live') whose end is NOT due (broadcastEndDueAt null or > now)
 //      → HttpError(409, "A match is using this channel", "YOUTUBE_IN_USE") (R9: 'ending'/claimed and due rows do not block; they are purged);
-//      openToken into memory; token-store's revokeConnection (token null + revoked + revoked_at, ONE statement, R1); archive the destination row; commit.
+//      openToken into memory; token-store's revokeConnection (token null + revoked + revoked_at + channel scrub + destination row archived, ONE statement, R1/B1-R1 — do NOT archive a second time); clear the archived row's watch_url and the connection's google_sub (B1 fix report); commit.
 // no lock: with the in-memory token, end each due/ending broadcast at YouTube (complete, or delete if never live; best-effort, so none is left
 //      live with no picture); deleteStream for each key; revoke unless another non-revoked connection has the same google_sub (T6 Step 0; record 'revoke_skipped_shared_grant').
 // tx2: purgeConnectionData; delete key rows. A YouTube failure in the middle never stops tx2.

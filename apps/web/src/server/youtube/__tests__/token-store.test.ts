@@ -394,7 +394,7 @@ describe.skipIf(!HAS_DB)("token-store — the connection's refresh token, sealed
     expect(await channelOf(c.connectionId)).toEqual({ channel_id: null, channel_title: null });
   });
 
-  it("org A's revoke never touches org B's row for the same channel — and a wrong-org revoke of B's connection changes nothing", async () => {
+  it("a wrong-org revoke of B's connection changes nothing, and A's earlier revoke left B's later row for the same channel intact", async () => {
     const a = await rig();
     const b = await rig();
     const ca = await a.connect({ channelTitle: "Forest Rovers TV" });

@@ -94,7 +94,8 @@ export async function replaceConnectionToken(tx: Exec, orgId: string, connection
 }
 
 /** What the destination row's label becomes when its connection is revoked: the channel's title is Authorized Data and must
- *  not outlive the revoke (DP III.E.4, spec §3.4), and the label is the only other place Seazn copied it. */
+ *  not outlive the revoke (DP III.E.4, spec §3.4). The label is the one copy this statement scrubs; the pending row's
+ *  `channels` (expiry sweep) and broadcast titles (disconnect purge) are cleared elsewhere. */
 const DISCONNECTED_LABEL = "YouTube channel (disconnected)";
 
 /** Revoke: ONE statement that (1) clears the token and makes the row `revoked` with `revoked_at` — V479's checks refuse any
