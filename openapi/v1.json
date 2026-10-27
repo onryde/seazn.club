@@ -19088,7 +19088,7 @@
     },
     "/api/v1/divisions/{id}/stages": {
       "get": {
-        "summary": "List stages",
+        "summary": "List stages in board order, each with its `tableRules` (W2d, as `GET /stages/{id}` serves them; null for a stage whose rules do not read)",
         "tags": [
           "stages"
         ],
@@ -19185,6 +19185,406 @@
                               "active",
                               "complete"
                             ]
+                          },
+                          "tableRules": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "tiebreakers": {
+                                    "type": "object",
+                                    "properties": {
+                                      "keys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "enum": [
+                                            "points",
+                                            "wins",
+                                            "h2h_points",
+                                            "h2h_diff",
+                                            "h2h_for",
+                                            "diff",
+                                            "for",
+                                            "nrr",
+                                            "set_ratio",
+                                            "game_ratio",
+                                            "board_ratio",
+                                            "point_ratio",
+                                            "buchholz",
+                                            "buchholz_cut1",
+                                            "sberger",
+                                            "direct",
+                                            "fair_play",
+                                            "seed",
+                                            "lots",
+                                            "set_diff",
+                                            "point_diff",
+                                            "h2h_two",
+                                            "h2h_wins",
+                                            "h2h_set_ratio",
+                                            "h2h_point_ratio",
+                                            "h2h_reapply",
+                                            "h2h_exclusion",
+                                            "matches_played",
+                                            "field_goals"
+                                          ]
+                                        }
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": [
+                                          "stage",
+                                          "division",
+                                          "sport",
+                                          "migrated"
+                                        ]
+                                      },
+                                      "pinnedAt": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      },
+                                      "sportDefault": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "enum": [
+                                            "points",
+                                            "wins",
+                                            "h2h_points",
+                                            "h2h_diff",
+                                            "h2h_for",
+                                            "diff",
+                                            "for",
+                                            "nrr",
+                                            "set_ratio",
+                                            "game_ratio",
+                                            "board_ratio",
+                                            "point_ratio",
+                                            "buchholz",
+                                            "buchholz_cut1",
+                                            "sberger",
+                                            "direct",
+                                            "fair_play",
+                                            "seed",
+                                            "lots",
+                                            "set_diff",
+                                            "point_diff",
+                                            "h2h_two",
+                                            "h2h_wins",
+                                            "h2h_set_ratio",
+                                            "h2h_point_ratio",
+                                            "h2h_reapply",
+                                            "h2h_exclusion",
+                                            "matches_played",
+                                            "field_goals"
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "keys",
+                                      "source",
+                                      "pinnedAt",
+                                      "sportDefault"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "crossGroup": {
+                                    "type": "object",
+                                    "properties": {
+                                      "keys": {
+                                        "type": "array",
+                                        "items": {
+                                          "type": "string",
+                                          "enum": [
+                                            "points",
+                                            "wins",
+                                            "h2h_points",
+                                            "h2h_diff",
+                                            "h2h_for",
+                                            "diff",
+                                            "for",
+                                            "nrr",
+                                            "set_ratio",
+                                            "game_ratio",
+                                            "board_ratio",
+                                            "point_ratio",
+                                            "buchholz",
+                                            "buchholz_cut1",
+                                            "sberger",
+                                            "direct",
+                                            "fair_play",
+                                            "seed",
+                                            "lots",
+                                            "set_diff",
+                                            "point_diff",
+                                            "h2h_two",
+                                            "h2h_wins",
+                                            "h2h_set_ratio",
+                                            "h2h_point_ratio",
+                                            "h2h_reapply",
+                                            "h2h_exclusion",
+                                            "matches_played",
+                                            "field_goals"
+                                          ]
+                                        }
+                                      }
+                                    },
+                                    "required": [
+                                      "keys"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "points": {
+                                    "type": "object",
+                                    "properties": {
+                                      "rule": {
+                                        "type": "object",
+                                        "properties": {
+                                          "win": {
+                                            "type": "object",
+                                            "properties": {
+                                              "regulation": {
+                                                "type": "number"
+                                              },
+                                              "ot": {
+                                                "type": "number"
+                                              },
+                                              "so": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "regulation"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          "loss": {
+                                            "type": "object",
+                                            "properties": {
+                                              "regulation": {
+                                                "type": "number"
+                                              },
+                                              "ot": {
+                                                "type": "number"
+                                              },
+                                              "so": {
+                                                "type": "number"
+                                              },
+                                              "unplayed": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "regulation"
+                                            ],
+                                            "additionalProperties": false
+                                          },
+                                          "draw": {
+                                            "type": "number"
+                                          },
+                                          "soBonus": {
+                                            "type": "number"
+                                          },
+                                          "shootoutAs": {
+                                            "type": "string",
+                                            "enum": [
+                                              "draw_plus_bonus",
+                                              "result"
+                                            ]
+                                          },
+                                          "tie": {
+                                            "type": "number"
+                                          },
+                                          "noResult": {
+                                            "type": "number"
+                                          },
+                                          "bySetScore": {
+                                            "type": "object",
+                                            "propertyNames": {
+                                              "type": "string",
+                                              "pattern": "^(\\d+-\\d+|\\*)$"
+                                            },
+                                            "additionalProperties": {
+                                              "type": "array",
+                                              "prefixItems": [
+                                                {
+                                                  "type": "number"
+                                                },
+                                                {
+                                                  "type": "number"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "unit": {
+                                            "type": "string",
+                                            "enum": [
+                                              "whole",
+                                              "half"
+                                            ]
+                                          },
+                                          "bonuses": {
+                                            "default": [],
+                                            "type": "array",
+                                            "items": {
+                                              "type": "object",
+                                              "properties": {
+                                                "when": {
+                                                  "type": "string",
+                                                  "enum": [
+                                                    "loss_margin_lte",
+                                                    "win_margin_gte",
+                                                    "score_ratio_gte",
+                                                    "draw",
+                                                    "forfeit_win",
+                                                    "forfeit_loss",
+                                                    "no_result"
+                                                  ]
+                                                },
+                                                "param": {
+                                                  "type": "number"
+                                                },
+                                                "points": {
+                                                  "type": "number"
+                                                }
+                                              },
+                                              "required": [
+                                                "when",
+                                                "points"
+                                              ],
+                                              "additionalProperties": false
+                                            }
+                                          },
+                                          "forfeit": {
+                                            "type": "object",
+                                            "properties": {
+                                              "winnerPoints": {
+                                                "type": "number"
+                                              },
+                                              "loserPoints": {
+                                                "type": "number"
+                                              },
+                                              "awardScore": {
+                                                "type": "array",
+                                                "prefixItems": [
+                                                  {
+                                                    "type": "number"
+                                                  },
+                                                  {
+                                                    "type": "number"
+                                                  }
+                                                ]
+                                              }
+                                            },
+                                            "required": [
+                                              "winnerPoints",
+                                              "loserPoints"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "required": [
+                                          "win",
+                                          "loss",
+                                          "shootoutAs",
+                                          "unit",
+                                          "bonuses"
+                                        ],
+                                        "additionalProperties": false,
+                                        "examples": [
+                                          {
+                                            "win": {
+                                              "regulation": 3,
+                                              "ot": 2
+                                            },
+                                            "loss": {
+                                              "regulation": 0,
+                                              "ot": 1
+                                            },
+                                            "shootoutAs": "result",
+                                            "unit": "whole",
+                                            "bonuses": [],
+                                            "forfeit": {
+                                              "winnerPoints": 3,
+                                              "loserPoints": 0
+                                            }
+                                          }
+                                        ]
+                                      },
+                                      "source": {
+                                        "type": "string",
+                                        "enum": [
+                                          "stage",
+                                          "division",
+                                          "sport",
+                                          "migrated"
+                                        ]
+                                      },
+                                      "pinnedAt": {
+                                        "anyOf": [
+                                          {
+                                            "type": "string"
+                                          },
+                                          {
+                                            "type": "null"
+                                          }
+                                        ]
+                                      }
+                                    },
+                                    "required": [
+                                      "rule",
+                                      "source",
+                                      "pinnedAt"
+                                    ],
+                                    "additionalProperties": false
+                                  },
+                                  "reachableOutcomes": {
+                                    "type": "array",
+                                    "items": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string",
+                                          "enum": [
+                                            "win.regulation",
+                                            "win.ot",
+                                            "win.so",
+                                            "loss.regulation",
+                                            "loss.ot",
+                                            "loss.so",
+                                            "loss.unplayed",
+                                            "draw",
+                                            "tie",
+                                            "noResult"
+                                          ]
+                                        },
+                                        {
+                                          "type": "string",
+                                          "pattern": "^set:\\d+-\\d+$"
+                                        }
+                                      ]
+                                    }
+                                  }
+                                },
+                                "required": [
+                                  "tiebreakers",
+                                  "crossGroup",
+                                  "points",
+                                  "reachableOutcomes"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -19195,7 +19595,8 @@
                           "name",
                           "config",
                           "progression",
-                          "status"
+                          "status",
+                          "tableRules"
                         ],
                         "additionalProperties": false
                       }
@@ -19217,7 +19618,48 @@
                       "name": "example",
                       "config": {},
                       "progression": {},
-                      "status": "pending"
+                      "status": "pending",
+                      "tableRules": {
+                        "tiebreakers": {
+                          "keys": [
+                            "points"
+                          ],
+                          "source": "stage",
+                          "pinnedAt": "example",
+                          "sportDefault": [
+                            "points"
+                          ]
+                        },
+                        "crossGroup": {
+                          "keys": [
+                            "points"
+                          ]
+                        },
+                        "points": {
+                          "rule": {
+                            "win": {
+                              "regulation": 3,
+                              "ot": 2
+                            },
+                            "loss": {
+                              "regulation": 0,
+                              "ot": 1
+                            },
+                            "shootoutAs": "result",
+                            "unit": "whole",
+                            "bonuses": [],
+                            "forfeit": {
+                              "winnerPoints": 3,
+                              "loserPoints": 0
+                            }
+                          },
+                          "source": "stage",
+                          "pinnedAt": "example"
+                        },
+                        "reachableOutcomes": [
+                          "win.regulation"
+                        ]
+                      }
                     }
                   ],
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -19368,7 +19810,7 @@
         ]
       },
       "post": {
-        "summary": "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a bracket stage starts with the deciders its sport presets for its kind and the division's variant — extra time and a shoot-out, overtime, a super over; the engine's `stageDefaults` decides which and their values; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value; `false` switches OFF a decider the sport turns off with no value at all, ice-hockey `overtime` and `shootout` and the hockey `shootout`). Unlike the stage PUT, `config.rules` that is absent, null or `{}` at create KEEPS the whole preset (a create has nothing stored to clear; to start from the division's own rules, send each preset key as null, or PUT `{}` afterwards). The rules are validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 TIEBREAK_KEY_INVALID (`refusals`, `stage_id`, `stage_name`) for the INHERITED tie-break order (the division's) the new stage's kind refuses — a stage's own order is not part of this body (`config.tiebreakers` is an unknown key of the strict stage config: 400 VALIDATION); nothing in the batch is written. A stage's own `config.points` (the engine's PointsRule) is asked what the stage PUT asks of it, and `config.points: null` means no points for this slot (as `points: null` does on the stage PUT): nothing is asked and nothing is stored. A non-null value: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a walkover `awardScore` on a sport whose table never reads it 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a rule that does not pay an outcome the stage can end in 422 POINTS_OUTCOME_UNCOVERED (`uncovered`, `stage_name`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; a FLAT rule (one amount per win and per loss: no overtime, shoot-out or not-played split, no set-score table, a shoot-out booked as a result) on a stage whose sport pays one of those apart (IIHF's overtime 2/1, a 3-2 volleyball result, a table-tennis loss not played, FIH's shoot-out bonus) 422 POINTS_SPLIT_FLATTENED (`splits` naming each: `otWin`, `otLoss`, `shootoutWin`, `shootoutLoss`, `soBonus`, `unplayed`, `pointsMap`, `stage_name`, `stage_kind`). A stage's own points ask no plan feature (bonuses and a forfeit row are free on every plan); a plan feature the body's stages need (a double-elimination or an advanced-format kind, carry-over) or the stage cap is 402 PAYMENT_REQUIRED. A decider at the config's TOP level (any whole decider a sport declares, e.g. `config.shootout`, `config.overtime`, `config.superOver`) is refused 400 VALIDATION naming the key (`field`) and where it goes (`config.rules.<key>`). 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size. Chess divisions take individual players only: an americano or mexicano stage (it mints pair entrants) is 422 CHESS_INDIVIDUAL_ONLY, asked before any plan gate, and the whole batch writes nothing",
+        "summary": "Define the stage graph. Each stage is created with its kind's PRESET match rules in `config.rules` (W2c X-SR-6: a bracket stage starts with the deciders its sport presets for its kind and the division's variant — extra time and a shoot-out, overtime, a super over; the engine's `stageDefaults` decides which and their values; a table stage with none), every one the organiser's to switch off. `config.rules` sent with a create is laid over that preset key by key (a null removes the preset key: the stage inherits the division's value; `false` switches OFF a decider the sport turns off with no value at all, ice-hockey `overtime` and `shootout` and the hockey `shootout`). Unlike the stage PUT, `config.rules` that is absent, null or `{}` at create KEEPS the whole preset (a create has nothing stored to clear; to start from the division's own rules, send each preset key as null, or PUT `{}` afterwards). The rules are validated as `PUT /stages/{id}/rules` validates a save: 400 UNKNOWN_RULE_KEY / RULE_NOT_SETTABLE (`field`), 422 CONFIG_INVALID (`issues`), 422 TIEBREAK_KEY_INVALID (`refusals`, `stage_id`, `stage_name`) for the INHERITED tie-break order (the division's) the new stage's kind refuses — a stage's own order is not part of this body (`config.tiebreakers` is an unknown key of the strict stage config: 400 VALIDATION); nothing in the batch is written. A stage's own `config.points` (the engine's PointsRule) is asked what the stage PUT asks of it, and `config.points: null` means no points for this slot (as `points: null` does on the stage PUT): nothing is asked and nothing is stored. A non-null value: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a walkover `awardScore` on a sport whose table never reads it 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a rule that does not pay an outcome the stage can end in 422 POINTS_OUTCOME_UNCOVERED (`uncovered`, `stage_name`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; a FLAT rule (one amount per win and per loss: no overtime, shoot-out or not-played split, no set-score table, a shoot-out booked as a result) on a stage whose sport pays one of those apart (IIHF's overtime 2/1, a 3-2 volleyball result, a table-tennis loss not played, FIH's shoot-out bonus) 422 POINTS_SPLIT_FLATTENED (`splits` naming each: `otWin`, `otLoss`, `shootoutWin`, `shootoutLoss`, `soBonus`, `unplayed`, `pointsMap`, `stage_name`, `stage_kind`); a flat rule that pays every outcome the stage can end in as the sport does is accepted. A stage's own points ask no plan feature (bonuses and a forfeit row are free on every plan); a plan feature the body's stages need (a double-elimination or an advanced-format kind, carry-over) or the stage cap is 402 PAYMENT_REQUIRED. A decider at the config's TOP level (any whole decider a sport declares, e.g. `config.shootout`, `config.overtime`, `config.superOver`) is refused 400 VALIDATION naming the key (`field`) and where it goes (`config.rules.<key>`). 422 STAGE_SWISS_ROUNDS_REQUIRED when a `swiss` stage's `config.rounds` is absent or is not a whole number >= 1 — a Swiss round budget is declared up front, never derived from field size. Chess divisions take individual players only: an americano or mexicano stage (it mints pair entrants) is 422 CHESS_INDIVIDUAL_ONLY, asked before any plan gate, and the whole batch writes nothing",
         "tags": [
           "stages"
         ],
@@ -24394,7 +24836,7 @@
     },
     "/api/v1/stages/{id}/standings": {
       "get": {
-        "summary": "Standings snapshot",
+        "summary": "Standings snapshot: one pool's table (`pool_id`; the stage's own table without it) as last folded. Each row carries the sport's ledger in `metrics` — with `won_ot`, `won_so`, `lost_ot`, `lost_so` (W2d spec §5.7: the wins and losses decided in overtime or a shoot-out, whatever the points rule paid for them) — and `tieBreak` naming the step that split it from the rows it was tied with (`key`, the rows it was tied `with`; `note` `h2h_two_not_applicable` / `h2h_incomplete` when a conditional step could not split a residual tie; `drawnAt`, the date a stored drawing of lots was made). `level: true` is on every row of a table with no counted fixture (no leader, nobody first)",
         "tags": [
           "stages"
         ],
@@ -24435,7 +24877,187 @@
                     "ok": {
                       "const": true
                     },
-                    "data": {},
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "stage_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "pool_id": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "format": "uuid",
+                              "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "rows": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "entrantId": {
+                                "type": "string"
+                              },
+                              "played": {
+                                "type": "number"
+                              },
+                              "won": {
+                                "type": "number"
+                              },
+                              "drawn": {
+                                "type": "number"
+                              },
+                              "lost": {
+                                "type": "number"
+                              },
+                              "points": {
+                                "type": "number"
+                              },
+                              "metrics": {
+                                "type": "object",
+                                "properties": {
+                                  "won_ot": {
+                                    "type": "number"
+                                  },
+                                  "won_so": {
+                                    "type": "number"
+                                  },
+                                  "lost_ot": {
+                                    "type": "number"
+                                  },
+                                  "lost_so": {
+                                    "type": "number"
+                                  }
+                                },
+                                "additionalProperties": {
+                                  "type": "number"
+                                }
+                              },
+                              "rank": {
+                                "type": "number"
+                              },
+                              "rankLocked": {
+                                "type": "boolean"
+                              },
+                              "tieUnbroken": {
+                                "type": "boolean"
+                              },
+                              "tieBreak": {
+                                "type": "object",
+                                "properties": {
+                                  "key": {
+                                    "type": "string",
+                                    "enum": [
+                                      "points",
+                                      "wins",
+                                      "h2h_points",
+                                      "h2h_diff",
+                                      "h2h_for",
+                                      "diff",
+                                      "for",
+                                      "nrr",
+                                      "set_ratio",
+                                      "game_ratio",
+                                      "board_ratio",
+                                      "point_ratio",
+                                      "buchholz",
+                                      "buchholz_cut1",
+                                      "sberger",
+                                      "direct",
+                                      "fair_play",
+                                      "seed",
+                                      "lots",
+                                      "set_diff",
+                                      "point_diff",
+                                      "h2h_two",
+                                      "h2h_wins",
+                                      "h2h_set_ratio",
+                                      "h2h_point_ratio",
+                                      "h2h_reapply",
+                                      "h2h_exclusion",
+                                      "matches_played",
+                                      "field_goals",
+                                      "fewest_played"
+                                    ]
+                                  },
+                                  "with": {
+                                    "type": "array",
+                                    "items": {
+                                      "type": "string"
+                                    }
+                                  },
+                                  "note": {
+                                    "type": "string",
+                                    "enum": [
+                                      "h2h_two_not_applicable",
+                                      "h2h_incomplete"
+                                    ]
+                                  },
+                                  "drawnAt": {
+                                    "type": "string"
+                                  }
+                                },
+                                "required": [
+                                  "key",
+                                  "with"
+                                ],
+                                "additionalProperties": false
+                              },
+                              "level": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "entrantId",
+                              "played",
+                              "won",
+                              "drawn",
+                              "lost",
+                              "points",
+                              "metrics"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
+                        "computed_through_seq": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "pattern": "^\\d+$"
+                            },
+                            {
+                              "type": "number",
+                              "const": 0
+                            }
+                          ]
+                        },
+                        "updated_at": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "stage_id",
+                        "pool_id",
+                        "rows",
+                        "computed_through_seq",
+                        "updated_at"
+                      ],
+                      "additionalProperties": false
+                    },
                     "requestId": {
                       "type": "string",
                       "format": "uuid"
@@ -24444,7 +25066,28 @@
                 },
                 "example": {
                   "ok": true,
-                  "data": {},
+                  "data": {
+                    "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "pool_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "rows": [
+                      {
+                        "entrantId": "example",
+                        "played": 1,
+                        "won": 1,
+                        "drawn": 1,
+                        "lost": 1,
+                        "points": 1,
+                        "metrics": {
+                          "won_ot": 1,
+                          "won_so": 1,
+                          "lost_ot": 1,
+                          "lost_so": 1
+                        }
+                      }
+                    ],
+                    "computed_through_seq": "example",
+                    "updated_at": "example"
+                  },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
               }
@@ -24594,6 +25237,723 @@
       }
     },
     "/api/v1/stages/{id}": {
+      "get": {
+        "summary": "One stage with its `tableRules` (W2d spec §7): the tie-break order it ranks by (`tiebreakers.keys`), the layer it came from (`source`: `stage` — its own, `PUT /stages/{id}/rules`; `division` — the division's `tiebreakers`; `sport` — the sport's default; `migrated` — what the W2d migration found it ranking by), when the stage was PINNED to its rules (`pinnedAt`: generating a stage's fixtures pins it, and a pinned stage keeps its rules while the division's move — `stagesKeptPinned` on `PATCH /divisions/{id}`), and the sport's own default for the stage's kind under the division's config (`sportDefault`, the editor's Reset — never the winning order); the cross-group order (`crossGroup.keys`, §5.9); the points rule it pays (`points.rule`, `source`, `pinnedAt`); and every outcome the stage can end in (`reachableOutcomes`, the keys a points rule must pay). `tableRules` is null for a stage whose rules do not read (a build this server no longer carries, a config its sport cannot read): no order is guessed",
+        "tags": [
+          "stages"
+        ],
+        "x-required-scope": "read",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "division_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "seq": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        },
+                        "kind": {
+                          "type": "string",
+                          "enum": [
+                            "league",
+                            "group",
+                            "swiss",
+                            "knockout",
+                            "double_elim",
+                            "stepladder",
+                            "page_playoff",
+                            "americano",
+                            "ladder"
+                          ]
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "config": {
+                          "type": "object",
+                          "propertyNames": {
+                            "type": "string"
+                          },
+                          "additionalProperties": {}
+                        },
+                        "progression": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "propertyNames": {
+                                "type": "string"
+                              },
+                              "additionalProperties": {}
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "pending",
+                            "active",
+                            "complete"
+                          ]
+                        },
+                        "tableRules": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "tiebreakers": {
+                                  "type": "object",
+                                  "properties": {
+                                    "keys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "enum": [
+                                          "points",
+                                          "wins",
+                                          "h2h_points",
+                                          "h2h_diff",
+                                          "h2h_for",
+                                          "diff",
+                                          "for",
+                                          "nrr",
+                                          "set_ratio",
+                                          "game_ratio",
+                                          "board_ratio",
+                                          "point_ratio",
+                                          "buchholz",
+                                          "buchholz_cut1",
+                                          "sberger",
+                                          "direct",
+                                          "fair_play",
+                                          "seed",
+                                          "lots",
+                                          "set_diff",
+                                          "point_diff",
+                                          "h2h_two",
+                                          "h2h_wins",
+                                          "h2h_set_ratio",
+                                          "h2h_point_ratio",
+                                          "h2h_reapply",
+                                          "h2h_exclusion",
+                                          "matches_played",
+                                          "field_goals"
+                                        ]
+                                      }
+                                    },
+                                    "source": {
+                                      "type": "string",
+                                      "enum": [
+                                        "stage",
+                                        "division",
+                                        "sport",
+                                        "migrated"
+                                      ]
+                                    },
+                                    "pinnedAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    },
+                                    "sportDefault": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "enum": [
+                                          "points",
+                                          "wins",
+                                          "h2h_points",
+                                          "h2h_diff",
+                                          "h2h_for",
+                                          "diff",
+                                          "for",
+                                          "nrr",
+                                          "set_ratio",
+                                          "game_ratio",
+                                          "board_ratio",
+                                          "point_ratio",
+                                          "buchholz",
+                                          "buchholz_cut1",
+                                          "sberger",
+                                          "direct",
+                                          "fair_play",
+                                          "seed",
+                                          "lots",
+                                          "set_diff",
+                                          "point_diff",
+                                          "h2h_two",
+                                          "h2h_wins",
+                                          "h2h_set_ratio",
+                                          "h2h_point_ratio",
+                                          "h2h_reapply",
+                                          "h2h_exclusion",
+                                          "matches_played",
+                                          "field_goals"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "keys",
+                                    "source",
+                                    "pinnedAt",
+                                    "sportDefault"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "crossGroup": {
+                                  "type": "object",
+                                  "properties": {
+                                    "keys": {
+                                      "type": "array",
+                                      "items": {
+                                        "type": "string",
+                                        "enum": [
+                                          "points",
+                                          "wins",
+                                          "h2h_points",
+                                          "h2h_diff",
+                                          "h2h_for",
+                                          "diff",
+                                          "for",
+                                          "nrr",
+                                          "set_ratio",
+                                          "game_ratio",
+                                          "board_ratio",
+                                          "point_ratio",
+                                          "buchholz",
+                                          "buchholz_cut1",
+                                          "sberger",
+                                          "direct",
+                                          "fair_play",
+                                          "seed",
+                                          "lots",
+                                          "set_diff",
+                                          "point_diff",
+                                          "h2h_two",
+                                          "h2h_wins",
+                                          "h2h_set_ratio",
+                                          "h2h_point_ratio",
+                                          "h2h_reapply",
+                                          "h2h_exclusion",
+                                          "matches_played",
+                                          "field_goals"
+                                        ]
+                                      }
+                                    }
+                                  },
+                                  "required": [
+                                    "keys"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "points": {
+                                  "type": "object",
+                                  "properties": {
+                                    "rule": {
+                                      "type": "object",
+                                      "properties": {
+                                        "win": {
+                                          "type": "object",
+                                          "properties": {
+                                            "regulation": {
+                                              "type": "number"
+                                            },
+                                            "ot": {
+                                              "type": "number"
+                                            },
+                                            "so": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "regulation"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        "loss": {
+                                          "type": "object",
+                                          "properties": {
+                                            "regulation": {
+                                              "type": "number"
+                                            },
+                                            "ot": {
+                                              "type": "number"
+                                            },
+                                            "so": {
+                                              "type": "number"
+                                            },
+                                            "unplayed": {
+                                              "type": "number"
+                                            }
+                                          },
+                                          "required": [
+                                            "regulation"
+                                          ],
+                                          "additionalProperties": false
+                                        },
+                                        "draw": {
+                                          "type": "number"
+                                        },
+                                        "soBonus": {
+                                          "type": "number"
+                                        },
+                                        "shootoutAs": {
+                                          "type": "string",
+                                          "enum": [
+                                            "draw_plus_bonus",
+                                            "result"
+                                          ]
+                                        },
+                                        "tie": {
+                                          "type": "number"
+                                        },
+                                        "noResult": {
+                                          "type": "number"
+                                        },
+                                        "bySetScore": {
+                                          "type": "object",
+                                          "propertyNames": {
+                                            "type": "string",
+                                            "pattern": "^(\\d+-\\d+|\\*)$"
+                                          },
+                                          "additionalProperties": {
+                                            "type": "array",
+                                            "prefixItems": [
+                                              {
+                                                "type": "number"
+                                              },
+                                              {
+                                                "type": "number"
+                                              }
+                                            ]
+                                          }
+                                        },
+                                        "unit": {
+                                          "type": "string",
+                                          "enum": [
+                                            "whole",
+                                            "half"
+                                          ]
+                                        },
+                                        "bonuses": {
+                                          "default": [],
+                                          "type": "array",
+                                          "items": {
+                                            "type": "object",
+                                            "properties": {
+                                              "when": {
+                                                "type": "string",
+                                                "enum": [
+                                                  "loss_margin_lte",
+                                                  "win_margin_gte",
+                                                  "score_ratio_gte",
+                                                  "draw",
+                                                  "forfeit_win",
+                                                  "forfeit_loss",
+                                                  "no_result"
+                                                ]
+                                              },
+                                              "param": {
+                                                "type": "number"
+                                              },
+                                              "points": {
+                                                "type": "number"
+                                              }
+                                            },
+                                            "required": [
+                                              "when",
+                                              "points"
+                                            ],
+                                            "additionalProperties": false
+                                          }
+                                        },
+                                        "forfeit": {
+                                          "type": "object",
+                                          "properties": {
+                                            "winnerPoints": {
+                                              "type": "number"
+                                            },
+                                            "loserPoints": {
+                                              "type": "number"
+                                            },
+                                            "awardScore": {
+                                              "type": "array",
+                                              "prefixItems": [
+                                                {
+                                                  "type": "number"
+                                                },
+                                                {
+                                                  "type": "number"
+                                                }
+                                              ]
+                                            }
+                                          },
+                                          "required": [
+                                            "winnerPoints",
+                                            "loserPoints"
+                                          ],
+                                          "additionalProperties": false
+                                        }
+                                      },
+                                      "required": [
+                                        "win",
+                                        "loss",
+                                        "shootoutAs",
+                                        "unit",
+                                        "bonuses"
+                                      ],
+                                      "additionalProperties": false,
+                                      "examples": [
+                                        {
+                                          "win": {
+                                            "regulation": 3,
+                                            "ot": 2
+                                          },
+                                          "loss": {
+                                            "regulation": 0,
+                                            "ot": 1
+                                          },
+                                          "shootoutAs": "result",
+                                          "unit": "whole",
+                                          "bonuses": [],
+                                          "forfeit": {
+                                            "winnerPoints": 3,
+                                            "loserPoints": 0
+                                          }
+                                        }
+                                      ]
+                                    },
+                                    "source": {
+                                      "type": "string",
+                                      "enum": [
+                                        "stage",
+                                        "division",
+                                        "sport",
+                                        "migrated"
+                                      ]
+                                    },
+                                    "pinnedAt": {
+                                      "anyOf": [
+                                        {
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": [
+                                    "rule",
+                                    "source",
+                                    "pinnedAt"
+                                  ],
+                                  "additionalProperties": false
+                                },
+                                "reachableOutcomes": {
+                                  "type": "array",
+                                  "items": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "enum": [
+                                          "win.regulation",
+                                          "win.ot",
+                                          "win.so",
+                                          "loss.regulation",
+                                          "loss.ot",
+                                          "loss.so",
+                                          "loss.unplayed",
+                                          "draw",
+                                          "tie",
+                                          "noResult"
+                                        ]
+                                      },
+                                      {
+                                        "type": "string",
+                                        "pattern": "^set:\\d+-\\d+$"
+                                      }
+                                    ]
+                                  }
+                                }
+                              },
+                              "required": [
+                                "tiebreakers",
+                                "crossGroup",
+                                "points",
+                                "reachableOutcomes"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "division_id",
+                        "seq",
+                        "kind",
+                        "name",
+                        "config",
+                        "progression",
+                        "status",
+                        "tableRules"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "seq": -9007199254740991,
+                    "kind": "league",
+                    "name": "example",
+                    "config": {},
+                    "progression": {},
+                    "status": "pending",
+                    "tableRules": {
+                      "tiebreakers": {
+                        "keys": [
+                          "points"
+                        ],
+                        "source": "stage",
+                        "pinnedAt": "example",
+                        "sportDefault": [
+                          "points"
+                        ]
+                      },
+                      "crossGroup": {
+                        "keys": [
+                          "points"
+                        ]
+                      },
+                      "points": {
+                        "rule": {
+                          "win": {
+                            "regulation": 3,
+                            "ot": 2
+                          },
+                          "loss": {
+                            "regulation": 0,
+                            "ot": 1
+                          },
+                          "shootoutAs": "result",
+                          "unit": "whole",
+                          "bonuses": [],
+                          "forfeit": {
+                            "winnerPoints": 3,
+                            "loserPoints": 0
+                          }
+                        },
+                        "source": "stage",
+                        "pinnedAt": "example"
+                      },
+                      "reachableOutcomes": [
+                        "win.regulation"
+                      ]
+                    }
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      },
       "delete": {
         "summary": "Delete a stage (last-in-graph, no played fixtures)",
         "tags": [
@@ -25478,7 +26838,7 @@
     },
     "/api/v1/stages/{id}/rules": {
       "put": {
-        "summary": "Per-stage match-format override (design 2026-09-17; every sport since W2c) — Best-of-1 in the league/Swiss stage and Best-of-3 in the playoff of the same division, an extra-time length on a knockout. What a stage can set is the SPORT'S declaration for the stage's kind and variant, not a list kept here: a key the sport never declares is 400 UNKNOWN_RULE_KEY, a declared key this stage cannot set (a league-only key on a knockout, a knockout-only decider on a table stage) or any points key is 400 RULE_NOT_SETTABLE (`field` names it). On an online (Lichess) division the clock and its clock family (`clock`, `variant`) are the division's own, never a stage's: either key is 400 RULE_NOT_SETTABLE (`field`, `reason: online_division`), and the Lichess challenge plays the division's clock in every stage. Keys are the CONFIG keys, not the editor's form keys: tennis takes `set`, `game` and `tiebreak`, NOT `setType`, `noAd` or `tiebreakWinBy`. The body is a FRAGMENT that MERGES into the stage's stored rules: a key it omits is kept, a key it names is replaced, a null VALUE removes that key (\"inherit\" is key ABSENCE — a stored null would be copied over the division's value by the overlay), `false` switches OFF a decider the sport turns off with no value at all (ice-hockey `overtime` and `shootout`, the hockey `shootout`; football's `shootout` and cricket's `superOver` take `false` as themselves; anywhere else it is 422 CONFIG_INVALID), an empty list is a value (chess `tiebreakRungs: []`, held for the organiser), and `rules: null` or `{}` clears every key back to the division format. The merged `{division config + rules}` is validated through the sport module's own configSchema (422 CONFIG_INVALID) while only the merged rules are stored. A save whose merged format (a `bestOf` in the body, say) would let the stage end in an outcome its points do not pay (the division's `pointsMap`, looked up by the exact \"W-L\" score else \"*\", or the stage's own `points`) is refused 422 POINTS_OUTCOME_UNCOVERED, `uncovered` naming the outcomes (`set:2-1`, `tie`). A save that would leave an unstarted match's OWN format (`PUT /fixtures/{id}/rules`) unable to fit the stage is 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS, naming the match (`fixture_id`, `fixture_no`, `field`) — never a silent drop; the same refusal comes from a division config save. Walkovers no event records are re-scored under the new format in the same transaction (409 FORMAT_DOES_NOT_FIT_PLAY if one cannot hold). The stage's own POINTS ride the same PUT (W2c ST-G8): the body is `{rules?, points?}`, at least one sent, each arm left as stored when omitted, any other key 400. `points` is the engine's PointsRule (the outcome-keyed `win` and `loss` — regulation, overtime, shoot-out — the `draw`, `bonuses`, a `forfeit` row with an optional walkover `awardScore`) written WHOLE to the stage's `config.points` — a second save replaces it — and `points: null` removes it, back to the division's points. Refused by name: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a rule that does not pay an outcome the stage can end in 422 POINTS_OUTCOME_UNCOVERED (`uncovered`); a walkover `awardScore` on a sport whose table never reads it (the set sports, carrom, the board games) 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; a FLAT rule (one amount per win and per loss: no overtime, shoot-out or not-played split, no set-score table, a shoot-out booked as a result) on a stage whose sport pays one of those apart (IIHF's overtime 2/1, a 3-2 volleyball result, a table-tennis loss not played, FIH's shoot-out bonus) 422 POINTS_SPLIT_FLATTENED (`splits` naming each: `otWin`, `otLoss`, `shootoutWin`, `shootoutLoss`, `soBonus`, `unplayed`, `pointsMap`) — state the split in the rule to set it. No plan feature is asked: bonuses and a forfeit row are free on every plan; the one 402 PAYMENT_REQUIRED is a frozen competition's (`competitions.max_active`, over its plan's active-competition limit). A decider at the body's TOP level (any whole decider a sport declares, e.g. `shootout`, `superOver`, `tiebreakRungs`) is 400 VALIDATION, naming the key (`field`) and where it goes (`rules.<key>`). Editable until the first fixture in THAT stage has a frozen config snapshot or a score event, then 409 STAGE_FORMAT_LOCKED — a monotonic pair, deliberately not `fixtures.status`, which moves backwards when a start is voided. The answer is the stage's `rules` and `points` as stored",
+        "summary": "Per-stage match-format override (design 2026-09-17; every sport since W2c) — Best-of-1 in the league/Swiss stage and Best-of-3 in the playoff of the same division, an extra-time length on a knockout. What a stage can set is the SPORT'S declaration for the stage's kind and variant, not a list kept here: a key the sport never declares is 400 UNKNOWN_RULE_KEY, a declared key this stage cannot set (a league-only key on a knockout, a knockout-only decider on a table stage) or any points key is 400 RULE_NOT_SETTABLE (`field` names it). On an online (Lichess) division the clock and its clock family (`clock`, `variant`) are the division's own, never a stage's: either key is 400 RULE_NOT_SETTABLE (`field`, `reason: online_division`), and the Lichess challenge plays the division's clock in every stage. Keys are the CONFIG keys, not the editor's form keys: tennis takes `set`, `game` and `tiebreak`, NOT `setType`, `noAd` or `tiebreakWinBy`. The body is a FRAGMENT that MERGES into the stage's stored rules: a key it omits is kept, a key it names is replaced, a null VALUE removes that key (\"inherit\" is key ABSENCE — a stored null would be copied over the division's value by the overlay), `false` switches OFF a decider the sport turns off with no value at all (ice-hockey `overtime` and `shootout`, the hockey `shootout`; football's `shootout` and cricket's `superOver` take `false` as themselves; anywhere else it is 422 CONFIG_INVALID), an empty list is a value (chess `tiebreakRungs: []`, held for the organiser), and `rules: null` or `{}` clears every key back to the division format. The merged `{division config + rules}` is validated through the sport module's own configSchema (422 CONFIG_INVALID) while only the merged rules are stored. A save whose merged format (a `bestOf` in the body, say) would let the stage end in an outcome its points do not pay (the division's `pointsMap`, looked up by the exact \"W-L\" score else \"*\", or the stage's own `points`) is refused 422 POINTS_OUTCOME_UNCOVERED, `uncovered` naming the outcomes (`set:2-1`, `tie`). A save that would leave an unstarted match's OWN format (`PUT /fixtures/{id}/rules`) unable to fit the stage is 409 FIXTURE_OWN_FORMAT_NO_LONGER_FITS, naming the match (`fixture_id`, `fixture_no`, `field`) — never a silent drop; the same refusal comes from a division config save. Walkovers no event records are re-scored under the new format in the same transaction (409 FORMAT_DOES_NOT_FIT_PLAY if one cannot hold). The stage's own POINTS and ORDERS ride the same PUT (W2c ST-G8, W2d): the body is `{rules?, points?, tiebreakers?, crossGroupTiebreakers?}`, at least one sent, each arm left as stored when omitted, any other key 400 (an old-shape `points: {base: …}` too: no alias). `tiebreakers` is the stage's own tie-break order (`null` clears it back to the division's, else the sport's), validated on the stage's kind before anything is written: 422 TIEBREAK_KEY_INVALID, `refusals` naming each (`index`, `key`, `reason` — `sport`: the sport records no such ledger, e.g. `nrr` outside cricket); `crossGroupTiebreakers` is its order across groups (§5.9; `null` derives it from the order again). `points` is the engine's PointsRule (the outcome-keyed `win` and `loss` — regulation, overtime, shoot-out — the `draw`, `bonuses`, a `forfeit` row with an optional walkover `awardScore`) written WHOLE to the stage's `config.points` — a second save replaces it — and `points: null` removes it, back to the division's points. Refused by name: a bracket stage (no table) 400 RULE_NOT_SETTABLE (`field` `points`); a rule that does not pay an outcome the stage can end in 422 POINTS_OUTCOME_UNCOVERED (`uncovered`); a walkover `awardScore` on a sport whose table never reads it (the set sports, carrom, the board games) 400 RULE_NOT_SETTABLE (`field` `points.forfeit.awardScore`); a bonus reading a score the sport does not emit 422 CONFIG_INVALID; a FLAT rule (one amount per win and per loss: no overtime, shoot-out or not-played split, no set-score table, a shoot-out booked as a result) on a stage whose sport pays one of those apart (IIHF's overtime 2/1, a 3-2 volleyball result, a table-tennis loss not played, FIH's shoot-out bonus) 422 POINTS_SPLIT_FLATTENED (`splits` naming each: `otWin`, `otLoss`, `shootoutWin`, `shootoutLoss`, `soBonus`, `unplayed`, `pointsMap`) — state the split in the rule to set it; a flat rule that pays every outcome the stage can end in as the sport does (ITTF's 2/1 with a `forfeit` row paying the walkover 2/0) is accepted. No plan feature is asked: bonuses and a forfeit row are free on every plan; the one 402 PAYMENT_REQUIRED is a frozen competition's (`competitions.max_active`, over its plan's active-competition limit). A decider at the body's TOP level (any whole decider a sport declares, e.g. `shootout`, `superOver`, `tiebreakRungs`) is 400 VALIDATION, naming the key (`field`) and where it goes (`rules.<key>`). Editable until the first fixture in THAT stage has a frozen config snapshot or a score event, then 409 STAGE_FORMAT_LOCKED — a monotonic pair, deliberately not `fixtures.status`, which moves backwards when a start is voided. W2d: a stage generated but not yet scored is PINNED to its table rules; a points or order save then re-pins only the arm it saved (the others keep their pin and source). The answer is the stage's `rules`, `points`, `tiebreakers` and `crossGroupTiebreakers` as stored",
         "tags": [
           "stages"
         ],
@@ -25713,6 +27073,111 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "tiebreakers": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "points",
+                            "wins",
+                            "h2h_points",
+                            "h2h_diff",
+                            "h2h_for",
+                            "diff",
+                            "for",
+                            "nrr",
+                            "set_ratio",
+                            "game_ratio",
+                            "board_ratio",
+                            "point_ratio",
+                            "buchholz",
+                            "buchholz_cut1",
+                            "sberger",
+                            "direct",
+                            "fair_play",
+                            "seed",
+                            "lots",
+                            "set_diff",
+                            "point_diff",
+                            "h2h_two",
+                            "h2h_wins",
+                            "h2h_set_ratio",
+                            "h2h_point_ratio",
+                            "h2h_reapply",
+                            "h2h_exclusion",
+                            "matches_played",
+                            "field_goals"
+                          ]
+                        },
+                        "examples": [
+                          [
+                            "points",
+                            "h2h_points",
+                            "diff",
+                            "for",
+                            "lots"
+                          ]
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "crossGroupTiebreakers": {
+                    "anyOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string",
+                          "enum": [
+                            "points",
+                            "wins",
+                            "h2h_points",
+                            "h2h_diff",
+                            "h2h_for",
+                            "diff",
+                            "for",
+                            "nrr",
+                            "set_ratio",
+                            "game_ratio",
+                            "board_ratio",
+                            "point_ratio",
+                            "buchholz",
+                            "buchholz_cut1",
+                            "sberger",
+                            "direct",
+                            "fair_play",
+                            "seed",
+                            "lots",
+                            "set_diff",
+                            "point_diff",
+                            "h2h_two",
+                            "h2h_wins",
+                            "h2h_set_ratio",
+                            "h2h_point_ratio",
+                            "h2h_reapply",
+                            "h2h_exclusion",
+                            "matches_played",
+                            "field_goals"
+                          ]
+                        },
+                        "examples": [
+                          [
+                            "points",
+                            "diff",
+                            "for",
+                            "lots"
+                          ]
+                        ]
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
                   }
                 },
                 "additionalProperties": false
@@ -25735,7 +27200,20 @@
                     "winnerPoints": 3,
                     "loserPoints": 0
                   }
-                }
+                },
+                "tiebreakers": [
+                  "points",
+                  "h2h_points",
+                  "diff",
+                  "for",
+                  "lots"
+                ],
+                "crossGroupTiebreakers": [
+                  "points",
+                  "diff",
+                  "for",
+                  "lots"
+                ]
               }
             }
           }
@@ -25953,11 +27431,101 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "tiebreakers": {
+                          "anyOf": [
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "points",
+                                  "wins",
+                                  "h2h_points",
+                                  "h2h_diff",
+                                  "h2h_for",
+                                  "diff",
+                                  "for",
+                                  "nrr",
+                                  "set_ratio",
+                                  "game_ratio",
+                                  "board_ratio",
+                                  "point_ratio",
+                                  "buchholz",
+                                  "buchholz_cut1",
+                                  "sberger",
+                                  "direct",
+                                  "fair_play",
+                                  "seed",
+                                  "lots",
+                                  "set_diff",
+                                  "point_diff",
+                                  "h2h_two",
+                                  "h2h_wins",
+                                  "h2h_set_ratio",
+                                  "h2h_point_ratio",
+                                  "h2h_reapply",
+                                  "h2h_exclusion",
+                                  "matches_played",
+                                  "field_goals"
+                                ]
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "crossGroupTiebreakers": {
+                          "anyOf": [
+                            {
+                              "type": "array",
+                              "items": {
+                                "type": "string",
+                                "enum": [
+                                  "points",
+                                  "wins",
+                                  "h2h_points",
+                                  "h2h_diff",
+                                  "h2h_for",
+                                  "diff",
+                                  "for",
+                                  "nrr",
+                                  "set_ratio",
+                                  "game_ratio",
+                                  "board_ratio",
+                                  "point_ratio",
+                                  "buchholz",
+                                  "buchholz_cut1",
+                                  "sberger",
+                                  "direct",
+                                  "fair_play",
+                                  "seed",
+                                  "lots",
+                                  "set_diff",
+                                  "point_diff",
+                                  "h2h_two",
+                                  "h2h_wins",
+                                  "h2h_set_ratio",
+                                  "h2h_point_ratio",
+                                  "h2h_reapply",
+                                  "h2h_exclusion",
+                                  "matches_played",
+                                  "field_goals"
+                                ]
+                              }
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
                         "rules",
-                        "points"
+                        "points",
+                        "tiebreakers",
+                        "crossGroupTiebreakers"
                       ],
                       "additionalProperties": false
                     },
@@ -25987,7 +27555,13 @@
                         "winnerPoints": 3,
                         "loserPoints": 0
                       }
-                    }
+                    },
+                    "tiebreakers": [
+                      "points"
+                    ],
+                    "crossGroupTiebreakers": [
+                      "points"
+                    ]
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
@@ -73521,7 +75095,7 @@
     },
     "/api/v1/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/standings": {
       "get": {
-        "summary": "Public standings",
+        "summary": "Public standings: every published table of the division, each row as `GET /stages/{id}/standings` serves it (`won_ot`/`won_so`/`lost_ot`/`lost_so` in `metrics`, `tieBreak` with its `note` and `drawnAt`, `level` on a table with no counted fixture)",
         "tags": [
           "public"
         ],
@@ -73567,7 +75141,192 @@
                     "ok": {
                       "const": true
                     },
-                    "data": {},
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "division_id": {
+                          "type": "string",
+                          "format": "uuid",
+                          "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                        },
+                        "standings": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "stage_id": {
+                                "type": "string",
+                                "format": "uuid",
+                                "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                              },
+                              "pool_id": {
+                                "anyOf": [
+                                  {
+                                    "type": "string",
+                                    "format": "uuid",
+                                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "rows": {
+                                "type": "array",
+                                "items": {
+                                  "type": "object",
+                                  "properties": {
+                                    "entrantId": {
+                                      "type": "string"
+                                    },
+                                    "played": {
+                                      "type": "number"
+                                    },
+                                    "won": {
+                                      "type": "number"
+                                    },
+                                    "drawn": {
+                                      "type": "number"
+                                    },
+                                    "lost": {
+                                      "type": "number"
+                                    },
+                                    "points": {
+                                      "type": "number"
+                                    },
+                                    "metrics": {
+                                      "type": "object",
+                                      "properties": {
+                                        "won_ot": {
+                                          "type": "number"
+                                        },
+                                        "won_so": {
+                                          "type": "number"
+                                        },
+                                        "lost_ot": {
+                                          "type": "number"
+                                        },
+                                        "lost_so": {
+                                          "type": "number"
+                                        }
+                                      },
+                                      "additionalProperties": {
+                                        "type": "number"
+                                      }
+                                    },
+                                    "rank": {
+                                      "type": "number"
+                                    },
+                                    "rankLocked": {
+                                      "type": "boolean"
+                                    },
+                                    "tieUnbroken": {
+                                      "type": "boolean"
+                                    },
+                                    "tieBreak": {
+                                      "type": "object",
+                                      "properties": {
+                                        "key": {
+                                          "type": "string",
+                                          "enum": [
+                                            "points",
+                                            "wins",
+                                            "h2h_points",
+                                            "h2h_diff",
+                                            "h2h_for",
+                                            "diff",
+                                            "for",
+                                            "nrr",
+                                            "set_ratio",
+                                            "game_ratio",
+                                            "board_ratio",
+                                            "point_ratio",
+                                            "buchholz",
+                                            "buchholz_cut1",
+                                            "sberger",
+                                            "direct",
+                                            "fair_play",
+                                            "seed",
+                                            "lots",
+                                            "set_diff",
+                                            "point_diff",
+                                            "h2h_two",
+                                            "h2h_wins",
+                                            "h2h_set_ratio",
+                                            "h2h_point_ratio",
+                                            "h2h_reapply",
+                                            "h2h_exclusion",
+                                            "matches_played",
+                                            "field_goals",
+                                            "fewest_played"
+                                          ]
+                                        },
+                                        "with": {
+                                          "type": "array",
+                                          "items": {
+                                            "type": "string"
+                                          }
+                                        },
+                                        "note": {
+                                          "type": "string",
+                                          "enum": [
+                                            "h2h_two_not_applicable",
+                                            "h2h_incomplete"
+                                          ]
+                                        },
+                                        "drawnAt": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "key",
+                                        "with"
+                                      ],
+                                      "additionalProperties": false
+                                    },
+                                    "level": {
+                                      "type": "boolean"
+                                    }
+                                  },
+                                  "required": [
+                                    "entrantId",
+                                    "played",
+                                    "won",
+                                    "drawn",
+                                    "lost",
+                                    "points",
+                                    "metrics"
+                                  ],
+                                  "additionalProperties": false
+                                }
+                              },
+                              "updated_at": {
+                                "anyOf": [
+                                  {
+                                    "type": "string"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              }
+                            },
+                            "required": [
+                              "stage_id",
+                              "pool_id",
+                              "rows",
+                              "updated_at"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "division_id",
+                        "standings"
+                      ],
+                      "additionalProperties": false
+                    },
                     "requestId": {
                       "type": "string",
                       "format": "uuid"
@@ -73576,7 +75335,32 @@
                 },
                 "example": {
                   "ok": true,
-                  "data": {},
+                  "data": {
+                    "division_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                    "standings": [
+                      {
+                        "stage_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "pool_id": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                        "rows": [
+                          {
+                            "entrantId": "example",
+                            "played": 1,
+                            "won": 1,
+                            "drawn": 1,
+                            "lost": 1,
+                            "points": 1,
+                            "metrics": {
+                              "won_ot": 1,
+                              "won_so": 1,
+                              "lost_ot": 1,
+                              "lost_so": 1
+                            }
+                          }
+                        ],
+                        "updated_at": "example"
+                      }
+                    ]
+                  },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }
               }

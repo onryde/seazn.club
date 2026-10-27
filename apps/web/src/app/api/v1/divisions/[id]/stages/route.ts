@@ -1,15 +1,16 @@
 import { v1, reply, parseBody } from "@/server/api-v1/http";
 import { requireResourceAuth } from "@/server/api-v1/auth";
 import { CreateStages } from "@/server/api-v1/schemas";
-import { listStages, createStages, replaceStages } from "@/server/usecases/stages";
+import { listStagesWithTableRules, createStages, replaceStages } from "@/server/usecases/stages";
 
 type Ctx = { params: Promise<{ id: string }> };
 
+/** The division's stages in board order, each with its table rules (W2d: `tableRules`, null where they do not read). */
 export async function GET(req: Request, { params }: Ctx) {
   return v1(async () => {
     const { id } = await params;
     const auth = await requireResourceAuth(req, "division", id, "read");
-    return listStages(auth, id);
+    return listStagesWithTableRules(auth, id);
   });
 }
 

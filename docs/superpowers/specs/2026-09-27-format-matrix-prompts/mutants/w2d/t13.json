@@ -1,0 +1,275 @@
+[
+ {
+  "id": "t13-tiebreakers-source-hardcoded-sport",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "tiebreakers: { keys: [...doc.tiebreakers], source: doc.sources.tiebreakers, pinnedAt:",
+  "replace": "tiebreakers: { keys: [...doc.tiebreakers], source: \"sport\" as const, pinnedAt:",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "X-TB-1 GET /stages"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "PATCH division tiebreakers after activation"
+   }
+  ]
+ },
+ {
+  "id": "t13-tiebreakerkeys-lose-h2h-two",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": "\"set_diff\", \"point_diff\", \"h2h_two\", \"h2h_wins\",",
+  "replace": "\"set_diff\", \"point_diff\", \"h2h_wins\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "X-TB-1 GET /stages"
+   }
+  ]
+ },
+ {
+  "id": "t13-sport-default-from-winning-order",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "sportDefault: [...doc.sportDefault] },",
+  "replace": "sportDefault: [...doc.tiebreakers] },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "PS-7b tableRules"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "X-TB-1 GET /stages"
+   }
+  ]
+ },
+ {
+  "id": "t13-points-source-hardcoded-sport",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "points: { rule: doc.points, source: doc.sources.points, pinnedAt: doc.pinnedAt },",
+  "replace": "points: { rule: doc.points, source: \"sport\" as const, pinnedAt: doc.pinnedAt },",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "X-TB-1 GET /stages"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "N2 a flat PUT body"
+   }
+  ]
+ },
+ {
+  "id": "t13-reachable-outcomes-dropped",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "    reachableOutcomes: [...doc.reachable],\n",
+  "replace": "    reachableOutcomes: [],\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "X-TB-1 GET /stages"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "X-PT-3 PUT /fixtures"
+   }
+  ]
+ },
+ {
+  "id": "t13-table-rules-never-served",
+  "file": "apps/web/src/server/usecases/stages.ts",
+  "find": "return { ...r, tableRules: doc === undefined ? null : tableRulesWireOf(doc) };",
+  "replace": "return { ...r, tableRules: null };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "X-TB-1 GET /stages"
+   }
+  ]
+ },
+ {
+  "id": "t13-put-answer-drops-order",
+  "file": "apps/web/src/server/usecases/stage-rules.ts",
+  "find": "      tiebreakers: after!.tiebreakers ?? null,\n",
+  "replace": "      tiebreakers: null,\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "X-TB-1 GET /stages"
+   }
+  ]
+ },
+ {
+  "id": "t13-put-refine-drops-order-arm",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": "(b) => b.rules !== undefined || b.points !== undefined || b.tiebreakers !== undefined || b.crossGroupTiebreakers !== undefined,",
+  "replace": "(b) => b.rules !== undefined || b.points !== undefined || b.crossGroupTiebreakers !== undefined,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "X-TB-1 GET /stages"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "X-TB-5 PUT /stages"
+   }
+  ]
+ },
+ {
+  "id": "t13-n2-flat-rule-asked-sport-only",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "  return splitsLost(module, stage, rule).differs ? splits : [];\n}",
+  "replace": "  return splits;\n}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "N2 a flat PUT body"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "N3 replaceStages carries"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "ITTF: a flat 2/1"
+   }
+  ]
+ },
+ {
+  "id": "t13-n2-flat-rule-always-accepted",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "  return splitsLost(module, stage, rule).differs ? splits : [];\n}",
+  "replace": "  return [];\n}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "N2 a flat PUT body"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "N3 replaceStages carries"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "flattenedSplits: the splits a flat rule SENT"
+   }
+  ]
+ },
+ {
+  "id": "t13-n2-stated-split-refused",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "export function flattenedSplits(module: AnySportModule, cfg: unknown, kind: string, rule: PointsRule): SplitReason[] {\n  if (!isFlatRule(rule)) return [];\n",
+  "replace": "export function flattenedSplits(module: AnySportModule, cfg: unknown, kind: string, rule: PointsRule): SplitReason[] {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/stage-points-splits.test.ts"
+    ],
+    "name": "flattenedSplits: the splits a flat rule SENT"
+   }
+  ]
+ },
+ {
+  "id": "t13-tiebreak-key-loses-fewest-played",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": "export const TieBreakKeyS = z.enum([...TiebreakerKeyS.options, \"fewest_played\"]);",
+  "replace": "export const TieBreakKeyS = z.enum([...TiebreakerKeyS.options]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "m8 the standings row"
+   }
+  ]
+ },
+ {
+  "id": "t13-tiebreak-note-loses-h2h-incomplete",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": "export const TieBreakNoteS = z.enum([\"h2h_two_not_applicable\", \"h2h_incomplete\"]);",
+  "replace": "export const TieBreakNoteS = z.enum([\"h2h_two_not_applicable\"]);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "m8 the standings row"
+   }
+  ]
+ },
+ {
+  "id": "t13-standings-metrics-drop-decided-in",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": "      won_so: z.number().optional(),\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "m8 the standings row"
+   }
+  ]
+ }
+]

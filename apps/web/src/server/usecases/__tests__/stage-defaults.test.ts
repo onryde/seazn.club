@@ -597,15 +597,15 @@ describe.skipIf(!HAS_DB)("R-T12-1 X-SR-6: a period knockout's deciders switched 
     const { divisionId } = await seedDivision(auth, "icehockey", "iihf", 2);
     const [st] = await createStages(auth, divisionId, { seq: 1, kind: "knockout", name: "KO", config: {}, progression: null });
     const preset = stageDefaultsFor(ice, "knockout", "iihf");
-    await expect(putStageRules(auth, st!.id, { rules: { shootout: false } })).resolves.toEqual({ rules: { ...preset, shootout: false }, points: null });
-    await expect(putStageRules(auth, st!.id, { rules: { overtime: false } })).resolves.toEqual({ rules: { overtime: false, shootout: false }, points: null });
+    await expect(putStageRules(auth, st!.id, { rules: { shootout: false } })).resolves.toEqual({ rules: { ...preset, shootout: false }, points: null, tiebreakers: null, crossGroupTiebreakers: null });
+    await expect(putStageRules(auth, st!.id, { rules: { overtime: false } })).resolves.toEqual({ rules: { overtime: false, shootout: false }, points: null, tiebreakers: null, crossGroupTiebreakers: null });
     await expect(putStageRules(auth, st!.id, { rules: { periods: false } })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
     // A division format save re-asks every stage's rules through the merged parse: `false` is read as off there too.
     const division = ice.configSchema.parse(ice.variants.iihf) as { periods: { count: number; minutes: number } };
     await expect(patchDivision(auth, divisionId, { config: { periods: { ...division.periods, minutes: division.periods.minutes + 1 } } })).resolves.toBeDefined();
     expect((await stageConfig(st!.id)).rules, "the division save keeps the stage's off").toEqual({ overtime: false, shootout: false });
     // Back on: null removes the key, and the stage inherits the division's overtime.
-    await expect(putStageRules(auth, st!.id, { rules: { overtime: null } })).resolves.toEqual({ rules: { shootout: false }, points: null });
+    await expect(putStageRules(auth, st!.id, { rules: { overtime: null } })).resolves.toEqual({ rules: { shootout: false }, points: null, tiebreakers: null, crossGroupTiebreakers: null });
   });
 });
 

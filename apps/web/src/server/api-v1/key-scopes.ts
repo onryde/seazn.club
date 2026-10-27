@@ -245,6 +245,7 @@ const RULES: RouteRule[] = [
 
   // pools / stages
   { method: "POST", path: "/pools/:id/clear-entrants", scope: "manage", pin: "pool" },
+  { method: "GET", path: "/stages/:id", scope: "read", pin: "stage" },
   { method: "DELETE", path: "/stages/:id", scope: "manage", pin: "stage" },
   { method: "GET", path: "/stages/:id/americano", scope: "read", pin: "stage" },
   { method: "POST", path: "/stages/:id/challenges", scope: "manage", pin: "stage" },

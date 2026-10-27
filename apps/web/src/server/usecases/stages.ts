@@ -52,6 +52,7 @@ import {
   type StandingsRow,
   type TakeRule,
 } from "@seazn/engine/competition";
+import type { TiebreakerKey } from "@seazn/engine/sport";
 import { completeStageIfReady, recomputeStandings, type CompleteResult } from "@/server/engine-db";
 import { resolveModule } from "@/server/engine-db";
 // L3/#414 pass 3 — not re-exported through the engine-db barrel (index.ts),
@@ -59,7 +60,7 @@ import { resolveModule } from "@/server/engine-db";
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
 import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandings } from "@/server/engine-db/competition";
-import { pinStageTableRules } from "@/server/engine-db/table-rules";
+import { pinStageTableRules, stageTableRulesDocs, type StageTableRulesDoc } from "@/server/engine-db/table-rules";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
@@ -331,6 +332,57 @@ export async function listStages(auth: AuthCtx, divisionId: string): Promise<Sta
     if (!division) throw new HttpError(404, "division not found");
     return tx<StageRow[]>`
       select ${tx(STAGE_COLS)} from stages where division_id = ${divisionId} order by seq`;
+  });
+}
+
+/** W2d Task 13 (spec §7): a stage's table rules on the API's stage document (`StageTableRules` on the wire). */
+export interface StageTableRulesWire {
+  tiebreakers: { keys: TiebreakerKey[]; source: StageTableRulesDoc["sources"]["tiebreakers"]; pinnedAt: string | null; sportDefault: TiebreakerKey[] };
+  crossGroup: { keys: TiebreakerKey[] };
+  points: { rule: StageTableRulesDoc["points"]; source: StageTableRulesDoc["sources"]["points"]; pinnedAt: string | null };
+  reachableOutcomes: StageTableRulesDoc["reachable"][number][];
+}
+export type StageWithTableRulesRow = StageRow & { tableRules: StageTableRulesWire | null };
+
+/** The loader's document (`stageTableRulesDocs`) as the API serves it: the order with the layer it came from, its pin and
+ *  the sport's own default for the stage (PS-7b: read off the sport, never the winning order), the cross-group order, the
+ *  points with theirs, and the outcomes they range over. One pin date: a stage is pinned whole. */
+function tableRulesWireOf(doc: StageTableRulesDoc): StageTableRulesWire {
+  return {
+    tiebreakers: { keys: [...doc.tiebreakers], source: doc.sources.tiebreakers, pinnedAt: doc.pinnedAt, sportDefault: [...doc.sportDefault] },
+    crossGroup: { keys: [...doc.crossGroup] },
+    points: { rule: doc.points, source: doc.sources.points, pinnedAt: doc.pinnedAt },
+    reachableOutcomes: [...doc.reachable],
+  };
+}
+
+/** Each stage row with its table rules, in one read (`stageTableRulesDocs`): null where the loader refuses the stage's
+ *  rules (logged there) — the API shows no order rather than a guessed one (R3). */
+async function withTableRules(tx: Tx, rows: readonly StageRow[]): Promise<StageWithTableRulesRow[]> {
+  const docs = await stageTableRulesDocs(tx, rows.map((r) => r.id));
+  return rows.map((r) => {
+    const doc = docs[r.id];
+    return { ...r, tableRules: doc === undefined ? null : tableRulesWireOf(doc) };
+  });
+}
+
+/** GET /divisions/{id}/stages (W2d Task 13): `listStages` with each stage's table rules. The pages keep `listStages`. */
+export async function listStagesWithTableRules(auth: AuthCtx, divisionId: string): Promise<StageWithTableRulesRow[]> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
+    if (!division) throw new HttpError(404, "division not found");
+    const rows = await tx<StageRow[]>`
+      select ${tx(STAGE_COLS)} from stages where division_id = ${divisionId} order by seq`;
+    return withTableRules(tx, rows);
+  });
+}
+
+/** GET /stages/{id} (W2d Task 13): one stage with its table rules. */
+export async function getStageWithTableRules(auth: AuthCtx, stageId: string): Promise<StageWithTableRulesRow> {
+  return withTenant(auth.orgId, async (tx) => {
+    const rows = await tx<StageRow[]>`select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+    if (rows.length === 0) throw new HttpError(404, "stage not found");
+    return (await withTableRules(tx, rows))[0]!;
   });
 }
 

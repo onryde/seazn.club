@@ -546,7 +546,7 @@ describe.skipIf(!HAS_DB)("I2 (Task 11 review): a stage save validates against th
     const { divisionId } = await seedDivision(auth, "badminton", "bwf", 0);
     const s = await seedStage(auth, divisionId, 1, "league");
     const outcome = await saveBehindADivisionCommit(auth, divisionId, s, { cap: 21 }, async () => {});
-    expect(outcome).toEqual({ rules: { cap: 21 }, points: null });
+    expect(outcome).toEqual({ rules: { cap: 21 }, points: null, tiebreakers: null, crossGroupTiebreakers: null });
     expect(await rulesOf(s)).toEqual({ cap: 21 });
   });
 });

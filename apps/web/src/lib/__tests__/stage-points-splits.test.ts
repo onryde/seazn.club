@@ -9,7 +9,7 @@ import { StageKind } from "@seazn/engine/core";
 import { PointsRule } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { RULEBOOK_SPLITS, TABLE_KINDS } from "@/components/v2/stage-rules/__tests__/_points-split-rulebook";
-import { flatOf, isFlatRule, sportPointsSplits } from "../stage-points-splits";
+import { flatOf, flattenedSplits, isFlatRule, sportPointsSplits } from "../stage-points-splits";
 
 const LEVEL = new Set(["tie", "noResult"]);
 const DIVISIONS = builtinModules.flatMap((m) => Object.keys(m.variants).map((variant) => ({ m: m as AnySportModule, variant })));
@@ -72,5 +72,61 @@ describe("isFlatRule / flatOf", () => {
     expect(PointsRule.safeParse({ ...FLAT, shootoutAs: "draw_plus_bonus", soBonus: 1 }).success, "and takes it with draw-plus-bonus").toBe(true);
     const kept = flatOf({ ...FLAT, tie: 1, noResult: 2, unit: "half", bonuses: [{ when: "draw", points: 1 }], win: { regulation: 3, ot: 2 } });
     expect(kept).toEqual({ ...FLAT, tie: 1, noResult: 2, unit: "half", bonuses: [{ when: "draw", points: 1 }] });
+  });
+});
+
+// W2d Task 13 (N2, N3; orchestrator ruling): the server asks the RULE SENT, not only the sport. A flat rule that pays every
+// outcome the stage reaches as the sport does is accepted; one that flattens a split is refused naming the sport's splits
+// (the wire `sportPointsSplits` has always named). ITTF team-league points (2/1/0) are the one rulebook whose split a flat
+// rule can still pay whole: its `forfeit` row pays the walkover — the loss not played — 2/0.
+const ITTF_EQUAL: PointsRule = { win: { regulation: 2 }, loss: { regulation: 1 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 2, loserPoints: 0 } };
+
+describe("flattenedSplits: the splits a flat rule SENT would flatten (N2, N3)", () => {
+  it("sweep: the sport's own rule made flat is refused naming the rulebook's splits, and accepted where the rulebook names none; the sport's own rule (its splits stated) is never refused (counted)", () => {
+    let checked = 0;
+    let refused = 0;
+    for (const { m, variant } of DIVISIONS) {
+      const want = (RULEBOOK_SPLITS[`${m.key}/${variant}`] ?? []).filter((r) => !LEVEL.has(r));
+      const cfg = m.configSchema.parse(m.variants[variant]);
+      for (const kind of TABLE_KINDS) {
+        const own = m.tablePointsRule(cfg, kind as StageKind);
+        expect(flattenedSplits(m, cfg, kind, flatOf(own)), `${m.key}/${variant} ${kind}: flattened`).toEqual(want);
+        if (!isFlatRule(own)) expect(flattenedSplits(m, cfg, kind, own), `${m.key}/${variant} ${kind}: stated`).toEqual([]);
+        if (want.length > 0) refused++;
+        checked++;
+      }
+    }
+    expect(checked, "every division × every table kind").toBe(DIVISIONS.length * TABLE_KINDS.length);
+    expect(refused, "the refusals were reached").toBeGreaterThan(0);
+    expect(checked - refused, "and the acceptances").toBeGreaterThan(0);
+  });
+
+  it("ITTF: a flat 2/1 whose forfeit row pays the walkover 2/0 is accepted on every table-tennis format and table kind; without the row, or paying 3/0, it is refused ['unplayed'] (counted)", () => {
+    // single-sport: table tennis is the one rulebook split (a loss not played) a flat rule's forfeit row can pay whole.
+    const tt = builtinModules.find((m) => m.key === "tabletennis") as AnySportModule;
+    let checked = 0;
+    for (const variant of Object.keys(tt.variants)) {
+      expect(RULEBOOK_SPLITS[`tabletennis/${variant}`], `premise: ${variant} splits the loss not played`).toEqual(["unplayed"]);
+      const cfg = tt.configSchema.parse(tt.variants[variant]);
+      for (const kind of TABLE_KINDS) {
+        expect(isFlatRule(ITTF_EQUAL), "premise: the rule is flat").toBe(true);
+        expect(flattenedSplits(tt, cfg, kind, ITTF_EQUAL), `${variant} ${kind}: pays as ITTF`).toEqual([]);
+        const noRow: PointsRule = { ...ITTF_EQUAL, forfeit: undefined };
+        expect(flattenedSplits(tt, cfg, kind, noRow), `${variant} ${kind}: no forfeit row`).toEqual(["unplayed"]);
+        expect(flattenedSplits(tt, cfg, kind, { ...ITTF_EQUAL, forfeit: { winnerPoints: 3, loserPoints: 0 } }), `${variant} ${kind}: 3/0`).toEqual(["unplayed"]);
+        checked++;
+      }
+    }
+    expect(checked).toBe(Object.keys(tt.variants).length * TABLE_KINDS.length);
+  });
+
+  it("another sport: no flat rule pays IIHF's overtime 2/1 — IIHF-equal amounts on regulation still flatten it; a flat sport takes any flat rule; nothing to ask is never a refusal", () => {
+    const ih = builtinModules.find((m) => m.key === "icehockey") as AnySportModule;
+    const g = builtinModules.find((m) => m.key === "generic") as AnySportModule;
+    expect(flattenedSplits(ih, ih.variants.iihf, "league", { ...FLAT, win: { regulation: 3 }, loss: { regulation: 0 } })).toEqual(["otWin", "otLoss"]);
+    expect(flattenedSplits(ih, ih.variants.iihf, "league", { ...FLAT, win: { regulation: 2 }, loss: { regulation: 1 } }), "OT's 2/1 everywhere").toEqual(["otWin", "otLoss"]);
+    expect(flattenedSplits(g, g.variants.score, "league", { ...FLAT, win: { regulation: 7 } }), "generic pays nothing apart").toEqual([]);
+    expect(flattenedSplits(ih, ih.variants.iihf, "knockout", FLAT), "a bracket kind").toEqual([]);
+    expect(flattenedSplits(ih, { periods: "many" }, "league", FLAT), "a cfg the schema refuses").toEqual([]);
   });
 });

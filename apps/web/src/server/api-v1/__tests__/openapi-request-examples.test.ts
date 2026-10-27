@@ -112,7 +112,8 @@ describe("OpenAPI — every published request example parses against its own sch
     const create = verdicts.find((x) => x.key === "POST /divisions/{id}/stages")!.example as { config: Record<string, unknown> };
     expect(Object.keys(create.config).length, "the config example is not empty").toBeGreaterThan(0);
     const put = verdicts.find((x) => x.key === "PUT /stages/{id}/rules")!.example as Record<string, unknown>;
-    expect(Object.keys(put).sort(), "the rules PUT shows its two arms").toEqual(["points", "rules"]);
+    // W2d Task 13: the stage's own orders ride the same PUT, beside the format and the points.
+    expect(Object.keys(put).sort(), "the rules PUT shows its four arms").toEqual(["crossGroupTiebreakers", "points", "rules", "tiebreakers"]);
   });
 });
 

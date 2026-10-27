@@ -456,9 +456,9 @@
  },
  {
   "id": "t10-split-flat-guard-dropped",
-  "file": "apps/web/src/server/usecases/table-rule-guards.ts",
-  "find": "  if (!isFlatRule(rule)) return;",
-  "replace": "  /*MUT*/",
+  "file": "apps/web/src/lib/stage-points-splits.ts",
+  "find": "  if (!isFlatRule(rule)) return [];\n",
+  "replace": "  /*MUT*/\n",
   "killers": [
    {
     "cwd": "apps/web",

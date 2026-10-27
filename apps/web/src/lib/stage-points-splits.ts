@@ -182,3 +182,20 @@ export function sportPointsSplits(module: AnySportModule, cfg: unknown, kind: st
   const stage = sportStageRule(module, cfg, kind);
   return stage === null ? [] : splitsLost(module, stage, flatOf(stage.rule)).reasons;
 }
+
+/**
+ * W2d Task 13 (N2, N3; orchestrator ruling) — the splits a FLAT `rule` written to a stage of `kind` under `cfg` would
+ * flatten: the server's POINTS_SPLIT_FLATTENED answer, the editor's (`pointsEditorFits`) asked of the rule actually sent.
+ * Empty where there is nothing to refuse: a rule that is not flat (it states its splits), a stage whose sport pays nothing
+ * apart (`sportPointsSplits` empty: a flat rule says its points whole), and a flat rule that pays every outcome the stage
+ * reaches exactly as the sport does (ITTF's win 2, loss 1 with a `forfeit` row paying the walkover 2/0 — nothing is
+ * flattened). Otherwise the sport's splits (`sportPointsSplits`), as the refusal has always named them.
+ */
+export function flattenedSplits(module: AnySportModule, cfg: unknown, kind: string, rule: PointsRule): SplitReason[] {
+  if (!isFlatRule(rule)) return [];
+  const stage = sportStageRule(module, cfg, kind);
+  if (stage === null) return [];
+  const splits = splitsLost(module, stage, flatOf(stage.rule)).reasons;
+  if (splits.length === 0) return [];
+  return splitsLost(module, stage, rule).differs ? splits : [];
+}
