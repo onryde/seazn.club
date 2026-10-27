@@ -644,6 +644,20 @@ describe("the rest of the port's behaviour", () => {
     expect(() => f.deleteVideo("never-existed")).toThrow(YouTubeError);
   });
 
+  it("existingVideos([]) follows the live driver: an empty set with NO token check, NO call logged and NO injected failure taken", async () => {
+    const f = new FakeYouTube();
+    const before = f.calls.length;
+    await expect(f.existingVideos("never-issued-access-token", []), "no token check").resolves.toEqual(new Set());
+    expect(f.calls.length, "not a call").toBe(before);
+    // an injected failure waits for a call that is one
+    const { f: g, at } = await rig();
+    g.failNext("existingVideos", "youtube_unavailable", "backendError");
+    await expect(g.existingVideos(at, [])).resolves.toEqual(new Set());
+    expect(((await rejection(g.existingVideos(at, ["aaa"]))) as YouTubeError).reason, "the injection was still waiting").toBe("backendError");
+    // the positive pair: a non-empty list does check the token
+    expect(((await rejection(f.existingVideos("never-issued-access-token", ["aaa"]))) as YouTubeError).code).toBe("youtube_reconnect_needed");
+  });
+
   it("control ops on a stream the fake never made are refused, not silently ignored", () => {
     const f = new FakeYouTube();
     expect(() => f.videoOn("nope")).toThrow(YouTubeError);
@@ -950,6 +964,41 @@ describe("OAuth exchange realism (PKCE, redirect, single use, granted scope)", (
     expect((await f.exchangeCode({ code: f.issueCode("s-early"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).scope, "and only that one: it was spent").toBe(youtube);
     expect(() => f.setGrantedScope(readonly, "never-authorized"), "an unknown state").toThrow(YouTubeError);
   });
+
+  it("the Google subject is bound to ONE state: null makes that grant's googleSub null (T18's no-sub branch), a string gives grants the SAME account, and it is spent by one grant", async () => {
+    const f = new FakeYouTube();
+    const dflt = (await grant(f)).googleSub;
+    expect(dflt, "PREMISE: an unset grant reports a subject").toEqual(expect.any(String));
+    expect((await grant(f, { before: (state) => f.setGoogleSub(null, state) })).googleSub, "null: no subject").toBeNull();
+    expect((await grant(f)).googleSub, "the next connect is back to the default: the control was spent").toBe(dflt);
+    // The SAME account on two connections (an admin of two clubs): both report it, and neither is the default.
+    const a = await grant(f, { before: (state) => f.setGoogleSub("acct-777", state) });
+    const b = await grant(f, { before: (state) => f.setGoogleSub("acct-777", state) });
+    expect([a.googleSub, b.googleSub]).toEqual(["acct-777", "acct-777"]);
+    expect(a.refreshToken, "two grants, one account").not.toBe(b.refreshToken);
+    expect((await grant(f)).googleSub, "and a third, unset, is not that account").toBe(dflt);
+    // A code issued BEFORE the control keeps the subject it was issued with; another state is never touched.
+    f.authorizeUrl({ state: "s-early", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
+    f.authorizeUrl({ state: "s-other", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
+    const early = f.issueCode("s-early");
+    f.setGoogleSub(null, "s-early");
+    expect((await f.exchangeCode({ code: early, codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub).toBe(dflt);
+    expect((await f.exchangeCode({ code: f.issueCode("s-other"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub, "another state is untouched").toBe(dflt);
+    expect((await f.exchangeCode({ code: f.issueCode("s-early"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub, "its next code carries it").toBeNull();
+    expect((await f.exchangeCode({ code: f.issueCode("s-early"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub, "and only that one: it was spent").toBe(dflt);
+    expect(() => f.setGoogleSub(null, "never-authorized"), "an unknown state").toThrow(YouTubeError);
+  });
+
+  it("a reset drops a subject bound to a state (the state is unknown afterwards, and the same string authorized again is the default)", async () => {
+    const f = new FakeYouTube();
+    const dflt = (await grant(f)).googleSub;
+    f.authorizeUrl({ state: "st-reset-sub", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
+    f.setGoogleSub(null, "st-reset-sub");
+    f.reset();
+    expect(() => f.issueCode("st-reset-sub")).toThrow(YouTubeError);
+    f.authorizeUrl({ state: "st-reset-sub", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
+    expect((await f.exchangeCode({ code: f.issueCode("st-reset-sub"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub).toBe(dflt);
+  });
 });
 
 describe("broadcast titles", () => {
@@ -977,6 +1026,27 @@ describe("broadcast titles", () => {
       checked++;
     }
     expect(checked).toBe(refused.length + accepted.length);
+  });
+});
+
+describe("insertBroadcast refusal order follows the live driver: the title before eligibility", () => {
+  it("a bad title is invalidTitle on a channel-less account, a not-enabled channel and a blocked channel; a good title there is told the eligibility reason", async () => {
+    const situations: [string, () => Promise<{ f: FakeYouTube; at: string }>, string][] = [
+      ["no channel", () => rig({ channels: [] }), "youtubeSignupRequired"],
+      ["live not enabled", async () => { const r = await rig(); r.f.setLive("not_enabled"); return r; }, "liveStreamingNotEnabled"],
+      ["live blocked", async () => { const r = await rig(); r.f.setLive("blocked"); return r; }, "livePermissionBlocked"],
+    ];
+    let checked = 0;
+    for (const [name, build, reason] of situations) {
+      const { f, at } = await build();
+      const bad = (await rejection(f.insertBroadcast(at, bcast("<b>")))) as YouTubeError;
+      expect([name, bad.code, bad.reason]).toEqual([name, "youtube_unavailable", "invalidTitle"]);
+      const good = (await rejection(f.insertBroadcast(at, bcast("Fine title")))) as YouTubeError;
+      expect([name, good.reason], "the positive pair").toEqual([name, reason]);
+      expect(f.broadcastsCount(), `${name}: nothing created`).toBe(0);
+      checked++;
+    }
+    expect(checked).toBe(situations.length);
   });
 });
 

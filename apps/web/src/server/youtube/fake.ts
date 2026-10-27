@@ -55,7 +55,7 @@ const FAKE_INGEST_URL = "rtmp://a.rtmp.youtube.com/live2";
 /** Google's refresh tokens begin `1//`. The fake accepts an UNSEEN refresh token only in that shape (a test seeding its own
  *  database writes one), pinning it to a fresh channel; any other string was never issued and is `invalid_grant`. */
 const GOOGLE_REFRESH_TOKEN_PREFIX = "1//";
-/** The fake's one account, constant: nothing in the product keys off a fake's subject. */
+/** The subject a fake grant reports unless `setGoogleSub` says otherwise (a state-bound control; null = no `sub`). */
 const FAKE_GOOGLE_SUB = "fake-google-sub";
 /** Where the fake authorize hop lives (T7 owns the route); the fake's `authorizeUrl` points at it on the redirect URI's origin. */
 const FAKE_AUTHORIZE_PATH = "/api/youtube/connect/fake-authorize";
@@ -84,7 +84,7 @@ interface Grant { channels: Channel[]; channelId: string }
 interface Injection { code: YoutubeErrorCode; reason?: string; channelId?: string }
 /** What `authorizeUrl` recorded for an OAuth state, plus what a test bound to THAT state: the channels the grant it mints gets
  *  and the scope its code carries. Both ride the first code `issueCode` mints for the state and are spent there. */
-interface Pending { challenge: string; redirectUri: string; channels?: Channel[]; scope?: string }
+interface Pending { challenge: string; redirectUri: string; channels?: Channel[]; scope?: string; sub?: string | null }
 /** What the inspector shows of a broadcast: everything it was created with, where it is bound and its life. No credential. */
 export interface BroadcastView {
   channelId: string; title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy; madeForKids: boolean;
@@ -124,7 +124,7 @@ export class FakeYouTube implements YouTubePort {
   private injected = new Map<PortMethod, Injection[]>();
   /** OAuth state → what `authorizeUrl` was asked for. */
   private pending = new Map<string, Pending>();
-  private codes = new Map<string, { challenge: string; redirectUri: string; scope: string; channels: Channel[] | null; used: boolean }>();
+  private codes = new Map<string, { challenge: string; redirectUri: string; scope: string; channels: Channel[] | null; sub: string | null; used: boolean }>();
 
   constructor(o: { channels?: Channel[]; now?: () => Date } = {}) {
     this.fixedChannels = o.channels ? o.channels.map((c) => ({ ...c })) : null;
@@ -212,6 +212,14 @@ export class FakeYouTube implements YouTubePort {
     else p.scope = scope;
   }
 
+  /** The Google account subject (`googleSub`) the ONE grant that OAuth `state` mints reports: `null` is the real driver's likely
+   *  answer for a youtube-only token (tokeninfo may carry no `sub`; google.ts returns null then), so T18's no-sub branch is
+   *  reachable here; a string lets a test give two connections the SAME account (an admin of two clubs). Bound to that state and
+   *  spent by its first code, like `setChannels` and `setGrantedScope`; a grant nobody set reports the fake's constant. */
+  setGoogleSub(sub: string | null, state: string): void {
+    this.pendingOf(state).sub = sub;
+  }
+
   /** The fake authorize hop's job: Google redirecting back with a code. A single-use code bound to the challenge and redirect
    *  URI the state's `authorizeUrl` recorded. Unknown state -> `youtube_not_found`. `o.scope` beats `setGrantedScope`. The
    *  channels and scope a test bound to the state ride this code and are SPENT: a second code for the state carries none. */
@@ -219,10 +227,12 @@ export class FakeYouTube implements YouTubePort {
     const p = this.pendingOf(state);
     const code = `fake-code-${++this.seq}`;
     this.codes.set(code, {
-      challenge: p.challenge, redirectUri: p.redirectUri, scope: o.scope ?? p.scope ?? YOUTUBE_SCOPE, channels: p.channels ?? null, used: false,
+      challenge: p.challenge, redirectUri: p.redirectUri, scope: o.scope ?? p.scope ?? YOUTUBE_SCOPE, channels: p.channels ?? null,
+      sub: p.sub === undefined ? FAKE_GOOGLE_SUB : p.sub, used: false,
     });
     delete p.channels;
     delete p.scope;
+    delete p.sub;
     return code;
   }
 
@@ -337,7 +347,7 @@ export class FakeYouTube implements YouTubePort {
     issued.used = true;
     const refreshToken = `fake-rt-${++this.seq}`;
     this.grants.set(refreshToken, this.newGrant(issued.channels));
-    return { refreshToken, scope: issued.scope, googleSub: FAKE_GOOGLE_SUB };
+    return { refreshToken, scope: issued.scope, googleSub: issued.sub };
   }
 
   async accessToken(refreshToken: string): Promise<string> {
@@ -382,11 +392,13 @@ export class FakeYouTube implements YouTubePort {
   ): Promise<{ broadcastId: string }> {
     this.enter("insertBroadcast", this.channelOfAccess(at));
     const who = this.who(at);
+    // Google answers an invalid title with a 400 that is none of the closed codes, so it is `youtube_unavailable` with its
+    // reason token (the same code `mapGoogleError` gives an unrecognised 4xx). Nothing is created. CHECKED BEFORE ELIGIBILITY,
+    // as the live driver does (google.ts refuses a bad title before it calls Google at all): a channel-less account or a channel
+    // not enabled for live, given a bad title, is told about the title.
+    if (badTitle(a.title)) throw new YouTubeError("youtube_unavailable", "invalidTitle");
     this.requireChannel(who.refreshToken);
     this.requireLiveEnabled(who.channelId);
-    // Google answers an invalid title with a 400 that is none of the closed codes, so it is `youtube_unavailable` with its
-    // reason token (the same code `mapGoogleError` gives an unrecognised 4xx). Nothing is created.
-    if (badTitle(a.title)) throw new YouTubeError("youtube_unavailable", "invalidTitle");
     // 11 characters from [A-Za-z0-9_-]: a real video id's shape, so the replay link and the public embed accept it.
     const id = `fakebc${this.pad()}`;
     this.broadcasts.set(id, {
@@ -404,7 +416,11 @@ export class FakeYouTube implements YouTubePort {
     const stream = this.streams.get(streamId);
     if (!stream || stream.channelId !== who.channelId) throw new YouTubeError("youtube_not_found", "liveStreamNotFound");
     if (!isOpen(b)) throw new YouTubeError("youtube_unavailable", "invalidTransition");
-    // The 4th open broadcast on a key is refused; a broadcast already on this key is not counted against itself.
+    // The 4th open broadcast on a key is refused; a broadcast already on this key is not counted against itself. FAKE-ONLY: Google
+    // documents the "3 per stream key" limit on liveBroadcasts.TRANSITION (`sharedIngestionBroadcastsExceedLimit`), not on bind,
+    // which has no limit reason (bind page). Plan P2 (at most ONE open broadcast per key, enforced by the per-key uniqueness
+    // index) makes this refusal unreachable in the product; it stays as a tripwire for a pool bug that would put a 4th on a key. The live
+    // driver has no counterpart, so no driver-vs-fake parity test may claim one.
     if (b.streamId !== streamId && this.boundOpenCount(streamId) >= MAX_OPEN_PER_STREAM_KEY) throw new YouTubeError("youtube_limit_reached", "limitExceeded");
     b.streamId = streamId;
     if (b.life === "created") b.life = "ready";
@@ -437,8 +453,11 @@ export class FakeYouTube implements YouTubePort {
   }
 
   async existingVideos(at: string, ids: readonly string[]): Promise<Set<string>> {
-    // Refused BEFORE it counts as a call, like the real driver (which refuses without calling Google).
+    // Refused or answered BEFORE it counts as a call, like the real driver (which refuses > 50 without calling Google, and answers
+    // an empty list with an empty set without calling it either: Google answers an empty `id` with a 400). So `[]` needs no valid
+    // token, takes no injected failure and is not logged.
     if (ids.length > MAX_VIDEO_IDS_PER_CALL) throw new RangeError(`existingVideos takes at most ${MAX_VIDEO_IDS_PER_CALL} ids per call`);
+    if (ids.length === 0) return new Set();
     this.enter("existingVideos", this.channelOfAccess(at));
     const who = this.who(at);
     return new Set(ids.filter((id) => this.ownBroadcast(who.channelId, id) !== undefined));

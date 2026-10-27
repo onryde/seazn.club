@@ -486,6 +486,177 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
   });
 });
 
+describe("existingVideos and Google's 404 videoNotFound (fix round 1, I1)", () => {
+  const idOf = (req: Sent): string => new URL(req.url).searchParams.get("id") ?? "";
+
+  it("a 404 videoNotFound on ONE id is that id missing: an empty set, not an error", async () => {
+    handler = () => apiError(404, "videoNotFound");
+    expect([...(await driver().existingVideos(AT, ["aaa"]))]).toEqual([]);
+    expect(sent, "one call: nothing to split").toHaveLength(1);
+    // The positive pair: a 404 with some other reason is NOT 'missing'; it is thrown.
+    handler = () => apiError(404, "somethingNew");
+    expect(((await rejection(driver().existingVideos(AT, ["aaa"]))) as YouTubeError).code).toBe("youtube_unavailable");
+  });
+
+  it("a 404 on a BATCH is never read as 'all missing': it is re-asked one id per call, and only the id whose own call is a 404 is absent", async () => {
+    // Google's page does not say whether a batch with SOME ids missing answers 200 or 404. If it 404s, "all missing" would purge
+    // the links of live videos, so the driver must find out id by id.
+    handler = (req) => {
+      const id = idOf(req);
+      if (id.includes(",")) return apiError(404, "videoNotFound");
+      return id === "bbb" ? apiError(404, "videoNotFound") : res(200, { items: [{ id }] });
+    };
+    const out = await driver().existingVideos(AT, ["aaa", "bbb", "ccc"]);
+    expect([...out].sort(), "bbb alone is absent").toEqual(["aaa", "ccc"]);
+    expect(sent.map(idOf), "the batch, then one call per id, in order").toEqual(["aaa,bbb,ccc", "aaa", "bbb", "ccc"]);
+    for (const r of sent) expect(new URL(r.url).searchParams.get("part")).toBe("id");
+  });
+
+  it("the fallback's other answers differ from the 'all missing' constant: every id present, every id missing, a duplicate id", async () => {
+    // all present singly -> all present (the wrong answer would be the empty set)
+    handler = (req) => (idOf(req).includes(",") ? apiError(404, "videoNotFound") : res(200, { items: [{ id: idOf(req) }] }));
+    expect([...(await driver().existingVideos(AT, ["aaa", "bbb"]))].sort()).toEqual(["aaa", "bbb"]);
+    // all missing singly -> empty
+    sent = [];
+    handler = () => apiError(404, "videoNotFound");
+    expect([...(await driver().existingVideos(AT, ["aaa", "bbb"]))]).toEqual([]);
+    expect(sent, "the batch plus one call per id").toHaveLength(3);
+    // a duplicate id is asked once, and a batch of one distinct id is not split
+    sent = [];
+    expect([...(await driver().existingVideos(AT, ["aaa", "aaa"]))]).toEqual([]);
+    expect(sent.map(idOf)).toEqual(["aaa"]);
+  });
+
+  it("any other failure is thrown and is not split: a batch 500 is one call; a per-id 500 during the fallback is thrown, not read as 'missing'", async () => {
+    handler = () => res(500, undefined, "<html>down</html>");
+    expect(((await rejection(driver().existingVideos(AT, ["aaa", "bbb"]))) as YouTubeError).code).toBe("youtube_unavailable");
+    expect(sent, "a batch 500 is not re-asked per id").toHaveLength(1);
+    sent = [];
+    handler = (req) => (idOf(req).includes(",") ? apiError(404, "videoNotFound") : idOf(req) === "bbb" ? res(503, {}, "unavailable") : res(200, { items: [{ id: idOf(req) }] }));
+    expect(((await rejection(driver().existingVideos(AT, ["aaa", "bbb", "ccc"]))) as YouTubeError).code).toBe("youtube_unavailable");
+    expect(sent.map(idOf), "stops at the failing id").toEqual(["aaa,bbb,ccc", "aaa", "bbb"]);
+  });
+
+  it("agrees with the fake: for the same videos the fake and the driver (batch 404, per-id answers) report the same set", async () => {
+    const fake = new FakeYouTube();
+    const fakeAt = await fake.accessToken("1//vids");
+    const present = (await fake.insertBroadcast(fakeAt, { title: "t", description: "", scheduledStart: new Date(), privacy: "unlisted", madeForKids: false })).broadcastId;
+    const asked = [present, "ghost0000001", "ghost0000002"];
+    const viaFake = await fake.existingVideos(fakeAt, asked);
+    handler = (req) => {
+      const id = idOf(req);
+      if (id.includes(",")) return apiError(404, "videoNotFound");
+      return id === present ? res(200, { items: [{ id }] }) : apiError(404, "videoNotFound");
+    };
+    const viaGoogle = await driver().existingVideos(AT, asked);
+    expect([...viaGoogle].sort()).toEqual([...viaFake].sort());
+    expect([...viaFake], "anti-vacuity: one present, two missing").toEqual([present]);
+  });
+});
+
+describe("guards that need their own killing test (fix round 1, Mb)", () => {
+  it("broadcastLife answers only for the broadcast it was asked about: an item with another id is 'absent', not that item's life", async () => {
+    handler = () => res(200, { items: [{ id: "someone-elses-broadcast", status: { lifeCycleStatus: "live" } }] });
+    expect(await driver().broadcastLife(AT, "bc1")).toBe("absent");
+    // the positive pair: the same body with the asked id IS read
+    handler = () => res(200, { items: [{ id: "someone-elses-broadcast", status: { lifeCycleStatus: "complete" } }, { id: "bc1", status: { lifeCycleStatus: "live" } }] });
+    expect(await driver().broadcastLife(AT, "bc1"), "the matching item among others").toBe("live");
+  });
+
+  it("insertStream needs all three of the stream id, the ingestion address and the stream name: each one missing alone is malformedResponse", async () => {
+    const full = { id: "strm1", cdn: { ingestionInfo: { ingestionAddress: "rtmp://a.rtmp.youtube.com/live2", streamName: "key-abcd-1234" } } };
+    const without: [string, unknown][] = [
+      ["id", { ...full, id: undefined }],
+      ["ingestionAddress", { ...full, cdn: { ingestionInfo: { streamName: "key-abcd-1234" } } }],
+      ["streamName", { ...full, cdn: { ingestionInfo: { ingestionAddress: "rtmp://a.rtmp.youtube.com/live2" } } }],
+    ];
+    let checked = 0;
+    for (const [missing, body] of without) {
+      handler = () => res(200, body);
+      const err = (await rejection(driver().insertStream(AT, { title: "k" }))) as YouTubeError;
+      expect([missing, err instanceof YouTubeError && err.code, err instanceof YouTubeError && err.reason]).toEqual([missing, "youtube_unavailable", "malformedResponse"]);
+      checked++;
+    }
+    expect(checked).toBe(3);
+    handler = () => res(200, full);
+    await expect(driver().insertStream(AT, { title: "k" }), "the positive pair: all three present").resolves.toMatchObject({ streamId: "strm1" });
+  });
+
+  it("tokeninfo's `sub` is kept only as a non-empty string of at most 255 characters: 255 is kept, 256 and empty are null", async () => {
+    const subOf = async (sub: unknown): Promise<string | null> => {
+      handler = when(/\/tokeninfo$/, () => res(200, { sub }))(ok);
+      return (await driver().exchangeCode({ code: CODE, codeVerifier: VERIFIER, redirectUri: REDIRECT })).googleSub;
+    };
+    expect(await subOf("1".repeat(255))).toBe("1".repeat(255));
+    expect(await subOf("1".repeat(256))).toBeNull();
+    expect(await subOf("")).toBeNull();
+    expect(await subOf("1")).toBe("1");
+  });
+
+  it("an OAuth `error` that is not snake_case is read as 'unrecognised' (and is still an OAuth error: a 401 with it is NOT a reconnect)", async () => {
+    const weird = "Some Weird Error! refresh_token=abc";
+    for (const status of [400, 401]) {
+      handler = () => res(status, { error: weird, error_description: "x" });
+      const err = (await rejection(driver().accessToken(RT))) as YouTubeError;
+      expect([status, err.code, err.reason]).toEqual([status, "youtube_unavailable", "unrecognised"]);
+      expect(err.message).not.toContain("refresh_token");
+    }
+    // the positive pair: a well-formed one keeps its own name, camelCased
+    handler = () => oauthError(400, "invalid_request");
+    expect(((await rejection(driver().accessToken(RT))) as YouTubeError).reason).toBe("invalidRequest");
+  });
+
+  it("exchangeCode refuses a token response with no access token (malformedResponse) before asking tokeninfo for anything", async () => {
+    handler = when(/\/token$/, () => res(200, { refresh_token: RT, scope: YOUTUBE_SCOPE }))(ok);
+    const err = (await rejection(driver().exchangeCode({ code: CODE, codeVerifier: VERIFIER, redirectUri: REDIRECT }))) as YouTubeError;
+    expect([err.code, err.reason]).toEqual(["youtube_unavailable", "malformedResponse"]);
+    expect(sent, "no tokeninfo call was made with an empty token").toHaveLength(1);
+  });
+});
+
+describe("refusal order agrees with the fake (fix round 1, Mc: the fake follows the live driver)", () => {
+  const goodBroadcast = { title: "t", description: "", scheduledStart: new Date("2026-11-03T14:30:00Z"), privacy: "unlisted" as const, madeForKids: false };
+
+  it("existingVideos([]) is an empty set with NO call and NO token check, in the fake and in the driver", async () => {
+    const fake = new FakeYouTube();
+    const before = fake.calls.length;
+    // a token the fake never issued: if it were checked, this would be invalid_grant / reconnect_needed
+    expect([...(await fake.existingVideos("not-an-access-token", []))]).toEqual([]);
+    expect(fake.calls.length, "the fake did not count it as a call").toBe(before);
+    expect([...(await driver().existingVideos("not-an-access-token", []))]).toEqual([]);
+    expect(sent, "nor did the driver").toHaveLength(0);
+    // the positive pair: a non-empty list DOES check the token, in the fake
+    await expect(fake.existingVideos("not-an-access-token", ["aaa"])).rejects.toBeInstanceOf(YouTubeError);
+  });
+
+  it("a bad title is refused as invalidTitle BEFORE eligibility: on a channel-less account, a not-enabled channel and a blocked channel, alike in the fake and the driver", async () => {
+    const mk = async (setup: (f: FakeYouTube) => FakeYouTube): Promise<{ f: FakeYouTube; at: string }> => {
+      const f = setup(new FakeYouTube());
+      return { f, at: await f.accessToken("1//order") };
+    };
+    const situations: [string, () => Promise<{ f: FakeYouTube; at: string }>, string][] = [
+      ["no channel", async () => { const f = new FakeYouTube({ channels: [] }); return { f, at: await f.accessToken("1//order") }; }, "youtubeSignupRequired"],
+      ["live not enabled", () => mk((f) => { f.setLive("not_enabled"); return f; }), "liveStreamingNotEnabled"],
+      ["live blocked", () => mk((f) => { f.setLive("blocked"); return f; }), "livePermissionBlocked"],
+    ];
+    let checked = 0;
+    for (const [name, build, eligibilityReason] of situations) {
+      const { f, at } = await build();
+      const badFake = (await rejection(f.insertBroadcast(at, { ...goodBroadcast, title: "<b>" }))) as YouTubeError;
+      expect([name, badFake.code, badFake.reason]).toEqual([name, "youtube_unavailable", "invalidTitle"]);
+      // the positive pair, in the fake: a GOOD title on the same situation is told about the eligibility instead
+      const goodFake = (await rejection(f.insertBroadcast(at, goodBroadcast))) as YouTubeError;
+      expect([name, goodFake.reason]).toEqual([name, eligibilityReason]);
+      sent = [];
+      const badGoogle = (await rejection(driver().insertBroadcast(AT, { ...goodBroadcast, title: "<b>" }))) as YouTubeError;
+      expect([name, badGoogle.code, badGoogle.reason], "the driver says the same").toEqual([name, badFake.code, badFake.reason]);
+      expect(sent, `${name}: and never reaches Google`).toHaveLength(0);
+      checked++;
+    }
+    expect(checked).toBe(situations.length);
+  });
+});
+
 describe("revoke (developers.google.com/identity/protocols/oauth2/web-server, 'Token revocation')", () => {
   it("POSTs the refresh token in a FORM BODY to oauth2.googleapis.com/revoke — never the query string Google's example shows", async () => {
     await driver().revoke(RT);
@@ -711,20 +882,9 @@ describe("mapGoogleError", () => {
       checked++;
     }
     expect(checked).toBe(rows.length);
-    // And the cap refusals agree on the CODE (the fake's reason is its own; Google names the cap in the reason).
-    const f = new FakeYouTube();
-    const at = await f.accessToken("1//cap");
-    const stream = await f.insertStream(at, { title: "k" });
-    for (let i = 0; i < 3; i++) {
-      const b = await f.insertBroadcast(at, { title: "t", description: "", scheduledStart: new Date(), privacy: "unlisted", madeForKids: false });
-      await f.bind(at, b.broadcastId, stream.streamId);
-    }
-    const fourth = await f.insertBroadcast(at, { title: "t", description: "", scheduledStart: new Date(), privacy: "unlisted", madeForKids: false });
-    const viaFake = (await rejection(f.bind(at, fourth.broadcastId, stream.streamId))) as YouTubeError;
-    handler = () => apiError(403, "sharedIngestionBroadcastsExceedLimit");
-    const viaGoogle = (await rejection(driver().bind(AT, "bc4", "strm1"))) as YouTubeError;
-    expect(viaGoogle.code).toBe(viaFake.code);
-    expect(viaFake.code).toBe("youtube_limit_reached");
+    // NOT compared: the fake's "4th open broadcast on a key" refusal at bind. Google documents the per-key 3 on TRANSITION
+    // (`sharedIngestionBroadcastsExceedLimit`, mapped in the table above) and gives bind no limit reason, so the driver has no
+    // bind counterpart to agree with; the fake's refusal is fake-only (see fake.ts).
   });
 });
 

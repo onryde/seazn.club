@@ -343,12 +343,26 @@ export class GoogleYouTube implements YouTubePort {
   }
 
   /** videos.list(part=id): Google leaves a deleted (or unreadable) video out of `items`, so presence is the answer. Only ids
-   *  that were asked about are returned. At most 50 per call; more is refused WITHOUT calling. */
+   *  that were asked about are returned. At most 50 per call; more is refused WITHOUT calling.
+   *
+   *  The page also lists a 404 `videoNotFound`, and does not say whether a batch can answer it when only SOME ids are missing.
+   *  A 404 on ONE id is that id missing (an empty set). A 404 on a BATCH is never read as "all missing" (the caller deletes the
+   *  links of videos it is told are gone, so a wrong "gone" purges links to live videos): the batch is re-asked one id per call,
+   *  and only an id whose own call is a 404 is absent. Any other failure, in the batch or in a single call, is thrown. */
   async existingVideos(at: string, ids: readonly string[]): Promise<Set<string>> {
     if (ids.length > MAX_VIDEO_IDS_PER_CALL) throw new RangeError(`existingVideos takes at most ${MAX_VIDEO_IDS_PER_CALL} ids per call`);
     if (ids.length === 0) return new Set();   // Google answers an empty `id` with a 400
     const asked = new Set(ids);
-    const items = parseBody(await api(at, "GET", "videos", { query: { part: "id", id: ids.join(",") } })).items;
+    let items: unknown;
+    try {
+      items = parseBody(await api(at, "GET", "videos", { query: { part: "id", id: [...asked].join(",") } })).items;
+    } catch (e) {
+      if (!(e instanceof YouTubeError && e.code === "youtube_not_found")) throw e;
+      if (asked.size === 1) return new Set();
+      const found = new Set<string>();
+      for (const id of asked) for (const present of await this.existingVideos(at, [id])) found.add(present);
+      return found;
+    }
     const found = new Set<string>();
     for (const item of Array.isArray(items) ? items : []) {
       const id = nonEmpty(asRecord(item)?.id);

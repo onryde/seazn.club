@@ -17,7 +17,7 @@ const Id = z.string().min(1).max(128);
  *  read or supply.
  *
  *  PARALLEL-SAFE ops name what they touch: a `tokenHandle` (`failNext`, `setLive`, `autoVideo` then scope to that grant's CHANNEL,
- *  so one org's walkthrough does not change another's), an OAuth `state` (`setChannels`, `pinChannels`, `grantScope`: spent by the
+ *  so one org's walkthrough does not change another's), an OAuth `state` (`setChannels`, `pinChannels`, `grantScope`, `grantSub`: spent by the
  *  one grant that state mints), or one resource (`videoOn`, `videoOff`, `deleteVideo`, `killToken`, `issueCode`, `state`).
  *  SERIAL-ONLY ops name nothing and act on the whole fake: `reset`, and `failNext` / `setLive` / `autoVideo` WITHOUT a
  *  `tokenHandle`. T20 calls those only from serial setup, never from a spec that runs beside others. */
@@ -38,6 +38,7 @@ const Body = z.discriminatedUnion("op", [
   z.object({ op: z.literal("autoVideo"), on: z.boolean(), tokenHandle: Handle.optional() }).strict(),
   z.object({ op: z.literal("issueCode"), state: State }).strict(),
   z.object({ op: z.literal("grantScope"), scope: z.string().min(1).max(512).nullable(), state: State }).strict(),
+  z.object({ op: z.literal("grantSub"), sub: z.string().min(1).max(255).nullable(), state: State }).strict(),
   z.object({ op: z.literal("reset") }).strict(),
   z.object({ op: z.literal("state"), fixtureId: z.uuid() }).strict(),
 ]);
@@ -75,6 +76,8 @@ export async function POST(req: Request) {
         // The fake authorize hop's job, for a walkthrough that drives the callback itself. A code alone is no credential.
         case "issueCode": return { op: body.op, code: fake.issueCode(body.state) };
         case "grantScope": fake.setGrantedScope(body.scope, body.state); return { op: body.op };
+        // The Google account subject the one grant of this state reports; null = a youtube-only token with no `sub` (T18's branch).
+        case "grantSub": fake.setGoogleSub(body.sub, body.state); return { op: body.op };
         case "reset": fake.reset(); return { op: body.op };
         case "state": return await fixtureState(fake, body.fixtureId);
       }

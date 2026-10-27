@@ -176,6 +176,26 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     expect((await call({ op: "grantScope", scope: "openid", state: "never-authorized" })).status, "an unknown state").toBe(404);
   });
 
+  it("grantSub sets the Google account subject the grant of ONE state reports: null is the no-sub branch, a string is a shared account, spent by that grant", async () => {
+    const fake = theFake();
+    const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";   // RFC 7636 appendix B
+    const redirectUri = "https://app.example.test/api/youtube/connect/callback";
+    const exchange = async (state: string) => {
+      const { code } = (await dataOf(await call({ op: "issueCode", state }))) as { code: string };
+      return (await fake.exchangeCode({ code, codeVerifier: verifier, redirectUri })).googleSub;
+    };
+    for (const st of ["st-sub-a", "st-sub-b", "st-sub-c"]) fake.authorizeUrl({ state: st, codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", redirectUri });
+    const dflt = await exchange("st-sub-c");
+    expect(dflt, "PREMISE: an unset grant reports a subject").toEqual(expect.any(String));
+    expect((await call({ op: "grantSub", sub: null, state: "st-sub-a" })).status).toBe(200);
+    expect(await exchange("st-sub-a"), "null: the grant reports no subject").toBeNull();
+    expect(await exchange("st-sub-a"), "spent by that one grant").toBe(dflt);
+    expect((await call({ op: "grantSub", sub: "acct-42", state: "st-sub-b" })).status).toBe(200);
+    expect(await exchange("st-sub-b"), "a string is the account").toBe("acct-42");
+    expect(await exchange("st-sub-c"), "another state was never touched").toBe(dflt);
+    expect((await call({ op: "grantSub", sub: null, state: "never-authorized" })).status, "an unknown state").toBe(404);
+  });
+
   it("reset clears the fake: a killed token lives again, streams and broadcasts are gone, handles are unknown", async () => {
     const fake = theFake();
     const at = await fake.accessToken("1//rt-reset");
@@ -256,7 +276,7 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
 
   it("a body that is not one of the ops is 400 and changes nothing: unknown op, extra key, wrong type, bad code, bad method, not JSON", async () => {
     const fake = theFake();
-    const spies = [vi.spyOn(fake, "setChannels"), vi.spyOn(fake, "failNext"), vi.spyOn(fake, "killHandle"), vi.spyOn(fake, "videoOn"), vi.spyOn(fake, "reset"), vi.spyOn(fake, "issueCode"), vi.spyOn(fake, "setGrantedScope")];
+    const spies = [vi.spyOn(fake, "setChannels"), vi.spyOn(fake, "failNext"), vi.spyOn(fake, "killHandle"), vi.spyOn(fake, "videoOn"), vi.spyOn(fake, "reset"), vi.spyOn(fake, "issueCode"), vi.spyOn(fake, "setGrantedScope"), vi.spyOn(fake, "setGoogleSub")];
     const bad: unknown[] = [
       { op: "dropDatabase" },
       {},
@@ -277,6 +297,10 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
       { op: "reset", extra: 1 },
       { op: "grantScope", scope: "" },
       { op: "grantScope" },
+      { op: "grantSub", sub: null },                        // a subject must name its state
+      { op: "grantSub", sub: "", state: "st" },
+      { op: "grantSub", sub: 7, state: "st" },
+      { op: "grantSub", state: "st" },
       { op: "issueCode" },
       { op: "pinChannels" },
       { op: "setLive", state: "blocked", tokenHandle: 7 },
@@ -308,6 +332,7 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
       autoVideo: { op: "autoVideo", on: false },
       issueCode: { op: "issueCode", state: "st-sweep" },
       grantScope: { op: "grantScope", scope: null, state: "st-sweep" },
+      grantSub: { op: "grantSub", sub: null, state: "st-sweep" },
       reset: { op: "reset" },   // last: it clears what the rest set up
     };
     let checked = 0;
@@ -315,7 +340,7 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
       expect((await call(body)).status, op).toBe(200);
       checked++;
     }
-    expect(checked, "12 ops here; the 13th, `state`, has its own DB-backed suite").toBe(12);
+    expect(checked, "13 ops here; the 14th, `state`, has its own DB-backed suite").toBe(13);
   });
 });
 
