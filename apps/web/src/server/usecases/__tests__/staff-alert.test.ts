@@ -45,15 +45,16 @@ type Row = {
   recipient_user_id: string | null; transactional: boolean; status: string; attempts: number; subject: string; expires_at: Date;
   sealed: boolean;
 };
-const ROW_COLUMNS = sql`
+/** A function, not a constant: building a fragment at module scope opens the DB client, which the no-DB unit job lacks. */
+const ROW_COLUMNS = () => sql`
   id, kind, ref_type, ref_id, dedupe_key, org_id, recipient, recipient_user_id, transactional, status, attempts, subject, expires_at,
   body_sealed is not null as sealed`;
 /** The rows queued to an address, oldest first. */
 const rowsTo = (address: string) =>
-  sql<Row[]>`select ${ROW_COLUMNS} from email_outbox where lower(recipient) = lower(${address}) order by created_at, id`;
+  sql<Row[]>`select ${ROW_COLUMNS()} from email_outbox where lower(recipient) = lower(${address}) order by created_at, id`;
 /** The rows of a kind whose ref starts with `prefix`, to ANY recipient (the unset case writes to no address at all). */
 const rowsOfRef = (kind: string, prefix: string) =>
-  sql<Row[]>`select ${ROW_COLUMNS} from email_outbox where kind = ${kind} and ref_id like ${`${prefix}%`} order by created_at, id`;
+  sql<Row[]>`select ${ROW_COLUMNS()} from email_outbox where kind = ${kind} and ref_id like ${`${prefix}%`} order by created_at, id`;
 
 /** What a `log.error` call would put on the line: the logger's OWN `err` serializer (the one that strips Postgres's echo fields),
  *  then the rest of the fields, then the message. */
