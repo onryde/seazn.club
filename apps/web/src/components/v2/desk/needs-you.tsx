@@ -53,6 +53,10 @@ export function needsYouItems(
 ): NeedsYouItem[] {
   const items: NeedsYouItem[] = [];
   let waiting = 0;
+  // Discipline (owner-approved 3A): pending bans, summed into ONE row like registrations — with the divisions they sit
+  // in, in ledger order, so the row can name them and open the first one's Discipline tab.
+  let bans = 0;
+  const bansIn: { name: string; slug: string }[] = [];
   for (const d of divisions) {
     const dd = desk.divisions.get(d.id);
     if (!dd) continue;
@@ -189,6 +193,10 @@ export function needsYouItems(
         case "registrations_waiting":
           waiting += a.count; // one competition-level row, not one per division
           break;
+        case "bans_waiting":
+          bans += a.count; // one competition-level row, not one per division
+          bansIn.push({ name: d.name, slug: d.slug });
+          break;
         default: {
           // Round J: this switch had no exhaustiveness guard, so a new
           // `Attention` kind compiled clean and rendered NOTHING — the inert
@@ -217,6 +225,19 @@ export function needsYouItems(
       action: {
         label: t(dict, "desk.needsYou.registrations_waiting.action"),
         href: routes.competitionRegistration(org, comp, "registrants"),
+      },
+    });
+  }
+  if (bans > 0) {
+    items.push({
+      key: "bans", severity: ATTENTION_SEVERITY.bans_waiting, kind: "bans_waiting",
+      title: plural(dict, "desk.needsYou.bans_waiting", bans, locale),
+      // Names the divisions rather than counting them: there is no competition-level discipline page, so "Review"
+      // opens ONE division's tab — the first listed — and the rest have to be findable from the row itself.
+      sub: t(dict, "desk.needsYou.bans_waiting.sub", { divisions: bansIn.map((d) => d.name).join(", ") }),
+      action: {
+        label: t(dict, "desk.needsYou.bans_waiting.action"),
+        href: routes.division(org, comp, bansIn[0]!.slug, "discipline"),
       },
     });
   }

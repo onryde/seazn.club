@@ -5749,6 +5749,20 @@ export const Suspension = z.object({
   createdAt: z.string(),
   decidedAt: z.string().nullable(),
   triggerVoided: z.boolean(),
+  /** The matches the ban still covers, in the order they will be missed (owner-approved 4A): an active ban's next
+   *  `matchesTotal - matchesServed`, a pending one's next `matchesTotal` were it confirmed now — computed by the same
+   *  rule that serves it. A null `fixtureId` is a placeholder: the team has fewer fixtures left than the ban has
+   *  matches. Empty for a served or waived ban. */
+  coveredMatches: z.array(
+    z.object({
+      fixtureId: Uuid.nullable(),
+      /** A `roundRoleKey()` of the fixture's round in its own stage (`plain_round_4`, `semi_final`); null for a placeholder. */
+      roundRole: RoundRoleKey.nullable(),
+      /** The other side's entrant name; null while that seat is undecided, and for a placeholder. */
+      opponentName: z.string().nullable(),
+      scheduledAt: z.string().nullable(),
+    }),
+  ),
 });
 
 // Official marks & match reports (SPEC-3 / PROMPT-80) --------------------------

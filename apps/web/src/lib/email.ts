@@ -378,7 +378,7 @@ export async function officialAssignmentChangedEmail(
  *  it directly. */
 export async function suspensionConfirmedEmail(args: Omit<SuspensionConfirmedArgs, "meUrl">, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return suspensionConfirmedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
+  return suspensionConfirmedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict, locale);
 }
 
 /** An official submitted a match report (SPEC-3), deep-linked to the fixture's officials panel, RENDERED and not sent. `args` carries

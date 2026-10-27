@@ -167,6 +167,7 @@ function authority(): { resultMissing: number[]; unscheduled: number } {
     now: new Date(NOW_MS).toISOString(),
     tz: TZ,
     awaitingRegistrations: 0,
+    bansToReview: 0,
   };
   const out = resolveAttention(input);
   const missing = out.find((a) => a.kind === "result_missing");

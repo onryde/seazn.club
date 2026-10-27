@@ -1,5 +1,5 @@
-import { t } from "@/lib/i18n";
-import type { Dict } from "@/lib/i18n-constants";
+import { plural, t } from "@/lib/i18n";
+import type { Dict, Locale } from "@/lib/i18n-constants";
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import { ATTENTION_SEVERITY, type Attention, type DivisionPhase } from "@/lib/division-phase";
 
@@ -35,8 +35,38 @@ export const RED_PILL_KEY: Record<Attention["kind"], DictionaryKey | null> = {
   not_recording: null,
   unscheduled: null,
   result_missing: null,
+  // Amber: its own pill BESIDE the phase (`BansToReviewPill` below), never in place of it.
+  bans_waiting: null,
   registrations_waiting: null,
 };
+
+/**
+ * Discipline (owner-approved 3A, 2026-10-27): "2 bans to review" — the division row's prompt that pending bans are
+ * waiting on the organiser, as a second, AMBER pill beside the phase pill. It never replaces the phase (amber never
+ * outranks it — `RED_PILL_KEY` maps the kind to null), and renders nothing when the division has no such attention:
+ * zero is not a pill. Ringed rather than flat so it does not read as the `match_day` pill's own amber.
+ */
+export function BansToReviewPill({
+  dict, attention, locale, className = "",
+}: {
+  dict: Dict;
+  attention: readonly Attention[];
+  locale: Locale;
+  className?: string;
+}) {
+  const bans = attention.find((a): a is Extract<Attention, { kind: "bans_waiting" }> => a.kind === "bans_waiting");
+  if (!bans || bans.count <= 0) return null;
+  return (
+    <span
+      data-attention-pill="bans_waiting"
+      data-count={bans.count}
+      className={`badge inline-flex items-center gap-1.5 normal-case bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-300 ${className}`}
+    >
+      <i aria-hidden className="h-1.5 w-1.5 rounded-full bg-current" />
+      {plural(dict, "desk.pill.bans_waiting", bans.count, locale)}
+    </span>
+  );
+}
 
 const PHASE_CLASS: Record<DivisionPhase | "in_play" | "next", string> = {
   setting_up: "bg-purple-50 text-purple-700",

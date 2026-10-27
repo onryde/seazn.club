@@ -64,6 +64,7 @@ describe("StagesPanel phase gating", () => {
     now: "2026-03-01T12:00:00Z",
     tz: "UTC",
     awaitingRegistrations: 0,
+    bansToReview: 0,
   });
 
   it("never shows the start-locks tip on a division that has already played its fixtures", () => {
@@ -112,6 +113,7 @@ describe("StagesPanel phase gating", () => {
       now: "2026-03-01T12:00:00Z",
       tz: "UTC",
       awaitingRegistrations: 0,
+      bansToReview: 0,
     };
     const phase = resolvePhase(matchDayInput);
     expect(phase, "a division with a fixture dated today is match_day (rule 3)").toBe("match_day");

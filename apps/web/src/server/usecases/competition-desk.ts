@@ -11,6 +11,7 @@ import { roundKey, roundOpensOfDivisions } from "@/server/external-play/round-op
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { ScheduleConfig } from "@/server/api-v1/schemas";
 import { log } from "@/server/logger";
+import { hasFeature } from "@/lib/entitlements";
 import { resolveVenueTz } from "@/lib/tz";
 import {
   fixtureAwaitsSeedDraw,
@@ -289,9 +290,14 @@ export async function getCompetitionDesk(
   competitionId: string,
   now: Date = new Date(),
 ): Promise<CompetitionDesk> {
-  const [divisions, stats] = await Promise.all([
+  const [divisions, stats, disciplineEntitled] = await Promise.all([
     listDivisions(auth, competitionId),
     listDivisionCardStats(auth, competitionId),
+    // Discipline (owner-approved 3A): bans to review are a signal only for an org entitled to discipline ON THIS
+    // competition. The key is a string literal, and the competition is passed, on purpose — an Event Pass lifts this
+    // feature per competition, and lib/__tests__/pass-scoping-guard.test.ts finds an unscoped gate by its literal
+    // (usecases/discipline.ts's header). Pooled `hasFeature`, out here before any tenant transaction opens.
+    hasFeature(auth.orgId, "discipline.enforced", competitionId),
   ]);
   const ids = divisions.map((d) => d.id);
   const { orgTz, stages, fixtures, settings, fixturesWithOfficial } = await withTenant(auth.orgId, async (tx) => {
@@ -534,6 +540,7 @@ export async function getCompetitionDesk(
       now: nowIso,
       tz: displayTz,
       awaitingRegistrations: s?.awaiting_confirmation ?? 0,
+      bansToReview: disciplineEntitled ? (s?.bans_to_review ?? 0) : 0,
     };
     const attention = resolveAttention(input);
     const needsDraw = attention.find((a) => a.kind === "needs_draw");

@@ -49,6 +49,7 @@ const PENDING: Suspension = {
   createdAt: "2026-10-27T00:00:00Z",
   decidedAt: null,
   triggerVoided: false,
+  coveredMatches: [],
 };
 
 type PanelProps = Parameters<typeof DisciplinePanel>[0];
@@ -64,6 +65,7 @@ async function confirmRefusedWith(err: unknown): Promise<{ text: string; calls: 
     initial: [PENDING],
     squad: [],
     canEdit: true,
+    tz: "UTC",
   });
   const confirms = island
     .tree()

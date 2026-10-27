@@ -10,6 +10,9 @@ import "server-only";
 // reducer/replay/golden change (D2).
 import type postgres from "postgres";
 import type { DisciplineModel, EventEnvelope } from "@seazn/engine/core";
+import { parseRoundRoleKey, roundRoleKey } from "@seazn/engine/competition";
+import { roundRoleFor, roundRoleLabel } from "@/lib/round-role-label";
+import { msgFor } from "@/lib/messages-i18n";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
@@ -68,6 +71,23 @@ export interface Suspension {
   /** true when a trigger event is now voided (the console shows a hint chip;
    *  the row itself is never auto-deleted once decided). */
   triggerVoided: boolean;
+  /** The matches this ban still covers, in the order they will be missed (`coveredMatches` below): for an ACTIVE ban
+   *  the next `matchesTotal - matchesServed`, for a PENDING one the next `matchesTotal` were it confirmed now. Empty
+   *  for a served or waived ban, and for a pending one whose player is on no entrant here (confirm refuses it). */
+  coveredMatches: CoveredMatch[];
+}
+
+/** One match a ban covers. `fixtureId` null is a PLACEHOLDER: the team has fewer fixtures left to play than the ban
+ *  has matches to run, so it covers a match that does not exist yet ("Next match (not scheduled yet)"). */
+export interface CoveredMatch {
+  fixtureId: string | null;
+  /** `roundRoleKey()` of the fixture's round within its OWN stage ("plain_round_4", "semi_final") — language-free, so a
+   *  surface renders it through `roundRoleLabel` in its reader's language. Null for a placeholder. */
+  roundRole: string | null;
+  /** The other side's entrant name; null while that seat is undecided (TBD), and for a placeholder. */
+  opponentName: string | null;
+  /** ISO instant, or null when the fixture has no time yet. */
+  scheduledAt: string | null;
 }
 
 // Sport defaults prefilled in the rules editor on first open (editable). Kept
@@ -364,19 +384,25 @@ function groupByPerson<T extends { personId: string }>(cards: T[]): Map<string, 
 // which carries no core.forfeit, counts too); abandoned/cancelled and forfeits
 // by anyone else never do. A fixture with no recorded event has not started
 // and serves nothing.
-async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Promise<string[]> {
-  const active = await tx<
-    { id: string; entrant_id: string | null; decided_at: Date | null; matches_total: number; fixture_id: string | null }[]
-  >`
-    select id, entrant_id, decided_at, matches_total, fixture_id from suspensions
-    where division_id = ${divisionId} and status = 'active'`;
-  if (active.length === 0) return [];
+//
+// The rule lives ONCE, in `servingVerdict` below: this counter takes its
+// "served" answers, and the "which matches does this ban cover" projection
+// (`coveredMatches`) takes its "upcoming" ones — so the line a person reads
+// ("Misses: Round 4 vs Rovers") and the counter that ends the ban cannot
+// disagree about which match is which.
 
-  const fixtures = await tx<
-    { id: string; status: string; home_entrant_id: string | null; away_entrant_id: string | null; outcome: { kind?: string } | null }[]
-  >`
-    select id, status, home_entrant_id, away_entrant_id, outcome from fixtures where division_id = ${divisionId}`;
+/** The two facts the serving rule reads off a fixture's ledger. */
+export interface LedgerFacts {
+  /** A fixture's START: its EARLIEST recorded event. Absent = never started. */
+  startedAt: Map<string, Date>;
+  /** Who a `core.forfeit` was recorded against (the last one, in ledger order). */
+  forfeitBy: Map<string, string>;
+}
 
+/** `events` in ledger order (fixture, seq) — the serving pass's own read, or the projection's narrower one. */
+export function ledgerFacts(
+  events: readonly Pick<EventRow, "fixture_id" | "recorded_at" | "type" | "payload">[],
+): LedgerFacts {
   const startedAt = new Map<string, Date>();
   const forfeitBy = new Map<string, string>();
   for (const e of events) {
@@ -387,19 +413,68 @@ async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Pr
       if (typeof by === "string") forfeitBy.set(e.fixture_id, by);
     }
   }
+  return { startedAt, forfeitBy };
+}
+
+/** The fixture fields the serving rule reads. */
+export interface ServingFixture {
+  id: string;
+  status: string;
+  home_entrant_id: string | null;
+  away_entrant_id: string | null;
+  outcome: { kind?: string } | null;
+}
+
+/** A fixture that can still be played to a result: not yet started, under way, or held for the organiser's settle.
+ *  Every other status (`decided`, `finalized`, `forfeited`, `abandoned`, `cancelled`) is terminal. */
+const OPEN_FIXTURE_STATUSES: ReadonlySet<string> = new Set(["scheduled", "in_play", "needs_decision"]);
+
+/**
+ * One fixture's standing against one ban — the serving rule, the ONE copy of it.
+ *
+ *  - `served`: it counts toward the ban (`updateServing`).
+ *  - `upcoming`: it will count once it is played — the ban covers it (`coveredMatches`). A match not yet started, or
+ *    one that started AFTER the ban did and is still under way.
+ *  - `never`: it can never count: another entrant's match, the ban's own trigger fixture, a match already under way
+ *    when the ban began, or one that ended without serving (abandoned, cancelled, a forfeit by the other side, a bye).
+ *
+ * `ban.since` is the ban's `decided_at`; a PENDING ban is projected as if confirmed at `since` = now.
+ */
+export function servingVerdict(
+  f: ServingFixture,
+  ban: { entrantId: string; fixtureId: string | null; since: Date },
+  facts: LedgerFacts,
+): "served" | "upcoming" | "never" {
+  if (f.home_entrant_id !== ban.entrantId && f.away_entrant_id !== ban.entrantId) return "never";
+  if (f.id === ban.fixtureId) return "never";
+  const began = facts.startedAt.get(f.id);
+  if (began !== undefined && began <= ban.since) return "never";
+  if (OPEN_FIXTURE_STATUSES.has(f.status)) return "upcoming";
+  if (began === undefined) return "never";
+  if (f.status === "decided" || f.status === "finalized") return "served";
+  if (f.status === "forfeited" && (facts.forfeitBy.get(f.id) === ban.entrantId || f.outcome?.kind === "double_walkover")) {
+    return "served";
+  }
+  return "never";
+}
+
+async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Promise<string[]> {
+  const active = await tx<
+    { id: string; entrant_id: string | null; decided_at: Date | null; matches_total: number; fixture_id: string | null }[]
+  >`
+    select id, entrant_id, decided_at, matches_total, fixture_id from suspensions
+    where division_id = ${divisionId} and status = 'active'`;
+  if (active.length === 0) return [];
+
+  const fixtures = await tx<ServingFixture[]>`
+    select id, status, home_entrant_id, away_entrant_id, outcome from fixtures where division_id = ${divisionId}`;
+  const facts = ledgerFacts(events);
 
   const flipped: string[] = [];
   for (const s of active) {
     if (!s.entrant_id || !s.decided_at) continue;
-    let served = 0;
-    for (const f of fixtures) {
-      if (f.home_entrant_id !== s.entrant_id && f.away_entrant_id !== s.entrant_id) continue;
-      if (f.id === s.fixture_id) continue;
-      const began = startedAt.get(f.id);
-      if (!began || began <= s.decided_at) continue;
-      if (f.status === "decided" || f.status === "finalized") served++;
-      else if (f.status === "forfeited" && (forfeitBy.get(f.id) === s.entrant_id || f.outcome?.kind === "double_walkover")) served++;
-    }
+    const ban = { entrantId: s.entrant_id, fixtureId: s.fixture_id, since: s.decided_at };
+    const served = fixtures.filter((f) => servingVerdict(f, ban, facts) === "served").length;
     const capped = Math.min(served, s.matches_total);
     const status = capped >= s.matches_total ? "served" : "active";
     // `and status = 'active'`: the read above takes no lock, so two passes
@@ -487,7 +562,7 @@ interface SuspensionRow {
   decided_at: Date | null;
 }
 
-function mapRow(row: SuspensionRow, voided: Set<string>): Suspension {
+function mapRow(row: SuspensionRow, voided: Set<string>, covered: Map<string, CoveredMatch[]>): Suspension {
   return {
     id: row.id,
     divisionId: row.division_id,
@@ -504,7 +579,141 @@ function mapRow(row: SuspensionRow, voided: Set<string>): Suspension {
     createdAt: row.created_at.toISOString(),
     decidedAt: row.decided_at ? row.decided_at.toISOString() : null,
     triggerVoided: (row.trigger_event_ids ?? []).some((id) => voided.has(id)),
+    coveredMatches: covered.get(row.id) ?? [],
   };
+}
+
+/** The serving entrant for a ban: the one stamped on it, else the person's entrant in this division — how a CONFIRM
+ *  resolves it (`decideSuspension`), so a pending ban's projection names the team the confirm would stamp. */
+async function resolveBanEntrant(tx: Tx, personId: string, divisionId: string): Promise<string | null> {
+  const [em] = await tx<{ id: string }[]>`
+    select e.id from entrant_members em join entrants e on e.id = em.entrant_id
+    where em.person_id = ${personId} and e.division_id = ${divisionId} limit 1`;
+  return em?.id ?? null;
+}
+
+/** What the projection needs of a ban. */
+interface CoverableBan {
+  id: string;
+  person_id: string;
+  entrant_id: string | null;
+  status: SuspensionStatus;
+  decided_at: Date | null;
+  fixture_id: string | null;
+  matches_total: number;
+  matches_served: number;
+}
+
+interface ProjectionFixture extends ServingFixture {
+  stage_id: string;
+  stage_kind: string;
+  stage_seq: number;
+  round_no: number;
+  seq_in_round: number;
+  lane: "WB" | "LB" | "GF" | null;
+  is_final: boolean;
+  third_place: boolean;
+  conditional: boolean;
+  ext_key: string | null;
+  scheduled_at: Date | null;
+  home_name: string | null;
+  away_name: string | null;
+}
+
+/**
+ * Which matches each pending or active ban still covers (owner-approved 4A, 2026-10-27).
+ *
+ * The ban's entrant's next `matchesTotal - matchesServed` fixtures whose `servingVerdict` is `upcoming` — the SAME
+ * predicate the counter serves with, so the matches named here are exactly the ones that will end the ban, in order: a
+ * match under way since the ban began first, then by kick-off (undated last), stage, round and place in the round —
+ * card-stats' "next fixture" order. A pending ban is projected as if confirmed now, through the entrant a confirm would
+ * stamp; one with no entrant covers nothing (confirm refuses it). When the team has fewer fixtures left than the ban has
+ * matches, the rest are placeholders (`fixtureId` null). Served and waived bans cover nothing.
+ *
+ * Two reads for the whole division, whatever the number of bans: its fixtures, and the ledger facts — never payloads
+ * beyond a forfeit's.
+ */
+async function coveredMatches(
+  tx: Tx,
+  divisionId: string,
+  bans: readonly CoverableBan[],
+  now: Date = new Date(),
+): Promise<Map<string, CoveredMatch[]>> {
+  const out = new Map<string, CoveredMatch[]>();
+  const open = bans.filter((b) => b.status === "pending" || b.status === "active");
+  if (open.length === 0) return out;
+
+  const fixtures = await tx<ProjectionFixture[]>`
+    select f.id, f.status, f.home_entrant_id, f.away_entrant_id, f.outcome,
+           f.stage_id, s.kind as stage_kind, s.seq as stage_seq, f.round_no, f.seq_in_round,
+           f.lane, f.is_final, f.third_place, f.conditional, f.ext_key, f.scheduled_at,
+           he.display_name as home_name, ae.display_name as away_name
+    from fixtures f
+    join stages s on s.id = f.stage_id
+    left join entrants he on he.id = f.home_entrant_id
+    left join entrants ae on ae.id = f.away_entrant_id
+    where f.division_id = ${divisionId}`;
+  // The serving pass's ledger read, narrowed: only a forfeit's payload is ever read.
+  const facts = ledgerFacts(
+    await tx<Pick<EventRow, "fixture_id" | "recorded_at" | "type" | "payload">[]>`
+      select se.fixture_id, se.recorded_at, se.type,
+             case when se.type = 'core.forfeit' then se.payload end as payload
+      from score_events se join fixtures f on f.id = se.fixture_id
+      where f.division_id = ${divisionId}
+      order by se.fixture_id, se.seq`,
+  );
+  const laneRowsByStage = new Map<string, { round_no: number; lane: "WB" | "LB" | "GF" | null }[]>();
+  for (const f of fixtures) {
+    (laneRowsByStage.get(f.stage_id) ?? laneRowsByStage.set(f.stage_id, []).get(f.stage_id)!).push({
+      round_no: f.round_no,
+      lane: f.lane,
+    });
+  }
+  const startedFirst = (f: ProjectionFixture) => (facts.startedAt.has(f.id) ? 0 : 1);
+  const at = (f: ProjectionFixture) => (f.scheduled_at === null ? Infinity : f.scheduled_at.getTime());
+  const order = (a: ProjectionFixture, b: ProjectionFixture) =>
+    startedFirst(a) - startedFirst(b) ||
+    at(a) - at(b) ||
+    a.stage_seq - b.stage_seq ||
+    a.round_no - b.round_no ||
+    a.seq_in_round - b.seq_in_round ||
+    a.id.localeCompare(b.id);
+
+  for (const b of open) {
+    const entrantId = b.entrant_id ?? (await resolveBanEntrant(tx, b.person_id, divisionId));
+    if (entrantId === null) {
+      out.set(b.id, []);
+      continue;
+    }
+    // A pending ban has served nothing and is projected from now; an active one from its decision.
+    const since = b.status === "active" && b.decided_at !== null ? b.decided_at : now;
+    const remaining = Math.max(0, b.matches_total - (b.status === "active" ? b.matches_served : 0));
+    const ban = { entrantId, fixtureId: b.fixture_id, since };
+    const next = fixtures
+      .filter((f) => servingVerdict(f, ban, facts) === "upcoming")
+      .sort(order)
+      .slice(0, remaining);
+    const covered: CoveredMatch[] = next.map((f) => {
+      const home = f.home_entrant_id === entrantId;
+      const role = roundRoleFor(
+        laneRowsByStage.get(f.stage_id) ?? [],
+        { round_no: f.round_no, lane: f.lane, is_final: f.is_final, third_place: f.third_place, conditional: f.conditional },
+        f.stage_kind,
+        f.ext_key,
+      );
+      return {
+        fixtureId: f.id,
+        roundRole: roundRoleKey(role),
+        opponentName: home ? f.away_name : f.home_name,
+        scheduledAt: f.scheduled_at === null ? null : f.scheduled_at.toISOString(),
+      };
+    });
+    for (let i = covered.length; i < remaining; i++) {
+      covered.push({ fixtureId: null, roundRole: null, opponentName: null, scheduledAt: null });
+    }
+    out.set(b.id, covered);
+  }
+  return out;
 }
 
 const SELECT_SUSPENSION = (tx: Tx) => tx`
@@ -528,7 +737,7 @@ async function loadSuspension(tx: Tx, divisionId: string, id: string): Promise<S
     left join entrants e on e.id = s.entrant_id
     where s.id = ${id} and s.division_id = ${divisionId}`;
   if (!row) throw new HttpError(404, "suspension not found");
-  return mapRow(row, await voidedSet(tx, divisionId));
+  return mapRow(row, await voidedSet(tx, divisionId), await coveredMatches(tx, divisionId, [row]));
 }
 
 /** Rules doc + enabled flag + the sport's offerable colours. null when the
@@ -619,7 +828,30 @@ export async function listSuspensions(
       ${status ? tx`and s.status = ${status}` : tx``}
       order by s.created_at desc, s.id`;
     const voided = await voidedSet(tx, divisionId);
-    return rows.map((r) => mapRow(r, voided));
+    // After the fold above, so an active ban's `matches_served` is the counter's current answer.
+    const covered = await coveredMatches(tx, divisionId, rows);
+    return rows.map((r) => mapRow(r, voided, covered));
+  });
+}
+
+/**
+ * The bans awaiting the organiser's review in this division: `pending` rows, counted only where the organiser has
+ * switched discipline ON (`discipline_rules.enabled`). A stored-row count — no fold — so the division page can ask it
+ * on every tab at the cost of one indexed read. The rows are kept current by the write path (`refreshDiscipline` folds
+ * on every decided/void score write) and by every read of the Discipline tab itself.
+ *
+ * Not gated here: the caller holds the entitlement answer. The division page asks only when `getDisciplineRules`
+ * (whose `requireFeature("discipline.enforced", competition)` is the pass-scoped gate) let it in; the desk reads the
+ * same count per division from card-stats and gates it with its own `hasFeature`.
+ */
+export async function countBansToReview(auth: AuthCtx, divisionId: string): Promise<number> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [r] = await tx<{ n: number }[]>`
+      select count(*)::int as n
+      from suspensions s
+      join discipline_rules dr on dr.division_id = s.division_id and dr.enabled
+      where s.division_id = ${divisionId} and s.status = 'pending'`;
+    return r?.n ?? 0;
   });
 }
 
@@ -671,13 +903,8 @@ export async function decideSuspension(
     if (action.kind === "confirm") {
       // Resolve the serving entrant now and stamp it (SPEC-1): the person's
       // entrant in this division, when not already known.
-      let entrantId = s.entrant_id;
-      if (!entrantId) {
-        const [em] = await tx<{ id: string }[]>`
-          select e.id from entrant_members em join entrants e on e.id = em.entrant_id
-          where em.person_id = ${s.person_id} and e.division_id = ${s.division_id} limit 1`;
-        entrantId = em?.id ?? null;
-      }
+      // `resolveBanEntrant` — shared with the "would miss" projection of a pending ban, so it names the team this stamps.
+      const entrantId = s.entrant_id ?? (await resolveBanEntrant(tx, s.person_id, s.division_id));
       // No entrant, no serving: `updateServing` counts only an entrant's
       // fixtures, so a ban confirmed with none would stay active for ever and
       // block the player's lineups. Refuse it, before anything is written; the
@@ -725,7 +952,7 @@ export async function decideSuspension(
  */
 export async function queueSuspensionConfirmed(tx: Tx, suspensionId: string): Promise<string | null> {
   const [r] = await tx<
-    {
+    ({
       org_id: string;
       user_id: string;
       email: string | null;
@@ -733,21 +960,43 @@ export async function queueSuspensionConfirmed(tx: Tx, suspensionId: string): Pr
       default_locale: string | null;
       division_name: string;
       reason: string;
-      matches_total: number;
-    }[]
+      venue_tz: string;
+      division_id: string;
+    } & CoverableBan)[]
   >`
     select s.org_id, u.id as user_id, u.email, o.name as org_name, o.default_locale, d.name as division_name,
-           s.reason, s.matches_total
+           s.reason, s.matches_total,
+           -- the venue lane (V305), as the officials' notice reads it: division override → org timezone → UTC
+           coalesce(ss.tz, o.timezone, 'UTC') as venue_tz,
+           s.id, s.person_id, s.entrant_id, s.status, s.decided_at, s.fixture_id, s.matches_served, s.division_id
     from suspensions s
     join persons p on p.id = s.person_id
     join users u on u.id = p.user_id and u.deleted_at is null
     join divisions d on d.id = s.division_id
     join organizations o on o.id = s.org_id
+    left join schedule_settings ss on ss.division_id = s.division_id
     where s.id = ${suspensionId}`;
   if (!r?.email) return null;
   const locale = await recipientLocale(tx, { pick: null, userId: r.user_id, orgDefault: r.default_locale });
+  // The matches the ban covers, by the SAME projection the Discipline tab shows (`coveredMatches`); the round names in
+  // the player's language, from the ui catalogue every bracket surface names rounds with.
+  const covered = (await coveredMatches(tx, r.division_id, [r])).get(r.id) ?? [];
   const content = await suspensionConfirmedEmail(
-    { orgName: r.org_name, divisionName: r.division_name, reason: r.reason, matchesTotal: r.matches_total },
+    {
+      orgName: r.org_name,
+      divisionName: r.division_name,
+      reason: r.reason,
+      matchesTotal: r.matches_total,
+      misses: covered.map((m) => {
+        const role = m.roundRole === null ? null : parseRoundRoleKey(m.roundRole);
+        return {
+          round: role === null ? null : roundRoleLabel((k, v) => msgFor(locale, k, v), role),
+          opponent: m.opponentName,
+          scheduledAt: m.scheduledAt,
+          tz: r.venue_tz,
+        };
+      }),
+    },
     locale,
   );
   return enqueueEmailOnce(tx, {
