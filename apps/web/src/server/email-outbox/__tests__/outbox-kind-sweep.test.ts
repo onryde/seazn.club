@@ -408,20 +408,21 @@ describe("the spec's lists (no database)", () => {
     ]);
   });
 
-  it("the not-yet-moved list names only spec kinds, once each, in the registry's order, none of waves 1 to 3, and leaves at least one kind to sweep", () => {
+  it("the not-yet-moved list names only spec kinds, once each, in the registry's order, none of waves 1 to 4, and leaves at least one kind to sweep", () => {
     expect(new Set(NOT_YET_MOVED).size).toBe(NOT_YET_MOVED.length);
     for (const k of NOT_YET_MOVED) expect(SPEC_KINDS as readonly string[]).toContain(k);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
-    // Waves 1 to 3 are closed (wave 1 T12, wave 2 T10, wave 3 T4c): none of their kinds may be listed again. They are the spec's first
-    // twenty-five (2 + 5 + 10 + 8), everything before wave 4's first kind in the spec's own list.
-    const closed = SPEC_KINDS.slice(0, SPEC_KINDS.indexOf("official_assigned"));
-    expect(closed, "waves 1 to 3 hold the spec's first twenty-five kinds").toHaveLength(25);
+    // Waves 1 to 4 are closed (wave 1 T12, wave 2 T10, wave 3 T4c, wave 4 T4): none of their kinds may be listed again. They are the
+    // spec's first thirty-four (2 + 5 + 10 + 8 + 9), everything up to and including wave 4's last kind in the spec's own list; a later
+    // wave's kinds come after it.
+    const closed = SPEC_KINDS.slice(0, SPEC_KINDS.indexOf("group_org_left") + 1);
+    expect(closed, "waves 1 to 4 hold the spec's first thirty-four kinds").toHaveLength(34);
     let closedChecked = 0;
     for (const k of closed) {
       expect(NOT_YET_MOVED, `${k} belongs to a closed wave, so it cannot be unmoved`).not.toContain(k);
       closedChecked += 1;
     }
-    expect(closedChecked, "anti-vacuity: every kind of waves 1 to 3 was judged").toBe(25);
+    expect(closedChecked, "anti-vacuity: every kind of waves 1 to 4 was judged").toBe(34);
     // In the registry's order, so a kind task deletes its own line and nothing else moves.
     expect([...NOT_YET_MOVED], "the unmoved kinds are a subsequence of OUTBOX_KINDS, in its order").toEqual(
       OUTBOX_KINDS.filter((k) => NOT_YET_MOVED.includes(k)),
@@ -444,9 +445,10 @@ describe("the spec's lists (no database)", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
-    // Which kinds are unmoved is NOT_YET_MOVED's alone (the test above holds its shape); the loop holds it to the map and the allowlist
-    // kind by kind. When the last wave-4 move empties it, put back `expect(NOT_YET_MOVED).toEqual([])` and "none still names a direct
-    // sender", as wave 3's T4c left them.
+    // Which kinds are unmoved is NOT_YET_MOVED's alone (the test above holds its shape, and holds every kind of waves 1 to 4 out of it);
+    // the loop holds it to the map and the allowlist kind by kind. Wave 4's last move emptied the list, but `expect(NOT_YET_MOVED)
+    // .toEqual([])` and "none still names a direct sender" are NOT put back here: wave 5 is stacked on wave 4 and appends its own kinds
+    // to the list, so wave 5's closing task restores both, as wave 3's T4c left them, once its own kinds have moved.
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
     const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
     expect(new Set(senders).size, "no two kinds share a direct sender").toBe(senders.length);
