@@ -501,18 +501,16 @@ export async function groupOrgRemovedEmail(
   return groupOrgRemovedTemplate(args.payerName, args.orgName, args.ridesOutUntil, args.link, dict);
 }
 
-/** An org's own owner left a billing group (billing-group detach). The PAYER is
- *  told their bill changed — `seatFreed` true = the seat is a reusable freed
- *  slot (release), false = it left with the org and the next invoice is smaller. */
-export async function sendGroupOrgLeftEmail(
-  to: string,
-  orgName: string,
-  seatFreed: boolean,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** An org's own owner left a billing group (billing-group detach), RENDERED and not sent. The PAYER is told their bill changed —
+ *  `seatFreed` true = the seat is a reusable freed slot (release), false = it left with the org and the next invoice is smaller.
+ *  `detachOrgFromGroup` (billing-groups.ts) queues what this returns on the email outbox (kind `group_org_left`, NOT transactional, to the
+ *  payer's account) in the detach's own transaction, in the payer's language. Nothing sends it directly. */
+export async function groupOrgLeftEmail(
+  args: { orgName: string; seatFreed: boolean; link: string },
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...groupOrgLeftTemplate(orgName, seatFreed, link, dict) });
+  return groupOrgLeftTemplate(args.orgName, args.seatFreed, args.link, dict);
 }
 
 /** The registration confirmation, RENDERED and not sent — it carries the offline (cash/bank) payment instructions for paid entries.

@@ -86,6 +86,9 @@
 //   - group_org_removed: the real `detachOrgFromGroup` by the payer of a paying group, pushing out an org whose owner's account is `fr`
 //     (ride-out): the notice is queued to the owner's account in the detach's own transaction, in the detached org, and the request
 //     makes the first attempt.
+//   - group_org_left: the real `detachOrgFromGroup` by the owner of an org in a paying group (release), whose payer's account has no
+//     language and whose remaining org is `nl`: the notice is queued to the payer's account in the detach's own transaction, in the
+//     detached org, and the request makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -1327,6 +1330,27 @@ async function groupOrgRemovedScenario(): Promise<KindScenario> {
   };
 }
 
+/** The owner of an org in a paying billing group takes it out (release: the payer keeps the seat as a reusable slot). The payer's
+ *  account has no language, so the notice follows the default of the group's remaining org (`nl`), the one its link points at; it is
+ *  queued to the payer's account in the detach's transaction, and the request makes the first attempt after commit. */
+async function groupOrgLeftScenario(): Promise<KindScenario> {
+  const g = await seedDetachableGroup({ remainingDefaultLocale: "nl", prefix: RUN });
+  made.orgIds.push(g.orgId, g.primaryId);
+  made.userIds.push(g.payer.id, g.owner.id);
+  return {
+    locale: "nl",
+    subjectKey: "groupOrgLeft.subject",
+    subjectVars: { orgName: g.orgName },
+    recipient: g.payer.email,
+    firstAttempt: "request",
+    run: async () => {
+      const out = await detachOrgFromGroup({ actorUserId: g.owner.id, orgId: g.orgId, mode: "release" });
+      const [org] = await sql<{ subscription_id: string }[]>`select subscription_id from organizations where id = ${g.orgId}`;
+      expect(org!.subscription_id, "premise: the real detach gave the org a group of its own").toBe(out.subscription_id);
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1484,6 +1508,9 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", orgRemoved.subjectKey, orgRemoved.subjectVars),
     );
 
+    const orgLeft = await groupOrgLeftScenario();
+    expect(dictionarySubject("nl", orgLeft.subjectKey, orgLeft.subjectVars)).not.toBe(dictionarySubject("en", orgLeft.subjectKey, orgLeft.subjectVars));
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1519,6 +1546,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         group_transfer_offer: transferOffer,
         group_transfer_complete: transferComplete,
         group_org_removed: orgRemoved,
+        group_org_left: orgLeft,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

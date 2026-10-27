@@ -36,7 +36,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendExtraOrgAllowanceAlertEmail",
   "sendExtraOrgRepriceFailedAlertEmail",
   "sendFunnelReminderEmail",
-  "sendGroupOrgLeftEmail",
   "sendPassCreditReversalIncompleteAlertEmail",
   "sendPassRungMismatchAlertEmail",
   "sendPassUnknownCompetitionAlertEmail",
@@ -55,7 +54,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  way, in the spec's table order: each kind task (T2-T4) deletes its own, and the last move closes the list again. The sweep covers every
  *  kind not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "group_org_left",
 ];
 
 /** For every kind, the direct sender its producer still calls (null = the kind has moved: nothing direct is left for it). */
@@ -96,7 +94,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   group_transfer_offer: null,
   group_transfer_complete: null,
   group_org_removed: null,
-  group_org_left: "sendGroupOrgLeftEmail",
+  group_org_left: null,
 };
 
 /** How long the allowlist must be while `unmoved` kinds are still on their direct sender: the spec's 49, less one for every phase-3 kind

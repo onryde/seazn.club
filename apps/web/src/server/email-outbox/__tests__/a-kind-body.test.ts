@@ -41,7 +41,8 @@
 //  - The immediate handover's notice is driven through the same `offerGroupTransfer` on a community group (no live subscription and no
 //    Stripe customer, so nothing reaches Stripe), judged the same way.
 //  - The detach notices are driven through the real `detachOrgFromGroup` on a paying group with no live Stripe subscription (so its
-//    quantity sync never reaches Stripe): the payer pushing another owner's org out (removed). Judged the same way.
+//    quantity sync never reaches Stripe): the payer pushing another owner's org out (removed), and an org's own owner taking it out
+//    (left). Judged the same way.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -289,6 +290,12 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       const out = await detachOrgFromGroup({ actorUserId: g.payer.id, orgId: g.orgId, mode: "ride_out" });
       // The notice names the org that was moved off the bill.
       return { rowIds: await attemptedRowIdsOf("group_org_removed", "group_detach", out.subscription_id), positive: literal(g.orgName) };
+    },
+    group_org_left: async () => {
+      const g = await seedDetachableGroup({ prefix: "akb" });
+      const out = await detachOrgFromGroup({ actorUserId: g.owner.id, orgId: g.orgId, mode: "release" });
+      // The notice names the org that left the group.
+      return { rowIds: await attemptedRowIdsOf("group_org_left", "group_detach", out.subscription_id), positive: literal(g.orgName) };
     },
   };
 
