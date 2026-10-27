@@ -112,6 +112,8 @@
 //     from reconcile-on-return, calls it; pass-checkout-plan-gate.test.ts drives both to a row), for a Checkout Session, the same way.
 //   - staff_pass_unknown_competition: the real `alertPassUnknownCompetition` (both its sites, the webhook and reconcile-on-return,
 //     call it; billing-pass-unknown-competition.test.ts drives both to one row), for a Checkout Session, the same way.
+//   - staff_stream_credit_clawback: the real `alertStreamClawback` (its four sites, the partial, short and ungranted refunds and the
+//     short lost dispute, call it; stream-credits-clawback.test.ts drives each to a row), for a partial refund of a charge, the same way.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -203,7 +205,7 @@ import {
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
-import { alertCreditPackGrantFailed, alertSizePackGrantFailed, processStripeEvent } from "@/server/usecases/billing-events";
+import { alertCreditPackGrantFailed, alertSizePackGrantFailed, alertStreamClawback, processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
@@ -1304,6 +1306,33 @@ function passUnknownCompetitionScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for a partially refunded match-credit charge, to this run's STAFF_ALERT_EMAIL: no org, no account, and the
+ *  worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function streamCreditClawbackScenario(): LiteralKindScenario {
+  const recipient = address();
+  const chargeId = `ch_${RUN}_claw_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Match credits claw-back needs review: ${chargeId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertStreamClawback({
+        shape: "partial",
+        refType: "charge",
+        refId: chargeId,
+        amountRefunded: 500,
+        orgId: randomUUID(),
+        purchased: 5,
+        clawedBack: 0,
+        reason: "partial refund — no automatic claw-back",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
  *  request makes the first attempt. */
 async function emailChangeConfirmationScenario(): Promise<KindScenario> {
@@ -1876,6 +1905,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_pass_credit_reversal_incomplete: passCreditReversalIncompleteScenario(),
         staff_pass_rung_mismatch: passRungMismatchScenario(),
         staff_pass_unknown_competition: passUnknownCompetitionScenario(),
+        staff_stream_credit_clawback: streamCreditClawbackScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

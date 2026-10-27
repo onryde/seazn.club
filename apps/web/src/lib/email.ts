@@ -816,7 +816,6 @@ export function streamCreditGrantFailedAlertEmail(opts: StreamCreditGrantFailedA
 }
 
 export interface StreamCreditClawbackAlertEmail {
-  to: string;
   /** The Stripe object a staffer opens: the refunded charge, or the dispute id
    *  when a lost chargeback is what triggered the claw-back. */
   chargeId: string;
@@ -848,12 +847,13 @@ export interface StreamCreditClawbackAlertEmail {
  *  it was kept separate from the AI-wallet builder so the subject does not send
  *  triage to the wrong balance; the same argument separates this one from it.
  *
- *  Ops-only, no user-facing i18n (mirrors the builders above). Guarded at the
- *  CALL SITE on STAFF_ALERT_EMAIL and fired `void … .catch(() => {})`, so it can
- *  never block the webhook ACK. */
-export async function sendStreamCreditClawbackAlertEmail(
-  opts: StreamCreditClawbackAlertEmail,
-): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors the builders above).
+ *
+ *  RENDERED and not sent: `alertStreamClawback` (billing-events.ts) queues what this returns on the email outbox through
+ *  `queueStaffAlert` (kind `staff_stream_credit_clawback`), once per incident — `<charge>:partial:<amount refunded>`,
+ *  `<charge>:short`, `<charge>:ungranted` or `<dispute>:lost` — and never throws, so it can never block the webhook ACK.
+ *  Nothing sends it directly. */
+export function streamCreditClawbackAlertEmail(opts: StreamCreditClawbackAlertEmail): EmailContent {
   const subject = `Match credits claw-back needs review: ${opts.chargeId}`;
   const movement =
     opts.purchased === undefined
@@ -882,7 +882,7 @@ export async function sendStreamCreditClawbackAlertEmail(
     footerNote: "Automated staff alert — match credits webhook (streaming R1).",
   });
   const text = `${bodyText}\n\nCharge: ${opts.chargeId} · org ${opts.orgId} · reason: ${opts.reason}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface StreamPackPriceDriftAlertEmail {

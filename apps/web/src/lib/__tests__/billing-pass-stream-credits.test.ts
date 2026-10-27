@@ -61,7 +61,6 @@ vi.mock("@/lib/sentry", () => ({ captureError: sentry.captureError }));
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
   sendStaffDisputeAlertEmail: vi.fn(async () => true),
-  sendStreamCreditClawbackAlertEmail: vi.fn(async () => true),
 }));
 
 import { sql } from "@/lib/db";

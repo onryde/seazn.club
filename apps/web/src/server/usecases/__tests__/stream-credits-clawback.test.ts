@@ -24,26 +24,44 @@
 // empty `metadata` exactly as a real Checkout-created charge does.
 //
 // Real Postgres required; skipped without DATABASE_URL.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { seedOrg } from "./_rig";
 import { processStripeEvent, runEvent } from "../billing-events";
 import { creditBalance } from "../stream-credits";
-import { sendStaffDisputeAlertEmail, sendStreamCreditClawbackAlertEmail } from "@/lib/email";
+import { sendStaffDisputeAlertEmail, streamCreditClawbackAlertEmail } from "@/lib/email";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
+import { staffAlertDrops, staffRows } from "./_money-fixtures";
 
-// Both alerts are mocked at the function rather than at the transport, so the
-// assertions are on the call the branch makes and not on whether an SMTP env
-// happens to be configured in this process. Their COPY is proven separately
-// (lib/__tests__/stream-credit-clawback-alert-email.test.ts).
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendStreamCreditClawbackAlertEmail: vi.fn(async () => true),
-  sendStaffDisputeAlertEmail: vi.fn(async () => true),
-}));
-const clawbackAlert = vi.mocked(sendStreamCreditClawbackAlertEmail);
+// The claw-back alert is queued on the email outbox (phase 3 wave 5, kind
+// `staff_stream_credit_clawback`, once per incident: `<charge>:partial:<amount
+// refunded>`, `<charge>:short`, `<charge>:ungranted`, `<dispute>:lost`) to this
+// suite's own STAFF_ALERT_EMAIL, so the tests read its rows (`staffRows`). Its
+// builder is a spy that calls through, so what the alert SAYS is read where it
+// enters the mail; the copy itself is proven in
+// lib/__tests__/stream-credit-clawback-alert-email.test.ts. Sentry's issue
+// capture is observed (call-through) so a test can assert the writer dropped
+// nothing. The dispute alert is still mocked at its sender.
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return {
+    ...actual,
+    streamCreditClawbackAlertEmail: vi.fn(actual.streamCreditClawbackAlertEmail),
+    sendStaffDisputeAlertEmail: vi.fn(async () => true),
+  };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
+const clawbackAlert = vi.mocked(streamCreditClawbackAlertEmail);
 const disputeAlert = vi.mocked(sendStaffDisputeAlertEmail);
+const KIND = "staff_stream_credit_clawback";
+const RUN = `scc-${randomUUID().slice(0, 8)}`;
+const clawSubject = (ref: string): string => `Match credits claw-back needs review: ${ref}`;
 
 // The guarded PaymentIntent retrieve the `matched === false` branch uses to tell
 // a paid-but-ungranted match-credit pack from a genuine non-stream charge. Only
@@ -187,19 +205,43 @@ async function revokeRows(orgId: string): Promise<LedgerRow[]> {
      order by created_at`;
 }
 
+/** This test's own staff address and its `log.error` spy, both set in `beforeEach`. */
+let staff = "";
+let errors: ReturnType<typeof vi.spyOn>;
+/** What the writer's never-throws catch left (I2): an alert that was queued or deduplicated left nothing. */
+const drops = () => staffAlertDrops(errors, vi.mocked(captureError));
+/** One queued claw-back row to this test's staff address, keyed `<ref>:<suffix>`. */
+const clawRow = (ref: string, suffix: string) => ({
+  ref_id: `${ref}:${suffix}`,
+  dedupe_key: `${ref}:${suffix}`,
+  status: "queued",
+  recipient: staff,
+  subject: clawSubject(ref),
+});
+
+afterAll(async () => {
+  if (!HAS_DB) return;
+  await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
+});
+
 describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
   beforeEach(() => {
     clawbackAlert.mockClear();
     disputeAlert.mockClear();
+    vi.mocked(captureError).mockClear();
     stripeMock.retrieveIntent.mockReset();
     // A real retrieve always answers with a PaymentIntent object; the AI pack
     // handler runs FIRST on every charge.refunded and reads `pi.metadata`, so a
     // bare reset (returning undefined) would crash the donor, not this arm.
     stripeMock.retrieveIntent.mockResolvedValue({ metadata: {} });
-    vi.stubEnv("STAFF_ALERT_EMAIL", "billing-ops@example.test");
+    // This test's own staff address: CI sets none, and the database is shared.
+    staff = `staff-${RUN}-${uniq()}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
     vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_dummy");
+    errors = vi.spyOn(log, "error");
   });
   afterEach(() => {
+    errors.mockRestore();
     vi.unstubAllEnvs();
   });
 
@@ -229,6 +271,7 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
     expect(rows[0]!.stripe_payment_intent_id).toBe(intent);
     // Nothing was spent, so this is a clean reversal: no human is owed a look.
     expect(clawbackAlert).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "charge", chargeId), "no page, to any recipient").toHaveLength(0);
   });
 
   it("a PARTIALLY spent pack: the claw-back is capped at the balance, and staff are alerted", async () => {
@@ -236,8 +279,9 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
     const { intent } = await buyPack(auth.orgId, 5);
     await spend(auth.orgId, 3);
     expect(await creditBalance(sql, auth.orgId)).toBe(2);
+    const chargeId = `ch_${RUN}_${uniq()}`;
 
-    await processStripeEvent(refundEvent({ paymentIntent: intent }));
+    await processStripeEvent(refundEvent({ paymentIntent: intent, chargeId }));
 
     // 2 revoked, not 5. An uncapped revoke would write balance_after -3 and
     // V410's CHECK would throw inside the webhook.
@@ -246,13 +290,16 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
     expect(rows).toHaveLength(1);
     expect(rows[0]!.delta).toBe(-2);
     expect(rows[0]!.balance_after).toBe(0);
-    // Bought → streamed → refunded is the abuse signature. Recorded AND alerted;
-    // a human decides whether to chase.
+    // Bought → streamed → refunded is the abuse signature. Recorded AND alerted
+    // (one page, keyed `<charge>:short`); a human decides whether to chase.
+    expect(await staffRows(KIND, "charge", chargeId)).toEqual([clawRow(chargeId, "short")]);
     expect(clawbackAlert).toHaveBeenCalledTimes(1);
     const arg = clawbackAlert.mock.calls[0]![0];
+    expect(arg.chargeId).toBe(chargeId);
     expect(arg.orgId).toBe(auth.orgId);
     expect(arg.purchased).toBe(5);
     expect(arg.clawedBack).toBe(2);
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
   });
 
   it("a FULLY spent pack: nothing is left to revoke, so NO row is written and staff are alerted", async () => {
@@ -396,7 +443,7 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
     expect(await revokeRows(auth.orgId)).toHaveLength(0);
   });
 
-  it("a replayed SHORT claw-back reports the EARLIER amount, writes no second row, and alerts again", async () => {
+  it("a replayed SHORT claw-back reports the EARLIER amount, writes no second row, reaches the alert again and pages once", async () => {
     // The replay branch returns `-prior.delta`, not 0, so the caller's
     // `clawedBack < purchased` verdict is the same on every delivery. Every
     // other replay case here uses an UNSPENT pack, where that number equals
@@ -405,7 +452,8 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
     const { auth } = await seedOrg();
     const { intent } = await buyPack(auth.orgId, 5);
     await spend(auth.orgId, 3);
-    const ev = refundEvent({ paymentIntent: intent });
+    const chargeId = `ch_${RUN}_${uniq()}`;
+    const ev = refundEvent({ paymentIntent: intent, chargeId });
 
     await processStripeEvent(ev);
     expect(clawbackAlert).toHaveBeenCalledTimes(1);
@@ -415,10 +463,13 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
 
     expect(await revokeRows(auth.orgId)).toHaveLength(1);
     expect(await creditBalance(sql, auth.orgId)).toBe(0);
-    // The replay reports 2 — the amount the FIRST call clawed — so the abuse
-    // alert fires again rather than falling silent.
-    expect(clawbackAlert).toHaveBeenCalledTimes(2);
+    // The replay reports 2 — the amount the FIRST call clawed — so the replay
+    // reaches the abuse alert again rather than falling silent before it…
+    expect(clawbackAlert, "premise: both deliveries reached the alert").toHaveBeenCalledTimes(2);
     expect(clawbackAlert.mock.calls[1]![0]).toMatchObject({ purchased: 5, clawedBack: 2 });
+    // …and the charge's once-key (`<charge>:short`) makes it one page.
+    expect(await staffRows(KIND, "charge", chargeId)).toEqual([clawRow(chargeId, "short")]);
+    expect(drops(), "deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
   });
 
   it("a refund of a DIFFERENT charge leaves another org's pack alone, and no PaymentIntent metadata makes it ours", async () => {
@@ -429,13 +480,15 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
     // A genuine non-stream charge: the retrieve answers with another product's
     // metadata, so the ungranted-pack alert must NOT fire either.
     stripeMock.retrieveIntent.mockResolvedValue({ metadata: { kind: "credit_pack" } });
-    await processStripeEvent(refundEvent({ paymentIntent: `pi_unrelated_${uniq()}` }));
+    const chargeId = `ch_${RUN}_${uniq()}`;
+    await processStripeEvent(refundEvent({ paymentIntent: `pi_unrelated_${uniq()}`, chargeId }));
 
     // The gate is `stripe_payment_intent_id = <this intent>`. Widened to "any
     // purchase row", this refund would claw back a stranger's pack.
     expect(await creditBalance(sql, auth.orgId)).toBe(5);
     expect(await revokeRows(auth.orgId)).toHaveLength(0);
     expect(clawbackAlert).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "charge", chargeId), "no page, to any recipient").toHaveLength(0);
   });
 
   it("a refunded match-credit charge with NO purchase row alerts a human and writes nothing", async () => {
@@ -444,10 +497,14 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
     stripeMock.retrieveIntent.mockResolvedValue({
       metadata: { kind: "stream_credits", org_id: orgId, pack: "5" },
     });
+    const chargeId = `ch_${RUN}_${uniq()}`;
 
-    await processStripeEvent(refundEvent({ paymentIntent: intent }));
+    await processStripeEvent(refundEvent({ paymentIntent: intent, chargeId }));
 
     expect(stripeMock.retrieveIntent).toHaveBeenCalledWith(intent);
+    // One page, keyed `<charge>:ungranted`.
+    expect(await staffRows(KIND, "charge", chargeId)).toEqual([clawRow(chargeId, "ungranted")]);
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
     expect(clawbackAlert).toHaveBeenCalledTimes(1);
     expect(clawbackAlert.mock.calls[0]![0].orgId).toBe(orgId);
     // Nothing to claw back and nothing invented.
@@ -478,14 +535,16 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
   it("an UNREFUNDED charge (both flags clear) is a silent no-op even for a pack we sold", async () => {
     const { auth } = await seedOrg();
     const { intent } = await buyPack(auth.orgId, 5);
+    const chargeId = `ch_${RUN}_${uniq()}`;
 
     await processStripeEvent(
-      refundEvent({ paymentIntent: intent, refunded: false, amountRefunded: 0 }),
+      refundEvent({ paymentIntent: intent, chargeId, refunded: false, amountRefunded: 0 }),
     );
 
     expect(await creditBalance(sql, auth.orgId)).toBe(5);
     expect(await revokeRows(auth.orgId)).toHaveLength(0);
     expect(clawbackAlert).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "charge", chargeId), "no page, to any recipient").toHaveLength(0);
   });
 
   it("a REDELIVERED refund writes no second revoke row", async () => {
@@ -502,21 +561,84 @@ describe.skipIf(!HAS_DB)("charge.refunded → match-credit claw-back", () => {
     expect(await revokeRows(auth.orgId)).toHaveLength(1);
     expect(await creditBalance(sql, auth.orgId)).toBe(0);
   });
+
+  // ---- The staff page: once per incident (P-W5-9). The row's ref IS its
+  // once-key (P-W5-1), so a replay pages nothing more, while two DIFFERENT
+  // incidents about one charge are two pages and neither replaces the other.
+
+  it("a partial refund pages once under the charge", async () => {
+    const { auth } = await seedOrg();
+    const { intent } = await buyPack(auth.orgId, 5);
+    const chargeId = `ch_${RUN}_${uniq()}`;
+
+    await processStripeEvent(refundEvent({ paymentIntent: intent, chargeId, refunded: false, amountRefunded: 500 }));
+
+    // Keyed `<charge>:partial:<amount_refunded>`: the amount is what moved.
+    expect(await staffRows(KIND, "charge", chargeId)).toEqual([clawRow(chargeId, "partial:500")]);
+    expect(clawbackAlert, "what the alert says").toHaveBeenCalledWith({
+      chargeId,
+      orgId: auth.orgId,
+      purchased: 5,
+      clawedBack: 0,
+      reason: expect.stringMatching(/partial/i),
+    });
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("a redelivered partial refund pages nothing more", async () => {
+    const { auth } = await seedOrg();
+    const { intent } = await buyPack(auth.orgId, 5);
+    const chargeId = `ch_${RUN}_${uniq()}`;
+    const ev = refundEvent({ paymentIntent: intent, chargeId, refunded: false, amountRefunded: 500 });
+
+    // processStripeEvent, not runEvent: the billing_events claim would stop a
+    // true redelivery before the handler, and this is the once-key's test.
+    await processStripeEvent(ev);
+    await processStripeEvent(ev);
+
+    expect(clawbackAlert, "premise: both deliveries reached the alert").toHaveBeenCalledTimes(2);
+    expect(await staffRows(KIND, "charge", chargeId)).toEqual([clawRow(chargeId, "partial:500")]);
+    expect(drops(), "deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("a partial and then a full short refund of one charge are two alerts, and neither replaces the other", async () => {
+    // Review Focus 1. The two pages share a kind, a charge and a recipient; with
+    // a shared ref the replace trigger would let the second supersede the
+    // first while it waits for the worker.
+    const { auth } = await seedOrg();
+    const { intent } = await buyPack(auth.orgId, 5);
+    await spend(auth.orgId, 3);
+    const chargeId = `ch_${RUN}_${uniq()}`;
+
+    await processStripeEvent(refundEvent({ paymentIntent: intent, chargeId, refunded: false, amountRefunded: 500 }));
+    await processStripeEvent(refundEvent({ paymentIntent: intent, chargeId, refunded: true, amountRefunded: 2500 }));
+
+    expect(await revokeRows(auth.orgId), "premise: the full refund clawed back the 2 left, short of 5").toMatchObject([{ delta: -2 }]);
+    expect(clawbackAlert, "premise: both refunds reached the alert").toHaveBeenCalledTimes(2);
+    // Both queued: neither is `replaced`.
+    expect(await staffRows(KIND, "charge", chargeId)).toEqual([clawRow(chargeId, "partial:500"), clawRow(chargeId, "short")]);
+    expect(drops(), "both queued, nothing dropped").toEqual({ logged: 0, issues: 0 });
+  });
 });
 
 describe.skipIf(!HAS_DB)("charge.dispute.* → match-credit claw-back", () => {
   beforeEach(() => {
     clawbackAlert.mockClear();
     disputeAlert.mockClear();
+    vi.mocked(captureError).mockClear();
     stripeMock.retrieveIntent.mockReset();
     // A real retrieve always answers with a PaymentIntent object; the AI pack
     // handler runs FIRST on every charge.refunded and reads `pi.metadata`, so a
     // bare reset (returning undefined) would crash the donor, not this arm.
     stripeMock.retrieveIntent.mockResolvedValue({ metadata: {} });
-    vi.stubEnv("STAFF_ALERT_EMAIL", "billing-ops@example.test");
+    // This test's own staff address: CI sets none, and the database is shared.
+    staff = `staff-${RUN}-${uniq()}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
     vi.stubEnv("STRIPE_SECRET_KEY", "sk_test_dummy");
+    errors = vi.spyOn(log, "error");
   });
   afterEach(() => {
+    errors.mockRestore();
     vi.unstubAllEnvs();
   });
 
@@ -552,13 +674,36 @@ describe.skipIf(!HAS_DB)("charge.dispute.* → match-credit claw-back", () => {
     // conditional on the SHORT claw-back, not fired on every lost dispute.
     const { auth } = await seedOrg();
     const { intent } = await buyPack(auth.orgId, 5);
+    const disputeId = `dp_${RUN}_${uniq()}`;
 
-    await processStripeEvent(disputeEvent({ paymentIntent: intent, phase: "closed", status: "lost" }));
+    await processStripeEvent(disputeEvent({ paymentIntent: intent, phase: "closed", status: "lost", disputeId }));
 
     expect(await revokeRows(auth.orgId)).toHaveLength(1);
     expect(await creditBalance(sql, auth.orgId)).toBe(0);
     expect(disputeAlert).toHaveBeenCalledTimes(1);
     expect(clawbackAlert).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "dispute", disputeId), "no claw-back page, to any recipient").toHaveLength(0);
+  });
+
+  it("a lost dispute's short claw-back pages under the dispute", async () => {
+    const { auth } = await seedOrg();
+    const { intent } = await buyPack(auth.orgId, 5);
+    await spend(auth.orgId, 1);
+    const disputeId = `dp_${RUN}_${uniq()}`;
+
+    await processStripeEvent(disputeEvent({ paymentIntent: intent, phase: "closed", status: "lost", disputeId }));
+
+    // Ref type `dispute`, keyed `<dispute>:lost`: the dispute is what a staffer
+    // opens, and a refund of the same charge is a different incident.
+    expect(await staffRows(KIND, "dispute", disputeId)).toEqual([clawRow(disputeId, "lost")]);
+    expect(clawbackAlert, "what the alert says").toHaveBeenCalledWith({
+      chargeId: disputeId,
+      orgId: auth.orgId,
+      purchased: 5,
+      clawedBack: 4,
+      reason: expect.stringMatching(/fewer credits than the pack granted/),
+    });
+    expect(drops(), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
   });
 
   it("a lost dispute after a refund that clawed NOTHING still cannot revoke a later pack", async () => {

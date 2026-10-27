@@ -62,7 +62,7 @@ import {
   sendStuckEventsAlertEmail,
   creditPackGrantFailedAlertEmail,
   type CreditPackGrantFailedAlertEmail,
-  sendStreamCreditClawbackAlertEmail,
+  streamCreditClawbackAlertEmail,
   sizePackGrantFailedAlertEmail,
   type SizePackGrantFailedAlertEmail,
   sendExtraOrgRepriceFailedAlertEmail,
@@ -2142,7 +2142,7 @@ async function handlePackChargeRefunded(charge: Stripe.Charge): Promise<void> {
   });
 }
 
-/** The three shapes `sendStreamCreditClawbackAlertEmail` is sent for. Named
+/** The three reasons `streamCreditClawbackAlertEmail` is rendered with. Named
  *  constants rather than inline strings so the alert's reason is one authority
  *  and a test can assert the one it expects without retyping the sentence. */
 const STREAM_CLAWBACK_REASON = {
@@ -2191,8 +2191,11 @@ async function handleStreamPackChargeRefunded(charge: Stripe.Charge): Promise<vo
       { chargeId: charge.id, intent, orgId: match.orgId, purchased: match.purchased },
       "billing: match-credit charge partially refunded — no automatic claw-back, staff alerted",
     );
-    alertStreamClawback({
-      chargeId: charge.id,
+    await alertStreamClawback({
+      shape: "partial",
+      refType: "charge",
+      refId: charge.id,
+      amountRefunded: charge.amount_refunded,
       orgId: match.orgId,
       purchased: match.purchased,
       clawedBack: 0,
@@ -2212,8 +2215,10 @@ async function handleStreamPackChargeRefunded(charge: Stripe.Charge): Promise<vo
     // fully-spent pack (which writes no row at all, V410's `delta <> 0`) still
     // alerts — that is precisely the case a human most needs to see.
     if (res.clawedBack < res.purchased) {
-      alertStreamClawback({
-        chargeId: charge.id,
+      await alertStreamClawback({
+        shape: "short",
+        refType: "charge",
+        refId: charge.id,
         orgId: res.orgId ?? "unknown",
         purchased: res.purchased,
         clawedBack: res.clawedBack,
@@ -2241,29 +2246,53 @@ async function handleStreamPackChargeRefunded(charge: Stripe.Charge): Promise<vo
     { chargeId: charge.id, intent },
     "billing: stream_credits charge refunded but no purchase ledger row found — nothing to claw back (was it ever granted?)",
   );
-  alertStreamClawback({
-    chargeId: charge.id,
+  await alertStreamClawback({
+    shape: "ungranted",
+    refType: "charge",
+    refId: charge.id,
     orgId: pi.metadata?.org_id ?? "unknown",
     reason: STREAM_CLAWBACK_REASON.ungranted,
   });
 }
 
-/** STAFF_ALERT_EMAIL guard + fire-and-forget, at the CALL SITE (the builder
- *  itself reads no env). ONE helper for all four call sites — the three in
- *  `handleStreamPackChargeRefunded` above (partial, short refund, ungranted)
- *  and the short lost-dispute one in `handlePlatformDispute` below — so the
- *  guard cannot be forgotten on one of them; `void … .catch(() => {})` so an
- *  alerting hiccup can never undo a claw-back or block the ACK. */
-function alertStreamClawback(args: {
-  chargeId: string;
+/** The staff alert for a match-credit claw-back that needs a human: queued on
+ *  the email outbox (kind `staff_stream_credit_clawback`) to STAFF_ALERT_EMAIL
+ *  through `queueStaffAlert`, which never throws, so an alerting hiccup can
+ *  never undo a claw-back or block the ACK. ONE function for all four call
+ *  sites — the three in `handleStreamPackChargeRefunded` above (partial, short
+ *  refund, ungranted) and the short lost-dispute one in `handlePlatformDispute`
+ *  below.
+ *
+ *  Once per incident (P-W5-9): `<charge>:partial:<amount refunded>`,
+ *  `<charge>:short` and `<charge>:ungranted` under ref type `charge`, and
+ *  `<dispute>:lost` under `dispute`. A redelivery pages nothing more, while a
+ *  partial refund and then the full refund of one charge are two incidents and
+ *  two pages, neither replacing the other (P-W5-1). Null when nothing was
+ *  queued. */
+export async function alertStreamClawback(a: {
+  shape: "partial" | "short" | "ungranted" | "lost";
+  refType: "charge" | "dispute";
+  refId: string;
+  amountRefunded?: number;
   orgId: string;
   purchased?: number;
   clawedBack?: number;
   reason: string;
-}): void {
-  const alertTo = process.env.STAFF_ALERT_EMAIL;
-  if (!alertTo) return;
-  void sendStreamCreditClawbackAlertEmail({ to: alertTo, ...args }).catch(() => {});
+}): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_stream_credit_clawback",
+    refType: a.refType,
+    id: a.refId,
+    suffix: a.shape === "partial" ? `partial:${a.amountRefunded}` : a.shape,
+    render: () =>
+      streamCreditClawbackAlertEmail({
+        chargeId: a.refId,
+        orgId: a.orgId,
+        purchased: a.purchased,
+        clawedBack: a.clawedBack,
+        reason: a.reason,
+      }),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -2424,8 +2453,10 @@ async function handlePlatformDispute(
           "billing: match-credit pack clawed back on a lost dispute",
         );
         if (res.matched && res.clawedBack < res.purchased) {
-          alertStreamClawback({
-            chargeId: dispute.id,
+          await alertStreamClawback({
+            shape: "lost",
+            refType: "dispute",
+            refId: dispute.id,
             orgId: res.orgId ?? stream.orgId,
             purchased: res.purchased,
             clawedBack: res.clawedBack,
