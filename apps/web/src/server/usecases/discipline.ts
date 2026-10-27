@@ -15,7 +15,8 @@ import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { resolvePersonDisplayName } from "@/lib/name-display";
 import type { Locale } from "@/lib/i18n-constants";
-import { sendSuspensionConfirmedEmail, sendSuspensionServedEmail } from "@/lib/email";
+import { sendSuspensionServedEmail, suspensionConfirmedEmail } from "@/lib/email";
+import { dispatchNow, enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
 import { suspendedPlayersMessage } from "@/lib/registration-rules";
@@ -686,11 +687,14 @@ export async function decideSuspension(
 ): Promise<Suspension> {
   await requireFeature(auth.orgId, "discipline.enforced", await competitionForSuspension(id));
   let served: ServedFlip[] = [];
+  let confirmedNotice: string | null = null;
   const result = await withTenant(auth.orgId, async (tx) => {
+    // `for update`: two confirms of one pending ban serialise here, so exactly one of them reads `pending` and owes the
+    // confirmed notice (R6); the other reads `active` and asks for nothing.
     const [s] = await tx<
       { division_id: string; person_id: string; entrant_id: string | null; status: SuspensionStatus }[]
     >`
-      select division_id, person_id, entrant_id, status from suspensions where id = ${id}`;
+      select division_id, person_id, entrant_id, status from suspensions where id = ${id} for update`;
     if (!s) throw new HttpError(404, "suspension not found");
 
     if (action.kind === "confirm") {
@@ -707,6 +711,9 @@ export async function decideSuspension(
         update suspensions set status = 'active', entrant_id = ${entrantId},
           decided_by = ${auth.userId}, decided_at = now(), updated_at = now()
         where id = ${id}`;
+      // The ban just went live (SPEC-1): the claimed player's notice, queued with the decision. A re-confirm of a live
+      // ban is not a new fact and owes nothing.
+      if (s.status === "pending") confirmedNotice = await queueSuspensionConfirmed(tx, id);
     } else if (action.kind === "waive") {
       await tx`
         update suspensions set status = 'waived', decided_by = ${auth.userId},
@@ -722,42 +729,58 @@ export async function decideSuspension(
     served = await detectSuspensions(tx, s.division_id);
     return loadSuspension(tx, s.division_id, id);
   });
-  // Confirm-only: notify the claimed player once the ban is live (SPEC-1).
-  if (action.kind === "confirm") await emailConfirmed(id, result);
+  // R5: the first attempt after the decision committed (the request's, as tail work); the worker retries it.
+  const queued = confirmedNotice;
+  if (queued !== null) deferred(() => dispatchNow([queued]));
   await notifyServedSuspensions(served);
   return result;
 }
 
-/** Notify the claimed player that an organiser confirmed their suspension.
- *  Superuser resolve; unclaimed persons drop out of the join. Fire-and-forget. */
-async function emailConfirmed(id: string, sus: Suspension): Promise<void> {
-  // After the decision committed: a failure here is logged, never thrown, so
-  // the decision does not read as failed and the served notice after it runs.
-  try {
-    const [r] = await sql<
-      { email: string | null; locale: string | null; org_name: string; division_name: string }[]
-    >`
-      select u.email, u.locale, o.name as org_name, d.name as division_name
-      from suspensions s
-      join persons p on p.id = s.person_id
-      join users u on u.id = p.user_id
-      join divisions d on d.id = s.division_id
-      join organizations o on o.id = s.org_id
-      where s.id = ${id}`;
-    if (!r?.email) return;
-    void sendSuspensionConfirmedEmail(
-      r.email,
-      { orgName: r.org_name, divisionName: r.division_name, reason: sus.reason, matchesTotal: sus.matchesTotal },
-      (r.locale as Locale) ?? "en",
-    ).catch((err: unknown) => {
-      log.warn({ suspensionId: id, err: errorText(err) }, "discipline: a confirmed email failed to send");
-    });
-  } catch (err) {
-    log.warn(
-      { suspensionId: id, err: errorText(err) },
-      "discipline: the confirmed notice failed after commit; the decision stands",
-    );
-  }
+/**
+ * Queue the "suspension confirmed" notice for the ban `suspensionId` on the email outbox, on `tx` (the decision's tenant
+ * transaction): to the claimed player's ACCOUNT, in their language (D4: the account's, then the org's default, then `en`),
+ * at most once per ban (once-key `<id>:confirmed`). Returns the row's id, or `null` when there is nobody to address (the
+ * person is not linked to a live account) or the ban's notice is already queued. Every read is on `tx` (#996).
+ */
+export async function queueSuspensionConfirmed(tx: Tx, suspensionId: string): Promise<string | null> {
+  const [r] = await tx<
+    {
+      org_id: string;
+      user_id: string;
+      email: string | null;
+      org_name: string;
+      default_locale: string | null;
+      division_name: string;
+      reason: string;
+      matches_total: number;
+    }[]
+  >`
+    select s.org_id, u.id as user_id, u.email, o.name as org_name, o.default_locale, d.name as division_name,
+           s.reason, s.matches_total
+    from suspensions s
+    join persons p on p.id = s.person_id
+    join users u on u.id = p.user_id and u.deleted_at is null
+    join divisions d on d.id = s.division_id
+    join organizations o on o.id = s.org_id
+    where s.id = ${suspensionId}`;
+  if (!r?.email) return null;
+  const locale = await recipientLocale(tx, { pick: null, userId: r.user_id, orgDefault: r.default_locale });
+  const content = await suspensionConfirmedEmail(
+    { orgName: r.org_name, divisionName: r.division_name, reason: r.reason, matchesTotal: r.matches_total },
+    locale,
+  );
+  return enqueueEmailOnce(tx, {
+    kind: "suspension_confirmed",
+    refType: "suspension",
+    refId: suspensionId,
+    dedupeKey: onceKey("suspension_confirmed", "suspension", suspensionId, "confirmed"),
+    orgId: r.org_id,
+    to: r.email,
+    recipientUserId: r.user_id,
+    ...content,
+    transactional: true,
+    expiresAt: expiryWithin(null),
+  });
 }
 
 // ---------------------------------------------------------------------------

@@ -5,20 +5,27 @@
 // exclusion, and the derived serving counter.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { builtinModules } from "@seazn/engine/sports";
 
-// Observe the two SPEC-1 player notices without touching the rest of the email
-// module (send() is a no-op without RESEND_API_KEY either way). Hoisted so the
-// spies are live before ../discipline binds the senders at import.
+// Observe the served notice without touching the rest of the email module
+// (send() is a no-op without RESEND_API_KEY either way). Hoisted so the spy is
+// live before ../discipline binds the sender at import.
 const emailMock = vi.hoisted(() => ({
-  confirmed: vi.fn().mockResolvedValue(true),
   served: vi.fn().mockResolvedValue(true),
 }));
 vi.mock("@/lib/email", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendSuspensionConfirmedEmail: emailMock.confirmed,
   sendSuspensionServedEmail: emailMock.served,
 }));
+// The confirmed notice is a row on the email outbox (phase 3 wave 4, kind `suspension_confirmed`). The outbox's one
+// network seam is captured, never sent; the row, the seal, the gate and the attempt are the real ones. `enqueueEmailOnce`
+// is WRAPPED (the real insert runs) so a test can count how often a producer asked for a notice, which the once-key
+// alone would hide (a second ask writes no second row).
+const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
+vi.mock("@/server/email-outbox", async (io) => {
+  const m = await io<typeof import("@/server/email-outbox")>();
+  return { ...m, enqueueEmailOnce: vi.fn(m.enqueueEmailOnce) };
+});
 
 // `after` wrapped, not replaced (the `lib/__tests__/deferred.test.ts` pattern):
 // outside a request it still throws and `deferred` runs its task inline, except
@@ -31,10 +38,12 @@ vi.mock("next/server", async (importOriginal) => {
 
 import { after } from "next/server";
 import { sql, withTenant } from "@/lib/db";
+import { enqueueEmailOnce } from "@/server/email-outbox";
+import { MAX_EXPIRY_MS, idempotencyKey, type OutboxKind, type OutboxStatus } from "@/server/email-outbox/constants";
+import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { stubOutboxEnv } from "./_invite-mail";
 import { log } from "@/server/logger";
-import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { PaymentRequiredError } from "@/lib/errors";
-import type { AuthCtx } from "@/server/api-v1/auth";
 import {
   activePublicSuspensionEntries,
   activeSuspensionsByEntrant,
@@ -45,15 +54,12 @@ import {
   listSuspensions,
   publicSuspensions,
   putDisciplineRules,
+  queueSuspensionConfirmed,
 } from "../discipline";
 import { refreshDiscipline, scoreEvent } from "../scoring";
 
-import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { claimPerson, makeFixture, seedFootballDivision, type FootballCtx as Ctx } from "./_seed";
 const HAS_DB = !!process.env.DATABASE_URL;
-
-// Full football config snapshot (createDivision would store this) — needed so
-// the seam test can fold a real forfeit through the module.
-const FOOTBALL_CFG = builtinModules.find((m) => m.key === "football")!.configSchema.parse({});
 
 const RULES = {
   accumulation: [
@@ -65,91 +71,6 @@ const RULES = {
     { key: "red", color: "red", ban_matches: 1 },
   ],
 };
-
-interface Ctx {
-  auth: AuthCtx;
-  orgId: string;
-  userId: string;
-  divisionId: string;
-  entrantA: string;
-  entrantB: string;
-  personX: string;
-  personY: string;
-  stageId: string;
-}
-
-async function seedFootballDivision(plan: "pro" | "community" = "pro"): Promise<Ctx> {
-  const suffix = randomUUID().slice(0, 8);
-  const [{ id: userId }] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, email_verified)
-    values (${`disc-${suffix}@test.local`}, 'Disc', true) returning id`;
-  const [{ id: orgId }] = await sql<{ id: string }[]>`
-    insert into organizations (name, slug, created_by)
-    values (${"Disc " + suffix}, ${"disc-" + suffix}, ${userId}) returning id`;
-  await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, 'owner')`;
-  if (plan === "pro") {
-    await setOrgPlan(orgId);
-  }
-  await invalidateOrgEntitlements(orgId);
-  await sql`
-    insert into sports (key, name, module_version, position_catalog)
-    values ('football', 'Football', '1.0.0', ${sql.json({ groups: [], lineup: { size: 11, benchMax: 12 } })})
-    on conflict (key) do nothing`;
-  const [{ id: compId }] = await sql<{ id: string }[]>`
-    insert into competitions (org_id, name, slug, visibility, created_by)
-    values (${orgId}, 'Cup', ${"cup-" + suffix}, 'public', ${userId}) returning id`;
-  const [{ id: divisionId }] = await sql<{ id: string }[]>`
-    insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
-    values (${compId}, ${orgId}, 'Open', 'open', 'football', '11-a-side', ${sql.json(FOOTBALL_CFG as never)}, '1.0.0')
-    returning id`;
-  const [{ id: stageId }] = await sql<{ id: string }[]>`
-    insert into stages (division_id, org_id, seq, kind, name) values (${divisionId}, ${orgId}, 1, 'league', 'League')
-    returning id`;
-  const [{ id: entrantA }] = await sql<{ id: string }[]>`
-    insert into entrants (division_id, org_id, kind, display_name, seed) values (${divisionId}, ${orgId}, 'team', 'A', 1) returning id`;
-  const [{ id: entrantB }] = await sql<{ id: string }[]>`
-    insert into entrants (division_id, org_id, kind, display_name, seed) values (${divisionId}, ${orgId}, 'team', 'B', 2) returning id`;
-  const [{ id: personX }] = await sql<{ id: string }[]>`
-    insert into persons (org_id, full_name) values (${orgId}, 'Xavier Smith') returning id`;
-  const [{ id: personY }] = await sql<{ id: string }[]>`
-    insert into persons (org_id, full_name) values (${orgId}, 'Yousef Kane') returning id`;
-  await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantA}, ${personX}, ${orgId})`;
-  await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantB}, ${personY}, ${orgId})`;
-  return {
-    auth: { orgId, via: "session", userId, role: "owner", keyId: null },
-    orgId,
-    userId,
-    divisionId,
-    entrantA,
-    entrantB,
-    personX,
-    personY,
-    stageId,
-  };
-}
-
-/** Link a person to a claimed user account so the confirmed/served notices
- *  have an inbox to resolve (the senders join persons→users→email). */
-async function claimPerson(personId: string, email: string): Promise<void> {
-  const [{ id: uid }] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, email_verified)
-    values (${email}, 'Claimed', true) returning id`;
-  await sql`update persons set user_id = ${uid} where id = ${personId}`;
-}
-
-async function makeFixture(
-  ctx: Ctx,
-  seqInRound: number,
-  home: string | null,
-  away: string | null,
-  status = "scheduled",
-): Promise<string> {
-  const [{ id }] = await sql<{ id: string }[]>`
-    insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
-    values (${ctx.stageId}, ${ctx.divisionId}, ${ctx.orgId}, 1, ${seqInRound}, ${home}, ${away}, ${status})
-    returning id`;
-  return id;
-}
 
 async function setRules(ctx: Ctx, rules: unknown = RULES, enabled = true): Promise<void> {
   await sql`
@@ -195,6 +116,41 @@ async function detect(ctx: Ctx): Promise<void> {
   await withTenant(ctx.orgId, (tx) => detectSuspensions(tx, ctx.divisionId));
 }
 
+// The suspension notices on the email outbox (phase 3 wave 4). A notice is a row about ONE ban (`suspension / <id>`),
+// at most once per fact (once-key `<id>:confirmed` / `<id>:served`), addressed to the claimed player's ACCOUNT
+// (`recipient_user_id`), in their language (D4: the account's, then the org's default, then `en`). Expected subjects
+// come from the emails dictionary on disk (`dictionarySubject`), never from the code under test.
+type NoticeRow = {
+  id: string; kind: OutboxKind; ref_type: string; ref_id: string; dedupe_key: string | null; org_id: string | null;
+  recipient: string; recipient_user_id: string | null; transactional: boolean; subject: string; status: OutboxStatus;
+  attempts: number; created_at: Date; expires_at: Date;
+};
+/** Every `kind` notice about the ban `banId`, oldest first. */
+const noticesOf = (kind: OutboxKind, banId: string) =>
+  sql<NoticeRow[]>`
+    select id, kind, ref_type, ref_id, dedupe_key, org_id, recipient, recipient_user_id, transactional, subject, status,
+           attempts, created_at, expires_at
+      from email_outbox where kind = ${kind} and ref_type = 'suspension' and ref_id = ${banId}
+     order by created_at, id`;
+/** The notices once the request's own first attempt (a deferred `dispatchNow`) is over: none left queued or sending. */
+const settledNoticesOf = async (kind: OutboxKind, banId: string) => {
+  await vi.waitFor(
+    async () => {
+      const rows = await noticesOf(kind, banId);
+      expect(rows.filter((r) => r.status === "queued" || r.status === "sending"), "the request's first attempt is over").toEqual([]);
+    },
+    { timeout: 15_000, interval: 100 },
+  );
+  return noticesOf(kind, banId);
+};
+/** How many times a producer asked the outbox for a `kind` notice about `banId` (the wrapped `enqueueEmailOnce`). */
+const asksFor = (kind: OutboxKind, banId: string): number =>
+  vi.mocked(enqueueEmailOnce).mock.calls.filter(([, m]) => m.kind === kind && m.refId === banId).length;
+/** The transport calls a row made (its idempotency key names the row). */
+const sendsOf = (rowId: string): number =>
+  transport.deliver.mock.calls.filter((c) => (c[0] as { idempotencyKey: string }).idempotencyKey === idempotencyKey(rowId)).length;
+const address = (tag: string) => `${tag}-${randomUUID().slice(0, 8)}@test.local`;
+
 afterAll(async () => {
   if (!HAS_DB) return;
   const globalForDb = globalThis as { _sql?: { end(): Promise<void> } };
@@ -205,8 +161,16 @@ afterAll(async () => {
 
 describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
   beforeEach(() => {
-    emailMock.confirmed.mockClear();
     emailMock.served.mockClear();
+    // The outbox seals the body and the gate lets the attempt through; the transport answers as Resend would.
+    stubOutboxEnv();
+    transport.deliver.mockReset();
+    transport.deliver.mockImplementation(async () => ({ ok: true, providerId: `re_test_${randomUUID()}` }));
+    vi.mocked(enqueueEmailOnce).mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
   });
 
   it("(a) 5 yellows raise one pending yellow_5 row; detection is idempotent", async () => {
@@ -589,25 +553,124 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
     ).rejects.toBeInstanceOf(PaymentRequiredError);
   });
 
-  it("confirming a suspension fires the confirmed email to the claimed player", async () => {
-    const ctx = await seedFootballDivision();
-    const email = `claim-${randomUUID().slice(0, 8)}@test.local`;
-    await claimPerson(ctx.personX, email);
-    const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
-      personId: ctx.personX,
-      matchesTotal: 2,
-      reason: "violent conduct",
+  // Phase 3 wave 4 (T3, kind `suspension_confirmed`): confirming a ban queues the player's notice on the email outbox
+  // in the decision's own transaction (R1), only on the pending -> active transition (R6: a re-confirm of a live ban,
+  // a waive or an adjust queues nothing), backed by the once-key `<id>:confirmed`; the request makes the first attempt
+  // after commit (R5). An unclaimed player has no account to address and gets no row.
+  // Not built (owner rule 2026-10-26, mainstream only): a rollback witnessed by a failing statement after the enqueue
+  // (`plantFailingUpdate` does not exist); the row shares the decision's transaction by construction.
+  // Sport: not applicable (the notice does not vary by sport; football is the seed every discipline test uses).
+  describe("the confirmed notice goes through the email outbox (suspension_confirmed)", () => {
+    const manualBan = (ctx: Ctx, personId: string, matchesTotal = 2) =>
+      createManualSuspension(ctx.auth, ctx.divisionId, { personId, matchesTotal, reason: "violent conduct" });
+
+    it("confirming queues one notice to the claimed player, in their language, from the request", async () => {
+      const ctx = await seedFootballDivision();
+      const email = address("confirmed");
+      const userId = await claimPerson(ctx.personX, email);
+      await sql`update users set locale = 'es' where id = ${userId}`;
+      const ban = await manualBan(ctx, ctx.personX);
+
+      const active = await decideSuspension(ctx.auth, ban.id, { kind: "confirm" });
+      expect(active.status).toBe("active");
+
+      const rows = await settledNoticesOf("suspension_confirmed", ban.id);
+      expect(rows, "one notice for the one confirmation").toHaveLength(1);
+      const subject = dictionarySubject("es", "suspensionConfirmed.subject", { division: "Open" });
+      expect(subject, "premise: the Spanish subject is not the English one").not.toBe(
+        dictionarySubject("en", "suspensionConfirmed.subject", { division: "Open" }),
+      );
+      expect(rows[0]).toMatchObject({
+        ref_type: "suspension",
+        ref_id: ban.id,
+        dedupe_key: `${ban.id}:confirmed`,
+        org_id: ctx.orgId,
+        recipient: email,
+        recipient_user_id: userId,
+        transactional: true,
+        subject,
+        // R5: the request made the first attempt after commit (the worker never runs here).
+        status: "sent",
+      });
+      expect(Math.abs(rows[0]!.expires_at.getTime() - rows[0]!.created_at.getTime() - MAX_EXPIRY_MS), "the bound").toBeLessThan(1_000);
+      expect(sendsOf(rows[0]!.id), "sent once").toBe(1);
+      expect(await noticesOf("suspension_served", ban.id), "no served notice for a ban nothing has served").toEqual([]);
     });
 
-    const active = await decideSuspension(ctx.auth, manual.id, {
-      kind: "confirm",
+    it("confirming twice queues one", async () => {
+      const ctx = await seedFootballDivision();
+      await claimPerson(ctx.personX, address("twice"));
+      const ban = await manualBan(ctx, ctx.personX);
+
+      await decideSuspension(ctx.auth, ban.id, { kind: "confirm" });
+      await settledNoticesOf("suspension_confirmed", ban.id);
+      const again = await decideSuspension(ctx.auth, ban.id, { kind: "confirm" });
+      expect(again.status, "premise: the second confirm went through").toBe("active");
+
+      expect(await settledNoticesOf("suspension_confirmed", ban.id), "one row").toHaveLength(1);
+      // R6: the second confirm found the ban already active and did not ask; the once-key alone would hide a second ask.
+      expect(asksFor("suspension_confirmed", ban.id), "asked once").toBe(1);
     });
-    expect(active.status).toBe("active");
-    // The confirmed sender fired exactly once, to this player's inbox. Remove the
-    // `await emailConfirmed(...)` wiring in decideSuspension and this goes to 0.
-    expect(emailMock.confirmed).toHaveBeenCalledTimes(1);
-    expect(emailMock.confirmed.mock.calls[0]![0]).toBe(email);
-    expect(emailMock.served).not.toHaveBeenCalled();
+
+    it("empty: an unclaimed player's ban is confirmed with no row", async () => {
+      const ctx = await seedFootballDivision();
+      // personY has no account: nothing to address.
+      const ban = await manualBan(ctx, ctx.personY);
+
+      const active = await decideSuspension(ctx.auth, ban.id, { kind: "confirm" });
+
+      expect(active.status, "the confirmation itself went through").toBe("active");
+      expect(await noticesOf("suspension_confirmed", ban.id)).toEqual([]);
+    });
+
+    it("D4: no account language → the org's default", async () => {
+      const ctx = await seedFootballDivision();
+      await sql`update organizations set default_locale = 'fr' where id = ${ctx.orgId}`;
+      const userId = await claimPerson(ctx.personX, address("d4"));
+      const [premise] = await sql<{ locale: string | null }[]>`select locale from users where id = ${userId}`;
+      expect(premise!.locale, "premise: the account has no language").toBeNull();
+      const ban = await manualBan(ctx, ctx.personX);
+
+      await decideSuspension(ctx.auth, ban.id, { kind: "confirm" });
+
+      const subject = dictionarySubject("fr", "suspensionConfirmed.subject", { division: "Open" });
+      expect(subject, "premise: the French subject is not the English one").not.toBe(
+        dictionarySubject("en", "suspensionConfirmed.subject", { division: "Open" }),
+      );
+      expect((await settledNoticesOf("suspension_confirmed", ban.id)).map((r) => r.subject)).toEqual([subject]);
+    });
+
+    it("waive and adjust queue nothing", async () => {
+      const ctx = await seedFootballDivision();
+      await claimPerson(ctx.personX, address("decide"));
+      // A pending ban adjusted, then waived: never confirmed, never mailed.
+      const waived = await manualBan(ctx, ctx.personX);
+      await decideSuspension(ctx.auth, waived.id, { kind: "adjust", matchesTotal: 3, reason: "serious foul play" });
+      expect((await decideSuspension(ctx.auth, waived.id, { kind: "waive" })).status, "premise: waived").toBe("waived");
+      expect(await noticesOf("suspension_confirmed", waived.id)).toEqual([]);
+      expect(asksFor("suspension_confirmed", waived.id)).toBe(0);
+      // A confirmed ban adjusted afterwards: the one notice of its confirmation, nothing more.
+      const live = await manualBan(ctx, ctx.personX);
+      await decideSuspension(ctx.auth, live.id, { kind: "confirm" });
+      await decideSuspension(ctx.auth, live.id, { kind: "adjust", matchesTotal: 4 });
+      expect(await settledNoticesOf("suspension_confirmed", live.id)).toHaveLength(1);
+      expect(asksFor("suspension_confirmed", live.id), "the adjust did not ask").toBe(1);
+    });
+
+    it("the confirmed helper called twice for one ban writes one row", async () => {
+      const ctx = await seedFootballDivision();
+      await claimPerson(ctx.personX, address("helper"));
+      const ban = await manualBan(ctx, ctx.personX);
+
+      const [first, second] = await withTenant(ctx.orgId, async (tx) => [
+        await queueSuspensionConfirmed(tx, ban.id),
+        await queueSuspensionConfirmed(tx, ban.id),
+      ]);
+
+      expect(first, "the first call queued a row").toEqual(expect.any(String));
+      expect(second, "the second found the once-key taken").toBeNull();
+      expect((await noticesOf("suspension_confirmed", ban.id)).map((r) => r.id)).toEqual([first]);
+    });
   });
 
   it("the active→served flip fires the served email once", async () => {
@@ -966,43 +1029,6 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
         .toBe(true);
       const call = warn.mock.calls.find((c: unknown[]) => (c[1] as string) === "discipline: a served email failed to send")!;
       expect(call[0]).toMatchObject({ suspensionId: banId, err: "provider 503" });
-    });
-
-    it("the CONFIRMED notice throwing does not fail the decision that committed, and a warning is logged", async () => {
-      const ctx = await seedFootballDivision();
-      await claimPerson(ctx.personX, `claim-${randomUUID().slice(0, 8)}@test.local`);
-      const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
-        personId: ctx.personX,
-        matchesTotal: 1,
-        reason: "violent conduct",
-      });
-      emailMock.confirmed.mockImplementationOnce(() => {
-        throw new Error("mail client blew up");
-      });
-      await expect(decideSuspension(ctx.auth, manual.id, { kind: "confirm" })).resolves.toMatchObject({
-        status: "active",
-      });
-      expect(warn).toHaveBeenCalledWith(
-        expect.objectContaining({ suspensionId: manual.id, err: "mail client blew up" }),
-        "discipline: the confirmed notice failed after commit; the decision stands",
-      );
-    });
-
-    it("a confirmed email whose send REJECTS is logged, never silently dropped", async () => {
-      const ctx = await seedFootballDivision();
-      await claimPerson(ctx.personX, `claim-${randomUUID().slice(0, 8)}@test.local`);
-      const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
-        personId: ctx.personX,
-        matchesTotal: 1,
-        reason: "violent conduct",
-      });
-      emailMock.confirmed.mockRejectedValueOnce(new Error("provider 503"));
-      await decideSuspension(ctx.auth, manual.id, { kind: "confirm" });
-      await expect
-        .poll(() => warn.mock.calls.some((c: unknown[]) => (c[1] as string) === "discipline: a confirmed email failed to send"))
-        .toBe(true);
-      const call = warn.mock.calls.find((c: unknown[]) => (c[1] as string) === "discipline: a confirmed email failed to send")!;
-      expect(call[0]).toMatchObject({ suspensionId: manual.id, err: "provider 503" });
     });
   });
 

@@ -69,6 +69,8 @@
 //   - official_assignment_changed: the real `moveFixture` of a fixture an official (an address, no account) has accepted, in an `nl`
 //     organisation: the change notice is queued in the move's own tenant transaction, in the organisation's language, and the request
 //     makes the first attempt.
+//   - suspension_confirmed: the real `decideSuspension` (confirm) of a pending ban on a player whose claimed account is `es`: the notice
+//     is queued to the account in the decision's own tenant transaction, once per confirmation, and the request makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -150,7 +152,8 @@ import {
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
-import { seedFutureDivision } from "@/server/usecases/__tests__/_seed";
+import { claimPerson, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
+import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
 import { seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
@@ -1152,6 +1155,30 @@ async function officialAssignmentChangedScenario(): Promise<KindScenario> {
   };
 }
 
+/** The organiser confirms a pending ban on a player whose claimed account's language is `es` (the org's default is `en`): the notice is
+ *  queued to that account in the decision's transaction, once, and the request makes the first attempt after commit. */
+async function suspensionConfirmedScenario(): Promise<KindScenario> {
+  const ctx = await seedFootballDivision();
+  made.orgIds.push(ctx.orgId);
+  made.userIds.push(ctx.userId);
+  const recipient = address();
+  const userId = await claimPerson(ctx.personX, recipient);
+  await sql`update users set locale = 'es' where id = ${userId}`;
+  const [division] = await sql<{ name: string }[]>`select name from divisions where id = ${ctx.divisionId}`;
+  const ban = await createManualSuspension(ctx.auth, ctx.divisionId, { personId: ctx.personX, matchesTotal: 2, reason: "violent conduct" });
+  return {
+    locale: "es",
+    subjectKey: "suspensionConfirmed.subject",
+    subjectVars: { division: division!.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const out = await decideSuspension(ctx.auth, ban.id, { kind: "confirm" });
+      expect(out.status, "premise: the real confirm made the ban live").toBe("active");
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1279,6 +1306,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", officialChanged.subjectKey, officialChanged.subjectVars),
     );
 
+    const suspensionConfirmed = await suspensionConfirmedScenario();
+    expect(dictionarySubject("es", suspensionConfirmed.subjectKey, suspensionConfirmed.subjectVars)).not.toBe(
+      dictionarySubject("en", suspensionConfirmed.subjectKey, suspensionConfirmed.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1308,6 +1340,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         official_invite: officialInvite,
         official_assigned: officialAssigned,
         official_assignment_changed: officialChanged,
+        suspension_confirmed: suspensionConfirmed,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

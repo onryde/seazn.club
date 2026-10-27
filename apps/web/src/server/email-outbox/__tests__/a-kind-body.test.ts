@@ -29,6 +29,9 @@
 //    the notice read the database only; the other refund handlers no-op on a pass charge (their one Stripe lookup needs a Stripe key).
 //  - The trial warning is driven through the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a trialing billing
 //    group. Nothing reaches Stripe: the group is found by the subscription id it stores.
+//  - The suspension notices are driven through the real discipline producers on a football division with a unique name (the positive
+//    pair) whose player is claimed by a fresh account: the confirmed notice through `decideSuspension` (confirm). Its request makes the
+//    first attempt, which the transport refuses (503), so the row is judged once that attempt is over and it is queued again.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -49,6 +52,8 @@ import { handleSponsorDispute } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
+import { claimPerson, seedFootballDivision } from "@/server/usecases/__tests__/_seed";
+import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -98,6 +103,30 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
   }
   const rowIdsOf = async (kind: OutboxKind, disputeId: string): Promise<string[]> =>
     (await sql<{ id: string }[]>`select id from email_outbox where kind = ${kind} and ref_id = ${disputeId}`).map((x) => x.id);
+  /** The rows of `kind` about `refType / refId` once the request's own first attempt (a deferred `dispatchNow`, answered 503 here)
+   *  is over: every row attempted and back to `queued` with its sealed body, so the guard below judges a body that is still there. */
+  const attemptedRowIdsOf = async (kind: OutboxKind, refType: string, refId: string): Promise<string[]> => {
+    let ids: string[] = [];
+    await vi.waitFor(
+      async () => {
+        const rows = await sql<{ id: string; status: string; attempts: number }[]>`
+          select id, status, attempts from email_outbox where kind = ${kind} and ref_type = ${refType} and ref_id = ${refId}`;
+        expect(rows.length, `premise: the ${kind} producer wrote a row`).toBeGreaterThan(0);
+        expect(rows.filter((r) => r.status !== "queued" || r.attempts < 1), `the ${kind} request's first attempt is over`).toEqual([]);
+        ids = rows.map((r) => r.id);
+      },
+      { timeout: 15_000, interval: 100 },
+    );
+    return ids;
+  };
+  /** A football division with a unique name (the suspension notices' positive pair) and its player X claimed by a fresh account. */
+  const claimedFootballDivision = async () => {
+    const ctx = await seedFootballDivision();
+    const divisionName = `Division ${randomUUID().slice(0, 8)}`;
+    await sql`update divisions set name = ${divisionName} where id = ${ctx.divisionId}`;
+    await claimPerson(ctx.personX, `akb-${randomUUID().slice(0, 8)}@test.local`);
+    return { ctx, divisionName };
+  };
   /** A pattern that matches `text` literally. */
   const literal = (text: string): RegExp => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -176,6 +205,13 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       await processStripeEvent(event as unknown as Stripe.Event);
       // The warning links to the billing page, where the payer adds a card or cancels.
       return { rowIds: await rowIdsOf("trial_ending", g.groupId), positive: /\/settings\/billing/ };
+    },
+    suspension_confirmed: async () => {
+      const { ctx, divisionName } = await claimedFootballDivision();
+      const ban = await createManualSuspension(ctx.auth, ctx.divisionId, { personId: ctx.personX, matchesTotal: 2, reason: "violent conduct" });
+      expect((await decideSuspension(ctx.auth, ban.id, { kind: "confirm" })).status, "premise: the real confirm made the ban live").toBe("active");
+      // The notice names the division the ban is in.
+      return { rowIds: await attemptedRowIdsOf("suspension_confirmed", "suspension", ban.id), positive: literal(divisionName) };
     },
   };
 

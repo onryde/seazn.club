@@ -380,19 +380,13 @@ export async function officialAssignmentChangedEmail(
   return officialAssignmentChangedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict, locale);
 }
 
-/** A confirmed suspension (SPEC-1) — CTA to the /me suspensions card. Claimed
- *  players default to their stored locale; unclaimed persons never reach here. */
-export async function sendSuspensionConfirmedEmail(
-  to: string,
-  args: Omit<SuspensionConfirmedArgs, "meUrl">,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** A confirmed suspension (SPEC-1), CTA to the /me suspensions card, RENDERED and not sent. `queueSuspensionConfirmed`
+ *  (discipline.ts) queues what this returns on the email outbox (kind `suspension_confirmed`, transactional, to the claimed
+ *  player's account), in the transaction that confirms the ban, once per confirmation, in the player's language. Nothing sends
+ *  it directly. */
+export async function suspensionConfirmedEmail(args: Omit<SuspensionConfirmedArgs, "meUrl">, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({
-    to,
-    transactional: true,
-    ...suspensionConfirmedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict),
-  });
+  return suspensionConfirmedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
 }
 
 /** An official submitted a match report (SPEC-3) — sent to the org's
