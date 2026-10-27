@@ -4,7 +4,8 @@
 // Claims, and where each is pinned:
 //  - the kind facts (who a kind is addressed to, its `transactional` flag) are the spec's legend. Typed here from the spec,
 //    never read from the code under test;
-//  - the facts guard is ONE-DIRECTIONAL: a literal-address kind that carries an account id is refused before any statement.
+//  - the facts guard is ONE-DIRECTIONAL: a kind not addressed to an account (a literal address or the staff address) that carries
+//    an account id is refused before any statement.
 //    An account kind without an id and a mismatched `transactional` flag are NOT refused (31 phase-1 sites enqueue
 //    `chess_invite` with no user id and 8 enqueue T kinds with `transactional: false` to reach the suppression gate);
 //  - `enqueueEmailOnce` writes `recipient_user_id` and `dedupe_key`, returns the id, and returns null (never throws) for a
@@ -44,9 +45,9 @@ vi.mock("node:crypto", async (importOriginal) => {
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-/** The spec's Waves legend, as [To, Tx]: A = account, L = literal address; Tx T = transactional, N = suppression applies.
- *  Typed from the spec's table (kinds in wave order) and never imported from constants.ts. */
-const SPEC_LEGEND: Record<string, [to: "account" | "literal", transactional: boolean]> = {
+/** The spec's Waves legend, as [To, Tx]: A = account, L = literal address, S = the staff address; Tx T = transactional, N = suppression
+ *  applies. Typed from the spec's table (kinds in wave order) and never imported from constants.ts. */
+const SPEC_LEGEND: Record<string, [to: "account" | "literal" | "staff", transactional: boolean]> = {
   magic_link: ["literal", true],
   chess_invite: ["account", true],
   registration_confirmation: ["literal", false],
@@ -81,6 +82,23 @@ const SPEC_LEGEND: Record<string, [to: "account" | "literal", transactional: boo
   group_transfer_complete: ["account", false],
   group_org_removed: ["account", false],
   group_org_left: ["account", false],
+  funnel_reminder: ["literal", true],
+  staff_registration_refund_failed: ["staff", true],
+  staff_credit_pack_grant_failed: ["staff", true],
+  staff_size_pack_grant_failed: ["staff", true],
+  staff_stream_credit_grant_failed: ["staff", true],
+  staff_pass_credit_reversal_incomplete: ["staff", true],
+  staff_pass_rung_mismatch: ["staff", true],
+  staff_pass_unknown_competition: ["staff", true],
+  staff_stream_credit_clawback: ["staff", true],
+  staff_extra_org_reprice_failed: ["staff", true],
+  staff_dispute_alert: ["staff", true],
+  staff_connect_bank_changed: ["staff", true],
+  staff_stuck_events: ["staff", true],
+  staff_stream_pack_price_drift: ["staff", true],
+  staff_ai_run_cost: ["staff", true],
+  staff_earn_grant_volume: ["staff", true],
+  staff_extra_org_allowance: ["staff", true],
 };
 
 /** A `db` that records the statements it is handed and answers like postgres.js does for an insert: a row list carrying the
@@ -141,15 +159,16 @@ describe("the kind facts guard (no database)", () => {
       expect(OUTBOX_KIND_FACTS[kind as OutboxKind], kind).toEqual({ to, transactional });
       checked++;
     }
-    expect(checked, "every kind of the legend was compared").toBe(34);
+    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51."
+    expect(checked, "every kind of the legend was compared").toBe(51);
     // The other direction: the code declares no kind the legend does not.
     expect(Object.keys(OUTBOX_KIND_FACTS).sort()).toEqual(Object.keys(SPEC_LEGEND).sort());
   });
 
-  it("a literal kind with recipientUserId is refused by name before any statement, for EVERY literal kind", async () => {
+  it("a kind not addressed to an account (literal or staff) with recipientUserId is refused by name before any statement, for EVERY such kind", async () => {
     let checked = 0;
     for (const [kind, [to]] of Object.entries(SPEC_LEGEND)) {
-      if (to !== "literal") continue;
+      if (to === "account") continue;
       for (const call of [enqueueEmail, (db: never, m: OutboxMessage) => enqueueEmailOnce(db, { ...m, dedupeKey: `${randomUUID()}:k` })]) {
         const { db, calls } = stubDb();
         const err = (await call(db, msg({ kind: kind as OutboxKind, recipientUserId: randomUUID() })).catch((e: unknown) => e)) as OutboxKindMismatchError;
@@ -160,7 +179,9 @@ describe("the kind facts guard (no database)", () => {
         checked++;
       }
     }
-    expect(checked, "19 literal kinds (magic_link, the five wave-1 kinds, wave 2's three sponsor mails, wave 3's eight and wave 4's two official notices) x 2 writers").toBe(38);
+    // (20 literal + 16 staff) x 2 writers = 72: the spec's legend has 20 L kinds (magic_link, the five wave-1 kinds, wave 2's three
+    // sponsor mails, wave 3's eight, wave 4's two official notices and wave 5's funnel reminder) and 16 S kinds (wave 5's staff alerts).
+    expect(checked, "36 kinds not addressed to an account x 2 writers").toBe(72);
   });
 
   it("the refusal names the kind and ref type and carries neither the address, the user id nor the body", async () => {

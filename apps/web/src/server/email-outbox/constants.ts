@@ -3,7 +3,7 @@
 // can all read them without a cycle.
 //
 // The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
-// (as last redefined) in V477__email_outbox_phase3_wave4.sql. They are two copies of one fact, so outbox-schema.test.ts reads the
+// (as last redefined) in V477__email_outbox_phase3_wave5.sql. They are two copies of one fact, so outbox-schema.test.ts reads the
 // constraint definitions back from the catalogue and requires them to name exactly these members.
 
 export const OUTBOX_KINDS = [
@@ -44,6 +44,24 @@ export const OUTBOX_KINDS = [
   "group_transfer_complete",
   "group_org_removed",
   "group_org_left",
+  // Phase 3 wave 5, in the spec's table order: the funnel reminder, then the sixteen staff alerts.
+  "funnel_reminder",
+  "staff_registration_refund_failed",
+  "staff_credit_pack_grant_failed",
+  "staff_size_pack_grant_failed",
+  "staff_stream_credit_grant_failed",
+  "staff_pass_credit_reversal_incomplete",
+  "staff_pass_rung_mismatch",
+  "staff_pass_unknown_competition",
+  "staff_stream_credit_clawback",
+  "staff_extra_org_reprice_failed",
+  "staff_dispute_alert",
+  "staff_connect_bank_changed",
+  "staff_stuck_events",
+  "staff_stream_pack_price_drift",
+  "staff_ai_run_cost",
+  "staff_earn_grant_volume",
+  "staff_extra_org_allowance",
 ] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
@@ -53,9 +71,9 @@ export type OutboxKind = (typeof OUTBOX_KINDS)[number];
  *    (spec §6); `literal` is a literal address, sent as it stands; `staff` is `STAFF_ALERT_EMAIL`.
  *  - `transactional`: whether the mail ignores the marketing suppression list. Each kind keeps its sender's flag from before it
  *    joined the outbox: the sign-in link, the chess invite, the trial-ending notice, seven of wave 3's eight account and invite
- *    mails, and wave 4's two official notices, two suspension notices and match-report notice are transactional; the registration,
- *    refund, dispute, sponsor and pass mails, the org invite (`sendInviteEmail` passed no flag) and wave 4's four billing-group mails
- *    (their senders passed none either) are not.
+ *    mails, wave 4's two official notices, two suspension notices and match-report notice, and all seventeen of wave 5 (the funnel
+ *    reminder and the sixteen staff alerts) are transactional; the registration, refund, dispute, sponsor and pass mails, the org
+ *    invite (`sendInviteEmail` passed no flag) and wave 4's four billing-group mails (their senders passed none either) are not.
  *
  * A declaration, like the lists above: pure data for the core, the writers and the tests to read.
  */
@@ -94,6 +112,23 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   group_transfer_complete: { to: "account", transactional: false },
   group_org_removed: { to: "account", transactional: false },
   group_org_left: { to: "account", transactional: false },
+  funnel_reminder: { to: "literal", transactional: true },
+  staff_registration_refund_failed: { to: "staff", transactional: true },
+  staff_credit_pack_grant_failed: { to: "staff", transactional: true },
+  staff_size_pack_grant_failed: { to: "staff", transactional: true },
+  staff_stream_credit_grant_failed: { to: "staff", transactional: true },
+  staff_pass_credit_reversal_incomplete: { to: "staff", transactional: true },
+  staff_pass_rung_mismatch: { to: "staff", transactional: true },
+  staff_pass_unknown_competition: { to: "staff", transactional: true },
+  staff_stream_credit_clawback: { to: "staff", transactional: true },
+  staff_extra_org_reprice_failed: { to: "staff", transactional: true },
+  staff_dispute_alert: { to: "staff", transactional: true },
+  staff_connect_bank_changed: { to: "staff", transactional: true },
+  staff_stuck_events: { to: "staff", transactional: true },
+  staff_stream_pack_price_drift: { to: "staff", transactional: true },
+  staff_ai_run_cost: { to: "staff", transactional: true },
+  staff_earn_grant_volume: { to: "staff", transactional: true },
+  staff_extra_org_allowance: { to: "staff", transactional: true },
 };
 
 /** Mail ABOUT an account that is addressed to a literal address (phase-3 D5, wave 3): its verification and its email change. These kinds

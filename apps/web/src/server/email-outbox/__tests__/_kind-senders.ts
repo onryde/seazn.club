@@ -6,7 +6,7 @@
 //  - NOT_YET_MOVED: the kinds whose producer still mails through one of those (outbox-kind-sweep.test.ts sweeps the others).
 //  - KIND_DIRECT_SENDER: for every kind, the `send*` its producer still calls, or null once the kind has moved to the outbox.
 //
-// When a kind task (wave 1 T8-T12, wave 2 T2-T9, wave 3 T2-T4, wave 4 T2-T4) moves a kind: delete the kind from NOT_YET_MOVED, delete its `send*` from SENDER_ALLOWLIST
+// When a kind task (wave 1 T8-T12, wave 2 T2-T9, wave 3 T2-T4, wave 4 T2-T4, wave 5 T3-T6) moves a kind: delete the kind from NOT_YET_MOVED, delete its `send*` from SENDER_ALLOWLIST
 // AND from lib/email.ts, and set its KIND_DIRECT_SENDER entry to null. The allowlist's LENGTH follows by itself (allowlistLengthFor below: the
 // spec's 49 less one per phase-3 kind that has moved, both counted from these lists), so there is no number to change. When a wave registers
 // a kind before its producer moves, it adds the kind to NOT_YET_MOVED and names its `send*` in KIND_DIRECT_SENDER: the length is unchanged.
@@ -51,9 +51,28 @@ export const SENDER_ALLOWLIST: readonly string[] = [
 /** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12). Wave 2's T1 listed its ten kinds before their
  *  producers moved, each kind task (T2-T9) deleted its own, and T10 closed the list again. Wave 3's T1 listed its eight kinds the same
  *  way, each kind task (T2-T4) deleted its own, and the last move (T4c) closed the list again. Wave 4's T1 listed its nine kinds the same
- *  way, in the spec's table order: each kind task (T2-T4) deletes its own, and the last move closes the list again. The sweep covers every
- *  kind not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
+ *  way, in the spec's table order: each kind task (T2-T4) deletes its own, and the last move closes the list again. Wave 5's T1 appended
+ *  its seventeen after them, in the spec's table order, and each of its kind tasks (T3-T6) deletes its own. The sweep covers every kind
+ *  not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
+  // Wave 5, in the spec's table order.
+  "funnel_reminder",
+  "staff_registration_refund_failed",
+  "staff_credit_pack_grant_failed",
+  "staff_size_pack_grant_failed",
+  "staff_stream_credit_grant_failed",
+  "staff_pass_credit_reversal_incomplete",
+  "staff_pass_rung_mismatch",
+  "staff_pass_unknown_competition",
+  "staff_stream_credit_clawback",
+  "staff_extra_org_reprice_failed",
+  "staff_dispute_alert",
+  "staff_connect_bank_changed",
+  "staff_stuck_events",
+  "staff_stream_pack_price_drift",
+  "staff_ai_run_cost",
+  "staff_earn_grant_volume",
+  "staff_extra_org_allowance",
 ];
 
 /** For every kind, the direct sender its producer still calls (null = the kind has moved: nothing direct is left for it). */
@@ -95,6 +114,24 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   group_transfer_complete: null,
   group_org_removed: null,
   group_org_left: null,
+  // Wave 5: each kind's direct sender in lib/email.ts (the spec's kind table cites it by line; the T0 re-pin names it).
+  funnel_reminder: "sendFunnelReminderEmail",
+  staff_registration_refund_failed: "sendRegistrationRefundFailedAlertEmail",
+  staff_credit_pack_grant_failed: "sendCreditPackGrantFailedAlertEmail",
+  staff_size_pack_grant_failed: "sendSizePackGrantFailedAlertEmail",
+  staff_stream_credit_grant_failed: "sendStreamCreditGrantFailedAlertEmail",
+  staff_pass_credit_reversal_incomplete: "sendPassCreditReversalIncompleteAlertEmail",
+  staff_pass_rung_mismatch: "sendPassRungMismatchAlertEmail",
+  staff_pass_unknown_competition: "sendPassUnknownCompetitionAlertEmail",
+  staff_stream_credit_clawback: "sendStreamCreditClawbackAlertEmail",
+  staff_extra_org_reprice_failed: "sendExtraOrgRepriceFailedAlertEmail",
+  staff_dispute_alert: "sendStaffDisputeAlertEmail",
+  staff_connect_bank_changed: "sendConnectBankAlertEmail",
+  staff_stuck_events: "sendStuckEventsAlertEmail",
+  staff_stream_pack_price_drift: "sendStreamPackPriceDriftAlertEmail",
+  staff_ai_run_cost: "sendAiRunCostAlertEmail",
+  staff_earn_grant_volume: "sendEarnGrantVolumeAlertEmail",
+  staff_extra_org_allowance: "sendExtraOrgAllowanceAlertEmail",
 };
 
 /** How long the allowlist must be while `unmoved` kinds are still on their direct sender: the spec's 49, less one for every phase-3 kind

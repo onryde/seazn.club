@@ -188,7 +188,16 @@ import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegist
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
-import { REQUEST_ATTEMPT_WAIT_MS, assertNothingMoreToSend, dictionarySubject, forEachOutboxKind, type KindFacts, type KindScenario } from "./_kind-harness";
+import {
+  REQUEST_ATTEMPT_WAIT_MS,
+  assertNothingMoreToSend,
+  dictionarySubject,
+  forEachOutboxKind,
+  type AnyKindScenario,
+  type KindFacts,
+  type KindScenario,
+  type LiteralKindScenario,
+} from "./_kind-harness";
 import { allowlistLengthFor, KIND_DIRECT_SENDER, NOT_YET_MOVED, SENDER_ALLOWLIST } from "./_kind-senders";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -239,6 +248,24 @@ const SPEC_KINDS = [
   "group_transfer_complete",
   "group_org_removed",
   "group_org_left",
+  // Wave 5, in the table's row order: the funnel reminder, then the sixteen staff alerts.
+  "funnel_reminder",
+  "staff_registration_refund_failed",
+  "staff_credit_pack_grant_failed",
+  "staff_size_pack_grant_failed",
+  "staff_stream_credit_grant_failed",
+  "staff_pass_credit_reversal_incomplete",
+  "staff_pass_rung_mismatch",
+  "staff_pass_unknown_competition",
+  "staff_stream_credit_clawback",
+  "staff_extra_org_reprice_failed",
+  "staff_dispute_alert",
+  "staff_connect_bank_changed",
+  "staff_stuck_events",
+  "staff_stream_pack_price_drift",
+  "staff_ai_run_cost",
+  "staff_earn_grant_volume",
+  "staff_extra_org_allowance",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -280,6 +307,24 @@ const SPEC_FACTS: KindFacts = {
   group_transfer_complete: ["account", false],
   group_org_removed: ["account", false],
   group_org_left: ["account", false],
+  // Wave 5: the funnel reminder is L, the sixteen staff alerts S; all seventeen are T (their senders pass `transactional: true`).
+  funnel_reminder: ["literal", true],
+  staff_registration_refund_failed: ["staff", true],
+  staff_credit_pack_grant_failed: ["staff", true],
+  staff_size_pack_grant_failed: ["staff", true],
+  staff_stream_credit_grant_failed: ["staff", true],
+  staff_pass_credit_reversal_incomplete: ["staff", true],
+  staff_pass_rung_mismatch: ["staff", true],
+  staff_pass_unknown_competition: ["staff", true],
+  staff_stream_credit_clawback: ["staff", true],
+  staff_extra_org_reprice_failed: ["staff", true],
+  staff_dispute_alert: ["staff", true],
+  staff_connect_bank_changed: ["staff", true],
+  staff_stuck_events: ["staff", true],
+  staff_stream_pack_price_drift: ["staff", true],
+  staff_ai_run_cost: ["staff", true],
+  staff_earn_grant_volume: ["staff", true],
+  staff_extra_org_allowance: ["staff", true],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -336,12 +381,13 @@ afterEach(() => {
 });
 
 describe("the spec's lists (no database)", () => {
-  it("the spec lists thirty-four kinds and the code's registry is exactly them, in the spec's order", () => {
+  it("the spec lists fifty-one kinds and the code's registry is exactly them, in the spec's order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
-    expect(SPEC_KINDS).toHaveLength(34);
+    // The spec's Counts: "With `magic_link` and `chess_invite` that is 51."
+    expect(SPEC_KINDS).toHaveLength(51);
   });
 
-  it("the legend has NINETEEN literal kinds, FIFTEEN account kinds and no staff kind", () => {
+  it("the legend has TWENTY literal kinds, FIFTEEN account kinds and SIXTEEN staff kinds; THIRTY-TWO are transactional", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -365,6 +411,8 @@ describe("the spec's lists (no database)", () => {
       // Wave 4: the two official notices are literal addresses.
       "official_assigned",
       "official_assignment_changed",
+      // Wave 5: the funnel reminder goes to the draft's address.
+      "funnel_reminder",
     ]);
     expect(by("account")).toEqual([
       "chess_invite",
@@ -384,10 +432,27 @@ describe("the spec's lists (no database)", () => {
       "group_org_removed",
       "group_org_left",
     ]);
-    expect(by("staff"), "waves 1 to 4 have no staff kind").toEqual([]);
-    // Each kind keeps its sender's flag: the two phase-1 kinds, the trial-ending notice, seven of wave 3's eight and five of wave 4's
-    // nine are transactional; the registration, refund, dispute, sponsor and pass mails, the org invite and the four billing-group
-    // mails are not.
+    expect(by("staff"), "the sixteen staff alerts are wave 5's, in the table's row order").toEqual([
+      "staff_registration_refund_failed",
+      "staff_credit_pack_grant_failed",
+      "staff_size_pack_grant_failed",
+      "staff_stream_credit_grant_failed",
+      "staff_pass_credit_reversal_incomplete",
+      "staff_pass_rung_mismatch",
+      "staff_pass_unknown_competition",
+      "staff_stream_credit_clawback",
+      "staff_extra_org_reprice_failed",
+      "staff_dispute_alert",
+      "staff_connect_bank_changed",
+      "staff_stuck_events",
+      "staff_stream_pack_price_drift",
+      "staff_ai_run_cost",
+      "staff_earn_grant_volume",
+      "staff_extra_org_allowance",
+    ]);
+    // Each kind keeps its sender's flag: the two phase-1 kinds, the trial-ending notice, seven of wave 3's eight, five of wave 4's
+    // nine and all seventeen of wave 5 are transactional; the registration, refund, dispute, sponsor and pass mails, the org invite
+    // and the four billing-group mails are not.
     expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toEqual([
       "magic_link",
       "chess_invite",
@@ -405,7 +470,27 @@ describe("the spec's lists (no database)", () => {
       "suspension_confirmed",
       "suspension_served",
       "match_report_submitted",
+      // Wave 5: all seventeen.
+      "funnel_reminder",
+      "staff_registration_refund_failed",
+      "staff_credit_pack_grant_failed",
+      "staff_size_pack_grant_failed",
+      "staff_stream_credit_grant_failed",
+      "staff_pass_credit_reversal_incomplete",
+      "staff_pass_rung_mismatch",
+      "staff_pass_unknown_competition",
+      "staff_stream_credit_clawback",
+      "staff_extra_org_reprice_failed",
+      "staff_dispute_alert",
+      "staff_connect_bank_changed",
+      "staff_stuck_events",
+      "staff_stream_pack_price_drift",
+      "staff_ai_run_cost",
+      "staff_earn_grant_volume",
+      "staff_extra_org_allowance",
     ]);
+    // The spec's legend: "The 19 N kinds are the senders that pass no `transactional: true` today", so 51 - 19 = 32 are T.
+    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toHaveLength(32);
   });
 
   it("the not-yet-moved list names only spec kinds, once each, in the registry's order, none of waves 1 to 4, and leaves at least one kind to sweep", () => {
@@ -1604,7 +1689,7 @@ const sendsInRequest =
     await dispatchNow([id]);
   };
 
-const swept = (scenarios: Partial<Record<OutboxKind, KindScenario>>, facts: KindFacts = SPEC_FACTS, notYetMoved?: readonly OutboxKind[]) =>
+const swept = (scenarios: Partial<Record<OutboxKind, AnyKindScenario>>, facts: KindFacts = SPEC_FACTS, notYetMoved?: readonly OutboxKind[]) =>
   forEachOutboxKind(scenarios, { notYetMoved: notYetMoved ?? except(...(Object.keys(scenarios) as OutboxKind[])), specFacts: facts });
 
 describe.skipIf(!HAS_DB)("the harness judges what it says it judges (DB)", () => {
@@ -1666,6 +1751,52 @@ describe.skipIf(!HAS_DB)("the harness judges what it says it judges (DB)", () =>
     // The right key in the wrong locale: the English row is not the Spanish dictionary's.
     const wrongLocale = handMade({ locale: "es", run: sendsInRequest() });
     await expect(swept({ magic_link: wrongLocale })).rejects.toThrow(/magic_link[\s\S]*subject/);
+  });
+
+  it("a scenario's literal subject is judged against the row and the call", async () => {
+    // A staff alert's subject is inline English, not a dictionary key (spec F2): its scenario names the subject literally.
+    const literal = `Staff probe ${RUN} ${randomUUID().slice(0, 8)}`;
+    const byLiteral = (subjectLiteral: string, run: (to: string) => Promise<void>): LiteralKindScenario => ({
+      ...handMade({ run }),
+      subjectKey: undefined,
+      subjectVars: undefined,
+      subjectLiteral,
+    });
+    // The row and the mail both say the literal: it passes.
+    await expect(swept({ magic_link: byLiteral(literal, sendsInRequest({ subject: literal })) })).resolves.toMatchObject({
+      checked: 1,
+      kinds: ["magic_link"],
+    });
+    // Another literal than the one the row was written with fails.
+    await expect(swept({ magic_link: byLiteral(`${literal} (another)`, sendsInRequest({ subject: literal })) })).rejects.toThrow(
+      /magic_link[\s\S]*subject/,
+    );
+    // The call is judged too: the row is edited for the send and restored after it, so only the mail disagrees with the literal.
+    const sentWrong = byLiteral(literal, async (to) => {
+      const id = await enqueueEmail(sql, row({ to, subject: literal }));
+      await sql`update email_outbox set subject = 'edited for the send' where id = ${id}`;
+      await dispatchNow([id]);
+      await sql`update email_outbox set subject = ${literal} where id = ${id}`;
+    });
+    await expect(swept({ magic_link: sentWrong })).rejects.toThrow(/magic_link[\s\S]*was sent with subject/);
+  });
+
+  it("a scenario that gives both subjectKey and subjectLiteral, or neither, fails by kind", async () => {
+    // Refused up front, before any scenario runs: a valid first kind's producer is never called.
+    const firstRun = vi.fn(sendsInRequest());
+    const valid = handMade({ run: firstRun });
+    const chess = { kind: "chess_invite", refType: "fixture_seat" } as const;
+    // Both and neither are type errors, so each is built the way a careless spread or cast would build it.
+    const both = { ...handMade({ run: sendsInRequest(chess) }), subjectLiteral: "Also a literal" } as unknown as AnyKindScenario;
+    await expect(swept({ magic_link: valid, chess_invite: both })).rejects.toThrow(
+      /^outbox kind chess_invite: give subjectKey or subjectLiteral, exactly one$/,
+    );
+    const neither = { ...handMade({ run: sendsInRequest(chess) }), subjectKey: undefined, subjectVars: undefined } as unknown as AnyKindScenario;
+    await expect(swept({ magic_link: valid, chess_invite: neither })).rejects.toThrow(
+      /^outbox kind chess_invite: give subjectKey or subjectLiteral, exactly one$/,
+    );
+    expect(firstRun, "no scenario ran: the check is made before the first producer").not.toHaveBeenCalled();
+    expect(deliverMock).not.toHaveBeenCalled();
   });
 
   it("the mail is addressed to the scenario's recipient: an account that moved after the write and before the send is seen", async () => {
