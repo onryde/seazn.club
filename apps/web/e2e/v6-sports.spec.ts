@@ -684,7 +684,7 @@ test("hockey (FIH): quarters, team-short chip, escalation hint, draw stands in s
   await sendEvent(request, fixtureId, "hockey.suspension.end", { by: herons, class: "green" });
   await sendEvent(request, fixtureId, "hockey.suspension.end", { by: herons, class: "green" });
   await sendEvent(request, fixtureId, "hockey.goal", { by: falcons, kind: "pc" });
-  await sendEvent(request, fixtureId, "hockey.goal", { by: herons });
+  await sendEvent(request, fixtureId, "hockey.goal", { by: herons, kind: "fg" }); // W2d T18: the write path needs the type
   await sendEvent(request, fixtureId, "hockey.period.advance", { to: "Q2" });
   await page.reload();
   await expect(scorePad).toBeVisible({ timeout: 20_000 });

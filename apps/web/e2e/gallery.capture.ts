@@ -2684,8 +2684,14 @@ const SPORTS: GallerySport[] = [
     // every other converted sport's `scoreOne` uses — see icehockey's own
     // entry, immediately above, for the full reasoning (both skins share
     // period-shared.ts's `buildTiles`).
+    //
+    // W2d T18 (HK-TB-2): a hockey goal tap now asks the goal's TYPE first and
+    // queues nothing until it is answered — so scoring one is the tile, then
+    // Field goal. `openDock` below leaves the away goal's choice open: that
+    // question IS hockey's goal dock now.
     scoreOne: async (page) => {
       await pad(page).locator('[data-tile-id="goal-home"]').click();
+      await pad(page).locator('[data-testid="pad-dock-chip-kind:fg"]').click();
     },
     openDock: async (page) => {
       await pad(page).locator('[data-tile-id="goal-away"]').click();
