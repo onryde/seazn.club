@@ -1,6 +1,7 @@
 // design §6.2: every *_enc column is named only by its owner — server/relay/**
 // for the stream columns, device-links.ts for the device-link secret (scorer
-// sheets §4.1). Claims, because an enumerating grep is only as good as its list:
+// sheets §4.1), external-accounts.ts for the Lichess token, server/youtube/token-store.ts
+// for the YouTube refresh token. Claims, because an enumerating grep is only as good as its list:
 //  1. every *_enc column ANY delta declares is owned (ENC_COLUMNS is derived
 //     from the migration files, never typed here — an encrypted column added
 //     later cannot walk past this test with the list still green);
@@ -59,9 +60,12 @@ const LICHESS_COLUMNS = ["access_token_enc"];
 const LICHESS_OWNER = "server/usecases/external-accounts.ts";
 
 /** YouTube Connect (V478, spec §5.1): the channel's refresh token at rest, on `org_youtube_connections` and on the
- *  short-lived `youtube_connect_pending`, sealed under YOUTUBE_TOKEN_KEK. Its owner file and the "only it names it —
- *  and it does" claim arrive with that file (T2); until then this is the declaration claim 1 needs. */
+ *  short-lived `youtube_connect_pending`, sealed under YOUTUBE_TOKEN_KEK. SQL over it lives in exactly one file — every
+ *  write (the connection insert with its token, the token replace, the ONE-statement revoke, the pending seal and
+ *  take) and the one read (openToken) — so V478's `revoked <=> no token` checks hold within a single statement each
+ *  (controller ruling R1). */
 const YOUTUBE_COLUMNS = ["refresh_token_enc"];
+const YOUTUBE_OWNER = "server/youtube/token-store.ts";
 
 describe("*_enc columns never leave their owners", () => {
   it("every declared *_enc column is owned — a new one cannot walk past this test", () => {
@@ -103,6 +107,19 @@ describe("*_enc columns never leave their owners", () => {
       .filter((f) => !f.split("/").includes("__tests__"))
       .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
     expect(naming).toEqual([LICHESS_OWNER]);
+  });
+
+  it("outside __tests__, only token-store.ts names refresh_token_enc — and it does", () => {
+    const pattern = new RegExp(`\\b(${YOUTUBE_COLUMNS.join("|")})\\b`);
+    const naming = walk(SRC)
+      .map((f) => relative(SRC, f))
+      .filter((f) => !f.split("/").includes("__tests__"))
+      .filter((f) => pattern.test(readFileSync(join(SRC, f), "utf8")));
+    // The positive half first: an owner that stopped naming the column would leave it written by nobody, and an
+    // offenders-only scan could not see that.
+    expect(naming).toContain(YOUTUBE_OWNER);
+    const offenders = naming.filter((f) => f !== YOUTUBE_OWNER);
+    expect(offenders).toEqual([]);
   });
 });
 

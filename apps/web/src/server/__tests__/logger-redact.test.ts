@@ -69,6 +69,16 @@ describe("the logger's redaction, path by path (§10.2)", () => {
     ["cred (top level)", { cred: SECRET }],
     ["streamKey (top level)", { streamKey: SECRET }],
     ["passphrase (top level)", { passphrase: SECRET }],
+    // YouTube Connect (T1 review carry-over → T2): a refresh or access token never reaches a line, in either spelling
+    // (the camelCase a caller writes, the snake_case Google's token endpoint answers in), at either level.
+    ["*.refreshToken", { grant: { refreshToken: SECRET } }],
+    ["*.accessToken", { grant: { accessToken: SECRET } }],
+    ["*.refresh_token", { body: { refresh_token: SECRET } }],
+    ["*.access_token", { body: { access_token: SECRET } }],
+    ["refreshToken (top level)", { refreshToken: SECRET }],
+    ["accessToken (top level)", { accessToken: SECRET }],
+    ["refresh_token (top level)", { refresh_token: SECRET }],
+    ["access_token (top level)", { access_token: SECRET }],
   ];
   it.each(cases)("%s → [Redacted]", (_path, obj) => {
     log.warn(obj, "redaction probe");

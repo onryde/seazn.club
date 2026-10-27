@@ -250,9 +250,13 @@ function rethrowKekFault(err: unknown): void {
  *  sentence, and the id is not a secret so it stays in the message. An ARCHIVED (removed) row reads the same way (M-1,
  *  final review): its key is never opened, whoever the caller is and whatever lock it holds. */
 export async function readTargetSecret(tx: Tx, orgId: string, targetId: string): Promise<{ url: string; streamKey: string }> {
-  const [row] = await tx<{ rtmp_enc: Uint8Array; kind: string }[]>`
+  const [row] = await tx<{ rtmp_enc: Uint8Array | null; kind: string }[]>`
     select rtmp_enc, kind from org_stream_targets where id = ${targetId} and org_id = ${orgId} and archived_at is null`;
   if (!row) throw new Error(`stream target ${targetId} not found`);
+  // YouTube Connect (spec §5.2): an API-backed destination seals no key of its own — its keys live in the pool
+  // (`readPooledKey`). Refused BEFORE any decrypt, so this is never a decrypt error and never depends on the KEK; and AFTER
+  // the org/archive filter above, so another org's API row still reads as "not found" (no oracle).
+  if (row.rtmp_enc === null) throw new ApiBackedTargetError(targetId);
   let fields: Record<(typeof TARGET_SEALED)[number], string>;
   try {
     fields = openFields(row.rtmp_enc, TARGET_SEALED);
@@ -273,6 +277,18 @@ export class TargetSecretUnreadableError extends Error {
   constructor(public readonly targetId: string, public readonly kind: string) {
     super(`stream target ${targetId}: the saved destination will not open`);
     this.name = "TargetSecretUnreadableError";
+  }
+}
+
+/** YouTube Connect (plan T2): the destination row EXISTS, is this org's and active, but it is API-backed — it has no
+ *  `rtmp_enc` because its stream keys live in the connection's pool, one per broadcast. A caller that reaches for "the
+ *  target's key" has the wrong model of this row and must read a pooled key instead; it is not an unreadable envelope
+ *  (there is none to read), so it is a type of its own and never `TargetSecretUnreadableError`. Carries the target id
+ *  ONLY: the id is not a secret, and no key, url or org is ever near this error. */
+export class ApiBackedTargetError extends Error {
+  constructor(public readonly targetId: string) {
+    super(`stream target ${targetId} is API-backed: it has no key of its own`);
+    this.name = "ApiBackedTargetError";
   }
 }
 
@@ -416,4 +432,53 @@ export async function wipeStreamCodeTok(
     update fixture_stream_codes
        set ended_at = now(), end_cause = ${cause}, ended_by = ${endedBy}, tok_enc = null
      where id = ${codeId} and ended_at is null`;
+}
+
+// ---------------------------------------------------------------------------
+// YouTube Connect (spec §5.3, plan T2) — the stream-key POOL. Each row is a YouTube liveStream the connection owns; its
+// ingestion url + stream key are sealed TOGETHER under RELAY_KEK in `rtmp_enc`'s {url, streamKey} shape, so `add_output`
+// takes a pooled key through the very code a pasted one takes. `pool_rtmp_enc` is a stream column: only this file names
+// it (enc-boundary.test.ts). The `youtube_stream_keys` table is sealed like the other stream tables (FORCE RLS, no
+// policy), so — like `readTargetSecret` — tenancy lives in the SQL here, never in the caller's say-so.
+// ---------------------------------------------------------------------------
+
+/** Pool one YouTube liveStream's ingest credential. `orgId` and `connectionId` are checked AGAINST EACH OTHER in the
+ *  statement itself (the row is selected FROM the connection, org-filtered), so a key can never be filed under one org
+ *  with another org's connection; a mismatch writes nothing and reads as the connection being "not found". Seals BEFORE
+ *  any write, so a missing KEK writes nothing. The sealed JSON is built field by field — exactly {url, streamKey} —
+ *  whatever else the caller's object carries. `slot` (1..10) and the per-connection uniqueness are the table's own
+ *  constraints (V478), not re-checked here: their violations surface as the database's 23505 / 23514. */
+export async function insertPooledKey(
+  tx: Tx,
+  a: { orgId: string; connectionId: string; slot: number; liveStreamId: string; ingest: { url: string; streamKey: string } },
+): Promise<{ keyId: string }> {
+  if (!a.ingest.url || !a.ingest.streamKey) throw new Error("a pooled key needs a non-empty ingestion url and stream key");
+  const sealed = seal(JSON.stringify({ url: a.ingest.url, streamKey: a.ingest.streamKey }));
+  const [row] = await tx<{ id: string }[]>`
+    insert into youtube_stream_keys (org_id, connection_id, slot, live_stream_id, pool_rtmp_enc)
+    select c.org_id, c.id, ${a.slot}, ${a.liveStreamId}, ${sealed}
+      from org_youtube_connections c
+     where c.id = ${a.connectionId} and c.org_id = ${a.orgId}
+    returning id`;
+  if (!row) throw new Error(`youtube connection ${a.connectionId} not found`);
+  return { keyId: row.id };
+}
+
+/** A pooled key's {url, streamKey}, DECRYPTED for this request only. The `orgId` is the tenancy check itself (the same
+ *  argument as `readTargetSecret`): a wrong org reads exactly like a missing key — one sentence, no oracle. A RETIRED key
+ *  still opens (a broadcast already bound to it must stay readable until it ends); choosing a key to bind is the pool's
+ *  job and filters `retired_at` itself. An envelope that will not open under a valid RELAY_KEK is
+ *  `TargetSecretUnreadableError` with kind `youtube` (its `targetId` field carries the KEY id here); a missing or
+ *  malformed RELAY_KEK is the deployment's fault and rethrows as the KEK's own error (M3). */
+export async function readPooledKey(tx: Tx, orgId: string, keyId: string): Promise<{ url: string; streamKey: string }> {
+  const [row] = await tx<{ pool_rtmp_enc: Uint8Array }[]>`
+    select pool_rtmp_enc from youtube_stream_keys where id = ${keyId} and org_id = ${orgId}`;
+  if (!row) throw new Error(`youtube stream key ${keyId} not found`);
+  try {
+    const fields = openFields(row.pool_rtmp_enc, TARGET_SEALED);
+    return { url: fields.url, streamKey: fields.streamKey };
+  } catch (err) {
+    rethrowKekFault(err);
+    throw new TargetSecretUnreadableError(keyId, "youtube");
+  }
 }

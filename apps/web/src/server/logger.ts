@@ -43,6 +43,10 @@ export const LOGGER_OPTIONS = {
     "req.headers.authorization",
     "*.tok", "*.cred", "*.streamKey", "*.passphrase",
     "tok", "cred", "streamKey", "passphrase",
+    // YouTube Connect (spec §7): a refresh or access token, in the camelCase a caller writes and the snake_case Google's
+    // token endpoint answers in. The channel's tokens act as the channel; none is ever a log field.
+    "*.refreshToken", "*.accessToken", "*.refresh_token", "*.access_token",
+    "refreshToken", "accessToken", "refresh_token", "access_token",
   ],
 } satisfies pino.LoggerOptions;
 
