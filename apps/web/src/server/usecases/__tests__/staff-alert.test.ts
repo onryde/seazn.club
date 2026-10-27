@@ -1,25 +1,32 @@
 // `queueStaffAlert`, the one writer every staff alert goes through (phase 3 wave 5, T2; spec §10, plan P-W5-1, P-W5-2, P-W5-3 / Q1).
 // A staff alert has no org and no account: it is written on the pool, to `STAFF_ALERT_EMAIL`, once per incident (its once-key IS its
 // ref, so two incidents of one kind about one id never replace each other), and the worker sends it after the first-attempt window.
-// It never throws (Q1): an alert that cannot be queued is logged, without the address, the key or the body, and dropped, so the money
-// action it reports goes on.
+// It never throws (Q1): an alert that cannot be queued is logged and sent to Sentry as an issue, without the address, the key or the
+// body, and dropped, so the money action it reports goes on.
 //
-// Driven through the REAL writer, the real enqueue, the real seal and the real replace trigger. Stand-in: the outbox's transport (the one
-// network seam; a staff alert must not reach it in the request). Expected values come from the spec (the expiry bound, the facts) and
-// from the test's own render, never from the writer's answer. Sport: not applicable (no staff alert names a sport).
+// Driven through the REAL writer, the real enqueue, the real seal and the real replace trigger. Stand-ins: the outbox's transport (the
+// one network seam; a staff alert must not reach it in the request) and Sentry's `captureError` (observed). Expected values come from
+// the spec (the expiry bound, the facts) and from the test's own render, never from the writer's answer. Sport: not applicable (no
+// staff alert names a sport).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
 // The outbox's one network seam. The rows, the seal and the trigger are the real ones.
 const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
+// Sentry's issue capture, observed: a dropped alert must open an issue (a `log.error` alone reaches Sentry Logs only).
+const sentry = vi.hoisted(() => ({ captureError: vi.fn() }));
+vi.mock("@/lib/sentry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/sentry")>()),
+  captureError: sentry.captureError,
+}));
 
 import { sql } from "@/lib/db";
 import type { EmailContent } from "@/lib/email";
 import { OutboxDedupeKeyError } from "@/server/email-outbox";
 import { LOGGER_OPTIONS, log } from "@/server/logger";
 import { stubOutboxEnv } from "./_invite-mail";
-import { queueStaffAlert } from "../staff-alert";
+import { STAFF_ALERT_QUEUE_FAILED, queueStaffAlert } from "../staff-alert";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = `sa-${randomUUID().slice(0, 8)}`;
@@ -56,8 +63,12 @@ function loggedLine(args: unknown[]): string {
   return JSON.stringify([{ ...fields, err }, ...rest]);
 }
 
+/** The drops a `log.error` spy saw: `null` answers unset, a replay and a drop alike, and only this line tells a drop apart. */
+const drops = (errors: { mock: { calls: unknown[][] } }): unknown[][] => errors.mock.calls.filter((c) => c[1] === STAFF_ALERT_QUEUE_FAILED);
+
 beforeEach(() => {
   transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_${RUN}_${randomUUID()}` }));
+  sentry.captureError.mockReset();
   stubOutboxEnv();
 });
 afterEach(() => {
@@ -87,12 +98,14 @@ describe.skipIf(!HAS_DB)("queueStaffAlert: one writer for staff alerts (DB)", ()
     expect(checked, "anti-vacuity: unset, empty and blank were each driven").toBe(3);
     expect(await rowsOfRef("staff_stuck_events", ref), "no row, to any recipient").toHaveLength(0);
     expect(errors, "an unset address is not an error").not.toHaveBeenCalled();
+    expect(sentry.captureError, "nor a Sentry issue").not.toHaveBeenCalled();
     expect(transport.deliver).not.toHaveBeenCalled();
   });
 
   it("one alert: one queued staff row, no org, no account, transactional, for the worker", async () => {
     const address = staffAddress("one");
     vi.stubEnv("STAFF_ALERT_EMAIL", address);
+    const errors = vi.spyOn(log, "error").mockImplementation(() => undefined);
     const id = `evt_${RUN}`;
     const mail = content("one");
 
@@ -125,11 +138,14 @@ describe.skipIf(!HAS_DB)("queueStaffAlert: one writer for staff alerts (DB)", ()
     expect(expires).toBeLessThanOrEqual(after + SPEC_MAX_EXPIRY_MS + 60_000);
     // W: no first attempt in the request; the worker sends it after the window.
     expect(transport.deliver).not.toHaveBeenCalled();
+    expect(drops(errors), "nothing was dropped").toHaveLength(0);
+    expect(sentry.captureError).not.toHaveBeenCalled();
   });
 
   it("the same incident twice: one row, and the second call returns null", async () => {
     const address = staffAddress("twice");
     vi.stubEnv("STAFF_ALERT_EMAIL", address);
+    const errors = vi.spyOn(log, "error").mockImplementation(() => undefined);
     const alert = () =>
       queueStaffAlert({ kind: "staff_stuck_events", refType: "stripe_event", id: `evt_${RUN}_twice`, suffix: "parked", render: async () => content("twice") });
 
@@ -141,6 +157,9 @@ describe.skipIf(!HAS_DB)("queueStaffAlert: one writer for staff alerts (DB)", ()
     const rows = await rowsTo(address);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({ id: first, status: "queued", ref_id: `evt_${RUN}_twice:parked` });
+    // The second `null` is the once-key's answer, not a swallowed failure (a conflict that threw and was caught would read the same).
+    expect(drops(errors), "the replay was deduplicated, not dropped").toHaveLength(0);
+    expect(sentry.captureError).not.toHaveBeenCalled();
   });
 
   it("P-W5-1: two incidents of one kind and one id, different suffixes, both stay queued and neither is replaced", async () => {
@@ -148,6 +167,7 @@ describe.skipIf(!HAS_DB)("queueStaffAlert: one writer for staff alerts (DB)", ()
     // shared ref would let the replace trigger supersede the first while it waits for the worker.
     const address = staffAddress("p1");
     vi.stubEnv("STAFF_ALERT_EMAIL", address);
+    const errors = vi.spyOn(log, "error").mockImplementation(() => undefined);
     const charge = `ch_${RUN}`;
     const clawback = (suffix: string) =>
       queueStaffAlert({ kind: "staff_stream_credit_clawback", refType: "charge", id: charge, suffix, render: async () => content(suffix) });
@@ -163,9 +183,11 @@ describe.skipIf(!HAS_DB)("queueStaffAlert: one writer for staff alerts (DB)", ()
       [short, `${charge}:short`, "queued"],
     ]);
     expect(rows.filter((r) => r.status === "replaced"), "neither incident replaced the other").toHaveLength(0);
+    expect(drops(errors), "nothing was dropped").toHaveLength(0);
+    expect(sentry.captureError).not.toHaveBeenCalled();
   });
 
-  it("Q1: a render that throws, a missing id, or a refused insert resolves null, logs the kind, and writes nothing", async () => {
+  it("Q1: a render that throws, a missing id, or a refused insert resolves null, logs the kind, opens a Sentry issue, and writes nothing", async () => {
     const address = staffAddress("q1");
     vi.stubEnv("STAFF_ALERT_EMAIL", address);
     const errors = vi.spyOn(log, "error").mockImplementation(() => undefined);
@@ -217,6 +239,21 @@ describe.skipIf(!HAS_DB)("queueStaffAlert: one writer for staff alerts (DB)", ()
       lines++;
     }
     expect(lines, "anti-vacuity: all three log lines were read").toBe(3);
+    expect(drops(errors), "every line is the one drop message").toHaveLength(3);
+
+    // One Sentry ISSUE per drop (a `log.error` reaches Sentry Logs only, and pages nobody), carrying the same error and exactly the
+    // kind and ref type: no address, no key, no body.
+    const failures = [
+      { kind: "staff_credit_pack_grant_failed", refType: "checkout_session" },
+      { kind: "staff_connect_bank_changed", refType: "stripe_event" },
+      { kind: "staff_pass_unknown_competition", refType: "" },
+    ];
+    expect(sentry.captureError).toHaveBeenCalledTimes(failures.length);
+    failures.forEach((extra, i) => {
+      const [err, context] = sentry.captureError.mock.calls[i]!;
+      expect(err, `failure ${i}: the error that was logged`).toBe((errors.mock.calls[i]![0] as { err: unknown }).err);
+      expect(context, `failure ${i}: the route and exactly the kind and ref type`).toEqual({ route: "staff-alert", extra });
+    });
     expect(await rowsTo(address), "nothing was written").toHaveLength(0);
     expect(await rowsOfRef("staff_credit_pack_grant_failed", session), "no row for the session, to any recipient").toHaveLength(0);
     expect(transport.deliver).not.toHaveBeenCalled();
