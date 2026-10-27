@@ -23,6 +23,7 @@ import { createEntrants } from "../entrants";
 import { putStageRules } from "../stage-rules";
 import { createStages, generateStageFixtures } from "../stages";
 import { builtFor, engineValueFor } from "./_stage-probe";
+import { CHESS_INDIVIDUAL_ONLY, sportRefusesStageKind } from "@/lib/chess-individual-only";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -105,10 +106,18 @@ describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
     expect(builtinModules.length).toBe(SPORTS_AT_W2C);
   });
 
-  it("every sport x EVERY variant x EVERY stage kind: a declared key is saved, an undeclared-for-this-kind one is RULE_NOT_SETTABLE (counted)", async () => {
+  it("every sport x EVERY variant x EVERY stage kind: a declared key is saved, an undeclared-for-this-kind one is RULE_NOT_SETTABLE; a kind the sport refuses is refused at create (counted apart)", async () => {
     let combos = 0;
     let accepted = 0;
     let refused = 0;
+    let createRefused = 0;
+    const refusedCells = new Set<string>();
+    // The literal pin beside the product's rule, so a broken rule cannot make both sides of the sweep agree: chess is
+    // individual-only (owner ruling 2026-10-26, follow-up to #1027), and an americano stage mints pair entrants.
+    expect(sportRefusesStageKind("boardgame", "americano"), "chess refuses americano").toBe(true);
+    expect(sportRefusesStageKind("badminton", "americano"), "badminton does not").toBe(false);
+    /** A (sport, kind) the product offers: every cell but the refused ones, which have no stage to set rules on. */
+    const offered = (sportKey: string, kind: string): boolean => !sportRefusesStageKind(sportKey, kind);
     let declaredTotal = 0;
     let viaEditor = 0;
     const unprobed: string[] = [];
@@ -121,6 +130,14 @@ describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
       for (const variant of Object.keys(m.variants)) {
         const { divisionId } = await seedDivision(auth, m.key, variant, 0);
         for (const kind of StageKind.options) {
+          if (!offered(m.key, kind)) {
+            // A cell the product refuses: the create answers 422 CHESS_INDIVIDUAL_ONLY and writes nothing.
+            await expect(seedStage(auth, divisionId, 1, kind), `${m.key}/${variant}/${kind}`).rejects.toMatchObject({ status: 422, code: CHESS_INDIVIDUAL_ONLY });
+            expect((await sql<{ n: number }[]>`select count(*)::int as n from stages where division_id = ${divisionId}`)[0]!.n, `${m.key}/${variant}/${kind}: nothing written`).toBe(0);
+            createRefused++;
+            refusedCells.add(`${m.key}/${kind}`);
+            continue;
+          }
           // One stage at a time: all nine kinds in one division would outrun the plan's stages-per-division cap, and a
           // stage that is removed after its kind is swept leaves the next kind a clean division.
           const stageId = await seedStage(auth, divisionId, 1, kind);
@@ -165,20 +182,27 @@ describe.skipIf(!HAS_DB)("X-SR-1 putStageRules covers every sport", () => {
     expect(unprobed, "every declared stage key got a value the engine accepts").toEqual([]);
     expect(accepted, "every declared (kind, variant, key) was saved and read back").toBe(declaredTotal - unprobed.length);
     // Anti-vacuity, from the engine's declarations (a sport has at least one variant and the kinds are the engine's):
+    // The refused cells, from the literal ruling: chess x americano (mexicano is the same kind), every chess variant.
+    const chessVariants = Object.keys(mod("boardgame").variants).length;
+    expect(chessVariants, "chess declares variants").toBeGreaterThan(0);
+    expect([...refusedCells], "the refused cells").toEqual(["boardgame/americano"]);
+    expect(createRefused, `${createRefused} (sport, variant, kind) creates refused`).toBe(chessVariants);
     expect(combos, `${combos} (sport, variant, kind) combinations visited`).toBe(
-      builtinModules.reduce((n, m) => n + Object.keys(m.variants).length, 0) * StageKind.options.length,
+      builtinModules.reduce((n, m) => n + Object.keys(m.variants).length, 0) * StageKind.options.length - createRefused,
     );
+    expect(combos, "anti-vacuity").toBeGreaterThan(0);
+    console.info(`stage-rules X-SR-1: ${combos} (sport, variant, kind) combinations swept, ${createRefused} refused CHESS_INDIVIDUAL_ONLY at create`);
     expect(sportsSeen.size, "every sport was visited").toBe(SPORTS_AT_W2C);
     // Exact, from the engine's declarations (Task 11 re-review b): the kinds where some sport and variant settles a key,
     // and every declared key a (sport, variant, kind) cannot set.
     const engineKinds = StageKind.options.filter((kind) =>
-      builtinModules.some((m) => Object.keys(m.variants).some((v) => stageTopKeysFor(m as AnySportModule, kind, v).size > 0)),
+      builtinModules.some((m) => offered(m.key, kind) && Object.keys(m.variants).some((v) => stageTopKeysFor(m as AnySportModule, kind, v).size > 0)),
     );
     expect(kindsWithAKey.size, `the kinds that settle a key: ${engineKinds.join(", ")}`).toBe(engineKinds.length);
     const engineRefused = builtinModules.reduce((n, m) => {
       const sport = m as AnySportModule;
       const known = [...sportTopKeys(sport)];
-      return n + Object.keys(m.variants).reduce((k, v) => k + StageKind.options.reduce((j, kind) => j + known.filter((top) => !stageTopKeysFor(sport, kind, v).has(top)).length, 0), 0);
+      return n + Object.keys(m.variants).reduce((k, v) => k + StageKind.options.filter((kind) => offered(m.key, kind)).reduce((j, kind) => j + known.filter((top) => !stageTopKeysFor(sport, kind, v).has(top)).length, 0), 0);
     }, 0);
     expect(viaEditor, "most keys ride the editor's own builders").toBeGreaterThan(SPORTS_AT_W2C);
     expect(accepted, `${accepted} saves`).toBeGreaterThan(2 * SPORTS_AT_W2C * StageKind.options.length);
