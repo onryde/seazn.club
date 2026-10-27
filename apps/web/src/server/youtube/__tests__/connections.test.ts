@@ -71,6 +71,20 @@ async function refusal(fn: () => Promise<unknown>): Promise<{ status: number; co
   throw new Error("expected a refusal, the call succeeded");
 }
 
+/** The backends (pids) that are waiting on a lock held by backend `pid`. Exact: a wait on anything else in the database is not counted. */
+const waitersOf = async (pid: number): Promise<number[]> =>
+  (await sql<{ pid: number }[]>`select pid from pg_stat_activity where datname = current_database() and ${pid}::int = any(pg_blocking_pids(pid))`).map((r) => r.pid);
+/** Poll until `read` returns something (the wait is real, not assumed): an empty answer after the budget is a FAILURE, never a pass. */
+async function eventually(read: () => Promise<number[]>, what: string): Promise<number[]> {
+  for (let i = 0; i < 200; i++) {
+    const got = await read();
+    if (got.length > 0) return got;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`never observed: ${what}`);
+}
+const ROLLBACK = new Error("rollback the holder");
+
 // =====================================================================================================================================
 describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a new connection", () => {
   it("writes the connection (with the pending grant's choices and consent), its destination row (kind youtube, channel title, channel fingerprint, NO key of its own, no watch link) and consumes the pending grant", async () => {
@@ -198,17 +212,44 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a new connection", () => {
     expect(await pendingCount(o.orgId)).toBe(0);
   });
 
-  it("two connects of one channel in the SAME org at once (two pending grants): both succeed with the same ids; one connection, one destination", async () => {
+  it("two connects of one channel in the SAME org at once (two pending grants): the loser of the unique-index race RECONNECTS the winner's connection — same ids, the loser's token on it, one connection, one destination", async () => {
     const o = await org();
     const ch = { id: channelId(), title: "Double Tap FC" };
     const [p1, p2] = [await grant(o, { channels: [ch] }), await grant(o, { channels: [ch] })];
-    const results = await Promise.all([
-      saveConnectionFromGrant({ pendingId: p1.id, channelId: ch.id, userId: o.userId }, fake),
-      saveConnectionFromGrant({ pendingId: p2.id, channelId: ch.id, userId: o.userId }, fake),
-    ]);
-    expect(results[0]).toEqual(results[1]);
-    expect(await connRows(o.orgId)).toHaveLength(1);
-    expect(await targetRows(o.orgId)).toHaveLength(1);
+    const other = await connect(o);   // another channel's connection: the holder row below is an API-shaped destination row of it
+    // Hold the winner (A) AFTER its connection insert and BEFORE its commit: A's destination insert waits on a row this test holds
+    // (the same org's active destination with the channel's fingerprint), so A's connection row exists but is not visible.
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let holderPid!: number;
+    let held!: () => void;
+    const holding = new Promise<void>((resolve) => { held = resolve; });
+    const holder = sql.begin(async (tx) => {
+      holderPid = (await tx<{ pid: number }[]>`select pg_backend_pid() as pid`)[0]!.pid;
+      await tx`insert into org_stream_targets (org_id, kind, label, youtube_connection_id, dest_fingerprint)
+               values (${o.orgId}, 'youtube', 'holder', ${other.connectionId}, ${fingerprintYoutubeChannel(ch.id)})`;
+      held();
+      await gate;
+      throw ROLLBACK;
+    }).catch((err: unknown) => { if (err !== ROLLBACK) throw err; });
+    await holding;
+
+    const a = saveConnectionFromGrant({ pendingId: p1.id, channelId: ch.id, userId: o.userId }, fake);
+    const [aPid] = await eventually(() => waitersOf(holderPid), "A (the winner) waiting on the holder's destination row");
+    // B starts now: A's connection is not visible, so B finds no live connection, INSERTS one, and waits on A's unique-index entry.
+    const b = saveConnectionFromGrant({ pendingId: p2.id, channelId: ch.id, userId: o.userId }, fake);
+    const [bPid] = await eventually(() => waitersOf(aPid!), "B waiting on A's connection insert (it is inside the race)");
+    expect(bPid, "B is a different backend from A").not.toBe(aPid);
+    release();
+    await holder;
+    const [won, lost] = await Promise.all([a, b]);
+
+    expect(lost, "the loser's answer is the winner's ids").toEqual(won);
+    expect(await connRows(o.orgId), "the raced channel's connection plus the other channel's").toHaveLength(2);
+    expect((await targetRows(o.orgId)).filter((t) => t.youtube_connection_id === won.connectionId), "one destination for the raced channel").toHaveLength(1);
+    expect(await targetRows(o.orgId), "plus the other channel's own").toHaveLength(2);
+    expect(await openToken(sql, o.orgId, won.connectionId), "the loser reconnected: ITS token is the one on the connection").toBe(p2.token);
+    expect(await pendingCount(o.orgId), "both grants are spent").toBe(0);
   });
 
   it("after a disconnect (revoke) the same channel connects again as a NEW connection with a NEW destination row; the archived one stays archived", async () => {
@@ -272,8 +313,10 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a new connection", () => {
     const gate = new Promise<void>((resolve) => { release = resolve; });
     let revoked!: () => void;
     const revokedInTx = new Promise<void>((resolve) => { revoked = resolve; });
+    let revokerPid!: number;
     // Request B: revokes, and holds its transaction open (the row is locked, the revoke not yet visible).
     const other = sql.begin(async (tx) => {
+      revokerPid = (await tx<{ pid: number }[]>`select pg_backend_pid() as pid`)[0]!.pid;
       await revokeConnection(tx, o.orgId, first.connectionId);
       revoked();
       await gate;
@@ -281,12 +324,8 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a new connection", () => {
     await revokedInTx;
     // Request A: reads the connection as still live, then waits on B's lock at the token replace.
     const save = refusal(() => saveConnectionFromGrant({ pendingId: p.id, channelId: first.channel.id, userId: o.userId }, fake));
-    let waiting = 0;
-    for (let i = 0; i < 100 && waiting === 0; i++) {
-      waiting = (await sql<{ n: number }[]>`select count(*)::int as n from pg_stat_activity where datname = current_database() and wait_event_type = 'Lock'`)[0]!.n;
-      if (waiting === 0) await new Promise((r) => setTimeout(r, 50));
-    }
-    expect(waiting, "anti-vacuity: the save really is waiting on the revoke's lock").toBeGreaterThan(0);
+    const waiting = await eventually(() => waitersOf(revokerPid), "the save waiting on the revoking transaction's lock");
+    expect(waiting.length, "anti-vacuity: exactly the save is blocked by the revoke").toBe(1);
     release();
     await other;
     const refused = await save;
@@ -402,6 +441,20 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a reconnect", () => {
     expect(await connRows(o.orgId)).toHaveLength(1);
     expect(await targetRows(o.orgId), "no second destination").toHaveLength(1);
     expect(await pendingCount(o.orgId)).toBe(0);
+  });
+
+  it("a reconnect whose grant has no Google account id (the lookup returned null) KEEPS the connection's known one; a grant that has one replaces it", async () => {
+    const o = await org();
+    const first = await connect(o, { sub: "sub-known" });
+    const blank = await grant(o, { channels: [first.channel], connectionId: first.connectionId, sub: null });
+    await saveConnectionFromGrant({ pendingId: blank.id, channelId: first.channel.id, userId: o.userId }, fake);
+    const kept = await connRow(first.connectionId);
+    expect(kept.google_sub, "a null never erases a known sub (T18 reads it to decide whether a revoke is safe)").toBe("sub-known");
+    expect(await openToken(sql, o.orgId, first.connectionId), "the reconnect itself still happened").toBe(blank.token);
+    // The positive pair: a grant that DOES carry one moves it.
+    const named = await grant(o, { channels: [first.channel], connectionId: first.connectionId, sub: "sub-next" });
+    await saveConnectionFromGrant({ pendingId: named.id, channelId: first.channel.id, userId: o.userId }, fake);
+    expect((await connRow(first.connectionId)).google_sub).toBe("sub-next");
   });
 
   it("clears the retry backoff of every OPEN broadcast of THIS connection (the 'ending' one among them) and nothing else: a complete one, another connection's, a broadcast with no backoff", async () => {
@@ -561,26 +614,34 @@ describe.skipIf(!HAS_DB)("updateConnectionSettings", () => {
 
 // =====================================================================================================================================
 describe.skipIf(!HAS_DB)("the Directory's view of a connection", () => {
-  it("liveState follows what the health check last learned, and is 'unknown' until it ran and while the grant is dead (5 rows checked)", async () => {
+  it("liveState is 'enabled' ONLY for a clean health check made since the token last changed; an unrecognised code, a check older than the last reconnect, no check, and a dead grant are all 'unknown' (10 rows checked)", async () => {
     const o = await org();
-    // [status, last_health_at set?, last_error_code, expected] — the codes are the port's own refusal vocabulary (port.ts).
-    const table: [string, boolean, string | null, string][] = [
-      ["connected", false, null, "unknown"],
-      ["connected", true, null, "enabled"],
-      ["connected", true, "youtube_live_not_enabled", "not_enabled"],
-      ["connected", true, "youtube_live_blocked", "blocked"],
-      ["reconnect_needed", true, "youtube_reconnect_needed", "unknown"],
+    // [status, when the check ran relative to status_since, last_error_code, expected] — the refusal codes are the port's own
+    // vocabulary (port.ts); "youtube_unavailable" and the made-up one are codes this build does not map to a state.
+    type When = "never" | "before" | "equal" | "after";
+    const table: [string, When, string | null, string][] = [
+      ["connected", "never", null, "unknown"],
+      ["connected", "after", null, "enabled"],
+      ["connected", "equal", null, "enabled"],
+      ["connected", "after", "youtube_live_not_enabled", "not_enabled"],
+      ["connected", "after", "youtube_live_blocked", "blocked"],
+      ["reconnect_needed", "after", "youtube_reconnect_needed", "unknown"],
+      ["connected", "after", "youtube_unavailable", "unknown"],
+      ["connected", "after", "a_code_a_later_build_adds", "unknown"],
+      ["connected", "before", null, "unknown"],            // a reconnect cleared the code; the check predates the new token
+      ["connected", "before", "youtube_live_blocked", "unknown"],
     ];
     let checked = 0;
-    for (const [status, checkedAt, code, expected] of table) {
+    for (const [status, when, code, expected] of table) {
       const c = await connect(o);
-      await sql`update org_youtube_connections set status = ${status}, last_health_at = ${checkedAt ? new Date() : null}, last_error_code = ${code} where id = ${c.connectionId}`;
+      const at = { never: sql`null`, before: sql`status_since - interval '1 minute'`, equal: sql`status_since`, after: sql`status_since + interval '1 minute'` }[when];
+      await sql`update org_youtube_connections set status = ${status}, last_health_at = ${at}, last_error_code = ${code} where id = ${c.connectionId}`;
       const view = (await connectionViews(o.orgId)).get(c.connectionId)!;
-      expect(view.liveState, `${status} / ${checkedAt} / ${code}`).toBe(expected);
+      expect(view.liveState, `${status} / ${when} / ${code}`).toBe(expected);
       expect(view.status).toBe(status);
       checked++;
     }
-    expect(checked, "anti-vacuity: rows checked").toBe(5);
+    expect(checked, "anti-vacuity: rows checked").toBe(10);
   });
 
   it("openBroadcasts counts the connection's broadcasts that are neither complete nor failed ('ending' included), and no other connection's", async () => {

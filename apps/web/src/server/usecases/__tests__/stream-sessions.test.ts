@@ -34,7 +34,7 @@ import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destina
 import { routes } from "@/lib/routes";
 import { admit, holdStateOf, type AdmitInput, type SessionState } from "@/server/relay/domain/session";
 import { apiSessionOnTarget, pairPresentPhone, resealTargetDestination, rigApiTarget, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
-import { KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readFirstInput, readTargetSecret } from "@/server/relay/secret-columns";
+import { ApiBackedTargetError, KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readFirstInput, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CODE_GRACE_AFTER_FINISH_MINUTES, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
@@ -55,6 +55,7 @@ import {
 } from "../stream-credits";
 import { reissueStreamCode } from "../stream-codes";
 import { createStreamTarget, listStreamTargets, patchStreamTarget, removeStreamTarget } from "../stream-targets";
+import { connect as connectYoutubeChannel } from "@/server/youtube/__tests__/_connect-rig";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import {
@@ -5056,6 +5057,56 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
     const released = rec2.calls.filter((c) => c.operation === "removeOutput");
     expect(released, "the failure releases the output too").toHaveLength(1);
     expect(released[0]!.sessionId).toBe(made.sessionId);
+  });
+});
+
+// YouTube Connect (T8 fix round 1, I2): B3 merges before T11, so until `prepare` replaces the key read an API-backed destination
+// (no key of its own) must meet Go live as the SAME clean refusal an unreadable key does — never ApiBackedTargetError's 500.
+describe.skipIf(!HAS_DB)("Go live on an API-BACKED destination (before T11's prepare)", () => {
+  const savedTokenKek = process.env.YOUTUBE_TOKEN_KEK;
+  beforeAll(() => { process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex"); });
+  afterAll(() => {
+    if (savedTokenKek === undefined) delete process.env.YOUTUBE_TOKEN_KEK;
+    else process.env.YOUTUBE_TOKEN_KEK = savedTokenKek;
+  });
+
+  it("an org whose ONLY destination is API-backed: Go live is 422 TARGET_UNREADABLE (not a 500) — twice — with no session row, the credit ledger unmoved, and NO provider call (addOutput 0); a pasted destination beside it still starts", async () => {
+    const rec = new FakeRecorder();
+    const r = await rig({ credits: 1, recorder: rec });
+    // The rig's pasted destination goes; the org's only one is the connected channel's (a real save, real rows).
+    await sql.begin((tx) => archiveStreamTarget(tx, r.auth.orgId, r.target.id));
+    const api = await connectYoutubeChannel({ auth: r.auth, orgId: r.auth.orgId, userId: r.auth.userId! });
+    const [row] = await sql<{ youtube_connection_id: string | null }[]>`select youtube_connection_id from org_stream_targets where id = ${api.targetId}`;
+    expect(row, "the fixture really is API-backed: a connection behind it").toMatchObject({ youtube_connection_id: api.connectionId });
+    await expect(sql.begin((tx) => readTargetSecret(tx, r.auth.orgId, api.targetId)), "and no key of its own: the key reader says so by name").rejects.toBeInstanceOf(ApiBackedTargetError);
+    const money = async () => (await sql<{ n: number; net: number }[]>`
+      select count(*)::int as n, coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${r.auth.orgId}`)[0];
+    const before = await money();
+    expect(before!.net, "the rig's credit is there to be spent — or 'unmoved' could not fail").toBe(1);
+    const refusedDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
+
+    let refused = 0;
+    for (const attempt of ["first", "second"]) {
+      const err = await createSession(r.auth, r.fixtureId, body(api.targetId), refusedDeps).then(() => null, (e: unknown) => e);
+      expect(err, `${attempt} Go live: a typed refusal, not the key reader's own error`).toBeInstanceOf(HttpError);
+      expect(err, attempt).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
+      refused++;
+    }
+    expect(refused, "anti-vacuity: both attempts refused").toBe(2);
+    r.tick(3000);
+    expect(await currentSession(r.auth, r.fixtureId, refusedDeps), "nothing to project").toBeNull();
+    expect(await money(), "no credit spent, no ledger row").toEqual(before);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
+    expect(n, "no session row, in any state").toBe(0);
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls.filter((c) => c.operation === "addOutput"), "addOutput was never asked").toHaveLength(0);
+    expect(rec.calls.map((c) => c.operation), "the refusal is the probe's: no provider call of any kind").toEqual([]);
+    expect(r.runner.created).toEqual([]);
+
+    // The positive pair: the same org with a PASTED destination goes live (so the zero above was not a Go live that cannot start).
+    const pasted = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Pasted", streamKey: "yt-key" });
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(pasted.id), r.deps);
+    expect((await r.row(sessionId)).state).toBe("warming");
   });
 });
 

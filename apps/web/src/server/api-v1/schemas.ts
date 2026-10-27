@@ -2108,9 +2108,9 @@ export const YoutubePrivacy = z.enum(YOUTUBE_PRIVACIES);
 
 /** What the Directory shows of a connected channel (never a token, a channel id or Google's own words). `status` is the
  *  two LIVE states — a revoked connection has no view. `liveState` is what the health check last learned about the channel's
- *  ability to stream: `unknown` until it has run once, and while the grant is dead (nothing can be asked of YouTube).
+ *  ability to stream: `unknown` until a check has run since the token last changed, while the grant is dead (nothing can be asked of YouTube), and for a result this build does not map; `enabled` only for a clean one.
  *  `termsOutdated`: the consent text moved on since this connection was consented — Go live is never blocked by it (spec
- *  §6.1.5). `openBroadcasts`: broadcasts of the channel not yet complete or failed (what a Disconnect must wait for). */
+ *  §6.1.5). `openBroadcasts`: how many of this connection's broadcasts are neither complete nor failed (created, bound, reserved, live or ending). */
 export const YoutubeConnectionView = z.object({
   connectionId: z.string(),
   channelTitle: z.string(),

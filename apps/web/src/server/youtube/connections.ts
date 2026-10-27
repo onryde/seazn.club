@@ -94,7 +94,7 @@ async function reconnect(
 ): Promise<YoutubeConnectionSaved> {
   if (!(await replaceConnectionToken(tx, p.org_id, connectionId, token))) throw notFound();
   await tx`
-    update org_youtube_connections set google_sub = ${p.google_sub}, granted_scope = ${p.granted_scope ?? ""}
+    update org_youtube_connections set google_sub = coalesce(${p.google_sub}, google_sub), granted_scope = ${p.granted_scope ?? ""}
      where id = ${connectionId} and org_id = ${p.org_id}`;
   if (p.consent_version > consentVersionOnConnection) {
     await tx`
@@ -204,16 +204,22 @@ export async function pickYoutubeChannel(
 
 interface ConnectionViewRow {
   id: string; channel_title: string; default_privacy: YoutubePrivacy; made_for_kids: boolean; status: "connected" | "reconnect_needed";
-  last_health_at: Date | null; last_error_code: string | null; consent_version: number; open_broadcasts: number;
+  last_health_at: Date | null; last_error_code: string | null; consent_version: number; open_broadcasts: number; status_since: Date;
 }
 
-/** What the health check last learned about the channel's ability to stream, as the Directory says it. `unknown` while no check has
- *  run yet and while the grant is dead (YouTube cannot be asked); otherwise the refusal code the check recorded, or `enabled`. */
-function liveStateOf(r: Pick<ConnectionViewRow, "status" | "last_health_at" | "last_error_code">): YoutubeConnectionView["liveState"] {
+/** What the health check last learned about the channel's ability to stream, as the Directory says it. It fails CLOSED: `enabled`
+ *  needs a check that came back clean (no code) and was made SINCE the token last changed (`status_since`; a reconnect clears the
+ *  code, so a clean-looking row older than its token says nothing). `unknown` while no check has run, while the check predates the
+ *  token, while the grant is dead (YouTube cannot be asked), and for any code this build does not map to a state. */
+function liveStateOf(
+  r: Pick<ConnectionViewRow, "status" | "last_health_at" | "last_error_code" | "status_since">,
+): YoutubeConnectionView["liveState"] {
   if (r.status === "reconnect_needed" || r.last_health_at === null) return "unknown";
+  if (r.last_health_at < r.status_since) return "unknown";
+  if (r.last_error_code === null) return "enabled";
   if (r.last_error_code === "youtube_live_blocked") return "blocked";
   if (r.last_error_code === "youtube_live_not_enabled") return "not_enabled";
-  return "enabled";
+  return "unknown";
 }
 
 function toView(r: ConnectionViewRow): YoutubeConnectionView {
@@ -231,7 +237,7 @@ function toView(r: ConnectionViewRow): YoutubeConnectionView {
  *  and have no view. `only` narrows to one connection (a PATCH's reply). */
 export async function connectionViews(orgId: string, only?: string): Promise<Map<string, YoutubeConnectionView>> {
   const rows = await sql<ConnectionViewRow[]>`
-    select c.id, c.channel_title, c.default_privacy, c.made_for_kids, c.status, c.last_health_at, c.last_error_code, c.consent_version,
+    select c.id, c.channel_title, c.default_privacy, c.made_for_kids, c.status, c.last_health_at, c.last_error_code, c.consent_version, c.status_since,
            (select count(*)::int from youtube_broadcasts b
              where b.connection_id = c.id and b.org_id = c.org_id and b.state in ${sql(OPEN_BROADCAST_STATES)}) as open_broadcasts
       from org_youtube_connections c
