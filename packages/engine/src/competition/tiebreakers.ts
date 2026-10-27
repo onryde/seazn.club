@@ -19,7 +19,7 @@ import { EngineError } from "../core/errors.ts";
 import { shuffle } from "../core/rng.ts";
 import type { EntrantId, StandingsDelta } from "../core/types.ts";
 import type { PartialScheduleKey, TiebreakerKey } from "../sport/module.ts";
-import { RATIO_LEDGERS, type RatioKey } from "./display.ts";
+import { RATIO_LEDGERS, fieldGoalsOf, ledgerDifference, type RatioKey } from "./display.ts";
 import {
   foldResults,
   resultsAmong,
@@ -408,15 +408,10 @@ function ratioComparator(key: RatioKey): RunComparator {
 // RATIO_LEDGERS pair the ratio of that ledger reads (BWF 16.2.3 "games
 // difference", 16.2.4 "points difference"), greater first. A row recording
 // neither half has no difference at all and sorts last, as `diff` does (#429);
-// one recorded half reads the other as 0, as the ratio does.
+// one recorded half reads the other as 0, as the ratio does. The difference is
+// display.ts's `ledgerDifference` — the one formula its column prints (T17).
 function differenceComparator(key: "set_ratio" | "point_ratio"): RunComparator {
-  const [won, lost] = RATIO_LEDGERS[key];
-  const difference = (row: StandingsRow): number | undefined => {
-    const w = metricOf(row, [won]);
-    const l = metricOf(row, [lost]);
-    return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);
-  };
-  return (a, b) => compareRecorded(difference(a), difference(b));
+  return (a, b) => compareRecorded(ledgerDifference(a, key), ledgerDifference(b, key));
 }
 
 // `wins` (W2d B2): the W column, less the overtime wins under winsCount
@@ -426,12 +421,9 @@ function winsOf(row: StandingsRow, ctx: RankContext): number {
   return ctx.winsCount === "regulation" ? row.won - ledgerOf(row, ["won_ot"]) : row.won;
 }
 
-// `field_goals` (W2d B3, FIH GTR App. 3): every goal not scored from a penalty
-// corner or a penalty stroke. An own goal is in `gf` (credited to the side it
-// benefits) and in no `goals_<kind>` ledger, so it counts. Missing reads 0.
-function fieldGoals(row: StandingsRow): number {
-  return ledgerOf(row, ["gf"]) - ledgerOf(row, ["goals_pc"]) - ledgerOf(row, ["goals_stroke"]);
-}
+// `field_goals` (W2d B3, FIH GTR App. 3) is display.ts's `fieldGoalsOf`: every
+// goal not scored from a penalty corner or a penalty stroke — the one formula
+// its column prints (T17).
 
 // The keys the refinement driver handles itself, because they need the tied
 // class (a mini-table, the class size, the stored draw) rather than a pairwise
@@ -502,7 +494,7 @@ const COMPARATORS: Readonly<Record<PlainKey, RunComparator>> = {
   point_diff: differenceComparator("point_ratio"),
   // ATP 4.01 C.3-2: more matches played ranks higher ("a 2-1 record beats 2-0").
   matches_played: (a, b) => sgn(a.played - b.played),
-  field_goals: (a, b) => sgn(fieldGoals(a) - fieldGoals(b)),
+  field_goals: (a, b) => sgn(fieldGoalsOf(a) - fieldGoalsOf(b)),
 };
 
 // Inside an h2h block each key is its plain twin applied to the mini-table:

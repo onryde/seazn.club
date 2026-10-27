@@ -55,9 +55,9 @@ describe("derivedMetricText (doc 09 §2)", () => {
     expect(derivedMetricText(r, "set_ratio")).toBe("2.00");
     expect(derivedMetricText(r, "board_ratio")).toBe("2.33");
     expect(derivedMetricText(r, "point_ratio")).toBe("0.94");
-    // game_ratio has no standings column, but a tie decided on it still
-    // prints both sides' values in the what-if — off the games pair, not a
-    // neighbour's (the sets pair would print 2.00).
+    // game_ratio (a column since W2d, ST-G29) and a tie decided on it print
+    // both sides' values off the games pair, not a neighbour's (the sets pair
+    // would print 2.00).
     expect(derivedMetricText(r, "game_ratio")).toBe("1.43");
     expect(RATIO_LEDGERS).toEqual({
       set_ratio: ["sets_won", "sets_lost"],
@@ -111,7 +111,11 @@ describe("DERIVED_METRICS", () => {
       "point_ratio",
       "buchholz_cut1",
       "buchholz",
+      "set_diff",
+      "point_diff",
+      "field_goals",
       "sberger",
+      "game_ratio",
     ]);
   });
 });
