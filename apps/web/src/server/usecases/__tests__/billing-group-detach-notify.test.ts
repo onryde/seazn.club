@@ -106,6 +106,32 @@ describe.skipIf(!HAS_DB)("detach notifies the non-acting party", () => {
     await vi.waitFor(async () => expect((await detachRows(res.subscription_id))[0]!.status).toBe("sent"), { timeout: 15_000, interval: 50 });
   });
 
+  it("an owner with no account language gets the removal notice in the DETACHED org's default, not the remaining org's", async () => {
+    // The mainstream path: sign-up never writes an account language (lib/users.ts), so D4's org step answers for most owners. The
+    // detached org and the group's remaining org differ, and neither is English, so the wrong org and the fallback are both seen.
+    const detachedOrgLocale = "fr" as const;
+    const { payer, owner, orgId, orgName } = await seedLiveGroup({
+      ownerLocale: null,
+      orgDefaultLocale: detachedOrgLocale,
+      remainingDefaultLocale: "nl",
+    });
+    const [account] = await sql<{ locale: string | null }[]>`select locale from users where id = ${owner.id}`;
+    expect(account!.locale, "no account language: the org step must answer").toBeNull();
+
+    const res = await detachOrgFromGroup({ actorUserId: payer.id, orgId, mode: "ride_out" });
+
+    const rows = await detachRows(res.subscription_id);
+    expect(rows.map((r) => [r.kind, r.recipient_user_id]), "one removal notice, to the owner").toEqual([["group_org_removed", owner.id]]);
+    const expected = dictionarySubject(detachedOrgLocale, "groupOrgRemoved.subject", { orgName });
+    for (const wrong of ["nl", "en"] as const)
+      expect(dictionarySubject(wrong, "groupOrgRemoved.subject", { orgName }), `the ${wrong} subject is distinguishable`).not.toBe(expected);
+    expect(rows[0]!.subject).toBe(expected);
+    expect(mail.removed).toHaveBeenCalledTimes(1);
+    expect(mail.removed.mock.calls[0]![1]).toBe(detachedOrgLocale);
+
+    await vi.waitFor(async () => expect((await detachRows(res.subscription_id))[0]!.status).toBe("sent"), { timeout: 15_000, interval: 50 });
+  });
+
   it("the owner leaving queues one notice to the payer, saying whether the seat was kept", async () => {
     // release: the payer keeps the seat as a reusable freed slot. The payer's account has no language, so the notice follows the
     // default of the group's remaining org, the one the link points at (D4).
