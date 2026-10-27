@@ -1,6 +1,7 @@
-// Body copy for the staff alert sent when an extra-organisation rider could not
-// be moved onto its group's current price (`maybeAlertOrgRepriceFailed`,
-// billing-events.ts).
+// Body copy for the staff alert queued when an extra-organisation rider could
+// not be moved onto its group's current price (`extraOrgRepriceFailedAlertEmail`,
+// rendered by `maybeAlertOrgRepriceFailed` in billing-events.ts and queued on the
+// email outbox as kind `staff_extra_org_reprice_failed`).
 //
 // The copy this file pins used to explain the fault as a TIER ARBITRAGE: "the
 // two rates ($9 Pro / $19 Pro Plus) are load-bearing — left on the Pro price, a
@@ -15,42 +16,16 @@
 // this is a rewrite of the WHY, not a downgrade of the alert.
 //
 // Internal staff alert: NOT localised (it takes no locale/Dict and is composed
-// inline in lib/email.ts), so English is the only copy to assert. Asserted
-// through the real send path with `fetch` stubbed, like
-// pass-credit-reversal-alert-email.test.ts, because the body is built inside
-// the send function and there is no separate template export to call.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sendExtraOrgRepriceFailedAlertEmail } from "../email";
+// inline in lib/email.ts), so English is the only copy to assert. The site
+// suites prove it is QUEUED (one row per rider per UTC day, its recipient and
+// subject); this file proves what it SAYS, by calling the builder that renders
+// it.
+import { describe, expect, it } from "vitest";
+import { extraOrgRepriceFailedAlertEmail } from "../email";
 
-interface SentPayload {
-  subject: string;
-  html: string;
-  text: string;
-}
-
-let sent: SentPayload[] = [];
-const OLD_KEY = process.env.RESEND_API_KEY;
-
-beforeEach(() => {
-  sent = [];
-  process.env.RESEND_API_KEY = "re_test_key";
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (_url: string, init: { body: string }) => {
-      sent.push(JSON.parse(init.body) as SentPayload);
-      return { ok: true, status: 200, text: async () => "" } as unknown as Response;
-    }),
-  );
-});
-
-afterEach(() => {
-  vi.unstubAllGlobals();
-  if (OLD_KEY === undefined) delete process.env.RESEND_API_KEY;
-  else process.env.RESEND_API_KEY = OLD_KEY;
-});
+const bodyOf = (mail: { subject: string; html: string; text: string }): string => `${mail.subject}\n${mail.html}\n${mail.text}`;
 
 const base = {
-  to: "ops@seazn.test",
   subscriptionId: "sub_group_1",
   stripeSubscriptionId: "sub_stripe_1",
   planKey: "pro",
@@ -61,10 +36,10 @@ const base = {
 };
 
 describe("extra-org reprice failure alert", () => {
-  it("names no retired plan and quotes no hardcoded rate", async () => {
-    await sendExtraOrgRepriceFailedAlertEmail(base);
-    expect(sent).toHaveLength(1);
-    const body = `${sent[0]!.subject}\n${sent[0]!.html}\n${sent[0]!.text}`;
+  it("names no retired plan and quotes no hardcoded rate", () => {
+    const mail = extraOrgRepriceFailedAlertEmail(base);
+    expect(mail.subject).toBe("Extra-org rider stuck on the wrong price (group sub_group_1)");
+    const body = bodyOf(mail);
 
     // The retired plan, in both spellings the codebase has used for it.
     expect(body).not.toMatch(/Pro Plus/i);
@@ -77,12 +52,11 @@ describe("extra-org reprice failure alert", () => {
     expect(body).not.toContain("$19");
   });
 
-  it("still reports the fault, and points at the two price ids that ARE the fault", async () => {
+  it("still reports the fault, and points at the two price ids that ARE the fault", () => {
     // The positive pair. Without it, every assertion above is satisfied by an
     // alert that says nothing at all — and an alert nobody can act on is worse
     // than one explaining a retired ladder, because it looks fine.
-    await sendExtraOrgRepriceFailedAlertEmail(base);
-    const body = `${sent[0]!.subject}\n${sent[0]!.html}\n${sent[0]!.text}`;
+    const body = bodyOf(extraOrgRepriceFailedAlertEmail(base));
 
     expect(body).toContain("price_old");
     expect(body).toContain("price_new");
@@ -96,17 +70,18 @@ describe("extra-org reprice failure alert", () => {
     expect(body).toMatch(/nothing re-converges this group on its own/i);
   });
 
-  it("survives the failure shape where no item or price could be named", async () => {
+  it("survives the failure shape where no item or price could be named", () => {
     // `itemId`/`currentPriceId`/`expectedPriceId` are all nullable — catalog
     // resolution can fail before any item is reached. The copy must still be
     // sendable and must not print "null" at a reader.
-    await sendExtraOrgRepriceFailedAlertEmail({
-      ...base,
-      itemId: null,
-      currentPriceId: null,
-      expectedPriceId: null,
-    });
-    const body = `${sent[0]!.subject}\n${sent[0]!.html}\n${sent[0]!.text}`;
+    const body = bodyOf(
+      extraOrgRepriceFailedAlertEmail({
+        ...base,
+        itemId: null,
+        currentPriceId: null,
+        expectedPriceId: null,
+      }),
+    );
     expect(body).not.toMatch(/\bnull\b/);
     expect(body).toContain("(unknown)");
     expect(body).toContain("(unresolved)");

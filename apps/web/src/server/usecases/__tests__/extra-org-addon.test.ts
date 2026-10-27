@@ -23,6 +23,7 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
+import type { EmailContent, ExtraOrgRepriceFailedAlertEmail } from "@/lib/email";
 
 // getLimit reads through resolve()'s entitlement cache; disable it so a
 // just-written add-on row is seen on the very next read (same mock as
@@ -49,6 +50,7 @@ const {
   allowanceAlertSpy,
   itemRetrieveSpy,
   repriceAlertSpy,
+  realBuilders,
 } = vi.hoisted(() => ({
   retrieveSpy: vi.fn(),
   itemCreateSpy: vi.fn(),
@@ -57,7 +59,11 @@ const {
   // Task 4b: converge re-reads the ITEM live before mutating it, so the
   // quantity it writes back can never come from a stale event snapshot.
   itemRetrieveSpy: vi.fn(),
-  repriceAlertSpy: vi.fn(async () => true),
+  // The re-price alert's BUILDER (it renders; the outbox queues), a spy that
+  // calls through: the mock factory below sets its implementation to the real
+  // builder, and the convergence describe restores it before every test.
+  repriceAlertSpy: vi.fn<(opts: ExtraOrgRepriceFailedAlertEmail) => EmailContent>(),
+  realBuilders: {} as { reprice?: (opts: ExtraOrgRepriceFailedAlertEmail) => EmailContent },
   // Typed with the resolver's args so a test can answer PER LOOKUP KEY (Task
   // 4b's `describe` block resolves every lookup key to its own live price id,
   // via its local `livePriceFor`); the default implementation ignores them.
@@ -83,12 +89,25 @@ vi.mock("@/server/usecases/billing-manage", () => ({
   requireBillingOwner: requireBillingOwnerMock,
 }));
 // Partial mock: billing-events.ts imports a dozen other senders from this
-// module, so only the one under test is replaced.
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendExtraOrgAllowanceAlertEmail: allowanceAlertSpy,
-  sendExtraOrgRepriceFailedAlertEmail: repriceAlertSpy,
-}));
+// module, so only the ones under test are replaced. The re-price alert is
+// queued on the email outbox (phase 3 wave 5, kind
+// `staff_extra_org_reprice_failed`, once per rider per UTC day), so its
+// builder is a call-through spy and the tests read its rows; Sentry's issue
+// capture is observed (call-through) so a test can tell a drop apart.
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  realBuilders.reprice = actual.extraOrgRepriceFailedAlertEmail;
+  repriceAlertSpy.mockImplementation(actual.extraOrgRepriceFailedAlertEmail);
+  return {
+    ...actual,
+    sendExtraOrgAllowanceAlertEmail: allowanceAlertSpy,
+    extraOrgRepriceFailedAlertEmail: repriceAlertSpy,
+  };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
 
 import { sql } from "@/lib/db";
 import { createOrgForUser } from "@/lib/auth";
@@ -97,6 +116,8 @@ import { getLimit, invalidateOrgEntitlements } from "@/lib/entitlements";
 import { groupOrgLimit } from "@/lib/billing-group";
 import { HttpError } from "@/lib/errors";
 import { log } from "@/server/logger";
+import { captureError } from "@/lib/sentry";
+import { staffAlertDrops, staffRows } from "./_money-fixtures";
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 import { ORG_ADDONS } from "@/lib/org-addons";
 import {
@@ -1729,14 +1750,42 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // care about staleness override this per test.
     itemRetrieveSpy.mockImplementation(async (id: string) => liveItems[id] ?? null);
     liveItems = {};
-    repriceAlertSpy.mockResolvedValue(true);
+    // `clearAllMocks` keeps an implementation a test replaced (a throwing
+    // render), so the real builder is put back before every test.
+    repriceAlertSpy.mockImplementation(realBuilders.reprice!);
     // Every alert in this codebase is gated on STAFF_ALERT_EMAIL first, so
-    // without this the alert assertions would pass vacuously.
-    vi.stubEnv("STAFF_ALERT_EMAIL", "ops@test.local");
+    // without this the alert assertions would pass vacuously. This test's own
+    // address: CI sets none, and the database is shared.
+    staff = `staff-${RUN}-${uniq()}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
+  });
+
+  afterAll(async () => {
+    await sql`delete from email_outbox where kind = ${REPRICE_KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
+  });
+
+  const RUN = `eoa-${uniq()}`;
+  const REPRICE_KIND = "staff_extra_org_reprice_failed";
+  let staff = "";
+  /** Pin the clock (Date only) and return its UTC day, the once-key's day part (Q2, P-W5-4), so a call cannot straddle midnight. */
+  const pinnedDay = (): string => {
+    const now = new Date();
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(now);
+    return now.toISOString().slice(0, 10);
+  };
+  /** One queued re-price row to this test's address, keyed `<group>:<item or "plan">:<UTC day>`, its subject the sender's literal. */
+  const repriceRow = (groupId: string, item: string, day: string) => ({
+    ref_id: `${groupId}:${item}:${day}`,
+    dedupe_key: `${groupId}:${item}:${day}`,
+    status: "queued",
+    recipient: staff,
+    subject: `Extra-org rider stuck on the wrong price (group ${groupId})`,
   });
 
   /** What Stripe would return from `subscriptionItems.retrieve`, keyed by item
@@ -2012,6 +2061,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     // path's job; the webhook's job is that the RATE is right.
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
+    const day = pinnedDay();
     await convergeOrgAddonPrices(
       subFor(stripeSubId, [
         planItem,
@@ -2023,9 +2073,12 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     expect(itemUpdateSpy).toHaveBeenCalledTimes(1);
     expect(itemUpdateSpy.mock.calls[0]![0]).toBe(dupA);
     expect(logged.mock.calls.some((c) => logCallIncludes(c, dupB))).toBe(true);
+    expect(staffAlertDrops(logged, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
     logged.mockRestore();
     // …and the loser is ALERTED, not just logged: it bills the wrong rate until
-    // a human or a purchase consolidates it, and nothing here retries.
+    // a human or a purchase consolidates it, and nothing here retries. One
+    // page, keyed by the group, the loser and the UTC day.
+    expect(await staffRows(REPRICE_KIND, "subscription", walletId)).toEqual([repriceRow(walletId, dupB, day)]);
     expect(repriceAlertSpy).toHaveBeenCalledTimes(1);
     expect(repriceAlertSpy).toHaveBeenCalledWith(
       expect.objectContaining({ itemId: dupB, expectedPriceId: livePriceFor(proEntry.lookupKey) }),
@@ -2384,16 +2437,20 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     pricesListSpy.mockResolvedValue({ data: [] }); // stripe:sync never run here
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
+    const day = pinnedDay();
 
     await processStripeEvent(
       updatedEvent(stripeSubId, walletId, [riderItem(riderId, proEntry.lookupKey, 2)]),
     );
+    expect(staffAlertDrops(logged, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
     logged.mockRestore();
 
+    // No item could be named before the catalog failed, so the key's item part is "plan".
+    expect(await staffRows(REPRICE_KIND, "subscription", walletId)).toEqual([repriceRow(walletId, "plan", day)]);
     expect(repriceAlertSpy).toHaveBeenCalledTimes(1);
     expect(repriceAlertSpy).toHaveBeenCalledWith(
       expect.objectContaining({
-        to: "ops@test.local",
+        itemId: null,
         subscriptionId: walletId,
         stripeSubscriptionId: stripeSubId,
         // The plan is KNOWN here — resolveOrgAddonPriceId throws after the plan
@@ -2441,6 +2498,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
       ),
     );
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
+    const day = pinnedDay();
 
     // Never throws: a rejected currency must not fail the whole webhook.
     await expect(
@@ -2452,8 +2510,10 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     ).resolves.toBeUndefined();
 
     expect(logged.mock.calls.some((c) => logCallIncludes(c, riderId))).toBe(true);
+    expect(staffAlertDrops(logged, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
     logged.mockRestore();
 
+    expect(await staffRows(REPRICE_KIND, "subscription", walletId)).toEqual([repriceRow(walletId, riderId, day)]);
     expect(repriceAlertSpy).toHaveBeenCalledTimes(1);
     expect(repriceAlertSpy).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2471,7 +2531,7 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     expect(row).toMatchObject({ qty: 2, status: "active" });
   });
 
-  it("stays silent when STAFF_ALERT_EMAIL is unset — the gate comes before the send", async () => {
+  it("stays silent when STAFF_ALERT_EMAIL is unset — the gate comes before the render", async () => {
     vi.stubEnv("STAFF_ALERT_EMAIL", "");
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     pricesListSpy.mockResolvedValue({ data: [] });
@@ -2480,14 +2540,18 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
     await processStripeEvent(
       updatedEvent(stripeSubId, walletId, [riderItem(riderId, proEntry.lookupKey, 2)]),
     );
+    expect(staffAlertDrops(logged, vi.mocked(captureError)), "unset is not a drop").toEqual({ logged: 0, issues: 0 });
     logged.mockRestore();
     expect(repriceAlertSpy).not.toHaveBeenCalled();
+    expect(await staffRows(REPRICE_KIND, "subscription", walletId), "no row, to any recipient").toHaveLength(0);
   });
 
   it("a failing ALERT can never be what breaks the webhook", async () => {
     const { walletId, stripeSubId } = await makeBilledGroupOrg("pro");
     pricesListSpy.mockResolvedValue({ data: [] });
-    repriceAlertSpy.mockRejectedValue(new Error("resend is down"));
+    repriceAlertSpy.mockImplementation(() => {
+      throw new Error("the alert builder failed");
+    });
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
 
     // Telemetry on a failure path must never turn "the rate is stale" into
@@ -2497,19 +2561,25 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
         updatedEvent(stripeSubId, walletId, [riderItem(riderId, proEntry.lookupKey, 2)]),
       ),
     ).resolves.toBeUndefined();
+    // The lost page is logged and opens a Sentry issue (Q1), and nothing was queued.
+    expect(staffAlertDrops(logged, vi.mocked(captureError)), "one drop, seen").toEqual({ logged: 1, issues: 1 });
     logged.mockRestore();
+    expect(await staffRows(REPRICE_KIND, "subscription", walletId)).toHaveLength(0);
 
     const [row] = await sql<{ qty: number }[]>`
       select qty from org_addons where stripe_item_id = ${riderId}`;
     expect(row?.qty).toBe(2);
   });
 
-  it("maybeAlertOrgRepriceFailed resolves rather than throwing when the send throws", async () => {
-    repriceAlertSpy.mockRejectedValue(new Error("resend is down"));
+  it("maybeAlertOrgRepriceFailed resolves rather than throwing when the render throws", async () => {
+    repriceAlertSpy.mockImplementation(() => {
+      throw new Error("the alert builder failed");
+    });
     const logged = vi.spyOn(log, "error").mockImplementation(() => {});
+    const groupId = randomUUID();
     await expect(
       maybeAlertOrgRepriceFailed({
-        subscriptionId: "grp",
+        subscriptionId: groupId,
         stripeSubscriptionId: "sub",
         planKey: "pro",
         itemId: "si",
@@ -2517,9 +2587,25 @@ describe.skipIf(!HAS_DB)("extra-org rider prices converge on a PLAN change (webh
         expectedPriceId: "p2",
         reason: "test",
       }),
-    ).resolves.toBeUndefined();
-    expect(logged).toHaveBeenCalled();
+    ).resolves.toBeNull();
+    expect(staffAlertDrops(logged, vi.mocked(captureError)), "one drop, seen").toEqual({ logged: 1, issues: 1 });
     logged.mockRestore();
+    expect(await staffRows(REPRICE_KIND, "subscription", groupId)).toHaveLength(0);
+    // Positive pair: the same call with the real builder queues the page.
+    repriceAlertSpy.mockImplementation(realBuilders.reprice!);
+    const day = pinnedDay();
+    await expect(
+      maybeAlertOrgRepriceFailed({
+        subscriptionId: groupId,
+        stripeSubscriptionId: "sub",
+        planKey: "pro",
+        itemId: "si",
+        currentPriceId: "p1",
+        expectedPriceId: "p2",
+        reason: "test",
+      }),
+    ).resolves.toEqual(expect.any(String));
+    expect(await staffRows(REPRICE_KIND, "subscription", groupId)).toEqual([repriceRow(groupId, "si", day)]);
   });
 
   it("a CANCELED subscription is skipped — no update attempt, no alert, no noise", async () => {

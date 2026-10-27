@@ -114,6 +114,9 @@
 //     call it; billing-pass-unknown-competition.test.ts drives both to one row), for a Checkout Session, the same way.
 //   - staff_stream_credit_clawback: the real `alertStreamClawback` (its four sites, the partial, short and ungranted refunds and the
 //     short lost dispute, call it; stream-credits-clawback.test.ts drives each to a row), for a partial refund of a charge, the same way.
+//   - staff_extra_org_reprice_failed: the real `maybeAlertOrgRepriceFailed` (its four sites, the webhook's three convergence failures
+//     and the daily stale-price sweep, call it; extra-org-addon.test.ts drives the three and org-addon-price-sweep.test.ts the sweep,
+//     each to a row), for one rider of a billing group, the same way.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -205,7 +208,13 @@ import {
   withdrawRegistrationPublic,
 } from "@/server/usecases/registrations";
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
-import { alertCreditPackGrantFailed, alertSizePackGrantFailed, alertStreamClawback, processStripeEvent } from "@/server/usecases/billing-events";
+import {
+  alertCreditPackGrantFailed,
+  alertSizePackGrantFailed,
+  alertStreamClawback,
+  maybeAlertOrgRepriceFailed,
+  processStripeEvent,
+} from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
@@ -1333,6 +1342,32 @@ function streamCreditClawbackScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for an extra-organisation rider stuck on the wrong price, to this run's STAFF_ALERT_EMAIL: no org, no account,
+ *  and the worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function extraOrgRepriceFailedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const subscriptionId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Extra-org rider stuck on the wrong price (group ${subscriptionId})`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await maybeAlertOrgRepriceFailed({
+        subscriptionId,
+        stripeSubscriptionId: `sub_${RUN}_reprice`,
+        planKey: "pro",
+        itemId: `si_${RUN}_reprice`,
+        currentPriceId: "price_superseded",
+        expectedPriceId: "price_current",
+        reason: "Stripe rejected the item update: price_currency_mismatch",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
  *  request makes the first attempt. */
 async function emailChangeConfirmationScenario(): Promise<KindScenario> {
@@ -1906,6 +1941,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_pass_rung_mismatch: passRungMismatchScenario(),
         staff_pass_unknown_competition: passUnknownCompetitionScenario(),
         staff_stream_credit_clawback: streamCreditClawbackScenario(),
+        staff_extra_org_reprice_failed: extraOrgRepriceFailedScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

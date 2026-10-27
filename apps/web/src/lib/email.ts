@@ -1365,7 +1365,6 @@ export async function sendExtraOrgAllowanceAlertEmail(
 }
 
 export interface ExtraOrgRepriceFailedAlertEmail {
-  to: string;
   /** The billing GROUP (subscriptions.id) — what a human looks up first. */
   subscriptionId: string;
   /** The Stripe subscription the rider rides, so the item is reachable in the
@@ -1408,10 +1407,11 @@ export interface ExtraOrgRepriceFailedAlertEmail {
  *
  * Never blocks and never retries — the webhook has already ACKed by design.
  * Ops-only, no user-facing i18n (mirrors sendExtraOrgAllowanceAlertEmail).
+ *
+ * RENDERED and not sent: `maybeAlertOrgRepriceFailed` (billing-events.ts) queues what this returns on the email outbox through
+ * `queueStaffAlert` (kind `staff_extra_org_reprice_failed`), once per rider per UTC day. Nothing sends it directly.
  */
-export async function sendExtraOrgRepriceFailedAlertEmail(
-  opts: ExtraOrgRepriceFailedAlertEmail,
-): Promise<boolean> {
+export function extraOrgRepriceFailedAlertEmail(opts: ExtraOrgRepriceFailedAlertEmail): EmailContent {
   const subject = `Extra-org rider stuck on the wrong price (group ${opts.subscriptionId})`;
   const bodyText =
     `The extra-organisation add-on for a ${opts.planKey} billing group could not be moved onto that ` +
@@ -1442,7 +1442,7 @@ export async function sendExtraOrgRepriceFailedAlertEmail(
     `${bodyText}\n\nbilling group: ${opts.subscriptionId} · stripe sub: ${opts.stripeSubscriptionId} · ` +
     `plan: ${opts.planKey} · item: ${opts.itemId ?? "(none)"} · ` +
     `price ${opts.currentPriceId ?? "(unknown)"} -> ${opts.expectedPriceId ?? "(unresolved)"}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface RegistrationRefundFailedAlertEmail {
@@ -1473,7 +1473,7 @@ export interface RegistrationRefundFailedAlertEmail {
  * are Connect/platform-level and not something an organiser can act on;
  * alerting them would produce alarm with no remedy.
  *
- * Ops-only, no user-facing i18n (mirrors sendExtraOrgRepriceFailedAlertEmail).
+ * Ops-only, no user-facing i18n (mirrors extraOrgRepriceFailedAlertEmail).
  *
  * RENDERED and not sent: `maybeAlertRegistrationRefundFailed` (registrations.ts) queues what this returns on the email outbox through
  * `queueStaffAlert` (kind `staff_registration_refund_failed`), once per registration, mode and amount. Nothing sends it directly.

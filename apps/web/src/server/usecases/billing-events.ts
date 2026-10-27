@@ -65,7 +65,8 @@ import {
   streamCreditClawbackAlertEmail,
   sizePackGrantFailedAlertEmail,
   type SizePackGrantFailedAlertEmail,
-  sendExtraOrgRepriceFailedAlertEmail,
+  extraOrgRepriceFailedAlertEmail,
+  type ExtraOrgRepriceFailedAlertEmail,
   sendConnectBankAlertEmail,
   trialEndingEmail,
 } from "@/lib/email";
@@ -1358,37 +1359,36 @@ function errText(err: unknown): string {
 /**
  * Best-effort staff alert (v17 gap #293, Task 4b): a billing group's
  * extra-organisation rider is stuck on a price that is NOT its plan's rate.
+ * Queued on the email outbox (kind `staff_extra_org_reprice_failed`) to
+ * STAFF_ALERT_EMAIL through `queueStaffAlert`.
  *
- * NEVER THROWS, and gated on STAFF_ALERT_EMAIL before anything else — the same
- * discipline as maybeAlertOrgAllowance (extra-orgs.ts), which this deliberately
- * mirrors. It sits on the webhook's failure path, so an alert that threw would
- * turn "the rate is stale" into "the whole webhook fails and retries for ever",
- * i.e. the telemetry would become a strictly worse outcome than the fault it
- * reports. Awaited rather than fire-and-forget: this path is rare, a webhook has
- * no user waiting on it, and a floating promise cannot be tested honestly.
+ * NEVER THROWS, and gated on STAFF_ALERT_EMAIL before anything else — both are
+ * the writer's (Q1). It sits on the webhook's failure path, so an alert that
+ * threw would turn "the rate is stale" into "the whole webhook fails and
+ * retries for ever", i.e. the telemetry would become a strictly worse outcome
+ * than the fault it reports. Awaited rather than fire-and-forget: this path is
+ * rare, a webhook has no user waiting on it, and a floating promise cannot be
+ * tested honestly.
+ *
+ * Once per rider per UTC DAY (Q2, P-W5-4): ref type `subscription`, keyed
+ * `<group>:<item, or "plan" when none could be named>:<yyyy-mm-dd>`. The daily
+ * sweep nags on purpose (a money fault should nag until someone acts), so the
+ * webhook and the sweep together page a stuck rider once a day: a same-day cron
+ * retry or webhook replay pages nothing more, and tomorrow's pass pages again.
+ * Two stuck riders of one group are two pages, neither replacing the other
+ * (P-W5-1). Null when nothing was queued.
  *
  * Exported so the never-throws contract can be tested DIRECTLY rather than
  * through the caller's own catch, which would hide a missing wrapper.
  */
-export async function maybeAlertOrgRepriceFailed(opts: {
-  subscriptionId: string;
-  stripeSubscriptionId: string;
-  planKey: string;
-  itemId: string | null;
-  currentPriceId: string | null;
-  expectedPriceId: string | null;
-  reason: string;
-}): Promise<void> {
-  try {
-    const alertTo = process.env.STAFF_ALERT_EMAIL;
-    if (!alertTo) return;
-    await sendExtraOrgRepriceFailedAlertEmail({ to: alertTo, ...opts });
-  } catch (err) {
-    log.error(
-      { subscriptionId: opts.subscriptionId, err },
-      "billing: extra-org re-price alert failed",
-    );
-  }
+export async function maybeAlertOrgRepriceFailed(opts: ExtraOrgRepriceFailedAlertEmail): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_extra_org_reprice_failed",
+    refType: "subscription",
+    id: opts.subscriptionId,
+    suffix: `${opts.itemId ?? "plan"}:${new Date().toISOString().slice(0, 10)}`,
+    render: () => extraOrgRepriceFailedAlertEmail(opts),
+  });
 }
 
 /** One live extra-org rider found on a price that is NOT its group's plan rate
@@ -1679,7 +1679,7 @@ export async function sweepStaleOrgAddonPrices(limit = 500): Promise<{
   }
 
   // Logged for EVERY mismatch (the record when staff email is not configured);
-  // emailed for the first ORG_PRICE_SWEEP_ALERT_CAP only.
+  // paged for the first ORG_PRICE_SWEEP_ALERT_CAP only.
   for (const m of mismatches) {
     log.error(
       {
@@ -1695,10 +1695,12 @@ export async function sweepStaleOrgAddonPrices(limit = 500): Promise<{
       "billing: stale extra-org rider",
     );
   }
-  // The env is re-read here rather than left to maybeAlertOrgRepriceFailed's own
+  // The env is re-read here rather than left to the staff-alert writer's own
   // gate so the returned `alerted` counts what was actually attempted; a counter
-  // that incremented on a call the callee no-ops would report sends that never
-  // happened, and this number is what a cron response is judged on.
+  // that incremented on a call the callee no-ops would report alerts that were
+  // never attempted, and this number is what a cron response is judged on. It
+  // counts ATTEMPTS: a same-day pass whose rider was already paged today
+  // attempts again and the once-key holds (Q2).
   if (process.env.STAFF_ALERT_EMAIL) {
     for (const m of mismatches.slice(0, ORG_PRICE_SWEEP_ALERT_CAP)) {
       await maybeAlertOrgRepriceFailed({
