@@ -1533,7 +1533,6 @@ export async function trialEndingEmail(args: TrialEndingEmailArgs, locale: Local
 }
 
 export interface ConnectBankAlertEmail {
-  to: string;
   orgId: string;
   orgName: string;
   /** The connected account (acct_…) the bank account was removed from. */
@@ -1547,9 +1546,12 @@ export interface ConnectBankAlertEmail {
  *  settling. The org sees its own banner; this is the ops half, because money
  *  piling up on a club's connected balance is something a human may have to
  *  chase. Platform-locale (en) and built inline — ops-only, no user-facing
- *  i18n, same convention as `sendStuckEventsAlertEmail`. Only `.deleted` sends
- *  here; `.updated` is too chatty to page anyone with. */
-export async function sendConnectBankAlertEmail(opts: ConnectBankAlertEmail): Promise<boolean> {
+ *  i18n, same convention as `sendStuckEventsAlertEmail`. RENDERED here; it is
+ *  queued on the email outbox by `alertConnectBankRemoved` (billing-events.ts,
+ *  kind `staff_connect_bank_changed`), once per Stripe event, and only for
+ *  `.deleted` (`.updated` is too chatty to page anyone with); nothing sends it
+ *  directly. */
+export function connectBankAlertEmail(opts: ConnectBankAlertEmail): EmailContent {
   const subject = `Connect bank account removed: ${opts.orgName}`;
   const bodyText =
     `The destination bank account on ${opts.orgName}'s connected Stripe account was deleted. ` +
@@ -1571,7 +1573,7 @@ export async function sendConnectBankAlertEmail(opts: ConnectBankAlertEmail): Pr
   const text =
     `${bodyText}\n\norg: ${opts.orgName} (${opts.orgId}) · stripe account: ${opts.accountId} · ` +
     `removed: ${opts.detail}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 /** True when Resend is configured. */

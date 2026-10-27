@@ -67,7 +67,7 @@ import {
   type SizePackGrantFailedAlertEmail,
   extraOrgRepriceFailedAlertEmail,
   type ExtraOrgRepriceFailedAlertEmail,
-  sendConnectBankAlertEmail,
+  connectBankAlertEmail,
   trialEndingEmail,
 } from "@/lib/email";
 import type { PassRevokedArgs, StaffDisputeAlertArgs } from "@/lib/email-templates";
@@ -2570,9 +2570,9 @@ async function handleConnectPayout(event: Stripe.Event): Promise<void> {
  * billing banner); the staff-facing half is an English ops email, because a
  * removed bank account on an org with live entry fees is money piling up that
  * a human may have to chase. The email follows the existing ops-alert
- * convention in this file — `STAFF_ALERT_EMAIL`, English-only, never throws —
- * so it owes no dictionary work, and a failure to alert must not fail the
- * webhook and strand the DB write behind a retry loop.
+ * convention in this file — `STAFF_ALERT_EMAIL`, English-only, never throws
+ * (`alertConnectBankRemoved`) — so it owes no dictionary work, and a failure to
+ * alert must not fail the webhook and strand the DB write behind a retry loop.
  */
 async function handleExternalAccountChanged(event: Stripe.Event): Promise<void> {
   const accountId = event.account;
@@ -2602,19 +2602,29 @@ async function handleExternalAccountChanged(event: Stripe.Event): Promise<void> 
   // receives those stops being read — which would cost us the `.deleted`
   // alert that actually matters. The org still gets its banner either way.
   if (!deleted) return;
-  const to = process.env.STAFF_ALERT_EMAIL;
-  if (!to) return;
-  try {
-    await sendConnectBankAlertEmail({
-      to,
-      orgId: org.id,
-      orgName: org.name,
-      accountId,
-      detail,
-    });
-  } catch (err) {
-    log.error({ org_id: org.id, err }, "connect: bank-removed staff alert failed");
-  }
+  await alertConnectBankRemoved({ eventId: event.id, orgId: org.id, orgName: org.name, accountId, detail });
+}
+
+/** The staff alert for a connected org's DELETED bank account, queued on the
+ *  email outbox (kind `staff_connect_bank_changed`, to STAFF_ALERT_EMAIL,
+ *  nothing when unset) once per Stripe EVENT: a redelivered event pages nothing
+ *  more, and the club removing a second bank account is a second event and a
+ *  second alert. Never throws (the queue logs and reports its own failure).
+ *  Resolves to the row's id, or null when nothing was queued. */
+export async function alertConnectBankRemoved(a: {
+  eventId: string;
+  orgId: string;
+  orgName: string;
+  accountId: string;
+  detail: string;
+}): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_connect_bank_changed",
+    refType: "stripe_event",
+    id: a.eventId,
+    render: () =>
+      connectBankAlertEmail({ orgId: a.orgId, orgName: a.orgName, accountId: a.accountId, detail: a.detail }),
+  });
 }
 
 /**

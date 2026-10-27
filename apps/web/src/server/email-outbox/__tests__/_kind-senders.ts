@@ -30,7 +30,6 @@ export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess
  *  `sendWithResult` is the outbox's own typed sender and is not among them. */
 export const SENDER_ALLOWLIST: readonly string[] = [
   "sendAiRunCostAlertEmail",
-  "sendConnectBankAlertEmail",
   "sendEarnGrantVolumeAlertEmail",
   "sendExtraOrgAllowanceAlertEmail",
   "sendStreamPackPriceDriftAlertEmail",
@@ -45,7 +44,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
   // Wave 5, in the spec's table order.
-  "staff_connect_bank_changed",
   "staff_stuck_events",
   "staff_stream_pack_price_drift",
   "staff_ai_run_cost",
@@ -93,7 +91,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   group_org_removed: null,
   group_org_left: null,
   // Wave 5: each kind's direct sender in lib/email.ts (the spec's kind table cites it by line; the T0 re-pin names it), null once its
-  // task has moved it (T3: the funnel reminder; T4: the money batch).
+  // task has moved it (T3: the funnel reminder; T4: the money batch; T5: staff batch B).
   funnel_reminder: null,
   staff_registration_refund_failed: null,
   staff_credit_pack_grant_failed: null,
@@ -105,7 +103,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   staff_stream_credit_clawback: null,
   staff_extra_org_reprice_failed: null,
   staff_dispute_alert: null,
-  staff_connect_bank_changed: "sendConnectBankAlertEmail",
+  staff_connect_bank_changed: null,
   staff_stuck_events: "sendStuckEventsAlertEmail",
   staff_stream_pack_price_drift: "sendStreamPackPriceDriftAlertEmail",
   staff_ai_run_cost: "sendAiRunCostAlertEmail",

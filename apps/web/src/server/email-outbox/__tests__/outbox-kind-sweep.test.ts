@@ -121,6 +121,9 @@
 //     and subscription branches, call it; platform-dispute.test.ts drives the pass and subscription branches to a row and
 //     stream-credits-clawback.test.ts the pack branch's render), for a `created` subscription dispute. Unlike the other staff alerts its
 //     subject IS a dictionary key, rendered in the platform locale (en) whatever the org's own language.
+//   - staff_connect_bank_changed: the real `alertConnectBankRemoved` (its one site, `handleExternalAccountChanged`, calls it for a
+//     DELETED external account only; billing-events-payout-health.test.ts drives it to a row through the webhook), for a Stripe event,
+//     the same way as the literal-subject alerts above.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -213,6 +216,7 @@ import {
 } from "@/server/usecases/registrations";
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
 import {
+  alertConnectBankRemoved,
   alertCreditPackGrantFailed,
   alertSizePackGrantFailed,
   alertStreamClawback,
@@ -1373,6 +1377,30 @@ function extraOrgRepriceFailedScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for a connected org's deleted bank account, to this run's STAFF_ALERT_EMAIL: no org row, no account, and the
+ *  worker makes the first attempt. The subject is the builder's inline English, typed from its source. */
+function connectBankChangedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const orgName = `Bank Org ${RUN} ${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Connect bank account removed: ${orgName}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertConnectBankRemoved({
+        eventId: `evt_${RUN}_bank_${randomUUID().slice(0, 8)}`,
+        orgId: randomUUID(),
+        orgName,
+        accountId: `acct_${RUN}_bank`,
+        detail: "bank_account ba_sweep ••••1234",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real staff alert for a platform-charge dispute, to this run's STAFF_ALERT_EMAIL, for a `created` subscription dispute of an org
  *  that speaks French: the alert is in the platform locale (en) all the same, it names the org, and the worker makes the first
  *  attempt. */
@@ -1982,6 +2010,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_stream_credit_clawback: streamCreditClawbackScenario(),
         staff_extra_org_reprice_failed: extraOrgRepriceFailedScenario(),
         staff_dispute_alert: staffDispute,
+        staff_connect_bank_changed: connectBankChangedScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
