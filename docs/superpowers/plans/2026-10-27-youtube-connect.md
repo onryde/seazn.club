@@ -595,6 +595,9 @@ the runbook's `stg: connect a real channel` step (T22). Recorded exception to R1
 
 ### Task 7: The OAuth route pair
 
+> **Post-T2 amendment:** `sealPendingToken` re-seals silently; the OAuth state must be single-use (a replayed callback
+> answers `expired` and seals nothing — Review Focus 2).
+
 **Files:**
 - Modify: `apps/web/src/lib/oauth.ts` (YouTube cookie names and redirect URI)
 - Create: `apps/web/src/app/api/youtube/connect/route.ts`, `…/connect/callback/route.ts`, `…/connect/fake-authorize/route.ts`
@@ -633,6 +636,9 @@ it("fake-authorize: 404 in live mode; in fake mode 303 back to the callback with
 smoke `youtube: connect without consent is refused` (T21).
 
 ### Task 8: Connections usecase, Directory projection, v1 routes
+
+> **Post-T2 amendment:** `takePendingToken` does not check `expires_at`; T8 checks expiry in the SAME transaction as
+> the take and refuses an expired pending grant.
 
 **Files:**
 - Create: `apps/web/src/server/youtube/connections.ts`
@@ -806,6 +812,10 @@ it("org B's fixture cannot be prepared on org A's API target → 404, zero port 
 `youtube: reconnect-needed refusal` (T21).
 
 ### Task 11: Wire prepare into admission and `add_output`
+
+> **Post-T2 amendment:** `readPooledKey` raising `TargetSecretUnreadableError(keyId,"youtube")` must NOT reach the
+> pasted-key `unreadableRefusal` ("replace the key" is meaningless for an API row). Map it to `youtube_unavailable`
+> (503) for API-backed targets, abandon the prepared broadcast, and test that the copy is not the replace-key copy.
 
 **Files:**
 - Modify: `apps/web/src/server/usecases/stream-sessions.ts` (`startBroadcast` `:1553`, `refuseUnreadableTarget` `:1448`, `runEffects` `:913-923`, `sessionFactsForJob` `:2871-2880`; re-pin each by symbol)
@@ -1081,6 +1091,9 @@ fixture's single link is unchanged).
 # B6 — Daily work and disconnect (T17–T18)
 
 ### Task 17: Daily health, 30-day refresh, dead-grant purge
+
+> **Post-T2 amendment:** the dead-grant purge also DELETES the connection's `youtube_stream_keys` rows (sealed pooled
+> keys are YouTube API data, DP III.E.4) — same as T18. Test: after purge, zero key rows for that connection.
 
 **Files:**
 - Create: `apps/web/src/server/youtube/daily.ts`
