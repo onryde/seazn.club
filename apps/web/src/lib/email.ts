@@ -1015,7 +1015,6 @@ export function passCreditReversalIncompleteAlertEmail(opts: PassCreditReversalI
 }
 
 export interface PassRungMismatchAlertEmail {
-  to: string;
   /** The checkout session that was refused. The whole investigation starts
    *  here: it names the price, the customer and the payment intent. */
   sessionId: string;
@@ -1052,10 +1051,11 @@ export interface PassRungMismatchAlertEmail {
  *  stale `stripe:sync`, a price id edited in the Dashboard, a new rung wired to
  *  the wrong lookup key). The buyer has been charged and holds nothing —
  *  this is urgent. Ops-only, no user-facing i18n (mirrors
- *  sendCreditPackGrantFailedAlertEmail). */
-export async function sendPassRungMismatchAlertEmail(
-  opts: PassRungMismatchAlertEmail,
-): Promise<boolean> {
+ *  creditPackGrantFailedAlertEmail).
+ *
+ *  RENDERED and not sent: `maybeAlertPassRungMismatch` (lib/billing.ts) queues what this returns on the email outbox
+ *  through `queueStaffAlert` (kind `staff_pass_rung_mismatch`), once per Checkout Session. Nothing sends it directly. */
+export function passRungMismatchAlertEmail(opts: PassRungMismatchAlertEmail): EmailContent {
   const subject = `Event Pass NOT granted — price/rung mismatch: ${opts.sessionId}`;
   const what =
     opts.reason === "line_items"
@@ -1104,7 +1104,7 @@ export async function sendPassRungMismatchAlertEmail(
     `rung ${opts.passKey} · refused because ${opts.reason} · expected ${opts.expectedPriceId} · ` +
     `actual ${opts.actualPriceId ?? "(no single line item)"} · ` +
     `payment intent ${opts.paymentIntent ?? "(none)"}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface PassUnknownCompetitionAlertEmail {

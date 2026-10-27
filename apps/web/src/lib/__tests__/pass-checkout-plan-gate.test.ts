@@ -37,14 +37,21 @@ const stripeMock = vi.hoisted(() => {
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 // PARTIAL mock: lib/billing.ts and billing-events.ts import a dozen other
-// senders from this module and a full replacement breaks them.
-const emailMock = vi.hoisted(() => ({
-  sendPassRungMismatchAlertEmail: vi.fn().mockResolvedValue(true),
-}));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendPassRungMismatchAlertEmail: emailMock.sendPassRungMismatchAlertEmail,
-}));
+// exports from this module and a full replacement breaks them. The rung
+// mismatch alert is queued on the email outbox (phase 3 wave 5, kind
+// `staff_pass_rung_mismatch`, once per Checkout Session) to this suite's own
+// STAFF_ALERT_EMAIL, so the tests read its row (`staffRows`); its builder is a
+// spy that calls through (what the alert says, and how many calls reached it),
+// and Sentry's issue capture is observed (call-through) so a test can assert
+// the writer dropped nothing.
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, passRungMismatchAlertEmail: vi.fn(actual.passRungMismatchAlertEmail) };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
 
 const authState = vi.hoisted(() => ({
   orgId: null as string | null,
@@ -89,8 +96,17 @@ import { PASS_END_GRACE_DAYS } from "@/lib/entitlements";
 import { processStripeEvent } from "@/server/usecases/billing-events";
 import { balance, walletIdFor } from "@/lib/credits";
 import { PASS_CREDIT_GRANT } from "@/lib/pricing-cards";
+import { passRungMismatchAlertEmail } from "@/lib/email";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
+import { staffAlertDrops, staffRows } from "@/server/usecases/__tests__/_money-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
+const KIND = "staff_pass_rung_mismatch";
+const RUN = `prm-${randomUUID().slice(0, 8)}`;
+const alertMock = vi.mocked(passRungMismatchAlertEmail);
+/** The sender's subject, typed from its source. */
+const rungSubject = (sessionId: string) => `Event Pass NOT granted — price/rung mismatch: ${sessionId}`;
 
 async function seedOrgWithComp(): Promise<{ orgId: string; compId: string }> {
   const suffix = randomUUID().slice(0, 8);
@@ -144,6 +160,7 @@ let capturedL = false;
 
 afterAll(async () => {
   if (!HAS_DB) return;
+  await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
   if (captured) {
     await sql`update plans set stripe_price_id_onetime = ${priorOnetime}
               where key = 'event_pass'`;
@@ -159,7 +176,8 @@ beforeEach(() => {
   stripeMock.listLineItems.mockClear();
   stripeMock.retrieve.mockClear();
   stripeMock.refundCreate.mockClear();
-  emailMock.sendPassRungMismatchAlertEmail.mockClear();
+  alertMock.mockClear();
+  vi.mocked(captureError).mockClear();
   billingState.refusalReadThrows = false;
 });
 
@@ -515,17 +533,17 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
     await giveLPrice("price_test_pass_l");
   };
 
-  // STAFF_ALERT_EMAIL is the first thing every alert wrapper in this codebase
-  // checks, so it must be SET for the alert assertions to mean anything — and
-  // restored afterwards, because it is process-wide.
-  let priorAlertTo: string | undefined;
+  // STAFF_ALERT_EMAIL is the first thing the staff-alert writer checks, so it
+  // must be SET for the alert assertions to mean anything — to this test's own
+  // address (CI sets none, and the database is shared) — and restored
+  // afterwards, because it is process-wide.
+  let staff = "";
   const withAlertAddress = () => {
-    priorAlertTo = process.env.STAFF_ALERT_EMAIL;
-    process.env.STAFF_ALERT_EMAIL = "ops@test.local";
+    staff = `staff-${RUN}-${randomUUID().slice(0, 8)}@x.test`;
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
   };
   const restoreAlertAddress = () => {
-    if (priorAlertTo === undefined) delete process.env.STAFF_ALERT_EMAIL;
-    else process.env.STAFF_ALERT_EMAIL = priorAlertTo;
+    vi.unstubAllEnvs();
   };
 
   it("reconcile MINTS when the price paid IS the rung's own price", async () => {
@@ -548,7 +566,8 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       expect(await passKeyHeld(compId)).toBe("event_pass_l");
       expect(await balance(await walletIdFor(orgId))).toBe(PASS_CREDIT_GRANT.event_pass_l);
       expect(await refusalFor(compId)).toBeNull();
-      expect(emailMock.sendPassRungMismatchAlertEmail).not.toHaveBeenCalled();
+      expect(alertMock).not.toHaveBeenCalled();
+      expect(await staffRows(KIND, "checkout_session", session.id), "a mint pages nobody").toHaveLength(0);
       expect(errors).not.toHaveBeenCalled();
     } finally {
       errors.mockRestore();
@@ -713,9 +732,9 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
         actual_price_id: "price_test_pass",
       });
 
-      expect(emailMock.sendPassRungMismatchAlertEmail).toHaveBeenCalledTimes(1);
-      expect(emailMock.sendPassRungMismatchAlertEmail.mock.calls[0]![0]).toMatchObject({
-        to: "ops@test.local",
+      expect(alertMock).toHaveBeenCalledTimes(1);
+      expect(await staffRows(KIND, "checkout_session", session.id)).toMatchObject([{ ref_id: session.id, status: "queued", recipient: staff }]);
+      expect(alertMock.mock.calls[0]![0]).toEqual({
         sessionId: session.id,
         orgId,
         competitionId: compId,
@@ -799,13 +818,14 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
           actual_price_id: null,
         });
         expect(
-          emailMock.sendPassRungMismatchAlertEmail.mock.calls.at(-1)![0],
+          alertMock.mock.calls.at(-1)![0],
           label,
         ).toMatchObject({ reason: "line_items", actualPriceId: null });
+        expect(await staffRows(KIND, "checkout_session", session.id), label).toMatchObject([{ ref_id: session.id, recipient: staff }]);
       } finally {
         errors.mockRestore();
         restoreAlertAddress();
-        emailMock.sendPassRungMismatchAlertEmail.mockClear();
+        alertMock.mockClear();
       }
     }
   });
@@ -830,7 +850,7 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       expect(await reconcilePassCheckout(orgId, session.id)).toBe(true);
       expect(await passKeyHeld(compId)).toBe("event_pass");
       expect(await refusalFor(compId)).toBeNull();
-      expect(emailMock.sendPassRungMismatchAlertEmail).not.toHaveBeenCalled();
+      expect(alertMock).not.toHaveBeenCalled();
     } finally {
       restoreAlertAddress();
     }
@@ -906,7 +926,7 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       await processStripeEvent(passEvent(paidSession(ok.orgId, ok.compId, "event_pass")));
       expect(await passKeyHeld(ok.compId)).toBe("event_pass");
       expect(stripeMock.listLineItems).toHaveBeenCalled();
-      expect(emailMock.sendPassRungMismatchAlertEmail).not.toHaveBeenCalled();
+      expect(alertMock).not.toHaveBeenCalled();
 
       const bad = await seedMintBuyer();
       builtOn("price_test_pass"); // M's price under L's metadata again
@@ -918,7 +938,7 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       expect(await passKeyHeld(bad.compId)).toBeNull();
       expect(await balance(await walletIdFor(bad.orgId))).toBe(0);
       expect(await refusalFor(bad.compId)).toMatchObject({ reason: "price_mismatch" });
-      expect(emailMock.sendPassRungMismatchAlertEmail).toHaveBeenCalledTimes(1);
+      expect(alertMock).toHaveBeenCalledTimes(1);
     } finally {
       errors.mockRestore();
       restoreAlertAddress();
@@ -949,7 +969,7 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       expect(await passKeyHeld(compId)).toBe("event_pass_l");
       expect(stripeMock.listLineItems).not.toHaveBeenCalled();
       expect(await refusalFor(compId)).toBeNull();
-      expect(emailMock.sendPassRungMismatchAlertEmail).not.toHaveBeenCalled();
+      expect(alertMock).not.toHaveBeenCalled();
     } finally {
       restoreAlertAddress();
     }
@@ -982,7 +1002,8 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       // Logged, but nothing durable and nobody alerted — the deliberate gap.
       expect(errors).toHaveBeenCalled();
       expect(await refusalFor(compId)).toBeNull();
-      expect(emailMock.sendPassRungMismatchAlertEmail).not.toHaveBeenCalled();
+      expect(alertMock).not.toHaveBeenCalled();
+      expect(await staffRows(KIND, "checkout_session", session.id)).toHaveLength(0);
 
       // Stripe comes back. The SAME session is re-read on the next visit to the
       // return URL, the comparison finally happens, and the desync is recorded
@@ -990,7 +1011,8 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       builtOn("price_test_pass");
       expect(await reconcilePassCheckout(orgId, session.id)).toBe(false);
       expect(await refusalFor(compId)).toMatchObject({ reason: "price_mismatch" });
-      expect(emailMock.sendPassRungMismatchAlertEmail).toHaveBeenCalledTimes(1);
+      expect(alertMock).toHaveBeenCalledTimes(1);
+      expect(await staffRows(KIND, "checkout_session", session.id)).toMatchObject([{ ref_id: session.id, recipient: staff }]);
       // The pass STAYS — it is already live and the buyer is entitled to
       // whatever was minted; this second pass is a detector, not a revoker.
       expect(await passKeyHeld(compId)).toBe("event_pass_l");
@@ -1018,14 +1040,16 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       await processStripeEvent(passEvent(session));
       expect(await passKeyHeld(compId)).toBe("event_pass_l");
       expect(await refusalFor(compId)).toBeNull();
-      expect(emailMock.sendPassRungMismatchAlertEmail).not.toHaveBeenCalled();
+      expect(alertMock).not.toHaveBeenCalled();
+      expect(await staffRows(KIND, "checkout_session", session.id)).toHaveLength(0);
 
       // Delivery 2 (a redelivery, or the next event carrying this session):
       // Stripe answers, the guard finally compares, and the desync is recorded.
       builtOn("price_test_pass");
       await expect(processStripeEvent(passEvent(session))).resolves.toBeUndefined();
       expect(await refusalFor(compId)).toMatchObject({ reason: "price_mismatch" });
-      expect(emailMock.sendPassRungMismatchAlertEmail).toHaveBeenCalledTimes(1);
+      expect(alertMock).toHaveBeenCalledTimes(1);
+      expect(await staffRows(KIND, "checkout_session", session.id)).toMatchObject([{ ref_id: session.id, recipient: staff }]);
       // Detector, not revoker — same rule as the reconcile path above.
       expect(await passKeyHeld(compId)).toBe("event_pass_l");
     } finally {
@@ -1088,7 +1112,10 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       const rows = await sql<{ n: string }[]>`
         select count(*)::text as n from pass_mint_refusals where competition_id = ${compId}`;
       expect(rows[0]!.n).toBe("1");
-      expect(emailMock.sendPassRungMismatchAlertEmail).toHaveBeenCalledTimes(1);
+      // The refusal row gates the alert: only the visit that inserted it
+      // reached the alert at all, and one row was queued.
+      expect(alertMock, "only the inserting visit reached the alert").toHaveBeenCalledTimes(1);
+      expect(await staffRows(KIND, "checkout_session", session.id)).toHaveLength(1);
       // ...and the refusal itself is unchanged on every visit — the dedupe must
       // quieten the email, not weaken the guard.
       expect(await passKeyHeld(compId)).toBeNull();
@@ -1098,12 +1125,14 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
     }
   });
 
-  it("still alerts EVERY time when the row could not be written", async () => {
+  it("still reaches the alert on every call when the row could not be written, and the session pages once", async () => {
     // The documented "degrades to alert-only" path, and the discriminator for
     // the dedupe above: gating the alert on `inserted` alone would silence the
     // one case where the email is the only record that will ever exist. A
     // non-uuid competition id in the metadata fails the insert's cast — caught,
-    // logged, and the incident still has to reach a human.
+    // logged, and the incident still has to reach a human. With no refusal
+    // row, the outbox's once-key (the session) is the only dedupe left: every
+    // call reaches the alert, and one row is queued.
     const { orgId } = await seedMintBuyer();
     await priceBothRungs();
     withAlertAddress();
@@ -1116,10 +1145,13 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
 
       expect(await reconcilePassCheckout(orgId, session.id)).toBe(false);
       expect(await reconcilePassCheckout(orgId, session.id)).toBe(false);
-      expect(emailMock.sendPassRungMismatchAlertEmail).toHaveBeenCalledTimes(2);
-      expect(emailMock.sendPassRungMismatchAlertEmail.mock.calls[0]![0]).toMatchObject({
+      expect(alertMock, "both calls reached the alert").toHaveBeenCalledTimes(2);
+      expect(alertMock.mock.calls[0]![0]).toMatchObject({
         competitionId: "not-a-uuid",
       });
+      expect(await staffRows(KIND, "checkout_session", session.id)).toEqual([
+        { ref_id: session.id, dedupe_key: session.id, status: "queued", recipient: staff, subject: rungSubject(session.id) },
+      ]);
     } finally {
       errors.mockRestore();
       restoreAlertAddress();
@@ -1127,10 +1159,11 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
   });
 
   it("the alert is gated on STAFF_ALERT_EMAIL and can never throw at its caller", async () => {
-    // The contract every maybeAlert* in this codebase carries, tested DIRECTLY
-    // rather than through a caller's catch — which would hide a missing wrapper.
+    // The contract every staff alert carries, tested DIRECTLY rather than
+    // through a caller's catch — which would hide a missing wrapper.
+    const sessionId = `cs_alert_probe_${randomUUID().slice(0, 8)}`;
     const opts = {
-      sessionId: "cs_alert_probe",
+      sessionId,
       orgId: "org-probe",
       competitionId: "comp-probe",
       passKey: "event_pass_l" as const,
@@ -1139,24 +1172,108 @@ describe.skipIf(!HAS_DB)("Event Pass mint refuses a rung/price desync (v17 gap #
       actualPriceId: "price_test_pass",
       paymentIntent: "pi_probe",
     };
-    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
-    priorAlertTo = process.env.STAFF_ALERT_EMAIL;
+    const logged = vi.spyOn(log, "error");
     try {
-      delete process.env.STAFF_ALERT_EMAIL;
-      await maybeAlertPassRungMismatch(opts);
-      expect(emailMock.sendPassRungMismatchAlertEmail).not.toHaveBeenCalled();
-      // The absence above is only meaningful against a positive: the SAME call
-      // with an address configured does send.
-      process.env.STAFF_ALERT_EMAIL = "ops@test.local";
-      await maybeAlertPassRungMismatch(opts);
-      expect(emailMock.sendPassRungMismatchAlertEmail).toHaveBeenCalledTimes(1);
+      vi.stubEnv("STAFF_ALERT_EMAIL", "");
+      await expect(maybeAlertPassRungMismatch(opts)).resolves.toBeNull();
+      expect(alertMock).not.toHaveBeenCalled();
+      expect(await staffRows(KIND, "checkout_session", sessionId), "unset queues nothing").toHaveLength(0);
 
-      // A dead mailbox must never be what fails a mint the buyer already paid
-      // for — and the swallow must be visible in the log, not silent.
-      emailMock.sendPassRungMismatchAlertEmail.mockRejectedValueOnce(new Error("mailbox down"));
-      await expect(maybeAlertPassRungMismatch(opts)).resolves.toBeUndefined();
-      expect(errors).toHaveBeenCalled();
+      // A render that throws must never be what fails a mint the buyer already
+      // paid for — and the drop must be visible (a log line and a Sentry issue).
+      withAlertAddress();
+      alertMock.mockImplementationOnce(() => {
+        throw new Error("the alert builder failed");
+      });
+      await expect(maybeAlertPassRungMismatch(opts)).resolves.toBeNull();
+      expect(staffAlertDrops(logged, vi.mocked(captureError)), "one drop, seen").toEqual({ logged: 1, issues: 1 });
+      expect(await staffRows(KIND, "checkout_session", sessionId), "a drop writes nothing").toHaveLength(0);
+
+      // The absences above are only meaningful against a positive: the SAME
+      // call, with an address and a working builder, is queued.
+      await expect(maybeAlertPassRungMismatch(opts)).resolves.toEqual(expect.any(String));
+      expect(await staffRows(KIND, "checkout_session", sessionId)).toEqual([
+        { ref_id: sessionId, dedupe_key: sessionId, status: "queued", recipient: staff, subject: rungSubject(sessionId) },
+      ]);
     } finally {
+      // Restored here: this describe restores no spies between tests, and a
+      // later `vi.spyOn(log, "error")` would otherwise inherit this drop.
+      logged.mockRestore();
+      restoreAlertAddress();
+    }
+  });
+
+  it("a refused mint queues one alert under the session", async () => {
+    // The webhook's refusal (the fetching path): one row, keyed by the Checkout
+    // Session, its subject the sender's inline English typed from its source.
+    const { orgId, compId } = await seedMintBuyer();
+    await priceBothRungs();
+    withAlertAddress();
+    const logged = vi.spyOn(log, "error");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const session = paidSession(orgId, compId, "event_pass_l");
+      builtOn("price_test_pass"); // M's price under L's metadata
+      await expect(processStripeEvent(passEvent(session))).resolves.toBeUndefined();
+
+      expect(await passKeyHeld(compId)).toBeNull();
+      expect(await staffRows(KIND, "checkout_session", session.id)).toEqual([
+        { ref_id: session.id, dedupe_key: session.id, status: "queued", recipient: staff, subject: rungSubject(session.id) },
+      ]);
+      expect(alertMock, "what the alert says").toHaveBeenCalledWith({
+        sessionId: session.id,
+        orgId,
+        competitionId: compId,
+        passKey: "event_pass_l",
+        reason: "price_mismatch",
+        expectedPriceId: "price_test_pass_l",
+        actualPriceId: "price_test_pass",
+        paymentIntent: session.payment_intent,
+      });
+      expect(staffAlertDrops(logged, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+    } finally {
+      logged.mockRestore();
+      errors.mockRestore();
+      restoreAlertAddress();
+    }
+  });
+
+  it("the webhook and the return page for one session page once", async () => {
+    // Two floors, each killed alone. The refusal row gates the second path:
+    // the return page finds the webhook's row and never reaches the alert. The
+    // session's once-key is the other floor, reached on its own by a third call
+    // whose refusal row could NOT be written (a malformed competition id), so
+    // it alerts regardless — and still queues nothing new.
+    const { orgId, compId } = await seedMintBuyer();
+    await priceBothRungs();
+    withAlertAddress();
+    const logged = vi.spyOn(log, "error");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const session = paidSession(orgId, compId, "event_pass_l");
+      builtOn("price_test_pass");
+      await processStripeEvent(passEvent(session));
+      expect(await staffRows(KIND, "checkout_session", session.id), "the webhook pages").toHaveLength(1);
+
+      // The return page re-reads the same session from Stripe.
+      stripeMock.retrieve.mockResolvedValue(session);
+      expect(await reconcilePassCheckout(orgId, session.id)).toBe(false);
+      expect(alertMock, "the return page found the refusal row and stayed quiet").toHaveBeenCalledTimes(1);
+      expect(await staffRows(KIND, "checkout_session", session.id), "one page for the session").toHaveLength(1);
+
+      // The key alone: the same session, its refusal row unwritable.
+      stripeMock.retrieve.mockResolvedValue({
+        ...session,
+        metadata: { ...session.metadata, competition_id: "not-a-uuid" },
+      } as Stripe.Checkout.Session);
+      expect(await reconcilePassCheckout(orgId, session.id)).toBe(false);
+      expect(alertMock, "premise: the third call reached the alert").toHaveBeenCalledTimes(2);
+      expect(await staffRows(KIND, "checkout_session", session.id), "the key holds on its own").toEqual([
+        { ref_id: session.id, dedupe_key: session.id, status: "queued", recipient: staff, subject: rungSubject(session.id) },
+      ]);
+      expect(staffAlertDrops(logged, vi.mocked(captureError)), "deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
+    } finally {
+      logged.mockRestore();
       errors.mockRestore();
       restoreAlertAddress();
     }

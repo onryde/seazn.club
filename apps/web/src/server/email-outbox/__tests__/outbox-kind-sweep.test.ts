@@ -105,6 +105,8 @@
 //   - staff_pass_credit_reversal_incomplete: the real `alertPassCreditReversalIncomplete` (its one site, `reversePassCreditOnRefund`,
 //     calls it after the reversal commits; pass-credit-refund-reversal.test.ts drives it to a row), for an undetermined reversal of a
 //     redemption whose org and competition this database does not hold, the same way.
+//   - staff_pass_rung_mismatch: the real `maybeAlertPassRungMismatch` (its one site, `refusePassMint`, reached from the webhook and
+//     from reconcile-on-return, calls it; pass-checkout-plan-gate.test.ts drives both to a row), for a Checkout Session, the same way.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -206,6 +208,7 @@ import { detachOrgFromGroup, offerGroupTransfer } from "@/server/usecases/billin
 import { seedCommunityGroup, seedDetachableGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { alertStreamCreditGrantFailed } from "@/server/usecases/stream-credits-checkout";
 import { alertPassCreditReversalIncomplete } from "@/server/usecases/pass-credit";
+import { maybeAlertPassRungMismatch } from "@/lib/billing";
 import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
@@ -1243,6 +1246,33 @@ function passCreditReversalIncompleteScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for a paid Event Pass session whose rung and price disagree, to this run's STAFF_ALERT_EMAIL: no org, no
+ *  account, and the worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function passRungMismatchScenario(): LiteralKindScenario {
+  const recipient = address();
+  const sessionId = `cs_${RUN}_rung_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Event Pass NOT granted — price/rung mismatch: ${sessionId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await maybeAlertPassRungMismatch({
+        sessionId,
+        orgId: randomUUID(),
+        competitionId: randomUUID(),
+        passKey: "event_pass_l",
+        reason: "price_mismatch",
+        expectedPriceId: "price_test_pass_l",
+        actualPriceId: "price_test_pass",
+        paymentIntent: `pi_${RUN}_rung`,
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
  *  request makes the first attempt. */
 async function emailChangeConfirmationScenario(): Promise<KindScenario> {
@@ -1813,6 +1843,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_size_pack_grant_failed: sizePackGrantFailedScenario(),
         staff_stream_credit_grant_failed: streamCreditGrantFailedScenario(),
         staff_pass_credit_reversal_incomplete: passCreditReversalIncompleteScenario(),
+        staff_pass_rung_mismatch: passRungMismatchScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
