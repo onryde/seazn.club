@@ -76,3 +76,11 @@ My calls (minor; flag if you disagree):
   recorded as one entry. The per-section baseline in the earlier answers is dropped.
 - Known cost: `core.ts` stays ~1,100 lines and keeps attracting new inline checks. Regrouping is a possible later PR.
 - My call (not the owner's): two PRs, in order. (1) emitter + diff script, no behaviour change; (2) the split.
+
+## Correction found while planning (2026-10-27) — supersedes "index calls core first"
+`main()` is NOT a prelude followed by suites: ~60 suite calls sit INSIDE it, interleaved with inline checks and using
+its locals (`admin`, `org2`, `renamed.slug`; e.g. `v1Suite` at main:555, `matchCentreSmoke` at the tail). Calling a
+`core` first and then the suites would reorder the run. So under option B `main()` moves WHOLE into
+`scripts/smoke/main.ts`, importing the suites and calling them in the same positions; `index.ts` only does selection,
+the run, the manifest write and the exit code. The "28 `*Suite`" count is a grep of one signature style, not a census:
+the plan enumerates the top-level functions properly.
