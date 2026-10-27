@@ -59,6 +59,7 @@ executors re-pin each one by symbol (`grep -an <symbol>`) before editing.
 | # | Decision | Why |
 |---|---|---|
 | P1 | The V421 index is narrowed through a new column `fixture_stream_sessions.youtube_broadcast_id` (`… where state in (5 active) and youtube_broadcast_id is null`). A partial index cannot read `org_stream_targets`. | Every API session carries its broadcast, and pasted sessions never do. T11 guards "API target ⇒ broadcast id set" in code and tests it. |
+|  | **[Amended after T1 review, 9456a5555a]:** the predicate is `and not api_backed` on a new `fixture_stream_sessions.api_backed boolean not null default false` (set at admission, never changed; check `broadcast_implies_api_backed`), because `youtube_broadcast_id … on delete set null` re-exposed active API sessions to the pasted uniqueness. | |
 | P2 | Open-broadcast uniqueness. **Per fixture**: states `created, bound, reserved, live` (not `ending`). **Per key**: `created, bound, reserved, live, ending`. | §6.2 says admission treats `ending` as gone and creates a new broadcast, and the fixture index must let it. The ending row still holds its key until `transition(complete)` returns, so the new broadcast takes another key. |
 | P3 | The key cap is enforced in the DB: `youtube_stream_keys.slot smallint check (slot between 1 and 10)` plus `unique (connection_id, slot) where retired_at is null`. The live-stream insert happens outside any lock. A lost slot race deletes the extra liveStream and retries the pick once. | §5.3 "never more than 10" with no lock held across a YouTube call (§6.2 step 4). |
 | P4 | The broadcast row is written `created` **before** `liveBroadcasts.insert`, gets `yt_broadcast_id` right after insert, and becomes `bound` after `bind`. Orphans are `created`, or `bound` with no session ever attached, older than 10 min. | §6.2's orphan rule needs the row to exist before the call. A crash between insert and bind would otherwise litter an "upcoming" broadcast nobody records. `bound` with no session is the same orphan one step later. |
@@ -820,7 +821,7 @@ it("org B's fixture cannot be prepared on org A's API target → 404, zero port 
   - After `refuseUnreadableTarget(…)` and before `deps.drivers.ingest.storageUsage()`: when the same no-storage
     `admit` probe passes, call `prepared = await prepareYoutubeBroadcast(…, deps.youtube)`.
   - Inside the admission tx, for an API row, skip the `readTargetSecret`/`checkDestination` block. The session insert
-    sets `youtube_broadcast_id = prepared.broadcastId`, then calls `attachPrepared(tx, prepared, sid)`.
+    sets `youtube_broadcast_id = prepared.broadcastId` **and `api_backed = true`** (post-T1 amendment; never updated afterwards — add a test that an UPDATE leaving a broadcast id with api_backed false is refused by `broadcast_implies_api_backed`), then calls `attachPrepared(tx, prepared, sid)`.
   - On any throw **after prepare** (`storageUsage()`, the admission transaction including the 23505 mappers, anything
     before the session commits), call `abandonPrepared` before rethrowing (R12; spec §6.2: deleted, never left "upcoming").
   - A thrown guard: an API row with `prepared === null`, or a pasted row with one, is a caller bug, refused by name
@@ -928,6 +929,10 @@ it("RF3: a pasted session ACTIVE on the fixture does not keep the API broadcast 
 stream-tick answers` (T21).
 
 ### Task 14: The end step
+
+> **Post-T1 amendment:** an `ending` row with no `yt_broadcast_id` finalizes as **`failed`**, never `complete`
+> (V478 check `complete_has_facts` would refuse it forever). `last_error_code` stores OUR code (`^[a-z_:]{1,64}$`,
+> V478 shape check), never Google's camelCase `reason` token — map first.
 
 **Files:**
 - Create: `apps/web/src/server/youtube/end-step.ts`
