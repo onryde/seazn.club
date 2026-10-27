@@ -149,7 +149,7 @@ pages below rather than trusting a summary.
   `app/api/v1/orgs/[id]/stream-targets/*` (write = EDITOR_ROLES owner|admin).
 - Google sign-in (`app/api/auth/google/*`, `lib/oauth.ts`): scopes `openid email profile`, `access_type=online`;
   **no Google token is stored anywhere today**.
-- Highest migration on origin/main: **V476** (`stream_phone_live_edge`). Outbox W5 has V477 planned. Take max+1 at merge.
+- Highest migration on origin/main: **V477** (re-pinned 2026-10-27; V476 `stream_phone_live_edge` at `1e0ffaaf1e`). Take max+1 at merge (V478+).
 
 ### 3.3 The stg join test (owner ran it, 2026-10-27)
 
@@ -198,7 +198,7 @@ Go live on that destination (passthrough or composed — unchanged chain)
 
 Stop / result / tick
    Stop        → nothing new (every session end already writes ended_at)
-   stream-tick (every minute, both envs) → end every broadcast whose end is due (§6.4)
+   stream-tick (every fast firing: prod every 1 min, stg every 5 min) → end every broadcast whose end is due (§6.4)
               → transition(complete) → fixtures.stream_url = YouTube watch link
 ```
 

@@ -41,7 +41,7 @@ executors re-pin each one by symbol (`grep -an <symbol>`) before editing.
 |---|---|---|---|
 | F1 (FALSE) | `targetHolderFor` call sites `stream-sessions.ts:1250,1644,1821`. | `:1250` is the definition, `:1644` is the **only** call, and `:1821-1826` is the 23505 mapper for the V421 index. | T3 narrows `holderRows` and the V421 index. The mapper stays as it is: once the index is narrowed, an API row can never raise it. |
 | F2 (FALSE) | The tick's break is at `:2424-2427`. | The budget check is at `:2419` and `break` at `:2421`. | T15 edits by symbol (`STREAM_TICK_BUDGET_MS`). |
-| F3 (FALSE) | "Email-outbox shares the fast trigger and is unaffected." | `email-outbox` is `due: { kind: "every" }` on `FAST_TRIGGER` (`schedule.ts:147-153`). Today it runs every 5 min on stg, under owner ruling 2026-10-20. Changing stg's `FAST_TRIGGER` to `* * * * *` makes it run **every minute on stg**. The `FAST_TRIGGER` doc comment (`schedule.ts:55-57`) says stg keeps `*/5` because "stg is `min_machines_running = 0`, and a minute trigger would keep it awake all day". | **Owner question Q1.** T15 builds the recommendation: accept the change, so stg matches prod. The outbox tick is skip-locked and idempotent. `external-play` stays `minuteMod 5` and is unaffected. |
+| F3 (FALSE) | "Email-outbox shares the fast trigger and is unaffected." | `email-outbox` is `due: { kind: "every" }` on `FAST_TRIGGER` (`schedule.ts:147-153`). Today it runs every 5 min on stg, under owner ruling 2026-10-20. Changing stg's `FAST_TRIGGER` to `* * * * *` makes it run **every minute on stg**. The `FAST_TRIGGER` doc comment (`schedule.ts:55-57`) says stg keeps `*/5` because "stg is `min_machines_running = 0`, and a minute trigger would keep it awake all day". | **Owner ruled Q1 = (b), 2026-10-27:** stg's `FAST_TRIGGER` stays `*/5`; `wrangler.json` and the email-outbox cadence are unchanged. Stream-tick runs on every fast firing (prod every minute, stg every 5 min), so on stg an end can land up to 5 min late: T22's stg window is [5, 10) min. |
 | F4 | Only `targetHolderFor` treats the target as the unit of exclusivity. | Four more places do. (a) `tearDownPriorMachines` (`:1292`, `or target_id = $t` at `:1300`). (b) `releasePriorOutputs` (`:1340`, `:1350`); both refuse `target_in_use` over **another fixture's** leftovers on the same target. (c) `holderRows` (`stream-target-holders.ts:43`), which also feeds the Directory `inUse`, Replace/Remove and `expireTargetHolders` (`:2952`). (d) `readKeyHints` (`secret-columns.ts:282`) opens every row's `rtmp_enc`. | T3 narrows (a), (b) and (c) to pasted rows. For an API row, another fixture's leftovers are on a different pooled key and cannot collide. T3 also filters (d) to `rtmp_enc is not null`. |
 | F5 | `readTargetSecret` is read at `:922` (`add_output`). | There are four readers: `:922` (`runEffects`), `:1454` (`refuseUnreadableTarget`), `:1741` (admission) and `:2878` (`sessionFactsForJob`, the passthrough job facts). Each throws on a null `rtmp_enc`. | T11 adds one helper, `readSessionDestination`, used at `:922` and `:2878`, so the job contract shape is unchanged. Admission and the early probe skip the secret read for API rows. |
 | F6 | `:1741` is "admission". | `:1741` is the in-transaction `readTargetSecret`. `admit` is called at `:1696` (W5 probe), `:1708` (unreadable probe) and `:1724` (authority). | T11 places prepare by symbol (after `refuseUnreadableTarget`, before `storageUsage()`). |
@@ -62,8 +62,8 @@ executors re-pin each one by symbol (`grep -an <symbol>`) before editing.
 | P2 | Open-broadcast uniqueness. **Per fixture**: states `created, bound, reserved, live` (not `ending`). **Per key**: `created, bound, reserved, live, ending`. | §6.2 says admission treats `ending` as gone and creates a new broadcast, and the fixture index must let it. The ending row still holds its key until `transition(complete)` returns, so the new broadcast takes another key. |
 | P3 | The key cap is enforced in the DB: `youtube_stream_keys.slot smallint check (slot between 1 and 10)` plus `unique (connection_id, slot) where retired_at is null`. The live-stream insert happens outside any lock. A lost slot race deletes the extra liveStream and retries the pick once. | §5.3 "never more than 10" with no lock held across a YouTube call (§6.2 step 4). |
 | P4 | The broadcast row is written `created` **before** `liveBroadcasts.insert`, gets `yt_broadcast_id` right after insert, and becomes `bound` after `bind`. Orphans are `created`, or `bound` with no session ever attached, older than 10 min. | §6.2's orphan rule needs the row to exist before the call. A crash between insert and bind would otherwise litter an "upcoming" broadcast nobody records. `bound` with no session is the same orphan one step later. |
-| P5 | "A session for the fixture is active" (§6.4) is read as "an active session **on this broadcast** (`youtube_broadcast_id = b.id`), or an unlapsed reservation". | It gives the same answer as the spec wording in every case but one: the organiser switching the fixture to a pasted key inside grace. Under the literal wording, that pasted stream would hold the YouTube broadcast open forever. Covered by Review Focus 3. |
-| P6 | Reservation lapse: `YOUTUBE_RESERVATION_MINUTES = 2` (§6.2 "~2 min"). End retry backoff: 1, 2, 4, … minutes, capped at 60 (`next_attempt_at`). Google call timeout: 10 s. End-step budget slice: 15 s of the existing 45 s. | §11 leaves these to the builder. 15 + 30 = 45 keeps the pass under the Worker's 60 s. |
+| P5 | "A session for the fixture is active" (§6.4) is read as "an active session **on this broadcast** (`youtube_broadcast_id = b.id`), or an unlapsed reservation". | It gives the same answer as the spec wording in every case but one: the organiser switching the fixture to a pasted key inside grace. Under the literal wording, that pasted stream would hold the YouTube broadcast open forever. Covered by Review Focus 3. The same narrowing applies to the end-time anchor: **S is the latest `ended_at` among sessions on this broadcast**, not among all the fixture's sessions (spec §6.4 says the fixture's), so a pasted session's Stop never moves an API broadcast's end. |
+| P6 | Reservation lapse: `YOUTUBE_RESERVATION_MINUTES = 2` (§6.2 "~2 min"). End retry backoff: 1, 2, 4, … minutes, capped at 60 (`next_attempt_at`; after the n-th consecutive failure `min(2^(n-1), 60)` min, so the first retry is 1 min later). Google call timeout: 10 s. End-step budget slice: 15 s of the existing 45 s. | §11 leaves these to the builder. 15 + 30 = 45 keeps the pass under the Worker's 60 s. |
 | P7 | An admission that finds this fixture's open broadcast **due but unclaimed** claims it for ending itself (marks it `ending`, commits) and takes the new-broadcast path. The tick finalizes it. | Without this, P2's fixture index blocks the new broadcast until the next tick. |
 | P8 | A broadcast deleted because it never went live ends `failed`, with `last_error_code = 'never_live'`. An orphan ends `failed`, with code `orphan`. Only `complete` rows are replay parts. | §6.4 says "deleted instead". The spec's state list has no separate state for that. |
 | P9 | `PATCH`/`DELETE /orgs/:id/stream-targets/:targetId` on an API row answer 422 `YOUTUBE_USE_DISCONNECT`. The Directory never offers Replace key or Remove on an API row. | §6.8: disconnect is the one way out. Replace key has no meaning for a pooled key. |
@@ -85,7 +85,7 @@ executors re-pin each one by symbol (`grep -an <symbol>`) before editing.
 - **Worktree:** `/Users/ashokhein/github/seazn.club/.claude/worktrees/youtube-connect`, branch `feat/youtube-connect`.
   Prefix every shell call with `cd <worktree> &&` or `cd <worktree>/apps/web &&`. Never touch the main checkout. Never
   `git stash`; use a WIP commit to set work aside.
-- **Agents:** web implementers are `implementer-sonnet`. Each task is reviewed by `reviewer` (Opus), and every batch
+- **Agents:** web implementers are `implementer-sonnet` (owner rule 2026-10-19, recorded in the controller's memory: web implementers = Sonnet; it postdates RULES.md's Opus-minimum line). Each task is reviewed by `reviewer` (Opus), and every batch
   closes with one `reviewer` pass over the whole batch diff. Never set `model:` on a dispatch. Every dispatch carries
   exact paths, acceptance criteria, what not to touch, the verify command and an output cap (`AGENTS.md`
   §Orchestration).
@@ -113,14 +113,14 @@ executors re-pin each one by symbol (`grep -an <symbol>`) before editing.
 - **Migration:** exactly one delta, `db/migration/deltas/V4NN__youtube_connect.sql`. `V4NN` is a placeholder. Before
   the PR is marked ready and again right before merge, run
   `git fetch origin && git ls-tree --name-only origin/main db/migration/deltas/ | sort -V | tail -1` and take max + 1
-  (origin/main max is V476 today, and outbox W5 has V477 planned). Then `git mv` and amend the T1 commit while
+  (origin/main max is V477 today, so expect V478 or later). Then `git mv` and amend the T1 commit while
   unmerged. Load `supabase:supabase-postgres-best-practices` before writing it. Greenfield: no backfill.
 - **Copy:** every user-facing string goes into `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`, then
   `cd apps/web && npm run i18n:gen-keys` (the keys file is generated; never hand-edit it). YouTube branding: the icon
   where the API has a presence, never the most prominent element. "YouTube" never appears in a Seazn product name.
 - **UI:** load `frontend-design:frontend-design` in every UI task. Mobile-first. Screenshot at 1280, 768 and 320 with
-  no horizontal page scroll, using the house theme (mocks are layout only). Screenshots go to an Artifact page, never
-  into the repo. UI build tasks (T9, T12, T16 UI half, T18 UI half) are **blocked on the owner's choice in T4**.
+  no horizontal page scroll, using the house theme (mocks are layout only). Each UI task writes its OWN CI-dispatched shots spec
+  (`apps/web/e2e/youtube-*.shots.spec.ts`) and publishes the captures to an Artifact page, never into the repo (R8). UI build tasks (T9, T12, T16 UI half, T18 UI half) are **blocked on the owner's choice in T4**.
 - **OpenAPI:** before every commit that touches `server/api-v1/**` or an `app/api/v1/**` route, run
   `npm run openapi:gen && git status --porcelain`. It must print nothing beyond the files that commit already stages.
   New v1 routes get a `key-scopes.ts` entry with the same scope family as `/orgs/:id/stream-targets`.
@@ -207,7 +207,7 @@ New, under `apps/web/src/`:
 Modified: `server/relay/crypto.ts`, `server/relay/secret-columns.ts`, `server/relay/__tests__/enc-boundary.test.ts`,
 `server/usecases/stream-target-holders.ts`, `server/usecases/stream-targets.ts`, `server/usecases/stream-sessions.ts`,
 `server/api-v1/{schemas,openapi,key-scopes}.ts`, `app/api/cron/{stream-tick,relay-sweep}/route.ts`,
-`apps/cron-worker/{src/schedule.ts,wrangler.json}`, `components/v2/stream-destinations-panel.tsx`, the fixture stream
+`apps/cron-worker/src/schedule.ts` (`wrangler.json` is NOT modified, Q1 = b), `components/v2/stream-destinations-panel.tsx`, the fixture stream
 panel (located in T12), the public match page, `app/legal/privacy/page.tsx`, the four `ui.json`,
 `.github/workflows/{e2e,ci}.yml` (env only), `scripts/smoke.ts`.
 
@@ -231,17 +231,17 @@ panel (located in T12), the public match page, `app/legal/privacy/page.tsx`, the
 
 **Interfaces:**
 - Produces (tables and columns that later tasks rely on):
-  - `org_youtube_connections(id uuid pk, org_id uuid not null → organizations on delete cascade, channel_id text not null, channel_title text not null, google_sub text null, refresh_token_enc bytea null, granted_scope text not null, default_privacy text not null default 'unlisted' check in ('unlisted','public','private'), made_for_kids boolean not null default false, consent_by uuid not null → users, consent_at timestamptz not null, consent_version int not null, status text not null check in ('connected','reconnect_needed','revoked'), status_since timestamptz not null default now(), last_health_at timestamptz, last_error_code text, created_by uuid not null → users, created_at timestamptz not null default now(), revoked_at timestamptz)`, plus checks `(status = 'revoked') = (refresh_token_enc is null)`, `(status = 'revoked') = (revoked_at is not null)`, and `unique (channel_id) where status <> 'revoked'` named `org_youtube_connections_one_live_channel`. Index `(org_id)`.
+  - `org_youtube_connections(id uuid pk, org_id uuid not null → organizations on delete cascade, channel_id text not null, channel_title text not null, google_sub text null, refresh_token_enc bytea null, granted_scope text not null, default_privacy text not null default 'unlisted' check in ('unlisted','public','private'), made_for_kids boolean not null default false, consent_by uuid not null → users, consent_at timestamptz not null, consent_version int not null, status text not null check in ('connected','reconnect_needed','revoked'), status_since timestamptz not null default now(), last_health_at timestamptz, last_error_code text, created_by uuid not null → users, created_at timestamptz not null default now(), revoked_at timestamptz)`, plus checks `org_youtube_connections_revoked_no_token ((status = 'revoked') = (refresh_token_enc is null))` and `org_youtube_connections_revoked_at ((status = 'revoked') = (revoked_at is not null))`, immediate, not deferrable (R1: every write of these columns is one `token-store.ts` statement, T2), and `unique (channel_id) where status <> 'revoked'` named `org_youtube_connections_one_live_channel`. Index `(org_id)`.
   - `youtube_connect_pending(id uuid pk, state_hash text unique not null, org_id, user_id, connection_id uuid null → org_youtube_connections (the reconnect target), default_privacy, made_for_kids, consent_version int, consent_at, refresh_token_enc bytea null, granted_scope text null, google_sub text null, channels jsonb null, expires_at timestamptz not null, created_at)`.
-  - `youtube_stream_keys(id uuid pk, org_id, connection_id → org_youtube_connections on delete cascade, slot smallint not null check (slot between 1 and 10), live_stream_id text not null, pool_rtmp_enc bytea not null, created_at, retired_at timestamptz)`, plus `unique (connection_id, slot) where retired_at is null` and `unique (connection_id, live_stream_id)`.
-  - `youtube_broadcasts(id uuid pk, org_id, connection_id → org_youtube_connections, fixture_id → fixtures on delete cascade, key_id uuid null → youtube_stream_keys, yt_broadcast_id text null, title text not null, privacy text not null, state text not null check in ('created','bound','reserved','live','ending','complete','failed'), reserved_until timestamptz null, last_session_id uuid null → fixture_stream_sessions on delete set null, claimed_at, completed_at, refreshed_at timestamptz not null default now(), last_error_code text, attempts int not null default 0, next_attempt_at timestamptz null, created_at)`, plus `check ((state = 'reserved') = (reserved_until is not null))`. Indexes:
+  - `youtube_stream_keys(id uuid pk, org_id, connection_id → org_youtube_connections on delete cascade, slot smallint not null constraint youtube_stream_keys_slot_range check (slot between 1 and 10), live_stream_id text not null, pool_rtmp_enc bytea not null, created_at, retired_at timestamptz)`, plus `youtube_stream_keys_one_live_slot`: unique `(connection_id, slot) where retired_at is null`, and `unique (connection_id, live_stream_id)`.
+  - `youtube_broadcasts(id uuid pk, org_id, connection_id → org_youtube_connections, fixture_id → fixtures on delete cascade, key_id uuid null → youtube_stream_keys, yt_broadcast_id text null, title text not null, privacy text not null, state text not null check in ('created','bound','reserved','live','ending','complete','failed'), reserved_until timestamptz null, last_session_id uuid null → fixture_stream_sessions on delete set null, claimed_at, completed_at, refreshed_at timestamptz not null default now(), last_error_code text, attempts int not null default 0, next_attempt_at timestamptz null, created_at)`, plus `youtube_broadcasts_reserved_until check ((state = 'reserved') = (reserved_until is not null))`. Indexes:
     - `youtube_broadcasts_one_open_per_fixture`: unique `(fixture_id)` where state in `('created','bound','reserved','live')`.
     - `youtube_broadcasts_one_open_per_key`: unique `(key_id)` where state in `('created','bound','reserved','live','ending')`.
     - `youtube_broadcasts_open_due_idx`: on `(next_attempt_at nulls first, created_at)` where state in `('created','bound','reserved','live','ending')` (the V470 `email_outbox_due_idx` pattern).
     - `youtube_broadcasts_parts_idx`: on `(fixture_id, completed_at)` where `state = 'complete'`.
   - `org_stream_targets`: `alter column rtmp_enc drop not null`, add `youtube_connection_id uuid null → org_youtube_connections`, check `org_stream_targets_one_source ((rtmp_enc is null) <> (youtube_connection_id is null))`, check `(youtube_connection_id is null or kind = 'youtube')`.
   - `fixture_stream_sessions`: add `youtube_broadcast_id uuid null → youtube_broadcasts on delete set null`. Drop and recreate `fixture_stream_sessions_one_active_target` as `on (target_id) where state in ('requested','provisioning','warming','live','ending') and youtube_broadcast_id is null` (P1).
-  - View `public_fixture_youtube_parts_v(fixture_id, video_id, part_no, completed_at)`: `complete` rows only, `part_no = row_number() over (partition by fixture_id order by completed_at, id)`, with the same `setup`-division redaction and the same grants as `public_fixtures_v` (V401, read it).
+  - View `public_fixture_youtube_parts_v(fixture_id, video_id, part_no, completed_at)`: `complete` rows only, `part_no = row_number() over (partition by fixture_id order by completed_at, id)`, with the same `setup`-division redaction as `public_fixtures_v` (V401, read it). **No grant** (R7): only the server usecase `replayParts` (T16) reads it, on the privileged `sql` (the stream pattern); the view exists so the redaction lives in one place.
   - Every new table: `enable` + `force row level security`, no policy, no grant.
 
 - [ ] **Step 1: Write the failing tests.** Each test inserts through raw `sql` on the fresh DB and asserts the
@@ -276,8 +276,8 @@ it("one open broadcast per key, ending INCLUDED; complete frees the key", async 
 });
 it("a connection holds at most 10 live keys — slot 11 is refused, and a retired slot is reusable", async () => {
   for (let s = 1; s <= 10; s++) await key({ connection: C, slot: s });   // 10: YouTube's per-channel cap (spec §3.1)
-  await expect(key({ connection: C, slot: 11 })).rejects.toMatchObject({ code: "23514" });
-  await expect(key({ connection: C, slot: 3 })).rejects.toMatchObject({ code: "23505" });
+  await expect(key({ connection: C, slot: 11 })).rejects.toMatchObject({ code: "23514", constraint_name: "youtube_stream_keys_slot_range" });
+  await expect(key({ connection: C, slot: 3 })).rejects.toMatchObject({ code: "23505", constraint_name: "youtube_stream_keys_one_live_slot" });
   await retire(C, 3);
   await expect(key({ connection: C, slot: 3 })).resolves.toBeTruthy();
 });
@@ -287,8 +287,12 @@ it("a channel is live in at most one org; revoking frees it for another org", as
   await revoke(c);
   await expect(connection({ org: O2, channel: "UC1", status: "connected" })).resolves.toBeTruthy();
 });
-it("revoked ⇔ no token ⇔ revoked_at — each direction refused", async () => { /* 3 inserts, each 23514 */ });
-it("reserved ⇔ reserved_until", async () => { /* both directions 23514 */ });
+it("revoked ⇔ no token and revoked ⇔ revoked_at: all 4 directions refused BY NAME; both consistent shapes accepted", async () => {
+  // connected + null token, revoked + token → org_youtube_connections_revoked_no_token
+  // connected + revoked_at, revoked + null revoked_at → org_youtube_connections_revoked_at
+  // positive pair: connected + token + null revoked_at; revoked + null token + revoked_at → both insert
+});
+it("reserved ⇔ reserved_until: both directions refused as youtube_broadcasts_reserved_until; reserved + reserved_until accepted", …);
 it("the parts view lists complete rows only, numbered by completion, and nothing for a setup division", async () => {
   // complete at 10:00 and 11:00, plus one failed and one live → exactly [{part_no:1},{part_no:2}]; flip the division to setup → []
 });
@@ -326,7 +330,13 @@ Go live` (T20); smoke `youtube: stream-tick answers` (T21).
   - `fingerprintYoutubeChannel(channelId: string): string`: 64 lower-hex. HKDF info `"seazn/stream-destination-fingerprint/youtube-channel/v1"`. Never equal to any `fingerprintDestination` output for the same string.
   - `secret-columns.ts`: `insertPooledKey(tx: Tx, a: { orgId: string; connectionId: string; slot: number; liveStreamId: string; ingest: { url: string; streamKey: string } }): Promise<{ keyId: string }>` and `readPooledKey(tx: Tx, orgId: string, keyId: string): Promise<{ url: string; streamKey: string }>`. The latter throws `TargetSecretUnreadableError` with kind `youtube` on a bad envelope, and rethrows a KEK fault (`rethrowKekFault`).
   - `readTargetSecret` on a row whose `rtmp_enc is null` throws `ApiBackedTargetError` (new, exported; carries `targetId` only). Its message never contains a key.
-  - `token-store.ts`: `sealToken(tx, table: "connection" | "pending", id: string, refreshToken: string): Promise<void>`, `openToken(exec, table, orgId: string, id: string): Promise<string | null>` (null when cleared), and `clearToken(tx, "connection", id): Promise<void>`.
+  - `token-store.ts` owns **every** statement that names `refresh_token_enc` (R1), so T1's revoked checks hold within one statement each:
+    - `insertConnectionWithToken(tx, a: { orgId: string; channelId: string; channelTitle: string; googleSub: string | null; grantedScope: string; defaultPrivacy: YoutubePrivacy; madeForKids: boolean; consentBy: string; consentAt: Date; consentVersion: number; createdBy: string; refreshToken: string }): Promise<{ connectionId: string }>` (status `connected`);
+    - `replaceConnectionToken(tx, orgId: string, connectionId: string, refreshToken: string): Promise<boolean>` (token, `status = 'connected'`, `status_since = now()`, `last_error_code = null`; false when there is no non-revoked row of this org);
+    - `revokeConnection(tx, orgId: string, connectionId: string): Promise<boolean>`: ONE statement, `refresh_token_enc = null, status = 'revoked', revoked_at = now()` (false when already revoked or not this org's);
+    - `sealPendingToken(tx, pendingId: string, refreshToken: string): Promise<void>` and `takePendingToken(tx, orgId: string, pendingId: string): Promise<string | null>`;
+    - `openToken(exec, orgId: string, connectionId: string): Promise<string | null>`: null for a missing row, another org's row, or a revoked one (one pinned behaviour).
+    T8, T17 and T18 call these; no other file writes `status = 'revoked'` or the token.
 - Consumes: T1 columns `refresh_token_enc` (both tables) and `pool_rtmp_enc`.
 
 - [ ] **Step 1: Write the failing tests.**
@@ -341,9 +351,10 @@ it("only token-store.ts names refresh_token_enc — and it does", …);   // neg
 
 // token-store.test.ts
 it("a sealed token opens under YOUTUBE_TOKEN_KEK and NOT under RELAY_KEK", …);   // openWith("RELAY_KEK", bytes) throws
-it("openToken is org-scoped: another org's id reads null-or-throws exactly like a missing row", …);
+it("openToken returns null for another org's id, exactly as for a missing id and for a revoked row (3 cases, one behaviour)", …);
 it("an unset YOUTUBE_TOKEN_KEK throws the KEK's own sentence, which contains no token", …);
-it("clearToken leaves refresh_token_enc null", …);
+it("revokeConnection nulls the token and sets revoked + revoked_at in ONE statement (T1's checks never fire); a second call returns false", …);
+it("insertConnectionWithToken writes a connected row whose token opens; replaceConnectionToken on a revoked row returns false and writes nothing", …);
 
 // secret-columns.test.ts
 it("readPooledKey round-trips {url, streamKey}; another org's keyId is 'not found'", …);
@@ -356,10 +367,11 @@ it("fingerprintYoutubeChannel is stable, 64 hex, and differs from fingerprintDes
 - [ ] **Step 3: Implement** to the Interfaces. `token-store.ts` seals with `sealWith("YOUTUBE_TOKEN_KEK", …)`.
   `insertPooledKey` seals with `seal()` (RELAY_KEK).
 - [ ] **Step 4: Run VERIFY → `t2`.** Expected: green. **MUTATE** the org filter in `openToken`, and separately the
-  KEK name used by `sealToken`. Name the killers.
+  KEK name used by `insertConnectionWithToken`. Name the killers.
 - [ ] **Step 5: Commit** `feat(youtube): YOUTUBE_TOKEN_KEK, token store, pooled-key envelope`.
 
-**Four types:** unit (above); regression (enc-boundary, crypto); E2E (T20 connect); smoke (T21).
+**Four types:** unit (above); regression (enc-boundary, crypto); E2E (T20 `› connect: consent → picker → row`); smoke
+`youtube: reconnect-needed refusal` (T21, reads a sealed connection).
 
 ### Task 3: The target is the unit of exclusivity for pasted rows only
 
@@ -399,7 +411,7 @@ it("PATCH and DELETE on an API row → 422 YOUTUBE_USE_DISCONNECT; the row is un
 - [ ] **Step 5: Commit** `feat(youtube): pasted-key rows alone hold a destination`.
 
 **Four types:** unit + regression (above); E2E `directory-stream-destinations.spec.ts` stays green (the pasted path is
-unchanged) and `youtube-connect.spec.ts › two matches on one channel` (T20); smoke (T21).
+unchanged) and `youtube-connect.spec.ts › two matches on one channel` (T20); smoke `youtube: list shape` (T21).
 
 ### Task 4: UI options for the owner (no repo change; gates T9, T12, T16, T18's UI)
 
@@ -475,6 +487,7 @@ export class FakeYouTube implements YouTubePort {
   constructor(o?: { channels?: { id: string; title: string }[]; now?: () => Date });
   failNext(method: keyof YouTubePort, code: YoutubeErrorCode, reason?: string): void;
   killToken(refreshToken: string): void;          // the next accessToken → youtube_reconnect_needed
+  tokenHandle(refreshToken: string): string; killHandle(handle: string): void; setAutoVideo(on: boolean): void;   // R6: e2e handles
   setChannels(c: { id: string; title: string }[]): void;
   setLive(state: "enabled" | "not_enabled" | "blocked"): void;
   videoOn(streamId: string): void; videoOff(streamId: string): void;   // auto-start: a bound 'ready' broadcast → 'live'
@@ -483,7 +496,7 @@ export class FakeYouTube implements YouTubePort {
   liveBroadcastCount(): number; streamsCount(): number; boundOpenCount(streamId: string): number;
 }
 ```
-- The fake control route: `POST /api/internal/youtube/fake` with body `{ op: "setChannels" | "failNext" | "killToken" | "videoOn" | "videoOff" | "deleteVideo" | "setLive", … }`. It answers 404 unless `youtubeDriverMode() === "fake"` **and** the fake-ingest route's env-name gate passes (P12).
+- The fake control route (R6): `POST /api/internal/youtube/fake` with body `{ op: "setChannels" | "failNext" | "killToken" | "videoOn" | "videoOff" | "deleteVideo" | "setLive" | "autoVideo" | "state", … }`. It answers 404 unless `youtubeDriverMode() === "fake"` **and** the fake-ingest route's env-name gate passes (P12). e2e never sees a token or a key, so ops take **handles**: `state` with `{ fixtureId }` answers `{ connectionId, tokenHandle, broadcasts: [{ videoId, life, streamId }] }` (the fake assigns an opaque `tokenHandle` per refresh token; the route resolves the fixture's connection and broadcasts server-side); `killToken` takes `{ tokenHandle }`; `videoOn`/`videoOff` take `{ streamId }`; `autoVideo { on }` makes every `bind` flip its broadcast to `live` at once, as if video arrived. The fake has no ingest to observe, so e2e turns `autoVideo` on and its broadcasts can complete as replay parts.
 
 - [ ] **Step 1: Write the failing tests.** These are the fake's realism, from Google's documented limits.
 
@@ -502,6 +515,7 @@ it("failNext injects exactly once, for every refusal code", async () => {
 it("calls[] records method names only — no token or key substring appears in JSON.stringify(fake.calls)", …);
 it("driver: production with YOUTUBE_DRIVER unset is live, never fake; test env unset is fake; 'fake' in production is fake (e2e)", …);
 it("control route: 404 when mode is live; 404 when the env-name gate refuses; 200 in fake + allowed env", …);
+it("control route (R6): 'state' answers handles only — its JSON holds no refresh token, stream key or ingest url; killToken by handle kills that token; autoVideo on → a bind leaves the broadcast 'live'", …);
 ```
 
 - [ ] **Step 2: Run VERIFY** over the three files → `t5`. Expected: FAIL.
@@ -511,7 +525,8 @@ it("control route: 404 when mode is live; 404 when the env-name gate refuses; 20
   of `youtubeDriverMode`. Name the killers.
 - [ ] **Step 5: Commit** `feat(youtube): port, deterministic fake, driver selection`.
 
-**Four types:** unit (above); regression (the driver default); E2E (T20 drives the fake through this route); smoke (T21).
+**Four types:** unit (above); regression (the driver default); E2E (T20 drives the fake through this route); smoke
+`youtube: fake control route answers in fake mode` (T21).
 
 ### Task 6: The Google driver
 
@@ -536,7 +551,8 @@ it("insertBroadcast body: contentDetails.enableAutoStart true, enableAutoStop fa
 it("insertStream: cdn.ingestionType 'rtmp', contentDetails.isReusable true; returns ingestionAddress + streamName as {url, streamKey}", …);
 it("complete: liveBroadcasts/transition?broadcastStatus=complete&id=…&part=status; a 'redundantTransition' answer resolves", …);
 it("every call sends the token in the Authorization header; no request URL contains the access or refresh token", async () => {
-  // run every port method once; for each captured request: expect(url).not.toContain(TOKEN); checked === 14
+  // every method that makes a request (13: all but authorizeUrl; exchangeCode makes 2 — token + tokeninfo) → 14 captured requests;
+  // each: expect(url).not.toContain(TOKEN); Data API calls also carry `Authorization: Bearer <at>`. checked === 14
 });
 it("revoke and tokeninfo send the token in a form POST body, never the query string", …);
 it("mapGoogleError table", () => {
@@ -569,7 +585,8 @@ it("existingVideos refuses > 50 ids without calling", …);
 - [ ] **Step 5: Commit** `feat(youtube): Google driver with error-code mapping`.
 
 **Four types:** unit + regression (the mapping table); E2E: none can reach Google, so the stg acceptance runbook (T22)
-is this driver's end-to-end. Smoke: T21.
+is this driver's end-to-end. Smoke: none can reach Google on CI (the smoke job runs the fake driver); the named probe is
+the runbook's `stg: connect a real channel` step (T22). Recorded exception to R12's every-task-names-a-smoke rule.
 
 **B2 gate:** `reviewer` over B2. Push.
 
@@ -587,7 +604,7 @@ is this driver's end-to-end. Smoke: T21.
 - Produces:
   - `lib/oauth.ts`: `YOUTUBE_OAUTH_STATE_COOKIE = "seazn_youtube_oauth_state"`, `YOUTUBE_OAUTH_VERIFIER_COOKIE = "seazn_youtube_oauth_verifier"`, `youtubeRedirectUri(req) = process.env.YOUTUBE_REDIRECT_URI || \`${baseUrl(req)}/api/youtube/connect/callback\``.
   - `POST /api/youtube/connect`, form fields `orgId`, `privacy`, `madeForKids`, `consent` (must be `"1"`), and optional `connectionId` (reconnect). It requires a signed-in editor of `orgId`. It refuses a present `Origin` that is not `baseUrl(req)`. It writes a `youtube_connect_pending` row (consent recorded: user, now, `YOUTUBE_CONSENT_VERSION`), sets the two cookies (httpOnly, lax, 600 s), and answers 303 to `port.authorizeUrl(…)`.
-  - `GET /api/youtube/connect/callback`. Every exit is `303 /directory?tab=streaming&youtube=<code>`, with code in `connected | pick | no_channel | scope_missing | other_org | different_channel | denied | expired | not_configured`. `pick` also carries `&pending=<id>`.
+  - `GET /api/youtube/connect/callback`. Every exit is `303 /directory?tab=streaming&youtube=<code>`, with code in `connected | pick | no_channel | scope_missing | other_org | different_channel | denied | expired | not_configured | forbidden`. `pick` also carries `&pending=<id>`.
 
 - [ ] **Step 1: Write the failing tests.**
 
@@ -596,7 +613,7 @@ it("start: no consent → 400 and no pending row, no cookie; consent=1 → pendi
 it("start: a non-editor (scorer) of the org → 403; an editor of ANOTHER org → 404", …);
 it("callback: state cookie ≠ query state → expired, nothing stored", …);
 it("callback REPLAYED: the same state a second time → expired; still exactly one connection row", …);   // Review Focus 2
-it("callback: the user lost the editor role between start and callback → refused, the grant revoked, nothing stored", …);
+it("callback: the user lost the editor role between start and callback → landing 'forbidden', the grant revoked, nothing stored", …);
 it("callback: granted scope lacks the youtube scope → scope_missing; port.revoke called once; no connection row", …);   // §9.3 mutation target
 it("callback: zero channels → no_channel; revoked; one channel → connected (connection + destination row); two → pick, token sealed on the pending row, NOT on any connection", …);
 it("callback: Google 'access_denied' → denied, no call to exchangeCode", …);
@@ -626,11 +643,11 @@ smoke `youtube: connect without consent is refused` (T21).
 - Produces:
 ```ts
 export async function saveConnectionFromGrant(a: { pendingId: string; channelId: string; userId: string }, port: YouTubePort): Promise<{ connectionId: string; targetId: string }>;
-// one transaction: insert connection (status connected) + seal token + insert org_stream_targets (kind youtube, label = channel title,
+// one transaction: insertConnectionWithToken (token-store.ts, R1) + insert org_stream_targets (kind youtube, label = channel title,
 // youtube_connection_id, dest_fingerprint = fingerprintYoutubeChannel(channelId), rtmp_enc null); delete the pending row.
-// 23505 org_youtube_connections_one_live_channel → HttpError(409, "This channel is connected to another organisation on Seazn", "YOUTUBE_OTHER_ORG")
-// (same org, same channel, live → returns the existing ids, token replaced). Reconnect (pending.connection_id set): same row, token replaced,
-// status connected, status_since now, last_error_code null; every 'ending' or due broadcast of it gets next_attempt_at = null.
+// 23505 org_youtube_connections_one_live_channel → HttpError(409, "This channel is connected to another organisation on Seazn", "YOUTUBE_OTHER_ORG"), then — outside the rolled-back tx — port.revoke(the new token)
+// (same org, same channel, live → returns the existing ids, token replaced). Reconnect (pending.connection_id set): replaceConnectionToken (token-store.ts, R1:
+// token + connected + status_since + last_error_code null, one statement); every 'ending' or due broadcast of it gets next_attempt_at = null.
 export async function updateConnectionSettings(auth: AuthCtx, orgId: string, connectionId: string, b: { privacy?: YoutubePrivacy; madeForKids?: boolean; consent?: true }): Promise<YoutubeConnectionView>;
 export type YoutubeConnectionView = { connectionId: string; channelTitle: string; privacy: YoutubePrivacy; madeForKids: boolean;
   status: "connected" | "reconnect_needed"; liveState: "enabled" | "not_enabled" | "blocked" | "unknown"; termsOutdated: boolean; openBroadcasts: number };
@@ -667,26 +684,31 @@ e2e-reachable (it needs a version bump), so it stays unit-only, with the reason 
 - Modify: `apps/web/src/components/v2/stream-destinations-panel.tsx` (it may split one focused child component out of it, `components/v2/youtube-connect-panel.tsx`, if the panel would otherwise pass ~800 lines)
 - Modify: `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`, then `npm run i18n:gen-keys`
 - Test: `apps/web/src/components/v2/__tests__/youtube-connect-panel.test.ts` (markup render, node env)
+- Create: `apps/web/e2e/youtube-directory.shots.spec.ts` (R8)
 
 **Interfaces:** Consumes T7's form POST and landing codes, T8's list `youtube` block, the PATCH, and the pending GET.
 Copy keys (under `streaming.youtube.`): `connect`, `consent.title`, `consent.body` (spec §6.1 draft, owner's legal
 text later), `consent.tos`, `consent.guidelines`, `consent.privacy`, `privacy.unlisted|public|private`,
 `madeForKids.label|no|yes`, `picker.title`, `status.connected|reconnectNeeded|notEnabled|blocked|reviewTerms`,
 `notEnabledHint` ("YouTube can take up to 24 hours"), `action.reconnect|settings|disconnect`, and one key per landing
-code (`landing.connected|no_channel|scope_missing|other_org|different_channel|denied|expired|not_configured`).
+code (`landing.connected|no_channel|scope_missing|other_org|different_channel|denied|expired|not_configured|forbidden`).
 
 - [ ] **Step 1: Write the failing tests:**
   - the Connect button is disabled until the box is ticked (render both states);
   - Unlisted and No are preselected (**pin the value the control opens at**, AGENTS.md class 19);
-  - every landing code renders its own key, `checked === 8`;
+  - every landing code renders its own key, `checked === 9` (`pick` opens the picker instead);
   - an API row shows no Replace key and no Remove;
   - a key from each locale renders (no English fallback in `es`).
-- [ ] **Step 2–4:** red → implement → VERIFY green. Then build-verify by CI dispatch (no local server). Screenshots at
-  1280, 768 and 320 from the CI e2e run's artifacts (T20 captures them), published to an Artifact page. No
+- [ ] **Step 2–4:** red → implement → VERIFY green. Then build-verify by CI dispatch (no local server). R8: this task writes
+  its own `apps/web/e2e/youtube-directory.shots.spec.ts` (pattern: `e2e/credits-tab-shots.spec.ts`; the fake port via
+  the T5 control route), capturing the Connect action, the consent step, the picker and the connection row at 1280,
+  768 and 320, each asserting `document.documentElement.scrollWidth <= clientWidth`. Push, dispatch it by CI, and
+  publish the captures to an Artifact page. No
   horizontal scroll, and `min-w-0` on every truncating chain (channel names).
 - [ ] **Step 5: Commit** `feat(youtube): Directory connect, consent, picker, connection row`.
 
-**Four types:** unit (markup); E2E `youtube-connect.spec.ts › connect` + `mobile.spec.ts` widths (T20); smoke (T21);
+**Four types:** unit (markup); E2E `youtube-directory.shots.spec.ts` (this task, three widths) + `youtube-connect.spec.ts
+› connect` (T20); smoke `youtube: directory renders Connect YouTube` (T21);
 regression `directory-stream-destinations.spec.ts` unchanged.
 
 **B3 gate:** `reviewer` over B3 plus a visual sign-off per screen (AGENTS.md class 11). Push. Dispatch e2e.
@@ -706,14 +728,17 @@ regression `directory-stream-destinations.spec.ts` unchanged.
 - Produces:
 ```ts
 export type Prepared = { broadcastId: string; reused: boolean; keyId: string };
-/** null when targetId is a pasted row. Throws HttpError with a YoutubeRefusalCode (409; youtube_limit_reached 429; youtube_unavailable 503),
- *  extra { connectionId } only. Never holds a lock across a port call. */
+/** null when targetId is a pasted row. Throws HttpError with a YoutubeRefusalCode (409; youtube_limit_reached 429; youtube_unavailable 503
+ *  everywhere, R3), extra { connectionId } only — or the EXISTING active_session 409 (refuse()'s shape, no new code, R3) while another admission
+ *  holds an unlapsed reservation. Never holds a lock across a port call. */
 export async function prepareYoutubeBroadcast(a: { orgId: string; fixtureId: string; targetId: string; now: Date }, port: YouTubePort): Promise<Prepared | null>;
-/** A refused admission: created-new → deleteBroadcast at YouTube + row 'failed' code 'admission_refused'; reused → reservation released
+/** A refused admission: created-new → deleteBroadcast at YouTube + row 'failed' code 'admission_refused', only while the row is still
+ *  'created'/'bound' (a row another admission reserved meanwhile is left to it); reused → reservation released
  *  (state back to 'live' when last_session_id is set, else 'bound'). Never throws (reports). */
 export async function abandonPrepared(p: Prepared, port: YouTubePort): Promise<void>;
 /** Inside admission's transaction, after the session insert: reserved|bound → live, reserved_until null, last_session_id = sessionId.
- *  0 rows updated (the reservation lapsed and the end step claimed it) → HttpError(409, …, "youtube_unavailable"). */
+ *  0 rows updated (the reservation lapsed and the end step claimed it), or a reused row whose key_id / yt_broadcast_id is still null
+ *  (two Go lives on one fixture in the same second; rare) → HttpError(503, …, "youtube_unavailable") (R3). */
 export async function attachPrepared(tx: Tx, p: Prepared, sessionId: string): Promise<void>;
 export const YOUTUBE_RESERVATION_MINUTES = 2;
 export function broadcastTitle(a: { home: string | null; away: string | null; division: string; competition: string; vs: string; tbd: string }): string;   // ≤ 100, '<' '>' removed, competition trimmed first
@@ -722,18 +747,22 @@ export function broadcastDescription(a: { line: string; matchUrl: string }): str
 - The algorithm the signatures do not determine (spec §6.2 with P2, P3, P4, P7):
   1. Read the connection through the target. If its status is not `connected`, throw `youtube_reconnect_needed`.
      Get the access token with `port.accessToken(openToken(…))`.
-  2. Short tx: `select … from youtube_broadcasts where fixture_id = $f and state in ('bound','live','reserved') for update`.
-     - Row found, not due (`broadcastEndDueAt(facts) > now`), and not reserved-unlapsed: set it `reserved`, set
-       `reserved_until = now + 2 min`, commit, and return `{ reused: true }`.
-     - Row found and due: set it `ending` (`claimed_at = now`), commit, and continue to step 3 (P7).
-     - Row found and reserved-unlapsed: another Go live is mid-admission, so throw the existing `active_session` 409.
+  2. Short tx: `select … from youtube_broadcasts where fixture_id = $f and state in ('created','bound','live','reserved') for update`
+     (R3: `created` included; `ending` is never selected, so a claimed row is never reused).
+     - Row reserved-unlapsed: another Go live is mid-admission → the existing `active_session` 409 (R3).
+     - Else, with `dueAt = broadcastEndDueAt(await readEndFacts(tx, id), now)`: **reuse when `dueAt === null || dueAt > now`**
+       (R2: null means never due while a session is active, or before any session): set it `reserved`,
+       `reserved_until = now + 2 min`, commit, return `{ reused: true }`.
+     - Else (due, unclaimed): set it `ending` (`claimed_at = now`), commit, continue to step 3 (P7).
   3. Short tx: lock the connection row and pick a free non-retired key (no row in the per-key open set). If one is
-     free, insert the broadcast row `created` with that `key_id`. If none is free and fewer than 10 are live, insert the
+     free, insert the broadcast row `created` with that `key_id` and its `title` (computed before the tx; the column is NOT NULL). If none is free and fewer than 10 are live, insert the
      row `created` with `key_id null`. Outside the tx, call `port.insertStream`. Then in a tx: `insertPooledKey` at the
      lowest free slot and set the row's `key_id`. A slot 23505 means another admission won the race: delete that
-     liveStream and retry the pick once. If 10 are busy, throw `youtube_channel_busy` (no row written).
+     liveStream and retry the pick once. If 10 are busy, throw `youtube_channel_busy` (no row written). A 23505 on
+     `youtube_broadcasts_one_open_per_fixture` (a concurrent admission inserted first) → re-read and take step 2's
+     reuse path (R3).
   4. Outside any tx: `port.insertBroadcast` (title, description, `scheduledStart = now`, the connection's privacy and
-     made-for-kids). Write `yt_broadcast_id` and `title`. Then `port.bind`, then mark the row `bound`. On any port
+     made-for-kids). Write `yt_broadcast_id` (the title was written in step 3). Then `port.bind`, then mark the row `bound`. On any port
      throw: delete at YouTube what was created, set the row `failed` with the code, and rethrow as the refusal.
 
 - [ ] **Step 1: Write the failing tests** (FakeYouTube, fresh DB, expected numbers typed from the spec).
@@ -741,10 +770,12 @@ export function broadcastDescription(a: { line: string; matchUrl: string }): str
 ```ts
 it("title: 'Home v Away · Division · Competition'; a 43-char entrant pair + long competition stays ≤ 100 and trims the competition FIRST (division intact)", …);   // RF1
 it("title: '<' and '>' are removed; TBD v TBD uses the tbd word", …);
-it("title + description in 'es' use es's schedule.vs / schedule.tbd and description line, read from dictionaries/es/ui.json by import", …);   // RF4
+it("RF4 (R4): prepareYoutubeBroadcast for an org whose default_locale is 'es' → the fake's recorded insertBroadcast title uses es's schedule.vs (a TBD side es's schedule.tbd) and the description es's line; expected words read from dictionaries/es/ui.json by import, and the en words are ABSENT", …);   // through prepare: the dictionary lookup lives inside it
 it("reuse inside grace: an open 'live' broadcast stopped 4 min ago → same broadcastId, same key, reserved, reserved_until = now + 2 min; ZERO insertBroadcast calls", …);   // §9.3 mutation target
 it("…stopped 6 min ago → claimed 'ending', a NEW broadcast on a DIFFERENT key", …);   // 6 ≠ 5: the right answer differs from the off-by-one
 it("a claimed (ending) broadcast is never reused", …);
+it("R2: a broadcast whose session is still ACTIVE (dueAt null) is selected for reuse, not claimed; a reserved-unlapsed row → the existing active_session 409", …);
+it("R3: a concurrent admission's 'created' row on the same fixture (23505 on one_open_per_fixture) → re-read → reused; one broadcast at YouTube", …);
 it("two fixtures prepared at once on one channel → two keys; when the first completes, a third fixture reuses its key (no insertStream)", …);   // §9.2
 it("key-busy: 10 open broadcasts on 10 keys → the 11th throws youtube_channel_busy; no row, no insertStream, no insertBroadcast", …);   // 10: §3.1; §9.3 mutation target
 it("each port refusal at each step leaves no 'created'/'bound' row and deletes what YouTube got", async () => {
@@ -752,13 +783,13 @@ it("each port refusal at each step leaves no 'created'/'bound' row and deletes w
   // youtube_broadcasts open rows === 0; fake.liveBroadcastCount() === 0 and no orphan 'upcoming' in the fake; checked === 20
 });
 it("abandonPrepared: created-new → deleteBroadcast called, row 'failed'; reused → back to 'live', reserved_until null", …);
-it("attachPrepared after the reservation lapsed and the end step claimed it → 409; the claimed row stays 'ending'", …);
+it("attachPrepared after the reservation lapsed and the end step claimed it → 503 youtube_unavailable; the claimed row stays 'ending'", …);
 it("a connection in reconnect_needed → youtube_reconnect_needed before any port call", …);
 it("org B's fixture cannot be prepared on org A's API target → 404, zero port calls", …);   // §9.2 cross-org (use)
 ```
 
 - [ ] **Step 2–4:** red → implement → VERIFY green → TSC. **MUTATE**, one at a time:
-  - the reuse predicate (`dueAt > now` → `true`), killed by the 6-min test;
+  - the reuse predicate (`dueAt === null || dueAt > now` → `true`), killed by the 6-min test;
   - the key-busy predicate (`< 10` → `<= 10`);
   - the reserved-unlapsed refusal.
 - [ ] **Step 5: Commit** `feat(youtube): go-live prepare (reuse, key pool, insert, bind)`.
@@ -783,8 +814,8 @@ it("org B's fixture cannot be prepared on org A's API target → 404, zero port 
     `admit` probe passes, call `prepared = await prepareYoutubeBroadcast(…, deps.youtube)`.
   - Inside the admission tx, for an API row, skip the `readTargetSecret`/`checkDestination` block. The session insert
     sets `youtube_broadcast_id = prepared.broadcastId`, then calls `attachPrepared(tx, prepared, sid)`.
-  - On any throw from the transaction promise (including the 23505 mappers), call `abandonPrepared` before
-    rethrowing.
+  - On any throw **after prepare** (`storageUsage()`, the admission transaction including the 23505 mappers, anything
+    before the session commits), call `abandonPrepared` before rethrowing (R12; spec §6.2: deleted, never left "upcoming").
   - A thrown guard: an API row with `prepared === null`, or a pasted row with one, is a caller bug, refused by name
     (TEST-STRATEGY rule 4).
 
@@ -799,6 +830,7 @@ it("each refusal code: refused with that code, credit ledger rows unchanged, add
   // 6 codes: 5 via fake.failNext + youtube_channel_busy via 10 open broadcasts; checked === 6   // §9.2
 });
 it("admission refused AFTER the broadcast was created (no_credits forced inside the tx) → deleteBroadcast called, row 'failed', no session", …);   // §9.2
+it("storageUsage() throws after prepare → the broadcast is deleted at YouTube and its row 'failed', not left for the orphan sweep", …);   // R12
 it("an 11th concurrent Go live → youtube_channel_busy, nothing charged, no CF output", …);   // §9.2
 it("consent outdated (version stubbed to 2) → Go live still succeeds", …);   // §9.2 / §6.1 step 5
 it("two fixtures live at once on ONE API target → both admitted (no target_in_use), two keys", …);
@@ -829,10 +861,13 @@ copy` (T20); smoke `youtube: reconnect-needed refusal` (T21).
     to `/directory?tab=streaming`.
   - The picker lists an API row with the YouTube icon and channel name.
   - An unknown `youtube_*` code falls back to the generic error, never a raw code.
-- [ ] **Step 2–4:** red → implement → green. Copy is the spec §6.2 table's gist, in four locales.
+- [ ] **Step 2–4:** red → implement → green. Copy is the spec §6.2 table's gist, in four locales. R8: write
+  `apps/web/e2e/youtube-panel.shots.spec.ts` (the API row in the picker, one refusal with its action, the after-match
+  link) at 1280/768/320 with the no-horizontal-scroll assertion; CI dispatch; Artifact page.
 - [ ] **Step 5: Commit** `feat(youtube): fixture panel picker and refusal copy`.
 
-**Four types:** unit; E2E `youtube-connect.spec.ts › refusal copy` (T20) + `mobile.spec.ts`; smoke (T21); regression
+**Four types:** unit; E2E `youtube-panel.shots.spec.ts` (this task) + `youtube-connect.spec.ts › refusal copy` (T20);
+smoke `youtube: reconnect-needed refusal` (T21); regression
 (the existing refusal codes still render).
 
 **B4 gate:** `reviewer` plus visual sign-off. Push. Dispatch e2e.
@@ -850,7 +885,9 @@ copy` (T20); smoke `youtube: reconnect-needed refusal` (T21).
 ```ts
 export type EndFacts = { activeSessionOnBroadcast: boolean; reservedUntil: Date | null; latestEndedAt: Date | null;
   fixtureStatus: string; finishedAt: Date | null; terminalWithoutEndedAt: boolean };
-/** null = not due (active, reserved, or no session yet). Throws EndRuleInvariantError when terminalWithoutEndedAt. */
+/** null = NEVER due while a session on this broadcast is active, a reservation is unlapsed, or no session has used it yet
+ *  (R2: T10 reuses on null). S = the latest ended_at among sessions ON THIS BROADCAST (P5).
+ *  Throws EndRuleInvariantError when terminalWithoutEndedAt. */
 export function broadcastEndDueAt(f: EndFacts, now: Date): Date | null;
 export async function readEndFacts(exec: Tx | typeof sql, broadcastId: string): Promise<EndFacts>;   // plain selects, no lock
 export const YOUTUBE_GRACE_MINUTES = 5; export const YOUTUBE_FINISHED_END_MINUTES = 2;
@@ -894,26 +931,30 @@ stream-tick answers` (T21).
 - Produces:
 ```ts
 export type YoutubeEndResult = { ended: number; neverLive: number; orphans: number; failed: number; deferred: number };
-export async function endDueBroadcasts(port: YouTubePort, o: { now: () => Date; budgetMs: number; wallClock?: () => number; orgIds?: readonly string[] }): Promise<YoutubeEndResult>;
+export async function endDueBroadcasts(port: YouTubePort, o: { now: () => Date; budgetMs: number; wallClock?: () => number; orgIds?: readonly string[]; hooks?: EndStepHooks }): Promise<YoutubeEndResult>;
 export const YOUTUBE_END_BUDGET_MS = 15_000;
 /** Test seam only: called between the claim's commit and the YouTube call. */
 export type EndStepHooks = { afterClaim?: (broadcastId: string) => Promise<void> };
 ```
 - Algorithm (spec §6.4 "Races"). Select candidate ids with `state in ('created','bound','reserved','live','ending')`
-  and `(next_attempt_at is null or <= now)` whose connection is `connected` (oldest first; `orgIds` is test-only, and an
+  and `(next_attempt_at is null or <= now)` on a non-revoked connection, `reconnect_needed` included (R5, spec §6.7: retried with backoff, never skipped) (oldest first; `orgIds` is test-only, and an
   empty array is refused). For each, while inside the budget:
   1. tx: `for update skip locked` on the row; skipped → next. If the state is `ending`, go to step 2 (the retry of a
      crashed claim). If it is an orphan (P4: `created`/`bound`, no session ever, `created_at < now - 10 min`), claim it
      with orphan intent. Else compute `broadcastEndDueAt(readEndFacts(tx, id))`; not due → commit, next. Due → `state
      = 'ending', claimed_at = now`, commit.
   2. No lock held: `accessToken`, then `broadcastLife`. `ready`/`created`/`absent`, or orphan intent → `deleteBroadcast`
-     → outcome failed (`never_live` / `orphan`). `live`/`testing` → `complete`. `complete` → nothing to call.
+     → outcome failed (`never_live` / `orphan`). `live`/`testing` → `complete`. `complete` → nothing to call. `revoked` (Google's life when the
+     channel's grant is gone) → handled as `youtube_reconnect_needed` (R5).
   3. tx: `update … set state = $outcome, completed_at = now where id = $id and state = 'ending'` (finalize never moves
      any other state). On `complete`, write `youtubeWatchUrl(yt_broadcast_id)` through `setFixtureStreamUrl` only when
-     `fixtures.stream_url is null`.
-  - Errors: `youtube_reconnect_needed` → connection `reconnect_needed` (status_since now), row stays `ending`,
-    `next_attempt_at` null, skipped while not connected. Any other code: `attempts++`, `next_attempt_at = now +
-    min(2^attempts, 60) min`, `last_error_code`, count `failed`. A throw never stops the loop.
+     `fixtures.stream_url is null`. The actor is `fillReplayUrl`'s shape built from the last session's `created_by`,
+     falling back to the connection's `created_by` when `last_session_id` was set null.
+  - Errors (R5): every code, `youtube_reconnect_needed` included: `attempts++`, `next_attempt_at = now +
+    min(2^(attempts-1), 60) min` (first retry 1 min later, then 2, 4, … 60; P6), `last_error_code`; the row stays
+    `ending`. `youtube_reconnect_needed` also moves the connection to `reconnect_needed` (status_since now) and is not
+    counted `failed` (a known state); other codes count `failed`. A reconnect resets `next_attempt_at` (T8). A throw
+    never stops the loop.
 
 - [ ] **Step 1: Failing tests** (FakeYouTube, real DB, sessions driven through the T11 path or the session rig).
 
@@ -927,29 +968,31 @@ it("each end path fires the rule from ended_at", async () => {
 });
 it("two overlapping firings (Promise.all of two endDueBroadcasts) → exactly ONE complete call, ended sums to 1", …);   // §9.2
 it("race, order A: admission reserves first → the step sees the reservation → not due; the session attaches; broadcast stays live", …);   // §9.2
-it("race, order B: the step claims first (afterClaim hook pauses) → admission takes the new-broadcast path; the claimed row ends 'complete', the new one is live; no session references a complete broadcast", …);
-it("token killed mid-match: video keeps flowing (fake.videoOn stays live), the step marks reconnect_needed and does NOT call complete; after reconnect (saveConnectionFromGrant) the next run ends it", …);   // §9.2
+it("race, order B: the step claims first (`o.hooks.afterClaim` pauses it, R5) → admission takes the new-broadcast path; the claimed row ends 'complete', the new one is live; no session references a complete broadcast", …);
+it("token killed mid-match: video keeps flowing (fake.videoOn stays live), the step marks reconnect_needed, does NOT call complete, and RETRIES at +1 min and +2 min (accessToken attempted each time, R5); after reconnect (saveConnectionFromGrant) the next run ends it", …);   // §9.2
 it("never-live broadcast (bound, video never arrived, session ended) → deleteBroadcast, state failed 'never_live', not a replay part", …);
 it("orphan: 'created' 11 min old, no session → deleted at YouTube, failed 'orphan'; 9 min old → untouched", …);   // 10 min: spec §6.2
 it("stream_url: null → set to the watch URL; already set by the club → untouched (Part 1 rule)", …);
-it("backoff: an unavailable error sets next_attempt_at = now + 2 min after the first failure; the row is skipped before that", …);
+it("backoff: an unavailable error sets next_attempt_at = now + 1 min after the first failure and + 2 min after the second (P6); the row is not selected before that", …);
+it("broadcastLife 'revoked' → connection reconnect_needed, the row stays 'ending' with backoff (R5)", …);
 it("RF3: fixture switched to a pasted key inside grace, pasted session live → the API broadcast still ends at Stop + 5", …);
 it("budget: wallClock past 15 s after the first row → the rest counted deferred, not failed", …);
 it("orgIds: [] is refused", …);
 ```
 
 - [ ] **Step 2–4:** red → implement → VERIFY green. **MUTATE** the `skip locked` (drop it, killed by overlap or race),
-  the finalize `where state = 'ending'` (killed by race B) and the reconnect-skip.
+  the finalize `where state = 'ending'` (killed by race B) and the reconnect retry (make it skip: killed by the token-killed test's retry assertions).
 - [ ] **Step 5: Commit** `feat(youtube): end step (claim, call, finalize)`.
 
-**Four types:** unit + regression; E2E `youtube-connect.spec.ts › Stop > 5 min ⇒ new video` (T20); smoke (T21).
+**Four types:** unit + regression; E2E `youtube-connect.spec.ts › Stop > 5 min ⇒ new video` (T20); smoke
+`youtube: stream-tick answers` (T21).
 
 ### Task 15: Tick wiring and cadence
 
 **Files:**
 - Modify: `apps/web/src/app/api/cron/stream-tick/route.ts`; `apps/web/src/server/usecases/stream-sessions.ts` (`tickOpenSessions` gains `budgetMs?: number`, default `STREAM_TICK_BUDGET_MS`)
 - Modify: `apps/cron-worker/src/schedule.ts` (stream-tick `due: { kind: "every" }`; `FAST_TRIGGER` UNCHANGED — stg stays `*/5` (owner Q1 = b, 2026-10-27); the doc comments at `:113-116`, `:140-142` updated to the new truth; failureCounts add `"data.youtube.failed"`). `wrangler.json` UNCHANGED.
-- Test: `apps/web/src/app/api/cron/stream-tick/route.test.ts`, `apps/cron-worker/test/{schedule,drift}.test.ts`
+- Test: `apps/web/src/app/api/cron/stream-tick/route.test.ts`, `apps/cron-worker/test/{schedule,drift,run}.test.ts` (`run.test.ts:18` `FIVE_MINUTE_ROWS` lists stream-tick: it leaves that list and its throttle cases are re-pinned, R12)
 
 **Interfaces:** the route answer is `StreamTickAnswer & { youtube: YoutubeEndResult }`. The YouTube step runs first,
 then the relay-disabled return, then `tickOpenSessions(deps, { budgetMs: STREAM_TICK_BUDGET_MS - elapsed })`. A throw
@@ -975,27 +1018,33 @@ it("email-outbox cadence unchanged: every fast firing in both envs (prod minute,
 - Note: on stg a broadcast's end can land up to 5 min late (accepted by the owner, Q1 = b); stg acceptance timings
   in T22's runbook allow for it.
 
-**Four types:** unit + regression (drift, schedule); E2E `youtube-connect.spec.ts › Stop > 5 min` posts the tick route
+**Four types:** unit + regression (drift, schedule, run); E2E `youtube-connect.spec.ts › Stop > 5 min` posts the tick route
 (T20); smoke `youtube: stream-tick answers with youtube counters` (T21).
 
 ### Task 16: Replay parts (UI half blocked on T4)
 
 **Files:**
 - Modify: the public match page (`page.tsx:405-430` block); the fixture stream panel's after-match area (path from T12)
-- Create: `apps/web/src/server/youtube/parts.ts`: `replayParts(fixtureId: string): Promise<{ partNo: number; url: string }[]>` reading `public_fixture_youtube_parts_v`
+- Create: `apps/web/src/server/youtube/parts.ts`: `replayParts(fixtureId: string): Promise<{ partNo: number; url: string }[]>` reading `public_fixture_youtube_parts_v` on the privileged `sql` (R7, the stream pattern)
 - Modify: `ui.json` × 4 (`streaming.youtube.watch`, `streaming.youtube.part` with `{n}`)
-- Test: `apps/web/src/server/youtube/__tests__/parts.test.ts`, the page's markup test
+- Test: `apps/web/src/server/youtube/__tests__/parts.test.ts`; the page tested through its **real server loader** (the
+  function the page calls for its fixture data, extended to return `parts`), never a test role reading the view (R7)
+- Create: `apps/web/e2e/youtube-parts.shots.spec.ts` (R8)
 
 - [ ] **Step 1: Failing tests.**
   - Restart after completion (complete b1, Go live again, complete b2) gives `[{partNo:1},{partNo:2}]`. The page
     renders "Part 1" and "Part 2" in order. With one part it renders the `watch` key, not "Part 1".
   - Zero parts renders the existing `public-stream-link` path unchanged (empty case first).
+  - With parts, the list replaces the single link when `stream_url` is Part 1's URL (never shown twice); a club's own
+    different `stream_url` still renders beside the parts.
   - A setup division renders nothing.
   - A `cancelled` fixture renders nothing: it follows `streamLinkLabelKey`'s void rule (§3.9 comment, read it).
-- [ ] **Step 2–4:** red → implement → green. Screenshots at three widths come via the CI artifacts (T20).
+- [ ] **Step 2–4:** red → implement → green. R8: `youtube-parts.shots.spec.ts` captures the one-part and two-part
+  public page at 1280/768/320 (no horizontal scroll asserted); CI dispatch; Artifact page.
 - [ ] **Step 5: Commit** `feat(youtube): match page lists YouTube replay parts`.
 
-**Four types:** unit; E2E `youtube-connect.spec.ts › replay link(s)` (T20); smoke (T21); regression (a pasted-key
+**Four types:** unit; E2E `youtube-parts.shots.spec.ts` (this task) + `youtube-connect.spec.ts › replay link(s)` (T20);
+smoke `youtube: public match page lists parts` (T21); regression (a pasted-key
 fixture's single link is unchanged).
 
 **B5 gate:** `reviewer` plus visual sign-off. Push. Dispatch e2e.
@@ -1006,8 +1055,8 @@ fixture's single link is unchanged).
 
 **Files:**
 - Create: `apps/web/src/server/youtube/daily.ts`
-- Modify: `apps/web/src/app/api/cron/relay-sweep/route.ts` (the YouTube pass **before** the disabled return, F7); `apps/cron-worker/src/schedule.ts` relay-sweep row `failureCounts: ["data.youtube.failed"]`
-- Test: `apps/web/src/server/youtube/__tests__/daily.test.ts`, `apps/web/src/app/api/cron/relay-sweep/__tests__/route.test.ts` (create if absent)
+- Modify: `apps/web/src/app/api/cron/relay-sweep/route.ts` (the YouTube pass **before** the disabled return, F7); `apps/cron-worker/src/schedule.ts` relay-sweep row `failureCounts: ["data.youtube.failed"]`; the relay-sweep answer type declares `youtube: YoutubeDailyResult` so `drift.test.ts` resolves the counter
+- Test: `apps/web/src/server/youtube/__tests__/daily.test.ts`; extend the EXISTING `apps/web/src/app/api/cron/relay-sweep/route.test.ts`; `apps/cron-worker/test/drift.test.ts` (its counter count rises by one)
 
 **Interfaces:**
 ```ts
@@ -1026,7 +1075,7 @@ it("RF5: live blocked → the Directory view's liveState 'blocked'", …);
 it("refresh: rows refreshed 26 days ago → videos.list called in batches of ≤ 50 (120 rows → 3 calls: 50, 50, 20); present → refreshed_at now", …);   // 50: Google's per-call id cap
 it("refresh: a video deleted on YouTube → row deleted AND fixtures.stream_url cleared when it pointed at that video; a club's own link untouched", …);   // §9.2
 it("refresh: rows refreshed 24 days ago are not called (EMPTY batch → zero calls, checked reported)", …);
-it("dead grant: reconnect_needed for 31 days → purge (broadcast rows of the connection gone, its stream_urls cleared, token cleared, status revoked); 29 days → untouched", …);   // 30: DP III.E.4
+it("dead grant: reconnect_needed for 31 days → purge (broadcast rows of the connection gone, its stream_urls cleared, token cleared + status revoked through token-store's revokeConnection, R1); 29 days → untouched", …);   // 30: DP III.E.4
 it("relay-disabled deployment → the YouTube daily pass still runs (answer carries youtube{…})", …);
 ```
 
@@ -1042,16 +1091,18 @@ Smoke `youtube: relay-sweep answers` (T21).
 
 **Files:**
 - Create: `apps/web/src/server/youtube/disconnect.ts`
-- Modify: `app/api/v1/orgs/[id]/youtube-connections/[connectionId]/route.ts` (DELETE), `schemas.ts`/`openapi.ts`/`key-scopes.ts`, the Directory row's Disconnect action, `ui.json` × 4
+- Modify: `app/api/v1/orgs/[id]/youtube-connections/[connectionId]/route.ts` (DELETE), `schemas.ts`/`openapi.ts`/`key-scopes.ts`, the Directory row's Disconnect action, `ui.json` × 4; extend `apps/web/e2e/youtube-directory.shots.spec.ts` (T9) with the disconnect confirm and the `YOUTUBE_IN_USE` refusal at 1280/768/320 (R8)
 - Test: `apps/web/src/server/youtube/__tests__/disconnect.test.ts`, the route test
 
 **Interfaces:**
 ```ts
 export async function disconnectYoutube(auth: AuthCtx, orgId: string, connectionId: string, port: YouTubePort): Promise<{ revokedAtGoogle: boolean; keysDeleted: number; purged: { broadcasts: number; streamUrlsCleared: number } }>;
-// tx1: lock connection; any broadcast in ('created','bound','reserved','live','ending') → HttpError(409, "A match is using this channel", "YOUTUBE_IN_USE");
-//      open token into memory; status revoked, revoked_at now; archive the destination row; commit.
-// no lock: deleteStream for each key; revoke unless another non-revoked connection has the same google_sub (T6 Step 0 answer; record 'revoke_skipped_shared_grant').
-// tx2: clearToken; purgeConnectionData; delete key rows. A YouTube failure in the middle never stops tx2.
+// tx1: lock connection; any broadcast in ('reserved','bound','live') whose end is NOT due (broadcastEndDueAt null or > now)
+//      → HttpError(409, "A match is using this channel", "YOUTUBE_IN_USE") (R9: 'ending'/claimed and due rows do not block; they are purged);
+//      openToken into memory; token-store's revokeConnection (token null + revoked + revoked_at, ONE statement, R1); archive the destination row; commit.
+// no lock: with the in-memory token, end each due/ending broadcast at YouTube (complete, or delete if never live; best-effort, so none is left
+//      live with no picture); deleteStream for each key; revoke unless another non-revoked connection has the same google_sub (T6 Step 0; record 'revoke_skipped_shared_grant').
+// tx2: purgeConnectionData; delete key rows. A YouTube failure in the middle never stops tx2.
 ```
 
 - [ ] **Step 1: Failing tests.**
@@ -1059,6 +1110,8 @@ export async function disconnectYoutube(auth: AuthCtx, orgId: string, connection
 ```ts
 it("disconnect while a broadcast is live → 409 YOUTUBE_IN_USE, nothing changed", …);                 // §9.2; §9.3 mutation target
 it("disconnect inside grace (Stopped 2 min ago, broadcast live) → 409", …);
+it("R9: a reconnect_needed connection holding a claimed 'ending' row → disconnect succeeds and purges it", …);
+it("R9: a due-but-unclaimed live broadcast (Stopped 6 min ago) does not block; it is completed at YouTube before the revoke", …);
 it("disconnect idle → token revoked at Google once, keys deleted at YouTube, token null, status revoked, destination archived, broadcast rows gone, fixtures.stream_url pointing at its videos cleared, a club's own link kept", …);   // §9.2
 it("a SECOND disconnect → 404 (already revoked), no Google call", …);
 it("same google_sub on another live connection → no revoke call, recorded; that connection still works", …);
@@ -1067,7 +1120,8 @@ it("after disconnect, the same channel can be connected by another org", …);
 it("Go live on the archived destination after disconnect → the existing 404 target_not_found", …);
 ```
 
-- [ ] **Step 2–4:** red → implement → green → openapi drift empty. **MUTATE** the in-use guard (§9.3).
+- [ ] **Step 2–4:** red → implement → green → openapi drift empty. **MUTATE** the in-use guard (§9.3). CI-dispatch the
+  shots spec; Artifact page.
 - [ ] **Step 5: Commit** `feat(youtube): disconnect with revoke and inline purge`.
 
 **Four types:** unit + regression; E2E `youtube-connect.spec.ts › disconnect` (T20); smoke `youtube: disconnect
@@ -1087,7 +1141,8 @@ unknown → 404` (T21).
   - it links the YouTube ToS;
   - it names what is accessed, stored, used and shared (channel id and title, a refresh token, broadcast/video ids and
     titles, kept up to 30 days and refreshed or deleted), the in-app disconnect and its 7-day purge, and a contact.
-  - `checked === 6`.
+  - `checked === 7` (the API Services text, the Google privacy href, the permissions href, the ToS href, the data list,
+    the disconnect + 7-day purge, a contact).
 - [ ] **Step 2–4:** red → write the section (DP III.A.2 per spec §3.4; re-read developers.google.com/youtube/terms/developer-policies first) → green.
 - [ ] **Step 5: Commit** `docs(privacy): YouTube API Services disclosure`.
 
@@ -1100,10 +1155,13 @@ names YouTube API Services` (T21); regression (the existing sections unchanged).
 - Create: `apps/web/e2e/walkthrough/youtube-connect.spec.ts` (follow `walkthrough/directory-stream-destinations.spec.ts` and `walkthrough/stream-relay.spec.ts` for login, org seeding and fake-ingest driving)
 - Modify: `.github/workflows/e2e.yml` (env on every job that starts the server: `YOUTUBE_DRIVER: fake` and a per-run `YOUTUBE_TOKEN_KEK`, generated the way `RELAY_KEK` is at `:976-980`), plus its wiring test `e2e-ci-wiring.test.ts` ("YOUTUBE_TOKEN_KEK reaches every …")
 
-- [ ] **Step 1: Write the spec.** Each test drives the UI and the fake control route, and asserts what the screen shows
+- [ ] **Step 1: Write the spec.** Each test drives the UI and the fake control route (`autoVideo` on, so broadcasts go live and can complete as parts;
+  tokens and streams addressed only by the handles `state` returns, R6), and asserts what the screen shows
   plus the fake's counts:
   - `connect: consent → picker → row`. The Connect button is disabled until ticked. Two fake channels lead to the
-    picker. The row shows the channel name and the Unlisted badge. Captures at 1280/768/320.
+    picker. The row shows the channel name and the Unlisted badge. (Captures belong to T9's shots spec, R8.)
+  - `connect → Go live` (T1's named test): connect one channel and Go live on its row; the session is live and `state`
+    shows one bound broadcast.
   - `Go live → Stop → Go live = same video`. Fake `insertBroadcast` count stays 1, and the panel shows live.
   - `Stop > 5 min ⇒ new video`. Advance by POSTing the tick route with a server clock override if one exists,
     otherwise by stamping `ended_at` back in the DB the way existing walkthroughs age rows. Record which in the report.
@@ -1111,7 +1169,7 @@ names YouTube API Services` (T21); regression (the existing sections unchanged).
   - `refusal copy`: `failNext youtube_live_not_enabled`, Go live, then the spec sentence is visible and no session
     exists.
   - `replay link(s)`: two parts give "Part 1" and "Part 2" on the public page.
-  - `reconnect needed badge`: `killToken`, POST relay-sweep, then the badge shows.
+  - `reconnect needed badge`: `killToken` with the `tokenHandle` from `state`, POST relay-sweep, then the badge shows.
   - `disconnect`: refused while live; after the end, the disconnect succeeds and the row is gone.
   - `two matches on one channel`: both live, no `target_in_use`.
   - `consent links resolve`: the three hrefs are the exact spec URLs.
@@ -1123,13 +1181,22 @@ names YouTube API Services` (T21); regression (the existing sections unchanged).
 
 **Files:** Modify `scripts/smoke.ts` (one `// --- youtube connect` section); the smoke job's env in `.github/workflows/ci.yml` (`YOUTUBE_DRIVER: fake`, `YOUTUBE_TOKEN_KEK`).
 
-- [ ] **Step 1: Add probes.**
-  - `POST /api/cron/stream-tick` answers 200 with `data.youtube.failed === 0` and numeric `ended`.
-  - `POST /api/cron/relay-sweep` answers with `data.youtube`.
-  - `POST /api/youtube/connect` without `consent` answers 400 (the connect-less refusal).
-  - A connection seeded `reconnect_needed`, then Go live, answers 409 `youtube_reconnect_needed` with no session row.
-  - The Directory list for that org carries `youtube.status === "reconnect_needed"`.
-  - `/legal/privacy` contains "YouTube API Services".
+- [ ] **Step 1: Add probes**, each under the name its owning task cites. Anti-vacuity: the section reports `probes === 10`.
+  - `youtube: stream-tick answers` (T1, T13, T14, T15): `POST /api/cron/stream-tick` → 200, `data.youtube.failed === 0`, numeric `ended`.
+  - `youtube: relay-sweep answers` (T17): `POST /api/cron/relay-sweep` → `data.youtube` present.
+  - `youtube: connect without consent is refused` (T7): `POST /api/youtube/connect` without `consent` → 400.
+  - `youtube: reconnect-needed refusal` (T2, T10, T11, T12): a connection seeded `reconnect_needed` through the smoke's
+    `postgres` handle (any non-null token bytes: prepare refuses on status before opening it), then Go live → 409
+    `youtube_reconnect_needed`, no session row.
+  - `youtube: list shape` (T3, T8): the Directory list carries that API row with `youtube.status === "reconnect_needed"`,
+    `keyHint === null`, `inUse === null`.
+  - `youtube: fake control route answers in fake mode` (T5): `POST /api/internal/youtube/fake {op:"state"}` → 200, and the
+    body holds no token or key.
+  - `youtube: directory renders Connect YouTube` (T9): `GET /directory?tab=streaming` HTML has `data-testid="youtube-connect"`.
+  - `youtube: public match page lists parts` (T16): one seeded `complete` broadcast → the public page has
+    `data-testid="youtube-part-1"`.
+  - `youtube: disconnect unknown → 404` (T18): `DELETE /api/v1/orgs/:id/youtube-connections/<random uuid>` → 404.
+  - `youtube: /legal/privacy names YouTube API Services` (T19).
   - Each probe asserts `="` anchored attributes where it reads HTML (AGENTS.md trap).
 - [ ] **Step 2:** Smoke runs on the PR's CI job. Paste back the counts. **Step 3: Commit** `test(smoke): YouTube connect probes`.
 
@@ -1146,7 +1213,7 @@ names YouTube API Services` (T21); regression (the existing sections unchanged).
     Then disconnect: the token is revoked at myaccount, the keys are gone in Studio, and the links are cleared.
   - **Read-only stg SQL** the agent runs afterwards (`REMOTE_DATABASE_URL`, schema `seazn_club`): the
     `youtube_broadcasts` states and times against `fixture_stream_sessions.ended_at`, with end time minus Stop
-    expected in [5, 6) min. Also record the real visibility (spec §10 unknown).
+    expected in [5, 10) min on stg (its tick fires every 5 min, Q1 = b; prod's would be [5, 6)). Also record the real visibility (spec §10 unknown).
 - [ ] **Step 2: PR readiness (controller).**
   - Renumber `V4NN` to the actual max + 1.
   - Run `npm run openapi:gen && git status --porcelain`, which must be empty.
