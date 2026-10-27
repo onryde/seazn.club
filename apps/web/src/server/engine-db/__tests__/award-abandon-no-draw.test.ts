@@ -72,6 +72,9 @@ const tip = async (id: string) =>
   (await sql<{ s: number }[]>`select coalesce(max(seq), 0)::int as s from score_events where fixture_id = ${id}`)[0]!.s;
 const post = async (auth: AuthCtx, id: string, type: string, payload: unknown = {}) =>
   scoreEvent(auth, id, { expected_seq: await tip(id), type, payload } as never);
+/** A side's goal. FIH hockey refuses an untyped goal on the write path (W2d T18, HK-TB-2: GOAL_KIND_REQUIRED), so its
+ *  goals here are field goals — what the table counts an untyped goal as anyway (B3); every other sport's is side-only. */
+const goal = (m: Mod, by: string) => (m.key === "hockey" ? { by, kind: "fg" } : { by });
 async function tableOf(auth: AuthCtx, stageId: string, ids: readonly string[]): Promise<StandingRow[]> {
   await recomputeStandings(auth.orgId, stageId);
   const rows = (await getStandings(auth, stageId)).rows as StandingRow[];
@@ -88,8 +91,8 @@ async function levelAbandon(c: Case, kind: StageKind) {
   const id = s.fixtureIds[0]!;
   const { home_entrant_id: home, away_entrant_id: away } = await rowOf(id);
   await post(s.auth, id, "core.start");
-  await post(s.auth, id, `${c.m.key}.goal`, { by: home });
-  await post(s.auth, id, `${c.m.key}.goal`, { by: away });
+  await post(s.auth, id, `${c.m.key}.goal`, goal(c.m, home));
+  await post(s.auth, id, `${c.m.key}.goal`, goal(c.m, away));
   await post(s.auth, id, "core.abandon", { reason: "floodlights" });
   return { s, id, home, away };
 }
@@ -125,7 +128,7 @@ describe.runIf(HAS_DB)("R16-3, ruling 117: a level award-policy abandon where th
       const [abandon] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${id} and type = 'core.abandon'`;
       await post(s.auth, id, "core.void", { event_id: abandon!.id }); // the console's undo of the abandon
       expect((await rowOf(id)).status, `${name}: voided`).toBe("in_play");
-      await post(s.auth, id, `${c.m.key}.goal`, { by: home });
+      await post(s.auth, id, `${c.m.key}.goal`, goal(c.m, home));
       await post(s.auth, id, "core.abandon", { reason: "floodlights" });
       const r = await rowOf(id);
       expect({ status: r.status, outcome: r.outcome }, name).toEqual({ status: "decided", outcome: { kind: "win", winner: home, loser: away, method: "abandoned" } });

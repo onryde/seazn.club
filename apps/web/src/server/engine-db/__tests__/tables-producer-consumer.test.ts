@@ -522,7 +522,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     const t = named("ABCD", s.entrants);
     const reg = (goals: ("H" | "A")[]): Ev[] => [
       { type: "core.start" },
-      ...goals.map((by): Ev => ({ type: "hockey.goal", payload: { by } })),
+      ...goals.map((by): Ev => ({ type: "hockey.goal", payload: { by, kind: "fg" } })), // W2d T18: the write path needs the type
       { type: "hockey.period.advance", payload: { to: "Q2" } },
       { type: "hockey.period.advance", payload: { to: "Q3" } },
       { type: "hockey.period.advance", payload: { to: "Q4" } },
@@ -556,7 +556,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     const t = named("ABCD", s.entrants);
     const toFt = (goals: ("H" | "A")[]): Ev[] => [
       { type: "core.start" },
-      ...goals.map((by): Ev => ({ type: "hockey.goal", payload: { by } })),
+      ...goals.map((by): Ev => ({ type: "hockey.goal", payload: { by, kind: "fg" } })), // W2d T18: the write path needs the type
       { type: "hockey.period.advance", payload: { to: "Q2" } },
       { type: "hockey.period.advance", payload: { to: "Q3" } },
       { type: "hockey.period.advance", payload: { to: "Q4" } },
@@ -564,7 +564,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     ];
     await play(door, s.auth, s.stageId, t.A!, t.C!, toFt(["H"])); // A 1-0 C
     await play(door, s.auth, s.stageId, t.D!, t.A!, toFt(["H", "H", "H"])); // D 3-0 A
-    const ot = await play(door, s.auth, s.stageId, t.B!, t.D!, [...toFt([]), { type: "hockey.goal", payload: { by: "H" } }]); // B 1-0 D in overtime
+    const ot = await play(door, s.auth, s.stageId, t.B!, t.D!, [...toFt([]), { type: "hockey.goal", payload: { by: "H", kind: "fg" } }]); // B 1-0 D in overtime
     expect([ot.status, ot.outcome?.winner, ot.outcome?.method], "rig: B won in overtime").toEqual(["decided", t.B, "extra_time"]);
     const rows = await publicRows(door, s);
     // FIH 3/1/0 with no overtime split (D9: an overtime win pays a win): A 3, B 3, D 3 + 0, C 0.
