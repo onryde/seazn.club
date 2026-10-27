@@ -11,7 +11,7 @@ import "server-only";
 //  - `purgeOldEmails` is the worker's last step (RETENTION_DAYS); `scrubEndedRecipients` runs just before it (step 7a), taking the address
 //    out of an ended row of a kind that may keep it only while it can still be sent (SCRUBBED_WHEN_ENDED).
 import { sql, type Tx } from "@/lib/db";
-import { PURGE_BATCH, RETENTION_DAYS, SCRUBBED_WHEN_ENDED, type OutboxKind, type OutboxStatus } from "./constants";
+import { PURGE_BATCH, RETENTION_DAYS, type OutboxKind, type OutboxStatus } from "./constants";
 import { CANCELLED_REASONS } from "./cancel";
 
 // THE RULE for "which row is the email a recipient has about a thing", in one place. THREE statements need it and their call shapes
@@ -219,19 +219,33 @@ export async function purgeOldEmails(opts: PurgeOptions = {}): Promise<number> {
  * many rows it scrubbed. SQL only: it reads no body and renders nothing.
  */
 export async function scrubEndedRecipients(opts: PurgeOptions = {}): Promise<number> {
-  const db = opts.db ?? sql;
-  const scope = opts.onlyIds === undefined ? db`` : db`and id = any(${opts.onlyIds as string[]}::uuid[])`;
-  const rows = await db`
+  const rows = await scrubEndedStatement(opts.db ?? sql, opts.onlyIds);
+  return rows.length;
+}
+
+/**
+ * `scrubEndedRecipients`' statement, built and not yet run (postgres.js runs a query only when it is awaited). Exported so the access-path
+ * pin EXPLAINs exactly this text. It runs every tick, so it must not read the table: V474's `email_outbox_scrub_idx` holds only the rows
+ * it may scrub, and its WHERE is this predicate word for word.
+ *
+ * The kinds are SCRUBBED_WHEN_ENDED written out as LITERALS, on purpose. The planner may read a partial index only when it can prove the
+ * index's WHERE from the statement's, and a bound value (`kind = any($1)`) proves nothing under the generic plan a named prepared statement
+ * moves to after a few calls (postgres.js prepares on a direct connection): the scrub would walk the whole table again. So a kind added to
+ * SCRUBBED_WHEN_ENDED is added here and to the index in the same change. The tests hold all three together: the status sweep stages every
+ * kind of the list, and the plan pin reads the index's own WHERE back.
+ */
+export function scrubEndedStatement(db: Tx | typeof sql, onlyIds?: readonly string[]) {
+  const scope = onlyIds === undefined ? db`` : db`and id = any(${onlyIds as string[]}::uuid[])`;
+  return db`
     with ended as (
       select id from email_outbox
-       where kind = any(${SCRUBBED_WHEN_ENDED as string[]}::text[]) and ref_type = 'user'
+       where kind = 'account_deletion' and ref_type = 'user'
          and status not in ('queued', 'sending')
-         and recipient <> 'deleted-' || ref_id || '@deleted.invalid' ${scope}
+         and recipient <> ('deleted-' || ref_id || '@deleted.invalid') ${scope}
        order by created_at, id
        limit ${PURGE_BATCH}
        for update skip locked
     )
     update email_outbox o set recipient = 'deleted-' || o.ref_id || '@deleted.invalid' from ended where o.id = ended.id
     returning o.id`;
-  return rows.length;
 }

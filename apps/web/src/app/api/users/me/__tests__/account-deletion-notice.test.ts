@@ -36,8 +36,9 @@ vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }
 
 import { sql } from "@/lib/db";
 import { DELETE } from "@/app/api/users/me/route";
-import { RETRYABLE_STATUSES, enqueueEmail, type OutboxKind } from "@/server/email-outbox";
+import { RETRYABLE_STATUSES, SCRUBBED_WHEN_ENDED, enqueueEmail, type OutboxKind } from "@/server/email-outbox";
 import { runOutboxTick } from "@/server/email-outbox/worker";
+import { scrubEndedStatement } from "@/server/email-outbox/status";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 
@@ -214,5 +215,38 @@ describe.skipIf(!HAS_DB)("deleting an account queues the deletion notice on the 
     const report = await tick(id);
     expect(report.scrubbed).toBe(0);
     expect((await rowOf(id)).recipient, "an ended row of another kind keeps its address").toBe(email);
+  });
+
+  it("the scrub reads only the rows it may scrub, through their own index, never the whole table", async () => {
+    // Step 7a runs every tick, so its cost must not grow with the table. The statement explained is the step's own, unscoped as the worker
+    // runs it in production (`scrubEndedStatement`, so the pin cannot drift from it), in both plans it can get: with its values bound, as
+    // postgres.js first sends it, and GENERIC, planned without any value, as a named prepared statement may run it after a few calls
+    // (`explain (generic_plan)` on the very text postgres.js sends, read back with `describe`). Sequential scans are off so the answer does
+    // not depend on how many rows the test table holds (account-deletion-sweep.test.ts's rule). That alone proves nothing here: without the
+    // partial index the planner still finds an index (the ref index, over every sign-in row), so the pin names the partial index.
+    type PlanRow = { "QUERY PLAN": string };
+    const lines = (rows: readonly PlanRow[]) => rows.map((r) => r["QUERY PLAN"]).join("\n");
+    const { bound, generic, predicate } = await sql.begin(async (tx) => {
+      await tx`set local enable_seqscan = off`;
+      const bound = lines(await tx<PlanRow[]>`explain ${scrubEndedStatement(tx)}`);
+      const sent = await scrubEndedStatement(tx).describe();
+      const generic = lines(await tx.unsafe<PlanRow[]>(`explain (generic_plan) ${sent.string}`));
+      const [index] = await tx<{ predicate: string }[]>`
+        select pg_get_expr(indpred, indrelid) as predicate from pg_index where indexrelid = to_regclass('email_outbox_scrub_idx')`;
+      return { bound, generic, predicate: index?.predicate ?? "" };
+    });
+    for (const [name, plan] of [["bound", bound], ["generic", generic]] as const) {
+      expect(plan, `${name}: the rows to scrub come from the scrub's own partial index`).toMatch(
+        /Index Scan using email_outbox_scrub_idx|Bitmap Index Scan on email_outbox_scrub_idx/,
+      );
+      expect(plan, name).not.toMatch(/Seq Scan on email_outbox/);
+    }
+    // SCRUBBED_WHEN_ENDED stays the authority: the index's own WHERE (read back from the catalogue) names every kind of it.
+    let kinds = 0;
+    for (const kind of SCRUBBED_WHEN_ENDED) {
+      expect(predicate, `the index covers ${kind}`).toContain(`'${kind}'::text`);
+      kinds++;
+    }
+    expect(kinds, "anti-vacuity: the list named at least one kind").toBeGreaterThan(0);
   });
 });
