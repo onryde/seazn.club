@@ -81,7 +81,7 @@ describe("W2d T18 — a hockey (FIH) goal records its type (HK-TB-2, B3, PS-7d)"
     let accepted = 0;
     const sports = forEachSport(({ key, module }) => {
       const type = `${key}.goal`;
-      if ((module as AnySportModule).eventSchemas?.[type] === undefined) return; // no goal event to type
+      if (module.eventSchemas?.[type] === undefined) return; // no goal event to type
       for (const { name, cfg } of declaredCfgs(module as never)) {
         const lineups = defaultLineupPair(resolvePositions(module as never, cfg));
         const stream = envelopes([start, { type, payload: { by: lineups.home.entrantId } }]);
@@ -170,7 +170,7 @@ describe("W2d T18 — a hockey (FIH) goal records its type (HK-TB-2, B3, PS-7d)"
         const lineups = defaultLineupPair(resolvePositions(module as never, cfg));
         for (let seed = 1; seed <= 25; seed++) {
           const rng = mulberry32(seed);
-          let state = module.init(cfg as never, lineups);
+          let state = module.init(cfg, lineups);
           for (let i = 0; i < 120; i++) {
             const next = module.arbitraryEvent?.(state as never, rng) ?? null;
             if (next === null) break;
