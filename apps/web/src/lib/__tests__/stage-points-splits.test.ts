@@ -126,6 +126,10 @@ describe("flattenedSplits: the splits a flat rule SENT would flatten (N2, N3)", 
     expect(flattenedSplits(ih, ih.variants.iihf, "league", { ...FLAT, win: { regulation: 3 }, loss: { regulation: 0 } })).toEqual(["otWin", "otLoss"]);
     expect(flattenedSplits(ih, ih.variants.iihf, "league", { ...FLAT, win: { regulation: 2 }, loss: { regulation: 1 } }), "OT's 2/1 everywhere").toEqual(["otWin", "otLoss"]);
     expect(flattenedSplits(g, g.variants.score, "league", { ...FLAT, win: { regulation: 7 } }), "generic pays nothing apart").toEqual([]);
+    // A rule that STATES its splits is the caller's choice, never refused for them — even paying other amounts than IIHF's.
+    const stated: PointsRule = { ...FLAT, win: { regulation: 3, ot: 6, so: 9 }, loss: { regulation: 0, ot: 4, so: 7 } };
+    expect(isFlatRule(stated), "premise: not flat").toBe(false);
+    expect(flattenedSplits(ih, ih.variants.iihf, "league", stated), "stated, other amounts").toEqual([]);
     expect(flattenedSplits(ih, ih.variants.iihf, "knockout", FLAT), "a bracket kind").toEqual([]);
     expect(flattenedSplits(ih, { periods: "many" }, "league", FLAT), "a cfg the schema refuses").toEqual([]);
   });

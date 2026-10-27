@@ -223,7 +223,14 @@
     "files": [
      "src/lib/__tests__/stage-points-splits.test.ts"
     ],
-    "name": "flattenedSplits: the splits a flat rule SENT"
+    "name": "another sport: no flat rule pays IIHF"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/stage-points.test.ts"
+    ],
+    "name": "W2d T10 fix round 1 I2: a FLAT rule over a sport"
    }
   ]
  },
@@ -269,6 +276,21 @@
      "src/server/api-v1/__tests__/w2d-api.test.ts"
     ],
     "name": "m8 the standings row"
+   }
+  ]
+ },
+ {
+  "id": "t13-retired-code-planted",
+  "file": "apps/web/src/server/api-v1/schemas.ts",
+  "find": "export const TableRulesSourceS = z.enum([\"stage\", \"division\", \"sport\", \"migrated\"]);",
+  "replace": "export const TableRulesSourceS = z.enum([\"stage\", \"division\", \"sport\", \"migrated\"]); // POINTS_RULE_INEXPRESSIBLE",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/w2d-api.test.ts"
+    ],
+    "name": "appears nowhere in schemas"
    }
   ]
  }

@@ -7404,7 +7404,7 @@ async function w2dTablesSuite(): Promise<void> {
     prepare: !url.includes(":6543"),
     max: 1,
   });
-  const EXPECTED_CHECKS = 6;
+  const EXPECTED_CHECKS = 9;
   let checked = 0;
   const w2dCheck = (label: string, cond: boolean) => {
     checked++;
@@ -7442,12 +7442,57 @@ async function w2dTablesSuite(): Promise<void> {
       "w2d: a stage is unpinned before it is generated" + (before?.pinned_at === null ? "" : ` — got ${JSON.stringify(before)}`),
       entrants.length === 6 && before !== undefined && before.pinned_at === null && before.sources === null,
     );
+    // W2d Task 13 (spec §7, §10): the table rules over API v1 — refused by name, served with their source, kept by a pin.
+    type TableRulesWire = { tiebreakers: { keys: string[]; source: string; pinnedAt: string | null; sportDefault: string[] } };
+    const tableRules = async () =>
+      v1data<{ tableRules: TableRulesWire | null } | undefined>(await v1(owner, `/api/v1/stages/${stageId}`))?.tableRules ?? null;
+    // `nrr` is cricket's net run rate: generic records no such ledger, so the validator refuses it for the sport.
+    const invalid = await v1(owner, `/api/v1/stages/${stageId}/rules`, "PUT", { tiebreakers: ["points", "nrr", "lots"] });
+    const invalidErr = (invalid.json as { error?: { code?: string; refusals?: { index: number; key: string; reason: string }[] } } | null)?.error;
+    const unsaved = await tableRules();
+    w2dCheck(
+      "w2d: an invalid order is refused by name — 422 TIEBREAK_KEY_INVALID naming nrr (index 1) for the sport, nothing stored" +
+        (invalid.status === 422 ? "" : ` — got ${invalid.status} ${JSON.stringify(invalid.json)}`),
+      invalid.status === 422 &&
+        invalidErr?.code === "TIEBREAK_KEY_INVALID" &&
+        invalidErr.refusals?.[0]?.index === 1 &&
+        invalidErr.refusals[0].key === "nrr" &&
+        invalidErr.refusals[0].reason === "sport" &&
+        unsaved?.tiebreakers.source === "sport",
+    );
+    // A division default before the generate: the pending stage reads it, and says so.
+    const DIV_ORDER = ["points", "diff", "for", "lots"];
+    const divDefault = await v1(owner, `/api/v1/divisions/${divId}`, "PATCH", { tiebreakers: DIV_ORDER });
+    const inherited = await tableRules();
+    w2dCheck(
+      "w2d: GET /stages/{id} tableRules says where the order came from — the division's default, unpinned, beside the sport's own" +
+        (inherited?.tiebreakers.source === "division" ? "" : ` — PATCH ${divDefault.status}, got ${JSON.stringify(inherited)}`),
+      divDefault.status === 200 &&
+        JSON.stringify(inherited?.tiebreakers.keys) === JSON.stringify(DIV_ORDER) &&
+        inherited?.tiebreakers.source === "division" &&
+        inherited.tiebreakers.pinnedAt === null &&
+        inherited.tiebreakers.sportDefault.length > 0 &&
+        JSON.stringify(inherited.tiebreakers.sportDefault) !== JSON.stringify(DIV_ORDER),
+    );
     const generated = v1data<{ fixtures: { id: string }[] } | undefined>(await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST"))?.fixtures ?? [];
     const after = await pinOf();
     w2dCheck(
       "w2d: generating the stage pins its table rules (pinned_at set, sources recorded)" +
         (after?.pinned_at != null ? "" : ` — got ${generated.length} fixture(s), ${JSON.stringify(after)}`),
       generated.length === 15 && after?.pinned_at != null && after.sources != null,
+    );
+    // After activation a division order edit lands and lists the pinned stage as kept; the stage still ranks by its pin.
+    const moved = await v1(owner, `/api/v1/divisions/${divId}`, "PATCH", { tiebreakers: ["points", "for", "diff", "lots"] });
+    const kept = (moved.json as { data?: { stagesKeptPinned?: { stageId: string; name: string }[] } } | null)?.data?.stagesKeptPinned;
+    const pinned = await tableRules();
+    w2dCheck(
+      "w2d: a division edit after activation lists the stage as kept (stagesKeptPinned), and the stage keeps its pinned order" +
+        (moved.status === 200 ? "" : ` — got ${moved.status} ${JSON.stringify(moved.json)}`),
+      moved.status === 200 &&
+        JSON.stringify(kept) === JSON.stringify([{ stageId, name: "Table" }]) &&
+        JSON.stringify(pinned?.tiebreakers.keys) === JSON.stringify(DIV_ORDER) &&
+        pinned?.tiebreakers.source === "division" &&
+        pinned.tiebreakers.pinnedAt !== null,
     );
     const started = await v1(owner, `/api/v1/divisions/${divId}/start`, "POST");
 
