@@ -9,6 +9,7 @@ import "server-only";
 // control route uses), so a deployment that names itself stg or prod cannot serve them even if its mode were set wrong.
 import { FAKE_DRIVER_ENV_NAMES } from "@/server/relay/config";
 import { FakeYouTube } from "./fake";
+import { GoogleYouTube } from "./google";
 import type { YouTubePort } from "./port";
 
 export type YoutubeDriverMode = "fake" | "live";
@@ -46,11 +47,10 @@ const slots = globalThis as unknown as Record<symbol, FakeYouTube | undefined>;
 let override: YouTubePort | null = null;
 let liveDriver: YouTubePort | null = null;
 
-/** The Google driver. T6 builds `GoogleYouTube` (google.ts) and replaces this body with `new GoogleYouTube()`. Until then the
- *  live branch REFUSES BY NAME instead of falling back to the fake: serving a fake where Google was asked for is the failure
- *  this file exists to prevent. */
+/** The Google driver (google.ts). Built once per process and cached by `youtubeDriver`. It reads the Google client credentials
+ *  per call, so a process without them still starts and each call refuses by code (`notConfigured`) instead of serving a fake. */
 function buildLiveDriver(): YouTubePort {
-  throw new Error("YOUTUBE_DRIVER=live: the Google driver (server/youtube/google.ts, plan T6) is not wired into driver.ts yet");
+  return new GoogleYouTube();
 }
 
 export function youtubeDriver(): YouTubePort {

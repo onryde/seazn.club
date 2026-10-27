@@ -9,7 +9,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FAKE_DRIVER_ENV_NAMES } from "@/server/relay/config";
 import { FakeYouTube } from "../fake";
-import type { YouTubePort } from "../port";
+import { GoogleYouTube } from "../google";
 import { setYoutubeDriverForTest, youtubeDriver, youtubeDriverMode, youtubeFakeRoutesEnabled } from "../driver";
 
 afterEach(() => {
@@ -122,33 +122,32 @@ describe("youtubeDriver", () => {
     expect(youtubeDriver(), "and the new one is cached").toBe(fresh);
   });
 
-  it("in live mode it never returns the fake: it is a live port, or it refuses (until the Google driver is wired it refuses by name)", () => {
+  it("in live mode it returns the Google driver — a live port that is not the fake — and the same instance on a second call", () => {
     vi.stubEnv("YOUTUBE_DRIVER", "live");
-    let got: YouTubePort | Error;
-    try {
-      got = youtubeDriver();
-    } catch (e) {
-      got = e as Error;
-    }
+    const got = youtubeDriver();
+    expect(got).toBeInstanceOf(GoogleYouTube);
     expect(got).not.toBeInstanceOf(FakeYouTube);
-    if (got instanceof Error) expect(got.message).toMatch(/YOUTUBE_DRIVER=live/);
-    else expect(got.mode).toBe("live");
+    expect(got.mode).toBe("live");
+    expect(youtubeDriver(), "second call: one driver per process").toBe(got);
+    // A clear drops the cached live driver too, so the next test builds its own.
+    setYoutubeDriverForTest(null);
+    expect(youtubeDriver()).not.toBe(got);
   });
 
-  it("production with the variable unset: the driver is the live path, not the fake", () => {
+  it("production with the variable unset: the driver is the Google driver, not the fake (the regression this file pins)", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("YOUTUBE_DRIVER", "");
-    let got: YouTubePort | Error;
-    try {
-      got = youtubeDriver();
-    } catch (e) {
-      got = e as Error;
-    }
+    const got = youtubeDriver();
     expect(got).not.toBeInstanceOf(FakeYouTube);
-    // The positive pair (as in the explicit-live test above): what it IS, not only what it is not. A driver that returned
-    // `undefined`, or any other object, would pass the line above and be neither the named refusal nor a live port.
-    if (got instanceof Error) expect(got.message).toMatch(/YOUTUBE_DRIVER=live/);
-    else expect(got.mode).toBe("live");
+    // The positive pair: what it IS, not only what it is not.
+    expect(got).toBeInstanceOf(GoogleYouTube);
+    expect(got.mode).toBe("live");
+  });
+
+  it("and the fake mode never hands out the Google driver (the other half of the pair)", () => {
+    vi.stubEnv("YOUTUBE_DRIVER", "fake");
+    expect(youtubeDriver()).not.toBeInstanceOf(GoogleYouTube);
+    expect(youtubeDriver().mode).toBe("fake");
   });
 
   it("an override set while the mode is live is still honoured (a test double stands in for Google)", () => {

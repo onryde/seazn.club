@@ -500,8 +500,9 @@ export class FakeYouTube implements YouTubePort {
     return p;
   }
 
-  /** A Google account with no YouTube channel cannot create a stream or a broadcast. Google answers a 403
-   *  `youtubeSignupRequired`, a reason T6's `mapGoogleError` table has no row for, so it lands on `youtube_unavailable`. */
+  /** A Google account with no YouTube channel cannot create a stream or a broadcast. Google answers an HTTP 401
+   *  `youtubeSignupRequired` (errors page: "an unlinked Google Account"); `mapGoogleError` (google.ts) decides that reason BEFORE
+   *  its generic 401 -> reconnect rule and answers `youtube_unavailable`, the code this throws (reconnecting cannot help). */
   private requireChannel(refreshToken: string): void {
     if (this.grantOf(refreshToken).channels.length === 0) throw new YouTubeError("youtube_unavailable", "youtubeSignupRequired");
   }
