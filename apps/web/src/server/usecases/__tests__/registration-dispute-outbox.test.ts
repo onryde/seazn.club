@@ -3,7 +3,8 @@
 // the dispute on the cart and written only on the transition to THIS dispute. A dispute that closes lost tells the owner what was written
 // off and recovered (kind `registration_dispute_lost`, the same ref, once-key `<dispute id>:lost`). The owner is an account (the address is
 // resolved at send), the mail is in the owner's language (D4: the account's, then the org default), and the first attempt is the worker's
-// (a webhook has no response to defer behind). The lost notice's own tests are the dispute-loss suite of registrations.test.ts.
+// (a webhook has no response to defer behind). The lost notice's own tests are the dispute-loss suite of registrations.test.ts. An
+// inquiry that closes without a chargeback (`warning_closed`) takes the won path: the cart's flag is cleared, and no mail is sent.
 //
 // Producer under test: `handleRegistrationDispute`, driven directly as the billing webhook calls it. Only the network seams are replaced
 // (Stripe, for the withdrawal's refund; `@/server/email-outbox/transport`). The enqueue is the real one, observed through a spy that calls
@@ -319,5 +320,37 @@ describe.skipIf(!HAS_DB)("a lost dispute notifies the org owner through the outb
     }
     expect(lost[0]!.subject).toBe(dictionarySubject("fr", "disputeLost.subject", { competitionName: w.competition.name }));
     expect(transportCallsFor(lost[0]!.id), "the webhook did not attempt the send").toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// A closed inquiry: the registrant is no longer disputed
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+describe.skipIf(!HAS_DB)("an inquiry that closes without a chargeback ends the dispute (DB)", () => {
+  it("a closed inquiry (warning_closed) clears the cart's dispute flag", async () => {
+    // Stripe's inquiry: it opens as `charge.dispute.created` with status `warning_needs_response` (no money is withdrawn), and when the
+    // bank drops it without a chargeback it closes as `charge.dispute.closed` with status `warning_closed`. The registrant is no
+    // longer disputed (the hub and the division's dispute count read `disputed_at`), and nothing is written off.
+    const w = await world({ ownerLocale: "fr", orgDefault: "en" });
+    const e = await paidEntry(w);
+    const id = newDisputeId();
+
+    await handleRegistrationDispute(disputeOf(id, e.intent, { status: "warning_needs_response" }), "created");
+    expect((await loadWithGroup(e.regId)).disputed_at, "premise: the inquiry flagged the cart").not.toBeNull();
+
+    await expect(handleRegistrationDispute(disputeOf(id, e.intent, { status: "warning_closed" }), "closed")).resolves.toBe(true);
+
+    const after = await loadWithGroup(e.regId);
+    expect(after.disputed_at, "the flag is cleared").toBeNull();
+    expect(after.refunded_cents, "nothing was written off: an inquiry takes no money").toBe(0);
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from competition_events
+       where competition_id = ${w.competition.id} and type = 'registration.dispute_won' and payload->>'dispute_id' = ${id}`;
+    expect(n, "the close is recorded as the dispute ending in the club's favour").toBe(1);
+    expect(await rowsOf(LOST, [id]), "and no loss notice was queued").toHaveLength(0);
+
+    await handleRegistrationDispute(disputeOf(id, e.intent, { status: "warning_closed" }), "closed"); // Stripe's retry, or a replay
+    expect((await loadWithGroup(e.regId)).disputed_at, "a redelivered close leaves the flag clear").toBeNull();
   });
 });

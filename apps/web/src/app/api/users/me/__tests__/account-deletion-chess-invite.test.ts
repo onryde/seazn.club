@@ -18,7 +18,7 @@
 // `Ann@x.io` and `ann@x.io` are two live accounts and deleting one must leave the other's rows alone.
 //
 // Driven against a real Postgres. The REAL open writes the rows of the seat tests and the REAL attempt sends them (only the network, the
-// invite renderer, the session half of auth, the deletion email and Stripe are stand-ins, the shared invite harness); the REAL DELETE
+// invite renderer, the session half of auth and Stripe are stand-ins, the shared invite harness); the REAL DELETE
 // /api/users/me anonymises them; the REAL chess hook and the REAL webhook handler follow.
 //
 // Sport: online chess is the only sport that sends an invite (supportsOnlinePlay is `boardgame` only), so there is no other sport to sweep.
@@ -43,7 +43,7 @@ const mail = vi.hoisted(() => ({
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
   const h = await import("@/server/usecases/__tests__/_invite-mail");
-  return { ...actual, sendAccountDeletionEmail: vi.fn(async () => {}), externalPlayInviteEmail: h.renderInviteForTest };
+  return { ...actual, externalPlayInviteEmail: h.renderInviteForTest };
 });
 vi.mock("@/server/email-outbox/transport", async () => {
   const h = await import("@/server/usecases/__tests__/_invite-mail");

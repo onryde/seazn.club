@@ -108,8 +108,8 @@ describe.skipIf(!HAS_DB)("cross-org booked-elsewhere read (v11.1)", () => {
 
     const officialA = await createOfficial(orgA.auth, { display_name: "Ref A-side", role_keys: ["referee"] });
     const officialB = await createOfficial(orgB.auth, { display_name: "Ref B-side", role_keys: ["referee"] });
-    const invitedA = await inviteOfficial(orgA.auth, officialA.id, ref.email);
-    const invitedB = await inviteOfficial(orgB.auth, officialB.id, ref.email);
+    const invitedA = await inviteOfficial(orgA.auth, officialA.id, ref.email, "https://officials.test");
+    const invitedB = await inviteOfficial(orgB.auth, officialB.id, ref.email, "https://officials.test");
     await claimPerson(invitedA.secret, ref.id, ref.email);
     await claimPerson(invitedB.secret, ref.id, ref.email);
 
@@ -153,7 +153,7 @@ describe.skipIf(!HAS_DB)("cross-org booked-elsewhere read (v11.1)", () => {
 
     const officialA = await createOfficial(orgA.auth, { display_name: "Claimed Ref", role_keys: ["referee"] });
     const unclaimed = await createOfficial(orgB.auth, { display_name: "Unclaimed Ref", role_keys: ["referee"] });
-    const invitedA = await inviteOfficial(orgA.auth, officialA.id, ref.email);
+    const invitedA = await inviteOfficial(orgA.auth, officialA.id, ref.email, "https://officials.test");
     await claimPerson(invitedA.secret, ref.id, ref.email);
     // orgB's official is never invited/claimed — no persons.user_id link at all.
 

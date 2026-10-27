@@ -7,6 +7,14 @@ import {
 } from "../settings-support";
 import { apiJson, TAG } from "../helpers";
 import { ownTest, signInOwnAccount } from "../own-account";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** Notice copy read from the dictionary the page renders from, never retyped here (the `readFileSync` shape of
+ *  settings-admin.spec.ts: Playwright's loader supplies no JSON import attribute). */
+const UI_EN: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
 
 /**
  * W2 Task 3 — the four PEOPLE-facing panels of `/o/{org}/settings`:
@@ -330,10 +338,32 @@ test("team tab: an email invite is really accepted, the new member's role change
     ),
     page.getByRole("button", { name: "Send invite" }).click(),
   ]);
+  // This server has no Resend key, so the invite email's first attempt cannot go out: the notice says it may
+  // arrive late and points at the personal link, while the outbox keeps the email.
+  const notSent = UI_EN["settings.team.inviteEmail.notSent"];
+  expect(notSent, "settings.team.inviteEmail.notSent missing from en/ui.json").toBeTruthy();
+  await expect(page.getByText(notSent!, { exact: true })).toBeVisible({ timeout: 20_000 });
 
   const emailInvite = (await readInvites()).find((i) => i.email === memberEmail);
   expect(emailInvite, `no invite row was stored for ${memberEmail}`).toBeTruthy();
   expect(emailInvite!.role).toBe("viewer");
+
+  // The invite's email is ONE `org_invite` row, ref the stored invite, written with it. Its first attempt was made
+  // in the request, so it is no longer waiting and holds no body.
+  const inviteMail = await withDb(
+    (sql) => sql<{ status: string; hasBody: boolean }[]>`
+      select status, body_sealed is not null as "hasBody"
+        from email_outbox
+       where kind = 'org_invite' and ref_type = 'org_invite' and ref_id = ${emailInvite!.id}`,
+  );
+  expect(
+    {
+      count: inviteMail.length,
+      waiting: inviteMail.filter((r) => r.status === "queued" || r.status === "sending").length,
+      withBody: inviteMail.filter((r) => r.hasBody).length,
+    },
+    "one invite email for the invite, its first attempt made, no body kept",
+  ).toEqual({ count: 1, waiting: 0, withBody: 0 });
 
   // ── a real person accepts it ─────────────────────────────────────────────
   // An invite nobody can accept is a row, not a feature. `browser.newContext()`

@@ -8,6 +8,14 @@ import {
   waitForHydration,
 } from "../directory-kit";
 import { ALL_OFFICIAL_ROLES } from "../../src/lib/official-roles";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+
+/** Notice copy read from the dictionary the page renders from, never retyped here (the `readFileSync` shape of
+ *  scheduling-officials-handoff.spec.ts: Playwright's loader supplies no JSON import attribute). */
+const UI_EN: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
+);
 
 /**
  * `officials.roles_multi` in BOTH directions: refused, it must SWAP the pick
@@ -261,14 +269,17 @@ test("roles_multi is free on community, swaps under a deny, and sticks once allo
   await row.getByRole("button", { name: "Invite" }).click();
   await row.getByLabel("Email", { exact: true }).fill(`delivered+official-${s}@resend.dev`);
   await row.getByRole("button", { name: "Send invite" }).click();
-  // The link is the send-FAILURE fallback: with a mailer configured the form
+  // The link is the not-sent fallback: with a mailer configured the form
   // renders `officials.inviteSent` and no link at all, so this spec says that
   // out loud instead of dying on an empty locator below. It is CI's path too —
-  // e2e.yml sets no RESEND_API_KEY and lib/email's send() returns false when it
-  // is unset. Note the officials invite does NOT emit `data-testid="claim-link"`
+  // e2e.yml sets no RESEND_API_KEY, so the invite email's first attempt through
+  // the email outbox cannot go out (the row ends `dead`) and `email_sent` is
+  // false. Note the officials invite does NOT emit `data-testid="claim-link"`
   // (that is the persons rail's); here the URL is bare <code> text.
+  const notSent = UI_EN["officials.inviteEmailFailed"];
+  expect(notSent, "officials.inviteEmailFailed missing from en/ui.json").toBeTruthy();
   await expect(
-    row.getByText(/Email failed to send/i),
+    row.getByText(notSent!, { exact: true }),
     "the mailer accepted this invite, so no link is shown — this spec needs the send-failure fallback",
   ).toBeVisible();
   await expect(row.getByText(/\/claim\/pc_/)).toBeVisible();

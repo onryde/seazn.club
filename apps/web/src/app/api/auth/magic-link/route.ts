@@ -8,7 +8,14 @@ import { stampTermsAcceptance } from "@/lib/legal";
 import { magicLinkEmail } from "@/lib/email";
 import { issueLoginLink } from "@/lib/login-link";
 import { sql } from "@/lib/db";
-import { OutboxExpiryTooLongError, OutboxKeyUnavailableError, dispatchNow, enqueueEmail, outboxKeyProblem } from "@/server/email-outbox";
+import {
+  OutboxExpiryTooLongError,
+  OutboxKeyUnavailableError,
+  dispatchNow,
+  enqueueEmail,
+  outboxKeyProblem,
+  recipientLocale,
+} from "@/server/email-outbox";
 import { baseUrl } from "@/lib/oauth";
 import { mayExposeDevLink } from "@/lib/dev-links";
 import { z } from "zod";
@@ -81,7 +88,8 @@ export async function POST(req: Request) {
             refId: userId,
             orgId: null,
             to: email,
-            ...(await magicLinkEmail(email, link)),
+            // D4: the account's own language (a brand-new account has none, so it is `en`).
+            ...(await magicLinkEmail(email, link, await recipientLocale(tx, { pick: null, userId, orgDefault: null }))),
             transactional: true,
             expiresAt,
           });

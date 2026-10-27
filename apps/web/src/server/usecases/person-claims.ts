@@ -24,18 +24,20 @@ import { AuthError, HttpError } from "@/lib/errors";
 import { emailSigninOpen } from "@/lib/claim-signin-window";
 import { stampTermsAcceptance } from "@/lib/legal";
 import { resolveOrCreateUser } from "@/lib/users";
+import { routes } from "@/lib/routes";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { queueClaimInviteEmail } from "./claim-invite-mail";
 
 export const CLAIM_PREFIX = "pc_";
 const CLAIM_DAYS = 14;
 
-// Both the superuser client and a withTenant tx serve createSystemClaimInvite
-// below (registrations.ts's own AnySql precedent) — a caller MAY pass a `tx`
-// to mint atomically inside a larger transaction, but every RS008 call site
-// today calls this with the pooled `sql`, strictly AFTER its own enclosing
-// transaction has committed (never inside one — this mints a row, the
-// caller separately sends an email, and network I/O must never run inside
-// an open tx, same reasoning `getLimit`'s own doc comment gives elsewhere).
+// Both the superuser client and a tx serve createSystemClaimInvite below
+// (registrations.ts's own AnySql precedent). The RS008 sweep
+// (`maybeInviteClaim`) passes a transaction of its OWN, opened on the pool
+// strictly AFTER the registration's transaction has committed, so the claim
+// and the outbox row that mails it commit together; the email itself is
+// attempted only after that commits (network I/O never runs inside an open
+// tx, same reasoning `getLimit`'s own doc comment gives elsewhere).
 type AnySql = Tx | postgres.Sql;
 
 export function hashClaimToken(secret: string): string {
@@ -134,18 +136,35 @@ function isPooledSql(db: AnySql): db is postgres.Sql {
   return typeof (db as postgres.Sql).begin === "function";
 }
 
+/** The invite email a console claim queues (`createClaimInvite`'s `mail`): which kind and what it is about, the origin its link is built
+ *  on, and the address as the organiser typed it. */
+export interface ClaimInviteMail {
+  kind: "claim_invite" | "official_invite";
+  refType: "person" | "official";
+  refId: string;
+  origin: string;
+  to: string;
+}
+
 /**
  * Invite a person to claim their profile. One open claim per person: minting
  * revokes any prior open invite (both secrets with it). Secrets returned
  * exactly once: `secret` is the console one (the organiser's copyable link +
  * QR), `emailSecret` is for the invite email and must NEVER reach the
  * organiser — every caller destructures it out before building a response.
+ *
+ * With `mail`, the invite email carrying the EMAIL secret is queued on the
+ * email outbox in this same tenant transaction (the row's org is the
+ * tenant's), so the claim and its mail commit together; `outboxId` is its row,
+ * for the caller's first attempt after commit. Without it nothing is queued
+ * and `outboxId` is null.
  */
 export async function createClaimInvite(
   auth: AuthCtx,
   personId: string,
   email: string,
-): Promise<ClaimRow & ClaimSecrets & { person_name: string; org_name: string }> {
+  mail?: ClaimInviteMail,
+): Promise<ClaimRow & ClaimSecrets & { person_name: string; org_name: string; outboxId: string | null }> {
   requireSessionEditor(auth);
   const secrets = mintClaimSecrets();
   const row = await withTenant(auth.orgId, async (tx) => {
@@ -164,7 +183,20 @@ export async function createClaimInvite(
     // treats as needing a runtime check only because THAT function's
     // contract is "never throws"; this one's is not.
     const created = (await reviveClaimInvite(tx, auth.orgId, personId, email, auth.userId, secrets))!;
-    return { ...created, person_name: person.full_name, org_name: org?.name ?? "" };
+    const outboxId = mail
+      ? await queueClaimInviteEmail(tx, {
+          kind: mail.kind,
+          refType: mail.refType,
+          refId: mail.refId,
+          orgId: auth.orgId,
+          to: mail.to,
+          claimUrl: `${mail.origin}${routes.claim(secrets.emailSecret)}`,
+          personName: person.full_name,
+          orgName: org?.name ?? "",
+          expiresAt: new Date(created.expires_at),
+        })
+      : null;
+    return { ...created, person_name: person.full_name, org_name: org?.name ?? "", outboxId };
   });
   return { ...row, ...secrets };
 }
@@ -194,7 +226,7 @@ export async function createSystemClaimInvite(
   orgId: string,
   personId: string,
   email: string,
-): Promise<(ClaimSecrets & { person_name: string; org_name: string }) | null> {
+): Promise<(ClaimSecrets & { person_name: string; org_name: string; expires_at: string }) | null> {
   const secrets = mintClaimSecrets();
   const [person] = await db<{ id: string; full_name: string; user_id: string | null }[]>`
     select id, full_name, user_id from persons
@@ -204,19 +236,19 @@ export async function createSystemClaimInvite(
     select name from organizations where id = ${orgId}`;
   // Code-review fix (2026-08-30, item 3): revoke-then-insert now shares
   // reviveClaimInvite's one transactional core with createClaimInvite — see
-  // that function's own doc comment for the race it closes. `db` is the
-  // pooled `sql` at every real call site today (this function's own doc
-  // comment above), so it opens ITS OWN transaction here; a caller that
-  // instead passes an already-open `Tx` runs the pair directly on it,
-  // already atomic with the rest of that transaction.
+  // that function's own doc comment for the race it closes. Given the pooled
+  // `sql`, it opens ITS OWN transaction here; given an already-open `Tx` (the
+  // RS008 sweep's, which queues the invite email on it too), it runs the pair
+  // directly on it, atomic with the rest of that transaction.
   const created = isPooledSql(db)
     ? await db.begin((tx) => reviveClaimInvite(tx, orgId, personId, email, null, secrets))
     : await reviveClaimInvite(db, orgId, personId, email, null, secrets);
   if (!created) return null;
   // No organiser console ever shows this invite, so only `emailSecret` is ever
   // used (the registration mail); `secret` is minted for the row's NOT NULL
-  // column and never leaves the server.
-  return { ...secrets, person_name: person.full_name, org_name: org?.name ?? "" };
+  // column and never leaves the server. `expires_at` is the claim's own
+  // deadline, which the mail's outbox row must not outlive.
+  return { ...secrets, person_name: person.full_name, org_name: org?.name ?? "", expires_at: created.expires_at };
 }
 
 /** Revoke the person's open invite, if any (idempotent). */

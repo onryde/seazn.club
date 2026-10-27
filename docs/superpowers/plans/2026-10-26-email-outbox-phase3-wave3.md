@@ -34,7 +34,7 @@ difference.
 
 ## Owner rulings (2026-10-26) — every Owner question below is decided
 
-The owner applied every recommendation in this plan's Owner questions: Q1 yes (also reword `claim.invite.sendFailed`, 4 locales); Q2 screenshots from a ONE-OFF local server with no Resend key, used only for the 3 widths and torn down after; Q3 yes (sign-in link in the account's language, T2e).
+The owner applied every recommendation in this plan's Owner questions: Q1 yes (also reword `claim.invite.sendFailed`, 4 locales); Q2 screenshots from a ONE-OFF local server with no Resend key, used only for the 3 widths and torn down after; Q3 yes (sign-in link in the account's language, T2e). Later the same day the owner added: check every wave-2 finding for product and customer value and build the ones that have it in this wave → Task 4d (three fixes), triage table below.
 
 ## Global Constraints
 
@@ -148,7 +148,7 @@ Each one is a finding to record in the wave's report. A controller who disagrees
 | P-W3-2 | Test row: "a second request replaces the first (verification, funnel, org invite)". | Only verification restates one document: each press deletes the old token and mints a new one for the same user (`:23-24`). Each funnel start inserts a new draft with its own token (`lib/funnel.ts:38-49`), and each email invite inserts a new single-use invite (`invites.ts:24-50`). Both earlier links still work. | Ref = the document (§5's ref rule): `user / <user id>`, `funnel_draft / <draft id>`, `org_invite / <invite id>`. Verification's second press supersedes. Funnel and org invite get a test that two requests give two rows and neither is replaced. |
 | P-W3-3 | `email_change_notice` once-key: the request id. | The request is user-pressed; nothing replays it. Each request's id is new, so the key never collides. | Keep it as a belt (`onceKey(kind, "user", requestId)`), as wave 2 kept the invoice's. Ref `user / <user id>`: a newer request's notice to the same old address supersedes a still-queued older one through the replace trigger. |
 | P-W3-4 | §5: the request's transaction ends the user's queued confirmations "using the cancel primitive in §7". | `cancelQueuedEmails` refuses a reason not in `CANCELLED_REASONS` (`cancel.ts:63-66`). On the pooled handle it matches only rows with no org (`cancel.ts:47-50`), which is exactly these rows. The route today runs on the bare pool (`change-email/route.ts:29-38`). | Add `EMAIL_CHANGE_SUPERSEDED_REASON = "email_change_superseded"` to `CANCELLED_REASONS` (T1). The route runs delete, insert, cancel and both enqueues in one `sql.begin`. |
-| P-W3-5 | Test row: "the wave's account kinds fall inside wave 1's deletion sweep". | The sweep's arms are `recipient_user_id = <user>` and the legacy chess-invite address arm (`account-deletion.ts:96-101`). Every wave-3 kind is literal and carries no user id. So a queued verification or email-change mail would NOT be reached. | A third arm, `accountMail(tx, userId)`: `kind = any(ACCOUNT_MAIL_KINDS) and ref_type = 'user' and ref_id = <user>`, where `ACCOUNT_MAIL_KINDS = ["email_verification", "email_change_confirmation", "email_change_notice"]` (T3). It is ended and scrubbed like the other arms. It is served by `email_outbox_replace_idx` on `(kind, ref_type, ref_id)`, which an explicit kind list lets the planner use. Org invites, claim invites and other records' rows to the same address stay (D5). |
+| P-W3-5 | Test row: "the wave's account kinds fall inside wave 1's deletion sweep". | The sweep's arms are `recipient_user_id = <user>` and the legacy chess-invite address arm (`account-deletion.ts:96-101`). Every wave-3 kind is literal and carries no user id. So a queued verification or email-change mail would NOT be reached. | A third arm, `accountMail(tx, userId)`: `kind = any(ACCOUNT_MAIL_KINDS) and ref_type = 'user' and ref_id = <user>`, where `ACCOUNT_MAIL_KINDS = ["email_verification", "email_change_confirmation", "email_change_notice"]` (T3). It is ended and scrubbed like the other arms. ~~It is served by `email_outbox_replace_idx`~~ (built: that index is partial and cannot serve it; the arm uses `email_outbox_ref_idx` on `(ref_type, ref_id, created_at desc)`, EXPLAIN-pinned in `account-deletion-sweep.test.ts`). Org invites, claim invites and other records' rows to the same address stay (D5). |
 | P-W3-6 | §6: the deletion notice's address "is scrubbed to the placeholder when the row ends"; how is left to the builder. | A row ends on five paths: `attemptClaimed` (sent, dead, suppressed, expired), the worker's expiry step and its dead step, and a cancel. | One worker step, `scrubEndedRecipients`, runs before the retention purge (`worker.ts` step 7, `:326-333`), inside the same budget and the same logged try/catch. It sets `recipient = 'deleted-' \|\| ref_id \|\| '@deleted.invalid'` on rows of `SCRUBBED_WHEN_ENDED = ["account_deletion"]` that are no longer `queued` or `sending`. One step covers all five paths. The address lives at most one tick after the row ends. |
 | P-W3-7 | `account_deletion`: queued "after the T5 sweep". | With P-W3-5's explicit kind list, the sweep does not match `account_deletion`, so the order has no observable effect. | Enqueue after `anonymiseAccountEmails` in the same transaction, for reading order. There is no guard to mutate; it is recorded. Once-key `onceKey("account_deletion", "user", user.id)` (spec): a belt, because a deleted account cannot request deletion again (`requireUser`). |
 | P-W3-8 | F9: the claim invite "is fired from seven" places, and "all seven need wave 3's in-transaction enqueue". | Re-pinned, the seven calls are `registration-submit.ts:964` and `:1484`, `registration-approval.ts:158`, and `registrations.ts:3235`, `:6202`, `:6260`, `:6302`. Every one is `void inviteUnclaimedMembers(...)` after its own commit, by design (`registrations.ts:1592-1596`). Each converges on `maybeInviteClaim` (`:1549`), which mints the claim in its own transaction (`createSystemClaimInvite` → `db.begin`, `person-claims.ts:212-214`). The fact the email carries is the claim, not the registration. | One enqueue, in `maybeInviteClaim`: `sql.begin(tx => createSystemClaimInvite(tx, …) then enqueue on tx)`. All seven sites get it unchanged. A refusal rolls the claim back with its row and is logged (the function never throws, as today), so the next convergence re-invites. Tests drive two different entry points (submit and approval). T0 reads all seven and records that each still calls `inviteUnclaimedMembers` after its commit. |
@@ -158,7 +158,7 @@ Each one is a finding to record in the wave's report. A controller who disagrees
 | P-W3-12 | (test fallout) | `lib/__tests__/email-send-result.test.ts:464-509` uses `sendVerificationEmail` as the representative `send()` sender. Two e2e tests match the old officials copy by regex: `officials-directory.spec.ts:71` and `walkthrough/directory-officials-roles.spec.ts:271`. | Repoint the unit test to `sendFunnelReminderEmail` (transactional; it lives until wave 5 deletes `send()`). The two e2e tests read the dictionary value (T6). |
 | P-W3-13 | (visual check) | The brief asks for screenshots at 1280, 768 and 320, and forbids a local web server. The notices appear only when `email_sent` is false, which stg (it has a Resend key) never shows. | Q2. |
 | P-W3-14 | D4 for account mail. | Wave 1's T7 note says the `magic_link` locale "is wave 3's"; the sign-in route still renders `en` (`magic-link/route.ts:84`). | Q3. A one-line change if approved (T2e). |
-| P-W3-15 | D4 for the funnel. | The funnel start carries no locale (`funnel/start/route.ts:12-15`, a strict schema), there is no account yet, and there is no org. | D4 gives `en`, as today. Recorded as a routed finding, not built. |
+| P-W3-15 | D4 for the funnel. | The funnel start carries no locale (`funnel/start/route.ts:12-15`, a strict schema), there is no account yet, and there is no org. | ~~D4 gives `en`, as today.~~ **Superseded (build, 2026-10-27):** the start request DOES reach a language: the `/start` wizard sends the locale it rendered in (`useLocale()`, validated `z.enum(LOCALES).optional().catch(undefined)`), then the `seazn_locale` cookie (shared reader `lib/explicit-locale.ts`), then `en`. Fix rounds 1–2 (T2-G1, FR1-gap). |
 
 **Stale citations (re-verified at `67eb05aedd`).** The spec's `email.ts` lines are current (`:288`, `:316`, `:326`,
 `:349`, `:461`, `:470`, `:479`, `:491`). The F9 call sites moved: spec `registrations.ts:1462`, `:3036`, `:5910`,
@@ -194,8 +194,8 @@ All are literal (`recipient_user_id` null). `transactional` is `true` except `or
 | Kind (spec order) | Sender deleted (email.ts) | Builder added | Producer (re-pinned) | First | `ref_type / ref_id` | Once-key | Org | Locale (`recipientLocale`) | Changed while queued |
 |---|---|---|---|---|---|---|---|---|---|
 | `email_verification` | `sendVerificationEmail` :288 | `verificationEmail(link, locale)` | `api/admin/users/[id]/resend-verification/route.ts:17-33` | R, deferred | `user / <user id>` | — | null | pick null, `userId: user.id` | The token: a second staff press deletes it and re-enqueues, so the newer row supersedes (built, T2a test 2). The account's address changing while the row waits: rare — recorded. |
-| `funnel_claim` | `sendFunnelClaimEmail` :316 | `funnelClaimEmail(args, locale)` | `api/funnel/start/route.ts:24-43` + `lib/funnel.ts:38` | R, awaited | `funnel_draft / <draft id>` | — | null | none → `en` (P-W3-15) | None can change: a draft has no edit path, and claiming it needs the link this mail carries. |
-| `email_change_confirmation` | `sendEmailChangeConfirmation` :461 | `emailChangeConfirmationEmail(link, locale)` | `api/auth/change-email/route.ts:11-41` | R, awaited | `user / <user id>` | — | null | pick `user.locale`, `userId: user.id` | The token and address: a new request ends the older queued row, `email_change_superseded` (built, T2c test 2). Confirmation needs this link, so it cannot happen first. |
+| `funnel_claim` | `sendFunnelClaimEmail` :316 | `funnelClaimEmail(args, locale)` | `api/funnel/start/route.ts:24-43` + `lib/funnel.ts:38` | R, awaited | `funnel_draft / <draft id>` | — | null | page locale → `seazn_locale` cookie → `en` (P-W3-15, superseded) | None can change: a draft has no edit path, and claiming it needs the link this mail carries. |
+| `email_change_confirmation` | `sendEmailChangeConfirmation` :461 | `emailChangeConfirmationEmail(link, locale)` | `api/auth/change-email/route.ts:11-41` | R, awaited | `user / <user id>` | — | null | pick `null`, `userId: user.id` (one source: the account; fix round 1, T2-M1) | The token and address: a new request ends the older queued row, `email_change_superseded` (built, T2c test 2). Confirmation needs this link, so it cannot happen first. |
 | `email_change_notice` | `sendEmailChangeNotice` :470 | `emailChangeNoticeEmail(newEmail, locale)` | same route | R, awaited | `user / <user id>` | `<request id>` (P-W3-3) | null | as above | The new address: a newer request's notice to the same old address supersedes it through the trigger (asserted in T2c test 2). |
 | `account_deletion` | `sendAccountDeletionEmail` :479 | `accountDeletionEmail(locale)` | `api/users/me/route.ts` DELETE, `sql.begin` `:167-195` | R, deferred | `user / <user id>` | `<user id>` (P-W3-7) | null | pick `user.locale` (read before the anonymisation) | None: the account is gone. The address is scrubbed when the row ends (P-W3-6). |
 | `org_invite` | `sendInviteEmail` :491 | `orgInviteEmail(args, locale)` | `api/orgs/[id]/invites/route.ts:31-53` + `invites.ts:24` | R, awaited → `email_sent` | `org_invite / <invite id>` | — | the org | org `default_locale` (no link; never looked up by address) | Revoking the invite, or renaming the org, while the row waits in retry: rare — recorded. A second invite is its own document (P-W3-2). |
@@ -704,6 +704,57 @@ and returns `outboxId`. The route passes `baseUrl(req)` and computes `email_sent
 - [ ] **Step 8: TSC, LINT, commit**
   `feat(officials): the officiating invite goes through the outbox; the notice is true while it retries`.
 
+### Task 4d (batch C): wave-2 findings with customer value (owner, 2026-10-26)
+
+The owner asked for every wave-2 finding to be checked for product and customer value, and for the ones that have value
+to be built in this wave. The triage of all 27 is under "Wave-2 findings, triaged by customer value" below. Three
+are built here. Each is one guard plus one test, and each is ONE commit. Lines are cited as of `badfee3fef`; re-pin by
+symbol at T0.
+
+**Files:** `apps/web/src/server/usecases/sponsors.ts`, `apps/web/src/server/usecases/registrations.ts`; tests in
+`apps/web/src/server/usecases/__tests__/sponsor-dispute-outbox.test.ts`, `registration-dispute-outbox.test.ts`,
+`sponsor-outbox.test.ts` (extend; reuse `_money-fixtures.ts`, `_registration-fixtures.ts`; no new fixture code).
+
+- [ ] **4d-1. A closed inquiry un-parks the sponsor** (`handleSponsorDispute`, the `closed` phase, `sponsors.ts:1040`).
+  *Customer value:* Stripe sends an inquiry (`warning_needs_response`) as `charge.dispute.created`, so the sponsor's
+  placement is parked and the owner is alerted. When the inquiry closes without a chargeback, Stripe sends
+  `charge.dispute.closed` with `status: "warning_closed"`. That matches neither `won` nor `lost`, so today the flag
+  stays and the placement stays hidden FOREVER. The organiser cannot fix it either: `updateSponsor` refuses a manual
+  reactivate with 409 "parked by an open payment dispute — it comes back automatically if the dispute is won". A sponsor
+  who paid is invisible and nobody is told.
+  *Change:* the `won` branch runs for `dispute.status === "won" || dispute.status === "warning_closed"`. A
+  `warning_closed` means the money was never taken, which is what the won email already says ("closed in your favour.
+  The money stays with you and the placement is back"), so the existing `sponsor_dispute_won` email and its once-key
+  (`<dispute>:won`) are reused: no new kind, no migration, no new copy.
+  *Test:* `a closed inquiry (warning_closed) clears the flag, re-activates the placement and queues the won notice once`.
+  Expected values: `disputed_at` null, sponsor `status = 'active'`, one `sponsor_dispute_won` row; redelivery → still one.
+  Mutant: drop the `warning_closed` arm → red.
+- [ ] **4d-2. A closed inquiry clears the registrant's dispute flag** (`handleRegistrationDispute`, the `closed` phase,
+  `registrations.ts:3413`).
+  *Customer value:* same Stripe sequence on a registration cart. The registrant stays "disputed" for good in the
+  registration hub (`registration-hub-registrant-derive.ts:176`) and in the division's dispute count
+  (`registration-derive.ts:54`), so the organiser chases a dispute that ended.
+  *Change:* the `won` branch also runs for `warning_closed` (clear `disputed_at`, the `registration.dispute_won` audit).
+  No email: the registration won path sends none today.
+  *Test:* `a closed inquiry (warning_closed) clears the cart's dispute flag`. Mutant: drop the arm → red.
+- [ ] **4d-3. A replayed payment success cannot re-activate a refunded order** (`handleSponsorPaymentSucceeded`,
+  `sponsors.ts:605`).
+  *Customer value:* money. A refunded sponsor must never go back on boards and public pages. The handler's only guard
+  is `order.status === "paid" || order.sponsor_id !== null`. A refunded order whose sponsor row was deleted has neither,
+  so a re-run of its success (a crash re-claim of the event) inserts a NEW `active` sponsor row and marks the order
+  `paid` again. Narrow to reach, but the owner's exception covers it (money), and the fix is one guard.
+  *Change:* the guard becomes "only a `pending` or `failed` order activates" (confirm the order status enum at T0 and
+  name every non-activating status in the test). Anything else returns `null`: no sponsor row, no receipt, no order write.
+  *Test:* `a payment success re-run on a refunded order whose sponsor was deleted creates no sponsor and leaves the order
+  refunded`. Expected: order `status = 'refunded'`, zero new `sponsors` rows for the org, zero new `sponsor_receipt`
+  rows. Mutant: restore the old guard → red.
+
+Changed while queued: nothing new. 4d-1 reuses a kind whose facts were recorded in wave 2.
+
+### Task 4d-4 (owner, 2026-10-26, Option A): a card inquiry alerts the owner but keeps the sponsor on show
+
+Built from `.superpowers` brief task-4d4-brief.md; recorded here as built. A card inquiry (`warning_*`) takes no money (Stripe docs, disputes/how-disputes-work), so `handleSponsorDispute`'s `created` phase flags the order and queues the owner's alert but no longer parks the placement; a formal dispute still parks at `created`. The new handled event `charge.dispute.funds_withdrawn` parks the placement once (paid order flagged with this dispute; idempotent), routed only to the sponsor handler. `dispute_parked` and the manual-status 409 apply only while the placement is actually parked; while parked, any manual status change is refused. A close restores only a placement the dispute parked (`status = 'pending'`) on a still-paid order. The alert and won emails reworded in 4 locales to be true for both an inquiry and a formal dispute. **Owner step:** subscribe `charge.dispute.funds_withdrawn` on the platform webhook endpoint, stg and prod.
+
 ### Task 5: Smoke
 
 **Files:** `scripts/smoke.ts` only. No new selectable suite, so `smoke-select.test.ts` is unchanged.
@@ -847,6 +898,33 @@ One line each. None loses money or data or leaks a secret's value, except where 
 - The tick's budget is spent before step 7a: the scrub runs next tick.
 - A staff verification resend races the account's own email change: the newer token goes to whichever address the
   route read.
+
+## Wave-2 findings, triaged by customer value (owner, 2026-10-26)
+
+Source: the wave-2 ledger and final review (24 parked minors and 3 new). The question for each: does a customer
+(organiser, sponsor, player, staff) see a difference? Built = Task 4d.
+
+| # | Finding | Who sees it | Verdict |
+|---|---|---|---|
+| 1 | sponsor `warning_closed` falls through: placement hidden forever, manual reactivate refused | paying sponsor, organiser | **Build (4d-1)** |
+| 2 | registration `warning_closed` twin: registrant "disputed" forever | organiser | **Build (4d-2)** |
+| 3 | refunded order (sponsor deleted) re-activated by a re-run success (`sponsors.ts:605`) | public pages show a refunded sponsor | **Build (4d-3)**: money |
+| 4 | platform-subscription `warning_closed` twin (`billing-events.ts:2433`) | nobody: no code reads `subscriptions.disputed_at` | Record |
+| 5 | missing order/cart row counts as a transition (`sponsors.ts:1050`, `registrations.ts:3380`) | at worst one extra alert for a real dispute; rare | Record |
+| 6 | pass revoke reads owner + locale on partial refunds; no log for an owner-less org | nobody (two indexed reads) | Record |
+| 7 | `refId: dedupeKey` → `chargeId` in `queuePassRevokedEmail` | nobody today; a future suffix fails loudly | Record |
+| 8 | `enqueue.ts:77` refusal says "empty or blank" for a missing id | developers only | Fold only if T1 touches `enqueue.ts` |
+| 9 | evidence-pack comments ("language it was sent in", "exact sender inputs") | developers only | Record |
+| 10 | test anchors / unasserted comments (`once-key-builder.test.ts:67`, `sponsor-dispute-outbox.test.ts:298`) | nobody; behaviour is killed by other tests | Record |
+| 11 | hand-typed spec kind lists in 4 test files | developers only; hand-typing from the spec is deliberate | Record |
+| 12 | three similar enqueue literals in `sponsors.ts` | nobody; below the abstraction bar | Record |
+| 13 | lost branch: no no-owner / after-withdrawal test | nobody; TSC kills the guard mutant | Record |
+| 14 | test rows left in local DBs | developers only; CI is fresh | Record |
+| 15 | wave-1 dedupeKeys not on `onceKey` | nobody; each embeds a non-null id | Record |
+| 16 | walkthrough / e2e wording, order and comments (T11/12 m1–m4), `hasBody:false` belt | nobody | Record |
+| 17 | `registration_dispute_lost` has no e2e/smoke row check | nobody; unit + sweep + F7 cover it | Record |
+| 18 | changed-while-queued plan text for won/lost; first-attempt timing checks; 149-char comment line | nobody | Record |
+| 19 | walkthrough KEK concern | ruled void in wave 2 (CI witness) | Closed |
 
 ## Next waves and routed findings (not built here)
 

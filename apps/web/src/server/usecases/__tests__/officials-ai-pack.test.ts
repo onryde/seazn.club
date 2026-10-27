@@ -414,8 +414,8 @@ describe.skipIf(!HAS_DB)("buildOfficialsPack cross-org busy", () => {
 
     const officialA = await createOfficial(orgA, { display_name: "Shared Ref", role_keys: ["referee"] });
     const officialB = await createOfficial(orgB, { display_name: "Shared Ref B", role_keys: ["referee"] });
-    const invitedA = await inviteOfficial(orgA, officialA.id, ref.email);
-    const invitedB = await inviteOfficial(orgB, officialB.id, ref.email);
+    const invitedA = await inviteOfficial(orgA, officialA.id, ref.email, "https://officials.test");
+    const invitedB = await inviteOfficial(orgB, officialB.id, ref.email, "https://officials.test");
     await claimPerson(invitedA.secret, ref.id, ref.email);
     await claimPerson(invitedB.secret, ref.id, ref.email);
 

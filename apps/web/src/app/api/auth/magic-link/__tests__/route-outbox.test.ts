@@ -43,6 +43,8 @@ import { consumeLoginLink, LOGIN_LINK_TTL_MS } from "@/lib/login-link";
 import { idempotencyKey } from "@/server/email-outbox/constants";
 import { openBody } from "@/server/email-outbox/seal";
 import { runOutboxTick } from "@/server/email-outbox/worker";
+import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { makeUser } from "@/server/usecases/__tests__/_registration-fixtures";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const RUN = `ml-${randomUUID().slice(0, 8)}`;
@@ -211,6 +213,25 @@ describe.skipIf(!HAS_DB)("POST /api/auth/magic-link writes the token and the out
     vi.setSystemTime(new Date(r.expires_at.getTime() + 1000));
     expect(await consumeLoginLink(links[0]!.token), "one second after the row's expiry the link is dead").toBeNull();
     vi.useRealTimers();
+  });
+
+  // D4 for the sign-in link: an account that already exists has a language, and the link follows it. (A brand-new account has none,
+  // so the case above, and the kind sweep's scenario, stay `en`.)
+  it("an existing account with locale 'nl' gets a Dutch sign-in link", async () => {
+    const userId = await makeUser("signin-nl");
+    const [account] = await sql<{ email: string }[]>`update users set locale = 'nl' where id = ${userId} returning email`;
+    const email = account!.email;
+    emails.push(email);
+    // The Dutch subject is not the English one, so a route that dropped the account's language would be seen.
+    expect(dictionarySubject("nl", "magicLink.subject", {})).not.toBe(dictionarySubject("en", "magicLink.subject", {}));
+
+    const res = await post({ email });
+
+    expect(res.status).toBe(200);
+    const rows = await rowsFor(email);
+    expect(rows.map((r) => [r.kind, r.ref_id, r.status])).toEqual([["magic_link", userId, "sent"]]);
+    expect(rows[0]!.subject).toBe(dictionarySubject("nl", "magicLink.subject", {}));
+    expect(calls.map((c) => c.body.subject), "and that is the subject that was sent").toEqual([dictionarySubject("nl", "magicLink.subject", {})]);
   });
 
   it("the live link is consumable until the row's expiry: the row never outlives or undercuts the credential", async () => {

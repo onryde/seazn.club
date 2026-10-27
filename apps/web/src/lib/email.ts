@@ -285,13 +285,12 @@ async function send(opts: SendOptions): Promise<boolean> {
 // Transactional emails (bypass suppression — user must receive these)
 // ---------------------------------------------------------------------------
 
-export async function sendVerificationEmail(
-  to: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The account's verification link, RENDERED and not sent. The staff resend (`api/admin/users/[id]/resend-verification`) queues
+ *  what this returns on the email outbox (kind `email_verification`, transactional), in the same transaction as the token it carries,
+ *  and the first attempt is made after commit. Nothing sends it directly. */
+export async function verificationEmail(link: string, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...verificationTemplate(link, dict) });
+  return verificationTemplate(link, dict);
 }
 
 /** What an email says: the part of a message that is not who it goes to. */
@@ -312,24 +311,28 @@ export async function magicLinkEmail(
   return magicLinkTemplate(link, dict);
 }
 
-/** Funnel claim link (v3/07 §6) — transactional: it doubles as sign-in. */
-export async function sendFunnelClaimEmail(
-  to: string,
-  args: FunnelEmailArgs,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** Funnel claim link (v3/07 §6), RENDERED and not sent. The funnel start (`api/funnel/start`) queues what this returns on the email
+ *  outbox (kind `funnel_claim`, transactional: it doubles as sign-in), in the same transaction as the draft whose token it carries,
+ *  and makes the first attempt after commit. Nothing sends it directly. */
+export async function funnelClaimEmail(args: FunnelEmailArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...funnelClaimTemplate(args, dict) });
+  return funnelClaimTemplate(args, dict);
 }
 
-/** Player-account claim invite (PROMPT-53). */
-export async function sendClaimInviteEmail(
-  to: string,
-  args: ClaimInviteArgs,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** Player-account claim invite (PROMPT-53), RENDERED and not sent. `queueClaimInviteEmail` (server/usecases/claim-invite-mail.ts) queues
+ *  what this returns on the email outbox (kind `claim_invite`, transactional), in the transaction that mints the claim whose EMAIL
+ *  secret it carries, from the organiser's console and from every registration path. Nothing sends it directly. */
+export async function claimInviteEmail(args: ClaimInviteArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...claimInviteTemplate(args, dict) });
+  return claimInviteTemplate(args, dict);
+}
+
+/** Officiating claim invite (PROMPT-57), RENDERED and not sent: the claim invite's rail with officiating copy. `queueClaimInviteEmail`
+ *  queues what this returns on the email outbox (kind `official_invite`, transactional), in the transaction that mints the official's
+ *  claim (`inviteOfficial`). Nothing sends it directly. */
+export async function officialInviteEmail(args: OfficialInviteArgs, locale: Locale): Promise<EmailContent> {
+  const dict = await getDictionary(locale, "emails");
+  return officialInviteTemplate(args, dict);
 }
 
 /** Origin for officiating emails fired from request-less paths — same
@@ -342,17 +345,6 @@ export function appOrigin(): string {
     process.env.NEXT_PUBLIC_BASE_URL ||
     "http://localhost:3000"
   ).replace(/\/$/, "");
-}
-
-/** Officiating claim invite (PROMPT-57) — same rail as sendClaimInviteEmail,
- *  officiating copy. Officials default to en (no stored locale). */
-export async function sendOfficialInviteEmail(
-  to: string,
-  args: OfficialInviteArgs,
-  locale: Locale = "en",
-): Promise<boolean> {
-  const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...officialInviteTemplate(args, dict) });
 }
 
 /** New officiating assignment(s) with accept/decline CTA to /me. */
@@ -458,44 +450,41 @@ export async function sendFunnelReminderEmail(
   return send({ to, transactional: true, ...funnelReminderTemplate(args, dict) });
 }
 
-export async function sendEmailChangeConfirmation(
-  to: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The confirm-your-new-address link, RENDERED and not sent. The email-change request (`api/auth/change-email`) queues what this
+ *  returns on the email outbox (kind `email_change_confirmation`, transactional, to the NEW address), in the same transaction as the
+ *  request whose token it carries, and makes the first attempt after commit. Nothing sends it directly. */
+export async function emailChangeConfirmationEmail(link: string, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...emailChangeConfirmTemplate(link, dict) });
+  return emailChangeConfirmTemplate(link, dict);
 }
 
-export async function sendEmailChangeNotice(
-  to: string,
-  newEmail: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The security notice to the OLD address that an email change was requested, naming the new address, RENDERED and not sent. The
+ *  email-change request (`api/auth/change-email`) queues what this returns on the email outbox (kind `email_change_notice`,
+ *  transactional, once per request) in the request's transaction, and makes the first attempt after commit. Nothing sends it directly. */
+export async function emailChangeNoticeEmail(newEmail: string, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...emailChangeNoticeTemplate(newEmail, dict) });
+  return emailChangeNoticeTemplate(newEmail, dict);
 }
 
-export async function sendAccountDeletionEmail(
-  to: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The notice that an account was deleted, RENDERED and not sent. The account deletion (`DELETE /api/users/me`) queues what this returns
+ *  on the email outbox (kind `account_deletion`, transactional, to the address the account had) in the deletion's own transaction, and
+ *  makes the first attempt after commit. Nothing sends it directly. */
+export async function accountDeletionEmail(locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...accountDeletionTemplate(dict) });
+  return accountDeletionTemplate(dict);
 }
 
 // ---------------------------------------------------------------------------
 // Lifecycle emails (respect suppression list)
 // ---------------------------------------------------------------------------
 
-export async function sendInviteEmail(
-  to: string,
-  orgName: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The organisation's email invite (`/join/<token>`), RENDERED and not sent. The org's invite route (`api/orgs/[id]/invites`) queues
+ *  what this returns on the email outbox (kind `org_invite`, NOT transactional, as the direct sender was: the suppression list
+ *  applies), in the same transaction as the invite whose link it carries, and makes the first attempt after commit. Nothing sends it
+ *  directly. */
+export async function orgInviteEmail(args: { orgName: string; link: string }, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...inviteTemplate(orgName, link, dict) });
+  return inviteTemplate(args.orgName, args.link, dict);
 }
 
 /** A payer offered a whole billing group to this recipient (billing-group

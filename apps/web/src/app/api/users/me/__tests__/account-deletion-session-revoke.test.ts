@@ -13,7 +13,7 @@
 // Driven end to end, with nothing stubbed on the identity path: the REAL createSession mints each device's cookie into
 // that device's own jar, the REAL DELETE /api/users/me deletes the account (real Postgres), and the REAL getCurrentUser /
 // requireUser / GET /api/users/me are what each device is then asked. The stand-ins are the outside world only: the
-// cookie jar (`next/headers`), the account-deletion email, Stripe, and Redis — replaced by an in-memory cache that honours
+// cookie jar (`next/headers`), Stripe, and Redis — replaced by an in-memory cache that honours
 // the same contract (get / set with a TTL on the clock / delete by key or glob), because the suite has no Redis and a
 // no-op cache would make the "warm cache" half of this file vacuous.
 //
@@ -24,10 +24,6 @@ import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vites
 import { randomUUID } from "node:crypto";
 
 vi.mock("@/lib/stripe", () => ({ getStripe: () => ({ subscriptions: { cancel: vi.fn(async () => ({})) } }) }));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendAccountDeletionEmail: vi.fn(async () => {}),
-}));
 
 type Entry = { value: string; expiresAt: number };
 const h = vi.hoisted(() => ({
@@ -83,7 +79,6 @@ vi.mock("@/lib/cache", async (importOriginal) => {
 import { sql } from "@/lib/db";
 import { USER_TTL_SECONDS, createSession, getCurrentUser, requireUser } from "@/lib/auth";
 import { AuthError } from "@/lib/errors";
-import { sendAccountDeletionEmail } from "@/lib/email";
 import { DELETE, GET } from "@/app/api/users/me/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -137,6 +132,10 @@ const del = (device: string) => {
   as(device);
   return DELETE(new Request("http://test.local/api/users/me", { method: "DELETE", body: JSON.stringify({ confirm: "DELETE" }) }));
 };
+/** The "your account is deleted" mails queued for an account: the outbox's `account_deletion` rows about it. */
+const deletionNotices = async (userId: string): Promise<number> =>
+  (await sql<{ n: number }[]>`
+    select count(*)::int as n from email_outbox where kind = 'account_deletion' and ref_type = 'user' and ref_id = ${userId}`)[0]!.n;
 const row = async (id: string) =>
   (await sql<{ email: string; display_name: string; deleted_at: Date | null }[]>`
     select email, display_name, deleted_at from users where id = ${id}`)[0]!;
@@ -155,6 +154,7 @@ afterEach(() => {
 });
 afterAll(async () => {
   if (HAS_DB) {
+    await sql`delete from email_outbox where ref_type = 'user' and ref_id = any(${seeded}::text[])`.catch(() => undefined);
     await sql`delete from users where id = any(${seeded}::uuid[])`.catch(() => undefined);
     await sql.end({ timeout: 2 }).catch(() => undefined);
   }
@@ -263,7 +263,7 @@ describe.skipIf(!HAS_DB)("a deleted account's sessions on other devices", () => 
     expect((await del("A")).status).toBe(200);
     const first = await row(leaver.id);
     expect(first.deleted_at).not.toBeNull();
-    expect(vi.mocked(sendAccountDeletionEmail)).toHaveBeenCalledTimes(1);
+    expect(await deletionNotices(leaver.id), "one 'your account is deleted' mail queued").toBe(1);
 
     // Device A's cookie is cleared; device B still holds its own. Neither may delete again.
     const fromA = await del("A");
@@ -273,7 +273,7 @@ describe.skipIf(!HAS_DB)("a deleted account's sessions on other devices", () => 
 
     const second = await row(leaver.id);
     expect(second.deleted_at?.getTime(), "deleted_at is stamped once").toBe(first.deleted_at!.getTime());
-    expect(vi.mocked(sendAccountDeletionEmail), "no second 'your account is deleted' mail").toHaveBeenCalledTimes(1);
+    expect(await deletionNotices(leaver.id), "no second 'your account is deleted' mail").toBe(1);
   });
 
   it("a session minted AFTER the deletion (an impersonation or login link redeemed late) resolves to nobody", async () => {

@@ -17,8 +17,12 @@ import "server-only";
 //     stores it (FU2). `users.email` is unique but case-sensitive, so `Ann@x.io` and `ann@x.io` are two live accounts and a folded
 //     match would reach the other one's rows (N-B). A row that does name an account is that account's, never this one's, even when it
 //     holds this address (a previous owner of it): hence `recipient_user_id is null`.
-//   - NOT a row of a literal-address kind (`registration_confirmation` ...) queued to the account's address. It is the organiser's:
-//     an entry, a payment or a refund they keep their record of (D5). A kind is the account's only if it names the account.
+//   - mail ABOUT the account (wave 3: its verification and its email change, `ACCOUNT_MAIL_KINDS`), found by its ref `user / <the account>`.
+//     These kinds are addressed to a literal address and name no account, so neither arm above reaches them; the ref is the account, at
+//     whatever address the row holds (the email-change confirmation goes to the NEW address).
+//   - NOT a row of any other literal-address kind (`registration_confirmation`, an org's invite ...) queued to the account's address. It is
+//     the organiser's: an entry, a payment, a refund or an invite they keep their record of (D5). A row is the account's only if it names
+//     the account, or is one of the account's own kinds about it.
 //
 // RESIDUAL (accepted): a pre-V472 invite queued to an address the account has SINCE CHANGED AWAY FROM is reached by neither arm. It names no
 // account (the account arm cannot find it) and no longer holds the account's current address (the legacy arm cannot find it), so that old
@@ -36,13 +40,17 @@ import "server-only";
 //     the seat through the usual hook. Nothing reaches the deleted person either way.
 //   - terminal rows: the address is simply replaced.
 //
-// EACH OF STEPS 2 AND 3 IS TWO STATEMENTS, ONE PER ARM, and each arm is index-served (EXPLAIN on 100k rows):
+// EACH OF STEPS 2 AND 3 IS THREE STATEMENTS, ONE PER ARM, and each arm is index-served (EXPLAIN on 100k rows):
 //   - the account arm (every row since V472, the arm that grows): a Bitmap Index Scan on `email_outbox_recipient_user_idx`;
 //   - the legacy arm's SCRUB (all statuses): an Index Scan on `email_outbox_legacy_invite_idx`, V472's partial index on `(recipient) where
 //     kind = 'chess_invite' and recipient_user_id is null`. It is plain `recipient`, not `lower(recipient)`, because this arm does not fold
 //     case; before the index this one statement read the whole table (cost ~4300, now ~23);
 //   - the legacy arm's END is the same predicate plus `status = 'queued'`, so the same index serves it (the planner may prefer the partial
-//     `queued` index instead; which one it takes is not pinned).
+//     `queued` index instead; which one it takes is not pinned);
+//   - the account-mail arm (both statements): an Index Scan on `email_outbox_ref_idx` (V470, `(ref_type, ref_id, created_at desc)`, not
+//     partial), the ref as the `Index Cond` and the kind as a Filter (read with sequential scans off, as the test pins it; not measured on
+//     100k rows). `email_outbox_replace_idx` leads on the kind too, but it is partial on the live statuses, so it cannot serve the scrub,
+//     which touches every status.
 // With that index even a single `a or b` statement would be a BitmapOr of the two, so the split is for clarity (each arm's access path is
 // stated and pinned alone, account-deletion-sweep.test.ts) and no longer for the planner. The `magic_link` delete in step 1 is a Seq Scan,
 // as it has always been (it matches `ref_id` or `recipient` on a kind, and no index leads on either).
@@ -51,7 +59,7 @@ import "server-only";
 // transaction would be refused. It must run in the SAME transaction as the account's anonymisation, so the address is never left behind an
 // anonymised account (a failure here fails the deletion, which the person can retry).
 import type { Tx } from "@/lib/db";
-import type { OutboxKind } from "./constants";
+import { ACCOUNT_MAIL_KINDS, type OutboxKind } from "./constants";
 import type { EndedRow } from "./hooks";
 
 /** Why a queued row was ended: the row's `last_error`, a closed reason and never free text. */
@@ -71,6 +79,10 @@ type EndedRecord = { id: string; kind: OutboxKind; ref_type: string; ref_id: str
 export const namesAccount = (tx: Tx, userId: string) => tx`(recipient_user_id = ${userId})`;
 /** The legacy arm: a chess invite from before V472, no user id, at the address EXACTLY (no case folding). */
 export const legacyInviteAt = (tx: Tx, email: string) => tx`(kind = 'chess_invite' and recipient_user_id is null and recipient = ${email})`;
+/** The account-mail arm: the account's own verification and email-change mail, by its ref (a literal kind names no account). Served by
+ *  `email_outbox_ref_idx`. */
+export const accountMail = (tx: Tx, userId: string) =>
+  tx`(kind = any(${ACCOUNT_MAIL_KINDS as string[]}::text[]) and ref_type = 'user' and ref_id = ${userId})`;
 
 type Predicate = ReturnType<typeof namesAccount>;
 
@@ -95,10 +107,15 @@ export async function anonymiseAccountEmails(tx: Tx, a: { userId: string; email:
            status_at = now()
      where ${where} and status = 'queued'
     returning id, kind, ref_type, ref_id, meta`;
-  const ended = [...(await endQueued(namesAccount(tx, a.userId))), ...(await endQueued(legacyInviteAt(tx, a.email)))];
+  const ended = [
+    ...(await endQueued(namesAccount(tx, a.userId))),
+    ...(await endQueued(legacyInviteAt(tx, a.email))),
+    ...(await endQueued(accountMail(tx, a.userId))),
+  ];
 
   await tx`update email_outbox set recipient = ${a.placeholder} where ${namesAccount(tx, a.userId)}`;
   await tx`update email_outbox set recipient = ${a.placeholder} where ${legacyInviteAt(tx, a.email)}`;
+  await tx`update email_outbox set recipient = ${a.placeholder} where ${accountMail(tx, a.userId)}`;
 
   return ended.map(toEnded);
 }

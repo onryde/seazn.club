@@ -13,8 +13,8 @@ export interface SponsorDisputeWonArgs {
 /** Organiser-facing outcome mail: a sponsorship chargeback closed WON. The
  *  alert (created) and lost mails both exist; without this one a win was
  *  silent — the flag cleared and the placement returned with no explanation.
- *  States that the money stays and the placement is live again. `dict` =
- *  emails namespace for the recipient's locale. */
+ *  States that the money stays and, if the dispute paused the placement, that
+ *  it is live again. `dict` = emails namespace for the recipient's locale. */
 export function sponsorDisputeWonTemplate(
   opts: SponsorDisputeWonArgs,
   dict: Dict,

@@ -17,10 +17,15 @@ import { fileURLToPath } from "node:url";
 const UI_EN: Record<string, string> = JSON.parse(
   readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/ui.json", import.meta.url)), "utf8"),
 );
+/** Email subjects, from the dictionary the server renders them from, for the same reason. */
+const EMAILS_EN: Record<string, string> = JSON.parse(
+  readFileSync(fileURLToPath(new URL("../../src/dictionaries/en/emails.json", import.meta.url)), "utf8"),
+);
 
 /**
- * One-shot SQL client against the app's schema, for the ONE fixture this file
- * seeds (a pending `email_change_requests` row) and its read-back.
+ * One-shot SQL client against the app's schema, for the fixtures this file
+ * seeds (a pending `email_change_requests` row, a queued email-change
+ * confirmation) and their read-back.
  *
  * A local copy of `helpers.ts`'s `withDb` (helpers.ts:295) rather than an
  * import, because that one is module-private and helpers.ts is owned by
@@ -865,7 +870,7 @@ test.describe("legacy settings redirects", () => {
     });
     expect(currentEmail, `no users row for the signed-in account ${userId}`).toBeTruthy();
 
-    // Mirrors POST /api/auth/change-email (route.ts:31-33) column for column —
+    // Mirrors POST /api/auth/change-email's `email_change_requests` insert column for column —
     // the row production writes, not an invented shape.
     await withDb(
       (sql) => sql`
@@ -913,6 +918,104 @@ test.describe("legacy settings redirects", () => {
       await userColumns(sharedUserId, ["email"]),
       "the confirmation moved the shared Pro user's address",
     ).toEqual(sharedBefore);
+  });
+
+  /**
+   * EMAIL OUTBOX, phase 3 wave 3 (spec §5): a second email-change request ends
+   * the first's still-queued confirmation. That mail would otherwise reach an
+   * address the person has moved on from, carrying a token the second request
+   * deleted.
+   *
+   * THE SEEDED ROW. CI's server has no mail provider, so every first attempt
+   * ends at once and a real first request leaves nothing queued to end. The
+   * row that can be ended is the one a provider outage leaves waiting for a
+   * retry, so it is written the way the route writes it (the kind, the
+   * `user / <id>` ref, no organisation, a body), to a DIFFERENT address than
+   * the second request's — the replace rule pairs rows by address, so only
+   * the cancel can reach it — and parked an hour out, where no worker tick
+   * takes it (the shape of online-chess-desk.spec.ts's void test).
+   *
+   * ON AN ACCOUNT OF ITS OWN: the request deletes the account's pending
+   * requests and ends its queued confirmations.
+   */
+  ownTest("a second email-change request ends the first's queued confirmation", async ({
+    ownPage: page,
+    request,
+  }) => {
+    const sharedUserId = await signedInUserId(request);
+    const { userId } = await signInOwnAccount(page, "admin-email-again", sharedUserId);
+    const subject = EMAILS_EN["emailChangeConfirm.subject"];
+    expect(subject, "emailChangeConfirm.subject missing from en/emails.json").toBeTruthy();
+
+    const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`;
+    const firstEmail = `delivered+e2e-emailchange-first-${stamp}@resend.dev`;
+    const secondEmail = `delivered+e2e-emailchange-second-${stamp}@resend.dev`;
+    const oldEmail = await withDb(async (sql) => {
+      const [row] = await sql<{ email: string }[]>`
+        select email from users where id = ${userId}`;
+      return row?.email ?? null;
+    });
+    expect(oldEmail, `no users row for the signed-in account ${userId}`).toBeTruthy();
+
+    try {
+      const [seeded] = await withDb(
+        (sql) => sql<{ id: string }[]>`
+          insert into email_outbox
+            (id, kind, ref_type, ref_id, org_id, recipient, subject, transactional, status,
+             next_attempt_at, expires_at, body_sealed)
+          values
+            (gen_random_uuid(), 'email_change_confirmation', 'user', ${userId}, null, ${firstEmail},
+             ${subject!}, true, 'queued', now() + interval '1 hour', now() + interval '2 hours',
+             ${Buffer.from([1])})
+          returning id`,
+      );
+      const seededRow = () =>
+        withDb(async (sql) => {
+          const [row] = await sql<{ status: string; lastError: string | null; hasBody: boolean }[]>`
+            select status, last_error as "lastError", body_sealed is not null as "hasBody"
+              from email_outbox where id = ${seeded!.id}`;
+          return row;
+        });
+      expect(
+        await seededRow(),
+        "premise: the seeded confirmation is waiting, with its body, before the second request",
+      ).toEqual({ status: "queued", lastError: null, hasBody: true });
+
+      const res = await apiJson(page.request, "/api/auth/change-email", "POST", {
+        new_email: secondEmail,
+      });
+      expect(res.status, `POST /api/auth/change-email → ${res.status} ${JSON.stringify(res.error)}`).toBe(200);
+
+      expect(
+        await seededRow(),
+        "the second request must end the first's queued confirmation as superseded, with no body",
+      ).toEqual({ status: "expired", lastError: "email_change_superseded", hasBody: false });
+
+      const mail = await withDb(
+        (sql) => sql<{ kind: string; recipient: string; status: string; hasBody: boolean }[]>`
+          select kind, recipient, status, body_sealed is not null as "hasBody"
+            from email_outbox
+           where ref_type = 'user' and ref_id = ${userId} and id <> ${seeded!.id}
+             and kind in ('email_change_confirmation', 'email_change_notice')
+           order by kind`,
+      );
+      expect(
+        mail.map((r) => ({
+          kind: r.kind,
+          to: r.recipient,
+          waiting: r.status === "queued" || r.status === "sending",
+          hasBody: r.hasBody,
+        })),
+        "one new confirmation to the new address and one notice to the old, each attempted, no body kept",
+      ).toEqual([
+        { kind: "email_change_confirmation", to: secondEmail, waiting: false, hasBody: false },
+        { kind: "email_change_notice", to: oldEmail, waiting: false, hasBody: false },
+      ]);
+    } finally {
+      await withDb(
+        (sql) => sql`delete from email_change_requests where user_id = ${userId} and not confirmed`,
+      );
+    }
   });
 
   /**

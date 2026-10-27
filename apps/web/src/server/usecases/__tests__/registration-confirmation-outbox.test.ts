@@ -780,9 +780,10 @@ describe.skipIf(!HAS_DB)("D4: the confirmation's language, through the real prod
 // The facts that can change while it waits are the entries' statuses and fees (a payment, a waive, an approval, a promotion, a
 // withdrawal), so the cart's total, the pay link and its deadline, the payment instructions, and the organisation's and the
 // competition's names. Only a RESEND refreshes it: the resend writes a new row, and the replace rule retires the stale one. Nothing
-// refreshes or cancels it on its own, and no cancel reason in CANCELLED_REASONS (round_voided, board_settled, fixture_deleted) is
-// about a registration, so a withdrawal does not cancel it (the second test documents that, as it stands). Accepted: a withdrawal
-// while a confirmation sits in retry only happens during a provider outage, so it is rare and no cancel path is built for it.
+// refreshes or cancels it on its own, and none of the four cancel reasons in CANCELLED_REASONS (the three online-chess board reasons
+// and the email change's) is about a registration, so a withdrawal does not cancel it (the second test documents that, as it stands).
+// Accepted: a withdrawal while a confirmation sits in retry only happens during a provider outage, so it is rare and no cancel path is
+// built for it.
 
 describe.skipIf(!HAS_DB)("a queued confirmation is a frozen snapshot (DB)", () => {
   const paidLine = dictionarySubject("en", "registration.textFee", { amount: "£15.00" });
@@ -818,9 +819,10 @@ describe.skipIf(!HAS_DB)("a queued confirmation is a frozen snapshot (DB)", () =
   });
 
   it("CURRENT BEHAVIOUR: a withdrawal while the confirmation waits does not cancel it, the stale confirmation is what sends", async () => {
-    // There is no cancel reason for a registration (the three in CANCELLED_REASONS are about online chess boards). Accepted: rare (a
-    // confirmation only waits in retry during a provider outage). This test pins what happens today so a change is a decision, not an
-    // accident: the registrant who has pulled out still gets the mail that was queued before they did, and it states their old state.
+    // There is no cancel reason for a registration (the four in CANCELLED_REASONS are about online chess boards and an email change).
+    // Accepted: rare (a confirmation only waits in retry during a provider outage). This test pins what happens today so a change is a
+    // decision, not an accident: the registrant who has pulled out still gets the mail that was queued before they did, and it states
+    // their old state.
     const w = await world({ fee: 1500 });
     deliverMock.mockReset().mockImplementation(later);
     const out = await submit(w);

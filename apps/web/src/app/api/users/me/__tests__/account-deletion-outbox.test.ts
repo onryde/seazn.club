@@ -3,8 +3,8 @@
 // real address) would stay for the outbox's 90-day retention, three times as long as the account itself.
 //
 // Driven end to end against a real Postgres: the REAL magic-link route writes the account's outbox row (the producer), the REAL
-// DELETE /api/users/me removes it (the consumer). Only the session half of auth, the account-deletion email, the rate limiter and
-// `next/headers` are stand-ins, and global `fetch` (the Resend call) via the shared outbox harness.
+// DELETE /api/users/me removes it (the consumer). Only the session half of auth, the rate limiter and `next/headers` are stand-ins, and
+// global `fetch` (the Resend call) via the shared outbox harness.
 //
 // Which role runs the deletion: the handler's `sql` is the pooled PRIVILEGED client (no `withTenant`, no `app_user`): `app_user` holds
 // INSERT only on `email_outbox` (V470), so a tenant transaction could not delete, and this one can. The "rows are gone" tests below are
@@ -30,10 +30,6 @@ vi.mock("@/lib/auth", async (importOriginal) => ({
   destroySession: vi.fn(async () => {}),
   invalidateUser: vi.fn(async () => {}),
   invalidateUserOrgs: vi.fn(async () => {}),
-}));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendAccountDeletionEmail: vi.fn(async () => {}),
 }));
 vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),

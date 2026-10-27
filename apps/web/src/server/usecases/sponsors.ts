@@ -58,8 +58,10 @@ export interface SponsorRow {
   /** Terminal outcome: a lost dispute wrote the paid order off — the
    *  placement stayed down and the row explains why (list reads only). */
   dispute_lost?: boolean;
-  /** True while that order carries an OPEN dispute (paid + disputed_at):
-   *  the placement was parked by the dispute handler, not by the manager.
+  /** True while the dispute handler has the placement parked: its paid order
+   *  carries an OPEN dispute (paid + disputed_at) AND the placement is down
+   *  ('pending', the handler's park). An inquiry flags the order but leaves
+   *  the placement live, so this stays false until the money is taken.
    *  Cleared when the dispute is won; a lost dispute flips the order off
    *  'paid' so this goes false with it (list reads only). */
   dispute_parked?: boolean;
@@ -143,9 +145,10 @@ export async function listSponsorRows(orgId: string): Promise<SponsorRow[]> {
            (select o.id from sponsor_orders o
             where o.sponsor_id = sponsors.id and o.status = 'paid'
             limit 1) as paid_order_id,
-           exists(select 1 from sponsor_orders o
-                  where o.sponsor_id = sponsors.id and o.status = 'paid'
-                    and o.disputed_at is not null) as dispute_parked,
+           (sponsors.status = 'pending'
+            and exists(select 1 from sponsor_orders o
+                       where o.sponsor_id = sponsors.id and o.status = 'paid'
+                         and o.disputed_at is not null)) as dispute_parked,
            exists(select 1 from sponsor_orders o
                   where o.sponsor_id = sponsors.id and o.status = 'refunded'
                     and o.dispute_id is not null) as dispute_lost
@@ -216,15 +219,22 @@ export async function patchSponsor(
         : undefined;
   await assertTierAllowed(auth.orgId, patch.tier, scope);
   return withTenant(auth.orgId, async (tx) => {
-    // A placement parked by an open dispute stays down until the dispute
+    // A placement parked by an open dispute (its paid order is flagged and
+    // the handler took it down to 'pending') stays down until the dispute
     // closes — reactivating it by hand would put a charged-back sponsor
-    // back on boards and public pages.
-    if (patch.status === "active") {
-      const [open] = await tx`
-        select 1 from sponsor_orders o
-        where o.sponsor_id = ${id} and o.status = 'paid'
-          and o.disputed_at is not null limit 1`;
-      if (open) {
+    // back on boards and public pages. Any status change is refused, not
+    // just `active`: switched to `inactive` it would no longer read as
+    // parked, and `active` would then pass. An inquiry flags the order but
+    // leaves the placement live, so the organiser manages it as normal.
+    // The row lock orders this against the webhook's park.
+    if (patch.status !== undefined && patch.status !== "pending") {
+      const [cur] = await tx<{ status: string; open_dispute: boolean }[]>`
+        select s.status,
+               exists(select 1 from sponsor_orders o
+                      where o.sponsor_id = s.id and o.status = 'paid'
+                        and o.disputed_at is not null) as open_dispute
+        from sponsors s where s.id = ${id} for update of s`;
+      if (cur?.status === "pending" && cur.open_dispute) {
         throw new HttpError(
           409,
           "this placement is parked by an open payment dispute — it comes back automatically if the dispute is won",
@@ -593,13 +603,14 @@ export async function startSponsorCheckout(
 /**
  * payment_intent.succeeded with metadata.kind === 'sponsor': mark the order
  * paid and create the activated sponsor row at the package tier. Idempotent
- * under /admin/billing-events replay — belt (order already paid) and braces
- * (order already carries a sponsor_id) both short-circuit; Stripe's own
+ * under /admin/billing-events replay: only a `pending` or `failed` order
+ * activates, so a paid or refunded one short-circuits (sponsor_id is written
+ * only with `paid`, so it needs no guard of its own); Stripe's own
  * idempotency keys expire ~24h so this DB guard is the real one.
  *
  * The sponsor's receipt is queued on the email outbox in the SAME transaction
  * (`queueSponsorReceipt`), so it exists exactly when the activation does, and
- * only on the transition (the guards above stop a replay before it). The
+ * only on the transition (the guard above stops a replay before it). The
  * worker makes the first attempt: a webhook has no response to defer behind.
  */
 export async function handleSponsorPaymentSucceeded(
@@ -614,7 +625,10 @@ export async function handleSponsorPaymentSucceeded(
       select ${sql(ORDER_COLS as unknown as string[])}, org_id
       from sponsor_orders where id = ${orderId} for update`;
     if (!order) return null;
-    if (order.status === "paid" || order.sponsor_id !== null) return null;
+    // Only an order that has not been paid activates: `pending`, or `failed` (Stripe lets a failed intent succeed on a retry).
+    // `paid` is a replay. `refunded` must never come back on boards and public pages: the old guard (paid, or a sponsor_id) let a
+    // refunded order whose placement the organiser had deleted (`sponsor_id` set null) re-activate and be marked paid again.
+    if (order.status !== "pending" && order.status !== "failed") return null;
 
     const [pkg] = await tx<{ name: string; tier: SponsorTier; competition_id: string | null }[]>`
       select name, tier, competition_id from sponsor_packages where id = ${order.package_id}`;
@@ -940,13 +954,18 @@ async function recoverSponsorDispute(
 }
 
 /**
- * charge.dispute.created / .closed for a sponsor package charge (P0-2 —
- * destination charges make the PLATFORM liable, exactly like entry fees).
- * `created` flags the order + parks the placement (pending) and alerts the
- * owner; `closed` clears the flag and re-activates on a win, or writes the
- * order off, deactivates the placement and reverses the club's transfer on a
- * loss. Dispatched after handleRegistrationDispute for both event types —
- * a non-sponsor intent matches no order row and no-ops.
+ * charge.dispute.created / .funds_withdrawn / .closed for a sponsor package
+ * charge (P0-2 — destination charges make the PLATFORM liable, exactly like
+ * entry fees). `created` flags the order and alerts the owner, and parks the
+ * placement (pending) for a formal dispute, which takes the money at once.
+ * An inquiry (`warning_*`) takes no money, so its placement stays live until
+ * `funds_withdrawn` reports the money taken and parks it (owner, 2026-10-26).
+ * `closed` clears the flag and, on a win (or a closed inquiry,
+ * `warning_closed`) while the order is still paid, re-activates a placement
+ * the dispute parked; on a loss it writes the order off, deactivates the
+ * placement and reverses the club's transfer. Dispatched after
+ * handleRegistrationDispute for `created` and `closed`, and alone for
+ * `funds_withdrawn` — a non-sponsor intent matches no order row and no-ops.
  *
  * The owner's notices go through the email outbox (kinds
  * `sponsor_dispute_alert`, `sponsor_dispute_won`, `sponsor_dispute_lost`, ref
@@ -955,13 +974,14 @@ async function recoverSponsorDispute(
  *
  * Replay-safe: the disputed_at/dispute_id + status writes converge, the
  * created alert and the won notice are queued only on their transition, the
+ * withdrawal's park holds only while THIS dispute is open on a paid order, the
  * lost recovery + its notice short-circuit on the core's dispute_id metadata
  * guard, and each once-key holds its dispute to one row of its kind. Stripe
  * calls stay OUTSIDE any sql tx.
  */
 export async function handleSponsorDispute(
   dispute: Stripe.Dispute,
-  phase: "created" | "closed",
+  phase: "created" | "funds_withdrawn" | "closed",
 ): Promise<boolean> {
   const intent =
     typeof dispute.payment_intent === "string" ? dispute.payment_intent : dispute.payment_intent?.id;
@@ -1007,6 +1027,12 @@ export async function handleSponsorDispute(
     // is not one, and coalesce keeps the first flag time. The once-key keeps
     // an older dispute's `created`, arriving again after a newer one moved the
     // order on, from alerting twice.
+    //
+    // The park is for a formal dispute only. An inquiry (Stripe's `warning_`
+    // statuses) is the cardholder's bank asking questions: no money is taken,
+    // and Stripe can take 120 days to close one, so the sponsor who paid stays
+    // on show. If the network escalates it, `funds_withdrawn` parks it then.
+    const inquiry = dispute.status.startsWith("warning_");
     await sql.begin(async (tx) => {
       const [prior] = await tx<{ dispute_id: string | null }[]>`
         select dispute_id from sponsor_orders where id = ${order.id} for update`;
@@ -1029,7 +1055,7 @@ export async function handleSponsorDispute(
           dedupeKey: onceKey(kind, "dispute", dispute.id, "created"),
         });
       }
-      if (firstFlag && order.sponsor_id) {
+      if (firstFlag && !inquiry && order.sponsor_id) {
         await tx`update sponsors set status = 'pending' where id = ${order.sponsor_id}`;
       }
     });
@@ -1037,18 +1063,50 @@ export async function handleSponsorDispute(
     return true;
   }
 
-  if (dispute.status === "won") {
+  if (phase === "funds_withdrawn") {
+    // The money is taken (Stripe: "funds are removed from your account due to
+    // a dispute"), at once for a formal dispute, or when the network escalates
+    // an inquiry: this is what parks an inquiry's placement. No mail: the
+    // owner was alerted at `created`. Parked only while THIS dispute is open
+    // on a paid order (read under lock): a withdrawal delivered after the
+    // dispute closed, or one for a dispute the order no longer carries, must
+    // not take a placement down that nothing will bring back. A formal
+    // dispute's `created` has parked it already, so the write converges, and
+    // a withdrawal that beats its `created` leaves the park to that event.
+    await sql.begin(async (tx) => {
+      const [prior] = await tx<
+        { status: SponsorOrderRow["status"]; disputed_at: Date | null; dispute_id: string | null }[]
+      >`select status, disputed_at, dispute_id from sponsor_orders where id = ${order.id} for update`;
+      const open = prior?.status === "paid" && prior.disputed_at !== null && prior.dispute_id === dispute.id;
+      if (open && order.sponsor_id) {
+        await tx`update sponsors set status = 'pending' where id = ${order.sponsor_id}`;
+      }
+    });
+    bustPublicSponsors(order.org_id);
+    return true;
+  }
+
+  // An inquiry (opened as `warning_needs_response`) that the bank drops without a chargeback closes `warning_closed`: no money was
+  // ever taken, which is a win in all but name. Without this arm the flag stayed for good, and with it the organiser's refusal to
+  // reactivate by hand. An inquiry no longer parks its placement, but one opened before that change did, and this brings it back. It
+  // reuses the won notice and its key.
+  if (dispute.status === "won" || dispute.status === "warning_closed") {
     const recipient = await sponsorDisputeRecipient(order.org_id, order.org_default_locale);
     // ONE transaction clears the flag and queues the owner's notice (R1),
     // only on the TRANSITION (replay-safe): the order, read under lock, still
     // carried the flag. A redelivered `won` finds it clear. The once-key keeps
     // the notice single should this dispute flag the order again and win again.
+    // The placement comes back, and the notice ("the money stays with you")
+    // goes, only while the order is still paid: a full refund is one of the
+    // two ways Stripe offers to resolve an inquiry, and a refunded sponsor
+    // never goes back on boards and public pages.
     await sql.begin(async (tx) => {
-      const [prior] = await tx<{ disputed_at: Date | null }[]>`
-        select disputed_at from sponsor_orders where id = ${order.id} for update`;
+      const [prior] = await tx<{ disputed_at: Date | null; status: SponsorOrderRow["status"] }[]>`
+        select disputed_at, status from sponsor_orders where id = ${order.id} for update`;
       await tx`update sponsor_orders set disputed_at = null where id = ${order.id}`;
       const firstClear = prior?.disputed_at !== null;
-      if (firstClear && recipient) {
+      const stillPaid = prior?.status === "paid";
+      if (firstClear && stillPaid && recipient) {
         const kind = "sponsor_dispute_won";
         await enqueueEmailOnce(tx, {
           kind,
@@ -1063,8 +1121,13 @@ export async function handleSponsorDispute(
           dedupeKey: onceKey(kind, "dispute", dispute.id, "won"),
         });
       }
-      if (order.sponsor_id) {
-        await tx`update sponsors set status = 'active' where id = ${order.sponsor_id}`;
+      // Only a placement the dispute parked comes back ('pending' is the
+      // park marker, and the 409 holds it while parked): an inquiry leaves
+      // the placement live, and one the organiser switched off during it
+      // stays off.
+      if (stillPaid && order.sponsor_id) {
+        await tx`update sponsors set status = 'active'
+                 where id = ${order.sponsor_id} and status = 'pending'`;
       }
     });
     bustPublicSponsors(order.org_id);

@@ -1,6 +1,7 @@
 import "server-only";
 // The void (spec §7): ending a tenant's own QUEUED emails because the thing they were about is gone - a round unpaired, a board
-// settled by a walkover, a fixture deleted. `app_user` holds INSERT only (V470), so the way in is the SECURITY DEFINER function
+// settled by a walkover, a fixture deleted - or a person's own account mail that a newer request has superseded (an email change's
+// older confirmation, on the pooled handle). `app_user` holds INSERT only (V470), so the way in is the SECURITY DEFINER function
 // `email_outbox_cancel` (V472), which this module calls and whose rows it maps to `EndedRow`s.
 //
 // A LEAF of the core on purpose: no runtime import at all (the db handle and the row type are types). It must not import a usecase
@@ -20,6 +21,9 @@ export const ROUND_VOIDED_REASON = "round_voided";
 export const BOARD_SETTLED_REASON = "board_settled";
 /** The board's fixture was deleted (a stage rebuilt or deleted, an undone generation, a competition deleted). */
 export const FIXTURE_DELETED_REASON = "fixture_deleted";
+/** A newer email-change request ended the user's older queued confirmation: its token is gone, and the address it would reach is one
+ *  the person has moved on from (phase-3 spec §5). Org-less account mail, so the change request cancels on the pooled handle. */
+export const EMAIL_CHANGE_SUPERSEDED_REASON = "email_change_superseded";
 
 /**
  * Every reason a cancel may write. `status.ts` reads an `expired` row with one of these in `last_error` as "voided, not delivered":
@@ -27,7 +31,12 @@ export const FIXTURE_DELETED_REASON = "fixture_deleted";
  * so a typo cannot write a voided row the readers would take for a failed send. A new reason is added here AND is a snake_case word
  * (`email_outbox_cancel` refuses anything else).
  */
-export const CANCELLED_REASONS: readonly string[] = [ROUND_VOIDED_REASON, BOARD_SETTLED_REASON, FIXTURE_DELETED_REASON];
+export const CANCELLED_REASONS: readonly string[] = [
+  ROUND_VOIDED_REASON,
+  BOARD_SETTLED_REASON,
+  FIXTURE_DELETED_REASON,
+  EMAIL_CHANGE_SUPERSEDED_REASON,
+];
 
 type CancelledRecord = {
   outbox_id: string;

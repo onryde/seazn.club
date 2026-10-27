@@ -40,12 +40,36 @@
 //   - trial_ending: the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a no-card trialing billing group whose
 //     payer's account is `fr`: the warning is queued to the payer's account, TRANSACTIONAL (the only wave-2 kind that is), with no
 //     organisation, and the worker makes the first attempt.
+//   - email_verification: the route POST of app/api/admin/users/[id]/resend-verification/route.ts, a staff press for an unverified `fr`
+//     account: the token and its row are one transaction on the pool, no organisation, and the request's own deferred attempt sends it.
+//     The staff member is signed in through the session stand-in below; `requireStaff` itself is real.
+//   - funnel_claim: the route POST of app/api/funnel/start/route.ts, a visitor's start (no account, no organisation, so `en`): the
+//     draft and its row are one transaction on the pool, and the request makes the first attempt after commit.
+//   - email_change_confirmation: the route POST of app/api/auth/change-email/route.ts by an `es` account (signed in through the session
+//     stand-in): the confirmation to the NEW address is queued in the request's transaction, and the request makes the first attempt.
+//   - email_change_notice: the same route by another `es` account: the notice to the OLD address, once per request, is queued in the
+//     same transaction, and the request makes the first attempt.
+//   - account_deletion: the route DELETE of app/api/users/me/route.ts by an `nl` account (signed in through the session stand-in): the
+//     notice to the address the account had is queued in the deletion's own transaction, once per account, and the request's own
+//     deferred attempt sends it. The harness finds the row by that address before any tick runs, and judges it by id afterwards, so
+//     the worker's scrub of an ended notice's address (step 7a) does not hide it.
+//   - org_invite: the route POST of app/api/orgs/[id]/invites/route.ts, an email invite by the owner of an `fr` organisation (signed in
+//     through the session stand-in): the invite and its row are one transaction on the pool, in the organisation's language, and the
+//     request makes the first attempt.
+//   - claim_invite: the route POST of app/api/v1/persons/[id]/claim-invites/route.ts, the organiser of an `es` organisation (signed in
+//     through the session stand-in) inviting an unclaimed person: the claim and its row are one tenant transaction, in the organisation's
+//     language, and the request makes the first attempt. (The registration paths reach the same helper; claim-invite-outbox.test.ts
+//     drives two of them.)
+//   - official_invite: the route POST of app/api/v1/officials/[id]/invite/route.ts, the organiser of an `nl` organisation (signed in
+//     through the session stand-in) inviting an official to claim their profile: the same rail as the claim invite, with the officiating
+//     copy, in the organisation's language, and the request makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
-// moved, each kind task (wave 2, T2-T9) added the scenario and deleted the entry, and T10 closed the list again, so every kind in the
-// registry is swept. A kind that is neither moved nor listed fails by name, and so does a kind that is listed while it has a scenario (a
-// stale entry would skip the sweep), and so do the three lists when they disagree.
+// moved, each kind task (wave 2, T2-T9) added the scenario and deleted the entry, and T10 closed the list again. Wave 3's T1 registered
+// its eight kinds the same way, each kind task (wave 3, T2-T4) added the scenario and deleted the entry, and T4c closed the list again,
+// so every kind in the registry is swept. A kind that is neither moved nor listed fails by name, and so does a kind that is listed while
+// it has a scenario (a stale entry would skip the sweep), and so do the three lists when they disagree.
 //
 // Sport: not applicable. These emails do not vary by sport (spec, Test strategy 4).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -63,6 +87,25 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers({ "x-forwarded-for": "203.0.113.78" }),
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
 }));
+// Wave 3's account mail comes from signed-in routes (a staff press, an email change). Their scenario sets who is signed in for its own
+// `run` only (`signedInAs`); every other producer here runs with nobody signed in, as before (the real `requireUser`, no session).
+// `requireOrgRole` reaches the session through the module's own `requireUser`, which this mock cannot replace, so it is stood in for the
+// same way: the signed-in account's role in the org is the REAL one (`getOrgRole`), and the route's editor check is applied to it.
+const session = vi.hoisted(() => ({ user: null as null | { id: string } }));
+vi.mock("@/lib/auth", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/auth")>();
+  type User = Awaited<ReturnType<typeof real.requireUser>>;
+  return {
+    ...real,
+    requireUser: vi.fn(async (): Promise<User> => (session.user as User | null) ?? real.requireUser()),
+    requireOrgRole: vi.fn(async (orgId: string, roles: Parameters<typeof real.requireOrgRole>[1]) => {
+      if (session.user === null) return real.requireOrgRole(orgId, roles);
+      const role = await real.getOrgRole(orgId, session.user.id);
+      if (role === null || !roles.includes(role)) throw new Error("sweep: the signed-in account is not an editor of the organisation");
+      return { user: session.user as User, role };
+    }),
+  };
+});
 // The one network seam. The harness reads this same mock back (it imports `deliver` from the same module).
 const deliverMock = vi.hoisted(() => vi.fn());
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: deliverMock }));
@@ -75,6 +118,15 @@ const stripeMock = vi.hoisted(() => {
 vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
+import { POST as resendVerificationPost } from "@/app/api/admin/users/[id]/resend-verification/route";
+import { POST as funnelStartPost } from "@/app/api/funnel/start/route";
+import { POST as changeEmailPost } from "@/app/api/auth/change-email/route";
+import { DELETE as deleteAccount } from "@/app/api/users/me/route";
+import { POST as orgInvitePost } from "@/app/api/orgs/[id]/invites/route";
+import { POST as claimInvitePost } from "@/app/api/v1/persons/[id]/claim-invites/route";
+import { POST as officialInvitePost } from "@/app/api/v1/officials/[id]/invite/route";
+import { createOfficial } from "@/server/usecases/officials";
+import { createPerson } from "@/server/usecases/persons";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { assignSoloSignUp } from "@/server/usecases/registration-assign";
@@ -91,7 +143,7 @@ import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { planLabel } from "@/lib/plan-label";
-import { SETTINGS_BASE, asOwner, fakeSession, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
+import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
 import { dispatchNow } from "../attempt";
 import { enqueueEmail, type OutboxMessage } from "../enqueue";
@@ -127,6 +179,15 @@ const SPEC_KINDS = [
   "sponsor_dispute_lost",
   "pass_revoked",
   "trial_ending",
+  // Wave 3, in the table's row order.
+  "email_verification",
+  "funnel_claim",
+  "email_change_confirmation",
+  "email_change_notice",
+  "account_deletion",
+  "org_invite",
+  "claim_invite",
+  "official_invite",
 ] as const satisfies readonly OutboxKind[];
 
 /** The legend: [to, transactional]. A = an account, resolved at send; L = a literal address; S = the staff address. T = transactional. */
@@ -148,6 +209,15 @@ const SPEC_FACTS: KindFacts = {
   sponsor_dispute_lost: ["account", false],
   pass_revoked: ["account", false],
   trial_ending: ["account", true],
+  // Wave 3: every one is L; all T but the org invite, which is N (its sender passes no `transactional` flag).
+  email_verification: ["literal", true],
+  funnel_claim: ["literal", true],
+  email_change_confirmation: ["literal", true],
+  email_change_notice: ["literal", true],
+  account_deletion: ["literal", true],
+  org_invite: ["literal", false],
+  claim_invite: ["literal", true],
+  official_invite: ["literal", true],
 };
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
@@ -162,13 +232,17 @@ async function cleanUp(): Promise<void> {
   await sql`
     delete from email_outbox
      where ref_id like ${like} or lower(recipient) like ${like} or recipient_user_id = any(${made.userIds}::uuid[])
-        or recipient_user_id in (select id from users where email like ${like})`;
+        or recipient_user_id in (select id from users where email like ${like})
+        or (ref_type = 'user' and ref_id = any(${made.userIds}::text[]))`;
   // A sponsor org's orders hold it (a RESTRICT foreign key, V299): they go first.
   if (made.orgIds.length > 0) await sql`delete from sponsor_orders where org_id = any(${made.orgIds}::uuid[])`;
   if (made.orgIds.length > 0) await sql`delete from organizations where id = any(${made.orgIds}::uuid[])`;
   // The seeded owner is referenced without a cascade by the plan it was given and by the round's audit trail.
   await sql`delete from subscriptions where owner_user_id = any(${made.userIds}::uuid[])`;
   await sql`delete from online_chess_audit where actor_user_id = any(${made.userIds}::uuid[])`;
+  // The staff press's audit row references its staff member without a cascade.
+  await sql`delete from staff_audit_log where actor_id in (select id from users where email like ${like})`;
+  await sql`delete from funnel_drafts where email like ${like}`;
   await sql`delete from users where email like ${like} or id = any(${made.userIds}::uuid[])`;
 }
 
@@ -192,12 +266,12 @@ afterEach(() => {
 });
 
 describe("the spec's lists (no database)", () => {
-  it("the spec lists seventeen kinds and the code's registry is exactly them, in the spec's order", () => {
+  it("the spec lists twenty-five kinds and the code's registry is exactly them, in the spec's order", () => {
     expect([...OUTBOX_KINDS]).toEqual([...SPEC_KINDS]);
-    expect(SPEC_KINDS).toHaveLength(17);
+    expect(SPEC_KINDS).toHaveLength(25);
   });
 
-  it("the legend has NINE literal kinds, EIGHT account kinds and no staff kind", () => {
+  it("the legend has SEVENTEEN literal kinds, EIGHT account kinds and no staff kind", () => {
     const by = (to: string): string[] => SPEC_KINDS.filter((k) => SPEC_FACTS[k][0] === to);
     expect(by("literal")).toEqual([
       "magic_link",
@@ -209,6 +283,15 @@ describe("the spec's lists (no database)", () => {
       "sponsor_invoice",
       "sponsor_receipt",
       "sponsor_refund",
+      // Wave 3: all eight are literal addresses.
+      "email_verification",
+      "funnel_claim",
+      "email_change_confirmation",
+      "email_change_notice",
+      "account_deletion",
+      "org_invite",
+      "claim_invite",
+      "official_invite",
     ]);
     expect(by("account")).toEqual([
       "chess_invite",
@@ -220,9 +303,21 @@ describe("the spec's lists (no database)", () => {
       "pass_revoked",
       "trial_ending",
     ]);
-    expect(by("staff"), "waves 1 and 2 have no staff kind").toEqual([]);
-    // The two phase-1 kinds and the trial-ending notice are transactional (each keeps its sender's flag); the rest are not.
-    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toEqual(["magic_link", "chess_invite", "trial_ending"]);
+    expect(by("staff"), "waves 1 to 3 have no staff kind").toEqual([]);
+    // Each kind keeps its sender's flag: the two phase-1 kinds, the trial-ending notice and seven of wave 3's eight are transactional;
+    // the registration, refund, dispute, sponsor and pass mails, and the org invite, are not.
+    expect(SPEC_KINDS.filter((k) => SPEC_FACTS[k][1])).toEqual([
+      "magic_link",
+      "chess_invite",
+      "trial_ending",
+      "email_verification",
+      "funnel_claim",
+      "email_change_confirmation",
+      "email_change_notice",
+      "account_deletion",
+      "claim_invite",
+      "official_invite",
+    ]);
   });
 
   it("the not-yet-moved list names only spec kinds, once each, and leaves at least one kind to sweep", () => {
@@ -247,10 +342,10 @@ describe("the spec's lists (no database)", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
-    // Waves 1 and 2 are closed (wave 1 T12, wave 2 T10): every kind has moved, so no kind is listed and none has a direct sender left.
-    // The moved side is what the loop above judged for all of them; the unmoved side of the equivalence has no member to judge until a
-    // later wave registers a kind early.
-    expect(NOT_YET_MOVED, "waves 1 and 2 are closed: every kind has moved to the outbox").toEqual([]);
+    // Waves 1, 2 and 3 are closed (wave 1 T12, wave 2 T10, wave 3 T4c): every kind has moved, so no kind is listed and none has a direct
+    // sender left. The moved side is what the loop above judged for all of them; the unmoved side of the equivalence has no member to
+    // judge until a later wave registers a kind early.
+    expect(NOT_YET_MOVED, "waves 1 to 3 are closed: every kind has moved to the outbox").toEqual([]);
     expect(Object.values(KIND_DIRECT_SENDER).filter((x) => x !== null), "and none still names a direct sender").toEqual([]);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
     const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
@@ -300,7 +395,7 @@ const address = (): string => `${RUN}-${randomUUID().slice(0, 8)}@x.test`;
 function magicLinkScenario(): KindScenario {
   const recipient = address();
   return {
-    // The route passes no locale to `magicLinkEmail` (route.ts:84): account email is rendered in `en` until wave 3.
+    // The link follows the account's language (D4), and the route creates the account here: a brand-new account has none, so `en`.
     locale: "en",
     subjectKey: "magicLink.subject",
     subjectVars: {},
@@ -726,6 +821,228 @@ async function trialEndingScenario(): Promise<KindScenario> {
   };
 }
 
+/** Run `fn` with `userId` signed in (the session stand-in above), and nobody after it. */
+async function signedInAs<T>(userId: string, fn: () => Promise<T>): Promise<T> {
+  const [user] = await sql<{ id: string }[]>`select id, display_name, email, avatar_url, timezone, locale from users where id = ${userId}`;
+  session.user = user!;
+  try {
+    return await fn();
+  } finally {
+    session.user = null;
+  }
+}
+
+/** An account at a RUN address (`makeUser`'s), so the harness and the clean-up find it. */
+async function runUser(set: { locale?: string; verified?: boolean; staff?: boolean }): Promise<{ id: string; email: string }> {
+  const id = await makeUser(RUN);
+  const [u] = await sql<{ email: string }[]>`
+    update users set locale = ${set.locale ?? null}, email_verified = ${set.verified ?? true},
+                     is_staff = ${set.staff === true}, staff_role = ${set.staff ? "support" : null}
+     where id = ${id} returning email`;
+  return { id, email: u!.email };
+}
+
+/** The real staff resend for an unverified account whose language is `fr`: the token and its row are one transaction on the pool, and
+ *  the request's own (deferred) attempt sends it. */
+async function emailVerificationScenario(): Promise<KindScenario> {
+  const staff = await runUser({ staff: true });
+  const target = await runUser({ locale: "fr", verified: false });
+  return {
+    locale: "fr",
+    subjectKey: "verification.subject",
+    subjectVars: {},
+    recipient: target.email,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await signedInAs(staff.id, () =>
+        resendVerificationPost(new Request(`https://sweep.test/api/admin/users/${target.id}/resend-verification`, { method: "POST" }), {
+          params: Promise.resolve({ id: target.id }),
+        }),
+      );
+      expect(res.status, "premise: the real staff action answered 200").toBe(200);
+    },
+  };
+}
+
+/** The real start of the funnel by a visitor: no account and no organisation, so the claim is rendered in `en` (D4's last step); the
+ *  request makes the first attempt. */
+function funnelClaimScenario(): KindScenario {
+  const recipient = address();
+  const competitionName = `Sweep Open ${RUN}`;
+  return {
+    locale: "en",
+    subjectKey: "funnelClaim.subject",
+    subjectVars: { competitionName },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await funnelStartPost(
+        new Request("https://sweep.test/api/funnel/start", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ email: recipient, name: competitionName, sport: "Badminton", entrants: 8 }),
+        }),
+      );
+      expect(res.status, "premise: the real route answered 200").toBe(200);
+    },
+  };
+}
+
+/** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
+ *  request makes the first attempt. */
+async function emailChangeConfirmationScenario(): Promise<KindScenario> {
+  const user = await runUser({ locale: "es" });
+  const recipient = address();
+  return {
+    locale: "es",
+    subjectKey: "emailChangeConfirm.subject",
+    subjectVars: {},
+    recipient,
+    firstAttempt: "request",
+    run: () => requestEmailChange(user.id, recipient),
+  };
+}
+
+/** The real email-change request by another `es` account: the notice goes to the OLD address, naming the new one. */
+async function emailChangeNoticeScenario(): Promise<KindScenario> {
+  const user = await runUser({ locale: "es" });
+  return {
+    locale: "es",
+    subjectKey: "emailChangeNotice.subject",
+    subjectVars: {},
+    recipient: user.email,
+    firstAttempt: "request",
+    run: () => requestEmailChange(user.id, address()),
+  };
+}
+
+/** The real deletion of an `nl` account by itself: the notice goes to the address the account had, in its language, and the request's
+ *  own (deferred) attempt sends it. The deletion replaces the account's address, so the clean-up finds the account (and the notice, once
+ *  a tick has scrubbed its address) by id. */
+async function accountDeletionScenario(): Promise<KindScenario> {
+  const user = await runUser({ locale: "nl" });
+  made.userIds.push(user.id);
+  return {
+    locale: "nl",
+    subjectKey: "accountDeletion.subject",
+    subjectVars: {},
+    recipient: user.email,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await signedInAs(user.id, () =>
+        deleteAccount(new Request("https://sweep.test/api/users/me", { method: "DELETE", body: JSON.stringify({ confirm: "DELETE" }) })),
+      );
+      expect(res.status, "premise: the real route answered 200").toBe(200);
+    },
+  };
+}
+
+/** The real email invite by the owner of an organisation whose default language is `fr`: the invitee has no account the org may follow,
+ *  so the invite is in the org's language, and the request makes the first attempt. */
+async function orgInviteScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("community");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const [org] = await sql<{ name: string }[]>`update organizations set default_locale = 'fr' where id = ${orgId} returning name`;
+  const recipient = address();
+  return {
+    locale: "fr",
+    subjectKey: "invite.subject",
+    subjectVars: { orgName: org!.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await signedInAs(ownerId, () =>
+        orgInvitePost(
+          new Request(`https://sweep.test/api/orgs/${orgId}/invites`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ role: "viewer", email: recipient }),
+          }),
+          { params: Promise.resolve({ id: orgId }) },
+        ),
+      );
+      expect(res.status, "premise: the real route answered 200").toBe(200);
+    },
+  };
+}
+
+/** The organiser of an organisation whose default language is `es` invites an unclaimed person to claim their profile: the person has no
+ *  account to follow, so the invite is in the org's language, and the request makes the first attempt. */
+async function claimInviteScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("community");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const [org] = await sql<{ name: string }[]>`update organizations set default_locale = 'es' where id = ${orgId} returning name`;
+  const person = await createPerson(asOwner(orgId, ownerId), { full_name: "Sweep Claimant", consent: {} } as never);
+  const recipient = address();
+  return {
+    locale: "es",
+    subjectKey: "claimInvite.subject",
+    subjectVars: { orgName: org!.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await signedInAs(ownerId, () =>
+        claimInvitePost(
+          new Request(`https://sweep.test/api/v1/persons/${person.id}/claim-invites`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: recipient }),
+          }),
+          { params: Promise.resolve({ id: person.id }) },
+        ),
+      );
+      expect(res.status, "premise: the real route answered 201").toBe(201);
+    },
+  };
+}
+
+/** The organiser of an organisation whose default language is `nl` invites an official to claim their profile: the official's person
+ *  has no account to follow, so the invite is in the org's language, and the request makes the first attempt. */
+async function officialInviteScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("community");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const [org] = await sql<{ name: string }[]>`update organizations set default_locale = 'nl' where id = ${orgId} returning name`;
+  const official = await createOfficial(asOwner(orgId, ownerId), { display_name: "Sweep Referee", role_keys: ["referee"] });
+  const recipient = address();
+  return {
+    locale: "nl",
+    subjectKey: "officialInvite.subject",
+    subjectVars: { orgName: org!.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await signedInAs(ownerId, () =>
+        officialInvitePost(
+          new Request(`https://sweep.test/api/v1/officials/${official.id}/invite`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: recipient }),
+          }),
+          { params: Promise.resolve({ id: official.id }) },
+        ),
+      );
+      expect(res.status, "premise: the real route answered 201").toBe(201);
+    },
+  };
+}
+
+/** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
+async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
+  const res = await signedInAs(userId, () =>
+    changeEmailPost(
+      new Request("https://sweep.test/api/auth/change-email", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ new_email: newEmail }),
+      }),
+    ),
+  );
+  expect(res.status, "premise: the real route answered 200").toBe(200);
+}
+
 describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (DB)", () => {
   it("every outbox kind is swept through its real producer", async () => {
     // The Spanish subject differs from the English one, so a producer that dropped the locale would be seen (the right answer is not
@@ -796,6 +1113,39 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", trialEnding.subjectKey, trialEnding.subjectVars),
     );
 
+    const verification = await emailVerificationScenario();
+    expect(dictionarySubject("fr", verification.subjectKey, verification.subjectVars)).not.toBe(
+      dictionarySubject("en", verification.subjectKey, verification.subjectVars),
+    );
+
+    const confirmation = await emailChangeConfirmationScenario();
+    expect(dictionarySubject("es", confirmation.subjectKey, confirmation.subjectVars)).not.toBe(
+      dictionarySubject("en", confirmation.subjectKey, confirmation.subjectVars),
+    );
+
+    const notice = await emailChangeNoticeScenario();
+    expect(dictionarySubject("es", notice.subjectKey, notice.subjectVars)).not.toBe(dictionarySubject("en", notice.subjectKey, notice.subjectVars));
+
+    const deletion = await accountDeletionScenario();
+    expect(dictionarySubject("nl", deletion.subjectKey, deletion.subjectVars)).not.toBe(
+      dictionarySubject("en", deletion.subjectKey, deletion.subjectVars),
+    );
+
+    const orgInvite = await orgInviteScenario();
+    expect(dictionarySubject("fr", orgInvite.subjectKey, orgInvite.subjectVars)).not.toBe(
+      dictionarySubject("en", orgInvite.subjectKey, orgInvite.subjectVars),
+    );
+
+    const claimInvite = await claimInviteScenario();
+    expect(dictionarySubject("es", claimInvite.subjectKey, claimInvite.subjectVars)).not.toBe(
+      dictionarySubject("en", claimInvite.subjectKey, claimInvite.subjectVars),
+    );
+
+    const officialInvite = await officialInviteScenario();
+    expect(dictionarySubject("nl", officialInvite.subjectKey, officialInvite.subjectVars)).not.toBe(
+      dictionarySubject("en", officialInvite.subjectKey, officialInvite.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -815,11 +1165,19 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         sponsor_dispute_lost: sponsorDisputeLost,
         pass_revoked: passRevoked,
         trial_ending: trialEnding,
+        email_verification: verification,
+        funnel_claim: funnelClaimScenario(),
+        email_change_confirmation: confirmation,
+        email_change_notice: notice,
+        account_deletion: deletion,
+        org_invite: orgInvite,
+        claim_invite: claimInvite,
+        official_invite: officialInvite,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 
-    expect(out.checked, "anti-vacuity: every kind the spec lists was swept (waves 1 and 2 closed: none is left unmoved)").toBe(SPEC_KINDS.length);
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept (waves 1 to 3 closed: none is left unmoved)").toBe(SPEC_KINDS.length);
     expect(out.checked).toBeGreaterThan(0);
     expect(out.kinds, "and they are exactly the spec's kinds, in the spec's order").toEqual([...SPEC_KINDS]);
   }, 60_000);

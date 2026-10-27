@@ -7,19 +7,8 @@ import { mintGroupCheckout, notifySubmitted } from "@/server/usecases/registrati
 import { getCurrentUser } from "@/lib/auth";
 import { baseUrl } from "@/lib/oauth";
 import { log } from "@/server/logger";
-import { hasLocale, type Locale } from "@/lib/i18n-constants";
+import { explicitLocale } from "@/lib/explicit-locale";
 import { OutboxKeyUnavailableError, assertOutboxCanQueue } from "@/server/email-outbox";
-
-/** The registrant's explicit locale pick (footer switcher → seazn_locale cookie),
- *  or null when they never chose — then the org's public default applies.
- *  Same shape as the deleted pre-redesign route's own `explicitLocale`
- *  (850cc6308^) — kept local to this file rather than shared, matching it. */
-function explicitLocale(req: Request): Locale | null {
-  const raw = req.headers.get("cookie")?.match(/(?:^|;\s*)seazn_locale=([^;]+)/)?.[1];
-  if (!raw) return null;
-  const v = decodeURIComponent(raw);
-  return hasLocale(v) ? v : null;
-}
 
 type Ctx = { params: Promise<{ orgSlug: string; slug: string }> };
 

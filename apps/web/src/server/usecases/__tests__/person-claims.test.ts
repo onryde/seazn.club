@@ -340,14 +340,14 @@ describe.skipIf(!HAS_DB)("duplicate player link (#402)", () => {
       role_keys: ["referee"],
     });
     expect(first.person_id).toBeNull(); // the premise: no person bound at create
-    const inviteOne = await inviteOfficial(owner, first.id, refEmail);
+    const inviteOne = await inviteOfficial(owner, first.id, refEmail, "https://officials.test");
     await claimPerson(inviteOne.secret, refUser, refEmail);
 
     const second = await createOfficial(owner, {
       display_name: "Ria Ref Two",
       role_keys: ["referee"],
     });
-    const inviteTwo = await inviteOfficial(owner, second.id, refEmail);
+    const inviteTwo = await inviteOfficial(owner, second.id, refEmail, "https://officials.test");
     await expect(claimPerson(inviteTwo.secret, refUser, refEmail)).resolves.toMatchObject({
       person_id: inviteTwo.official.person_id!,
     });

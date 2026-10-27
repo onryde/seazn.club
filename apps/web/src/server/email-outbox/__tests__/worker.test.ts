@@ -85,7 +85,7 @@ const pid = (s: string): string => `re_${s}_${RUN}`;
  *  `cutoffMs`: claims start while the tick's elapsed time is under it. */
 const budgetFor = (cutoffMs: number): number => (cutoffMs + SEND_TIMEOUT_MS + MIN_SEND_INTERVAL_MS) / (1 - HOOK_RESERVE_FRACTION);
 
-const ZERO: OutboxTickReport = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0, purged: 0 };
+const ZERO: OutboxTickReport = { claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0, purged: 0, scrubbed: 0 };
 const REPORT_KEYS = Object.keys(ZERO).sort();
 
 type Row = {
@@ -806,10 +806,10 @@ describe.skipIf(!HAS_DB)("the email outbox retry worker (DB)", () => {
       expect(logMock.error).not.toHaveBeenCalled();
     });
 
-    it("the report always carries exactly the nine counters, all whole numbers", async () => {
+    it("the report always carries exactly the ten counters, all whole numbers", async () => {
       const report = await tick([randomUUID()]);
       expect(Object.keys(report).sort()).toEqual(REPORT_KEYS);
-      expect(REPORT_KEYS.length).toBe(9);
+      expect(REPORT_KEYS.length).toBe(10);
       for (const [k, v] of Object.entries(report)) expect(Number.isInteger(v), k).toBe(true);
     });
 

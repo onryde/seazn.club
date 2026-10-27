@@ -29,6 +29,10 @@ import "server-only";
 //     terminal write and its hook leaves such a row, and the next tick finishes the job. The hooks and the re-drive count
 //     against the SAME budget (M2): once TICK_BUDGET_MS is spent no further hook runs and the finder is not asked, and what
 //     was skipped is exactly what the finder reports next tick (a hook is idempotent and recomputes from state);
+//  7a. takes the address out of the ended rows of SCRUBBED_WHEN_ENDED (the deletion notice: `scrubEndedRecipients`, at most PURGE_BATCH),
+//     just before the purge and inside the SAME budget and the same kind of logged try/catch: a row that has ended (whichever way)
+//     holds the deleted person's address for at most one tick. A scrub skipped for the budget, or one that throws, is done by the next
+//     tick (`scrubbed` reports 0);
 //  7. purges the rows older than RETENTION_DAYS (`purgeOldEmails`, at most PURGE_BATCH, whatever their status), LAST and inside the
 //     SAME budget: housekeeping never takes time from a send or a hook, so once TICK_BUDGET_MS is spent it is skipped and the next
 //     tick purges (the rows are as old tomorrow as today). A purge that throws is logged (`errFields`) and reported as 0: it never
@@ -54,7 +58,7 @@ import {
 } from "./constants";
 import { afterEndedBadly, findUnappliedEndings, hasEndedBadlyHook, type EndedRow } from "./hooks";
 import { outboxRoleOk } from "./role-check";
-import { purgeOldEmails } from "./status";
+import { purgeOldEmails, scrubEndedRecipients } from "./status";
 
 /**
  * What a tick did. `claimed` is every row it took; a claimed row lands in exactly one of `sent`, `retried`, `dead`,
@@ -62,7 +66,9 @@ import { purgeOldEmails } from "./status";
  * row that was replaced while its attempt was in flight, which is counted in `claimed` only: its fate belongs to the newer
  * row. `expired` and `dead` also count the rows steps 1 and 2 ended without a claim. `deferred` is a count of rows due
  * right now that this tick did not take (batch full, budget spent, or stopped at a 429). `purged` is the number of rows older than
- * RETENTION_DAYS the tick deleted (step 7): 0 when none were old enough, and 0 when the budget was already spent.
+ * RETENTION_DAYS the tick deleted (step 7): 0 when none were old enough, and 0 when the budget was already spent. `scrubbed` is the number
+ * of ended rows whose address the tick replaced with the deleted account's placeholder (step 7a): 0 when none had ended unscrubbed, when
+ * the budget was already spent, and when the scrub failed.
  */
 export type OutboxTickReport = {
   claimed: number;
@@ -74,6 +80,7 @@ export type OutboxTickReport = {
   failed: number;
   deferred: number;
   purged: number;
+  scrubbed: number;
 };
 
 export type RunOutboxTickOptions = {
@@ -221,7 +228,7 @@ export async function runOutboxTick(opts: RunOutboxTickOptions = {}): Promise<Ou
   const nowMs = opts.nowMs ?? (() => performance.now());
   const budgetMs = opts.budgetMs ?? TICK_BUDGET_MS;
   const report: OutboxTickReport = {
-    claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0, purged: 0,
+    claimed: 0, sent: 0, retried: 0, dead: 0, suppressed: 0, expired: 0, failed: 0, deferred: 0, purged: 0, scrubbed: 0,
   };
 
   if (!(await outboxRoleOk())) {
@@ -321,6 +328,16 @@ export async function runOutboxTick(opts: RunOutboxTickOptions = {}): Promise<Ou
     );
   }
 
+  // Step 7a. Just before the purge, with the same budget rule and the same failure rule: the address of an ended deletion notice goes
+  // (P-W3-6). Its own try/catch, so a scrub that throws neither fails the tick nor skips the purge; the next tick scrubs.
+  if (!overBudget()) {
+    try {
+      report.scrubbed = await scrubEndedRecipients({ onlyIds: opts.onlyIds });
+    } catch (err) {
+      log.error({ ...errFields(err) }, "email outbox: the recipient scrub failed; the next tick scrubs");
+    }
+  }
+
   // Step 7. Last, and only with budget left: retention is housekeeping, and the next tick does it just as well. It is also the one
   // step whose failure costs nothing that was already done: the sends and the hooks above are committed, so a purge that throws
   // (a statement timeout on a big backlog, a dropped connection) must not turn the tick into a 500 that loses their report. It is
@@ -334,6 +351,8 @@ export async function runOutboxTick(opts: RunOutboxTickOptions = {}): Promise<Ou
     }
   }
 
-  if (report.claimed + report.expired + report.dead + report.deferred + report.purged > 0) log.info({ ...report }, "email outbox: tick");
+  if (report.claimed + report.expired + report.dead + report.deferred + report.purged + report.scrubbed > 0) {
+    log.info({ ...report }, "email outbox: tick");
+  }
   return report;
 }

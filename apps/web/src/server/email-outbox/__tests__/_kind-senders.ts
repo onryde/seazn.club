@@ -6,7 +6,7 @@
 //  - NOT_YET_MOVED: the kinds whose producer still mails through one of those (outbox-kind-sweep.test.ts sweeps the others).
 //  - KIND_DIRECT_SENDER: for every kind, the `send*` its producer still calls, or null once the kind has moved to the outbox.
 //
-// When a kind task (wave 1 T8-T12, wave 2 T2-T9) moves a kind: delete the kind from NOT_YET_MOVED, delete its `send*` from SENDER_ALLOWLIST
+// When a kind task (wave 1 T8-T12, wave 2 T2-T9, wave 3 T2-T4) moves a kind: delete the kind from NOT_YET_MOVED, delete its `send*` from SENDER_ALLOWLIST
 // AND from lib/email.ts, and set its KIND_DIRECT_SENDER entry to null. The allowlist's LENGTH follows by itself (allowlistLengthFor below: the
 // spec's 49 less one per phase-3 kind that has moved, both counted from these lists), so there is no number to change. When a wave registers
 // a kind before its producer moves, it adds the kind to NOT_YET_MOVED and names its `send*` in KIND_DIRECT_SENDER: the length is unchanged.
@@ -29,24 +29,17 @@ export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess
 /** The `send*` exports of lib/email.ts as of the start of phase 3 wave 1 (spec: "49 send* exports"), copied once from the file.
  *  `sendWithResult` is the outbox's own typed sender and is not among them. */
 export const SENDER_ALLOWLIST: readonly string[] = [
-  "sendAccountDeletionEmail",
   "sendAiRunCostAlertEmail",
-  "sendClaimInviteEmail",
   "sendConnectBankAlertEmail",
   "sendCreditPackGrantFailedAlertEmail",
   "sendEarnGrantVolumeAlertEmail",
-  "sendEmailChangeConfirmation",
-  "sendEmailChangeNotice",
   "sendExtraOrgAllowanceAlertEmail",
   "sendExtraOrgRepriceFailedAlertEmail",
-  "sendFunnelClaimEmail",
   "sendFunnelReminderEmail",
   "sendGroupOrgLeftEmail",
   "sendGroupOrgRemovedEmail",
-  "sendInviteEmail",
   "sendOfficialAssignedEmail",
   "sendOfficialAssignmentChangedEmail",
-  "sendOfficialInviteEmail",
   "sendPassCreditReversalIncompleteAlertEmail",
   "sendPassRungMismatchAlertEmail",
   "sendPassUnknownCompetitionAlertEmail",
@@ -62,12 +55,12 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendSuspensionServedEmail",
   "sendTransferCompleteEmail",
   "sendTransferOfferEmail",
-  "sendVerificationEmail",
 ];
 
 /** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12). Wave 2's T1 listed its ten kinds before their
- *  producers moved, each kind task (T2-T9) deleted its own, and T10 closed the list again. A later wave that registers a kind before its
- *  producer moves lists it here until then. The sweep covers every kind not listed. */
+ *  producers moved, each kind task (T2-T9) deleted its own, and T10 closed the list again. Wave 3's T1 listed its eight kinds the same
+ *  way, each kind task (T2-T4) deleted its own, and the last move (T4c) closed the list again. A later wave that registers a kind before
+ *  its producer moves lists it here until then. The sweep covers every kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [];
 
 /** For every kind, the direct sender its producer still calls (null = the kind has moved: nothing direct is left for it). */
@@ -89,6 +82,15 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   sponsor_dispute_lost: null,
   pass_revoked: null,
   trial_ending: null,
+  // Wave 3: every one has moved (T2-T4).
+  email_verification: null,
+  funnel_claim: null,
+  email_change_confirmation: null,
+  email_change_notice: null,
+  account_deletion: null,
+  org_invite: null,
+  claim_invite: null,
+  official_invite: null,
 };
 
 /** How long the allowlist must be while `unmoved` kinds are still on their direct sender: the spec's 49, less one for every phase-3 kind

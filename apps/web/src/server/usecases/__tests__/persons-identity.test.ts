@@ -216,14 +216,14 @@ describe.skipIf(!HAS_DB)("persons lane identity (#402)", () => {
 
   it("inviteOfficial mints an official-lane person", async () => {
     const { auth } = await seedOrg("pro");
-    // inviteOfficial(auth, officialId, email) — it does not create the official,
+    // inviteOfficial(auth, officialId, email, origin) — it does not create the official,
     // it ensures a person for one that already exists with person_id null.
     const official = await createOfficial(auth, {
       display_name: "Ref Without Account",
       role_keys: ["referee"],
     });
     expect(official.person_id).toBeNull();
-    await inviteOfficial(auth, official.id, `ref-${randomUUID().slice(0, 8)}@test.local`);
+    await inviteOfficial(auth, official.id, `ref-${randomUUID().slice(0, 8)}@test.local`, "https://officials.test");
     const [row] = await sql<{ lane: string }[]>`
       select p.lane from persons p
         join officials o on o.person_id = p.id

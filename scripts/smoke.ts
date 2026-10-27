@@ -298,13 +298,15 @@ async function main() {
   );
 
   // Invite-by-email (team settings): personal invite, single-use forced,
-  // address stored; email_sent reports the Resend outcome (false with a blank
-  // key — the UI then offers the personal link for manual sharing).
+  // address stored; email_sent reports the outcome of the email's first attempt
+  // (false with a blank key — the UI then offers the personal link for manual
+  // sharing while the outbox keeps the email).
   const emailInvitee = `delivered+emailinvitee_${tag}@resend.dev`;
   const emailInvite = (await call(admin, `/api/orgs/${org.id}/invites`, "POST", {
     role: "viewer",
     email: emailInvitee,
   })) as {
+    id: string;
     token: string;
     email: string | null;
     max_uses: number;
@@ -313,6 +315,9 @@ async function main() {
   check("email invite stores address", emailInvite.email === emailInvitee);
   check("email invite forced single-use", emailInvite.max_uses === 1);
   check("email invite reports send status", typeof emailInvite.email_sent === "boolean");
+  // Email outbox, phase 3 wave 3 (Task 5): the invite email is one `org_invite` row, ref the invite itself (each email invite is its
+  // own single-use link), its first attempt made in the request and no body left on it.
+  await checkOutboxRow("org_invite", "org_invite", emailInvite.id);
   // Personal: only the invited address may accept — anyone else holding the
   // link (here: the admin who minted it) is turned away with a 403.
   await expectFail("email invite rejects a different account", () =>
@@ -16773,13 +16778,30 @@ async function marketingSuite(): Promise<void> {
 
 async function funnelSuite(): Promise<void> {
   const visitor = newSession();
+  const funnelEmail = `delivered+funnel_${tag}@resend.dev`;
   const started = (await call(visitor, "/api/funnel/start", "POST", {
-    email: `delivered+funnel_${tag}@resend.dev`,
+    email: funnelEmail,
     name: `Funnel Fiesta ${tag}`,
     sport: "Badminton",
     entrants: 8,
   })) as { claim_url?: string };
   check("funnel: draft created with dev claim_url", !!started.claim_url);
+
+  // Email outbox, phase 3 wave 3 (Task 5): the claim email is one `funnel_claim` row, ref the draft (the response does not name it, so
+  // it is read back by the visitor's address), its first attempt made in the request and no body left on it. Keyless run: no DB.
+  if (process.env.DATABASE_URL) {
+    const db = smokeDb();
+    let draftId: string | undefined;
+    try {
+      const [draft] = await db<{ id: string }[]>`
+        select id from funnel_drafts where email = ${funnelEmail} order by created_at desc limit 1`;
+      draftId = draft?.id;
+    } finally {
+      await db.end();
+    }
+    check("funnel: the start stored a draft for the visitor's address", !!draftId);
+    if (draftId) await checkOutboxRow("funnel_claim", "funnel_draft", draftId);
+  }
 
   const token = new URL(started.claim_url ?? "").searchParams.get("token");
   const claimed = (await call(visitor, "/api/funnel/claim", "POST", {
@@ -22534,7 +22556,7 @@ async function emailOutboxCronSmoke(): Promise<void> {
     return;
   }
   const body = (await right.json().catch(() => ({}))) as { ok?: boolean; data?: Record<string, unknown> };
-  const KEYS = ["claimed", "sent", "retried", "dead", "suppressed", "expired", "failed", "deferred", "purged"] as const;
+  const KEYS = ["claimed", "sent", "retried", "dead", "suppressed", "expired", "failed", "deferred", "purged", "scrubbed"] as const;
   check(
     "email-outbox: cron runs a tick and answers a number for every report key",
     body.ok === true && KEYS.every((k) => typeof body.data?.[k] === "number"),

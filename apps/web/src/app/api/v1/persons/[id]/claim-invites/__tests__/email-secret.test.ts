@@ -1,15 +1,16 @@
 // The organiser invite routes and the EMAIL secret (owner-approved 2026-10-19, "split design").
 // A claim has two secrets: the CONSOLE one (the organiser's copyable link + QR) and one that goes
 // ONLY into the invite email. This file drives the REAL producers — POST /persons/{id}/claim-invites
-// and POST /officials/{id}/invite — over a real database, capturing what they hand the mailer, and
-// proves, on the real wire:
+// and POST /officials/{id}/invite — over a real database, capturing what they hand the mail (both
+// invites are queued on the email outbox through `queueClaimInviteEmail`, which is observed here
+// and still runs), and proves, on the real wire:
 //   - the email carries the EMAIL secret and NOT the console one;
 //   - the organiser's JSON never carries the email secret, its hash, or any field that names it;
 //   - what the mailer was handed really is the secret stored as email_token_hash (a fixture on both
 //     ends proves the fixture: here the producer's own output is folded through the REAL accept route);
 //   - a re-invite through the route kills the previously emailed link.
-// Only the cookie door and the mailer are faked. Skipped without DATABASE_URL (nothing touches `sql`
-// at module level — CI unit shards have no database).
+// Only the cookie door is faked; the invites' queueing is observed, not replaced. Skipped without
+// DATABASE_URL (nothing touches `sql` at module level — CI unit shards have no database).
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createHash, randomUUID } from "node:crypto";
 
@@ -37,17 +38,16 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
   headers: async () => new Headers(),
 }));
-vi.mock("@/lib/email", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("@/lib/email")>();
+// Both invites are queued on the email outbox: what the producer hands the queue is recorded here,
+// and the real helper still renders and queues it.
+vi.mock("@/server/usecases/claim-invite-mail", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/usecases/claim-invite-mail")>();
   return {
     ...actual,
-    sendClaimInviteEmail: async (to: string, a: { claimUrl: string; personName: string }) => {
-      world.mail.push({ kind: "claim", to, claimUrl: a.claimUrl, personName: a.personName });
-      return true;
-    },
-    sendOfficialInviteEmail: async (to: string, a: { claimUrl: string; personName: string }) => {
-      world.mail.push({ kind: "official", to, claimUrl: a.claimUrl, personName: a.personName });
-      return true;
+    queueClaimInviteEmail: async (...args: Parameters<typeof actual.queueClaimInviteEmail>) => {
+      const a = args[1];
+      world.mail.push({ kind: a.kind === "claim_invite" ? "claim" : "official", to: a.to, claimUrl: a.claimUrl, personName: a.personName });
+      return actual.queueClaimInviteEmail(...args);
     },
   };
 });
