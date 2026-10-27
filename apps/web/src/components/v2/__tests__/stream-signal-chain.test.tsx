@@ -262,12 +262,12 @@ describe("SignalChain (spec §3.2)", () => {
 });
 
 describe("D3Warning (D3; I-1 — the cause decides the sentence)", () => {
-  it("the key box (cause destination) is a status box naming the platform, with an Open Directory link to the Streaming tab in a new tab — 44 px on a phone", () => {
+  it("the key box (cause destination) is a status box naming the platform, with an Open Streaming link to the Streaming page in a new tab — 44 px on a phone", () => {
     const html = renderToStaticMarkup(<D3Warning cause="destination" kind="twitch" />);
     expect(html).toMatch(/data-testid="stream-output-warning"[^>]*data-cause="destination"/);
     expect(html).toMatch(/data-testid="stream-output-warning"[^>]*role="status"|role="status"[^>]*data-testid="stream-output-warning"/);
     expect(html).toContain(messages["stream.output.warning"].replace("{platform}", "Twitch").replace(/'/g, "&#x27;"));
-    expect(html).toMatch(/data-testid="stream-output-open-directory"[^>]*href="\/directory\?tab=streaming"/);
+    expect(html).toMatch(/data-testid="stream-output-open-directory"[^>]*href="\/streaming"/);
     expect(html).toMatch(/data-testid="stream-output-open-directory"[^>]*target="_blank"/);
     expect(html).toMatch(/data-testid="stream-output-open-directory"[^>]*class="[^"]*min-h-11[^"]*md:min-h-0/);
     expect(html).toContain(`>${messages["stream.output.openDirectory"]}</a>`);
@@ -469,7 +469,7 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
     expect(text(h)).toBe("Pixel 8 · Operator");
   });
 
-  it("the refusal: the reason sentence, and its remedy — Buy credits only with a handler (a button), Manage destinations a new-tab link to Directory → Streaming", () => {
+  it("the refusal: the reason sentence, and its remedy — Buy credits only with a handler (a button), Manage destinations a new-tab link to the Streaming page", () => {
     const auto = (refusal: "no_credit" | "no_destination" | "unavailable") => ({ enabled: true, refusal, wontStart: null, stopApplies: null });
     const noCredit = phoneStrip(readModel(facts({ state: "paired" }), { auto: auto("no_credit") }), null)!;
     const withBuy = html(noCredit, "en", () => {});
@@ -477,7 +477,7 @@ describe("PhoneStripView — PR-2's line, lead values and remedies (Option A)", 
     expect(withBuy).toMatch(/<button type="button" data-testid="stream-auto-remedy-buy" class="[^"]*min-h-11[^"]*"/);
     expect(html(noCredit), "no handler, no button").not.toContain("stream-auto-remedy-buy");
     const manage = html(phoneStrip(readModel(facts({ state: "paired" }), { auto: auto("no_destination") }), null)!);
-    expect(manage).toMatch(/<a data-testid="stream-auto-remedy-manage" href="\/directory\?tab=streaming" target="_blank" rel="noopener" class="[^"]*min-h-11[^"]*"/);
+    expect(manage).toMatch(/<a data-testid="stream-auto-remedy-manage" href="\/streaming" target="_blank" rel="noopener" class="[^"]*min-h-11[^"]*"/);
     expect(text(manage)).toBe("Automatic start couldn't begin: This match has no destination to stream to. Manage destinations");
     const none = html(phoneStrip(readModel(facts({ state: "paired" }), { auto: auto("unavailable") }), null)!, "en", () => {});
     expect(none).not.toMatch(/stream-auto-remedy/);

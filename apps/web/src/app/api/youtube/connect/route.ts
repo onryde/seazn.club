@@ -64,8 +64,8 @@ export async function POST(req: Request) {
     if (!role) throw new HttpError(404, "Not found");
     if (!(EDITOR_ROLES as readonly string[]).includes(role)) throw new HttpError(403, "Only an owner or admin can connect YouTube");
 
-    // The Directory's Streaming tab is listed only to an org entitled to the relay, on a deployment that can start a stream
-    // (directory/page.tsx, via `relayOffer`); this asks the same question, so a hand-made POST gets what the tab would not offer.
+    // The Streaming page is offered only to an org entitled to the relay, on a deployment that can start a stream
+    // (streaming/page.tsx, via `streamingPageOffered`); this asks the same question, so a hand-made POST gets what the page would not offer.
     const offer = await relayOffer(body.orgId);
     if (!offer.relayEntitled) return redirectLocal(youtubeLanding("forbidden"), 303);
     if (offer.relayDisabled) return redirectLocal(youtubeLanding("not_configured"), 303);

@@ -303,8 +303,8 @@ const WALKTHROUGH_SPECS: string[] = [
   "directory-officials-roles.spec.ts",
   "directory-player-identity.spec.ts",
   "directory-venues-courts.spec.ts",
-  // The Streaming tab (2026-09-30): destinations' add, shape warning, rename, replace key, remove=archive, the in-use lock (waiting and live), re-add restores, the empty state, the phone ⋯ menu, and (T8) the fixture picker's Manage destinations link.
-  "directory-stream-destinations.spec.ts",
+  // The Streaming page (2026-09-30 as a Directory tab; its own top-nav page since 2026-10-27): destinations' add, shape warning, rename, replace key, remove=archive, the in-use lock (waiting and live), re-add restores, the empty state, the phone ⋯ menu, and (T8) the fixture picker's Manage destinations link.
+  "streaming-destinations.spec.ts",
 
   // Spectator surface W1 (Task 15) — the anonymous match centre. Split
   // across two files so each stays under budget: cricket matches A (tapped

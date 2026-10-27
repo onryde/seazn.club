@@ -1,5 +1,5 @@
 import Link from "@/components/ui/console-link";
-import { CircleUserRound, LayoutDashboard, Settings, Users } from "lucide-react";
+import { CircleUserRound, LayoutDashboard, Radio, Settings, Users } from "lucide-react";
 import { HelpMenu } from "@/components/help-menu";
 import { getActiveOrgId, getCurrentUser, getUserOrgs } from "@/lib/auth";
 import { pickActiveOrg } from "@/lib/active-org";
@@ -12,6 +12,9 @@ import { ProductTour } from "@/components/product-tour";
 import { hasAnyCompetitions } from "@/server/usecases/competitions";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
+import { STREAMING_PAGE_HREF } from "@/lib/youtube";
+import { captureError } from "@/lib/sentry";
+import { streamingPageOffered } from "@/server/stream-panel-context";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 
@@ -57,6 +60,17 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
     }
   }
   const logoUrl = activeOrg ? orgLogoUrl(activeOrg) : null;
+  // The Streaming item (owner, 2026-10-27) is shown to exactly the orgs the Streaming page exists for — the page's own predicate,
+  // asked for the org the chrome is showing, never guessed client-side. A failed read hides the item (and is reported): the chrome
+  // must not take a page down, and a missing link is the honest fail-closed answer for a page that would 404.
+  let streamingOffered = false;
+  if (activeOrg) {
+    try {
+      streamingOffered = await streamingPageOffered(activeOrg.id);
+    } catch (err) {
+      captureError(err, { orgId: activeOrg.id, route: "nav.streaming_offered" });
+    }
+  }
   const isPlayer = !!user && (await hasClaimedProfile(user.id));
   // #516: the 4-link dual-role nav (below) doesn't fit this row's #349
   // budget at 640-1023px with every label shown — the display-name span was
@@ -208,6 +222,17 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 <Users className="h-4 w-4" strokeWidth={1.75} />
                 <span className={navLabelClass}>{t(dict, "nav.directory")}</span>
               </Link>
+              {streamingOffered && (
+                <Link
+                  href={STREAMING_PAGE_HREF}
+                  aria-label={t(dict, "nav.streaming")}
+                  data-testid="nav-streaming"
+                  className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                >
+                  <Radio className="h-4 w-4" strokeWidth={1.75} />
+                  <span className={navLabelClass}>{t(dict, "nav.streaming")}</span>
+                </Link>
+              )}
               <Link
                 href={activeOrg ? routes.orgSettings(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.settings")}

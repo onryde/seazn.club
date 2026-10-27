@@ -209,7 +209,8 @@ function landed(res: Response) {
   const u = new URL(res.headers.get("location") ?? "", "http://t");
   return { status: res.status, path: u.pathname, tab: u.searchParams.get("tab"), youtube: u.searchParams.get("youtube"), pending: u.searchParams.get("pending") };
 }
-const LANDS = (youtube: string, pending: string | null = null) => ({ status: 303, path: "/directory", tab: "streaming", youtube, pending });
+// The owner's page (2026-10-27): Streaming is its own top-nav page, `/streaming`, with no `tab` parameter. A literal, not the constant under test.
+const LANDS = (youtube: string, pending: string | null = null) => ({ status: 303, path: "/streaming", tab: null, youtube, pending });
 
 const callsOf = (method: string) => fake.calls.filter((c) => c.method === method).length;
 /** The refresh token the fake minted for the grant (read from the spy on the port, since the route never returns it). */

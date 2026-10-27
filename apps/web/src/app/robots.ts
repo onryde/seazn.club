@@ -9,7 +9,7 @@ export default function robots(): MetadataRoute.Robots {
         userAgent: "*",
         allow: ["/", "/pricing", "/use-cases/", "/legal/"],
         disallow: [
-          "/o/", "/dashboard", "/admin", "/api/", "/settings", "/competitions/", "/divisions/", "/fixtures/", "/directory", "/players", "/people", "/clubs", "/orgs/",
+          "/o/", "/dashboard", "/admin", "/api/", "/settings", "/competitions/", "/divisions/", "/fixtures/", "/directory", "/streaming", "/players", "/people", "/clubs", "/orgs/",
           // PostHog's first-party proxy (next.config.js rewrites): beacons, not pages.
           "/ingest/",
           // Public player profiles, /shared/{org}/{competition}/players/{personId}:

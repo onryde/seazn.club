@@ -38,13 +38,19 @@ export const GOOGLE_PRIVACY_URL = "http://www.google.com/policies/privacy";
 /** Developer Policies III.A.2: where a user revokes access to Seazn. */
 export const GOOGLE_PERMISSIONS_URL = "https://security.google.com/settings/security/permissions";
 
-// --- The connect round trip's landing --------------------------------------------------------------------------------
-// Every exit of the OAuth callback (and the start's own refusals that are not a bad request) is a 303 to the Directory's
-// streaming tab carrying one outcome, as `?youtube=<code>`. The Directory (plan T9) maps a code to a sentence; a value that
-// is not one of these shows nothing. `pick` also carries the pending grant's id, `&pending=<id>`.
+// --- The Streaming page and the connect round trip's landing --------------------------------------------------------------
 
-/** The Directory page the connect flow always lands on. */
-export const YOUTUBE_LANDING_PATH = "/directory?tab=streaming";
+/** The org's Streaming page (owner, 2026-10-27: Streaming is its own top-nav page, not a Directory tab, and nothing forwards from
+ *  the old `/directory?tab=streaming`). The ONE href for the nav item, the fixture panel's "Manage destinations" links and the
+ *  connect flow's landing. Constants only: no import, so the OpenAPI loader can read this file bare. */
+export const STREAMING_PAGE_HREF = "/streaming";
+
+// Every exit of the OAuth callback (and the start's own refusals that are not a bad request) is a 303 to the Streaming page
+// carrying one outcome, as `?youtube=<code>`. The page maps a code to a sentence; a value that is not one of these shows
+// nothing. `pick` also carries the pending grant's id, `&pending=<id>`.
+
+/** The page the connect flow always lands on. */
+export const YOUTUBE_LANDING_PATH = STREAMING_PAGE_HREF;
 /** The query parameter carrying the outcome. */
 export const YOUTUBE_LANDING_PARAM = "youtube";
 /** The query parameter carrying the pending grant's id on a `pick`. */
@@ -65,10 +71,10 @@ export const YOUTUBE_LANDING_CODES = [
 ] as const;
 export type YoutubeLandingCode = (typeof YOUTUBE_LANDING_CODES)[number];
 
-/** Where the connect flow lands: `/directory?tab=streaming&youtube=<code>`, plus `&pending=<id>` for a `pick`. The ONE
- *  builder for the start route, the callback and the page that reads the parameters, so they cannot drift. */
+/** Where the connect flow lands: `/streaming?youtube=<code>`, plus `&pending=<id>` for a `pick`. The ONE builder for the start
+ *  route, the callback and the page that reads the parameters, so they cannot drift. */
 export function youtubeLanding(code: YoutubeLandingCode, pendingId?: string): string {
-  const base = `${YOUTUBE_LANDING_PATH}&${YOUTUBE_LANDING_PARAM}=${code}`;
+  const base = `${YOUTUBE_LANDING_PATH}?${YOUTUBE_LANDING_PARAM}=${code}`;
   return pendingId === undefined ? base : `${base}&${YOUTUBE_LANDING_PENDING_PARAM}=${encodeURIComponent(pendingId)}`;
 }
 

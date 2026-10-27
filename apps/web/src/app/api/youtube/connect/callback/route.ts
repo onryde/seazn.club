@@ -13,7 +13,7 @@ import { saveConnectionFromGrant } from "@/server/youtube/connections";
 import { youtubeDriver } from "@/server/youtube/driver";
 import { YouTubeError, type YouTubePort } from "@/server/youtube/port";
 
-/** Every exit is the same: a 303 to the Directory's streaming tab carrying one outcome (lib/youtube.ts `youtubeLanding`). */
+/** Every exit is the same: a 303 to the Streaming page carrying one outcome (lib/youtube.ts `youtubeLanding`). */
 const land = (code: YoutubeLandingCode, pendingId?: string) => redirectLocal(youtubeLanding(code, pendingId), 303);
 
 /** What went wrong, as a code and nothing else: an error here may be a Google or database error whose text echoes a value, so

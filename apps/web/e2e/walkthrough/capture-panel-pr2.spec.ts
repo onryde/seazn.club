@@ -20,7 +20,7 @@
 // no sport (capture-phone.spec.ts's reasoning).
 //
 // Every rig is a FRESH org; sessions are opened under the stream-slot pool this file SHARES with capture-phone.spec.ts,
-// stream-relay.spec.ts and directory-stream-destinations.spec.ts (the same keys, the same capacity derivation), so the
+// stream-relay.spec.ts and streaming-destinations.spec.ts (the same keys, the same capacity derivation), so the
 // fake's capacity is never over-asked and capture-phone's W22 exclusion still holds.
 import { test, expect, type APIRequestContext, type Locator, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
@@ -698,7 +698,7 @@ test("T11 refusal: switch on, an automatic phone, the match in play and NO desti
   expect(row?.r, "the server stored the refusal it served").toBe("no_destination");
   const manage = strip.getByTestId("stream-auto-remedy-manage");
   await expect(manage).toHaveText(en("stream.dest.manage"));
-  await expect(manage).toHaveAttribute("href", "/directory?tab=streaming");
+  await expect(manage).toHaveAttribute("href", "/streaming");
   await page.setViewportSize({ width: 320, height: 800 });
   await expectNoHorizontalScroll(page);
   await page.setViewportSize({ width: 1280, height: 900 });

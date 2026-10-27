@@ -1,4 +1,4 @@
-// Directory → Streaming (spec 2026-09-30 §4, owner rulings D1 D2 D6).
+// The Streaming page (spec 2026-09-30 §4, owner rulings D1 D2 D6; moved from the Directory tab 2026-10-27).
 //
 // `apps/web` vitest is `environment: "node"` — NO DOM. Three layers, each proven where it CAN be (AGENTS.md classes 1
 // and 2):
@@ -10,7 +10,7 @@
 //   * the error map off the REAL wire: each refusal is the server's own error (its class or its code constant), sent
 //     through the real v1 envelope (`v1()`) and the real client transport (`apiV1`), exactly as the tab receives it.
 // What none of this can see — layout, the cascade, real tap area, a real server — is the walkthrough
-// `e2e/walkthrough/directory-stream-destinations.spec.ts`.
+// `e2e/walkthrough/streaming-destinations.spec.ts`.
 //
 // Sport-agnostic on purpose (TEST-STRATEGY rule 6): a destination reads no sport. The "another platform" axis is swept
 // instead — every create platform (STREAM_PLATFORMS) and every stored legacy kind (StreamTargetKind minus them).
@@ -51,8 +51,8 @@ vi.mock("@/lib/client-v1", async (importOriginal) => {
 const refresh = vi.fn();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh, push: vi.fn(), replace: vi.fn() }),
-  usePathname: () => "/directory",
-  useSearchParams: () => new URLSearchParams("tab=streaming"),
+  usePathname: () => "/streaming",
+  useSearchParams: () => new URLSearchParams(""),
 }));
 const confirmMock = vi.hoisted(() => vi.fn<(opts: unknown) => Promise<boolean>>(async () => true));
 vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => confirmMock }));
@@ -153,7 +153,7 @@ async function schemaRefusal(body: unknown): Promise<unknown> {
 const LEGACY_KINDS = StreamTargetKind.options.filter((k) => !isStreamPlatform(k));
 
 // ─── the whole panel as markup ────────────────────────────────────────────────────────────────────────────────────────
-describe("the Directory Streaming tab (spec §4)", () => {
+describe("the Streaming page (spec §4)", () => {
   it("a row: platform mark, name, and the subline '{Platform} · key ends …{hint} · added {date}'", () => {
     const html = panelHtml({ targets: [target()] });
     expect(html).toMatch(/data-testid="stream-dest-subline"[^>]*>YouTube · key ends …8hd · added 12 Sept?</);
@@ -396,7 +396,7 @@ describe("destinationErrorText — every refusal the routes answer reads as the 
     const { LOCALES } = await import("@/lib/i18n-constants");
     const { readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
-    const keys = Object.keys(messages).filter((k) => k.startsWith("streamDest.") || k === "directory.tab.streaming" || k === "directory.streaming.desc");
+    const keys = Object.keys(messages).filter((k) => k.startsWith("streamDest.") || k.startsWith("streaming."));
     expect(keys.length).toBeGreaterThan(30);
     let checked = 0;
     for (const l of LOCALES) {

@@ -20769,7 +20769,7 @@ async function seedOverlayOrg(label: string, cards: boolean): Promise<{
  * Streaming destinations over real HTTP (fixture-page stream T2b; spec §5.2, D2, D6): add a Twitch destination →
  * rename → replace its key → remove (an ARCHIVE) → remove again (404) → add the same key again (RESTORED: the same id)
  * → the same key once more while it is ACTIVE (A19, owner decision (a): `outcome: existing`, NOT renamed) → remove. First
- * the Directory's Streaming tab itself renders its panel (B4 fix round 1, m10 — the page's only PR-time signal, since
+ * the Streaming page itself renders its panel (B4 fix round 1, m10 — the page's only PR-time signal, since
  * e2e runs on a push to main). Runs on the shared Pro org and archives everything it creates, so no later suite sees a
  * destination. The stream key is never printed. SMOKE_ONLY=streamTargets runs it alone (SELECTABLE_SUITES).
  */
@@ -20790,9 +20790,9 @@ async function streamTargetsSuite(admin: Session, orgId: string): Promise<void> 
   };
 
   // Anchored on `="` (AGENTS.md): a bare testid probe also matches a serialised prop.
-  const page = await html(admin, "/directory?tab=streaming");
+  const page = await html(admin, "/streaming");
   step(
-    `GET /directory?tab=streaming renders the Streaming panel (got ${page.status})`,
+    `GET /streaming renders the Streaming panel (got ${page.status})`,
     page.status === 200 && page.body.includes('data-testid="stream-destinations"'),
   );
 

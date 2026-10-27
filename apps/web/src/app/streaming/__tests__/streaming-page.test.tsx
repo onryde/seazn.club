@@ -1,10 +1,11 @@
-// The Directory's Streaming tab (final review M-5 and M-3), through the REAL page and the REAL `relayOffer`.
+// The org's Streaming page (final review M-5 and M-3, moved from the Directory's tab by the owner, 2026-10-27), through the REAL
+// page and the REAL `relayOffer`.
 //
-// M-5: the tab holds relay destinations — a stream key is only ever used by Go live — so it is offered exactly when the
-// fixture panel offers Go live: `relayOffer` (server/stream-panel-context.ts), the panel's own decision, asked org-wide.
-// Not offered → no tab link, and `?tab=streaming` falls back to the first tab, reading no destination.
-// M-3: before listing, the tab ticks every holder's lazy expiry (`expireTargetHolders(org, null)`), so an abandoned Go
-// live cannot keep the "In use" lock — which disables exactly the buttons whose routes tick it — up indefinitely.
+// M-5: the page holds relay destinations — a stream key is only ever used by Go live — so it exists exactly when the fixture panel
+// offers Go live: `relayOffer` (server/stream-panel-context.ts), the panel's own decision, asked org-wide. Not offered → a real
+// 404 (`notFound()`), and no destination is read.
+// M-3: before listing, the page ticks every holder's lazy expiry (`expireTargetHolders(org, null)`), so an abandoned Go live
+// cannot keep the "In use" lock — which disables exactly the buttons whose routes tick it — up indefinitely.
 //
 // prerender, not renderToStaticMarkup: the page is an async server component.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -28,39 +29,27 @@ vi.mock("@/server/usecases/stream-targets", () => ({ listStreamTargets: m.listSt
 vi.mock("@/server/usecases/stream-sessions", () => ({
   expireTargetHolders: m.expireTargetHolders, defaultDeps: m.defaultDeps, relayCredits: async () => ({ total: 0, monthly: 0, pack: 0, monthlyAllowance: 0 }),
 }));
-vi.mock("@/server/usecases/persons", () => ({ listPersons: async () => ({ items: [] }) }));
-vi.mock("@/server/usecases/person-duplicates", () => ({ listDuplicateCandidates: async () => ({ items: [] }) }));
-vi.mock("@/server/usecases/clubs", () => ({ listClubsWithMeta: async () => [] }));
-vi.mock("@/server/usecases/teams", () => ({ listTeams: async () => [] }));
-vi.mock("@/server/usecases/officials", () => ({ listOfficialsForConsole: async () => [] }));
-vi.mock("@/server/usecases/venues", () => ({ listVenues: async () => [] }));
 // Client islands → identifiable markers.
 vi.mock("@/components/nav", () => ({ Nav: () => <nav data-testid="nav" /> }));
 // The panel renders the labels it is handed, so a test can see the LIST arrive, not only the panel.
 vi.mock("@/components/v2/stream-destinations-panel", () => ({
-  StreamDestinationsPanel: ({ targets }: { targets: { id: string; label: string }[] }) => (
-    <div data-testid="stream-destinations-panel">{targets.map((t) => <span key={t.id} data-target-label={t.label} />)}</div>
+  StreamDestinationsPanel: ({ targets, canEdit }: { targets: { id: string; label: string }[]; canEdit: boolean }) => (
+    <div data-testid="stream-destinations-panel" data-can-edit={String(canEdit)}>{targets.map((t) => <span key={t.id} data-target-label={t.label} />)}</div>
   ),
 }));
-vi.mock("@/components/v2/persons-panel", () => ({ PersonsPanel: () => <div data-testid="players-tab" /> }));
-vi.mock("@/components/v2/duplicates-panel", () => ({ DuplicatesPanel: () => <div /> }));
-vi.mock("@/components/v2/clubs-teams-list", () => ({ ClubsTeamsList: () => <div /> }));
-vi.mock("@/components/v2/officials-directory-panel", () => ({ OfficialsDirectoryPanel: () => <div /> }));
-vi.mock("@/components/v2/venues-panel", () => ({ VenuesPanel: () => <div /> }));
-vi.mock("@/components/ui/tip", () => ({ Tip: () => null }));
-vi.mock("@/components/ui/scroll-active-tab-into-view", () => ({ ScrollActiveTabIntoView: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
 
-import DirectoryPage from "../page";
+import StreamingPage from "../page";
 import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 
 const ORG = "org-1";
-const render = async (tab?: string) => {
-  const { prelude } = await prerender(await DirectoryPage({ searchParams: Promise.resolve(tab ? { tab } : {}) }));
+const render = async () => {
+  const { prelude } = await prerender(await StreamingPage());
   return new Response(prelude).text();
 };
-const STREAMING_LINK = 'href="/directory?tab=streaming"';
 const PANEL = 'data-testid="stream-destinations-panel"';
+/** What Next throws for `notFound()` — the digest the framework turns into the 404 page. */
+const NOT_FOUND = { digest: "NEXT_HTTP_ERROR_FALLBACK;404" };
 
 beforeEach(() => {
   m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, canEdit: true });
@@ -73,10 +62,11 @@ beforeEach(() => {
 });
 afterEach(() => setRelayDriversForTest(null));
 
-describe("Directory › Streaming tab — offered exactly when the fixture panel offers Go live (M-5)", () => {
-  it("OFFERED (both keys, a running relay): the tab is listed and renders the destinations — after ticking every holder's expiry, org-wide (M-3)", async () => {
-    const html = await render("streaming");
-    expect(html).toContain(STREAMING_LINK);
+describe("Streaming page — offered exactly when the fixture panel offers Go live (M-5)", () => {
+  it("OFFERED (both keys, a running relay): renders the page chrome and the destinations — after ticking every holder's expiry, org-wide (M-3)", async () => {
+    const html = await render();
+    expect(html).toContain('data-testid="nav"');
+    expect(html, "the page's own title").toContain("<h1");
     expect(html).toContain(PANEL);
     expect(m.hasFeature.mock.calls.map((c) => [c[0], c[1], c[2]]), "the panel's two keys, org-wide (no competition)").toEqual([
       [ORG, "streaming.overlay", undefined], [ORG, "streaming.relay", undefined],
@@ -93,8 +83,8 @@ describe("Directory › Streaming tab — offered exactly when the fixture panel
     const destinations = [{ id: "t-1", label: "Club YouTube" }, { id: "t-2", label: "Club Facebook" }];
     m.listStreamTargets.mockResolvedValue(destinations);
     m.expireTargetHolders.mockRejectedValueOnce(boom);
-    const html = await render("streaming");
-    expect(html, "the tab renders, not an error page").toContain(PANEL);
+    const html = await render();
+    expect(html, "the page renders, not an error page").toContain(PANEL);
     let checked = 0;
     for (const t of destinations) {
       expect(html, `${t.label} is listed after the failed tick`).toContain(`data-target-label="${t.label}"`);
@@ -104,16 +94,16 @@ describe("Directory › Streaming tab — offered exactly when the fixture panel
     expect(m.expireTargetHolders, "PREMISE: the tick ran, and threw").toHaveBeenCalledTimes(1);
     expect(m.listStreamTargets, "listed anyway").toHaveBeenCalledTimes(1);
     expect(m.captureError).toHaveBeenCalledTimes(1);
-    expect(m.captureError).toHaveBeenCalledWith(boom, expect.objectContaining({ orgId: ORG, route: "directory.streaming.expire_holders" }));
+    expect(m.captureError).toHaveBeenCalledWith(boom, expect.objectContaining({ orgId: ORG, route: "streaming.expire_holders" }));
     // The positive pair, and the second call: a tick that succeeds reports nothing and lists the same destinations.
-    const again = await render("streaming");
+    const again = await render();
     expect(again).toContain('data-target-label="Club YouTube"');
     expect(m.captureError, "a clean tick reports nothing").toHaveBeenCalledTimes(1);
     expect(m.expireTargetHolders).toHaveBeenCalledTimes(2);
     expect(m.listStreamTargets).toHaveBeenCalledTimes(2);
   });
 
-  it("NOT offered, for each of the three reasons the panel would not offer Go live: no tab link, `?tab=streaming` falls back to Players, and no destination is read or ticked", async () => {
+  it("NOT offered, for each of the three reasons the panel would not offer Go live: a real 404, and no destination is read or ticked", async () => {
     const reasons: [string, () => void][] = [
       ["streaming.overlay switched off", () => m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.overlay")],
       ["streaming.relay switched off", () => m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.relay")],
@@ -126,11 +116,7 @@ describe("Directory › Streaming tab — offered exactly when the fixture panel
       m.listStreamTargets.mockClear();
       m.expireTargetHolders.mockClear();
       apply();
-      const html = await render("streaming");
-      expect(html, why).not.toContain(STREAMING_LINK);
-      expect(html, `${why}: the other tabs stay`).toContain('href="/directory?tab=venues"');
-      expect(html, why).not.toContain(PANEL);
-      expect(html, `${why}: the first tab instead`).toContain('data-testid="players-tab"');
+      await expect(StreamingPage(), why).rejects.toMatchObject(NOT_FOUND);
       expect(m.listStreamTargets, why).not.toHaveBeenCalled();
       expect(m.expireTargetHolders, why).not.toHaveBeenCalled();
       checked++;
@@ -138,13 +124,19 @@ describe("Directory › Streaming tab — offered exactly when the fixture panel
     expect(checked).toBe(3);
   });
 
-  it("another tab: the Streaming link follows the same gate, and nothing streaming is read", async () => {
-    const shown = await render("venues");
-    expect(shown).toContain(STREAMING_LINK);
-    m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.relay");
-    const hidden = await render("venues");
-    expect(hidden).not.toContain(STREAMING_LINK);
-    expect(m.listStreamTargets).not.toHaveBeenCalled();
-    expect(m.expireTargetHolders).not.toHaveBeenCalled();
+  it("the positive pair of the three refusals: the same org, with both keys on and a running relay, is NOT a 404 (a guard that 404s everyone would pass the test above)", async () => {
+    await expect(StreamingPage()).resolves.toBeDefined();
+  });
+
+  it("a viewer (not an editor) is offered the page too — every member sees the list; only the actions are an editor's (the panel takes canEdit)", async () => {
+    m.requirePageAuth.mockResolvedValue({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, canEdit: false });
+    const html = await render();
+    expect(html).toContain(PANEL);
+    expect(html, "canEdit reaches the panel as false").toContain('data-can-edit="false"');
+    expect(m.listStreamTargets).toHaveBeenCalledTimes(1);
+  });
+
+  it("the owner's canEdit reaches the panel as true (the positive pair of the viewer case)", async () => {
+    expect(await render()).toContain('data-can-edit="true"');
   });
 });
