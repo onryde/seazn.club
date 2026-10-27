@@ -124,6 +124,10 @@
 //   - staff_connect_bank_changed: the real `alertConnectBankRemoved` (its one site, `handleExternalAccountChanged`, calls it for a
 //     DELETED external account only; billing-events-payout-health.test.ts drives it to a row through the webhook), for a Stripe event,
 //     the same way as the literal-subject alerts above.
+//   - staff_stuck_events: the real `alertStuckEventParked` (its one site, the park in `sweepStuckEvents`, calls it for the pass whose
+//     park moved the row; billing-events-sweep.test.ts drives the sweep to a row, and two overlapping passes to one), for a Stripe
+//     event, the same way. Not the sweep itself: it is global over billing_events, and that suite clears and counts the same working
+//     set, so a sweep run here would race it under CI's parallel files.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -220,6 +224,7 @@ import {
   alertCreditPackGrantFailed,
   alertSizePackGrantFailed,
   alertStreamClawback,
+  alertStuckEventParked,
   maybeAlertOrgRepriceFailed,
   notifyStaffDispute,
   processStripeEvent,
@@ -1401,6 +1406,24 @@ function connectBankChangedScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for a webhook event the stuck-event sweep has parked, to this run's STAFF_ALERT_EMAIL: no org, no account, and
+ *  the worker makes the first attempt. The subject is the builder's inline English, typed from its source. */
+function stuckEventsScenario(): LiteralKindScenario {
+  const recipient = address();
+  const eventId = `evt_${RUN}_stuck_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Stuck webhook event needs review: ${eventId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertStuckEventParked({ eventId, eventType: "invoice.paid", attempts: 4 });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real staff alert for a platform-charge dispute, to this run's STAFF_ALERT_EMAIL, for a `created` subscription dispute of an org
  *  that speaks French: the alert is in the platform locale (en) all the same, it names the org, and the worker makes the first
  *  attempt. */
@@ -2012,6 +2035,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_extra_org_reprice_failed: extraOrgRepriceFailedScenario(),
         staff_dispute_alert: staffDispute,
         staff_connect_bank_changed: connectBankChangedScenario(),
+        staff_stuck_events: stuckEventsScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

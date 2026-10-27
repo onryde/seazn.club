@@ -638,7 +638,6 @@ export async function staffDisputeAlertEmail(args: StaffDisputeAlertArgs, locale
 }
 
 export interface StuckEventsAlertEmail {
-  to: string;
   /** The Stripe event id (e.g. evt_…) that could not be auto-replayed. */
   eventId: string;
   eventType: string;
@@ -649,10 +648,12 @@ export interface StuckEventsAlertEmail {
 /** Internal staff alert (payments-hardening Task 11, P1-7): a webhook event
  *  failed auto-replay `attempts` times and is now PARKED — the sweep caps
  *  attempts and never re-selects it, so a human must inspect and replay it from
- *  /admin/billing-events. Fires exactly once per event. Platform-locale (en)
- *  and built inline — this is an ops-only alert with no user-facing i18n.
- *  Transactional so it bypasses the suppression list. */
-export async function sendStuckEventsAlertEmail(opts: StuckEventsAlertEmail): Promise<boolean> {
+ *  /admin/billing-events. Platform-locale (en) and built inline — this is an
+ *  ops-only alert with no user-facing i18n. RENDERED here; it is queued on the
+ *  email outbox by `alertStuckEventParked` (billing-events.ts, kind
+ *  `staff_stuck_events`, transactional), once per event, by the sweep pass
+ *  whose park moved it; nothing sends it directly. */
+export function stuckEventsAlertEmail(opts: StuckEventsAlertEmail): EmailContent {
   const subject = `Stuck webhook event needs review: ${opts.eventId}`;
   const bodyText =
     `Stripe event ${opts.eventId} (${opts.eventType}) failed auto-replay ${opts.attempts} times ` +
@@ -668,7 +669,7 @@ export async function sendStuckEventsAlertEmail(opts: StuckEventsAlertEmail): Pr
     footerNote: "Automated staff alert — webhook auto-replay cron (P1-7).",
   });
   const text = `${bodyText}\n\nEvent: ${opts.eventId} (${opts.eventType}) · attempts ${opts.attempts}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface CreditPackGrantFailedAlertEmail {
@@ -685,7 +686,7 @@ export interface CreditPackGrantFailedAlertEmail {
  *  also could not resolve) — the buyer paid but the wallet grant could not be
  *  safely determined, so nothing was granted rather than risking a silent
  *  wrong amount. A human must inspect and grant manually. Built inline, no
- *  user-facing i18n — same ops-only pattern as `sendStuckEventsAlertEmail`.
+ *  user-facing i18n — same ops-only pattern as `stuckEventsAlertEmail`.
  *
  *  RENDERED and not sent: `alertCreditPackGrantFailed` (billing-events.ts) queues what this returns on the email outbox through
  *  `queueStaffAlert` (kind `staff_credit_pack_grant_failed`), once per session or charge. Nothing sends it directly. */
@@ -1203,7 +1204,7 @@ export interface AiRunCostAlertEmail {
  *  above AI_RUN_COST_ALERT_MULTIPLE x the trailing median for its
  *  phase — the exact trigger SPEC-2 §5.1 named for revisiting the flat
  *  1-credit-per-run price. Ops-only, no user-facing i18n (mirrors
- *  sendStuckEventsAlertEmail). Not deduped — a run class that keeps tripping
+ *  stuckEventsAlertEmail). Not deduped — a run class that keeps tripping
  *  this is the point, not a bug to suppress. */
 export async function sendAiRunCostAlertEmail(opts: AiRunCostAlertEmail): Promise<boolean> {
   const multiple = opts.medianUsd > 0 ? opts.costUsd / opts.medianUsd : null;
@@ -1266,7 +1267,7 @@ export interface EarnGrantVolumeAlertEmail {
  *  across every wallet) crossed the daily alert threshold — the backstop
  *  for the publish-with-division gate, in case the gate itself is being
  *  worked (many throwaway orgs each publishing one bare competition).
- *  Ops-only, no user-facing i18n (mirrors sendStuckEventsAlertEmail). Fires
+ *  Ops-only, no user-facing i18n (mirrors stuckEventsAlertEmail). Fires
  *  at most once per cron poll, not deduped across days — a persistent high
  *  day repeats the alert, which is the point. */
 export async function sendEarnGrantVolumeAlertEmail(opts: EarnGrantVolumeAlertEmail): Promise<boolean> {
@@ -1546,7 +1547,7 @@ export interface ConnectBankAlertEmail {
  *  settling. The org sees its own banner; this is the ops half, because money
  *  piling up on a club's connected balance is something a human may have to
  *  chase. Platform-locale (en) and built inline — ops-only, no user-facing
- *  i18n, same convention as `sendStuckEventsAlertEmail`. RENDERED here; it is
+ *  i18n, same convention as `stuckEventsAlertEmail`. RENDERED here; it is
  *  queued on the email outbox by `alertConnectBankRemoved` (billing-events.ts,
  *  kind `staff_connect_bank_changed`), once per Stripe event, and only for
  *  `.deleted` (`.updated` is too chatty to page anyone with); nothing sends it

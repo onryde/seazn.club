@@ -59,7 +59,7 @@ import { getStripe } from "@/lib/stripe";
 import {
   passRevokedEmail,
   staffDisputeAlertEmail,
-  sendStuckEventsAlertEmail,
+  stuckEventsAlertEmail,
   creditPackGrantFailedAlertEmail,
   type CreditPackGrantFailedAlertEmail,
   streamCreditClawbackAlertEmail,
@@ -3042,9 +3042,13 @@ export async function ledgerByIds(ids: string[]): Promise<Map<string, LedgerRow>
  * replay-idempotent by contract, so replaying a `received` row is always safe.
  *
  * A row is retried up to 3 times; on the 3rd-attempt row it is PARKED
- * (replay_attempts bumped to 4, which the `< 4` filter excludes from every
- * future sweep) and staff are alerted ONCE, so the sweep stays quiet instead of
- * hammering a permanently-broken event. Stripe calls stay OUTSIDE any sql.begin.
+ * (replay_attempts set to 4, which the `< 4` filter excludes from every future
+ * sweep) and staff are alerted ONCE, so the sweep stays quiet instead of
+ * hammering a permanently-broken event. The park is the transition (R6): it
+ * moves the row from 3 to 4 or matches nothing, so of two overlapping passes
+ * (the cron is `retry: true`) only the one that parked it counts `alerted` and
+ * pages; the alert's once-key (`<event>:parked`) backs that up. Stripe calls
+ * stay OUTSIDE any sql.begin.
  */
 export async function sweepStuckEvents(limit = 25): Promise<{
   replayed: number;
@@ -3062,19 +3066,18 @@ export async function sweepStuckEvents(limit = 25): Promise<{
   let replayed = 0,
     failed = 0,
     alerted = 0;
-  const alertTo = process.env.STAFF_ALERT_EMAIL;
   for (const row of rows) {
-    // Cap reached: park it (bump to 4 → never selected again) and alert once.
+    // Cap reached: park it (3 → 4, never selected again) and alert once. A pass
+    // whose park matches nothing lost the row to an overlapping pass, which
+    // counts and pages it.
     if (row.replay_attempts >= 3) {
-      await sql`update billing_events set replay_attempts = replay_attempts + 1 where id = ${row.id}`;
-      alerted++;
-      if (alertTo) {
-        void sendStuckEventsAlertEmail({
-          to: alertTo,
-          eventId: row.id,
-          eventType: row.type,
-          attempts: row.replay_attempts + 1,
-        }).catch(() => {});
+      const parked = await sql`
+        update billing_events set replay_attempts = 4
+         where id = ${row.id} and replay_attempts = 3
+        returning id`;
+      if (parked.length > 0) {
+        alerted++;
+        await alertStuckEventParked({ eventId: row.id, eventType: row.type, attempts: row.replay_attempts + 1 });
       }
       continue;
     }
@@ -3090,6 +3093,26 @@ export async function sweepStuckEvents(limit = 25): Promise<{
     }
   }
   return { replayed, failed, alerted };
+}
+
+/** The staff alert for a webhook event the sweep has just PARKED: queued on the
+ *  email outbox (kind `staff_stuck_events`, to STAFF_ALERT_EMAIL, nothing when
+ *  unset) once per event (`<event>:parked`), so a pass that re-reaches the alert
+ *  for the same event pages nothing more. Never throws (the queue logs and
+ *  reports its own failure). Resolves to the row's id, or null when nothing was
+ *  queued. */
+export async function alertStuckEventParked(a: {
+  eventId: string;
+  eventType: string;
+  attempts: number;
+}): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_stuck_events",
+    refType: "stripe_event",
+    id: a.eventId,
+    suffix: "parked",
+    render: () => stuckEventsAlertEmail({ eventId: a.eventId, eventType: a.eventType, attempts: a.attempts }),
+  });
 }
 
 /** Stuck rows outside the live window: received, never processed. */
