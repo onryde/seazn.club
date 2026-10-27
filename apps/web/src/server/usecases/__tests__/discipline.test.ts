@@ -1004,46 +1004,42 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
     });
   });
 
-  it("waive: excluded from activeSuspensionsByEntrant/publicSuspensions; no served notice", async () => {
+  it("waive: excluded from activeSuspensionsByEntrant/publicSuspensions, and a real serving pass that serves its un-waived twin leaves it unserved", async () => {
     const ctx = await seedFootballDivision();
-    const email = `claim-${randomUUID().slice(0, 8)}@test.local`;
-    await claimPerson(ctx.personX, email);
-    const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
-      personId: ctx.personX,
-      matchesTotal: 1,
-      reason: "dissent",
-    });
-    const active = await decideSuspension(ctx.auth, manual.id, {
-      kind: "confirm",
-    });
-    expect(active.status).toBe("active");
+    await claimPerson(ctx.personX, `claim-${randomUUID().slice(0, 8)}@test.local`);
+    await claimPerson(ctx.personY, `claim-${randomUUID().slice(0, 8)}@test.local`);
+    // Two one-match bans, both live: X's (entrant A) is about to be waived, Y's (entrant B) is the positive pair.
+    const toWaive = await createManualSuspension(ctx.auth, ctx.divisionId, { personId: ctx.personX, matchesTotal: 1, reason: "dissent" });
+    const twin = await createManualSuspension(ctx.auth, ctx.divisionId, { personId: ctx.personY, matchesTotal: 1, reason: "dissent" });
+    for (const ban of [toWaive, twin]) {
+      expect((await decideSuspension(ctx.auth, ban.id, { kind: "confirm" })).status, "premise: live").toBe("active");
+    }
 
-    const waived = await decideSuspension(ctx.auth, manual.id, {
-      kind: "waive",
-    });
+    const waived = await decideSuspension(ctx.auth, toWaive.id, { kind: "waive" });
     expect(waived.status).toBe("waived");
 
-    const byEntrant = await withTenant(ctx.orgId, (tx) =>
-      activeSuspensionsByEntrant(tx, ctx.divisionId),
-    );
-    expect(byEntrant.get(ctx.entrantA) ?? []).toHaveLength(0);
+    const byEntrant = await withTenant(ctx.orgId, (tx) => activeSuspensionsByEntrant(tx, ctx.divisionId));
+    expect(byEntrant.get(ctx.entrantA) ?? [], "the waived ban is off its entrant's chip").toHaveLength(0);
+    expect(byEntrant.get(ctx.entrantB) ?? [], "positive pair: the live twin is on its entrant's chip").toHaveLength(1);
 
-    const [org] = await sql<
-      { slug: string }[]
-    >`select slug from organizations where id = ${ctx.orgId}`;
-    const [comp] = await sql<
-      { slug: string }[]
-    >`select slug from competitions where org_id = ${ctx.orgId}`;
-    const [division] = await sql<
-      { slug: string }[]
-    >`select slug from divisions where id = ${ctx.divisionId}`;
+    const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${ctx.orgId}`;
+    const [comp] = await sql<{ slug: string }[]>`select slug from competitions where org_id = ${ctx.orgId}`;
+    const [division] = await sql<{ slug: string }[]>`select slug from divisions where id = ${ctx.divisionId}`;
     const pub = await publicSuspensions(org!.slug, comp!.slug, division!.slug);
-    expect(pub).toEqual([]); // waived is neither active nor listed publicly
+    expect(pub, "only the live twin is listed publicly; the waived ban is not").toHaveLength(1);
 
-    // A further recompute-on-read pass (listSuspensions) must not queue the
-    // served notice for a waived row — it never enters the `active` set.
-    await listSuspensions(ctx.auth, ctx.divisionId);
-    expect(await noticesOf("suspension_served", manual.id)).toEqual([]);
+    // A decided A-vs-B fixture stamped after both decisions: it would serve BOTH one-match bans had X's not been waived.
+    const fx = await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB, "decided");
+    await sql`
+      insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+      values (${fx}, ${ctx.orgId}, ${nextSeq(fx)}, 'core.note', ${sql.json({ text: "d" })}, now() + interval '1 hour')`;
+
+    // The real serving pass (the recompute-on-read of the division's list).
+    const rows = await listSuspensions(ctx.auth, ctx.divisionId);
+    expect(rows.find((r) => r.id === twin.id)?.status, "positive pair: the pass served the live twin").toBe("served");
+    expect(await noticesOf("suspension_served", twin.id), "and queued its served notice").toHaveLength(1);
+    expect(await noticesOf("suspension_served", toWaive.id), "the same pass queued no served notice for the waived ban").toEqual([]);
+    expect(rows.find((r) => r.id === toWaive.id)?.status, "and left it waived").toBe("waived");
   });
 
   it("a yellow-accumulation threshold and a straight red fire together without cross-contamination", async () => {
