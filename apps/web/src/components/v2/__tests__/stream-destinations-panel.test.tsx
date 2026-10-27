@@ -72,7 +72,7 @@ afterEach(() => vi.restoreAllMocks());
 // ─── builders ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 const target = (over: Partial<StreamTarget> = {}): StreamTarget => ({
   id: "t1", kind: "youtube", label: "Club YouTube", watchUrl: null, createdAt: "2026-09-12T10:00:00.000Z",
-  keyHint: "8hd", inUse: null, ...over,
+  keyHint: "8hd", inUse: null, youtube: null, ...over,
 });
 const live = { sessionId: "s", fixtureId: "f", href: "/o/a/c/b/d/c/f/5", matchNo: 5, courtName: "Court 1", state: "live" as const };
 

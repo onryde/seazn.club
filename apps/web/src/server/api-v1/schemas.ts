@@ -86,6 +86,8 @@ import { isValidIana } from "../../lib/tz.ts";
 // D6 (fixture-page stream, 2026-09-30) — the platforms a NEW destination may name. RELATIVE with `.ts`, never `@/`,
 // for the same reason as the imports above; lib/stream-destinations.ts is deliberately import-free.
 import { STREAM_PLATFORMS } from "../../lib/stream-destinations.ts";
+// YouTube Connect (T8): the privacy vocabulary is lib/youtube.ts's own list (constants only; loads bare under strip-types).
+import { YOUTUBE_PRIVACIES } from "../../lib/youtube.ts";
 // R2007 PR B — the compositor's programme phases, the overlay page's phase channels and the loopback phase endpoint's
 // constants. RELATIVE with `.ts` for the same reason; lib/relay-phase.ts is deliberately import-free.
 import {
@@ -2101,6 +2103,26 @@ export const StreamTargetHolder = z.object({
 });
 export type StreamTargetHolder = z.infer<typeof StreamTargetHolder>;
 
+/** YouTube Connect (T8, spec §5.1): a connection's visibility vocabulary — lib/youtube.ts's list, imported, not retyped. */
+export const YoutubePrivacy = z.enum(YOUTUBE_PRIVACIES);
+
+/** What the Directory shows of a connected channel (never a token, a channel id or Google's own words). `status` is the
+ *  two LIVE states — a revoked connection has no view. `liveState` is what the health check last learned about the channel's
+ *  ability to stream: `unknown` until it has run once, and while the grant is dead (nothing can be asked of YouTube).
+ *  `termsOutdated`: the consent text moved on since this connection was consented — Go live is never blocked by it (spec
+ *  §6.1.5). `openBroadcasts`: broadcasts of the channel not yet complete or failed (what a Disconnect must wait for). */
+export const YoutubeConnectionView = z.object({
+  connectionId: z.string(),
+  channelTitle: z.string(),
+  privacy: YoutubePrivacy,
+  madeForKids: z.boolean(),
+  status: z.enum(["connected", "reconnect_needed"]),
+  liveState: z.enum(["enabled", "not_enabled", "blocked", "unknown"]),
+  termsOutdated: z.boolean(),
+  openBroadcasts: z.number().int(),
+});
+export type YoutubeConnectionView = z.infer<typeof YoutubeConnectionView>;
+
 export const StreamTarget = z.object({
   id: z.string(),
   kind: StreamTargetKind,
@@ -2110,6 +2132,8 @@ export const StreamTarget = z.object({
   /** The key's last 3 characters, or null for a key under 12 characters or an envelope that will not open (§5.3). */
   keyHint: z.string().nullable(),
   inUse: StreamTargetHolder.nullable(),
+  /** YouTube Connect: the connection behind an API-backed destination; null for a pasted-key row (T8). */
+  youtube: YoutubeConnectionView.nullable(),
 });
 export type StreamTarget = z.infer<typeof StreamTarget>;
 
@@ -2129,6 +2153,28 @@ export const PatchStreamTarget = z
   .refine((b) => (b.label === undefined) !== (b.streamKey === undefined), { message: "send exactly one of label or streamKey" });
 export type PatchStreamTarget = z.infer<typeof PatchStreamTarget>;
 export const StreamTargetRemoved = z.object({ removed: z.literal(true) });
+
+/** POST /orgs/{id}/youtube-connections — the channel picked from a multi-channel grant (the callback landed `pick` with the
+ *  pending grant's id). */
+export const PickYoutubeChannel = z
+  .object({ pendingId: z.string().uuid(), channelId: z.string().min(1).max(200) })
+  .strict();
+export type PickYoutubeChannel = z.infer<typeof PickYoutubeChannel>;
+/** The connection a pick (or a connect) saved, and its destination row. */
+export const YoutubeConnectionSaved = z.object({ connectionId: z.string(), targetId: z.string() });
+export type YoutubeConnectionSaved = z.infer<typeof YoutubeConnectionSaved>;
+/** GET /orgs/{id}/youtube-connections/pending/{pendingId} — the channels a grant offers, for the picker. */
+export const YoutubePendingChannels = z.object({ channels: z.array(z.object({ id: z.string(), title: z.string() })) });
+export type YoutubePendingChannels = z.infer<typeof YoutubePendingChannels>;
+/** PATCH /orgs/{id}/youtube-connections/{connectionId} — the connection's settings. `consent` can only be `true`: ticking
+ *  the box on the updated wording ("Review updated terms"); there is no way to withdraw consent here (Disconnect is that). */
+export const YoutubeConnectionSettings = z
+  .object({ privacy: YoutubePrivacy.optional(), madeForKids: z.boolean().optional(), consent: z.literal(true).optional() })
+  .strict()
+  .refine((b) => b.privacy !== undefined || b.madeForKids !== undefined || b.consent !== undefined, {
+    message: "send at least one of privacy, madeForKids or consent",
+  });
+export type YoutubeConnectionSettings = z.infer<typeof YoutubeConnectionSettings>;
 
 /** The Machine's beat (§6.3) — the control channel; the reply carries desired_state. */
 export const RelayHeartbeat = z

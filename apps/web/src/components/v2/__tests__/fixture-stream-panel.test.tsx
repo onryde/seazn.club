@@ -663,8 +663,8 @@ const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
 });
 
 const TARGETS: StreamTarget[] = [
-  { id: "t1", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: "abc", inUse: null },
-  { id: "t2", kind: "twitch", label: "Alt", watchUrl: null, createdAt: "2026-09-02T10:00:00.000Z", keyHint: null, inUse: null },
+  { id: "t1", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: "abc", inUse: null, youtube: null },
+  { id: "t2", kind: "twitch", label: "Alt", watchUrl: null, createdAt: "2026-09-02T10:00:00.000Z", keyHint: null, inUse: null, youtube: null },
 ];
 
 describe("the Phone tab reads the §5.3 gate, then hands the container the context (D15)", () => {

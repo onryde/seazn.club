@@ -4,18 +4,18 @@
 //
 // What is real here, on purpose: the three routes, the FakeYouTube behind the port (the whole loop runs start -> hop -> callback, so the
 // state the start records is the state the hop mints a code for and the callback redeems — a fixture on both ends would prove the
-// fixture), real Postgres for the pending grant, the token store and the role reads. What is stood in: the signed-in user (`requireUser`)
-// and `saveConnectionFromGrant`, which is T8's. T8 is not built when this suite lands, so `emulatedSave` below performs what its plan
-// text says it does (take the pending token, insert the connection, delete the pending row, 23505 -> YOUTUBE_OTHER_ORG) from the same
-// token-store functions T8 uses. It exists so that "exactly one connection row" and "the other org's connection is untouched" are
-// statements about rows rather than about a mock; T8 replaces the double with the real usecase and its own tests.
+// fixture), real Postgres for the pending grant, the token store and the role reads, and — since T8 — the REAL
+// `saveConnectionFromGrant` (server/youtube/connections.ts). It is wrapped in a spy, not replaced: the spy passes every call through to
+// the real usecase, so a test can count the calls, read what the save returned or threw, and inject ONE failure (the "database fell
+// over" case), and every other callback case ends in real connection and destination rows. (T7 shipped before T8 with a stand-in that
+// followed the plan's text; it is gone, so no test here proves a stand-in.) What is stood in: the signed-in user (`requireUser`).
 //
 // Expected values are literals typed from the brief and the spec (cookie names, the landing codes, 600 s, consent version 1, the
 // scope), never read back from the code under test. Skipped without DATABASE_URL like every DB suite here.
 //
 // Sport: not applicable — connecting a YouTube channel is sport-agnostic.
 import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 
 // ---- doubles ------------------------------------------------------------------------------------------------------------------------
 
@@ -53,21 +53,20 @@ vi.mock("@/lib/auth", async (importOriginal) => {
   };
 });
 
-const save = vi.hoisted(() => ({ fn: vi.fn() }));
-vi.mock("@/server/youtube/connections", () => ({ saveConnectionFromGrant: save.fn }));
-
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
-import { HttpError } from "@/lib/errors";
 import { YOUTUBE_CONSENT_VERSION } from "@/lib/youtube";
 import { pkceChallenge } from "@/server/external-play/pkce";
 import { log } from "@/server/logger";
-import { openWith } from "@/server/relay/crypto";
+import { fingerprintYoutubeChannel, openWith } from "@/server/relay/crypto";
+import { ApiBackedTargetError, readTargetSecret } from "@/server/relay/secret-columns";
+import { listStreamTargets } from "@/server/usecases/stream-targets";
 import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { setYoutubeDriverForTest } from "@/server/youtube/driver";
 import { FakeYouTube } from "@/server/youtube/fake";
 import { GoogleYouTube } from "@/server/youtube/google";
-import { insertConnectionWithToken, openToken, replaceConnectionToken, takePendingToken } from "@/server/youtube/token-store";
+import * as connections from "@/server/youtube/connections";
+import { insertConnectionWithToken, openToken } from "@/server/youtube/token-store";
 import { seedOrg } from "@/server/usecases/__tests__/_rig";
 import { POST as START } from "../route";
 import { GET as CALLBACK } from "../callback/route";
@@ -91,6 +90,11 @@ afterAll(() => {
   }
 });
 
+/** The spy on the save the callback calls: every call passes through to the real usecase (`vi.spyOn` keeps the implementation). */
+const save = { fn: undefined as unknown as MockInstance<typeof connections.saveConnectionFromGrant> };
+/** The real save, taken before any spy replaces it: a test that wraps the save calls THIS. */
+const realSave = connections.saveConnectionFromGrant;
+
 let fake: FakeYouTube;
 beforeEach(() => {
   jar.values.clear();
@@ -104,7 +108,7 @@ beforeEach(() => {
   for (const k of ["OAUTH_BASE_URL", "NEXT_PUBLIC_BASE_URL", "YOUTUBE_REDIRECT_URI", "GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"]) vi.stubEnv(k, undefined);
   fake = new FakeYouTube();
   setYoutubeDriverForTest(fake);
-  save.fn.mockReset().mockImplementation(emulatedSave);
+  save.fn = vi.spyOn(connections, "saveConnectionFromGrant");
 });
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -161,40 +165,6 @@ async function liveConnection(r: Rig, o: { channel?: string; sub?: string | null
       createdBy: r.userId, refreshToken,
     }));
   return { connectionId, channel, refreshToken };
-}
-
-/** What T8's saveConnectionFromGrant does, per the plan text (see the header). */
-async function emulatedSave(a: { pendingId: string; channelId: string; userId: string }): Promise<{ connectionId: string; targetId: string }> {
-  try {
-    return await sql.begin(async (tx) => {
-      const [p] = await tx<(PendingRow & { org_id: string })[]>`
-        select id, org_id, user_id, connection_id, default_privacy, made_for_kids, consent_version, consent_at, channels, granted_scope, google_sub
-          from youtube_connect_pending where id = ${a.pendingId}`;
-      const token = await takePendingToken(tx, p!.org_id, a.pendingId);
-      if (token === null) throw new Error("emulated save: no token sealed on the pending grant");
-      const ch = (p!.channels ?? []).find((c) => c.id === a.channelId);
-      if (!ch) throw new HttpError(422, "emulated save: not one of the grant's channels");
-      let connectionId: string;
-      if (p!.connection_id) {
-        if (!(await replaceConnectionToken(tx, p!.org_id, p!.connection_id, token))) throw new Error("emulated save: no such connection");
-        connectionId = p!.connection_id;
-      } else {
-        ({ connectionId } = await insertConnectionWithToken(tx, {
-          orgId: p!.org_id, channelId: ch.id, channelTitle: ch.title, googleSub: p!.google_sub, grantedScope: p!.granted_scope ?? "",
-          defaultPrivacy: p!.default_privacy as "unlisted", madeForKids: p!.made_for_kids, consentBy: p!.user_id, consentAt: p!.consent_at,
-          consentVersion: p!.consent_version, createdBy: a.userId, refreshToken: token,
-        }));
-      }
-      await tx`delete from youtube_connect_pending where id = ${a.pendingId}`;
-      return { connectionId, targetId: randomUUID() };
-    });
-  } catch (err) {
-    const e = err as { code?: string; constraint_name?: string };
-    if (e.code === "23505" && e.constraint_name === "org_youtube_connections_one_live_channel") {
-      throw new HttpError(409, "This channel is connected to another organisation on Seazn", "YOUTUBE_OTHER_ORG");
-    }
-    throw err;
-  }
 }
 
 // ---- driving the three routes -------------------------------------------------------------------------------------------------------
@@ -529,9 +499,9 @@ describe.skipIf(!HAS_DB)("GET /api/youtube/connect/callback — the landing", ()
     fake.setChannels([ch], f.state);
     fake.setGoogleSub("sub-solo", f.state);
     let atSave: PendingRow[] = [];
-    save.fn.mockImplementationOnce(async (a) => {
+    save.fn.mockImplementationOnce(async (a, port) => {
       atSave = await pendingRows(r.orgId);
-      return emulatedSave(a);
+      return realSave(a, port);
     });
     const { res } = await finish(f);
 
@@ -1138,5 +1108,132 @@ describe.skipIf(!HAS_DB)("GET /api/youtube/connect/fake-authorize — the hop CI
     const noState = await HOP(new Request("http://localhost/api/youtube/connect/fake-authorize"));
     expect(noState.status).toBe(400);
     expect(minting).not.toHaveBeenCalled();
+  });
+});
+
+// =====================================================================================================================================
+// INERT-SEAM GUARD (T8). The cases above run the real save too (the spy passes through), but each is about the callback's landing. These
+// four are about what the save LEAVES: route -> real usecase -> database -> fake port, end to end, asserting the rows — the rows the
+// Directory then lists and Go live (T10+) will read. A save that landed `connected` and wrote nothing would pass every landing check.
+describe.skipIf(!HAS_DB)("the callback's save is the REAL one: what a landing leaves in the database", () => {
+  /** The refresh token the nth exchange minted (one spy is shared: spying again on a spied method returns the same spy). */
+  const mintedAt = async (spy: ReturnType<typeof vi.spyOn>, n: number): Promise<string> =>
+    ((spy.mock.results[n]!.value as Promise<{ refreshToken: string }>).then((g) => g.refreshToken));
+  const savedOf = async (n: number): Promise<{ connectionId: string; targetId: string }> => save.fn.mock.results[n]!.value as Promise<{ connectionId: string; targetId: string }>;
+  const connRow = async (id: string) => (await sql<Record<string, unknown>[]>`select * from org_youtube_connections where id = ${id}`)[0]!;
+  const targetRows = (orgId: string) =>
+    sql<{ id: string; kind: string; label: string; youtube_connection_id: string; dest_fingerprint: string; watch_url: string | null; archived_at: Date | null }[]>`
+      select id, kind, label, youtube_connection_id, dest_fingerprint, watch_url, archived_at from org_stream_targets where org_id = ${orgId} order by created_at, id`;
+  const ownerCtx = (r: Rig) => ({ orgId: r.orgId, via: "session" as const, userId: r.userId, role: "owner" as const, keyId: null });
+
+  it("(a) connected: the connection holds the start's choices and consent and the grant's token; its destination row is kind youtube, labelled with the channel's title, fingerprinted by the channel, with NO key of its own and NO watch link; the grant is not revoked; the Directory lists it", async () => {
+    const r = await rig();
+    const f = await begin(r, { privacy: "private", madeForKids: "1" });
+    const ch = { id: channelId(), title: "Solo United" };
+    fake.setChannels([ch], f.state);
+    fake.setGoogleSub("sub-solo", f.state);
+    const exchange = vi.spyOn(fake, "exchangeCode");
+    const { res } = await finish(f);
+    expect(landed(res)).toEqual(LANDS("connected"));
+
+    const { connectionId, targetId } = await savedOf(0);
+    expect(await connRow(connectionId)).toMatchObject({
+      org_id: r.orgId, channel_id: ch.id, channel_title: "Solo United", google_sub: "sub-solo", granted_scope: YOUTUBE_SCOPE, default_privacy: "private",
+      made_for_kids: true, consent_by: r.userId, consent_version: 1, status: "connected", created_by: r.userId, last_error_code: null,
+    });
+    expect(await openToken(sql, r.orgId, connectionId), "the stored token is the one the grant minted").toBe(await minted(exchange));
+    const targets = await targetRows(r.orgId);
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject({
+      id: targetId, kind: "youtube", label: "Solo United", youtube_connection_id: connectionId, dest_fingerprint: fingerprintYoutubeChannel(ch.id), watch_url: null, archived_at: null,
+    });
+    await expect(sql.begin((tx) => readTargetSecret(tx, r.orgId, targetId)), "no key of its own").rejects.toBeInstanceOf(ApiBackedTargetError);
+    expect(callsOf("revoke"), "a connection was made: nothing to revoke").toBe(0);
+    expect(await pendingRows(r.orgId)).toEqual([]);
+    expect(await listStreamTargets(ownerCtx(r), r.orgId)).toMatchObject([
+      { id: targetId, kind: "youtube", label: "Solo United", keyHint: null, inUse: null, youtube: { connectionId, channelTitle: "Solo United", privacy: "private", madeForKids: true, status: "connected" } },
+    ]);
+  });
+
+  it("(b) other_org: the channel is live in another org -> the REAL save refused 409 YOUTUBE_OTHER_ORG, nothing was revoked (the holder's token still opens and still works at YouTube), the holder's connection and destination are byte-for-byte untouched, and this org has no connection, destination or pending grant", async () => {
+    const holder = await rig();
+    const fa = await begin(holder);
+    const ch = { id: channelId(), title: "Held FC" };
+    fake.setChannels([ch], fa.state);
+    const exchangeA = vi.spyOn(fake, "exchangeCode");
+    expect(landed((await finish(fa)).res)).toEqual(LANDS("connected"));
+    const heldToken = await minted(exchangeA);
+    const { connectionId: heldId } = await savedOf(0);
+    const heldBefore = await connRow(heldId);
+    const heldTargetsBefore = await targetRows(holder.orgId);
+
+    const r = await rig();
+    const fb = await begin(r);
+    fake.setChannels([ch], fb.state);
+    const { res } = await finish(fb);
+    expect(landed(res)).toEqual(LANDS("other_org"));
+    await expect(save.fn.mock.results[1]!.value, "the refusal is the usecase's own").rejects.toMatchObject({ status: 409, code: "YOUTUBE_OTHER_ORG", message: "This channel is connected to another organisation on Seazn" });
+    expect(callsOf("revoke"), "revoking the grant would kill the holder's live connection").toBe(0);
+    expect(await connRow(heldId)).toEqual(heldBefore);
+    expect(await targetRows(holder.orgId)).toEqual(heldTargetsBefore);
+    expect(await openToken(sql, holder.orgId, heldId)).toBe(heldToken);
+    await expect(fake.accessToken(heldToken), "the holder's token works at YouTube").resolves.toEqual(expect.any(String));
+    expect(await connectionCount(r.orgId)).toBe(0);
+    expect(await targetRows(r.orgId)).toEqual([]);
+    expect(await pendingRows(r.orgId), "the callback dropped the pending grant").toEqual([]);
+  });
+
+  it("(c) reconnect: a connection whose grant died is re-authorised -> the SAME connection and destination, the token replaced by the new grant's, connected again with its error cleared; the old token stays dead and the new one works", async () => {
+    const r = await rig();
+    const f1 = await begin(r);
+    const ch = { id: channelId(), title: "Reconnect FC" };
+    fake.setChannels([ch], f1.state);
+    const exchange = vi.spyOn(fake, "exchangeCode");
+    expect(landed((await finish(f1)).res)).toEqual(LANDS("connected"));
+    const oldToken = await mintedAt(exchange, 0);
+    const first = await savedOf(0);
+    fake.killToken(oldToken);
+    await sql`update org_youtube_connections set status = 'reconnect_needed', status_since = now() - interval '2 days', last_error_code = 'youtube_reconnect_needed' where id = ${first.connectionId}`;
+    const before = await connRow(first.connectionId);
+
+    const f2 = await begin(r, { connectionId: first.connectionId });
+    fake.setChannels([ch], f2.state);
+    expect(landed((await finish(f2)).res)).toEqual(LANDS("connected"));
+    const newToken = await mintedAt(exchange, 1);
+    expect(newToken).not.toBe(oldToken);
+    expect(await savedOf(1)).toEqual(first);
+    expect(await openToken(sql, r.orgId, first.connectionId), "the token is the NEW grant's").toBe(newToken);
+    const after = await connRow(first.connectionId);
+    expect(after).toMatchObject({ status: "connected", last_error_code: null });
+    expect((after.status_since as Date).getTime()).toBeGreaterThan((before.status_since as Date).getTime());
+    expect(await connectionCount(r.orgId)).toBe(1);
+    expect(await targetRows(r.orgId)).toHaveLength(1);
+    expect(await isDead(oldToken)).toBe(true);
+    await expect(fake.accessToken(newToken)).resolves.toEqual(expect.any(String));
+    expect(callsOf("revoke"), "a reconnect revokes nothing").toBe(0);
+  });
+
+  it("(d) a NEW connect of a channel already live in the SAME org returns the existing ids: one connection, one destination row, the token replaced, nothing revoked", async () => {
+    const r = await rig();
+    const f1 = await begin(r, { privacy: "public" });
+    const ch = { id: channelId(), title: "Twice FC" };
+    fake.setChannels([ch], f1.state);
+    const exchange = vi.spyOn(fake, "exchangeCode");
+    expect(landed((await finish(f1)).res)).toEqual(LANDS("connected"));
+    const oldToken = await mintedAt(exchange, 0);
+    const first = await savedOf(0);
+
+    const f2 = await begin(r, { privacy: "private" });   // a fresh connect (no connectionId), a different choice
+    fake.setChannels([ch], f2.state);
+    expect(landed((await finish(f2)).res)).toEqual(LANDS("connected"));
+    const newToken = await mintedAt(exchange, 1);
+    expect(newToken).not.toBe(oldToken);
+    expect(await savedOf(1), "the existing ids, not new ones").toEqual(first);
+    expect(await connectionCount(r.orgId)).toBe(1);
+    expect(await targetRows(r.orgId)).toHaveLength(1);
+    expect(await openToken(sql, r.orgId, first.connectionId)).toBe(newToken);
+    expect((await connRow(first.connectionId)).default_privacy, "the first choice stands; a connect does not silently change settings").toBe("public");
+    expect(callsOf("revoke")).toBe(0);
+    expect(await pendingRows(r.orgId)).toEqual([]);
   });
 });
