@@ -488,19 +488,17 @@ export async function transferCompleteEmail(
   return transferCompleteTemplate(args.payerName, args.groupName, args.link, dict);
 }
 
-/** A group's payer pushed an org off the shared bill (billing-group detach). The
- *  org's OWNER is told what happened — `ridesOutUntil` set = keeps the plan
- *  until then, null = on Community now — and that its billing is now theirs. */
-export async function sendGroupOrgRemovedEmail(
-  to: string,
-  payerName: string,
-  orgName: string,
-  ridesOutUntil: string | null,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** A group's payer pushed an org off the shared bill (billing-group detach), RENDERED and not sent. The org's OWNER is told what
+ *  happened — `ridesOutUntil` set (already written in `locale`'s way) = keeps the plan until then, null = on Community now — and that its
+ *  billing is now theirs. `detachOrgFromGroup` (billing-groups.ts) queues what this returns on the email outbox (kind
+ *  `group_org_removed`, NOT transactional, to the owner's account) in the detach's own transaction, in the owner's language. Nothing
+ *  sends it directly. */
+export async function groupOrgRemovedEmail(
+  args: { payerName: string; orgName: string; ridesOutUntil: string | null; link: string },
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...groupOrgRemovedTemplate(payerName, orgName, ridesOutUntil, link, dict) });
+  return groupOrgRemovedTemplate(args.payerName, args.orgName, args.ridesOutUntil, args.link, dict);
 }
 
 /** An org's own owner left a billing group (billing-group detach). The PAYER is

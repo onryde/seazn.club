@@ -83,6 +83,9 @@
 //   - group_transfer_complete: the real `offerGroupTransfer` of a community billing group (no live subscription: the immediate path) to
 //     the owner of its org, whose account has no language, in an `fr` org: the notice is queued to the recipient's account in the
 //     handover's own transaction, with no organisation, and the request makes the first attempt.
+//   - group_org_removed: the real `detachOrgFromGroup` by the payer of a paying group, pushing out an org whose owner's account is `fr`
+//     (ride-out): the notice is queued to the owner's account in the detach's own transaction, in the detached org, and the request
+//     makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -175,8 +178,8 @@ import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFoot
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
 import { refreshDiscipline } from "@/server/usecases/scoring";
 import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
-import { offerGroupTransfer } from "@/server/usecases/billing-groups";
-import { seedCommunityGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { detachOrgFromGroup, offerGroupTransfer } from "@/server/usecases/billing-groups";
+import { seedCommunityGroup, seedDetachableGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
@@ -1303,6 +1306,27 @@ async function groupTransferCompleteScenario(): Promise<KindScenario> {
   };
 }
 
+/** The payer of a paying billing group pushes out an org someone else owns (ride-out: the org keeps the plan to the period end). The
+ *  owner's account is `fr`, so the notice is in French; it is queued to that account in the detach's transaction, and the request makes
+ *  the first attempt after commit. */
+async function groupOrgRemovedScenario(): Promise<KindScenario> {
+  const g = await seedDetachableGroup({ ownerLocale: "fr", prefix: RUN });
+  made.orgIds.push(g.orgId, g.primaryId);
+  made.userIds.push(g.payer.id, g.owner.id);
+  return {
+    locale: "fr",
+    subjectKey: "groupOrgRemoved.subject",
+    subjectVars: { orgName: g.orgName },
+    recipient: g.owner.email,
+    firstAttempt: "request",
+    run: async () => {
+      const out = await detachOrgFromGroup({ actorUserId: g.payer.id, orgId: g.orgId, mode: "ride_out" });
+      const [org] = await sql<{ subscription_id: string }[]>`select subscription_id from organizations where id = ${g.orgId}`;
+      expect(org!.subscription_id, "premise: the real detach gave the org a group of its own").toBe(out.subscription_id);
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1455,6 +1479,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", transferComplete.subjectKey, transferComplete.subjectVars),
     );
 
+    const orgRemoved = await groupOrgRemovedScenario();
+    expect(dictionarySubject("fr", orgRemoved.subjectKey, orgRemoved.subjectVars)).not.toBe(
+      dictionarySubject("en", orgRemoved.subjectKey, orgRemoved.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1489,6 +1518,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         match_report_submitted: matchReport,
         group_transfer_offer: transferOffer,
         group_transfer_complete: transferComplete,
+        group_org_removed: orgRemoved,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

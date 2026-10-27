@@ -40,6 +40,8 @@
 //    call (every other producer meets the real `getStripe`, as before). Judged once the request's refused (503) first attempt is over.
 //  - The immediate handover's notice is driven through the same `offerGroupTransfer` on a community group (no live subscription and no
 //    Stripe customer, so nothing reaches Stripe), judged the same way.
+//  - The detach notices are driven through the real `detachOrgFromGroup` on a paying group with no live Stripe subscription (so its
+//    quantity sync never reaches Stripe): the payer pushing another owner's org out (removed). Judged the same way.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -71,8 +73,8 @@ import { openRound } from "@/server/usecases/external-play/open-round";
 import { handleRegistrationCheckoutCompleted, handleRegistrationDispute } from "@/server/usecases/registrations";
 import { handleSponsorDispute } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
-import { seedCommunityGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
-import { offerGroupTransfer } from "@/server/usecases/billing-groups";
+import { seedCommunityGroup, seedDetachableGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { detachOrgFromGroup, offerGroupTransfer } from "@/server/usecases/billing-groups";
 import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
@@ -281,6 +283,12 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       expect(out.status, "premise: the real handover moved the group").toBe("transferred");
       // The notice names the group by the org the recipient can reach.
       return { rowIds: await attemptedRowIdsOf("group_transfer_complete", "subscription", g.groupId), positive: literal(g.orgName) };
+    },
+    group_org_removed: async () => {
+      const g = await seedDetachableGroup({ prefix: "akb" });
+      const out = await detachOrgFromGroup({ actorUserId: g.payer.id, orgId: g.orgId, mode: "ride_out" });
+      // The notice names the org that was moved off the bill.
+      return { rowIds: await attemptedRowIdsOf("group_org_removed", "group_detach", out.subscription_id), positive: literal(g.orgName) };
     },
   };
 

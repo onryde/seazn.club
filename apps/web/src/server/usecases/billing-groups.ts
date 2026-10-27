@@ -33,11 +33,11 @@ import { orgAddonForPlan } from "@/lib/org-addons";
 import { planItem } from "@/lib/subscription-items";
 import { hasLiveSubscription, isTerminalStripeStatus } from "@/lib/subscription-status";
 import { intervalForPrice } from "@/lib/billing-manage";
-import { toLocale, type Locale } from "@/lib/i18n-constants";
+import type { Locale } from "@/lib/i18n-constants";
 import {
   transferOfferEmail,
   transferCompleteEmail,
-  sendGroupOrgRemovedEmail,
+  groupOrgRemovedEmail,
   sendGroupOrgLeftEmail,
 } from "@/lib/email";
 import { dispatchNow, enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
@@ -1184,8 +1184,9 @@ export async function detachOrgFromGroup(args: {
         deleted_at: Date | null;
         name: string;
         slug: string;
+        default_locale: string | null;
       }[]
-    >`select subscription_id, created_by, deleted_at, name, slug from organizations
+    >`select subscription_id, created_by, deleted_at, name, slug, default_locale from organizations
         where id = ${orgId} for update`;
     if (!org || org.deleted_at) throw new HttpError(404, "Organisation not found.");
     if (!org.subscription_id)
@@ -1260,6 +1261,18 @@ export async function detachOrgFromGroup(args: {
               ${compedUntil}, ${group.trial_used_at}, now())
       returning id`;
     await tx`update organizations set subscription_id = ${fresh.id} where id = ${orgId}`;
+    // Tell whoever did NOT press the button, in this transaction: committed <=> queued, and a refused enqueue fails the detach (D1).
+    const noticeId = await queueDetachNotice(tx, {
+      actorUserId,
+      orgId,
+      orgName: org.name,
+      orgSlug: org.slug,
+      orgDefaultLocale: org.default_locale,
+      orgOwnerId,
+      payerId: group.owner_user_id,
+      ridesOutUntil: compedUntil,
+      detachId: fresh.id,
+    });
     // #306: a ride_out just minted a free paid period at the payer's expense.
     // Only when one was ACTUALLY handed out — a release, or a group too far into
     // dunning to hand anything on, grants nothing, and a trail that fired on
@@ -1310,22 +1323,27 @@ export async function detachOrgFromGroup(args: {
       to: fresh.id,
       remaining: others.length,
       comped: compedUntil != null,
-      // Carried out of the tx so the post-commit notification can tell the party
-      // that did NOT initiate the removal. See notifyDetachParties.
+      // Carried out of the tx so the post-commit notification can tell the payer
+      // when the org's owner left. See notifyDetachParties.
       orgName: org.name,
-      orgSlug: org.slug,
       orgOwnerId,
       payerId: group.owner_user_id,
-      ridesOutUntil: compedUntil,
       remainingSlug: others[0]?.slug ?? null,
+      noticeId,
     };
   });
 
   await invalidateMove(orgId, result.from, result.to);
 
-  // Tell whoever did NOT press the button. Best-effort and after the commit, like
-  // the transfer notifications — the detach is done and a mail failure cannot
-  // undo it. Runs regardless of the cancel/sync branching below.
+  // The notice queued in the detach's transaction: the request makes the first attempt, after commit. Runs regardless of the
+  // cancel/sync branching below.
+  if (result.noticeId) {
+    const ids = [result.noticeId];
+    deferred(() => dispatchNow(ids));
+  }
+
+  // Tell the payer when the org's own owner left. Best-effort and after the commit — the detach is done and a mail failure cannot undo
+  // it.
   await notifyDetachParties({ actorUserId, ...result });
 
   // Never leave a live subscription at quantity 0: the last org out cancels the
@@ -2011,55 +2029,81 @@ function billingSettingsLink(slug: string): string {
   return `${base}/o/${slug}/settings/billing`;
 }
 
-/** A user's contact + preferred locale for a best-effort notification, or null
- *  if they have no reachable email (deleted, or never had one). */
-async function notifyContact(userId: string): Promise<{ email: string; locale: Locale } | null> {
-  const [u] = await sql<{ email: string | null; locale: string | null }[]>`
-    select email, locale from users where id = ${userId} and deleted_at is null`;
+/** A user's address and the language a notice to them is written in (D4: the account's, then `orgDefault`, then `en`), or null if
+ *  they have no reachable email (deleted, or never had one). Reads on the handle it is given. */
+async function notifyContact(
+  db: Tx | typeof sql,
+  userId: string,
+  orgDefault: string | null,
+): Promise<{ email: string; locale: Locale } | null> {
+  const [u] = await db<{ email: string | null }[]>`
+    select email from users where id = ${userId} and deleted_at is null`;
   if (!u?.email) return null;
-  return { email: u.email, locale: toLocale(u.locale) };
+  return { email: u.email, locale: await recipientLocale(db, { pick: null, userId, orgDefault }) };
 }
 
 /**
- * After a detach, email whichever party did NOT initiate it:
- *  - the payer pushed someone else's org out  → tell that org's OWNER what
- *    happened to the plan (ride-out date, or Community now) and that its billing
- *    is now theirs;
- *  - the org's own owner left                  → tell the PAYER their bill
- *    changed (the seat is a reusable freed slot, or it left with the org).
- *
- * When the actor owns both the org and the group there is no one else to tell.
- * Best-effort: a mail failure cannot undo the committed detach.
+ * After a detach, queue the notice to the party that did NOT initiate it, on `tx`, the detach's own transaction (committed <=> queued):
+ * the payer pushed someone else's org out → `group_org_removed` to that org's OWNER, saying what happened to the plan (the ride-out date,
+ * written the owner's way, or Community now) and that its billing is now theirs, in the owner's language (D4: the account's, then the
+ * detached org's default). Ref `group_detach / <the org's new subscription>` (unique per detach), the detached org, NOT transactional,
+ * the bound expiry. Returns the row's id, or null when there is nobody to tell (or no address to tell them at). A refused enqueue
+ * throws, failing the detach (D1).
+ */
+async function queueDetachNotice(
+  tx: Tx,
+  args: {
+    actorUserId: string;
+    orgId: string;
+    orgName: string;
+    orgSlug: string;
+    orgDefaultLocale: string | null;
+    orgOwnerId: string | null;
+    payerId: string;
+    ridesOutUntil: Date | string | null;
+    detachId: string;
+  },
+): Promise<string | null> {
+  const { actorUserId, orgId, orgName, orgSlug, orgDefaultLocale, orgOwnerId, payerId, ridesOutUntil, detachId } = args;
+  if (!(actorUserId === payerId && orgOwnerId && orgOwnerId !== payerId)) return null;
+  const to = await notifyContact(tx, orgOwnerId, orgDefaultLocale);
+  if (!to) return null;
+  const until = ridesOutUntil
+    ? new Intl.DateTimeFormat(to.locale, { dateStyle: "long" }).format(new Date(ridesOutUntil))
+    : null;
+  return enqueueEmail(tx, {
+    kind: "group_org_removed",
+    refType: "group_detach",
+    refId: detachId,
+    orgId,
+    to: to.email,
+    recipientUserId: orgOwnerId,
+    ...(await groupOrgRemovedEmail(
+      { payerName: await payerDisplayName(tx, payerId), orgName, ridesOutUntil: until, link: billingSettingsLink(orgSlug) },
+      to.locale,
+    )),
+    transactional: false,
+    expiresAt: expiryWithin(null),
+  });
+}
+
+/**
+ * After a detach the org's own owner made, email the PAYER: their bill changed (the seat is a reusable freed slot, or it left with the
+ * org). The payer pushing someone else's org out is told in the detach's transaction (queueDetachNotice); when the actor owns both the
+ * org and the group there is no one else to tell. Best-effort: a mail failure cannot undo the committed detach.
  */
 async function notifyDetachParties(args: {
   actorUserId: string;
   orgName: string;
-  orgSlug: string;
   orgOwnerId: string | null;
   payerId: string;
-  ridesOutUntil: Date | string | null;
   comped: boolean;
   remainingSlug: string | null;
 }): Promise<void> {
-  const { actorUserId, orgName, orgSlug, orgOwnerId, payerId, ridesOutUntil, comped, remainingSlug } =
-    args;
+  const { actorUserId, orgName, orgOwnerId, payerId, comped, remainingSlug } = args;
   try {
-    if (actorUserId === payerId && orgOwnerId && orgOwnerId !== payerId) {
-      const to = await notifyContact(orgOwnerId);
-      if (!to) return;
-      const until = ridesOutUntil
-        ? new Intl.DateTimeFormat(to.locale, { dateStyle: "long" }).format(new Date(ridesOutUntil))
-        : null;
-      await sendGroupOrgRemovedEmail(
-        to.email,
-        await payerDisplayName(sql, payerId),
-        orgName,
-        until,
-        billingSettingsLink(orgSlug),
-        to.locale,
-      );
-    } else if (actorUserId === orgOwnerId && payerId !== orgOwnerId && remainingSlug) {
-      const to = await notifyContact(payerId);
+    if (actorUserId === orgOwnerId && payerId !== orgOwnerId && remainingSlug) {
+      const to = await notifyContact(sql, payerId, null);
       if (!to) return;
       // seatFreed = release (no comp): the payer kept the seat as a reusable
       // slot. On ride_out the seat left with the org, so the next invoice shrinks.
