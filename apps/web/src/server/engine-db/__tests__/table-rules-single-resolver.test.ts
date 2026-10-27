@@ -34,6 +34,13 @@ const EXEMPT: readonly { file: string; pattern: RegExp; text: string; reason: st
     text: "const named = presets?.tiebreakers ?? [];",
     reason: "reads the preset catalogue for the editor's Reset menu, not a stage's order",
   },
+  {
+    file: "server/slideshow-data.ts",
+    pattern: READS[1]!,
+    text: "cascade: rules?.tiebreakers ?? [],",
+    reason:
+      "reads the loader's own output (`stageTableRulesDocs` / `PublicStage.table_rules`); `?? []` is a refused or absent stage's empty cascade, never the division's or the module's default",
+  },
 ];
 
 function sources(dir: string, out: string[] = []): string[] {
