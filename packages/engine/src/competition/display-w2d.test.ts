@@ -16,9 +16,11 @@ import { tableRulesOf } from "../testkit/index.ts";
 import {
   DERIVED_METRICS,
   LEVEL_RANK,
+  PLAIN_LAYOUT,
   completeTableStage,
   derivedMetricText,
   fieldGoalsOf,
+  foldResults,
   isLevelTable,
   ledgerDifference,
   payout,
@@ -277,5 +279,130 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
     const bg = boardgame.configSchema.parse({});
     const bgRule = boardgame.tablePointsRule(bg, "league");
     expect(isLevelTable(tableOf(["A", "B"], [], bgRule))).toBe(true);
+  });
+});
+
+// W2d T17 MD-1 — the lines the per-task Stryker sweep found unwitnessed (task-17-stryker-report.md). Each expected value
+// is the rule's or the spec's, never display.ts's: D9's split, RBG §3.4's columns, the half-point unit (D10(b)) and
+// Jul3/05 §2 (fractional and negative points are legal).
+describe("W2d T17 MD-1 — the public table's untested edges", () => {
+  it("MD-1 every derived column has a header to print: a non-empty label, no two alike (spec §5.7: each new key needs a column and a label), counted", () => {
+    // sport-agnostic: DERIVED_METRICS is the one list every sport's table reads its derived columns from
+    let checked = 0;
+    for (const m of DERIVED_METRICS) {
+      expect(m.label.trim(), m.key).not.toBe("");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the derived columns").toBe(DERIVED_METRICS.length);
+    expect(checked).toBeGreaterThan(0);
+    const labels = DERIVED_METRICS.map((m) => m.label);
+    expect(new Set(labels).size, "two columns under one header cannot be told apart").toBe(labels.length);
+  });
+
+  it("MD-1 PLAIN_LAYOUT (a stage with no rules to read) is the plain table — W and L as folded, whole points (RBG §3.4 'Recreational: GP W D L'): the layout every whole-point table without a split computes, every sport, counted", () => {
+    let plain = 0;
+    const sports = forEachSport(({ module }) => {
+      for (const { name, cfg } of declaredCfgs(module)) {
+        for (const kind of TABLE_KINDS) {
+          const layout = tableLayoutOf(module.tablePointsRule(cfg as never, kind), reachableOutcomes(module, cfg, kind));
+          if (layout.apart.length > 0 || layout.unit !== "whole") continue;
+          expect(layout, `${module.key} ${name} ${kind}`).toStrictEqual(PLAIN_LAYOUT);
+          plain++;
+        }
+      }
+    });
+    expect(sports).toBeGreaterThan(1);
+    expect(plain, "anti-vacuity: the plain layouts").toBeGreaterThan(sports);
+    // What it prints, on IIHF results: nothing is counted apart — A's regulation, OT and GWS wins are all W, its OT loss an
+    // L, and its points are IIHF's 3 + 2 + 2 + 1 = 8, whole.
+    const iihf = cfgNamed(icehockey, "iihf");
+    const rule = icehockey.tablePointsRule(iihf as never, "league");
+    const table = tableOf(
+      ["A", "B", "C", "D", "E"],
+      [
+        played("g1", "A", "B", [4, 1], "regulation", rule),
+        played("g2", "A", "C", [3, 2], "ot", rule),
+        played("g3", "A", "D", [3, 2], "so", rule),
+        played("g4", "E", "A", [2, 1], "ot", rule),
+      ],
+      rule,
+    );
+    const cols = ["played", "won", "otw", "otl", "drawn", "lost", "points"] as const;
+    expect(cols.map((k) => resultColumnText(rowOf(table, "A"), k, PLAIN_LAYOUT))).toEqual(["4", "3", "0", "0", "0", "1", "8"]);
+  });
+
+  it("MD-1 a half-point total that is negative or not a whole number of half-points (fractional and negative points are legal, Jul3/05 §2) prints its own value with its sign: the text reads back as stored ÷ 2 — every case counted, and through the fold", () => {
+    // The half-point spelling read back: "1½" is 1.5, "½" 0.5, "-½" −0.5.
+    const readBack = (text: string): number => Number(text.replace(/^(-?)½$/, (_m, sign: string) => `${sign}0.5`).replace(/½$/, ".5"));
+    const stored = [...Array.from({ length: 19 }, (_, i) => i - 9), 0.5, 1.5, -0.5, -2.5, 3.25, -3.75, 7.5];
+    let checked = 0;
+    let negative = 0;
+    let fractional = 0;
+    for (const half of stored) {
+      const text = pointsText(half, "half");
+      expect(text, `${half} half-points`).not.toBe("");
+      expect(readBack(text), `${half} half-points print ${text}`).toBe(half / 2);
+      expect(text.startsWith("-"), `${half}: the sign is kept`).toBe(half < 0);
+      // A whole number of half-points spells its half as "½" (FIDE 1 / ½ / 0); any other remainder is never a "½".
+      expect(text.endsWith("½"), `${half}: ${text}`).toBe(Number.isInteger(half) && half % 2 !== 0);
+      checked++;
+      if (half < 0) negative++;
+      if (!Number.isInteger(half)) fractional++;
+    }
+    expect(checked).toBe(stored.length);
+    expect(negative, "anti-vacuity: negative totals").toBeGreaterThan(0);
+    expect(fractional, "anti-vacuity: totals that are not a whole number of half-points").toBeGreaterThan(0);
+    // single-sport: chess is the one half-point sport (the layout sweep above asserts it). Through the fold and `payout`:
+    // a half-point rule paying 2.5 for a win (1.25 points), 1 for a draw (½) and −1 for a loss (a deduction, −½).
+    const cfg = boardgame.configSchema.parse({});
+    const rule = PointsRule.parse({ win: { regulation: 2.5 }, loss: { regulation: -1 }, draw: 1, shootoutAs: "result", unit: "half" });
+    const layout = tableLayoutOf(rule, reachableOutcomes(boardgame, cfg, "league"));
+    expect(layout.unit, "premise: the rule's own unit").toBe("half");
+    // A beats B, then draws C: A 2.5 + 1 = 3.5 half-points (1.75); B −1 (−½); C 1 (½).
+    const table = tableOf(["A", "B", "C"], [played("g1", "A", "B", [1, 0], "regulation", rule), played("g2", "A", "C", [0, 0], null, rule)], rule);
+    expect(Object.fromEntries(["A", "B", "C"].map((id) => [id, resultColumnText(rowOf(table, id), "points", layout)]))).toEqual({ A: "1.75", B: "-½", C: "½" });
+  });
+
+  it("MD-1 a row the ranking pass left without a place prints no place on a played table (never 'undefined'), and '–' on a level one", () => {
+    // sport-agnostic: the fold is every sport's; it writes no rank (StandingsRow: `rank` is the ranking pass's)
+    const folded = foldResults(["A", "B"], []);
+    expect(folded.length, "premise: a row per entrant").toBe(2);
+    let checked = 0;
+    for (const row of folded) {
+      expect(row.rank, `premise: ${row.entrantId} has no place yet`).toBeUndefined();
+      expect(rankText(row, false), row.entrantId).toBe("");
+      expect(rankText(row, true), row.entrantId).toBe(LEVEL_RANK);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // The pair: a place prints as itself.
+    expect(rankText({ rank: 2 }, false)).toBe("2");
+  });
+
+  it("MD-1 a split paid on the WINNER's side alone is a column too (D9: an OT win pays a win 'unless a split is set'): every point the table prints is accounted for by its columns", () => {
+    // Three for a regulation win, two for an OT win, nothing for any loss: the split is on the winner's side only (the
+    // loser-only case is the shoot-out test above). A loss beyond regulation falls back to the regulation loss (§5.3).
+    const rule = PointsRule.parse({ win: { regulation: 3, ot: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole" });
+    const reach = new Set(["win.regulation", "loss.regulation", "win.ot", "loss.ot", "draw"] as const);
+    const layout = tableLayoutOf(rule, reach);
+    expect(layout.apart).toEqual(["ot"]);
+    // A: a regulation win, an OT win, an OT loss — 3 + 2 + 0 = 5. Every row's points equal its columns paid by the rule.
+    const table = tableOf(
+      ["A", "B", "C", "D"],
+      [played("g1", "A", "B", [2, 0], "regulation", rule), played("g2", "A", "C", [2, 1], "ot", rule), played("g3", "D", "A", [3, 2], "ot", rule)],
+      rule,
+    );
+    const otWin = rule.win.ot ?? rule.win.regulation;
+    const otLoss = rule.loss.ot ?? rule.loss.regulation;
+    let checked = 0;
+    for (const row of table) {
+      const n = (k: "won" | "otw" | "otl" | "drawn" | "lost") => Number(resultColumnText(row, k, layout));
+      const paid = n("won") * rule.win.regulation + n("otw") * otWin + n("otl") * otLoss + n("drawn") * rule.draw! + n("lost") * rule.loss.regulation;
+      expect(Number(resultColumnText(row, "points", layout)), row.entrantId).toBe(paid);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    expect(resultColumnText(rowOf(table, "A"), "points", layout)).toBe("5");
+    expect((["won", "otw", "otl", "lost"] as const).map((k) => resultColumnText(rowOf(table, "A"), k, layout))).toEqual(["1", "1", "1", "0"]);
   });
 });
