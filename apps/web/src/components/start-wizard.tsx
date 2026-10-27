@@ -7,7 +7,7 @@ import { api } from "@/lib/client";
 import { recommendFormats, type Recommendation } from "@/lib/format-recommend";
 import { FUNNEL_SPORTS } from "@/components/start-funnel-form";
 import { LegalNotice } from "@/components/legal-notice";
-import { useT } from "@/components/i18n/dict-provider";
+import { useLocale, useT } from "@/components/i18n/dict-provider";
 
 interface Initial {
   sport?: string;
@@ -17,6 +17,7 @@ interface Initial {
 
 export function StartWizard({ initial }: { initial: Initial }) {
   const t = useT();
+  const locale = useLocale();
   const [step, setStep] = useState(0);
   const [sport, setSport] = useState(initial.sport ?? "Badminton");
   const [name, setName] = useState("");
@@ -45,6 +46,8 @@ export function StartWizard({ initial }: { initial: Initial }) {
         method: "POST",
         json: {
           email,
+          // The claim email is written in the language this page was shown in.
+          locale,
           name: compName,
           sport,
           entrants,

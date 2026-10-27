@@ -8,12 +8,18 @@ import { createFunnelDraft, funnelPayloadSchema } from "@/lib/funnel";
 import { funnelClaimEmail } from "@/lib/email";
 import { dispatchNow, enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { explicitLocale } from "@/lib/explicit-locale";
+import { LOCALES } from "@/lib/i18n-constants";
 import { captureServer } from "@/lib/posthog-server";
 import { EVENTS } from "@/lib/analytics-events";
 import { mayExposeDevLink } from "@/lib/dev-links";
 
 const schema = z
-  .object({ email: z.string().email().max(120) })
+  .object({
+    email: z.string().email().max(120),
+    // The language the /start page was rendered in (its `[lang]` segment, which the proxy resolved from the cookie or Accept-Language
+    // when the URL had none): the language the visitor saw. One that names no shipped locale is dropped, never a 400.
+    locale: z.enum(LOCALES).optional().catch(undefined),
+  })
   .extend(funnelPayloadSchema.shape)
   .strict();
 
@@ -26,7 +32,8 @@ export async function POST(req: Request) {
     const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
     await rateLimit(`funnel-start:${ip}`, EMAIL_LIMIT);
 
-    const { email, ...payload } = schema.parse(await req.json());
+    // `locale` is the email's, not the draft's: the claim re-reads the draft's payload strictly.
+    const { email, locale, ...payload } = schema.parse(await req.json());
 
     // The draft and the email that carries its token are one transaction on the pool (a visitor has no account and no
     // organisation): a refused row fails the start and leaves no draft behind. The row's ref is the draft, so a second start (its
@@ -42,11 +49,11 @@ export async function POST(req: Request) {
         to: email,
         transactional: true,
         expiresAt: expiryWithin(draft.expiresAt),
-        // D4: the visitor's explicit pick (the switcher's cookie, read as the public register route reads it), then `en`: there is no
-        // account and no organisation yet.
+        // D4: the visitor's pick is the language the page was shown in, then the switcher's cookie (read as the public register route
+        // reads it) for a client that sent none, then `en`: there is no account and no organisation yet.
         ...(await funnelClaimEmail(
           { competitionName: payload.name, sport: payload.sport, link },
-          await recipientLocale(tx, { pick: explicitLocale(req), userId: null, orgDefault: null }),
+          await recipientLocale(tx, { pick: locale ?? explicitLocale(req), userId: null, orgDefault: null }),
         )),
       });
       return { draftId: draft.id, rowId, link };

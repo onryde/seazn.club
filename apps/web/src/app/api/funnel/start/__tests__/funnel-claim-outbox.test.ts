@@ -23,6 +23,7 @@ const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
 
 import { sql } from "@/lib/db";
+import { LOCALES } from "@/lib/i18n-constants";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
 import { POST as start } from "../route";
@@ -150,6 +151,34 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/start queues the claim link on the ou
     expect(dictionarySubject("fr", "funnelClaim.subject", { competitionName: "x" })).not.toBe(
       dictionarySubject("en", "funnelClaim.subject", { competitionName: "x" }),
     );
+  });
+
+  it("the language the /start page was shown in (its posted locale) is the claim's; an unsupported one falls back", async () => {
+    // A visitor who reached /fr/start, or whose page language came from Accept-Language, never set the cookie: the page posts the locale
+    // it rendered in, and that outranks the cookie. A value naming no shipped language is ignored, so the cookie, then `en`, applies.
+    const cases = [
+      { locale: "fr", cookie: undefined, expected: "fr" },
+      { locale: "nl", cookie: "seazn_locale=es", expected: "nl" },
+      { locale: "de", cookie: undefined, expected: "en" },
+      { locale: "de", cookie: "seazn_locale=es", expected: "es" },
+    ] as const;
+    let checked = 0;
+    for (const c of cases) {
+      const label = `${c.locale} with ${c.cookie ?? "no cookie"}`;
+      const email = address();
+      const name = competition();
+      expect((await post({ email, name, sport: "Badminton", entrants: 8, locale: c.locale }, c.cookie)).status, label).toBe(200);
+      const [row] = await claimRows(email);
+      expect(row!.subject, label).toBe(dictionarySubject(c.expected, "funnelClaim.subject", { competitionName: name }));
+      // The claim re-reads the draft strictly (`funnelPayloadSchema`), so the page language must not be written into it.
+      const [draft] = await sql<{ payload: Record<string, unknown> }[]>`select payload from funnel_drafts where email = ${email}`;
+      expect(draft!.payload, `${label}: the draft stays claimable`).not.toHaveProperty("locale");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every case was driven").toBe(cases.length);
+    // Each case can tell its language from the fallback only while the dictionaries differ.
+    const subjects = new Set(LOCALES.map((l) => dictionarySubject(l, "funnelClaim.subject", { competitionName: "x" })));
+    expect(subjects.size, "premise: every shipped language has its own subject").toBe(LOCALES.length);
   });
 
   it("a second start is a second draft and a second email; neither replaces the other", async () => {
