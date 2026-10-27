@@ -1,4 +1,4 @@
--- V477 — email outbox phase 3, wave 5: the funnel reminder and the sixteen staff alerts join the outbox's vocabulary, and a funnel
+-- V478 — email outbox phase 3, wave 5: the funnel reminder and the sixteen staff alerts join the outbox's vocabulary, and a funnel
 -- draft remembers the visitor's language. Spec: docs/superpowers/specs/2026-10-25-email-outbox-phase3-design.md (the kind table, wave 5).
 -- Plan: docs/superpowers/plans/2026-10-26-email-outbox-phase3-wave5.md (T1; Owner questions Q3).
 --
@@ -6,15 +6,15 @@
 -- staff_credit_pack_grant_failed, staff_size_pack_grant_failed, staff_stream_credit_grant_failed, staff_pass_credit_reversal_incomplete,
 -- staff_pass_rung_mismatch, staff_pass_unknown_competition, staff_stream_credit_clawback, staff_extra_org_reprice_failed,
 -- staff_dispute_alert, staff_connect_bank_changed, staff_stuck_events, staff_stream_pack_price_drift, staff_ai_run_cost,
--- staff_earn_grant_volume, staff_extra_org_allowance. The CHECK restates every kind: V476's thirty-four in V476's order, then these.
+-- staff_earn_grant_volume, staff_extra_org_allowance. The CHECK restates every kind: wave 4's thirty-four in wave 4's order (V477), then these.
 -- With them the vocabulary is the spec's fifty-one. The once-key, the replace rule and the cancel function are V472's.
 --
 -- And one column (the plan's Q3, which the owner applied; wave 3 stored no locale on the draft): `funnel_drafts.locale`, the language the visitor started the draft in, so the claim
 -- and the +24h reminder are written in it. Nullable: a draft started before this column has none, and its reminder falls back to `en`,
 -- which is what it was sent in before. The set is the app's LOCALES (lib/i18n-constants.ts), in V282's shape.
 --
--- ORDER. V475 is W2d's and V476 is wave 4's; both must reach main before this migration does: db/flyway.toml sets no outOfOrder, so a
--- database already at V477 refuses a V475 or V476 that arrives after it.
+-- ORDER. V475 is W2d's, V476 the relay's (stream phone live edge) and V477 wave 4's; all must reach main before this migration does:
+-- db/flyway.toml sets no outOfOrder, so a database already at V478 refuses a lower version that arrives after it.
 
 -- Closed set: outbox-schema.test.ts reads this back and requires it to equal constants.ts and the spec's list.
 alter table email_outbox drop constraint email_outbox_kind_valid,
