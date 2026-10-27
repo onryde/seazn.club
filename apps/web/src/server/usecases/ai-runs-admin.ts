@@ -7,7 +7,7 @@ import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { aiRunUnitNoun } from "@/lib/ai-pricing";
-// lib/credits imports no usecase that imports this file (its one usecase
+// lib/credits imports no usecase that imports this file (its one runtime usecase
 // import, staff-alert, reaches neither credits nor this file), so reading it
 // here closes no import cycle.
 import { EARN_GRANT_DAILY_ALERT_THRESHOLD, earnGrantVolumeToday } from "@/lib/credits";

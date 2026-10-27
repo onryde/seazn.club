@@ -199,9 +199,9 @@ function errorNameOf(text: string): string | null {
 
 /** What a failed request writes to the server log. */
 export interface DeliverLogging {
-  /** Default true: today's lines, which carry the recipient and Resend's raw response text (that text can echo what was
-   *  sent, a sign-in link included). The email outbox passes false (ruling R8): it logs the status and Resend's error
-   *  NAME only. Every other caller keeps today's lines byte for byte. */
+  /** Default true: the recipient and Resend's raw response text (that text can echo what was sent, a sign-in link
+   *  included). The email outbox, now the only production caller, passes false (ruling R8): it logs the status and
+   *  Resend's error NAME only. The default survives for tests alone; phase 4's split drops it. */
   logDetail?: boolean;
 }
 

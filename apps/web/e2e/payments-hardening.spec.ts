@@ -870,10 +870,12 @@ test.describe("T7 · platform disputes truth-up entitlements", () => {
       subject: subjectTpl!.replace("{kind}", kindLabel!).replace("{orgName}", org.orgName),
     });
 
-    // Replay the IDENTICAL created event: it ACKs, and staff are not paged twice.
+    // Replay the IDENTICAL created event: it ACKs, and staff are not paged twice. The billing_events claim refuses the
+    // repeated event id before the alert runs, so this witnesses the event ledger; the alert's own once-key is
+    // witnessed by platform-dispute.test.ts (the alert reached twice, one row).
     const replay = await postSignedEvent(request, createdEvent);
     expect(replay.status()).toBe(200);
-    expect(await staffPages(), "the replayed created queues no second staff_dispute_alert row").toHaveLength(1);
+    expect(await staffPages(), "the event ledger refuses the replayed created: no second staff_dispute_alert row").toHaveLength(1);
 
     // … and the billing UI is still Pro.
     await loginAsOwner(page, org.ownerEmail);

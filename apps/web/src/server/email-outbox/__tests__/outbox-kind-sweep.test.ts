@@ -153,7 +153,8 @@
 // neither moved nor listed fails by name, and so does a kind that is listed while it has a scenario (a stale entry would skip the
 // sweep), and so do the three lists when they disagree.
 //
-// Sport: not applicable. These emails do not vary by sport (spec, Test strategy 4).
+// Sport: not applicable here (spec, Test strategy 4). The one body that names a sport, funnel_reminder, has its two-sport
+// case in app/api/funnel/remind/__tests__/route.test.ts.
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";

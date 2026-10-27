@@ -391,6 +391,10 @@ officials and notices, then the reminder and staff alerts.
 | 44 | `staff_earn_grant_volume` | :1391 | 5 | S | T | W | UTC day | Abuse watch. |
 | 45 | `staff_extra_org_allowance` | :1444 | 5 | S | T | W | group + count | Ops. |
 
+**Wave-5 keys as built:** the staff rows above give the pre-ruling once-keys. The code follows the wave-5 plan's
+P-W5-4/5/6/11/16 and owner Q2: the reversal is keyed by payment_intent, the reprice and price-drift keys carry the UTC
+day, the AI-cost key is a minted id per run, and the allowance key is subscription + count.
+
 **Counts:** wave 1 has 5 kinds, wave 2 has 10, wave 3 has 8, wave 4 has 9 and wave 5 has 17, which makes 49. With
 `magic_link` and `chess_invite` that is 51. Wave 1 also carries the shared machinery (§5, §6), both parked fixes, the change that
 makes `chess_invite` an A kind, and the generalised deletion sweep (§6, controller call 2026-10-25), because the
