@@ -44,11 +44,8 @@ export default function ChangelogPage() {
         <p className="font-semibold text-slate-900">The promise</p>
         <p className="mt-1">
           Additive changes (new endpoints, new optional fields) land in place and
-          are announced here. Breaking changes never land in place — they get a
-          new version path (<code className="font-mono text-xs">/api/v2</code>)
-          and the old one keeps working through a sunset window announced months
-          ahead, with <code className="font-mono text-xs">Sunset</code> headers on
-          deprecated routes.
+          are announced here. Breaking changes are rare. Each one is listed here
+          with its date, what changed and what to send instead.
         </p>
       </div>
 
