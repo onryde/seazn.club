@@ -46,7 +46,8 @@ async function withYtKek<T>(value: string | undefined, body: () => Promise<T>): 
   try {
     return await body();
   } finally {
-    process.env.YOUTUBE_TOKEN_KEK = keep;
+    if (keep === undefined) delete process.env.YOUTUBE_TOKEN_KEK;
+    else process.env.YOUTUBE_TOKEN_KEK = keep;
   }
 }
 const KEK_FAULTS = [

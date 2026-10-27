@@ -444,7 +444,9 @@ export async function wipeStreamCodeTok(
 
 /** Pool one YouTube liveStream's ingest credential. `orgId` and `connectionId` are checked AGAINST EACH OTHER in the
  *  statement itself (the row is selected FROM the connection, org-filtered), so a key can never be filed under one org
- *  with another org's connection; a mismatch writes nothing and reads as the connection being "not found". Seals BEFORE
+ *  with another org's connection; a mismatch writes nothing and reads as the connection being "not found". So does a
+ *  REVOKED connection (it holds no token and can create no broadcast, so a new key could never be used); a
+ *  `reconnect_needed` one still takes keys. Seals BEFORE
  *  any write, so a missing KEK writes nothing. The sealed JSON is built field by field — exactly {url, streamKey} —
  *  whatever else the caller's object carries. `slot` (1..10) and the per-connection uniqueness are the table's own
  *  constraints (V478), not re-checked here: their violations surface as the database's 23505 / 23514. */
@@ -458,7 +460,7 @@ export async function insertPooledKey(
     insert into youtube_stream_keys (org_id, connection_id, slot, live_stream_id, pool_rtmp_enc)
     select c.org_id, c.id, ${a.slot}, ${a.liveStreamId}, ${sealed}
       from org_youtube_connections c
-     where c.id = ${a.connectionId} and c.org_id = ${a.orgId}
+     where c.id = ${a.connectionId} and c.org_id = ${a.orgId} and c.status <> 'revoked'
     returning id`;
   if (!row) throw new Error(`youtube connection ${a.connectionId} not found`);
   return { keyId: row.id };
@@ -467,12 +469,17 @@ export async function insertPooledKey(
 /** A pooled key's {url, streamKey}, DECRYPTED for this request only. The `orgId` is the tenancy check itself (the same
  *  argument as `readTargetSecret`): a wrong org reads exactly like a missing key — one sentence, no oracle. A RETIRED key
  *  still opens (a broadcast already bound to it must stay readable until it ends); choosing a key to bind is the pool's
- *  job and filters `retired_at` itself. An envelope that will not open under a valid RELAY_KEK is
+ *  job and filters `retired_at` itself. A key of a REVOKED connection does not open: it reads "not found", the same
+ *  sentence as a missing key (the connection is history, no token and no broadcast can use the key) while its rows stay
+ *  for the cascade; a `reconnect_needed` connection's keys still open. An envelope that will not open under a valid RELAY_KEK is
  *  `TargetSecretUnreadableError` with kind `youtube` (its `targetId` field carries the KEY id here); a missing or
  *  malformed RELAY_KEK is the deployment's fault and rethrows as the KEK's own error (M3). */
 export async function readPooledKey(tx: Tx, orgId: string, keyId: string): Promise<{ url: string; streamKey: string }> {
   const [row] = await tx<{ pool_rtmp_enc: Uint8Array }[]>`
-    select pool_rtmp_enc from youtube_stream_keys where id = ${keyId} and org_id = ${orgId}`;
+    select k.pool_rtmp_enc
+      from youtube_stream_keys k
+      join org_youtube_connections c on c.id = k.connection_id
+     where k.id = ${keyId} and k.org_id = ${orgId} and c.status <> 'revoked'`;
   if (!row) throw new Error(`youtube stream key ${keyId} not found`);
   try {
     const fields = openFields(row.pool_rtmp_enc, TARGET_SEALED);

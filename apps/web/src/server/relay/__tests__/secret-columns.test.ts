@@ -19,7 +19,7 @@ import { STREAM_PLATFORMS, STREAM_PLATFORM_PRESETS, checkDestination } from "@/l
 import { seedOrg, startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { log } from "@/server/logger";
 import { fingerprintDestination, openWith, seal, sealWith } from "../crypto";
-import { insertConnectionWithToken } from "@/server/youtube/token-store";
+import { insertConnectionWithToken, revokeConnection } from "@/server/youtube/token-store";
 import {
   ApiBackedTargetError, insertPooledKey, readPooledKey,
   KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, StreamTargetVanishedError, TargetSecretUnreadableError, archiveStreamTarget, insertStreamTarget, keyHintOf,
@@ -829,8 +829,12 @@ describe.skipIf(!HAS_DB)("secret-columns — the *_enc columns, sealed and opene
 // `rtmp_enc`'s {url, streamKey} shape (spec §5.3), so a pooled key reaches `add_output` through the same code a pasted one
 // does. The connection a key hangs off is written by its real producer, token-store's insertConnectionWithToken (R1).
 describe.skipIf(!HAS_DB)("YouTube Connect T2 — pooled keys and API-backed destination rows", () => {
-  const savedYt = process.env.YOUTUBE_TOKEN_KEK;
-  beforeAll(() => { process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex"); });
+  // Snapshotted inside beforeAll (collection-time snapshots miss whatever an earlier beforeAll set; crypto.test.ts's did).
+  let savedYt: string | undefined;
+  beforeAll(() => {
+    savedYt = process.env.YOUTUBE_TOKEN_KEK;
+    process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
+  });
   afterAll(() => {
     if (savedYt === undefined) delete process.env.YOUTUBE_TOKEN_KEK;
     else process.env.YOUTUBE_TOKEN_KEK = savedYt;
@@ -864,7 +868,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T2 — pooled keys and API-backed dest
     try {
       return await body();
     } finally {
-      process.env.RELAY_KEK = saved;
+      if (saved === undefined) delete process.env.RELAY_KEK;
+      else process.env.RELAY_KEK = saved;
     }
   };
   const KEK_FAULTS = [{ name: "unset", value: undefined, says: /RELAY_KEK is not set/ }, { name: "malformed", value: "zz".repeat(32), says: /RELAY_KEK must be exactly 64 hex/ }] as const;
@@ -925,6 +930,35 @@ describe.skipIf(!HAS_DB)("YouTube Connect T2 — pooled keys and API-backed dest
     // the accepted twin: the owner's own org writes
     await sql.begin((tx) => insertPooledKey(tx, { orgId: a.orgId, connectionId: a.connectionId, slot: 1, liveStreamId: "ls-x", ingest: ingest() }));
     expect(await count()).toBe(before + 1);
+  });
+
+  it("a REVOKED connection takes no new key and its keys no longer open — 'not found', the same sentence as a missing key; connected and reconnect_needed connections work (only 'revoked' refuses)", async () => {
+    const r = await ytRig();
+    const k = ingest();
+    const rows = async () => (await sql<{ n: number }[]>`select count(*)::int as n from youtube_stream_keys where connection_id = ${r.connectionId}`)[0]!.n;
+    // before the revoke: pooling works and the key opens (so each refusal below is the revoke's doing, not an empty table)
+    const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 1, liveStreamId: "ls-live", ingest: k }));
+    expect(await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId))).toEqual(k);
+    // reconnect_needed is NOT revoked: a dead grant still holds its keys until the 30-day purge revokes it
+    await sql`update org_youtube_connections set status = 'reconnect_needed' where id = ${r.connectionId}`;
+    expect(await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId)), "reconnect_needed still opens").toEqual(k);
+    await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 2, liveStreamId: "ls-rn", ingest: ingest() }));
+    expect(await rows()).toBe(2);
+
+    expect(await revokeConnection(sql, r.orgId, r.connectionId)).toBe(true);
+    const read = await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId)).then(() => null, (e: unknown) => e);
+    const missing = await sql.begin((tx) => readPooledKey(tx, r.orgId, randomUUID())).then(() => null, (e: unknown) => e);
+    expect(read, "revoked: the key does not open").toBeInstanceOf(Error);
+    expect(read).not.toBeInstanceOf(TargetSecretUnreadableError);
+    expect((read as Error).message).toMatch(/not found/);
+    expect((read as Error).message).not.toContain(k.streamKey);
+    expect((read as Error).message.replace(keyId, "ID"), "one sentence for revoked and missing").toBe((missing as Error).message.replace(/[0-9a-f-]{36}/, "ID"));
+    expect(await rows(), "the revoke did not delete the key rows").toBe(2);
+
+    const err = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 3, liveStreamId: "ls-after", ingest: ingest() })).then(() => null, (e: unknown) => e);
+    expect(err, "a revoked connection takes no new key").toBeInstanceOf(Error);
+    expect((err as Error).message).toMatch(/not found/);
+    expect(await rows(), "and the refused insert wrote nothing").toBe(2);
   });
 
   it("insertPooledKey refuses an empty url or stream key by name — the message echoes neither field — and writes nothing; a missing RELAY_KEK writes nothing either", async () => {

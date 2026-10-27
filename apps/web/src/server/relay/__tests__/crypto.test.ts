@@ -280,9 +280,14 @@ describe("fingerprintDestination (A19/A19b)", () => {
 // pooled stream keys; it must not also open every connected channel's refresh token, and the reverse.
 describe("sealWith/openWith — YOUTUBE_TOKEN_KEK (YouTube Connect §7)", () => {
   const others: KekName[] = ["RELAY_KEK", "DEVICE_LINK_KEK", "LICHESS_TOKEN_KEK", "EMAIL_OUTBOX_KEK"];
-  const savedYt = process.env.YOUTUBE_TOKEN_KEK;
-  const savedOthers = Object.fromEntries(others.map((k) => [k, process.env[k]]));
+  // Snapshotted INSIDE beforeAll, never in the describe body: the body runs at COLLECTION, before this file's own
+  // top-level beforeAll has set RELAY_KEK, so a body-time snapshot records "no RELAY_KEK" and the afterAll below would
+  // then DELETE the file's key out from under every describe that follows (CI sets none: 4 fingerprint cases went red).
+  let savedYt: string | undefined;
+  let savedOthers: Record<string, string | undefined> = {};
   beforeAll(() => {
+    savedYt = process.env.YOUTUBE_TOKEN_KEK;
+    savedOthers = Object.fromEntries(others.map((k) => [k, process.env[k]]));
     process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
     // every other envelope key present and valid, so "does not open under X" is about X's VALUE, never about X being unset
     for (const k of others) process.env[k] = randomBytes(32).toString("hex");
