@@ -1,6 +1,12 @@
 import { test, expect, type Page, type APIRequestContext } from "@playwright/test";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
 import { apiJson, expectNoHorizontalScroll, fixturePath, seedRosteredFixture, TAG } from "./helpers";
+import { scanPadContrast } from "./scorepad-a11y-kit";
+
+/** The en ui dictionary: copy under test is read from it, never typed (console-start-tap-at-mount.spec.ts's posture). */
+const UI_EN = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
 
 /**
  * W2d Task 18 (HK-TB-2, owner option A 2026-10-20) — a hockey goal tap is a QUESTION, not a held write.
@@ -112,10 +118,11 @@ async function hitTestChoiceChips(page: Page): Promise<{ checked: number; misses
     });
 }
 
-test("hockey (FIH): a goal tap asks its type, nothing is written until it is chosen, Cancel drops it, and the chosen type is what lands", async ({
+test("hockey (FIH): a goal tap asks its type, nothing is written until it is chosen, Cancel and Take back drop it, another tap is refused while it waits, and the chosen type is what lands", async ({
   page,
 }) => {
-  test.setTimeout(180_000);
+  // Four unanswered waits of UNANSWERED_MS each, so the budget moves with HOLD_MS (AGENTS.md class 20).
+  test.setTimeout(Math.max(180_000, 120_000 + 4 * UNANSWERED_MS));
   const fx = await seedRosteredFixture(page.request, {
     label: `HGT Hockey ${TAG}`,
     sportKey: "hockey",
@@ -145,6 +152,13 @@ test("hockey (FIH): a goal tap asks its type, nothing is written until it is cho
   expect(hits.checked, "anti-vacuity: every choice and Cancel was hit-tested").toBe(expected.length + 1);
   expect(hits.misses, "every choice chip hit-tests at its centre and both edges").toEqual([]);
   await expectNoHorizontalScroll(page);
+  // Fix round 1 (m7): axe over the pad WITH the question open (the at-rest a11y sweep never opens it), then over the
+  // question alone so its own nodes are proven evaluated rather than drowned in the pad's.
+  const padScan = await scanPadContrast(page, '[data-testid="score-pad"]');
+  expect(padScan.serious, JSON.stringify(padScan.serious, null, 2)).toEqual([]);
+  await expect(choice(page), "the question was open for the scan").toBeVisible();
+  const questionScan = await scanPadContrast(page, '[data-testid="pad-dock-choice"]', { padMarker: null });
+  expect(questionScan.serious, JSON.stringify(questionScan.serious, null, 2)).toEqual([]);
 
   // 2. Unanswered past the hold: still asking, still nothing on the ledger.
   await page.waitForTimeout(UNANSWERED_MS);
@@ -176,20 +190,56 @@ test("hockey (FIH): a goal tap asks its type, nothing is written until it is cho
   );
   await expect(dock(page)).toHaveCount(0, { timeout: 5_000 });
 
-  // 5. Own goal (the existing control): struck by away, credited to home (FIH Rule 9.12).
+  // 5. Fix round 1 (m2): "Take back" with the question open takes back the QUESTION — the corner goal before it stays.
+  const typesNow = async () => (await ledger(page.request, fx.fixtureId)).map((e) => e.type);
+  const beforeTakeBack = await typesNow();
+  await tile(page, "goal-away").click();
+  await expect(choice(page)).toBeVisible({ timeout: 10_000 });
+  await pad(page).locator('[data-role="v3-ribbon-undo"]').click();
+  await expect(choice(page), "Take back closed the question").toHaveCount(0, { timeout: 5_000 });
+  await expect(dock(page)).toHaveCount(0);
+  await page.waitForTimeout(UNANSWERED_MS);
+  expect(await typesNow(), "Take back on an open question voids nothing and writes nothing").toEqual(beforeTakeBack);
+  expect(await scoreOf(page.request, fx.fixtureId), "the corner goal stands").toEqual({ home: 1, away: 0 });
+
+  // 6. Fix round 1 (m3): another tap while the question is open is refused, NOT recorded, and the pad says so; the
+  // question stays open (Cancel is the only drop), and once answered the goal lands and the next tap is taken.
+  await tile(page, "goal-home").click();
+  await expect(choice(page)).toBeVisible({ timeout: 10_000 });
+  await tile(page, "advance").click();
+  await expect(pad(page).locator('[data-role="v3-rejection"]'), "the refused tap is said, not swallowed").toHaveText(
+    UI_EN["pad.dock.choice.blocked"]!,
+    { timeout: 5_000 },
+  );
+  await expect(choice(page), "the question survives the other tap").toBeVisible();
+  await page.waitForTimeout(UNANSWERED_MS);
+  expect(await typesNow(), "neither the goal nor the refused advance was written").toEqual(beforeTakeBack);
+  await choice(page).getByTestId("pad-dock-chip-kind:fg").click();
+  await expect(pad(page).locator('[data-role="v3-rejection"]'), "answering clears the line").toHaveCount(0, { timeout: 5_000 });
+  await expect(dock(page).getByTestId("pad-send-now")).toBeVisible({ timeout: 5_000 });
+  await freezeClock(page);
+  await dock(page).getByTestId("pad-send-now").click();
+  await expect.poll(async () => (await goalsIn(page.request, fx.fixtureId, "hockey.goal")).length, { timeout: 20_000 }).toBe(2);
+  await page.clock.resume();
+  expect((await goalsIn(page.request, fx.fixtureId, "hockey.goal"))[1]!.payload).toEqual(
+    expect.objectContaining({ by: fx.homeEntrantId, kind: "fg" }),
+  );
+  expect((await typesNow()).filter((t) => t === "hockey.period.advance"), "the refused advance never reached the ledger").toEqual([]);
+
+  // 7. Own goal (the existing control): struck by away, credited to home (FIH Rule 9.12).
   await tile(page, "goal-away").click();
   await expect(choice(page)).toBeVisible({ timeout: 10_000 });
   await choice(page).getByTestId("pad-dock-chip-ownGoal").click();
   await expect(dock(page).getByTestId("pad-send-now")).toBeVisible({ timeout: 5_000 });
   await freezeClock(page);
   await dock(page).getByTestId("pad-send-now").click();
-  await expect.poll(async () => (await goalsIn(page.request, fx.fixtureId, "hockey.goal")).length, { timeout: 20_000 }).toBe(2);
+  await expect.poll(async () => (await goalsIn(page.request, fx.fixtureId, "hockey.goal")).length, { timeout: 20_000 }).toBe(3);
   await page.clock.resume();
-  const og = (await goalsIn(page.request, fx.fixtureId, "hockey.goal"))[1]!;
+  const og = (await goalsIn(page.request, fx.fixtureId, "hockey.goal"))[2]!;
   expect(og.payload, "the own goal is a typed goal").toEqual(expect.objectContaining({ by: fx.awayEntrantId, kind: "og" }));
   await expect
-    .poll(() => scoreOf(page.request, fx.fixtureId), { timeout: 20_000, message: "corner + away's own goal = 2-0 home" })
-    .toEqual({ home: 2, away: 0 });
+    .poll(() => scoreOf(page.request, fx.fixtureId), { timeout: 20_000, message: "corner + field goal + away's own goal = 3-0 home" })
+    .toEqual({ home: 3, away: 0 });
 });
 
 test("ice hockey (IIHF, the contrast): a goal tap is the ordinary held goal — no type question, and the goal lands typeless", async ({
