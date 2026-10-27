@@ -7404,7 +7404,7 @@ async function w2dTablesSuite(): Promise<void> {
     prepare: !url.includes(":6543"),
     max: 1,
   });
-  const EXPECTED_CHECKS = 9;
+  const EXPECTED_CHECKS = 12;
   let checked = 0;
   const w2dCheck = (label: string, cond: boolean) => {
     checked++;
@@ -7412,8 +7412,10 @@ async function w2dTablesSuite(): Promise<void> {
   };
   try {
     const owner = newSession();
-    await signIn(owner, `delivered+w2d_${tag}@resend.dev`);
-    const comp = v1data<{ id: string }>(
+    const who = await signIn(owner, `delivered+w2d_${tag}@resend.dev`);
+    // Public by default (V396/T15): the suite's one competition is within the free plan's public cap, so its tables are
+    // served on the public standings route (Task 14's §13 read).
+    const comp = v1data<{ id: string; slug: string; visibility: string }>(
       await v1(owner, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: `W2d Tables ${tag}` }),
     );
     const divId = v1data<{ id: string } | undefined>(
@@ -7566,10 +7568,135 @@ async function w2dTablesSuite(): Promise<void> {
       "w2d: a plain reload serves the same table order",
       read3.length > 0 && JSON.stringify(read3.map((r) => r.entrantId)) === JSON.stringify(read2.map((r) => r.entrantId)),
     );
+    await w2dStageRulesToPublicChecks(owner, who.org_id, comp, w2dCheck);
   } finally {
     await sql.end();
   }
   check(`w2d: the tables suite ran its ${EXPECTED_CHECKS} checks (ran ${checked})`, checked === EXPECTED_CHECKS);
+}
+
+/**
+ * W2d Task 14 (spec §13 Smoke) — a stage's OWN order and points, set through the API, reach the PUBLIC standings. A
+ * second generic division in the suite's public competition, three entrants under the division's 3/1/0; its league stage
+ * takes its own order `points, for, diff, lots` and its own points (a win 2, a draw 1, a loss 0) through
+ * `PUT /stages/{id}/rules`; generate pins them; A beats B 3-2 through `POST /fixtures/{id}/events`; the anonymous public
+ * standings route then serves A first on 2 points (the division's own table would pay 3), and B above C, the two level
+ * on 0: B scored 2 goals to C's none, while generic's own order (difference before goals for) would put C (0) above B
+ * (−1). `GET /stages/{id}` says where the order and points came from (`source`) and when they were pinned (`pinnedAt`)
+ * — the public route carries neither. Three checks, counted by the suite's own counter.
+ */
+async function w2dStageRulesToPublicChecks(
+  owner: Session,
+  orgId: string,
+  comp: { id: string; slug: string; visibility: string },
+  w2dCheck: (label: string, cond: boolean) => void,
+): Promise<void> {
+  const OWN = ["points", "for", "diff", "lots"];
+  const RULE = { win: { regulation: 2 }, loss: { regulation: 0 }, draw: 1, shootoutAs: "result", unit: "whole", bonuses: [] };
+  // The counterfactuals the checks must differ from: the division's own win (3) and the sport's order.
+  const DIVISION_WIN = 3;
+  const div = v1data<{ id: string; slug: string } | undefined>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", {
+      name: "W2d Stage Rules",
+      sport_key: "generic",
+      variant_key: "score",
+      config: { resultMode: "score", allowDraws: true, points: { w: DIVISION_WIN, d: 1, l: 0 }, progressScore: false },
+    }),
+  );
+  const names = ["A", "B", "C"] as const;
+  const entrants = v1data<{ id: string }[] | undefined>(
+    await v1(owner, `/api/v1/divisions/${div?.id}/entrants`, "POST",
+      names.map((n, i) => ({ kind: "individual", display_name: `${n} ${tag} rules`, seed: i + 1 }))),
+  ) ?? [];
+  const [A, B, C] = names.map((_, i) => entrants[i]?.id ?? `missing ${names[i]}`);
+  const stageId = v1data<{ id: string } | undefined>(
+    await v1(owner, `/api/v1/divisions/${div?.id}/stages`, "POST", { seq: 1, kind: "league", name: "Rules Table" }),
+  )?.id ?? "";
+  type Rules = {
+    tiebreakers: { keys: string[]; source: string; pinnedAt: string | null; sportDefault: string[] };
+    points: { rule: { win?: { regulation?: number } }; source: string; pinnedAt: string | null };
+  };
+  const tableRules = async () => v1data<{ tableRules: Rules | null } | undefined>(await v1(owner, `/api/v1/stages/${stageId}`))?.tableRules ?? null;
+
+  const put = await v1(owner, `/api/v1/stages/${stageId}/rules`, "PUT", { tiebreakers: OWN, points: RULE });
+  const saved = await tableRules();
+  const savedOk =
+    put.status === 200 &&
+    JSON.stringify(saved?.tiebreakers.keys) === JSON.stringify(OWN) &&
+    saved?.tiebreakers.source === "stage" &&
+    saved.tiebreakers.pinnedAt === null &&
+    JSON.stringify(saved.tiebreakers.sportDefault) !== JSON.stringify(OWN) &&
+    saved.points.source === "stage" &&
+    saved.points.rule.win?.regulation === RULE.win.regulation &&
+    saved.points.pinnedAt === null;
+  w2dCheck(
+    "w2d §13: a stage's own order and points saved through PUT /stages/{id}/rules are served back as the stage's (source 'stage'), not yet pinned" +
+      (savedOk ? "" : ` — PUT ${put.status} ${JSON.stringify(put.json.error ?? null)}, got ${JSON.stringify(saved)}`),
+    entrants.length === 3 && savedOk,
+  );
+
+  const generated = v1data<{ fixtures: { id: string }[] } | undefined>(await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST"))?.fixtures ?? [];
+  const pinned = await tableRules();
+  const pinnedOk =
+    generated.length === 3 &&
+    JSON.stringify(pinned?.tiebreakers.keys) === JSON.stringify(OWN) &&
+    pinned?.tiebreakers.source === "stage" &&
+    pinned.points.source === "stage" &&
+    typeof pinned.tiebreakers.pinnedAt === "string" &&
+    pinned.points.pinnedAt === pinned.tiebreakers.pinnedAt;
+  w2dCheck(
+    "w2d §13: generating pins them — GET /stages/{id} names both sources 'stage' and one pinnedAt for the order and the points" +
+      (pinnedOk ? "" : ` — ${generated.length} fixture(s), got ${JSON.stringify(pinned)}`),
+    pinnedOk,
+  );
+
+  const started = await v1(owner, `/api/v1/divisions/${div?.id}/start`, "POST");
+  type Fx = { id: string; home_entrant_id: string | null; away_entrant_id: string | null };
+  const fixtures = v1data<Fx[] | undefined>(await v1(owner, `/api/v1/divisions/${div?.id}/fixtures`)) ?? [];
+  const ab = fixtures.find((f) => [f.home_entrant_id, f.away_entrant_id].sort().join() === [A, B].sort().join());
+  let scored = 0;
+  if (ab !== undefined) {
+    const state = v1data<{ last_seq: number }>(await v1(owner, `/api/v1/fixtures/${ab.id}/state`));
+    // A 3-2 B, oriented to the fixture's seating (generic's p1 is home).
+    const [p1Score, p2Score] = ab.home_entrant_id === A ? [3, 2] : [2, 3];
+    scored = (await v1(owner, `/api/v1/fixtures/${ab.id}/events`, "POST", {
+      expected_seq: state.last_seq,
+      type: "generic.result",
+      payload: { p1Score, p2Score },
+    })).status;
+  }
+
+  // The public read, anonymous: the table the append refreshed, in the order the route serves it. A bounded poll, its reads
+  // counted, never a fixed sleep.
+  const anon = newSession();
+  const orgSlug = ((await call(owner, "/api/orgs")) as { id: string; slug: string }[]).find((o) => o.id === orgId)?.slug ?? "";
+  type PubRow = { entrantId: string; points: number; tieBreak?: { key: string } };
+  const publicRows = async () =>
+    v1data<{ standings?: { stage_id: string; rows: PubRow[] }[] } | undefined>(
+      await v1(anon, `/api/v1/public/orgs/${orgSlug}/competitions/${comp.slug}/divisions/${div?.slug}/standings`),
+    )?.standings?.find((t) => t.stage_id === stageId)?.rows ?? [];
+  let rows = await publicRows();
+  for (let reads = 1; reads < 20 && rows.find((r) => r.entrantId === A)?.points === undefined; reads++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    rows = await publicRows();
+  }
+  const order = rows.map((r) => names[[A, B, C].indexOf(r.entrantId)] ?? r.entrantId);
+  const a = rows.find((r) => r.entrantId === A);
+  const b = rows.find((r) => r.entrantId === B);
+  const publicOk =
+    comp.visibility === "public" &&
+    started.status < 300 &&
+    scored === 201 &&
+    order.join() === "A,B,C" &&
+    a?.points === RULE.win.regulation &&
+    a.points !== DIVISION_WIN &&
+    b?.points === 0 &&
+    b.tieBreak?.key === "for";
+  w2dCheck(
+    "w2d §13: one fixture scored through POST /fixtures/{id}/events reaches the PUBLIC standings ranked and paid by the stage's own rules — A first on 2 (not the division's 3), B above C on goals for" +
+      (publicOk ? "" : ` — visibility ${comp.visibility}, start ${started.status}, event ${scored}, order ${order.join()}, rows ${JSON.stringify(rows)}`),
+    publicOk,
+  );
 }
 
 /**
