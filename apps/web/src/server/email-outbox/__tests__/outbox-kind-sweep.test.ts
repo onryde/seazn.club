@@ -74,6 +74,9 @@
 //   - suspension_served: the real `refreshDiscipline` (the score write's fold) on a decided fixture that serves a confirmed one-match ban,
 //     in an `nl` organisation whose player's claimed account has no language: the notice is queued to the account in the transaction
 //     that flips the ban, and the worker makes the first attempt (a serving pass may be a read with no request to send from).
+//   - match_report_submitted: the real `submitMyReport` of a claimed official's draft, in an organisation whose owner's account is `fr`:
+//     the notice is queued to the owner's account in the submit's own transaction, once per member, and the request makes the first
+//     attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -155,7 +158,8 @@ import {
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
-import { claimPerson, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
+import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
+import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
 import { refreshDiscipline } from "@/server/usecases/scoring";
 import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
 import { seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
@@ -1214,6 +1218,33 @@ async function suspensionServedScenario(): Promise<KindScenario> {
   };
 }
 
+/** A claimed official submits their draft report on a decided fixture. The organisation's one owner (its only owner or admin) has an `fr`
+ *  account at a RUN address; the notice is queued to that account in the submit's transaction, and the request makes the first attempt. */
+async function matchReportSubmittedScenario(): Promise<KindScenario> {
+  const ctx = await seedFootballDivision();
+  made.orgIds.push(ctx.orgId);
+  made.userIds.push(ctx.userId);
+  const recipient = address();
+  await sql`update users set email = ${recipient}, locale = 'fr' where id = ${ctx.userId}`;
+  const ref = await makeClaimedOfficial(ctx);
+  made.userIds.push(ref.userId);
+  const { fixtureOfficialId } = await makeAssignment(ctx, ref.officialId);
+  await putMyReport(ref.userId, fixtureOfficialId, { body: "Sweep report", incidents: [] });
+  const [home, away] = await sql<{ display_name: string }[]>`
+    select display_name from entrants where id in (${ctx.entrantA}, ${ctx.entrantB}) order by seed`;
+  return {
+    locale: "fr",
+    subjectKey: "reportSubmitted.subject",
+    subjectVars: { fixture: `${home!.display_name} vs ${away!.display_name}` },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const out = await submitMyReport(ref.userId, fixtureOfficialId);
+      expect(out.status, "premise: the real submit filed the report").toBe("submitted");
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1351,6 +1382,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", suspensionServed.subjectKey, suspensionServed.subjectVars),
     );
 
+    const matchReport = await matchReportSubmittedScenario();
+    expect(dictionarySubject("fr", matchReport.subjectKey, matchReport.subjectVars)).not.toBe(
+      dictionarySubject("en", matchReport.subjectKey, matchReport.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1382,6 +1418,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         official_assignment_changed: officialChanged,
         suspension_confirmed: suspensionConfirmed,
         suspension_served: suspensionServed,
+        match_report_submitted: matchReport,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

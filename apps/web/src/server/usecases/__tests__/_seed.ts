@@ -256,3 +256,46 @@ export async function makeFixture(
     returning id`;
   return id;
 }
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// MOVED from match-reports.test.ts (email outbox phase 3 wave 4, T3): the report suite, the kind sweep and the A-kind body guard all
+// file a match report through the real producer on these. `ctx` is any seed with an org, a league stage and two entrants (the report
+// suite's own `seedOrg`, or `seedFootballDivision` above).
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+type ReportSeedCtx = Pick<FootballCtx, "orgId" | "divisionId" | "stageId" | "entrantA" | "entrantB">;
+
+/** A user + a person in this org linked to it + an official on that person —
+ *  the claimed-official identity a report write proves. Returns both ids. */
+export async function makeClaimedOfficial(ctx: Pick<ReportSeedCtx, "orgId">): Promise<{ userId: string; officialId: string }> {
+  const suffix = randomUUID().slice(0, 8);
+  const [{ id: userId }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified)
+    values (${`ref-${suffix}@test.local`}, 'Ref', true) returning id`;
+  const [{ id: personId }] = await sql<{ id: string }[]>`
+    insert into persons (org_id, full_name, user_id) values (${ctx.orgId}, 'Ref Person', ${userId})
+    returning id`;
+  const [{ id: officialId }] = await sql<{ id: string }[]>`
+    insert into officials (org_id, person_id, display_name, role_keys)
+    values (${ctx.orgId}, ${personId}, 'The Ref', ${sql.json(["referee"])}) returning id`;
+  return { userId, officialId };
+}
+
+export async function makeAssignment(
+  ctx: ReportSeedCtx,
+  officialId: string,
+  opts: { status?: string; response?: string } = {},
+): Promise<{ fixtureOfficialId: string; fixtureId: string }> {
+  const status = opts.status ?? "decided";
+  const response = opts.response ?? "accepted";
+  const [{ id: fixtureId }] = await sql<{ id: string }[]>`
+    insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
+                          home_entrant_id, away_entrant_id, status)
+    values (${ctx.stageId}, ${ctx.divisionId}, ${ctx.orgId}, 1, 1,
+            ${ctx.entrantA}, ${ctx.entrantB}, ${status}) returning id`;
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into fixture_officials (fixture_id, official_id, org_id, role_key, source, response)
+    values (${fixtureId}, ${officialId}, ${ctx.orgId}, 'referee', 'manual', ${response})
+    returning id`;
+  return { fixtureOfficialId: id, fixtureId };
+}

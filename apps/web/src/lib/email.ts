@@ -389,26 +389,22 @@ export async function suspensionConfirmedEmail(args: Omit<SuspensionConfirmedArg
   return suspensionConfirmedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
 }
 
-/** An official submitted a match report (SPEC-3) — sent to the org's
- *  owner/admins, deep-linked to the fixture's officials panel. `args` carries
- *  the org/competition/division slugs; the URL is built here. */
-export async function sendReportSubmittedEmail(
-  to: string,
+/** An official submitted a match report (SPEC-3), deep-linked to the fixture's officials panel, RENDERED and not sent. `args` carries
+ *  the org/competition/division slugs; the URL is built here. `submitMyReport` (match-reports.ts) queues what this returns on the
+ *  email outbox (kind `match_report_submitted`, transactional), one row per owner and admin of the organisation, in the submit's
+ *  transaction, each in that member's language. Nothing sends it directly. */
+export async function reportSubmittedEmail(
   args: Omit<ReportSubmittedArgs, "url"> & {
     orgSlug: string;
     competitionSlug: string;
     divisionSlug: string;
   },
-  locale: Locale = "en",
-): Promise<boolean> {
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
   const { orgSlug, competitionSlug, divisionSlug, ...rest } = args;
   const url = `${appOrigin()}/o/${orgSlug}/c/${competitionSlug}/d/${divisionSlug}/schedule?tab=officials`;
-  return send({
-    to,
-    transactional: true,
-    ...reportSubmittedTemplate({ ...rest, url }, dict),
-  });
+  return reportSubmittedTemplate({ ...rest, url }, dict);
 }
 
 /** A suspension flipped to served, the player is eligible again (SPEC-1), RENDERED and not sent. `queueSuspensionServed`

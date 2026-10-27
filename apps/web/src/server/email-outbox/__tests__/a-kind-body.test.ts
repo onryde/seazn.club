@@ -33,6 +33,8 @@
 //    pair) whose player is claimed by a fresh account: the confirmed notice through `decideSuspension` (confirm). Its request makes the
 //    first attempt, which the transport refuses (503), so the row is judged once that attempt is over and it is queued again. The
 //    served notice through `refreshDiscipline` on a decided fixture that serves the ban; it waits for the worker, queued.
+//  - The report notice is driven through the real `submitMyReport` of a claimed official (a unique name, the positive pair) on a football
+//    division: one row per owner and admin, judged once the request's refused (503) first attempt is over.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -53,7 +55,8 @@ import { handleSponsorDispute } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
-import { claimPerson, makeFixture, seedFootballDivision } from "@/server/usecases/__tests__/_seed";
+import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision } from "@/server/usecases/__tests__/_seed";
+import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
 import { refreshDiscipline } from "@/server/usecases/scoring";
 import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
 
@@ -229,6 +232,17 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
         select id from email_outbox where kind = 'suspension_served' and ref_type = 'suspension' and ref_id = ${ban.id}`;
       // The notice names the division the ban was served in.
       return { rowIds: rows.map((x) => x.id), positive: literal(divisionName) };
+    },
+    match_report_submitted: async () => {
+      const ctx = await seedFootballDivision();
+      const ref = await makeClaimedOfficial(ctx);
+      const officialName = `Official ${randomUUID().slice(0, 8)}`;
+      await sql`update officials set display_name = ${officialName} where id = ${ref.officialId}`;
+      const { fixtureOfficialId } = await makeAssignment(ctx, ref.officialId);
+      await putMyReport(ref.userId, fixtureOfficialId, { body: "a quiet game", incidents: [] });
+      const report = await submitMyReport(ref.userId, fixtureOfficialId);
+      // The notice names the official who filed the report.
+      return { rowIds: await attemptedRowIdsOf("match_report_submitted", "match_report", report.id), positive: literal(officialName) };
     },
   };
 
