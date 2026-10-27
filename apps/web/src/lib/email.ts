@@ -347,18 +347,12 @@ export function appOrigin(): string {
   ).replace(/\/$/, "");
 }
 
-/** New officiating assignment(s) with accept/decline CTA to /me. */
-export async function sendOfficialAssignedEmail(
-  to: string,
-  args: Omit<OfficialAssignedArgs, "meUrl">,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** New officiating assignment(s) with accept/decline CTA to /me, RENDERED and not sent. `queueAssignedNotices` (officials.ts) queues
+ *  what this returns on the email outbox (kind `official_assigned`, transactional), in the transaction that commits the assignment
+ *  (the auto apply and the manual set), one per official with an address, in the official's language. Nothing sends it directly. */
+export async function officialAssignedEmail(args: Omit<OfficialAssignedArgs, "meUrl">, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({
-    to,
-    transactional: true,
-    ...officialAssignedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict),
-  });
+  return officialAssignedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
 }
 
 /** D12 (T19): the organiser opened the round - sent once per player, per board, per pairing. RENDERED here and not sent: the

@@ -21,9 +21,10 @@ import { bulkImportRowsReason } from "@/lib/feature-copy";
 import { requireFeature, withinLimit } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { AiApplyMeta, CreateOfficial, PatchOfficial } from "@/server/api-v1/schemas";
-import { sendOfficialAssignedEmail } from "@/lib/email";
-import { toLocale } from "@/lib/i18n-constants";
+import { officialAssignedEmail } from "@/lib/email";
+import { deferred } from "@/lib/deferred";
 import { msgFor } from "@/lib/messages-i18n";
+import { dispatchNow, enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { unseatedForfeitLoserName, unseatedWithdrew } from "@/lib/forfeit-tag";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
@@ -549,7 +550,7 @@ export async function applyOfficialAssignments(
   input: ApplyAssignmentsInput,
 ): Promise<{ applied: number }> {
   await requireFeature(auth.orgId, "officials.auto", await competitionForDivision(divisionId));
-  return withTenant(auth.orgId, async (tx) => {
+  const { applied, emailIds } = await withTenant(auth.orgId, async (tx) => {
     await tx`select pg_advisory_xact_lock(hashtext(${"division:" + divisionId}))`;
     const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
@@ -572,7 +573,7 @@ export async function applyOfficialAssignments(
       returning fixture_id, official_id, role_key, response, responded_at, decline_reason`;
     const prior = new Map(touched.map((t) => [assignmentKey(t.fixture_id, t.official_id, t.role_key), t]));
     let applied = 0;
-    const fresh: { fixture_id: string; official_id: string; role_key: string }[] = [];
+    const fresh: FreshAssignment[] = [];
     for (const a of input.assignments) {
       const prev = prior.get(assignmentKey(a.fixture_id, a.official_id, a.role_key));
       if (!prev) fresh.push(a);
@@ -585,22 +586,27 @@ export async function applyOfficialAssignments(
         on conflict (fixture_id, role_key, official_id) do nothing`;
       applied++;
     }
-    const allTouched = [...new Set([...touched.map((t) => t.fixture_id), ...fixtureIds])];
-    await refreshOfficialsCache(tx, allTouched);
-
+    // The ledger entry this apply writes below is `seq + 1`, read under the division's lock: the notices name it in their ref.
     const [{ seq }] = await tx<{ seq: number }[]>`
       select coalesce(max(seq), 0)::int as seq from division_events
       where division_id = ${divisionId}`;
+    const emailIds = await queueAssignedNotices(tx, auth.orgId, fresh, (officialId) => ({
+      refType: "division_event",
+      refId: `${divisionId}:${seq + 1}:${officialId}`,
+    }));
+
+    const allTouched = [...new Set([...touched.map((t) => t.fixture_id), ...fixtureIds])];
+    await refreshOfficialsCache(tx, allTouched);
+
     await tx`
       insert into division_events (division_id, seq, type, payload, actor_id)
       values (${divisionId}, ${seq + 1}, 'officials_assigned',
               ${tx.json({ applied, ...(input.ai ? { ai: { ...input.ai, instruction: input.ai.instruction.trim() } } : {}) } as never)}, ${auth.userId})`;
-    const notices = await assignedNotices(tx, auth.orgId, fresh);
-    return { applied, notices };
-  }).then(({ applied, notices }) => {
-    sendAssignedNotices(notices);
-    return { applied };
+    return { applied, emailIds };
   });
+  // The request makes the first attempt, after commit (R5); a failed attempt is the outbox's retry, never the assignment's.
+  if (emailIds.length > 0) deferred(() => dispatchNow(emailIds));
+  return { applied };
 }
 
 export const PatchFixtureOfficialsInput = z.object({
@@ -623,7 +629,7 @@ export async function patchFixtureOfficials(
   fixtureId: string,
   input: PatchFixtureOfficialsInput,
 ): Promise<{ officials: unknown }> {
-  return withTenant(auth.orgId, async (tx) => {
+  const { officials, emailIds } = await withTenant(auth.orgId, async (tx) => {
     const [fixture] = await tx<{ id: string }[]>`select id from fixtures where id = ${fixtureId}`;
     if (!fixture) throw new HttpError(404, "fixture not found");
     // Same carry-over rule as the auto path: a re-set that keeps the same
@@ -632,7 +638,7 @@ export async function patchFixtureOfficials(
       delete from fixture_officials where fixture_id = ${fixtureId}
       returning fixture_id, official_id, role_key, response, responded_at, decline_reason`;
     const prior = new Map(priorRows.map((t) => [assignmentKey(t.fixture_id, t.official_id, t.role_key), t]));
-    const fresh: { fixture_id: string; official_id: string; role_key: string }[] = [];
+    const fresh: FreshAssignment[] = [];
     for (const s of input.set) {
       const prev = prior.get(assignmentKey(fixtureId, s.official_id, s.role_key));
       if (!prev) fresh.push({ fixture_id: fixtureId, official_id: s.official_id, role_key: s.role_key });
@@ -643,19 +649,23 @@ export async function patchFixtureOfficials(
                 ${prev?.response ?? "pending"}, ${prev?.responded_at ?? null},
                 ${prev?.decline_reason ?? null})`;
     }
+    const emailIds = await queueAssignedNotices(tx, auth.orgId, fresh, (officialId) => ({
+      refType: "fixture_official",
+      refId: `${fixtureId}:${officialId}`,
+    }));
     const cache = await refreshOfficialsCache(tx, [fixtureId]);
-    const notices = await assignedNotices(tx, auth.orgId, fresh);
-    return { officials: cache.get(fixtureId) ?? [], notices };
-  }).then(({ officials, notices }) => {
-    sendAssignedNotices(notices);
-    return { officials };
+    return { officials: cache.get(fixtureId) ?? [], emailIds };
   });
+  if (emailIds.length > 0) deferred(() => dispatchNow(emailIds));
+  return { officials };
 }
 
 // ---------------------------------------------------------------------------
 // Assignment notifications (v11): who newly got a fixture, with enough detail
-// for the official-assigned email. Assembled inside the tx, sent after commit
-// (fire-and-forget — a mail hiccup must not fail the assignment).
+// for the official-assigned email. Queued on the email outbox inside the tx
+// that commits the assignment (phase 3 wave 4, kind `official_assigned`); the
+// request makes the first attempt after commit and the outbox retries, so a
+// mail hiccup never fails the assignment.
 // ---------------------------------------------------------------------------
 
 interface PriorAssignment {
@@ -671,41 +681,36 @@ function assignmentKey(fixtureId: string, officialId: string, roleKey: string): 
   return `${fixtureId}:${officialId}:${roleKey}`;
 }
 
-export interface AssignedNotice {
-  email: string;
-  official_name: string;
-  org_name: string;
-  fixtures: {
-    label: string;
-    role_key: string;
-    scheduled_at: string | null;
-    venue_tz: string | null;
-    venue: string | null;
-    court_label: string | null;
-  }[];
-}
+/** A `(fixture, official, role)` triple that was not assigned before this write (the carry-over diff): the only ones notified. */
+type FreshAssignment = { fixture_id: string; official_id: string; role_key: string };
 
-async function assignedNotices(
+/**
+ * Queue the assignment notice on the email outbox, on the caller's transaction (R1: committed with the assignment, or not at all),
+ * one row per official in `fresh` who has an address, listing that official's new fixtures. Returns the rows' ids for the caller's
+ * first attempt after commit. No row for an official without an address, and none at all for an empty `fresh` (R6: a re-apply or a
+ * re-set that keeps an official writes no triple here).
+ *
+ * `ref` names the row (the auto apply's ledger entry, or the manual set's fixture), with the official in it, so two officials sharing
+ * one address in one write do not supersede each other. The language is the official's (F5, D4): a claimed official's account, then
+ * the org's default, then `en`; the fixture labels are built in that same language, so one email speaks one language.
+ */
+async function queueAssignedNotices(
   tx: Tx,
   orgId: string,
-  fresh: { fixture_id: string; official_id: string; role_key: string }[],
-): Promise<AssignedNotice[]> {
+  fresh: FreshAssignment[],
+  ref: (officialId: string) => { refType: string; refId: string },
+): Promise<string[]> {
   if (fresh.length === 0) return [];
   const officialIds = [...new Set(fresh.map((f) => f.official_id))];
   const fixtureIds = [...new Set(fresh.map((f) => f.fixture_id))];
-  const officials = await tx<{ id: string; display_name: string; email: string | null }[]>`
-    select id, display_name, email from officials
-    where id in ${tx(officialIds)} and email is not null`;
+  // The claimed official's account (`persons.user_id`) is where their language is: an existing link only.
+  const officials = await tx<{ id: string; display_name: string; email: string; user_id: string | null }[]>`
+    select o.id, o.display_name, o.email, p.user_id
+    from officials o left join persons p on p.id = o.person_id
+    where o.id in ${tx(officialIds)} and o.email is not null`;
   if (officials.length === 0) return [];
   const [org] = await tx<{ name: string; default_locale: string | null }[]>`
     select name, default_locale from organizations where id = ${orgId}`;
-  // Copy locale for a document nobody is "viewing" — same reasoning as
-  // exports.ts's exportLookup / calendar.ics/route.ts: the assignment-notice
-  // email has no single reader whose cookie could be consulted, so it uses
-  // the org's own default locale.
-  const locale = toLocale(org?.default_locale ?? null);
-  const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
-    msgFor(locale, k, v);
   // P9 cutover: `venue`/`court_label` below are the DERIVED names (from
   // venues/courts via venue_id/court_id) despite the field names — these
   // feed `officialAssignedTemplate`'s rendered "where" line
@@ -735,11 +740,11 @@ async function assignedNotices(
     left join venues ven on ven.id = f.venue_id
     where f.id in ${tx(fixtureIds)}`;
   const byId = new Map(fixtures.map((f) => [f.id, f]));
-  return officials.map((o) => ({
-    email: o.email!,
-    official_name: o.display_name,
-    org_name: org?.name ?? "",
-    fixtures: fresh
+  const ids: string[] = [];
+  for (const o of officials) {
+    const locale = await recipientLocale(tx, { pick: null, userId: o.user_id, orgDefault: org?.default_locale ?? null });
+    const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor(locale, k, v);
+    const lines = fresh
       .filter((f) => f.official_id === o.id)
       .map((f) => {
         const fx = byId.get(f.fixture_id);
@@ -761,18 +766,21 @@ async function assignedNotices(
           venue: fx?.venue ?? null,
           court_label: fx?.court_label ?? null,
         };
+      });
+    ids.push(
+      await enqueueEmail(tx, {
+        kind: "official_assigned",
+        ...ref(o.id),
+        orgId,
+        to: o.email,
+        ...(await officialAssignedEmail({ orgName: org?.name ?? "", officialName: o.display_name, fixtures: lines }, locale)),
+        transactional: true,
+        // The bound, not the fixture's start (P-W4-3): an official assigned after the match (to file a report) is still told.
+        expiresAt: expiryWithin(null),
       }),
-  }));
-}
-
-function sendAssignedNotices(notices: AssignedNotice[]): void {
-  for (const n of notices) {
-    void sendOfficialAssignedEmail(n.email, {
-      orgName: n.org_name,
-      officialName: n.official_name,
-      fixtures: n.fixtures,
-    }).catch(() => {});
+    );
   }
+  return ids;
 }
 
 /** Rebuild fixtures.officials (the read cache) from fixture_officials.

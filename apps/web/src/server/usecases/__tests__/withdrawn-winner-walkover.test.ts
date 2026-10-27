@@ -71,12 +71,14 @@ vi.mock("next/cache", () => ({
   revalidateTag: vi.fn(),
   revalidatePath: vi.fn(),
 }));
-// R116-4: the officials' assignment email is read off its send — the real template's input, never a mail transport.
-const mail = vi.hoisted(() => ({ assigned: vi.fn<(...args: unknown[]) => Promise<undefined>>(async () => undefined) }));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendOfficialAssignedEmail: mail.assigned,
-}));
+// R116-4: the officials' assignment email is read off its builder (`officialAssignedEmail`, wrapped: the real render runs and
+// the spy records the template's input). The notice is queued on the email outbox; no mail transport is involved.
+const mail = vi.hoisted(() => ({ assigned: vi.fn<typeof import("@/lib/email").officialAssignedEmail>() }));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  mail.assigned.mockImplementation(actual.officialAssignedEmail);
+  return { ...actual, officialAssignedEmail: mail.assigned };
+});
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const EN = enPublic as unknown as Dict;
@@ -616,8 +618,8 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
       await claimPerson(invited.secret, user!.id, email);
       mail.assigned.mockClear();
       await patchFixtureOfficials(auth, id, { set: [{ official_id: official.id, role_key: "referee", locked: false }] });
-      const sent = mail.assigned.mock.calls.map((c) => c[1] as { fixtures: { label: string }[] });
-      expect(sent.length, "rig: the appointment sent one email").toBe(1);
+      const sent = mail.assigned.mock.calls.map((c) => c[0]);
+      expect(sent.length, "rig: the appointment built one email").toBe(1);
       const row = (await getMyOfficiating(user!.id)).completed.find((a) => a.fixture_id === id);
       if (!row) throw new Error(`rig: ${id} is not in the official's finished duties`);
       return { label: sent[0]!.fixtures[0]!.label, me: [row.home_name, row.away_name], meWithdrew: [row.home_withdrew === true, row.away_withdrew === true] };

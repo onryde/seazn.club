@@ -63,6 +63,9 @@
 //   - official_invite: the route POST of app/api/v1/officials/[id]/invite/route.ts, the organiser of an `nl` organisation (signed in
 //     through the session stand-in) inviting an official to claim their profile: the same rail as the claim invite, with the officiating
 //     copy, in the organisation's language, and the request makes the first attempt.
+//   - official_assigned: the real `patchFixtureOfficials` of an `es` organisation's organiser setting an official (an address, no
+//     account) on a fixture by hand: the notice is queued in the assignment's own tenant transaction, in the organisation's language
+//     (the official has no account to follow), and the request makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -127,7 +130,7 @@ import { DELETE as deleteAccount } from "@/app/api/users/me/route";
 import { POST as orgInvitePost } from "@/app/api/orgs/[id]/invites/route";
 import { POST as claimInvitePost } from "@/app/api/v1/persons/[id]/claim-invites/route";
 import { POST as officialInvitePost } from "@/app/api/v1/officials/[id]/invite/route";
-import { createOfficial } from "@/server/usecases/officials";
+import { createOfficial, patchFixtureOfficials } from "@/server/usecases/officials";
 import { createPerson } from "@/server/usecases/persons";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
@@ -143,6 +146,7 @@ import {
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
+import { seedFutureDivision } from "@/server/usecases/__tests__/_seed";
 import { seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
@@ -259,6 +263,10 @@ async function cleanUp(): Promise<void> {
         or (ref_type = 'user' and ref_id = any(${made.userIds}::text[]))`;
   // A sponsor org's orders hold it (a RESTRICT foreign key, V299): they go first.
   if (made.orgIds.length > 0) await sql`delete from sponsor_orders where org_id = any(${made.orgIds}::uuid[])`;
+  // The officials' scenarios seed courts: courts.venue_id and fixtures.court_id are ON DELETE RESTRICT, so the competitions
+  // (cascading their fixtures) go, then the courts, before the organisation's cascade reaches its venues (venues.test.ts's order).
+  if (made.orgIds.length > 0) await sql`delete from competitions where org_id = any(${made.orgIds}::uuid[])`;
+  if (made.orgIds.length > 0) await sql`delete from courts where org_id = any(${made.orgIds}::uuid[])`;
   if (made.orgIds.length > 0) await sql`delete from organizations where id = any(${made.orgIds}::uuid[])`;
   // The seeded owner is referenced without a cascade by the plan it was given and by the round's audit trail.
   await sql`delete from subscriptions where owner_user_id = any(${made.userIds}::uuid[])`;
@@ -1082,6 +1090,33 @@ async function officialInviteScenario(): Promise<KindScenario> {
   };
 }
 
+/** The organiser of an organisation whose default language is `es` sets an official on a fixture by hand. The official has an address
+ *  and no account, so the notice is in the org's language; it is queued in the assignment's transaction and the request makes the first
+ *  attempt after commit. */
+async function officialAssignedScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("pro");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const [org] = await sql<{ name: string }[]>`update organizations set default_locale = 'es' where id = ${orgId} returning name`;
+  const owner = asOwner(orgId, ownerId);
+  const { fixtures } = await seedFutureDivision(owner);
+  const recipient = address();
+  const official = await createOfficial(owner, { display_name: "Sweep Assigned Ref", role_keys: ["referee"], email: recipient });
+  return {
+    locale: "es",
+    subjectKey: "officialAssigned.subject",
+    subjectVars: { orgName: org!.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const out = await patchFixtureOfficials(owner, fixtures[0]!.id, {
+        set: [{ official_id: official.id, role_key: "referee", locked: false }],
+      });
+      expect(out.officials, "premise: the real set wrote the assignment").toHaveLength(1);
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1199,6 +1234,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", officialInvite.subjectKey, officialInvite.subjectVars),
     );
 
+    const officialAssigned = await officialAssignedScenario();
+    expect(dictionarySubject("es", officialAssigned.subjectKey, officialAssigned.subjectVars)).not.toBe(
+      dictionarySubject("en", officialAssigned.subjectKey, officialAssigned.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1226,6 +1266,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         org_invite: orgInvite,
         claim_invite: claimInvite,
         official_invite: officialInvite,
+        official_assigned: officialAssigned,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
