@@ -138,13 +138,17 @@ describe("youtubeDriver", () => {
   it("production with the variable unset: the driver is the live path, not the fake", () => {
     vi.stubEnv("NODE_ENV", "production");
     vi.stubEnv("YOUTUBE_DRIVER", "");
-    let got: unknown;
+    let got: YouTubePort | Error;
     try {
       got = youtubeDriver();
     } catch (e) {
-      got = e;
+      got = e as Error;
     }
     expect(got).not.toBeInstanceOf(FakeYouTube);
+    // The positive pair (as in the explicit-live test above): what it IS, not only what it is not. A driver that returned
+    // `undefined`, or any other object, would pass the line above and be neither the named refusal nor a live port.
+    if (got instanceof Error) expect(got.message).toMatch(/YOUTUBE_DRIVER=live/);
+    else expect(got.mode).toBe("live");
   });
 
   it("an override set while the mode is live is still honoured (a test double stands in for Google)", () => {

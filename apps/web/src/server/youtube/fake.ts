@@ -1,22 +1,31 @@
 import "server-only";
+import { createHash } from "node:crypto";
 // server/youtube/fake.ts — FakeYouTube: a deterministic in-memory YouTube (plan T5, spec §9.1). It implements the whole port,
-// refuses the way Google does (the 10 / 3 limits, the live-streaming eligibility errors, an expired or revoked grant), and
-// carries a control surface the unit tests and the e2e control route drive (`failNext`, `killToken`, `videoOn`, …). It is the
-// driver of every process that is not talking to the real YouTube: unit tests, `next dev`, and the e2e server.
+// refuses the way Google does (the 10 / 3 limits, the live-streaming eligibility errors, an expired or revoked grant, a bad
+// OAuth exchange), and carries a control surface the unit tests and the e2e control route drive (`failNext`, `killToken`,
+// `videoOn`, `issueCode`, `reset`, …). It is the driver of every process that is not talking to the real YouTube: unit tests,
+// `next dev`, and the e2e server.
 //
 // What it models, because a later task's code will lean on it:
 //   * A broadcast is `created`, becomes `ready` when bound to a stream, and goes `live` when VIDEO ARRIVES on that stream
 //     (`enableAutoStart=true`). Nothing ends it but `complete()` — `enableAutoStop=false`, so `videoOff` leaves it live.
 //   * Limits are Google's, typed as their own literals below with the page they come from. The 10 is per CHANNEL.
+//   * CHANNELS belong to GRANTS. A refresh token is pinned to a channel the first time the fake sees it (a code exchange, or —
+//     for a token a test seeds from its own database — its first `accessToken`), and every access token minted from it
+//     inherits that channel. Streams and broadcasts belong to a channel: another channel's resource is `youtube_not_found`
+//     to a token (`broadcastLife` says `absent`; a delete of it resolves and removes nothing). By default every grant gets its OWN
+//     fresh channel, so parallel e2e orgs never share one channel's 10-live cap; `setChannels` (or the constructor's
+//     `channels`) pins what the grants made AFTER it get, which is how a test shares a channel or builds a multi-channel picker.
 //   * A token that is killed (or revoked) is dead for good, and so is every access token minted from it; the broadcasts it
-//     made keep running, because Google's revoke does not touch a stream already carrying video.
-//   * Refresh tokens are whatever string a caller supplies (a connection's sealed token, opened): the fake does not need to
-//     have issued it. A string is good until killed.
+//     made keep running, because Google's revoke does not touch a stream already carrying video. A mint lasts 3600 s by the
+//     injected clock; an expired access token is the same 401 a dead one is.
+//   * The OAuth exchange is PKCE: `authorizeUrl` records the state's challenge and redirect URI, `issueCode(state)` (the fake
+//     authorize hop's job) mints a single-use code bound to them, and `exchangeCode` refuses a verifier whose S256 is not the
+//     challenge, another redirect URI, an unknown code and a replayed one — all `invalid_grant`, i.e. `youtube_reconnect_needed`.
 //   * Errors carry a CODE and at most Google's reason token (port.ts) — never an argument, a token or a key. `calls` records
 //     method names and times only.
 //
-// What it does not model: a daily stream-creation cap (unpublished), access-token expiry (a request mints a fresh one), a
-// broadcast belonging to a channel (any valid access token can read any broadcast), and the title's 100-character limit.
+// What it does not model: a daily stream-creation cap (unpublished) and a stream's own title rules.
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
 import { YOUTUBE_ERROR_CODES, YouTubeError, type BroadcastLife, type YoutubeErrorCode, type YouTubePort } from "./port";
 
@@ -26,18 +35,19 @@ const MAX_LIVE_PER_CHANNEL = 10;
 const MAX_OPEN_PER_STREAM_KEY = 3;
 /** videos.list takes at most 50 ids per call (https://developers.google.com/youtube/v3/docs/videos/list, `id`). */
 const MAX_VIDEO_IDS_PER_CALL = 50;
+/** A broadcast title: at most 100 characters, and neither `<` nor `>` (liveBroadcasts `snippet.title`, plan P11). Counted in
+ *  code points, so a title Seazn trimmed to 100 code points is never refused for an emoji's two UTF-16 units. */
+const BROADCAST_TITLE_MAX_CHARS = 100;
+/** An OAuth access token lasts `expires_in` = 3600 seconds (https://developers.google.com/identity/protocols/oauth2/web-server). */
+const ACCESS_TOKEN_LIFETIME_MS = 3600 * 1000;
 
 /** YouTube's real RTMP ingest host, so a pooled key from the fake passes the destination allowlist
  *  (lib/stream-destinations.ts) wherever a later task checks one. The fake never opens a socket to it. */
 const FAKE_INGEST_URL = "rtmp://a.rtmp.youtube.com/live2";
-/** The fake's one account, constant: nothing in the product keys off a fake's subject, and a constant keeps grants comparable. */
+/** The fake's one account, constant: nothing in the product keys off a fake's subject. */
 const FAKE_GOOGLE_SUB = "fake-google-sub";
-/** `UC` + 22 characters, a real channel id's shape (the public page and the directory validate channel ids by it). */
-const DEFAULT_CHANNEL = { id: "UCfakeChannel000000000AA", title: "Fake Channel" } as const;
 /** Where the fake authorize hop lives (T7 owns the route); the fake's `authorizeUrl` points at it on the redirect URI's origin. */
 const FAKE_AUTHORIZE_PATH = "/api/youtube/connect/fake-authorize";
-/** A channel the fake hands a token when none are configured (setChannels([])): a stream still needs an owner for the cap. */
-const NO_CHANNEL = "UC-no-channel";
 
 type PortMethod = Exclude<keyof YouTubePort, "mode">;
 // A Record, not an array: tsc refuses a port method added to the interface and forgotten here.
@@ -51,19 +61,30 @@ export const FAKE_YOUTUBE_METHODS = Object.keys(PORT_METHODS) as PortMethod[];
 
 type Channel = { id: string; title: string };
 type LiveState = "enabled" | "not_enabled" | "blocked";
+/** Scope a control to one channel: only calls made with that channel's tokens see it. Absent: every channel. */
+export type FakeScope = { channelId: string };
 interface Stream { id: string; title: string; channelId: string; video: boolean }
 interface Broadcast {
   id: string; channelId: string; title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy;
   madeForKids: boolean; streamId: string | null; life: Exclude<BroadcastLife, "absent">;
 }
+/** A refresh token's pinned identity: the channels its grant can see, and the one its API calls act on (the first). */
+interface Grant { channels: Channel[]; channelId: string }
+interface Injection { code: YoutubeErrorCode; reason?: string; channelId?: string }
 /** What the inspector shows of a broadcast: everything it was created with, where it is bound and its life. No credential. */
 export interface BroadcastView {
-  title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy; madeForKids: boolean; streamId: string | null;
-  life: BroadcastLife;
+  channelId: string; title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy; madeForKids: boolean;
+  streamId: string | null; life: BroadcastLife;
 }
 
 /** A broadcast YouTube would still count against a stream key (3 per key) — not finished, not revoked. */
 const isOpen = (b: Broadcast): boolean => b.life !== "complete" && b.life !== "revoked";
+
+/** RFC 7636 §4.2: the S256 challenge of a verifier. */
+const s256 = (verifier: string): string => createHash("sha256").update(verifier).digest("base64url");
+
+const badTitle = (t: unknown): boolean =>
+  typeof t !== "string" || t.trim() === "" || Array.from(t).length > BROADCAST_TITLE_MAX_CHARS || /[<>]/.test(t);
 
 export class FakeYouTube implements YouTubePort {
   readonly mode = "fake" as const;
@@ -71,44 +92,58 @@ export class FakeYouTube implements YouTubePort {
   readonly calls: { method: string; at: Date }[] = [];
 
   private readonly now: () => Date;
-  private channels: Channel[];
+  /** What the constructor was given, so `reset()` returns to it. `null`: a fresh channel per grant. */
+  private readonly initialChannels: Channel[] | null;
+  private template: Channel[] | null;
   private live: LiveState = "enabled";
-  private autoVideo = false;
+  private liveByChannel = new Map<string, LiveState>();
+  private auto = false;
+  private autoByChannel = new Map<string, boolean>();
+  private grantedScope: string | null = null;
   private seq = 0;
-  private readonly streams = new Map<string, Stream>();
-  private readonly broadcasts = new Map<string, Broadcast>();
-  /** access token → who it was minted for and on which channel. */
-  private readonly access = new Map<string, { refreshToken: string; channelId: string }>();
-  private readonly killed = new Set<string>();
-  private readonly handleOf = new Map<string, string>();
-  private readonly tokenOf = new Map<string, string>();
-  private readonly injected = new Map<PortMethod, { code: YoutubeErrorCode; reason?: string }[]>();
+  private streams = new Map<string, Stream>();
+  private broadcasts = new Map<string, Broadcast>();
+  private grants = new Map<string, Grant>();
+  /** access token → who it was minted for, on which channel, and when it dies. */
+  private access = new Map<string, { refreshToken: string; channelId: string; expiresAt: number }>();
+  private killed = new Set<string>();
+  private handleOf = new Map<string, string>();
+  private tokenOf = new Map<string, string>();
+  private injected = new Map<PortMethod, Injection[]>();
+  /** OAuth state → what `authorizeUrl` was asked for. */
+  private pending = new Map<string, { challenge: string; redirectUri: string }>();
+  private codes = new Map<string, { challenge: string; redirectUri: string; scope: string; used: boolean }>();
 
   constructor(o: { channels?: Channel[]; now?: () => Date } = {}) {
-    this.channels = (o.channels ?? [DEFAULT_CHANNEL]).map((c) => ({ ...c }));
+    this.initialChannels = o.channels ? o.channels.map((c) => ({ ...c })) : null;
+    this.template = this.initialChannels ? this.initialChannels.map((c) => ({ ...c })) : null;
     this.now = o.now ?? (() => new Date());
   }
 
   // ─── the control surface (tests and the e2e control route) ──────────────────────────────────────────────────────────
 
-  /** The next call of `method` throws `YouTubeError(code, reason)` — once, before it changes anything. Calls queue in order. */
-  failNext(method: keyof YouTubePort, code: YoutubeErrorCode, reason?: string): void {
+  /** The next call of `method` throws `YouTubeError(code, reason)` — once, before it changes anything. Calls queue in order.
+   *  With `scope`, only a call made with that channel's tokens takes it. */
+  failNext(method: keyof YouTubePort, code: YoutubeErrorCode, reason?: string, scope?: FakeScope): void {
     // A typo'd method or code would otherwise be a failure that never fires, and the test around it would pass vacuously.
     if (typeof method !== "string" || !Object.hasOwn(PORT_METHODS, method)) throw new Error("failNext: not a method of the YouTube port");
     if (!YOUTUBE_ERROR_CODES.includes(code)) throw new Error("failNext: not a YouTube error code");
     const queue = this.injected.get(method as PortMethod) ?? [];
-    queue.push({ code, reason });
+    queue.push({ code, reason, channelId: scope?.channelId });
     this.injected.set(method as PortMethod, queue);
   }
 
   /** The refresh token is dead for good: the next `accessToken` is `youtube_reconnect_needed`, and so is every access token
-   *  already minted from it. Its broadcasts and streams are untouched. */
+   *  already minted from it. Its broadcasts and streams are untouched. This is also how a test makes a token REVOKED (T14's
+   *  end step finding a dead grant); `revoke(refreshToken)` is the same effect through the port. */
   killToken(refreshToken: string): void {
     this.killed.add(refreshToken);
   }
 
-  /** An opaque handle for a refresh token (so an e2e test never sees the token). Stable per token. */
+  /** An opaque handle for a refresh token (so an e2e test never sees the token). Stable per token. Seeing a token pins it to
+   *  a channel, so the handle can name that channel (`channelOfHandle`). */
   tokenHandle(refreshToken: string): string {
+    this.grantOf(refreshToken);
     let handle = this.handleOf.get(refreshToken);
     if (handle === undefined) {
       handle = `fake-th-${++this.seq}`;
@@ -119,22 +154,80 @@ export class FakeYouTube implements YouTubePort {
   }
 
   killHandle(handle: string): void {
-    const token = this.tokenOf.get(handle);
-    if (token === undefined) throw new YouTubeError("youtube_not_found", "unknownHandle");
-    this.killToken(token);
+    this.killToken(this.tokenForHandle(handle));
   }
 
-  /** `true`: every `bind` leaves its broadcast live at once, as if video had arrived (an e2e server has no ingest to watch). */
-  setAutoVideo(on: boolean): void {
-    this.autoVideo = on;
+  /** The channel a handle's token acts on — how a control scopes `failNext`, `setLive` and `setAutoVideo` to one org's channel. */
+  channelOfHandle(handle: string): string {
+    return this.grantOf(this.tokenForHandle(handle)).channelId;
   }
 
+  /** The channel a refresh token acts on (pinning the token the first time it is seen). */
+  channelOf(refreshToken: string): string {
+    return this.grantOf(refreshToken).channelId;
+  }
+
+  /** `true`: every `bind` leaves its broadcast live at once, as if video had arrived (an e2e server has no ingest to watch).
+   *  Without a scope it is the default for every channel; a scoped value wins for that channel. */
+  setAutoVideo(on: boolean, scope?: FakeScope): void {
+    if (scope) this.autoByChannel.set(scope.channelId, on);
+    else this.auto = on;
+  }
+
+  /** What the grants made AFTER this call can see (the first is the channel their API calls act on). An empty list is a real
+   *  answer: a Google account with no channel. Grants already made keep the channels they were pinned to. */
   setChannels(c: Channel[]): void {
-    this.channels = c.map((x) => ({ ...x }));
+    this.template = c.map((x) => ({ ...x }));
   }
 
-  setLive(state: LiveState): void {
-    this.live = state;
+  /** The grants made AFTER this call get the channels that handle's grant has: how an e2e RECONNECT lands on the SAME channel (a
+   *  fresh grant otherwise gets a channel of its own, and the reconnect would be refused as a different channel). */
+  pinChannelsTo(handle: string): void {
+    this.template = this.grantOf(this.tokenForHandle(handle)).channels.map((c) => ({ ...c }));
+  }
+
+  /** Whether live streaming is enabled: the default for every channel, or (with `scope`) for one. */
+  setLive(state: LiveState, scope?: FakeScope): void {
+    if (scope) this.liveByChannel.set(scope.channelId, state);
+    else this.live = state;
+  }
+
+  /** The scope the NEXT codes `issueCode` mints carry (null: exactly the YouTube scope). How a test drives `scope_missing`. */
+  setGrantedScope(scope: string | null): void {
+    this.grantedScope = scope;
+  }
+
+  /** The fake authorize hop's job: Google redirecting back with a code. A single-use code bound to the challenge and redirect
+   *  URI the state's `authorizeUrl` recorded. Unknown state -> `youtube_not_found`. `o.scope` beats `setGrantedScope`. */
+  issueCode(state: string, o: { scope?: string } = {}): string {
+    const p = this.pending.get(state);
+    if (!p) throw new YouTubeError("youtube_not_found", "unknownState");
+    const code = `fake-code-${++this.seq}`;
+    this.codes.set(code, { challenge: p.challenge, redirectUri: p.redirectUri, scope: o.scope ?? this.grantedScope ?? YOUTUBE_SCOPE, used: false });
+    return code;
+  }
+
+  /** Back to the state `new FakeYouTube(sameOptions)` has: no streams, broadcasts, grants, handles, codes, injections or call
+   *  log; every switch (live, autoVideo, granted scope) at its default; the channels the constructor was given. The id counter
+   *  is NOT rewound, so an id from before the reset never names something new. */
+  reset(): void {
+    this.template = this.initialChannels ? this.initialChannels.map((c) => ({ ...c })) : null;
+    this.live = "enabled";
+    this.liveByChannel = new Map();
+    this.auto = false;
+    this.autoByChannel = new Map();
+    this.grantedScope = null;
+    this.streams = new Map();
+    this.broadcasts = new Map();
+    this.grants = new Map();
+    this.access = new Map();
+    this.killed = new Set();
+    this.handleOf = new Map();
+    this.tokenOf = new Map();
+    this.injected = new Map();
+    this.pending = new Map();
+    this.codes = new Map();
+    this.calls.length = 0;
   }
 
   /** Video arrives on a stream: every broadcast bound to it that is `ready` goes `live` (auto-start). A channel cannot have
@@ -157,14 +250,34 @@ export class FakeYouTube implements YouTubePort {
     if (!this.broadcasts.delete(videoId)) throw new YouTubeError("youtube_not_found", "videoNotFound");
   }
 
-  liveBroadcastCount(): number {
-    let n = 0;
-    for (const b of this.broadcasts.values()) if (b.life === "live") n++;
-    return n;
+  /** YouTube revoked the broadcast (a policy takedown): life `revoked`, which frees its key and its live slot. T14's end step
+   *  maps this life; nothing else in the fake produces it. */
+  revokeBroadcast(broadcastId: string): void {
+    const b = this.broadcasts.get(broadcastId);
+    if (!b) throw new YouTubeError("youtube_not_found", "videoNotFound");
+    b.life = "revoked";
   }
 
-  streamsCount(): number {
-    return this.streams.size;
+  // Counts need no ids (a refused Go live leaves no id to look up). Each takes an optional channel; without one it counts all.
+  liveBroadcastCount(channelId?: string): number {
+    return this.countBroadcasts(channelId, (b) => b.life === "live");
+  }
+
+  /** Broadcasts that exist on YouTube, whatever their life. */
+  broadcastsCount(channelId?: string): number {
+    return this.countBroadcasts(channelId, () => true);
+  }
+
+  /** Broadcasts that exist and are NOT live (created, ready, testing, complete, revoked): after a refused Go live, none of
+   *  these may be left behind that the product did not mean to keep. */
+  nonLiveBroadcastCount(channelId?: string): number {
+    return this.countBroadcasts(channelId, (b) => b.life !== "live");
+  }
+
+  streamsCount(channelId?: string): number {
+    let n = 0;
+    for (const s of this.streams.values()) if (channelId === undefined || s.channelId === channelId) n++;
+    return n;
   }
 
   /** Open broadcasts bound to this stream key — the figure Google's "3 per stream key" counts. */
@@ -179,8 +292,8 @@ export class FakeYouTube implements YouTubePort {
     const b = this.broadcasts.get(broadcastId);
     if (!b) return null;
     return {
-      title: b.title, description: b.description, scheduledStart: b.scheduledStart, privacy: b.privacy, madeForKids: b.madeForKids,
-      streamId: b.streamId, life: b.life,
+      channelId: b.channelId, title: b.title, description: b.description, scheduledStart: b.scheduledStart, privacy: b.privacy,
+      madeForKids: b.madeForKids, streamId: b.streamId, life: b.life,
     };
   }
 
@@ -192,57 +305,69 @@ export class FakeYouTube implements YouTubePort {
     url.searchParams.set("state", a.state);
     url.searchParams.set("code_challenge", a.codeChallenge);
     url.searchParams.set("redirect_uri", a.redirectUri);
+    this.pending.set(a.state, { challenge: a.codeChallenge, redirectUri: a.redirectUri });
     return url.toString();
   }
 
   async exchangeCode(a: { code: string; codeVerifier: string; redirectUri: string }): Promise<{ refreshToken: string; scope: string; googleSub: string | null }> {
     this.enter("exchangeCode");
-    if (!a.code || !a.codeVerifier) throw new YouTubeError("youtube_reconnect_needed", "invalidGrant");
-    return { refreshToken: `fake-rt-${++this.seq}`, scope: YOUTUBE_SCOPE, googleSub: FAKE_GOOGLE_SUB };
+    // Every refusal is the same `invalid_grant`, as Google's is: an unknown or replayed code, another redirect URI than the one
+    // the code was issued for, a verifier whose S256 is not the challenge. A refused attempt does not spend the code.
+    const issued = this.codes.get(a.code);
+    if (!issued || issued.used || issued.redirectUri !== a.redirectUri || !a.codeVerifier || s256(a.codeVerifier) !== issued.challenge) {
+      throw new YouTubeError("youtube_reconnect_needed", "invalidGrant");
+    }
+    issued.used = true;
+    const refreshToken = `fake-rt-${++this.seq}`;
+    this.grants.set(refreshToken, this.newGrant());
+    return { refreshToken, scope: issued.scope, googleSub: FAKE_GOOGLE_SUB };
   }
 
   async accessToken(refreshToken: string): Promise<string> {
-    this.enter("accessToken");
+    this.enter("accessToken", this.grants.get(refreshToken)?.channelId ?? null);
     if (!refreshToken || this.killed.has(refreshToken)) throw new YouTubeError("youtube_reconnect_needed", "invalidGrant");
     const at = `fake-at-${++this.seq}`;
-    this.access.set(at, { refreshToken, channelId: this.channels[0]?.id ?? NO_CHANNEL });
+    this.access.set(at, { refreshToken, channelId: this.grantOf(refreshToken).channelId, expiresAt: this.now().getTime() + ACCESS_TOKEN_LIFETIME_MS });
     return at;
   }
 
   async listMyChannels(at: string): Promise<Channel[]> {
-    this.enter("listMyChannels");
-    this.who(at);
-    return this.channels.map((c) => ({ ...c }));
+    this.enter("listMyChannels", this.channelOfAccess(at));
+    const who = this.who(at);
+    return this.grantOf(who.refreshToken).channels.map((c) => ({ ...c }));
   }
 
   async liveEnabled(at: string): Promise<LiveState> {
-    this.enter("liveEnabled");
-    this.who(at);
-    return this.live;
+    this.enter("liveEnabled", this.channelOfAccess(at));
+    return this.liveStateOf(this.who(at).channelId);
   }
 
   async insertStream(at: string, a: { title: string }): Promise<{ streamId: string; ingest: { url: string; streamKey: string } }> {
-    this.enter("insertStream");
+    this.enter("insertStream", this.channelOfAccess(at));
     const who = this.who(at);
-    this.requireLiveEnabled();
+    this.requireLiveEnabled(who.channelId);
     const id = `fakestream${this.pad()}`;
     this.streams.set(id, { id, title: a.title, channelId: who.channelId, video: false });
     return { streamId: id, ingest: { url: FAKE_INGEST_URL, streamKey: `fakekey-${this.pad()}` } };
   }
 
   async deleteStream(at: string, streamId: string): Promise<void> {
-    this.enter("deleteStream");
-    this.who(at);
-    this.streams.delete(streamId);
+    this.enter("deleteStream", this.channelOfAccess(at));
+    const who = this.who(at);
+    // Another channel's stream is absent to this token: the delete resolves and removes nothing.
+    if (this.streams.get(streamId)?.channelId === who.channelId) this.streams.delete(streamId);
   }
 
   async insertBroadcast(
     at: string,
     a: { title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy; madeForKids: boolean },
   ): Promise<{ broadcastId: string }> {
-    this.enter("insertBroadcast");
+    this.enter("insertBroadcast", this.channelOfAccess(at));
     const who = this.who(at);
-    this.requireLiveEnabled();
+    this.requireLiveEnabled(who.channelId);
+    // Google answers an invalid title with a 400 that is none of the closed codes, so it is `youtube_unavailable` with its
+    // reason token (the same code `mapGoogleError` gives an unrecognised 4xx). Nothing is created.
+    if (badTitle(a.title)) throw new YouTubeError("youtube_unavailable", "invalidTitle");
     // 11 characters from [A-Za-z0-9_-]: a real video id's shape, so the replay link and the public embed accept it.
     const id = `fakebc${this.pad()}`;
     this.broadcasts.set(id, {
@@ -253,12 +378,12 @@ export class FakeYouTube implements YouTubePort {
   }
 
   async bind(at: string, broadcastId: string, streamId: string): Promise<void> {
-    this.enter("bind");
-    this.who(at);
-    const b = this.broadcasts.get(broadcastId);
+    this.enter("bind", this.channelOfAccess(at));
+    const who = this.who(at);
+    const b = this.ownBroadcast(who.channelId, broadcastId);
     if (!b) throw new YouTubeError("youtube_not_found", "liveBroadcastNotFound");
     const stream = this.streams.get(streamId);
-    if (!stream) throw new YouTubeError("youtube_not_found", "liveStreamNotFound");
+    if (!stream || stream.channelId !== who.channelId) throw new YouTubeError("youtube_not_found", "liveStreamNotFound");
     if (!isOpen(b)) throw new YouTubeError("youtube_unavailable", "invalidTransition");
     // The 4th open broadcast on a key is refused; a broadcast already on this key is not counted against itself.
     if (b.streamId !== streamId && this.boundOpenCount(streamId) >= MAX_OPEN_PER_STREAM_KEY) throw new YouTubeError("youtube_limit_reached", "limitExceeded");
@@ -266,19 +391,19 @@ export class FakeYouTube implements YouTubePort {
     if (b.life === "created") b.life = "ready";
     // Auto-start: a key that already carries video (or autoVideo) starts it. A channel at its 10 does not start it — the
     // broadcast stays `ready`, as YouTube would leave it — and the bind itself still succeeds.
-    if (b.life === "ready" && (stream.video || this.autoVideo) && this.liveOn(stream.channelId) < MAX_LIVE_PER_CHANNEL) b.life = "live";
+    if (b.life === "ready" && (stream.video || this.autoOn(stream.channelId)) && this.liveOn(stream.channelId) < MAX_LIVE_PER_CHANNEL) b.life = "live";
   }
 
   async broadcastLife(at: string, broadcastId: string): Promise<BroadcastLife> {
-    this.enter("broadcastLife");
-    this.who(at);
-    return this.broadcasts.get(broadcastId)?.life ?? "absent";
+    this.enter("broadcastLife", this.channelOfAccess(at));
+    const who = this.who(at);
+    return this.ownBroadcast(who.channelId, broadcastId)?.life ?? "absent";
   }
 
   async complete(at: string, broadcastId: string): Promise<void> {
-    this.enter("complete");
-    this.who(at);
-    const b = this.broadcasts.get(broadcastId);
+    this.enter("complete", this.channelOfAccess(at));
+    const who = this.who(at);
+    const b = this.ownBroadcast(who.channelId, broadcastId);
     if (!b) throw new YouTubeError("youtube_not_found", "liveBroadcastNotFound");
     if (b.life === "complete") return;   // redundantTransition: already there
     if (b.life !== "live") throw new YouTubeError("youtube_unavailable", "invalidTransition");
@@ -286,43 +411,96 @@ export class FakeYouTube implements YouTubePort {
   }
 
   async deleteBroadcast(at: string, broadcastId: string): Promise<void> {
-    this.enter("deleteBroadcast");
-    this.who(at);
-    this.broadcasts.delete(broadcastId);
+    this.enter("deleteBroadcast", this.channelOfAccess(at));
+    const who = this.who(at);
+    // Another channel's broadcast is absent to this token: the delete resolves and removes nothing.
+    if (this.ownBroadcast(who.channelId, broadcastId)) this.broadcasts.delete(broadcastId);
   }
 
   async existingVideos(at: string, ids: readonly string[]): Promise<Set<string>> {
     // Refused BEFORE it counts as a call, like the real driver (which refuses without calling Google).
     if (ids.length > MAX_VIDEO_IDS_PER_CALL) throw new RangeError(`existingVideos takes at most ${MAX_VIDEO_IDS_PER_CALL} ids per call`);
-    this.enter("existingVideos");
-    this.who(at);
-    return new Set(ids.filter((id) => this.broadcasts.has(id)));
+    this.enter("existingVideos", this.channelOfAccess(at));
+    const who = this.who(at);
+    return new Set(ids.filter((id) => this.ownBroadcast(who.channelId, id) !== undefined));
   }
 
   async revoke(refreshToken: string): Promise<void> {
-    this.enter("revoke");
+    this.enter("revoke", this.grants.get(refreshToken)?.channelId ?? null);
     this.killToken(refreshToken);
   }
 
   // ─── internals ──────────────────────────────────────────────────────────────────────────────────────────────────────
 
-  /** Every port method starts here: the call is logged (name and time), then an injected failure fires, once. */
-  private enter(method: PortMethod): void {
+  /** Every port method starts here: the call is logged (name and time), then an injected failure fires, once. A failure scoped
+   *  to a channel is taken only by a call made with that channel's tokens (`channelId`; null when the call carries none). */
+  private enter(method: PortMethod, channelId: string | null = null): void {
     this.calls.push({ method, at: this.now() });
-    const next = this.injected.get(method)?.shift();
-    if (next) throw new YouTubeError(next.code, next.reason);
+    const queue = this.injected.get(method);
+    if (!queue) return;
+    const i = queue.findIndex((e) => e.channelId === undefined || e.channelId === channelId);
+    if (i === -1) return;
+    const [next] = queue.splice(i, 1);
+    throw new YouTubeError(next!.code, next!.reason);
   }
 
-  /** The grant behind an access token — or the 401 Google answers a dead or unknown one with. */
+  private channelOfAccess(at: string): string | null {
+    return this.access.get(at)?.channelId ?? null;
+  }
+
+  /** A new grant: the channels the template pins (a copy), or ONE fresh channel nobody else shares. */
+  private newGrant(): Grant {
+    const channels = this.template ? this.template.map((c) => ({ ...c })) : [this.freshChannel()];
+    // An account with no channel still owns streams while a test drives it: give it a private owner so the cap is its own.
+    return { channels, channelId: channels[0]?.id ?? `UCnone${this.pad()}` };
+  }
+
+  /** `UC` + 22 characters, a real channel id's shape. */
+  private freshChannel(): Channel {
+    const n = ++this.seq;
+    return { id: `UCfake${String(n).padStart(18, "0")}`, title: `Fake Channel ${n}` };
+  }
+
+  /** The grant behind a refresh token, pinned the first time the token is seen. */
+  private grantOf(refreshToken: string): Grant {
+    let g = this.grants.get(refreshToken);
+    if (!g) {
+      g = this.newGrant();
+      this.grants.set(refreshToken, g);
+    }
+    return g;
+  }
+
+  private tokenForHandle(handle: string): string {
+    const token = this.tokenOf.get(handle);
+    if (token === undefined) throw new YouTubeError("youtube_not_found", "unknownHandle");
+    return token;
+  }
+
+  /** The grant behind an access token — or the 401 Google answers a dead, expired or unknown one with. */
   private who(at: string): { refreshToken: string; channelId: string } {
-    const grant = this.access.get(at);
-    if (!grant || this.killed.has(grant.refreshToken)) throw new YouTubeError("youtube_reconnect_needed", "authError");
-    return grant;
+    const a = this.access.get(at);
+    if (!a || this.killed.has(a.refreshToken) || this.now().getTime() >= a.expiresAt) throw new YouTubeError("youtube_reconnect_needed", "authError");
+    return a;
   }
 
-  private requireLiveEnabled(): void {
-    if (this.live === "not_enabled") throw new YouTubeError("youtube_live_not_enabled", "liveStreamingNotEnabled");
-    if (this.live === "blocked") throw new YouTubeError("youtube_live_blocked", "livePermissionBlocked");
+  private ownBroadcast(channelId: string, broadcastId: string): Broadcast | undefined {
+    const b = this.broadcasts.get(broadcastId);
+    return b && b.channelId === channelId ? b : undefined;
+  }
+
+  private liveStateOf(channelId: string): LiveState {
+    return this.liveByChannel.get(channelId) ?? this.live;
+  }
+
+  private autoOn(channelId: string): boolean {
+    return this.autoByChannel.get(channelId) ?? this.auto;
+  }
+
+  private requireLiveEnabled(channelId: string): void {
+    const state = this.liveStateOf(channelId);
+    if (state === "not_enabled") throw new YouTubeError("youtube_live_not_enabled", "liveStreamingNotEnabled");
+    if (state === "blocked") throw new YouTubeError("youtube_live_blocked", "livePermissionBlocked");
   }
 
   private stream(streamId: string): Stream {
@@ -331,10 +509,14 @@ export class FakeYouTube implements YouTubePort {
     return s;
   }
 
-  private liveOn(channelId: string): number {
+  private countBroadcasts(channelId: string | undefined, pick: (b: Broadcast) => boolean): number {
     let n = 0;
-    for (const b of this.broadcasts.values()) if (b.life === "live" && b.channelId === channelId) n++;
+    for (const b of this.broadcasts.values()) if ((channelId === undefined || b.channelId === channelId) && pick(b)) n++;
     return n;
+  }
+
+  private liveOn(channelId: string): number {
+    return this.countBroadcasts(channelId, (b) => b.life === "live");
   }
 
   private pad(): string {

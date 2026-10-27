@@ -79,11 +79,13 @@ describe("POST /api/internal/youtube/fake — refused anywhere a fake must not b
 });
 
 describe("POST /api/internal/youtube/fake — the ops", () => {
-  it("setChannels / setLive / autoVideo change the fake", async () => {
+  it("setChannels pins what LATER grants see; setLive / autoVideo change the fake", async () => {
     const fake = theFake();
-    const at = await fake.accessToken("rt");
+    const before = await fake.accessToken("rt-before");
     expect((await call({ op: "setChannels", channels: [] })).status).toBe(200);
+    const at = await fake.accessToken("rt");
     expect(await fake.listMyChannels(at)).toEqual([]);
+    expect(await fake.listMyChannels(before), "a grant made before keeps its channel").toHaveLength(1);
     expect((await call({ op: "setLive", state: "not_enabled" })).status).toBe(200);
     expect(await fake.liveEnabled(at)).toBe("not_enabled");
     expect((await call({ op: "setLive", state: "enabled" })).status).toBe(200);
@@ -97,6 +99,75 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     const second = await fake.insertBroadcast(at, bcast());
     await fake.bind(at, second.broadcastId, streamId);
     expect(await fake.broadcastLife(at, second.broadcastId), "autoVideo off: back to ready (the key has no video)").toBe("ready");
+  });
+
+  it("failNext / setLive / autoVideo with a tokenHandle touch only that grant's channel", async () => {
+    const fake = theFake();
+    const atA = await fake.accessToken("rt-a");
+    const atB = await fake.accessToken("rt-b");
+    const handleA = fake.tokenHandle("rt-a");
+    expect((await call({ op: "failNext", method: "insertStream", code: "youtube_unavailable", tokenHandle: handleA })).status).toBe(200);
+    await expect(fake.insertStream(atB, { title: "k" }), "B is not A").resolves.toBeDefined();
+    await expect(fake.insertStream(atA, { title: "k" })).rejects.toMatchObject({ code: "youtube_unavailable" });
+    expect((await call({ op: "setLive", state: "blocked", tokenHandle: handleA })).status).toBe(200);
+    expect([await fake.liveEnabled(atA), await fake.liveEnabled(atB)]).toEqual(["blocked", "enabled"]);
+    expect((await call({ op: "autoVideo", on: true, tokenHandle: handleA })).status).toBe(200);
+    await call({ op: "setLive", state: "enabled", tokenHandle: handleA });
+    const onA = await fake.insertBroadcast(atA, bcast());
+    const onB = await fake.insertBroadcast(atB, bcast());
+    const keyA = await fake.insertStream(atA, { title: "k" });
+    const keyB = await fake.insertStream(atB, { title: "k" });
+    await fake.bind(atA, onA.broadcastId, keyA.streamId);
+    await fake.bind(atB, onB.broadcastId, keyB.streamId);
+    expect([await fake.broadcastLife(atA, onA.broadcastId), await fake.broadcastLife(atB, onB.broadcastId)]).toEqual(["live", "ready"]);
+    expect((await call({ op: "setLive", state: "blocked", tokenHandle: "fake-th-unknown" })).status, "an unknown handle").toBe(404);
+  });
+
+  it("pinChannels: the next grant lands on that handle's channel (an e2e reconnect), and a grant after a plain setChannels does not", async () => {
+    const fake = theFake();
+    const handle = fake.tokenHandle("rt-first");
+    expect((await call({ op: "pinChannels", tokenHandle: handle })).status).toBe(200);
+    expect(fake.channelOf("rt-reconnect")).toBe(fake.channelOf("rt-first"));
+    expect((await call({ op: "pinChannels", tokenHandle: "fake-th-unknown" })).status).toBe(404);
+  });
+
+  it("issueCode mints a code for an authorized state (the fake authorize hop's job) and grantScope sets the scope the next codes carry", async () => {
+    const fake = theFake();
+    const verifier = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";   // RFC 7636 appendix B
+    const redirectUri = "https://app.example.test/api/youtube/connect/callback";
+    fake.authorizeUrl({ state: "st-1", codeChallenge: "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM", redirectUri });
+    const res = await call({ op: "issueCode", state: "st-1" });
+    expect(res.status).toBe(200);
+    const { code } = (await dataOf(res)) as { code: string };
+    expect(code).toEqual(expect.any(String));
+    expect((await fake.exchangeCode({ code, codeVerifier: verifier, redirectUri })).scope).toBe("https://www.googleapis.com/auth/youtube");
+    expect((await call({ op: "issueCode", state: "never-authorized" })).status, "an unknown state").toBe(404);
+    expect((await call({ op: "grantScope", scope: "https://www.googleapis.com/auth/youtube.readonly" })).status).toBe(200);
+    const narrow = ((await dataOf(await call({ op: "issueCode", state: "st-1" }))) as { code: string }).code;
+    expect((await fake.exchangeCode({ code: narrow, codeVerifier: verifier, redirectUri })).scope).toBe("https://www.googleapis.com/auth/youtube.readonly");
+    expect((await call({ op: "grantScope", scope: null })).status).toBe(200);
+    const back = ((await dataOf(await call({ op: "issueCode", state: "st-1" }))) as { code: string }).code;
+    expect((await fake.exchangeCode({ code: back, codeVerifier: verifier, redirectUri })).scope).toBe("https://www.googleapis.com/auth/youtube");
+  });
+
+  it("reset clears the fake: a killed token lives again, streams and broadcasts are gone, handles are unknown", async () => {
+    const fake = theFake();
+    const at = await fake.accessToken("rt-reset");
+    const { streamId, broadcastId } = await (async () => {
+      const s = await fake.insertStream(at, { title: "k" });
+      const b = await fake.insertBroadcast(at, bcast());
+      await fake.bind(at, b.broadcastId, s.streamId);
+      return { streamId: s.streamId, broadcastId: b.broadcastId };
+    })();
+    const handle = fake.tokenHandle("rt-reset");
+    fake.killToken("rt-reset");
+    await expect(fake.accessToken("rt-reset"), "PREMISE: dead").rejects.toBeInstanceOf(YouTubeError);
+    expect((await call({ op: "reset" })).status).toBe(200);
+    await expect(fake.accessToken("rt-reset"), "alive again").resolves.toBeDefined();
+    expect(fake.streamsCount()).toBe(0);
+    expect(fake.inspectBroadcast(broadcastId)).toBeNull();
+    expect((await call({ op: "videoOn", streamId })).status, "the stream is gone").toBe(404);
+    expect((await call({ op: "killToken", tokenHandle: handle })).status, "the handle is gone").toBe(404);
   });
 
   it("failNext makes the next call fail once with the code and reason given — and a token-shaped reason is dropped, not stored", async () => {
@@ -157,9 +228,9 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     expect(err?.code).toBe("youtube_reconnect_needed");
   });
 
-  it("a body that is not one of the nine ops is 400 and changes nothing: unknown op, extra key, wrong type, bad code, bad method, not JSON", async () => {
+  it("a body that is not one of the ops is 400 and changes nothing: unknown op, extra key, wrong type, bad code, bad method, not JSON", async () => {
     const fake = theFake();
-    const spies = [vi.spyOn(fake, "setChannels"), vi.spyOn(fake, "failNext"), vi.spyOn(fake, "killHandle"), vi.spyOn(fake, "videoOn")];
+    const spies = [vi.spyOn(fake, "setChannels"), vi.spyOn(fake, "failNext"), vi.spyOn(fake, "killHandle"), vi.spyOn(fake, "videoOn"), vi.spyOn(fake, "reset"), vi.spyOn(fake, "issueCode"), vi.spyOn(fake, "setGrantedScope")];
     const bad: unknown[] = [
       { op: "dropDatabase" },
       {},
@@ -174,6 +245,12 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
       { op: "failNext", method: "insertStreem", code: "youtube_unavailable" },
       { op: "setChannels", channels: [{ id: "UCx" }] },
       { op: "state", fixtureId: "not-a-uuid" },
+      { op: "reset", extra: 1 },
+      { op: "grantScope", scope: "" },
+      { op: "grantScope" },
+      { op: "issueCode" },
+      { op: "pinChannels" },
+      { op: "setLive", state: "blocked", tokenHandle: 7 },
     ];
     let checked = 0;
     for (const body of bad) {
@@ -189,22 +266,27 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     const at = await fake.accessToken("rt");
     const { streamId } = await fake.insertStream(at, { title: "k" });
     const { broadcastId } = await fake.insertBroadcast(at, bcast());
+    fake.authorizeUrl({ state: "st-sweep", codeChallenge: "c", redirectUri: "https://app.example.test/cb" });
     const valid: Record<string, unknown> = {
       setChannels: { op: "setChannels", channels: [{ id: "UCx", title: "X" }] },
       failNext: { op: "failNext", method: "listMyChannels", code: "youtube_unavailable" },
+      pinChannels: { op: "pinChannels", tokenHandle: fake.tokenHandle("rt-for-pin") },
       killToken: { op: "killToken", tokenHandle: fake.tokenHandle("rt-for-kill") },
       videoOn: { op: "videoOn", streamId },
       videoOff: { op: "videoOff", streamId },
       deleteVideo: { op: "deleteVideo", videoId: broadcastId },
       setLive: { op: "setLive", state: "enabled" },
       autoVideo: { op: "autoVideo", on: false },
+      issueCode: { op: "issueCode", state: "st-sweep" },
+      grantScope: { op: "grantScope", scope: null },
+      reset: { op: "reset" },   // last: it clears what the rest set up
     };
     let checked = 0;
     for (const [op, body] of Object.entries(valid)) {
       expect((await call(body)).status, op).toBe(200);
       checked++;
     }
-    expect(checked, "8 of the plan's 9 ops").toBe(8);
+    expect(checked, "12 ops here; the 13th, `state`, has its own DB-backed suite").toBe(12);
   });
 });
 
@@ -231,19 +313,30 @@ describe.skipIf(!HAS_DB)("POST /api/internal/youtube/fake — state (real Postgr
       orgId: auth.orgId, channelId, channelTitle: "State FC", googleSub: null, grantedScope: SCOPE, defaultPrivacy: "unlisted", madeForKids: false,
       consentBy: user!.id, consentAt: new Date(), consentVersion: 1, createdBy: user!.id, refreshToken,
     }));
-    return { orgId: auth.orgId, fixtureId, refreshToken, channelId, connectionId };
+    return { orgId: auth.orgId, fixtureId, refreshToken, channelId, connectionId, userId: user!.id };
+  }
+
+  /** A SECOND connection of the same org (another channel, another token), for the fixture that already has one. */
+  async function addConnection(r: Awaited<ReturnType<typeof rig>>) {
+    const refreshToken = `1//rt-${randomBytes(24).toString("base64url")}`;
+    const channelId = `UC${randomUUID().replace(/-/g, "").slice(0, 22)}`;
+    const { connectionId } = await sql.begin((tx) => insertConnectionWithToken(tx, {
+      orgId: r.orgId, channelId, channelTitle: "Second FC", googleSub: null, grantedScope: SCOPE, defaultPrivacy: "unlisted", madeForKids: false,
+      consentBy: r.userId, consentAt: new Date(), consentVersion: 1, createdBy: r.userId, refreshToken,
+    }));
+    return { ...r, refreshToken, channelId, connectionId };
   }
 
   /** What Go live (T11) leaves behind, written raw: a pooled key and a broadcast row naming the YouTube broadcast. */
-  async function broadcastOnYoutube(r: Awaited<ReturnType<typeof rig>>, fake: FakeYouTube, state: string, slot = 1) {
+  async function broadcastOnYoutube(r: Awaited<ReturnType<typeof rig>>, fake: FakeYouTube, state: string, slot = 1, createdAt: Date = new Date()) {
     const at = await fake.accessToken(r.refreshToken);
     const stream = await fake.insertStream(at, { title: "key" });
     const { broadcastId } = await fake.insertBroadcast(at, bcast());
     await fake.bind(at, broadcastId, stream.streamId);
     const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot, liveStreamId: stream.streamId, ingest: stream.ingest }));
     await sql`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, key_id, yt_broadcast_id, title, privacy, state)
-      values (${r.orgId}, ${r.connectionId}, ${r.fixtureId}, ${keyId}, ${broadcastId}, 'Match', 'unlisted', ${state})`;
+      insert into youtube_broadcasts (org_id, connection_id, fixture_id, key_id, yt_broadcast_id, title, privacy, state, created_at)
+      values (${r.orgId}, ${r.connectionId}, ${r.fixtureId}, ${keyId}, ${broadcastId}, 'Match', 'unlisted', ${state}, ${createdAt})`;
     return { at, stream, broadcastId };
   }
 
@@ -293,14 +386,20 @@ describe.skipIf(!HAS_DB)("POST /api/internal/youtube/fake — state (real Postgr
     expect(data.broadcasts.map((b) => b.life)).toEqual(["live"]);
   });
 
-  it("two broadcasts of one fixture come back oldest first, and a deleted video reads absent", async () => {
+  it("broadcasts come back OLDEST FIRST and the connection is the NEWEST broadcast's — rows inserted newest first, so storage order is the opposite of the answer", async () => {
     const fake = theFake();
     const r = await rig();
-    const first = await broadcastOnYoutube(r, fake, "failed");   // not open, so the second may be
-    const second = await broadcastOnYoutube(r, fake, "bound", 2);
-    fake.deleteVideo(first.broadcastId);
-    const data = (await dataOf(await call({ op: "state", fixtureId: r.fixtureId }))) as { broadcasts: { videoId: string; life: string }[] };
-    expect(data.broadcasts.map((b) => [b.videoId, b.life])).toEqual([[first.broadcastId, "absent"], [second.broadcastId, "ready"]]);
+    const second = await addConnection(r);
+    const hour = 3_600_000;
+    // Inserted newest first: a read with no ORDER BY returns [newer, older] and ends on the OLDER row's connection.
+    const newer = await broadcastOnYoutube(second, fake, "bound", 1, new Date(Date.now() - hour));
+    const older = await broadcastOnYoutube(r, fake, "failed", 1, new Date(Date.now() - 2 * hour));   // not open, so the newer may be
+    fake.deleteVideo(older.broadcastId);
+    const data = (await dataOf(await call({ op: "state", fixtureId: r.fixtureId }))) as { connectionId: string; tokenHandle: string; broadcasts: { videoId: string; life: string }[] };
+    expect(data.broadcasts.map((b) => [b.videoId, b.life]), "oldest first, and a deleted video reads absent").toEqual([[older.broadcastId, "absent"], [newer.broadcastId, "ready"]]);
+    expect(data.connectionId, "the newest broadcast's connection").toBe(second.connectionId);
+    expect(data.tokenHandle).toBe(fake.tokenHandle(second.refreshToken));
+    expect(data.tokenHandle, "and not the older one's").not.toBe(fake.tokenHandle(r.refreshToken));
   });
 
   it("a fixture with a YouTube destination but no broadcast yet: the connection and its handle, and an EMPTY list (not an error)", async () => {
