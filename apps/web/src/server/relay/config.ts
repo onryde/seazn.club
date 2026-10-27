@@ -49,9 +49,10 @@ export const CLOUDFLARE_RETENTION_RANGE = { min: 30, max: 1096 } as const;
  *  DELETE of VIDEOS (never inputs — `deleteInput` leaks recordings, C2). */
 export const RECORDING_RETENTION_DAYS = 3;
 
-/** C7 / owner ruling 2026-09-13: performance-4x / 8 GB. `cpuClass` is the
+/** Owner ruling 2026-10-27 (compositor F-033: 1080p x264 `medium` on performance-6x, size rule 75 % of cores):
+ *  performance-6x / 12 GB, superseding C7's performance-4x / 8 GB (owner ruling 2026-09-13). `cpuClass` is the
  *  port's vocabulary; runner-fly.ts maps "dedicated" → cpu_kind "performance". */
-export const RUNNER_DEFAULT_GUEST = { cpus: 4, memoryMb: 8192, cpuClass: "dedicated" } as const;
+export const RUNNER_DEFAULT_GUEST = { cpus: 6, memoryMb: 12288, cpuClass: "dedicated" } as const;
 export const RUNNER_DEFAULT_REGION = "lhr";
 
 /** Design §6.1 default and ruling E: 5 h. */
@@ -265,13 +266,13 @@ const OUTPUT_PROFILES = {
   "1080p": { width: 1920, height: 1080, fps: 30, videoKbps: 6000 },
 } as const;
 export type RelayOutputProfile = { width: number; height: number; fps: number; videoKbps: number };
-/** `RELAY_OUTPUT_PROFILE`: `720p` (the default; unset or blank) or `1080p`. Anything else throws, naming the variable —
- *  a typo must not silently stream the default. Read at the call, never cached, and a fresh object every call. */
+/** `RELAY_OUTPUT_PROFILE`: `1080p` (the default; unset or blank — owner ruling 2026-10-27, compositor F-033) or `720p`.
+ *  Anything else throws, naming the variable — a typo must not silently stream the default. Read at the call, never cached, and a fresh object every call. */
 export function relayOutputProfile(env: Record<string, string | undefined> = process.env): RelayOutputProfile {
   const v = env.RELAY_OUTPUT_PROFILE?.trim();
-  const key = v ? v : "720p";
+  const key = v ? v : "1080p";
   if (key !== "720p" && key !== "1080p") {
-    throw new Error(`RELAY_OUTPUT_PROFILE must be "720p" or "1080p" (unset = 720p), got ${JSON.stringify(env.RELAY_OUTPUT_PROFILE)}`);
+    throw new Error(`RELAY_OUTPUT_PROFILE must be "720p" or "1080p" (unset = 1080p), got ${JSON.stringify(env.RELAY_OUTPUT_PROFILE)}`);
   }
   return { ...OUTPUT_PROFILES[key] };
 }

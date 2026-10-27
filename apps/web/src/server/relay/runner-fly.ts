@@ -3,7 +3,8 @@
 // redaction live THERE). `create` is 1:1 onto POST /v1/apps/{app}/machines in
 // FIELDS, with `cpuClass` translated to Fly's `cpu_kind` here and nowhere
 // else. Values that are load-bearing, each with its measurement:
-//  * guest performance-4x / 8 GB — owner ruling 2026-09-13 (C7); Fly refuses
+//  * guest performance-6x / 12 GB — owner ruling 2026-10-27 (compositor F-033),
+//    superseding C7's performance-4x / 8 GB (2026-09-13); Fly refuses
 //    performance-8x under 16384 MB, which is why the size is a FIELD the
 //    caller passes from config.ts, not a driver default that could drift.
 //  * auto_destroy: true — fires on a NON-ZERO exit too (R0 watch 4 closed:

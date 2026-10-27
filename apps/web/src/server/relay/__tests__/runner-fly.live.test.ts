@@ -12,7 +12,7 @@
 // driven the adopt that reads it. A fixture on both ends proves the fixture.
 //
 // Guest is the smallest that proves it (shared-cpu-1x / 256 MB), NOT the ruled
-// performance-4x: the spec's guest is caller-supplied, and this leg is about the
+// performance-6x: the spec's guest is caller-supplied, and this leg is about the
 // 409 path, not about the size. The image is a long-running one on purpose — an
 // image that exits immediately would auto_destroy and free the name before the
 // second create could collide with it.
