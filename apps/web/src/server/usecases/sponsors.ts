@@ -960,9 +960,10 @@ async function recoverSponsorDispute(
  * placement (pending) for a formal dispute, which takes the money at once.
  * An inquiry (`warning_*`) takes no money, so its placement stays live until
  * `funds_withdrawn` reports the money taken and parks it (owner, 2026-10-26).
- * `closed` clears the flag and re-activates on a win (or a closed inquiry,
- * `warning_closed`), or writes the order off, deactivates the placement and
- * reverses the club's transfer on a loss. Dispatched after
+ * `closed` clears the flag and, on a win (or a closed inquiry,
+ * `warning_closed`) while the order is still paid, re-activates a placement
+ * the dispute parked; on a loss it writes the order off, deactivates the
+ * placement and reverses the club's transfer. Dispatched after
  * handleRegistrationDispute for `created` and `closed`, and alone for
  * `funds_withdrawn` — a non-sponsor intent matches no order row and no-ops.
  *

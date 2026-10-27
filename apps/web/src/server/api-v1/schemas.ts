@@ -4504,8 +4504,10 @@ export const Sponsor = z.object({
   created_at: z.string(),
   /** Set on list reads when a paid package order activated this placement. */
   paid_order_id: z.string().nullable().optional(),
-  /** List reads: true while that order carries an open payment dispute — the
-   *  placement was parked by the dispute handler and can't be re-activated. */
+  /** List reads: true while a payment dispute has the placement parked — that
+   *  order carries an open dispute AND the placement is down ('pending'). An
+   *  inquiry that has taken no money leaves it live, so this stays false.
+   *  While true the placement can't be re-activated by hand. */
   dispute_parked: z.boolean().optional(),
   /** List reads: a lost dispute wrote the activating order off — the
    *  placement stays down and this explains why. */
