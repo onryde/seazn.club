@@ -371,7 +371,7 @@ Reuse the **existing** stream tick. No new job, no new route:
   finds it `complete` and does nothing.
 - Same step: delete orphan `created` broadcasts > 10 min old.
 - Whole pass stays inside the existing 45 s budget, below the 60 s period (overlapping firings are safe, but wasteful).
-- r2's ending-session gap closes with the cadence change alone: `tickOpenSessions` already selects `ending`
+- r2's ending-session gap closes with the cadence change alone on prod (1 min); on stg it stays ≤ 5 min (D9): `tickOpenSessions` already selects `ending`
   (confirmed with r2). Terminal sessions with a live runner remain daily-sweep only, unchanged.
 
 **Daily** (existing relay-sweep, 04 UTC): connection health check (`channels.list` per connected channel → status;
