@@ -7,9 +7,12 @@
 //
 // What is checked, and how:
 //  - WHICH kinds are account kinds is the engine's own declaration (`OUTBOX_KIND_FACTS`), compared with a list typed here from the
-//    spec (`chess_invite` and wave 2's seven). A new account kind is then a failure that asks for a decision here, not a quiet pass.
-//  - Every account kind is swept through its real producer. Wave 2's T1 registered its kinds before their producers moved, each kind task
-//    (T2-T9) added its producer here, and T10 deleted the list of the pending ones.
+//    spec (`chess_invite`, wave 2's seven and wave 4's seven). A new account kind is then a failure that asks for a decision here, not a
+//    quiet pass.
+//  - Every account kind that has moved is swept through its real producer. Wave 2's T1 registered its kinds before their producers moved,
+//    each kind task (T2-T9) added its producer here, and T10 deleted the list of the pending ones. Wave 4's T1 registered its seven
+//    account kinds the same way, with no pending list here: the kinds not swept yet are the ones NOT_YET_MOVED names (_kind-senders.ts,
+//    the one authority for "not moved yet"), and each kind task adds its producer here in the commit that deletes the kind from that list.
 //  - The bodies are the REAL producer's: `openRound` renders the invite with the real `externalPlayInviteEmail` (NOT replaced, unlike the
 //    sibling suites: their stand-in puts the address in the body on purpose so the transport double can read it) and queues it. Only
 //    the transport is replaced, and it answers 503 so every row stays `queued` with its sealed body. A row that had been sent has no
@@ -34,6 +37,7 @@ import { OUTBOX_KIND_FACTS, OUTBOX_KINDS, type OutboxKind } from "../constants";
 import { openBody } from "../seal";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
+import { NOT_YET_MOVED } from "./_kind-senders";
 
 vi.mock("@/server/email-outbox/transport", () => ({
   deliver: async () => ({ ok: false as const, reason: "http" as const, status: 503, errorName: "service_unavailable", detail: "later" }),
@@ -58,6 +62,14 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
   "sponsor_dispute_lost",
   "pass_revoked",
   "trial_ending",
+  // Wave 4, in the table's order.
+  "suspension_confirmed",
+  "suspension_served",
+  "match_report_submitted",
+  "group_transfer_offer",
+  "group_transfer_complete",
+  "group_org_removed",
+  "group_org_left",
 ];
 
 beforeEach(() => stubOutboxEnv());
@@ -167,11 +179,14 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
     },
   };
 
-  it("every account kind: the recipient's address is absent from the subject, the html and the text", async () => {
-    expect(Object.keys(PRODUCERS).sort(), "a producer for exactly the account kinds").toEqual([...SPEC_ACCOUNT_KINDS].sort());
+  it("every account kind that has moved: the recipient's address is absent from the subject, the html and the text", async () => {
+    // A kind still on its direct sender writes no row to judge yet; NOT_YET_MOVED says which, so a kind task that moves one and forgets
+    // its producer here (or adds a producer while the kind is still listed) fails the comparison below.
+    const moved = SPEC_ACCOUNT_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
+    expect(Object.keys(PRODUCERS).sort(), "a producer for exactly the account kinds that have moved").toEqual([...moved].sort());
     let kindsChecked = 0;
     let rowsChecked = 0;
-    for (const kind of SPEC_ACCOUNT_KINDS) {
+    for (const kind of moved) {
       const { rowIds, positive } = await PRODUCERS[kind]!();
       const rows = await sql<{ id: string; recipient: string; recipient_user_id: string | null; subject: string; status: string; body_sealed: Buffer | null }[]>`
         select id, recipient, recipient_user_id, subject, status, body_sealed
@@ -195,7 +210,7 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       }
       kindsChecked += 1;
     }
-    expect(kindsChecked, "every account kind was checked").toBe(SPEC_ACCOUNT_KINDS.length);
+    expect(kindsChecked, "every account kind that has moved was checked").toBe(moved.length);
     expect(kindsChecked, "anti-vacuity: at least one account kind was swept").toBeGreaterThan(0);
     expect(rowsChecked, "anti-vacuity: bodies were opened, at least one per kind").toBeGreaterThanOrEqual(kindsChecked);
   });
