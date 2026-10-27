@@ -480,12 +480,13 @@ export default async function DivisionPage({
         )
       : undefined;
   // Discipline (owner-approved 3A): bans awaiting the organiser's review, as a dot on the Discipline tab — on EVERY
-  // tab, because a card raises its ban while the organiser is on fixtures or standings, never on Discipline. Only where
-  // the organiser switched discipline on. ONE guard, and it carries the other two: `disciplineRules` is read for
-  // editors only, and is null whenever discipline is not offered or the pass-scoped gate (`getDisciplineRules`'
-  // `requireFeature`) refused it — so a viewer or an unentitled org never reaches the count. A stored-row count, no
-  // fold: read after the Discipline tab's own fold above, so on that tab the dot and the list cannot disagree.
-  const bansToReview = disciplineRules?.enabled === true ? await countBansToReview(auth, id) : 0;
+  // tab, because a card raises its ban while the organiser is on fixtures or standings, never on Discipline. Rules on
+  // or OFF (F7, 2026-10-27): a referee's report and a manual record raise a pending ban with the rules off, and the
+  // Discipline tab lists it either way. ONE guard: `disciplineRules` is read for editors only, and is null whenever
+  // the sport has no discipline model or the pass-scoped gate (`getDisciplineRules`' `requireFeature`) refused it — so
+  // a viewer, an unentitled org or a tab-less sport never reaches the count. A stored-row count, no fold: read after
+  // the Discipline tab's own fold above, so on that tab the dot and the list cannot disagree.
+  const bansToReview = disciplineRules !== null ? await countBansToReview(auth, id) : 0;
 
   // The standings table and results grid take their words from the PUBLIC
   // dictionary (the same helpers as the hub's table), in this viewer's

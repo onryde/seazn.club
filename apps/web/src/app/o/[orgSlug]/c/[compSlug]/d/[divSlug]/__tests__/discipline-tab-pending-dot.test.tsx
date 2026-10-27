@@ -1,8 +1,8 @@
 // Discipline 3A (owner-approved 2026-10-27): pending bans waiting on the organiser show as an amber dot INSIDE the
 // Discipline tab's label — on EVERY tab, because a card raises its ban while the organiser is on fixtures or standings.
-// Discipline stays opt-in and organiser-approved: no dot unless the sport has a card model, the org is entitled
-// (`getDisciplineRules`' pass-scoped gate let it in) and the organiser switched the rules on; and nothing is counted
-// for a viewer. Same harness as pending-seed-proposal-badge.test.tsx (no jsdom here): the async server component is
+// Organiser-approved, never auto-enabled: no dot unless the sport has a card model and the org is entitled
+// (`getDisciplineRules`' pass-scoped gate let it in) — rules on OR off, since a referee's report and a manual record
+// raise a pending ban with the rules off (F7, 2026-10-27); and nothing is counted for a viewer. Same harness as pending-seed-proposal-badge.test.tsx (no jsdom here): the async server component is
 // called directly and its element tree walked, reading PROPS — an absent prop is simply absent, never "$undefined".
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { isValidElement, type ReactElement, type ReactNode } from "react";
@@ -165,11 +165,21 @@ describe("Discipline 3A — pending bans are visible from every tab, as a dot on
     expect(ban!.props.className).toBe(seed!.props.className);
   });
 
-  it("rules OFF ⇒ no dot, and the count is never read (discipline is opt-in)", async () => {
+  // F7 (owner-approved 2026-10-27): a referee's report or a manual record raises a pending ban with the rules OFF — the
+  // dot shows it, rules on or off; nothing is switched on.
+  it("rules OFF with nothing pending ⇒ no dot (the count is still asked)", async () => {
+    disc.getDisciplineRules.mockResolvedValue({ ...RULES_ON, enabled: false });
+    expect(dots(await renderTab("standings"))).toHaveLength(0);
+    expect(disc.countBansToReview, "rig: asked with the rules off").toHaveBeenCalledTimes(1);
+  });
+
+  it("rules OFF with bans pending (a referee's report) ⇒ the dot, with its count", async () => {
     disc.getDisciplineRules.mockResolvedValue({ ...RULES_ON, enabled: false });
     disc.countBansToReview.mockResolvedValue(3);
-    expect(dots(await renderTab("standings"))).toHaveLength(0);
-    expect(disc.countBansToReview).not.toHaveBeenCalled();
+    const found = dots(await renderTab("standings"));
+    expect(found).toHaveLength(1);
+    expect(found[0]!.props["data-pending-suspensions"]).toBe(3);
+    expect(srText(found[0]!)).toBe("3 bans awaiting your review");
   });
 
   it("NOT entitled (the pass-scoped gate 402s) ⇒ no dot, and the count is never read", async () => {

@@ -195,9 +195,10 @@ export interface PhaseInput {
    *  entirely for a division whose venue was ahead of its org. */
   tz: string;
   awaitingRegistrations: number;
-  /** Discipline (owner-approved 3A, 2026-10-27): bans awaiting the organiser's review — `pending` suspensions in a
-   *  division whose discipline rules are ENABLED, and only for an org entitled to `discipline.enforced` on this
-   *  competition. The caller resolves both conditions and passes 0 otherwise; nothing here is ever confirmed. */
+  /** Discipline (owner-approved 3A, 2026-10-27; widened F7): bans awaiting the organiser's review — `pending`
+   *  suspensions, rules on or off, only for an org entitled to `discipline.enforced` on this competition and a sport
+   *  with a discipline model (a Discipline tab to review them on). The caller resolves both conditions and passes 0
+   *  otherwise; nothing here is ever enabled or confirmed. */
   bansToReview: number;
 }
 

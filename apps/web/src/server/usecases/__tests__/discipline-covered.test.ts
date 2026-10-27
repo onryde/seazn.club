@@ -218,6 +218,33 @@ describe.skipIf(!HAS_DB)("coveredMatches — which matches a ban still covers", 
     expect(ids((await read(ctx, orphan.id)).coveredMatches)).toEqual([c]);
   }, 60_000);
 
+  // A person on two entrants of one division (nothing in the schema forbids it): the confirm, the serving pass and the
+  // projection all resolve through ONE resolver, and it picks the entrant created FIRST (then by id) — a stated order,
+  // never whichever row the planner happens to return. D is created a day before A but X joins it AFTER joining A, so
+  // a resolver with no order (scan order: A's membership row first) names the wrong team.
+  it("a player on two entrants: the pending projection, the confirm's stamp and the active projection all name the earliest-created one", async () => {
+    const ctx = await seed();
+    const [{ id: entrantD }] = await sql<{ id: string }[]>`
+      insert into entrants (division_id, org_id, kind, display_name, seed, created_at)
+      values (${ctx.divisionId}, ${ctx.orgId}, 'team', 'Dynamo', 4, now() - interval '1 day')
+      returning id`;
+    await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantD}, ${ctx.personX}, ${ctx.orgId})`;
+    const memberships = await sql<{ entrant_id: string; created_at: Date }[]>`
+      select em.entrant_id, e.created_at from entrant_members em join entrants e on e.id = em.entrant_id
+      where em.person_id = ${ctx.personX} and e.division_id = ${ctx.divisionId}`;
+    expect(memberships.map((m) => m.entrant_id).sort(), "rig: X is on A and D").toEqual([ctx.entrantA, entrantD].sort());
+    const earliest = [...memberships].sort((a, b) => a.created_at.getTime() - b.created_at.getTime())[0]!.entrant_id;
+    expect(earliest, "rig: D was created first").toBe(entrantD);
+
+    const gA = await fixture(ctx, 1, ctx.entrantA, ctx.entrantB, SAT_2_NOV);
+    const gD = await fixture(ctx, 2, entrantD, ctx.entrantC, SAT_9_NOV);
+    const pending = await banFor(ctx, 1);
+    expect(ids(pending.coveredMatches), "pending: D's next match").toEqual([gD]);
+    const active = await decideSuspension(ctx.auth, pending.id, { kind: "confirm" });
+    expect([active.entrantId, ids(active.coveredMatches)], "confirmed: stamped D, still D's match").toEqual([entrantD, [gD]]);
+    expect(ids(active.coveredMatches)).not.toContain(gA);
+  }, 60_000);
+
   it("SEQUENCE: a two-match ban — the line moves on as each match is served, agreeing with matchesServed at every step, and is empty when done", async () => {
     const ctx = await seed();
     const r1 = await fixture(ctx, 1, ctx.entrantA, ctx.entrantB, SAT_2_NOV);

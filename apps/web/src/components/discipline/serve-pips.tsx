@@ -1,9 +1,14 @@
 "use client";
 
 // SPEC-1 design direction: served progress is match PIPS, never a percent bar.
-// One pip per match of the ban, filled once served (● ● ○). Reuses the scorebug
-// dot idiom. The pips are decorative; the container carries an accessible label
-// ("2 of 3 matches served") so screen readers get the count, not a row of dots.
+// One pip per match of the ban, filled once served (● ● ○). The pips are
+// decorative; the container carries an accessible label ("2 of 3 matches
+// served") so screen readers get the count, not a row of dots.
+//
+// Drawn for a LIGHT surface — every consumer renders them on a white `.card`
+// (discipline panel, /me suspensions lane; pinned in serve-pips.test.tsx). An
+// unserved pip is HOLLOW (no fill, a slate ring): the scorebug's filled slate
+// dot read as a served pip on white, so "0 of 3" looked like three done (F6).
 import { useMsg } from "@/components/i18n/dict-provider";
 
 export function ServePips({
@@ -28,7 +33,7 @@ export function ServePips({
           key={i}
           aria-hidden
           data-filled={i < filled ? "1" : "0"}
-          className={`h-2 w-2 rounded-full ${i < filled ? "bg-lime-400" : "bg-slate-600 ring-1 ring-inset ring-slate-500"}`}
+          className={`h-2 w-2 rounded-full ${i < filled ? "bg-lime-400" : "bg-transparent ring-1 ring-inset ring-slate-400"}`}
         />
       ))}
     </span>

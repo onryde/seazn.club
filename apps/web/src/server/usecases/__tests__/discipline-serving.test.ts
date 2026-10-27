@@ -304,6 +304,110 @@ describe.skipIf(!HAS_DB)("serving: only a match that STARTED after the confirm s
   }, 120_000);
 });
 
+// 3. A start is an ACTIVE event. The rule read a fixture's start as its earliest recorded event, voided ones included —
+//    and a lone `core.start` (or a lone `core.forfeit`) is voidable, which puts the fixture back to `scheduled`. So a
+//    kick-off undone BEFORE the confirm made the match, really played after it, read as "under way when the ban began":
+//    it never served, and the "Misses:" line skipped it. The voided event and its `core.void` are not a start.
+describe.skipIf(!HAS_DB)("serving: a kick-off or forfeit VOIDED before the confirm is not a start", () => {
+  beforeEach(() => {
+    stubOutboxEnv();
+    transport.deliver.mockReset();
+    transport.deliver.mockImplementation(async () => ({ ok: true, providerId: `re_test_${randomUUID()}` }));
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("SEQUENCE start → void → confirm → start → full time: the confirm names G as the match to miss, and G played serves the ban (1/1); a voided forfeit likewise", async () => {
+    const PRODUCERS: [string, (ctx: Ctx) => object][] = [
+      ["core.start", () => ({})],
+      ["core.forfeit", (ctx) => ({ by: ctx.entrantA, reason: "walkover" })],
+    ];
+    // Every producer read before any is judged, so one red names every one that moved.
+    const seen: Record<string, { covered: (string | null)[]; stored: [number, string]; listed: [number, string] }> = {};
+    const want: typeof seen = {};
+    for (const [type, payload] of PRODUCERS) {
+      const ctx = await seed("football");
+      const manual = await createManualSuspension(ctx.auth, ctx.divisionId, { personId: ctx.personX, matchesTotal: 1, reason: "violent conduct" });
+      const g = await makeFixture(ctx, 1, ctx.entrantA, ctx.entrantB);
+      const done = (await write(ctx, g, type, payload(ctx))) as { event_id: string };
+      await write(ctx, g, "core.void", { event_id: done.event_id });
+      expect(await statusOf(g), `rig (${type}): voided, G is unplayed again`).toBe("scheduled");
+      expect(await seqOf(g), `rig (${type}): the ledger keeps both rows`).toBe(2);
+
+      const confirmed = await decideSuspension(ctx.auth, manual.id, { kind: "confirm" });
+      expect(confirmed.status).toBe("active");
+      await kickOff(ctx, g);
+      await playOut(ctx, "football", g);
+      expect(await statusOf(g), `rig (${type}): G kicked off after the confirm and decided`).toBe("decided");
+      seen[type] = { covered: confirmed.coveredMatches.map((m) => m.fixtureId), stored: await stored(manual.id), listed: await listed(ctx, manual.id) };
+      want[type] = { covered: [g], stored: [1, "served"], listed: [1, "served"] };
+    }
+    expect(Object.keys(seen).length, "producers checked").toBe(PRODUCERS.length);
+    expect(seen, JSON.stringify(seen)).toEqual(want);
+  }, 120_000);
+});
+
+// 4. A legacy ACTIVE ban with no entrant — confirmed before the refusal below existed. The counter skipped it for ever,
+//    while the "Misses:" projection resolved an entrant for it and named matches that would never end it. The serving
+//    pass now resolves the entrant the way a confirm does, stamps it, and serves the ban from its `decided_at`; the
+//    projection reads the stamped entrant, so the two cannot name different teams.
+describe.skipIf(!HAS_DB)("serving: a legacy ACTIVE ban with no entrant is stamped by the serving pass, then served", () => {
+  beforeEach(() => {
+    stubOutboxEnv();
+    transport.deliver.mockReset();
+    transport.deliver.mockImplementation(async () => ({ ok: true, providerId: `re_test_${randomUUID()}` }));
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  /** The legacy shape, written raw: active, decided, no entrant. Z is on no entrant of the division yet. */
+  async function legacyBan(ctx: Ctx): Promise<{ personZ: string; banId: string }> {
+    const [{ id: personZ }] = await sql<{ id: string }[]>`insert into persons (org_id, full_name) values (${ctx.orgId}, 'Zara Legacy') returning id`;
+    const [{ id: banId }] = await sql<{ id: string }[]>`
+      insert into suspensions (org_id, division_id, person_id, status, source, reason, matches_total, decided_at)
+      values (${ctx.orgId}, ${ctx.divisionId}, ${personZ}, 'active', 'manual', 'violent conduct', 1, now())
+      returning id`;
+    return { personZ, banId };
+  }
+  const entrantOf = async (id: string) => (await sql<{ entrant_id: string | null }[]>`select entrant_id from suspensions where id = ${id}`)[0]!.entrant_id;
+  const row = async (ctx: Ctx, id: string) => (await listSuspensions(ctx.auth, ctx.divisionId)).find((r) => r.id === id)!;
+
+  it("unrostered: stays active, nothing stamped, covers nothing; rostered: the read's serving pass stamps A, names A's next match, and that match played serves it", async () => {
+    const ctx = await seed("football");
+    const { personZ, banId } = await legacyBan(ctx);
+    const g = await makeFixture(ctx, 1, ctx.entrantA, ctx.entrantB);
+
+    // Empty case first: Z is on no entrant here, so there is no team to serve through.
+    const orphan = await row(ctx, banId);
+    expect([orphan.status, orphan.entrantId, orphan.matchesServed, orphan.coveredMatches], "unrostered: untouched, covers nothing").toEqual(["active", null, 0, []]);
+    expect(await entrantOf(banId), "nothing stamped").toBeNull();
+
+    await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${ctx.entrantA}, ${personZ}, ${ctx.orgId})`;
+    const stamped = await row(ctx, banId);
+    expect([stamped.status, stamped.entrantId, stamped.matchesServed], "rostered: the read's serving pass stamps A").toEqual(["active", ctx.entrantA, 0]);
+    expect(await entrantOf(banId), "stored").toBe(ctx.entrantA);
+    expect(stamped.coveredMatches.map((m) => m.fixtureId), "the projection names A's next match").toEqual([g]);
+
+    await kickOff(ctx, g);
+    await playOut(ctx, "football", g);
+    expect(await stored(banId), "G, kicked off after decided_at, serves it").toEqual([1, "served"]);
+  }, 60_000);
+
+  it("the write path alone: rostered and never read, the deciding write's fold stamps the entrant and serves the ban", async () => {
+    const ctx = await seed("football");
+    const { personZ, banId } = await legacyBan(ctx);
+    await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${ctx.entrantA}, ${personZ}, ${ctx.orgId})`;
+    expect(await entrantOf(banId), "rig: no read since rostering — still unstamped").toBeNull();
+    await nextMatch(ctx, "football", 1);
+    expect(await entrantOf(banId), "the decided write's fold stamped A").toBe(ctx.entrantA);
+    expect(await stored(banId)).toEqual([1, "served"]);
+  }, 60_000);
+});
+
 describe.skipIf(!HAS_DB)("confirm refuses a ban that could never be served (no entrant in the division)", () => {
   beforeEach(() => {
     stubOutboxEnv();
