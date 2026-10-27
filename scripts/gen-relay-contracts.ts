@@ -100,9 +100,10 @@ const HEARTBEAT: Shape = {
 
 const REPLY: Shape = {
   twin: RelayHeartbeatReply,
-  description: `The \`data\` of a heartbeat's 200 (${SPEC} §5.3): what the Machine must do. A Machine takes no inbound traffic, so this reply is the only way a stop reaches it.`,
+  description: `The \`data\` of a heartbeat's 200 (${SPEC} §5.3): what the Machine must do. A Machine takes no inbound traffic, so this reply is the only way a stop reaches it, and the only way web can tell it the phone is back.`,
   props: {
     desiredState: "\"live\": keep going. \"ending\": flush, send EOS and exit 0.",
+    phoneLiveEdge: "The session's phone-live edge counter (Owed 108 fix b): web adds 1 each time the session's phone goes from not-live back to live, after it had been live before, so a Machine waiting out its input's reconnect back-off can reconnect at once. Act once per INCREASE of the value you have seen, and treat an increase as a hint: never rebuild an input still receiving frames (latch it and act only at a stall). Web raises it from the phone's own beats, including after the phone had gone silent for the not-responding window (about 30 s), so a web outage of 30 s or more, which silences the phone-to-web leg while video keeps flowing, raises it on every live session at once; that guard absorbs it. The first-ever live is not an edge (the counter first appears at 0). Monotonic for the life of the session and stored by web, so it survives a restart of web or of the Machine. Served on every reply once it exists, so a repeat is not news. Absent, or null (a reader treats both alike), means unknown: the session has no phone, or its phone has not been live yet.",
   },
 };
 
