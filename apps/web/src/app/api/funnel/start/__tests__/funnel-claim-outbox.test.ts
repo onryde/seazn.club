@@ -132,9 +132,10 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/start queues the claim link on the ou
   it("the language the visitor chose (the seazn_locale cookie) is the claim's; a cookie naming no shipped language keeps English", async () => {
     // D4's explicit pick is the footer switcher's cookie, as on the public register route. There is no account and no organisation to
     // follow, so a cookie that names no shipped language ends at `en` (test 1 is the no-cookie case).
+    // `stored` is what the draft remembers for its +24h reminder (Q3): the visitor's pick, or nothing when there was none.
     const cases = [
-      { cookie: "seazn_locale=fr", locale: "fr" },
-      { cookie: "seazn_locale=de", locale: "en" },
+      { cookie: "seazn_locale=fr", locale: "fr", stored: "fr" },
+      { cookie: "seazn_locale=de", locale: "en", stored: null },
     ] as const;
     let checked = 0;
     for (const c of cases) {
@@ -144,6 +145,8 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/start queues the claim link on the ou
       const [row] = await claimRows(email);
       expect(row!.subject, c.cookie).toBe(dictionarySubject(c.locale, "funnelClaim.subject", { competitionName: name }));
       expect(callsFor(row!.id).map((m) => m.subject), `${c.cookie}: the mail sent is the row's`).toEqual([row!.subject]);
+      const [draft] = await sql<{ locale: string | null }[]>`select locale from funnel_drafts where email = ${email}`;
+      expect(draft!.locale, `${c.cookie}: the draft remembers the same pick`).toBe(c.stored);
       checked++;
     }
     expect(checked, "anti-vacuity: every cookie was driven").toBe(cases.length);
@@ -156,11 +159,12 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/start queues the claim link on the ou
   it("the language the /start page was shown in (its posted locale) is the claim's; an unsupported one falls back", async () => {
     // A visitor who reached /fr/start, or whose page language came from Accept-Language, never set the cookie: the page posts the locale
     // it rendered in, and that outranks the cookie. A value naming no shipped language is ignored, so the cookie, then `en`, applies.
+    // `stored` is what the draft remembers for its +24h reminder (Q3): the same pick the claim used, or nothing when it fell to `en`.
     const cases = [
-      { locale: "fr", cookie: undefined, expected: "fr" },
-      { locale: "nl", cookie: "seazn_locale=es", expected: "nl" },
-      { locale: "de", cookie: undefined, expected: "en" },
-      { locale: "de", cookie: "seazn_locale=es", expected: "es" },
+      { locale: "fr", cookie: undefined, expected: "fr", stored: "fr" },
+      { locale: "nl", cookie: "seazn_locale=es", expected: "nl", stored: "nl" },
+      { locale: "de", cookie: undefined, expected: "en", stored: null },
+      { locale: "de", cookie: "seazn_locale=es", expected: "es", stored: "es" },
     ] as const;
     let checked = 0;
     for (const c of cases) {
@@ -171,8 +175,10 @@ describe.skipIf(!HAS_DB)("POST /api/funnel/start queues the claim link on the ou
       const [row] = await claimRows(email);
       expect(row!.subject, label).toBe(dictionarySubject(c.expected, "funnelClaim.subject", { competitionName: name }));
       // The claim re-reads the draft strictly (`funnelPayloadSchema`), so the page language must not be written into it.
-      const [draft] = await sql<{ payload: Record<string, unknown> }[]>`select payload from funnel_drafts where email = ${email}`;
+      const [draft] = await sql<{ payload: Record<string, unknown>; locale: string | null }[]>`
+        select payload, locale from funnel_drafts where email = ${email}`;
       expect(draft!.payload, `${label}: the draft stays claimable`).not.toHaveProperty("locale");
+      expect(draft!.locale, `${label}: the draft remembers the claim's language for its reminder`).toBe(c.stored);
       checked++;
     }
     expect(checked, "anti-vacuity: every case was driven").toBe(cases.length);

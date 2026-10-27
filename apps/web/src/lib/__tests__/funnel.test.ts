@@ -5,6 +5,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { getLimit } from "@/lib/entitlements";
+import { LOCALES } from "@/lib/i18n-constants";
 import {
   consumeFunnelDraft,
   createFromDraft,
@@ -145,5 +146,50 @@ describe.skipIf(!HAS_DB)("funnel drafts (v3/07 §6)", () => {
       join organizations o on o.id = c.org_id
       where o.created_by = ${userId}`;
     expect(div.sport_key).toBe("generic");
+  });
+
+  // Q3 (wave 5): the draft remembers the language the visitor started it in, for its +24h reminder. The database holds the column to
+  // the app's shipped locales: a locale added to LOCALES without the CHECK would fail every /start in that language.
+  it("the draft's language round-trips for every shipped locale and for none, and the database refuses any other", async () => {
+    const run = `locale-${randomUUID().slice(0, 8)}`;
+    const ids: string[] = [];
+    try {
+      let checked = 0;
+      for (const locale of LOCALES) {
+        const { id } = await createFunnelDraft(`${run}-${locale}@example.com`, PAYLOAD, sql, locale);
+        ids.push(id);
+        const [row] = await sql<{ locale: string | null }[]>`select locale from funnel_drafts where id = ${id}`;
+        expect(row!.locale, locale).toBe(locale);
+        checked++;
+      }
+      expect(checked, "anti-vacuity: every shipped locale was written").toBe(LOCALES.length);
+      expect(LOCALES.some((l) => l !== "en"), "premise: a language other than the fallback is among them").toBe(true);
+
+      const { id: none } = await createFunnelDraft(`${run}-none@example.com`, PAYLOAD);
+      ids.push(none);
+      const [noLanguage] = await sql<{ locale: string | null }[]>`select locale from funnel_drafts where id = ${none}`;
+      expect(noLanguage!.locale, "a draft written without a language has none").toBeNull();
+
+      let refused = 0;
+      for (const bad of ["de", "en-XA", "EN", ""]) {
+        await expect(sql`update funnel_drafts set locale = ${bad} where id = ${none}`, JSON.stringify(bad)).rejects.toMatchObject({
+          code: "23514",
+          constraint_name: "funnel_drafts_locale_valid",
+        });
+        refused++;
+      }
+      expect(refused, "anti-vacuity: every unshipped value was tried").toBe(4);
+
+      // And the CHECK's list is exactly LOCALES, read back from the database.
+      const [check] = await sql<{ def: string }[]>`
+        select pg_get_constraintdef(oid) as def from pg_constraint
+         where conrelid = 'funnel_drafts'::regclass and conname = 'funnel_drafts_locale_valid'`;
+      expect(check, "the CHECK exists").toBeDefined();
+      const members = [...check!.def.matchAll(/'([^']+)'::text/g)].map((m) => m[1]!).sort();
+      expect(members.length).toBeGreaterThan(0);
+      expect(members).toEqual([...LOCALES].sort());
+    } finally {
+      await sql`delete from funnel_drafts where id = any(${ids}::uuid[])`;
+    }
   });
 });

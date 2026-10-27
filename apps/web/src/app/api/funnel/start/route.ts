@@ -32,14 +32,18 @@ export async function POST(req: Request) {
     const ip = (await headers()).get("x-forwarded-for")?.split(",")[0]?.trim() ?? "unknown";
     await rateLimit(`funnel-start:${ip}`, EMAIL_LIMIT);
 
-    // `locale` is the email's, not the draft's: the claim re-reads the draft's payload strictly.
+    // `locale` is kept out of the payload: the claim re-reads the draft's payload strictly. It rides its own column instead.
     const { email, locale, ...payload } = schema.parse(await req.json());
+    // D4: the visitor's pick is the language the page was shown in, then the switcher's cookie (read as the public register route
+    // reads it) for a client that sent none. The draft remembers it for its +24h reminder (Q3), so the claim and the reminder share a
+    // language; null when there was none, and both then fall to `en`: there is no account and no organisation yet.
+    const pick = locale ?? explicitLocale(req);
 
     // The draft and the email that carries its token are one transaction on the pool (a visitor has no account and no
     // organisation): a refused row fails the start and leaves no draft behind. The row's ref is the draft, so a second start (its
     // own draft, its own token, both links live) is a second document and neither row replaces the other.
     const { draftId, rowId, link } = await sql.begin(async (tx) => {
-      const draft = await createFunnelDraft(email, payload, tx);
+      const draft = await createFunnelDraft(email, payload, tx, pick);
       const link = `${baseUrl(req)}/start/claim?token=${draft.token}`;
       const rowId = await enqueueEmail(tx, {
         kind: "funnel_claim",
@@ -49,11 +53,9 @@ export async function POST(req: Request) {
         to: email,
         transactional: true,
         expiresAt: expiryWithin(draft.expiresAt),
-        // D4: the visitor's pick is the language the page was shown in, then the switcher's cookie (read as the public register route
-        // reads it) for a client that sent none, then `en`: there is no account and no organisation yet.
         ...(await funnelClaimEmail(
           { competitionName: payload.name, sport: payload.sport, link },
-          await recipientLocale(tx, { pick: locale ?? explicitLocale(req), userId: null, orgDefault: null }),
+          await recipientLocale(tx, { pick, userId: null, orgDefault: null }),
         )),
       });
       return { draftId: draft.id, rowId, link };

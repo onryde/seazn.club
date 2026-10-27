@@ -7,6 +7,7 @@ import "server-only";
 import crypto from "node:crypto";
 import { z } from "zod";
 import { sql, type Tx } from "@/lib/db";
+import type { Locale } from "@/lib/i18n-constants";
 import { createOrgForUser, getUserOrgs } from "@/lib/auth";
 import { consumeReferralCookie } from "@/lib/referral";
 import { createCompetition } from "@/server/usecases/competitions";
@@ -35,17 +36,19 @@ export interface FunnelDraft {
 }
 
 /** Create a draft on `db` and return its single-use claim token and the instant it stops working. The start route passes its
- *  transaction, so the draft and the outbox row that carries its token are committed together or not at all. */
+ *  transaction, so the draft and the outbox row that carries its token are committed together or not at all. `locale` is the
+ *  language the visitor started it in (the start route's pick), kept for the +24h reminder; null when they gave none. */
 export async function createFunnelDraft(
   email: string,
   payload: FunnelPayload,
   db: Tx | typeof sql = sql,
+  locale: Locale | null = null,
 ): Promise<{ id: string; token: string; expiresAt: Date }> {
   const token = crypto.randomBytes(32).toString("base64url");
   const expiresAt = new Date(Date.now() + DRAFT_TTL_DAYS * 86_400_000);
   const [row] = await db<{ id: string }[]>`
-    insert into funnel_drafts (token, email, payload, expires_at)
-    values (${token}, ${email}, ${db.json(payload)}, ${expiresAt.toISOString()})
+    insert into funnel_drafts (token, email, payload, expires_at, locale)
+    values (${token}, ${email}, ${db.json(payload)}, ${expiresAt.toISOString()}, ${locale})
     returning id`;
   return { id: row.id, token, expiresAt };
 }
