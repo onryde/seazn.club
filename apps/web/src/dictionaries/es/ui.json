@@ -3162,6 +3162,7 @@
   "pad.pp.escalation": "Este jugador ya tiene tarjeta verde — una nueva infracción podría escalar a amarilla.",
   "pad.dock.choice.cancel": "Cancelar",
   "pad.dock.choice.hint": "No se registra nada hasta que elijas.",
+  "pad.dock.choice.blocked": "Responde primero a la pregunta abierta o cancélala. Ese toque no se registró.",
   "pad.dock.clears": "se cierra en {s} s",
   "pad.dock.dismiss": "Enviar ahora",
   "pad.dock.title": "Añadir detalle — opcional",

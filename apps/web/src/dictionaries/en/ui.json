@@ -3215,6 +3215,7 @@
   "pad.pp.escalation": "This player already has a green card — a further offence may escalate to yellow.",
   "pad.dock.choice.cancel": "Cancel",
   "pad.dock.choice.hint": "Nothing is recorded until you choose.",
+  "pad.dock.choice.blocked": "Answer the open question or cancel it first. That tap was not recorded.",
   "pad.dock.clears": "clears in {s}s",
   "pad.dock.dismiss": "Send now",
   "pad.dock.title": "Add detail — optional",

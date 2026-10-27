@@ -3215,6 +3215,7 @@
   "pad.pp.escalation": "Ce joueur a déjà un carton vert — une nouvelle faute peut évoluer vers un carton jaune.",
   "pad.dock.choice.cancel": "Annuler",
   "pad.dock.choice.hint": "Rien n'est enregistré tant que vous n'avez pas choisi.",
+  "pad.dock.choice.blocked": "Répondez d'abord à la question en cours ou annulez-la. Ce geste n'a pas été enregistré.",
   "pad.dock.clears": "se ferme dans {s} s",
   "pad.dock.dismiss": "Envoyer maintenant",
   "pad.dock.title": "Ajouter un détail — facultatif",

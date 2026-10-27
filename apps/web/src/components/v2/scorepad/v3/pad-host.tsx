@@ -1366,6 +1366,33 @@ export function softCommitPlan(dock: DockSpec | null, payload: Record<string, un
 }
 
 /**
+ * W2d T18 fix round 1 (m3) — whether a NEW tap may reach `dispatch` while a required question is open.
+ *
+ * Owner option A: nothing is queued until the goal's type is chosen, and Cancel is the one way to drop the goal. A
+ * second tap that silently replaced the question dropped an unrecorded goal with no word to the scorer. So the question
+ * is modal: while it is open every other tap is refused, NOT recorded, and the host says so on its own "that tap did
+ * not stick" banner (`dispatchRefusal`) and brings the question back into view. The answer itself never comes through
+ * here — `chooseDockChip` goes straight to `dispatch`.
+ */
+export function admitsTap(questionOpen: boolean): boolean {
+  return !questionOpen;
+}
+
+/** What the ribbon's "Take back" does. See `takeBackAction`. */
+export type TakeBackAction<T> = { readonly kind: "cancel-question" } | { readonly kind: "undo"; readonly target: T };
+
+/**
+ * W2d T18 fix round 1 (m2) — the ribbon's "Take back" is the scorer's undo of their LAST tap. With a required question
+ * open, the last tap is the question's (nothing was queued for it), so Take back cancels the question — exactly what
+ * the question's own Cancel does — and never voids the event before it. With no question open it is the ordinary undo
+ * of `ribbonUndoTarget`'s answer; `null` when there is neither.
+ */
+export function takeBackAction<T>(questionOpen: boolean, undoTarget: T | null): TakeBackAction<T> | null {
+  if (questionOpen) return { kind: "cancel-question" };
+  return undoTarget === null ? null : { kind: "undo", target: undoTarget };
+}
+
+/**
  * R7-42/F (owner ruling on P-5, `_INDEX.md`) — "a doubles rally opens the
  * dock; if nobody answers within HOLD_MS the hold drains and the rally
  * submits with `wonBy` only... label the stat as partial wherever it
@@ -1424,6 +1451,12 @@ export function isPartialDockAnswer(
 ): boolean {
   const spec = skin.dock(eventType, view, payload);
   if (spec === null) return false;
+  // W2d T18 fix round 1 (I1, m1). A dock that still REQUIRES an answer this stored payload lacks is a row recorded
+  // BEFORE the requirement existed — an untyped hockey goal from before the deploy. It is not partial: the rule that
+  // reads the answer already reads its absence (B3: an untyped goal is a field goal), and every live write carries it.
+  // Calling it partial offered the amendment, whose re-append is this payload VERBATIM (`amendPlan`) — the very write
+  // the strict path now refuses (GOAL_KIND_REQUIRED), with its bound void left queued behind the refusal.
+  if (spec.requires !== undefined && payload[spec.requires] === undefined) return false;
   const attribution = spec.chips.filter((chip) => chip.kind !== "flag");
   if (attribution.length === 0) return false;
   return attribution.every((chip) => !deepEqual(chip.mutate(payload), payload));
@@ -2058,8 +2091,8 @@ export function PadHostV3(props: PadHostV3Props) {
         const dock = dockFor(props.skin, type, view, tap);
         const plan = softCommitPlan(dock, tap);
         // W2d T18 — a required answer is missing (a hockey goal's type): queue NOTHING, ask. The answered payload
-        // comes back through this same dispatch (`chooseDockChip`) and lands on "hold"/"send" below. A new tap of
-        // any kind while a question is open replaces it — the scorer has moved on, and nothing was ever queued.
+        // comes back through this same dispatch (`chooseDockChip`) and lands on "hold"/"send" below. No other tap
+        // reaches here while a question is open: `send` refuses it (`admitsTap`, fix round 1 m3).
         if (plan === "choose") {
           setChoosing((prev) => ({ key: (prev?.key ?? 0) + 1, eventType: type, payload: tap ?? {} }));
           return;
@@ -2097,6 +2130,13 @@ export function PadHostV3(props: PadHostV3Props) {
   const [dispatchRefusal, setDispatchRefusal] = useState<string | null>(null);
   const send = useCallback(
     (type: string, payload: unknown): void => {
+      // W2d T18 fix round 1 (m3): an open required question is modal — this tap is not recorded, the scorer is told,
+      // and the question is brought back into view (a new key remounts ChoiceDock, whose mount reveals it).
+      if (!admitsTap(choosing !== null)) {
+        setDispatchRefusal(msg("pad.dock.choice.blocked"));
+        setChoosing((prev) => (prev === null ? null : { ...prev, key: prev.key + 1 }));
+        return;
+      }
       setDispatchRefusal(null);
       // R6/task A — THE one place `at` enters an event, for exactly the reason
       // this file's header gives for `dispatch` being the one gateway: a
@@ -2112,8 +2152,15 @@ export function PadHostV3(props: PadHostV3Props) {
         setDispatchRefusal(msg("scorepad.rejection.fallback"));
       });
     },
-    [dispatch, msg, clock, props.module],
+    [dispatch, msg, clock, props.module, choosing],
   );
+
+  // W2d T18 fix round 1 (m2) — the question's own Cancel and the ribbon's Take back are one action: drop the open
+  // question (nothing was queued for it) and clear any "that tap was not recorded" line it caused.
+  const cancelQuestion = useCallback((): void => {
+    setChoosing(null);
+    setDispatchRefusal(null);
+  }, []);
 
   // W2d T18 — the scorer answered the open question. The payload already carries the TAP's own `at` (`send` stamped
   // it), so this goes straight to `dispatch`, not back through `send`: a second stamp would move the goal to the
@@ -2388,6 +2435,8 @@ export function PadHostV3(props: PadHostV3Props) {
     pipeline.ownEventIds,
     props.identity.deviceLinkId,
   );
+  // W2d T18 fix round 1 (m2): with a required question open, Take back cancels the question, never the event before it.
+  const takeBack = takeBackAction(choosing !== null, undoTarget);
 
   const [voidingId, setVoidingId] = useState<string | null>(null);
   const [amendingId, setAmendingId] = useState<string | null>(null);
@@ -2660,11 +2709,11 @@ export function PadHostV3(props: PadHostV3Props) {
               action here", and after a void there is not. The strip's TEXT
               stays either way: losing the last-event line would be a
               different regression. */}
-          {undoTarget !== null && (
+          {takeBack !== null && (
             <button
               type="button"
               data-role="v3-ribbon-undo"
-              onClick={() => void handleUndo(undoTarget)}
+              onClick={() => (takeBack.kind === "cancel-question" ? cancelQuestion() : void handleUndo(takeBack.target))}
               style={{ minHeight: 44, minWidth: 44 }}
               className="shrink-0 rounded-full px-3 text-sm font-semibold text-violet-700 transition-colors hover:bg-violet-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400"
             >
@@ -2716,7 +2765,7 @@ export function PadHostV3(props: PadHostV3Props) {
        *  (an earlier tap) drains on its own timer whether or not its dock is on screen. */}
       {choiceSpec !== null && choosing !== null ? (
         <div data-role="v3-dock">
-          <ChoiceDock key={choosing.key} spec={choiceSpec} t={t} onChoose={chooseDockChip} onCancel={() => setChoosing(null)} />
+          <ChoiceDock key={choosing.key} spec={choiceSpec} t={t} onChoose={chooseDockChip} onCancel={cancelQuestion} />
         </div>
       ) : (
         held && (

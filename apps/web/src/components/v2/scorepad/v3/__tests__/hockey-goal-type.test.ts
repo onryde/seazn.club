@@ -17,8 +17,10 @@ import { EngineError, initSquads, type CoreEv, type EventEnvelope } from "@seazn
 import type { AnySportModule } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { propsOf, renderIsland, textOf } from "@/components/__tests__/_hook-harness";
+import { foldMatch } from "@seazn/engine/core";
+import { canAmendRow, partialBadge, type ActivityEvent } from "../activity";
 import { ChoiceDock, choiceController } from "../detail-dock";
-import { dockFor, isPartialDockAnswer, softCommitPlan } from "../pad-host";
+import { admitsTap, amendPlan, dockFor, isPartialDockAnswer, softCommitPlan, takeBackAction } from "../pad-host";
 import { hockeySkinV3, hockeySpec } from "../skins/hockey";
 import { icehockeySkinV3, icehockeySpec } from "../skins/icehockey";
 import type { PeriodSkinSpec } from "../skins/period-shared";
@@ -257,14 +259,165 @@ describe("W2d T18 — softCommitPlan, the one decision the host's dispatch makes
 });
 
 describe("W2d T18 — the partial label reads the answers the TYPED goal's dock offers", () => {
-  it("hockey: a typed goal with its scorer named is complete; without one at band 3 it is partial; an untyped (legacy) one is partial", () => {
+  it("hockey: a typed goal with its scorer named is complete; without one at band 3 it is partial", () => {
     const cfg = periodCfg(FIH.module);
     const view = viewFor(FIH, cfg, foldPeriod(FIH.module, cfg, [["core.start"]]));
     const tap = goalTile(FIH, view);
     const scorer = view.squads.home.members.find((m) => m.onField)!.personId;
     expect(isPartialDockAnswer(FIH.skin, tap.type, { ...tap.payload, kind: "fg", person: scorer }, view)).toBe(false);
     expect(isPartialDockAnswer(FIH.skin, tap.type, { ...tap.payload, kind: "fg" }, view)).toBe(true);
-    expect(isPartialDockAnswer(FIH.skin, tap.type, { ...tap.payload, person: scorer }, view)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1, I1 + m1 — a goal recorded BEFORE the requirement existed. A hockey match in progress at the deploy
+// holds untyped goals; the read path folds them (B3: an untyped goal is a field goal) and the pad must show them as
+// the ordinary goals they are. Marking one Partial offered the amendment, whose re-append is the ORIGINAL payload
+// verbatim (`amendPlan`) — an untyped goal the strict write path now refuses, while its bound void survived the
+// refusal. Driven through the pad's own chain: the real fold of a ledger that holds the legacy goal, the real skin
+// (`isPartialDockAnswer`), the ledger panel's own badge and amend gates (`partialBadge`, `canAmendRow`), and the
+// amendment's own plan folded the way `append-event.ts` appends it (`strictFromSeq` = the candidate).
+// ---------------------------------------------------------------------------
+
+describe("W2d T18 fix round 1 (I1, m1) — a legacy untyped hockey goal in the ledger is an ordinary goal on the pad", () => {
+  /** The ledger as the pad's activity panel holds it, from real envelopes. */
+  const rowsOf = (envelopes: readonly EventEnvelope[]): ActivityEvent[] =>
+    envelopes.map((e) => ({ id: e.id, seq: e.seq, type: e.type, payload: e.payload, voids: e.voids ?? null }));
+  /** The append the server makes: the whole stream, strict from the candidate only (`append-event.ts`). */
+  const appendCode = (cfg: unknown, envelopes: readonly EventEnvelope[]): string | null => {
+    try {
+      foldMatch(FIH.module as never, cfg as never, lineupsFor(FIH.module, cfg), envelopes as never, { strictFromSeq: envelopes.length - 1 });
+      return null;
+    } catch (error) {
+      if (error instanceof EngineError) return error.code;
+      throw error;
+    }
+  };
+
+  it("with or without its scorer, at every band: no Partial badge and no amendment — and the verbatim re-append it would have made IS the refused write", () => {
+    const cfg = periodCfg(FIH.module);
+    let checked = 0;
+    for (const band of [0, 1, 2, 3] as const) {
+      const atStart = viewFor(FIH, cfg, foldPeriod(FIH.module, cfg, [["core.start"]]), band);
+      const scorer = atStart.squads.home.members.find((m) => m.onField)!.personId;
+      for (const legacy of [{ by: "H" }, { by: "H", person: scorer }]) {
+        const ledger = [makeEnvelope(0, { type: "core.start", payload: {} }), makeEnvelope(1, { type: "hockey.goal", payload: legacy })];
+        // The read path folds it, and it is a goal.
+        const state = foldPeriod(FIH.module, cfg, [["core.start"], ["hockey.goal", legacy]]);
+        expect(state.goals, `b${band}`).toEqual({ home: 1, away: 0 });
+        const view = viewFor(FIH, cfg, state, band);
+        const isPartial = (type: string, payload: Record<string, unknown>) => isPartialDockAnswer(FIH.skin, type, payload, view);
+        const rows = rowsOf(ledger);
+        const own = new Set(rows.map((r) => r.id));
+        const goal = rows[1]!;
+        const label = `b${band}/${JSON.stringify(legacy)}`;
+        expect(isPartial(goal.type, legacy), label).toBe(false);
+        expect(partialBadge(goal, rows, own, null, null, true, isPartial), label).toBe("none");
+        expect(canAmendRow(goal, rows, own, null, null, true, isPartial(goal.type, legacy)), label).toBe(false);
+        // Why it must stay closed: the amendment's own plan re-appends this payload verbatim, behind its void, and
+        // the server refuses exactly that re-append while the void alone would land.
+        const plan = amendPlan(goal.id, ledger)!;
+        const voided = [...ledger, makeEnvelope(2, { type: "core.void", payload: { event_id: plan.voidId } }, plan.voidId)];
+        expect(appendCode(cfg, voided), `${label}: the void alone is accepted`).toBeNull();
+        expect(appendCode(cfg, [...voided, makeEnvelope(3, { type: plan.type, payload: plan.payload })]), label).toBe("GOAL_KIND_REQUIRED");
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+  });
+
+  it("the positive pair: a TYPED goal missing its scorer at band 3 is still Partial and amendable, and its amendment lands under strict", () => {
+    const cfg = periodCfg(FIH.module);
+    const typed = { by: "H", kind: "pc" };
+    const ledger = [makeEnvelope(0, { type: "core.start", payload: {} }), makeEnvelope(1, { type: "hockey.goal", payload: typed })];
+    const view = viewFor(FIH, cfg, foldPeriod(FIH.module, cfg, [["core.start"], ["hockey.goal", typed]]), 3);
+    const isPartial = (type: string, payload: Record<string, unknown>) => isPartialDockAnswer(FIH.skin, type, payload, view);
+    const rows = rowsOf(ledger);
+    const own = new Set(rows.map((r) => r.id));
+    expect(isPartial("hockey.goal", typed)).toBe(true);
+    expect(partialBadge(rows[1]!, rows, own, null, null, true, isPartial)).not.toBe("none");
+    expect(canAmendRow(rows[1]!, rows, own, null, null, true, true)).toBe(true);
+    const plan = amendPlan(rows[1]!.id, ledger)!;
+    const scorerChip = dockFor(FIH.skin, plan.type, view, plan.payload)!.chips.find((c) => c.id.startsWith("person:"))!;
+    const voided = [...ledger, makeEnvelope(2, { type: "core.void", payload: { event_id: plan.voidId } }, plan.voidId)];
+    // Both the answered and the unanswered (drained) re-append are typed, so both land.
+    expect(appendCode(cfg, [...voided, makeEnvelope(3, { type: plan.type, payload: scorerChip.mutate(plan.payload) })])).toBeNull();
+    expect(appendCode(cfg, [...voided, makeEnvelope(3, { type: plan.type, payload: plan.payload })])).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Fix round 1, m2 + m3 — what the pad's other controls do while the question is open. Owner option A: nothing is
+// queued until a type is chosen, and Cancel is the ONE way to drop the goal. So the question is MODAL: another tap is
+// not recorded and the pad says so (the house "that tap did not stick" banner), the question stays open, and "Take
+// back" — the scorer's habit for undoing the last tap — takes back the question, never the goal before it. Driven as
+// SEQUENCES over the host's own decisions (`admitsTap`, `takeBackAction`, `softCommitPlan`) with the real skin's
+// tiles and docks; the host's wiring of them is the browser's (`e2e/scorepad-v3-hockey-goal-type.spec.ts`).
+// ---------------------------------------------------------------------------
+
+describe("W2d T18 fix round 1 (m2, m3) — the open question is modal: Take back cancels it, another tap is refused, Cancel is the only drop", () => {
+  /** The host's state, modelled exactly as `pad-host.tsx` keeps it: the open question, the queue, the recorded log. */
+  interface Host {
+    question: { type: string; payload: Record<string, unknown> } | null;
+    queued: { type: string; payload: Record<string, unknown> }[];
+    refused: number;
+  }
+  const cfg = periodCfg(FIH.module);
+  const view = viewFor(FIH, cfg, foldPeriod(FIH.module, cfg, [["core.start"], ["hockey.goal", { by: "H", kind: "pc" }]]));
+  /** The prior goal the ribbon's Take back would void — a stand-in for `ribbonUndoTarget`'s own answer. */
+  const PRIOR = { kind: "void", eventId: "e-1" } as const;
+  const tap = (host: Host, type: string, payload: Record<string, unknown>): void => {
+    if (!admitsTap(host.question !== null)) {
+      host.refused++;
+      return;
+    }
+    const plan = softCommitPlan(dockFor(FIH.skin, type, view, payload), payload);
+    if (plan === "choose") host.question = { type, payload };
+    else host.queued.push({ type, payload });
+  };
+  const answer = (host: Host, chipId: string): void => {
+    const q = host.question!;
+    const chip = dockFor(FIH.skin, q.type, view, q.payload)!.chips.find((c) => c.id === chipId)!;
+    host.question = null;
+    const payload = chip.mutate(q.payload);
+    expect(softCommitPlan(dockFor(FIH.skin, q.type, view, payload), payload), "the answer is never asked again").not.toBe("choose");
+    host.queued.push({ type: q.type, payload });
+  };
+  const goal = goalTile(FIH, view, "away");
+  const advance = FIH.skin.tiles(view).find((t2: TileSpec) => t2.id === "advance");
+
+  it("m2: Take back while the question is open cancels the QUESTION — the goal before it is not voided — and with no question open it is the ordinary undo", () => {
+    const host: Host = { question: null, queued: [], refused: 0 };
+    expect(takeBackAction(host.question !== null, PRIOR), "no question: Take back undoes the last recorded event").toEqual({ kind: "undo", target: PRIOR });
+    tap(host, goal.type, goal.payload);
+    expect(host.question, "the goal tap asks").not.toBeNull();
+    const action = takeBackAction(host.question !== null, PRIOR);
+    expect(action, "an open question: Take back takes back the question").toEqual({ kind: "cancel-question" });
+    host.question = null;
+    expect(host.queued, "nothing was ever queued, and the prior goal was not touched").toEqual([]);
+    // With nothing left to undo, an open question still offers Take back (it cancels the question).
+    tap(host, goal.type, goal.payload);
+    expect(takeBackAction(host.question !== null, null)).toEqual({ kind: "cancel-question" });
+    expect(takeBackAction(false, null), "nothing open, nothing to undo: no control").toBeNull();
+  });
+
+  it("m3: a second tap while the question is open is refused (not recorded, and said so) and the question survives; answered, the goal lands and the next tap is taken", () => {
+    if (advance === undefined || !("event" in advance.action)) throw new Error("premise: hockey's advance tile dispatches an event directly");
+    const advanceEvent = advance.action.event as { type: string; payload: Record<string, unknown> };
+    const host: Host = { question: null, queued: [], refused: 0 };
+    tap(host, goal.type, goal.payload);
+    tap(host, advanceEvent.type, advanceEvent.payload);
+    tap(host, goal.type, { ...goal.payload, by: "H" });
+    expect(host.refused, "both taps were refused while the question was open").toBe(2);
+    expect(host.question, "the question is still the first goal's — never replaced, never dropped").toEqual({ type: goal.type, payload: goal.payload });
+    expect(host.queued).toEqual([]);
+    answer(host, "kind:stroke");
+    expect(host.queued).toEqual([{ type: goal.type, payload: { ...goal.payload, kind: "stroke" } }]);
+    tap(host, advanceEvent.type, advanceEvent.payload);
+    expect(host.refused, "with the question answered, the next tap is taken").toBe(2);
+    expect(host.queued.map((q) => q.type)).toEqual([goal.type, advanceEvent.type]);
+    expect(admitsTap(false)).toBe(true);
+    expect(admitsTap(true)).toBe(false);
   });
 });
 

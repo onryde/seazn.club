@@ -4450,6 +4450,7 @@ export type DictionaryKey =
   | "pad.cricket.tile.runs.3"
   | "pad.cricket.tile.runs.4"
   | "pad.cricket.tile.runs.6"
+  | "pad.dock.choice.blocked"
   | "pad.dock.choice.cancel"
   | "pad.dock.choice.hint"
   | "pad.dock.clears"
