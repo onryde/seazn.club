@@ -1,0 +1,120 @@
+[
+ {
+  "id": "final-i1-card-previews-live-division-for-pinned-stage",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+  "find": "  const pin = pinInForce(inForce, unread ? null : pinned);\n",
+  "replace": "  const pin = pinInForce(inForce, null);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "the pin's 3 under the started wording"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "the inheriting preview is the pin's 3 with the started line"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+    ],
+    "name": "a started pinned stage reads the pin's 4 under the started wording"
+   }
+  ]
+ },
+ {
+  "id": "final-i1-draft-ignores-pin",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "    if (pin !== null) return draftOfRule(pin, true);\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+    ],
+    "name": "the draft opens inheriting at the PIN's numbers"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
+    ],
+    "name": "sweep: on every division the registry ships, a pinned stage with no rule opens and previews at its pin's numbers"
+   }
+  ]
+ },
+ {
+  "id": "final-i1-readonly-says-division-wording-for-pin",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+  "find": "basis === \"pin\" ? \"stagePoints.startedPoints\" : \"stagePoints.divisionPoints\"",
+  "replace": "\"stagePoints.divisionPoints\"",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "the pin's 3 under the started wording"
+   }
+  ]
+ },
+ {
+  "id": "final-i1-panel-drops-the-pin",
+  "file": "apps/web/src/components/v2/stages-panel.tsx",
+  "find": "                    pinnedPoints={pinnedStagePoints[stage.id] ?? null}\n",
+  "replace": "                    pinnedPoints={null}\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+    ],
+    "name": "a started pinned stage reads the pin's 4 under the started wording"
+   }
+  ]
+ },
+ {
+  "id": "final-i1-page-reads-no-pins",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "find": "    tab === \"fixtures\" ? await listPinnedStagePoints(auth, stages.filter((s) => stageTakesPoints(s.kind)).map((s) => s.id)) : {};\n",
+  "replace": "    tab === \"fixtures\" ? {} : {};\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+    ],
+    "name": "the loader is asked about the table stage"
+   }
+  ]
+ },
+ {
+  "id": "final-i1-loader-carries-unpinned-stages",
+  "file": "apps/web/src/server/usecases/stage-qualification.ts",
+  "find": "(doc.pinnedAt === null ? [] : [[id, doc.points] as const])",
+  "replace": "[[id, doc.points] as const]",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/pinned-stage-points-db.test.ts"
+    ],
+    "name": "football: generate pins Pool A"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/pinned-stage-points-db.test.ts"
+    ],
+    "name": "generic: generate pins Pool A"
+   }
+  ]
+ }
+]
