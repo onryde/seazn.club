@@ -101,6 +101,29 @@ describe("W2d T18 — a hockey (FIH) goal records its type (HK-TB-2, B3, PS-7d)"
     expect(accepted).toBeGreaterThanOrEqual(declaredCfgs(icehockey as never).length);
   });
 
+  it("MD-1 the refusal's message, which API v1 sends as error.message, tells the caller the goal needs its type (every declared FIH cfg, counted)", () => {
+    // apps/web/src/server/api-v1/http.ts maps an EngineError to `errorResponse(requestId, status, err.code, err.message, …)`,
+    // so the message is wire text an integrator reads beside the code: an empty one would pass every code check above.
+    // The words it must carry come from the rule (HK-TB-2: every GOAL records its TYPE), not from the sentence written.
+    let checked = 0;
+    for (const { name, cfg } of declaredCfgs(hockey as never)) {
+      const lineups = defaultLineupPair(resolvePositions(hockey, cfg as never));
+      let err: unknown;
+      try {
+        foldMatch(hockey, cfg as never, lineups, envelopes([start, goal(lineups.home.entrantId)]), STRICT_ALL);
+      } catch (e) {
+        err = e;
+      }
+      expect(err, name).toBeInstanceOf(EngineError);
+      const { code, message } = err as EngineError;
+      expect(code, name).toBe("GOAL_KIND_REQUIRED");
+      expect(message, name).toMatch(/\bgoal\b/i);
+      expect(message, name).toMatch(/\btype\b/i);
+      checked++;
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
   it("the refusal names the kinds the sport records, and is an EngineError the server maps by code", () => {
     let err: unknown;
     try {
