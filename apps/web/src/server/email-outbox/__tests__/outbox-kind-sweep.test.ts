@@ -71,6 +71,9 @@
 //     makes the first attempt.
 //   - suspension_confirmed: the real `decideSuspension` (confirm) of a pending ban on a player whose claimed account is `es`: the notice
 //     is queued to the account in the decision's own tenant transaction, once per confirmation, and the request makes the first attempt.
+//   - suspension_served: the real `refreshDiscipline` (the score write's fold) on a decided fixture that serves a confirmed one-match ban,
+//     in an `nl` organisation whose player's claimed account has no language: the notice is queued to the account in the transaction
+//     that flips the ban, and the worker makes the first attempt (a serving pass may be a read with no request to send from).
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -152,7 +155,8 @@ import {
 import { handleSponsorDispute, handleSponsorPaymentSucceeded, refundSponsorOrder, startSponsorCheckout } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
-import { claimPerson, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
+import { claimPerson, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
+import { refreshDiscipline } from "@/server/usecases/scoring";
 import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
 import { seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { planLabel } from "@/lib/plan-label";
@@ -1179,6 +1183,37 @@ async function suspensionConfirmedScenario(): Promise<KindScenario> {
   };
 }
 
+/** A score write's fold serves a confirmed one-match ban: the decided fixture of the banned team is stamped after the ban, and the real
+ *  `refreshDiscipline` flips it. The player's claimed account has no language, so the notice is in the organisation's (`nl`); it is
+ *  queued in the flip's transaction and waits for the worker. */
+async function suspensionServedScenario(): Promise<KindScenario> {
+  const ctx = await seedFootballDivision();
+  made.orgIds.push(ctx.orgId);
+  made.userIds.push(ctx.userId);
+  await sql`update organizations set default_locale = 'nl' where id = ${ctx.orgId}`;
+  const recipient = address();
+  await claimPerson(ctx.personX, recipient);
+  const [division] = await sql<{ name: string }[]>`select name from divisions where id = ${ctx.divisionId}`;
+  const ban = await createManualSuspension(ctx.auth, ctx.divisionId, { personId: ctx.personX, matchesTotal: 1, reason: "violent conduct" });
+  await decideSuspension(ctx.auth, ban.id, { kind: "confirm" });
+  const fx = await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB, "decided");
+  await sql`
+    insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+    values (${fx}, ${ctx.orgId}, 1, 'core.note', ${sql.json({ text: "d" })}, now() + interval '1 hour')`;
+  return {
+    locale: "nl",
+    subjectKey: "suspensionServed.subject",
+    subjectVars: { division: division!.name },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      await refreshDiscipline(ctx.auth, fx);
+      const [row] = await sql<{ status: string }[]>`select status from suspensions where id = ${ban.id}`;
+      expect(row!.status, "premise: the real fold served the ban").toBe("served");
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1311,6 +1346,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", suspensionConfirmed.subjectKey, suspensionConfirmed.subjectVars),
     );
 
+    const suspensionServed = await suspensionServedScenario();
+    expect(dictionarySubject("nl", suspensionServed.subjectKey, suspensionServed.subjectVars)).not.toBe(
+      dictionarySubject("en", suspensionServed.subjectKey, suspensionServed.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1341,6 +1381,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         official_assigned: officialAssigned,
         official_assignment_changed: officialChanged,
         suspension_confirmed: suspensionConfirmed,
+        suspension_served: suspensionServed,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

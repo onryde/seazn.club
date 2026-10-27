@@ -411,18 +411,12 @@ export async function sendReportSubmittedEmail(
   });
 }
 
-/** A suspension flipped to served — the player is eligible again (SPEC-1). */
-export async function sendSuspensionServedEmail(
-  to: string,
-  args: Omit<SuspensionServedArgs, "meUrl">,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** A suspension flipped to served, the player is eligible again (SPEC-1), RENDERED and not sent. `queueSuspensionServed`
+ *  (discipline.ts) queues what this returns on the email outbox (kind `suspension_served`, transactional, to the claimed player's
+ *  account), in the transaction that flips the ban, once per ban, in the player's language; the retry worker sends it. */
+export async function suspensionServedEmail(args: Omit<SuspensionServedArgs, "meUrl">, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({
-    to,
-    transactional: true,
-    ...suspensionServedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict),
-  });
+  return suspensionServedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
 }
 
 /** One-shot +24h funnel reminder (v3/07 §6). */

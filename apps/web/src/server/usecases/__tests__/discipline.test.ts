@@ -6,17 +6,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
-// Observe the served notice without touching the rest of the email module
-// (send() is a no-op without RESEND_API_KEY either way). Hoisted so the spy is
-// live before ../discipline binds the sender at import.
-const emailMock = vi.hoisted(() => ({
-  served: vi.fn().mockResolvedValue(true),
-}));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendSuspensionServedEmail: emailMock.served,
-}));
-// The confirmed notice is a row on the email outbox (phase 3 wave 4, kind `suspension_confirmed`). The outbox's one
+// The suspension notices are rows on the email outbox (phase 3 wave 4, kinds `suspension_confirmed`, `suspension_served`). The outbox's one
 // network seam is captured, never sent; the row, the seal, the gate and the attempt are the real ones. `enqueueEmailOnce`
 // is WRAPPED (the real insert runs) so a test can count how often a producer asked for a notice, which the once-key
 // alone would hide (a second ask writes no second row).
@@ -27,22 +17,12 @@ vi.mock("@/server/email-outbox", async (io) => {
   return { ...m, enqueueEmailOnce: vi.fn(m.enqueueEmailOnce) };
 });
 
-// `after` wrapped, not replaced (the `lib/__tests__/deferred.test.ts` pattern):
-// outside a request it still throws and `deferred` runs its task inline, except
-// where one test captures the task to run it LATER, as a request's after-window
-// would.
-vi.mock("next/server", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("next/server")>();
-  return { ...actual, after: vi.fn(actual.after) };
-});
-
-import { after } from "next/server";
 import { sql, withTenant } from "@/lib/db";
 import { enqueueEmailOnce } from "@/server/email-outbox";
 import { MAX_EXPIRY_MS, idempotencyKey, type OutboxKind, type OutboxStatus } from "@/server/email-outbox/constants";
-import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { bornAgo, dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { runOutboxTick } from "@/server/email-outbox/worker";
 import { stubOutboxEnv } from "./_invite-mail";
-import { log } from "@/server/logger";
 import { PaymentRequiredError } from "@/lib/errors";
 import {
   activePublicSuspensionEntries,
@@ -55,6 +35,7 @@ import {
   publicSuspensions,
   putDisciplineRules,
   queueSuspensionConfirmed,
+  queueSuspensionServed,
 } from "../discipline";
 import { refreshDiscipline, scoreEvent } from "../scoring";
 
@@ -161,7 +142,6 @@ afterAll(async () => {
 
 describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
   beforeEach(() => {
-    emailMock.served.mockClear();
     // The outbox seals the body and the gate lets the attempt through; the transport answers as Resend would.
     stubOutboxEnv();
     transport.deliver.mockReset();
@@ -673,10 +653,15 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
     });
   });
 
-  it("the active→served flip fires the served email once", async () => {
+  // Phase 3 wave 4 (T3, kind `suspension_served`): the flip active -> served queues the player's notice on the email
+  // outbox IN the transaction that flips the ban (R1, every serving pass: write paths and read paths alike), once per
+  // ban (once-key `<id>:served`), and leaves the first attempt to the retry worker (W: a read path has no request to
+  // send it from). A pass that rolls back takes its row with it, so the notice exists exactly when the flip committed:
+  // that is what the old after-commit `xmin` check stood in for (spec §8).
+  it("the active→served flip queues one served notice, left to the worker", async () => {
     const ctx = await seedFootballDivision();
-    const email = `claim-${randomUUID().slice(0, 8)}@test.local`;
-    await claimPerson(ctx.personX, email);
+    const email = address("served");
+    const userId = await claimPerson(ctx.personX, email);
     const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
       personId: ctx.personX,
       matchesTotal: 1,
@@ -686,6 +671,7 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       kind: "confirm",
     });
     expect(active.entrantId).toBe(ctx.entrantA);
+    expect(await noticesOf("suspension_served", manual.id), "premise: nothing served yet").toEqual([]);
 
     // A decided fixture for the banned entrant, stamped after the ban's decided_at,
     // serves the one-match ban. The recompute-on-read flips active→served.
@@ -695,17 +681,48 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       values (${fx}, ${ctx.orgId}, ${nextSeq(fx)}, 'core.note', ${sql.json({ text: "d" })},
               now() + interval '1 hour')`;
 
-    emailMock.served.mockClear();
     const served = (await listSuspensions(ctx.auth, ctx.divisionId)).find(
       (r) => r.id === manual.id,
     )!;
     expect(served.status).toBe("served");
-    // The served sender fired exactly once on the flip. Remove `await emailServed(...)`
-    // and this goes to 0; a second read must not re-fire it.
-    expect(emailMock.served).toHaveBeenCalledTimes(1);
-    expect(emailMock.served.mock.calls[0]![0]).toBe(email);
+    const rows = await noticesOf("suspension_served", manual.id);
+    expect(rows, "one notice on the flip").toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      ref_type: "suspension",
+      ref_id: manual.id,
+      dedupe_key: `${manual.id}:served`,
+      org_id: ctx.orgId,
+      recipient: email,
+      recipient_user_id: userId,
+      transactional: true,
+      // No account language, no org default: `en`.
+      subject: dictionarySubject("en", "suspensionServed.subject", { division: "Open" }),
+      // W: queued for the worker, never attempted by the read that flipped it.
+      status: "queued",
+      attempts: 0,
+    });
+    expect(Math.abs(rows[0]!.expires_at.getTime() - rows[0]!.created_at.getTime() - MAX_EXPIRY_MS), "the bound").toBeLessThan(1_000);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(sendsOf(rows[0]!.id), "no transport call: the worker sends it").toBe(0);
+    // A second read finds nothing active: no second row, and it did not even ask.
     await listSuspensions(ctx.auth, ctx.divisionId);
-    expect(emailMock.served).toHaveBeenCalledTimes(1);
+    expect((await noticesOf("suspension_served", manual.id)).map((r) => r.id)).toEqual([rows[0]!.id]);
+    expect(asksFor("suspension_served", manual.id)).toBe(1);
+  });
+
+  it("the served helper called twice for one ban writes one row", async () => {
+    const ctx = await seedFootballDivision();
+    await claimPerson(ctx.personX, address("served-helper"));
+    const ban = await createManualSuspension(ctx.auth, ctx.divisionId, { personId: ctx.personX, matchesTotal: 1, reason: "dissent" });
+
+    const [first, second] = await withTenant(ctx.orgId, async (tx) => [
+      await queueSuspensionServed(tx, ban.id),
+      await queueSuspensionServed(tx, ban.id),
+    ]);
+
+    expect(first, "the first call queued a row").toEqual(expect.any(String));
+    expect(second, "the second found the once-key taken").toBeNull();
+    expect((await noticesOf("suspension_served", ban.id)).map((r) => r.id)).toEqual([first]);
   });
 
   // The division page used to be what served a manual ban in a division whose
@@ -714,7 +731,7 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
   // a public read. The competition hub reads bans without writing, so the WRITE
   // path has to serve them itself. Read the row directly: every discipline
   // reader serves on read and would hide a write path that does not.
-  it("discipline OFF: the score that serves a manual ban flips it on the write path, with one served email", async () => {
+  it("discipline OFF: the score that serves a manual ban flips it on the write path, with one served notice", async () => {
     const ctx = await seedFootballDivision();
     await sql`update divisions set status = 'active' where id = ${ctx.divisionId}`;
     const [rulesRow] = await sql`select 1 from discipline_rules where division_id = ${ctx.divisionId}`;
@@ -727,7 +744,6 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       reason: "violent conduct",
     });
     await decideSuspension(ctx.auth, manual.id, { kind: "confirm" });
-    emailMock.served.mockClear();
 
     // Team A forfeits a fixture after the ban was decided: that serves A's one match.
     const fx = await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB);
@@ -740,19 +756,19 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
     const [row] = await sql<{ status: string; matches_served: number }[]>`
       select status, matches_served from suspensions where id = ${manual.id}`;
     expect(row).toEqual({ status: "served", matches_served: 1 });
-    expect(emailMock.served).toHaveBeenCalledTimes(1);
-    expect(emailMock.served.mock.calls[0]![0]).toBe(email);
-    // Running the write-path fold again finds nothing active: no second email.
+    const rows = await noticesOf("suspension_served", manual.id);
+    expect(rows.map((r) => [r.recipient, r.status, r.attempts]), "one notice, queued for the worker").toEqual([[email, "queued", 0]]);
+    // Running the write-path fold again finds nothing active: no second row.
     await refreshDiscipline(ctx.auth, fx);
-    expect(emailMock.served).toHaveBeenCalledTimes(1);
+    expect((await noticesOf("suspension_served", manual.id)).map((r) => r.id)).toEqual([rows[0]!.id]);
   });
 
   // Two serving passes can read ONE active ban at the same time: a decided
   // score write (`refreshDiscipline`) against a division page read
   // (`publicSuspensions` still serves on read), or two decided writes in one
   // division (two courts finishing together). Each computes "served"; only one
-  // may flip the row, and only the flip that COMMITTED may send the email.
-  describe("serving under concurrency — one flip, one served email, sent after commit", () => {
+  // may flip the row, and only the flip that COMMITTED may leave a notice.
+  describe("serving under concurrency — one flip, one served notice, queued with the flip", () => {
     /** The holder's grip on the ban row: its transaction id and the row's
      *  physical address, which is all a waiter on THAT row can be waiting on. */
     interface Grip {
@@ -841,7 +857,6 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       const [org] = await sql<{ slug: string }[]>`select slug from organizations where id = ${ctx.orgId}`;
       const [comp] = await sql<{ slug: string }[]>`select slug from competitions where org_id = ${ctx.orgId}`;
       const [division] = await sql<{ slug: string }[]>`select slug from divisions where id = ${ctx.divisionId}`;
-      emailMock.served.mockClear();
       return { ctx, banId: manual.id, fixtures, slugs: [org!.slug, comp!.slug, division!.slug] as const };
     }
 
@@ -881,18 +896,21 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       return racing;
     }
 
-    it("a decided score write and a division page read, together: one flip, ONE served email", async () => {
+    it("a decided score write and a division page read, together: one flip, ONE served notice", async () => {
       const { ctx, banId, fixtures, slugs } = await dueBan();
       await race<unknown>(banId, () => [refreshDiscipline(ctx.auth, fixtures[0]!), publicSuspensions(...slugs)]);
       expect(await statusOf(banId)).toEqual({ status: "served", matches_served: 1 });
-      expect(emailMock.served).toHaveBeenCalledTimes(1);
+      expect(await noticesOf("suspension_served", banId), "one row").toHaveLength(1);
+      // Only the pass whose guarded update flipped the ban asked; the once-key alone would hide a second ask.
+      expect(asksFor("suspension_served", banId), "asked once").toBe(1);
     });
 
-    it("two decided score writes in one division, together: one flip, ONE served email", async () => {
+    it("two decided score writes in one division, together: one flip, ONE served notice", async () => {
       const { ctx, banId, fixtures } = await dueBan();
       await race(banId, () => [refreshDiscipline(ctx.auth, fixtures[0]!), refreshDiscipline(ctx.auth, fixtures[1]!)]);
       expect(await statusOf(banId)).toEqual({ status: "served", matches_served: 1 });
-      expect(emailMock.served).toHaveBeenCalledTimes(1);
+      expect(await noticesOf("suspension_served", banId), "one row").toHaveLength(1);
+      expect(asksFor("suspension_served", banId), "asked once").toBe(1);
     });
 
     it("exactly ONE of two racing passes reports the flip — the other's guarded update matched nothing", async () => {
@@ -901,12 +919,14 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
         withTenant(ctx.orgId, (tx) => detectSuspensions(tx, ctx.divisionId)),
         withTenant(ctx.orgId, (tx) => detectSuspensions(tx, ctx.divisionId)),
       ]);
-      expect(flips.flat().map((flip) => flip.id)).toEqual([banId]);
-      // The pass itself never mails: its caller does, once the flip is committed.
-      expect(emailMock.served).not.toHaveBeenCalled();
+      expect(flips.flat()).toEqual([banId]);
+      // The pass that flipped it queued the one notice; nothing was sent (the worker sends it).
+      const rows = await noticesOf("suspension_served", banId);
+      expect(rows.map((r) => [r.status, r.attempts])).toEqual([["queued", 0]]);
+      expect(sendsOf(rows[0]!.id)).toBe(0);
     });
 
-    it("a serving pass whose transaction ROLLS BACK sends nothing; the next committed pass flips it and sends the one email", async () => {
+    it("a serving pass whose transaction ROLLS BACK leaves no notice; the next committed pass flips it and queues the one", async () => {
       const { ctx, banId } = await dueBan();
       await expect(
         withTenant(ctx.orgId, async (tx) => {
@@ -915,18 +935,18 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
         }),
       ).rejects.toThrow("rolled back after serving");
       expect(await statusOf(banId)).toEqual({ status: "active", matches_served: 0 });
-      expect(emailMock.served).not.toHaveBeenCalled();
+      expect(asksFor("suspension_served", banId), "premise: the rolled-back pass did flip it and ask").toBe(1);
+      expect(await noticesOf("suspension_served", banId), "its row rolled back with it").toEqual([]);
 
       await listSuspensions(ctx.auth, ctx.divisionId);
       expect(await statusOf(banId)).toEqual({ status: "served", matches_served: 1 });
-      expect(emailMock.served).toHaveBeenCalledTimes(1);
+      expect(await noticesOf("suspension_served", banId), "the committed pass's one row").toHaveLength(1);
     });
 
     // `activeSuspensionsByEntrant` serves inside a transaction its CALLER owns
-    // (the organiser division page), so it cannot send after a commit it
-    // never sees: it hands the flip to a notice that waits for that
-    // transaction to end and mails only a flip that committed.
-    it("the entrant-chip read serves inside its caller's transaction: nothing if that rolls back, one email once it commits", async () => {
+    // (the organiser division page): the notice is queued in that same
+    // transaction, so it stands or falls with the caller's commit.
+    it("the entrant-chip read serves inside its caller's transaction: no notice if that rolls back, one once it commits", async () => {
       const { ctx, banId } = await dueBan();
       await expect(
         withTenant(ctx.orgId, async (tx) => {
@@ -934,62 +954,23 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
           throw new Error("caller rolled back");
         }),
       ).rejects.toThrow("caller rolled back");
-      await new Promise((r) => setTimeout(r, 500));
       expect(await statusOf(banId)).toEqual({ status: "active", matches_served: 0 });
-      expect(emailMock.served).not.toHaveBeenCalled();
+      expect(await noticesOf("suspension_served", banId)).toEqual([]);
 
       await withTenant(ctx.orgId, (tx) => activeSuspensionsByEntrant(tx, ctx.divisionId));
-      await expect.poll(() => emailMock.served.mock.calls.length, { timeout: 5_000 }).toBe(1);
       expect(await statusOf(banId)).toEqual({ status: "served", matches_served: 1 });
-      await new Promise((r) => setTimeout(r, 300));
-      expect(emailMock.served).toHaveBeenCalledTimes(1);
-    });
-
-    // The notice checks THIS pass's flip, not merely that the row is served: a
-    // served row flipped by someone else carries someone else's email.
-    it("an entrant-chip notice that runs after its caller ROLLED BACK and another pass flipped and committed sends nothing — the other pass's own notice is the one email", async () => {
-      const { ctx, banId } = await dueBan();
-      // Capture the tail work instead of running it inline, as a request's
-      // after-window would run it later.
-      let notice: (() => unknown) | undefined;
-      vi.mocked(after).mockImplementationOnce((task) => {
-        notice = task as () => unknown;
-      });
-      await expect(
-        withTenant(ctx.orgId, async (tx) => {
-          await activeSuspensionsByEntrant(tx, ctx.divisionId);
-          throw new Error("caller rolled back");
-        }),
-      ).rejects.toThrow("caller rolled back");
-      expect(notice).toBeTypeOf("function");
-
-      // Another pass flips the ban for real, commits and mails.
-      await listSuspensions(ctx.auth, ctx.divisionId);
-      expect(await statusOf(banId)).toEqual({ status: "served", matches_served: 1 });
-      expect(emailMock.served).toHaveBeenCalledTimes(1);
-
-      // Now the rolled-back pass's notice runs: the row IS served, but not by it.
-      await notice!();
-      expect(emailMock.served).toHaveBeenCalledTimes(1);
+      expect((await noticesOf("suspension_served", banId)).map((r) => [r.status, r.attempts])).toEqual([["queued", 0]]);
     });
   });
 
-  // A notice runs after the write committed. If it throws, the write still
-  // stands — so it must not make the write look failed.
-  describe("a served notice that fails never fails the write that committed", () => {
-    let warn: ReturnType<typeof vi.spyOn>;
-    beforeEach(() => {
-      warn = vi.spyOn(log, "warn").mockImplementation(() => undefined as never);
-    });
-    // `log` is a module singleton: an unrestored spy leaks into every later test.
-    afterEach(() => {
-      warn.mockRestore();
-    });
-
+  // The served notice no longer runs after the write: it is a row the write's own transaction queued, and the retry
+  // worker sends it. So nothing after the commit can fail the score, and the notice still reaches the player.
+  describe("the served notice is the worker's: queued with the flip, sent by the worker", () => {
     async function forfeitServesBan() {
       const ctx = await seedFootballDivision();
       await sql`update divisions set status = 'active' where id = ${ctx.divisionId}`;
-      await claimPerson(ctx.personX, `claim-${randomUUID().slice(0, 8)}@test.local`);
+      const email = address("worker");
+      await claimPerson(ctx.personX, email);
       const manual = await createManualSuspension(ctx.auth, ctx.divisionId, {
         personId: ctx.personX,
         matchesTotal: 1,
@@ -997,14 +978,11 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       });
       await decideSuspension(ctx.auth, manual.id, { kind: "confirm" });
       const fx = await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB);
-      return { ctx, banId: manual.id, fx };
+      return { ctx, banId: manual.id, fx, email };
     }
 
-    it("the notifier THROWS after the score committed: scoreEvent still resolves, the result and the flip both stand, and a warning is logged", async () => {
-      const { ctx, banId, fx } = await forfeitServesBan();
-      emailMock.served.mockImplementationOnce(() => {
-        throw new Error("mail client blew up");
-      });
+    it("the score that serves the ban resolves, the result and the flip both stand, the notice waits queued, and one worker tick sends it", async () => {
+      const { ctx, banId, fx, email } = await forfeitServesBan();
 
       await expect(
         scoreEvent(ctx.auth, fx, { expected_seq: 0, type: "core.forfeit", payload: { by: ctx.entrantA, reason: "walkover" } }),
@@ -1014,25 +992,19 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       expect(fixture!.status).toBe("forfeited");
       const [ban] = await sql<{ status: string }[]>`select status from suspensions where id = ${banId}`;
       expect(ban!.status).toBe("served");
-      expect(warn).toHaveBeenCalledWith(
-        expect.objectContaining({ suspensionIds: [banId], err: "mail client blew up" }),
-        "discipline: the served notice failed after commit; the ban stands served",
-      );
-    });
+      const [row] = await noticesOf("suspension_served", banId);
+      expect(row, "the notice was queued with the flip").toMatchObject({ status: "queued", attempts: 0, recipient: email });
+      expect(sendsOf(row!.id), "the score's request did not send it").toBe(0);
 
-    it("a served email whose send REJECTS is logged, never silently dropped", async () => {
-      const { ctx, banId, fx } = await forfeitServesBan();
-      emailMock.served.mockRejectedValueOnce(new Error("provider 503"));
-      await scoreEvent(ctx.auth, fx, { expected_seq: 0, type: "core.forfeit", payload: { by: ctx.entrantA, reason: "walkover" } });
-      await expect
-        .poll(() => warn.mock.calls.some((c: unknown[]) => (c[1] as string) === "discipline: a served email failed to send"))
-        .toBe(true);
-      const call = warn.mock.calls.find((c: unknown[]) => (c[1] as string) === "discipline: a served email failed to send")!;
-      expect(call[0]).toMatchObject({ suspensionId: banId, err: "provider 503" });
+      // The worker's turn: past the first-attempt window, one tick sends it.
+      await bornAgo([row!.id]);
+      await runOutboxTick({ onlyIds: [row!.id], sleep: async () => undefined });
+      expect((await noticesOf("suspension_served", banId)).map((r) => r.status)).toEqual(["sent"]);
+      expect(sendsOf(row!.id), "sent once, by the worker").toBe(1);
     });
   });
 
-  it("waive: excluded from activeSuspensionsByEntrant/publicSuspensions; served email never fires", async () => {
+  it("waive: excluded from activeSuspensionsByEntrant/publicSuspensions; no served notice", async () => {
     const ctx = await seedFootballDivision();
     const email = `claim-${randomUUID().slice(0, 8)}@test.local`;
     await claimPerson(ctx.personX, email);
@@ -1045,7 +1017,6 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       kind: "confirm",
     });
     expect(active.status).toBe("active");
-    emailMock.served.mockClear();
 
     const waived = await decideSuspension(ctx.auth, manual.id, {
       kind: "waive",
@@ -1069,10 +1040,10 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
     const pub = await publicSuspensions(org!.slug, comp!.slug, division!.slug);
     expect(pub).toEqual([]); // waived is neither active nor listed publicly
 
-    // A further recompute-on-read pass (listSuspensions) must not fire the
+    // A further recompute-on-read pass (listSuspensions) must not queue the
     // served notice for a waived row — it never enters the `active` set.
     await listSuspensions(ctx.auth, ctx.divisionId);
-    expect(emailMock.served).not.toHaveBeenCalled();
+    expect(await noticesOf("suspension_served", manual.id)).toEqual([]);
   });
 
   it("a yellow-accumulation threshold and a straight red fire together without cross-contamination", async () => {
@@ -1255,7 +1226,7 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       expect(await activePublicSuspensionEntries([ctx.divisionId])).toEqual([]);
     });
 
-    it("READ-ONLY: a ban a result has already served stays active in the table, is still listed, and no served email fires — the division page's reader still serves it", async () => {
+    it("READ-ONLY: a ban a result has already served stays active in the table, is still listed, and no served notice is queued — the division page's reader still serves it", async () => {
       const ctx = await seedFootballDivision();
       await claimPerson(ctx.personX, `claim-${randomUUID().slice(0, 8)}@test.local`);
       const id = await ban(ctx, ctx.personX, 1);
@@ -1269,18 +1240,17 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
       const statusOf = async () =>
         (await sql<{ status: string; matches_served: number }[]>`
           select status, matches_served from suspensions where id = ${id}`)[0];
-      emailMock.served.mockClear();
 
       const entries = await activePublicSuspensionEntries([ctx.divisionId]);
       expect(entries.map((e) => e.personId)).toEqual([ctx.personX]);
       expect(await statusOf()).toEqual({ status: "active", matches_served: 0 });
-      expect(emailMock.served).not.toHaveBeenCalled();
+      expect(await noticesOf("suspension_served", id)).toEqual([]);
 
       // The division page is untouched: its reader still serves on read.
       const [orgSlug, compSlug, divSlug] = await slugsOf(ctx);
       expect(await publicSuspensions(orgSlug, compSlug, divSlug)).toEqual([]);
       expect(await statusOf()).toEqual({ status: "served", matches_served: 1 });
-      expect(emailMock.served).toHaveBeenCalledTimes(1);
+      expect(await noticesOf("suspension_served", id)).toHaveLength(1);
     });
 
     it("the division page's reader keeps its 404 for a division a spectator cannot see", async () => {

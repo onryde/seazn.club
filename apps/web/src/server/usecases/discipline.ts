@@ -14,14 +14,12 @@ import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { resolvePersonDisplayName } from "@/lib/name-display";
-import type { Locale } from "@/lib/i18n-constants";
-import { sendSuspensionServedEmail, suspensionConfirmedEmail } from "@/lib/email";
+import { suspensionConfirmedEmail, suspensionServedEmail } from "@/lib/email";
 import { dispatchNow, enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
 import { suspendedPlayersMessage } from "@/lib/registration-rules";
 import { deferred } from "@/lib/deferred";
-import { log } from "@/server/logger";
 import { audit } from "./audit";
 
 type Tx = postgres.TransactionSql;
@@ -177,11 +175,11 @@ interface WantRow {
 /** Recompute-on-read fold + detection + serving. Idempotent. Safe on divisions
  *  with no rules row and no active suspensions (no-op).
  *
- *  Returns the bans THIS pass flipped active→served, and sends
- *  nothing: the "served" notice belongs after the transaction commits, which
- *  only the caller sees. Every caller that owns its transaction passes these
- *  to `notifyServedSuspensions` once `withTenant` has resolved. */
-export async function detectSuspensions(tx: Tx, divisionId: string): Promise<ServedFlip[]> {
+ *  Returns the ids of the bans THIS pass flipped active→served. Each one's
+ *  "served" notice is already queued on `tx` (`updateServing`), so it commits
+ *  or rolls back with the flip, and the retry worker sends it: callers have
+ *  nothing to do after their transaction. */
+export async function detectSuspensions(tx: Tx, divisionId: string): Promise<string[]> {
   const [rules] = await tx<
     { org_id: string; enabled: boolean; rules: DisciplineRules; sport_key: string; module_version: string }[]
   >`
@@ -358,7 +356,7 @@ function groupByPerson<T extends { personId: string }>(cards: T[]): Map<string, 
 // legacy chess `boardgame.result{double_forfeit}`, which carries no core.forfeit,
 // counts too); abandoned/cancelled and forfeits by anyone else never do. A
 // fixture's elapsed time = its latest recorded event.
-async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Promise<ServedFlip[]> {
+async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Promise<string[]> {
   const active = await tx<
     { id: string; entrant_id: string | null; decided_at: Date | null; matches_total: number }[]
   >`
@@ -382,7 +380,7 @@ async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Pr
     }
   }
 
-  const flipped: ServedFlip[] = [];
+  const flipped: string[] = [];
   for (const s of active) {
     if (!s.entrant_id || !s.decided_at) continue;
     let served = 0;
@@ -400,93 +398,62 @@ async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Pr
     // can both see this ban active and both compute "served". The second
     // UPDATE waits on the first's row lock, then re-checks the WHERE against
     // the committed row — no longer active — and matches nothing. So only the
-    // statement that actually flipped the row reports it.
-    // `xmin` names THIS transaction as the writer of the flip, so the notice
-    // can tell its own flip from someone else's (see `notifyServedSuspensions`).
-    const updated = await tx<{ id: string; xmin: string }[]>`
+    // statement that actually flipped the row reports it, and queues its notice.
+    const updated = await tx<{ id: string }[]>`
       update suspensions set matches_served = ${capped}, status = ${status}, updated_at = now()
       where id = ${s.id} and status = 'active'
-      returning id, xmin::text as xmin`;
-    if (status === "served" && updated.length > 0) flipped.push({ id: s.id, xmin: updated[0]!.xmin });
+      returning id`;
+    if (status === "served" && updated.length > 0) {
+      // The player's notice, queued with the flip: it exists exactly when the flip committed (R1), which is what the
+      // after-commit `xmin` check used to stand in for (spec §8). The once-key backs it.
+      await queueSuspensionServed(tx, s.id);
+      flipped.push(s.id);
+    }
   }
   return flipped;
 }
 
-/** One ban a serving pass flipped active→served: the row, and the id of the
- *  transaction that wrote that flip (`xmin` of the row version it produced). */
-export interface ServedFlip {
-  id: string;
-  xmin: string;
-}
-
-const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
-
 /**
- * Notify claimed players whose suspensions a serving pass flipped to served —
- * called with `detectSuspensions`' return value AFTER the transaction that
- * flipped them has ended. Superuser read (users is a global table); unclaimed
- * persons (no users row) drop out of the join and get no mail. The sends are
- * fire-and-forget, and a send that rejects is logged.
- *
- * The first read takes `for share` on the rows WITHOUT filtering on status:
- * a row lock is only taken — and so only waited for — on rows the snapshot
- * already matches, and a flip still uncommitted reads as `active` in it. So it
- * waits out a flipping transaction that is still open (the one caller that
- * serves inside a transaction it does not own hands its flips here without
- * being able to wait for that commit) and sees the row as that transaction
- * left it.
- *
- * A row is mailed only if it is served AND its current version is still the
- * one THIS pass wrote (`xmin`). "Is served" alone is not enough: a pass that
- * rolled back, whose notice runs after another pass flipped the ban and
- * committed, would otherwise mail a flip that other pass already mailed. A row
- * rewritten again since the flip (an organiser edit) is not mailed either —
- * delivery is at most once, never twice.
- *
- * NEVER throws: it runs after a commit, and a notice that fails must not make
- * a write that already stands look failed. A failure is logged instead.
+ * Queue the "suspension served" notice for the ban `suspensionId` on the email outbox, on `tx` (the serving pass's tenant
+ * transaction, which may be a read's): to the claimed player's ACCOUNT, in their language (D4: the account's, then the org's
+ * default, then `en`), at most once per ban (once-key `<id>:served`). The retry worker makes the first attempt: a serving
+ * pass has no request of its own to send from. Returns the row's id, or `null` when there is nobody to address (the person
+ * is not linked to a live account) or the ban's notice is already queued. Every read is on `tx` (#996).
  */
-export async function notifyServedSuspensions(flips: readonly ServedFlip[]): Promise<void> {
-  if (flips.length === 0) return;
-  try {
-    const wrote = new Map(flips.map((f) => [f.id, f.xmin]));
-    const settled = await sql<{ id: string; status: string; xmin: string }[]>`
-      select id, status, xmin::text as xmin from suspensions where id = any(${[...wrote.keys()]}) for share`;
-    const served = settled.filter((r) => r.status === "served" && r.xmin === wrote.get(r.id)).map((r) => r.id);
-    if (served.length === 0) return;
-    const rows = await sql<
-      {
-        id: string;
-        email: string | null;
-        locale: string | null;
-        org_name: string;
-        division_name: string;
-        reason: string;
-      }[]
-    >`
-      select s.id, u.email, u.locale, o.name as org_name, d.name as division_name, s.reason
-      from suspensions s
-      join persons p on p.id = s.person_id
-      join users u on u.id = p.user_id
-      join divisions d on d.id = s.division_id
-      join organizations o on o.id = s.org_id
-      where s.id = any(${served})`;
-    for (const r of rows) {
-      if (!r.email) continue;
-      void sendSuspensionServedEmail(
-        r.email,
-        { orgName: r.org_name, divisionName: r.division_name, reason: r.reason },
-        (r.locale as Locale) ?? "en",
-      ).catch((err: unknown) => {
-        log.warn({ suspensionId: r.id, err: errorText(err) }, "discipline: a served email failed to send");
-      });
-    }
-  } catch (err) {
-    log.warn(
-      { suspensionIds: flips.map((f) => f.id), err: errorText(err) },
-      "discipline: the served notice failed after commit; the ban stands served",
-    );
-  }
+export async function queueSuspensionServed(tx: Tx, suspensionId: string): Promise<string | null> {
+  const [r] = await tx<
+    {
+      org_id: string;
+      user_id: string;
+      email: string | null;
+      org_name: string;
+      default_locale: string | null;
+      division_name: string;
+      reason: string;
+    }[]
+  >`
+    select s.org_id, u.id as user_id, u.email, o.name as org_name, o.default_locale, d.name as division_name, s.reason
+    from suspensions s
+    join persons p on p.id = s.person_id
+    join users u on u.id = p.user_id and u.deleted_at is null
+    join divisions d on d.id = s.division_id
+    join organizations o on o.id = s.org_id
+    where s.id = ${suspensionId}`;
+  if (!r?.email) return null;
+  const locale = await recipientLocale(tx, { pick: null, userId: r.user_id, orgDefault: r.default_locale });
+  const content = await suspensionServedEmail({ orgName: r.org_name, divisionName: r.division_name, reason: r.reason }, locale);
+  return enqueueEmailOnce(tx, {
+    kind: "suspension_served",
+    refType: "suspension",
+    refId: suspensionId,
+    dedupeKey: onceKey("suspension_served", "suspension", suspensionId, "served"),
+    orgId: r.org_id,
+    to: r.email,
+    recipientUserId: r.user_id,
+    ...content,
+    transactional: true,
+    expiresAt: expiryWithin(null),
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -604,7 +571,7 @@ export async function putDisciplineRules(
   body: { enabled: boolean; rules: DisciplineRules },
 ): Promise<void> {
   await requireFeature(auth.orgId, "discipline.enforced", await competitionForDivision(divisionId));
-  const served = await withTenant(auth.orgId, async (tx) => {
+  await withTenant(auth.orgId, async (tx) => {
     const [division] = await tx<{ sport_key: string; module_version: string }[]>`
       select sport_key, module_version from divisions where id = ${divisionId}`;
     if (!division) throw new HttpError(404, "division not found");
@@ -620,9 +587,8 @@ export async function putDisciplineRules(
       values (${auth.orgId}, ${divisionId}, ${body.enabled}, ${tx.json(body.rules as never)})
       on conflict (division_id)
         do update set enabled = excluded.enabled, rules = excluded.rules, updated_at = now()`;
-    return detectSuspensions(tx, divisionId);
+    await detectSuspensions(tx, divisionId);
   });
-  await notifyServedSuspensions(served);
 }
 
 export async function listSuspensions(
@@ -633,9 +599,8 @@ export async function listSuspensions(
   // Division-scoped, so exactly ONE competition — the filtering question the
   // org-wide readers in usecases/player-stats.ts had to answer does not arise.
   await requireFeature(auth.orgId, "discipline.enforced", await competitionForDivision(divisionId));
-  let served: ServedFlip[] = [];
-  const result = await withTenant(auth.orgId, async (tx) => {
-    served = await detectSuspensions(tx, divisionId);
+  return withTenant(auth.orgId, async (tx) => {
+    await detectSuspensions(tx, divisionId);
     const rows = await tx<SuspensionRow[]>`
       select ${SELECT_SUSPENSION(tx)}
       from suspensions s
@@ -647,8 +612,6 @@ export async function listSuspensions(
     const voided = await voidedSet(tx, divisionId);
     return rows.map((r) => mapRow(r, voided));
   });
-  await notifyServedSuspensions(served);
-  return result;
 }
 
 export async function createManualSuspension(
@@ -686,7 +649,6 @@ export async function decideSuspension(
     | { kind: "adjust"; matchesTotal?: number; reason?: string },
 ): Promise<Suspension> {
   await requireFeature(auth.orgId, "discipline.enforced", await competitionForSuspension(id));
-  let served: ServedFlip[] = [];
   let confirmedNotice: string | null = null;
   const result = await withTenant(auth.orgId, async (tx) => {
     // `for update`: two confirms of one pending ban serialise here, so exactly one of them reads `pending` and owes the
@@ -726,13 +688,12 @@ export async function decideSuspension(
           reason = coalesce(${action.reason ?? null}, reason), updated_at = now()
         where id = ${id}`;
     }
-    served = await detectSuspensions(tx, s.division_id);
+    await detectSuspensions(tx, s.division_id);
     return loadSuspension(tx, s.division_id, id);
   });
   // R5: the first attempt after the decision committed (the request's, as tail work); the worker retries it.
   const queued = confirmedNotice;
   if (queued !== null) deferred(() => dispatchNow([queued]));
-  await notifyServedSuspensions(served);
   return result;
 }
 
@@ -792,11 +753,10 @@ export async function activeSuspensionsByEntrant(
   tx: Tx,
   divisionId: string,
 ): Promise<Map<string, { personId: string; personName: string; remaining: number }[]>> {
-  // The transaction is the CALLER's (the organiser division page), so its
-  // commit is out of sight here: hand any flip to the notice as tail work. It
-  // waits for this transaction to end and mails only a flip that committed.
-  const served = await detectSuspensions(tx, divisionId);
-  if (served.length > 0) deferred(() => notifyServedSuspensions(served));
+  // The transaction is the CALLER's (the organiser division page): a flip here
+  // queues its notice in that same transaction, so it stands or falls with the
+  // caller's commit.
+  await detectSuspensions(tx, divisionId);
   const rows = await tx<
     { entrant_id: string; person_id: string; person_name: string; remaining: number }[]
   >`
@@ -844,9 +804,8 @@ export async function suspensionsForFixture(
   if (ids.length === 0) return [];
   const competitionId = await competitionForDivision(divisionId);
   if (!(await hasFeature(auth.orgId, "discipline.enforced", competitionId))) return [];
-  let served: ServedFlip[] = [];
-  const result = await withTenant(auth.orgId, async (tx) => {
-    served = await detectSuspensions(tx, divisionId);
+  return withTenant(auth.orgId, async (tx) => {
+    await detectSuspensions(tx, divisionId);
     const rows = await tx<
       { person_id: string; person_name: string; served: number; total: number }[]
     >`
@@ -862,8 +821,6 @@ export async function suspensionsForFixture(
       total: r.total,
     }));
   });
-  await notifyServedSuspensions(served);
-  return result;
 }
 
 /** Public "Suspensions" strip: active bans, names via public_person_name
@@ -884,7 +841,7 @@ export async function publicSuspensions(
     where o.slug = ${orgSlug} and c.slug = ${competitionSlug} and d.slug = ${divisionSlug}
       and c.visibility in ('public','unlisted')`;
   if (!division) throw new HttpError(404, "division not found");
-  await notifyServedSuspensions(await withTenant(division.org_id, (tx) => detectSuspensions(tx, division.id)));
+  await withTenant(division.org_id, (tx) => detectSuspensions(tx, division.id));
   const rows = await sql<{ name: string; consent: { public_name?: boolean } | null; remaining: number }[]>`
     select public_person_name(p.full_name, p.consent) as name, p.consent,
            (s.matches_total - s.matches_served) as remaining

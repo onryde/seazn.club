@@ -40,7 +40,7 @@ import { isOrganiserOnlyEvent } from "@/lib/organiser-only-events";
 import { DEPARTED_STATUSES } from "./entrants";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
 import { fillSlot, markDependentSeedProposalsStale, resolveBracketSeats, stampDepartedSeat } from "./stages";
-import { detectSuspensions, notifyServedSuspensions, type ServedFlip } from "./discipline";
+import { detectSuspensions } from "./discipline";
 import { draftPostsForDecidedFixture } from "./org-posts";
 import {
   RESULT_CARRIED_FORWARD,
@@ -786,20 +786,19 @@ export function requiresDlsEntitlement(
 // effects scoreEvent does, in the same order — reusing these three rather
 // than copying their bodies is what keeps the two paths from drifting apart.
 export async function refreshDiscipline(auth: AuthCtx, fixtureId: string): Promise<void> {
-  const served = await withTenant(auth.orgId, async (tx): Promise<ServedFlip[]> => {
+  // A ban this fold flips to served queues its notice in this same transaction
+  // (`updateServing`), and the retry worker sends it: nothing runs after commit.
+  await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<{ division_id: string }[]>`
       select division_id from fixtures where id = ${fixtureId}`;
-    if (!row) return [];
+    if (!row) return;
     const [due] = await tx`
       select 1
       where exists (select 1 from discipline_rules where division_id = ${row.division_id} and enabled)
          or exists (select 1 from suspensions where division_id = ${row.division_id} and status = 'active')`;
-    if (!due) return [];
-    return detectSuspensions(tx, row.division_id);
+    if (!due) return;
+    await detectSuspensions(tx, row.division_id);
   });
-  // After the commit, and only for the bans this pass flipped. The notice never
-  // throws (see `notifyServedSuspensions`): the score already stands.
-  await notifyServedSuspensions(served);
 }
 
 // News auto-drafts (SPEC-2): a decided/void write may draft a result/round_recap

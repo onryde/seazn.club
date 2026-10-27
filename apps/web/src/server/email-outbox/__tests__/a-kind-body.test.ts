@@ -31,7 +31,8 @@
 //    group. Nothing reaches Stripe: the group is found by the subscription id it stores.
 //  - The suspension notices are driven through the real discipline producers on a football division with a unique name (the positive
 //    pair) whose player is claimed by a fresh account: the confirmed notice through `decideSuspension` (confirm). Its request makes the
-//    first attempt, which the transport refuses (503), so the row is judged once that attempt is over and it is queued again.
+//    first attempt, which the transport refuses (503), so the row is judged once that attempt is over and it is queued again. The
+//    served notice through `refreshDiscipline` on a decided fixture that serves the ban; it waits for the worker, queued.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -52,7 +53,8 @@ import { handleSponsorDispute } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
 import { seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
-import { claimPerson, seedFootballDivision } from "@/server/usecases/__tests__/_seed";
+import { claimPerson, makeFixture, seedFootballDivision } from "@/server/usecases/__tests__/_seed";
+import { refreshDiscipline } from "@/server/usecases/scoring";
 import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -212,6 +214,21 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       expect((await decideSuspension(ctx.auth, ban.id, { kind: "confirm" })).status, "premise: the real confirm made the ban live").toBe("active");
       // The notice names the division the ban is in.
       return { rowIds: await attemptedRowIdsOf("suspension_confirmed", "suspension", ban.id), positive: literal(divisionName) };
+    },
+    suspension_served: async () => {
+      const { ctx, divisionName } = await claimedFootballDivision();
+      const ban = await createManualSuspension(ctx.auth, ctx.divisionId, { personId: ctx.personX, matchesTotal: 1, reason: "violent conduct" });
+      await decideSuspension(ctx.auth, ban.id, { kind: "confirm" });
+      // A decided fixture of the banned team, after the ban: the score write's fold serves it.
+      const fx = await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB, "decided");
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${fx}, ${ctx.orgId}, 1, 'core.note', ${sql.json({ text: "d" })}, now() + interval '1 hour')`;
+      await refreshDiscipline(ctx.auth, fx);
+      const rows = await sql<{ id: string }[]>`
+        select id from email_outbox where kind = 'suspension_served' and ref_type = 'suspension' and ref_id = ${ban.id}`;
+      // The notice names the division the ban was served in.
+      return { rowIds: rows.map((x) => x.id), positive: literal(divisionName) };
     },
   };
 

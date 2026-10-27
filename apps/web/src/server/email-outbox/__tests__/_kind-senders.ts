@@ -49,7 +49,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendStreamCreditGrantFailedAlertEmail",
   "sendStreamPackPriceDriftAlertEmail",
   "sendStuckEventsAlertEmail",
-  "sendSuspensionServedEmail",
   "sendTransferCompleteEmail",
   "sendTransferOfferEmail",
 ];
@@ -60,7 +59,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  way, in the spec's table order: each kind task (T2-T4) deletes its own, and the last move closes the list again. The sweep covers every
  *  kind not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "suspension_served",
   "match_report_submitted",
   "group_transfer_offer",
   "group_transfer_complete",
@@ -101,7 +99,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   official_assigned: null,
   official_assignment_changed: null,
   suspension_confirmed: null,
-  suspension_served: "sendSuspensionServedEmail",
+  suspension_served: null,
   match_report_submitted: "sendReportSubmittedEmail",
   group_transfer_offer: "sendTransferOfferEmail",
   group_transfer_complete: "sendTransferCompleteEmail",

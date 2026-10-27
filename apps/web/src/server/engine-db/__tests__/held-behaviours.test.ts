@@ -9,16 +9,16 @@
 // Witnesses are passthrough spies on the two modules the refreshes call (the real code still runs).
 import { afterAll, describe, expect, it, vi } from "vitest";
 
-const calls = vi.hoisted(() => ({ notify: 0, drafted: [] as string[] }));
+const calls = vi.hoisted(() => ({ fold: 0, drafted: [] as string[] }));
 
 vi.mock("@/server/usecases/discipline", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/usecases/discipline")>();
   return {
     ...real,
-    // refreshDiscipline's last act, unconditional (an empty list when no rule is due).
-    notifyServedSuspensions: vi.fn(async (...a: Parameters<typeof real.notifyServedSuspensions>) => {
-      calls.notify++;
-      return real.notifyServedSuspensions(...a);
+    // refreshDiscipline's fold: it runs whenever the division has an enabled rule set (the rig below gives it one).
+    detectSuspensions: vi.fn(async (...a: Parameters<typeof real.detectSuspensions>) => {
+      calls.fold++;
+      return real.detectSuspensions(...a);
     }),
   };
 });
@@ -64,18 +64,22 @@ describe.skipIf(!HAS_DB)("M-3: the held behaviours Task 8 changed", () => {
     const s = await seedBracket({ sport: "boardgame", variant: "classical", stageKind: "knockout", entrants: 2 });
     const id = s.fixtureIds[0]!;
     await sql`update divisions set auto_posts = true where id = ${s.divisionId}`;
+    // An enabled (empty) rule set, so refreshDiscipline folds whenever it runs: its fold is the witness that it ran.
+    await sql`
+      insert into discipline_rules (org_id, division_id, enabled, rules)
+      values (${s.auth.orgId}, ${s.divisionId}, true, ${sql.json({ accumulation: [], dismissal: [] })})`;
     await appendEvent(s.auth.orgId, id, 0, { type: "core.start", payload: {} });
     // A frozen cfg without the bracket overlay's tie-break, so the drawn game HOLDS (settle-seating's dropTiebreak).
     await sql`update fixtures set config_snapshot = config_snapshot - 'tiebreak' where id = ${id}`;
-    const notifyBefore = calls.notify;
+    const foldBefore = calls.fold;
     await post(s.auth, id, "boardgame.result", { winner: null, method: "agreement" });
     expect(await status(id), "the rig must actually hold the fixture").toBe("needs_decision");
-    expect(calls.notify - notifyBefore, "refreshDiscipline ran for the held write").toBe(0);
+    expect(calls.fold - foldBefore, "refreshDiscipline ran for the held write").toBe(0);
     expect(calls.drafted.filter((x) => x === id), "refreshNews ran for the held write").toEqual([]);
     const { home } = await sides(id);
     await post(s.auth, id, "core.settle", { winner: home, method: "organiser" });
     expect(await status(id)).toBe("decided");
-    expect(calls.notify - notifyBefore, "the settle runs refreshDiscipline").toBe(1);
+    expect(calls.fold - foldBefore, "the settle runs refreshDiscipline").toBe(1);
     expect(calls.drafted.filter((x) => x === id), "the settle runs refreshNews").toEqual([id]);
   });
 
