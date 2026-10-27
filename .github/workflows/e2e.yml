@@ -983,6 +983,16 @@ jobs:
           echo "::add-mask::$kek"
           echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
 
+      # YouTube Connect (plan T7, pulled forward from T20/T21): the OAuth callback SEALS the channel's refresh token with
+      # YOUTUBE_TOKEN_KEK (server/youtube/token-store.ts), and the start refuses to send anyone to Google while it is unusable.
+      # A fresh random key per run, masked, and never a literal: this repository is public. Pinned by
+      # e2e-ci-wiring.test.ts ("YOUTUBE_TOKEN_KEK reaches …").
+      - name: Generate a per-run YOUTUBE_TOKEN_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "YOUTUBE_TOKEN_KEK=$kek" >> "$GITHUB_ENV"
+
       - name: Start server
         # On the SERVER, not the Playwright step: `build.ts` runs server-side,
         # so the server is what dials the solver. Set only on the test step,
@@ -1010,6 +1020,13 @@ jobs:
           # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
           ENV_NAME: ci
+          # YouTube Connect: the fake YouTube (server/youtube/driver.ts), as RELAY_DRIVERS=fake picks the fake relay. Under
+          # production an UNSET YOUTUBE_DRIVER is LIVE, and the fake's routes (the control route, the fake authorize hop) also
+          # need ENV_NAME ci, set above. The redirect URI is pinned to the browser's own origin: the standalone server binds
+          # 0.0.0.0, so a base URL derived from the request would send the authorize hop to an origin whose cookies are not the
+          # browser's. Pinned by e2e-ci-wiring.test.ts.
+          YOUTUBE_DRIVER: fake
+          YOUTUBE_REDIRECT_URI: http://localhost:3000/api/youtube/connect/callback
           # Capture QR v2: the panel's phone-camera option is behind the PostHog flag capture-qr-v2
           # (fallback false, and CI has no PostHog); the override shows it to every spec and walkthrough.
           # Exactly "1". Staging and prod never set it.
@@ -1491,6 +1508,16 @@ jobs:
           echo "::add-mask::$kek"
           echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
 
+      # YouTube Connect (plan T7, pulled forward from T20/T21): the OAuth callback SEALS the channel's refresh token with
+      # YOUTUBE_TOKEN_KEK (server/youtube/token-store.ts), and the start refuses to send anyone to Google while it is unusable.
+      # A fresh random key per run, masked, and never a literal: this repository is public. Pinned by
+      # e2e-ci-wiring.test.ts ("YOUTUBE_TOKEN_KEK reaches …").
+      - name: Generate a per-run YOUTUBE_TOKEN_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "YOUTUBE_TOKEN_KEK=$kek" >> "$GITHUB_ENV"
+
       - name: Start server
         env:
           # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
@@ -1513,6 +1540,13 @@ jobs:
           # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
           ENV_NAME: ci
+          # YouTube Connect: the fake YouTube (server/youtube/driver.ts), as RELAY_DRIVERS=fake picks the fake relay. Under
+          # production an UNSET YOUTUBE_DRIVER is LIVE, and the fake's routes (the control route, the fake authorize hop) also
+          # need ENV_NAME ci, set above. The redirect URI is pinned to the browser's own origin: the standalone server binds
+          # 0.0.0.0, so a base URL derived from the request would send the authorize hop to an origin whose cookies are not the
+          # browser's. Pinned by e2e-ci-wiring.test.ts.
+          YOUTUBE_DRIVER: fake
+          YOUTUBE_REDIRECT_URI: http://localhost:3000/api/youtube/connect/callback
           # Capture QR v2: the panel's phone-camera option is behind the PostHog flag capture-qr-v2
           # (fallback false, and CI has no PostHog); the override shows it to every spec and walkthrough.
           # Exactly "1". Staging and prod never set it.
@@ -1860,6 +1894,16 @@ jobs:
           echo "::add-mask::$kek"
           echo "RELAY_KEK=$kek" >> "$GITHUB_ENV"
 
+      # YouTube Connect (plan T7, pulled forward from T20/T21): the OAuth callback SEALS the channel's refresh token with
+      # YOUTUBE_TOKEN_KEK (server/youtube/token-store.ts), and the start refuses to send anyone to Google while it is unusable.
+      # A fresh random key per run, masked, and never a literal: this repository is public. Pinned by
+      # e2e-ci-wiring.test.ts ("YOUTUBE_TOKEN_KEK reaches …").
+      - name: Generate a per-run YOUTUBE_TOKEN_KEK
+        run: |
+          kek=$(openssl rand -hex 32)
+          echo "::add-mask::$kek"
+          echo "YOUTUBE_TOKEN_KEK=$kek" >> "$GITHUB_ENV"
+
       - name: Start server
         env:
           # register() runs on this server, and sentry.server.config.ts enables Sentry the moment a DSN exists. Held
@@ -1882,6 +1926,13 @@ jobs:
           # to boot, exactly as a deployment missing its ENV_NAME would.
           RELAY_DRIVERS: fake
           ENV_NAME: ci
+          # YouTube Connect: the fake YouTube (server/youtube/driver.ts), as RELAY_DRIVERS=fake picks the fake relay. Under
+          # production an UNSET YOUTUBE_DRIVER is LIVE, and the fake's routes (the control route, the fake authorize hop) also
+          # need ENV_NAME ci, set above. The redirect URI is pinned to the browser's own origin: the standalone server binds
+          # 0.0.0.0, so a base URL derived from the request would send the authorize hop to an origin whose cookies are not the
+          # browser's. Pinned by e2e-ci-wiring.test.ts.
+          YOUTUBE_DRIVER: fake
+          YOUTUBE_REDIRECT_URI: http://localhost:3000/api/youtube/connect/callback
           # Capture QR v2: the panel's phone-camera option is behind the PostHog flag capture-qr-v2
           # (fallback false, and CI has no PostHog); the override shows it to every spec and walkthrough.
           # Exactly "1". Staging and prod never set it.
