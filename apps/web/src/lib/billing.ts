@@ -19,7 +19,8 @@ import { creditPassTowardSubscription } from "@/server/usecases/pass-credit";
 import { grantPassStreamCredits } from "@/server/usecases/stream-credits";
 import {
   passRungMismatchAlertEmail,
-  sendPassUnknownCompetitionAlertEmail,
+  passUnknownCompetitionAlertEmail,
+  type PassUnknownCompetitionAlertEmail,
 } from "@/lib/email";
 import { queueStaffAlert } from "@/server/usecases/staff-alert";
 
@@ -1457,6 +1458,22 @@ export async function maybeAlertPassRungMismatch(opts: {
 }
 
 /**
+ * Staff alert for a paid Event Pass naming a competition this database does not
+ * hold: queued on the email outbox (kind `staff_pass_unknown_competition`) to
+ * STAFF_ALERT_EMAIL through `queueStaffAlert`, once per Checkout Session — the
+ * webhook and reconcile-on-return both reach it for one payment, and the first
+ * path's alert is the one page. Never throws; null when nothing was queued.
+ */
+export async function alertPassUnknownCompetition(a: PassUnknownCompetitionAlertEmail): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_pass_unknown_competition",
+    refType: "checkout_session",
+    id: a.sessionId,
+    render: () => passUnknownCompetitionAlertEmail(a),
+  });
+}
+
+/**
  * Reconcile a completed Event Pass checkout directly from Stripe (same
  * webhook-optional contract as reconcileCheckout). Returns true once the pass
  * is recorded. Best-effort and idempotent; never throws.
@@ -1525,19 +1542,15 @@ export async function reconcilePassCheckout(
         `reconcilePassCheckout: competition ${competitionId} does not exist in this ` +
           `database — org ${orgId} session ${sessionId} rung ${passKey}; pass NOT recorded`,
       );
-      const alertTo = process.env.STAFF_ALERT_EMAIL;
-      if (alertTo) {
-        void sendPassUnknownCompetitionAlertEmail({
-          to: alertTo,
-          sessionId,
-          orgId,
-          competitionId,
-          passKey,
-          paymentIntent:
-            typeof session.payment_intent === "string" ? session.payment_intent : null,
-          source: "reconcile",
-        }).catch(() => {});
-      }
+      await alertPassUnknownCompetition({
+        sessionId,
+        orgId,
+        competitionId,
+        passKey,
+        paymentIntent:
+          typeof session.payment_intent === "string" ? session.payment_intent : null,
+        source: "reconcile",
+      });
       return false;
     }
     // Reconcile-on-return can land a second owner's payment; refund it (the

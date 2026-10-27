@@ -11,6 +11,7 @@ import { log } from "@/server/logger";
 import {
   linkStripeCustomerForGroup,
   linkStripeCustomer,
+  alertPassUnknownCompetition,
   passKeyForSession,
   passSessionRungMatchesPrice,
   pinBillingCurrency,
@@ -65,7 +66,6 @@ import {
   sizePackGrantFailedAlertEmail,
   type SizePackGrantFailedAlertEmail,
   sendExtraOrgRepriceFailedAlertEmail,
-  sendPassUnknownCompetitionAlertEmail,
   sendConnectBankAlertEmail,
   trialEndingEmail,
 } from "@/lib/email";
@@ -430,19 +430,15 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
           },
           "billing: event pass paid but the competition does not exist in this database — acked, not retried",
         );
-        const alertTo = process.env.STAFF_ALERT_EMAIL;
-        if (alertTo) {
-          void sendPassUnknownCompetitionAlertEmail({
-            to: alertTo,
-            sessionId: session.id,
-            orgId,
-            competitionId,
-            passKey,
-            paymentIntent:
-              typeof session.payment_intent === "string" ? session.payment_intent : null,
-            source: "webhook",
-          }).catch(() => {});
-        }
+        await alertPassUnknownCompetition({
+          sessionId: session.id,
+          orgId,
+          competitionId,
+          passKey,
+          paymentIntent:
+            typeof session.payment_intent === "string" ? session.payment_intent : null,
+          source: "webhook",
+        });
         return;
       }
       // Second owner / second tab paid for an already-passed comp — send it

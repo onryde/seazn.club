@@ -1108,7 +1108,6 @@ export function passRungMismatchAlertEmail(opts: PassRungMismatchAlertEmail): Em
 }
 
 export interface PassUnknownCompetitionAlertEmail {
-  to: string;
   /** The checkout session that paid. Names the price, the customer and the
    *  payment intent — the whole investigation starts here. */
   sessionId: string;
@@ -1120,8 +1119,8 @@ export interface PassUnknownCompetitionAlertEmail {
   paymentIntent: string | null;
   /** Which path hit it. The webhook is Stripe's own delivery; the reconcile is
    *  the buyer sitting on the return page. Both can arrive, and which one came
-   *  first changes nothing about the diagnosis — but a responder reading two
-   *  alerts for one payment should be able to see that is what happened. */
+   *  first changes nothing about the diagnosis; the session pages once, so the
+   *  one alert names the path that got there first. */
   source: "webhook" | "reconcile";
 }
 
@@ -1140,10 +1139,12 @@ export interface PassUnknownCompetitionAlertEmail {
  *  a responder makes it. The event is ACKed either way: no retry can conjure
  *  the missing row, and leaving it unacked buys a three-day retry storm
  *  instead of an answer. Ops-only, no user-facing i18n (mirrors
- *  sendCreditPackGrantFailedAlertEmail). */
-export async function sendPassUnknownCompetitionAlertEmail(
-  opts: PassUnknownCompetitionAlertEmail,
-): Promise<boolean> {
+ *  creditPackGrantFailedAlertEmail).
+ *
+ *  RENDERED and not sent: `alertPassUnknownCompetition` (lib/billing.ts) queues what this returns on the email outbox
+ *  through `queueStaffAlert` (kind `staff_pass_unknown_competition`), once per Checkout Session. Nothing sends it
+ *  directly. */
+export function passUnknownCompetitionAlertEmail(opts: PassUnknownCompetitionAlertEmail): EmailContent {
   const subject = `Event Pass NOT granted — unknown competition: ${opts.competitionId}`;
   const bodyText =
     `A paid Event Pass (session ${opts.sessionId}, org ${opts.orgId}) named competition ` +
@@ -1177,7 +1178,7 @@ export async function sendPassUnknownCompetitionAlertEmail(
     `${bodyText}\n\n${decide}\n\nSession: ${opts.sessionId} · org ${opts.orgId} · ` +
     `competition ${opts.competitionId} · rung ${opts.passKey} · source ${opts.source} · ` +
     `payment intent ${opts.paymentIntent ?? "(none)"}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface AiRunCostAlertEmail {
