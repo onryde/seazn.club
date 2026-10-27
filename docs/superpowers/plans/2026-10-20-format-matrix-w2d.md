@@ -5,7 +5,7 @@
 > **Sequencing.** W2d builds ON W2c, which merged as #1007 (`5e8cef4347`) on 2026-10-24.
 > - **Every task waits for Task 0**: the rebase, the re-pin of every line in **Anchors**, the migration number and the pre-W2d snapshot B1 needs.
 > - Task 0 re-took every **Anchors** pin at `e97823e4d8` (= origin/main `2e0deaa6c1` plus the W2d docs merge); they are marked **main@e97823e4d8**. They are still pins, not promises.
-> - The migration is **V474** (`V474__w2d_table_rules.sql`), re-pinned at the 2026-10-26 rebase onto main `badfee3fef`, whose max is V473 (V472 and V473 are email outbox phase 3, waves 1 and 2). At T0 it was V472 and main's max was V471: V469 W2c (`fixture_rules_override`), V470 email-outbox, V471 all-stages-free.
+> - The migration is **V475** (`V475__w2d_table_rules.sql`), re-pinned at the 2026-10-27 rebase onto main `411083560c`, whose max is V474 (V472, V473 and V474 are email outbox phase 3, waves 1, 2 and 3). At the 2026-10-26 rebase onto main `badfee3fef` (max V473) it was V474. At T0 it was V472 and main's max was V471: V469 W2c (`fixture_rules_override`), V470 email-outbox, V471 all-stages-free.
 
 ## PR split (owner, 2026-10-25/26)
 
@@ -16,7 +16,7 @@
   - **A20**: the MD-1 Stryker sweep over PR A's engine files.
   - **A21**: PR A's ship gates.
 - **PR B** = Tasks 13–21, branched from PR A.
-- **V474 is frozen** once PR A merges.
+- **V475 is frozen** once PR A merges.
 - `scripts/w2d/post-deploy-pin.ts` is the one owner-run post-deploy script (owner: "create one script only"). Run `--check` after the deploy, and run fix mode (a run without `--check`) only if a count is above 0 (orchestrator ruling 2026-10-26, on the owner's word: "nobody is using the prod now so we can run the script anytime").
 - The tennis player stat `nestedGamesOf` stays unchanged (owner).
 
@@ -89,7 +89,7 @@ Where the spec and the tree disagree, the tree wins and the disagreement is a nu
 | bench resolvers | main@e97823e4d8 `tools/bench/lib/validate-pack.ts:2303,2337,2367`, `tools/bench/lib/pack-template.ts:107`; `applyPointsRule` import `:191`, call `:2261` |
 | smoke `w2cStageRulesSuite :7231`, called `:1294`; `SELECTABLE_SUITES :23060` (`w2cStageRules :23071`); `SMOKE_ONLY` takes a comma list (`scripts/smoke-select.ts:12`) | main@e97823e4d8 `scripts/smoke.ts` |
 | W2c e2e `e2e/stage-rules-w2c.spec.ts`; `e2e/standings-popovers.spec.ts`; `e2e/mobile.spec.ts`; walkthroughs `e2e/walkthrough/` | main@e97823e4d8 `apps/web/` |
-| highest delta: main@e97823e4d8 `V471__all_stages_free.sql` (W2c's is `V469__fixture_rules_override.sql`); W2d's is **`V474__w2d_table_rules.sql`** (V472 at T0; renumbered at the 2026-10-26 rebase, main's max then V473) | `db/migration/deltas/` |
+| highest delta: main@e97823e4d8 `V471__all_stages_free.sql` (W2c's is `V469__fixture_rules_override.sql`); W2d's is **`V475__w2d_table_rules.sql`** (V472 at T0; V474 at the 2026-10-26 rebase, main's max then V473; renumbered at the 2026-10-27 rebase, main's max then V474) | `db/migration/deltas/` |
 | `stages.status` check `('pending','active','complete')` | `db/migration/v2-engine/tables/V210__stages.sql:10` |
 | golden hockey streams record untyped goals (`{"by":"H"}`) | main@e97823e4d8 `E/sports/hockey/hockey.golden.json` (finding PF-2) |
 

@@ -1,7 +1,7 @@
-// W2d Task 7 (review m6) — the V474 mutants that no text row can express, re-runnable by anyone.
+// W2d Task 7 (review m6) — the V475 mutants that no text row can express, re-runnable by anyone.
 //
 // `pnpm mutate` edits the delta's TEXT, and the pin test installs the delta's functions from that text inside a
-// rolled-back transaction, so a text mutant of a function is judged by the pin test. The rest of V474 is judged against
+// rolled-back transaction, so a text mutant of a function is judged by the pin test. The rest of V475 is judged against
 // the APPLIED migration: the pin columns' checks, `stage_lots_draws`' keys, checks, foreign key, trigger and RLS, and the
 // read function `stage_qualification_meta` as the public pages call it. This driver mutates those IN the database,
 // one at a time, runs the killer test file, and restores — on a seazn-env LABEL database only:

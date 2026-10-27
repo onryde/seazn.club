@@ -482,7 +482,7 @@ export interface CrossGroupRules {
 }
 
 /** The order best-Nth used before W2d, hard-coded for every sport — and the `crossGroup` every B1-migrated pin records
- *  (V474: points, diff, for, wins), so a pinned stage's best-Nth seats do not move (B1). */
+ *  (V475: points, diff, for, wins), so a pinned stage's best-Nth seats do not move (B1). */
 export const PRE_W2D_CROSS_GROUP: readonly TiebreakerKey[] = ["points", "diff", "for", "wins"];
 export interface ResolvedProgressionEntry {
   seed: number;

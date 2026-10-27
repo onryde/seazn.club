@@ -58,7 +58,7 @@ export async function listStageQualificationMeta(
  * caller's org that are pinned (`table_rules_pinned`, written at generate). The organiser console's stage points card reads
  * these, never the live `division.config`: a division points save after the pin lands (`rule-locks.ts`) but never reaches
  * the stage, so the live division is not what its table pays. Read through the one loader (`stageTableRulesDocs`: a pinned
- * stage's rules ARE its pin, `pinnedAt` set exactly when it is pinned, V474's pair check), under withTenant like the meta
+ * stage's rules ARE its pin, `pinnedAt` set exactly when it is pinned, V475's pair check), under withTenant like the meta
  * above. A stage still reading the live layers (pending) is absent, and so is one the loader refused (logged there): the
  * card then reads the live division, as it did before W2d.
  */
