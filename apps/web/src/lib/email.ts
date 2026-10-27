@@ -680,7 +680,7 @@ export async function sendStuckEventsAlertEmail(opts: StuckEventsAlertEmail): Pr
 }
 
 export interface CreditPackGrantFailedAlertEmail {
-  to: string;
+  /** The Stripe object a staffer opens: the Checkout Session that paid, or the refunded charge when a refund found no grant. */
   sessionId: string;
   orgId: string;
   packKey?: string;
@@ -693,10 +693,11 @@ export interface CreditPackGrantFailedAlertEmail {
  *  also could not resolve) — the buyer paid but the wallet grant could not be
  *  safely determined, so nothing was granted rather than risking a silent
  *  wrong amount. A human must inspect and grant manually. Built inline, no
- *  user-facing i18n — same ops-only pattern as `sendStuckEventsAlertEmail`. */
-export async function sendCreditPackGrantFailedAlertEmail(
-  opts: CreditPackGrantFailedAlertEmail,
-): Promise<boolean> {
+ *  user-facing i18n — same ops-only pattern as `sendStuckEventsAlertEmail`.
+ *
+ *  RENDERED and not sent: `alertCreditPackGrantFailed` (billing-events.ts) queues what this returns on the email outbox through
+ *  `queueStaffAlert` (kind `staff_credit_pack_grant_failed`), once per session or charge. Nothing sends it directly. */
+export function creditPackGrantFailedAlertEmail(opts: CreditPackGrantFailedAlertEmail): EmailContent {
   const subject = `Credit pack purchase could not be granted: ${opts.sessionId}`;
   const bodyText =
     `A paid credit-pack checkout session (${opts.sessionId}, org ${opts.orgId}` +
@@ -716,7 +717,7 @@ export async function sendCreditPackGrantFailedAlertEmail(
     footerNote: "Automated staff alert — credit pack webhook (P3 T1).",
   });
   const text = `${bodyText}\n\nSession: ${opts.sessionId} · org ${opts.orgId} · reason: ${opts.reason}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface SizePackGrantFailedAlertEmail {

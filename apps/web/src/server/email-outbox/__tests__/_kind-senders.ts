@@ -31,7 +31,6 @@ export const KINDS_BEFORE_PHASE_3: readonly OutboxKind[] = ["magic_link", "chess
 export const SENDER_ALLOWLIST: readonly string[] = [
   "sendAiRunCostAlertEmail",
   "sendConnectBankAlertEmail",
-  "sendCreditPackGrantFailedAlertEmail",
   "sendEarnGrantVolumeAlertEmail",
   "sendExtraOrgAllowanceAlertEmail",
   "sendExtraOrgRepriceFailedAlertEmail",
@@ -54,7 +53,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
   // Wave 5, in the spec's table order.
-  "staff_credit_pack_grant_failed",
   "staff_size_pack_grant_failed",
   "staff_stream_credit_grant_failed",
   "staff_pass_credit_reversal_incomplete",
@@ -114,7 +112,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   // task has moved it (T3: the funnel reminder; T4: the money batch).
   funnel_reminder: null,
   staff_registration_refund_failed: null,
-  staff_credit_pack_grant_failed: "sendCreditPackGrantFailedAlertEmail",
+  staff_credit_pack_grant_failed: null,
   staff_size_pack_grant_failed: "sendSizePackGrantFailedAlertEmail",
   staff_stream_credit_grant_failed: "sendStreamCreditGrantFailedAlertEmail",
   staff_pass_credit_reversal_incomplete: "sendPassCreditReversalIncompleteAlertEmail",

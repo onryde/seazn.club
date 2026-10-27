@@ -59,7 +59,8 @@ import {
   passRevokedEmail,
   sendStaffDisputeAlertEmail,
   sendStuckEventsAlertEmail,
-  sendCreditPackGrantFailedAlertEmail,
+  creditPackGrantFailedAlertEmail,
+  type CreditPackGrantFailedAlertEmail,
   sendStreamCreditClawbackAlertEmail,
   sendSizePackGrantFailedAlertEmail,
   sendExtraOrgRepriceFailedAlertEmail,
@@ -70,6 +71,7 @@ import {
 import type { PassRevokedArgs, StaffDisputeAlertArgs } from "@/lib/email-templates";
 import { enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
 import { orgOwnerRecipient } from "@/server/usecases/org-owner";
+import { queueStaffAlert } from "@/server/usecases/staff-alert";
 import {
   handleRegistrationCheckoutAsyncPaymentFailed,
   handleRegistrationCheckoutCompleted,
@@ -189,6 +191,25 @@ async function ownerDistinctId(orgId: string): Promise<string> {
 // Event handlers
 // ---------------------------------------------------------------------------
 
+/**
+ * Staff alert: a buyer paid for an AI credit pack and holds nothing (phase 3 wave 5, kind `staff_credit_pack_grant_failed`). Queued on
+ * the email outbox through `queueStaffAlert`, once per Stripe object (P-W5-10): the Checkout Session that paid and could not be granted
+ * (ref type `checkout_session`, from `handleCheckoutCompleted`), or the refunded charge that found no pack_purchase row to claw back
+ * (ref type `charge`, from `handlePackChargeRefunded`). Both ids are Stripe's, so the two cannot collide. Never throws (the writer's
+ * Q1 catch): both callers ACK the webhook either way, and nothing here is retryable into a better outcome.
+ */
+export async function alertCreditPackGrantFailed(
+  refType: "checkout_session" | "charge",
+  opts: CreditPackGrantFailedAlertEmail,
+): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_credit_pack_grant_failed",
+    refType,
+    id: opts.sessionId,
+    render: () => creditPackGrantFailedAlertEmail(opts),
+  });
+}
+
 async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
   // Entry-fee checkouts (PROMPT-20a) share the endpoint; kind disambiguates.
   // Re-keyed to the GROUP (RS003 W3a mint / W3b webhook): a session now
@@ -295,16 +316,12 @@ async function handleCheckoutCompleted(session: Stripe.Checkout.Session) {
           { sessionId: session.id, orgId, packKey },
           "billing: credit_pack session paid but ungranted — no credits snapshot and no resolvable pack_key",
         );
-        const alertTo = process.env.STAFF_ALERT_EMAIL;
-        if (alertTo) {
-          void sendCreditPackGrantFailedAlertEmail({
-            to: alertTo,
-            sessionId: session.id,
-            orgId,
-            packKey,
-            reason: "no credits snapshot and no resolvable pack_key",
-          }).catch(() => {});
-        }
+        await alertCreditPackGrantFailed("checkout_session", {
+          sessionId: session.id,
+          orgId,
+          packKey,
+          reason: "no credits snapshot and no resolvable pack_key",
+        });
       }
     }
     return;
@@ -2110,16 +2127,12 @@ async function handlePackChargeRefunded(charge: Stripe.Charge): Promise<void> {
     { chargeId: charge.id, intent },
     "billing: credit_pack charge refunded but no pack_purchase ledger row found — nothing to claw back (was it ever granted?)",
   );
-  const alertTo = process.env.STAFF_ALERT_EMAIL;
-  if (alertTo) {
-    void sendCreditPackGrantFailedAlertEmail({
-      to: alertTo,
-      sessionId: charge.id,
-      orgId: pi.metadata?.org_id ?? "unknown",
-      packKey: pi.metadata?.pack_key,
-      reason: "refunded pack charge has no pack_purchase ledger row to claw back",
-    }).catch(() => {});
-  }
+  await alertCreditPackGrantFailed("charge", {
+    sessionId: charge.id,
+    orgId: pi.metadata?.org_id ?? "unknown",
+    packKey: pi.metadata?.pack_key,
+    reason: "refunded pack charge has no pack_purchase ledger row to claw back",
+  });
 }
 
 /** The three shapes `sendStreamCreditClawbackAlertEmail` is sent for. Named

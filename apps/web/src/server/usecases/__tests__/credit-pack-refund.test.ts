@@ -15,19 +15,37 @@
 // `paymentIntents.retrieve` (mocked here) distinguishes a paid-but-never-granted
 // pack from a genuine non-pack (registration/sponsor/pass) refund.
 //
+// The staff alert for a paid pack that holds nothing (phase 3 wave 5, kind
+// `staff_credit_pack_grant_failed`) is queued on the email outbox to
+// STAFF_ALERT_EMAIL, once per Stripe object (P-W5-10): a refunded pack with no
+// ledger row under its CHARGE (ref type `charge`), and, in the second block
+// below, a paid session that could not be granted under its SESSION (ref type
+// `checkout_session`). The tests read the row (`staffRows`) with this run's own
+// staff address, and assert the writer dropped nothing (no
+// STAFF_ALERT_QUEUE_FAILED line, no Sentry issue). The builder is a spy that
+// calls through, so what the alert says is read where it enters the mail. The
+// subjects are the sender's inline English, typed from its source.
+//
 // Real Postgres required; skipped without DATABASE_URL. Run against the fresh
 // v17 schema: DATABASE_URL=$(cat /tmp/v17_base_url) DB_SCHEMA=seazn_club_v17.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { balance, grantBalance, packBalance, recordPackPurchase, reserve, walletIdFor } from "@/lib/credits";
-import { processStripeEvent } from "../billing-events";
-import { sendCreditPackGrantFailedAlertEmail } from "@/lib/email";
+import { processStripeEvent, runEvent } from "../billing-events";
+import { creditPackGrantFailedAlertEmail } from "@/lib/email";
+import { captureError } from "@/lib/sentry";
+import { log } from "@/server/logger";
+import { staffAlertDrops, staffRows } from "./_money-fixtures";
 
 vi.mock("@/lib/email", async (importActual) => {
   const actual = await importActual<typeof import("@/lib/email")>();
-  return { ...actual, sendCreditPackGrantFailedAlertEmail: vi.fn().mockResolvedValue(true) };
+  return { ...actual, creditPackGrantFailedAlertEmail: vi.fn(actual.creditPackGrantFailedAlertEmail) };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
 });
 
 // The guarded PaymentIntent retrieve the matched===false branch uses to tell an
@@ -44,6 +62,16 @@ vi.mock("@/lib/stripe", () => ({
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const uniq = () => randomUUID().slice(0, 8);
+const RUN = `cpr-${uniq()}`;
+const KIND = "staff_credit_pack_grant_failed";
+/** This test's own staff address (CI sets none; a shared database must not count another run's rows). */
+const staffAddress = (): string => `staff-${RUN}-${uniq()}@x.test`;
+
+afterAll(async () => {
+  if (!HAS_DB) return;
+  await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
+  await sql`delete from billing_events where id like ${`evt_${RUN}_%`}`;
+});
 
 async function seedOrg(): Promise<string> {
   const [org] = await sql<{ id: string }[]>`
@@ -75,10 +103,11 @@ function packRefundEvent(over: { paymentIntent: string; chargeId?: string; refun
 }
 
 describe.skipIf(!HAS_DB)("webhook → credit pack refund claws back unspent pack credits", () => {
-  const alertMock = vi.mocked(sendCreditPackGrantFailedAlertEmail);
+  const alertMock = vi.mocked(creditPackGrantFailedAlertEmail);
 
   beforeEach(() => {
     alertMock.mockClear();
+    vi.mocked(captureError).mockClear();
     stripeMock.retrieveIntent.mockReset();
     // A real `paymentIntents.retrieve` always answers with a PaymentIntent
     // object. A bare reset returns `undefined`, which no caller can be asked to
@@ -91,7 +120,8 @@ describe.skipIf(!HAS_DB)("webhook → credit pack refund claws back unspent pack
     process.env.STRIPE_SECRET_KEY = "sk_test_dummy";
   });
   afterEach(() => {
-    delete process.env.STAFF_ALERT_EMAIL;
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
     delete process.env.STRIPE_SECRET_KEY;
   });
 
@@ -153,9 +183,10 @@ describe.skipIf(!HAS_DB)("webhook → credit pack refund claws back unspent pack
   });
 
   it("non-pack charge (no pack_purchase row, PI metadata not credit_pack) is a silent no-op — no ledger row, no alert", async () => {
-    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+    vi.stubEnv("STAFF_ALERT_EMAIL", staffAddress());
     // A registration/sponsor/pass refund: the PI retrieve resolves, but its
-    // metadata.kind is NOT credit_pack, so it must stay silent.
+    // metadata.kind is NOT credit_pack, so it must stay silent. (The positive
+    // pair is the last test in this block: the same refund of a pack pages.)
     stripeMock.retrieveIntent.mockResolvedValue({ metadata: { kind: "registration" } });
     const orgId = await seedOrg();
     const walletId = await walletIdFor(orgId);
@@ -163,13 +194,15 @@ describe.skipIf(!HAS_DB)("webhook → credit pack refund claws back unspent pack
     expect(await packBalance(walletId)).toBe(40);
 
     // Different payment_intent — no pack_purchase row matches it.
-    await processStripeEvent(packRefundEvent({ paymentIntent: `pi_${uniq()}` }));
+    const chargeId = `ch_${RUN}_${uniq()}`;
+    await processStripeEvent(packRefundEvent({ paymentIntent: `pi_${uniq()}`, chargeId }));
 
     expect(await packBalance(walletId)).toBe(40);
     const refundRows = await sql<{ id: string }[]>`
       select id from ai_credit_ledger where wallet_id = ${walletId} and source = 'refund'`;
     expect(refundRows).toHaveLength(0);
     expect(alertMock).not.toHaveBeenCalled();
+    expect(await staffRows(KIND, "charge", chargeId), "no staff row").toHaveLength(0);
   });
 
   it("replayed charge.refunded is idempotent — exactly one refund row, clawed once", async () => {
@@ -189,24 +222,110 @@ describe.skipIf(!HAS_DB)("webhook → credit pack refund claws back unspent pack
     expect(rows).toHaveLength(1);
   });
 
-  it("pack charge with NO purchase row but PI metadata=credit_pack fires the staff alert, writes no negative balance", async () => {
-    process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
+  it("a refunded pack with no ledger row pages under the charge, and writes no negative balance", async () => {
+    const staff = staffAddress();
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    const errors = vi.spyOn(log, "error");
     const orgId = await seedOrg();
     const walletId = await walletIdFor(orgId);
     const intent = `pi_${uniq()}`; // never recorded a purchase for this intent
+    const chargeId = `ch_${RUN}_${uniq()}`;
     // The guarded retrieve reveals it WAS a pack (Part A stamps the PI) — an
     // ungranted-then-refunded pack, which must alert rather than no-op.
     stripeMock.retrieveIntent.mockResolvedValue({
       metadata: { kind: "credit_pack", org_id: orgId, pack_key: "credits_10" },
     });
 
-    await processStripeEvent(packRefundEvent({ paymentIntent: intent }));
+    await processStripeEvent(packRefundEvent({ paymentIntent: intent, chargeId }));
 
     expect(await balance(walletId)).toBe(0);
     const rows = await sql<{ id: string }[]>`
       select id from ai_credit_ledger where wallet_id = ${walletId} and source = 'refund'`;
     expect(rows).toHaveLength(0);
     expect(stripeMock.retrieveIntent).toHaveBeenCalledWith(intent);
-    expect(alertMock).toHaveBeenCalledTimes(1);
+    // P-W5-10: the refund's own Stripe object is the charge, so the ref type is `charge` and the key the charge id.
+    expect(await staffRows(KIND, "charge", chargeId)).toEqual([
+      { ref_id: chargeId, dedupe_key: chargeId, status: "queued", recipient: staff, subject: `Credit pack purchase could not be granted: ${chargeId}` },
+    ]);
+    expect(alertMock, "what the alert says").toHaveBeenCalledWith({
+      sessionId: chargeId,
+      orgId,
+      packKey: "credits_10",
+      reason: "refunded pack charge has no pack_purchase ledger row to claw back",
+    });
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+});
+
+/** A `checkout.session.completed` for an AI credit pack that is PAID but carries no credits snapshot and names a pack the catalog does
+ *  not have: nothing can be granted. Only the fields the credit_pack limb reads. A fresh event id per call. */
+function ungrantablePackSessionEvent(orgId: string, sessionId: string): Stripe.Event {
+  return {
+    id: `evt_${RUN}_${uniq()}`,
+    type: "checkout.session.completed",
+    data: {
+      object: {
+        id: sessionId,
+        object: "checkout.session",
+        payment_status: "paid",
+        payment_intent: `pi_${RUN}_${uniq()}`,
+        customer: null,
+        currency: "gbp",
+        metadata: { kind: "credit_pack", org_id: orgId, pack_key: "nope" },
+      },
+    },
+  } as unknown as Stripe.Event;
+}
+
+describe.skipIf(!HAS_DB)("webhook → a paid credit-pack session that cannot be granted pages staff", () => {
+  beforeEach(() => {
+    vi.mocked(creditPackGrantFailedAlertEmail).mockClear();
+    vi.mocked(captureError).mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.restoreAllMocks();
+  });
+
+  it("a paid credit-pack session with no snapshot and no pack queues one alert", async () => {
+    const staff = staffAddress();
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    const errors = vi.spyOn(log, "error");
+    const orgId = await seedOrg();
+    const sessionId = `cs_${RUN}_${uniq()}`;
+
+    await processStripeEvent(ungrantablePackSessionEvent(orgId, sessionId));
+
+    expect(await balance(await walletIdFor(orgId)), "premise: nothing was granted").toBe(0);
+    // P-W5-10: ref type `checkout_session`, keyed by the session id.
+    expect(await staffRows(KIND, "checkout_session", sessionId)).toEqual([
+      { ref_id: sessionId, dedupe_key: sessionId, status: "queued", recipient: staff, subject: `Credit pack purchase could not be granted: ${sessionId}` },
+    ]);
+    expect(creditPackGrantFailedAlertEmail, "what the alert says").toHaveBeenCalledWith({
+      sessionId,
+      orgId,
+      packKey: "nope",
+      reason: "no credits snapshot and no resolvable pack_key",
+    });
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
+  });
+
+  it("the same event processed twice pages once", async () => {
+    const staff = staffAddress();
+    vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    const errors = vi.spyOn(log, "error");
+    const orgId = await seedOrg();
+    const sessionId = `cs_${RUN}_${uniq()}`;
+    const event = ungrantablePackSessionEvent(orgId, sessionId);
+
+    expect(await runEvent(event), "premise: the first delivery ran the handler").toBe(true);
+    // A crashed attempt (wave-2 T10's pattern): the ledger row is left unprocessed and its lease has run out, so the next delivery
+    // takes it over and runs the handler again.
+    await sql`update billing_events set processed_at = null, processing_started_at = now() - interval '11 minutes' where id = ${event.id}`;
+    expect(await runEvent(event), "premise: the redelivery ran the handler again").toBe(true);
+
+    expect(creditPackGrantFailedAlertEmail, "premise: both runs reached the alert (the writer renders before the once-key insert)").toHaveBeenCalledTimes(2);
+    expect(await staffRows(KIND, "checkout_session", sessionId)).toMatchObject([{ ref_id: sessionId, status: "queued", recipient: staff }]);
+    expect(staffAlertDrops(errors, vi.mocked(captureError)), "the replay was deduplicated, not dropped").toEqual({ logged: 0, issues: 0 });
   });
 });
