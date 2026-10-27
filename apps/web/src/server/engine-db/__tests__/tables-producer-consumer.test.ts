@@ -9,6 +9,13 @@
 // BD-TB-1) and the engine's own declarations (a sport's variant cfg, its default order, its presets) — never from
 // `payout` or the ranker. Each case states the counterfactual its numbers differ from, so a fold that dropped the seam
 // reads differently. Real Postgres; skipped without DATABASE_URL.
+//
+// W2d Task 14, PR B (spec §13.5, the API half): the brief's cases run again through API v1's REAL route handlers — the
+// generate (`POST /stages/{id}/generate`, the pin), the start, every event through `POST /fixtures/{id}/events` (then the
+// real recompute), the stage and fixture rules PUTs, the division PATCH, the served pin (`GET /stages/{id}`) and the
+// public `GET …/divisions/{divisionSlug}/standings`, validated against its documented schema. One case body serves both
+// doors (`DOORS`), so the expected values are written once: the usecase door keeps A14's titles (t14.json's killers name
+// them), the API door's titles carry "API v1: ". HK-TB-2 (typed hockey goals) is not here: its producer is Task 18.
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 // `unstable_cache` is a Next server-runtime API with no incrementalCache outside a real request — passthrough, never a
@@ -17,6 +24,22 @@ vi.mock("next/cache", () => ({
   unstable_cache: (fn: (...args: unknown[]) => unknown) => fn,
   revalidateTag: vi.fn(),
 }));
+// The API door's session (the desk-route pattern, as w2d-api.test.ts drives it): the caller is the scene's owner; the
+// route, its auth door and the usecases behind it are real. The usecase door never reads either.
+const authState = vi.hoisted(() => ({ userId: "" }));
+vi.mock("@/lib/auth", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth")>();
+  return {
+    ...actual,
+    requireUser: async () => ({ id: authState.userId }),
+    getCurrentUser: async () => ({ id: authState.userId }),
+    getActiveOrgId: async () => null,
+  };
+});
+vi.mock("next/headers", () => ({
+  cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
+  headers: async () => new Headers(),
+}));
 
 import { coverage, reachableOutcomes, type PointsRule } from "@seazn/engine/competition";
 import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
@@ -24,6 +47,7 @@ import { builtinModules } from "@seazn/engine/sports";
 import en from "@/dictionaries/en/public.json";
 import { sql } from "@/lib/db";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import * as S from "@/server/api-v1/schemas";
 import type { CreateStages } from "@/server/api-v1/schemas";
 import { loadTableRules } from "@/server/engine-db/table-rules";
 import { getPublicDivision, type StandingsSnapshotRow } from "@/server/public-site/data";
@@ -34,7 +58,16 @@ import { startDivision } from "@/server/usecases/schedule";
 import { putStageRules } from "@/server/usecases/stage-rules";
 import { completeStage, generateStageFixtures } from "@/server/usecases/stages";
 import { between, genericResult, seatedFixtures, stageRules, tableScene, type TableScene } from "./helpers/w2d-table-rig";
-import { fixtureRow, post } from "./helpers/w2b-rig";
+import { fixtureRow, post, tip } from "./helpers/w2b-rig";
+import { GENERIC_CONFIG } from "@/server/usecases/__tests__/_seed";
+import { POST as generateRoute } from "@/app/api/v1/stages/[id]/generate/route";
+import { GET as getStageRoute } from "@/app/api/v1/stages/[id]/route";
+import { PUT as putStageRulesRoute } from "@/app/api/v1/stages/[id]/rules/route";
+import { POST as startRoute } from "@/app/api/v1/divisions/[id]/start/route";
+import { PATCH as patchDivisionRoute } from "@/app/api/v1/divisions/[id]/route";
+import { POST as eventsRoute } from "@/app/api/v1/fixtures/[id]/events/route";
+import { PUT as putFixtureRulesRoute } from "@/app/api/v1/fixtures/[id]/rules/route";
+import { GET as publicStandingsRoute } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/standings/route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -58,6 +91,151 @@ const variantCfg = (sport: string, variant: string): Record<string, unknown> => 
   return { ...(v as Record<string, unknown>) };
 };
 
+// ── The two doors ────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A write's answer, one shape from both doors: its status, and on a refusal its code and the fields it carries (the
+ *  usecase's `HttpError.extra`; the API envelope's `error` without `code` and `message`, which is where the envelope
+ *  spreads that same `extra`). */
+interface Answer {
+  status: number;
+  code: string | undefined;
+  extra: Record<string, unknown>;
+  data: unknown;
+}
+/** A stage's pin as its reader serves it: the stamp, the order, and where the order and the points came from. */
+interface ServedPin {
+  pinnedAt: string | null;
+  tiebreakers: readonly string[];
+  sources: { tiebreakers: string; points: string };
+}
+interface PublicTable {
+  stage_id: string;
+  pool_id: string | null;
+  /** In the reader's rank order. */
+  rows: StandingsSnapshotRow[];
+}
+interface Door {
+  /** The title prefix: "" keeps A14's titles (the usecase door), "API v1: " marks the wire's. */
+  tag: string;
+  generate(auth: AuthCtx, stageId: string): Promise<void>;
+  start(auth: AuthCtx, divisionId: string): Promise<void>;
+  post(auth: AuthCtx, fixtureId: string, type: string, payload?: Record<string, unknown>): Promise<void>;
+  putStageRules(auth: AuthCtx, stageId: string, body: Record<string, unknown>): Promise<Answer>;
+  patchDivision(auth: AuthCtx, divisionId: string, body: Record<string, unknown>): Promise<Answer>;
+  fixtureRules(auth: AuthCtx, fixtureId: string, rules: Record<string, unknown>): Promise<Answer>;
+  servedPin(auth: AuthCtx, stageId: string): Promise<ServedPin>;
+  /** Every published table of the division, as the public reader serves it. */
+  tables(slugs: readonly [string, string, string]): Promise<PublicTable[]>;
+}
+
+const byRank = (a: StandingsSnapshotRow, b: StandingsSnapshotRow) => (a.rank ?? 0) - (b.rank ?? 0);
+
+/** A usecase's answer as the API would carry it: its value, or its refusal's status, code and extra. */
+async function answered(run: () => Promise<unknown>): Promise<Answer> {
+  try {
+    return { status: 200, code: undefined, extra: {}, data: await run() };
+  } catch (e) {
+    const err = e as { status?: unknown; code?: unknown; extra?: Record<string, unknown> };
+    if (typeof err.status !== "number") throw e;
+    return { status: err.status, code: typeof err.code === "string" ? err.code : undefined, extra: err.extra ?? {}, data: undefined };
+  }
+}
+
+/** The usecases the console calls (A14's producer and consumer). */
+const USECASE: Door = {
+  tag: "",
+  generate: async (auth, stageId) => {
+    await generateStageFixtures(auth, stageId);
+  },
+  start: async (auth, divisionId) => {
+    await startDivision(auth, divisionId);
+  },
+  post: async (auth, fixtureId, type, payload = {}) => {
+    await post(auth, fixtureId, type, payload);
+  },
+  putStageRules: (auth, stageId, body) => answered(() => putStageRules(auth, stageId, body as never)),
+  patchDivision: (auth, divisionId, body) => answered(() => patchDivision(auth, divisionId, body as never)),
+  fixtureRules: (auth, fixtureId, rules) => answered(() => writeFixtureRulesOverride(auth, [fixtureId], rules as never)),
+  servedPin: async (_auth, stageId) => {
+    const r = await loadTableRules(sql, stageId);
+    return { pinnedAt: r.pinnedAt, tiebreakers: r.tiebreakers, sources: { tiebreakers: r.sources.tiebreakers, points: r.sources.points } };
+  },
+  tables: async (slugs) => {
+    const data = await getPublicDivision(...slugs);
+    if (data === null) throw new Error("the public read found no division");
+    return data.standings.map((t) => ({ stage_id: t.stage_id, pool_id: t.pool_id, rows: [...t.rows].sort(byRank) }));
+  },
+};
+
+interface Envelope {
+  status: number;
+  data: unknown;
+  error: { code: string; message: string; [k: string]: unknown } | undefined;
+}
+type Handler<P> = (req: Request, ctx: { params: Promise<P> }) => Promise<Response>;
+/** One request through a real route handler, as the scene's owner (`auth.userId` is the session), its envelope read back. */
+async function call<P>(auth: AuthCtx | null, handler: Handler<P>, params: P, method: string, path: string, body?: unknown): Promise<Envelope> {
+  authState.userId = auth?.userId ?? "";
+  const req = new Request(`https://test.local/api/v1${path}`, {
+    method,
+    headers: { "content-type": "application/json" },
+    ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+  });
+  const res = await handler(req, { params: Promise.resolve(params) });
+  const json = (await res.json()) as { ok: boolean; data?: unknown; error?: Envelope["error"] };
+  return { status: res.status, data: json.data, error: json.error };
+}
+const answer = (r: Envelope): Answer => {
+  const extra: Record<string, unknown> = { ...r.error };
+  delete extra.code;
+  delete extra.message;
+  return { status: r.status, code: r.error?.code, extra, data: r.data };
+};
+const ok = (r: Envelope, what: string, status = 200): Envelope => {
+  expect(r.status, `${what}: ${JSON.stringify(r.error)}`).toBe(status);
+  return r;
+};
+
+/** API v1's route handlers: the wire. */
+const API: Door = {
+  tag: "API v1: ",
+  generate: async (auth, stageId) => {
+    ok(await call(auth, generateRoute, { id: stageId }, "POST", `/stages/${stageId}/generate`), "POST /stages/{id}/generate");
+  },
+  start: async (auth, divisionId) => {
+    ok(await call(auth, startRoute, { id: divisionId }, "POST", `/divisions/${divisionId}/start`), "POST /divisions/{id}/start");
+  },
+  post: async (auth, fixtureId, type, payload = {}) => {
+    const body = { expected_seq: await tip(fixtureId), type, payload };
+    ok(await call(auth, eventsRoute, { id: fixtureId }, "POST", `/fixtures/${fixtureId}/events`, body), `POST /fixtures/{id}/events ${type}`, 201);
+  },
+  putStageRules: async (auth, stageId, body) => answer(await call(auth, putStageRulesRoute, { id: stageId }, "PUT", `/stages/${stageId}/rules`, body)),
+  patchDivision: async (auth, divisionId, body) => answer(await call(auth, patchDivisionRoute, { id: divisionId }, "PATCH", `/divisions/${divisionId}`, body)),
+  fixtureRules: async (auth, fixtureId, rules) =>
+    answer(await call(auth, putFixtureRulesRoute, { id: fixtureId }, "PUT", `/fixtures/${fixtureId}/rules`, { rules })),
+  servedPin: async (auth, stageId) => {
+    const r = ok(await call(auth, getStageRoute, { id: stageId }, "GET", `/stages/${stageId}`), "GET /stages/{id}");
+    // The served document is the documented one (OpenAPI is generated from this schema).
+    const rules = S.StageWithTableRules.parse(r.data).tableRules;
+    if (rules === null) throw new Error(`GET /stages/${stageId}: the stage's rules do not read (tableRules null)`);
+    expect(rules.points.pinnedAt, "the order and the points are pinned by one write").toBe(rules.tiebreakers.pinnedAt);
+    return { pinnedAt: rules.tiebreakers.pinnedAt, tiebreakers: rules.tiebreakers.keys, sources: { tiebreakers: rules.tiebreakers.source, points: rules.points.source } };
+  },
+  tables: async ([orgSlug, slug, divisionSlug]) => {
+    // Anonymous: the public route has no auth door.
+    const path = `/public/orgs/${orgSlug}/competitions/${slug}/divisions/${divisionSlug}/standings`;
+    const r = ok(await call(null, publicStandingsRoute, { orgSlug, slug, divisionSlug }, "GET", path), "GET public standings");
+    return S.PublicDivisionStandings.parse(r.data).standings.map((t) => {
+      const rows = t.rows as StandingsSnapshotRow[];
+      // The wire's order IS the ranking an API consumer reads, so it is never re-sorted here — it must already be the rank order.
+      expect(rows.map((x) => x.entrantId), "the public route serves the table in rank order").toEqual([...rows].sort(byRank).map((x) => x.entrantId));
+      return { stage_id: t.stage_id, pool_id: t.pool_id, rows };
+    });
+  },
+};
+
+const DOORS: readonly Door[] = [USECASE, API];
+
 interface PublicScene extends TableScene {
   stageId: string;
   /** org, competition, division slugs: the public read's address. */
@@ -65,9 +243,9 @@ interface PublicScene extends TableScene {
 }
 
 /** A division of `sport`/`variant` with ONE table stage, published (its competition public), the stage's own saves made
- *  while it is pending (`beforeGenerate`), then generated through the real `generateStageFixtures` (the pin) and the
- *  division started. */
-async function publicScene(opts: {
+ *  while it is pending (`beforeGenerate`), then generated through `door`'s real generate (the pin) and the division
+ *  started through its start. */
+async function publicScene(door: Door, opts: {
   sport: string;
   variant: string;
   config?: Record<string, unknown>;
@@ -88,8 +266,12 @@ async function publicScene(opts: {
   const before = await loadTableRules(sql, stageId);
   expect(before.pinnedAt, "premise: a created stage is not pinned").toBeNull();
   await opts.beforeGenerate?.({ ...s, stageId });
-  await generateStageFixtures(s.auth, stageId);
-  await startDivision(s.auth, s.divisionId);
+  await door.generate(s.auth, stageId);
+  // The pin is the GENERATE's: read before the start, whose quick-start generates (and so pins) a first stage that has no
+  // fixtures yet — read after it, a generate that never ran would pass (t14-api-generate-route-inert survived until this).
+  const generated = await pinOf(stageId);
+  expect([generated.status, generated.pinnedAt !== null], "the generate activated and pinned the stage").toEqual(["active", true]);
+  await door.start(s.auth, s.divisionId);
   const [row] = await sql<{ org: string; comp: string; div: string; comp_id: string }[]>`
     select o.slug as org, c.slug as comp, d.slug as div, c.id as comp_id
       from divisions d join competitions c on c.id = d.competition_id join organizations o on o.id = d.org_id
@@ -107,16 +289,15 @@ async function pinOf(stageId: string): Promise<{ status: string; pinnedAt: strin
   return { status: r.status, pinnedAt: r.pinned_at, pin: r.pin };
 }
 
-/** The stage's public table as a visitor's page reads it: `getPublicDivision`'s standings (`public_standings_v`), the
- *  overall snapshot of a league, or the one pool's of a group of one pool. */
-async function publicRows(s: PublicScene): Promise<StandingsSnapshotRow[]> {
-  const data = await getPublicDivision(...s.slugs);
-  if (data === null) throw new Error("the public read found no division");
-  const snaps = data.standings.filter((x) => x.stage_id === s.stageId);
+/** The stage's public table as its reader serves it — a visitor's page (`getPublicDivision`, the usecase door) or the
+ *  public standings route (the API door), both off `public_standings_v` — in rank order: the overall snapshot of a
+ *  league, or the one pool's of a group of one pool. */
+async function publicRows(door: Door, s: PublicScene): Promise<StandingsSnapshotRow[]> {
+  const snaps = (await door.tables(s.slugs)).filter((x) => x.stage_id === s.stageId);
   const overall = snaps.find((x) => x.pool_id === null);
   const table = overall ?? (snaps.length === 1 ? snaps[0] : undefined);
   if (table === undefined) throw new Error(`no public table for the stage (${snaps.length} snapshots)`);
-  return [...table.rows].sort((a, b) => (a.rank ?? 0) - (b.rank ?? 0));
+  return table.rows;
 }
 const rowOf = (rows: readonly StandingsSnapshotRow[], id: string): StandingsSnapshotRow => {
   const r = rows.find((x) => x.entrantId === id);
@@ -125,31 +306,32 @@ const rowOf = (rows: readonly StandingsSnapshotRow[], id: string): StandingsSnap
 };
 
 type Ev = { type: string; payload?: Record<string, unknown> };
-/** Play `events` on the fixture between `home` and `away` through `scoreEvent`. "H"/"A" in a `by` or `winner` field name
- *  `home`/`away` (whichever way the generator seated them). Returns the fixture row after the last event. */
-async function play(auth: AuthCtx, stageId: string, home: string, away: string, events: readonly Ev[]) {
+/** Play `events` on the fixture between `home` and `away` through `door`'s append (`scoreEvent`, or the events route).
+ *  "H"/"A" in a `by` or `winner` field name `home`/`away` (whichever way the generator seated them). Returns the fixture
+ *  row after the last event. */
+async function play(door: Door, auth: AuthCtx, stageId: string, home: string, away: string, events: readonly Ev[]) {
   const f = await between(stageId, home, away);
   const side = (v: unknown) => (v === "H" ? home : v === "A" ? away : v);
   for (const e of events) {
     const payload = Object.fromEntries(Object.entries(e.payload ?? {}).map(([k, v]) => [k, k === "by" || k === "winner" ? side(v) : v]));
-    await post(auth, f.id, e.type, payload);
+    await door.post(auth, f.id, e.type, payload);
   }
   return fixtureRow(f.id);
 }
 /** Coarse set summaries, oriented to the FIXTURE's seating: `games` are [home's, away's] for `home` as named here. */
-async function playSets(auth: AuthCtx, stageId: string, sport: string, home: string, away: string, games: readonly [number, number][]) {
+async function playSets(door: Door, auth: AuthCtx, stageId: string, sport: string, home: string, away: string, games: readonly [number, number][]) {
   const f = await between(stageId, home, away);
   const summary = sport === "volleyball" ? "volleyball.set.summary" : `${sport}.game.summary`;
-  await post(auth, f.id, "core.start");
-  for (const [h, a] of games) await post(auth, f.id, summary, f.home === home ? { home: h, away: a } : { home: a, away: h });
+  await door.post(auth, f.id, "core.start");
+  for (const [h, a] of games) await door.post(auth, f.id, summary, f.home === home ? { home: h, away: a } : { home: a, away: h });
   const r = await fixtureRow(f.id);
   if (r.status !== "decided") throw new Error(`rig: ${home} v ${away} did not decide (${r.status})`);
   return r;
 }
 /** A walkover: `loser` forfeits before the start (W2b D3: a pre-start forfeit is a walkover; reason is the engine's). */
-async function walkover(auth: AuthCtx, stageId: string, winner: string, loser: string) {
+async function walkover(door: Door, auth: AuthCtx, stageId: string, winner: string, loser: string) {
   const f = await between(stageId, winner, loser);
-  await post(auth, f.id, "core.forfeit", { by: loser, reason: "walkover" });
+  await door.post(auth, f.id, "core.forfeit", { by: loser, reason: "walkover" });
   const r = await fixtureRow(f.id);
   if (r.status !== "forfeited") throw new Error(`rig: the walkover did not land (${r.status})`);
   return r;
@@ -161,21 +343,28 @@ const named = (letters: string, ids: readonly string[]): Record<string, string> 
   Object.fromEntries([...letters].map((l, i) => [l, ids[i]!]));
 
 describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real producer to real consumer", () => {
-  it("empty case first: a generated stage is pinned by the real generate and the public read has no table before a result", async () => {
+  for (const door of DOORS) it(`${door.tag}empty case first: a generated stage is pinned by the real generate and the public read has no table before a result`, async () => {
     // single-sport: the empty case is sport-blind (no result is written); generic is the rig's sport.
-    const s = await publicScene({ sport: "generic", variant: "score", entrants: 3 });
+    const s = await publicScene(door, { sport: "generic", variant: "score", entrants: 3 });
     const p = await pinOf(s.stageId);
     expect([p.status, p.pinnedAt !== null, p.pin !== null], "active and pinned, by generate alone").toEqual(["active", true, true]);
-    const data = await getPublicDivision(...s.slugs);
-    expect(data!.standings.filter((x) => x.stage_id === s.stageId), "no table before a result").toEqual([]);
+    // The reader serves the pin the generate wrote: its stamp, the sport's order, nothing of the stage's or division's own.
+    const generic = mod("generic");
+    expect(await door.servedPin(s.auth, s.stageId), "the served pin").toEqual({
+      pinnedAt: p.pinnedAt,
+      // The scene's division cfg is the rig's GENERIC_CONFIG (generic declares no variant cfg of its own).
+      tiebreakers: generic.defaultTiebreakers("league", generic.configSchema.parse(GENERIC_CONFIG)),
+      sources: { tiebreakers: "sport", points: "sport" },
+    });
+    expect((await door.tables(s.slugs)).filter((x) => x.stage_id === s.stageId), "no table before a result").toEqual([]);
     const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from stage_lots_draws where stage_id = ${s.stageId}`;
-    expect(n, "no drawing of lots without a table").toBe(0);
+    expect(n, "no drawing of lots without a table, and none by a read").toBe(0);
   });
 
-  it("FB-PT-1 football group, shootout on: football.shootout.kick in the SHOOTOUT phase → public row D for both, winner 2 points, loser 1, wins 0 (RB2B-7)", async () => {
+  for (const door of DOORS) it(`${door.tag}FB-PT-1 football group, shootout on: football.shootout.kick in the SHOOTOUT phase → public row D for both, winner 2 points, loser 1, wins 0 (RB2B-7)`, async () => {
     // single-sport: FB-PT-1 is football's own row (a group-stage shoot-out, booked draw-plus-bonus).
     const cfg = { ...variantCfg("football", "11-a-side"), shootout: true };
-    const s = await publicScene({
+    const s = await publicScene(door, {
       sport: "football",
       variant: "11-a-side",
       config: cfg,
@@ -190,7 +379,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect([points.points.win, points.points.draw, points.points.loss, points.points.soBonus], "premise: FIFA 3/1/0, no own bonus").toEqual([3, 1, 0, undefined]);
     const kicks: Ev[] = [];
     for (let i = 0; i < 3; i++) kicks.push({ type: "football.shootout.kick", payload: { by: "H", scored: true } }, { type: "football.shootout.kick", payload: { by: "A", scored: false } });
-    const f = await play(s.auth, s.stageId, H, A, [
+    const f = await play(door, s.auth, s.stageId, H, A, [
       { type: "core.start" },
       { type: "football.period", payload: { phase: "HT" } },
       { type: "football.period", payload: { phase: "FT" } },
@@ -199,7 +388,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     const winner = f.outcome?.winner;
     expect([f.status, f.outcome?.kind, f.outcome?.method], "rig: the kicks decided the match").toEqual(["decided", "win", "shootout"]);
     const loser = winner === H ? A : H;
-    const rows = await publicRows(s);
+    const rows = await publicRows(door, s);
     const w = rowOf(rows, winner!);
     const l = rowOf(rows, loser);
     expect([w.played, w.won, w.drawn, w.lost, w.points], "the shoot-out winner: a draw plus the bonus").toEqual([1, 0, 1, 0, 2]);
@@ -230,16 +419,16 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
       ],
     },
   ];
-  for (const c of IH_CASES) {
-    it(`IH-PT-1 icehockey ${c.name} → OTW/OTL ledgers and IIHF 3-2-1-0 points 2/1 on the public rows (RBG:343-344)`, async () => {
+  for (const door of DOORS) for (const c of IH_CASES) {
+    it(`${door.tag}IH-PT-1 icehockey ${c.name} → OTW/OTL ledgers and IIHF 3-2-1-0 points 2/1 on the public rows (RBG:343-344)`, async () => {
       // single-sport: IH-PT-1 is ice hockey's own row (IIHF splits regulation, overtime and the GWS).
-      const s = await publicScene({ sport: "icehockey", variant: "iihf", entrants: 2 });
+      const s = await publicScene(door, { sport: "icehockey", variant: "iihf", entrants: 2 });
       const [H, A] = s.entrants as [string, string];
       const cfg = mod("icehockey").configSchema.parse(variantCfg("icehockey", "iihf")) as { points: Record<string, number> };
       expect(cfg.points, "premise: the variant declares IIHF 3-2-1-0").toMatchObject({ win: 3, otWin: 2, otLoss: 1, loss: 0 });
-      const f = await play(s.auth, s.stageId, H, A, c.events);
+      const f = await play(door, s.auth, s.stageId, H, A, c.events);
       expect([f.status, f.outcome?.kind, f.outcome?.winner, f.outcome?.method], "rig").toEqual(["decided", "win", H, c.method]);
-      const rows = await publicRows(s);
+      const rows = await publicRows(door, s);
       const w = rowOf(rows, H);
       const l = rowOf(rows, A);
       // IIHF (RBG:343-344): a win after regulation is 2, a loss after regulation 1 — the overtime and the GWS alike.
@@ -249,18 +438,18 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     });
   }
 
-  it("CK-PT-1 a cricket tie → 1 point each on the public table; a win beside it pays 2 and its loser 0", async () => {
+  for (const door of DOORS) it(`${door.tag}CK-PT-1 a cricket tie → 1 point each on the public table; a win beside it pays 2 and its loser 0`, async () => {
     // single-sport: CK-PT-1 is cricket's own row (2/1/1/0: win, tie, no result, loss).
-    const s = await publicScene({ sport: "cricket", variant: "t20", entrants: 3 });
+    const s = await publicScene(door, { sport: "cricket", variant: "t20", entrants: 3 });
     const [A, B, C] = s.entrants as [string, string, string];
     const cfg = mod("cricket").configSchema.parse(variantCfg("cricket", "t20")) as { ballsPerInnings: number; superOver?: unknown };
     const balls = cfg.ballsPerInnings;
     const innings = (runs: number, wickets: number): Ev => ({ type: "cricket.innings.summary", payload: { runs, wickets, legalBalls: balls } });
-    const tie = await play(s.auth, s.stageId, A, B, [{ type: "core.start" }, innings(150, 5), innings(150, 7)]);
+    const tie = await play(door, s.auth, s.stageId, A, B, [{ type: "core.start" }, innings(150, 5), innings(150, 7)]);
     expect([tie.status, tie.outcome?.kind], "rig: equal innings in a league stage (no super over) are a tie").toEqual(["decided", "tie"]);
-    const win = await play(s.auth, s.stageId, A, C, [{ type: "core.start" }, innings(150, 5), innings(100, 6)]);
+    const win = await play(door, s.auth, s.stageId, A, C, [{ type: "core.start" }, innings(150, 5), innings(100, 6)]);
     expect([win.status, win.outcome?.kind], "rig").toEqual(["decided", "win"]);
-    const rows = await publicRows(s);
+    const rows = await publicRows(door, s);
     const winnerOfAC = win.outcome!.winner!;
     const loserOfAC = winnerOfAC === A ? C : A;
     // CK-PT-1: W2, tie 1, L0. A: one tie and one result of the A–C match; B: the tie; C: the A–C result.
@@ -275,21 +464,21 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect(rowOf(rows, loserOfAC).points - (loserOfAC === A ? 1 : 0), "the loss pays 0").toBe(0);
   });
 
-  it("TT-PT-1 a table-tennis walkover → the loser's row gets 0, a played loser 1", async () => {
+  for (const door of DOORS) it(`${door.tag}TT-PT-1 a table-tennis walkover → the loser's row gets 0, a played loser 1`, async () => {
     // single-sport: TT-PT-1 is table tennis's own row (ITTF 2/1/0: a played loss pays 1, an unplayed one 0).
-    const s = await publicScene({ sport: "tabletennis", variant: "bo5", entrants: 3 });
+    const s = await publicScene(door, { sport: "tabletennis", variant: "bo5", entrants: 3 });
     const [A, B, C] = s.entrants as [string, string, string];
-    await playSets(s.auth, s.stageId, "tabletennis", A, B, [[11, 5], [5, 11], [11, 5], [11, 5]]);
-    await walkover(s.auth, s.stageId, A, C);
-    const rows = await publicRows(s);
+    await playSets(door, s.auth, s.stageId, "tabletennis", A, B, [[11, 5], [5, 11], [11, 5], [11, 5]]);
+    await walkover(door, s.auth, s.stageId, A, C);
+    const rows = await publicRows(door, s);
     // A: two wins (2 + 2); B: a played loss (1); C: a walkover (0).
     expect([rowOf(rows, A).points, rowOf(rows, B).points, rowOf(rows, C).points]).toEqual([4, 1, 0]);
     expect(rowOf(rows, C).points, "not a played loser's 1").not.toBe(rowOf(rows, B).points);
   });
 
-  it("HK-TB-1 FIH: a team with more REGULATION wins ranks above one level on points whose points include a shoot-out win (booked a draw, B2)", async () => {
+  for (const door of DOORS) it(`${door.tag}HK-TB-1 FIH: a team with more REGULATION wins ranks above one level on points whose points include a shoot-out win (booked a draw, B2)`, async () => {
     // single-sport: HK-TB-1 is hockey's own order (FIH GTR App. 3) with its draw-plus-bonus shoot-out (HK-PT-2).
-    const s = await publicScene({ sport: "hockey", variant: "fih-shootout", entrants: 4 });
+    const s = await publicScene(door, { sport: "hockey", variant: "fih-shootout", entrants: 4 });
     const t = named("ABCD", s.entrants);
     const reg = (goals: ("H" | "A")[]): Ev[] => [
       { type: "core.start" },
@@ -302,12 +491,12 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     // A level match goes to the FIH shoot-out: H scores its first three, A misses its first three.
     const so: Ev[] = [];
     for (let i = 0; i < 3; i++) so.push({ type: "hockey.shootout.attempt", payload: { by: "H", scored: true } }, { type: "hockey.shootout.attempt", payload: { by: "A", scored: false } });
-    await play(s.auth, s.stageId, t.A!, t.C!, reg(["H"])); // A 1-0 C
-    await play(s.auth, s.stageId, t.D!, t.A!, reg(["H", "H", "H"])); // D 3-0 A
-    const cb = await play(s.auth, s.stageId, t.C!, t.B!, [...reg([]), ...so]); // C v B 0-0, C wins the shoot-out
-    const bd = await play(s.auth, s.stageId, t.B!, t.D!, [...reg(["H", "A"]), ...so]); // B v D 1-1, B wins the shoot-out
+    await play(door, s.auth, s.stageId, t.A!, t.C!, reg(["H"])); // A 1-0 C
+    await play(door, s.auth, s.stageId, t.D!, t.A!, reg(["H", "H", "H"])); // D 3-0 A
+    const cb = await play(door, s.auth, s.stageId, t.C!, t.B!, [...reg([]), ...so]); // C v B 0-0, C wins the shoot-out
+    const bd = await play(door, s.auth, s.stageId, t.B!, t.D!, [...reg(["H", "A"]), ...so]); // B v D 1-1, B wins the shoot-out
     expect([cb.outcome?.method, bd.outcome?.method], "rig: both level matches went to the shoot-out").toEqual(["shootout", "shootout"]);
-    const rows = await publicRows(s);
+    const rows = await publicRows(door, s);
     // FIH 3/1/0 and HK-PT-2 (a shoot-out is a draw, 1, plus a bonus of 1 to its winner): A 3 + 0, B 1 + 2, C 0 + 2, D 3 + 1.
     expect(Object.fromEntries(Object.entries(t).map(([k, id]) => [k, rowOf(rows, id).points]))).toEqual({ A: 3, B: 3, C: 2, D: 4 });
     // HK-TB-1: points, then matches won (regulation wins only — B's are shoot-outs, booked drawn: 0), then goal difference.
@@ -317,13 +506,13 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect(order(rows, t)).toEqual(["D", "A", "B", "C"]);
   });
 
-  it("HK-TB-1 winsCount 'regulation' reaches the web rank call: an OVERTIME win is not a match won, so A (one regulation win) ranks above B (one overtime win) though B's goal difference is the better", async () => {
+  for (const door of DOORS) it(`${door.tag}HK-TB-1 winsCount 'regulation' reaches the web rank call: an OVERTIME win is not a match won, so A (one regulation win) ranks above B (one overtime win) though B's goal difference is the better`, async () => {
     // single-sport: HK-TB-1 ("matches won: regulation wins only", B2) is hockey's; hockey is the one sport that declares
     // `winsCount: "regulation"`. A shoot-out win is booked a draw (the case above), so only an overtime win can reach
     // the W column: a hockey division whose cfg plays overtime (the period kernel's own `overtime` key).
     const cfg = { ...variantCfg("hockey", "fih-outdoor"), overtime: { kind: "sudden_death", minutes: 5 } };
     expect(mod("hockey").winsCount, "premise: hockey counts regulation wins").toBe("regulation");
-    const s = await publicScene({ sport: "hockey", variant: "fih-outdoor", config: cfg, entrants: 4 });
+    const s = await publicScene(door, { sport: "hockey", variant: "fih-outdoor", config: cfg, entrants: 4 });
     const t = named("ABCD", s.entrants);
     const toFt = (goals: ("H" | "A")[]): Ev[] => [
       { type: "core.start" },
@@ -333,11 +522,11 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
       { type: "hockey.period.advance", payload: { to: "Q4" } },
       { type: "hockey.period.advance", payload: { to: "FT" } },
     ];
-    await play(s.auth, s.stageId, t.A!, t.C!, toFt(["H"])); // A 1-0 C
-    await play(s.auth, s.stageId, t.D!, t.A!, toFt(["H", "H", "H"])); // D 3-0 A
-    const ot = await play(s.auth, s.stageId, t.B!, t.D!, [...toFt([]), { type: "hockey.goal", payload: { by: "H" } }]); // B 1-0 D in overtime
+    await play(door, s.auth, s.stageId, t.A!, t.C!, toFt(["H"])); // A 1-0 C
+    await play(door, s.auth, s.stageId, t.D!, t.A!, toFt(["H", "H", "H"])); // D 3-0 A
+    const ot = await play(door, s.auth, s.stageId, t.B!, t.D!, [...toFt([]), { type: "hockey.goal", payload: { by: "H" } }]); // B 1-0 D in overtime
     expect([ot.status, ot.outcome?.winner, ot.outcome?.method], "rig: B won in overtime").toEqual(["decided", t.B, "extra_time"]);
-    const rows = await publicRows(s);
+    const rows = await publicRows(door, s);
     // FIH 3/1/0 with no overtime split (D9: an overtime win pays a win): A 3, B 3, D 3 + 0, C 0.
     expect(Object.fromEntries(Object.entries(t).map(([k, id]) => [k, rowOf(rows, id).points]))).toEqual({ A: 3, B: 3, C: 0, D: 3 });
     // HK-TB-1: points (A, B, D level), matches won counting REGULATION wins only — A 1, D 1, B 0 — then goal difference
@@ -348,11 +537,11 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
 
   /** FIDE results in a 3/1/0 round robin: "1-0" home wins, "0-1" away wins, "½-½" a draw. */
   type Chess = [string, string, "1-0" | "0-1" | "½-½"];
-  async function playChess(s: PublicScene, t: Record<string, string>, games: readonly Chess[]): Promise<number> {
+  async function playChess(door: Door, s: PublicScene, t: Record<string, string>, games: readonly Chess[]): Promise<number> {
     let n = 0;
     for (const [h, a, r] of games) {
       const winner = r === "1-0" ? "H" : r === "0-1" ? "A" : null;
-      const f = await play(s.auth, s.stageId, t[h]!, t[a]!, [
+      const f = await play(door, s.auth, s.stageId, t[h]!, t[a]!, [
         { type: "core.start" },
         { type: "boardgame.result", payload: winner === null ? { winner: null, method: "agreement" } : { winner, method: "checkmate" } },
       ]);
@@ -371,27 +560,27 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     sql<{ members: string[]; drawn_order: string[] }[]>`
       select members, drawn_order from stage_lots_draws where stage_id = ${stageId} and superseded_at is null order by members_key`;
 
-  it("B5 chess round robin under the 3/1/0 preset: Sonneborn-Berger reads the game points 1/½/0, not the 3/1/0 table points — A and E, level on table points, split as FIDE's SB arithmetic says (gamePoints reaches the web rank call)", async () => {
+  for (const door of DOORS) it(`${door.tag}B5 chess round robin under the 3/1/0 preset: Sonneborn-Berger reads the game points 1/½/0, not the 3/1/0 table points — A and E, level on table points, split as FIDE's SB arithmetic says (gamePoints reaches the web rank call)`, async () => {
     // single-sport: B5 / BG-TB-3 is chess's: chess is the sport whose game points (1/½/0) differ from a table preset's.
-    const s = await publicScene({
+    const s = await publicScene(door, {
       sport: "boardgame",
       variant: "classical",
       entrants: 6,
       beforeGenerate: async (x) => {
-        await putStageRules(x.auth, x.stageId, { points: threeOneZero() });
+        expect(await door.putStageRules(x.auth, x.stageId, { points: threeOneZero() }), "the stage saves the 3/1/0 preset").toMatchObject({ status: 200 });
       },
     });
     const t = named("ABCDEF", s.entrants);
     expect((await loadTableRules(sql, s.stageId)).points, "premise: the pin carries the 3/1/0 preset the stage saved").toEqual(threeOneZero());
     expect(mod("boardgame").defaultTiebreakers("league", {} as never), "premise: FIDE's round-robin order").toEqual(["points", "direct", "wins", "sberger", "lots"]);
-    const n = await playChess(s, t, [
+    const n = await playChess(door, s, t, [
       ["A", "B", "0-1"], ["A", "C", "0-1"], ["A", "D", "1-0"], ["A", "E", "½-½"], ["A", "F", "½-½"],
       ["B", "C", "½-½"], ["B", "D", "1-0"], ["B", "E", "½-½"], ["B", "F", "1-0"],
       ["C", "D", "1-0"], ["C", "E", "1-0"], ["C", "F", "1-0"],
       ["D", "E", "1-0"], ["D", "F", "1-0"], ["E", "F", "1-0"],
     ]);
     expect(n).toBe(15);
-    const rows = await publicRows(s);
+    const rows = await publicRows(door, s);
     // 3/1/0 table points: C 13, B 11, D 6, A 5, E 5, F 1. A and E drew each other (direct level) and won one each.
     expect(Object.fromEntries(Object.entries(t).map(([k, id]) => [k, rowOf(rows, id).points]))).toEqual({ A: 5, B: 11, C: 13, D: 6, E: 5, F: 1 });
     // Game points: A 2, B 4, C 4½, D 2, E 2, F ½. SB (FIDE C.07, game points): A = D 2 + ½·E 2 + ½·F ½ = 3¼;
@@ -405,27 +594,27 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect(rowOf(rows, t.A!).tieBreak?.key, "A's place is SB's too").toBe("sberger");
   });
 
-  it("B5 chess round robin under the 3/1/0 preset: direct encounter reads the game points too — P and Q level among the four on 7, where the table points would split them", async () => {
+  for (const door of DOORS) it(`${door.tag}B5 chess round robin under the 3/1/0 preset: direct encounter reads the game points too — P and Q level among the four on 7, where the table points would split them`, async () => {
     // single-sport: B5 / BG-TB-3 is chess's (see above). The order is an own one the write path validates — points,
     // direct, lots — so direct's reading alone decides: FIDE's default puts `wins` after direct, which splits P and Q the
     // same way whichever points direct read.
     const OWN: TiebreakerKey[] = ["points", "direct", "lots"];
-    const s = await publicScene({
+    const s = await publicScene(door, {
       sport: "boardgame",
       variant: "classical",
       entrants: 6,
       beforeGenerate: async (x) => {
-        await putStageRules(x.auth, x.stageId, { points: threeOneZero(), tiebreakers: OWN });
+        expect(await door.putStageRules(x.auth, x.stageId, { points: threeOneZero(), tiebreakers: OWN }), "the stage saves the preset and its own order").toMatchObject({ status: 200 });
       },
     });
     const t = named("PQRSTU", s.entrants);
     expect((await loadTableRules(sql, s.stageId)).tiebreakers, "premise: pinned to the own order").toEqual(OWN);
-    await playChess(s, t, [
+    await playChess(door, s, t, [
       ["P", "R", "1-0"], ["P", "S", "1-0"], ["Q", "P", "1-0"], ["Q", "R", "½-½"], ["Q", "S", "½-½"], ["R", "S", "1-0"],
       ["P", "T", "½-½"], ["U", "P", "1-0"], ["Q", "T", "½-½"], ["Q", "U", "½-½"],
       ["T", "R", "1-0"], ["R", "U", "1-0"], ["S", "T", "1-0"], ["S", "U", "1-0"], ["T", "U", "1-0"],
     ]);
-    const rows = await publicRows(s);
+    const rows = await publicRows(door, s);
     // 3/1/0: T 8; P, Q, R, S 7; U 4. Among P, Q, R, S in GAME points: P 2 (R, S), Q 2 (P, ½ R, ½ S), R 1½, S ½ → P and Q
     // level, a drawing of lots. In table points P 6 > Q 5 would split them on direct.
     expect(Object.fromEntries(Object.entries(t).map(([k, id]) => [k, rowOf(rows, id).points]))).toEqual({ P: 7, Q: 7, R: 7, S: 7, T: 8, U: 4 });
@@ -438,11 +627,11 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     expect([rowOf(rows, t.P!).tieBreak?.key, rowOf(rows, t.Q!).tieBreak?.key], "lots, not direct, split them").toEqual(["lots", "lots"]);
   });
 
-  it("X-TB-2 the pin comes from the real generate; with the division's live points moved off it, the override refusal (the real fixture-rules usecase) and the public table both follow the PIN; the lock comes from the real first event; a division order saved after activation never reaches the public table", async () => {
+  for (const door of DOORS) it(`${door.tag}X-TB-2 the pin comes from the real generate${door === API ? " (POST /stages/{id}/generate)" : ""}; with the division's live points moved off it, the override refusal (${door === API ? "PUT /fixtures/{id}/rules" : "the real fixture-rules usecase"}) and the public table both follow the PIN; the lock comes from the real first event${door === API ? " (POST /fixtures/{id}/events)" : ""}; a division order saved after activation never reaches the public table`, async () => {
     // single-sport: the override refusal needs a match-scope format key whose change adds outcomes the pinned rule does
     // not pay — volleyball's best-of (VB-PT-3); generic has no match-scope key.
     const vb = mod("volleyball");
-    const s = await publicScene({ sport: "volleyball", variant: "indoor", entrants: 3 });
+    const s = await publicScene(door, { sport: "volleyball", variant: "indoor", entrants: 3 });
     const t = named("ABC", s.entrants);
     const cfg = vb.configSchema.parse(variantCfg("volleyball", "indoor"));
     // The pin: written in the transaction that activated the stage (generate), to the sport's own rule and order.
@@ -451,11 +640,14 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     const pinned = await loadTableRules(sql, s.stageId);
     expect(pinned.tiebreakers, "pinned to FIVB V3's order (the engine's declaration)").toEqual(vb.defaultTiebreakers("league", cfg));
     expect(pinned.points, "pinned to the sport's rule").toEqual(vb.tablePointsRule(cfg, "league"));
+    // The reader serves that pin: the stamp the activation wrote, the sport's order, both from the sport.
+    const servedPin: ServedPin = { pinnedAt: p.pinnedAt, tiebreakers: vb.defaultTiebreakers("league", cfg), sources: { tiebreakers: "sport", points: "sport" } };
+    expect(await door.servedPin(s.auth, s.stageId), "the served pin").toEqual(servedPin);
     // Move the LIVE layer off the pin (A14 review m2): the division's own points table, saved through the real division
     // door before the first event, pays every win 3/0 ("*", an organiser's map pays as given). The pin keeps FIVB's
     // best-of-5 rule, so pin and live now disagree on a best-of-3's 2-0 and 2-1 and on what a 3-2 pays.
     const LIVE_MAP = { "*": [3, 0] };
-    await patchDivision(s.auth, s.divisionId, { config: { pointsMap: LIVE_MAP } });
+    expect(await door.patchDivision(s.auth, s.divisionId, { config: { pointsMap: LIVE_MAP } }), "the division's points table saves").toMatchObject({ status: 200 });
     const [stored] = await sql<{ map: unknown }[]>`select config -> 'pointsMap' as map from divisions where id = ${s.divisionId}`;
     expect(stored?.map, "premise: the division's live points table landed").toEqual(LIVE_MAP);
     const liveCfg = (bestOf: number) => vb.configSchema.parse({ ...variantCfg("volleyball", "indoor"), pointsMap: LIVE_MAP, bestOf });
@@ -466,43 +658,49 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     // The override refusal reads the PIN: a best-of-3 match on a best-of-5 stage reaches 2-0 and 2-1, which FIVB's
     // best-of-5 rule does not pay (VB-PT-3) — and which the live table would.
     const bc = await between(s.stageId, t.B!, t.C!);
-    await expect(writeFixtureRulesOverride(s.auth, [bc.id], { bestOf: 3 })).rejects.toMatchObject({
+    expect(await door.fixtureRules(s.auth, bc.id, { bestOf: 3 })).toMatchObject({
       status: 422,
       code: "POINTS_OUTCOME_UNCOVERED",
       extra: { uncovered: ["set:2-0", "set:2-1"] },
     });
+    const [{ rules_override }] = await sql<{ rules_override: unknown }[]>`select rules_override from fixtures where id = ${bc.id}`;
+    expect(rules_override, "the refused override stored nothing").toBeNull();
     // A division order saved after activation: accepted, and the pinned stage keeps its own.
     const DIV: TiebreakerKey[] = ["wins", "point_ratio", "points", "set_ratio", "h2h_points", "lots"];
-    const saved = await patchDivision(s.auth, s.divisionId, { tiebreakers: DIV });
-    expect(saved.tiebreakers, "premise: the division order landed").toEqual(DIV);
+    const saved = await door.patchDivision(s.auth, s.divisionId, { tiebreakers: DIV });
+    expect([saved.status, (saved.data as { tiebreakers?: unknown } | undefined)?.tiebreakers], "premise: the division order landed").toEqual([200, DIV]);
     expect((await loadTableRules(sql, s.stageId)).tiebreakers, "the pin holds").toEqual(pinned.tiebreakers);
-    // The lock: the first event appended through scoreEvent closes the stage's own order and points.
+    // The lock: the first event appended through the door's append closes the stage's own order and points.
     const ab = await between(s.stageId, t.A!, t.B!);
-    await post(s.auth, ab.id, "core.start");
+    await door.post(s.auth, ab.id, "core.start");
     const OWN: TiebreakerKey[] = ["wins", "set_ratio", "points", "point_ratio", "h2h_points", "lots"];
-    await expect(putStageRules(s.auth, s.stageId, { tiebreakers: OWN }), "the own order").rejects.toMatchObject({ status: 409, code: "STAGE_FORMAT_LOCKED" });
-    await expect(putStageRules(s.auth, s.stageId, { points: pinned.points }), "the own points").rejects.toMatchObject({ status: 409, code: "STAGE_FORMAT_LOCKED" });
+    expect(await door.putStageRules(s.auth, s.stageId, { tiebreakers: OWN }), "the own order").toMatchObject({ status: 409, code: "STAGE_FORMAT_LOCKED" });
+    expect(await door.putStageRules(s.auth, s.stageId, { points: pinned.points }), "the own points").toMatchObject({ status: 409, code: "STAGE_FORMAT_LOCKED" });
     // Results: one win each. A beats B 3-2 by a wide rally margin; B and C win 3-0 by two points a set.
     const summary = (home: string, games: readonly [number, number][]) =>
       games.map(([h, a]) => ({ type: "volleyball.set.summary", payload: ab.home === home ? { home: h, away: a } : { home: a, away: h } }));
-    for (const e of summary(t.A!, [[25, 0], [25, 0], [23, 25], [23, 25], [15, 0]])) await post(s.auth, ab.id, e.type, e.payload);
+    for (const e of summary(t.A!, [[25, 0], [25, 0], [23, 25], [23, 25], [15, 0]])) await door.post(s.auth, ab.id, e.type, e.payload);
     expect((await fixtureRow(ab.id)).status, "rig").toBe("decided");
-    await playSets(s.auth, s.stageId, "volleyball", t.B!, t.C!, [[25, 23], [25, 23], [25, 23]]);
-    await playSets(s.auth, s.stageId, "volleyball", t.C!, t.A!, [[25, 23], [25, 23], [25, 23]]);
-    const rows = await publicRows(s);
+    await playSets(door, s.auth, s.stageId, "volleyball", t.B!, t.C!, [[25, 23], [25, 23], [25, 23]]);
+    await playSets(door, s.auth, s.stageId, "volleyball", t.C!, t.A!, [[25, 23], [25, 23], [25, 23]]);
+    const rows = await publicRows(door, s);
     // The PIN pays (FIVB, VB-PT-1): 3-0 pays 3/0, 3-2 pays 2/1 → A 2, B 1 + 3 = 4, C 3. One win each. The live table
     // ("*" 3/0) would pay A 3, B 3, C 3.
     expect(Object.fromEntries(Object.entries(t).map(([k, id]) => [k, rowOf(rows, id).points]))).toEqual({ A: 2, B: 4, C: 3 });
     // The pinned order (wins, points, …) → B, C, A. The division's later order (wins, point_ratio, …) would read A first:
     // A won 180 rally points to 125, C 144 to 144, B 125 to 180.
     expect(order(rows, t)).toEqual(["B", "C", "A"]);
+    // The sequence: across a live points table, a division order, the lock and three results, the served pin never moved.
+    expect(await door.servedPin(s.auth, s.stageId), "the served pin, unmoved").toEqual(servedPin);
   });
 
   it("X-TB-3 a wins-first sport's DEFAULT reaches the public qualification view through the real loader: badminton's table gets its view, not silently dropped", async () => {
     // single-sport: badminton's default order is the one the routed gap names (merge-fix report, A14 route). Its flat 2/0
     // makes a race in points the race in wins scaled by two, so the race itself is witnessed on volleyball (next case).
+    // Usecase door only: the qualification view is the public site's builder over `getPublicDivision`, no API v1 reader.
+    const door = USECASE;
     const bdm = mod("badminton");
-    const s = await publicScene({
+    const s = await publicScene(door, {
       sport: "badminton",
       variant: "bwf",
       entrants: 4,
@@ -524,7 +722,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     let played = 0;
     for (const f of fixtures.filter((x) => x.round_no <= 2)) {
       const [w, l] = rank(f.home) < rank(f.away) ? [f.home, f.away] : [f.away, f.home];
-      await playSets(s.auth, s.stageId, "badminton", w, l, [[21, 10], [21, 10]]);
+      await playSets(door, s.auth, s.stageId, "badminton", w, l, [[21, 10], [21, 10]]);
       played++;
     }
     expect(played, "two rounds of two matches").toBe(4);
@@ -552,10 +750,12 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
   it("X-TB-3 volleyball races in matches WON, not in its table points: after two rounds of 3-2 results the two winners are Through and the two losers Out on wins (FIVB V3-1), where a race in FIVB points (VB-PT-1) would leave all four open", async () => {
     // single-sport: volleyball is the wins-first sport whose rule pays a win unevenly (3-0 → 3/0, 3-2 → 2/1), so a race
     // in points and a race in wins disagree; badminton's flat 2/0 cannot show it (above), and tennis shares the gate.
+    // Usecase door only, as above.
+    const door = USECASE;
     const vb = mod("volleyball");
     const cfg = vb.configSchema.parse(variantCfg("volleyball", "indoor"));
     expect([vb.primaryTableKey, vb.defaultTiebreakers("league", cfg)[0]], "premise: FIVB V3-1 ranks on matches won first").toEqual(["wins", "wins"]);
-    const s = await publicScene({
+    const s = await publicScene(door, {
       sport: "volleyball",
       variant: "indoor",
       entrants: 4,
@@ -581,7 +781,7 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
     for (const f of fixtures.filter((x) => x.round_no <= 2)) {
       const [w, l] = top.has(f.home) ? [f.home, f.away] : [f.away, f.home];
       expect(top.has(w) && !top.has(l), "rig: every early match is a cross match").toBe(true);
-      await playSets(s.auth, s.stageId, "volleyball", w, l, [[25, 20], [20, 25], [25, 20], [20, 25], [15, 10]]);
+      await playSets(door, s.auth, s.stageId, "volleyball", w, l, [[25, 20], [20, 25], [25, 20], [20, 25], [15, 10]]);
       played++;
     }
     expect(played, "two rounds of two matches").toBe(4);
@@ -689,16 +889,18 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
 
   it("BD-WO-1 under BWF's default (set_diff): a badminton walkover credits its 2-0 games, and the game difference of three level on wins reads them", async () => {
     // single-sport: BD-WO-1 is badminton's own row (a walkover is 2-0 games, each 21-0), read by BD-TB-1's set_diff.
-    const s = await publicScene({ sport: "badminton", variant: "bwf", entrants: 4 });
+    // Usecase door only: not one of Task 14's API cases (TT-PT-1 carries a walkover through the events route).
+    const door = USECASE;
+    const s = await publicScene(door, { sport: "badminton", variant: "bwf", entrants: 4 });
     const t = named("ABCD", s.entrants);
     const twoOne: [number, number][] = [[21, 10], [10, 21], [21, 10]];
-    await playSets(s.auth, s.stageId, "badminton", t.A!, t.B!, twoOne); // A 2-1 B
-    await playSets(s.auth, s.stageId, "badminton", t.B!, t.C!, twoOne); // B 2-1 C
-    await playSets(s.auth, s.stageId, "badminton", t.C!, t.A!, twoOne); // C 2-1 A
-    await walkover(s.auth, s.stageId, t.A!, t.D!); // D gives A a walkover
-    await playSets(s.auth, s.stageId, "badminton", t.B!, t.D!, twoOne); // B 2-1 D
-    await playSets(s.auth, s.stageId, "badminton", t.C!, t.D!, twoOne); // C 2-1 D
-    const rows = await publicRows(s);
+    await playSets(door, s.auth, s.stageId, "badminton", t.A!, t.B!, twoOne); // A 2-1 B
+    await playSets(door, s.auth, s.stageId, "badminton", t.B!, t.C!, twoOne); // B 2-1 C
+    await playSets(door, s.auth, s.stageId, "badminton", t.C!, t.A!, twoOne); // C 2-1 A
+    await walkover(door, s.auth, s.stageId, t.A!, t.D!); // D gives A a walkover
+    await playSets(door, s.auth, s.stageId, "badminton", t.B!, t.D!, twoOne); // B 2-1 D
+    await playSets(door, s.auth, s.stageId, "badminton", t.C!, t.D!, twoOne); // C 2-1 D
+    const rows = await publicRows(door, s);
     // BWF 16.2.1: A, B, C on two wins each. 16.2.3 (three level): game difference — A +1 −1 +2 (the walkover's 2-0,
     // BD-WO-1) = +2; B −1 +1 +1 = +1; C +1 −1 +1 = +1. 16.2.2 (two level): B beat C. Without the credited games A would
     // read 0 and fall below both.
