@@ -1,0 +1,408 @@
+[
+ {
+  "id": "t15-lock-every-activated-oc2",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  return formatLockedStageIds.includes(stage.id);",
+  "replace": "  return stage.tableRules.tiebreakers.pinnedAt !== null || /*MUT*/ formatLockedStageIds.includes(stage.id);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "X-TB-2 OC2 editable between activation"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-section.test.tsx"
+    ],
+    "name": "pinned but not listed by the server"
+   }
+  ]
+ },
+ {
+  "id": "t15-lock-ignores-server-list-pf9",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  return formatLockedStageIds.includes(stage.id);",
+  "replace": "  return /*MUT*/ false && formatLockedStageIds.includes(stage.id);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "an online stage with an opened round and no score is locked"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-section.test.tsx"
+    ],
+    "name": "listed by the server"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-tiebreaks.test.tsx"
+    ],
+    "name": "listed in formatLockedStageIds"
+   }
+  ]
+ },
+ {
+  "id": "t15-reset-returns-current",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  return tableRules.tiebreakers.sportDefault;",
+  "replace": "  return /*MUT*/ tableRules.tiebreakers.keys;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "football reset offers FIFA 2026"
+   }
+  ]
+ },
+ {
+  "id": "t15-swiss-rows-pinned-oc1",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  const swiss = ctx.stageKind === \"swiss\";",
+  "replace": "  const swiss = /*MUT*/ false;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "X-TB-3 OC1 a Swiss stage shows no pinned rows"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-section.test.tsx"
+    ],
+    "name": "a Swiss order keeps its own shape"
+   }
+  ]
+ },
+ {
+  "id": "t15-add-not-offerable",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  return offerableKeys(keys, position, ctx);",
+  "replace": "  return offerableKeys(keys, /*MUT*/ keys.length, ctx);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "Add step offers exactly offerableKeys at that position"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-section.test.tsx"
+    ],
+    "name": "offers exactly the engine.s offerable keys"
+   }
+  ]
+ },
+ {
+  "id": "t15-add-position-after-lots",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  return kind !== \"swiss\" && keys.length > 0 && keys[keys.length - 1] === \"lots\" ? keys.length - 1 : keys.length;",
+  "replace": "  return /*MUT*/ keys.length;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "the add point is just before lots"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-section.test.tsx"
+    ],
+    "name": "offers exactly the engine.s offerable keys"
+   }
+  ]
+ },
+ {
+  "id": "t15-badge-pin-ignored-xtb1",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  if (pinnedAt !== null) return { kind: \"pinned\", from: source };",
+  "replace": "  /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "X-TB-1 badge: Inherited"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-section.test.tsx"
+    ],
+    "name": "Inherited from the sport default, from the division"
+   }
+  ]
+ },
+ {
+  "id": "t15-clear-for-any-source",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  return { add: !locked, reset: !locked, clear: !locked && tableRules.tiebreakers.source === \"stage\" };",
+  "replace": "  return { add: !locked, reset: !locked, clear: /*MUT*/ !locked };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "is offered only for a stage.s OWN order"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-section.test.tsx"
+    ],
+    "name": "only for a stage with its own"
+   }
+  ]
+ },
+ {
+  "id": "t15-hint-inherited-dropped",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  const inherited = refused && (tableRules.tiebreakers.source === \"division\" || tableRules.tiebreakers.source === \"sport\");",
+  "replace": "  const inherited = /*MUT*/ false && refused;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "an inherited division default invalid for this stage"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-section.test.tsx"
+    ],
+    "name": "an inherited division order the stage refuses"
+   }
+  ]
+ },
+ {
+  "id": "t15-refusals-while-locked",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  const refusals = locked ? [] : validateCascade(keys, ctx);",
+  "replace": "  const refusals = /*MUT*/ validateCascade(keys, ctx);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "a locked stage shows no refusals"
+   }
+  ]
+ },
+ {
+  "id": "t15-cross-group-keeps-h2h",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  return stage.tableRules.crossGroup.keys.filter((key) => !isHeadToHeadKey(key));",
+  "replace": "  return /*MUT*/ stage.tableRules.crossGroup.keys;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "the cross-group line shows only for a pooled stage"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-section.test.tsx"
+    ],
+    "name": "a pooled stage a later stage takes a best-Nth from"
+   }
+  ]
+ },
+ {
+  "id": "t15-cross-group-without-bestnth",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  if (!stage.pooled || !stage.bestNth) return null;",
+  "replace": "  if (!stage.pooled /*MUT*/) return null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "the cross-group line shows only for a pooled stage"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-section.test.tsx"
+    ],
+    "name": "a pooled stage a later stage takes a best-Nth from"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-tiebreaks.test.tsx"
+    ],
+    "name": "a group stage the next stage takes a best-Nth from"
+   }
+  ]
+ },
+ {
+  "id": "t15-pooled-one-pool",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  return typeof pools === \"number\" && pools > 1;",
+  "replace": "  return typeof pools === \"number\" && pools >= 1 /*MUT*/;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "pooled = a group stage"
+   }
+  ]
+ },
+ {
+  "id": "t15-bestnth-any-take",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "      return names && Array.isArray(src.take) && src.take.some((t: unknown) => isObj(t) && t.kind === \"bestNth\");",
+  "replace": "      return names && Array.isArray(src.take) /*MUT*/;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "pooled = a group stage"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-tiebreaks.test.tsx"
+    ],
+    "name": "a group stage the next stage takes a best-Nth from"
+   }
+  ]
+ },
+ {
+  "id": "t15-panel-mounts-on-bracket",
+  "file": "apps/web/src/components/v2/stages-panel.tsx",
+  "find": "    {stageTakesPoints(kind) && tiebreaks !== null && (",
+  "replace": "    {/*MUT*/ tiebreaks !== null && (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-tiebreaks.test.tsx"
+    ],
+    "name": "sweep: every table kind and every bracket kind"
+   }
+  ]
+ },
+ {
+  "id": "t15-panel-guesses-without-rules",
+  "file": "apps/web/src/components/v2/stages-panel.tsx",
+  "find": "    {stageTakesPoints(kind) && tiebreaks !== null && (",
+  "replace": "    {stageTakesPoints(kind) && /*MUT*/ (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-tiebreaks.test.tsx"
+    ],
+    "name": "no table rules handed for the stage"
+   }
+  ]
+ },
+ {
+  "id": "t15-page-hands-null-rules",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "find": "(s.tableRules !== null && stageTakesPoints(s.kind) ? [[s.id, s.tableRules] as const] : [])",
+  "replace": "(/*MUT*/ stageTakesPoints(s.kind) ? [[s.id, s.tableRules] as const] : [])",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+    ],
+    "name": "only the table stage whose rules read is handed"
+   }
+  ]
+ },
+ {
+  "id": "t15-page-hands-bracket-rules",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "find": "(s.tableRules !== null && stageTakesPoints(s.kind) ? [[s.id, s.tableRules] as const] : [])",
+  "replace": "(s.tableRules !== null /*MUT*/ ? [[s.id, s.tableRules] as const] : [])",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+    ],
+    "name": "only the table stage whose rules read is handed"
+   }
+  ]
+ },
+ {
+  "id": "t15-page-reads-every-tab",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "find": "  const stageTableRules =\n    tab === \"fixtures\"",
+  "replace": "  const stageTableRules =\n    /*MUT*/ true",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/held-final-phase.test.tsx"
+    ],
+    "name": "another tab does not ask"
+   }
+  ]
+ },
+ {
+  "id": "t15-kept-pinned-dupes",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "    if (out.some((o) => o.stageId === k.stageId)) continue;\n",
+  "replace": "    /*MUT*/\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/kept-pinned.test.ts"
+    ],
+    "name": "a stage named twice is said once"
+   }
+  ]
+ },
+ {
+  "id": "t15-kept-pinned-shape",
+  "file": "apps/web/src/lib/rule-errors.ts",
+  "find": "    if (!isRecord(k) || typeof k.stageId !== \"string\" || typeof k.name !== \"string\") continue;",
+  "replace": "    if (!isRecord(k) /*MUT*/) continue;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/lib/__tests__/kept-pinned.test.ts"
+    ],
+    "name": "skips an entry it cannot say"
+   }
+  ]
+ }
+]

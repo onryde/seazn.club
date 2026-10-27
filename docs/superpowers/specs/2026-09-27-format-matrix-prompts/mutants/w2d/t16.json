@@ -1,0 +1,388 @@
+[
+ {
+  "id": "t16-rows-unreachable-xpt3",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  return [...reachable]\n    .sort(",
+  "replace": "  return [...reachable, ...([\"win.ot\", \"draw\", \"tie\"] as OutcomeKey[]).filter((k) => !reachable.includes(k))] /*MUT*/\n    .sort(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "X-PT-3 rows are exactly reachableOutcomes"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "sweep: every .sport, variant. in the registry"
+   }
+  ]
+ },
+ {
+  "id": "t16-dpb-loss-row-shown-b2",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "            shown: key === \"win.so\" && !underMap,",
+  "replace": "            shown: /*MUT*/ !underMap,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "B2 football/hockey SO row"
+   }
+  ]
+ },
+ {
+  "id": "t16-dpb-bonus-default-b2",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "            drawPlusBonus: key === \"win.so\" ? (rule.soBonus ?? 1) : null,",
+  "replace": "            drawPlusBonus: key === \"win.so\" ? (rule.soBonus ?? /*MUT*/ 0) : null,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "B2 football/hockey SO row"
+   }
+  ]
+ },
+ {
+  "id": "t16-plain-win-shown-under-set-table",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "        return plain(paid.value, paid.fallback, !underMap);",
+  "replace": "        return plain(paid.value, paid.fallback /*MUT*/);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "VB-PT-3 volleyball best of 5"
+   }
+  ]
+ },
+ {
+  "id": "t16-unplayed-own-ignored-d6",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "        return rule.loss.unplayed === undefined ? plain(rule.loss.regulation, true) : plain(rule.loss.unplayed, false);",
+  "replace": "        return /*MUT*/ plain(rule.loss.regulation, true);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "cricket shows tie and no result"
+   }
+  ]
+ },
+ {
+  "id": "t16-unknown-outcome-dropped",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "    throw new Error(`stage points: no row for the outcome \"${key}\"`);\n  };",
+  "replace": "    return { key, value: null, pair: null, fallback: false, drawPlusBonus: null, shown: false }; /*MUT*/\n  };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "an outcome key the app has no row for is refused by name"
+   }
+  ]
+ },
+ {
+  "id": "t16-presets-ignore-kind",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  return module.tablePresets(kind as TableStageKind).points.map(",
+  "replace": "  return module.tablePresets(/*MUT*/ \"league\" as TableStageKind).points.map(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "chess presets"
+   }
+  ]
+ },
+ {
+  "id": "t16-presets-on-bracket",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  if (!stageTakesPoints(kind) || module.tablePresets === undefined) return [];",
+  "replace": "  if (/*MUT*/ module.tablePresets === undefined) return [];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "chess presets"
+   }
+  ]
+ },
+ {
+  "id": "t16-draft-opens-blank-carry1",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  return ctx === null ? { ...BLANK_DRAFT, sets: {} } : draftOfRule(ctx.rule, true, reachable);",
+  "replace": "  return { ...BLANK_DRAFT, sets: {} } /*MUT*/;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "the volleyball indoor editor opens with its set scores"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "round trip on every division"
+   }
+  ]
+ },
+ {
+  "id": "t16-draft-own-ignored",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  if (own !== null) return draftOfRule(own, false, reachable);",
+  "replace": "  /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "round trip on every division"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "a stored rule: unchecked, the boxes hold its numbers"
+   }
+  ]
+ },
+ {
+  "id": "t16-set-blank-row-dropped",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "      if (blank) pairs.push([score, [win, loss]]);",
+  "replace": "      if (blank) continue; /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "a set score needs both numbers or neither"
+   }
+  ]
+ },
+ {
+  "id": "t16-set-partial-row-taken",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "      else if (w === null || l === null) return { ok: false, problem: \"set\" };",
+  "replace": "      else if (w === null && l === null /*MUT*/) return { ok: false, problem: \"set\" };",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "a set score needs both numbers or neither"
+   }
+  ]
+ },
+ {
+  "id": "t16-set-star-not-kept",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "    bySetScore = draft.setsStar && one ? { \"*\": pairs[0]![1] } : Object.fromEntries(pairs);",
+  "replace": "    bySetScore = /*MUT*/ Object.fromEntries(pairs);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "round trip on every division"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "set scores"
+   }
+  ]
+ },
+ {
+  "id": "t16-half-not-stored",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "(unit === \"half\" ? n * 2 : n);",
+  "replace": "(/*MUT*/ n);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "chess: the boxes show points"
+   }
+  ]
+ },
+ {
+  "id": "t16-half-not-shown",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "String(unit === \"half\" ? n / 2 : n);",
+  "replace": "String(/*MUT*/ n);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "chess: the boxes show points"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "chess shows points, not half-points"
+   }
+  ]
+ },
+ {
+  "id": "t16-tie-box-dropped",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "    ...(v.tie === undefined ? {} : { tie: v.tie }),",
+  "replace": "    /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "round trip on every division"
+   }
+  ]
+ },
+ {
+  "id": "t16-refusal-never",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  const built = ruleFromDraft(module, draft);\n  if (!built.ok || built.rule === null) return null;\n  const ctx = stagePointsContext(module, divisionConfig, stage);",
+  "replace": "  const built = ruleFromDraft(module, draft);\n  if (/*MUT*/ true || !built.ok || built.rule === null) return null;\n  const ctx = stagePointsContext(module, divisionConfig, stage);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "a blank row pays its fallback"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "an editable stage: it"
+   }
+  ]
+ },
+ {
+  "id": "t16-refusal-uncovered-dropped",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  if (!cov.ok && cov.uncovered.length > 0) return { code: \"POINTS_OUTCOME_UNCOVERED\", uncovered: cov.uncovered };",
+  "replace": "  /*MUT*/",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "a blank row pays its fallback"
+   }
+  ]
+ },
+ {
+  "id": "t16-refusal-split-dropped",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
+  "find": "  return splits.length > 0 ? { code: \"POINTS_SPLIT_FLATTENED\", splits } : null;",
+  "replace": "  return /*MUT*/ null;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-w2d-model.test.ts"
+    ],
+    "name": "a blank row pays its fallback"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "an editable stage: it"
+   }
+  ]
+ },
+ {
+  "id": "t16-keep-started-label-carry3",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+  "find": "{msg(basis === \"pin\" ? \"stagePoints.keepStarted\" : \"stagePoints.useDivision\")}",
+  "replace": "{msg(/*MUT*/ \"stagePoints.useDivision\")}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "the editor .pinned, not yet scored."
+   }
+  ]
+ },
+ {
+  "id": "t16-refusal-line-hidden",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+  "find": "      {refusalText !== null && !draft.useDivision && (",
+  "replace": "      {/*MUT*/ false && (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "an editable stage: it"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
+    ],
+    "name": "W2d T16: an ice-hockey division"
+   }
+  ]
+ },
+ {
+  "id": "t16-rows-hidden-while-inheriting",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+  "find": "      {draft.useDivision && <RowsList rows={playingRows} unit={playing.unit} msg={msg} />}",
+  "replace": "      {/*MUT*/ false && <RowsList rows={playingRows} unit={playing.unit} msg={msg} />}",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
+    ],
+    "name": "ice hockey .IIHF.: the editor, its overtime"
+   }
+  ]
+ }
+]

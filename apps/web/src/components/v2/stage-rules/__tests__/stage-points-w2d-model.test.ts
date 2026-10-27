@@ -50,6 +50,15 @@ const DIVISIONS = builtinModules.flatMap((m) => Object.keys(m.variants).map((var
 const TABLE_KINDS = [...DRAW_KINDS];
 
 describe("X-PT-3 the rows are the reachable outcomes", () => {
+  it("an outcome key the app has no row for is refused by name, never dropped: alone, and sorted beside a known one", () => {
+    const rule = sportRule(icehockey, cfg(icehockey, "iihf"));
+    const bogus = "win.penalties" as OutcomeKey;
+    expect(() => pointsRows([bogus], rule)).toThrow('stage points: no row for the outcome "win.penalties"');
+    expect(() => pointsRows(["win.regulation", bogus], rule)).toThrow('stage points: no row for the outcome "win.penalties"');
+    // The positive pair: every key the engine can reach has a row (the X-PT-3 sweep below counts them).
+    expect(pointsRows(["win.regulation"], rule).map((r) => r.key)).toEqual(["win.regulation"]);
+  });
+
   it("X-PT-3 rows are exactly reachableOutcomes: IIHF shows OT and shoot-out rows; recreational shows a draw row and none of them", () => {
     const iihf = reach(icehockey, cfg(icehockey, "iihf"));
     const rows = pointsRows(iihf, sportRule(icehockey, cfg(icehockey, "iihf")));

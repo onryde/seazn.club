@@ -268,21 +268,6 @@
     ]
   },
   {
-    "id": "t18-draw-zero",
-    "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
-    "find": "draw: text(b.draw ?? 0),",
-    "replace": "draw: text(b.draw),",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
-        ],
-        "name": "starts from the division's numbers"
-      }
-    ]
-  },
-  {
     "id": "t18-blank-zero",
     "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
     "find": "if (raw.trim() === \"\") return null;",
@@ -567,21 +552,6 @@
     ]
   },
   {
-    "id": "t18-sec-can-draw",
-    "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
-    "find": "const canDraw = divisionBasePoints(module, divisionConfig).draw !== null;",
-    "replace": "const canDraw = true;",
-    "killers": [
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
-        ],
-        "name": "a sport that cannot draw gets the two-part sentence"
-      }
-    ]
-  },
-  {
     "id": "t18-sec-inexpressible",
     "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
     "find": "if (state === \"inexpressible\") {",
@@ -599,7 +569,7 @@
   {
     "id": "t18-sec-save-needs-valid",
     "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
-    "find": "disabled={saving || !dirty || problem !== null}",
+    "find": "disabled={saving || !dirty || problem !== null || refusal !== null}",
     "replace": "disabled={saving}",
     "killers": [
       {

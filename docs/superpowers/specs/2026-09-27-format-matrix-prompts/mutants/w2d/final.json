@@ -31,7 +31,7 @@
  {
   "id": "final-i1-draft-ignores-pin",
   "file": "apps/web/src/components/v2/stage-rules/stage-points-model.ts",
-  "find": "    if (pin !== null) return draftOfRule(pin, true);\n",
+  "find": "  if (pin !== null) return draftOfRule(pin, true, reachable);\n",
   "replace": "",
   "killers": [
    {

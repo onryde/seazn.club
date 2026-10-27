@@ -138,10 +138,9 @@ const SET_KEY = /^set:(\d+)-(\d+)$/;
 const rank = (key: OutcomeKey): [number, number, number] => {
   const set = SET_KEY.exec(key);
   if (set !== null) return [ROW_ORDER.length, Number(set[1]), Number(set[2])];
+  // An outcome key this app has no row for sorts last; `pointsRows` then refuses it by name (its one guard).
   const at = ROW_ORDER.indexOf(key);
-  // Assumptions are guards: an outcome key this app has no row for is refused by name, never dropped from the list.
-  if (at === -1) throw new Error(`stage points: no row for the outcome "${key}"`);
-  return [at, 0, 0];
+  return [at === -1 ? ROW_ORDER.length + 1 : at, 0, 0];
 };
 
 /** One outcome row. Numbers are in the rule's STORED unit (half-points under `unit: "half"`; the draft shows points). */
@@ -229,6 +228,7 @@ export function pointsRows(reachable: readonly OutcomeKey[], rule: PointsRule): 
       case "noResult":
         return rule.noResult === undefined ? plain(0, true) : plain(rule.noResult, false);
     }
+    // Assumptions are guards: an outcome key this app has no row for is refused by name, never dropped from the list.
     throw new Error(`stage points: no row for the outcome "${key}"`);
   };
   return [...reachable]
