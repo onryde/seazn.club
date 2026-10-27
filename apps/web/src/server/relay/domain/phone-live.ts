@@ -23,7 +23,7 @@ export const isPhoneLive = (state: CapturePhoneState): boolean => (PHONE_LIVE_ST
  *  so the phone coming back is not an edge for them. The counter then stands where it was. */
 export const phoneLiveTracked = (state: SessionState): boolean => isActive(state) && state !== "ending";
 
-/** What is persisted per session (fixture_stream_sessions.phone_live_edge / phone_live / phone_live_beat_at, V475).
+/** What is persisted per session (fixture_stream_sessions.phone_live_edge / phone_live / phone_live_beat_at, V476).
  *  `edge`: null until the session's phone has been live once; 0 at that first live; +1 per later edge. `live` and `beatAt`:
  *  the last beat the tracker APPLIED (null together with no beat at all). */
 export interface PhoneLiveTracker { edge: number | null; live: boolean | null; beatAt: Date | null }
@@ -46,7 +46,7 @@ export const NO_PHONE_LIVE: PhoneLiveTracker = { edge: null, live: null, beatAt:
  *  - One edge per beat at most, and the counter never goes down.
  */
 export function stepPhoneLive(prev: PhoneLiveTracker, beat: { state: CapturePhoneState; at: Date }, silentBefore: boolean): PhoneLiveTracker {
-  // A counter with no recorded side is a corrupted row (V475's CHECK refuses it) — never guess which side it was on.
+  // A counter with no recorded side is a corrupted row (V476's CHECK refuses it) — never guess which side it was on.
   if (prev.edge !== null && (prev.live === null || prev.beatAt === null)) {
     throw new RangeError(`stepPhoneLive: a counter of ${prev.edge} with no last beat (live=${String(prev.live)}, beatAt=${String(prev.beatAt)})`);
   }

@@ -2061,7 +2061,7 @@ export const RelayHeartbeat = z
 export type RelayHeartbeat = z.infer<typeof RelayHeartbeat>;
 export const RelayHeartbeatReply = z.object({
   desiredState: z.enum(["live", "ending"]),
-  /** Owed 108 fix (b): the session's PHONE-LIVE EDGE counter (V475; domain/phone-live.ts) — bumped once each time the phone goes
+  /** Owed 108 fix (b): the session's PHONE-LIVE EDGE counter (V476; domain/phone-live.ts) — bumped once each time the phone goes
    *  from not-live back to live after it had been live, so a relay waiting out its reconnect back-off can reconnect at once.
    *  The relay acts once per INCREASE. Monotonic for the life of the session and stored, never remembered. 0 at the first-ever
    *  live (no outage to recover from). Absent — web omits it, and a reader treats null the same — when the session has no phone,

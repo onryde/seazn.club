@@ -1,4 +1,4 @@
--- V475 — Owed 108 fix (b), web half: tell the relay when the phone is live AGAIN.
+-- V476 — Owed 108 fix (b), web half: tell the relay when the phone is live AGAIN.
 --
 -- The relay (the Fly compositor) is outbound-only: it POSTs a heartbeat about every 5 s and web can answer only in that
 -- reply. When the phone's connection returns after an outage the relay is waiting out its own back-off; the heartbeat reply
