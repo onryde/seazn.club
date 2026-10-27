@@ -379,7 +379,25 @@ export interface DockChip {
   kind?: "flag";
   mutate: (payload: Record<string, unknown>) => Record<string, unknown>;
 }
-export interface DockSpec { title: string; chips: DockChip[] }
+export interface DockSpec {
+  title: string;
+  chips: DockChip[];
+  /**
+   * W2d T18 (HK-TB-2, PS-7d; owner option A, 2026-10-20) — the payload field this event CANNOT be sent without.
+   *
+   * Every dock before this one was optional enrichment of a tap that had ALREADY committed: the tap is held for
+   * HOLD_MS and drains whether or not a chip is touched (`DockChip` above, `detail-dock.tsx`'s header). A hockey goal
+   * is the first event the engine refuses without an answer — FIH ranks on field goals, so the write path refuses an
+   * untyped `hockey.goal` (`GOAL_KIND_REQUIRED`) — and holding it would only drain a refusal.
+   *
+   * So when this is set and the payload does not carry it, the host does NOT queue the tap: it shows the dock as a
+   * CHOICE (no timer, a Cancel that sends nothing) and dispatches only once a chip has answered it (`pad-host.tsx`'s
+   * `softCommitPlan`). A chip that does not set it (a modifier flag) just updates the pending payload and the choice
+   * stays open; but at least one chip MUST set it, or the scorer is offered a question they cannot answer —
+   * `softCommitPlan` refuses that dock by name. Absent (every other dock) means nothing is required, as before.
+   */
+  requires?: string;
+}
 
 /**
  * R2c — a person/option id -> the PRE-LOCALISED reason it is not selectable

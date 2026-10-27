@@ -7612,10 +7612,59 @@ async function w2dTablesSuite(): Promise<void> {
       read3.length > 0 && JSON.stringify(read3.map((r) => r.entrantId)) === JSON.stringify(read2.map((r) => r.entrantId)),
     );
     await w2dStageRulesToPublicChecks(owner, who.org_id, comp, w2dCheck);
+    await w2dHockeyGoalTypeChecks(owner, comp);
   } finally {
     await sql.end();
   }
   check(`w2d: the tables suite ran its ${EXPECTED_CHECKS} checks (ran ${checked})`, checked === EXPECTED_CHECKS);
+}
+
+/**
+ * W2d Task 18 (HK-TB-2, B3; PS-7d) — over real HTTP: FIH ranks on field goals, so the write path refuses a hockey goal
+ * that does not say what kind it is, BY NAME (422 GOAL_KIND_REQUIRED, not CONFIG_INVALID), and writes nothing; the same
+ * goal with its type is taken. A third division (hockey, fih-outdoor, two rosterless teams) in the suite's competition.
+ * Counted on its own (the tables suite's EXPECTED_CHECKS stays its own), and a run that checked nothing fails.
+ */
+async function w2dHockeyGoalTypeChecks(owner: Session, comp: { id: string }): Promise<void> {
+  const EXPECTED = 2;
+  let ran = 0;
+  const hkCheck = (label: string, cond: boolean) => {
+    ran++;
+    check(label, cond);
+  };
+  const div = v1data<{ id: string } | undefined>(
+    await v1(owner, `/api/v1/competitions/${comp.id}/divisions`, "POST", { name: "W2d Hockey", sport_key: "hockey", variant_key: "fih-outdoor" }),
+  );
+  const entrants = v1data<{ id: string }[] | undefined>(
+    await v1(owner, `/api/v1/divisions/${div?.id}/entrants`, "POST",
+      ["H", "A"].map((n, i) => ({ kind: "team", display_name: `${n} ${tag} hockey`, seed: i + 1 }))),
+  ) ?? [];
+  const stageId = v1data<{ id: string } | undefined>(
+    await v1(owner, `/api/v1/divisions/${div?.id}/stages`, "POST", { seq: 1, kind: "league", name: "Hockey Table" }),
+  )?.id ?? "";
+  const fx = (v1data<{ fixtures: { id: string }[] } | undefined>(await v1(owner, `/api/v1/stages/${stageId}/generate`, "POST"))?.fixtures ?? [])[0]?.id ?? "";
+  const divStart = await v1(owner, `/api/v1/divisions/${div?.id}/start`, "POST");
+  const seqOf = async () => v1data<{ last_seq: number } | undefined>(await v1(owner, `/api/v1/fixtures/${fx}/state`))?.last_seq;
+  const send = async (type: string, payload: unknown) =>
+    v1(owner, `/api/v1/fixtures/${fx}/events`, "POST", { expected_seq: await seqOf(), type, payload });
+  const started = await send("core.start", {});
+  const home = entrants[0]?.id ?? "";
+  const before = await seqOf();
+  const untyped = await send("hockey.goal", { by: home });
+  const after = await seqOf();
+  const code = (untyped.json as { error?: { code?: string } } | null)?.error?.code;
+  hkCheck(
+    "w2d T18: an untyped hockey goal is refused by name — 422 GOAL_KIND_REQUIRED, and nothing is written" +
+      (untyped.status === 422 && code === "GOAL_KIND_REQUIRED" ? "" : ` — got ${untyped.status} ${JSON.stringify(untyped.json)}`),
+    entrants.length === 2 && divStart.status < 300 && started.status === 201 &&
+      untyped.status === 422 && code === "GOAL_KIND_REQUIRED" && typeof before === "number" && after === before,
+  );
+  const typed = await send("hockey.goal", { by: home, kind: "pc" });
+  hkCheck(
+    "w2d T18: the same goal with its type (a penalty corner) is accepted" + (typed.status === 201 ? "" : ` — got ${typed.status} ${JSON.stringify(typed.json)}`),
+    typed.status === 201 && (await seqOf()) === (before ?? -1) + 1,
+  );
+  check(`w2d T18: the hockey goal-type checks ran ${EXPECTED} (ran ${ran})`, ran === EXPECTED);
 }
 
 /**

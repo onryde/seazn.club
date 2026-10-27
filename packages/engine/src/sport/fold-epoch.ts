@@ -30,8 +30,12 @@ export const FOLD_EPOCH = Object.freeze({
   // W2d (T3, PS-1) raised football, hockey and icehockey one MAJOR: `points.shootoutWin/shootoutLoss` are gone (a phone that still sends them has
   // them stripped), football and hockey take `soBonus` instead, and a shoot-out win's standingsDelta pays the plain win (the 2/1 booking is the
   // table rule's). Their recorded configs were converted (soBonus = shootoutWin - draw), so the guard reads the streams as re-recorded.
+  // W2d T18 (HK-TB-2, B3; owner PS-7d) raised hockey once more (its fourth): the write path refuses a hockey.goal without its
+  // type (GOAL_KIND_REQUIRED), so a phone that still sends an untyped goal must update, and the corpus's untyped goals were
+  // re-recorded as field goals (kind "fg"). As with the lineup refusal, it is the write path that refuses: replay is lenient,
+  // and a recorded untyped goal still folds as a field goal.
   football: 3, cricket: 1, boardgame: 3, carrom: 3, generic: 3, volleyball: 1,
-  badminton: 1, tabletennis: 1, tennis: 1, icehockey: 2, hockey: 3,
+  badminton: 1, tabletennis: 1, tennis: 1, icehockey: 2, hockey: 4,
 } as const satisfies Readonly<Record<string, number>>);
 export type FoldEpochSport = keyof typeof FOLD_EPOCH;
 // The same sports as FOLD_EPOCH: `satisfies` over its keys makes a sport missing here, or one only here, a type error.

@@ -144,14 +144,29 @@ async function pace(page: Page): Promise<void> {
  *  Confirm; period-shared.ts's own `buildTiles`). Leaves whatever Detail
  *  Dock opens alone: `queue.ts`'s `HOLD_MS` window auto-flushes it, and
  *  the dock is an inline panel, not a blocking overlay, so the next tap
- *  reaches its own tile regardless. */
-async function tapGoal(page: Page, request: APIRequestContext, fixtureId: string, side: "home" | "away"): Promise<void> {
+ *  reaches its own tile regardless.
+ *
+ *  W2d T18 (HK-TB-2): a HOCKEY goal tap asks the goal's type first and
+ *  queues nothing until it is answered, so a hockey caller names `kind` and
+ *  the chip is tapped; the row then carries it. Ice hockey passes none. */
+async function tapGoal(
+  page: Page,
+  request: APIRequestContext,
+  fixtureId: string,
+  side: "home" | "away",
+  kind?: "fg" | "pc" | "stroke",
+): Promise<void> {
   const before = (await ledger(request, fixtureId)).length;
   await pace(page);
   await v3Tile(page, `goal-${side}`).click();
+  if (kind !== undefined) await page.locator(`[data-testid="pad-dock-chip-kind:${kind}"]`).click();
   await expect
     .poll(async () => (await ledger(request, fixtureId)).length, { timeout: 20_000 })
     .toBe(before + 1);
+  if (kind !== undefined) {
+    const rows = await ledger(request, fixtureId);
+    expect(rows.at(-1)!.payload.kind, "the goal row must carry the type its chip chose").toBe(kind);
+  }
 }
 
 /** The "Advance period" tile — one tap, no sheet: `expectedAdvance` leaves
@@ -403,14 +418,14 @@ test("R6 — hockey: a suspension with its own minutes/servedBy, the clock start
   await shot(page, "hockey", "match-open");
 
   // ---- Q1: HOME opens the scoring ------------------------------------------
-  await tapGoal(page, page.request, fx.fixtureId, "home");
+  await tapGoal(page, page.request, fx.fixtureId, "home", "fg");
   await expect(halfScore(page, "home")).toHaveText("1", { timeout: 20_000 });
   await shot(page, "hockey", "q1-home-goal");
 
   await tapAdvance(page, page.request, fx.fixtureId, "Q2");
 
   // ---- Q2: AWAY levels it, then the clock is driven by hand ---------------
-  await tapGoal(page, page.request, fx.fixtureId, "away");
+  await tapGoal(page, page.request, fx.fixtureId, "away", "pc");
   await expect(halfScore(page, "away")).toHaveText("1", { timeout: 20_000 });
 
   await expect(clockBar(page), "clock() is declared — the bar must be on screen").toBeVisible({ timeout: 20_000 });
@@ -459,7 +474,7 @@ test("R6 — hockey: a suspension with its own minutes/servedBy, the clock start
   // card server-side (kernel.ts sweeps before applying). The proof it is
   // genuinely gone, not merely displaying zero: the Release tile vanishes.
   await toggleClock(page, page.request, fx.fixtureId, "hockey.clock", true);
-  await tapGoal(page, page.request, fx.fixtureId, "home");
+  await tapGoal(page, page.request, fx.fixtureId, "home", "stroke");
   await expect(halfScore(page, "home")).toHaveText("2", { timeout: 20_000 });
   await expect(
     v3Tile(page, "release"),

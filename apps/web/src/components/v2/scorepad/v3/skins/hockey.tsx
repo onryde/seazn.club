@@ -73,6 +73,9 @@ export const hockeySpec: PeriodSkinSpec = {
   key: "hockey",
   classes: HOCKEY_CLASSES,
   reasons: HOCKEY_REASONS,
+  // W2d T18 (HK-TB-2): FIH ranks on field goals, so the engine refuses a goal without its type — the goal tap
+  // asks Field goal / Penalty corner / Penalty stroke (or Own goal) before anything is queued. See the flag's doc.
+  goalKindRequired: true,
 };
 
 export const hockeySkinV3: (t: TFn) => SkinDefV3<PadHostView> = makePeriodSkin(hockeySpec);

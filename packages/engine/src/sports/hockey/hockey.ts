@@ -260,4 +260,7 @@ export const hockey = makePeriodModule({
   // rows). See `PeriodPreset.shotTracking`'s own comment for why this is a
   // preset flag and not a cfg knob.
   shotTracking: true,
+  // W2d T18 (HK-TB-2, B3) — FIH ranks level teams on field goals (GTR App. 3), so every goal records its type: the write
+  // path refuses an untyped goal with GOAL_KIND_REQUIRED. See `PeriodPreset.goalKindRequired`.
+  goalKindRequired: true,
 });

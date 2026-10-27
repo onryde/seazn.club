@@ -687,9 +687,9 @@ test.describe("the overlay puts the right score on air", () => {
         away: "0",
       });
 
-      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
-      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", { by: rig.awayEntrantId });
-      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId, kind: "fg" });
+      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", { by: rig.awayEntrantId, kind: "fg" });
+      await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId, kind: "fg" });
 
       // A poll with a reload, not a bare assertion: the public row this route
       // reads is `unstable_cache`-wrapped, so the first load after a write can
@@ -1409,6 +1409,7 @@ test.describe("private realtime push to the overlay", () => {
       const t0 = Date.now();
       await sendEvent(ownerPage.request, rig.fixtureId, "hockey.goal", {
         by: rig.homeEntrantId,
+        kind: "fg", // W2d T18: a hockey goal carries its type
       });
 
       await expect
@@ -1517,7 +1518,7 @@ test.describe("the public match page's stream link", () => {
  *  day a preset moves. One goal first — a level score sends hockey to a
  *  shoot-out instead of deciding. */
 async function decideFixture(page: Page, fixtureId: string): Promise<void> {
-  await sendEvent(page.request, fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+  await sendEvent(page.request, fixtureId, "hockey.goal", { by: rig.homeEntrantId, kind: "fg" });
   for (let guard = 0; guard < 10; guard++) {
     const state = await apiJson<{
       status: string;
@@ -1613,7 +1614,7 @@ test.describe("moments (W2)", () => {
         await anon.waitForTimeout(250);
       }
 
-      await sendEvent(ownerPage.request, moments.fixtureId, "hockey.goal", { by: moments.homeEntrantId });
+      await sendEvent(ownerPage.request, moments.fixtureId, "hockey.goal", { by: moments.homeEntrantId, kind: "fg" });
 
       // It arrives, carrying the engine's own kind and the sheet's tone.
       await expect(slab).toHaveAttribute("data-kind", "goal", { timeout: 30_000 });
@@ -1689,7 +1690,7 @@ test.describe("moments (W2)", () => {
     try {
       await anon.goto(`/overlay/fixtures/${moments.fixtureId}?style=bar`);
       const slab = anon.locator('[data-testid="overlay-moment"]');
-      await sendEvent(ownerPage.request, moments.fixtureId, "hockey.goal", { by: moments.homeEntrantId });
+      await sendEvent(ownerPage.request, moments.fixtureId, "hockey.goal", { by: moments.homeEntrantId, kind: "fg" });
       await sendEvent(ownerPage.request, moments.fixtureId, "hockey.suspension.start", {
         by: moments.awayEntrantId,
         class: "yellow",

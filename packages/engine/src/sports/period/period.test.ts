@@ -59,9 +59,11 @@ const iceAdvance = (to: string): ModuleEvent => ({
   type: "icehockey.period.advance",
   payload: { to },
 });
+// W2d T18 (HK-TB-2, B3) — a FIH goal records its type on the write path, so a goal these tests do not type is a field
+// goal (`fg`, what the pad sends for one); a test about a kind passes its own.
 const fihGoal = (by: string, extra?: Record<string, unknown>): ModuleEvent => ({
   type: "hockey.goal",
-  payload: { by, ...(extra ?? {}) },
+  payload: { by, kind: "fg", ...(extra ?? {}) },
 });
 const fihAdvance = (to: string): ModuleEvent => ({
   type: "hockey.period.advance",

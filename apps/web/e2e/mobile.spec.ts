@@ -6571,3 +6571,51 @@ test("W2d T17 public standings: IIHF OTW/OTL columns on both public tables, no h
   await expectNoHorizontalScroll(page);
   console.log(`[t17-otw ${width}px] division headers ${headers.join(" ")}; Ash ${ashCells.join(" ")}; scrollable ${scrollable.length}`);
 });
+
+// --- W2d T18 (HK-TB-2): the hockey goal-type question at every width ------------------------------------------------
+// A hockey goal tap opens "What kind of goal?" before anything is queued (the engine refuses an untyped FIH goal,
+// GOAL_KIND_REQUIRED). The question is a new surface in the dock slot, so it owes the pad's own width bar here: every
+// choice and Cancel at the 44px floor and hit-testable by a finger, nothing clipped, no page scroll, and the same
+// choices in the same order as 1280. Not folded behind a phone disclosure (class 22 does not apply): it is the dock.
+test("hockey v3 pad (W2d T18): the goal-type question holds the 44px floor, hit-tests, clips nothing, does not scroll, and offers the 1280 choices in order", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(request, { ...v3SkinSeed("hockey", "HKT"), emitCoreStart: true });
+  const projectWidth = page.viewportSize()!.width;
+  const question = page.getByTestId("score-pad").getByTestId("pad-dock-choice");
+  const controls = () =>
+    question
+      .locator('[data-testid^="pad-dock-chip-"], [data-testid="pad-dock-cancel"]')
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!));
+  const ask = async () => {
+    await padTile(page, "goal-home").click();
+    await expect(question, "a hockey goal tap opens the goal-type question").toBeVisible({ timeout: 20_000 });
+  };
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await ask();
+  const here = await controls();
+  expect(here.length, "anti-vacuity: three goal types, Own goal and Cancel were read").toBeGreaterThanOrEqual(5);
+  for (const id of here) await assertTapFloor(question.getByTestId(id), `goal-type question ${id} at ${projectWidth}`);
+  const clip = await overflowingIn(page, '[data-testid="pad-dock-choice"]', "*", "the goal-type question is missing");
+  expect(clip.clipped, `nothing in the question is clipped at ${projectWidth}`).toEqual([]);
+  expect(clip.scrollable, `the question has no scroll rail at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(widths.scroll, `${projectWidth}: scrollWidth ${widths.scroll} within clientWidth ${widths.client}`).toBeLessThanOrEqual(widths.client);
+  await question.getByTestId("pad-dock-cancel").click();
+  await expect(question).toHaveCount(0, { timeout: 5_000 });
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await ask();
+  expect(here, `the question's controls at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await controls());
+  await question.getByTestId("pad-dock-cancel").click();
+  await expect(question).toHaveCount(0, { timeout: 5_000 });
+  // Asking twice and cancelling twice wrote nothing.
+  const events = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`);
+  expect(events.data!.filter((e) => e.type === "hockey.goal"), "a cancelled question writes no goal").toEqual([]);
+  console.log(`[hockey goal-type ${projectWidth}px] ${here.length} controls hit-tested; scrollWidth ${widths.scroll}/${widths.client}`);
+});

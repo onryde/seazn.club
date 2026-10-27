@@ -6,6 +6,16 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 // and dated; this page IS the versioning promise (v3/08 §3).
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
+    date: "2026-10-27",
+    title: "Breaking: a hockey goal must record its type",
+    lines: [
+      "POST /fixtures/{id}/events with type hockey.goal now requires payload.kind: fg (field goal), pc (penalty corner), stroke (penalty stroke) or og (own goal, credited to the other side).",
+      "An untyped hockey goal is refused with 422 GOAL_KIND_REQUIRED (\"a goal in this sport must record its type\") and nothing is written. Send kind: \"fg\" if the type is unknown — what an untyped goal always counted as.",
+      "Untyped goals already recorded still replay as field goals and can still be voided. Ice hockey and every other sport are unchanged.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
     date: "2026-07-11",
     title: "Scoped keys, pins and rate-limit headers",
     lines: [
@@ -34,11 +44,8 @@ export default function ChangelogPage() {
         <p className="font-semibold text-slate-900">The promise</p>
         <p className="mt-1">
           Additive changes (new endpoints, new optional fields) land in place and
-          are announced here. Breaking changes never land in place — they get a
-          new version path (<code className="font-mono text-xs">/api/v2</code>)
-          and the old one keeps working through a sunset window announced months
-          ahead, with <code className="font-mono text-xs">Sunset</code> headers on
-          deprecated routes.
+          are announced here. Breaking changes are rare. Each one is listed here
+          with its date, what changed and what to send instead.
         </p>
       </div>
 

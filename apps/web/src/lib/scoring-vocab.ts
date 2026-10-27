@@ -651,6 +651,8 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   STAGE_SEAT_DEPARTED: "engineError.STAGE_SEAT_DEPARTED",
   // W2c (D7).
   TIEBREAK_COLOUR_REQUIRED: "engineError.TIEBREAK_COLOUR_REQUIRED",
+  // W2d T18 (HK-TB-2, PS-7d) — pad-visible, so it names what to do.
+  GOAL_KIND_REQUIRED: "engineError.GOAL_KIND_REQUIRED",
 };
 
 /**
