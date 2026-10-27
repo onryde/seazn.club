@@ -7,6 +7,7 @@
 import { describe, expect, it } from "vitest";
 import { StageKind } from "@/server/api-v1/schemas";
 import { TEMPLATE_CATALOG, getTemplate } from "../catalog";
+import { sportRefusesStageKind } from "@/lib/chess-individual-only";
 import uiEn from "@/dictionaries/en/ui.json";
 import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
@@ -46,6 +47,28 @@ describe("template catalog", () => {
         }
       }
     }
+  });
+
+  // createFromTemplate writes a template's stages straight into `stages` (usecases/templates.ts), past the stage batch
+  // gates, so the catalog itself owes the stage-kind rule: chess is individual-only (owner ruling 2026-10-26, follow-up
+  // to #1027) and no catalog division may seat chess in an americano/mexicano stage. Counted, so an empty walk fails.
+  it("no catalog division seats a stage kind its own sport refuses (chess: no americano or mexicano)", () => {
+    let stages = 0;
+    let chessDivisions = 0;
+    for (const template of TEMPLATE_CATALOG) {
+      for (const division of template.divisions) {
+        if (division.sportKey === "boardgame") chessDivisions++;
+        for (const stage of division.stages) {
+          stages++;
+          expect(sportRefusesStageKind(division.sportKey, stage.kind), `${template.key}/${division.sportKey}/${stage.kind}`).toBe(false);
+        }
+      }
+    }
+    expect(stages).toBeGreaterThanOrEqual(CATALOG_KEYS.length);
+    // The rule has a chess division to bite on (swiss11), and americano-night is the americano the rule must leave to tennis.
+    expect(chessDivisions).toBeGreaterThan(0);
+    expect(sportRefusesStageKind("boardgame", "americano")).toBe(true);
+    expect(getTemplate("americano-night")!.divisions.some((d) => d.sportKey !== "boardgame" && d.stages.some((st) => st.kind === "americano"))).toBe(true);
   });
 
   it("every i18n key referenced by the catalog is a dotted templates.* key, never literal English", () => {

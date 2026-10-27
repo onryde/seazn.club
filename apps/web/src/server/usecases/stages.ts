@@ -8,7 +8,7 @@ import { sql, withTenant } from "@/lib/db";
 import { SWISS_ABANDONED_BOARDS_REASON } from "@/lib/swiss-abandoned-refusal";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { HttpError } from "@/lib/errors";
-import { chessIndividualOnlyError, isChessSport } from "@/lib/chess-individual-only";
+import { assertStageKindsAllowed, chessIndividualOnlyError, isChessSport } from "@/lib/chess-individual-only";
 import { ROSTER_DRIFT_INELIGIBLE_KINDS, isRosterDriftEligible } from "@/lib/roster-drift-eligibility";
 import { assertWithinLimit, getLimit, requireFeature } from "@/lib/entitlements";
 import { captureServer } from "@/lib/posthog-server";
@@ -423,7 +423,9 @@ function stageConfigsAtCreate(
 
 /**
  * W2c Task 13 fix round 1 (R-T13-2) — every refusal a stage BATCH earns from its input alone, before anything is written:
- * the entitlement gates (`formats.double_elim`, `formats.advanced`, `standings.carry_over`), the feed graph, the stage cap counted against the batch, and a seq the
+ * the sport's refused stage kinds (chess is individual-only: no americano or mexicano, which mint pair entrants — owner
+ * ruling 2026-10-26, follow-up to #1027; asked FIRST, so a chess organiser is never offered a plan upgrade for a format
+ * chess cannot play), the entitlement gates (`formats.double_elim`, `formats.advanced`, `standings.carry_over`), the feed graph, the stage cap counted against the batch, and a seq the
  * batch names twice. Pooled reads (`requireFeature`, `getLimit`), so both callers ask it before their transaction opens,
  * never inside one (lib/db.ts): `createStages` before its inserts, `replaceStages` before the one transaction that
  * deletes and recreates (R-T13-3), so a 402 or a 409 here writes nothing. It is not the only refusal a batch can earn —
@@ -433,9 +435,12 @@ function stageConfigsAtCreate(
  */
 export async function assertStageBatchGates(
   auth: AuthCtx,
-  divComp: { competition_id: string } | undefined,
+  divComp: { competition_id: string; sport_key: string } | undefined,
   inputs: readonly StageInput[],
 ): Promise<number | null> {
+  // A division's sport never changes after create (PatchDivision carries no sport_key), so the caller's read decides it.
+  // No division read (missing, or another org's) refuses nothing here: the insert transaction answers it 404.
+  if (divComp !== undefined) assertStageKindsAllowed(divComp.sport_key, inputs.map((s) => s.kind));
   // Doc 10 §1: `formats.double_elim` is Pro — gate before any insert.
   if (inputs.some((s) => stageNeedsDoubleElimGate(s.kind))) {
     await requireFeature(auth.orgId, "formats.double_elim", divComp?.competition_id);
@@ -503,8 +508,8 @@ export async function createStages(auth: AuthCtx, divisionId: string, input: Cre
   assertSwissRoundsDeclared(inputs);
   // Format gates honour an Event Pass on this division's competition
   // (v3/07 §3), so resolve the competition before gating.
-  const [divComp] = await sql<{ competition_id: string }[]>`
-    select competition_id from divisions where id = ${divisionId}`;
+  const [divComp] = await sql<{ competition_id: string; sport_key: string }[]>`
+    select competition_id, sport_key from divisions where id = ${divisionId}`;
   const stageCap = await assertStageBatchGates(auth, divComp, inputs);
   // Resolved BEFORE the transaction: the lookup queries the POOLED `sql` proxy
   // (`getLimit`), and `withTenant` pins a pooled connection for its whole
@@ -633,8 +638,8 @@ export async function replaceStages(
   // FORMAT_LOCKED, the refusal the organiser can act on, ahead of any plan gate or frozen 402. The lock is asked
   // again under the advisory lock below: this read decides the ORDER of the refusals, that one is the guard.
   const divComp = await withTenant(auth.orgId, async (tx) => {
-    const [head] = await tx<{ competition_id: string }[]>`
-      select competition_id from divisions where id = ${divisionId}`;
+    const [head] = await tx<{ competition_id: string; sport_key: string }[]>`
+      select competition_id, sport_key from divisions where id = ${divisionId}`;
     if (!head) throw new HttpError(404, "division not found");
     await assertFormatUnlocked(tx, divisionId);
     return head;
@@ -877,8 +882,8 @@ async function americanoGen(
   entrants: ActiveEntrant[],
 ): Promise<GenFixture[]> {
   // Chess is individual-only (owner ruling 2026-10-26). This stage mints `pair` entrants for every rotation
-  // (pairEntrantsFor below), and nothing gates the stage kind per sport - so the entrant-kind writers' refusal has to
-  // stand here too, before a single pair is written.
+  // (pairEntrantsFor below). The create door refuses the stage for chess (assertStageBatchGates, follow-up to #1027);
+  // this guard stays for a chess americano stage stored before that refusal, before a single pair is written.
   const [sportRow] = await tx<{ sport_key: string }[]>`select sport_key from divisions where id = ${divisionId}`;
   if (sportRow && isChessSport(sportRow.sport_key)) throw chessIndividualOnlyError();
   // players = the PERSONS behind the individual entrants

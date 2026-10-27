@@ -12,7 +12,9 @@ import {
   applyStandingsCarry,
   buildTemplateStages,
   clampKnob,
+  templateAfterSportChange,
   templateHasProgression,
+  templatesForSport,
   type StageDraft,
   type StandingsCarry,
 } from "@/lib/format-templates";
@@ -337,6 +339,9 @@ export function DivisionBuilder({
     const firstVariant = next ? pickVariant(next.key, next.variants) : "";
     setVariantKey(firstVariant);
     setRuleValues({}); // rules are sport-specific
+    // Chess is offered no americano/mexicano (templatesForSport): a pick the new sport is not offered falls back to
+    // league rather than staying selected behind a card that is no longer rendered.
+    setTemplate((t) => templateAfterSportChange(t, key));
     if (!matchMinutesTouched) setMatchMinutes(defaultMatchMinutes(key, firstVariant));
     // `courts` (P9 scope item 5: real court ids from the picker) is no
     // longer a fabricated per-sport name — nothing to rename here on a sport
@@ -778,7 +783,9 @@ export function DivisionBuilder({
         />
 
         <div className="grid gap-2 sm:grid-cols-3">
-          {STAGE_TEMPLATES.map((t) => (
+          {/* The sport's OFFER, not every template: chess is individual-only (owner ruling 2026-10-26), so it is
+              offered no americano/mexicano, which mint pair entrants (format-templates.ts templatesForSport). */}
+          {templatesForSport(sportKey).map((t) => (
             <label
               key={t.key}
               className={`cursor-pointer rounded-lg border p-3 text-sm transition ${

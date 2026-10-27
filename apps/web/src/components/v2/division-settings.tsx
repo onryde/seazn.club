@@ -47,6 +47,7 @@ import {
   clampKnob,
   detectTemplate,
   templateHasProgression,
+  templatesForSport,
   type StageDraft,
   type StandingsCarry,
   type TemplateKnobs,
@@ -1102,7 +1103,9 @@ export function DivisionSettings({
                       still fail to compile. format-templates.test.ts's
                       dictionary-coverage test backstops every t.key actually
                       resolving. */}
-                  {STAGE_TEMPLATES.map((t) => (
+                  {/* The sport's offer (templatesForSport): chess lists no americano/mexicano, except the structure a
+                      division stored before the ruling already plays, so it still shows what it is. */}
+                  {templatesForSport(division.sport_key, detected).map((t) => (
                     <option key={t.key} value={t.key}>
                       {msg(`format.template.${t.key}.label` as MessageKey)}
                     </option>

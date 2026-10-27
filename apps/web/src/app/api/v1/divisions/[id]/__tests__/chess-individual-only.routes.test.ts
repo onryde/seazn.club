@@ -12,6 +12,8 @@
 //   POST  /divisions/{id}/entrants                -> createEntrants
 //   POST  /divisions/{id}/entrants (multipart)    -> import preview (pinned alias)
 //   POST  /imports/{id}/commit                    -> commitImport
+//   POST  /divisions/{id}/stages                  -> createStages  (an americano/mexicano stage; follow-up to #1027)
+//   PUT   /divisions/{id}/stages                  -> replaceStages (the same)
 import { afterAll, describe, expect, it, vi } from "vitest";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -45,6 +47,7 @@ import { PATCH as patchDivisionRoute } from "@/app/api/v1/divisions/[id]/route";
 import { POST as postEntrantsRoute } from "@/app/api/v1/divisions/[id]/entrants/route";
 import { POST as postDivisionRoute } from "@/app/api/v1/competitions/[id]/divisions/route";
 import { POST as commitImportRoute } from "@/app/api/v1/imports/[id]/commit/route";
+import { POST as postStagesRoute, PUT as putStagesRoute } from "@/app/api/v1/divisions/[id]/stages/route";
 
 // --- what the engine itself declares (never typed into the test) ----------
 // The sport this file proves the positive pair on: a non-chess sport whose own
@@ -141,6 +144,8 @@ const ROUTES = [
   "PATCH divisions",
   "POST divisions/entrants",
   "POST imports/commit",
+  "POST divisions/stages",
+  "PUT divisions/stages",
 ] as const;
 
 describe.skipIf(!HAS_DB)("chess individual-only on the wire", () => {
@@ -340,8 +345,37 @@ describe.skipIf(!HAS_DB)("chess individual-only on the wire", () => {
     expect(committed.status).toBe(201);
   });
 
+  it("POST and PUT divisions/{id}/stages: a chess americano or mexicano stage -> 422 and nothing written; the same bodies on badminton -> 201 / 200", async () => {
+    const { owner } = await signedInOwner();
+    const chess = await seedDivision(owner, CHESS_SPORT_KEY, "knights");
+    const padel = await seedDivision(owner, "badminton", "smash");
+    const americano = { seq: 1, kind: "americano", name: "Americano", config: { mode: "americano", courtCount: 2, rounds: 3 } };
+    const mexicano = { seq: 1, kind: "americano", name: "Mexicano", config: { mode: "mexicano", courtCount: 2, rounds: 3 } };
+    const stageRows = async (divisionId: string) =>
+      (await sql<{ kind: string }[]>`select kind from stages where division_id = ${divisionId} order by seq`).map((r) => r.kind);
+
+    for (const body of [americano, [mexicano]]) {
+      await expectWireRefusal(
+        await postStagesRoute(jsonReq("POST", `/divisions/${chess.division.id}/stages`, body), ctx(chess.division.id)),
+        "POST divisions/stages",
+      );
+      await expectWireRefusal(
+        await putStagesRoute(jsonReq("PUT", `/divisions/${chess.division.id}/stages`, Array.isArray(body) ? body : [body]), ctx(chess.division.id)),
+        "PUT divisions/stages",
+      );
+    }
+    expect(await stageRows(chess.division.id)).toEqual([]);
+
+    // Positive pair: badminton takes both, through the same two routes.
+    const created = await read(await postStagesRoute(jsonReq("POST", `/divisions/${padel.division.id}/stages`, americano), ctx(padel.division.id)));
+    expect(created.status).toBe(201);
+    const replaced = await read(await putStagesRoute(jsonReq("PUT", `/divisions/${padel.division.id}/stages`, [mexicano]), ctx(padel.division.id)));
+    expect(replaced.status).toBe(200);
+    expect(await stageRows(padel.division.id)).toEqual(["americano"]);
+  });
+
   it("every public route in the ledger answered the chess refusal on the wire (anti-vacuity)", () => {
-    expect(ROUTES.length).toBe(5);
+    expect(ROUTES.length).toBe(7);
     expect([...refusedOnWire].sort()).toEqual([...ROUTES].sort());
   });
 });

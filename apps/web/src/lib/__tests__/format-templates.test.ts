@@ -22,8 +22,11 @@ import {
   buildTemplateStages,
   clampKnob,
   detectTemplate,
+  templateAfterSportChange,
   templateHasProgression,
+  templatesForSport,
 } from "../format-templates";
+import { builtinModules } from "@seazn/engine/sports";
 import { FORMAT_FAMILIES } from "@/config/format-gallery";
 import { ProgressionSchema } from "@/server/api-v1/schemas";
 import {
@@ -665,5 +668,73 @@ describe("STAGE_TEMPLATES — every key has dictionary-backed label/help copy (F
         ).toBe(true);
       }
     }
+  });
+});
+
+// Chess is individual-only (owner ruling 2026-10-26; follow-up to #1027): an americano or mexicano stage rotates its
+// players into PAIR entrants, so the builder and Settings no longer OFFER those two templates for chess. The expected
+// lists below come from the ruling (chess = the `boardgame` module; the refused formats are americano and mexicano),
+// never from templatesForSport itself.
+describe("templatesForSport: the format templates offered per sport (chess individual-only, follow-up to #1027)", () => {
+  const CHESS = "boardgame";
+  const REFUSED_FOR_CHESS = ["americano", "mexicano"];
+  const ALL_KEYS = STAGE_TEMPLATES.map((t) => t.key);
+  const keysOf = (ts: readonly { key: string }[]) => ts.map((t) => t.key);
+
+  it("every registered sport: chess is offered every template but americano and mexicano, every other sport every template (counts)", () => {
+    let checked = 0;
+    let others = 0;
+    for (const m of builtinModules) {
+      checked++;
+      const offered = keysOf(templatesForSport(m.key));
+      if (m.key === CHESS) {
+        expect(offered).toEqual(ALL_KEYS.filter((k) => !REFUSED_FOR_CHESS.includes(k)));
+      } else {
+        others++;
+        expect(offered, m.key).toEqual(ALL_KEYS);
+      }
+    }
+    // Anti-vacuity: the registry was swept, chess was in it, and the positive side covered every other sport.
+    expect(checked).toBe(builtinModules.length);
+    expect(checked).toBeGreaterThanOrEqual(11);
+    expect(builtinModules.some((m) => m.key === CHESS)).toBe(true);
+    expect(others).toBe(checked - 1);
+  });
+
+  it("the positive pair, named: badminton is still offered americano and mexicano, and both build a pair-rotating americano stage", () => {
+    const offered = keysOf(templatesForSport("badminton"));
+    for (const k of REFUSED_FOR_CHESS) expect(offered).toContain(k);
+    for (const k of REFUSED_FOR_CHESS) expect(STAGE_TEMPLATES.find((t) => t.key === k)!.build({ qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 }).map((s) => s.kind)).toEqual(["americano"]);
+  });
+
+  it("empty case: a missing or unknown sport (a division that could not be read) is offered every template — only chess is refused anything", () => {
+    for (const key of [undefined, null, "", "not-a-sport"]) expect(keysOf(templatesForSport(key)), String(key)).toEqual(ALL_KEYS);
+  });
+
+  it("the CURRENT structure stays listed: a chess division stored with americano before the ruling still shows it, and nothing else comes back", () => {
+    const offered = ALL_KEYS.filter((k) => !REFUSED_FOR_CHESS.includes(k));
+    expect(keysOf(templatesForSport(CHESS, "americano"))).toEqual(ALL_KEYS.filter((k) => k !== "mexicano"));
+    expect(keysOf(templatesForSport(CHESS, "mexicano"))).toEqual(ALL_KEYS.filter((k) => k !== "americano"));
+    // An offered or custom (null) current adds nothing, and never a duplicate.
+    expect(keysOf(templatesForSport(CHESS, "league"))).toEqual(offered);
+    expect(keysOf(templatesForSport(CHESS, null))).toEqual(offered);
+    expect(keysOf(templatesForSport(CHESS, "not-a-template"))).toEqual(offered);
+  });
+
+  it("a second call answers the same and STAGE_TEMPLATES is untouched", () => {
+    const first = keysOf(templatesForSport(CHESS));
+    expect(keysOf(templatesForSport(CHESS))).toEqual(first);
+    expect(keysOf(STAGE_TEMPLATES)).toEqual(ALL_KEYS);
+    expect(ALL_KEYS).toEqual(expect.arrayContaining(REFUSED_FOR_CHESS));
+  });
+
+  it("templateAfterSportChange: switching the builder to chess off americano/mexicano falls back to league, an offered pick is kept, and switching back keeps league", () => {
+    expect(templateAfterSportChange("americano", CHESS)).toBe("league");
+    expect(templateAfterSportChange("mexicano", CHESS)).toBe("league");
+    expect(templateAfterSportChange("swiss", CHESS)).toBe("swiss");
+    expect(templateAfterSportChange("americano", "badminton")).toBe("americano");
+    // The sequence: badminton americano -> chess (league) -> badminton keeps league (the pick is not remembered).
+    const onChess = templateAfterSportChange("americano", CHESS);
+    expect(templateAfterSportChange(onChess, "badminton")).toBe("league");
   });
 });

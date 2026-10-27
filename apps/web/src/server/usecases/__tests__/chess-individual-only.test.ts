@@ -11,6 +11,8 @@
 //   4. createEntrants            — entrants.kind
 //   5. commitImport (+ the plan) — the CSV import hard-codes kind 'team'
 //   6. generateStageFixtures (americano / mexicano) — mints `pair` entrants for every rotation
+//   7. createStages / replaceStages (follow-up to #1027) — an americano or mexicano stage is refused at CREATE, so no
+//      organiser builds a stage that generation (6) would refuse; 6 now drives a stage stored before that refusal
 //
 // Each writer has a refusal (chess), a positive pair (a sport that DOES take
 // teams/pairs, swept across the registry from the engine's own declarations),
@@ -39,7 +41,7 @@ import { createCompetition } from "../competitions";
 import { createDivision, getDivision, patchDivision } from "../divisions";
 import { createEntrants, listEntrants } from "../entrants";
 import { createPerson } from "../persons";
-import { createStages, generateStageFixtures } from "../stages";
+import { createStages, generateStageFixtures, listStages, replaceStages } from "../stages";
 import { commitImport, createImport } from "../imports";
 import { getRegistrationSettings, publicRegistrationInfo, putRegistrationSettings } from "../registrations";
 import { asOwner, makeUser } from "./_registration-fixtures";
@@ -65,6 +67,8 @@ const WRITERS = [
   "createEntrants",
   "commitImport",
   "generateStageFixtures",
+  "createStages",
+  "replaceStages",
 ] as const;
 type Writer = (typeof WRITERS)[number];
 /** Writer -> how many chess refusals this file actually drove through it. */
@@ -648,28 +652,34 @@ async function playersFor(auth: AuthCtx, divisionId: string, n: number) {
     ]);
   }
 }
+/** A chess americano/mexicano stage stored BEFORE the follow-up to #1027 refused the create (section 7): written as a
+ *  raw row, since createStages now answers 422 for it. Generation must still refuse it (the stored-row guard). */
+async function legacyChessRotation(divisionId: string, mode: "americano" | "mexicano", courtCount: number): Promise<{ id: string }> {
+  const [row] = await sql<{ id: string }[]>`
+    insert into stages (division_id, seq, kind, name, config, progression)
+    values (${divisionId}, 1, 'americano', ${mode === "mexicano" ? "Mexicano" : "Americano"},
+            ${sql.json({ mode, courtCount, rounds: 3 } as never)}, null)
+    returning id`;
+  return row!;
+}
+
 const pairCount = async (divisionId: string) => {
   const [r] = await sql<{ n: number }[]>`select count(*)::int as n from entrants where division_id = ${divisionId} and kind = 'pair'`;
   return r!.n;
 };
 
 describe.skipIf(!HAS_DB)("6. generateStageFixtures (americano / mexicano mint pair entrants)", () => {
-  it("refuses to generate an americano stage for chess and mints no pair; the same stage on a team sport generates", async () => {
+  it("refuses to generate a stored chess americano stage and mints no pair; the same stage on a team sport generates", async () => {
     const owner = await seedOwner();
     const { division: chess } = await chessDivision(owner);
     await playersFor(owner, chess.id, 8);
-    const [stage] = await createStages(owner, chess.id, {
-      seq: 1,
-      kind: "americano" as never,
-      name: "Rotation",
-      config: { mode: "americano", courtCount: 2, rounds: 3 },
-    });
+    const stage = await legacyChessRotation(chess.id, "americano", 2);
     expect(await pairCount(chess.id), "premise: no pair yet").toBe(0);
-    await expect(generateStageFixtures(owner, stage!.id)).rejects.toMatchObject({ status: 422, code: CHESS_INDIVIDUAL_ONLY });
+    await expect(generateStageFixtures(owner, stage.id)).rejects.toMatchObject({ status: 422, code: CHESS_INDIVIDUAL_ONLY });
     noteRefusal("generateStageFixtures");
     expect(await pairCount(chess.id)).toBe(0);
     // A second call is refused the same way (the guard is not first-call-only).
-    await expect(generateStageFixtures(owner, stage!.id)).rejects.toMatchObject({ status: 422, code: CHESS_INDIVIDUAL_ONLY });
+    await expect(generateStageFixtures(owner, stage.id)).rejects.toMatchObject({ status: 422, code: CHESS_INDIVIDUAL_ONLY });
 
     // Positive pair: a sport that takes pairs generates, and the rotation does mint them.
     const { division: other } = await divisionOf(owner, "generic");
@@ -689,13 +699,8 @@ describe.skipIf(!HAS_DB)("6. generateStageFixtures (americano / mexicano mint pa
     const owner = await seedOwner();
     const { division } = await chessDivision(owner);
     await playersFor(owner, division.id, 2);
-    const [stage] = await createStages(owner, division.id, {
-      seq: 1,
-      kind: "americano" as never,
-      name: "Rotation",
-      config: { mode: "americano", courtCount: 1, rounds: 3 },
-    });
-    await expect(generateStageFixtures(owner, stage!.id)).rejects.toMatchObject({ code: CHESS_INDIVIDUAL_ONLY });
+    const stage = await legacyChessRotation(division.id, "americano", 1);
+    await expect(generateStageFixtures(owner, stage.id)).rejects.toMatchObject({ code: CHESS_INDIVIDUAL_ONLY });
     // Control: the same two players on a team sport hit the stage's own readiness check instead.
     const { division: other } = await divisionOf(owner, "generic");
     await playersFor(owner, other.id, 2);
@@ -710,12 +715,104 @@ describe.skipIf(!HAS_DB)("6. generateStageFixtures (americano / mexicano mint pa
 });
 
 // ---------------------------------------------------------------------------
+// 7. createStages / replaceStages: an americano or mexicano stage is refused at CREATE (follow-up to #1027)
+// ---------------------------------------------------------------------------
+
+const AMERICANO = { seq: 1, kind: "americano" as never, name: "Americano", config: { mode: "americano", courtCount: 2, rounds: 3 } };
+const MEXICANO = { seq: 1, kind: "americano" as never, name: "Mexicano", config: { mode: "mexicano", courtCount: 2, rounds: 3 } };
+const LEAGUE = { seq: 1, kind: "league" as never, name: "League", config: { legs: 1 } };
+const stagesOf = async (divisionId: string) =>
+  sql<{ seq: number; kind: string; name: string }[]>`select seq, kind, name from stages where division_id = ${divisionId} order by seq`;
+
+describe.skipIf(!HAS_DB)("7. createStages / replaceStages (an americano or mexicano stage mints pair entrants)", () => {
+  it("refuses an americano and a mexicano stage for chess, and writes nothing; a second call is refused the same", async () => {
+    const owner = await seedOwner();
+    const { division } = await chessDivision(owner);
+    for (const body of [AMERICANO, MEXICANO, AMERICANO]) {
+      await expectChessRefusal(createStages(owner, division.id, body as never), "createStages");
+    }
+    expect(await stagesOf(division.id)).toEqual([]);
+  });
+
+  it("a mixed batch (a league, then an americano) is refused WHOLE: not even the league is written", async () => {
+    const owner = await seedOwner();
+    const { division } = await chessDivision(owner);
+    await expectChessRefusal(createStages(owner, division.id, [LEAGUE, { ...AMERICANO, seq: 2 }] as never), "createStages");
+    expect(await stagesOf(division.id)).toEqual([]);
+  });
+
+  it("the refusal is kind-specific: chess still creates a league (the empty division takes its first stage)", async () => {
+    const owner = await seedOwner();
+    const { division } = await chessDivision(owner);
+    expect(await stagesOf(division.id), "premise: no stage yet").toEqual([]);
+    await createStages(owner, division.id, LEAGUE as never);
+    expect(await stagesOf(division.id)).toEqual([{ seq: 1, kind: "league", name: "League" }]);
+  });
+
+  it("every non-chess sport still creates an americano and a mexicano stage (the positive pair, swept over the registry)", async () => {
+    const owner = await seedOwner();
+    let checked = 0;
+    for (const sport of NON_CHESS) {
+      const { division } = await divisionOf(owner, sport.key);
+      await createStages(owner, division.id, [AMERICANO, { ...MEXICANO, seq: 2 }] as never);
+      expect((await stagesOf(division.id)).map((s) => [s.kind, s.name]), sport.key).toEqual([["americano", "Americano"], ["americano", "Mexicano"]]);
+      checked++;
+    }
+    expect(checked).toBe(MODULES.length - 1);
+    expect(checked).toBeGreaterThanOrEqual(10);
+  });
+
+  it("the refusal answers before the plan gate: a Community chess organiser gets 422 for americano, not the advanced-formats 402 a Community padel organiser gets", async () => {
+    const owner = await seedOwner();
+    await setOrgPlan(owner.orgId, "community");
+    await invalidateOrgEntitlements(owner.orgId);
+    const { division: chess } = await chessDivision(owner);
+    await expectChessRefusal(createStages(owner, chess.id, AMERICANO as never), "createStages");
+    // The control: the plan gate is real on this org, so the 422 above is the ORDER, not a missing gate.
+    const { division: other } = await divisionOf(owner, "generic");
+    await expect(createStages(owner, other.id, AMERICANO as never)).rejects.toMatchObject({ status: 402 });
+  });
+
+  it("replaceStages: a chess league re-shaped to americano is refused and the league stands; re-shaped to swiss it applies", async () => {
+    const owner = await seedOwner();
+    const { division } = await chessDivision(owner);
+    await createStages(owner, division.id, LEAGUE as never);
+    await expectChessRefusal(replaceStages(owner, division.id, [AMERICANO] as never), "replaceStages");
+    await expectChessRefusal(replaceStages(owner, division.id, [MEXICANO] as never), "replaceStages");
+    expect(await stagesOf(division.id)).toEqual([{ seq: 1, kind: "league", name: "League" }]);
+    await replaceStages(owner, division.id, [{ seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 5 } }] as never);
+    expect(await stagesOf(division.id)).toEqual([{ seq: 1, kind: "swiss", name: "Swiss" }]);
+  });
+
+  it("replaceStages: a badminton league re-shaped to mexicano applies (the positive pair)", async () => {
+    const owner = await seedOwner();
+    const { division } = await divisionOf(owner, "badminton");
+    await createStages(owner, division.id, LEAGUE as never);
+    await replaceStages(owner, division.id, [MEXICANO] as never);
+    expect(await stagesOf(division.id)).toEqual([{ seq: 1, kind: "americano", name: "Mexicano" }]);
+  });
+
+  it("a chess americano stage stored before the refusal still loads and shows its state; only re-applying it is refused", async () => {
+    const owner = await seedOwner();
+    const { division } = await chessDivision(owner);
+    await legacyChessRotation(division.id, "mexicano", 2);
+    const listed = await listStages(owner, division.id);
+    expect(listed.map((s) => ({ kind: s.kind, name: s.name, mode: (s.config as { mode?: string }).mode }))).toEqual([
+      { kind: "americano", name: "Mexicano", mode: "mexicano" },
+    ]);
+    // Re-applying the stored structure is a new write, refused; the stored stage is kept.
+    await expectChessRefusal(replaceStages(owner, division.id, [MEXICANO] as never), "replaceStages");
+    expect((await listStages(owner, division.id)).map((s) => s.name)).toEqual(["Mexicano"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // The ledger
 // ---------------------------------------------------------------------------
 
 describe.skipIf(!HAS_DB)("every writer in the ledger refused chess at least once", () => {
   it("WRITERS and the refusals actually driven are the same set, each driven more than zero times", () => {
-    expect(WRITERS.length).toBe(6);
+    expect(WRITERS.length).toBe(8);
     for (const w of WRITERS) expect(refused.get(w) ?? 0, w).toBeGreaterThan(0);
     expect([...refused.keys()].sort()).toEqual([...WRITERS].sort());
   });
