@@ -28,6 +28,9 @@ These are the owner's own answers in this session's chat. Items marked *(my call
 | D9 | **stg keeps its 5-minute fast trigger** (amended). The first "Ok" to stg-every-minute was given without knowing it also moves stg's email outbox to every minute and keeps the stg machine awake all day; re-asked with that cost. | "1 b" (2026-10-27) |
 | D10 | Only the **web app** changes. Compositor/relay: none. | "Ok" to the explanation that the key never leaves web + Cloudflare |
 | D11 | **No feature switch.** Connect YouTube ships on in every env; no flag, no staff-only gate. Connect sits under the existing streaming entitlement (the Directory → Streaming tab is already shown only to relay-entitled orgs); Go live keeps today's credit checks. | "no" (asked: hide on prod until Google verification passes?) |
+| D12 | **Public match page embeds the YouTube player** (click-to-play facade, `youtube-nocookie`, "Open on YouTube" link under it) for API-connected matches; pasted-key matches keep the link. | "yes" (2026-10-27) |
+| D13 | **Part labels only when a match has 2+ parts**; a single part shows the player alone. | "hope that we don't display part 1 like that always, only when more than one part" |
+| D14 | UI layouts: Directory = Option A connect flow + Option B channel rows; fixture panel = Option B; public page = D12. | "Option A but 4 from Option B" → clarified "1"; "Fixture stream panel Option B" |
 
 Accepted without objection in playback (owner "Ok"), originally proposed by this author:
 - made-for-kids asked at connect, default **No** *(my call)*;

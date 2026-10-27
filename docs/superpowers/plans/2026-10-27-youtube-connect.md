@@ -678,6 +678,13 @@ e2e-reachable (it needs a version bump), so it stays unit-only, with the reason 
 
 ### Task 9: Directory UI (blocked on T4's choice)
 
+> **Owner's T4 choice (2026-10-27):** Directory → Streaming = **Option A** connect flow (Connect YouTube secondary
+> beside Add destination; inline consent card; inline channel picker) **with Option B's channel rows** (status
+> sentence + the fixing button on show, full-width on a phone). Fixture stream panel (T12) = **Option B** (custom
+> list with kind + health on every row; a refusal replaces Go live with its fix; replays as rows with times + Copy
+> link; re-read connection health on tab focus; rebuild keyboard/typeahead/focus for the list). Public page (T16) =
+> see D12 under T16. Mocks: controller scratchpad `t4/youtube-ui-options.html`.
+
 **Owner's choice from T4:** *(controller records the option here before dispatch)*
 
 **Files:**
@@ -1022,6 +1029,16 @@ it("email-outbox cadence unchanged: every fast firing in both envs (prod minute,
 (T20); smoke `youtube: stream-tick answers with youtube counters` (T21).
 
 ### Task 16: Replay parts (UI half blocked on T4)
+
+> **Owner D12 + part rule (2026-10-27) — supersedes the T4 pill for API-connected matches:** the public match page
+> **embeds the YouTube player** behind a **click-to-play facade** (thumbnail + play button; the iframe loads only on
+> tap; `youtube-nocookie.com` privacy mode), with a small **"Open on YouTube"** link under it. Pasted-key matches
+> keep today's link pill. **Part tabs appear ONLY when a match has 2+ parts**; one part = the player alone, no
+> "Part 1" anywhere (tests: single part renders no part label; two parts render both tabs). `src/proxy.ts` CSP
+> `frame-src` gains the YouTube embed origin(s) only. If the channel disabled embedding (or the embed errors), fall
+> back to the link. Before building: verify Google's embedded-player rules (YouTube Required Minimum Functionality /
+> Developer Policies: minimum player size, never obscure controls or branding) from the docs, and show the owner
+> **2+ embed layouts** (320/768/1280) before the UI half is built.
 
 **Files:**
 - Modify: the public match page (`page.tsx:405-430` block); the fixture stream panel's after-match area (path from T12)
