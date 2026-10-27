@@ -1410,6 +1410,7 @@ async function staffDisputeAlertScenario(): Promise<KindScenario> {
   const [{ id: orgId }] = await sql<{ id: string }[]>`
     insert into organizations (name, slug, default_locale)
     values (${orgName}, ${`dispute-org-${RUN}-${randomUUID().slice(0, 8)}`}, 'fr') returning id`;
+  made.orgIds.push(orgId);
   return {
     locale: "en",
     subjectKey: "staffDisputeAlert.subject",

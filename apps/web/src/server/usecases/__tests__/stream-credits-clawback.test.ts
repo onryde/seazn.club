@@ -29,7 +29,7 @@ import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { seedOrg } from "./_rig";
-import { processStripeEvent, runEvent } from "../billing-events";
+import { processStripeEvent, runEvent, type StreamClawbackAlert } from "../billing-events";
 import { creditBalance } from "../stream-credits";
 import { staffDisputeAlertEmail, streamCreditClawbackAlertEmail } from "@/lib/email";
 import { captureError } from "@/lib/sentry";
@@ -794,5 +794,27 @@ describe.skipIf(!HAS_DB)("charge.dispute.* → match-credit claw-back", () => {
     ).rejects.toThrow(/matched no registration\/sponsor\/platform charge/);
     expect(await creditBalance(sql, auth.orgId)).toBe(5);
     expect(await revokeRows(auth.orgId)).toHaveLength(0);
+  });
+});
+
+describe("the claw-back alert's argument (tsc, no database)", () => {
+  it("holds each shape to the ref type its sites pass, and a partial refund to the amount its key carries", () => {
+    // The witness is `tsc --noEmit`: each `@ts-expect-error` below is itself an error once the union lets that call through, so a
+    // loosened type (an optional `amountRefunded`, a free `refType`) reds the typecheck. The four accepted shapes are the sites'.
+    const accepted: StreamClawbackAlert[] = [
+      { shape: "partial", refType: "charge", refId: "ch_1", amountRefunded: 500, orgId: "o", purchased: 5, clawedBack: 0, reason: "r" },
+      { shape: "short", refType: "charge", refId: "ch_1", orgId: "o", purchased: 5, clawedBack: 2, reason: "r" },
+      { shape: "ungranted", refType: "charge", refId: "ch_1", orgId: "o", reason: "r" },
+      { shape: "lost", refType: "dispute", refId: "dp_1", orgId: "o", purchased: 5, clawedBack: 2, reason: "r" },
+    ];
+    const refused: StreamClawbackAlert[] = [
+      // @ts-expect-error a partial refund without the amount its once-key carries (it would key as `partial:undefined`)
+      { shape: "partial", refType: "charge", refId: "ch_1", orgId: "o", reason: "r" },
+      // @ts-expect-error a lost dispute keyed by a charge
+      { shape: "lost", refType: "charge", refId: "ch_1", orgId: "o", reason: "r" },
+      // @ts-expect-error a refund shape keyed by a dispute
+      { shape: "short", refType: "dispute", refId: "dp_1", orgId: "o", reason: "r" },
+    ];
+    expect(accepted.length + refused.length, "anti-vacuity: four accepted shapes and three refused ones").toBe(7);
   });
 });

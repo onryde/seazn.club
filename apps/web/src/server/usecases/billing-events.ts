@@ -2257,6 +2257,19 @@ async function handleStreamPackChargeRefunded(charge: Stripe.Charge): Promise<vo
   });
 }
 
+/** What `alertStreamClawback` is told: the incident's shape, with the ref type and fields that shape is keyed by. */
+export type StreamClawbackAlert = {
+  refId: string;
+  orgId: string;
+  purchased?: number;
+  clawedBack?: number;
+  reason: string;
+} & (
+  | { shape: "partial"; refType: "charge"; amountRefunded: number }
+  | { shape: "short" | "ungranted"; refType: "charge" }
+  | { shape: "lost"; refType: "dispute" }
+);
+
 /** The staff alert for a match-credit claw-back that needs a human: queued on
  *  the email outbox (kind `staff_stream_credit_clawback`) to STAFF_ALERT_EMAIL
  *  through `queueStaffAlert`, which never throws, so an alerting hiccup can
@@ -2270,17 +2283,13 @@ async function handleStreamPackChargeRefunded(charge: Stripe.Charge): Promise<vo
  *  `<dispute>:lost` under `dispute`. A redelivery pages nothing more, while a
  *  partial refund and then the full refund of one charge are two incidents and
  *  two pages, neither replacing the other (P-W5-1). Null when nothing was
- *  queued. */
-export async function alertStreamClawback(a: {
-  shape: "partial" | "short" | "ungranted" | "lost";
-  refType: "charge" | "dispute";
-  refId: string;
-  amountRefunded?: number;
-  orgId: string;
-  purchased?: number;
-  clawedBack?: number;
-  reason: string;
-}): Promise<string | null> {
+ *  queued.
+ *
+ *  The argument is a union on `shape`, so tsc holds each shape to the ref type
+ *  its sites pass (a lost dispute is keyed by the dispute, every refund shape
+ *  by the charge) and a partial refund cannot be queued without the amount its
+ *  key carries (`partial:undefined` is unrepresentable, not merely unreached). */
+export async function alertStreamClawback(a: StreamClawbackAlert): Promise<string | null> {
   return queueStaffAlert({
     kind: "staff_stream_credit_clawback",
     refType: a.refType,

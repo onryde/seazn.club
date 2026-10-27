@@ -1397,7 +1397,7 @@ export interface ExtraOrgRepriceFailedAlertEmail {
  * daily reconciliation sweep and an /admin mismatch list are tracked as #332;
  * until they land, THIS is the entire safety net.
  *
- * Never blocks and never retries — the webhook has already ACKed by design.
+ * Never blocks the webhook; queued on the outbox, whose worker delivers and retries it.
  * Ops-only, no user-facing i18n (mirrors sendExtraOrgAllowanceAlertEmail).
  *
  * RENDERED and not sent: `maybeAlertOrgRepriceFailed` (billing-events.ts) queues what this returns on the email outbox through
