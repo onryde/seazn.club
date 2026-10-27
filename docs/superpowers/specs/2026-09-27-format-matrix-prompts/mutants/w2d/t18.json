@@ -288,5 +288,50 @@
     "name": "renders the question and every answer, NO countdown"
    }
   ]
+ },
+ {
+  "id": "t18-fr1-partial-legacy-untyped",
+  "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+  "find": "  if (spec.requires !== undefined && payload[spec.requires] === undefined) return false;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "with or without its scorer, at every band"
+   }
+  ]
+ },
+ {
+  "id": "t18-fr1-admits-tap-always",
+  "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+  "find": "  return !questionOpen;\n",
+  "replace": "  return true;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "m3: a second tap while the question is open is refused"
+   }
+  ]
+ },
+ {
+  "id": "t18-fr1-takeback-ignores-question",
+  "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+  "find": "  if (questionOpen) return { kind: \"cancel-question\" };\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "m2: Take back while the question is open cancels the QUESTION"
+   }
+  ]
  }
 ]
