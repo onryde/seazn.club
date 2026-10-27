@@ -19,6 +19,7 @@ import { dispatchNow, enqueueEmailOnce, expiryWithin, onceKey, recipientLocale }
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
 import { suspendedPlayersMessage } from "@/lib/registration-rules";
+import { SUSPENSION_NO_ENTRANT_CODE } from "@/lib/suspension-no-entrant";
 import { deferred } from "@/lib/deferred";
 import { audit } from "./audit";
 
@@ -350,17 +351,24 @@ function groupByPerson<T extends { personId: string }>(cards: T[]): Map<string, 
 
 // Serving — matches_served is derived, stored and monotonic (SPEC-1). No lineup
 // entity exists, so a match is "served" per decided/finalized fixture of the
-// suspended entrant that elapsed after the ban's decided_at. A forfeit BY the
-// suspended entrant counts, and so does a double walkover (owner ruling 126,
-// 2026-10-13: `by: "both"` includes her — read off the stored outcome, so the
-// legacy chess `boardgame.result{double_forfeit}`, which carries no core.forfeit,
-// counts too); abandoned/cancelled and forfeits by anyone else never do. A
-// fixture's elapsed time = its latest recorded event.
+// suspended entrant that STARTED after the ban's decided_at — a fixture's start
+// is its EARLIEST recorded event — and that is not the ban's own trigger
+// fixture (`suspensions.fixture_id`). A match already under way when the ban
+// was confirmed never serves it, however late it is decided or finalized; so a
+// red confirmed mid-match is not served by that match being played out, nor a
+// red confirmed after full time by a `core.finalize` on it (2026-10-27 fix: the
+// rule used to read the LATEST event, which both of those moved past the
+// confirm). A forfeit BY the suspended entrant counts, and so does a double
+// walkover (owner ruling 126, 2026-10-13: `by: "both"` includes her — read off
+// the stored outcome, so the legacy chess `boardgame.result{double_forfeit}`,
+// which carries no core.forfeit, counts too); abandoned/cancelled and forfeits
+// by anyone else never do. A fixture with no recorded event has not started
+// and serves nothing.
 async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Promise<string[]> {
   const active = await tx<
-    { id: string; entrant_id: string | null; decided_at: Date | null; matches_total: number }[]
+    { id: string; entrant_id: string | null; decided_at: Date | null; matches_total: number; fixture_id: string | null }[]
   >`
-    select id, entrant_id, decided_at, matches_total from suspensions
+    select id, entrant_id, decided_at, matches_total, fixture_id from suspensions
     where division_id = ${divisionId} and status = 'active'`;
   if (active.length === 0) return [];
 
@@ -369,11 +377,11 @@ async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Pr
   >`
     select id, status, home_entrant_id, away_entrant_id, outcome from fixtures where division_id = ${divisionId}`;
 
-  const elapsedAt = new Map<string, Date>();
+  const startedAt = new Map<string, Date>();
   const forfeitBy = new Map<string, string>();
   for (const e of events) {
-    const cur = elapsedAt.get(e.fixture_id);
-    if (!cur || e.recorded_at > cur) elapsedAt.set(e.fixture_id, e.recorded_at);
+    const cur = startedAt.get(e.fixture_id);
+    if (!cur || e.recorded_at < cur) startedAt.set(e.fixture_id, e.recorded_at);
     if (e.type === "core.forfeit") {
       const by = (e.payload as { by?: string } | null)?.by;
       if (typeof by === "string") forfeitBy.set(e.fixture_id, by);
@@ -386,8 +394,9 @@ async function updateServing(tx: Tx, divisionId: string, events: EventRow[]): Pr
     let served = 0;
     for (const f of fixtures) {
       if (f.home_entrant_id !== s.entrant_id && f.away_entrant_id !== s.entrant_id) continue;
-      const when = elapsedAt.get(f.id);
-      if (!when || when <= s.decided_at) continue;
+      if (f.id === s.fixture_id) continue;
+      const began = startedAt.get(f.id);
+      if (!began || began <= s.decided_at) continue;
       if (f.status === "decided" || f.status === "finalized") served++;
       else if (f.status === "forfeited" && (forfeitBy.get(f.id) === s.entrant_id || f.outcome?.kind === "double_walkover")) served++;
     }
@@ -668,6 +677,17 @@ export async function decideSuspension(
           select e.id from entrant_members em join entrants e on e.id = em.entrant_id
           where em.person_id = ${s.person_id} and e.division_id = ${s.division_id} limit 1`;
         entrantId = em?.id ?? null;
+      }
+      // No entrant, no serving: `updateServing` counts only an entrant's
+      // fixtures, so a ban confirmed with none would stay active for ever and
+      // block the player's lineups. Refuse it, before anything is written; the
+      // organiser rosters the player first, or waives the ban.
+      if (!entrantId) {
+        throw new HttpError(
+          422,
+          "this player is on no entrant in this division, so the ban could never be served — add them to an entrant first, or waive it",
+          SUSPENSION_NO_ENTRANT_CODE,
+        );
       }
       await tx`
         update suspensions set status = 'active', entrant_id = ${entrantId},

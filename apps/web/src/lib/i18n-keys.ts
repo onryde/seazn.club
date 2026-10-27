@@ -1815,6 +1815,7 @@ export type DictionaryKey =
   | "disc.panel.fromReport"
   | "disc.panel.history"
   | "disc.panel.matches"
+  | "disc.panel.noEntrant"
   | "disc.panel.pending"
   | "disc.panel.pendingEmpty"
   | "disc.panel.person"

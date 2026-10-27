@@ -6709,5 +6709,6 @@
   "runSheet.formatChanged": "Format gewijzigd",
   "rules.err.formatDoesNotFitPlayBecause": "Wat tot nu toe gespeeld is, past niet bij dat format: {reason}",
   "matchRules.show": "Wedstrijdregels tonen",
-  "matchRules.hide": "Wedstrijdregels verbergen"
+  "matchRules.hide": "Wedstrijdregels verbergen",
+  "disc.panel.noEntrant": "Deze speler staat in de selectie van geen enkele deelnemer in deze divisie, dus de schorsing kan nooit worden uitgezeten. Voeg de speler eerst aan een selectie toe, of trek de schorsing in."
 }

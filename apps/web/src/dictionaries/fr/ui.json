@@ -6709,5 +6709,6 @@
   "runSheet.formatChanged": "Format modifié",
   "rules.err.formatDoesNotFitPlayBecause": "Le jeu déjà joué ne correspond pas à ce format : {reason}",
   "matchRules.show": "Afficher les règles de la rencontre",
-  "matchRules.hide": "Masquer les règles de la rencontre"
+  "matchRules.hide": "Masquer les règles de la rencontre",
+  "disc.panel.noEntrant": "Ce joueur ne figure dans la liste d'aucun participant de cette division : la suspension ne pourrait jamais être purgée. Ajoutez-le d'abord à une liste, ou levez la suspension."
 }

@@ -6709,5 +6709,6 @@
   "runSheet.formatChanged": "Format changed",
   "rules.err.formatDoesNotFitPlayBecause": "The match so far doesn't fit that format: {reason}",
   "matchRules.show": "Show match rules",
-  "matchRules.hide": "Hide match rules"
+  "matchRules.hide": "Hide match rules",
+  "disc.panel.noEntrant": "This player isn't on any entrant's roster in this division, so the ban could never be served. Add them to a roster first, or waive the ban."
 }

@@ -6709,5 +6709,6 @@
   "runSheet.formatChanged": "Formato cambiado",
   "rules.err.formatDoesNotFitPlayBecause": "Lo jugado hasta ahora no encaja con ese formato: {reason}",
   "matchRules.show": "Mostrar las reglas del partido",
-  "matchRules.hide": "Ocultar las reglas del partido"
+  "matchRules.hide": "Ocultar las reglas del partido",
+  "disc.panel.noEntrant": "Este jugador no figura en la lista de ningún participante de esta división, así que la sanción nunca podría cumplirse. Añádelo primero a una lista o retira la sanción."
 }

@@ -9,6 +9,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
+import { SUSPENSION_NO_ENTRANT_CODE } from "@/lib/suspension-no-entrant";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { Suspension } from "@/server/usecases/discipline";
 import { CardGlyph, toneForSource } from "./card-glyph";
@@ -51,7 +52,16 @@ export function DisciplinePanel({
       replace(next);
       router.refresh();
     } catch (err) {
-      setError(err instanceof ApiV1Error ? err.message : msg("disc.panel.failed"));
+      // A confirm for a player on no entrant here is refused (the ban could
+      // never be served): said from the dictionary, keyed on the CODE — the
+      // server's sentence is English.
+      setError(
+        err instanceof ApiV1Error && err.code === SUSPENSION_NO_ENTRANT_CODE
+          ? msg("disc.panel.noEntrant")
+          : err instanceof ApiV1Error
+            ? err.message
+            : msg("disc.panel.failed"),
+      );
     } finally {
       setBusyId(null);
     }
