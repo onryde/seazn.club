@@ -4,7 +4,8 @@ import { getStripe } from "@/lib/stripe";
 import { sql } from "@/lib/db";
 import { log } from "@/server/logger";
 import { HttpError } from "@/lib/errors";
-import { sendPassCreditReversalIncompleteAlertEmail } from "@/lib/email";
+import { passCreditReversalIncompleteAlertEmail } from "@/lib/email";
+import { queueStaffAlert } from "@/server/usecases/staff-alert";
 import type { PassKey } from "@/lib/currency";
 
 /**
@@ -688,7 +689,7 @@ export async function reversePassCreditOnRefund(
       // stays blocked until staff resolution tooling ships — there is no
       // self-serve release path, and resolving the balance in Stripe does not
       // touch this row. The staff alert below says so in as many words
-      // (`sendPassCreditReversalIncompleteAlertEmail`, reason "undetermined"),
+      // (`alertPassCreditReversalIncomplete`, reason "undetermined"),
       // because holding the cap forever is only defensible while a human is
       // being told about every row that does it.
       //
@@ -728,31 +729,49 @@ export async function reversePassCreditOnRefund(
     // split cannot be proven, so NOTHING was reversed and a human must read
     // the Stripe balance transaction history directly; otherwise, the
     // (provable) unreversed remainder was already consumed by an invoice and
-    // is being written off. The redemption row already carries org_id and
-    // competition_id, so this is a lookup rather than a value passed through
-    // from the caller.
-    const alertTo = process.env.STAFF_ALERT_EMAIL;
-    if (alertTo) {
+    // is being written off. Queued after the reversal transaction committed,
+    // and only by the delivery whose transition won (`settled`).
+    await alertPassCreditReversalIncomplete({ intent, passKey, redemption, reverseAmount, unsafe });
+  }
+}
+
+/** Page staff that a refunded Event Pass credit was not (or not fully) reversed: queued on the email outbox (kind
+ *  `staff_pass_credit_reversal_incomplete`) to STAFF_ALERT_EMAIL, once per payment intent (`<intent>:reversal`) — the
+ *  redemption is keyed by it, and its reversal runs once. Staff resolution (§6) does not cancel it: the alert is what asks
+ *  for that resolution. The redemption row already carries org_id and competition_id, so the names are a lookup made
+ *  when the alert renders rather than values passed through from the caller. Never throws; null when nothing was queued. */
+export async function alertPassCreditReversalIncomplete(a: {
+  intent: string;
+  passKey: PassKey | null;
+  redemption: { org_id: string; competition_id: string; amount_minor: number; currency: string };
+  reverseAmount: number;
+  unsafe: boolean;
+}): Promise<string | null> {
+  return queueStaffAlert({
+    kind: "staff_pass_credit_reversal_incomplete",
+    refType: "payment_intent",
+    id: a.intent,
+    suffix: "reversal",
+    render: async () => {
       const [org] = await sql<{ name: string }[]>`
-        select name from organizations where id = ${redemption.org_id}`;
+        select name from organizations where id = ${a.redemption.org_id}`;
       const [comp] = await sql<{ name: string }[]>`
-        select name from competitions where id = ${redemption.competition_id}`;
-      void sendPassCreditReversalIncompleteAlertEmail({
-        to: alertTo,
+        select name from competitions where id = ${a.redemption.competition_id}`;
+      return passCreditReversalIncompleteAlertEmail({
         // A redemption row only ever exists for a charge that WAS a pass, so
         // the caller found a row and `passKey` is non-null here; the fallback
         // keeps the alert honest rather than inventing a rung.
-        passKey: passKey ?? "event_pass",
-        orgId: redemption.org_id,
+        passKey: a.passKey ?? "event_pass",
+        orgId: a.redemption.org_id,
         orgName: org?.name ?? "unknown",
         competitionName: comp?.name ?? "unknown",
-        grantedMinor: redemption.amount_minor,
-        reversedMinor: reverseAmount,
-        currency: redemption.currency,
-        reason: unsafe ? "undetermined" : "consumed",
-      }).catch(() => {});
-    }
-  }
+        grantedMinor: a.redemption.amount_minor,
+        reversedMinor: a.reverseAmount,
+        currency: a.redemption.currency,
+        reason: a.unsafe ? "undetermined" : "consumed",
+      });
+    },
+  });
 }
 
 /* ────────────────────────────────────────────────────────────────────────────

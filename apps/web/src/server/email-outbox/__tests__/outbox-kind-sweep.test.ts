@@ -102,6 +102,9 @@
 //   - staff_stream_credit_grant_failed: the real `alertStreamCreditGrantFailed` (both ungranted limbs of the webhook's
 //     `stream_credits` branch call it; stream-credits-webhook.test.ts drives both to a row, and the return-page reconcile never
 //     pages), the same way.
+//   - staff_pass_credit_reversal_incomplete: the real `alertPassCreditReversalIncomplete` (its one site, `reversePassCreditOnRefund`,
+//     calls it after the reversal commits; pass-credit-refund-reversal.test.ts drives it to a row), for an undetermined reversal of a
+//     redemption whose org and competition this database does not hold, the same way.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -202,6 +205,7 @@ import { createManualSuspension, decideSuspension } from "@/server/usecases/disc
 import { detachOrgFromGroup, offerGroupTransfer } from "@/server/usecases/billing-groups";
 import { seedCommunityGroup, seedDetachableGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { alertStreamCreditGrantFailed } from "@/server/usecases/stream-credits-checkout";
+import { alertPassCreditReversalIncomplete } from "@/server/usecases/pass-credit";
 import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
@@ -1213,6 +1217,32 @@ function streamCreditGrantFailedScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for a refunded Event Pass credit that could not be reversed, to this run's STAFF_ALERT_EMAIL: no org, no
+ *  account, and the worker makes the first attempt. The subject is the sender's inline English for the undetermined reason, typed
+ *  from its source. */
+function passCreditReversalIncompleteScenario(): LiteralKindScenario {
+  const recipient = address();
+  const intent = `pi_${RUN}_rev_${randomUUID().slice(0, 8)}`;
+  const orgId = randomUUID();
+  return {
+    locale: "en",
+    subjectLiteral: `Pass credit reversal skipped — needs manual review — org ${orgId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertPassCreditReversalIncomplete({
+        intent,
+        passKey: "event_pass",
+        redemption: { org_id: orgId, competition_id: randomUUID(), amount_minor: 2500, currency: "gbp" },
+        reverseAmount: 0,
+        unsafe: true,
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
  *  request makes the first attempt. */
 async function emailChangeConfirmationScenario(): Promise<KindScenario> {
@@ -1782,6 +1812,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_credit_pack_grant_failed: creditPackGrantFailedScenario(),
         staff_size_pack_grant_failed: sizePackGrantFailedScenario(),
         staff_stream_credit_grant_failed: streamCreditGrantFailedScenario(),
+        staff_pass_credit_reversal_incomplete: passCreditReversalIncompleteScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

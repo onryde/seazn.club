@@ -924,7 +924,6 @@ export async function sendStreamPackPriceDriftAlertEmail(opts: StreamPackPriceDr
 }
 
 export interface PassCreditReversalIncompleteAlertEmail {
-  to: string;
   orgId: string;
   orgName: string;
   competitionName: string;
@@ -956,10 +955,12 @@ export interface PassCreditReversalIncompleteAlertEmail {
  *  an Event Pass was refunded but its pass-to-Pro subscription credit could
  *  not be fully (or, in the "undetermined" case, at all) reversed. A human
  *  needs the exact numbers and the reason, not just "something is off".
- *  Ops-only, no user-facing i18n (mirrors sendCreditPackGrantFailedAlertEmail). */
-export async function sendPassCreditReversalIncompleteAlertEmail(
-  opts: PassCreditReversalIncompleteAlertEmail,
-): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors creditPackGrantFailedAlertEmail).
+ *
+ *  RENDERED and not sent: `alertPassCreditReversalIncomplete` (pass-credit.ts) queues what this returns on the email outbox
+ *  through `queueStaffAlert` (kind `staff_pass_credit_reversal_incomplete`), once per payment intent. Nothing sends it
+ *  directly. */
+export function passCreditReversalIncompleteAlertEmail(opts: PassCreditReversalIncompleteAlertEmail): EmailContent {
   const absorbed = opts.grantedMinor - opts.reversedMinor;
   const undetermined = opts.reason === "undetermined";
   // Ops-only copy, so this is not translated — but it must still name the rung,
@@ -1010,7 +1011,7 @@ export async function sendPassCreditReversalIncompleteAlertEmail(
     `${bodyText}\n\norg: ${opts.orgName} (${opts.orgId}) · competition: ${opts.competitionName} · ` +
     `granted ${opts.grantedMinor} ${opts.currency} · reversed ${opts.reversedMinor} ${opts.currency}` +
     (undetermined ? "" : ` · absorbed ${absorbed} ${opts.currency}`);
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface PassRungMismatchAlertEmail {
@@ -1046,7 +1047,7 @@ export interface PassRungMismatchAlertEmail {
  *  for (or charged them for one they will not get). Nothing about which side is
  *  wrong can be inferred from here, so the mint refuses rather than guessing,
  *  exactly like the "undetermined" arm of
- *  `sendPassCreditReversalIncompleteAlertEmail`. A human must decide whether to
+ *  `passCreditReversalIncompleteAlertEmail`. A human must decide whether to
  *  refund the charge or grant the pass by hand, and then fix the desync (a
  *  stale `stripe:sync`, a price id edited in the Dashboard, a new rung wired to
  *  the wrong lookup key). The buyer has been charged and holds nothing —
