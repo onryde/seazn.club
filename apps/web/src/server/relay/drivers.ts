@@ -44,7 +44,7 @@ export function disabledRelayDrivers(): RelayDrivers {
       throw new RelayDriversDisabled();
     },
     createLiveInput: refuse, inputStatus: refuse, addOutput: refuse, outputState: refuse, removeOutput: refuse,
-    deleteInput: refuse, storageUsage: refuse, listVideos: refuse, listInputVideos: refuse, deleteVideo: refuse,
+    setInputEnabled: refuse, deleteInput: refuse, storageUsage: refuse, listVideos: refuse, listInputVideos: refuse, deleteVideo: refuse,
   };
   const runner: RunnerProvider = {
     get listSettleMs(): number {

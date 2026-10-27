@@ -7,8 +7,12 @@
 //  * status: the PER-INPUT GET. The list endpoint omits `recording` entirely
 //    and unset fields are omitted (absent-as-false), so an input that has
 //    never connected has no `status.current` — read as "disconnected".
-//  * NO update of `recording` on a live input, ever: flipping mode off took a
-//    live input off air in seconds while it stayed `connected` (F1).
+//  * NO update that changes `recording` on a live input, ever: flipping mode off
+//    took a live input off air in seconds while it stayed `connected` (F1).
+//    The ONE update this adapter sends is `setInputEnabled`, and it re-asserts the
+//    create's own recording settings (LIVE_INPUT_RECORDING) with the flag — the
+//    docs' page sends the flag alone, but nothing there says a partial body leaves
+//    `recording` as it was, and an input reset to mode off is the F1 outage.
 //  * deleteInput leaks the recording; deleteVideo answers 409 code 10046 while
 //    a recording is live-inprogress — reported as "in_progress", never retried
 //    here (the sweep's next tick does).
@@ -38,7 +42,7 @@ import { NOOP_RECORDER } from "./ports";
 import { redact } from "./sanitise";
 import type {
   DeleteVideoResult, IngestCapabilities, IngestCreateSpec, IngestCredentials, IngestProvider,
-  IngestState, IngestStatus, IngestTarget, IngestVideo, OutputState, ProviderCallMeta, ProviderCallRecorder, StorageUsage,
+  IngestState, IngestStatus, IngestTarget, IngestVideo, InputSwitchMeta, OutputState, ProviderCallMeta, ProviderCallRecorder, StorageUsage,
 } from "./ports";
 
 export const CLOUDFLARE_STREAM_BASE = "https://api.cloudflare.com/client/v4/accounts";
@@ -57,6 +61,15 @@ export const CLOUDFLARE_STREAM_BASE = "https://api.cloudflare.com/client/v4/acco
  *  tautology, and a limit of 1 would cap the daily retention sweep at one
  *  video per run and leak the prepaid block. */
 export const LIST_VIDEOS_PAGE_LIMIT = 1000;
+
+/** The recording settings a live input carries. ONE constant, sent by the create AND re-sent by `setInputEnabled`, so the
+ *  two cannot drift: the mode is `automatic`, always (C4 — a live input whose recording goes off is off air), and the
+ *  timeout is config's. `deleteRecordingAfterDays` is NOT a member: it is a top-level sibling (U1-S1). */
+const LIVE_INPUT_RECORDING = { mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS } as const;
+
+/** The dashboard name a live input is created with: session, role (a programme input says so) and slot. ONE builder, so the
+ *  create and the update (`setInputEnabled`) cannot name the same input two ways. */
+const inputName = (spec: IngestCreateSpec): string => `seazn-session-${spec.sessionId}-${spec.role === "programme" ? "programme-" : ""}slot-${spec.slot}`;
 
 interface CfEnvelope<T> { success: boolean; result?: T; errors?: { code?: number; message?: string }[] }
 
@@ -187,12 +200,14 @@ export class CloudflareIngest implements IngestProvider {
    *  fails the call. */
   private async call<T>(
     // C4 is a TYPE here, not only a regex (lane-A minors, Task 4 round-0 minor 5).
-    // The union used to admit "PUT", which `ingest-cf.test.ts`'s static C4 ban
-    // forbids anywhere in this file — so the one thing that could cause the C4
-    // outage (updating a live input's `recording`) was refused by a source scan and
-    // welcomed by the compiler. Narrowed to what this adapter actually calls; the
-    // scan stays, because a raw `fetch` beside this helper would dodge the type.
-    method: "GET" | "POST" | "DELETE", path: string, body: unknown,
+    // The union used to admit "PUT" with nothing to say what it was for, and the
+    // one thing that could cause the C4 outage (updating a live input's `recording`)
+    // was welcomed by the compiler. Narrowed to what this adapter actually calls:
+    // "PUT" is back for `setInputEnabled` alone, and `ingest-cf.test.ts`'s static C4
+    // scan pins that there is exactly one `.call("PUT"` and that its body carries
+    // LIVE_INPUT_RECORDING, never a mode of its own. The scan stays, because a raw
+    // `fetch` beside this helper would dodge the type.
+    method: "GET" | "POST" | "PUT" | "DELETE", path: string, body: unknown,
     meta: { operation: string; ids: string[]; subjectId?: string | null; subjectOf?: (result: T | undefined) => string | null; sessionId?: string | null },
   ): Promise<{ status: number; json: CfEnvelope<T> }> {
     const url = `${this.base}${path}`;
@@ -268,7 +283,7 @@ export class CloudflareIngest implements IngestProvider {
     }>("POST", "/live_inputs", {
       // R2004: a programme input (the composed session's Input B) says so in its name; the camera's name is unchanged.
       // Both record (owner ruling 2026-10-18, option (a)), so the settings below are the same for both roles.
-      meta: { name: `seazn-session-${spec.sessionId}-${spec.role === "programme" ? "programme-" : ""}slot-${spec.slot}` },
+      meta: { name: inputName(spec) },
       // U1-S1, MEASURED 2026-09-10: `deleteRecordingAfterDays` is a TOP-LEVEL
       // SIBLING of `recording`, never a member of it. Nested, Cloudflare answers
       // HTTP 200 / success:true, echoes a `recording` block that does not carry
@@ -276,7 +291,7 @@ export class CloudflareIngest implements IngestProvider {
       // retention is then never configured, the prepaid storage block never
       // recycles, and §6.5's 503 storage_exhausted starts refusing every
       // session, with a green create call at every step.
-      recording: { mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS },
+      recording: LIVE_INPUT_RECORDING,
       deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
     }, { operation: "createLiveInput", ids: [], sessionId: spec.sessionId, subjectOf: (result) => result?.uid ?? null });
     if (!r.json.success || !r.json.result) this.fail("create live input", r);
@@ -462,6 +477,39 @@ export class CloudflareIngest implements IngestProvider {
       { operation: "removeOutput", ids: [inputId, outputId], subjectId: outputId, sessionId: meta.sessionId ?? null });
     if (r.status === 404 || r.json.success || (r.status >= 200 && r.status < 300)) return;
     this.fail("remove output", r);
+  }
+
+  /** "Enable or disable a live input" — `PUT /accounts/{account_id}/stream/live_inputs/{input_id}` with `enabled`
+   *  (developers.cloudflare.com/stream/stream-live/start-stream-live/, Cloudflare's changelog 2026-02-24; OpenAPI "Update a
+   *  live input", read 2026-10-26). A disabled input "rejects incoming RTMPS and SRT connections" and ends the broadcast it
+   *  holds; live inputs are enabled by default.
+   *
+   *  THE BODY IS NOT THE FLAG ALONE. The docs' own example sends `{"enabled": false}`, and the OpenAPI says only the
+   *  retention field is "omit to indicate no change" — nothing says a body without `recording` leaves it as it was, and
+   *  `recording.mode` defaults to `off`, which on a live input is the C4 outage. UNMEASURED (no live call was made), so the
+   *  call is made safe either way: it re-sends the create's own body (name, recording settings, retention) with the flag, so
+   *  the update's body is the create's plus `enabled`. Sending it is a no-op on a healthy input and the repair on one that
+   *  would have been reset. (Cloudflare also documents `POST …/live_inputs/{id}/disable` and `/enable`, which take no body;
+   *  not used, as neither is measured here either.)
+   *
+   *  Read back, like every setting the create sends (U1): a 200 whose echoed `enabled` is not the flag, or whose echoed
+   *  `recording.mode` is anything but `automatic`, is an ERROR — a disable that did not take leaves a phone connected, and
+   *  a flipped mode is C4. A 404 is an input already gone: success to a DISABLE (idempotent — the daily retention sweep and
+   *  the create's cleanup delete inputs, and a second stop must not fail), a refusal to an ENABLE. */
+  async setInputEnabled(inputId: string, enabled: boolean, meta: InputSwitchMeta = {}): Promise<void> {
+    // The name is the create's, rebuilt from the same three facts; a caller with no session or slot cannot name the input, and
+    // then the body carries none (the usecase always passes them).
+    const named = meta.sessionId && meta.slot !== undefined ? { meta: { name: inputName({ sessionId: meta.sessionId, slot: meta.slot, ...(meta.role ? { role: meta.role } : {}) }) } } : {};
+    const r = await this.call<{ enabled?: boolean; recording?: { mode?: string } | null }>("PUT", `/live_inputs/${encodeURIComponent(inputId)}`, {
+      ...named, enabled, recording: LIVE_INPUT_RECORDING, deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS,
+    }, { operation: "setInputEnabled", ids: [inputId], subjectId: inputId, sessionId: meta.sessionId ?? null });
+    if (r.status === 404 && !enabled) return;
+    if (!r.json.success || !r.json.result) this.fail("set input enabled", r);
+    const notApplied: string[] = [];
+    if (r.json.result.enabled !== enabled) notApplied.push(`enabled sent ${String(enabled)}, echoed ${String(r.json.result.enabled)}`);
+    const echoedMode = r.json.result.recording?.mode;
+    if (echoedMode !== undefined && echoedMode !== LIVE_INPUT_RECORDING.mode) notApplied.push(`recording.mode sent ${LIVE_INPUT_RECORDING.mode}, echoed ${String(echoedMode)}`);
+    if (notApplied.length > 0) throw new Error(this.red(`cloudflare set input enabled: settings were not applied — ${notApplied.join("; ")}`));
   }
 
   /** `meta.sessionId` is an ADDITION to the port's signature (an optional

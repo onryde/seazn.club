@@ -968,7 +968,7 @@ describe("F-007 — an in-place restart as the Machines API shows it", () => {
     const w = sim();
     feed(w, { type: "runner", trigger: obs("pending", REFUSED_EXIT, T0) }, 1);
     expect(w.s).toMatchObject({ state: "failed", failReason: "machine_refused", runnerRetries: 0, runner: { state: "lost", attempt: 1 } });
-    expect(w.effects).toEqual(["force_destroy"]);
+    expect(w.effects).toEqual(["disable_phone_input", "force_destroy"]);
     feed(w, { type: "runner", trigger: obs("running", null, null) }, 2);
     expect(w.s).toMatchObject({ state: "failed", failReason: "machine_refused", runner: { state: "lost", attempt: 1 } });
     expect(w.creates).toEqual([]);
@@ -1075,7 +1075,7 @@ describe("R2003b — the crash-loop cap: RUNNER_CRASH_CAP fatal crashes per SESS
     at += 1;
     finalBeat(w, at, "fatal");                                                 // crash RUNNER_CRASH_CAP
     expect(w.s).toMatchObject({ state: "failed", failReason: "machine_crash", runner: { state: "lost", attempt: 1, crashes: { count: RUNNER_CRASH_CAP } } });
-    expect(w.effects, "the Machine Fly would restart again is torn down, once").toEqual(["force_destroy"]);
+    expect(w.effects, "the Machine Fly would restart again is torn down, once").toEqual(["disable_phone_input", "force_destroy"]);
     // crash 3's own exit, read afterwards — Fly's final one for its window (F-007: restarting false, restart_count
     // RUNNER_INPLACE_RESTARTS, then auto_destroy): the SAME crash, so still RUNNER_CRASH_CAP; then the DELETE lands
     feed(w, { type: "runner", trigger: crashExit("destroyed", sec(at), RUNNER_INPLACE_RESTARTS, false) }, at + 1);
@@ -1624,7 +1624,7 @@ describe("Owed 66 — the in-place restart (final beat `restart`, exit 75) is re
     cycle("restart", 0); cycle("crash", 1); cycle("restart", 1); cycle("crash", 2); cycle("restart", 2); cycle("crash", RUNNER_CRASH_CAP);
     expect(counts, "a restart moves nothing; each crash moves the count by exactly one").toEqual([0, 1, 1, 2, 2, RUNNER_CRASH_CAP]);
     expect(w.s).toMatchObject({ state: "failed", failReason: "machine_crash", runner: { state: "lost", attempt: 1, crashes: { count: RUNNER_CRASH_CAP, restartSeen: true } } });
-    expect(w.effects, "torn down at the cap, once").toEqual(["force_destroy"]);
+    expect(w.effects, "torn down at the cap, once").toEqual(["disable_phone_input", "force_destroy"]);
     expect(w.creates, "no retry, though attempt 1 had one").toEqual([]);
   });
 
@@ -1854,7 +1854,7 @@ describe("Owed 67 — the restart cap: a SESSION survives RUNNER_RESTART_CAP in-
     at += 20;
     finalBeat(w, at, "restart");                                           // restart RUNNER_RESTART_CAP + 1
     expect(w.s).toMatchObject({ state: "failed", failReason: "machine_crash", endReason: null, runner: { state: "lost", attempt: 1, crashes: { count: 0, restarts: { count: RUNNER_RESTART_CAP + 1 } } } });
-    expect(w.effects, "the Machine Fly would restart again is torn down, once").toEqual(["force_destroy"]);
+    expect(w.effects, "the Machine Fly would restart again is torn down, once").toEqual(["disable_phone_input", "force_destroy"]);
     // its own exit, read afterwards: the SAME restart — nothing moves, nothing is signalled again
     const ended = w.s;
     feed(w, { type: "runner", trigger: exit75("pending", sec(at)) }, at + 1);

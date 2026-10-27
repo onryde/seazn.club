@@ -145,6 +145,27 @@ function cfReply(c: Call): Reply {
   if (c.init.method === "DELETE" && /\/live_inputs\/in_undeletable$/.test(c.url))
     return { status: 500, body: { success: false, errors: [{ code: 10001, message: "internal error" }] } };
   if (c.init.method === "DELETE" && /\/stream\/v_nobody$/.test(c.url)) return { status: 200, body: undefined };
+  // "Update a live input" (PUT) — the enable/disable call. A healthy Cloudflare applies the body and echoes the live input it
+  // now holds, so the default answer echoes what was SENT (enabled, recording, retention); the named inputs are its refusals
+  // and its silent acceptances (the U1 family: a 200 that did not apply what it was given).
+  if (c.init.method === "PUT" && /\/live_inputs\/in_gone$/.test(c.url))
+    return { status: 404, body: { success: false, errors: [{ code: 10003, message: "live input not found" }] } };
+  if (c.init.method === "PUT" && /\/live_inputs\/in_boom$/.test(c.url))
+    return { status: 500, body: { success: false, errors: [{ code: 10000, message: "internal error for tok" }] } };
+  if (c.init.method === "PUT" && /\/live_inputs\/in_ignored$/.test(c.url))   // 200, but `enabled` comes back as it was
+    return { status: 200, body: { success: true, result: { uid: "in_ignored", enabled: true, recording: { mode: "automatic", timeoutSeconds: INGEST_TIMEOUT_SECONDS }, deleteRecordingAfterDays: DELETE_RECORDING_AFTER_DAYS } } };
+  if (c.init.method === "PUT" && /\/live_inputs\/in_mode_off$/.test(c.url))   // 200, the flag applied, but the recording mode came back off (the C4 outage)
+    return { status: 200, body: { success: true, result: { uid: "in_mode_off", enabled: false, recording: { mode: "off", timeoutSeconds: 0 }, deleteRecordingAfterDays: null } } };
+  if (c.init.method === "PUT" && /\/live_inputs\/in_noecho$/.test(c.url))   // 200 and nothing to read back
+    return { status: 200, body: { success: true, result: { uid: "in_noecho" } } };
+  if (c.init.method === "PUT" && /\/live_inputs\/[^/]+$/.test(c.url)) {
+    const sent = JSON.parse(String(c.init.body)) as { enabled: boolean; recording: Record<string, unknown>; deleteRecordingAfterDays: number };
+    return { status: 200, body: { success: true, result: {
+      uid: c.url.split("/").pop(), enabled: sent.enabled,
+      recording: { allowedOrigins: null, hideLiveViewerCount: false, requireSignedURLs: false, ...sent.recording },
+      deleteRecordingAfterDays: sent.deleteRecordingAfterDays,
+    } } };
+  }
   return { status: 500, body: { success: false, errors: [{ message: `unexpected ${String(c.init.method)} ${c.url}` }] } };
 }
 
@@ -316,6 +337,74 @@ describe("CloudflareIngest", () => {
     ]);
     // Never the input: deleting it leaks the recording (C2), and the recording is the replay.
     expect(rec.calls.some((x) => /\/live_inputs\/in_abc$/.test(x.url))).toBe(false);
+  });
+
+  // The phone's input is switched off when its session ends (the enable direction is the port's symmetry only: every session
+  // gets a FRESH input, so nothing in production switches one back on). Cloudflare's
+  // own page ("Enable or disable a live input") sends `{"enabled": false}` alone, but nothing there says a body without
+  // `recording` leaves the recording untouched — and the recording is the thing C4 measured: an input whose mode went
+  // off was off air. So this adapter never sends the flag alone: it re-asserts the recording settings the create sent.
+  it("setInputEnabled PUTs live_inputs/{input} ONCE per call, in both directions, with the CREATE's own body plus the flag — the same name, recording settings and retention, never the flag alone, and nothing else (no preferLowLatency)", async () => {
+    let checked = 0;
+    // Every role the create names differently: the camera (the default) and a programme input.
+    for (const role of [undefined, "camera", "programme"] as const) {
+      const spec = { sessionId: "s_1", slot: 0, ...(role ? { role } : {}) };
+      rec.calls.length = 0;
+      await ingest.createLiveInput(spec);
+      const created = JSON.parse(String(rec.calls[0]!.init.body)) as { meta: { name: string }; recording: { mode: string; timeoutSeconds: number }; deleteRecordingAfterDays: number };
+      for (const enabled of [false, true]) {
+        rec.calls.length = 0;
+        await expect(ingest.setInputEnabled("in_abc", enabled, spec)).resolves.toBeUndefined();
+        expect(rec.calls, `${role ?? "default"} enabled ${enabled}: one call`).toHaveLength(1);
+        const call = rec.calls[0]!;
+        expect(call.init.method).toBe("PUT");
+        expect(call.url).toBe(`${CLOUDFLARE_STREAM_BASE}/acct/stream/live_inputs/in_abc`);
+        expect((call.init.headers as Record<string, string>).authorization).toBe("Bearer tok");
+        const body = JSON.parse(String(call.init.body)) as { enabled: boolean; meta: { name: string }; recording: { mode: string; timeoutSeconds: number }; deleteRecordingAfterDays: number };
+        // ONE authority for the settings: what the create sent is what the update re-asserts, so neither can drift from the other.
+        expect(body, `${role ?? "default"} enabled ${enabled}: the create's body plus the flag`).toEqual({ ...created, enabled });
+        expect(body.enabled, "the flag is the boolean asked for").toBe(enabled);
+        // …and each is the rulebook's value, read off config and C4, not off the adapter: mode is the literal "automatic".
+        expect(body.recording.mode).toBe("automatic");
+        expect(body.recording.timeoutSeconds).toBe(INGEST_TIMEOUT_SECONDS);
+        expect(body.deleteRecordingAfterDays).toBe(DELETE_RECORDING_AFTER_DAYS);
+        expect(Object.keys(body).sort(), "exactly these four keys").toEqual(["deleteRecordingAfterDays", "enabled", "meta", "recording"]);
+        checked++;
+      }
+    }
+    expect(checked, "three roles x both directions were sent").toBe(6);
+    // The names differ by role, so the loop above is not three copies of one case.
+    rec.calls.length = 0;
+    await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "programme" });
+    await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1", slot: 0, role: "camera" });
+    const names = rec.calls.map((c) => (JSON.parse(String(c.init.body)) as { meta: { name: string } }).meta.name);
+    expect(new Set(names).size, "a programme input and a camera input are not named alike").toBe(2);
+  });
+
+  it("setInputEnabled with no session or slot to name the input sends no meta at all (never a made-up name) — the recording settings and retention still ride", async () => {
+    await ingest.setInputEnabled("in_abc", false);
+    const body = JSON.parse(String(rec.calls.at(-1)!.init.body)) as Record<string, unknown>;
+    expect(Object.keys(body).sort()).toEqual(["deleteRecordingAfterDays", "enabled", "recording"]);
+    await ingest.setInputEnabled("in_abc", false, { sessionId: "s_1" });
+    expect(Object.keys(JSON.parse(String(rec.calls.at(-1)!.init.body)) as Record<string, unknown>), "a session without a slot cannot name it either").not.toContain("meta");
+  });
+
+  it("setInputEnabled outcomes: a 404 is an input already gone — success for a DISABLE (idempotent), a refusal for an ENABLE; a 5xx throws with the account token redacted; and a 200 that did not apply the flag, flipped the recording mode, or echoed nothing is an ERROR, never a pass", async () => {
+    await expect(ingest.setInputEnabled("in_gone", false), "a disable of a gone input is the repeat of a disable").resolves.toBeUndefined();
+    const enableGone = await ingest.setInputEnabled("in_gone", true).then(() => null, (e: Error) => e);
+    expect(enableGone?.message, "an enable that cannot happen must not read as one that did").toMatch(/^cloudflare set input enabled: HTTP 404 code 10003/);
+    const boom = await ingest.setInputEnabled("in_boom", false).then(() => null, (e: Error) => e);
+    expect(boom?.message).toMatch(/^cloudflare set input enabled: HTTP 500 code 10000/);
+    expect(boom?.message).not.toContain("tok");
+    const ignored = await ingest.setInputEnabled("in_ignored", false).then(() => null, (e: Error) => e);
+    expect(ignored?.message).toMatch(/^cloudflare set input enabled: settings were not applied — enabled sent false, echoed true/);
+    const modeOff = await ingest.setInputEnabled("in_mode_off", false).then(() => null, (e: Error) => e);
+    expect(modeOff?.message, "the flag took, but the input is now off air (C4): said by name").toMatch(/recording\.mode sent automatic, echoed off/);
+    const noEcho = await ingest.setInputEnabled("in_noecho", false).then(() => null, (e: Error) => e);
+    expect(noEcho?.message).toMatch(/enabled sent false, echoed undefined/);
+    // The positive pair for every refusal above: the same adapter answers a healthy input.
+    await expect(ingest.setInputEnabled("in_abc", false)).resolves.toBeUndefined();
+    await expect(ingest.setInputEnabled("in_abc", true)).resolves.toBeUndefined();
   });
 
   it("storageUsage returns the three fields raw — no headroom arithmetic in the adapter (C3)", async () => {
@@ -649,7 +738,17 @@ describe("CloudflareIngest — D3 output state and §5.7 session ids", () => {
     expect(reports()[2]![1]).toMatchObject({ extra: { sessionId: null, inputUid: "in_xyz" } });
   });
 
-  it("the four per-session calls record their session id on the provider-call row (spec §5.7) — and a call with no meta records null", async () => {
+  it("a FAILED setInputEnabled is recorded like every other failed provider call: its row carries the HTTP status and Cloudflare's error code, then the call throws; and a recorder that itself throws changes neither", async () => {
+    const thrown = await adapter.setInputEnabled("in_boom", false, { sessionId: "sess-7" }).then(() => null, (e: Error) => e);
+    expect(thrown, "the failure reaches the caller").toBeInstanceOf(Error);
+    await flush();
+    expect(port.calls.at(-1)).toMatchObject({ operation: "setInputEnabled", method: "PUT", subjectId: "in_boom", sessionId: "sess-7", status: 500, errorCode: "10000" });
+    port.failNext();                                            // the recorder throws on the next row
+    await expect(adapter.setInputEnabled("in_abc", false, { sessionId: "sess-7" }), "telemetry never fails the call it records").resolves.toBeUndefined();
+    await flush();
+  });
+
+  it("the five per-session calls record their session id on the provider-call row (spec §5.7) — and a call with no meta records null", async () => {
     stubOutputs(["connected"]);
     let checked = 0;
     for (const [op, run] of [
@@ -657,13 +756,14 @@ describe("CloudflareIngest — D3 output state and §5.7 session ids", () => {
       ["addOutput", () => adapter.addOutput("in_abc", { url: "rtmp://a.rtmp.youtube.com/live2", streamKey: "k" }, { sessionId: "sess-9" })],
       ["outputState", () => adapter.outputState("in_abc", { sessionId: "sess-9" })],
       ["removeOutput", () => adapter.removeOutput("in_abc", "out_1", { sessionId: "sess-9" })],
+      ["setInputEnabled", () => adapter.setInputEnabled("in_abc", false, { sessionId: "sess-9" })],
     ] as const) {
       await run();
       await flush();
       expect(port.calls.at(-1), op).toMatchObject({ operation: op, sessionId: "sess-9" });
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(5);
     await adapter.outputState("in_abc");
     await flush();
     expect(port.calls.at(-1), "no meta: the row says so").toMatchObject({ operation: "outputState", sessionId: null });
@@ -960,6 +1060,7 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     const realOut = await real.addOutput(realCreds.inputId, TARGET);
     await real.outputState(realCreds.inputId);
     await real.removeOutput(realCreds.inputId, realOut);
+    await real.setInputEnabled(realCreds.inputId, false);
     await real.storageUsage();
     await real.listVideos({ createdBefore: BEFORE });
     await real.listInputVideos(realCreds.inputId);
@@ -974,6 +1075,7 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     const fakeOut = await fake.addOutput(fakeCreds.inputId, TARGET);
     await fake.outputState(fakeCreds.inputId);
     await fake.removeOutput(fakeCreds.inputId, fakeOut);
+    await fake.setInputEnabled(fakeCreds.inputId, false);
     await fake.storageUsage();
     await fake.listVideos({ createdBefore: BEFORE });
     await fake.listInputVideos(fakeCreds.inputId);
@@ -983,19 +1085,21 @@ describe("fake/real provider-call parity (Task 3 review G1, m4)", () => {
     await new Promise((r) => setImmediate(r));
     const realShapes = shapes(realPort.calls, { input: realCreds.inputId, video: "v_done", output: realOut });
     const fakeShapes = shapes(fakePort.calls, { input: fakeCreds.inputId, video: "v_done", output: fakeOut });
-    // Present twin for the comparison's own vacuity: ten operations, in order,
+    // Present twin for the comparison's own vacuity: eleven operations, in order,
     // and the templates really are Cloudflare's account-scoped Stream paths.
     expect(realShapes.map((s) => s.operation)).toEqual([
-      "createLiveInput", "inputStatus", "addOutput", "outputState", "removeOutput", "storageUsage", "listVideos", "listInputVideos", "deleteVideo", "deleteInput",
+      "createLiveInput", "inputStatus", "addOutput", "outputState", "removeOutput", "setInputEnabled", "storageUsage", "listVideos", "listInputVideos", "deleteVideo", "deleteInput",
     ]);
     expect(realShapes[1]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}");
     expect(realShapes[4]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}/outputs/{id}");   // C1: the output, never the input
-    expect(realShapes[6]!.template).toBe("/client/v4/accounts/{id}/stream");
-    expect(realShapes[7]!.template).toBe("/client/v4/accounts/{id}/stream");   // R2004 review I2: the filtered account listing
-    expect(realShapes[8]!.template).toBe("/client/v4/accounts/{id}/stream/{id}");
+    expect(realShapes[5]!.method).toBe("PUT");
+    expect(realShapes[5]!.template).toBe("/client/v4/accounts/{id}/stream/live_inputs/{id}");   // the INPUT it switches: the same path as the status read
+    expect(realShapes[7]!.template).toBe("/client/v4/accounts/{id}/stream");
+    expect(realShapes[8]!.template).toBe("/client/v4/accounts/{id}/stream");   // R2004 review I2: the filtered account listing
+    expect(realShapes[9]!.template).toBe("/client/v4/accounts/{id}/stream/{id}");
     // m4: the subject id per operation. The adapter is the authority — the
-    // object the call is ABOUT — and the fake agrees on all ten (C1: the removal is about the OUTPUT).
-    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "none", "none", "input", "video", "input"]);
+    // object the call is ABOUT — and the fake agrees on all eleven (C1: the removal is about the OUTPUT; the switch, the INPUT).
+    expect(realShapes.map((s) => s.subject)).toEqual(["input", "input", "input", "input", "output", "input", "none", "none", "input", "video", "input"]);
     expect(fakeShapes).toEqual(realShapes);
   });
 });
@@ -1025,13 +1129,25 @@ describe("server/relay/** static claims (C4, C8, C11, C12, C13)", () => {
   it("recording mode is the literal \"automatic\" and no request updates a live input's recording (C4)", () => {
     expect(cf).toMatch(/mode:\s*"automatic"/);                 // present twin
     expect(sources.some((s) => s.name.startsWith("domain/")), "the walk is recursive").toBe(true);
-    // No PUT/PATCH to a live input at all — the only mutations are POST create,
-    // POST outputs, DELETE. A `recording` key in an update body is the C4 outage.
-    // BOTH spellings are banned: the object form, and this adapter's own helper
-    // `this.call("PUT", …)` — which is the shape the m-C4 mutant uses, so a
+    // No PATCH to a live input at all, and exactly ONE PUT: the enable/disable call (`setInputEnabled`). A `recording`
+    // key in an update body is the C4 outage unless it is the SAME automatic settings the create sent, so the PUT
+    // helper's body must reference the create's constant — never a literal of its own, never `mode: "off"`.
+    // BOTH spellings are banned for PATCH: the object form, and this adapter's own helper
+    // `this.call("PATCH", …)` — which is the shape the m-C4 mutant uses, so a
     // regex matching only the first reported that mutant killed while it lived.
     expect(cf).not.toMatch(/method:\s*"(PUT|PATCH)"/);
-    expect(cf).not.toMatch(/\.call(?:<[^>]*>)?\(\s*"(PUT|PATCH)"/);
+    expect(cf).not.toMatch(/\.call(?:<[^>]*>)?\(\s*"PATCH"/);
+    const puts = [...cf.matchAll(/\.call(?:<[^>]*>)?\(\s*"PUT"/g)];
+    expect(puts, "the one PUT — the enable/disable call — and no other").toHaveLength(1);
+    const body = cf.slice(puts[0]!.index, cf.indexOf("operation:", puts[0]!.index));   // the helper's own request body: everything before its call meta
+    expect(body.length, "the slice found the request body, not nothing").toBeGreaterThan(40);
+    expect(body, "the PUT's recording is the create's constant, not a literal").toMatch(/recording:\s*LIVE_INPUT_RECORDING/);
+    expect(body).toMatch(/deleteRecordingAfterDays:\s*DELETE_RECORDING_AFTER_DAYS/);
+    expect(body, "never a recording literal of its own").not.toMatch(/mode:/);
+    // The create sends that same constant — so the two cannot drift — and nothing in the adapter spells a mode but `automatic`.
+    expect([...cf.matchAll(/recording:\s*LIVE_INPUT_RECORDING/g)], "create and enable/disable both send it").toHaveLength(2);
+    expect(cf).not.toMatch(/mode:\s*"off"/);
+    expect([...cf.matchAll(/mode:\s*"/g)], "one mode literal in the whole adapter").toHaveLength(1);
   });
   it("no preferLowLatency, no token verify, no manifest fetch, no ENDLIST anywhere under server/relay (C11, C12, C13, C8)", () => {
     expect(sources.length, "the scan found sources at all").toBeGreaterThan(5);

@@ -50,6 +50,9 @@ export type OutputState = "ok" | "connecting" | "rejected" | "unknown";
 /** Spec §5.7 — what a per-session provider call is FOR, so its stream_provider_calls row carries the session (staging
  *  2026-09-30 found removeOutput rows with a NULL session_id). Optional: a caller with no session passes nothing. */
 export interface ProviderCallMeta { sessionId?: string | null }
+/** What `setInputEnabled` is told about the input beside the session: its slot and role, so an adapter that updates the input
+ *  with the CREATE's own body can re-send the name the create gave it (`meta.name` is built from session, role and slot). */
+export interface InputSwitchMeta extends ProviderCallMeta { slot?: number; role?: InputRole }
 export interface StorageUsage { totalStorageMinutes: number; totalStorageMinutesLimit: number; videoCount: number }
 /** Dd — a recording, with every fact Cloudflare's video object carries.
  *  While `state` is "live-inprogress" the probe (2026-09-14) reads `duration`
@@ -93,6 +96,14 @@ export interface IngestProvider {
    *  to the destination — the ONE teardown of a passthrough broadcast. Idempotent: an output already gone is success.
    *  Never `deleteInput` for this (the input carries the recording — C2). */
   removeOutput(inputId: string, outputId: string, meta?: ProviderCallMeta): Promise<void>;
+  /** Switches ONE input on or off. A disabled input rejects every connection and ends the one it holds — which is how a
+   *  phone that is still pushing after its session ended (or after the live limit) stops costing a connection for nothing.
+   *  Idempotent in both directions: disabling a disabled input, or enabling an enabled one, is success. An input that is
+   *  GONE (the provider's 404) is success for a DISABLE — there is nothing left to switch off — and a refusal for an
+   *  ENABLE, which cannot have happened. It never touches the input's recording: switching a live input's recording off is
+   *  the C4 outage, so an adapter that sends anything but the flag must re-send the recording settings the create sent.
+   *  Never `deleteInput` for this — the input carries the recording (C2). */
+  setInputEnabled(inputId: string, enabled: boolean, meta?: InputSwitchMeta): Promise<void>;
   deleteInput(inputId: string): Promise<void>;                    // LEAKS recordings (C2) — videos first
   storageUsage(): Promise<StorageUsage>;                          // C3: raw usage; headroom is the usecase's
   listVideos(opts: { createdBefore: Date }): Promise<IngestVideo[]>;

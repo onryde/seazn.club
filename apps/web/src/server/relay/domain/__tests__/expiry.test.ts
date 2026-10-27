@@ -45,7 +45,9 @@ describe("evaluate", () => {
     expect(evaluate(r, at(REQUESTED_TIMEOUT_SECONDS))).toEqual({ kind: "requested_timeout" });
     const d = decide(r, { type: "expire", expiry: { kind: "requested_timeout" } }, at(REQUESTED_TIMEOUT_SECONDS));
     expect(d.next).toMatchObject({ state: "failed", failReason: "admission_timeout", endReason: null });
-    expect(d.effects).toEqual([]);                            // no provider was ever called
+    // no runner or output was ever asked for. The input's disable is the one effect the domain emits on EVERY entry to a
+    // terminal state; the usecase finds no camera input for a session that never provisioned one and calls nothing.
+    expect(d.effects).toEqual([{ type: "disable_phone_input" }]);
     // it is THAT state's rule, not a clock on every session: a warming one of the same age is untouched
     expect(evaluate(S({ state: "warming" }), at(REQUESTED_TIMEOUT_SECONDS))).toEqual({ kind: "none" });
   });
@@ -68,7 +70,7 @@ describe("evaluate", () => {
     expect(evaluate(e, at(bound))).toEqual({ kind: "ending_timeout" });
     const d = decide(e, { type: "expire", expiry: { kind: "ending_timeout" } }, at(bound));
     expect(d.next).toMatchObject({ state: "completed", endReason: "stopped", endedAt: at(bound) });
-    expect(d.effects).toEqual([{ type: "fill_replay" }]);
+    expect(d.effects).toEqual([{ type: "disable_phone_input" }, { type: "fill_replay" }]);
     // a MARKED runner stays the stop grace's business, and that fires first
     const marked = S({ state: "ending", mode: "composed", runner: { ...PLAYING, state: "stopping", stopRequestedAt: T0 }, startedAt: T0 });
     expect(evaluate(marked, at(bound))).toEqual({ kind: "grace_expired" });
@@ -89,12 +91,12 @@ describe("evaluate", () => {
     expect(evaluate(marked, at(PROVISION_TIMEOUT_SECONDS))).toEqual({ kind: "grace_expired" });
     // a passthrough session in provisioning has no Machine to tear down (fix round 1, M1: moved ABOVE the composed decide
     // for the same reason as `marked` — it needs no runner, and behind the stub call it could not run until Task 2C)
-    expect(decide(p, { type: "expire", expiry: { kind: "provision_timeout" } }, at(PROVISION_TIMEOUT_SECONDS)).effects).toEqual([]);
+    expect(decide(p, { type: "expire", expiry: { kind: "provision_timeout" } }, at(PROVISION_TIMEOUT_SECONDS)).effects).toEqual([{ type: "disable_phone_input" }]);
     // F16's stranded session: the create returned, `provisioned` never landed, and the Machine beats forever.
     const c = S({ state: "provisioning", mode: "composed", runner: { ...PLAYING, state: "booting" } });
     const d = decide(c, { type: "expire", expiry: evaluate(c, at(PROVISION_TIMEOUT_SECONDS)) }, at(PROVISION_TIMEOUT_SECONDS));
     expect(d.next).toMatchObject({ state: "failed", failReason: "provision_timeout", endReason: null });
-    expect(d.effects).toEqual([{ type: "runner", effect: { type: "stop_machine", signal: "SIGINT", timeoutSeconds: RUNNER_STOP_GRACE_SECONDS } }]);
+    expect(d.effects).toEqual([{ type: "disable_phone_input" }, { type: "runner", effect: { type: "stop_machine", signal: "SIGINT", timeoutSeconds: RUNNER_STOP_GRACE_SECONDS } }]);
   });
   it("warming ≥ 10 min → warming_timeout at the threshold, none one second before", () => {
     expect(evaluate(S(), at(WARMING_TIMEOUT_MINUTES * 60 - 1))).toEqual({ kind: "none" });

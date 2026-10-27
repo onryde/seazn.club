@@ -77,7 +77,7 @@ export function connectAfterMsFromEnv(): number {
 /** Dd: a test names the fields it cares about; the fake supplies the rest. */
 export type FakeVideoInput = Pick<IngestVideo, "videoId" | "inputId" | "createdAt" | "inProgress"> & Partial<IngestVideo>;
 
-interface FakeInput { createdAt: number; scripted: IngestState | null; outputs: IngestTarget[]; deleted: boolean; outputUids: string[] }
+interface FakeInput { createdAt: number; scripted: IngestState | null; outputs: IngestTarget[]; deleted: boolean; outputUids: string[]; enabled: boolean }
 
 export class FakeIngest implements IngestProvider {
   readonly capabilities: IngestCapabilities = {
@@ -117,7 +117,7 @@ export class FakeIngest implements IngestProvider {
     const createdAt = this.clock();
     const inputId = `fake-in-${createdAt}-${randomBytes(4).toString("hex")}`;
     this.record("createLiveInput", "POST", "/live_inputs", [], inputId, spec.sessionId);
-    this.inputs.set(inputId, { createdAt, scripted: null, outputs: [], deleted: false, outputUids: [] });
+    this.inputs.set(inputId, { createdAt, scripted: null, outputs: [], deleted: false, outputUids: [], enabled: true });   // Cloudflare's default: enabled
     // R2004: a composed session's programme input shares the camera's session and slot, so its stream id names the role.
     // The camera's is the id it always was (`role` absent is the camera).
     const streamId = spec.role === "programme" ? `${spec.sessionId}-programme-${spec.slot}` : `${spec.sessionId}-${spec.slot}`;
@@ -140,6 +140,9 @@ export class FakeIngest implements IngestProvider {
   /** The ONE connect rule (scripted state, else the clock), shared by `inputStatus` and `outputState` — the latter must
    *  not call `inputStatus`, which would record a provider call nobody made and move every provider-call count. */
   private stateOf(row: FakeInput | undefined, createdAt: number): IngestState {
+    // A DISABLED input rejects every connection and ends the one it holds (Cloudflare, "Enable or disable a live input"), so
+    // no scripted word and no clock can read it connected: the phone that is still pushing is turned away.
+    if (row && !row.enabled) return "disconnected";
     return row?.scripted ?? (this.clock() - createdAt >= this.connectAfterMs ? "connected" : "disconnected");
   }
 
@@ -226,6 +229,29 @@ export class FakeIngest implements IngestProvider {
       return "connecting";
     }
     return "ok";
+  }
+
+  /** Every setInputEnabled call, in order — a repeat and an input that is gone included, as `removedOutputs` is. */
+  readonly enabledCalls: { inputId: string; enabled: boolean }[] = [];
+
+  /** Whether the input accepts connections: a live input never switched off. An input that is deleted, or that this fake
+   *  never made, accepts nothing. */
+  isEnabled(inputId: string): boolean {
+    const row = this.inputs.get(inputId);
+    return !!row && !row.deleted && row.enabled;
+  }
+
+  /** The port's switch (ingest-cf.ts: `PUT /live_inputs/{uid}`). An input that is GONE — deleted, or never made by this
+   *  fake — is Cloudflare's 404: success to a disable, a refusal to an enable. */
+  async setInputEnabled(inputId: string, enabled: boolean, meta: ProviderCallMeta = {}): Promise<void> {
+    this.record("setInputEnabled", "PUT", `/live_inputs/${inputId}`, [inputId], inputId, meta.sessionId ?? null);
+    this.enabledCalls.push({ inputId, enabled });
+    const row = this.inputs.get(inputId);
+    if (!row || row.deleted) {
+      if (enabled) throw new Error(`FakeIngest.setInputEnabled: input ${inputId} is gone or unknown — it cannot be enabled`);
+      return;
+    }
+    row.enabled = enabled;
   }
 
   async deleteInput(inputId: string): Promise<void> {

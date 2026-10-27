@@ -39,7 +39,7 @@ describe("R5: relayDrivers() in disabled mode", () => {
     const ingest = methodsOf(d.ingest);
     const runner = methodsOf(d.runner);
     // Completeness is tsc's: the disabled pair is typed as the two ports, so a method missing from it does not compile.
-    // What runs here is that every method it HAS refuses — the floors below are today's port sizes (9 and 5).
+    // What runs here is that every method it HAS refuses — the floors below are today's port sizes (11 and 5).
     let refused = 0;
     for (const [port, names] of [[d.ingest, ingest], [d.runner, runner]] as const) {
       for (const name of names) {
@@ -49,7 +49,7 @@ describe("R5: relayDrivers() in disabled mode", () => {
       }
     }
     expect(refused, "no port method was exercised").toBeGreaterThanOrEqual(ingest.length + runner.length);
-    expect(ingest.length, "the ingest port's methods").toBeGreaterThanOrEqual(9);
+    expect(ingest.length, "the ingest port's methods").toBeGreaterThanOrEqual(11);
     expect(runner.length, "the runner port's methods").toBeGreaterThanOrEqual(5);
     // The two data members refuse too: a capability or a settle window read off a disabled provider is a fake number.
     expect(() => d.ingest.capabilities).toThrow(RelayDriversDisabled);

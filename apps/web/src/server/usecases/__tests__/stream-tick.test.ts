@@ -294,6 +294,18 @@ describe.skipIf(!HAS_DB)("ask 10 (§6.8.3): a warming broadcast whose phone is l
     expect((await tickSession(r.sessionId, r.deps, "sweep")).session).toMatchObject({ state: "completed", endReason: "phone_lost" });
   });
 
+  it("the tick's own end reaches the phone input's disable: a phone_lost end switches the camera input OFF once, on the camera row's own uid — and a tick that finds the session ended switches nothing again", async () => {
+    const r = await rig({ connectAfterMs: 10 * MIN });
+    r.tick(ASK10_SILENT_MS);
+    expect(r.ingest.enabledCalls, "premise: nothing switched while the session runs").toEqual([]);
+    expect(r.ingest.isEnabled(r.inputId)).toBe(true);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session).toMatchObject({ state: "completed", endReason: "phone_lost" });
+    expect(r.ingest.enabledCalls).toEqual([{ inputId: r.inputId, enabled: false }]);
+    expect(r.ingest.isEnabled(r.inputId)).toBe(false);
+    expect((await tickSession(r.sessionId, r.deps, "sweep")).session).toMatchObject({ state: "completed", endReason: "phone_lost" });
+    expect(r.ingest.enabledCalls).toHaveLength(1);
+  });
+
   it("a session whose pairing has ENDED (each end_cause) no longer has a current phone (§6.8.3) — a fresh beat does not hold it: ended phone_lost; the same fresh beat on a CURRENT pairing holds it", async () => {
     const causes = [null, "replaced", "operator_stopped", "code_ended"] as const;
     let checked = 0;
