@@ -95,8 +95,8 @@ export function endedCameraReservationMinutes(warmingAt: Date | null, endedAt: D
 
 /** Review I1 of PR #1041 (owner-directed 2026-10-26): what an ENDED session reserves at `now`.
  *
- *  An in-progress recording is counted by NOTHING — `storage-usage` shows it only when Cloudflare finalises it, one hold window
- *  after the input disconnects (R0 F2; `FINALISATION_GRACE_SECONDS`). The programme (composed B) and a passthrough input
+ *  An in-progress recording is counted by NOTHING — `storage-usage` shows it only when Cloudflare finalises it, after the hold
+ *  window that follows the input's disconnect plus a cautious processing allowance (R0 F2; `FINALISATION_GRACE_SECONDS`). The programme (composed B) and a passthrough input
  *  disconnect at the session's end, so for the grace after `endedAt` EVERY recording keeps its span reserved: composed twice
  *  (the camera A and the programme B), passthrough once. After it the programme and the passthrough recording are in
  *  Cloudflare's usage and stop reserving; the camera alone keeps its span until its recordings are deleted (`cameraHeld`:

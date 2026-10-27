@@ -25,14 +25,21 @@
 export const INGEST_TIMEOUT_SECONDS = 180;
 /** R0 §4a: 182.8 s and 183.5 s against a configured 180; 12.2 s at 10; 63.1 s at 60. */
 export const HOLD_SLACK_SECONDS = 3;
+/** Review m9 of PR #1041 (controller ruling): a cautious allowance, in seconds, for the time between a recording's playback hold
+ *  ending and its minutes showing in `storage-usage`. NOT a measurement: R0 F2 has a single "under three minutes" sample of the
+ *  lump arriving, and the hold it is added to (`INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS`) is R0 §4a's measured RTMPS
+ *  playback hold - proof of when playback ends, not of when the usage figure moves. Over-reserving for 2 minutes longer after
+ *  an end costs headroom for those 2 minutes; under-reserving admits a match the account cannot hold. */
+export const FINALISATION_PROCESSING_SLACK_SECONDS = 120;
 /** How long after a session ends its recordings are still being FINALISED — and so are counted by nothing. R0 F2: an in-progress
- *  recording contributes NOTHING to `storage-usage`; its minutes land in one lump when Cloudflare finalises it, which is the hold
- *  window after the input disconnects (`INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS`, the very figure the ingest port declares
- *  as `holdWindowSeconds.rtmps`). A programme (composed B) or a passthrough input disconnects at the session's end, so for this
- *  long after `ended_at` the pool owes it a reservation (domain/credits.ts `endedReservationMinutes`). No margin on top: usage is
- *  read live at every admission and at the sweep, so there is no polling gap to cover, and the camera (A) stays reserved
- *  after this window regardless. */
-export const FINALISATION_GRACE_SECONDS = INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS;
+ *  recording contributes NOTHING to `storage-usage`; its minutes land in one lump when Cloudflare finalises it, which is after
+ *  the hold window that follows the input's disconnect (`INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS`, the very figure the
+ *  ingest port declares as `holdWindowSeconds.rtmps`) plus the processing allowance above. A programme (composed B) or a
+ *  passthrough input disconnects at the session's end, so for this long after `ended_at` the pool owes it a reservation
+ *  (domain/credits.ts `endedReservationMinutes`). The SRT finalisation is UNMEASURED (`holdWindowSeconds.srt` is null, H-P5-1;
+ *  passthrough phones prefer SRT), so the allowance is a cautious one for it too. Usage is read live at every admission and at
+ *  the sweep, so there is no polling gap to cover, and the camera (A) stays reserved after this window regardless. */
+export const FINALISATION_GRACE_SECONDS = INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS + FINALISATION_PROCESSING_SLACK_SECONDS;
 
 /** C1: Cloudflare rejects 1 and 7 with HTTP 400 code 10060; the valid range is
  *  30–1096 days. The product's 3-day promise is OUR sweep (RECORDING_RETENTION_DAYS). */

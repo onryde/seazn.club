@@ -1101,7 +1101,7 @@ export function storageUsageForColumns(u: StorageUsage): StorageUsage {
  *     cannot hold the pool forever. A camera input the provider never made recorded nothing and reserves nothing. Once the
  *     camera's recording is finalised Cloudflare's own usage counts it too, so until the sweep deletes it a composed match's
  *     camera is counted twice — an under-statement of the room;
- *   - for the FINALISATION GRACE after `ended_at` (`FINALISATION_GRACE_SECONDS`, the ingest hold window) EVERY recording of
+ *   - for the FINALISATION GRACE after `ended_at` (`FINALISATION_GRACE_SECONDS`: the ingest hold window plus a cautious processing allowance) EVERY recording of
  *     an ended session keeps its span reserved — composed twice (the camera and the programme), passthrough once (review I1
  *     of PR #1041, owner-directed 2026-10-26). R0 F2: an in-progress recording is counted by NOTHING in `storage-usage`; its
  *     minutes land in one lump when Cloudflare finalises it, that long after the input disconnects. Without this window

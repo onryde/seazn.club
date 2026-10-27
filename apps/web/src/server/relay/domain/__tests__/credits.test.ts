@@ -3,7 +3,7 @@
 // ever see it). C3's arithmetic is pure here so the differential is a
 // millisecond test, and Task 10's DB test proves the SAME function is wired.
 import { describe, expect, it } from "vitest";
-import { CREDIT_REUSE_HOURS, FINALISATION_GRACE_SECONDS, FREE_RESTARTS_PER_WINDOW, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, NEVER_LIVE_REFUNDS_PER_WINDOW, RESERVATION_BUFFER_MINUTES } from "../../config";
+import { CREDIT_REUSE_HOURS, FINALISATION_GRACE_SECONDS, FINALISATION_PROCESSING_SLACK_SECONDS, FREE_RESTARTS_PER_WINDOW, HOLD_SLACK_SECONDS, INGEST_TIMEOUT_SECONDS, MAX_DURATION_MINUTES, NEVER_LIVE_REFUNDS_PER_WINDOW, RESERVATION_BUFFER_MINUTES } from "../../config";
 import { FakeIngest } from "../../fakes";
 import {
   InsufficientCredits, RECORDINGS_PER_SESSION, credit, debit, elapsedMinutesSince, endedCameraReservationMinutes, endedReservationMinutes, headroomAfterReservations,
@@ -151,10 +151,12 @@ describe("endedReservationMinutes (the finalisation grace)", () => {
   const at = (msAfterEnd: number) => new Date(end.getTime() + msAfterEnd);
   const base = { warmingAt: start, endedAt: end, maxDurationMinutes: MAX, cameraHeld: true };
 
-  it("the grace is the hold window the ingest port itself declares (not a typed figure), and a real, positive span of time", () => {
-    expect(FINALISATION_GRACE_SECONDS).toBe(new FakeIngest().capabilities.holdWindowSeconds.rtmps);
-    expect(FINALISATION_GRACE_SECONDS).toBe(INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS);
-    expect(FINALISATION_GRACE_SECONDS).toBeGreaterThan(0);
+  it("the grace is the hold window the ingest port itself declares PLUS the processing allowance (not a typed figure), strictly longer than the hold alone", () => {
+    const hold = new FakeIngest().capabilities.holdWindowSeconds.rtmps;
+    expect(hold, "PREMISE: the port declares an RTMPS hold").toBe(INGEST_TIMEOUT_SECONDS + HOLD_SLACK_SECONDS);
+    expect(FINALISATION_PROCESSING_SLACK_SECONDS, "the allowance is a real span of time").toBeGreaterThan(0);
+    expect(FINALISATION_GRACE_SECONDS).toBe(hold! + FINALISATION_PROCESSING_SLACK_SECONDS);
+    expect(FINALISATION_GRACE_SECONDS).toBeGreaterThan(hold!);
   });
 
   it("COMPOSED: every recording's span while finalising (just inside), the camera alone just after - the boundary row, both neighbours", () => {
