@@ -576,14 +576,17 @@ export async function applyOfficialAssignments(
     const fresh: FreshAssignment[] = [];
     for (const a of input.assignments) {
       const prev = prior.get(assignmentKey(a.fixture_id, a.official_id, a.role_key));
-      if (!prev) fresh.push(a);
-      await tx`
+      const written = await tx`
         insert into fixture_officials (fixture_id, official_id, role_key, source, locked,
                                        response, responded_at, decline_reason)
         values (${a.fixture_id}, ${a.official_id}, ${a.role_key}, 'auto', ${a.locked},
                 ${prev?.response ?? "pending"}, ${prev?.responded_at ?? null},
                 ${prev?.decline_reason ?? null})
-        on conflict (fixture_id, role_key, official_id) do nothing`;
+        on conflict (fixture_id, role_key, official_id) do nothing
+        returning 1`;
+      // New only when absent before AND written now: a locked assignment survives the delete above (the input may echo it, as the
+      // AI console and the API can), and a triple repeated within this input conflicts with its own first insert. Neither is news.
+      if (!prev && written.length > 0) fresh.push(a);
       applied++;
     }
     // The ledger entry this apply writes below is `seq + 1`, read under the division's lock: the notices name it in their ref.

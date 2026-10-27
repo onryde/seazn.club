@@ -732,7 +732,7 @@ describe.skipIf(!HAS_DB)("the assignment notice goes through the email outbox (o
     expect(mail.assigned.mock.calls.map((c) => c[0].fixtures.length), "the second lists only the fixture it added").toEqual([1, 1]);
   });
 
-  it("a manual set notifies the newly set official, and a re-set keeping them does not", async () => {
+  it("a manual set notifies the newly set official, a re-set keeping them does not, and a re-set adding another notifies only the newcomer", async () => {
     const { auth } = await seedOrg("pro");
     const { fixtures } = await seedScheduledDivision(auth);
     const email = address("manual");
@@ -754,6 +754,46 @@ describe.skipIf(!HAS_DB)("the assignment notice goes through the email outbox (o
     await patchFixtureOfficials(auth, fixtures[0]!.id, set);
     expect(await settledNoticesOf(auth.orgId), "the re-set kept the official: no new row").toHaveLength(1);
     expect(mail.assigned.mock.calls).toHaveLength(1);
+
+    // The other direction (class 13): a re-set that KEEPS A and ADDS B tells B, and only B.
+    const newcomerEmail = address("newcomer");
+    const newcomer = await createOfficial(auth, { display_name: "Newcomer Ref", role_keys: ["referee"], email: newcomerEmail });
+    await patchFixtureOfficials(auth, fixtures[0]!.id, {
+      set: [...set.set, { official_id: newcomer.id, role_key: "referee", locked: false }],
+    });
+    const after = await settledNoticesOf(auth.orgId);
+    expect(after.map((r) => [r.recipient, r.ref_id, r.status]), "one new row, to the newcomer; A's first row untouched").toEqual([
+      [email, `${fixtures[0]!.id}:${official.id}`, "sent"],
+      [newcomerEmail, `${fixtures[0]!.id}:${newcomer.id}`, "sent"],
+    ]);
+    expect(mail.assigned.mock.calls.map((c) => c[0].officialName), "built once more, for the newcomer only").toEqual(["Manual Ref", "Newcomer Ref"]);
+  });
+
+  it("an apply that repeats a locked assignment does not notify it again, and still notifies a new one in the same apply", async () => {
+    const { auth } = await seedOrg("pro");
+    const { division, fixtures } = await seedScheduledDivision(auth);
+    const lockedEmail = address("locked");
+    const locked = await createOfficial(auth, { display_name: "Locked Ref", role_keys: ["referee"], email: lockedEmail });
+    const freshEmail = address("fresh");
+    const added = await createOfficial(auth, { display_name: "Fresh Ref", role_keys: ["referee"], email: freshEmail });
+    // A locked assignment survives an apply (the apply replaces only unlocked rows). Its own notice is the manual set's.
+    await patchFixtureOfficials(auth, fixtures[0]!.id, { set: [{ official_id: locked.id, role_key: "referee", locked: true }] });
+    expect((await settledNoticesOf(auth.orgId)).map((r) => r.recipient), "premise: the lock's own notice").toEqual([lockedEmail]);
+    mail.assigned.mockClear();
+
+    // The AI console and the API can echo a locked row back in an apply: the insert writes nothing for it.
+    await applyOfficialAssignments(auth, division.id, {
+      assignments: [assign(fixtures[0]!.id, locked.id), assign(fixtures[1]!.id, added.id)],
+    });
+
+    const seq = await lastAssignedSeq(division.id);
+    const rows = await settledNoticesOf(auth.orgId);
+    expect(rows.map((r) => [r.recipient, r.ref_type]), "nothing new for the locked official; one row for the new one").toEqual([
+      [lockedEmail, "fixture_official"],
+      [freshEmail, "division_event"],
+    ]);
+    expect(rows[1]!.ref_id).toBe(`${division.id}:${seq}:${added.id}`);
+    expect(mail.assigned.mock.calls.map((c) => [c[0].officialName, c[0].fixtures.length])).toEqual([["Fresh Ref", 1]]);
   });
 
   it("empty: an official with no email gets no row, and the assignment stands", async () => {
