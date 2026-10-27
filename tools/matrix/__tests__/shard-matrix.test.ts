@@ -392,13 +392,15 @@ describe("drivenInPlanOrder (lib/expected-plan.ts): the plan's items in the orde
       checked++;
     }
     expect(checked).toBe(plans.length);
-    // The sizes the brief gives, by plan: 6 / 231 / 68 / 1,729 / 937 / 33 (L2 was 1,731 before X-DR-1; layers-grid.test.ts:183).
+    // The sizes the brief gives, by plan: 6 / 231 / 68 / 1,729 / 937 / 33 (L2 was 1,731 before X-DR-1; layers-grid.test.ts:183),
+    // less the chess americano/mexicano cells the product refuses since the follow-up to #1027 (owner ruling 2026-10-26):
+    // 2 cells off the L1 grid (231 -> 229), and their 4 scripts each off the w1-driving set (937 -> 929).
     expect(drivenInPlanOrder("--layer L1").length).toBe(6);
-    expect(drivenInPlanOrder("--layer L1 --scope grid").length).toBe(231);
+    expect(drivenInPlanOrder("--layer L1 --scope grid").length).toBe(229);
     expect(drivenInPlanOrder("--layer L2").length).toBe(68);
     expect(drivenInPlanOrder("--layer L2").filter(Boolean).length).toBe(3);
     expect(drivenInPlanOrder("--layer L2 --scope grid").length).toBe(1729);
-    expect(drivenInPlanOrder("--set w1-driving").length).toBe(937);
+    expect(drivenInPlanOrder("--set w1-driving").length).toBe(929);
     expect(drivenInPlanOrder("--set pr-sample --rows none").length).toBe(33);
   });
 
@@ -466,7 +468,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
       const r = runs.get(j.layer)![j.k - 1];
       const workers = j.args.includes("--workers 4") ? 4 : 1;
       // L2's plan size is the regenerated 1,729 (X-DR-1, W2a; was 1,731 - layers-grid.test.ts:183).
-      expect(r.shard, `${j.layer} ${j.k}/${j.of}`).toEqual({ index: j.k, of: j.of, planSize: { L1: 231, L2: 1729, L3: 937 }[j.layer] });
+      expect(r.shard, `${j.layer} ${j.k}/${j.of}`).toEqual({ index: j.k, of: j.of, planSize: { L1: 229, L2: 1729, L3: 929 }[j.layer] });
       expect(r.cases.length).toBeGreaterThan(0);
       // The budget basis: the cases the stripe DROVE (no `planned` marker), counted from the evidence the runner wrote.
       const drivenReal = r.cases.filter((c) => c.planned !== true).length;
@@ -484,7 +486,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
     expect(runs.get("L1")![0].scope).toBe("L1 (grid)");
     // Non-vacuity: the stripes differ in how much they drove (the L2 grid's 62 driven items do not split evenly across any 8).
     const l1 = runs.get("L1")!.map((r) => r.cases.filter((c) => c.planned !== true).length);
-    expect(l1.reduce((a, b) => a + b, 0)).toBe(178);
+    expect(l1.reduce((a, b) => a + b, 0)).toBe(176);
     expect(new Set(l1).size).toBeGreaterThan(1);
     expect(runs.get("L2")!.map((r) => r.cases.filter((c) => c.planned !== true).length).reduce((a, b) => a + b, 0)).toBe(62);
   });
@@ -498,7 +500,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
       const m = mergeShards(inputs, `ci-1-1-${l.toLowerCase()}`);
       expect(m.merged.shards, l).toBe(shards.length);
       // L2 checks the regenerated 1,729 (X-DR-1, W2a; was 1,731 - layers-grid.test.ts:183).
-      expect(m.checked, l).toBe({ L1: 231, L2: 1729, L3: 937 }[l]);
+      expect(m.checked, l).toBe({ L1: 229, L2: 1729, L3: 929 }[l]);
       expect(matchPlanIds(m.merged).compared, l).toBe(m.checked);
       merged++;
     }
@@ -564,7 +566,7 @@ describe("shard-matrix.ts the CLI: matrix=<json> for $GITHUB_OUTPUT (exit 0), or
     expect(m.include.map((j) => j.id)).toEqual(["l1-s1", "l1-s2", "l1-s3", "l1-s4", "l1-s5", "l1-s6", "l1-s7", "l1-s8", "l2-s1", "l2-s2", "l3-s1", "l3-s2"]);
     expect(m.include.every((j) => Object.keys(j).sort().join() === "args,id,k,layer,of,timeout")).toBe(true);
     expect(m.include.every((j) => j.timeout <= 300)).toBe(true);
-    expect(io.err).toMatch(/L1.*231.*178/);
+    expect(io.err).toMatch(/L1.*229.*176/);
   });
 
   it("--scope smoke is 6 jobs; --scope pr-sample --rows <r> is one; and --rows beside full or smoke is ignored", () => {
@@ -668,7 +670,7 @@ describe("shard-matrix.ts the CLI: matrix=<json> for $GITHUB_OUTPUT (exit 0), or
 
   it("a plan that would time out past the cap is a refusal at plan time, named (ShardTimeoutTooLong), never at minute 360", () => {
     const c = JSON.parse(shardsText) as { layers: Record<string, { full: { shards: number } }> };
-    c.layers.L1.full.shards = 2; // 178 driven over two stripes of one browser worker at 210 s
+    c.layers.L1.full.shards = 2; // 176 driven over two stripes of one browser worker at 210 s
     const f = join(dir, "two.json");
     writeFileSync(f, JSON.stringify(c));
     expect(main(["--scope", "full", "--shards-file", f])).toBe(2);

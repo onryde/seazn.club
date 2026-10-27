@@ -7,16 +7,86 @@
     "harness-gap": "the scenario APPLIES in the cell, but the L3 generator cannot drive it yet (the rule's harness gap); L2 still owes the pair and marks its run l3Gap",
     "unscorable-only": "only committed variants the harness cannot score (variants.json scorable ≠ null) would enable the scenario in the cell — it may apply once they can be scored; the reason names them"
   },
-  "total": 4779,
-  "inapplicable": 4779,
+  "total": 4899,
+  "inapplicable": 4899,
   "harnessGap": 0,
   "unscorableOnly": 0,
   "groups": [
     {
+      "scenario": "LIFECYCLE",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R1",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R2",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R3",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R4a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "R4b",
       "kind": "inapplicable",
       "reason": "only a league or group stage expunges an early withdrawal (engine withdrawTableEntrant: Swiss always walks over; no bracket stage has a threshold), so 'half or more played' is not a distinct input here — R4a covers the withdrawal",
-      "count": 143,
+      "count": 141,
       "cells": {
         "swiss": [
           "football",
@@ -112,7 +182,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -125,7 +194,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -136,6 +204,210 @@
           "hockey"
         ],
         "ladder": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "knockout_third_place": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "page_playoff_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "stepladder_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ]
+      }
+    },
+    {
+      "scenario": "R4b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R4c",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R5",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R6",
+      "kind": "inapplicable",
+      "reason": "single-stage row: there is no later stage (bracket or playoff) to be drawn into; a withdrawal between rounds of one stage is R4a's input",
+      "count": 130,
+      "cells": {
+        "league": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "triple_rr": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "swiss": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "knockout": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "double_elim": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "americano": [
+          "football",
+          "cricket",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "mexicano": [
+          "football",
+          "cricket",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "ladder": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "group_only": [
           "football",
           "cricket",
           "boardgame",
@@ -192,164 +464,56 @@
     {
       "scenario": "R6",
       "kind": "inapplicable",
-      "reason": "single-stage row: there is no later stage (bracket or playoff) to be drawn into; a withdrawal between rounds of one stage is R4a's input",
-      "count": 132,
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
       "cells": {
-        "league": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "triple_rr": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "swiss": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "knockout": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "double_elim": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
         "americano": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "boardgame"
         ],
         "mexicano": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R7",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
         ],
-        "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R8",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
         ],
-        "group_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R9a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
         ],
-        "knockout_third_place": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "page_playoff_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "stepladder_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+        "mexicano": [
+          "boardgame"
         ]
       }
     },
@@ -357,7 +521,7 @@
       "scenario": "R9a",
       "kind": "inapplicable",
       "reason": "the sport's entrant model allows neither pairs nor teams: nothing to rename as a pair/team",
-      "count": 21,
+      "count": 19,
       "cells": {
         "league": [
           "boardgame"
@@ -396,12 +560,6 @@
           "boardgame"
         ],
         "double_elim": [
-          "boardgame"
-        ],
-        "americano": [
-          "boardgame"
-        ],
-        "mexicano": [
           "boardgame"
         ],
         "ladder": [
@@ -428,7 +586,7 @@
       "scenario": "R9b",
       "kind": "inapplicable",
       "reason": "no team entrants in this sport's model: there is no lineup to change",
-      "count": 105,
+      "count": 103,
       "cells": {
         "league": [
           "boardgame",
@@ -522,14 +680,12 @@
           "tennis"
         ],
         "americano": [
-          "boardgame",
           "carrom",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "mexicano": [
-          "boardgame",
           "carrom",
           "badminton",
           "tabletennis",
@@ -580,10 +736,52 @@
       }
     },
     {
+      "scenario": "R9b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R10",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R11a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "R11b",
       "kind": "inapplicable",
       "reason": "no pair entrants in this sport's model: nobody can be in two partnerships",
-      "count": 105,
+      "count": 103,
       "cells": {
         "league": [
           "football",
@@ -679,14 +877,179 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "icehockey",
           "hockey"
         ],
         "mexicano": [
           "football",
           "cricket",
+          "icehockey",
+          "hockey"
+        ],
+        "ladder": [
+          "football",
+          "cricket",
           "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "group_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "group_group_ko": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "knockout_third_place": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "page_playoff_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "stepladder_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ]
+      }
+    },
+    {
+      "scenario": "R11b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R12a",
+      "kind": "inapplicable",
+      "reason": "no pair entrants in this sport's model: there is no doubles partner",
+      "count": 103,
+      "cells": {
+        "league": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "triple_rr": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "league_ko": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "groups_ko": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "group_stepladder": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "group_playoffs": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "swiss": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "swiss_playoff": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "swiss_knockout": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "knockout": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "ko_plate": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "qualifying_main": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "double_elim": [
+          "football",
+          "cricket",
+          "boardgame",
+          "icehockey",
+          "hockey"
+        ],
+        "americano": [
+          "football",
+          "cricket",
+          "icehockey",
+          "hockey"
+        ],
+        "mexicano": [
+          "football",
+          "cricket",
           "icehockey",
           "hockey"
         ],
@@ -737,8 +1100,22 @@
     {
       "scenario": "R12a",
       "kind": "inapplicable",
-      "reason": "no pair entrants in this sport's model: there is no doubles partner",
-      "count": 105,
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R12b",
+      "kind": "inapplicable",
+      "reason": "no pair entrants in this sport's model: there is no pair to dissolve",
+      "count": 103,
       "cells": {
         "league": [
           "football",
@@ -834,14 +1211,12 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "icehockey",
           "hockey"
         ],
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "icehockey",
           "hockey"
         ],
@@ -892,155 +1267,28 @@
     {
       "scenario": "R12b",
       "kind": "inapplicable",
-      "reason": "no pair entrants in this sport's model: there is no pair to dissolve",
-      "count": 105,
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
       "cells": {
-        "league": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "triple_rr": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "league_ko": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "groups_ko": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "group_stepladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "group_playoffs": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "swiss": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "swiss_playoff": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "swiss_knockout": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "knockout": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "ko_plate": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "qualifying_main": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "double_elim": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
         "americano": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
+          "boardgame"
         ],
         "mexicano": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "R13",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
         ],
-        "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "group_group_ko": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "knockout_third_place": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "page_playoff_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
-        ],
-        "stepladder_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "icehockey",
-          "hockey"
+        "mexicano": [
+          "boardgame"
         ]
       }
     },
@@ -1101,6 +1349,20 @@
           "tennis",
           "icehockey",
           "hockey"
+        ]
+      }
+    },
+    {
+      "scenario": "R14",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
         ]
       }
     },
@@ -1321,10 +1583,24 @@
       }
     },
     {
+      "scenario": "R15",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "R16",
       "kind": "inapplicable",
       "reason": "no team entrants in this sport's model: no team lineup to substitute into",
-      "count": 105,
+      "count": 103,
       "cells": {
         "league": [
           "boardgame",
@@ -1418,14 +1694,12 @@
           "tennis"
         ],
         "americano": [
-          "boardgame",
           "carrom",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "mexicano": [
-          "boardgame",
           "carrom",
           "badminton",
           "tabletennis",
@@ -1476,10 +1750,94 @@
       }
     },
     {
+      "scenario": "R16",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M1",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M2",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M3",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M4a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M4b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "M4b",
       "kind": "inapplicable",
       "reason": "this config gives no abandon a result: football/hockey/icehockey need abandonPolicy \"award\" (hockey also \"q4_stands\"), which the editor's \"If a match is abandoned\" field sets; cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS) — no committed variant enables it",
-      "count": 147,
+      "count": 145,
       "cells": {
         "league": [
           "boardgame",
@@ -1599,7 +1957,6 @@
           "tennis"
         ],
         "americano": [
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -1608,7 +1965,6 @@
           "tennis"
         ],
         "mexicano": [
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -1676,7 +2032,7 @@
       "scenario": "M5",
       "kind": "inapplicable",
       "reason": "no level result the sport can reach under this config lands in a stage that cannot take it: draws (supportsDraws) are allowed in every stage of the row or in none, and a tie (a real fold of level scores) cannot happen here or meets no bracket stage (outside a bracket a tie has a place: a points table pays a tie, and a ladder's order moves only on a winner, so a tie leaves it standing) — no committed variant enables it",
-      "count": 126,
+      "count": 124,
       "cells": {
         "league": [
           "football",
@@ -1780,7 +2136,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -1793,7 +2148,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -1849,10 +2203,38 @@
       }
     },
     {
+      "scenario": "M5",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M6",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "M6",
       "kind": "inapplicable",
       "reason": "the sport declares no tie decider (DECIDERS: it never finishes level, or — boardgame — KO ties resolve at the fixture layer, false premise 9, W4), or none is switched on under this config — no committed variant enables it",
-      "count": 126,
+      "count": 124,
       "cells": {
         "league": [
           "boardgame",
@@ -1959,7 +2341,6 @@
           "tennis"
         ],
         "americano": [
-          "boardgame",
           "generic",
           "volleyball",
           "badminton",
@@ -1967,7 +2348,6 @@
           "tennis"
         ],
         "mexicano": [
-          "boardgame",
           "generic",
           "volleyball",
           "badminton",
@@ -2018,6 +2398,271 @@
           "boardgame",
           "generic",
           "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ]
+      }
+    },
+    {
+      "scenario": "M7a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M7b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M8a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M8b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M9a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M9b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M10",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M11",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M12a",
+      "kind": "inapplicable",
+      "reason": "no team entrants in this sport's model: no substitute can come on for an injured player",
+      "count": 103,
+      "cells": {
+        "league": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "triple_rr": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "league_ko": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "groups_ko": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "group_stepladder": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "group_playoffs": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "swiss": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "swiss_playoff": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "swiss_knockout": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "knockout": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "ko_plate": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "qualifying_main": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "double_elim": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "americano": [
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "mexicano": [
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "ladder": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "group_only": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "group_group_ko": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "knockout_third_place": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "page_playoff_only": [
+          "boardgame",
+          "carrom",
+          "badminton",
+          "tabletennis",
+          "tennis"
+        ],
+        "stepladder_only": [
+          "boardgame",
+          "carrom",
           "badminton",
           "tabletennis",
           "tennis"
@@ -2027,8 +2672,22 @@
     {
       "scenario": "M12a",
       "kind": "inapplicable",
-      "reason": "no team entrants in this sport's model: no substitute can come on for an injured player",
-      "count": 105,
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M12b",
+      "kind": "inapplicable",
+      "reason": "no team entrants in this sport's model: there is no team to play short",
+      "count": 103,
       "cells": {
         "league": [
           "boardgame",
@@ -2122,14 +2781,12 @@
           "tennis"
         ],
         "americano": [
-          "boardgame",
           "carrom",
           "badminton",
           "tabletennis",
           "tennis"
         ],
         "mexicano": [
-          "boardgame",
           "carrom",
           "badminton",
           "tabletennis",
@@ -2182,155 +2839,28 @@
     {
       "scenario": "M12b",
       "kind": "inapplicable",
-      "reason": "no team entrants in this sport's model: there is no team to play short",
-      "count": 105,
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
       "cells": {
-        "league": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "triple_rr": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "league_ko": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "groups_ko": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "group_stepladder": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "group_playoffs": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "swiss": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "swiss_playoff": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "swiss_knockout": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "knockout": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "ko_plate": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "qualifying_main": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "double_elim": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
         "americano": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
+          "boardgame"
         ],
         "mexicano": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "M12c",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
         ],
-        "ladder": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "group_only": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "group_group_ko": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "knockout_third_place": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "page_playoff_only": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
-        ],
-        "stepladder_only": [
-          "boardgame",
-          "carrom",
-          "badminton",
-          "tabletennis",
-          "tennis"
+        "mexicano": [
+          "boardgame"
         ]
       }
     },
@@ -2338,7 +2868,7 @@
       "scenario": "M12c",
       "kind": "inapplicable",
       "reason": "the sport declares no retired-hurt event (module eventSchemas has no cricket.retire; ruling 30: cricket only)",
-      "count": 210,
+      "count": 208,
       "cells": {
         "league": [
           "football",
@@ -2498,7 +3028,6 @@
         ],
         "americano": [
           "football",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -2510,7 +3039,6 @@
         ],
         "mexicano": [
           "football",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -2616,10 +3144,38 @@
       }
     },
     {
+      "scenario": "F1",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "F2",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "F3",
       "kind": "inapplicable",
       "reason": "no knockout or double-elimination bracket in this row: nothing to size to a power of two",
-      "count": 132,
+      "count": 130,
       "cells": {
         "league": [
           "football",
@@ -2702,7 +3258,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -2715,7 +3270,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -2780,10 +3334,24 @@
       }
     },
     {
+      "scenario": "F3",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "F4",
       "kind": "inapplicable",
       "reason": "no pooled (group) stage in this row",
-      "count": 198,
+      "count": 196,
       "cells": {
         "league": [
           "football",
@@ -2944,7 +3512,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -2957,7 +3524,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -3018,6 +3584,20 @@
           "tennis",
           "icehockey",
           "hockey"
+        ]
+      }
+    },
+    {
+      "scenario": "F4",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
         ]
       }
     },
@@ -3134,6 +3714,20 @@
       }
     },
     {
+      "scenario": "F5a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "F5b",
       "kind": "inapplicable",
       "reason": "no points-table stage in this row (brackets place by elimination; a ladder orders by position): no points to tie on",
@@ -3242,6 +3836,20 @@
           "tennis",
           "icehockey",
           "hockey"
+        ]
+      }
+    },
+    {
+      "scenario": "F5b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
         ]
       }
     },
@@ -3358,6 +3966,20 @@
       }
     },
     {
+      "scenario": "F6",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "F7",
       "kind": "inapplicable",
       "reason": "no points-table stage in this row (brackets place by elimination; a ladder orders by position): no points tiebreak can fall through to lots",
@@ -3470,10 +4092,24 @@
       }
     },
     {
+      "scenario": "F7",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "F8",
       "kind": "inapplicable",
       "reason": "no seeded placement in this row: everyone meets everyone, or pairing follows standings only",
-      "count": 55,
+      "count": 53,
       "cells": {
         "league": [
           "football",
@@ -3504,7 +4140,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -3517,7 +4152,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -3543,10 +4177,150 @@
       }
     },
     {
+      "scenario": "F8",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "D1",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "D2",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "D3",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "D4a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "D4b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "D5a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "D6",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "D7",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "P1",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "P2",
       "kind": "inapplicable",
       "reason": "no later stage fed by a points table: nothing qualifies from a table",
-      "count": 154,
+      "count": 152,
       "cells": {
         "league": [
           "football",
@@ -3642,7 +4416,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -3655,7 +4428,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -3733,10 +4505,66 @@
       }
     },
     {
+      "scenario": "P2",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "P3",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "P4",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "P5a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "P5b",
       "kind": "inapplicable",
       "reason": "Pair next round (and its undo, /unpair) exists only for swiss stages",
-      "count": 198,
+      "count": 196,
       "cells": {
         "league": [
           "football",
@@ -3871,7 +4699,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -3884,7 +4711,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -3975,10 +4801,38 @@
       }
     },
     {
+      "scenario": "P5b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "P6",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "P6",
       "kind": "inapplicable",
       "reason": "the sport has no best-of for a stage to override (the per-stage best-of final is for the four sets-based sports)",
-      "count": 147,
+      "count": 145,
       "cells": {
         "league": [
           "football",
@@ -4100,7 +4954,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "icehockey",
@@ -4109,7 +4962,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "icehockey",
@@ -4271,10 +5123,24 @@
       }
     },
     {
+      "scenario": "P7",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "Q1a",
       "kind": "inapplicable",
       "reason": "no later stage fed by a points table: no qualifier is decided by lots",
-      "count": 154,
+      "count": 152,
       "cells": {
         "league": [
           "football",
@@ -4370,7 +5236,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -4383,7 +5248,208 @@
         "mexicano": [
           "football",
           "cricket",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "ladder": [
+          "football",
+          "cricket",
           "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "group_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "knockout_third_place": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "page_playoff_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "stepladder_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ]
+      }
+    },
+    {
+      "scenario": "Q1a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "Q1b",
+      "kind": "inapplicable",
+      "reason": "no later stage fed by a points table: no qualifier is decided by the organiser",
+      "count": 152,
+      "cells": {
+        "league": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "triple_rr": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "swiss": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "knockout": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "ko_plate": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "qualifying_main": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "double_elim": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "americano": [
+          "football",
+          "cricket",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "mexicano": [
+          "football",
+          "cricket",
           "carrom",
           "generic",
           "volleyball",
@@ -4463,8 +5529,22 @@
     {
       "scenario": "Q1b",
       "kind": "inapplicable",
-      "reason": "no later stage fed by a points table: no qualifier is decided by the organiser",
-      "count": 154,
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "Q2",
+      "kind": "inapplicable",
+      "reason": "no later stage fed by a points table: nobody qualifies from a group or table",
+      "count": 152,
       "cells": {
         "league": [
           "football",
@@ -4560,7 +5640,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -4573,7 +5652,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -4653,190 +5731,14 @@
     {
       "scenario": "Q2",
       "kind": "inapplicable",
-      "reason": "no later stage fed by a points table: nobody qualifies from a group or table",
-      "count": 154,
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
       "cells": {
-        "league": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "triple_rr": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "swiss": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "knockout": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "ko_plate": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "qualifying_main": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "double_elim": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
         "americano": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "boardgame"
         ],
         "mexicano": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "knockout_third_place": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "page_playoff_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "stepladder_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "boardgame"
         ]
       }
     },
@@ -4844,7 +5746,7 @@
       "scenario": "Q3",
       "kind": "inapplicable",
       "reason": "no third-place match in this row (knockout config.thirdPlace)",
-      "count": 220,
+      "count": 218,
       "cells": {
         "league": [
           "football",
@@ -5018,7 +5920,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -5031,7 +5932,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -5109,10 +6009,24 @@
       }
     },
     {
+      "scenario": "Q3",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "Q4a",
       "kind": "inapplicable",
       "reason": "no final in this row: league/swiss/rotation/ladder formats end on a table or order",
-      "count": 77,
+      "count": 75,
       "cells": {
         "league": [
           "football",
@@ -5156,7 +6070,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -5169,7 +6082,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -5208,10 +6120,24 @@
       }
     },
     {
+      "scenario": "Q4a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "Q4b",
       "kind": "inapplicable",
       "reason": "no table to fall back on: the final is not fed by a points-table stage",
-      "count": 154,
+      "count": 152,
       "cells": {
         "league": [
           "football",
@@ -5307,7 +6233,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -5320,7 +6245,6 @@
         "mexicano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -5398,10 +6322,24 @@
       }
     },
     {
+      "scenario": "Q4b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "Q5a",
       "kind": "inapplicable",
       "reason": "no plate stage in this row",
-      "count": 220,
+      "count": 218,
       "cells": {
         "league": [
           "football",
@@ -5562,7 +6500,6 @@
         "americano": [
           "football",
           "cricket",
-          "boardgame",
           "carrom",
           "generic",
           "volleyball",
@@ -5575,7 +6512,286 @@
         "mexicano": [
           "football",
           "cricket",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "ladder": [
+          "football",
+          "cricket",
           "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "group_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "group_group_ko": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "knockout_third_place": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "page_playoff_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "stepladder_only": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ]
+      }
+    },
+    {
+      "scenario": "Q5a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "Q5b",
+      "kind": "inapplicable",
+      "reason": "no plate stage in this row",
+      "count": 218,
+      "cells": {
+        "league": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "triple_rr": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "league_ko": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "groups_ko": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "group_stepladder": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "group_playoffs": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "swiss": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "swiss_playoff": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "swiss_knockout": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "knockout": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "qualifying_main": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "double_elim": [
+          "football",
+          "cricket",
+          "boardgame",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "americano": [
+          "football",
+          "cricket",
+          "carrom",
+          "generic",
+          "volleyball",
+          "badminton",
+          "tabletennis",
+          "tennis",
+          "icehockey",
+          "hockey"
+        ],
+        "mexicano": [
+          "football",
+          "cricket",
           "carrom",
           "generic",
           "volleyball",
@@ -5668,268 +6884,14 @@
     {
       "scenario": "Q5b",
       "kind": "inapplicable",
-      "reason": "no plate stage in this row",
-      "count": 220,
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
       "cells": {
-        "league": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "triple_rr": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "league_ko": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "groups_ko": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_stepladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_playoffs": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "swiss": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "swiss_playoff": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "swiss_knockout": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "knockout": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "qualifying_main": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "double_elim": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
         "americano": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "boardgame"
         ],
         "mexicano": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "ladder": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "group_group_ko": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "knockout_third_place": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "page_playoff_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
-        ],
-        "stepladder_only": [
-          "football",
-          "cricket",
-          "boardgame",
-          "carrom",
-          "generic",
-          "volleyball",
-          "badminton",
-          "tabletennis",
-          "tennis",
-          "icehockey",
-          "hockey"
+          "boardgame"
         ]
       }
     },
@@ -6033,6 +6995,132 @@
       }
     },
     {
+      "scenario": "X2",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "X3",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "X4a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "X4b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "X4c",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "C1",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "C2",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "C3a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "C3b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
       "scenario": "C4",
       "kind": "inapplicable",
       "reason": "bracket-only row: there is no table for retroactive forfeits to rewrite",
@@ -6128,6 +7216,20 @@
           "tennis",
           "icehockey",
           "hockey"
+        ]
+      }
+    },
+    {
+      "scenario": "C4",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
         ]
       }
     },
@@ -6240,6 +7342,76 @@
           "tennis",
           "icehockey",
           "hockey"
+        ]
+      }
+    },
+    {
+      "scenario": "C5",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "C6a",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "C6b",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "C7",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
+        ]
+      }
+    },
+    {
+      "scenario": "E2",
+      "kind": "inapplicable",
+      "reason": "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)",
+      "count": 2,
+      "cells": {
+        "americano": [
+          "boardgame"
+        ],
+        "mexicano": [
+          "boardgame"
         ]
       }
     }

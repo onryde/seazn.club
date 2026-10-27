@@ -15,7 +15,8 @@ import { generatePagePlayoff, generateStepladder } from "@seazn/engine/schedulin
 import { describe, expect, it } from "vitest";
 import { SPORT_RULES, configKeysFor } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { stageKeysFor } from "@seazn/engine/sport";
-import { ROW_KEYS, SPORT_KEYS, stagesForRow, type RowKey } from "../lib/catalogue.ts";
+import { REFUSED_CELL_REASON, ROW_KEYS, SPORT_KEYS, TEMPLATE_ROW_KEYS, refusedCell, stagesForRow, type RowKey } from "../lib/catalogue.ts";
+import { templatesForSport } from "../../../apps/web/src/lib/format-templates.ts";
 import {
   ABANDON_RESULTS, DECIDERS, LEVEL_PROBES, MissingRule, P6_SPORTS, RULES, TABLE_KINDS, UnknownScenario, UnresolvedFeeder, cellFacts, decide, gapReason, planL3, rowCounts, scenarioCounts, stageFactsOf,
   type CellFacts, type PlannedCase, type Rule, type WitnessCell,
@@ -27,6 +28,7 @@ import { entrantKindsFor, resolveSportCfg, sportModule } from "../lib/sport-cfg.
 import { generateStream } from "../lib/streams/index.ts";
 import { ALL_OUTCOMES, GeneratorUnsupported, START, type StreamEvent } from "../lib/streams/types.ts";
 import { buildSportVariants, offlineBuilderDefault, type SportVariants } from "../lib/variants.ts";
+import { REFUSED_CELLS, REFUSED_REASON, isRefusedCell, offeredCells } from "./refused-cells.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const variants = SPORT_KEYS.map((s) => buildSportVariants(s));
@@ -240,10 +242,13 @@ describe("applicability — predicates against the product's own declarations", 
     // A multi-stage row that ENDS in a page playoff seeds its first stage, not the playoff: F1 still applies.
     expect(stagesForRow("group_playoffs").some((b) => b.kind === "page_playoff")).toBe(true);
     expect(RULES.F1!.when(cellFacts("group_playoffs", "generic"))).toBe(true);
-    // The planned drops carry it, kind inapplicable, one per sport.
-    const f1 = base.drops.filter((d) => d.scenario === "F1");
+    // The planned drops carry it, kind inapplicable, one per sport; a cell the product refuses drops F1 for the refusal.
+    const f1 = base.drops.filter((d) => d.scenario === "F1" && !isRefusedCell(d.cell));
     expect(f1.map((d) => d.cell).sort()).toEqual(SPORT_KEYS.map((s) => `page_playoff_only|${s}`).sort());
     for (const d of f1) expect(d, d.cell).toMatchObject({ kind: "inapplicable", reason: expect.stringMatching(/odd field cannot enter a fixed 4-seat page playoff/) });
+    const f1Refused = base.drops.filter((d) => d.scenario === "F1" && isRefusedCell(d.cell));
+    expect(f1Refused.map((d) => d.cell).sort()).toEqual([...REFUSED_CELLS].sort());
+    for (const d of f1Refused) expect(d, d.cell).toMatchObject({ kind: "inapplicable", reason: expect.stringMatching(REFUSED_REASON) });
   });
   it("M5 applies exactly where a DRAW the sport allows somewhere is refused by some stage (supportsDraws), or a TIE the engine folds reaches a bracket stage (registry sweep)", () => {
     let judged = 0;
@@ -407,10 +412,15 @@ describe("applicability — the L3 plan", () => {
   it("empty case first: a rule set where nothing applies plans LIFECYCLE only, and drops name their reason", () => {
     const none: Record<string, Rule> = Object.fromEntries(Object.keys(RULES).map((k) => [k, k === LIFECYCLE_ID ? RULES[k]! : { when: () => false, reason: "test: nothing applies", variantDependent: false, witness: null }]));
     const p = planL3({ rules: none, variants });
-    expect(p.cases.length).toBe(ROW_KEYS.length * SPORT_KEYS.length);
+    const offered = offeredCells(ROW_KEYS, SPORT_KEYS);
+    // LIFECYCLE in every cell the product offers; a refused cell (chess americano/mexicano, ruling 2026-10-26) plans nothing.
+    expect(p.cases.map((c) => c.cell)).toEqual(offered);
     expect(p.cases.every((c) => c.scenario === LIFECYCLE_ID)).toBe(true);
-    expect(p.drops.length).toBe(ROW_KEYS.length * SPORT_KEYS.length * (L3_IDS.length - 1));
-    expect(p.drops.every((d) => d.reason === "test: nothing applies")).toBe(true);
+    expect(p.drops.length).toBe(offered.length * (L3_IDS.length - 1) + REFUSED_CELLS.length * L3_IDS.length);
+    expect(p.drops.filter((d) => !isRefusedCell(d.cell)).every((d) => d.reason === "test: nothing applies")).toBe(true);
+    const refused = p.drops.filter((d) => isRefusedCell(d.cell));
+    expect(refused.length).toBe(REFUSED_CELLS.length * L3_IDS.length);
+    expect(refused.every((d) => REFUSED_REASON.test(d.reason))).toBe(true);
   });
   it("a rule set missing an L3 id is refused, naming the id (not silently skipped)", () => {
     const { M1: _m1, ...rest } = RULES;
@@ -432,8 +442,9 @@ describe("applicability — the L3 plan", () => {
     expect(seen.size).toBe(ROW_KEYS.length * SPORT_KEYS.length * L3_IDS.length);
     expect([...seen.values()].every((n) => n === 1)).toBe(true);
   });
-  it("LIFECYCLE runs in every one of the 231 cells; every drop has a non-empty reason", () => {
-    expect(base.cases.filter((c) => c.scenario === LIFECYCLE_ID).length).toBe(ROW_KEYS.length * SPORT_KEYS.length);
+  it("LIFECYCLE runs in every one of the 231 cells the product offers (229: chess americano/mexicano refused); every drop has a non-empty reason", () => {
+    expect(base.cases.filter((c) => c.scenario === LIFECYCLE_ID).map((c) => c.cell)).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
+    expect(ROW_KEYS.length * SPORT_KEYS.length - REFUSED_CELLS.length).toBe(229);
     expect(base.drops.length).toBeGreaterThan(0);
     expect(base.drops.every((d) => d.reason.length > 0)).toBe(true);
   });
@@ -443,10 +454,10 @@ describe("applicability — the L3 plan", () => {
     for (const id of L3_IDS) { expect(c[id] ?? 0, id).toBeGreaterThan(0); judged++; }
     expect(judged).toBe(l3Atomic().length + 1);
   });
-  it("per-row floor: every row plans more than LIFECYCLE in every sport", () => {
+  it("per-row floor: every row plans more than LIFECYCLE in every sport that is offered it", () => {
     const perCell = new Map<string, number>();
     for (const c of base.cases) perCell.set(c.cell, (perCell.get(c.cell) ?? 0) + 1);
-    expect(perCell.size).toBe(ROW_KEYS.length * SPORT_KEYS.length);
+    expect([...perCell.keys()]).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
     for (const [cell, n] of perCell) expect(n, cell).toBeGreaterThan(1);
     for (const r of ROW_KEYS) expect(floors.perRow[r] ?? 0, r).toBeGreaterThan(SPORT_KEYS.length);
   });
@@ -549,8 +560,12 @@ describe("applicability — the L3 plan", () => {
       expect(d.reason.startsWith(gapReason(gap)), d.cell).toBe(true);
     }
     expect(held.cases).toEqual([]);
-    // Every other sport is a plain inapplicability with the rule's own reason, never the gap's.
-    expect(held.drops.filter((d) => d.sport !== one).every((d) => d.kind === "inapplicable" && d.reason === "only one sport")).toBe(true);
+    // Every other sport is a plain inapplicability with the rule's own reason, never the gap's (a refused cell names the refusal).
+    const others = held.drops.filter((d) => d.sport !== one);
+    expect(others.length).toBe(ROW_KEYS.length * (SPORT_KEYS.length - 1));
+    expect(others.filter((d) => !isRefusedCell(d.cell)).every((d) => d.kind === "inapplicable" && d.reason === "only one sport")).toBe(true);
+    expect(others.filter((d) => isRefusedCell(d.cell)).map((d) => d.cell).sort()).toEqual([...REFUSED_CELLS].sort());
+    expect(others.filter((d) => isRefusedCell(d.cell)).every((d) => d.kind === "inapplicable" && REFUSED_REASON.test(d.reason))).toBe(true);
     const lifted = planL3({ variants, rules: { ...RULES, M5: { ...gapped, gap: { ...gap, when: () => false } } }, only: ["M5"] });
     expect(lifted.cases.map((c) => c.cell)).toEqual(ROW_KEYS.map((r) => `${r}|${one}`));
     expect(lifted.drops.filter((d) => d.kind === "harness-gap")).toEqual([]);
@@ -559,7 +574,55 @@ describe("applicability — the L3 plan", () => {
     expect(planL3({ variants })).toEqual(base);
     const cells = [...new Set(base.cases.map((c) => c.cell))];
     expect(cells.slice(0, SPORT_KEYS.length)).toEqual(SPORT_KEYS.map((s) => `${ROW_KEYS[0]}|${s}`));
-    expect(cells).toEqual(ROW_KEYS.flatMap((r) => SPORT_KEYS.map((s) => `${r}|${s}`)));
+    expect(cells).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
+  });
+});
+
+describe("applicability — the cells the product refuses (chess is individual-only, owner ruling 2026-10-26; follow-up to #1027)", () => {
+  it("empty case first: refusedCell answers null on every cell but the ruling's two, over the whole grid (counts)", () => {
+    let judged = 0;
+    const refused: string[] = [];
+    for (const row of ROW_KEYS) for (const s of SPORT_KEYS) {
+      const why = refusedCell(row, s);
+      judged++;
+      if (why !== null) { refused.push(`${row}|${s}`); expect(why, `${row}|${s}`).toBe(REFUSED_CELL_REASON); }
+    }
+    expect(judged).toBe(231);
+    expect(refused.sort()).toEqual([...REFUSED_CELLS].sort());
+    expect(REFUSED_REASON.test(REFUSED_CELL_REASON)).toBe(true);
+  });
+  it("on every template row the matrix refuses exactly what the builder does not offer (format-templates templatesForSport), every sport", () => {
+    let judged = 0;
+    let unoffered = 0;
+    for (const row of TEMPLATE_ROW_KEYS) for (const s of SPORT_KEYS) {
+      const offered = templatesForSport(s).some((t) => t.key === row);
+      expect(refusedCell(row, s) === null, `${row}|${s}`).toBe(offered);
+      judged++;
+      if (!offered) unoffered++;
+    }
+    expect(judged).toBe(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length);
+    expect(unoffered).toBe(REFUSED_CELLS.length);
+  });
+  it("a refused cell plans no L3 case and drops EVERY L3 id with the refusal as the reason, kind inapplicable, even LIFECYCLE", () => {
+    expect(base.cases.filter((c) => isRefusedCell(c.cell))).toEqual([]);
+    const drops = base.drops.filter((d) => isRefusedCell(d.cell));
+    expect(drops.length).toBe(REFUSED_CELLS.length * L3_IDS.length);
+    for (const cell of REFUSED_CELLS) expect(drops.filter((d) => d.cell === cell).map((d) => d.scenario).sort(), cell).toEqual([...L3_IDS].sort());
+    for (const d of drops) expect(d, `${d.cell}#${d.scenario}`).toMatchObject({ kind: "inapplicable", reason: expect.stringMatching(REFUSED_REASON) });
+  });
+  it("decide asks the refusal FIRST: a rule that applies everywhere still does not apply on a refused cell, and its neighbours plan", () => {
+    const always: Rule = { when: () => true, reason: "test: applies everywhere", variantDependent: false, witness: null };
+    let judged = 0;
+    for (const cell of REFUSED_CELLS) {
+      const [row, sport] = cell.split("|") as [RowKey, string];
+      expect(decide(always, row, sport, variants), cell).toMatchObject({ applies: false, refused: REFUSED_CELL_REASON });
+      judged++;
+    }
+    // The positive pair: the same rows for another sport, and another row for chess, plan.
+    expect(decide(always, "americano", "badminton", variants)).toMatchObject({ applies: true, refused: null });
+    expect(decide(always, "mexicano", "badminton", variants)).toMatchObject({ applies: true, refused: null });
+    expect(decide(always, "league", "boardgame", variants)).toMatchObject({ applies: true, refused: null });
+    expect(judged).toBe(2);
   });
 });
 

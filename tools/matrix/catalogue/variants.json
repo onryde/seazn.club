@@ -6605,8 +6605,8 @@
       "sport": "boardgame",
       "defaultPreset": "blitz",
       "factors": 6,
-      "pairs": 543,
-      "covered": 543,
+      "pairs": 505,
+      "covered": 505,
       "cases": [
         {
           "id": "boardgame#001",
@@ -7615,7 +7615,7 @@
         {
           "id": "boardgame#040",
           "sport": "boardgame",
-          "row": "americano",
+          "row": "ladder",
           "preset": "blitz",
           "classes": {
             "variant": "option:classical",
@@ -7642,7 +7642,7 @@
         {
           "id": "boardgame#041",
           "sport": "boardgame",
-          "row": "americano",
+          "row": "ladder",
           "preset": "classical",
           "classes": {
             "variant": "option:rapid",
@@ -7669,7 +7669,7 @@
         {
           "id": "boardgame#042",
           "sport": "boardgame",
-          "row": "americano",
+          "row": "ladder",
           "preset": "rapid",
           "classes": {
             "variant": "option:blitz",
@@ -7696,7 +7696,7 @@
         {
           "id": "boardgame#043",
           "sport": "boardgame",
-          "row": "mexicano",
+          "row": "group_only",
           "preset": "blitz",
           "classes": {
             "variant": "option:classical",
@@ -7723,7 +7723,7 @@
         {
           "id": "boardgame#044",
           "sport": "boardgame",
-          "row": "mexicano",
+          "row": "group_only",
           "preset": "classical",
           "classes": {
             "variant": "option:rapid",
@@ -7750,7 +7750,7 @@
         {
           "id": "boardgame#045",
           "sport": "boardgame",
-          "row": "mexicano",
+          "row": "group_only",
           "preset": "rapid",
           "classes": {
             "variant": "option:blitz",
@@ -7777,7 +7777,7 @@
         {
           "id": "boardgame#046",
           "sport": "boardgame",
-          "row": "ladder",
+          "row": "group_group_ko",
           "preset": "blitz",
           "classes": {
             "variant": "option:classical",
@@ -7804,7 +7804,7 @@
         {
           "id": "boardgame#047",
           "sport": "boardgame",
-          "row": "ladder",
+          "row": "group_group_ko",
           "preset": "classical",
           "classes": {
             "variant": "option:rapid",
@@ -7831,7 +7831,7 @@
         {
           "id": "boardgame#048",
           "sport": "boardgame",
-          "row": "ladder",
+          "row": "group_group_ko",
           "preset": "rapid",
           "classes": {
             "variant": "option:blitz",
@@ -7858,7 +7858,7 @@
         {
           "id": "boardgame#049",
           "sport": "boardgame",
-          "row": "group_only",
+          "row": "knockout_third_place",
           "preset": "blitz",
           "classes": {
             "variant": "option:classical",
@@ -7885,7 +7885,7 @@
         {
           "id": "boardgame#050",
           "sport": "boardgame",
-          "row": "group_only",
+          "row": "knockout_third_place",
           "preset": "classical",
           "classes": {
             "variant": "option:rapid",
@@ -7912,7 +7912,7 @@
         {
           "id": "boardgame#051",
           "sport": "boardgame",
-          "row": "group_only",
+          "row": "knockout_third_place",
           "preset": "rapid",
           "classes": {
             "variant": "option:blitz",
@@ -7939,7 +7939,7 @@
         {
           "id": "boardgame#052",
           "sport": "boardgame",
-          "row": "group_group_ko",
+          "row": "page_playoff_only",
           "preset": "blitz",
           "classes": {
             "variant": "option:classical",
@@ -7966,7 +7966,7 @@
         {
           "id": "boardgame#053",
           "sport": "boardgame",
-          "row": "group_group_ko",
+          "row": "page_playoff_only",
           "preset": "classical",
           "classes": {
             "variant": "option:rapid",
@@ -7993,7 +7993,7 @@
         {
           "id": "boardgame#054",
           "sport": "boardgame",
-          "row": "group_group_ko",
+          "row": "page_playoff_only",
           "preset": "rapid",
           "classes": {
             "variant": "option:blitz",
@@ -8020,7 +8020,7 @@
         {
           "id": "boardgame#055",
           "sport": "boardgame",
-          "row": "knockout_third_place",
+          "row": "stepladder_only",
           "preset": "blitz",
           "classes": {
             "variant": "option:classical",
@@ -8047,7 +8047,7 @@
         {
           "id": "boardgame#056",
           "sport": "boardgame",
-          "row": "knockout_third_place",
+          "row": "stepladder_only",
           "preset": "classical",
           "classes": {
             "variant": "option:rapid",
@@ -8074,7 +8074,7 @@
         {
           "id": "boardgame#057",
           "sport": "boardgame",
-          "row": "knockout_third_place",
+          "row": "stepladder_only",
           "preset": "rapid",
           "classes": {
             "variant": "option:blitz",
@@ -8101,168 +8101,6 @@
         {
           "id": "boardgame#058",
           "sport": "boardgame",
-          "row": "page_playoff_only",
-          "preset": "blitz",
-          "classes": {
-            "variant": "option:classical",
-            "clockBaseMinutes": "min",
-            "clockIncrementSeconds": "min",
-            "clockDelaySeconds": "min"
-          },
-          "values": {
-            "variant": "classical",
-            "clockBaseMinutes": "1",
-            "clockIncrementSeconds": "0",
-            "clockDelaySeconds": "0"
-          },
-          "overrides": {
-            "variant": "classical",
-            "clock": {
-              "base": 60,
-              "increment": 0,
-              "delay": 0
-            }
-          },
-          "scorable": null
-        },
-        {
-          "id": "boardgame#059",
-          "sport": "boardgame",
-          "row": "page_playoff_only",
-          "preset": "classical",
-          "classes": {
-            "variant": "option:rapid",
-            "clockBaseMinutes": "max",
-            "clockIncrementSeconds": "max",
-            "clockDelaySeconds": "max"
-          },
-          "values": {
-            "variant": "rapid",
-            "clockBaseMinutes": "180",
-            "clockIncrementSeconds": "60",
-            "clockDelaySeconds": "60"
-          },
-          "overrides": {
-            "variant": "rapid",
-            "clock": {
-              "base": 10800,
-              "increment": 60,
-              "delay": 60
-            }
-          },
-          "scorable": null
-        },
-        {
-          "id": "boardgame#060",
-          "sport": "boardgame",
-          "row": "page_playoff_only",
-          "preset": "rapid",
-          "classes": {
-            "variant": "option:blitz",
-            "clockBaseMinutes": "interior",
-            "clockIncrementSeconds": "interior",
-            "clockDelaySeconds": "interior"
-          },
-          "values": {
-            "variant": "blitz",
-            "clockBaseMinutes": "91",
-            "clockIncrementSeconds": "30",
-            "clockDelaySeconds": "30"
-          },
-          "overrides": {
-            "variant": "blitz",
-            "clock": {
-              "base": 5460,
-              "increment": 30,
-              "delay": 30
-            }
-          },
-          "scorable": null
-        },
-        {
-          "id": "boardgame#061",
-          "sport": "boardgame",
-          "row": "stepladder_only",
-          "preset": "blitz",
-          "classes": {
-            "variant": "option:classical",
-            "clockBaseMinutes": "min",
-            "clockIncrementSeconds": "min",
-            "clockDelaySeconds": "min"
-          },
-          "values": {
-            "variant": "classical",
-            "clockBaseMinutes": "1",
-            "clockIncrementSeconds": "0",
-            "clockDelaySeconds": "0"
-          },
-          "overrides": {
-            "variant": "classical",
-            "clock": {
-              "base": 60,
-              "increment": 0,
-              "delay": 0
-            }
-          },
-          "scorable": null
-        },
-        {
-          "id": "boardgame#062",
-          "sport": "boardgame",
-          "row": "stepladder_only",
-          "preset": "classical",
-          "classes": {
-            "variant": "option:rapid",
-            "clockBaseMinutes": "max",
-            "clockIncrementSeconds": "max",
-            "clockDelaySeconds": "max"
-          },
-          "values": {
-            "variant": "rapid",
-            "clockBaseMinutes": "180",
-            "clockIncrementSeconds": "60",
-            "clockDelaySeconds": "60"
-          },
-          "overrides": {
-            "variant": "rapid",
-            "clock": {
-              "base": 10800,
-              "increment": 60,
-              "delay": 60
-            }
-          },
-          "scorable": null
-        },
-        {
-          "id": "boardgame#063",
-          "sport": "boardgame",
-          "row": "stepladder_only",
-          "preset": "rapid",
-          "classes": {
-            "variant": "option:blitz",
-            "clockBaseMinutes": "interior",
-            "clockIncrementSeconds": "interior",
-            "clockDelaySeconds": "interior"
-          },
-          "values": {
-            "variant": "blitz",
-            "clockBaseMinutes": "91",
-            "clockIncrementSeconds": "30",
-            "clockDelaySeconds": "30"
-          },
-          "overrides": {
-            "variant": "blitz",
-            "clock": {
-              "base": 5460,
-              "increment": 30,
-              "delay": 30
-            }
-          },
-          "scorable": null
-        },
-        {
-          "id": "boardgame#064",
-          "sport": "boardgame",
           "row": "league",
           "preset": "blitz",
           "classes": {
@@ -8282,7 +8120,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#065",
+          "id": "boardgame#059",
           "sport": "boardgame",
           "row": "triple_rr",
           "preset": "blitz",
@@ -8309,7 +8147,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#066",
+          "id": "boardgame#060",
           "sport": "boardgame",
           "row": "league_ko",
           "preset": "blitz",
@@ -8334,7 +8172,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#067",
+          "id": "boardgame#061",
           "sport": "boardgame",
           "row": "groups_ko",
           "preset": "blitz",
@@ -8361,7 +8199,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#068",
+          "id": "boardgame#062",
           "sport": "boardgame",
           "row": "group_stepladder",
           "preset": "blitz",
@@ -8386,7 +8224,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#069",
+          "id": "boardgame#063",
           "sport": "boardgame",
           "row": "group_playoffs",
           "preset": "blitz",
@@ -8404,7 +8242,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#070",
+          "id": "boardgame#064",
           "sport": "boardgame",
           "row": "swiss",
           "preset": "blitz",
@@ -8421,7 +8259,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#071",
+          "id": "boardgame#065",
           "sport": "boardgame",
           "row": "swiss_playoff",
           "preset": "blitz",
@@ -8438,7 +8276,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#072",
+          "id": "boardgame#066",
           "sport": "boardgame",
           "row": "swiss_knockout",
           "preset": "blitz",
@@ -8455,7 +8293,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#073",
+          "id": "boardgame#067",
           "sport": "boardgame",
           "row": "knockout",
           "preset": "blitz",
@@ -8470,7 +8308,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#074",
+          "id": "boardgame#068",
           "sport": "boardgame",
           "row": "ko_plate",
           "preset": "blitz",
@@ -8485,7 +8323,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#075",
+          "id": "boardgame#069",
           "sport": "boardgame",
           "row": "qualifying_main",
           "preset": "blitz",
@@ -8500,7 +8338,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#076",
+          "id": "boardgame#070",
           "sport": "boardgame",
           "row": "double_elim",
           "preset": "blitz",
@@ -8515,37 +8353,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#077",
-          "sport": "boardgame",
-          "row": "americano",
-          "preset": "blitz",
-          "classes": {
-            "variant": "blank",
-            "clockBaseMinutes": "blank",
-            "clockIncrementSeconds": "blank",
-            "clockDelaySeconds": "blank"
-          },
-          "values": {},
-          "overrides": {},
-          "scorable": null
-        },
-        {
-          "id": "boardgame#078",
-          "sport": "boardgame",
-          "row": "mexicano",
-          "preset": "blitz",
-          "classes": {
-            "variant": "blank",
-            "clockBaseMinutes": "blank",
-            "clockIncrementSeconds": "blank",
-            "clockDelaySeconds": "blank"
-          },
-          "values": {},
-          "overrides": {},
-          "scorable": null
-        },
-        {
-          "id": "boardgame#079",
+          "id": "boardgame#071",
           "sport": "boardgame",
           "row": "ladder",
           "preset": "blitz",
@@ -8560,7 +8368,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#080",
+          "id": "boardgame#072",
           "sport": "boardgame",
           "row": "group_only",
           "preset": "blitz",
@@ -8575,7 +8383,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#081",
+          "id": "boardgame#073",
           "sport": "boardgame",
           "row": "group_group_ko",
           "preset": "blitz",
@@ -8590,7 +8398,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#082",
+          "id": "boardgame#074",
           "sport": "boardgame",
           "row": "knockout_third_place",
           "preset": "blitz",
@@ -8605,7 +8413,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#083",
+          "id": "boardgame#075",
           "sport": "boardgame",
           "row": "page_playoff_only",
           "preset": "blitz",
@@ -8620,7 +8428,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#084",
+          "id": "boardgame#076",
           "sport": "boardgame",
           "row": "stepladder_only",
           "preset": "blitz",
@@ -8635,7 +8443,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#085",
+          "id": "boardgame#077",
           "sport": "boardgame",
           "row": "league",
           "preset": "blitz",
@@ -8656,7 +8464,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#086",
+          "id": "boardgame#078",
           "sport": "boardgame",
           "row": "league_ko",
           "preset": "blitz",
@@ -8677,7 +8485,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#087",
+          "id": "boardgame#079",
           "sport": "boardgame",
           "row": "groups_ko",
           "preset": "blitz",
@@ -8704,7 +8512,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#088",
+          "id": "boardgame#080",
           "sport": "boardgame",
           "row": "group_playoffs",
           "preset": "blitz",
@@ -8729,7 +8537,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#089",
+          "id": "boardgame#081",
           "sport": "boardgame",
           "row": "group_stepladder",
           "preset": "blitz",
@@ -8754,7 +8562,7 @@
           "scorable": null
         },
         {
-          "id": "boardgame#090",
+          "id": "boardgame#082",
           "sport": "boardgame",
           "row": "swiss_knockout",
           "preset": "blitz",

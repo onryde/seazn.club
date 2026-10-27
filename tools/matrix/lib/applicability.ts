@@ -7,7 +7,7 @@
 import { BRACKET_STAGE_KINDS } from "@seazn/engine/competition";
 import { StageKind } from "@seazn/engine/core";
 import { showsOnePointsField } from "../../../apps/web/src/lib/match-rules/index.ts";
-import { ROW_KEYS, SPORT_KEYS, cellId, stagesForRow, type RowKey } from "./catalogue.ts";
+import { ROW_KEYS, SPORT_KEYS, cellId, refusedCell, stagesForRow, type RowKey } from "./catalogue.ts";
 import { isLonePagePlayoff } from "./field-size.ts";
 import { expectedGate, type FormatGate } from "./format-gates-copy.ts";
 import { foldStream } from "./fold.ts";
@@ -373,18 +373,25 @@ export interface Decision {
   /** Where the rule applied but its harness gap held: the builder default
    *  ("<preset> (builder default)") and/or committed variant ids. */
   readonly gapped: readonly string[];
+  /** The product refuses the whole cell (catalogue.ts refusedCell): the reason, which every scenario's drop there
+   *  carries in place of the rule's own; null on an offered cell. */
+  readonly refused: string | null;
 }
 
 /** Applies at the builder default, else (variant-dependent rules only) bound
  *  to the first committed variant case that satisfies it AND the harness can
- *  score, else dropped. A case under the rule's harness gap is never planned. */
+ *  score, else dropped. A case under the rule's harness gap is never planned,
+ *  and nothing is planned on a cell the product refuses (refusedCell): asked
+ *  first, so neither L3 (planL3) nor L2 (pairs.ts owed) ever plans one. */
 export function decide(r: Rule, row: RowKey, sport: string, variants: readonly SportVariants[]): Decision {
   const def = offlineBuilderDefault(sport);
   const unscorable: string[] = [];
   const gapped: string[] = [];
+  const refused = refusedCell(row, sport);
+  if (refused !== null) return { applies: false, bound: null, preset: def, unscorable, gapped, refused };
   const atDefault = cellFacts(row, sport, def);
   if (r.when(atDefault)) {
-    if (r.gap?.when(atDefault) !== true) return { applies: true, bound: null, preset: def, unscorable, gapped };
+    if (r.gap?.when(atDefault) !== true) return { applies: true, bound: null, preset: def, unscorable, gapped, refused };
     gapped.push(`${def} (builder default)`);
   }
   if (r.variantDependent) {
@@ -393,10 +400,10 @@ export function decide(r: Rule, row: RowKey, sport: string, variants: readonly S
       if (!r.when(f)) continue;
       if (vc.scorable !== null) { unscorable.push(vc.id); continue; }
       if (r.gap?.when(f) === true) { gapped.push(vc.id); continue; }
-      return { applies: true, bound: vc.id, preset: vc.preset, unscorable, gapped };
+      return { applies: true, bound: vc.id, preset: vc.preset, unscorable, gapped, refused };
     }
   }
-  return { applies: false, bound: null, preset: def, unscorable, gapped };
+  return { applies: false, bound: null, preset: def, unscorable, gapped, refused };
 }
 
 export interface PlannedCase { readonly cell: string; readonly row: RowKey; readonly sport: string; readonly scenario: string; readonly preset: string; readonly bound: string | null }
@@ -438,6 +445,8 @@ const listed = (ids: readonly string[]): string => `${ids.length}: ${ids.slice(0
 const isHarnessGap = (r: Rule, d: Decision): boolean => r.gap !== undefined && d.gapped.length > 0;
 const dropKind = (r: Rule, d: Decision): DropKind => (isHarnessGap(r, d) ? "harness-gap" : d.unscorable.length > 0 ? "unscorable-only" : "inapplicable");
 const dropReason = (r: Rule, d: Decision): string => {
+  // A refused cell: the product offers no path to it at all, so no rule's own "why not" is the reason.
+  if (d.refused !== null) return d.refused;
   // Gapped: the rule APPLIES, so its own reason ("why not") would be false.
   if (r.gap !== undefined && isHarnessGap(r, d)) {
     const also = d.unscorable.length > 0 ? `; the other committed variants that enable it (${listed(d.unscorable)}) cannot be scored by the harness` : "";

@@ -1,5 +1,6 @@
 // W1d Task 3 (owner ruling 64, item 2): the FULL grid planners — `--layer L1
-// --scope grid` is one LIFECYCLE case per catalogue cell at 1280 (231), and
+// --scope grid` is one LIFECYCLE case per OFFERED catalogue cell at 1280 (229 of
+// the 231: chess americano/mexicano are refused, follow-up to #1027), and
 // `--layer L2 --scope grid` is every run of the committed l2-pairs.json (1,729).
 // Every expected value comes from somewhere other than planL1Grid / planL2: the
 // catalogue's row and sport constants, the product's own catalog JSON (read as
@@ -21,6 +22,7 @@ import { offlineBuilderDefault } from "../lib/variants.ts";
 import { SLICE_ROWS, SLICE_SPORTS } from "../lib/slice.ts";
 import { livePlan } from "./committed-plans.ts";
 import { rawCatalogTemplate } from "./fake-driver.ts";
+import { REFUSED_CELLS, isRefusedCell, offeredCells } from "./refused-cells.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 /** The committed pair file as plain JSON: never through layers.ts or pairs.ts. */
@@ -29,6 +31,10 @@ const COUNTS = JSON.parse(readFileSync(join(REPO, "tools/matrix/catalogue/counts
 
 /** Ruling 64: the grid is rows × sports, from the catalogue's own constants. */
 const CELLS = (TEMPLATE_ROW_KEYS.length + API_ONLY_ROWS.length) * SPORT_KEYS.length;
+/** The cells L1 plans: every cell but the ones the product refuses (chess americano/mexicano, owner ruling 2026-10-26). */
+const OFFERED = CELLS - REFUSED_CELLS.length;
+/** Every refused cell is a BUILDER row's (americano and mexicano are templates), so it comes off the driven count. */
+const REFUSED_TEMPLATE_CELLS = REFUSED_CELLS.filter((c) => (TEMPLATE_ROW_KEYS as readonly string[]).includes(c.split("|")[0]!)).length;
 /** The API-only cells a catalog template builds (ruling 47), from the PRODUCT's catalog JSON: its sport, its variant. */
 const TEMPLATE_CELLS = new Map(Object.entries(TEMPLATE_ROW).map(([key, row]) => {
   const d = rawCatalogTemplate(key).divisions[0]!;
@@ -42,30 +48,46 @@ const cellOf = (c: LayerCase): string => { const i = identityOf(c); return cellI
 /** A variantFor that is NOT a builder default, so a case's variant visibly comes from the argument. */
 const stubVariant = (s: string): string => `v-${s}`;
 
-describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39)", () => {
+describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39; 229 offered since the follow-up to #1027)", () => {
   const cases = planL1Grid(offlineBuilderDefault);
 
-  it("plans one case per cell — the count the corrected counts.json states — all at 1280, in ROW_KEYS × SPORT_KEYS order", () => {
+  it("plans one case per OFFERED cell — the count the corrected counts.json states — all at 1280, in ROW_KEYS × SPORT_KEYS order", () => {
     expect(CELLS).toBe(231);
-    expect(COUNTS.l1).toEqual({ formula: "cells × 1 width (1280; ruling 39)", value: CELLS });
-    expect(cases).toHaveLength(CELLS);
-    expect(new Set(cases.map(layerCaseId)).size).toBe(CELLS);
+    expect(OFFERED).toBe(229);
+    expect(COUNTS.l1).toEqual({ formula: "offered cells (cells − refused) × 1 width (1280; ruling 39)", value: OFFERED });
+    expect(cases).toHaveLength(OFFERED);
+    expect(new Set(cases.map(layerCaseId)).size).toBe(OFFERED);
     expect(cases.every((c) => c.width === L1_WIDTH && c.layer === "L1" && c.run === null)).toBe(true);
-    expect(cases.map(cellOf)).toEqual(ROW_KEYS.flatMap((r) => SPORT_KEYS.map((s) => cellId(r, s))));
+    expect(cases.map(cellOf)).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
     expect(cases.every((c) => identityOf(c).scenario === "LIFECYCLE")).toBe(true);
   });
 
-  it("ALL_CELLS is every catalogue cell, once: the set the L2 grid filters by", () => {
+  it("a cell the product refuses (chess americano/mexicano) has no L1 case at all — neither driven nor 🚫 — while its row plans in every other sport and chess plans every other row", () => {
+    expect(cases.filter((c) => isRefusedCell(cellOf(c)))).toEqual([]);
+    let checked = 0;
+    for (const cell of REFUSED_CELLS) {
+      const [row, sport] = cell.split("|") as [string, string];
+      expect(cases.filter((c) => identityOf(c).row === row).length, row).toBe(SPORT_KEYS.length - 1);
+      expect(cases.filter((c) => identityOf(c).sport === sport).length, sport).toBe(ROW_KEYS.length - REFUSED_CELLS.filter((x) => x.endsWith(`|${sport}`)).length);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("ALL_CELLS is every catalogue cell, once: the set the L2 grid filters by (a refused cell has no committed pair-run to let through)", () => {
     expect(ALL_CELLS.size).toBe(CELLS);
-    expect([...ALL_CELLS]).toEqual(cases.map(cellOf));
+    expect([...ALL_CELLS].filter((c) => !isRefusedCell(c))).toEqual(cases.map(cellOf));
+    for (const c of REFUSED_CELLS) expect(ALL_CELLS.has(c), c).toBe(true);
+    expect(RAW.filter((r) => isRefusedCell(cellId(r.row, r.sport)))).toEqual([]);
   });
 
   it("drives every builder row and every template-reached API-only cell; plans 🚫 for the rest, each naming the wave that owes it", () => {
     expect(TEMPLATE_CELLS.size).toBeGreaterThan(0);
-    expect(driven(cases)).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length + TEMPLATE_CELLS.size); // 178
+    expect(REFUSED_TEMPLATE_CELLS).toBe(REFUSED_CELLS.length);
+    expect(driven(cases)).toHaveLength(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length - REFUSED_TEMPLATE_CELLS + TEMPLATE_CELLS.size); // 176
     const p = planned(cases);
     expect(p).toHaveLength(API_ONLY_ROWS.length * SPORT_KEYS.length - TEMPLATE_CELLS.size); // 53
-    expect(driven(cases).length + p.length).toBe(CELLS);
+    expect(driven(cases).length + p.length).toBe(OFFERED);
     let checked = 0;
     for (const c of p) {
       const id = layerCaseId(c);
@@ -110,7 +132,7 @@ describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39)", () => {
       expect(i.caseId, layerCaseId(c)).toBe(`${i.row}|${i.sport}|${stubVariant(i.sport)}|LIFECYCLE`);
       checked++;
     }
-    expect(checked).toBe(CELLS - TEMPLATE_CELLS.size);
+    expect(checked).toBe(OFFERED - TEMPLATE_CELLS.size);
     // The offline builder default differs by sport (cricket vs football), so one constant cannot pass.
     const cricket = cases.filter((c) => layerCaseId(c).startsWith("league|cricket|"));
     expect(cricket).toHaveLength(1);
@@ -134,7 +156,7 @@ describe("the full L1 grid (ruling 64: 231 cells @1280, ruling 39)", () => {
     expect(planner.deniesFeatures).toBe(false);
     const asked = new Set<string>();
     const out = planner.layered((s) => { asked.add(s); return offlineBuilderDefault(s); });
-    expect(out).toHaveLength(CELLS);
+    expect(out).toHaveLength(OFFERED);
     expect([...asked].sort()).toEqual([...SPORT_KEYS].sort());
   });
 });
@@ -238,13 +260,13 @@ describe("the grid takes no filter: the whole grid is the plan (refused by name,
 });
 
 describe("committed-plans.ts reads the scope: --scope grid is the grid, a bare --layer is the slice (the second call: the default did not move)", () => {
-  it("--layer L1 --scope grid is the 231 cells (178 driven, 53 planned); --layer L1 is still the slice's 6", () => {
+  it("--layer L1 --scope grid is the 229 offered cells (176 driven, 53 planned); --layer L1 is still the slice's 6", () => {
     const grid = livePlan("--layer L1 --scope grid");
     expect(grid.plan).toBe("--layer L1 --scope grid");
     expect(grid.layered).toBe(true);
-    expect(grid.driven.size).toBe(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length + TEMPLATE_CELLS.size);
+    expect(grid.driven.size).toBe(TEMPLATE_ROW_KEYS.length * SPORT_KEYS.length - REFUSED_TEMPLATE_CELLS + TEMPLATE_CELLS.size);
     expect(grid.planned.size).toBe(API_ONLY_ROWS.length * SPORT_KEYS.length - TEMPLATE_CELLS.size);
-    expect(grid.driven.size + grid.planned.size).toBe(CELLS);
+    expect(grid.driven.size + grid.planned.size).toBe(OFFERED);
     const slice = livePlan("--layer L1");
     expect(slice.driven.size).toBe(SLICE_ROWS.length * SLICE_SPORTS.length);
     expect(slice.planned.size).toBe(0);

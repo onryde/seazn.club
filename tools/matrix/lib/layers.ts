@@ -12,8 +12,10 @@
 //    ░ "no scenario script yet" (D5 — W1c writes no new scenario script).
 //  - `--scope grid` (W1d Task 3, owner ruling 64): the FULL grid of each layer.
 //    L1 (planL1Grid, `--layer L1 --scope grid`) is one LIFECYCLE case per
-//    catalogue cell at 1280 — 231: a builder row and every API-only cell a
-//    catalog template reaches are driven, the rest are 🚫 naming their wave.
+//    OFFERED catalogue cell at 1280 — 229 of the 231: a builder row and every
+//    API-only cell a catalog template reaches are driven, the rest are 🚫
+//    naming their wave, and a cell the product refuses (catalogue.ts
+//    refusedCell: chess americano/mexicano) has no case at all.
 //    L2 (`--layer L2 --scope grid`) is planL2 over every cell, i.e. every run of
 //    l2-pairs.json (1,729), each driven, 🚫 or ░ exactly as the slice's are.
 //    `--scope slice` (the default, so a bare `--layer L1` is unchanged) is the
@@ -41,7 +43,7 @@
 // run.ts value-imports this module, so its static closure must stay clear of
 // lib/browser and lib/pads (boundary.test.ts): the D7 wave table comes from
 // the leaf api-only-ui.ts, never from browser-driver.ts.
-import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, type ApiOnlyRowKey, type RowKey } from "./catalogue.ts";
+import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, cellId, refusedCell, type ApiOnlyRowKey, type RowKey } from "./catalogue.ts";
 import { apiOnlyUiPath } from "./api-only-ui.ts";
 import { onTemplate, templateField, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
@@ -233,10 +235,12 @@ const refuseGridFilters = (label: string, cli: PlannerCli): void => {
  *  × SPORT_KEYS order. A builder row drives with variantFor's variant; an API-only
  *  cell a catalog template reaches drives through that template (its own sport and
  *  variant, D11, as planW1DrivingL1 does); every other API-only cell is 🚫 naming
- *  the wave that owes its organiser control (api-only-ui.ts). */
+ *  the wave that owes its organiser control (api-only-ui.ts). A cell the product
+ *  refuses (catalogue.ts refusedCell) is left out: no wave owes it a path, so it is
+ *  neither driven nor 🚫 — the committed drop list records it, with its reason. */
 export function planL1Grid(variantFor: (sport: string) => string): LayerCase[] {
   const at = (spec: CaseSpec): DrivenLayerCase => ({ spec, layer: "L1", width: L1_WIDTH, noPath: null, notRun: null, run: null });
-  return ROW_KEYS.flatMap((row) => SPORT_KEYS.map((sport): LayerCase => {
+  return ROW_KEYS.flatMap((row) => SPORT_KEYS.filter((sport) => refusedCell(row, sport) === null).map((sport): LayerCase => {
     if (!isApiOnly(row)) {
       const variant = variantFor(sport);
       return at({ caseId: `${row}|${sport}|${variant}|${LIFECYCLE}`, row, sport, variant, scenario: LIFECYCLE, canary: false });

@@ -38,6 +38,9 @@
 // benefit. format-templates.test.ts's dictionary-coverage test is the
 // regression net that replaces the old "has a label/help" field check.
 import type { TakeRule } from "@seazn/engine/competition";
+// A relative `.ts` import, never `@/`: tools/matrix loads this file under plain node (catalogue.ts), and the rule file
+// imports nothing, so node can follow it (tools/matrix/__tests__/boundary.test.ts pins both).
+import { sportRefusesStageKind } from "./chess-individual-only-rule.ts";
 
 export type StandingsCarry = "none" | "points" | "full";
 
@@ -295,6 +298,30 @@ export const STAGE_TEMPLATES: {
     ],
   },
 ];
+
+/** The knobs a template is built at when only its stage KINDS are read: the kinds do not depend on the knobs. */
+const KIND_PROBE_KNOBS: TemplateKnobs = { qualified: 4, swissRounds: 5, poolCount: 2, legs: 1 };
+
+/** The templates the division builder and the Settings format select OFFER for a sport, in STAGE_TEMPLATES order: a
+ *  template any of whose stages is a kind the sport refuses is left out (chess is individual-only, owner ruling
+ *  2026-10-26, follow-up to #1027: americano and mexicano mint pair entrants, so chess is offered neither). Read off
+ *  each template's OWN stage graph, never a list of keys, so a later template carrying such a stage is left out too.
+ *  `current` (Settings: the structure the division already plays) is kept even when refused, so a division stored
+ *  before the ruling still shows what it is; re-applying it is refused by the server (assertStageKindsAllowed). */
+export function templatesForSport(
+  sportKey: string | null | undefined,
+  current: string | null = null,
+): typeof STAGE_TEMPLATES {
+  return STAGE_TEMPLATES.filter(
+    (t) => t.key === current || !t.build(KIND_PROBE_KNOBS).some((s) => sportRefusesStageKind(sportKey, s.kind)),
+  );
+}
+
+/** The builder's template after the organiser picks another sport: kept when the new sport is offered it, else the
+ *  builder's own default (`league`), so a chess division can never be submitted with an americano picked for padel. */
+export function templateAfterSportChange(template: string, sportKey: string): string {
+  return templatesForSport(sportKey).some((t) => t.key === template) ? template : "league";
+}
 
 /** Clamps a knob (poolCount, qualified) into [min,max] — called at both UI
  *  call sites (division-builder.tsx, division-settings.tsx) right before

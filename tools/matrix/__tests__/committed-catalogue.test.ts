@@ -29,6 +29,7 @@ import type * as TS from "typescript";
 import { EngineError, StageKind, forbidsLevelResult } from "@seazn/engine/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ROW_KEYS, SPORT_KEYS, stagesForRow } from "../lib/catalogue.ts";
+import { REFUSED_CELLS, REFUSED_REASON } from "./refused-cells.ts";
 import { RULES, decide, gapReason, planL3 } from "../lib/applicability.ts";
 import { UnscorableUnclassified, computeCounts } from "../lib/counts.ts";
 import { foldStream } from "../lib/fold.ts";
@@ -49,6 +50,8 @@ const fresh = generateCatalogue(REPO);
 const L3_IDS = [LIFECYCLE_ID, ...l3Atomic().map((a) => a.id)];
 const L2_IDS = l2Atomic().map((a) => a.id);
 const CELLS = ROW_KEYS.length * SPORT_KEYS.length;
+/** The cells the product offers: every cell but chess americano/mexicano (owner ruling 2026-10-26; refused-cells.ts). */
+const OFFERED = CELLS - REFUSED_CELLS.length;
 const VARIANTS = SPORT_KEYS.map((s) => buildSportVariants(s));
 const PLAN = planL3({ variants: VARIANTS });
 const parsed = <T,>(f: (typeof GENERATED)[number]): T => JSON.parse(fresh[f]) as T;
@@ -58,7 +61,7 @@ interface DropGroup { scenario: string; kind: string; reason: string; count: num
 interface DropList { kinds: Record<string, string>; total: number; inapplicable: number; harnessGap: number; unscorableOnly: number; groups: DropGroup[] }
 interface CaseList { count: number; routedTo?: string; why: string; ids: string[] }
 interface CountsFile {
-  grid: { rows: number; sports: number; cells: number };
+  grid: { rows: number; sports: number; cells: number; refused: number };
   catalogue: { parents: number; atomic: number; atomicL3: number; atomicL2: number };
   l1: { formula: string; value: number };
   l2: { formula: string; value: number; pairTargets: number; l3GapRuns: number };
@@ -269,16 +272,17 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(l2.runs.length).toBe(planL2({ variants: VARIANTS }).runs.length);
   });
 
-  it("counts: L1 = cells × 1 width (1280, ruling 39); L2 = the pair file's runs; L3 = the sum of its declared parts, each part checked against another file", () => {
+  it("counts: L1 = offered cells × 1 width (1280, ruling 39); L2 = the pair file's runs; L3 = the sum of its declared parts, each part checked against another file", () => {
     const c = parsed<CountsFile>("counts.json");
     const l2 = parsed<L2File>("l2-pairs.json");
     const floors = parsed<Floors>("floors.json");
     const d = parsed<DropList>("drop-list.json");
     const v = parsed<VariantsFile>("variants.json");
-    expect(c.grid).toEqual({ rows: ROW_KEYS.length, sports: SPORT_KEYS.length, cells: CELLS });
-    // Ruling 39: L1 runs at 1280 only, so a cell is one case — never the 462 (cells × 2) this file once froze.
-    expect(c.l1).toEqual({ formula: "cells × 1 width (1280; ruling 39)", value: CELLS });
-    expect(c.l1.value).toBe(231);
+    expect(c.grid).toEqual({ rows: ROW_KEYS.length, sports: SPORT_KEYS.length, cells: CELLS, refused: REFUSED_CELLS.length });
+    // Ruling 39: L1 runs at 1280 only, so a cell is one case — never the 462 (cells × 2) this file once froze. A cell the
+    // product refuses (chess americano/mexicano, follow-up to #1027) has none.
+    expect(c.l1).toEqual({ formula: "offered cells (cells − refused) × 1 width (1280; ruling 39)", value: OFFERED });
+    expect(c.l1.value).toBe(229);
     expect(c.l2.value).toBe(l2.runs.length);
     expect(c.l2.pairTargets).toBe(l2.targets.rowScenario + l2.targets.sportScenario);
     expect(c.l2.l3GapRuns).toBe(l2.runs.filter((r) => r.l3Gap !== null).length);
@@ -286,7 +290,7 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(c.l2.formula).not.toMatch(/applicable/);
     expect(c.l3.value).toBe(c.l3.lifecycle + c.l3.atomicApplicable + c.l3.variantCasesScorable + c.l3.denied + c.l3.regressions);
     expect(c.l3.formula).toMatch(/scorable variant cases/);
-    expect(c.l3.lifecycle).toBe(CELLS);
+    expect(c.l3.lifecycle).toBe(OFFERED);
     expect(c.l3.lifecycle).toBe(floors.perScenarioL3[LIFECYCLE_ID]);
     // Every (cell, L3 scenario) is planned or dropped, exactly once.
     expect(c.l3.lifecycle + c.l3.atomicApplicable + c.drops.total).toBe(CELLS * L3_IDS.length);
@@ -304,11 +308,11 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(gated.length).toBeGreaterThan(0);
     expect(c.l3.denied).toBe(gated.length);
     expect(c.l3.regressions).toBe(loadRegressions(REPO).length);
-    expect(c.l3.value).toBe(CELLS + c.l3.atomicApplicable + scorable + gated.length + loadRegressions(REPO).length);
+    expect(c.l3.value).toBe(OFFERED + c.l3.atomicApplicable + scorable + gated.length + loadRegressions(REPO).length);
     // M-5: the fields drift alone used to protect.
     const bound = PLAN.cases.filter((x) => x.bound !== null);
     expect(c.l3.bound).toBe(bound.length);
-    expect(c.l3.atomicApplicable).toBe(PLAN.cases.length - CELLS);
+    expect(c.l3.atomicApplicable).toBe(PLAN.cases.length - OFFERED);
     const scorableIds = new Set(allCases.filter((x) => x.scorable === null).map((x) => x.id));
     for (const x of bound) expect(scorableIds.has(x.bound ?? ""), `${x.cell} ${x.scenario} binds ${x.bound}`).toBe(true);
     expect(c.variants.uncoverablePairs).toBe(v.sports.reduce((n, s) => n + s.uncoverable.length, 0));
@@ -324,6 +328,19 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(Object.keys(c.drops.byScenario)).toEqual(L3_IDS);
     expect(Object.values(c.drops.byScenario).reduce((a, b) => a + b, 0)).toBe(c.drops.total);
     for (const id of L3_IDS) expect(c.drops.byScenario[id]! + floors.perScenarioL3[id]!, id).toBe(CELLS);
+    // Every scenario drops on each refused cell, for the refusal (the drop list's own groups, recounted).
+    const refusedGroups = d.groups.filter((g) => REFUSED_REASON.test(g.reason));
+    expect(refusedGroups.map((g) => g.scenario).sort()).toEqual([...L3_IDS].sort());
+    let refusedDrops = 0;
+    for (const g of refusedGroups) {
+      expect(g.kind, g.scenario).toBe("inapplicable");
+      const cells = Object.entries(g.cells).flatMap(([row, sports]) => sports.map((s) => `${row}|${s}`)).sort();
+      expect(cells, g.scenario).toEqual([...REFUSED_CELLS].sort());
+      expect(g.count, g.scenario).toBe(REFUSED_CELLS.length);
+      refusedDrops += g.count;
+    }
+    expect(refusedDrops).toBe(REFUSED_CELLS.length * L3_IDS.length);
+    expect(c.drops.byScenario[LIFECYCLE_ID]).toBe(REFUSED_CELLS.length);
   });
 
   it("the independent classifier folds a BRACKET under the engine's overlay and a table stage under the bare cfg — anchored on the rulebook's witnessed values (CA-KO-1 extra board, BG-KO-1 tie-break), not on how the merge is spelled", () => {
@@ -379,11 +396,11 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     console.info(`committed-catalogue: ${judged} variant cases folded — ${got.scorable.length} scorable, ${got.engine.length} engine-unscorable, ${got.generator.length} generator-unsupported`);
   });
 
-  it("the GENERATOR's L1 is one case per cell (ruling 39): counts.ts computes the value counts.json carries, from the catalogue's cells — never cells × 2", () => {
+  it("the GENERATOR's L1 is one case per offered cell (ruling 39): counts.ts computes the value counts.json carries, from the catalogue's cells less the refused — never cells × 2", () => {
     // counts.json alone cannot kill a counts.ts regression (CI's matrix:catalogue check is the only other witness), so the generator is run here.
     const out = computeCounts({ l3: PLAN, l2: planL2({ variants: VARIANTS }), variants: VARIANTS, regressions: [] });
-    expect(out.l1).toEqual({ formula: "cells × 1 width (1280; ruling 39)", value: CELLS });
-    expect(out.l1.value).toBe(231);
+    expect(out.l1).toEqual({ formula: "offered cells (cells − refused) × 1 width (1280; ruling 39)", value: OFFERED });
+    expect(out.l1.value).toBe(229);
     expect(out.l1).toEqual(parsed<CountsFile>("counts.json").l1);
     expect(out.l1.value).not.toBe(CELLS * 2);
   });

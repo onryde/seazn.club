@@ -27,6 +27,7 @@ import { createStages, generateStageFixtures, replaceStages } from "../stages";
 import { validatedStageConfig } from "../stage-defaults";
 import { putStageRules } from "../stage-rules";
 import { decidersOffRules } from "../../../../e2e/stage-deciders";
+import { CHESS_INDIVIDUAL_ONLY, sportRefusesStageKind } from "@/lib/chess-individual-only";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -117,16 +118,35 @@ const kick = (by: string, scored: boolean) => ({ type: "football.shootout.kick",
 const levelAtFullTime = [start, whistle("HT"), whistle("FT")];
 
 describe.skipIf(!HAS_DB)("X-SR-6 P7 a new stage stores its sport's preset", () => {
-  it("X-SR-6 P7 a new stage stores its sport's preset: every sport x every variant x every kind (counted; a table kind stores none)", async () => {
+  it("X-SR-6 P7 a new stage stores its sport's preset: every sport x every variant x every kind (counted; a table kind stores none; a kind the sport refuses is refused, counted apart)", async () => {
     let checked = 0;
     let withPreset = 0;
     let tableKinds = 0;
+    let refused = 0;
+    let refusedTables = 0;
+    const refusedCells = new Set<string>();
     const presetSports = new Set<string>();
+    // The literal pin beside the product's rule, so a broken rule cannot make both sides of the sweep agree: chess is
+    // individual-only (owner ruling 2026-10-26, follow-up to #1027), and an americano stage mints pair entrants.
+    expect(sportRefusesStageKind("boardgame", "americano"), "chess refuses americano").toBe(true);
+    expect(sportRefusesStageKind("badminton", "americano"), "badminton does not").toBe(false);
     for (const m of builtinModules as readonly AnySportModule[]) {
       const auth = await seedOrg();
       for (const variant of Object.keys(m.variants)) {
         const { divisionId } = await seedDivision(auth, m.key, variant, 0);
         for (const kind of StageKind.options) {
+          if (sportRefusesStageKind(m.key, kind)) {
+            // A cell the product refuses: the create answers 422 CHESS_INDIVIDUAL_ONLY and writes nothing.
+            await expect(
+              createStages(auth, divisionId, { seq: 1, kind, name: kind, config: configFor(kind), progression: null }),
+              `${m.key}/${variant}/${kind}`,
+            ).rejects.toMatchObject({ status: 422, code: CHESS_INDIVIDUAL_ONLY });
+            expect(await stageCount(divisionId), `${m.key}/${variant}/${kind}: nothing written`).toBe(0);
+            refused++;
+            if (DRAW_KINDS.has(kind)) refusedTables++;
+            refusedCells.add(`${m.key}/${kind}`);
+            continue;
+          }
           // One stage at a time (the stages-per-division cap), each removed once read: every kind meets a clean division.
           const [st] = await createStages(auth, divisionId, { seq: 1, kind, name: kind, config: configFor(kind), progression: null });
           const expected = stageDefaultsFor(m, kind, variant);
@@ -149,8 +169,15 @@ describe.skipIf(!HAS_DB)("X-SR-6 P7 a new stage stores its sport's preset", () =
       }
     }
     const variants = builtinModules.reduce((n, m) => n + Object.keys(m.variants).length, 0);
-    expect(checked, `${checked} (sport, variant, kind) stages created`).toBe(variants * StageKind.options.length);
-    expect(tableKinds, "every table kind was asked").toBe(variants * DRAW_KINDS.size);
+    // The refused cells, from the literal ruling: chess x americano (mexicano is the same kind), every chess variant.
+    const chessVariants = Object.keys(mod("boardgame").variants).length;
+    expect(chessVariants, "chess declares variants").toBeGreaterThan(0);
+    expect([...refusedCells], "the refused cells").toEqual(["boardgame/americano"]);
+    expect(refused, `${refused} (sport, variant, kind) creates refused`).toBe(chessVariants);
+    expect(checked, `${checked} (sport, variant, kind) stages created`).toBe(variants * StageKind.options.length - refused);
+    expect(checked, "anti-vacuity").toBeGreaterThan(0);
+    console.info(`stage-defaults P7: ${checked} (sport, variant, kind) stages created, ${refused} refused CHESS_INDIVIDUAL_ONLY`);
+    expect(tableKinds + refusedTables, "every table kind was asked").toBe(variants * DRAW_KINDS.size);
     // Anti-vacuity, from the engine: the (sport, variant, kind) triples it presets, and the sports that declare a preset.
     const engineTriples = (builtinModules as readonly AnySportModule[]).reduce(
       (n, m) => n + Object.keys(m.variants).reduce((k, v) => k + StageKind.options.filter((kind) => Object.keys(stageDefaultsFor(m, kind, v)).length > 0).length, 0),

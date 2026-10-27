@@ -48,7 +48,12 @@ const STAGE_DECIDER_OFF = "apps/web/src/lib/stage-decider-off.ts";
 // import, with stage-decider-off.ts), and apps/web's schema and create door read it too, so it must stay loadable by plain
 // node: bare engine barrels only. The matrix itself does not load it.
 const TOP_LEVEL_STAGE_DECIDERS = "apps/web/src/lib/top-level-stage-deciders.ts";
-const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF]);
+// Follow-up to #1027 (chess is individual-only, owner ruling 2026-10-26): chess-individual-only-rule.ts is the PRODUCT's
+// stage-kind rule (sportRefusesStageKind) the builder's offer and the stage create read; catalogue.ts's refusedCell reads
+// it rather than keep a list of refused cells. format-templates.ts value-imports it too (templatesForSport), so it must
+// stay import-free (pinned below) or every node-run reader of the templates breaks.
+const CHESS_INDIVIDUAL_ONLY_RULE = "apps/web/src/lib/chess-individual-only-rule.ts";
+const ALLOWED_WEB = new Set(["apps/web/src/lib/format-templates.ts", `${MATCH_RULES_DIR}/index.ts`, ORGANISER_ONLY_EVENTS, BRACKET_NEXT_MATCH, FORFEIT_PHASE_REFUSAL, STAGE_DECIDER_OFF, CHESS_INDIVIDUAL_ONLY_RULE]);
 const FORBIDDEN = ["run-suite", "pack-schema", "seed.ts", "seed-plan", "validate-pack", "scripts/smoke"];
 const TYPE_ONLY = new Set(["lib/invariants.ts", "lib/observed.ts"]);
 // The bench is also the @seazn/bench workspace (2026-10-04). A bare
@@ -143,6 +148,19 @@ describe("tools/matrix import boundary", () => {
     expect(importsOf(file), `${ORGANISER_ONLY_EVENTS} must stay import-free`).toEqual([]);
     const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === ORGANISER_ONLY_EVENTS)).map((m) => relative(MATRIX, m));
     expect(naming).toEqual(["lib/driver/browser-driver.ts"]);
+  });
+
+  it("the product's chess stage-kind rule is a file plain node can load: it exists and imports nothing, only catalogue.ts names it, and format-templates.ts reaches it by a relative .ts path", () => {
+    const file = join(REPO, CHESS_INDIVIDUAL_ONLY_RULE);
+    expect(existsSync(file), CHESS_INDIVIDUAL_ONLY_RULE).toBe(true);
+    expect(importsOf(file), `${CHESS_INDIVIDUAL_ONLY_RULE} must stay import-free`).toEqual([]);
+    const naming = MODULES.filter((m) => importsOf(m).some((i) => i.spec.startsWith(".") && relative(REPO, resolve(dirname(m), i.spec)) === CHESS_INDIVIDUAL_ONLY_RULE)).map((m) => relative(MATRIX, m));
+    expect(naming).toEqual(["lib/catalogue.ts"]);
+    // The templates load it under plain node too: a value import by relative `.ts` path (no `@/` alias, which node cannot resolve).
+    const templates = join(REPO, "apps/web/src/lib/format-templates.ts");
+    const edge = importsOf(templates).filter((i) => !i.typeOnly && i.spec.startsWith(".") && relative(REPO, resolve(dirname(templates), i.spec)) === CHESS_INDIVIDUAL_ONLY_RULE);
+    expect(edge.map((i) => i.spec)).toEqual(["./chess-individual-only-rule.ts"]);
+    expect(importsOf(templates).filter((i) => !i.typeOnly && i.spec.startsWith("@/")), "format-templates.ts value-imports no `@/` alias").toEqual([]);
   });
 
   it("the product's next-match predicate is a file plain node can load: it exists and imports nothing, and only its two readers name it — the W2b checks' feed graph and the oracle's next line (the model reads it through the checks)", () => {

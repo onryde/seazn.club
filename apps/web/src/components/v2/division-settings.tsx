@@ -47,6 +47,7 @@ import {
   clampKnob,
   detectTemplate,
   templateHasProgression,
+  templatesForSport,
   type StageDraft,
   type StandingsCarry,
   type TemplateKnobs,
@@ -722,8 +723,11 @@ export function DivisionSettings({
         const controls = Array.isArray(err.extra.controls) ? err.extra.controls.map(String).join(", ") : "";
         setError(msg("divset.err.timeControlUnsupported", { controls }));
       } else if (err instanceof ApiV1Error && err.code === CHESS_INDIVIDUAL_ONLY) {
-        // Server English otherwise (no server-side i18n): localise the code. Reachable only from a stale page - the
-        // block offers nothing to widen - or a legacy override re-sent alongside a different one.
+        // Server English otherwise (no server-side i18n): localise the code. Reached by an entrants save that names a
+        // non-individual kind (a stale page, or a legacy override re-sent beside a different one), and by the format
+        // Apply on a chess division stored with americano/mexicano before the ruling: that structure stays listed and
+        // selected (templatesForSport `current`), so re-applying it - even to change only rounds or courts - is
+        // refused by the stage writers (follow-up to #1027).
         setError(msg("divset.err.chessIndividualOnly"));
       } else if (err instanceof ApiV1Error && err.code === ONLINE_CHESS_DISABLED_CODE) {
         // T20 (fix round 1, m6): turning online play on while the club is not offered online chess — a save racing a
@@ -1102,7 +1106,9 @@ export function DivisionSettings({
                       still fail to compile. format-templates.test.ts's
                       dictionary-coverage test backstops every t.key actually
                       resolving. */}
-                  {STAGE_TEMPLATES.map((t) => (
+                  {/* The sport's offer (templatesForSport): chess lists no americano/mexicano, except the structure a
+                      division stored before the ruling already plays, so it still shows what it is. */}
+                  {templatesForSport(division.sport_key, detected).map((t) => (
                     <option key={t.key} value={t.key}>
                       {msg(`format.template.${t.key}.label` as MessageKey)}
                     </option>

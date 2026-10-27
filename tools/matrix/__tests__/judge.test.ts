@@ -26,6 +26,7 @@ import { main } from "../judge.ts";
 import { planOf, runSlice, scopeOf } from "../run.ts";
 import { REPO, TRUTH_RUNS, livePlan } from "./committed-plans.ts";
 import { deps, fakeBrowserRun } from "./run-deps.ts";
+import { REFUSED_CELLS, isRefusedCell } from "./refused-cells.ts";
 
 // --- builders -----------------------------------------------------------------------------------------------
 
@@ -303,13 +304,22 @@ describe("matchPlanIds (T4-IDS): the run's case ids are exactly the planner's fo
   });
 
   it("a `--set` plan, from committed evidence: the w1drv L3 run (plan `--set w1-driving`) matches the ids its planner makes — the count is the planner's, and the evidence's own", () => {
-    const real = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w1drv-l3", "results.json"), "utf8")));
+    const committed = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w1drv-l3", "results.json"), "utf8")));
+    // The evidence predates the follow-up to #1027 (chess is individual-only, owner ruling 2026-10-26): it ran the four
+    // scripts on chess americano/mexicano too, cells today's planner refuses. Those are set aside, counted; the rest is
+    // the evidence the planner is matched against.
+    const onRefused = committed.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`));
+    expect(onRefused.length).toBe(REFUSED_CELLS.length * 4);
+    expect([...new Set(onRefused.map((c) => `${c.row}|${c.sport}`))].sort()).toEqual([...REFUSED_CELLS].sort());
+    const real = { ...committed, cases: committed.cases.filter((c) => !isRefusedCell(`${c.row}|${c.sport}`)) };
     const plan = livePlan("--set w1-driving");
     const asRun = { ...real, plan: "--set w1-driving" } as unknown as RunResults;
     // Two independent sources agree: the planner (derived from the registry) and the committed evidence.
     expect(plan.driven.size + plan.planned.size).toBe(real.cases.length);
     expect(matchPlanIds(asRun).compared).toBe(real.cases.length);
     expect(real.cases.length).toBeGreaterThan(900);
+    // The set-aside cases are exactly what the planner no longer makes: put back, they are refused as extras.
+    expect(() => matchPlanIds({ ...asRun, cases: committed.cases } as unknown as RunResults)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining(`extra ${onRefused.length}`) }));
     // …and it is a real check: one case dropped from the committed run is refused.
     expect(() => matchPlanIds({ ...asRun, cases: asRun.cases.slice(1) })).toThrow(expect.objectContaining({ name: "PlanIdsMismatch" }));
   });
@@ -831,15 +841,17 @@ describe("the seam, end to end: runSlice's own shards, through the real merge, i
     expect(r.cases).toHaveLength(PLAN_IDS.length);
   }, 120_000);
 
-  it("L1 --scope grid, unsharded: 231 cases, scope 'L1 (grid)', identity clean against the GRID planner", async () => {
+  it("L1 --scope grid, unsharded: 229 cases (the 231 cells less chess americano/mexicano, refused), scope 'L1 (grid)', identity clean against the GRID planner", async () => {
     const reportDir = mkdtempSync(join(tmpdir(), "w1d-judge-grid-"));
     const d = deps({ openBrowserRun: async () => fakeBrowserRun().run });
     const live = { ...d, openDb: async () => ({ ...(await d.openDb()), variantKeysInBuilderOrder: async (s: string) => [...(await import("../lib/variants.ts")).offlineVariantOrder(s)] }) };
     expect(await runSlice(live, ["--driver", "browser", "--layer", "L1", "--scope", "grid", "--run-id", "seamg", "--report-dir", reportDir])).toBe(0);
     const r = parseResults(JSON.parse(readFileSync(join(reportDir, "seamg", "results.json"), "utf8"))) as RunResults;
-    expect(r.cases).toHaveLength(231);
+    expect(r.cases).toHaveLength(ROW_KEYS.length * SPORT_KEYS.length - REFUSED_CELLS.length);
+    expect(r.cases).toHaveLength(229);
+    expect(r.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`))).toEqual([]);
     expect(r.scope).toBe("L1 (grid)");
-    expect(matchPlanIds(r).compared).toBe(231);
+    expect(matchPlanIds(r).compared).toBe(229);
     expect(judgeCli(["faults", f(r)])).not.toBe(2);
   }, 180_000);
 });
