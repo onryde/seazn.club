@@ -48,7 +48,8 @@ import { idempotencyKey } from "@/server/email-outbox/constants";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
 import { CONNECT_SCOPED_EVENT_TYPES, HANDLED_EVENT_TYPES, runEvent } from "../billing-events";
 import { handleRegistrationCheckoutCompleted } from "../registrations";
-import { handleSponsorChargeRefunded, handleSponsorDispute } from "../sponsors";
+import { handleSponsorChargeRefunded, handleSponsorDispute, listSponsorRows, patchSponsor } from "../sponsors";
+import type { AuthCtx } from "@/server/api-v1/auth";
 import { stubOutboxEnv } from "./_invite-mail";
 import { cleanUpSponsorOrgs, seedSponsorOrder } from "./_money-fixtures";
 import { fakeSession, loadWithGroup, seedRegistration, stripeRig } from "./_registration-fixtures";
@@ -145,6 +146,16 @@ const orderState = async (orderId: string) =>
         from sponsor_orders o left join sponsors s on s.id = o.sponsor_id
        where o.id = ${orderId}`
   )[0]!;
+
+/** The org owner, managing placements in the console. */
+const ownerAuth = (o: { orgId: string; ownerId: string }): AuthCtx => ({ orgId: o.orgId, via: "session", userId: o.ownerId, role: "owner", keyId: null });
+
+/** The placement's row as the sponsor console lists it. */
+const consoleRow = async (o: { orgId: string; sponsorId: string | null }) => {
+  const row = (await listSponsorRows(o.orgId)).find((r) => r.id === o.sponsorId);
+  expect(row, "premise: the console lists the placement").toBeDefined();
+  return row!;
+};
 
 /** A `charge.dispute.*` event as the webhook receives it (a fresh event id each), for the tests that go through `runEvent`. */
 const disputeEvent = (type: "created" | "funds_withdrawn", disputeId: string, intent: string, amount: number, status: string): Stripe.Event => {
@@ -323,6 +334,41 @@ describe.skipIf(!HAS_DB)("a card inquiry leaves the sponsor live; the money take
 
     expect(await rowsOf(ALERT, [id]), "still exactly one alert").toHaveLength(1);
     expect(enqueueCalls(ALERT, id), "asked once: a withdrawal queues no mail").toHaveLength(1);
+  });
+
+  it("empty: with no dispute, a placement the organiser holds as pending is not parked and goes live", async () => {
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "pending" })).resolves.toMatchObject({ status: "pending" });
+    expect((await consoleRow(o)).dispute_parked, "held by the organiser, not parked by a dispute").toBe(false);
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "active" })).resolves.toMatchObject({ status: "active" });
+  });
+
+  it("during an inquiry the console does not call the live placement parked, and the organiser can switch it off and on", async () => {
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const id = newDisputeId();
+
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
+    expect((await orderState(o.orderId)).disputed_at, "premise: the inquiry flagged the order").not.toBeNull();
+
+    expect((await consoleRow(o)).dispute_parked, "not parked: the placement is live").toBe(false);
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "inactive" })).resolves.toMatchObject({ status: "inactive" });
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "active" })).resolves.toMatchObject({ status: "active" });
+  });
+
+  it("once the money is taken the console calls the placement parked, and no status change by hand brings it back", async () => {
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const id = newDisputeId();
+
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "needs_response" }), "funds_withdrawn");
+    expect((await orderState(o.orderId)).sponsor_status, "premise: the withdrawal parked the placement").toBe("pending");
+
+    expect((await consoleRow(o)).dispute_parked, "parked by the dispute").toBe(true);
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "active" }), "not straight back on").rejects.toMatchObject({ status: 409 });
+    // Nor the long way round: switched off by hand, the placement would no longer read as parked, and `active` would then pass.
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "inactive" }), "nor off, then on").rejects.toMatchObject({ status: 409 });
+    expect((await orderState(o.orderId)).sponsor_status, "the placement stays parked").toBe("pending");
   });
 
   it("through the real dispatch, a funds_withdrawn event hides the sponsor and leaves an entry fee's dispute as it was", async () => {

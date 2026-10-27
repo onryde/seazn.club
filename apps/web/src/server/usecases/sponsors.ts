@@ -58,8 +58,10 @@ export interface SponsorRow {
   /** Terminal outcome: a lost dispute wrote the paid order off — the
    *  placement stayed down and the row explains why (list reads only). */
   dispute_lost?: boolean;
-  /** True while that order carries an OPEN dispute (paid + disputed_at):
-   *  the placement was parked by the dispute handler, not by the manager.
+  /** True while the dispute handler has the placement parked: its paid order
+   *  carries an OPEN dispute (paid + disputed_at) AND the placement is down
+   *  ('pending', the handler's park). An inquiry flags the order but leaves
+   *  the placement live, so this stays false until the money is taken.
    *  Cleared when the dispute is won; a lost dispute flips the order off
    *  'paid' so this goes false with it (list reads only). */
   dispute_parked?: boolean;
@@ -143,9 +145,10 @@ export async function listSponsorRows(orgId: string): Promise<SponsorRow[]> {
            (select o.id from sponsor_orders o
             where o.sponsor_id = sponsors.id and o.status = 'paid'
             limit 1) as paid_order_id,
-           exists(select 1 from sponsor_orders o
-                  where o.sponsor_id = sponsors.id and o.status = 'paid'
-                    and o.disputed_at is not null) as dispute_parked,
+           (sponsors.status = 'pending'
+            and exists(select 1 from sponsor_orders o
+                       where o.sponsor_id = sponsors.id and o.status = 'paid'
+                         and o.disputed_at is not null)) as dispute_parked,
            exists(select 1 from sponsor_orders o
                   where o.sponsor_id = sponsors.id and o.status = 'refunded'
                     and o.dispute_id is not null) as dispute_lost
@@ -216,15 +219,22 @@ export async function patchSponsor(
         : undefined;
   await assertTierAllowed(auth.orgId, patch.tier, scope);
   return withTenant(auth.orgId, async (tx) => {
-    // A placement parked by an open dispute stays down until the dispute
+    // A placement parked by an open dispute (its paid order is flagged and
+    // the handler took it down to 'pending') stays down until the dispute
     // closes — reactivating it by hand would put a charged-back sponsor
-    // back on boards and public pages.
-    if (patch.status === "active") {
-      const [open] = await tx`
-        select 1 from sponsor_orders o
-        where o.sponsor_id = ${id} and o.status = 'paid'
-          and o.disputed_at is not null limit 1`;
-      if (open) {
+    // back on boards and public pages. Any status change is refused, not
+    // just `active`: switched to `inactive` it would no longer read as
+    // parked, and `active` would then pass. An inquiry flags the order but
+    // leaves the placement live, so the organiser manages it as normal.
+    // The row lock orders this against the webhook's park.
+    if (patch.status !== undefined && patch.status !== "pending") {
+      const [cur] = await tx<{ status: string; open_dispute: boolean }[]>`
+        select s.status,
+               exists(select 1 from sponsor_orders o
+                      where o.sponsor_id = s.id and o.status = 'paid'
+                        and o.disputed_at is not null) as open_dispute
+        from sponsors s where s.id = ${id} for update of s`;
+      if (cur?.status === "pending" && cur.open_dispute) {
         throw new HttpError(
           409,
           "this placement is parked by an open payment dispute — it comes back automatically if the dispute is won",
