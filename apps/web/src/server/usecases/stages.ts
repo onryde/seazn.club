@@ -439,7 +439,10 @@ export async function assertStageBatchGates(
   inputs: readonly StageInput[],
 ): Promise<number | null> {
   // A division's sport never changes after create (PatchDivision carries no sport_key), so the caller's read decides it.
-  // No division read (missing, or another org's) refuses nothing here: the insert transaction answers it 404.
+  // The read is not an org check: `createStages` reads through the pooled `sql`, which bypasses RLS, so another org's
+  // division IS read here; only `replaceStages` reads under `withTenant` (and 404s a division it cannot see). Other
+  // orgs are kept out before either is called, by the route's `requireResourceAuth(req, "division", id, "write")`.
+  // A division that does not exist reads undefined and refuses nothing here; the insert transaction answers it 404.
   if (divComp !== undefined) assertStageKindsAllowed(divComp.sport_key, inputs.map((s) => s.kind));
   // Doc 10 §1: `formats.double_elim` is Pro — gate before any insert.
   if (inputs.some((s) => stageNeedsDoubleElimGate(s.kind))) {

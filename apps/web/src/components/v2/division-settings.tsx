@@ -723,8 +723,11 @@ export function DivisionSettings({
         const controls = Array.isArray(err.extra.controls) ? err.extra.controls.map(String).join(", ") : "";
         setError(msg("divset.err.timeControlUnsupported", { controls }));
       } else if (err instanceof ApiV1Error && err.code === CHESS_INDIVIDUAL_ONLY) {
-        // Server English otherwise (no server-side i18n): localise the code. Reachable only from a stale page - the
-        // block offers nothing to widen - or a legacy override re-sent alongside a different one.
+        // Server English otherwise (no server-side i18n): localise the code. Reached by an entrants save that names a
+        // non-individual kind (a stale page, or a legacy override re-sent beside a different one), and by the format
+        // Apply on a chess division stored with americano/mexicano before the ruling: that structure stays listed and
+        // selected (templatesForSport `current`), so re-applying it - even to change only rounds or courts - is
+        // refused by the stage writers (follow-up to #1027).
         setError(msg("divset.err.chessIndividualOnly"));
       } else if (err instanceof ApiV1Error && err.code === ONLINE_CHESS_DISABLED_CODE) {
         // T20 (fix round 1, m6): turning online play on while the club is not offered online chess — a save racing a
