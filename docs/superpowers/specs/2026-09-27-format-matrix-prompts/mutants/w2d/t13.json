@@ -120,7 +120,7 @@
  {
   "id": "t13-put-answer-drops-order",
   "file": "apps/web/src/server/usecases/stage-rules.ts",
-  "find": "      tiebreakers: after!.tiebreakers ?? null,\n",
+  "find": "      tiebreakers: after!.tiebreakers,\n",
   "replace": "      tiebreakers: null,\n",
   "killers": [
    {

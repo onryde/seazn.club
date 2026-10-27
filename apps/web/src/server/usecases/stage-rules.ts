@@ -302,8 +302,10 @@ export async function putStageRules(
     return {
       rules: after!.rules ?? null,
       points: after!.points ?? null,
-      tiebreakers: after!.tiebreakers ?? null,
-      crossGroupTiebreakers: after!.cross_group ?? null,
+      // The stage's OWN stored arms (SQL NULL arrives as null), never a resolved order: that is the loader's alone
+      // (table-rules-single-resolver.test.ts).
+      tiebreakers: after!.tiebreakers,
+      crossGroupTiebreakers: after!.cross_group,
       // A table already cached (a Swiss bye, an event-less walkover) is re-folded under the new points or order after the
       // commit: `getStandings` answers from the snapshot, and nothing else re-folds a stage nobody has played in.
       refold: writesTable && after!.snapshots,
