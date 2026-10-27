@@ -147,7 +147,7 @@ export function orderHint(tableRules: StageTableRules, ctx: CascadeContext): { e
 }
 
 /** "Reset to sport default" (PS-7b): the server's `sportDefault` for this stage — never the current order, and never the
- *  web asking the engine's default order itself (the loader is the one reader, table-rules-single-resolver.test.ts). */
+ *  web's own call of `defaultTiebreakers`. */
 export function resetOrder(tableRules: StageTableRules): readonly TiebreakerKey[] {
   return tableRules.tiebreakers.sportDefault;
 }
@@ -157,8 +157,8 @@ export function resetOrder(tableRules: StageTableRules): readonly TiebreakerKey[
  *  fair play, the default drops it, PS-7c), the sport default is offered too, so the menu always has the order the server
  *  calls the default (T15 fix round 1, review m2). */
 export function resetChoices(presets: TablePresets | undefined, tableRules: StageTableRules): { id: string; keys: readonly TiebreakerKey[] }[] {
-  // The sport's named orders (a catalogue, not a layer of the stage's rules); none when the sport declares no presets.
-  const named = presets === undefined ? [] : presets.tiebreakers;
+  // Exempted by name in table-rules-single-resolver.test.ts: the preset catalogue, not a stage's order.
+  const named = presets?.tiebreakers ?? [];
   const sportDefault = { id: "sport_default", keys: resetOrder(tableRules) };
   if (named.length === 0) return [sportDefault];
   const choices = named.map((p) => ({ id: p.id, keys: [...p.keys] }));
