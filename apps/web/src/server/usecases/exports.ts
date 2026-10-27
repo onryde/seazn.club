@@ -25,7 +25,7 @@ import {
   type ExportTicket,
   type PageBreaks,
 } from "@seazn/engine/exports";
-import { roundRole, type StandingsRow } from "@seazn/engine/competition";
+import { isLevelTable, roundRole, type StandingsRow } from "@seazn/engine/competition";
 import { roundRoleLabel } from "@/lib/round-role-label";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -462,11 +462,15 @@ export async function buildDivisionDocModel(
         });
       }
       case "standings": {
-        const [snapshot] = await tx<{ rows: StandingsRow[] }[]>`
+        const snapshots = await tx<{ rows: StandingsRow[] }[]>`
           select ss.rows from standings_snapshots ss
           join stages s on s.id = ss.stage_id
           where s.division_id = ${divisionId}
-          order by s.seq desc, ss.updated_at desc limit 1`;
+          order by s.seq desc, ss.updated_at desc`;
+        // W2d concern 2 (anti-goal 3, X-TB-6; review I2): a LEVEL table — nothing counted, the one the generate stores —
+        // has no places, and `#` would print seed 1 first. It is no standings to print: skipped, so a later stage's
+        // level table never displaces a finished stage's real one, and a division with only level tables has none yet.
+        const snapshot = snapshots.find((s) => !isLevelTable(s.rows));
         if (!snapshot) throw new HttpError(404, "no standings yet");
         const names = await tx<{ id: string; display_name: string; badge_url: string | null }[]>`
           select id, display_name, badge_url from entrants where division_id = ${divisionId}`;

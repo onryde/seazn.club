@@ -110,7 +110,7 @@ function isIdemKeyViolation(e: unknown): boolean {
   return pg?.code === "23505" && pg?.constraint_name === "score_events_idem_key";
 }
 
-const TABLE_KINDS = new Set(["league", "group", "swiss"]);
+export const TABLE_KINDS = new Set(["league", "group", "swiss"]); // pinned equal to stages.ts REAL_TABLE_KINDS (W2d c2)
 
 const ENGINE_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
 

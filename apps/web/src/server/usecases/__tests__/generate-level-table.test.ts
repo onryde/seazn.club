@@ -31,7 +31,13 @@ import { tableOrderOf } from "@/server/engine-db/table-rules";
 import { getPublicDivision, type StandingsSnapshotRow } from "@/server/public-site/data";
 import { assembleDigestStandings } from "@/server/usecases/org-posts";
 import { startDivision } from "@/server/usecases/schedule";
-import { generateStageFixtures } from "@/server/usecases/stages";
+import { completeStage, computeSeedProposal, confirmSeedProposal, generateStageFixtures, REAL_TABLE_KINDS, unpairSwissRound } from "@/server/usecases/stages";
+import { deleteEntrant } from "@/server/usecases/entrants";
+import { createPerson } from "@/server/usecases/persons";
+import { buildDivisionDocModel } from "@/server/usecases/exports";
+import { undoDivision } from "@/server/usecases/history";
+import { TABLE_KINDS as SCORING_TABLE_KINDS } from "@/server/usecases/scoring";
+import { StageKind } from "@/server/api-v1/schemas";
 import { between, genericResult, tableScene, type TableScene } from "@/server/engine-db/__tests__/helpers/w2d-table-rig";
 import { fixtureRow, playBadminton, post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 
@@ -242,6 +248,7 @@ describe.skipIf(!HAS_DB)("W2d concern 2 — a table stage's level table exists f
       expect(row(z).points, `${fam.sport}: the winner out-points the loser`).toBeGreaterThan(row(x).points);
       expect(row(y).played, `${fam.sport}: the third has not played`).toBe(0);
       expect(moved.html[0], `${fam.sport}: the leader row is drawn now`).toContain("bg-amber-50");
+      expect(moved.html[0], `${fam.sport}: and the gold medal (the pair of expectLevel's "no gold medal")`).toContain("bg-amber-300");
       // (c) void the decisive event: the match is back in play and the table is level again.
       await post(s.auth, (await between(s.stageId, z, x)).id, "core.void", { event_id: voidable });
       expect((await fixtureRow((await between(s.stageId, z, x)).id)).status, `${fam.sport}: premise: the void un-decided it`).not.toBe("decided");
@@ -287,10 +294,9 @@ describe.skipIf(!HAS_DB)("W2d concern 2 — a table stage's level table exists f
     expect(out.created, "premise: both pools were generated").toBe(12);
     const stored = await snapshotsOf(two.stageId);
     expect(stored.filter((x) => x.rows.length === 0), "no empty pool table is stored").toEqual([]);
-    for (const t of (await publicTablesOf(two)).tables) {
-      expect(t.rows.length, "a served pool table has rows").toBeGreaterThan(0);
-      expect(t.rows.every((r) => r.level === true), "and is level").toBe(true);
-    }
+    // Nothing is served: every pool folds empty before a result (engine `entrantsOfPool` takes pool membership from
+    // resulted fixtures) — parked as concern-2 finding 2 (owner follow-up), so "No standings yet" until a pool result.
+    expect((await publicTablesOf(two)).tables, "a pooled stage serves no table before a result (finding 2, parked)").toEqual([]);
   });
 
   it("RULING — a `timing: setup` progression's placeholder fixtures name no entrant, so they produce no table (not a table of placeholders)", async () => {
@@ -342,5 +348,190 @@ describe.skipIf(!HAS_DB)("W2d concern 2 — a table stage's level table exists f
     const [second] = await digest();
     expect(second?.climber?.entrantName, "a climb between two ranked tables is named").toBe("E1");
     expect(second?.climber?.to).toBe(1);
+  });
+});
+
+// ── Fix round 1 (review concern-2: I1, I2, I3, m1, m3) ───────────────────────────────────────────────────────────────
+
+/** `x` beats `y` for every pair where `x` is the LOWER seed: the finishing order is the reverse of the seed order, so the
+ *  real table never coincides with a level one (a level table orders by seed). */
+async function reverseSeedRound(s: Scene, stageId: string): Promise<void> {
+  for (let i = 0; i < s.entrants.length; i++)
+    for (let j = i + 1; j < s.entrants.length; j++) await genericResult(s.auth, stageId, s.entrants[j]!, s.entrants[i]!, 1, 0);
+}
+
+/** A league "Phase 1" of 4 and a league "Final Pool" taking its ranks 1-3 with `timing`; the scene's stage is the pool. */
+const twoStage = (timing: "setup" | "on_complete") =>
+  scene({
+    entrants: 4,
+    stage: 1,
+    stages: [
+      { seq: 1, kind: "league", name: "Phase 1", config: {} },
+      {
+        seq: 2,
+        kind: "league",
+        name: "Final Pool",
+        config: {},
+        progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 3 }] }], placement: "rank_order", timing },
+      },
+    ] as CreateStages,
+  });
+
+/** The organiser standings export's table: `#` and the name of every row (engine `buildStandings`: `#`, Team, …). */
+async function exportedStandings(s: Scene): Promise<{ place: unknown; name: unknown; played: unknown }[]> {
+  const doc = await buildDivisionDocModel(s.auth, s.divisionId, "standings", { printedAt: "2026-10-27T09:00:00.000Z" });
+  const table = doc.sections[0]?.table;
+  if (table === undefined) throw new Error("the standings export has no table");
+  return table.rows.map((r) => ({ place: r[0], name: r[1], played: r[2] }));
+}
+
+describe.skipIf(!HAS_DB)("W2d concern 2 fix round 1 — the stored table follows the roster, the export, and the seeding", () => {
+  it("I1: generate, then delete an entrant (division in setup): the public table drops it — no raw id, no deleted entrant, the 3 left level", async () => {
+    // single-sport: the roster delete is the division's (sport-agnostic)
+    const s = await scene({ entrants: 4 });
+    await generateStageFixtures(s.auth, s.stageId);
+    const victim = s.entrants[3]!;
+    await deleteEntrant(s.auth, victim);
+    const left = s.entrants.slice(0, 3);
+    const read = await publicTablesOf(s);
+    expectLevel(read, left, "after the delete");
+    const data = (await getPublicDivision(...s.slugs))!;
+    const known = new Set(data.entrants.map((e) => e.id));
+    const served = read.tables.flatMap((t) => t.rows.map((r) => r.entrantId));
+    expect(served.filter((id) => !known.has(id)), "every served row names an entrant the public read knows (no raw id)").toEqual([]);
+    expect(read.html.join(""), "the deleted entrant's id is printed nowhere").not.toContain(victim);
+  });
+
+  it("I1 sequence: delete, then start and record a result — the table moves, still without the deleted entrant", async () => {
+    // single-sport: the roster delete is the division's (sport-agnostic)
+    const s = await scene({ entrants: 4 });
+    await generateStageFixtures(s.auth, s.stageId);
+    const [e1, , e3, victim] = s.entrants as [string, string, string, string];
+    await deleteEntrant(s.auth, victim);
+    await startDivision(s.auth, s.divisionId);
+    await genericResult(s.auth, s.stageId, e3, e1, 1, 0);
+    const read = await publicTablesOf(s);
+    expect(read.tables, "one table").toHaveLength(1);
+    const rows = read.tables[0]!.rows;
+    expect(rows.map((r) => r.entrantId).sort(), "the 3 left, nobody else").toEqual(s.entrants.slice(0, 3).sort());
+    expect(rows.find((r) => r.rank === 1)?.entrantId, "the winner leads").toBe(e3);
+  });
+
+  it("I1: a seated Swiss round, then an entrant deleted — the round goes back to its shells and its stored table goes with it", async () => {
+    // single-sport: the Swiss unseat-on-delete is the stage kind's (sport-agnostic)
+    const s = await scene({ entrants: 4, stages: { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3 } } });
+    await generateStageFixtures(s.auth, s.stageId);
+    await generateStageFixtures(s.auth, s.stageId);
+    expectLevel(await publicTablesOf(s), s.entrants, "premise: Pair next seated round 1");
+    await deleteEntrant(s.auth, s.entrants[3]!);
+    const seated = await sql<{ n: number }[]>`
+      select count(*)::int as n from fixtures where stage_id = ${s.stageId} and (home_entrant_id is not null or away_entrant_id is not null)`;
+    expect(seated[0]!.n, "premise: the delete put the round back onto its shells").toBe(0);
+    expect(await snapshotsOf(s.stageId), "a fold that seats nobody leaves no stored table (not the stale 4)").toEqual([]);
+    expect((await publicTablesOf(s)).tables, "and nothing served — the mint's own state").toEqual([]);
+  });
+
+  it("I1: generate, undo, then delete an entrant — the undo's stale level table does not survive the delete", async () => {
+    // single-sport: undo and the roster delete are the division's (sport-agnostic)
+    const s = await scene({ entrants: 4 });
+    await generateStageFixtures(s.auth, s.stageId);
+    await undoDivision(s.auth, s.divisionId);
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixtures where stage_id = ${s.stageId}`;
+    expect(n, "premise: the undo took the fixtures back").toBe(0);
+    expect((await snapshotsOf(s.stageId)).length, "premise: the undo left the generate's table (finding 1, parked)").toBe(1);
+    await deleteEntrant(s.auth, s.entrants[3]!);
+    expect(await snapshotsOf(s.stageId), "the delete's refold of a fold with no row drops the stored table").toEqual([]);
+  });
+
+  it("m5: Unpair of Swiss round 1 puts the shells back — the stored table goes with it (the mint's state, not a header-only table)", async () => {
+    // single-sport: Unpair is the stage kind's (sport-agnostic)
+    const s = await scene({ entrants: 4, stages: { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3 } } });
+    await generateStageFixtures(s.auth, s.stageId);
+    await generateStageFixtures(s.auth, s.stageId);
+    expectLevel(await publicTablesOf(s), s.entrants, "premise: Pair next seated round 1");
+    const out = await unpairSwissRound(s.auth, s.stageId);
+    expect([out.round, out.cleared > 0], "premise: round 1 was unpaired").toEqual([1, true]);
+    expect(await snapshotsOf(s.stageId), "no stored table — not a table of no rows").toEqual([]);
+    expect((await publicTablesOf(s)).tables, "and nothing served").toEqual([]);
+    // The positive pair: Pair next again seats round 1, and the level table is back.
+    await generateStageFixtures(s.auth, s.stageId);
+    expectLevel(await publicTablesOf(s), s.entrants, "after Pair next again");
+  });
+
+  it("I2: the organiser export marks nobody first on a level table — a fresh league's export is 'no standings yet', a result's is ranked", async () => {
+    // single-sport: the export reads the stored table (sport-agnostic)
+    const s = await scene({ entrants: 4 });
+    await generateStageFixtures(s.auth, s.stageId);
+    expect((await snapshotsOf(s.stageId))[0]?.rows.every((r) => r.level === true), "premise: the generate stored a level table").toBe(true);
+    await expect(exportedStandings(s), "a level table is no standings to print (anti-goal 3: no row is marked first)").rejects.toMatchObject({ status: 404 });
+    // The positive pair: one counted result, and the export prints places — the winner first, not seed 1.
+    await startDivision(s.auth, s.divisionId);
+    await genericResult(s.auth, s.stageId, s.entrants[3]!, s.entrants[0]!, 1, 0);
+    const rows = await exportedStandings(s);
+    expect(rows[0], "the winner (seed 4) is #1").toMatchObject({ place: 1, name: "E4", played: 1 });
+    expect(rows.length).toBe(4);
+  });
+
+  it("I2: a finished stage's table is not displaced by the next stage's level table in the export", async () => {
+    // single-sport: the export's stage pick is the division's (sport-agnostic)
+    const s = await twoStage("on_complete");
+    const phase1 = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, phase1);
+    await startDivision(s.auth, s.divisionId);
+    await reverseSeedRound(s, phase1);
+    await completeStage(s.auth, phase1);
+    await generateStageFixtures(s.auth, s.stageId);
+    const pool = await snapshotsOf(s.stageId);
+    expect(pool.length === 1 && pool[0]!.rows.length === 3 && pool[0]!.rows.every((r) => r.level === true), "premise: the pool's level table of 3 is stored").toBe(true);
+    // Phase 1's real order: the lower seed won every match — E4 3 wins, E3 2, E2 1, E1 0.
+    expect(await exportedStandings(s), "the export prints Phase 1's final table, not the pool's seed list").toEqual([
+      { place: 1, name: "E4", played: 3 },
+      { place: 2, name: "E3", played: 3 },
+      { place: 3, name: "E2", played: 3 },
+      { place: 4, name: "E1", played: 3 },
+    ]);
+  });
+
+  it("I3: the seeding fills a `timing: setup` table stage — the confirm writes the qualifiers' level table to the public read", async () => {
+    // single-sport: the seed proposal is the progression's (sport-agnostic)
+    const s = await twoStage("setup");
+    const phase1 = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, s.stageId);
+    await generateStageFixtures(s.auth, phase1);
+    await startDivision(s.auth, s.divisionId);
+    await reverseSeedRound(s, phase1);
+    await completeStage(s.auth, phase1);
+    expect(await snapshotsOf(s.stageId), "premise: the placeholders stored no table (the RULING)").toEqual([]);
+    const proposal = await computeSeedProposal(s.auth, s.stageId);
+    await confirmSeedProposal(s.auth, s.stageId, { proposalId: proposal.id });
+    // Phase 1's top three (the lower seed won every match): E4, E3, E2.
+    const [, e2, e3, e4] = s.entrants as [string, string, string, string];
+    expectLevel(await publicTablesOf(s), [e4, e3, e2], "the seeded pool after the confirm");
+  });
+
+  it("m1: every stage kind outside the table kinds — the generate stores no table (registry sweep over StageKind, counted)", async () => {
+    // The spec's table kinds (§5.7: a bracket has no table; scoring folds no other kind on a result): league, group, swiss.
+    const tableKinds = ["league", "group", "swiss"];
+    const CONFIG: Record<string, Record<string, unknown>> = { americano: { mode: "americano", courtCount: 1, rounds: 1 }, ladder: { challengeRange: 2 } };
+    let checked = 0;
+    for (const kind of StageKind.options.filter((k) => !tableKinds.includes(k))) {
+      const s = await scene({ entrants: 4, stages: { seq: 1, kind, name: kind, config: CONFIG[kind] ?? {} } as CreateStages });
+      // americano pairs the PERSONS behind the individual entrants (stages.ts americanoGen): give each one.
+      if (kind === "americano")
+        for (const [i, id] of s.entrants.entries()) {
+          const person = await createPerson(s.auth, { full_name: `P${i + 1}`, consent: {}, dob: null, gender: null, external_ref: null });
+          await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${id}, ${person.id}, ${s.auth.orgId})`;
+        }
+      const out = await generateStageFixtures(s.auth, s.stageId);
+      if (kind !== "ladder") expect(out.created, `premise: ${kind} generated fixtures`).toBeGreaterThan(0);
+      expect(await snapshotsOf(s.stageId), `${kind}: no table stored`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "every non-table kind StageKind declares").toBe(StageKind.options.length - tableKinds.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("m3: the generate's table kinds are the ones scoring refolds on a result", () => {
+    expect([...REAL_TABLE_KINDS].sort()).toEqual([...SCORING_TABLE_KINDS].sort());
   });
 });

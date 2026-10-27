@@ -2520,7 +2520,11 @@ export async function unpairSwissRound(
   // Bye awards (and their removal) never go through appendEvent, so the
   // standings snapshot would otherwise keep the unpaired bye's points until
   // the next scored match — Dan after Unpair R3. Fold from the cleared rows.
-  await recomputeStandings(auth.orgId, stageId);
+  // `"drop"` (W2d concern 2, review m5): unpairing round 1 leaves the shells
+  // seating nobody — a fold with no row, so the stored table goes too and the
+  // page reads as it did after the mint ("No standings yet"), not a header-only
+  // table.
+  await recomputeStandings(auth.orgId, stageId, undefined, { emptyFold: "drop" });
 
   await fireStageRevalidate(auth.orgId, stageId);
   afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
@@ -2596,7 +2600,7 @@ async function generateStageFixturesWrite(
       const write = await generateProgressionSetupFixtures(auth, stageId);
       // No refold here (W2d concern 2 ruling): a `timing: "setup"` stage's fixtures are placeholders that name no
       // entrant, so its fold has no row — there is no table to show until the seeding fills the seats, never a table of
-      // placeholders. The refold below (`REAL_TABLE_KINDS`) is the main path's.
+      // placeholders. The seeding that fills them refolds (`confirmSeedProposal` → `refoldStageTable`).
       const outcome = write.outcome;
       await fireStageRevalidate(auth.orgId, stageId);
       if (outcome.created > 0) {
@@ -3112,14 +3116,10 @@ async function generateStageFixturesWrite(
   const outcome = write.outcome;
   // W2d concern 2 (spec §5.7, anti-goal 3; owner 2026-10-27): a table stage's table exists from the generate that
   // created its fixtures — LEVEL, every rank "–", no leader — so a visitor sees the table the organiser's Standings read
-  // would otherwise write lazily (`getStandings`), never "No standings yet" for the same state. The kinds are the ones
-  // scoring refolds on a result (`REAL_TABLE_KINDS`): a bracket has no table. `created` counts a Swiss seating too, so
-  // Pair next still refolds the bye awards it seats without score_events (same snapshot trap as Unpair: the bye win
-  // shows at once, Finn/Gus). `skipEmpty`: a fold that places nobody is no table and is not written — a Swiss mint's
-  // shells seat nobody, and a pooled group's pool membership comes from results (`entrantsOfPool`).
-  if (outcome.created > 0 && REAL_TABLE_KINDS.has(write.kind)) {
-    await recomputeStandings(auth.orgId, stageId, undefined, { skipEmpty: true });
-  }
+  // would otherwise write lazily (`getStandings`), never "No standings yet" for the same state. `created` counts a Swiss
+  // seating too, so Pair next still refolds the bye awards it seats without score_events (same snapshot trap as Unpair:
+  // the bye win shows at once, Finn/Gus). The kind gate and the empty-fold rule are `refoldStageTable`'s.
+  if (outcome.created > 0) await refoldStageTable(auth.orgId, { id: stageId, kind: write.kind }, "skip");
   await fireStageRevalidate(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.
   if (outcome.created > 0) {
@@ -4539,6 +4539,31 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
 // BRACKET_KINDS mirrors engine-db/competition.ts's own list — losersOfRound
 // only makes sense sourced from one of these.
 export const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
+
+/**
+ * W2d concern 2 (spec §5.7, anti-goal 3) — refold a table stage's stored table after a write that seats or unseats its
+ * entrants with no result: the generate and a seed-proposal confirm (`"skip"`), a roster delete (`"drop"`). One gate for
+ * all three: `REAL_TABLE_KINDS`, the kinds scoring refolds on a result (usecases/scoring.ts `TABLE_KINDS`, pinned equal
+ * by generate-level-table.test.ts) — a bracket has no table. `emptyFold` is engine-db `recomputeStandings`'s: `"skip"`
+ * stores no fold that places nobody (a Swiss mint, a pooled stage before results, placeholders); `"drop"` also deletes
+ * the stored tables the fold no longer produces, so a deleted entrant's row never outlives them.
+ *
+ * Best-effort, after the write has committed (review m4): a refold that throws (a rank-time refusal, anti-goal 2) is
+ * logged, never turned into a failed write the caller would retry into a no-op. The next result's refold, or the
+ * organiser's Standings read (`getStandings`), writes the table.
+ */
+export async function refoldStageTable(
+  orgId: string,
+  stage: { id: string; kind: string },
+  emptyFold: "skip" | "drop",
+): Promise<void> {
+  if (!REAL_TABLE_KINDS.has(stage.kind)) return;
+  try {
+    await recomputeStandings(orgId, stage.id, undefined, { emptyFold });
+  } catch (err) {
+    log.error({ err, event: "stage_table_refold_failed", stageId: stage.id, emptyFold }, "stage_table_refold_failed");
+  }
+}
 // Exported (F3 review item 5): stage-seeding.ts's sourcesToTables needs the
 // SAME set to know when a source needs bracket data for a roundLosers take
 // rule — see loadBracketFixtures' own export note below.
@@ -5951,6 +5976,7 @@ export async function confirmSeedProposal(
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
       filledFixtureIds: [...filledFixtureIds],
+      kind: stage.kind,
     };
   });
 
@@ -5958,6 +5984,9 @@ export async function confirmSeedProposal(
     { event: "stage_seeded", stageId, proposalId: input.proposalId, edits: input.edits?.length ?? 0 },
     "stage_seeded",
   );
+  // W2d concern 2 (review I3): the seats are filled — a `timing: "setup"` table stage's table exists from here, LEVEL,
+  // the same way the generate writes one (its placeholders had none to show, the generate's RULING).
+  await refoldStageTable(auth.orgId, { id: stageId, kind: committed.kind }, "skip");
   await fireStageRevalidate(auth.orgId, stageId);
   // R10g (review-r10f G1): the confirm names entrants into the bracket, and the
   // hub and each filled fixture's match centre show those names. So after the
