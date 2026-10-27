@@ -986,7 +986,13 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
     await heartbeat(sessionId, r.runner.created[0]!.jobToken, { state: "playing" }, r.deps);
     const machine = (await r.row(sessionId)).machine_id!;
-    await stopSession(r.auth, r.fixtureId, sessionId, r.deps);
+    // The fake's own stop exits the Machine at once and it auto-destroys on the next look — and `setObserved` cannot bring a
+    // destroyed one back. Before the grace expiry observed first, that premise was never in effect (the expiry ran ahead of
+    // the observation); now it is, so THIS stop leaves the Machine up for the `stopping` below to be true.
+    const stopsQuietly = Object.assign(Object.create(r.runner) as FakeRunner, {
+      async stop(id: string, opts: { signal: "SIGINT"; timeoutSeconds: number }) { r.runner.stops.push({ runnerId: id, ...opts }); },
+    });
+    await stopSession(r.auth, r.fixtureId, sessionId, { ...r.deps, drivers: { ...r.deps.drivers, runner: stopsQuietly } });
     r.runner.setObserved(machine, "stopping");                                   // Fly says stopping… forever
     // C16: one second past grace + observation slack, DERIVED — moving either constant moves this test with it.
     await sql`update fixture_stream_sessions set runner_stop_requested_at = now() - make_interval(secs => ${RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 1}) where id = ${sessionId}`;
@@ -997,6 +1003,160 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
     expect(r.runner.destroyed).toContain(machine);
     expect(done).toMatchObject({ state: "completed", endReason: "stopped" });
     expect((await r.row(sessionId)).runner_state).toBe("destroyed");
+  });
+
+  // Measured on stg 2026-10-27 (session 509ffe06). A composed session was stopped at T: the relay exited 0 inside its grace
+  // and Fly auto-destroyed the Machine, but NO read touched the session until after the grace had run out. That first read
+  // ran the expiry BEFORE the observation, so `grace_expired` force-destroyed a Machine that was already gone and the
+  // `observed` trigger that records "destroyed, exit 0" never ran — a clean stop read in the ledger exactly like a hang.
+  // The grace expiry now OBSERVES the Machine first and force-destroys only with no destroy seen (plan 2026-09-13
+  // streaming-r1 §"Fly machine lifecycle").
+  describe("composed: a stop whose grace ran out unread — the Machine is OBSERVED before it is force-destroyed", () => {
+    const CLEAN_STOP_EXIT = { exitCode: 0, oomKilled: false, requestedStop: true };
+    // T + the stop grace (+ the observation slack) + 21 s, DERIVED — moving either constant moves this test with it.
+    const PAST_GRACE_MS = (RUNNER_STOP_GRACE_SECONDS + RUNNER_OBSERVE_SLACK_SECONDS + 21) * 1000;
+    /** The runner as the provider's calls reach it, in ORDER — the property under test is that the observe comes first. */
+    const traced = (r: Awaited<ReturnType<typeof rig>>, observe?: () => Promise<never>) => {
+      const calls: string[] = [];
+      const runner = Object.assign(Object.create(r.runner) as FakeRunner, {
+        async observe(id: string) { calls.push("observe"); return observe ? observe() : r.runner.observe(id); },
+        async destroy(id: string) { calls.push("destroy"); return r.runner.destroy(id); },
+      });
+      return { calls, deps: { ...r.deps, drivers: { ...r.deps.drivers, runner } } as SessionDeps };
+    };
+    /** Stopped at T, the runner left in `via`, and then NOBODY reads until after the grace. The organiser's stop reads the
+     *  session once itself (`stopSession` ends in `currentSession`) and the fake's own stop exits its Machine at that very look —
+     *  so the stop here leaves the Machine `running` (the SIGINT is recorded, as Fly's is: it is inside its grace), and what
+     *  happens to the Machine afterwards is each test's to say. `stopping`: nothing more. `exited`: the relay's own final
+     *  `stopped` beat landed too. The guard: the stop really left the runner where the case says. */
+    const stoppedAndUnread = async (via: "stopping" | "exited", pastGrace = true) => {
+      const r = await rig({ credits: 1 });
+      const { sessionId } = await createSession(r.auth, r.fixtureId, body(r.target.id, "composed"), r.deps);
+      const jobToken = r.runner.created[0]!.jobToken;
+      await heartbeat(sessionId, jobToken, { state: "playing" }, r.deps);
+      const machine = (await r.row(sessionId)).machine_id!;
+      const stopsQuietly = Object.assign(Object.create(r.runner) as FakeRunner, {
+        async stop(id: string, opts: { signal: "SIGINT"; timeoutSeconds: number }) { r.runner.stops.push({ runnerId: id, ...opts }); },
+      });
+      await stopSession(r.auth, r.fixtureId, sessionId, { ...r.deps, drivers: { ...r.deps.drivers, runner: stopsQuietly } });
+      if (via === "exited") await heartbeat(sessionId, jobToken, { state: "stopped" }, r.deps);
+      expect(r.runner.stops, "the stop was sent").toHaveLength(1);
+      expect(await r.row(sessionId), `the stop left the runner in ${via}`).toMatchObject({ state: "ending", runner_state: via });
+      if (pastGrace) r.tick(PAST_GRACE_MS);
+      return { r, sessionId, machine };
+    };
+    const runnerRows = (sid: string) => sql<{ type: string; from_state: string; to_state: string; payload: { observed?: string; exit?: unknown } }[]>`
+      select type, from_state, to_state, payload from fixture_stream_events where session_id = ${sid} and kind = 'runner_transition' order by seq`;
+    const forceDestroys = async (sid: string) => (await sql<{ result: string }[]>`
+      select result from fixture_stream_events where session_id = ${sid} and kind = 'effect' and type = 'force_destroy' order by seq`).length;
+    const eventCount = async (sid: string) => (await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_events where session_id = ${sid}`)[0]!.n;
+
+    it("the Machine is already gone with its clean exit: the read records `observed → destroyed` WITH the exit and completes the session — NO force_destroy (mutant: skip the pre-observe → grace_expired force-destroys → red)", async () => {
+      let checked = 0;
+      for (const via of ["stopping", "exited"] as const) {
+        const { r, sessionId, machine } = await stoppedAndUnread(via);
+        r.runner.setObserved(machine, "destroyed", CLEAN_STOP_EXIT);
+        const t = traced(r);
+        const done = await reconcileSession(sessionId, t.deps);
+        expect(done, `${via}: the session completes through the observed path`).toMatchObject({ state: "completed", endReason: "stopped" });
+        const rows = await runnerRows(sessionId);
+        // The ledger says WHAT happened: one observed step into destroyed carrying the exit, and no grace_expired at all.
+        expect(rows.filter((x) => x.type === "observed" && x.to_state === "destroyed"), `${via}: the observed runner_transition`)
+          .toEqual([expect.objectContaining({ from_state: via, payload: expect.objectContaining({ observed: "destroyed", exit: CLEAN_STOP_EXIT }) })]);
+        expect(rows.map((x) => x.type), `${via}: a clean exit is not a hang`).not.toContain("grace_expired");
+        expect(t.calls, `${via}: ONE observation, no force`).toEqual(["observe"]);
+        expect(r.runner.destroyed, `${via}: the Machine was already gone — nothing to destroy`).toEqual([]);
+        expect(await forceDestroys(sessionId), `${via}: no force_destroy effect row`).toBe(0);
+        expect(await r.row(sessionId)).toMatchObject({ runner_state: "destroyed" });
+        // The session's last exit: stopping × observed(destroyed) records it. The exited cell does not (it settles to destroyed
+        // without `withExit`, runner.ts) — the ledger row above is the exit's record for both.
+        if (via === "stopping") expect(await r.row(sessionId), `${via}: the clean exit is the runner's last`).toMatchObject({ runner_exit_code: 0, runner_oom_killed: false, runner_requested_stop: true });
+        checked++;
+      }
+      expect(checked, "both runner states ran").toBe(2);
+    });
+
+    it("the negative pair — the Machine is still `stopping` past the grace: it is observed first, THEN force-destroyed exactly once, as before the fix", async () => {
+      let checked = 0;
+      for (const via of ["stopping", "exited"] as const) {
+        const { r, sessionId, machine } = await stoppedAndUnread(via);
+        r.runner.setObserved(machine, "stopping");
+        const t = traced(r);
+        const done = await reconcileSession(sessionId, t.deps);
+        expect(done, `${via}`).toMatchObject({ state: "completed", endReason: "stopped" });
+        expect(t.calls, `${via}: observe BEFORE destroy, and only once each`).toEqual(["observe", "destroy"]);
+        expect(r.runner.destroyed, `${via}`).toEqual([machine]);
+        expect(await forceDestroys(sessionId), `${via}: exactly one force_destroy effect row`).toBe(1);
+        const rows = await runnerRows(sessionId);
+        expect(rows.filter((x) => x.type === "grace_expired").map((x) => `${x.from_state}->${x.to_state}`), `${via}`).toEqual([`${via}->destroyed`]);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("the observation FAILS (a 5xx, the network): the grace_expired force-destroy still runs — no session is stuck in `ending`", async () => {
+      let checked = 0;
+      for (const via of ["stopping", "exited"] as const) {
+        const { r, sessionId, machine } = await stoppedAndUnread(via);
+        const warn = vi.spyOn(log, "warn").mockImplementation((() => {}) as never);
+        try {
+          const t = traced(r, async () => { throw Object.assign(new Error("fly: 503"), { status: 503 }); });
+          const done = await reconcileSession(sessionId, t.deps);
+          expect(done, `${via}: ended, not stuck`).toMatchObject({ state: "completed", endReason: "stopped" });
+          expect(t.calls, `${via}: the failed look is not retried, the force follows`).toEqual(["observe", "destroy"]);
+          expect(r.runner.destroyed, `${via}`).toEqual([machine]);
+          expect(await forceDestroys(sessionId), `${via}`).toBe(1);
+          expect(await r.row(sessionId), `${via}`).toMatchObject({ state: "completed", runner_state: "destroyed" });
+          expect(warn.mock.calls.some(([o]) => (o as { sid?: string } | undefined)?.sid === sessionId), `${via}: the failed look is logged, not swallowed`).toBe(true);
+        } finally {
+          warn.mockRestore();
+        }
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
+
+    it("SEQUENCE: a second read after the observed completion writes nothing and asks the provider nothing", async () => {
+      const { r, sessionId, machine } = await stoppedAndUnread("stopping");
+      r.runner.setObserved(machine, "destroyed", CLEAN_STOP_EXIT);
+      const t = traced(r);
+      await reconcileSession(sessionId, t.deps);
+      const before = { events: await eventCount(sessionId), row: await r.row(sessionId) };
+      expect(before.events, "the first read wrote its ledger rows (the second must add none)").toBeGreaterThan(0);
+      r.tick(PAST_GRACE_MS);                                                      // and again, a further grace later
+      const again = await reconcileSession(sessionId, t.deps);
+      expect(again).toMatchObject({ state: "completed", endReason: "stopped" });
+      expect(await eventCount(sessionId)).toBe(before.events);
+      expect(await r.row(sessionId)).toEqual(before.row);
+      expect(t.calls, "no further provider call: the destroyed runner is not looked at again").toEqual(["observe"]);
+      expect(r.runner.destroyed).toEqual([]);
+    });
+
+    it("the expiry's other callers get the same order: applyExpiry alone (a holder's tick, the start gate) observes before it forces", async () => {
+      const { r, sessionId, machine } = await stoppedAndUnread("stopping");
+      r.runner.setObserved(machine, "destroyed", CLEAN_STOP_EXIT);
+      const t = traced(r);
+      const done = await applyExpiry(sessionId, t.deps);
+      expect(done).toMatchObject({ state: "completed", endReason: "stopped" });
+      expect(t.calls).toEqual(["observe"]);
+      expect(await forceDestroys(sessionId)).toBe(0);
+      expect((await runnerRows(sessionId)).map((x) => x.type)).not.toContain("grace_expired");
+    });
+
+    it("INSIDE the grace the expiry is not due: a read asks the provider ONE thing (the reconcile's own observation) — nothing ahead of it, nothing destroyed", async () => {
+      let checked = 0;
+      for (const via of ["stopping", "exited"] as const) {
+        const { r, sessionId, machine } = await stoppedAndUnread(via, false);
+        r.runner.setObserved(machine, "stopping");                                 // still winding down, and the clock has not run out
+        const t = traced(r);
+        const cur = await reconcileSession(sessionId, t.deps);
+        expect(cur, `${via}: still ending`).toMatchObject({ state: "ending" });
+        expect(t.calls, `${via}: one look, no pre-observe`).toEqual(["observe"]);
+        expect(r.runner.destroyed, `${via}`).toEqual([]);
+        checked++;
+      }
+      expect(checked).toBe(2);
+    });
   });
 
   it("composed: a session left in `creating` (the app died mid-create) is reconciled by name on the next read — no second Machine (invariant 4)", async () => {
