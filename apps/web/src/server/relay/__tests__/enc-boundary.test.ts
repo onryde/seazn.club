@@ -46,7 +46,7 @@ const ENC_COLUMNS = [
  *  code's sealed tok (capture QR v2 §6.1, V430): RELAY_KEK, opened by crypto.ts, SQL in
  *  secret-columns.ts. `playback_srt_key_enc` (R2004, V462) seals a composed camera's SRT playback `{ passphrase,
  *  streamId }`, the ingest SRT envelope's twin. */
-const STREAM_COLUMNS = ["ingest_rtmps_key_enc", "ingest_srt_key_enc", "playback_srt_key_enc", "rtmp_enc", "tok_enc"];   // R2004 (V462): a composed camera's SRT playback credential
+const STREAM_COLUMNS = ["ingest_rtmps_key_enc", "ingest_srt_key_enc", "playback_srt_key_enc", "pool_rtmp_enc", "rtmp_enc", "tok_enc"];   // R2004 (V462): a composed camera's SRT playback credential; YouTube Connect (V478): the key pool's sealed {url, streamKey}, RELAY_KEK
 /** Scorer sheets §4.1: the sealed device-link secret, named by exactly one file. */
 const DEVICE_LINK_COLUMNS = ["secret_enc"];
 const DEVICE_LINK_OWNER = "server/usecases/device-links.ts";
@@ -58,10 +58,15 @@ const LICHESS_COLUMNS = ["access_token_enc"];
  *  one file. Named, so a second usecase reaching for the column reds. */
 const LICHESS_OWNER = "server/usecases/external-accounts.ts";
 
+/** YouTube Connect (V478, spec §5.1): the channel's refresh token at rest, on `org_youtube_connections` and on the
+ *  short-lived `youtube_connect_pending`, sealed under YOUTUBE_TOKEN_KEK. Its owner file and the "only it names it —
+ *  and it does" claim arrive with that file (T2); until then this is the declaration claim 1 needs. */
+const YOUTUBE_COLUMNS = ["refresh_token_enc"];
+
 describe("*_enc columns never leave their owners", () => {
   it("every declared *_enc column is owned — a new one cannot walk past this test", () => {
     expect(ENC_COLUMNS).toEqual(
-      [...STREAM_COLUMNS, ...DEVICE_LINK_COLUMNS, ...LICHESS_COLUMNS].sort(),
+      [...STREAM_COLUMNS, ...DEVICE_LINK_COLUMNS, ...LICHESS_COLUMNS, ...YOUTUBE_COLUMNS].sort(),
     );
   });
 
