@@ -5083,11 +5083,13 @@ describe.skipIf(!HAS_DB)("Go live on an API-BACKED destination (before T11's pre
       select count(*)::int as n, coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${r.auth.orgId}`)[0];
     const before = await money();
     expect(before!.net, "the rig's credit is there to be spent — or 'unmoved' could not fail").toBe(1);
-    const refusedDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
+    // The runner the attempts are handed is NAMED, so the assertion below reads the instance that would have created one (r.runner is not it).
+    const refusedRunner = new FakeRunner({ recorder: rec });
+    const refusedDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: refusedRunner } };
 
     let refused = 0;
     for (const attempt of ["first", "second"]) {
-      const err = await createSession(r.auth, r.fixtureId, body(api.targetId), refusedDeps).then(() => null, (e: unknown) => e);
+      const err = await createSession(r.auth, r.fixtureId, body(api.targetId, "composed"), refusedDeps).then(() => null, (e: unknown) => e);
       expect(err, `${attempt} Go live: a typed refusal, not the key reader's own error`).toBeInstanceOf(HttpError);
       expect(err, attempt).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
       refused++;
@@ -5101,12 +5103,16 @@ describe.skipIf(!HAS_DB)("Go live on an API-BACKED destination (before T11's pre
     await new Promise((res) => setImmediate(res));
     expect(rec.calls.filter((c) => c.operation === "addOutput"), "addOutput was never asked").toHaveLength(0);
     expect(rec.calls.map((c) => c.operation), "the refusal is the probe's: no provider call of any kind").toEqual([]);
-    expect(r.runner.created).toEqual([]);
+    expect(refusedRunner.created, "no runner was created for the refused attempts (composed is the mode that creates one)").toEqual([]);
 
-    // The positive pair: the same org with a PASTED destination goes live (so the zero above was not a Go live that cannot start).
+    // The positive pair, through the SAME deps (recorder and runner instance) in the SAME mode: the org's PASTED destination starts,
+    // so the zeros above came from a recorder and a runner that DO see a start.
     const pasted = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Pasted", streamKey: "yt-key" });
-    const { sessionId } = await createSession(r.auth, r.fixtureId, body(pasted.id), r.deps);
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(pasted.id, "composed"), refusedDeps);
     expect((await r.row(sessionId)).state).toBe("warming");
+    await new Promise((res) => setImmediate(res));
+    expect(rec.calls.length, "the recorder sees the admitted start").toBeGreaterThan(0);
+    expect(refusedRunner.created, "the admitted composed start created its runner").toHaveLength(1);
   });
 });
 
@@ -5126,12 +5132,13 @@ describe.skipIf(!HAS_DB)("Go live on an UNREADABLE destination key", () => {
     const before = await money();
     expect(before.balance, "the rig's credit is there to be spent — or 'unmoved' could not fail").toBe(1);
     // Both drivers report into ONE recorder for the refused attempt, so "zero provider calls" covers Cloudflare AND Fly.
-    const refusedDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: new FakeRunner({ recorder: rec }) } };
+    const refusedRunner = new FakeRunner({ recorder: rec });   // named: the zero below must read the instance the attempt was handed
+    const refusedDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: refusedRunner } };
     const warns: unknown[][] = [];
     const spy = vi.spyOn(log, "warn").mockImplementation(((...args: unknown[]) => { warns.push(args); }) as never);
     let err: unknown;
     try {
-      err = await createSession(r.auth, r.fixtureId, body(targetId), refusedDeps).then(() => null, (e: unknown) => e);
+      err = await createSession(r.auth, r.fixtureId, body(targetId, "composed"), refusedDeps).then(() => null, (e: unknown) => e);
     } finally {
       spy.mockRestore();
     }
@@ -5148,17 +5155,18 @@ describe.skipIf(!HAS_DB)("Go live on an UNREADABLE destination key", () => {
     expect(n, "no session row, in any state").toBe(0);
     await new Promise((res) => setImmediate(res));
     expect(rec.calls.map((c) => c.operation), "M1: no provider call of any kind — not even the read-only storage read").toEqual([]);
-    expect(r.runner.created).toEqual([]);
+    expect(refusedRunner.created, "no runner was created for the refused attempt (composed is the mode that creates one)").toEqual([]);
     // The operator's side: one warn naming the fixture and target, never a key.
     expect(warns.filter(([o]) => (o as { targetId?: string }).targetId === targetId).map(([o]) => o)).toEqual([{ fixtureId: r.fixtureId, targetId, kind: "youtube" }]);
     // The organiser's remedy works: Replace key re-seals the platform row, and the same Go live now starts.
     await patchStreamTarget(r.auth, r.auth.orgId, targetId, { streamKey: `k-${randomUUID()}` });
-    const { sessionId } = await createSession(r.auth, r.fixtureId, body(targetId), r.deps);
+    const { sessionId } = await createSession(r.auth, r.fixtureId, body(targetId, "composed"), refusedDeps);
     expect((await r.row(sessionId)).state).toBe("warming");
-    // The positive pair of M1's zero: a start that IS admitted reads the storage pool (so the zero above was not a
-    // recorder that sees nothing).
+    // The positive pair of M1's zero, through the SAME deps and mode: a start that IS admitted reads the storage pool and creates
+    // its runner (so the zeros above were not a recorder or a runner that sees nothing).
     await new Promise((res) => setImmediate(res));
     expect(rec.calls.map((c) => c.operation)).toContain("storageUsage");
+    expect(refusedRunner.created, "the admitted composed start created its runner").toHaveLength(1);
   });
 
   it("M1 guard: the early probe answers only for this org's ACTIVE row — an archived unreadable destination is still 404 target_not_found, another org's is 404 too, and neither is read", async () => {
