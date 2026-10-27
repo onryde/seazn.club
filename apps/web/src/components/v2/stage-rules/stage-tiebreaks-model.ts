@@ -86,9 +86,11 @@ export function addableAt(keys: readonly TiebreakerKey[], position: number, ctx:
   return offerableKeys(keys, position, ctx);
 }
 
-/** Where "+ Add step" inserts: just before a non-Swiss order's closing `lots` (it stays last, §5.5 rule 1), else at the end. */
-export function addPosition(keys: readonly TiebreakerKey[], kind: TableStageKind): number {
-  return kind !== "swiss" && keys.length > 0 && keys[keys.length - 1] === "lots" ? keys.length - 1 : keys.length;
+/** Where "+ Add step" inserts: just before an order's closing `lots`, else at the end. On a non-Swiss order lots stays last
+ *  (§5.5 rule 1). OC1 frees a Swiss order's shape but not the step's sense: a step after the drawing of lots never decides
+ *  anything, so a Swiss add lands before a trailing lots too (T15 fix round 1, review m7). */
+export function addPosition(keys: readonly TiebreakerKey[]): number {
+  return keys.length > 0 && keys[keys.length - 1] === "lots" ? keys.length - 1 : keys.length;
 }
 
 /** The order with `key` inserted at `position` (0..length). */
@@ -151,11 +153,16 @@ export function resetOrder(tableRules: StageTableRules): readonly TiebreakerKey[
 }
 
 /** The Reset menu: the sport's named orders where it declares some (football: FIFA 2026 / UEFA / Classic, D5), else the one
- *  sport default. */
+ *  sport default. When no named order IS the server's sport default (football with fair play off: every preset ranks on
+ *  fair play, the default drops it, PS-7c), the sport default is offered too, so the menu always has the order the server
+ *  calls the default (T15 fix round 1, review m2). */
 export function resetChoices(presets: TablePresets | undefined, tableRules: StageTableRules): { id: string; keys: readonly TiebreakerKey[] }[] {
   const named = presets?.tiebreakers ?? [];
-  if (named.length > 0) return named.map((p) => ({ id: p.id, keys: [...p.keys] }));
-  return [{ id: "sport_default", keys: resetOrder(tableRules) }];
+  const sportDefault = { id: "sport_default", keys: resetOrder(tableRules) };
+  if (named.length === 0) return [sportDefault];
+  const choices = named.map((p) => ({ id: p.id, keys: [...p.keys] }));
+  const listed = choices.some((c) => c.keys.join() === sportDefault.keys.join());
+  return listed ? choices : [...choices, sportDefault];
 }
 
 /** §5.9: the read-only "Between groups" line — only for a pooled stage a later stage takes a best-Nth from. It never shows a

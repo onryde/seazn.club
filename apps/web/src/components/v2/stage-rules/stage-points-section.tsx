@@ -201,9 +201,20 @@ export function StagePointsSection({
   const inForce = unread ? saved.points : stored;
   // I1: the pin as old as the page's props. Until the page re-reads after a save it says nothing: a cleared rule was re-pinned
   // to the live layers (`repinStageOwnRules`), and an own rule outranks any pin.
-  const pin = pinInForce(inForce, unread ? null : pinned);
+  const seedPin = unread ? null : pinned;
+  const pin = pinInForce(inForce, seedPin);
   const basis = pointsBasis(inForce, pin);
-  const [draft, setDraft] = useState<PointsDraft>(() => draftFromStored(module, divisionConfig, stored, pinned, stage));
+  const [draft, setDraft] = useState<PointsDraft>(() => draftFromStored(module, divisionConfig, inForce, seedPin, stage));
+  // T16 fix round 1 (review I1): the draft holds the stage's rows, so it follows what they are read from. A format save (best
+  // of 5 → 3, overtime off) refreshes the page with new `rules`, a points save with a new rule, a re-pin with a new pin: each
+  // re-seeds the draft (the Tie-breaks section's pattern). A refresh that changes none of them keeps a dirty draft.
+  const stageRules = typeof stageConfig === "object" && stageConfig !== null ? ((stageConfig as { rules?: unknown }).rules ?? null) : null;
+  const seedFor = JSON.stringify([kind, stageRules, divisionConfig ?? null, inForce ?? null, seedPin ?? null]);
+  const [seededFor, setSeededFor] = useState(seedFor);
+  if (seededFor !== seedFor) {
+    setSeededFor(seedFor);
+    setDraft(draftFromStored(module, divisionConfig, inForce, seedPin, stage));
+  }
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const ctx = stagePointsContext(module, divisionConfig, stage);

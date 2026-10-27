@@ -112,7 +112,7 @@
  {
   "id": "t15-add-position-after-lots",
   "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
-  "find": "  return kind !== \"swiss\" && keys.length > 0 && keys[keys.length - 1] === \"lots\" ? keys.length - 1 : keys.length;",
+  "find": "  return keys.length > 0 && keys[keys.length - 1] === \"lots\" ? keys.length - 1 : keys.length;",
   "replace": "  return /*MUT*/ keys.length;",
   "killers": [
    {
@@ -120,7 +120,14 @@
     "files": [
      "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
     ],
-    "name": "the add point is just before lots"
+    "name": "the add point is just before a closing lots"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "review m7: on a Swiss order too"
    },
    {
     "cwd": "apps/web",
@@ -402,6 +409,43 @@
      "src/lib/__tests__/kept-pinned.test.ts"
     ],
     "name": "skips an entry it cannot say"
+   }
+  ]
+ },
+ {
+  "id": "t15-reset-default-unoffered-fr1-m2",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  return listed ? choices : [...choices, sportDefault];",
+  "replace": "  return /*MUT*/ choices;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "football with fair play OFF"
+   }
+  ]
+ },
+ {
+  "id": "t15-reset-default-duplicated-fr1-m2",
+  "file": "apps/web/src/components/v2/stage-rules/stage-tiebreaks-model.ts",
+  "find": "  return listed ? choices : [...choices, sportDefault];",
+  "replace": "  return /*MUT*/ [...choices, sportDefault];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "football with fair play ON"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-tiebreaks-model.test.ts"
+    ],
+    "name": "football reset offers FIFA 2026"
    }
   ]
  }

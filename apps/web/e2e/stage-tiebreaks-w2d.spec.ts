@@ -198,6 +198,25 @@ test("football league: the order is inherited, overridden (a move, an added step
   await expect(section.getByTestId("stage-tiebreaks-down-1"), "pinned, not scored: the arrows are still there").toBeEnabled();
   await expect(section.getByTestId("stage-tiebreaks-locked")).toHaveCount(0);
 
+  // --- pinned, not scored: a save still lands and re-pins; the pin keeps its date (OC2, PS-5d; review m6) -------------------
+  const pinnedAt = (await servedOrder(request, rig.stageId)).pinnedAt;
+  await section.getByTestId("stage-tiebreaks-down-1").click();
+  const repinned = [...sportDefault];
+  [repinned[1], repinned[2]] = [repinned[2]!, repinned[1]!];
+  await expect.poll(() => listed(section), { timeout: STEP_MS }).toEqual(repinned);
+  expect(validateCascade(repinned, ctx), "premise: the moved order is valid").toEqual([]);
+  const pinPut = nextRulesPut(page, rig.stageId);
+  await section.getByTestId("stage-tiebreaks-save").click();
+  expect((await pinPut).postDataJSON(), "the strict body on a pinned stage").toEqual({ tiebreakers: repinned });
+  await expect.poll(async () => (await servedOrder(request, rig.stageId)).keys, { timeout: STEP_MS }).toEqual(repinned);
+  const afterPinSave = await servedOrder(request, rig.stageId);
+  expect(afterPinSave.source, "the stage's own order").toBe("stage");
+  expect(afterPinSave.pinnedAt, "re-pinned, the pin's date kept").toBe(pinnedAt);
+  await page.reload({ waitUntil: "load" });
+  await openFold(section);
+  await expect(section.getByTestId("stage-tiebreaks-badge")).toHaveAttribute("data-badge", "pinned", { timeout: STEP_MS });
+  await expect.poll(() => listed(section), { timeout: STEP_MS }).toEqual(repinned);
+
   // --- a first score: locked. The order is still listed; no arrow, no remove, no add, no reset; the lock line names it -------
   const started = await apiJson(request, `/api/v1/divisions/${rig.divisionId}/start`, "POST");
   expect(started.status, `start division: ${JSON.stringify(started.error)}`).toBeLessThan(300);
@@ -207,8 +226,14 @@ test("football league: the order is inherited, overridden (a move, an added step
   await expect(section).toHaveAttribute("data-state", "locked", { timeout: STEP_MS });
   await expect(section.getByTestId("stage-tiebreaks-locked")).toContainText(say("stageTiebreaks.locked", { stage: "Pool A" }));
   await openFold(section);
-  expect(await listed(section), "the pinned order is still listed").toEqual([...sportDefault]);
+  expect(await listed(section), "the pinned order is still listed").toEqual(repinned);
   await expect(section.locator("button:not([data-role='phone-disclosure-toggle']), select"), "locked: no control").toHaveCount(0);
+  // The lock is the server's, not the missing controls: a save sent anyway is refused in its words, and nothing moves.
+  const lockedPut = await apiJson(request, `/api/v1/stages/${rig.stageId}/rules`, "PUT", { tiebreakers: [...sportDefault] });
+  expect(lockedPut.status, "a locked stage refuses the save").toBe(409);
+  expect(lockedPut.error?.code).toBe("STAGE_FORMAT_LOCKED");
+  expect(lockedPut.error?.message).toBe(say("rules.err.stageFormatLocked", { stage: "Pool A" }));
+  expect((await servedOrder(request, rig.stageId)).keys, "the pinned order is unchanged").toEqual(repinned);
   await axeClean(page, `[data-testid="stage-tiebreaks-${rig.stageId}"]`);
   await expectNoHorizontalScroll(page);
 

@@ -133,18 +133,34 @@ describe("+ Add step (D11, §5.5)", () => {
     expect(modifiersWithheld, "and withheld elsewhere").toBeGreaterThan(0);
   });
 
-  it("the add point is just before lots on a non-Swiss order (lots stays last), at the end on Swiss or an order without lots", () => {
-    expect(addPosition(["points", "diff", "lots"], "league")).toBe(2);
-    expect(addPosition(["points", "diff"], "league")).toBe(2);
-    expect(addPosition(["points", "lots"], "swiss")).toBe(2);
-    expect(addPosition([], "league")).toBe(0);
+  it("the add point is just before a closing lots (it stays last), at the end of an order without lots", () => {
+    expect(addPosition(["points", "diff", "lots"])).toBe(2);
+    expect(addPosition(["points", "diff"])).toBe(2);
+    expect(addPosition([])).toBe(0);
     // An added step lands there, and the order still ends on lots.
     const keys = football.defaultTiebreakers("league", cfgOf(football));
-    const at = addPosition(keys, "league");
+    const at = addPosition(keys);
     const next = insertStep(keys, at, "matches_played");
     expect(next[next.length - 1]).toBe("lots");
     expect(next[at]).toBe("matches_played");
     expect(validateCascade(next, ctxOf(football, "league")), "the spec's validator accepts the order the add makes").toEqual([]);
+  });
+
+  it("review m7: on a Swiss order too, an added step lands BEFORE a closing lots (a step after the drawing of lots decides nothing); every sport's Swiss default (counted)", () => {
+    let checked = 0;
+    for (const m of builtinModules) {
+      const keys = m.defaultTiebreakers("swiss", cfgOf(m));
+      if (keys.length === 0 || keys[keys.length - 1] !== "lots") continue;
+      const at = addPosition(keys);
+      expect(at, `${m.key}: before lots`).toBe(keys.length - 1);
+      const offered = addableAt(keys, at, ctxOf(m, "swiss"));
+      if (offered.length === 0) continue;
+      const next = insertStep(keys, at, offered[0]!);
+      expect(next[next.length - 1], `${m.key}: lots still closes the order`).toBe("lots");
+      expect(validateCascade(next, ctxOf(m, "swiss")), `${m.key}: the engine takes the order the add makes`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "Swiss defaults closing on lots with a step to add").toBeGreaterThan(0);
   });
 
   it("move and remove: a pure list edit; a move off the ends is a no-op", () => {
@@ -281,6 +297,30 @@ describe("Reset (PS-7b, D5)", () => {
     // A sport whose presets declare points rules only (chess) still resets to its one sport default.
     const bg = tableRulesOf(boardgame, "league", { own: ["points", "wins", "lots"] });
     expect(resetChoices(boardgame.tablePresets!("league"), bg)).toEqual([{ id: "sport_default", keys: bg.tiebreakers.sportDefault }]);
+  });
+});
+
+describe("Reset when no named order is the sport default (review m2, PS-7c)", () => {
+  const presets = football.tablePresets!("league");
+  const variant = Object.keys(football.variants)[0]!;
+  const withFairPlay = (on: boolean) => ({ ...(cfgOf(football, variant) as object), fairPlay: on });
+
+  it("football with fair play OFF: every preset ranks on fair play and is refused, so the menu also offers the server's sport default, which the engine takes", () => {
+    const cfg = withFairPlay(false);
+    const rules = tableRulesOf(football, "league", { cfg });
+    expect(rules.tiebreakers.sportDefault, "premise: the server's default drops fair play").not.toContain("fair_play");
+    expect(presets.tiebreakers.every((p) => p.keys.includes("fair_play")), "premise: every football preset ranks on fair play").toBe(true);
+    const choices = resetChoices(presets, rules);
+    expect(choices.map((c) => c.id)).toEqual([...presets.tiebreakers.map((p) => p.id), "sport_default"]);
+    expect(choices.at(-1)!.keys, "the extra choice IS the server's sport default").toEqual(rules.tiebreakers.sportDefault);
+    const valid = choices.filter((c) => validateCascade(c.keys, ctxOf(football, "league", cfg)).length === 0);
+    expect(valid.map((c) => c.id), "the one valid order the menu reaches").toEqual(["sport_default"]);
+  });
+
+  it("football with fair play ON: a preset IS the sport default, so the menu stays the three named orders (no duplicate)", () => {
+    const rules = tableRulesOf(football, "league", { cfg: withFairPlay(true) });
+    expect(presets.tiebreakers.some((p) => p.keys.join() === rules.tiebreakers.sportDefault.join()), "premise: FIFA 2026 is the default").toBe(true);
+    expect(resetChoices(presets, rules).map((c) => c.id)).toEqual(presets.tiebreakers.map((p) => p.id));
   });
 });
 

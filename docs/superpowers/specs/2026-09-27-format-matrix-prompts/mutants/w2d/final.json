@@ -2,7 +2,7 @@
  {
   "id": "final-i1-card-previews-live-division-for-pinned-stage",
   "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
-  "find": "  const pin = pinInForce(inForce, unread ? null : pinned);\n",
+  "find": "  const pin = pinInForce(inForce, seedPin);\n",
   "replace": "  const pin = pinInForce(inForce, null);\n",
   "killers": [
    {

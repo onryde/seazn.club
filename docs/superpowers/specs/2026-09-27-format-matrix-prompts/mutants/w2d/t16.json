@@ -384,5 +384,57 @@
     "name": "ice hockey .IIHF.: the editor, its overtime"
    }
   ]
+ },
+ {
+  "id": "t16-draft-not-reseeded-fr1-i1",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+  "find": "    setDraft(draftFromStored(module, divisionConfig, inForce, seedPin, stage));\n  }",
+  "replace": "    /*MUT*/\n  }",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-reseed.test.tsx"
+    ],
+    "name": "a format save .best of 5 → 3. then the untick"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-reseed.test.tsx"
+    ],
+    "name": "a points save elsewhere"
+   }
+  ]
+ },
+ {
+  "id": "t16-reseed-ignores-stage-rules-fr1-i1",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+  "find": "JSON.stringify([kind, stageRules, divisionConfig",
+  "replace": "JSON.stringify([kind, /*MUT*/ null, divisionConfig",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-reseed.test.tsx"
+    ],
+    "name": "a format save .best of 5 → 3. then the untick"
+   }
+  ]
+ },
+ {
+  "id": "t16-reseed-ignores-stored-fr1-i1",
+  "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
+  "find": "divisionConfig ?? null, inForce ?? null, seedPin ?? null]",
+  "replace": "divisionConfig ?? null, /*MUT*/ null, seedPin ?? null]",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/stage-rules/__tests__/stage-points-reseed.test.tsx"
+    ],
+    "name": "a points save elsewhere"
+   }
+  ]
  }
 ]

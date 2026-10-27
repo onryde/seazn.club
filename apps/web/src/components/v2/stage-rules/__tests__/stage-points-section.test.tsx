@@ -199,6 +199,34 @@ describe("W2d T16: every division gets the editor, one row per outcome the stage
     expect(html, "no control").not.toMatch(/<(input|select|button)/);
   });
 
+  it("fail-closed with a rule the stage STORES: the general sentence AND the rule (its line, its preview); an editor can clear it, a viewer cannot; no preview without the public dictionary", () => {
+    const m = sport("icehockey");
+    const refused = { ...(m.variants.iihf as Record<string, unknown>), periods: "many" };
+    expect(m.configSchema.safeParse(refused).success, "premise: the sport refuses this config").toBe(false);
+    const own = { ...HEAD, bonuses: [] };
+    expect(PointsRule.safeParse(own).success, "premise: the stored rule is one the schema takes").toBe(true);
+    const after = (html: string, testId: string): string => {
+      const at = html.indexOf(`data-testid="${testId}"`);
+      expect(at, `${testId} is on the page`).toBeGreaterThan(-1);
+      return text(html.slice(html.indexOf(">", at) + 1, html.indexOf("</", at)));
+    };
+    const editor = render(m, "iihf", own, { divisionConfig: refused });
+    expect(editor).toContain('data-stage-points-state="inexpressible"');
+    expect(text(editor), "the general sentence").toContain(UI["stagePoints.inexpressible"]!);
+    expect(after(editor, "stage-points-readonly"), "the rule is read").toContain(UI["stagePoints.ownPoints"]!);
+    expect(after(editor, "stage-points-preview").trim().length, "the stored rule's preview says something").toBeGreaterThan(0);
+    expect(tagOf(editor, "stage-points-clear"), "an editor can clear it").toMatch(/^<button/);
+    expect(editor.match(/<(input|select)/g), "and nothing else to edit").toBeNull();
+
+    const viewer = render(m, "iihf", own, { divisionConfig: refused, readOnly: true });
+    expect(after(viewer, "stage-points-readonly"), "a viewer reads the rule").toContain(UI["stagePoints.ownPoints"]!);
+    expect(has(viewer, "stage-points-preview")).toBe(true);
+    expect(has(viewer, "stage-points-clear"), "a viewer cannot clear it").toBe(false);
+    expect(viewer, "a viewer has no control").not.toMatch(/<(input|select|button)/);
+
+    expect(has(render(m, "iihf", own, { divisionConfig: refused, pointsDict: undefined }), "stage-points-preview"), "no public dictionary: no preview").toBe(false);
+  });
+
   it("editor: the outcome boxes, the walkover row and the bonus add menu are all there for every stored rule - no plan note, no held boxes", () => {
     let checked = 0;
     for (const stored of [{ ...HEAD, bonuses: [] }, FORFEIT_RULE, { ...HEAD, bonuses: [{ when: "draw", points: 1 }] }]) {

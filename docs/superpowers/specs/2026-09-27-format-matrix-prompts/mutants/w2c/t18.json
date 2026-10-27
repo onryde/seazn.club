@@ -99,7 +99,7 @@
         "files": [
           "src/components/v2/stage-rules/__tests__/stage-points-model.test.ts"
         ],
-        "name": "Q1: the section"
+        "name": "a draw bonus is offered only where the sport can draw"
       }
     ]
   },
@@ -607,14 +607,7 @@
         "files": [
           "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
         ],
-        "name": "an editable stage shows the reason AND the rule"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
-        ],
-        "name": "a division whose points a stage cannot say"
+        "name": "fail-closed with a rule the stage STORES"
       }
     ]
   },
@@ -629,51 +622,37 @@
         "files": [
           "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
         ],
-        "name": "a locked stage or a viewer reads it"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
-        ],
-        "name": "a division whose points a stage cannot say"
+        "name": "fail-closed with a rule the stage STORES"
       }
     ]
   },
   {
     "id": "t18-m1-preview-dropped",
     "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
-    "find": "const own = ownRule === null ? \"\" : preview(draftFromStored(module, divisionConfig, inForce));",
-    "replace": "const own = \"\";",
+    "find": "const own = ownRule === null ? \"\" : preview(draftFromStored(module, divisionConfig, inForce, null, stage));",
+    "replace": "const own = /*MUT*/ \"\";",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
           "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
         ],
-        "name": "an editable stage shows the reason AND the rule"
-      },
-      {
-        "cwd": "apps/web",
-        "files": [
-          "src/components/v2/__tests__/stages-panel-stage-points.test.tsx"
-        ],
-        "name": "a division whose points a stage cannot say"
+        "name": "fail-closed with a rule the stage STORES"
       }
     ]
   },
   {
     "id": "t18-m1-reason-dropped",
     "file": "apps/web/src/components/v2/stage-rules/stage-points-section.tsx",
-    "find": "{reason ?? msg(\"stagePoints.inexpressible\")}",
-    "replace": "{ownRule === null ? (reason ?? msg(\"stagePoints.inexpressible\")) : null}",
+    "find": "{msg(\"stagePoints.inexpressible\")}",
+    "replace": "{/*MUT*/ ownRule === null ? msg(\"stagePoints.inexpressible\") : null}",
     "killers": [
       {
         "cwd": "apps/web",
         "files": [
           "src/components/v2/stage-rules/__tests__/stage-points-section.test.tsx"
         ],
-        "name": "an editable stage shows the reason AND the rule"
+        "name": "fail-closed with a rule the stage STORES"
       }
     ]
   },

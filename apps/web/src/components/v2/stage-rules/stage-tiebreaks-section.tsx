@@ -118,7 +118,7 @@ export function StageTiebreaksSection({
   const hint = readOnly ? null : orderHint(dirty ? { ...rules, tiebreakers: { ...rules.tiebreakers, keys: draft, source: "stage" } } : rules, ctx);
   const refused = validateCascade(draft, ctx).length > 0;
   const crossGroup = crossGroupLine(stage);
-  const at = addPosition(draft, stage.kind);
+  const at = addPosition(draft);
   const addable = controls.add ? addableAt(draft, at, ctx) : [];
   const choices = resetChoices(module.tablePresets?.(stage.kind), rules);
 
