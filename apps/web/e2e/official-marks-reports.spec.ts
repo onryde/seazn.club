@@ -8,6 +8,7 @@ import {
   setFixtureStatusSql,
   invalidateOrgEntitlements,
   expectNoHorizontalScroll,
+  withDb,
 } from "./helpers";
 
 // SPEC-3 marks & reports (PROMPT-81). On the shared Pro org: an organiser rates
@@ -19,6 +20,8 @@ import {
 // (mind the mobile project's concurrency).
 test.describe.serial("official marks & match reports", () => {
   let orgSlug: string;
+  let orgId: string;
+  let fixtureId: string;
   let compSlug: string;
   let divSlug: string;
   let officialName: string;
@@ -37,6 +40,7 @@ test.describe.serial("official marks & match reports", () => {
   }) => {
     const org = await activeOrg(page);
     orgSlug = org.slug;
+    orgId = org.id;
     await setOrgPlanBySql({ orgId: org.id }, "pro"); // marks + discipline.enforced
     await invalidateOrgEntitlements(page.request, org.id);
 
@@ -82,6 +86,7 @@ test.describe.serial("official marks & match reports", () => {
       "POST",
     );
     const fixture = gen.data!.fixtures[0]!;
+    fixtureId = fixture.id;
     await apiJson(page.request, `/api/v1/divisions/${divId}/start`, "POST");
 
     // An official assigned to the fixture; invited through the shared claim rail.
@@ -193,5 +198,50 @@ test.describe.serial("official marks & match reports", () => {
     await expect(page.getByTestId("discipline-panel")).toBeVisible();
     await expect(page.getByTestId("pending-row").filter({ hasText: playerName })).toBeVisible();
     await expect(page.getByText("From match report")).toBeVisible();
+
+    // Email outbox, phase 3 wave 4: the submit queues `match_report_submitted` in its own transaction, one row per owner and
+    // admin of the org (an account that is not deleted and has an address), ref the report, addressed to the account. The
+    // expected set is read from the org's own membership as it stood at the submit, never typed in. This server has no
+    // Resend key, so each row's first attempt (made after commit, hence the poll) settles it with no body kept.
+    const reportMail = () =>
+      withDb(async (sql) => {
+        const reports = await sql<{ id: string }[]>`
+          select id from match_reports where fixture_id = ${fixtureId} and status = 'submitted'`;
+        const report = reports[0];
+        if (reports.length !== 1 || !report) return { reports: reports.length, members: [], rows: [] };
+        const members = await sql<{ userId: string; email: string }[]>`
+          select u.id as "userId", u.email from org_members m
+            join users u on u.id = m.user_id and u.deleted_at is null and u.email is not null
+           where m.org_id = ${orgId} and m.role in ('owner', 'admin')
+             and m.created_at <= (select submitted_at from match_reports where id = ${report.id})
+           order by u.id`;
+        const rows = await sql<{ userId: string | null; email: string; status: string; hasBody: boolean }[]>`
+          select recipient_user_id as "userId", recipient as email, status, body_sealed is not null as "hasBody"
+            from email_outbox
+           where kind = 'match_report_submitted' and ref_type = 'match_report' and ref_id = ${report.id}
+           order by recipient_user_id`;
+        return { reports: reports.length, members, rows };
+      });
+    await expect
+      .poll(
+        async () => {
+          const { rows } = await reportMail();
+          return rows.length > 0 && rows.every((r) => r.status !== "queued" && r.status !== "sending");
+        },
+        { timeout: 20_000, message: "the report notices were queued and their first attempt made" },
+      )
+      .toBe(true);
+    const mail = await reportMail();
+    expect(mail.reports, "exactly one submitted report for the fixture").toBe(1);
+    expect(mail.members.length, "premise: the org has at least one owner or admin with an address").toBeGreaterThan(0);
+    expect(
+      mail.rows.map((r) => ({
+        userId: r.userId,
+        email: r.email,
+        waiting: r.status === "queued" || r.status === "sending",
+        hasBody: r.hasBody,
+      })),
+      "one report notice per owner and admin, to their account and address, attempted, no body kept",
+    ).toEqual(mail.members.map((m) => ({ userId: m.userId, email: m.email, waiting: false, hasBody: false })));
   });
 });
