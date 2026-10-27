@@ -338,6 +338,14 @@ const WALKTHROUGH_SPECS: string[] = [
   // a refusal-only test cannot distinguish from a lock that refuses
   // everything.
   "stage-rules-start-promotion.spec.ts",
+  // W2d tables and tie-breaks (Task 19) — one organiser per sport family sets
+  // a stage's order in the stage editor, generates (the pin), scores through
+  // the pad or the console, and reads the PUBLIC table a visitor reads: its
+  // order, its columns, its cells. Also the pin itself: a started stage's
+  // table does not move when the division's default changes, while a new
+  // pending stage takes the change. The only test that carries an editor
+  // save through the pad to the public page in one journey.
+  "tables-w2d.spec.ts",
 
   // The draw's own words. One organiser builds a League + Finals draw through
   // the wizard, reads who feeds each seat of the final on BOTH the bracket
