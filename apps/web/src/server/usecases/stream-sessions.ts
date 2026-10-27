@@ -664,8 +664,7 @@ export async function destroyListedMachine(
  *  reported once and answered `true` ("the ingest is unknown"), never thrown: before N1 it escaped ahead of the expiry,
  *  so during an outage a warming session past its WALL CLOCK was never ended, kept its destination (V421), and every
  *  organiser poll and another court's start 500'd. What an unknown blocks is `heldByUnknownIngest`'s to say. */
-async function observeIngestBeforeExpiry(sessionId: string, deps: SessionDeps): Promise<boolean> {
-  const row = await readRow(sessionId);
+async function observeIngestBeforeExpiry(sessionId: string, row: Row | null, deps: SessionDeps): Promise<boolean> {
   if (!row || row.mode !== "passthrough" || row.state !== "warming") return false;
   if (evaluate(toSession(row), deps.now()).kind === "none") return false;
   const input = (await sql.begin((tx) => readFirstInput(tx, sessionId))) as Awaited<ReturnType<typeof readFirstInput>>;
@@ -804,9 +803,51 @@ function connectIfWarming(s: Session): Command | null {
   return s.mode === "passthrough" && s.state === "warming" ? { type: "ingest_connected" } : null;
 }
 
-/** The lazy expiry path (recommendation B). I1: a passthrough warming session's ingest is observed first. */
+/** One provider reading of a composed Machine, fed to the lifecycle table as the `observed` trigger — what `reconcileSession`
+ *  does after the expiry and `observeRunnerBeforeGraceExpiry` does before a stop grace's. */
+function applyObservation(sessionId: string, observed: Awaited<ReturnType<SessionDeps["drivers"]["runner"]["observe"]>>, deps: SessionDeps): Promise<Session | null> {
+  return apply(sessionId, { type: "runner", trigger: { type: "observed", state: observed.state, exit: observed.exit, restarting: observed.restarting, restartingSince: observed.restartingSince,
+    // R2003b: the exit's identity, the provider's restart count and the exit's own restart record — what the crash cap
+    // counts an observed crash by
+    exitAt: observed.exitAt, restartCount: observed.restartCount, exitRestarted: observed.exitRestarted } }, deps);
+}
+
+/** Measured on stg (2026-10-27, session 509ffe06): a stopped composed session's Machine exited 0 inside its grace and Fly
+ *  destroyed it, but no read touched the session until the grace had run out. That read ran the expiry FIRST, so
+ *  `grace_expired` force-destroyed a Machine that was already gone and the `observed` trigger that records "destroyed, exit 0"
+ *  never ran — a clean stop read in the ledger exactly like a hang, and the teardown effects fired late. The table forces a
+ *  destroy only "with no destroyed seen" (plan 2026-09-13 streaming-r1 §"Fly machine lifecycle"), so before a due
+ *  `grace_expired` on a `stopping`/`exited` runner the Machine is read ONCE and fed to the table: a destroyed one completes
+ *  the session through the ordinary observed path and the expiry then finds nothing due.
+ *
+ *  Only when that expiry is DUE: a read with nothing to expire asks the provider nothing extra. A read that THROWS is
+ *  reported once (Sentry + a log line; the session, its Machine id and the attempt — never a URL or key) and the expiry runs
+ *  as it always did — a provider outage must not leave a session in `ending`. */
+async function observeRunnerBeforeGraceExpiry(sessionId: string, row: Row | null, deps: SessionDeps): Promise<void> {
+  if (!row) return;
+  const s = toSession(row);
+  // `grace_expired` is only ever a COMPOSED stopping, exited or creating runner's, and a `creating` one holds no Machine id
+  // yet (reconcileSession lists it by name) — so a runner with an id here is stopping or exited.
+  const machineId = s.runner.machineId;
+  if (!machineId || evaluate(s, deps.now()).kind !== "grace_expired") return;
+  let observed: Awaited<ReturnType<SessionDeps["drivers"]["runner"]["observe"]>>;
+  try {
+    observed = await deps.drivers.runner.observe(machineId);
+  } catch (err) {
+    const extra = { sessionId, machineId, attempt: s.runner.attempt };
+    captureError(err, { orgId: s.orgId, route: "relay.runner_observe_pre_grace", extra });
+    log.warn({ ...extra, err: String(err) }, "stream session: the Machine could not be observed before its stop grace expired — reported; the expiry force-destroys it as before");
+    return;
+  }
+  await applyObservation(sessionId, observed, deps);
+}
+
+/** The lazy expiry path (recommendation B). I1: a passthrough warming session's ingest is observed first; likewise a composed
+ *  runner whose stop grace has run out has its Machine observed before the expiry may force-destroy it. */
 export async function applyExpiry(sessionId: string, deps: SessionDeps): Promise<Session | null> {
-  const ingestUnknown = await observeIngestBeforeExpiry(sessionId, deps);
+  const row = await readRow(sessionId);                    // ONE read for both pre-observers (a passthrough warming row and a composed machine-holding row never overlap)
+  const ingestUnknown = await observeIngestBeforeExpiry(sessionId, row, deps);
+  await observeRunnerBeforeGraceExpiry(sessionId, row, deps);
   // `none` is the T5-a null command — write nothing, run nothing (post-2C-post plan sync). The committed domain REFUSES
   // `expire none` on a TERMINAL session (C27's negative pair: only `grace_expired` passes its guard), and `reconcileSession`
   // runs this on terminal rows by design — the sweep's backstop selects every terminal row whose runner is still alive, and
@@ -845,11 +886,7 @@ export async function reconcileSession(sessionId: string, deps: SessionDeps): Pr
     return mine ? apply(sessionId, { type: "runner", trigger: { type: "create_ok", machineId: mine.runnerId } }, deps) : s;
   }
   if (!r.machineId) return s;
-  const observed = await deps.drivers.runner.observe(r.machineId);
-  return apply(sessionId, { type: "runner", trigger: { type: "observed", state: observed.state, exit: observed.exit, restarting: observed.restarting, restartingSince: observed.restartingSince,
-    // R2003b: the exit's identity, the provider's restart count and the exit's own restart record — what the crash cap
-    // counts an observed crash by
-    exitAt: observed.exitAt, restartCount: observed.restartCount, exitRestarted: observed.exitRestarted } }, deps);
+  return applyObservation(sessionId, await deps.drivers.runner.observe(r.machineId), deps);
 }
 
 /** R2004, PR #981 review I3 (coordinator ruling, money): the destination output could not be added. Reported, then the

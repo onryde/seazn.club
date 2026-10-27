@@ -811,10 +811,13 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped',
                   ending_at = now() - make_interval(secs => ${ENDING_TIMEOUT_SECONDS + 60}) where id = ${end2.sessionId}`;
     const forced = await rig("composed");
-    await goLive(forced);
+    const forcedMachine = await goLive(forced);
     await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', runner_state = 'stopping', ending_at = now(),
                   runner_stop_requested_at = now() - make_interval(secs => ${PAST_GRACE_SECONDS}) where id = ${forced.sessionId}`;
-    const res = await sweep(prov, { orgIds: [prov, adm, end, end2, forced].map((x) => x.orgId) });
+    // The sweep must look at the runner that HOLDS the forced session's Machine: a prov-rig fake has never heard of it and reads it
+    // `destroyed`, which the grace expiry (observing first) rightly completes as `completedObserved`. This Machine stays up.
+    const res = await sweep(prov, { orgIds: [prov, adm, end, end2, forced].map((x) => x.orgId), runner: forced.runner });
+    expect(forced.runner.destroyed, "the Machine that never auto-destroyed was forced").toEqual([forcedMachine]);
     // The SPECIFIC counter, never a non-zero total: folding these into `crashed` would keep every "did something" assertion green.
     expect(res.backstop).toMatchObject({
       candidates: 5, visited: 5, errored: 0,
@@ -837,6 +840,24 @@ describe.skipIf(!HAS_DB)("relay sweep (daily)", () => {
     const res = await sweep(r);
     expect(res.backstop).toMatchObject({ candidates: 1, visited: 1, completedObserved: 1, endingTimedOut: 0, graceForced: 0 });
     expect(await r.state()).toMatchObject({ state: "completed", runner_state: "destroyed" });
+    expect(res.runnerGoneConfirmed).toBe(1);
+  });
+
+  it("PAIR of the forced case: a stop whose grace ran out UNREAD, with the Machine already gone (exit 0), is `completedObserved` — never `graceForced` — and nothing is destroyed (measured on stg 2026-10-27)", async () => {
+    const r = await rig("composed");
+    const m = await goLive(r);
+    await sql`update fixture_stream_sessions set state = 'ending', desired_state = 'ending', end_reason = 'stopped', runner_state = 'stopping', ending_at = now(),
+                  runner_stop_requested_at = now() - make_interval(secs => ${PAST_GRACE_SECONDS}) where id = ${r.sessionId}`;
+    r.runner.setObserved(m, "destroyed", { exitCode: 0, oomKilled: false, requestedStop: true });
+    const res = await sweep(r);
+    expect(res.backstop).toMatchObject({ candidates: 1, visited: 1, completedObserved: 1, graceForced: 0, endingTimedOut: 0 });
+    expect(r.runner.destroyed, "the Machine was already gone — no destroy call").toEqual([]);
+    expect(await effects(r.sessionId, "force_destroy")).toEqual([]);
+    expect(await r.state()).toMatchObject({ state: "completed", runner_state: "destroyed" });
+    const rt = await sql<{ type: string; from_state: string; to_state: string }[]>`
+      select type, from_state, to_state from fixture_stream_events
+       where session_id = ${r.sessionId} and kind = 'runner_transition' and ((type = 'observed' and to_state = 'destroyed') or type = 'grace_expired') order by seq`;
+    expect(rt, "completed by the observation, never by the grace").toEqual([{ type: "observed", from_state: "stopping", to_state: "destroyed" }]);
     expect(res.runnerGoneConfirmed).toBe(1);
   });
 
