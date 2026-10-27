@@ -99,6 +99,9 @@
 //     call it; credit-pack-refund.test.ts drives both to a row), for a Checkout Session, the same way.
 //   - staff_size_pack_grant_failed: the real `alertSizePackGrantFailed` (its one site, `grantSizePackAddon`, calls it;
 //     size-pack-addon.test.ts drives it to a row through the webhook), the same way.
+//   - staff_stream_credit_grant_failed: the real `alertStreamCreditGrantFailed` (both ungranted limbs of the webhook's
+//     `stream_credits` branch call it; stream-credits-webhook.test.ts drives both to a row, and the return-page reconcile never
+//     pages), the same way.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -198,6 +201,7 @@ import { refreshDiscipline } from "@/server/usecases/scoring";
 import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
 import { detachOrgFromGroup, offerGroupTransfer } from "@/server/usecases/billing-groups";
 import { seedCommunityGroup, seedDetachableGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { alertStreamCreditGrantFailed } from "@/server/usecases/stream-credits-checkout";
 import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
@@ -1186,6 +1190,29 @@ function sizePackGrantFailedScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for a paid match-credit session that granted nothing, to this run's STAFF_ALERT_EMAIL: no org, no account,
+ *  and the worker makes the first attempt. The subject is the sender's inline English, typed from its source. */
+function streamCreditGrantFailedScenario(): LiteralKindScenario {
+  const recipient = address();
+  const sessionId = `cs_${RUN}_stream_${randomUUID().slice(0, 8)}`;
+  return {
+    locale: "en",
+    subjectLiteral: `Match credits could not be granted: ${sessionId}`,
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      const id = await alertStreamCreditGrantFailed({
+        sessionId,
+        orgId: randomUUID(),
+        packRaw: "7",
+        reason: "no credits snapshot and no resolvable pack",
+      });
+      expect(id, "premise: the real alert was queued").toEqual(expect.any(String));
+    },
+  };
+}
+
 /** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
  *  request makes the first attempt. */
 async function emailChangeConfirmationScenario(): Promise<KindScenario> {
@@ -1754,6 +1781,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_registration_refund_failed: registrationRefundFailedScenario(),
         staff_credit_pack_grant_failed: creditPackGrantFailedScenario(),
         staff_size_pack_grant_failed: sizePackGrantFailedScenario(),
+        staff_stream_credit_grant_failed: streamCreditGrantFailedScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

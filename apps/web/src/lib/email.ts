@@ -765,7 +765,6 @@ export function sizePackGrantFailedAlertEmail(opts: SizePackGrantFailedAlertEmai
 }
 
 export interface StreamCreditGrantFailedAlertEmail {
-  to: string;
   sessionId: string;
   orgId: string;
   /** The `pack` size the session named, when it named one at all. */
@@ -784,12 +783,14 @@ export interface StreamCreditGrantFailedAlertEmail {
  *  MATCH credits, not the AI credit wallet — a separate ledger
  *  (`org_stream_credits`) and a separate remedy (the /admin Match credits
  *  panel's grant, capped at 50 per action). Kept as its own builder rather
- *  than reusing `sendCreditPackGrantFailedAlertEmail` precisely so the subject
+ *  than reusing `creditPackGrantFailedAlertEmail` precisely so the subject
  *  line does not send whoever triages it to the wrong balance.
- *  Ops-only, no user-facing i18n (mirrors the two builders above). */
-export async function sendStreamCreditGrantFailedAlertEmail(
-  opts: StreamCreditGrantFailedAlertEmail,
-): Promise<boolean> {
+ *  Ops-only, no user-facing i18n (mirrors the two builders above).
+ *
+ *  RENDERED and not sent: `alertStreamCreditGrantFailed` (stream-credits-checkout.ts) queues what this returns on the
+ *  email outbox through `queueStaffAlert` (kind `staff_stream_credit_grant_failed`), once per Checkout Session. Nothing
+ *  sends it directly. */
+export function streamCreditGrantFailedAlertEmail(opts: StreamCreditGrantFailedAlertEmail): EmailContent {
   const subject = `Match credits could not be granted: ${opts.sessionId}`;
   const bodyText =
     `A completed match-credit checkout session (${opts.sessionId}, org ${opts.orgId}` +
@@ -811,7 +812,7 @@ export async function sendStreamCreditGrantFailedAlertEmail(
     footerNote: "Automated staff alert — match credits webhook (streaming R1).",
   });
   const text = `${bodyText}\n\nSession: ${opts.sessionId} · org ${opts.orgId} · reason: ${opts.reason}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface StreamCreditClawbackAlertEmail {
@@ -841,7 +842,7 @@ export interface StreamCreditClawbackAlertEmail {
  *     proportion is a judgement call.
  *   * a refunded charge with NO match-credit purchase row — nothing to reverse.
  *
- *  NOT a reuse of `sendStreamCreditGrantFailedAlertEmail`: that subject says
+ *  NOT a reuse of `streamCreditGrantFailedAlertEmail`: that subject says
  *  credits could not be GRANTED and its body tells the reader to grant them
  *  manually, which is exactly backwards here. Its own doc comment records that
  *  it was kept separate from the AI-wallet builder so the subject does not send

@@ -17,7 +17,8 @@
 //
 // The ledger ROW COUNT is asserted directly, never inferred from the balance: a
 // second row carrying a compensating delta would leave the balance unchanged.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
 import { sql } from "@/lib/db";
 import { seedOrg } from "./_rig";
@@ -26,13 +27,21 @@ import { creditBalance } from "../stream-credits";
 import { fulfilStreamCreditsCheckout, reconcileStreamCreditsCheckout, reconcileStreamCreditsReturn, type StreamReturnOutcome } from "../stream-credits-checkout";
 import { buildRelayCheckoutParams } from "@/lib/relay-checkout";
 import { streamPack } from "@/lib/stream-credit-packs";
-import { sendStreamCreditGrantFailedAlertEmail } from "@/lib/email";
+import { streamCreditGrantFailedAlertEmail } from "@/lib/email";
+import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
+import { staffAlertDrops, staffRows } from "./_money-fixtures";
 
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendStreamCreditGrantFailedAlertEmail: vi.fn(async () => true),
-}));
+// The match-credit grant alert (phase 3 wave 5, kind `staff_stream_credit_grant_failed`) is queued on the email outbox; the N4
+// tests read its row. Its builder and Sentry's issue capture are observed, both calling through.
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  return { ...actual, streamCreditGrantFailedAlertEmail: vi.fn(actual.streamCreditGrantFailedAlertEmail) };
+});
+vi.mock("@/lib/sentry", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/sentry")>();
+  return { ...actual, captureError: vi.fn(actual.captureError) };
+});
 
 // The ONE Stripe call the reconcile makes is `checkout.sessions.retrieve`; the
 // table below is what Stripe "holds". Anything else (customers.retrieve, via
@@ -186,13 +195,23 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsCheckout — the return render l
   // render (a refresh, a second tab, a back button), so a page from it would repeat per render; it logs instead, and
   // the webhook — once per event, behind runEvent's claim — is the one caller that alerts.
   describe("N4: a terminal refusal pages staff from the WEBHOOK only — reconcile logs it and stays quiet", () => {
-    const alertMock = vi.mocked(sendStreamCreditGrantFailedAlertEmail);
+    const KIND = "staff_stream_credit_grant_failed";
+    const RUN = `scr-${randomUUID().slice(0, 8)}`;
+    const alertMock = vi.mocked(streamCreditGrantFailedAlertEmail);
+    /** This test's own staff address: CI sets none, and the database is shared. */
+    let staff = "";
     beforeEach(() => {
       alertMock.mockClear();
-      vi.stubEnv("STAFF_ALERT_EMAIL", "billing-ops@example.test");
+      vi.mocked(captureError).mockClear();
+      staff = `staff-${RUN}-${randomUUID().slice(0, 8)}@x.test`;
+      vi.stubEnv("STAFF_ALERT_EMAIL", staff);
+    });
+    afterAll(async () => {
+      if (!HAS_DB) return;
+      await sql`delete from email_outbox where kind = ${KIND} and lower(recipient) like ${`staff-${RUN}-%`}`;
     });
 
-    it("the ungranted limb (no credits snapshot, no resolvable pack): reconcile logs and sends 0 alerts; the webhook sends 1", async () => {
+    it("the return-page reconcile never pages (the ungranted limb): reconcile logs and queues 0 alerts; the webhook queues 1", async () => {
       const { auth } = await seedOrg();
       const sid = `cs_test_rec_ungranted_${auth.orgId.slice(0, 8)}`;
       const base = relaySession(auth.orgId, sid);
@@ -203,13 +222,18 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsCheckout — the return render l
       const errors = vi.spyOn(log, "error");
 
       expect(await reconcileStreamCreditsCheckout(auth.orgId, sid)).toBe(false);
-      expect(alertMock, "reconcile never pages").not.toHaveBeenCalled();
+      expect(alertMock, "reconcile never renders an alert").not.toHaveBeenCalled();
+      expect(await staffRows(KIND, "checkout_session", sid), "reconcile never pages").toHaveLength(0);
       expect(errors.mock.calls.some(([, text]) => /paid but ungranted/.test(String(text))), "…but it does log").toBe(true);
       expect(await purchaseRows(auth.orgId)).toEqual([]);
 
+      // The positive pair: the webhook for the same session pages, once.
       expect(await runEvent(completedEvent(structuredClone(session)))).toBe(true);
-      expect(alertMock, "the webhook pages, once").toHaveBeenCalledTimes(1);
-      expect(alertMock.mock.calls[0]![0]).toMatchObject({ to: "billing-ops@example.test", sessionId: sid, orgId: auth.orgId });
+      expect(await staffRows(KIND, "checkout_session", sid), "the webhook pages, once").toEqual([
+        { ref_id: sid, dedupe_key: sid, status: "queued", recipient: staff, subject: `Match credits could not be granted: ${sid}` },
+      ]);
+      expect(alertMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: sid, orgId: auth.orgId }));
+      expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
     });
 
     it("the org-mismatch limb (the session id already recorded for another org): reconcile logs and sends 0 alerts; the webhook sends 1", async () => {
@@ -225,15 +249,17 @@ describe.skipIf(!HAS_DB)("reconcileStreamCreditsCheckout — the return render l
       const errors = vi.spyOn(log, "error");
 
       expect(await reconcileStreamCreditsCheckout(second.orgId, sid)).toBe(false);
-      expect(alertMock, "reconcile never pages").not.toHaveBeenCalled();
+      expect(alertMock, "reconcile never renders an alert").not.toHaveBeenCalled();
+      expect(await staffRows(KIND, "checkout_session", sid), "reconcile never pages").toHaveLength(0);
       expect(errors.mock.calls.some(([, text]) => /already recorded for another organisation/.test(String(text))), "…but it does log").toBe(true);
       expect(await purchaseRows(second.orgId)).toEqual([]);
 
       const ev = completedEvent(structuredClone(collide));
       (ev as unknown as { id: string }).id = `evt_rec_mismatch_${second.orgId.slice(0, 8)}`;
       expect(await runEvent(ev)).toBe(true);
-      expect(alertMock, "the webhook pages, once").toHaveBeenCalledTimes(1);
-      expect(alertMock.mock.calls[0]![0]).toMatchObject({ sessionId: sid, orgId: second.orgId });
+      expect(await staffRows(KIND, "checkout_session", sid), "the webhook pages, once").toMatchObject([{ ref_id: sid, status: "queued", recipient: staff }]);
+      expect(alertMock).toHaveBeenCalledWith(expect.objectContaining({ sessionId: sid, orgId: second.orgId }));
+      expect(staffAlertDrops(errors, vi.mocked(captureError)), "the alert was queued, not dropped").toEqual({ logged: 0, issues: 0 });
     });
   });
 });
