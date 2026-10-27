@@ -18,6 +18,7 @@ import {
   planW1Driving, readDropIndex, readVariantsFile,
 } from "../lib/w1-driving-set.ts";
 import { slicePlanner } from "../run.ts";
+import { REFUSED_CELLS, REFUSED_REASON, isRefusedCell } from "./refused-cells.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const variantFor = offlineBuilderDefault;
@@ -52,6 +53,18 @@ describe("planW1Driving — empty and unknown first", () => {
     expect(() => planW1Driving(variantFor, { only: "page_playoff_only|generic", scenario: "F1" })).toThrow(W1DrivingPlansNothing);
     expect(() => planW1Driving(variantFor, { only: "page_playoff_only|generic", scenario: "F1" })).toThrow(g!.reason);
   });
+  it("a cell the product refuses (chess americano/mexicano, owner ruling 2026-10-26) is refused by name with the refusal as the reason, every scenario — and its row still plans for badminton", () => {
+    let checked = 0;
+    for (const cell of REFUSED_CELLS) {
+      expect(() => planW1Driving(variantFor, { only: cell }), cell).toThrow(W1DrivingPlansNothing);
+      expect(() => planW1Driving(variantFor, { only: cell }), cell).toThrow(REFUSED_REASON);
+      for (const scenario of W1_DRIVING_SCENARIOS) expect(() => planW1Driving(variantFor, { only: cell, scenario }), `${cell} ${scenario}`).toThrow(REFUSED_REASON);
+      const row = cell.split("|")[0]!;
+      expect(planW1Driving(variantFor, { only: `${row}|badminton` }).map((c) => c.scenario), row).toEqual(["LIFECYCLE", "M1", "R4", "F1"]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
   it("the set's scenarios are the four scripted ones, each the script of its catalogue atom", () => {
     expect([...W1_DRIVING_SCENARIOS]).toEqual(["LIFECYCLE", "M1", "R4", "F1"]);
     for (const s of W1_DRIVING_SCENARIOS) expect(HARNESS_SCENARIO[ATOM_OF[s]], s).toBe(s);
@@ -69,13 +82,15 @@ describe("planW1Driving — the whole set", () => {
     }
     const testCases = cricketTests().filter((c) => c.scorable === null).length;
     const plan = planW1Driving(variantFor, {});
-    expect(drops).toBe(11);
+    // 11 F1 page_playoff_only drops (Task 2) + the four scripts on each cell the product refuses (follow-up to #1027).
+    expect(drops).toBe(11 + REFUSED_CELLS.length * W1_DRIVING_SCENARIOS.length);
     expect(testCases).toBe(24);
     expect(cricketTests().length).toBe(testCases);
     expect(plan.length).toBe(expected + testCases);
-    // 231×4 − 11 (F1 page_playoff_only, Task 2) + 24 — the typed pin must equal the derivation.
+    // 231×4 − 11 (F1 page_playoff_only, Task 2) − 2×4 (chess americano/mexicano, refused) + 24 — the typed pin must equal the derivation.
     expect(ROW_KEYS.length * SPORT_KEYS.length).toBe(231);
-    expect(plan.length).toBe(937);
+    expect(plan.length).toBe(929);
+    expect(plan.filter((c) => isRefusedCell(`${c.row}|${c.sport}`))).toEqual([]);
     expect(new Set(plan.map((c) => c.caseId)).size).toBe(plan.length);
   });
   it("no case on a dropped (atom, cell) and every undropped one present — both directions, counted", () => {
@@ -140,7 +155,8 @@ describe("planW1Driving — --only and --scenario", () => {
     expect(planW1Driving(variantFor, { only: "league|cricket", scenario: "M1" }).map((c) => c.caseId)).toEqual([`league|cricket|${variantFor("cricket")}|M1`]);
   });
   it("--scenario alone narrows the whole grid to that scenario (and keeps the test cases only for LIFECYCLE)", () => {
-    const cells = ROW_KEYS.length * SPORT_KEYS.length;
+    // The offered cells: every cell but the ones the product refuses (chess americano/mexicano).
+    const cells = ROW_KEYS.length * SPORT_KEYS.length - REFUSED_CELLS.length;
     expect(planW1Driving(variantFor, { scenario: "M1" }).length).toBe(cells);
     expect(planW1Driving(variantFor, { scenario: "F1" }).length).toBe(cells - 11);
     expect(planW1Driving(variantFor, { scenario: "LIFECYCLE" }).length).toBe(cells + 24);
@@ -250,7 +266,7 @@ describe("the w1-driving planner (run.ts --set w1-driving) and the slice planner
     const whole = makeW1DrivingPlanner()({});
     expect([...whole.sports]).toEqual([...SPORT_KEYS]);
     expect(whole.deniesFeatures).toBe(false);
-    expect(whole.plan(variantFor).length).toBe(937);
+    expect(whole.plan(variantFor).length).toBe(929);
     const one = makeW1DrivingPlanner()({ only: "league_ko|football", scenario: "LIFECYCLE" });
     expect([...one.sports]).toEqual(["football"]);
     expect(one.plan(variantFor).map((c) => c.caseId)).toEqual([`league_ko|football|${variantFor("football")}|LIFECYCLE`]);

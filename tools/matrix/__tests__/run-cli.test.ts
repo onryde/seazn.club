@@ -29,6 +29,7 @@ import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "..
 import { LOCAL_BASE } from "../lib/redact.ts";
 import { slugRunId } from "../lib/run-id.ts";
 import { baseLiteralsIn } from "./loopback-literals.ts";
+import { REFUSED_CELLS, offeredCells } from "./refused-cells.ts";
 import { renderMatrix } from "../lib/render-matrix.ts";
 import { main as renderMain } from "../render.ts";
 import { parseResults, type CaseResult, type CheckResult, type RunResults } from "../lib/results.ts";
@@ -2252,6 +2253,8 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     return { d, reads, opened: () => opened };
   }
   const CELLS = ROW_KEYS.length * SPORT_KEYS.length;
+  /** The L1 grid's cases: every cell but chess americano/mexicano, which the product refuses (owner ruling 2026-10-26). */
+  const OFFERED = CELLS - REFUSED_CELLS.length;
   const RAW_RUNS = (JSON.parse(readFileSync(join(REPO, "tools/matrix/catalogue/l2-pairs.json"), "utf8")) as { runs: { row: string; sport: string }[] }).runs;
   const SLICE_CELLS = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => `${r}|${s}`)));
   const SLICE_RUNS = RAW_RUNS.filter((r) => SLICE_CELLS.has(`${r.row}|${r.sport}`));
@@ -2313,7 +2316,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
       { argv: ["--driver", "browser", "--layer", "L1", "--scope", "slice"], plan: "--layer L1", scope: "L1 (slice)", layer: "L1", cases: SLICE_ROWS.length * SLICE_SPORTS.length },
       { argv: ["--driver", "browser", "--layer", "L2"], plan: "--layer L2", scope: "L2 (slice)", layer: "L2", cases: SLICE_RUNS.length },
       { argv: ["--driver", "browser", "--layer", "L2", "--scope", "slice"], plan: "--layer L2", scope: "L2 (slice)", layer: "L2", cases: SLICE_RUNS.length },
-      { argv: ["--driver", "browser", "--layer", "L1", "--scope", "grid"], plan: "--layer L1 --scope grid", scope: "L1 (grid)", layer: "L1", cases: CELLS },
+      { argv: ["--driver", "browser", "--layer", "L1", "--scope", "grid"], plan: "--layer L1 --scope grid", scope: "L1 (grid)", layer: "L1", cases: OFFERED },
       { argv: ["--driver", "browser", "--layer", "L2", "--scope", "grid"], plan: "--layer L2 --scope grid", scope: "L2 (grid)", layer: "L2", cases: RAW_RUNS.length },
       // No --layer: the plan string alone names the plan, and no scope is written.
       { argv: ["--only", "league|generic", "--scenario", "LIFECYCLE"], plan: "slice --only league|generic --scenario LIFECYCLE", scope: undefined, layer: "L3", cases: 1 },
@@ -2340,22 +2343,23 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(checked).toBe(rows.length);
   });
 
-  it("--layer L1 --scope grid, through the real planner and runner: 231 cells at 1280, the 53 with no organiser path recorded 🚫 and never driven, every sport's variant order read once", async () => {
+  it("--layer L1 --scope grid, through the real planner and runner: the 229 offered cells (231 less chess americano/mexicano) at 1280, the 53 with no organiser path recorded 🚫 and never driven, every sport's variant order read once", async () => {
     capture();
     const dir = dirFor();
     const { d, reads, opened } = gridDeps();
     expect(await runSlice(d, ["--driver", "browser", "--layer", "L1", "--scope", "grid", "--run-id", "g1", "--report-dir", dir])).toBe(0);
     const r = runIn(dir, "g1");
-    expect(r.cases).toHaveLength(CELLS);
+    expect(r.cases).toHaveLength(OFFERED);
     expect(CELLS).toBe(231);
+    expect(OFFERED).toBe(229);
     expect(r.cases.every((c) => c.layer === "L1" && c.width === 1280 && c.caseId.endsWith("@1280"))).toBe(true);
-    expect(new Set(r.cases.map((c) => c.caseId)).size).toBe(CELLS);
-    expect(r.cases.map((c) => `${c.row}|${c.sport}`)).toEqual(ROW_KEYS.flatMap((row) => SPORT_KEYS.map((s) => `${row}|${s}`)));
+    expect(new Set(r.cases.map((c) => c.caseId)).size).toBe(OFFERED);
+    expect(r.cases.map((c) => `${c.row}|${c.sport}`)).toEqual(offeredCells(ROW_KEYS, SPORT_KEYS));
     const planned = r.cases.filter((c) => c.planned === true);
     expect(planned).toHaveLength(53);
     expect(planned.every((c) => c.state === "no_path" && (API_ONLY_ROWS as readonly string[]).includes(c.row))).toBe(true);
     // Every other case was handed to a driver: it is not marked planned, and its state is the scenario's.
-    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(CELLS - 53);
+    expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(OFFERED - 53);
     expect(r.cases.filter((c) => c.planned === undefined).every((c) => c.state !== "no_path" && c.state !== "not_run")).toBe(true);
     expect([...reads].sort()).toEqual([...SPORT_KEYS].sort());
     expect(reads).toHaveLength(SPORT_KEYS.length);

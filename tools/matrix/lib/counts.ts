@@ -1,6 +1,6 @@
 // Design §6.2's layer sizes, derived from what gen-catalogue.ts commits (W1b
 // owes the formulas and the real numbers). Pure and deterministic (R11).
-import { ROW_KEYS, SPORT_KEYS } from "./catalogue.ts";
+import { ROW_KEYS, SPORT_KEYS, refusedCell } from "./catalogue.ts";
 import { cellFacts, scenarioCounts, type Drop, type PlannedCase } from "./applicability.ts";
 import { ATOMIC, LIFECYCLE_ID, PARENTS, l2Atomic, l3Atomic, type RegressionCase } from "./scenario-catalogue.ts";
 import type { L2Run } from "./pairs.ts";
@@ -20,7 +20,8 @@ export interface CaseList { count: number; routedTo?: string; why: string; ids: 
 
 export interface Counts {
   schemaVersion: 1;
-  grid: { rows: number; sports: number; cells: number };
+  /** `refused`: the cells the product refuses (catalogue.ts refusedCell) — on the grid, planned in no layer. */
+  grid: { rows: number; sports: number; cells: number; refused: number };
   catalogue: { parents: number; atomic: number; atomicL3: number; atomicL2: number };
   l1: { formula: string; value: number };
   /** `pairTargets`: the OWED (row, scenario) + (sport, scenario) pairs
@@ -77,6 +78,7 @@ export function computeCounts(input: {
   regressions: readonly RegressionCase[];
 }): Counts {
   const cells = ROW_KEYS.length * SPORT_KEYS.length;
+  const refused = ROW_KEYS.reduce((n, r) => n + SPORT_KEYS.filter((s) => refusedCell(r, s) !== null).length, 0);
   const lifecycle = input.l3.cases.filter((c) => c.scenario === LIFECYCLE_ID).length;
   const atomicApplicable = input.l3.cases.length - lifecycle;
   const all = input.variants.flatMap((v) => v.cases);
@@ -94,10 +96,11 @@ export function computeCounts(input: {
   const dropped = scenarioCounts(input.l3.drops);
   return {
     schemaVersion: 1,
-    grid: { rows: ROW_KEYS.length, sports: SPORT_KEYS.length, cells },
+    grid: { rows: ROW_KEYS.length, sports: SPORT_KEYS.length, cells, refused },
     catalogue: { parents: PARENTS.length, atomic: ATOMIC.length, atomicL3: l3Atomic().length, atomicL2: l2Atomic().length },
     // Ruling 39: L1 runs at 1280 only, so a cell is ONE case. (This said "cells × 2 widths (1280, 320)" = 462 until W1d Task 3.)
-    l1: { formula: "cells × 1 width (1280; ruling 39)", value: cells },
+    // A refused cell has no case (layers.ts planL1Grid; follow-up to #1027).
+    l1: { formula: "offered cells (cells − refused) × 1 width (1280; ruling 39)", value: cells - refused },
     l2: {
       formula: "runs in l2-pairs.json; pairTargets = owed (row, scenario) + (sport, scenario) pairs (the scenario applies there, or its only drop is the L3 harness gap — that run is marked l3Gap), each covered by one run, so runs ≥ owed (row, scenario) pairs",
       value: input.l2.runs.length,
@@ -105,7 +108,7 @@ export function computeCounts(input: {
       l3GapRuns: input.l2.runs.filter((r) => r.l3Gap !== null).length,
     },
     l3: {
-      formula: "Σ cells (1 LIFECYCLE + applicable L3 atomic, variant-bound included) + scorable variant cases (Q-B: LIFECYCLE each; unscorable ones are listed under variants, not run) + denied cases (one per gated row, generic) + regression cases",
+      formula: "Σ offered cells (1 LIFECYCLE + applicable L3 atomic, variant-bound included) + scorable variant cases (Q-B: LIFECYCLE each; unscorable ones are listed under variants, not run) + denied cases (one per gated row, generic) + regression cases",
       lifecycle,
       atomicApplicable,
       bound: input.l3.cases.filter((c) => c.bound !== null).length,

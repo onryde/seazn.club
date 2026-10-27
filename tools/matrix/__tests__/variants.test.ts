@@ -12,6 +12,7 @@ import {
   SPORT_RULES, buildRuleOverride, showsOnePointsField, visibleRuleFields, type RuleField,
 } from "../../../apps/web/src/lib/match-rules/index.ts";
 import { BUILDER_PREFERRED_VARIANT, ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
+import { REFUSED_CELLS, offeredRows } from "./refused-cells.ts";
 import { CfgInvalid, UnknownSport, UnknownVariant, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
@@ -420,9 +421,15 @@ describe("the pair-wise cover", () => {
     expect(judged).toBe(SPORT_KEYS.length);
     expect(witnesses).toBeGreaterThan(0);
   });
-  it("covers every row: each sport has a case on each of the 21 rows", () => {
+  it("covers every row: each sport has a case on each of the 21 rows it is offered, and none on a refused cell (chess americano/mexicano)", () => {
     expect(ROW_KEYS.length).toBe(21);
-    for (const v of ALL) expect(new Set(v.cases.map((c) => c.row)).size, v.sport).toBe(ROW_KEYS.length);
+    let refusedRows = 0;
+    for (const v of ALL) {
+      const want = offeredRows(ROW_KEYS, v.sport);
+      expect([...new Set(v.cases.map((c) => c.row))].sort(), v.sport).toEqual([...want].sort());
+      refusedRows += ROW_KEYS.length - want.length;
+    }
+    expect(refusedRows).toBe(REFUSED_CELLS.length);
   });
   it("case ids are unique per sport and ordered", () => {
     let n = 0;

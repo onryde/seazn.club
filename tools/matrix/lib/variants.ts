@@ -7,7 +7,7 @@
 // randomness (R11) — a regeneration is a reviewed diff of variants.json.
 import { EngineError, type StageKind } from "@seazn/engine/core";
 import { SPORT_RULES, buildRuleOverride, visibleRuleFields, type RuleField } from "../../../apps/web/src/lib/match-rules/index.ts";
-import { ROW_KEYS, builderDefaultVariant, stagesForRow, type RowKey } from "./catalogue.ts";
+import { ROW_KEYS, builderDefaultVariant, refusedCell, stagesForRow, type RowKey } from "./catalogue.ts";
 import { foldStream } from "./fold.ts";
 import { CfgInvalid, resolveSportCfg, sportModule, stageCfg, variantKeys } from "./sport-cfg.ts";
 import { generateStream, matchesRequest } from "./streams/index.ts";
@@ -78,7 +78,9 @@ export interface Factor { readonly name: string; readonly levels: readonly Level
 
 export function factorsFor(sport: string): Factor[] {
   return [
-    { name: "row", levels: ROW_KEYS.map((r) => ({ cls: r, raw: r })) },
+    // The rows the sport is OFFERED: a cell the product refuses (catalogue.ts refusedCell — chess americano/mexicano,
+    // follow-up to #1027) is no combination an organiser can make, so no variant case sits on it.
+    { name: "row", levels: ROW_KEYS.filter((r) => refusedCell(r, sport) === null).map((r) => ({ cls: r, raw: r })) },
     { name: "preset", levels: offlineVariantOrder(sport).map((v) => ({ cls: v, raw: v })) },
     // The fields with boundary classes. A sequence field (an ordered list: chess's tie-break rungs) IS shown by the editor
     // since W2c Task 17 built its control, but it is neither a bound nor an option set, so it has no boundary classes and

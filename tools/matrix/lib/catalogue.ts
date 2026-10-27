@@ -8,7 +8,13 @@
 // builder's own output goes through the real API), with the builder's clamp,
 // carry and seq steps restated (division-builder.tsx:384-392, 443-447). The
 // API-only rows are derived from product authorities too (apiOnlyStages).
+//
+// The grid stays rows × sports, but a cell the PRODUCT refuses (refusedCell:
+// chess americano/mexicano since the follow-up to #1027) is planned in no
+// layer: every scenario drops there with the refusal as its reason.
 import { builtinModules } from "@seazn/engine/sports";
+// The product's own stage-kind rule (chess is individual-only), import-free so plain node loads it (boundary.test.ts).
+import { sportRefusesStageKind } from "../../../apps/web/src/lib/chess-individual-only-rule.ts";
 import {
   STAGE_TEMPLATES,
   applyStandingsCarry,
@@ -161,4 +167,23 @@ export function stagesForRow(row: string, knobs: TemplateKnobs = BUILDER_DEFAULT
   else if ((TEMPLATE_ROW_KEYS as readonly string[]).includes(row)) drafts = builderStages(row as TemplateRowKey, knobs);
   else throw new UnknownRow(row);
   return drafts.map((s, i) => ({ ...s, seq: i + 1 }));
+}
+
+/** The drop reason of a cell the product refuses: the committed drop list carries it, once per (scenario, cell). */
+export const REFUSED_CELL_REASON =
+  "the product refuses this format for the sport: chess is individual-only (owner ruling 2026-10-26) and an americano or mexicano stage mints pair entrants, so the builder does not offer it and the stage create answers 422 CHESS_INDIVIDUAL_ONLY (PR #1027 and its follow-up)";
+
+const refusedMemo = new Map<string, string | null>();
+/** Why the PRODUCT refuses this cell, or null when it is offered: a stage of the row's own bodies (stagesForRow, the
+ *  builder's or the API-only derivation) is a kind the sport refuses, by the product's rule (sportRefusesStageKind —
+ *  the same predicate the builder's offer and the stage create read). A refused cell has no organiser path and no API
+ *  path, so no layer plans a case on it (applicability.ts decide, layers.ts planL1Grid). */
+export function refusedCell(row: RowKey, sport: string): string | null {
+  const id = cellId(row, sport);
+  let out = refusedMemo.get(id);
+  if (out === undefined) {
+    out = stagesForRow(row).some((s) => sportRefusesStageKind(sport, s.kind)) ? REFUSED_CELL_REASON : null;
+    refusedMemo.set(id, out);
+  }
+  return out;
 }

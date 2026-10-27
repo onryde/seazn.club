@@ -19,6 +19,7 @@ import { GapUnbound, L2_WIDTHS, UnknownL2Scenario, VariantsIncomplete, planL2, t
 import { routeTo } from "../lib/routing.ts";
 import { l2Atomic, l3Atomic } from "../lib/scenario-catalogue.ts";
 import { buildSportVariants, offlineBuilderDefault } from "../lib/variants.ts";
+import { offeredRows } from "./refused-cells.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const variants = SPORT_KEYS.map((s) => buildSportVariants(s));
@@ -159,7 +160,8 @@ describe("L2 pair file", () => {
       if (vc === undefined) continue;
       const r: Rule = { when: (f) => f.sport === v.sport && f.preset !== offlineBuilderDefault(v.sport), reason: "off-default preset", variantDependent: true, witness: null, gap: { when: () => true, route: routeTo("W2", "variant gap") } };
       const p = planL2({ variants, rules: { ...RULES, [id]: r }, only: [id] });
-      expect(p.runs.length, v.sport).toBe(ROW_KEYS.length);
+      // Every row the sport is offered (chess is offered no americano/mexicano, owner ruling 2026-10-26).
+      expect(p.runs.map((x) => x.row), v.sport).toEqual(offeredRows(ROW_KEYS, v.sport));
       for (const x of p.runs) expect({ sport: x.sport, preset: x.preset, bound: x.bound, l3Gap: x.l3Gap }, `${v.sport} ${x.row}`).toEqual({ sport: v.sport, preset: vc.preset, bound: vc.id, l3Gap: "variant gap — routed W2" });
       checked++;
     }
