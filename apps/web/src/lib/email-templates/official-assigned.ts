@@ -1,5 +1,6 @@
 import { button, linkFallback, panel, paragraph, renderEmail } from "./compose";
 import { t, type Dict } from "@/lib/i18n";
+import type { Locale } from "@/lib/i18n-constants";
 
 export interface OfficialAssignedArgs {
   orgName: string;
@@ -17,12 +18,16 @@ export interface OfficialAssignedArgs {
   }[];
 }
 
-/** Venue-zone datetime with the zone labelled ("TBC" when unscheduled). */
-export function fixtureWhen(at: string | null, tz: string | null): string {
-  if (!at) return "TBC";
+/** The Intl tag an email's locale formats dates with (en keeps the day-month order it always had). */
+const DATE_TAG: Record<Locale, string> = { en: "en-GB", fr: "fr-FR", es: "es-ES", nl: "nl-NL" };
+
+/** Venue-zone datetime with the zone labelled, in `locale`'s words and order; `tbc` when unscheduled. The defaults are the
+ *  English the officials' exports print (`exports.ts`); an email passes its own locale and the dictionary's "TBC". */
+export function fixtureWhen(at: string | null, tz: string | null, locale: Locale = "en", tbc = "TBC"): string {
+  if (!at) return tbc;
   const zone = tz ?? "UTC";
   try {
-    const s = new Date(at).toLocaleString("en-GB", {
+    const s = new Date(at).toLocaleString(DATE_TAG[locale], {
       timeZone: zone,
       weekday: "short",
       day: "numeric",
@@ -36,19 +41,43 @@ export function fixtureWhen(at: string | null, tz: string | null): string {
   }
 }
 
-/** New officiating assignment(s) (PROMPT-57): one panel per match, CTA to the
- *  /me officiating lane where accept/decline lives. Default locale en —
- *  officials have no stored locale (registrations.locale precedent). */
+// Static map, not a template literal: the repo's i18n convention keeps message keys enumerable. The preset crews' roles
+// (lib/official-roles.ts ALL_OFFICIAL_ROLES); a custom role an organiser typed is shown as typed.
+const ROLE_LABEL_KEY = new Map<string, string>([
+  ["referee", "officialRole.referee"],
+  ["chair_umpire", "officialRole.chair_umpire"],
+  ["line_umpire", "officialRole.line_umpire"],
+  ["linesman", "officialRole.linesman"],
+  ["scorekeeper", "officialRole.scorekeeper"],
+  ["timekeeper", "officialRole.timekeeper"],
+  ["umpire", "officialRole.umpire"],
+  ["technical_officer", "officialRole.technical_officer"],
+  ["reserve_umpire", "officialRole.reserve_umpire"],
+  ["judge", "officialRole.judge"],
+  ["scorer", "officialRole.scorer"],
+]);
+
+/** An officiating role in the email's language: a preset role from the dictionary, a custom one as the organiser typed it. */
+export function officialRoleLabel(roleKey: string, dict: Dict): string {
+  const key = ROLE_LABEL_KEY.get(roleKey);
+  return key !== undefined ? t(dict, key) : roleKey;
+}
+
+/** New officiating assignment(s) (PROMPT-57): one panel per match, CTA to the /me officiating lane where accept/decline lives.
+ *  Everything in it is in `locale` (the official's: their account's, else the org's, F5): the dictionary copy, the role, the
+ *  match time and "TBC". The caller builds the match labels in the same locale. */
 export function officialAssignedTemplate(
   args: OfficialAssignedArgs,
   dict: Dict,
+  locale: Locale = "en",
 ): { subject: string; html: string; text: string } {
   const subject = t(dict, "officialAssigned.subject", { orgName: args.orgName });
+  const tbc = t(dict, "officialEmail.tbc");
   const lines = args.fixtures.map((f) => {
     const where = [f.court_label, f.venue].filter(Boolean).join(" · ");
     return {
       title: f.label,
-      body: `${f.role_key} · ${fixtureWhen(f.scheduled_at, f.venue_tz)}${where ? ` · ${where}` : ""}`,
+      body: `${officialRoleLabel(f.role_key, dict)} · ${fixtureWhen(f.scheduled_at, f.venue_tz, locale, tbc)}${where ? ` · ${where}` : ""}`,
     };
   });
   return {

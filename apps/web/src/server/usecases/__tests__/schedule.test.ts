@@ -4,8 +4,12 @@
 // start, score round 1, rain-reschedule remaining. Plus the Community gates
 // (doc 12 §5): constraints/board are Pro, quick-start unaffected.
 // Real Postgres required; skipped without DATABASE_URL (CI runs them).
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import enEmails from "@/dictionaries/en/emails.json";
+import nlEmails from "@/dictionaries/nl/emails.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 import { EngineError } from "@seazn/engine/core";
 import { buildGrid, slotFixtures } from "@seazn/engine/scheduling";
 import { sql, withTenant } from "@/lib/db";
@@ -43,22 +47,32 @@ import {
 import { seedOrg as seedOfficialsOrg, seedFutureDivision } from "./_seed";
 import { createOfficial } from "../officials";
 import { msgFor } from "@/lib/messages-i18n";
+import { LIVE_STATUSES, MAX_EXPIRY_MS, type OutboxStatus } from "@/server/email-outbox/constants";
+import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { stubOutboxEnv } from "./_invite-mail";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
-// F5/Task 9: the officials schedule-change notice email used to coalesce an
-// unfilled home/away name straight to the bare literal "TBD", never
-// selecting home_slot_label/away_slot_label at all — so a court/time
-// reassignment on an unresolved (day-one) fixture emailed "TBD vs TBD"
-// instead of the same slot text every HTML surface already shows for that
-// fixture. vi.hoisted for the same reason officials.test.ts uses it: the
-// vi.mock factory below hoists above this const otherwise.
-const { sendOfficialAssignmentChangedEmail } = vi.hoisted(() => ({
-  sendOfficialAssignmentChangedEmail: vi.fn().mockResolvedValue(true),
-}));
+// The officials' change notice is RENDERED by `officialAssignmentChangedEmail` and queued on the email outbox (phase 3
+// wave 4, kind `official_assignment_changed`) in the move's transaction. The builder is WRAPPED, never replaced: the real
+// render runs, and the spy records what the notice was built from (the label, the new time, the language) by the time
+// moveFixture resolves. vi.hoisted for the same reason officials.test.ts uses it: the vi.mock factory below hoists above
+// this const otherwise. The rest of the module is the real one (importOriginal).
+const mail = vi.hoisted(() => ({ changed: vi.fn<typeof import("@/lib/email").officialAssignmentChangedEmail>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return { ...actual, sendOfficialAssignmentChangedEmail };
+  mail.changed.mockImplementation(actual.officialAssignmentChangedEmail);
+  return { ...actual, officialAssignmentChangedEmail: mail.changed };
+});
+// The outbox's one network seam: captured, never sent. The row, the seal, the gate and the attempt are the real ones.
+const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
+// `dispatchNow` is the real one, wrapped, so one test can hold a notice queued (a second move "while the first waits").
+const outbox = vi.hoisted(() => ({ dispatchNow: vi.fn<typeof import("@/server/email-outbox").dispatchNow>() }));
+vi.mock("@/server/email-outbox", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/server/email-outbox")>();
+  outbox.dispatchNow.mockImplementation(actual.dispatchNow);
+  return { ...actual, dispatchNow: outbox.dispatchNow };
 });
 
 const DIVISION_CONFIG = {
@@ -879,15 +893,15 @@ describe.skipIf(!HAS_DB)("moveFixture officials change-notice email resolves slo
     const [before] = await sql<{ scheduled_at: Date }[]>`
       select scheduled_at from fixtures where id = ${fixtureId}`;
 
-    sendOfficialAssignmentChangedEmail.mockClear();
+    mail.changed.mockClear();
     await moveFixture(auth, fixtureId, {
       scheduled_at: new Date(before!.scheduled_at.getTime() + 60 * MIN).toISOString(),
       court_id: court.id,
     });
 
-    const call = sendOfficialAssignmentChangedEmail.mock.calls.find((c) => c[0] === official.email);
-    expect(call, "sendOfficialAssignmentChangedEmail was never called for this official").toBeTruthy();
-    return (call![1] as { label: string }).label;
+    const call = mail.changed.mock.calls.find((c) => c[0].officialName === "Notice Ref");
+    expect(call, "the change notice was never built for this official").toBeTruthy();
+    return call![0].label;
   }
 
   it("uses the resolved slot label, not the bare TBD literal, for an unresolved fixture", async () => {
@@ -902,6 +916,210 @@ describe.skipIf(!HAS_DB)("moveFixture officials change-notice email resolves slo
     const fr = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) => msgFor("fr", k, v);
     expect(fr("schedule.vs"), "premise: French says it differently").not.toBe("vs");
     expect(await noticeLabel("fr")).toBe(`${fr("bracket.round.roundOf", { n: 4 })} ${fr("schedule.vs")} ${fr("schedule.tbd")}`);
+  });
+});
+
+// Phase 3 wave 4 (T2, kind `official_assignment_changed`): a move that changes a fixture's time or court queues one row
+// per non-declined assignment of an official with an address, on the move's own transaction (R1), and the request makes
+// the first attempt after commit (R5). The ref is `fixture_official / <fixture>:<official>:<role>`: an official holding
+// two roles gets one notice per role and neither ends the other (P-W4-2), and a later move of the same fixture supersedes
+// a notice still waiting (the spec's "two moves give one"). The row expires at the new kickoff (a move of a match that
+// has started is not worth mailing). The language is the official's (F5, D4): a claimed official's account, then the
+// org's default, then `en`, and the label is built in it. Expected subjects come from the emails dictionary on disk and
+// the join word from the ui dictionaries by import, never from the code under test.
+// Sport: not applicable (the notice does not vary by sport).
+describe.skipIf(!HAS_DB)("the change notice goes through the email outbox (official_assignment_changed)", () => {
+  type NoticeRow = {
+    id: string; ref_type: string; ref_id: string; org_id: string | null; recipient: string; recipient_user_id: string | null;
+    transactional: boolean; subject: string; status: OutboxStatus; expires_at: Date;
+  };
+  /** Every change notice this organisation queued, oldest first. */
+  const noticesOf = (orgId: string) =>
+    sql<NoticeRow[]>`
+      select id, ref_type, ref_id, org_id, recipient, recipient_user_id, transactional, subject, status, expires_at
+        from email_outbox where kind = 'official_assignment_changed' and org_id = ${orgId}
+       order by created_at, id`;
+  /** The notices once the request's own first attempt (a deferred `dispatchNow`) is over: none left queued or sending. */
+  const settledNoticesOf = async (orgId: string) => {
+    await vi.waitFor(
+      async () => {
+        const rows = await noticesOf(orgId);
+        expect(rows.filter((r) => r.status === "queued" || r.status === "sending"), "the request's first attempt is over").toEqual([]);
+      },
+      { timeout: 15_000, interval: 100 },
+    );
+    return noticesOf(orgId);
+  };
+  const orgName = async (orgId: string) =>
+    (await sql<{ name: string }[]>`select name from organizations where id = ${orgId}`)[0]!.name;
+  const address = (tag: string) => `${tag}-${randomUUID().slice(0, 8)}@example.com`;
+  /** A whole minute this far from now: inside the outbox's expiry bound, so the row's expiry is the kickoff itself. */
+  const kickoffIn = (ms: number) => new Date(Math.ceil((Date.now() + ms) / MIN) * MIN).toISOString();
+  /** The division's first-round fixture (moving it earlier breaks no round order) and its two sides' names. */
+  async function firstFixture(divisionId: string) {
+    const [f] = await sql<{ id: string; scheduled_at: Date; home: string; away: string }[]>`
+      select f.id, f.scheduled_at, h.display_name as home, a.display_name as away
+        from fixtures f join entrants h on h.id = f.home_entrant_id join entrants a on a.id = f.away_entrant_id
+       where f.division_id = ${divisionId}
+       order by f.round_no, f.scheduled_at limit 1`;
+    return f!;
+  }
+  const appoint = (orgId: string, fixtureId: string, officialId: string, roleKey: string, response = "accepted") =>
+    sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+        values (${orgId}, ${fixtureId}, ${officialId}, ${roleKey}, ${response})`;
+  /** A match time as Intl writes it for the BCP 47 `tag` in `zone`, the zone named after it (the notices' shape). */
+  const whenIn = (tag: string, at: Date | string, zone: string) =>
+    `${new Date(at).toLocaleString(tag, { timeZone: zone, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} (${zone})`;
+
+  beforeEach(() => {
+    stubOutboxEnv();
+    transport.deliver.mockReset();
+    transport.deliver.mockImplementation(async () => ({ ok: true, providerId: `re_test_${randomUUID()}` }));
+    mail.changed.mockClear();
+    outbox.dispatchNow.mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("a move queues one change notice per assignment role", async () => {
+    const { auth } = await seedOfficialsOrg("pro");
+    const { division } = await seedFutureDivision(auth);
+    const fixture = await firstFixture(division.id);
+    const email = address("two-roles");
+    const official = await createOfficial(auth, { display_name: "Two Roles Ref", role_keys: ["referee", "assistant"], email });
+    await appoint(auth.orgId, fixture.id, official.id, "referee");
+    await appoint(auth.orgId, fixture.id, official.id, "assistant");
+    const kickoff = kickoffIn(2 * 60 * MIN);
+
+    await moveFixture(auth, fixture.id, { scheduled_at: kickoff });
+
+    const rows = await settledNoticesOf(auth.orgId);
+    expect(rows.map((r) => r.ref_id).sort(), "one row per role, each naming it").toEqual(
+      [`${fixture.id}:${official.id}:assistant`, `${fixture.id}:${official.id}:referee`],
+    );
+    const subject = dictionarySubject("en", "officialChanged.subject", { orgName: await orgName(auth.orgId) });
+    for (const r of rows) {
+      expect(r).toMatchObject({ ref_type: "fixture_official", recipient: email, recipient_user_id: null, transactional: true, org_id: auth.orgId, subject });
+      expect(LIVE_STATUSES, `${r.ref_id} is live: neither role's notice ended the other`).toContain(r.status);
+      // The new kickoff, which is inside the bound here (so the bound is not what was written).
+      expect(Date.parse(kickoff) - Date.now()).toBeLessThan(MAX_EXPIRY_MS);
+      expect(r.expires_at.toISOString(), "expires at the new kickoff").toBe(kickoff);
+    }
+    expect(rows.map((r) => r.status), "the request made the first attempt for both").toEqual(["sent", "sent"]);
+    expect(mail.changed.mock.calls.map((c) => c[0].roleKey).sort()).toEqual(["assistant", "referee"]);
+  });
+
+  it("a second move while the first notice waits leaves one notice, the second", async () => {
+    const { auth } = await seedOfficialsOrg("pro");
+    const { division } = await seedFutureDivision(auth);
+    const fixture = await firstFixture(division.id);
+    const official = await createOfficial(auth, { display_name: "Moved Twice Ref", role_keys: ["referee"], email: address("twice") });
+    await appoint(auth.orgId, fixture.id, official.id, "referee");
+    const first = kickoffIn(3 * 60 * MIN);
+    const second = kickoffIn(4 * 60 * MIN);
+
+    // The first move's attempt does not happen: its notice is still waiting when the second move lands.
+    outbox.dispatchNow.mockImplementationOnce(async () => new Map());
+    await moveFixture(auth, fixture.id, { scheduled_at: first });
+    const [waiting] = await noticesOf(auth.orgId);
+    expect(waiting?.status, "premise: the first notice is waiting").toBe("queued");
+
+    await moveFixture(auth, fixture.id, { scheduled_at: second });
+
+    // The second move's own attempt is real: wait for it alone, so a first notice left waiting is reported as such below.
+    await vi.waitFor(
+      async () => {
+        const later = (await noticesOf(auth.orgId)).filter((r) => r.id !== waiting!.id);
+        expect(later.map((r) => r.status), "the second move's attempt is over").toEqual(["sent"]);
+      },
+      { timeout: 15_000, interval: 100 },
+    );
+    const rows = await noticesOf(auth.orgId);
+    expect(rows.map((r) => [r.id === waiting!.id ? "first" : "second", r.status]), "the waiting one was superseded").toEqual([
+      ["first", "replaced"],
+      ["second", "sent"],
+    ]);
+    expect(rows.filter((r) => (LIVE_STATUSES as readonly string[]).includes(r.status)), "one live notice").toHaveLength(1);
+    expect(rows[1]!.expires_at.toISOString()).toBe(second);
+    expect(mail.changed.mock.calls.at(-1)![0].nextAt, "and it says the second move's time").toBe(second);
+  });
+
+  it("empty: a move that changes neither time nor court, or a declined official, queues nothing", async () => {
+    const { auth } = await seedOfficialsOrg("pro");
+    const { division } = await seedFutureDivision(auth);
+    const fixture = await firstFixture(division.id);
+    const accepted = await createOfficial(auth, { display_name: "Stays Ref", role_keys: ["referee"], email: address("stays") });
+    const declined = await createOfficial(auth, { display_name: "Declined Ref", role_keys: ["referee"], email: address("declined") });
+    await appoint(auth.orgId, fixture.id, accepted.id, "referee");
+    await appoint(auth.orgId, fixture.id, declined.id, "umpire", "declined");
+
+    // The same time and court: nothing moved, so nobody is told.
+    await moveFixture(auth, fixture.id, { scheduled_at: fixture.scheduled_at.toISOString() });
+    expect(await noticesOf(auth.orgId), "an unchanged slot queues nothing").toEqual([]);
+
+    // A real move: the accepted official is told, the declined one is not.
+    await moveFixture(auth, fixture.id, { scheduled_at: kickoffIn(2 * 60 * MIN) });
+    const rows = await settledNoticesOf(auth.orgId);
+    expect(rows.map((r) => r.ref_id), "only the official who did not decline").toEqual([`${fixture.id}:${accepted.id}:referee`]);
+    expect(mail.changed.mock.calls.map((c) => c[0].officialName)).toEqual(["Stays Ref"]);
+  });
+
+  it("F5: the change notice's label is in the official's language", async () => {
+    const { auth } = await seedOfficialsOrg("pro");
+    const zone = "Europe/Amsterdam";
+    await sql`update organizations set default_locale = 'fr', timezone = ${zone} where id = ${auth.orgId}`;
+    const { division } = await seedFutureDivision(auth);
+    // Premise: the org's zone is the venue zone (no division override), so the expected times below are in it.
+    expect(await sql`select 1 from schedule_settings where division_id = ${division.id} and tz is not null`).toHaveLength(0);
+    const fixture = await firstFixture(division.id);
+    // Claimed: the account's language is Dutch, the org's is French.
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, locale)
+      values (${address("claimed-account")}, 'Claimed Ref', true, 'nl') returning id`;
+    const [person] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, user_id) values (${auth.orgId}, 'Claimed Ref', ${user!.id}) returning id`;
+    const email = address("claimed");
+    const [official] = await sql<{ id: string }[]>`
+      insert into officials (org_id, person_id, display_name, role_keys, email)
+      values (${auth.orgId}, ${person!.id}, 'Claimed Ref', ${sql.json(["referee"])}, ${email}) returning id`;
+    await appoint(auth.orgId, fixture.id, official!.id, "referee");
+    // Premise: the two languages differ in both places, so the wrong one is seen.
+    expect(nlUi["schedule.vs"]).not.toBe(frUi["schedule.vs"]);
+    const name = await orgName(auth.orgId);
+    expect(dictionarySubject("nl", "officialChanged.subject", { orgName: name })).not.toBe(
+      dictionarySubject("fr", "officialChanged.subject", { orgName: name }),
+    );
+
+    const kickoff = kickoffIn(2 * 60 * MIN);
+    await moveFixture(auth, fixture.id, { scheduled_at: kickoff });
+
+    const rows = await settledNoticesOf(auth.orgId);
+    expect(rows.map((r) => [r.recipient, r.recipient_user_id, r.subject])).toEqual([
+      [email, null, dictionarySubject("nl", "officialChanged.subject", { orgName: name })],
+    ]);
+    expect(mail.changed.mock.calls.map((c) => [c[1], c[0].label])).toEqual([
+      ["nl", `${fixture.home} ${nlUi["schedule.vs"]} ${fixture.away}`],
+    ]);
+
+    // The role and both times are in the official's language too (expected text from the dictionaries on disk and
+    // Intl). Premise: each differs from the English, so English in the email is seen.
+    expect(whenIn("nl-NL", kickoff, zone)).not.toBe(whenIn("en-GB", kickoff, zone));
+    expect(nlEmails["officialRole.referee"]).not.toBe(enEmails["officialRole.referee"]);
+    expect(nlEmails["officialEmail.tbc"]).not.toBe(enEmails["officialEmail.tbc"]);
+    const moved = (await mail.changed.mock.results[0]!.value) as { text: string; html: string };
+    expect(moved.text, "now: the new time").toContain(whenIn("nl-NL", kickoff, zone));
+    expect(moved.text, "was: the old time").toContain(whenIn("nl-NL", fixture.scheduled_at, zone));
+    expect(moved.html, "the role").toContain(nlEmails["officialRole.referee"]);
+
+    // Unscheduled: "now" reads "TBC" in the official's language.
+    mail.changed.mockClear();
+    await moveFixture(auth, fixture.id, { scheduled_at: null });
+    expect((await settledNoticesOf(auth.orgId)).map((r) => r.status), "the unscheduling replaced the first notice").toEqual(["replaced", "sent"]);
+    const unscheduled = (await mail.changed.mock.results[0]!.value) as { text: string; html: string };
+    expect(unscheduled.text, "now: TBC").toContain(nlEmails["officialEmail.tbc"]);
+    expect(unscheduled.text, "was: the time it had").toContain(whenIn("nl-NL", kickoff, zone));
   });
 });
 

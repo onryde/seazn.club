@@ -13,7 +13,8 @@ import "server-only";
 // SOFTWARE has no effect on money in or out. Nothing in this file touches it.
 import type Stripe from "stripe";
 import type postgres from "postgres";
-import { sql } from "@/lib/db";
+import { sql, type Tx } from "@/lib/db";
+import { deferred } from "@/lib/deferred";
 import { HttpError } from "@/lib/errors";
 import { getStripe } from "@/lib/stripe";
 import { log } from "@/server/logger";
@@ -32,13 +33,14 @@ import { orgAddonForPlan } from "@/lib/org-addons";
 import { planItem } from "@/lib/subscription-items";
 import { hasLiveSubscription, isTerminalStripeStatus } from "@/lib/subscription-status";
 import { intervalForPrice } from "@/lib/billing-manage";
-import { toLocale, type Locale } from "@/lib/i18n-constants";
+import type { Locale } from "@/lib/i18n-constants";
 import {
-  sendTransferOfferEmail,
-  sendTransferCompleteEmail,
-  sendGroupOrgRemovedEmail,
-  sendGroupOrgLeftEmail,
+  transferOfferEmail,
+  transferCompleteEmail,
+  groupOrgRemovedEmail,
+  groupOrgLeftEmail,
 } from "@/lib/email";
+import { dispatchNow, enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
 
 interface GroupRow {
   id: string;
@@ -1182,8 +1184,9 @@ export async function detachOrgFromGroup(args: {
         deleted_at: Date | null;
         name: string;
         slug: string;
+        default_locale: string | null;
       }[]
-    >`select subscription_id, created_by, deleted_at, name, slug from organizations
+    >`select subscription_id, created_by, deleted_at, name, slug, default_locale from organizations
         where id = ${orgId} for update`;
     if (!org || org.deleted_at) throw new HttpError(404, "Organisation not found.");
     if (!org.subscription_id)
@@ -1214,8 +1217,8 @@ export async function detachOrgFromGroup(args: {
         "This organisation has no owner to bill — transfer ownership before separating it.",
       );
 
-    const others = await tx<{ id: string; slug: string }[]>`
-      select id, slug from organizations
+    const others = await tx<{ id: string; slug: string; default_locale: string | null }[]>`
+      select id, slug, default_locale from organizations
        where subscription_id = ${group.id} and id <> ${orgId} and deleted_at is null
        order by created_at, id`;
     if (others.length === 0 && group.owner_user_id === orgOwnerId)
@@ -1258,6 +1261,20 @@ export async function detachOrgFromGroup(args: {
               ${compedUntil}, ${group.trial_used_at}, now())
       returning id`;
     await tx`update organizations set subscription_id = ${fresh.id} where id = ${orgId}`;
+    // Tell whoever did NOT press the button, in this transaction: committed <=> queued, and a refused enqueue fails the detach (D1).
+    const noticeId = await queueDetachNotice(tx, {
+      actorUserId,
+      orgId,
+      orgName: org.name,
+      orgSlug: org.slug,
+      orgDefaultLocale: org.default_locale,
+      orgOwnerId,
+      payerId: group.owner_user_id,
+      ridesOutUntil: compedUntil,
+      comped: compedUntil != null,
+      remaining: others[0] ?? null,
+      detachId: fresh.id,
+    });
     // #306: a ride_out just minted a free paid period at the payer's expense.
     // Only when one was ACTUALLY handed out — a release, or a group too far into
     // dunning to hand anything on, grants nothing, and a trail that fired on
@@ -1308,23 +1325,19 @@ export async function detachOrgFromGroup(args: {
       to: fresh.id,
       remaining: others.length,
       comped: compedUntil != null,
-      // Carried out of the tx so the post-commit notification can tell the party
-      // that did NOT initiate the removal. See notifyDetachParties.
-      orgName: org.name,
-      orgSlug: org.slug,
-      orgOwnerId,
-      payerId: group.owner_user_id,
-      ridesOutUntil: compedUntil,
-      remainingSlug: others[0]?.slug ?? null,
+      // The notice queued above, for the first attempt after commit.
+      noticeId,
     };
   });
 
   await invalidateMove(orgId, result.from, result.to);
 
-  // Tell whoever did NOT press the button. Best-effort and after the commit, like
-  // the transfer notifications — the detach is done and a mail failure cannot
-  // undo it. Runs regardless of the cancel/sync branching below.
-  await notifyDetachParties({ actorUserId, ...result });
+  // The notice queued in the detach's transaction: the request makes the first attempt, after commit. Runs regardless of the
+  // cancel/sync branching below.
+  if (result.noticeId) {
+    const ids = [result.noticeId];
+    deferred(() => dispatchNow(ids));
+  }
 
   // Never leave a live subscription at quantity 0: the last org out cancels the
   // group it left. cancelBillingGroup is best-effort at Stripe and always makes
@@ -1515,20 +1528,14 @@ export async function offerGroupTransfer(args: {
       throw err;
     }
     if (!si.client_secret) throw new HttpError(500, "Stripe returned no client secret");
-    await sql`
-      update billing_group_transfers set setup_intent_id = ${si.id} where id = ${claim.id}`;
-
-    // BEST-EFFORT notification. The offer is already committed above; email is a
-    // convenience, so a send failure (or a missing RESEND key, or a query blip)
-    // must never surface as a failed transfer. Everything below is swallowed.
-    await notifyTransferOfferRecipient({
-      subscriptionId,
-      actorUserId,
-      recipientId: recipient.id,
-      recipientEmail: recipient.email,
-    }).catch((err) => {
-      log.error({ err }, "billing-groups: transfer-offer email failed (best-effort)");
+    // The offer goes live (its intent id on the claim) and the recipient's notice is queued in ONE transaction: committed <=> queued.
+    // A refused enqueue fails the offer (D1). The request makes the first attempt, after commit.
+    const queued = await sql.begin(async (tx) => {
+      await tx`
+        update billing_group_transfers set setup_intent_id = ${si.id} where id = ${claim.id}`;
+      return queueTransferNotice(tx, "group_transfer_offer", { subscriptionId, actorUserId, recipient });
     });
+    if (queued) deferred(() => dispatchNow([queued]));
 
     return {
       status: "pending_card",
@@ -1544,21 +1551,17 @@ export async function offerGroupTransfer(args: {
   // already own an org in the group, though — this path has no acceptance step,
   // so org ownership is the only consent in it.
   await assertRecipientOwnsAnOrgInGroup(subscriptionId, recipient.id);
-  const moved = await handOverGroup(group, recipient, null);
-  await finishHandover(moved, recipient, null);
-
-  // BEST-EFFORT notification. The recipient accepted nothing — the group is now
-  // simply on their account and they pay for it — so this is a DIFFERENT,
-  // informational message from the offer email. The transfer is already
-  // committed above; a send failure must never surface as a failed transfer.
-  await notifyTransferCompleteRecipient({
-    subscriptionId,
-    actorUserId,
-    recipientId: recipient.id,
-    recipientEmail: recipient.email,
-  }).catch((err) => {
-    log.error({ err }, "billing-groups: transfer-complete email failed (best-effort)");
+  // The recipient accepted nothing — the group is now simply on their account and they pay for it — so their notice is a DIFFERENT,
+  // informational message from the offer. It is queued in the handover's own transaction (committed <=> queued), so a Stripe tidy-up
+  // that fails after it cannot lose it; a refused enqueue fails the handover (D1). The request makes the first attempt once the tidy-up
+  // is done; if the tidy-up throws, the worker sends it.
+  const queued: string[] = [];
+  const moved = await handOverGroup(group, recipient, null, async (tx) => {
+    const id = await queueTransferNotice(tx, "group_transfer_complete", { subscriptionId, actorUserId, recipient });
+    if (id !== null) queued.push(id);
   });
+  await finishHandover(moved, recipient, null);
+  if (queued.length > 0) deferred(() => dispatchNow(queued));
 
   return { status: "transferred", subscription_id: subscriptionId, owner_user_id: recipient.id };
 }
@@ -1894,6 +1897,7 @@ async function handOverGroup(
   target: GroupRow | { id: string; expectOwner: string; expectCustomer?: string },
   recipient: { id: string; email: string; display_name: string },
   newPaymentMethodId: string | null,
+  inHandover?: (tx: Tx, row: GroupRow) => Promise<void>,
 ): Promise<GroupRow> {
   const expectOwner = "expectOwner" in target ? target.expectOwner : target.owner_user_id;
   const expectCustomer = "expectCustomer" in target ? target.expectCustomer : undefined;
@@ -1922,6 +1926,8 @@ async function handOverGroup(
       returning id`;
     if (!swapped)
       throw new HttpError(409, "This billing group has changed hands since it was offered.");
+    // What else must commit with the swap (the immediate path's notice), on this transaction, after it.
+    if (inHandover) await inHandover(tx, row);
     return row;
   }) as unknown as GroupRow;
 }
@@ -1967,6 +1973,9 @@ async function finishHandover(
   await syncPaymentMethodFlagForSubscription(group.id);
 }
 
+/** An org the notice links to: its slug for the link, its name for the human group label, its default language for D4. */
+type ReachableOrg = { slug: string; name: string; default_locale: string | null };
+
 /**
  * An org IN THE GROUP the recipient can actually open, for the notification link.
  *
@@ -1978,26 +1987,27 @@ async function finishHandover(
  * human group label; null when the group has no live org at all.
  */
 async function recipientReachableOrg(
+  db: Tx | typeof sql,
   subscriptionId: string,
   recipientId: string,
-): Promise<{ slug: string; name: string } | null> {
-  const [mine] = await sql<{ slug: string; name: string }[]>`
-    select o.slug, o.name from organizations o
+): Promise<ReachableOrg | null> {
+  const [mine] = await db<ReachableOrg[]>`
+    select o.slug, o.name, o.default_locale from organizations o
       join org_members m on m.org_id = o.id
      where o.subscription_id = ${subscriptionId} and o.deleted_at is null
        and m.user_id = ${recipientId}
      order by o.created_at limit 1`;
   if (mine) return mine;
-  const [primary] = await sql<{ slug: string; name: string }[]>`
-    select slug, name from organizations
+  const [primary] = await db<ReachableOrg[]>`
+    select slug, name, default_locale from organizations
      where subscription_id = ${subscriptionId} and deleted_at is null
      order by created_at limit 1`;
   return primary ?? null;
 }
 
 /** Human name for the outgoing payer, with a neutral fallback. */
-async function payerDisplayName(actorUserId: string): Promise<string> {
-  const [payer] = await sql<{ display_name: string }[]>`
+async function payerDisplayName(db: Tx | typeof sql, actorUserId: string): Promise<string> {
+  const [payer] = await db<{ display_name: string }[]>`
     select display_name from users where id = ${actorUserId}`;
   return payer?.display_name || "The current payer";
 }
@@ -2012,97 +2022,111 @@ function billingSettingsLink(slug: string): string {
   return `${base}/o/${slug}/settings/billing`;
 }
 
-/** A user's contact + preferred locale for a best-effort notification, or null
- *  if they have no reachable email (deleted, or never had one). */
-async function notifyContact(userId: string): Promise<{ email: string; locale: Locale } | null> {
-  const [u] = await sql<{ email: string | null; locale: string | null }[]>`
-    select email, locale from users where id = ${userId} and deleted_at is null`;
+/** A user's address and the language a notice to them is written in (D4: the account's, then `orgDefault`, then `en`), or null if
+ *  they have no reachable email (deleted, or never had one). Reads on the handle it is given. */
+async function notifyContact(
+  db: Tx | typeof sql,
+  userId: string,
+  orgDefault: string | null,
+): Promise<{ email: string; locale: Locale } | null> {
+  const [u] = await db<{ email: string | null }[]>`
+    select email from users where id = ${userId} and deleted_at is null`;
   if (!u?.email) return null;
-  return { email: u.email, locale: toLocale(u.locale) };
+  return { email: u.email, locale: await recipientLocale(db, { pick: null, userId, orgDefault }) };
 }
 
 /**
- * After a detach, email whichever party did NOT initiate it:
- *  - the payer pushed someone else's org out  → tell that org's OWNER what
- *    happened to the plan (ride-out date, or Community now) and that its billing
- *    is now theirs;
- *  - the org's own owner left                  → tell the PAYER their bill
- *    changed (the seat is a reusable freed slot, or it left with the org).
- *
- * When the actor owns both the org and the group there is no one else to tell.
- * Best-effort: a mail failure cannot undo the committed detach.
+ * After a detach, queue the notice to the party that did NOT initiate it, on `tx`, the detach's own transaction (committed <=> queued):
+ *  - the payer pushed someone else's org out → `group_org_removed` to that org's OWNER, saying what happened to the plan (the ride-out
+ *    date, written the owner's way, or Community now) and that its billing is now theirs, in the owner's language (D4: the account's,
+ *    then the detached org's default);
+ *  - the org's own owner left → `group_org_left` to the PAYER: their bill changed (the seat is a reusable freed slot, or it left with the
+ *    org), linking to the billing page of the group's remaining org, in the payer's language (D4: the account's, then that org's default).
+ * When the actor owns both the org and the group there is no one else to tell. Ref `group_detach / <the org's new subscription>` (unique
+ * per detach), the detached org, NOT transactional, the bound expiry. Returns the row's id, or null when there is nobody to tell (or no
+ * address to tell them at). A refused enqueue throws, failing the detach (D1).
  */
-async function notifyDetachParties(args: {
-  actorUserId: string;
-  orgName: string;
-  orgSlug: string;
-  orgOwnerId: string | null;
-  payerId: string;
-  ridesOutUntil: Date | string | null;
-  comped: boolean;
-  remainingSlug: string | null;
-}): Promise<void> {
-  const { actorUserId, orgName, orgSlug, orgOwnerId, payerId, ridesOutUntil, comped, remainingSlug } =
+async function queueDetachNotice(
+  tx: Tx,
+  args: {
+    actorUserId: string;
+    orgId: string;
+    orgName: string;
+    orgSlug: string;
+    orgDefaultLocale: string | null;
+    orgOwnerId: string | null;
+    payerId: string;
+    ridesOutUntil: Date | string | null;
+    comped: boolean;
+    remaining: { slug: string; default_locale: string | null } | null;
+    detachId: string;
+  },
+): Promise<string | null> {
+  const { actorUserId, orgId, orgName, orgSlug, orgDefaultLocale, orgOwnerId, payerId, ridesOutUntil, comped, remaining, detachId } =
     args;
-  try {
-    if (actorUserId === payerId && orgOwnerId && orgOwnerId !== payerId) {
-      const to = await notifyContact(orgOwnerId);
-      if (!to) return;
-      const until = ridesOutUntil
-        ? new Intl.DateTimeFormat(to.locale, { dateStyle: "long" }).format(new Date(ridesOutUntil))
-        : null;
-      await sendGroupOrgRemovedEmail(
-        to.email,
-        await payerDisplayName(payerId),
-        orgName,
-        until,
-        billingSettingsLink(orgSlug),
-        to.locale,
-      );
-    } else if (actorUserId === orgOwnerId && payerId !== orgOwnerId && remainingSlug) {
-      const to = await notifyContact(payerId);
-      if (!to) return;
-      // seatFreed = release (no comp): the payer kept the seat as a reusable
-      // slot. On ride_out the seat left with the org, so the next invoice shrinks.
-      await sendGroupOrgLeftEmail(to.email, orgName, !comped, billingSettingsLink(remainingSlug), to.locale);
-    }
-  } catch (err) {
-    log.error({ err }, "billing-groups: detach notification failed (best-effort)");
+  const row = { refType: "group_detach", refId: detachId, orgId, transactional: false, expiresAt: expiryWithin(null) } as const;
+  if (actorUserId === payerId && orgOwnerId && orgOwnerId !== payerId) {
+    const to = await notifyContact(tx, orgOwnerId, orgDefaultLocale);
+    if (!to) return null;
+    const until = ridesOutUntil
+      ? new Intl.DateTimeFormat(to.locale, { dateStyle: "long" }).format(new Date(ridesOutUntil))
+      : null;
+    const payerName = await payerDisplayName(tx, payerId);
+    return enqueueEmail(tx, {
+      kind: "group_org_removed",
+      ...row,
+      to: to.email,
+      recipientUserId: orgOwnerId,
+      ...(await groupOrgRemovedEmail({ payerName, orgName, ridesOutUntil: until, link: billingSettingsLink(orgSlug) }, to.locale)),
+    });
   }
+  if (actorUserId === orgOwnerId && payerId !== orgOwnerId && remaining) {
+    const to = await notifyContact(tx, payerId, remaining.default_locale);
+    if (!to) return null;
+    // seatFreed = release (no comp): the payer kept the seat as a reusable slot. On ride_out the seat left with the org, so the next
+    // invoice shrinks.
+    return enqueueEmail(tx, {
+      kind: "group_org_left",
+      ...row,
+      to: to.email,
+      recipientUserId: payerId,
+      ...(await groupOrgLeftEmail({ orgName, seatFreed: !comped, link: billingSettingsLink(remaining.slug) }, to.locale)),
+    });
+  }
+  return null;
 }
 
-/** Fire the transfer-OFFER email to the recipient (live-sub path, two-phase).
- *  Best-effort: the caller wraps this so nothing here can fail the offer. Links
- *  to an org the recipient can reach in the group (see recipientReachableOrg),
- *  and uses that org's name as the human label for the group. */
-async function notifyTransferOfferRecipient(args: {
-  subscriptionId: string;
-  actorUserId: string;
-  recipientId: string;
-  recipientEmail: string;
-}): Promise<void> {
-  const { subscriptionId, actorUserId, recipientId, recipientEmail } = args;
-  const org = await recipientReachableOrg(subscriptionId, recipientId);
-  if (!org) return; // no reachable org → no meaningful link to send.
-  const payerName = await payerDisplayName(actorUserId);
-  await sendTransferOfferEmail(recipientEmail, payerName, org.name, billingSettingsLink(org.slug));
-}
-
-/** Fire the transfer-COMPLETE email to the recipient (community / immediate
- *  handover). Informational, not an offer: they accepted nothing and now simply
- *  pay for the group. Best-effort — the caller wraps this so nothing here can
- *  fail the already-committed transfer. Same recipient-reachable-org link. */
-async function notifyTransferCompleteRecipient(args: {
-  subscriptionId: string;
-  actorUserId: string;
-  recipientId: string;
-  recipientEmail: string;
-}): Promise<void> {
-  const { subscriptionId, actorUserId, recipientId, recipientEmail } = args;
-  const org = await recipientReachableOrg(subscriptionId, recipientId);
-  if (!org) return;
-  const payerName = await payerDisplayName(actorUserId);
-  await sendTransferCompleteEmail(recipientEmail, payerName, org.name, billingSettingsLink(org.slug));
+/**
+ * Queue a transfer notice to the recipient on `tx`, the transaction of the fact it reports: `group_transfer_offer` (live-sub path,
+ * two-phase: the transaction that makes the offer live) or `group_transfer_complete` (the immediate handover: the transaction that swaps
+ * the payer). Ref `subscription / <group id>`, no organisation (a group can span several), addressed to the recipient's account, in
+ * their language (D4: the account's, then the default of the org the link points at), NOT transactional (as the senders never were),
+ * with the bound expiry. Links to an org the recipient can reach in the group (see recipientReachableOrg), and uses that org's name as
+ * the human label for the group. Returns the row's id, or null when the group has no live org to link to. A refused enqueue throws,
+ * failing the transfer (D1).
+ */
+async function queueTransferNotice(
+  tx: Tx,
+  kind: "group_transfer_offer" | "group_transfer_complete",
+  args: { subscriptionId: string; actorUserId: string; recipient: { id: string; email: string } },
+): Promise<string | null> {
+  const { subscriptionId, actorUserId, recipient } = args;
+  const org = await recipientReachableOrg(tx, subscriptionId, recipient.id);
+  if (!org) return null; // no reachable org → no meaningful link to send.
+  const locale = await recipientLocale(tx, { pick: null, userId: recipient.id, orgDefault: org.default_locale });
+  const payerName = await payerDisplayName(tx, actorUserId);
+  const build = kind === "group_transfer_offer" ? transferOfferEmail : transferCompleteEmail;
+  return enqueueEmail(tx, {
+    kind,
+    refType: "subscription",
+    refId: subscriptionId,
+    orgId: null,
+    to: recipient.email,
+    recipientUserId: recipient.id,
+    ...(await build({ payerName, groupName: org.name, link: billingSettingsLink(org.slug) }, locale)),
+    transactional: false,
+    expiresAt: expiryWithin(null),
+  });
 }
 
 async function transferRecipient(

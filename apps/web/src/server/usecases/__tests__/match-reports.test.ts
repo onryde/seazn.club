@@ -5,23 +5,28 @@
 // immutability (409), organiser fixtureReports (submitted only), and the soft
 // bridge — pending suspension on a named red card, dark on missing person /
 // discipline / table.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import { sql, withTenant } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
+import { MAX_EXPIRY_MS, idempotencyKey, type OutboxStatus } from "@/server/email-outbox/constants";
+import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { stubOutboxEnv } from "./_invite-mail";
 
-// Spy the report_submitted email at the module boundary — submit fires it
-// fire-and-forget, so the mock is invoked synchronously inside the awaited
-// usecase (conv_vitest email-spy pattern). Above the usecase import so the
-// binding is the spy.
-const emailMock = vi.hoisted(() => ({
-  report: vi.fn().mockResolvedValue(true),
-}));
-vi.mock("@/lib/email", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("@/lib/email")>()),
-  sendReportSubmittedEmail: emailMock.report,
-}));
+// The report notice is RENDERED by `reportSubmittedEmail` and queued on the email outbox (phase 3 wave 4, kind
+// `match_report_submitted`) in the submit's transaction. The builder is WRAPPED, never replaced: the real render runs,
+// and the spy records what each notice was built from (the fixture line, the official, the incident count). vi.hoisted so
+// the spy exists before the hoisted factory runs; the rest of the module is the real one (importOriginal).
+const mail = vi.hoisted(() => ({ report: vi.fn<typeof import("@/lib/email").reportSubmittedEmail>() }));
+vi.mock("@/lib/email", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/email")>();
+  mail.report.mockImplementation(actual.reportSubmittedEmail);
+  return { ...actual, reportSubmittedEmail: mail.report };
+});
+// The outbox's one network seam: captured, never sent. The row, the seal, the gate and the attempt are the real ones.
+const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
 
 import {
   __setBridgeProbeForTests,
@@ -34,6 +39,7 @@ import {
 } from "../match-reports";
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
+import { makeAssignment, makeClaimedOfficial } from "./_seed";
 const HAS_DB = !!process.env.DATABASE_URL;
 
 interface OrgCtx {
@@ -90,22 +96,6 @@ async function seedOrg(plan: "pro" | "community" = "pro"): Promise<OrgCtx> {
   };
 }
 
-/** A user + a person in this org linked to it + an official on that person —
- *  the claimed-official identity a report write proves. Returns both ids. */
-async function makeClaimedOfficial(ctx: OrgCtx): Promise<{ userId: string; officialId: string }> {
-  const suffix = randomUUID().slice(0, 8);
-  const [{ id: userId }] = await sql<{ id: string }[]>`
-    insert into users (email, display_name, email_verified)
-    values (${`ref-${suffix}@test.local`}, 'Ref', true) returning id`;
-  const [{ id: personId }] = await sql<{ id: string }[]>`
-    insert into persons (org_id, full_name, user_id) values (${ctx.orgId}, 'Ref Person', ${userId})
-    returning id`;
-  const [{ id: officialId }] = await sql<{ id: string }[]>`
-    insert into officials (org_id, person_id, display_name, role_keys)
-    values (${ctx.orgId}, ${personId}, 'The Ref', ${sql.json(["referee"])}) returning id`;
-  return { userId, officialId };
-}
-
 async function makePlayer(ctx: OrgCtx): Promise<string> {
   const [{ id }] = await sql<{ id: string }[]>`
     insert into persons (org_id, full_name) values (${ctx.orgId}, 'Player Nine') returning id`;
@@ -119,25 +109,6 @@ async function rosterMember(ctx: OrgCtx, entrantId: string, name: string): Promi
     insert into persons (org_id, full_name) values (${ctx.orgId}, ${name}) returning id`;
   await sql`insert into entrant_members (entrant_id, person_id) values (${entrantId}, ${id})`;
   return id;
-}
-
-async function makeAssignment(
-  ctx: OrgCtx,
-  officialId: string,
-  opts: { status?: string; response?: string } = {},
-): Promise<{ fixtureOfficialId: string; fixtureId: string }> {
-  const status = opts.status ?? "decided";
-  const response = opts.response ?? "accepted";
-  const [{ id: fixtureId }] = await sql<{ id: string }[]>`
-    insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
-                          home_entrant_id, away_entrant_id, status)
-    values (${ctx.stageId}, ${ctx.divisionId}, ${ctx.orgId}, 1, 1,
-            ${ctx.entrantA}, ${ctx.entrantB}, ${status}) returning id`;
-  const [{ id }] = await sql<{ id: string }[]>`
-    insert into fixture_officials (fixture_id, official_id, org_id, role_key, source, response)
-    values (${fixtureId}, ${officialId}, ${ctx.orgId}, 'referee', 'manual', ${response})
-    returning id`;
-  return { fixtureOfficialId: id, fixtureId };
 }
 
 async function pendingReportSuspensions(
@@ -157,7 +128,17 @@ afterAll(async () => {
 });
 
 describe.skipIf(!HAS_DB)("match reports (SPEC-3, PROMPT-80)", () => {
-  beforeEach(() => emailMock.report.mockClear());
+  beforeEach(() => {
+    mail.report.mockClear();
+    // The outbox seals the body and the gate lets the attempt through; the transport answers as Resend would.
+    stubOutboxEnv();
+    transport.deliver.mockReset();
+    transport.deliver.mockImplementation(async () => ({ ok: true, providerId: `re_test_${randomUUID()}` }));
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
 
   it("404s when the assignment isn't the caller's claimed official", async () => {
     const ctx = await seedOrg();
@@ -438,32 +419,156 @@ describe.skipIf(!HAS_DB)("match reports (SPEC-3, PROMPT-80)", () => {
     });
   });
 
-  it("emails owner + admins on submit with the fixture line, official name and incident count", async () => {
-    const ctx = await seedOrg();
-    // Add a second org member as admin — both should be notified.
-    const [{ id: adminId }] = await sql<{ id: string }[]>`
-      insert into users (email, display_name, email_verified)
-      values (${`admin-${randomUUID().slice(0, 8)}@test.local`}, 'Admin', true) returning id`;
-    await sql`insert into org_members (org_id, user_id, role) values (${ctx.orgId}, ${adminId}, 'admin')`;
+  // Phase 3 wave 4 (T3, kind `match_report_submitted`): a submitted report queues one notice per org owner and admin, in
+  // the submit's own transaction (R1), only when that submit flipped the draft (R6: a resubmit is refused 409 and queues
+  // nothing). Each notice is about the report (`match_report / <reportId>`), addressed to the member's ACCOUNT, in their
+  // language (D4: the account's, then the org's default, then `en`), once per member (once-key `<reportId>:<userId>`);
+  // the request makes the first attempt after commit (R5). A deleted account gets nothing.
+  // Not built (owner rule 2026-10-26, mainstream only): a rollback witnessed by a failing statement after the enqueue
+  // (`plantFailingUpdate` does not exist); the rows share the submit's transaction by construction.
+  // Sport: not applicable (the notice does not vary by sport; the report seeds are football).
+  describe("the report notice goes through the email outbox (match_report_submitted)", () => {
+    type NoticeRow = {
+      id: string; ref_type: string; ref_id: string; dedupe_key: string | null; org_id: string | null; recipient: string;
+      recipient_user_id: string | null; transactional: boolean; subject: string; status: OutboxStatus; created_at: Date; expires_at: Date;
+    };
+    /** Every report notice about `reportId`, by recipient. */
+    const noticesOf = (reportId: string) =>
+      sql<NoticeRow[]>`
+        select id, ref_type, ref_id, dedupe_key, org_id, recipient, recipient_user_id, transactional, subject, status, created_at, expires_at
+          from email_outbox where kind = 'match_report_submitted' and ref_type = 'match_report' and ref_id = ${reportId}
+         order by recipient`;
+    /** The notices once the request's own first attempt (a deferred `dispatchNow`) is over: none left queued or sending. */
+    const settledNoticesOf = async (reportId: string) => {
+      await vi.waitFor(
+        async () => {
+          const rows = await noticesOf(reportId);
+          expect(rows.filter((r) => r.status === "queued" || r.status === "sending"), "the request's first attempt is over").toEqual([]);
+        },
+        { timeout: 15_000, interval: 100 },
+      );
+      return noticesOf(reportId);
+    };
+    const subjectIn = (locale: "en" | "fr" | "es" | "nl") => dictionarySubject(locale, "reportSubmitted.subject", { fixture: "Alpha vs Bravo" });
+    /** A member of the org at a fresh address, with this role and account language. */
+    const member = async (orgId: string, role: "owner" | "admin" | "viewer", locale: string | null) => {
+      const email = `${role}-${randomUUID().slice(0, 8)}@test.local`;
+      const [{ id }] = await sql<{ id: string }[]>`
+        insert into users (email, display_name, email_verified, locale) values (${email}, ${role}, true, ${locale}) returning id`;
+      await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${id}, ${role})`;
+      return { id, email };
+    };
+    /** An org whose seeded owner has the language `ownerLocale`, an admin, a viewer, and a filed draft by its claimed official. */
+    async function draftWithMembers(ownerLocale: string | null) {
+      const ctx = await seedOrg();
+      await sql`update organizations set default_locale = 'es' where id = ${ctx.orgId}`;
+      const [owner] = await sql<{ email: string }[]>`update users set locale = ${ownerLocale} where id = ${ctx.userId} returning email`;
+      const admin = await member(ctx.orgId, "admin", null);
+      const viewer = await member(ctx.orgId, "viewer", "fr");
+      const ref = await makeClaimedOfficial(ctx);
+      const player = await rosterMember(ctx, ctx.entrantA, "Home Player");
+      const { fixtureOfficialId } = await makeAssignment(ctx, ref.officialId);
+      await putMyReport(ref.userId, fixtureOfficialId, {
+        body: "eventful",
+        incidents: [{ kind: "red_card", person_id: player, note: "sent off" }],
+      });
+      return { ctx, owner: { id: ctx.userId, email: owner!.email }, admin, viewer, ref, fixtureOfficialId };
+    }
 
-    const ref = await makeClaimedOfficial(ctx);
-    const player = await rosterMember(ctx, ctx.entrantA, "Home Player");
-    const { fixtureOfficialId } = await makeAssignment(ctx, ref.officialId);
-    await putMyReport(ref.userId, fixtureOfficialId, {
-      body: "eventful",
-      incidents: [{ kind: "red_card", person_id: player, note: "sent off" }],
-    });
-    await submitMyReport(ref.userId, fixtureOfficialId);
+    it("a submitted report queues one notice per owner and admin, each in their own language", async () => {
+      const { ctx, owner, admin, viewer, ref, fixtureOfficialId } = await draftWithMembers("fr");
+      for (const l of ["fr", "es"] as const) expect(subjectIn(l), `premise: the ${l} subject is not the English one`).not.toBe(subjectIn("en"));
 
-    expect(emailMock.report).toHaveBeenCalledTimes(2); // owner + admin
-    const recipients = emailMock.report.mock.calls.map((c) => c[0] as string);
-    expect(recipients.every((r) => r.endsWith("@test.local"))).toBe(true);
-    const args = emailMock.report.mock.calls[0]![1] as Record<string, unknown>;
-    expect(args).toMatchObject({
-      fixtureLine: "Alpha vs Bravo",
-      officialName: "The Ref",
-      incidentCount: 1,
+      const report = await submitMyReport(ref.userId, fixtureOfficialId);
+
+      const rows = await settledNoticesOf(report.id);
+      expect(
+        rows.map((r) => ({ to: r.recipient, user: r.recipient_user_id, key: r.dedupe_key, subject: r.subject, status: r.status })),
+        "the owner in their account's language, the admin (no language) in the org's; the viewer gets none",
+      ).toEqual(
+        [
+          { to: owner.email, user: owner.id, key: `${report.id}:${owner.id}`, subject: subjectIn("fr"), status: "sent" },
+          { to: admin.email, user: admin.id, key: `${report.id}:${admin.id}`, subject: subjectIn("es"), status: "sent" },
+        ].sort((a, b) => a.to.localeCompare(b.to)),
+      );
+      expect(rows.map((r) => r.recipient)).not.toContain(viewer.email);
+      for (const r of rows) {
+        expect(r).toMatchObject({ ref_type: "match_report", ref_id: report.id, org_id: ctx.orgId, transactional: true });
+        expect(Math.abs(r.expires_at.getTime() - r.created_at.getTime() - MAX_EXPIRY_MS), "the bound").toBeLessThan(1_000);
+        // R5: the request made the first attempt after commit, once per row.
+        expect(transport.deliver.mock.calls.filter((c) => (c[0] as { idempotencyKey: string }).idempotencyKey === idempotencyKey(r.id))).toHaveLength(1);
+      }
+      // Each notice was built from the report: the fixture line, the official, the incident count.
+      expect(mail.report.mock.calls.map((c) => c[0])).toEqual([
+        expect.objectContaining({ fixtureLine: "Alpha vs Bravo", officialName: "The Ref", incidentCount: 1 }),
+        expect.objectContaining({ fixtureLine: "Alpha vs Bravo", officialName: "The Ref", incidentCount: 1 }),
+      ]);
     });
-    expect(args.orgSlug).toBeTruthy();
+
+    it("a second submit is refused (409) and queues nothing", async () => {
+      const { ref, fixtureOfficialId } = await draftWithMembers("fr");
+      const report = await submitMyReport(ref.userId, fixtureOfficialId);
+      expect(await settledNoticesOf(report.id), "premise: the submit queued its two notices").toHaveLength(2);
+
+      await expect(submitMyReport(ref.userId, fixtureOfficialId)).rejects.toMatchObject({ status: 409 });
+
+      expect(await settledNoticesOf(report.id), "still two").toHaveLength(2);
+      expect(mail.report.mock.calls, "and nothing more was built").toHaveLength(2);
+    });
+
+    it("two submits of one draft at once: one files it, the other is refused (409) inside its transaction, and the notices are queued once", async () => {
+      const { ref, fixtureOfficialId } = await draftWithMembers("fr");
+      // Park both submits on the draft's row lock, so each has already READ the draft (and passed the pre-check's 409) before the
+      // guarded update; only the update's own re-check can refuse the loser.
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => (release = resolve));
+      let staged!: (grip: { xid: string; page: number; tuple: number }) => void;
+      const isStaged = new Promise<{ xid: string; page: number; tuple: number }>((resolve) => (staged = resolve));
+      const holder = sql.begin(async (tx) => {
+        const [row] = await tx<{ ctid: string; xid: string }[]>`
+          select ctid::text as ctid, pg_current_xact_id()::text as xid
+          from match_reports where fixture_official_id = ${fixtureOfficialId} for update`;
+        const [page, tuple] = row!.ctid.replace(/[()]/g, "").split(",").map(Number);
+        staged({ xid: row!.xid, page: page!, tuple: tuple! });
+        await held;
+      });
+      holder.catch(() => {});
+      const grip = await isStaged;
+      const racing = Promise.allSettled([submitMyReport(ref.userId, fixtureOfficialId), submitMyReport(ref.userId, fixtureOfficialId)]);
+      try {
+        // Only waiters on THIS row: the first queues on the holder's transaction id, the second on the row's tuple lock.
+        const deadline = Date.now() + 10_000;
+        for (;;) {
+          const [w] = await sql<{ n: number }[]>`
+            select count(*)::int as n from pg_locks l
+            where not l.granted
+              and ((l.locktype = 'transactionid' and l.transactionid::text = ${grip.xid})
+                or (l.locktype = 'tuple' and l.relation = 'match_reports'::regclass and l.page = ${grip.page} and l.tuple = ${grip.tuple}))`;
+          if (w!.n >= 2) break;
+          if (Date.now() > deadline) throw new Error(`only ${w!.n}/2 blocked submits appeared — race not staged`);
+          await new Promise((r) => setTimeout(r, 25));
+        }
+      } finally {
+        release();
+        await holder;
+      }
+      const settled = await racing;
+
+      const filed = settled.filter((r): r is PromiseFulfilledResult<Awaited<ReturnType<typeof submitMyReport>>> => r.status === "fulfilled");
+      const refused = settled.filter((r): r is PromiseRejectedResult => r.status === "rejected");
+      expect(filed, "one submit filed the report").toHaveLength(1);
+      expect(refused.map((r) => r.reason), "the other was refused as a resubmit").toEqual([expect.objectContaining({ status: 409, code: "REPORT_SUBMITTED" })]);
+      expect(await settledNoticesOf(filed[0]!.value.id), "one notice per owner and admin, once").toHaveLength(2);
+      expect(mail.report.mock.calls, "built once per member").toHaveLength(2);
+    });
+
+    it("empty: a deleted admin gets no row", async () => {
+      const { owner, admin, ref, fixtureOfficialId } = await draftWithMembers(null);
+      await sql`update users set deleted_at = now() where id = ${admin.id}`;
+
+      const report = await submitMyReport(ref.userId, fixtureOfficialId);
+
+      expect((await settledNoticesOf(report.id)).map((r) => r.recipient_user_id), "the owner only").toEqual([owner.id]);
+    });
   });
 });

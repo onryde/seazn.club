@@ -347,18 +347,12 @@ export function appOrigin(): string {
   ).replace(/\/$/, "");
 }
 
-/** New officiating assignment(s) with accept/decline CTA to /me. */
-export async function sendOfficialAssignedEmail(
-  to: string,
-  args: Omit<OfficialAssignedArgs, "meUrl">,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** New officiating assignment(s) with accept/decline CTA to /me, RENDERED and not sent. `queueAssignedNotices` (officials.ts) queues
+ *  what this returns on the email outbox (kind `official_assigned`, transactional), in the transaction that commits the assignment
+ *  (the auto apply and the manual set), one per official with an address, in the official's language. Nothing sends it directly. */
+export async function officialAssignedEmail(args: Omit<OfficialAssignedArgs, "meUrl">, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({
-    to,
-    transactional: true,
-    ...officialAssignedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict),
-  });
+  return officialAssignedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict, locale);
 }
 
 /** D12 (T19): the organiser opened the round - sent once per player, per board, per pairing. RENDERED here and not sent: the
@@ -375,69 +369,50 @@ export async function externalPlayInviteEmail(
   return externalPlayInviteTemplate(args, dict);
 }
 
-/** A match the official is assigned to changed time/venue. */
-export async function sendOfficialAssignmentChangedEmail(
-  to: string,
+/** A match the official is assigned to changed time/venue, RENDERED and not sent. `moveFixture` (schedule.ts) queues what this returns on
+ *  the email outbox (kind `official_assignment_changed`, transactional), in the move's transaction, one per assignment role, in the
+ *  official's language. Nothing sends it directly. */
+export async function officialAssignmentChangedEmail(
   args: Omit<OfficialAssignmentChangedArgs, "meUrl">,
-  locale: Locale = "en",
-): Promise<boolean> {
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({
-    to,
-    transactional: true,
-    ...officialAssignmentChangedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict),
-  });
+  return officialAssignmentChangedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict, locale);
 }
 
-/** A confirmed suspension (SPEC-1) — CTA to the /me suspensions card. Claimed
- *  players default to their stored locale; unclaimed persons never reach here. */
-export async function sendSuspensionConfirmedEmail(
-  to: string,
-  args: Omit<SuspensionConfirmedArgs, "meUrl">,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** A confirmed suspension (SPEC-1), CTA to the /me suspensions card, RENDERED and not sent. `queueSuspensionConfirmed`
+ *  (discipline.ts) queues what this returns on the email outbox (kind `suspension_confirmed`, transactional, to the claimed
+ *  player's account), in the transaction that confirms the ban, once per confirmation, in the player's language. Nothing sends
+ *  it directly. */
+export async function suspensionConfirmedEmail(args: Omit<SuspensionConfirmedArgs, "meUrl">, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({
-    to,
-    transactional: true,
-    ...suspensionConfirmedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict),
-  });
+  return suspensionConfirmedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
 }
 
-/** An official submitted a match report (SPEC-3) — sent to the org's
- *  owner/admins, deep-linked to the fixture's officials panel. `args` carries
- *  the org/competition/division slugs; the URL is built here. */
-export async function sendReportSubmittedEmail(
-  to: string,
+/** An official submitted a match report (SPEC-3), deep-linked to the fixture's officials panel, RENDERED and not sent. `args` carries
+ *  the org/competition/division slugs; the URL is built here. `submitMyReport` (match-reports.ts) queues what this returns on the
+ *  email outbox (kind `match_report_submitted`, transactional), one row per owner and admin of the organisation, in the submit's
+ *  transaction, each in that member's language. Nothing sends it directly. */
+export async function reportSubmittedEmail(
   args: Omit<ReportSubmittedArgs, "url"> & {
     orgSlug: string;
     competitionSlug: string;
     divisionSlug: string;
   },
-  locale: Locale = "en",
-): Promise<boolean> {
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
   const { orgSlug, competitionSlug, divisionSlug, ...rest } = args;
   const url = `${appOrigin()}/o/${orgSlug}/c/${competitionSlug}/d/${divisionSlug}/schedule?tab=officials`;
-  return send({
-    to,
-    transactional: true,
-    ...reportSubmittedTemplate({ ...rest, url }, dict),
-  });
+  return reportSubmittedTemplate({ ...rest, url }, dict);
 }
 
-/** A suspension flipped to served — the player is eligible again (SPEC-1). */
-export async function sendSuspensionServedEmail(
-  to: string,
-  args: Omit<SuspensionServedArgs, "meUrl">,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** A suspension flipped to served, the player is eligible again (SPEC-1), RENDERED and not sent. `queueSuspensionServed`
+ *  (discipline.ts) queues what this returns on the email outbox (kind `suspension_served`, transactional, to the claimed player's
+ *  account), in the transaction that flips the ban, once per ban, in the player's language; the retry worker sends it. */
+export async function suspensionServedEmail(args: Omit<SuspensionServedArgs, "meUrl">, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({
-    to,
-    transactional: true,
-    ...suspensionServedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict),
-  });
+  return suspensionServedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
 }
 
 /** One-shot +24h funnel reminder (v3/07 §6). */
@@ -487,62 +462,55 @@ export async function orgInviteEmail(args: { orgName: string; link: string }, lo
   return inviteTemplate(args.orgName, args.link, dict);
 }
 
-/** A payer offered a whole billing group to this recipient (billing-group
- *  transfer). The recipient adds their own card to take it over; the link goes
- *  to the billing settings of an org they can reach in the group. */
-export async function sendTransferOfferEmail(
-  to: string,
-  payerName: string,
-  groupName: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** A payer offered a whole billing group to this recipient (billing-group transfer), RENDERED and not sent. The recipient adds their own
+ *  card to take it over; the link goes to the billing settings of an org they can reach in the group. `offerGroupTransfer`
+ *  (billing-groups.ts) queues what this returns on the email outbox (kind `group_transfer_offer`, NOT transactional, as the direct
+ *  sender was: the suppression list applies, to the recipient's account) in the transaction that makes the offer live, in the
+ *  recipient's language. Nothing sends it directly. */
+export async function transferOfferEmail(
+  args: { payerName: string; groupName: string; link: string },
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...transferOfferTemplate(payerName, groupName, link, dict) });
+  return transferOfferTemplate(args.payerName, args.groupName, args.link, dict);
 }
 
-/** A payer handed a whole billing group to this recipient on the IMMEDIATE
- *  (community / no-live-subscription) path — the recipient accepted nothing and
- *  now simply pays for it. Informational; the link goes to the billing settings
- *  of an org they can reach in the group. Distinct from sendTransferOfferEmail. */
-export async function sendTransferCompleteEmail(
-  to: string,
-  payerName: string,
-  groupName: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** A payer handed a whole billing group to this recipient on the IMMEDIATE (community / no-live-subscription) path — the recipient
+ *  accepted nothing and now simply pays for it — RENDERED and not sent. Informational; the link goes to the billing settings of an org
+ *  they can reach in the group. Distinct from transferOfferEmail. `offerGroupTransfer` (billing-groups.ts) queues what this returns on
+ *  the email outbox (kind `group_transfer_complete`, NOT transactional, to the recipient's account) in the transaction that hands the
+ *  group over, in the recipient's language. Nothing sends it directly. */
+export async function transferCompleteEmail(
+  args: { payerName: string; groupName: string; link: string },
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...transferCompleteTemplate(payerName, groupName, link, dict) });
+  return transferCompleteTemplate(args.payerName, args.groupName, args.link, dict);
 }
 
-/** A group's payer pushed an org off the shared bill (billing-group detach). The
- *  org's OWNER is told what happened — `ridesOutUntil` set = keeps the plan
- *  until then, null = on Community now — and that its billing is now theirs. */
-export async function sendGroupOrgRemovedEmail(
-  to: string,
-  payerName: string,
-  orgName: string,
-  ridesOutUntil: string | null,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** A group's payer pushed an org off the shared bill (billing-group detach), RENDERED and not sent. The org's OWNER is told what
+ *  happened — `ridesOutUntil` set (already written in `locale`'s way) = keeps the plan until then, null = on Community now — and that its
+ *  billing is now theirs. `detachOrgFromGroup` (billing-groups.ts) queues what this returns on the email outbox (kind
+ *  `group_org_removed`, NOT transactional, to the owner's account) in the detach's own transaction, in the owner's language. Nothing
+ *  sends it directly. */
+export async function groupOrgRemovedEmail(
+  args: { payerName: string; orgName: string; ridesOutUntil: string | null; link: string },
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...groupOrgRemovedTemplate(payerName, orgName, ridesOutUntil, link, dict) });
+  return groupOrgRemovedTemplate(args.payerName, args.orgName, args.ridesOutUntil, args.link, dict);
 }
 
-/** An org's own owner left a billing group (billing-group detach). The PAYER is
- *  told their bill changed — `seatFreed` true = the seat is a reusable freed
- *  slot (release), false = it left with the org and the next invoice is smaller. */
-export async function sendGroupOrgLeftEmail(
-  to: string,
-  orgName: string,
-  seatFreed: boolean,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** An org's own owner left a billing group (billing-group detach), RENDERED and not sent. The PAYER is told their bill changed —
+ *  `seatFreed` true = the seat is a reusable freed slot (release), false = it left with the org and the next invoice is smaller.
+ *  `detachOrgFromGroup` (billing-groups.ts) queues what this returns on the email outbox (kind `group_org_left`, NOT transactional, to the
+ *  payer's account) in the detach's own transaction, in the payer's language. Nothing sends it directly. */
+export async function groupOrgLeftEmail(
+  args: { orgName: string; seatFreed: boolean; link: string },
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...groupOrgLeftTemplate(orgName, seatFreed, link, dict) });
+  return groupOrgLeftTemplate(args.orgName, args.seatFreed, args.link, dict);
 }
 
 /** The registration confirmation, RENDERED and not sent — it carries the offline (cash/bank) payment instructions for paid entries.

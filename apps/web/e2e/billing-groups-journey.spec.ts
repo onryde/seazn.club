@@ -278,6 +278,26 @@ test.describe.serial("billing groups — visual workflow", () => {
         select subscription_id from organizations where id = ${otherOrg}`,
     );
     expect(moved[0].subscription_id).not.toBe(groupId);
+
+    // Email outbox, phase 3 wave 4: a detach tells only the party who did NOT press the button. Here the one actor owns the
+    // org AND pays for the group, so there is nobody else to tell: no `group_org_removed` and no `group_org_left` row, by the
+    // detached org or by this detach's ref (`group_detach`, the org's new subscription). Such a row would be written in the
+    // detach's own transaction, which the reads above have already seen commit, so there is nothing to poll for. The positive
+    // pair (the payer removes another owner's org; an org's own owner leaves) is
+    // src/server/usecases/__tests__/billing-group-detach-notify.test.ts: this journey has no second person to detach.
+    // Premise, not assumed: the payer (who pressed the button: only the payer sees this panel) also owns the detached org.
+    const detachedOwners = await db((sql) =>
+      sql<{ user_id: string }[]>`
+        select user_id from org_members where org_id = ${otherOrg} and role = 'owner'`,
+    );
+    expect(detachedOwners.map((o) => o.user_id), "premise: the payer owns the detached org").toEqual([payerUserId]);
+    const detachMail = await db((sql) =>
+      sql<{ kind: string }[]>`
+        select kind from email_outbox
+         where kind in ('group_org_removed', 'group_org_left')
+           and (org_id = ${otherOrg} or (ref_type = 'group_detach' and ref_id = ${moved[0].subscription_id}))`,
+    );
+    expect(detachMail.map((r) => r.kind), "no detach notice when the actor owns both the org and the bill").toEqual([]);
   });
 
   test("08 — an organisation that already pays for itself cannot just join", async ({ page }) => {
@@ -375,11 +395,11 @@ test.describe.serial("billing groups — visual workflow", () => {
     // Give Northside a different owner, which is what makes them a candidate.
     // Ownership of an ORG is separate from who pays, and it is the only consent
     // in the no-card handover path.
+    const heirEmail = `delivered+e2e-heir-${TAG}@resend.dev`;
     const heir = await db(async (sql) => {
-      const email = `delivered+e2e-heir-${TAG}@resend.dev`;
       await sql`insert into users (email, display_name, email_verified)
-                values (${email}, ${"Sam Heir"}, true) on conflict (email) do nothing`;
-      const [u] = await sql<{ id: string }[]>`select id from users where email = ${email}`;
+                values (${heirEmail}, ${"Sam Heir"}, true) on conflict (email) do nothing`;
+      const [u] = await sql<{ id: string }[]>`select id from users where email = ${heirEmail}`;
       await sql`delete from org_members where org_id = ${otherOrg} and role = 'owner'`;
       await sql`insert into org_members (org_id, user_id, role)
                 values (${otherOrg}, ${u.id}, 'owner')`;
@@ -411,6 +431,39 @@ test.describe.serial("billing groups — visual workflow", () => {
           select owner_user_id from subscriptions where id = ${groupId}`,
       );
       expect(owner[0].owner_user_id).toBe(heir);
+
+      // Email outbox, phase 3 wave 4: the immediate handover queues ONE `group_transfer_complete` row in its own transaction,
+      // ref the group (`subscription`), addressed to the heir's account and address, no organisation on it (a group can span
+      // several). This server has no Resend key, so the first attempt (made after commit, hence the poll) settles it with no
+      // body kept.
+      const handoverMail = () =>
+        db((sql) =>
+          sql<{ userId: string | null; recipient: string; orgId: string | null; status: string; hasBody: boolean }[]>`
+            select recipient_user_id as "userId", recipient, org_id as "orgId", status,
+                   body_sealed is not null as "hasBody"
+              from email_outbox
+             where kind = 'group_transfer_complete' and ref_type = 'subscription' and ref_id = ${groupId}`,
+        );
+      await expect
+        .poll(
+          async () => {
+            const rows = await handoverMail();
+            return rows.length > 0 && rows.every((r) => r.status !== "queued" && r.status !== "sending");
+          },
+          { timeout: 20_000, message: "the handover notice was queued and its first attempt made" },
+        )
+        .toBe(true);
+      expect(
+        (await handoverMail()).map((r) => ({
+          userId: r.userId,
+          recipient: r.recipient,
+          orgId: r.orgId,
+          waiting: r.status === "queued" || r.status === "sending",
+          hasBody: r.hasBody,
+        })),
+        "one handover notice, to the heir's account and address, attempted, no body kept",
+      ).toEqual([{ userId: heir, recipient: heirEmail, orgId: null, waiting: false, hasBody: false }]);
+
       await page.goto("/settings/billing", { waitUntil: "load" });
       await page.waitForTimeout(500); // settle, not networkidle (realtime socket never idles → 60s hang)
       await expect(panelOf(page)).toHaveCount(0);

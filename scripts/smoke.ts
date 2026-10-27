@@ -5969,6 +5969,9 @@ async function officialOnboardingSuite(
   await v1(admin, `/api/v1/fixtures/${fixtures[1].id}/officials`, "PATCH", {
     set: [{ official_id: offId, role_key: "referee", locked: false }],
   });
+  // Email outbox, phase 3 wave 4: the invite above stamped the official's address, so this manual set is the first
+  // assignment that can notify — one `official_assigned` row, ref (fixture, official) as `patchFixtureOfficials` names it.
+  await checkOutboxRow("official_assigned", "fixture_official", `${fixtures[1].id}:${offId}`);
   await v1(ref, `/api/v1/me/fixtures/${fixtures[1].id}/officiating-response`, "PATCH", {
     response: "declined",
     decline_reason: "smoke clash",

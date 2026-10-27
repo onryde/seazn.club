@@ -7,9 +7,12 @@
 //
 // What is checked, and how:
 //  - WHICH kinds are account kinds is the engine's own declaration (`OUTBOX_KIND_FACTS`), compared with a list typed here from the
-//    spec (`chess_invite` and wave 2's seven). A new account kind is then a failure that asks for a decision here, not a quiet pass.
-//  - Every account kind is swept through its real producer. Wave 2's T1 registered its kinds before their producers moved, each kind task
-//    (T2-T9) added its producer here, and T10 deleted the list of the pending ones.
+//    spec (`chess_invite`, wave 2's seven and wave 4's seven). A new account kind is then a failure that asks for a decision here, not a
+//    quiet pass.
+//  - Every account kind that has moved is swept through its real producer. Wave 2's T1 registered its kinds before their producers moved,
+//    each kind task (T2-T9) added its producer here, and T10 deleted the list of the pending ones. Wave 4's T1 registered its seven
+//    account kinds the same way, with no pending list here: the kinds not swept yet are the ones NOT_YET_MOVED names (_kind-senders.ts,
+//    the one authority for "not moved yet"), and each kind task adds its producer here in the commit that deletes the kind from that list.
 //  - The bodies are the REAL producer's: `openRound` renders the invite with the real `externalPlayInviteEmail` (NOT replaced, unlike the
 //    sibling suites: their stand-in puts the address in the body on purpose so the transport double can read it) and queues it. Only
 //    the transport is replaced, and it answers 503 so every row stays `queued` with its sealed body. A row that had been sent has no
@@ -26,6 +29,20 @@
 //    the notice read the database only; the other refund handlers no-op on a pass charge (their one Stripe lookup needs a Stripe key).
 //  - The trial warning is driven through the real `processStripeEvent` (`customer.subscription.trial_will_end`) on a trialing billing
 //    group. Nothing reaches Stripe: the group is found by the subscription id it stores.
+//  - The suspension notices are driven through the real discipline producers on a football division with a unique name (the positive
+//    pair) whose player is claimed by a fresh account: the confirmed notice through `decideSuspension` (confirm). Its request makes the
+//    first attempt, which the transport refuses (503), so the row is judged once that attempt is over and it is queued again. The
+//    served notice through `refreshDiscipline` on a decided fixture that serves the ban; it waits for the worker, queued.
+//  - The report notice is driven through the real `submitMyReport` of a claimed official (a unique name, the positive pair) on a football
+//    division: one row per owner and admin, judged once the request's refused (503) first attempt is over.
+//  - The billing-group transfer offer is driven through the real `offerGroupTransfer` of a live group to the owner of one of its orgs.
+//    It mints a SetupIntent before it queues its notice: while that producer runs, and only then, Stripe is a stub that answers that one
+//    call (every other producer meets the real `getStripe`, as before). Judged once the request's refused (503) first attempt is over.
+//  - The immediate handover's notice is driven through the same `offerGroupTransfer` on a community group (no live subscription and no
+//    Stripe customer, so nothing reaches Stripe), judged the same way.
+//  - The detach notices are driven through the real `detachOrgFromGroup` on a paying group with no live Stripe subscription (so its
+//    quantity sync never reaches Stripe): the payer pushing another owner's org out (removed), and an org's own owner taking it out
+//    (left). Judged the same way.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -34,17 +51,36 @@ import { OUTBOX_KIND_FACTS, OUTBOX_KINDS, type OutboxKind } from "../constants";
 import { openBody } from "../seal";
 import { stubOutboxEnv } from "@/server/usecases/__tests__/_invite-mail";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
+import { NOT_YET_MOVED } from "./_kind-senders";
 
 vi.mock("@/server/email-outbox/transport", () => ({
   deliver: async () => ({ ok: false as const, reason: "http" as const, status: 503, errorName: "service_unavailable", detail: "later" }),
 }));
+const stripeSeam = vi.hoisted(() => ({ offering: false }));
+vi.mock("@/lib/stripe", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/stripe")>();
+  const offerStub = {
+    setupIntents: {
+      create: async () => {
+        const id = `seti_akb_${crypto.randomUUID().slice(0, 8)}`;
+        return { id, client_secret: `${id}_secret` };
+      },
+    },
+  } as unknown as ReturnType<typeof real.getStripe>;
+  return { ...real, getStripe: () => (stripeSeam.offering ? offerStub : real.getStripe()) };
+});
 
 import { openRound } from "@/server/usecases/external-play/open-round";
 import { handleRegistrationCheckoutCompleted, handleRegistrationDispute } from "@/server/usecases/registrations";
 import { handleSponsorDispute } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
-import { seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { seedCommunityGroup, seedDetachableGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { detachOrgFromGroup, offerGroupTransfer } from "@/server/usecases/billing-groups";
 import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
+import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision } from "@/server/usecases/__tests__/_seed";
+import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
+import { refreshDiscipline } from "@/server/usecases/scoring";
+import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -58,6 +94,14 @@ const SPEC_ACCOUNT_KINDS: readonly OutboxKind[] = [
   "sponsor_dispute_lost",
   "pass_revoked",
   "trial_ending",
+  // Wave 4, in the table's order.
+  "suspension_confirmed",
+  "suspension_served",
+  "match_report_submitted",
+  "group_transfer_offer",
+  "group_transfer_complete",
+  "group_org_removed",
+  "group_org_left",
 ];
 
 beforeEach(() => stubOutboxEnv());
@@ -86,6 +130,30 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
   }
   const rowIdsOf = async (kind: OutboxKind, disputeId: string): Promise<string[]> =>
     (await sql<{ id: string }[]>`select id from email_outbox where kind = ${kind} and ref_id = ${disputeId}`).map((x) => x.id);
+  /** The rows of `kind` about `refType / refId` once the request's own first attempt (a deferred `dispatchNow`, answered 503 here)
+   *  is over: every row attempted and back to `queued` with its sealed body, so the guard below judges a body that is still there. */
+  const attemptedRowIdsOf = async (kind: OutboxKind, refType: string, refId: string): Promise<string[]> => {
+    let ids: string[] = [];
+    await vi.waitFor(
+      async () => {
+        const rows = await sql<{ id: string; status: string; attempts: number }[]>`
+          select id, status, attempts from email_outbox where kind = ${kind} and ref_type = ${refType} and ref_id = ${refId}`;
+        expect(rows.length, `premise: the ${kind} producer wrote a row`).toBeGreaterThan(0);
+        expect(rows.filter((r) => r.status !== "queued" || r.attempts < 1), `the ${kind} request's first attempt is over`).toEqual([]);
+        ids = rows.map((r) => r.id);
+      },
+      { timeout: 15_000, interval: 100 },
+    );
+    return ids;
+  };
+  /** A football division with a unique name (the suspension notices' positive pair) and its player X claimed by a fresh account. */
+  const claimedFootballDivision = async () => {
+    const ctx = await seedFootballDivision();
+    const divisionName = `Division ${randomUUID().slice(0, 8)}`;
+    await sql`update divisions set name = ${divisionName} where id = ${ctx.divisionId}`;
+    await claimPerson(ctx.personX, `akb-${randomUUID().slice(0, 8)}@test.local`);
+    return { ctx, divisionName };
+  };
   /** A pattern that matches `text` literally. */
   const literal = (text: string): RegExp => new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
 
@@ -165,13 +233,80 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       // The warning links to the billing page, where the payer adds a card or cancels.
       return { rowIds: await rowIdsOf("trial_ending", g.groupId), positive: /\/settings\/billing/ };
     },
+    suspension_confirmed: async () => {
+      const { ctx, divisionName } = await claimedFootballDivision();
+      const ban = await createManualSuspension(ctx.auth, ctx.divisionId, { personId: ctx.personX, matchesTotal: 2, reason: "violent conduct" });
+      expect((await decideSuspension(ctx.auth, ban.id, { kind: "confirm" })).status, "premise: the real confirm made the ban live").toBe("active");
+      // The notice names the division the ban is in.
+      return { rowIds: await attemptedRowIdsOf("suspension_confirmed", "suspension", ban.id), positive: literal(divisionName) };
+    },
+    suspension_served: async () => {
+      const { ctx, divisionName } = await claimedFootballDivision();
+      const ban = await createManualSuspension(ctx.auth, ctx.divisionId, { personId: ctx.personX, matchesTotal: 1, reason: "violent conduct" });
+      await decideSuspension(ctx.auth, ban.id, { kind: "confirm" });
+      // A decided fixture of the banned team, after the ban: the score write's fold serves it.
+      const fx = await makeFixture(ctx, 2, ctx.entrantA, ctx.entrantB, "decided");
+      await sql`
+        insert into score_events (fixture_id, org_id, seq, type, payload, recorded_at)
+        values (${fx}, ${ctx.orgId}, 1, 'core.note', ${sql.json({ text: "d" })}, now() + interval '1 hour')`;
+      await refreshDiscipline(ctx.auth, fx);
+      const rows = await sql<{ id: string }[]>`
+        select id from email_outbox where kind = 'suspension_served' and ref_type = 'suspension' and ref_id = ${ban.id}`;
+      // The notice names the division the ban was served in.
+      return { rowIds: rows.map((x) => x.id), positive: literal(divisionName) };
+    },
+    match_report_submitted: async () => {
+      const ctx = await seedFootballDivision();
+      const ref = await makeClaimedOfficial(ctx);
+      const officialName = `Official ${randomUUID().slice(0, 8)}`;
+      await sql`update officials set display_name = ${officialName} where id = ${ref.officialId}`;
+      const { fixtureOfficialId } = await makeAssignment(ctx, ref.officialId);
+      await putMyReport(ref.userId, fixtureOfficialId, { body: "a quiet game", incidents: [] });
+      const report = await submitMyReport(ref.userId, fixtureOfficialId);
+      // The notice names the official who filed the report.
+      return { rowIds: await attemptedRowIdsOf("match_report_submitted", "match_report", report.id), positive: literal(officialName) };
+    },
+    group_transfer_offer: async () => {
+      const g = await seedLiveGroup({ prefix: "akb" });
+      stripeSeam.offering = true;
+      try {
+        const out = await offerGroupTransfer({ actorUserId: g.payer.id, subscriptionId: g.groupId, newOwnerUserId: g.heir.id });
+        expect(out.status, "premise: the real offer went live").toBe("pending_card");
+      } finally {
+        stripeSeam.offering = false;
+      }
+      // The notice names the group by the org the recipient can reach.
+      return { rowIds: await attemptedRowIdsOf("group_transfer_offer", "subscription", g.groupId), positive: literal(g.orgName) };
+    },
+    group_transfer_complete: async () => {
+      const g = await seedCommunityGroup({ prefix: "akb" });
+      const out = await offerGroupTransfer({ actorUserId: g.payer.id, subscriptionId: g.groupId, newOwnerUserId: g.heir.id });
+      expect(out.status, "premise: the real handover moved the group").toBe("transferred");
+      // The notice names the group by the org the recipient can reach.
+      return { rowIds: await attemptedRowIdsOf("group_transfer_complete", "subscription", g.groupId), positive: literal(g.orgName) };
+    },
+    group_org_removed: async () => {
+      const g = await seedDetachableGroup({ prefix: "akb" });
+      const out = await detachOrgFromGroup({ actorUserId: g.payer.id, orgId: g.orgId, mode: "ride_out" });
+      // The notice names the org that was moved off the bill.
+      return { rowIds: await attemptedRowIdsOf("group_org_removed", "group_detach", out.subscription_id), positive: literal(g.orgName) };
+    },
+    group_org_left: async () => {
+      const g = await seedDetachableGroup({ prefix: "akb" });
+      const out = await detachOrgFromGroup({ actorUserId: g.owner.id, orgId: g.orgId, mode: "release" });
+      // The notice names the org that left the group.
+      return { rowIds: await attemptedRowIdsOf("group_org_left", "group_detach", out.subscription_id), positive: literal(g.orgName) };
+    },
   };
 
-  it("every account kind: the recipient's address is absent from the subject, the html and the text", async () => {
-    expect(Object.keys(PRODUCERS).sort(), "a producer for exactly the account kinds").toEqual([...SPEC_ACCOUNT_KINDS].sort());
+  it("every account kind that has moved: the recipient's address is absent from the subject, the html and the text", async () => {
+    // A kind still on its direct sender writes no row to judge yet; NOT_YET_MOVED says which, so a kind task that moves one and forgets
+    // its producer here (or adds a producer while the kind is still listed) fails the comparison below.
+    const moved = SPEC_ACCOUNT_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
+    expect(Object.keys(PRODUCERS).sort(), "a producer for exactly the account kinds that have moved").toEqual([...moved].sort());
     let kindsChecked = 0;
     let rowsChecked = 0;
-    for (const kind of SPEC_ACCOUNT_KINDS) {
+    for (const kind of moved) {
       const { rowIds, positive } = await PRODUCERS[kind]!();
       const rows = await sql<{ id: string; recipient: string; recipient_user_id: string | null; subject: string; status: string; body_sealed: Buffer | null }[]>`
         select id, recipient, recipient_user_id, subject, status, body_sealed
@@ -195,7 +330,7 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       }
       kindsChecked += 1;
     }
-    expect(kindsChecked, "every account kind was checked").toBe(SPEC_ACCOUNT_KINDS.length);
+    expect(kindsChecked, "every account kind that has moved was checked").toBe(moved.length);
     expect(kindsChecked, "anti-vacuity: at least one account kind was swept").toBeGreaterThan(0);
     expect(rowsChecked, "anti-vacuity: bodies were opened, at least one per kind").toBeGreaterThanOrEqual(kindsChecked);
   });

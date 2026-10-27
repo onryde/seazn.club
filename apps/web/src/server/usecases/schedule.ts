@@ -66,9 +66,10 @@ import {
   type ScheduleSolverInfo,
   type StartDivisionRequest,
 } from "@/server/api-v1/schemas";
-import { sendOfficialAssignmentChangedEmail } from "@/lib/email";
-import { toLocale } from "@/lib/i18n-constants";
+import { officialAssignmentChangedEmail } from "@/lib/email";
+import { deferred } from "@/lib/deferred";
 import { msgFor } from "@/lib/messages-i18n";
+import { dispatchNow, enqueueEmail, expiryWithin, recipientLocale } from "@/server/email-outbox";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { capacityInputForFixtures, guardCapacity } from "./capacity-guard";
@@ -3087,8 +3088,8 @@ export async function moveFixture(
 
     const settings = await loadSettings(tx, fixture.division_id);
     // P9 pass 3a: resolved once, used for the conflict mapping below AND
-    // (court/venue both) for the officials email built after this
-    // transaction closes — see `change` at the end of this callback.
+    // (court/venue both) for the officials change notice queued further
+    // down in this transaction.
     const courtNames = await courtNamesById(tx);
     const venueNames = await venueNamesById(tx);
     // #5 fix — resolved once, used to DERIVE venue_id from the target
@@ -3273,6 +3274,89 @@ export async function moveFixture(
         where id = ${fixture.id}`;
     }
 
+    // v11: officials who agreed to a slot must hear when it moves. Only real
+    // timetable/venue changes notify, only non-declined assignments, only
+    // officials with an email. Queued on the email outbox in THIS transaction
+    // (phase 3 wave 4, kind `official_assignment_changed`), one row per
+    // assignment role; the request makes the first attempt after commit.
+    //
+    // #5 fix: the OLD second disjunct (`patch.venue_id !== undefined &&
+    // patch.venue_id !== fixture.venue_id`) is now dead code, deliberately
+    // removed rather than left misleading — venue_id can no longer change
+    // independently of court_id (see nextVenueId's own comment above), and
+    // any court_id change is already covered by the `fixture.court_id !==
+    // nextCourtId` clause below.
+    const timetableChanged =
+      movesTimetable &&
+      ((fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null) !== nextAt ||
+        fixture.court_id !== nextCourtId);
+    const emailIds: string[] = [];
+    if (timetableChanged) {
+      const notices = await tx<{
+        official_id: string; email: string; display_name: string; role_key: string; user_id: string | null;
+        org_name: string; default_locale: string | null;
+        home_name: string | null; away_name: string | null; venue_tz: string | null;
+        home_slot_label: SlotLabel | null; away_slot_label: SlotLabel | null;
+      }[]>`
+        select o.id as official_id, o.email, o.display_name, fo.role_key, p.user_id,
+               org.name as org_name, org.default_locale,
+               h.display_name as home_name, a.display_name as away_name,
+               f.home_slot_label, f.away_slot_label,
+               -- venue lane (V305): division override → org timezone → UTC
+               coalesce(ss.tz, org.timezone, 'UTC') as venue_tz
+        from fixture_officials fo
+        join fixtures f on f.id = fo.fixture_id
+        join officials o on o.id = fo.official_id
+        left join persons p on p.id = o.person_id
+        join organizations org on org.id = o.org_id
+        left join entrants h on h.id = ${fixture.home_entrant_id}
+        left join entrants a on a.id = ${fixture.away_entrant_id}
+        left join schedule_settings ss on ss.division_id = ${fixture.division_id}
+        where fo.fixture_id = ${fixture.id}
+          and fo.response <> 'declined' and o.email is not null`;
+      // P9 pass 3a: the email renders human text, so it carries RESOLVED
+      // court/venue NAMES, not ids, unlike the ledger event below.
+      const prevAt = fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null;
+      const court = nextCourtId !== null ? (courtNames.get(nextCourtId) ?? null) : null;
+      const venue = nextVenueId !== null ? (venueNames.get(nextVenueId) ?? null) : null;
+      for (const n of notices) {
+        // F5 (D4): the official's language — a claimed official's account,
+        // then the org's default, then en — for the label and the email alike.
+        const locale = await recipientLocale(tx, { pick: null, userId: n.user_id, orgDefault: n.default_locale });
+        const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
+          msgFor(locale, k, v);
+        emailIds.push(
+          await enqueueEmail(tx, {
+            kind: "official_assignment_changed",
+            // Per role (P-W4-2): an official holding two roles on the fixture gets one notice for each, and neither ends the
+            // other; a later move of this fixture supersedes a notice still waiting for the same role (the replace rule).
+            refType: "fixture_official",
+            refId: `${fixture.id}:${n.official_id}:${n.role_key}`,
+            orgId: auth.orgId,
+            to: n.email,
+            ...(await officialAssignmentChangedEmail(
+              {
+                orgName: n.org_name,
+                officialName: n.display_name,
+                roleKey: n.role_key,
+                // Design review M-7: the join word is the dictionary's (fr "contre"), as officials.ts's assignment notice says it.
+                label: `${n.home_name ?? resolveSlotLabel(n.home_slot_label, lookup, "schedule.tbd")} ${lookup("schedule.vs")} ${n.away_name ?? resolveSlotLabel(n.away_slot_label, lookup, "schedule.tbd")}`,
+                prevAt,
+                nextAt,
+                venueTz: n.venue_tz,
+                court,
+                venue,
+              },
+              locale,
+            )),
+            transactional: true,
+            // Worthless once the match has started at its new time; `null` (unscheduled) falls to the bound.
+            expiresAt: expiryWithin(nextAt === null ? null : new Date(nextAt)),
+          }),
+        );
+      }
+    }
+
     if (movesTimetable || patch.schedule_locked !== undefined) {
       // P9 pass 3a: `court` in this ledger payload is a `courts.id`
       // (previously a free-text `court_label`) — `execute()` in history.ts
@@ -3300,83 +3384,17 @@ export async function moveFixture(
       await tx`update divisions set seq = ${seq} where id = ${fixture.division_id}`;
     }
 
-    // v11: officials who agreed to a slot must hear when it moves. Only real
-    // timetable/venue changes notify, only non-declined assignments, only
-    // officials with an email — assembled in-tx, sent after commit.
-    //
-    // #5 fix: the OLD second disjunct (`patch.venue_id !== undefined &&
-    // patch.venue_id !== fixture.venue_id`) is now dead code, deliberately
-    // removed rather than left misleading — venue_id can no longer change
-    // independently of court_id (see nextVenueId's own comment above), and
-    // any court_id change is already covered by the `fixture.court_id !==
-    // nextCourtId` clause below.
-    const timetableChanged =
-      movesTimetable &&
-      ((fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null) !== nextAt ||
-        fixture.court_id !== nextCourtId);
-    let changeNotices: {
-      email: string; display_name: string; role_key: string; org_name: string;
-      default_locale: string | null;
-      home_name: string | null; away_name: string | null; venue_tz: string | null;
-      home_slot_label: SlotLabel | null; away_slot_label: SlotLabel | null;
-    }[] = [];
-    if (timetableChanged) {
-      changeNotices = await tx`
-        select o.email, o.display_name, fo.role_key, org.name as org_name,
-               org.default_locale,
-               h.display_name as home_name, a.display_name as away_name,
-               f.home_slot_label, f.away_slot_label,
-               -- venue lane (V305): division override → org timezone → UTC
-               coalesce(ss.tz, org.timezone, 'UTC') as venue_tz
-        from fixture_officials fo
-        join fixtures f on f.id = fo.fixture_id
-        join officials o on o.id = fo.official_id
-        join organizations org on org.id = o.org_id
-        left join entrants h on h.id = ${fixture.home_entrant_id}
-        left join entrants a on a.id = ${fixture.away_entrant_id}
-        left join schedule_settings ss on ss.division_id = ${fixture.division_id}
-        where fo.fixture_id = ${fixture.id}
-          and fo.response <> 'declined' and o.email is not null`;
-    }
     return {
       divisionId: fixture.division_id,
       competitionId: fixture.competition_id,
       // R10d n2: the one fixture this move wrote.
       fixtureId: fixture.id,
       conflicts,
-      changeNotices,
-      // P9 pass 3a: the officials-change EMAIL renders human text, so this
-      // (internal-only — never the API response, which is just `conflicts`)
-      // carries RESOLVED NAMES, not ids, unlike the ledger event above.
-      change: {
-        prevAt: fixture.scheduled_at !== null ? iso(ms(fixture.scheduled_at)) : null,
-        nextAt,
-        courtName: nextCourtId !== null ? (courtNames.get(nextCourtId) ?? null) : null,
-        venueName: nextVenueId !== null ? (venueNames.get(nextVenueId) ?? null) : null,
-      },
+      emailIds,
     };
   });
-  for (const n of out.changeNotices) {
-    // Copy locale for a document nobody is "viewing" — same reasoning as
-    // exports.ts's exportLookup / calendar.ics/route.ts: the officials-change
-    // notice email has no single reader whose cookie could be consulted, so
-    // it uses the org's own default locale.
-    const locale = toLocale(n.default_locale);
-    const lookup = (k: Parameters<typeof msgFor>[1], v?: Record<string, string | number>) =>
-      msgFor(locale, k, v);
-    void sendOfficialAssignmentChangedEmail(n.email, {
-      orgName: n.org_name,
-      officialName: n.display_name,
-      roleKey: n.role_key,
-      // Design review M-7: the join word is the dictionary's (fr "contre"), as officials.ts's assignment notice says it.
-      label: `${n.home_name ?? resolveSlotLabel(n.home_slot_label, lookup, "schedule.tbd")} ${lookup("schedule.vs")} ${n.away_name ?? resolveSlotLabel(n.away_slot_label, lookup, "schedule.tbd")}`,
-      prevAt: out.change.prevAt,
-      nextAt: out.change.nextAt,
-      venueTz: n.venue_tz,
-      court: out.change.courtName,
-      venue: out.change.venueName,
-    }).catch(() => {});
-  }
+  // The request makes the first attempt, after commit (R5); a failed attempt is the outbox's retry, never the move's.
+  if (out.emailIds.length > 0) deferred(() => dispatchNow(out.emailIds));
   afterScheduleWrite(out.divisionId, out.competitionId, "schedule", [out.fixtureId]);
   return out.conflicts;
 }

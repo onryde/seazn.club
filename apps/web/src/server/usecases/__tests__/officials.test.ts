@@ -1,9 +1,17 @@
 // Integration tests for PROMPT-22 (Jul3/02): officials CRUD, auto → apply,
 // manual set/lock, hide-names public read, entitlement gates. Real Postgres
 // required; skipped without DATABASE_URL.
-import { afterAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
+import enEmails from "@/dictionaries/en/emails.json";
+import frEmails from "@/dictionaries/fr/emails.json";
+import nlEmails from "@/dictionaries/nl/emails.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 import { sql } from "@/lib/db";
+import { LIVE_STATUSES, MAX_EXPIRY_MS, type OutboxStatus } from "@/server/email-outbox/constants";
+import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
+import { stubOutboxEnv } from "./_invite-mail";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { createCompetition } from "../competitions";
@@ -25,20 +33,20 @@ import { makeUser as makeSeedUser, seedOrg as seedSeedOrg, seedFutureDivision } 
 
 import { setOrgPlan } from "@/lib/__tests__/_billing-group";
 
-// P9 sweep (pass 3c-4): captures what assignedNotices() (officials.ts) would
-// actually email an official, without depending on RESEND_API_KEY/network —
-// sendAssignedNotices calls this synchronously (fire-and-forget, but the call
-// itself happens before applyOfficialAssignments/patchFixtureOfficials
-// resolves), so the mock has recorded its args by the time the assertion
-// runs. vi.hoisted for the same reason officials-ai-route.test.ts uses it: the
-// vi.mock factory below hoists above this const otherwise.
-const { sendOfficialAssignedEmail } = vi.hoisted(() => ({
-  sendOfficialAssignedEmail: vi.fn().mockResolvedValue(true),
-}));
+// The assignment notice is RENDERED by `officialAssignedEmail` and queued on the email outbox (phase 3 wave 4, kind
+// `official_assigned`) in the transaction that commits the assignment. The builder is WRAPPED, never replaced: the real
+// render runs, and the spy records what the notice was built from (each fixture's label, venue and court, and the
+// language) by the time the producer resolves. vi.hoisted for the same reason officials-ai-route.test.ts uses it: the
+// vi.mock factory below hoists above this const otherwise. The rest of the module is the real one (importOriginal).
+const mail = vi.hoisted(() => ({ assigned: vi.fn<typeof import("@/lib/email").officialAssignedEmail>() }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
-  return { ...actual, sendOfficialAssignedEmail };
+  mail.assigned.mockImplementation(actual.officialAssignedEmail);
+  return { ...actual, officialAssignedEmail: mail.assigned };
 });
+// The outbox's one network seam: captured, never sent. The row, the seal, the gate and the attempt are the real ones.
+const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
+vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -517,7 +525,7 @@ describe.skipIf(!HAS_DB)("non-member official fixture access rule", () => {
   });
 });
 
-// P9 sweep (pass 3c-4): assignedNotices() (officials.ts) used to SELECT
+// P9 sweep (pass 3c-4): the assignment notice (officials.ts, now queueAssignedNotices) used to SELECT
 // f.venue/f.court_label straight into the assignment-notice email — both
 // frozen since pass 3a, so a fixture assigned an official after the cutover
 // emailed a blank "where" line regardless of its real venue_id/court_id.
@@ -541,15 +549,15 @@ describe.skipIf(!HAS_DB)("P9: assignment-notice email carries the live venue/cou
       role_keys: ["referee"],
       email,
     });
-    sendOfficialAssignedEmail.mockClear();
+    mail.assigned.mockClear();
 
     await patchFixtureOfficials(auth, fixtures[0]!.id, {
       set: [{ official_id: official.id, role_key: "referee", locked: false }],
     });
 
-    const call = sendOfficialAssignedEmail.mock.calls.find((c) => c[0] === email);
-    expect(call, "sendOfficialAssignedEmail was never called for this official").toBeTruthy();
-    const args = call![1] as { fixtures: { venue: string | null; court_label: string | null }[] };
+    const call = mail.assigned.mock.calls.find((c) => c[0].officialName === "Notice Ref");
+    expect(call, "the assignment notice was never built for this official").toBeTruthy();
+    const args = call![0];
     expect(args.fixtures).toHaveLength(1);
     expect(args.fixtures[0]!.venue).toBe("Live Notice Venue");
     expect(args.fixtures[0]!.court_label).toBe("Live Notice Court");
@@ -558,7 +566,7 @@ describe.skipIf(!HAS_DB)("P9: assignment-notice email carries the live venue/cou
   });
 });
 
-// F5/Task 9: assignedNotices() (officials.ts) used to build its "X vs Y"
+// F5/Task 9: the assignment notice (officials.ts, now queueAssignedNotices) used to build its "X vs Y"
 // label from `fx?.home_name ?? "TBD"` — a bare literal, never selecting
 // home_slot_label/away_slot_label. An official can be pre-assigned to a
 // court/time slot before the bracket resolves entrants, so the digest must
@@ -585,17 +593,302 @@ describe.skipIf(!HAS_DB)("F5/Task 9: assignment digest resolves slot labels, not
       role_keys: ["referee"],
       email,
     });
-    sendOfficialAssignedEmail.mockClear();
+    mail.assigned.mockClear();
 
     await patchFixtureOfficials(auth, fixtureId, {
       set: [{ official_id: official.id, role_key: "referee", locked: false }],
     });
 
-    const call = sendOfficialAssignedEmail.mock.calls.find((c) => c[0] === email);
-    expect(call, "sendOfficialAssignedEmail was never called for this official").toBeTruthy();
-    const args = call![1] as { fixtures: { label: string }[] };
+    const call = mail.assigned.mock.calls.find((c) => c[0].officialName === "Slot Label Ref");
+    expect(call, "the assignment notice was never built for this official").toBeTruthy();
+    const args = call![0];
     expect(args.fixtures).toHaveLength(1);
     expect(args.fixtures[0]!.label).toBe("Round of 4 vs TBD");
     expect(args.fixtures[0]!.label).not.toBe("TBD vs TBD");
+  });
+});
+
+// Phase 3 wave 4 (T2, kind `official_assigned`): the assignment notice is a row on the email outbox, written in the
+// transaction that commits the assignment (R1), one row per official who has an address and NEWLY got a fixture (R6:
+// the carry-over diff, so a re-apply or a re-set that keeps an official notifies nobody), and the request makes the
+// first attempt after commit (R5). The ref names the assignment: the auto apply's ledger entry
+// (`division_event / <division>:<seq>:<official>`) or the manual set's fixture (`fixture_official / <fixture>:<official>`),
+// with the official in it so two officials sharing one address in one apply do not supersede each other. The language
+// is the official's (F5, D4): a claimed official's account, then the org's default, then `en`; the fixture labels are
+// built in that same language. Expected subjects come from the emails dictionary on disk (`dictionarySubject`) and the
+// join word from the ui dictionaries by import, never from the code under test.
+//
+// Not built (owner rule 2026-10-26, mainstream only): a rollback witnessed by a failing statement after the enqueue
+// (`plantFailingUpdate` does not exist); the row shares the producer's transaction by construction.
+// Sport: not applicable (the notice does not vary by sport).
+describe.skipIf(!HAS_DB)("the assignment notice goes through the email outbox (official_assigned)", () => {
+  type NoticeRow = {
+    id: string; kind: string; ref_type: string; ref_id: string; org_id: string | null; recipient: string;
+    recipient_user_id: string | null; transactional: boolean; subject: string; status: OutboxStatus;
+    created_at: Date; expires_at: Date;
+  };
+  /** Every assignment notice this organisation queued, oldest first. */
+  const noticesOf = (orgId: string) =>
+    sql<NoticeRow[]>`
+      select id, kind, ref_type, ref_id, org_id, recipient, recipient_user_id, transactional, subject, status, created_at, expires_at
+        from email_outbox where kind = 'official_assigned' and org_id = ${orgId}
+       order by created_at, id`;
+  /** The notices once the request's own first attempt (a deferred `dispatchNow`) is over: none left queued or sending. */
+  const settledNoticesOf = async (orgId: string) => {
+    await vi.waitFor(
+      async () => {
+        const rows = await noticesOf(orgId);
+        expect(rows.filter((r) => r.status === "queued" || r.status === "sending"), "the request's first attempt is over").toEqual([]);
+      },
+      { timeout: 15_000, interval: 100 },
+    );
+    return noticesOf(orgId);
+  };
+  const orgName = async (orgId: string) =>
+    (await sql<{ name: string }[]>`select name from organizations where id = ${orgId}`)[0]!.name;
+  const lastAssignedSeq = async (divisionId: string) =>
+    (
+      await sql<{ seq: number }[]>`
+        select seq from division_events where division_id = ${divisionId} and type = 'officials_assigned'
+         order by seq desc limit 1`
+    )[0]!.seq;
+  const address = (tag: string) => `${tag}-${randomUUID().slice(0, 8)}@example.com`;
+  const assign = (fixtureId: string, officialId: string) => ({ fixture_id: fixtureId, official_id: officialId, role_key: "referee", locked: false });
+  /** A match time as Intl writes it for the BCP 47 `tag` in `zone`, the zone named after it (the notices' shape). */
+  const whenIn = (tag: string, at: Date | string, zone: string) =>
+    `${new Date(at).toLocaleString(tag, { timeZone: zone, weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })} (${zone})`;
+
+  beforeEach(() => {
+    stubOutboxEnv();
+    transport.deliver.mockReset();
+    transport.deliver.mockImplementation(async () => ({ ok: true, providerId: `re_test_${randomUUID()}` }));
+    mail.assigned.mockClear();
+  });
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
+  it("an apply queues one notice per official with an email, listing that official's new fixtures", async () => {
+    const { auth } = await seedOrg("pro");
+    const { division, fixtures } = await seedScheduledDivision(auth);
+    const email = address("assigned");
+    const mailed = await createOfficial(auth, { display_name: "Mailed Ref", role_keys: ["referee"], email });
+    const unmailed = await createOfficial(auth, { display_name: "Unmailed Ref", role_keys: ["referee"] });
+
+    await applyOfficialAssignments(auth, division.id, {
+      assignments: [assign(fixtures[0]!.id, mailed.id), assign(fixtures[1]!.id, mailed.id), assign(fixtures[2]!.id, unmailed.id)],
+    });
+
+    const rows = await settledNoticesOf(auth.orgId);
+    expect(rows, "one row: the official with an address; none for the one without").toHaveLength(1);
+    const seq = await lastAssignedSeq(division.id);
+    expect(rows[0]).toMatchObject({
+      kind: "official_assigned",
+      ref_type: "division_event",
+      ref_id: `${division.id}:${seq}:${mailed.id}`,
+      recipient: email,
+      recipient_user_id: null,
+      transactional: true,
+      org_id: auth.orgId,
+      subject: dictionarySubject("en", "officialAssigned.subject", { orgName: await orgName(auth.orgId) }),
+      // R5: the request made the first attempt after commit (the worker never runs here).
+      status: "sent",
+    });
+    // The bound, not the fixture's start (P-W4-3): an assignment made after the match must still reach the official.
+    expect(Math.abs(rows[0]!.expires_at.getTime() - rows[0]!.created_at.getTime() - MAX_EXPIRY_MS)).toBeLessThan(1_000);
+    expect(transport.deliver.mock.calls.map((c) => (c[0] as { to: string }).to), "one send, to the official").toEqual([email]);
+    expect(mail.assigned.mock.calls, "built once, for the official with an address").toHaveLength(1);
+    expect(mail.assigned.mock.calls[0]![0].officialName).toBe("Mailed Ref");
+    expect(mail.assigned.mock.calls[0]![0].fixtures, "listing that official's two new fixtures, not the third").toHaveLength(2);
+  });
+
+  it("re-applying the same assignments queues nothing new", async () => {
+    const { auth } = await seedOrg("pro");
+    const { division, fixtures } = await seedScheduledDivision(auth);
+    const official = await createOfficial(auth, { display_name: "Steady Ref", role_keys: ["referee"], email: address("steady") });
+    const input = { assignments: [assign(fixtures[0]!.id, official.id)] };
+
+    await applyOfficialAssignments(auth, division.id, input);
+    expect(await settledNoticesOf(auth.orgId), "premise: the first apply queued its notice").toHaveLength(1);
+    await applyOfficialAssignments(auth, division.id, input);
+
+    expect(await settledNoticesOf(auth.orgId), "the second apply carried the assignment over: no new row").toHaveLength(1);
+    expect(mail.assigned.mock.calls, "and built nothing").toHaveLength(1);
+  });
+
+  it("two applies that each add a fixture give two notices", async () => {
+    const { auth } = await seedOrg("pro");
+    const { division, fixtures } = await seedScheduledDivision(auth);
+    const official = await createOfficial(auth, { display_name: "Growing Ref", role_keys: ["referee"], email: address("growing") });
+
+    await applyOfficialAssignments(auth, division.id, { assignments: [assign(fixtures[0]!.id, official.id)] });
+    const first = await lastAssignedSeq(division.id);
+    await applyOfficialAssignments(auth, division.id, {
+      assignments: [assign(fixtures[0]!.id, official.id), assign(fixtures[1]!.id, official.id)],
+    });
+    const second = await lastAssignedSeq(division.id);
+
+    const rows = await settledNoticesOf(auth.orgId);
+    expect(rows.map((r) => r.ref_id), "one per apply, each naming its own ledger entry").toEqual([
+      `${division.id}:${first}:${official.id}`,
+      `${division.id}:${second}:${official.id}`,
+    ]);
+    for (const r of rows) expect(LIVE_STATUSES, `${r.ref_id} is live, not replaced`).toContain(r.status);
+    expect(mail.assigned.mock.calls.map((c) => c[0].fixtures.length), "the second lists only the fixture it added").toEqual([1, 1]);
+  });
+
+  it("a manual set notifies the newly set official, a re-set keeping them does not, and a re-set adding another notifies only the newcomer", async () => {
+    const { auth } = await seedOrg("pro");
+    const { fixtures } = await seedScheduledDivision(auth);
+    const email = address("manual");
+    const official = await createOfficial(auth, { display_name: "Manual Ref", role_keys: ["referee"], email });
+    const set = { set: [{ official_id: official.id, role_key: "referee", locked: false }] };
+
+    await patchFixtureOfficials(auth, fixtures[0]!.id, set);
+    const rows = await settledNoticesOf(auth.orgId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      ref_type: "fixture_official",
+      ref_id: `${fixtures[0]!.id}:${official.id}`,
+      recipient: email,
+      recipient_user_id: null,
+      transactional: true,
+      status: "sent",
+    });
+
+    await patchFixtureOfficials(auth, fixtures[0]!.id, set);
+    expect(await settledNoticesOf(auth.orgId), "the re-set kept the official: no new row").toHaveLength(1);
+    expect(mail.assigned.mock.calls).toHaveLength(1);
+
+    // The other direction (class 13): a re-set that KEEPS A and ADDS B tells B, and only B.
+    const newcomerEmail = address("newcomer");
+    const newcomer = await createOfficial(auth, { display_name: "Newcomer Ref", role_keys: ["referee"], email: newcomerEmail });
+    await patchFixtureOfficials(auth, fixtures[0]!.id, {
+      set: [...set.set, { official_id: newcomer.id, role_key: "referee", locked: false }],
+    });
+    const after = await settledNoticesOf(auth.orgId);
+    expect(after.map((r) => [r.recipient, r.ref_id, r.status]), "one new row, to the newcomer; A's first row untouched").toEqual([
+      [email, `${fixtures[0]!.id}:${official.id}`, "sent"],
+      [newcomerEmail, `${fixtures[0]!.id}:${newcomer.id}`, "sent"],
+    ]);
+    expect(mail.assigned.mock.calls.map((c) => c[0].officialName), "built once more, for the newcomer only").toEqual(["Manual Ref", "Newcomer Ref"]);
+  });
+
+  it("an apply that repeats a locked assignment does not notify it again, and still notifies a new one in the same apply", async () => {
+    const { auth } = await seedOrg("pro");
+    const { division, fixtures } = await seedScheduledDivision(auth);
+    const lockedEmail = address("locked");
+    const locked = await createOfficial(auth, { display_name: "Locked Ref", role_keys: ["referee"], email: lockedEmail });
+    const freshEmail = address("fresh");
+    const added = await createOfficial(auth, { display_name: "Fresh Ref", role_keys: ["referee"], email: freshEmail });
+    // A locked assignment survives an apply (the apply replaces only unlocked rows). Its own notice is the manual set's.
+    await patchFixtureOfficials(auth, fixtures[0]!.id, { set: [{ official_id: locked.id, role_key: "referee", locked: true }] });
+    expect((await settledNoticesOf(auth.orgId)).map((r) => r.recipient), "premise: the lock's own notice").toEqual([lockedEmail]);
+    mail.assigned.mockClear();
+
+    // The AI console and the API can echo a locked row back in an apply: the insert writes nothing for it.
+    await applyOfficialAssignments(auth, division.id, {
+      assignments: [assign(fixtures[0]!.id, locked.id), assign(fixtures[1]!.id, added.id)],
+    });
+
+    const seq = await lastAssignedSeq(division.id);
+    const rows = await settledNoticesOf(auth.orgId);
+    expect(rows.map((r) => [r.recipient, r.ref_type]), "nothing new for the locked official; one row for the new one").toEqual([
+      [lockedEmail, "fixture_official"],
+      [freshEmail, "division_event"],
+    ]);
+    expect(rows[1]!.ref_id).toBe(`${division.id}:${seq}:${added.id}`);
+    expect(mail.assigned.mock.calls.map((c) => [c[0].officialName, c[0].fixtures.length])).toEqual([["Fresh Ref", 1]]);
+  });
+
+  it("empty: an official with no email gets no row, and the assignment stands", async () => {
+    const { auth } = await seedOrg("pro");
+    const { fixtures } = await seedScheduledDivision(auth);
+    const official = await createOfficial(auth, { display_name: "Silent Ref", role_keys: ["referee"] });
+
+    const { officials } = await patchFixtureOfficials(auth, fixtures[0]!.id, {
+      set: [{ official_id: official.id, role_key: "referee", locked: false }],
+    });
+
+    expect(await noticesOf(auth.orgId)).toEqual([]);
+    expect(mail.assigned.mock.calls).toEqual([]);
+    expect(officials, "the assignment stands").toEqual([expect.objectContaining({ official_id: official.id, role: "referee" })]);
+    const stored = await sql`select 1 from fixture_officials where fixture_id = ${fixtures[0]!.id} and official_id = ${official.id}`;
+    expect(stored).toHaveLength(1);
+  });
+
+  it("F5: an official's labels and email share the official's language", async () => {
+    const { auth } = await seedOrg("pro");
+    const zone = "Europe/Amsterdam";
+    await sql`update organizations set default_locale = 'fr', timezone = ${zone} where id = ${auth.orgId}`;
+    const { division, fixtures } = await seedScheduledDivision(auth);
+    // Premise: the org's zone is the venue zone (no division override), so the expected times below are in it.
+    expect(await sql`select 1 from schedule_settings where division_id = ${division.id} and tz is not null`).toHaveLength(0);
+    // A: claimed, the account's language is Dutch. B: unclaimed, so the org's French.
+    const [user] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified, locale)
+      values (${address("claimed-account")}, 'Claimed Ref', true, 'nl') returning id`;
+    const [person] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, user_id) values (${auth.orgId}, 'Claimed Ref', ${user!.id}) returning id`;
+    const claimedEmail = address("claimed");
+    const [claimed] = await sql<{ id: string }[]>`
+      insert into officials (org_id, person_id, display_name, role_keys, email)
+      values (${auth.orgId}, ${person!.id}, 'Claimed Ref', ${sql.json(["referee"])}, ${claimedEmail}) returning id`;
+    const unclaimedEmail = address("unclaimed");
+    const unclaimed = await createOfficial(auth, { display_name: "Unclaimed Ref", role_keys: ["referee"], email: unclaimedEmail });
+
+    await patchFixtureOfficials(auth, fixtures[0]!.id, {
+      set: [
+        { official_id: claimed!.id, role_key: "referee", locked: false },
+        { official_id: unclaimed.id, role_key: "referee", locked: false },
+      ],
+    });
+
+    const [names] = await sql<{ home: string; away: string }[]>`
+      select h.display_name as home, a.display_name as away
+        from fixtures f join entrants h on h.id = f.home_entrant_id join entrants a on a.id = f.away_entrant_id
+       where f.id = ${fixtures[0]!.id}`;
+    // Premise: the two languages' join words differ, so a label in the wrong one is seen.
+    expect(nlUi["schedule.vs"]).not.toBe(frUi["schedule.vs"]);
+    const name = await orgName(auth.orgId);
+    expect(dictionarySubject("nl", "officialAssigned.subject", { orgName: name })).not.toBe(
+      dictionarySubject("fr", "officialAssigned.subject", { orgName: name }),
+    );
+
+    const rows = await settledNoticesOf(auth.orgId);
+    const subjectOf = (to: string) => rows.find((r) => r.recipient === to)?.subject;
+    expect(subjectOf(claimedEmail), "A: the account's Dutch").toBe(dictionarySubject("nl", "officialAssigned.subject", { orgName: name }));
+    expect(subjectOf(unclaimedEmail), "B: the org's French").toBe(dictionarySubject("fr", "officialAssigned.subject", { orgName: name }));
+    expect(rows.map((r) => r.recipient_user_id), "a literal address, claimed or not").toEqual([null, null]);
+
+    const built = (official: string) => mail.assigned.mock.calls.find((c) => c[0].officialName === official);
+    expect(built("Claimed Ref")?.[1]).toBe("nl");
+    expect(built("Claimed Ref")?.[0].fixtures.map((f) => f.label)).toEqual([`${names!.home} ${nlUi["schedule.vs"]} ${names!.away}`]);
+    expect(built("Unclaimed Ref")?.[1]).toBe("fr");
+    expect(built("Unclaimed Ref")?.[0].fixtures.map((f) => f.label)).toEqual([`${names!.home} ${frUi["schedule.vs"]} ${names!.away}`]);
+
+    // The role and the match time are in the official's language too (expected text from the dictionaries on disk and
+    // Intl). Premise: each differs from the English, so English in the email is seen.
+    const [{ scheduled_at: at }] = await sql<{ scheduled_at: Date }[]>`select scheduled_at from fixtures where id = ${fixtures[0]!.id}`;
+    expect(whenIn("nl-NL", at, zone)).not.toBe(whenIn("en-GB", at, zone));
+    expect(whenIn("fr-FR", at, zone)).not.toBe(whenIn("en-GB", at, zone));
+    expect(nlEmails["officialRole.referee"]).not.toBe(enEmails["officialRole.referee"]);
+    expect(frEmails["officialRole.referee"]).not.toBe(enEmails["officialRole.referee"]);
+    expect(nlEmails["officialEmail.tbc"]).not.toBe(enEmails["officialEmail.tbc"]);
+    /** The email the builder rendered for this official (the latest one built). */
+    const rendered = async (official: string) => {
+      const i = mail.assigned.mock.calls.findLastIndex((c) => c[0].officialName === official);
+      expect(i, `${official}'s notice was built`).toBeGreaterThanOrEqual(0);
+      return (await mail.assigned.mock.results[i]!.value) as { text: string; html: string };
+    };
+    expect((await rendered("Claimed Ref")).text).toContain(`${nlEmails["officialRole.referee"]} · ${whenIn("nl-NL", at, zone)}`);
+    expect((await rendered("Unclaimed Ref")).text).toContain(`${frEmails["officialRole.referee"]} · ${whenIn("fr-FR", at, zone)}`);
+
+    // An unscheduled match reads "TBC" in the official's language.
+    await sql`update fixtures set scheduled_at = null where id = ${fixtures[1]!.id}`;
+    await patchFixtureOfficials(auth, fixtures[1]!.id, { set: [{ official_id: claimed!.id, role_key: "referee", locked: false }] });
+    expect(await settledNoticesOf(auth.orgId), "the new assignment's notice").toHaveLength(3);
+    expect((await rendered("Claimed Ref")).text).toContain(`${nlEmails["officialRole.referee"]} · ${nlEmails["officialEmail.tbc"]}`);
   });
 });

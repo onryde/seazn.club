@@ -18,6 +18,7 @@ import {
   screenshotAtWidths,
   seedVenueWithCourts,
   setOrgPlanBySql,
+  withDb,
 } from "../helpers";
 
 // The two-person seam: a link one person sends another, and an assignment
@@ -264,8 +265,8 @@ async function fixtureOfficials(
  * repeated `me-official-card` picks whichever one happens to render first —
  * it would keep passing even if the assignment this walkthrough just made
  * never showed up at all. Same lightweight one-shot `postgres` client shape
- * helpers.ts's own (module-private) `withDb` uses, kept local to this file
- * since only this spec needs it.
+ * as helpers.ts's exported `withDb`, which this file also imports for the
+ * outbox-row checks.
  */
 async function fixtureOfficialRowId(fixtureId: string, officialId: string, roleKey = "referee"): Promise<string> {
   const dbUrl = process.env.DATABASE_URL;
@@ -837,7 +838,10 @@ test.describe("the officials handoff, both people driven", () => {
 
 test.describe("the officials auto-draft applies, and the assignments persist", () => {
   const s4OfficialName = `S4 Ref ${TAG}`;
+  // An address, so the apply has someone to tell: `official_assigned` is queued only for an official with one.
+  const s4OfficialEmail = `delivered+e2e-official-s4-${TAG}@resend.dev`;
   let orgId = "";
+  let divisionId = "";
   let base = "";
   let officialId = "";
   let fixtureA = "";
@@ -864,7 +868,7 @@ test.describe("the officials auto-draft applies, and the assignments persist", (
       },
     );
     if (!div.data) throw new Error(`division → ${div.status} ${JSON.stringify(div.error)}`);
-    const divisionId = div.data.id;
+    divisionId = div.data.id;
 
     const entrants = await addEntrantsViaApi(request, divisionId, [`S1 ${TAG}`, `S2 ${TAG}`, `S3 ${TAG}`]);
     if (entrants.status >= 300) throw new Error(`entrants → ${entrants.status}`);
@@ -901,6 +905,7 @@ test.describe("the officials auto-draft applies, and the assignments persist", (
     // draft carries no `role_unfilled` block, and Apply is live.
     const off = await apiJson<{ id: string }>(request, "/api/v1/officials", "POST", {
       display_name: s4OfficialName,
+      email: s4OfficialEmail,
       role_keys: ["referee"],
     });
     if (!off.data) throw new Error(`official → ${off.status} ${JSON.stringify(off.error)}`);
@@ -1019,5 +1024,55 @@ test.describe("the officials auto-draft applies, and the assignments persist", (
     // the on-screen half of "it fired", and it fails against an apply whose
     // POST rejected while the button stayed put.
     await expect(apply).toHaveCount(0);
+
+    // Email outbox, phase 3 wave 4: the apply queues `official_assigned` in its own transaction, ONE row per official with an
+    // address (both fixtures in one notice, not a row each), ref the ledger entry the apply writes
+    // (`division_event`, `<division>:<seq>:<official>`), to the official's address (a literal kind: no account). The seq is
+    // read from that ledger entry, never typed in. This server has no Resend key, so the first attempt (made after commit,
+    // hence the poll) settles the row with no body kept.
+    const assignedMail = () =>
+      withDb(async (sql) => {
+        const ledger = await sql<{ seq: number }[]>`
+          select seq::int as seq from division_events
+           where division_id = ${divisionId} and type = 'officials_assigned'`;
+        const rows = await sql<
+          { refId: string; recipient: string; userId: string | null; status: string; hasBody: boolean }[]
+        >`
+          select ref_id as "refId", recipient, recipient_user_id as "userId", status,
+                 body_sealed is not null as "hasBody"
+            from email_outbox
+           where kind = 'official_assigned' and ref_type = 'division_event' and ref_id like ${`${divisionId}:%`}
+           order by ref_id`;
+        return { ledger: ledger.map((l) => l.seq), rows };
+      });
+    await expect
+      .poll(
+        async () => {
+          const { rows } = await assignedMail();
+          return rows.length > 0 && rows.every((r) => r.status !== "queued" && r.status !== "sending");
+        },
+        { timeout: 15_000, message: "the assignment notice was queued and its first attempt made" },
+      )
+      .toBe(true);
+    const mail = await assignedMail();
+    expect(mail.ledger, "the apply wrote exactly one officials_assigned ledger entry").toHaveLength(1);
+    expect(
+      mail.rows.map((r) => ({
+        refId: r.refId,
+        recipient: r.recipient,
+        userId: r.userId,
+        waiting: r.status === "queued" || r.status === "sending",
+        hasBody: r.hasBody,
+      })),
+      "one assignment notice for the one official, keyed by the apply's ledger entry, attempted, no body kept",
+    ).toEqual([
+      {
+        refId: `${divisionId}:${mail.ledger[0]}:${officialId}`,
+        recipient: s4OfficialEmail,
+        userId: null,
+        waiting: false,
+        hasBody: false,
+      },
+    ]);
   });
 });

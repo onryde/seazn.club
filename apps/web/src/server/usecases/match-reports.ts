@@ -11,8 +11,9 @@ import type postgres from "postgres";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { hasFeature } from "@/lib/entitlements";
-import { sendReportSubmittedEmail } from "@/lib/email";
-import type { Locale } from "@/lib/i18n-constants";
+import { reportSubmittedEmail } from "@/lib/email";
+import { deferred } from "@/lib/deferred";
+import { dispatchNow, enqueueEmailOnce, expiryWithin, onceKey, recipientLocale } from "@/server/email-outbox";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
 type Tx = postgres.TransactionSql;
@@ -138,7 +139,10 @@ export async function putMyReport(
 }
 
 /** Submit the draft (immutable thereafter, 409 on resubmit). Fires the soft
- *  SPEC-1 bridge. 404 when there is no draft to submit. */
+ *  SPEC-1 bridge. 404 when there is no draft to submit. The report notice to
+ *  every owner and admin is queued on the email outbox in the submit's own
+ *  transaction, so a submit and its notices commit or roll back together, and
+ *  the request makes the first attempt after commit. */
 export async function submitMyReport(userId: string, fixtureOfficialId: string): Promise<MatchReport> {
   const a = await myAssignment(userId, fixtureOfficialId);
   const [existing] = await superuser<{ status: string }[]>`
@@ -150,15 +154,19 @@ export async function submitMyReport(userId: string, fixtureOfficialId: string):
   }
   assertReportWindow(a);
   if (!existing) throw new HttpError(404, "There's no draft report to submit", "NO_REPORT");
-  const [row] = await superuser<ReportRow[]>`
-    update match_reports set status = 'submitted', submitted_at = now(), updated_at = now()
-    where fixture_official_id = ${fixtureOfficialId} and status = 'draft'
-    returning id, fixture_official_id, status, body, incidents, submitted_at`;
-  const report = mapReport(row!);
+  const { report, queued } = await sql.begin(async (tx) => {
+    const [row] = await tx<ReportRow[]>`
+      update match_reports set status = 'submitted', submitted_at = now(), updated_at = now()
+      where fixture_official_id = ${fixtureOfficialId} and status = 'draft'
+      returning id, fixture_official_id, status, body, incidents, submitted_at`;
+    // A concurrent submit of the same draft won the guarded update: this one is the resubmit (R6, no second notice).
+    if (!row) throw new HttpError(409, "This report is already submitted", "REPORT_SUBMITTED");
+    const submitted = mapReport(row);
+    // The organiser side gets the signal (D-direction); the official gets no per-mark signal (D4).
+    return { report: submitted, queued: await queueReportSubmitted(tx, a, submitted) };
+  });
   await bridgeReportSuspensions(a, report.incidents);
-  // After the report is committed, notify the org owner/admins (D-direction:
-  // organiser side gets the signal; the official gets no per-mark signal, D4).
-  await notifyReportSubmitted(a, report);
+  if (queued.length > 0) deferred(() => dispatchNow(queued));
   return report;
 }
 
@@ -187,11 +195,11 @@ export async function myFixtureSquad(
     order by e.display_name, p.full_name`;
 }
 
-/** Fire the report_submitted email to every org owner/admin. Fire-and-forget,
- *  superuser resolve (the official is not an org member); a mail failure never
- *  fails the submit. */
-async function notifyReportSubmitted(a: ReportAssignment, report: MatchReport): Promise<void> {
-  const [ctx] = await superuser<
+/** Queue the report notice to every owner and admin of the organisation (an account that is not deleted and has an address), one row
+ *  each, keyed `<reportId>:<userId>`, in that member's language (their account's, else the organisation's). Superuser resolve on the
+ *  submit's transaction (the official is not an org member). Returns the queued row ids. */
+async function queueReportSubmitted(tx: Tx, a: ReportAssignment, report: MatchReport): Promise<string[]> {
+  const [ctx] = await tx<
     {
       org_name: string;
       org_slug: string;
@@ -201,9 +209,10 @@ async function notifyReportSubmitted(a: ReportAssignment, report: MatchReport): 
       home_name: string | null;
       away_name: string | null;
       official_name: string;
+      default_locale: string | null;
     }[]
   >`
-    select org.name as org_name, org.slug as org_slug,
+    select org.name as org_name, org.slug as org_slug, org.default_locale,
            c.slug as competition_slug, d.slug as division_slug, f.fixture_no,
            h.display_name as home_name, aw.display_name as away_name,
            o.display_name as official_name
@@ -216,10 +225,10 @@ async function notifyReportSubmitted(a: ReportAssignment, report: MatchReport): 
     left join entrants h on h.id = f.home_entrant_id
     left join entrants aw on aw.id = f.away_entrant_id
     where f.id = ${a.fixture_id}`;
-  if (!ctx) return;
-  const recipients = await superuser<{ email: string | null; locale: string | null }[]>`
-    select u.email, u.locale from org_members m
-    join users u on u.id = m.user_id
+  if (!ctx) return [];
+  const recipients = await tx<{ user_id: string; email: string | null }[]>`
+    select u.id as user_id, u.email from org_members m
+    join users u on u.id = m.user_id and u.deleted_at is null
     where m.org_id = ${a.org_id} and m.role in ('owner', 'admin')`;
   // Unreachable: assertReportWindow only admits fixture_status decided/finalized/abandoned, all reachable solely via appendEvent, which refuses to fold a null-entrant fixture (WRONG_PHASE) — forfeited (the one bye-bypass status) isn't in REPORTABLE.
   const fixtureLine = `${ctx.home_name ?? "TBD"} vs ${ctx.away_name ?? "TBD"}`;
@@ -232,10 +241,26 @@ async function notifyReportSubmitted(a: ReportAssignment, report: MatchReport): 
     competitionSlug: ctx.competition_slug,
     divisionSlug: ctx.division_slug,
   };
+  const ids: string[] = [];
   for (const r of recipients) {
     if (!r.email) continue;
-    void sendReportSubmittedEmail(r.email, args, (r.locale as Locale) ?? "en").catch(() => {});
+    const locale = await recipientLocale(tx, { pick: null, userId: r.user_id, orgDefault: ctx.default_locale });
+    const content = await reportSubmittedEmail(args, locale);
+    const id = await enqueueEmailOnce(tx, {
+      kind: "match_report_submitted",
+      refType: "match_report",
+      refId: report.id,
+      dedupeKey: onceKey("match_report_submitted", "match_report", report.id, r.user_id),
+      orgId: a.org_id,
+      to: r.email,
+      recipientUserId: r.user_id,
+      ...content,
+      transactional: true,
+      expiresAt: expiryWithin(null),
+    });
+    if (id !== null) ids.push(id);
   }
+  return ids;
 }
 
 // Test seam — the suspensions-table existence probe, overridable so tests can

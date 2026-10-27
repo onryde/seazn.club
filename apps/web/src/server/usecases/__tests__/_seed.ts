@@ -2,6 +2,7 @@
 // Copied verbatim from me-officiating.test.ts (do not modify that file).
 import { randomUUID } from "node:crypto";
 import { football } from "@seazn/engine/sports/football";
+import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
@@ -158,4 +159,143 @@ export async function seedCourts(orgId: string, count: number): Promise<string[]
     ids.push(court.id);
   }
   return ids;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// MOVED from discipline.test.ts (email outbox phase 3 wave 4, T3): the discipline suite, the kind sweep and the A-kind body guard
+// all drive the suspension notices through the real producers on this seed.
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+// Full football config snapshot (createDivision would store this) — needed so
+// the seam test can fold a real forfeit through the module.
+const FOOTBALL_CFG = builtinModules.find((m) => m.key === "football")!.configSchema.parse({});
+
+export interface FootballCtx {
+  auth: AuthCtx;
+  orgId: string;
+  userId: string;
+  divisionId: string;
+  entrantA: string;
+  entrantB: string;
+  personX: string;
+  personY: string;
+  stageId: string;
+}
+
+export async function seedFootballDivision(plan: "pro" | "community" = "pro"): Promise<FootballCtx> {
+  const suffix = randomUUID().slice(0, 8);
+  const [{ id: userId }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified)
+    values (${`disc-${suffix}@test.local`}, 'Disc', true) returning id`;
+  const [{ id: orgId }] = await sql<{ id: string }[]>`
+    insert into organizations (name, slug, created_by)
+    values (${"Disc " + suffix}, ${"disc-" + suffix}, ${userId}) returning id`;
+  await sql`insert into org_members (org_id, user_id, role) values (${orgId}, ${userId}, 'owner')`;
+  if (plan === "pro") {
+    await setOrgPlan(orgId);
+  }
+  await invalidateOrgEntitlements(orgId);
+  await sql`
+    insert into sports (key, name, module_version, position_catalog)
+    values ('football', 'Football', '1.0.0', ${sql.json({ groups: [], lineup: { size: 11, benchMax: 12 } })})
+    on conflict (key) do nothing`;
+  const [{ id: compId }] = await sql<{ id: string }[]>`
+    insert into competitions (org_id, name, slug, visibility, created_by)
+    values (${orgId}, 'Cup', ${"cup-" + suffix}, 'public', ${userId}) returning id`;
+  const [{ id: divisionId }] = await sql<{ id: string }[]>`
+    insert into divisions (competition_id, org_id, name, slug, sport_key, variant_key, config, module_version)
+    values (${compId}, ${orgId}, 'Open', 'open', 'football', '11-a-side', ${sql.json(FOOTBALL_CFG as never)}, '1.0.0')
+    returning id`;
+  const [{ id: stageId }] = await sql<{ id: string }[]>`
+    insert into stages (division_id, org_id, seq, kind, name) values (${divisionId}, ${orgId}, 1, 'league', 'League')
+    returning id`;
+  const [{ id: entrantA }] = await sql<{ id: string }[]>`
+    insert into entrants (division_id, org_id, kind, display_name, seed) values (${divisionId}, ${orgId}, 'team', 'A', 1) returning id`;
+  const [{ id: entrantB }] = await sql<{ id: string }[]>`
+    insert into entrants (division_id, org_id, kind, display_name, seed) values (${divisionId}, ${orgId}, 'team', 'B', 2) returning id`;
+  const [{ id: personX }] = await sql<{ id: string }[]>`
+    insert into persons (org_id, full_name) values (${orgId}, 'Xavier Smith') returning id`;
+  const [{ id: personY }] = await sql<{ id: string }[]>`
+    insert into persons (org_id, full_name) values (${orgId}, 'Yousef Kane') returning id`;
+  await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantA}, ${personX}, ${orgId})`;
+  await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantB}, ${personY}, ${orgId})`;
+  return {
+    auth: { orgId, via: "session", userId, role: "owner", keyId: null },
+    orgId,
+    userId,
+    divisionId,
+    entrantA,
+    entrantB,
+    personX,
+    personY,
+    stageId,
+  };
+}
+
+/** Link a person to a claimed user account so the confirmed/served notices
+ *  have an inbox to resolve (the producers join persons→users→email). Returns
+ *  the account's id (the notices are addressed to it). */
+export async function claimPerson(personId: string, email: string): Promise<string> {
+  const [{ id: uid }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified)
+    values (${email}, 'Claimed', true) returning id`;
+  await sql`update persons set user_id = ${uid} where id = ${personId}`;
+  return uid;
+}
+
+export async function makeFixture(
+  ctx: FootballCtx,
+  seqInRound: number,
+  home: string | null,
+  away: string | null,
+  status = "scheduled",
+): Promise<string> {
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round, home_entrant_id, away_entrant_id, status)
+    values (${ctx.stageId}, ${ctx.divisionId}, ${ctx.orgId}, 1, ${seqInRound}, ${home}, ${away}, ${status})
+    returning id`;
+  return id;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------------------
+// MOVED from match-reports.test.ts (email outbox phase 3 wave 4, T3): the report suite, the kind sweep and the A-kind body guard all
+// file a match report through the real producer on these. `ctx` is any seed with an org, a league stage and two entrants (the report
+// suite's own `seedOrg`, or `seedFootballDivision` above).
+// ---------------------------------------------------------------------------------------------------------------------------------
+
+type ReportSeedCtx = Pick<FootballCtx, "orgId" | "divisionId" | "stageId" | "entrantA" | "entrantB">;
+
+/** A user + a person in this org linked to it + an official on that person —
+ *  the claimed-official identity a report write proves. Returns both ids. */
+export async function makeClaimedOfficial(ctx: Pick<ReportSeedCtx, "orgId">): Promise<{ userId: string; officialId: string }> {
+  const suffix = randomUUID().slice(0, 8);
+  const [{ id: userId }] = await sql<{ id: string }[]>`
+    insert into users (email, display_name, email_verified)
+    values (${`ref-${suffix}@test.local`}, 'Ref', true) returning id`;
+  const [{ id: personId }] = await sql<{ id: string }[]>`
+    insert into persons (org_id, full_name, user_id) values (${ctx.orgId}, 'Ref Person', ${userId})
+    returning id`;
+  const [{ id: officialId }] = await sql<{ id: string }[]>`
+    insert into officials (org_id, person_id, display_name, role_keys)
+    values (${ctx.orgId}, ${personId}, 'The Ref', ${sql.json(["referee"])}) returning id`;
+  return { userId, officialId };
+}
+
+export async function makeAssignment(
+  ctx: ReportSeedCtx,
+  officialId: string,
+  opts: { status?: string; response?: string } = {},
+): Promise<{ fixtureOfficialId: string; fixtureId: string }> {
+  const status = opts.status ?? "decided";
+  const response = opts.response ?? "accepted";
+  const [{ id: fixtureId }] = await sql<{ id: string }[]>`
+    insert into fixtures (stage_id, division_id, org_id, round_no, seq_in_round,
+                          home_entrant_id, away_entrant_id, status)
+    values (${ctx.stageId}, ${ctx.divisionId}, ${ctx.orgId}, 1, 1,
+            ${ctx.entrantA}, ${ctx.entrantB}, ${status}) returning id`;
+  const [{ id }] = await sql<{ id: string }[]>`
+    insert into fixture_officials (fixture_id, official_id, org_id, role_key, source, response)
+    values (${fixtureId}, ${officialId}, ${ctx.orgId}, 'referee', 'manual', ${response})
+    returning id`;
+  return { fixtureOfficialId: id, fixtureId };
 }

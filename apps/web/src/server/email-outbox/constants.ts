@@ -3,7 +3,7 @@
 // can all read them without a cycle.
 //
 // The same two lists are typed again as CHECK constraints: the statuses in db/migration/deltas/V470__email_outbox.sql, the kinds
-// (as last redefined) in V474__email_outbox_phase3_wave3.sql. They are two copies of one fact, so outbox-schema.test.ts reads the
+// (as last redefined) in V477__email_outbox_phase3_wave4.sql. They are two copies of one fact, so outbox-schema.test.ts reads the
 // constraint definitions back from the catalogue and requires them to name exactly these members.
 
 export const OUTBOX_KINDS = [
@@ -34,6 +34,16 @@ export const OUTBOX_KINDS = [
   "org_invite",
   "claim_invite",
   "official_invite",
+  // Phase 3 wave 4, in the spec's table order.
+  "official_assigned",
+  "official_assignment_changed",
+  "suspension_confirmed",
+  "suspension_served",
+  "match_report_submitted",
+  "group_transfer_offer",
+  "group_transfer_complete",
+  "group_org_removed",
+  "group_org_left",
 ] as const;
 export type OutboxKind = (typeof OUTBOX_KINDS)[number];
 
@@ -42,9 +52,10 @@ export type OutboxKind = (typeof OUTBOX_KINDS)[number];
  *  - `to` (the spec's legend A, L, S): `account` is an account, resolved at send so a changed or deleted account is followed
  *    (spec §6); `literal` is a literal address, sent as it stands; `staff` is `STAFF_ALERT_EMAIL`.
  *  - `transactional`: whether the mail ignores the marketing suppression list. Each kind keeps its sender's flag from before it
- *    joined the outbox: the sign-in link, the chess invite, the trial-ending notice and seven of wave 3's eight account and invite
- *    mails are transactional; the registration, refund, dispute, sponsor and pass mails, and the org invite (`sendInviteEmail`
- *    passed no flag), are not.
+ *    joined the outbox: the sign-in link, the chess invite, the trial-ending notice, seven of wave 3's eight account and invite
+ *    mails, and wave 4's two official notices, two suspension notices and match-report notice are transactional; the registration,
+ *    refund, dispute, sponsor and pass mails, the org invite (`sendInviteEmail` passed no flag) and wave 4's four billing-group mails
+ *    (their senders passed none either) are not.
  *
  * A declaration, like the lists above: pure data for the core, the writers and the tests to read.
  */
@@ -74,6 +85,15 @@ export const OUTBOX_KIND_FACTS: Readonly<Record<OutboxKind, { to: "account" | "l
   org_invite: { to: "literal", transactional: false },
   claim_invite: { to: "literal", transactional: true },
   official_invite: { to: "literal", transactional: true },
+  official_assigned: { to: "literal", transactional: true },
+  official_assignment_changed: { to: "literal", transactional: true },
+  suspension_confirmed: { to: "account", transactional: true },
+  suspension_served: { to: "account", transactional: true },
+  match_report_submitted: { to: "account", transactional: true },
+  group_transfer_offer: { to: "account", transactional: false },
+  group_transfer_complete: { to: "account", transactional: false },
+  group_org_removed: { to: "account", transactional: false },
+  group_org_left: { to: "account", transactional: false },
 };
 
 /** Mail ABOUT an account that is addressed to a literal address (phase-3 D5, wave 3): its verification and its email change. These kinds

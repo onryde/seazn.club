@@ -32,6 +32,12 @@ import type { Dict } from "@/lib/i18n";
 import { buildPseudoDictionary } from "@/lib/pseudo";
 // Localized builders take the emails dict; the en namespace is the source text.
 import emailsEn from "@/dictionaries/en/emails.json";
+import emailsEs from "@/dictionaries/es/emails.json";
+import emailsFr from "@/dictionaries/fr/emails.json";
+import emailsNl from "@/dictionaries/nl/emails.json";
+import { LOCALES, type Locale } from "@/lib/i18n-constants";
+import { ALL_OFFICIAL_ROLES } from "@/lib/official-roles";
+import { officialRoleLabel } from "../email-templates/official-assigned";
 import { PASS_KEYS, type PassKey } from "@/lib/currency";
 
 const LINK = "https://seazn.club/x?token=abc";
@@ -732,5 +738,30 @@ describe("pass-revoked names the rung that was refunded", () => {
       expect(out.subject).not.toMatch(/\{\w+\}/);
       expect(out.text).not.toMatch(/\{\w+\}/);
     }
+  });
+});
+
+// F5 (phase 3 wave 4): an official's notice names the role in the official's language. Every preset role an organiser
+// can pick (ALL_OFFICIAL_ROLES) has a label in every locale's emails dictionary, read from the file on disk; a role the
+// organiser typed is shown as typed. Sport: swept through ALL_OFFICIAL_ROLES, the union of every sport's crew.
+describe("official notices name the role in the email's language", () => {
+  const EMAILS: Record<Locale, Dict> = { en: emailsEn as Dict, fr: emailsFr as Dict, es: emailsEs as Dict, nl: emailsNl as Dict };
+
+  it("every preset role has its dictionary label in every locale", () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      for (const role of ALL_OFFICIAL_ROLES) {
+        const label = (EMAILS[locale] as Record<string, string>)[`officialRole.${role}`];
+        expect(label, `${locale} has officialRole.${role}`).toBeTruthy();
+        expect(officialRoleLabel(role, EMAILS[locale]), `${locale} ${role}`).toBe(label);
+        checked++;
+      }
+    }
+    expect(checked, "every preset role in every locale").toBe(ALL_OFFICIAL_ROLES.length * LOCALES.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("a role the organiser typed is shown as typed", () => {
+    expect(officialRoleLabel("Assistant coach", EMAILS.nl)).toBe("Assistant coach");
   });
 });

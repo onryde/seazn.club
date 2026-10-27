@@ -39,7 +39,8 @@ here are restated.
   `feat/email-outbox-phase3-w4`, cut from `origin/main` after wave 3 merges (T0). Prefix every command with
   `cd <that path> &&` or `cd <that path>/apps/web &&`. Never check anything out in the main checkout. Never use
   `git stash`.
-- **Migration number.** Expected `V475` (wave 2 takes V473, wave 3 V474), written below as `V<N>`. It is NOT a fact:
+- **Migration number.** Expected `V475` (wave 2 takes V473, wave 3 V474), written below as `V<N>`. Landed as `V477` (W2d took
+  V475, the relay V476; Flyway has no outOfOrder, so lower numbers must reach main first). It is NOT a fact:
   W2d and other programmes also allocate numbers. Re-pin right before committing T1 and again before the PR:
   `git fetch origin && git ls-tree --name-only origin/main db/migration/deltas/ | sort -V | tail -1`, then max + 1.
   If taken, `git mv` and amend while unmerged.
@@ -536,10 +537,18 @@ The controller rules on P-W4-1 to P-W4-12, or puts them to the owner, before T2.
    swallowed by the once-key (the UI offers confirm only on pending rows, `discipline-panel.tsx:91-123`).
 7. A waive or adjust within seconds of a confirm: the confirmed notice states the old facts.
 8. An admin demoted, or an org or division renamed, between a write and its send.
-9. A transfer offer whose enqueue is refused after its SetupIntent exists: the claim stays `pending` until the payer
-   withdraws it or it lapses (no money moves).
+9. A transfer offer whose enqueue is refused after its SetupIntent exists (a misconfigured key, code ahead of V477, or a
+   DB fault): the claim stays `pending` and cannot be withdrawn (withdraw finds it by the SetupIntent id, which the
+   rolled-back transaction never saved), so new offers on that group are refused until it lapses, up to 7 days. No
+   money moves; the same stranded claim was already possible before this wave. Fix if ever needed: release the claim in
+   a catch and rethrow, and check `assertOutboxCanQueue()` before the claim.
 10. An offer withdrawn, or an org re-attached, within its notice's window.
 11. Two concurrent manual sets of one fixture's officials (a pre-existing unique-violation race; unchanged).
+12. The last org taken out of a group by an org owner who is not the payer: the group is cancelled and the payer gets
+    no notice (`remaining` is null). Pre-existing; owner 2026-10-27: record, do not build (the payer's own org is
+    normally in the group, and billing simply stops).
+13. An admin added to the org in the milliseconds between a report's submit and the producer's member read gets no
+    report notice.
 
 ## Next waves and routed findings (not built here)
 
