@@ -64,7 +64,7 @@ declarations, mutate each guard once), frontend-design skill in every UI dispatc
 | 4. Content is a provider seam, scoped org → competition | `SponsorCardSource` (§3.3), one implementation (the `sponsors` table). Division / fixture scope are additive later. |
 | 5. Placement uses slots templates declare | `OverlayTemplateDef.sponsorSlots` (§3.5). |
 | 6. Proof of display is a log | `sponsor_airings` (§4), fed by the compositor (§3.6). |
-| 7. Composed and OBS render the same moment stream | The plan is derived **server-side** in the overlay data (§3.2), identical for both hosts. |
+| 7. Composed and OBS render the same moment stream | The plan is derived **server-side** in the overlay data (§3.2), identical for both hosts, and the operator's Hide graphics, Play next and Skip reach both (§3.2). |
 
 ## 3. Design
 
@@ -113,10 +113,21 @@ sponsorPlan: {
 ```
 
 Inputs: the fixture's break sequence (`derived.naturalBreaks` on each recent event, from the engine's `opensAt`), the
-fixture's rotation setting, the resolved ticked sponsors for its competition, and the operator state (console spec).
+fixture's rotation setting, the resolved ticked sponsors for its competition, the operator state (console spec), and
+the fixture's **already-assigned sponsor moments**.
 
-- **Deterministic.** Same events + same settings ⇒ same plan, so OBS and the composed page show the same card at the
-  same break and a re-poll never reshuffles. Moment id `${seq}:sponsor.${breakKind}`.
+- **Deterministic.** Same events + same settings + same assigned set ⇒ same plan, so OBS and the composed page show the
+  same card at the same break and a re-poll never reshuffles. Moment id `${seq}:sponsor.${breakKind}`.
+- **Assigned cards are frozen** *(coordinator's call 2026-10-27, not an owner ruling)*. Once a sponsor moment is on air or has aired, its sponsor never
+  changes. A settings change (tick / untick, the dial, tier weights) applies only to breaks not yet assigned. The
+  planner reads the assigned set from a persisted assignment, written when a served plan first hands a break its card
+  (keyed `(fixture_id, moment_id)`; a `sponsor_airings` row or an equivalent table, the builder's choice). A
+  heartbeat-fed `sponsor_airings` row alone is not enough: it lands only after the card has played, and an OBS-only
+  stream writes none. The plan is then a pure re-plan over events + current settings + assigned moments. An undone
+  event still removes its not-yet-aired moment (§7).
+- **Hidden graphics** *(coordinator's call 2026-10-27, not an owner ruling)*: a break that opens while the operator's Hide graphics is on does not count.
+  The sponsor whose turn it was keeps its turn and the rotation does not advance. Because the moment stream is shared
+  (requirement 7), Hide graphics, Play next and Skip apply on the OBS page exactly as on the composed one.
 - **Eligible breaks by the dial** (sport-agnostic; the engine supplies only `size`): Light = every major; Normal =
   every major + every 3rd minor; Busy = every major + every minor. A **90 s cooldown** between sponsor cards (event
   timestamps) thins fast minor breaks (short-format cricket overs).
@@ -141,6 +152,10 @@ MVP implementation reads `sponsors` (active, `on_stream = true`, `resolveSponsor
 `moment-queue.ts` gains one rule: a moment carries `priority: "score" | "sponsor"`.
 
 - A score moment enqueued while a sponsor card is queued jumps ahead of it.
+- **A score moment at the same event precedes the sponsor card** *(coordinator's call 2026-10-27, not an owner ruling)*. At a cricket over end the existing
+  `endOfOver` card (`lib/overlay-moments.ts:48`, held `END_OF_OVER_HOLD_MS`) goes first; the `over_end` sponsor card
+  queues after it and never covers it. The same holds for any break-opening event that also derives a score moment
+  (a goal's slab before its `after_goal` card, a set-winning point's slab before `set_end`).
 - A score moment enqueued while a sponsor card is **on air** sends it straight to `out`; the airing is recorded
   `cut_short`. "Never covering a score change" is this guard, with a test that kills its mutant.
 - A sponsor moment waiting **> 20 s** is dropped (its break has passed) and marked seen.
@@ -174,14 +189,17 @@ Counted from **composed streams only** in the MVP (§8):
    refused. An airing with no `end` by session end closes at the last beat and is flagged `ended_estimated`.
 5. **Viewers:** on `start`, if the broadcast came from YouTube Connect (r2-youtube's table), read
    `videos.list?part=liveStreamingDetails` → `concurrentViewers` once (1 quota unit). No connection, hidden count or
-   error ⇒ `viewers = null` (shown as a dash). Never retried in a loop.
+   error ⇒ `viewers = null` (shown as a dash). Never retried in a loop. The YouTube data kept on the airing (`viewers`,
+   `video_id`) is bound by the retention rule in §6.3.
 
 ### 3.7 Click attribution
 
-`/s/[sponsorId]` accepts `?f=<fixtureId>&src=<match|youtube|site>` (fixture must be in the sponsor's org, `src` an
+`/s/[sponsorId]` accepts `?f=<fixtureId>&src=<match|stream|site>` (fixture must be in the sponsor's org, `src` an
 enum, else `unknown`). It still bumps `click_count` and also inserts a `sponsor_clicks` row (deferred, as today).
-Tagged links: the public match page's sponsor strip (`src=match`) and the YouTube description r2-youtube writes
-(`src=youtube`, §9).
+Tagged links: the public match page's sponsor strip (`src=match`) and the `/s/` link shown on screen with the card
+(`src=stream`). **No sponsor links in the YouTube description** *(coordinator's call 2026-10-27, not an owner ruling)*: the YouTube Connect spec
+(§6.5) rules the description to one line plus the match link, so clicks come through the on-screen `/s/` link and
+the match page only.
 
 ## 4. Data model *(names are the builder's; facts and constraints are not)*
 
@@ -190,8 +208,10 @@ Tagged links: the public match page's sponsor strip (`src=match`) and the YouTub
   `(org_id, competition_id)`; a competition row overrides the org row. RLS org-scoped as V283.
 - `sponsor_airings (id, org_id, sponsor_id → set null, sponsor_name snapshot, fixture_id, session_id, moment_id,
   source ∈ rotation|scene|operator, break_kind null, style, started_at, ended_at null, cut_short, skipped (operator "Skip this card"), ended_estimated,
-  viewers int null, frame_path null)`, unique `(session_id, moment_id)`, index `(org_id, sponsor_id, started_at)`. The
-  name snapshot keeps a report readable after a sponsor is deleted. (`source` is text with a check, so a Later `deal`
+  viewers int null, video_id null, youtube_refreshed_at null, frame_path null)`, unique `(session_id, moment_id)`, index
+  `(org_id, sponsor_id, started_at)`. The name snapshot keeps a report readable after a sponsor is deleted. `viewers`
+  and `video_id` are YouTube API data and follow §6.3 (refreshed daily, purged on disconnect) *(coordinator's call 2026-10-27, not an owner ruling)*.
+  `skipped` is set by the web from the operator log (console spec §3.4), not by the compositor. (`source` is text with a check, so a Later `deal`
   value is one check change.)
 - `sponsor_clicks (id, org_id, sponsor_id → cascade, fixture_id null, source, at)`, index `(sponsor_id, at)`.
 - `sponsor_report_links (id, org_id, sponsor_id, competition_id null, from_date, to_date, token_hash, created_by,
@@ -219,6 +239,10 @@ Tagged links: the public match page's sponsor strip (`src=match`) and the YouTub
 Sponsor-branded (their logo and name lead), period and competition in the header, three numbers (on screen · viewer
 impressions · visits from the stream), then the showings: frame (neutral placeholder when none), match, break, and
 "watch this moment" when a YouTube VOD exists (`https://youtu.be/<videoId>?t=<max(0, started_at − actualStartTime − 3 s)>`).
+The offset needs the broadcast's actual start time, which YouTube Connect does not store yet (§9); until it does, no
+"watch this moment" link is shown (a link without `?t=` opens the VOD at its start, not at the moment) *(coordinator's call 2026-10-27, not an owner ruling)*.
+After a YouTube purge (§6.3) the showing keeps its frame, match, break and time on screen, shows a dash for viewers
+and no "watch this moment".
 Footnote: "composed streams", "viewer numbers from YouTube". `noindex`, rate-limited like other public reads, opaque
 404 on a revoked or unknown token. Mobile bar applies. The browser's print works; a built PDF is Later.
 
@@ -237,19 +261,43 @@ With rotation on for a Connect broadcast, the broadcast should declare paid prod
 the Data API exposes it (`videos.paidProductPlacementDetails`). If it does, r2-youtube sets it; if not, the On stream
 tab shows a one-line reminder linking the channel setting.
 
+### 6.3 YouTube data retention *(coordinator's call 2026-10-27, not an owner ruling)*
+
+YouTube's developer policies (Connect spec `2026-10-27-youtube-connect-design.md` §3, DP III.E.4, on
+`feat/youtube-connect`) allow stored YouTube API data (video ids, viewer counts) for **30 days at most unless
+refreshed**, and require it deleted **within 7 days** of an in-app disconnect.
+
+- **Daily refresh job:** while the org's channel is connected, re-read the viewer count and video id for airings that
+  carry them and set `youtube_refreshed_at`. *Unverified:* `liveStreamingDetails.concurrentViewers` is returned only
+  while a broadcast is live, so a post-broadcast re-read may not reproduce a per-showing count; the builder verifies
+  what a refresh may lawfully keep before building it, and a negative goes back to the coordinator.
+- **Purge:** on a disconnect, `viewers` and `video_id` are cleared from that org's `sponsor_airings` within 7 days (the
+  job's next run). A row whose `youtube_refreshed_at` is older than 30 days (a revoke on Google's side, a failed
+  refresh) is purged the same way.
+- **What the report keeps:** times shown, time on screen, clicks and frames are Seazn's own data and stay. Viewers show
+  a dash and "watch this moment" disappears.
+
 ## 7. Testing (all four types per task; TEST-STRATEGY.md)
 
 - **Planner (unit, pure):** expectations derived from `naturalBreaks` declarations, never a typed table. Each dial level
   × each declaring sport (counts reported, 0 = fail); cooldown; tier weights over 30 breaks; plan stable across a
   re-poll; an undone event removes its airing; a sponsor unticked mid-match; a break-less sport plans nothing.
+  **Sequence (frozen assignments):** change the dial mid-match, then tick / untick and change a weight; every earlier
+  assigned moment keeps its sponsor, only later breaks move. A break opened while graphics are hidden leaves the cycle
+  position unchanged (the sponsor keeps its turn). Mutate the frozen-set read once; a test must die.
 - **Queue (unit):** score pre-empts a queued sponsor; cuts an on-air one with `cutShort`; stale sponsor dropped at
-  20 s; Final discards; reduced motion. Mutate the pre-empt guard once; a test must die.
+  20 s; Final discards; reduced motion; at a cricket over end the real `endOfOver` card airs before the `over_end`
+  sponsor card and the sponsor card never overlaps it. Mutate the pre-empt guard once; a test must die.
 - **Seam, driven for real (failure class 1):** the planner's real output through the real page into a real heartbeat
   body, through the real `heartbeat` usecase, then read the `sponsor_airings` row back.
 - **Compositor (cargo):** line parser (bad JSON, oversize, unknown key refused); buffer bound and drop count; clear only
   on 2xx; final-beat flush; frame-grab rate limit; a failing upload never stalls the pipeline.
 - **E2E (CI dispatch):** hub at 320 / 768 / 1280, no horizontal scroll; report opens without login, 404s after revoke;
   overlay at `host=obs` shows a lower third after a cricket over, cooldown honoured.
+- **Retention job (usecase):** a connected channel's refresh sets `youtube_refreshed_at`; after a disconnect the next
+  run clears `viewers` and `video_id` (counts reported, 0 = fail) while times shown, time on screen and clicks are
+  unchanged; a row refreshed > 30 days ago is purged; the report then shows a dash and no "watch this moment". Sequence:
+  disconnect → reconnect → the purged rows stay purged.
 - **Smoke:** the report renders a seeded airing; `/s/[id]?f=&src=` records a click row and still redirects.
 - **Security:** cross-org on airings, settings, links and clicks; token hashed at rest, never logged; frame endpoint
   refuses another session's token.
@@ -264,11 +312,18 @@ tab shows a one-line reminder linking the channel setting.
 4. **Viewer wording.** "Viewer impressions" (live viewers at each showing, added up) with peak live viewers beside it;
    the mock's "people watching" overstates.
 5. **Default dial** for a newly ticked sponsor: recommendation Normal.
+6. **Ship before YouTube Connect?** If yes, viewers and "watch this moment" show a dash until Connect lands;
+   recommended: build in parallel, release together.
+7. **Rotation continuity:** carry the rotation on across the org's matches (recommended: a per-org cursor, so on Light
+   a T20's single innings break doesn't always go to the first title sponsor) or restart each match?
 
 ## 9. Coordination
 
-- **r2-youtube:** the broadcast table and `videoId` / `actualStartTime` (§3.6, §5.2), sponsor links with `src=youtube`
-  in the description (§3.7), the paid-placement flag (§6.2).
+- **r2-youtube:** the broadcast table and `videoId` (§3.6, §5.2), the paid-placement flag (§6.2), the disconnect
+  signal the retention job reads (§6.3). **No sponsor links in the description** (§3.7). **Request to the YouTube
+  Connect session** *(coordinator's call 2026-10-27, not an owner ruling)*: V478 `youtube_broadcasts` has no `actualStartTime`; please store the
+  broadcast's actual start time. The "watch this moment" offset needs it (§5.2); until then there is no timestamped
+  link.
 - **Compositor:** heartbeat contract bump (`airings`, `airingsDropped`) and the frame endpoint; vendored contract updated
   in the same pair of PRs.
 - **Operator console spec:** writes the operator state the planner reads; shares `sponsor_airings` and the carousel.
