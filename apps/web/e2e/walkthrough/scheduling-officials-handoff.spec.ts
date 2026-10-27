@@ -265,8 +265,8 @@ async function fixtureOfficials(
  * repeated `me-official-card` picks whichever one happens to render first —
  * it would keep passing even if the assignment this walkthrough just made
  * never showed up at all. Same lightweight one-shot `postgres` client shape
- * helpers.ts's own (module-private) `withDb` uses, kept local to this file
- * since only this spec needs it.
+ * as helpers.ts's exported `withDb`, which this file also imports for the
+ * outbox-row checks.
  */
 async function fixtureOfficialRowId(fixtureId: string, officialId: string, roleKey = "referee"): Promise<string> {
   const dbUrl = process.env.DATABASE_URL;
