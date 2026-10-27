@@ -5810,7 +5810,7 @@
   "stream.error.no_credits": "Necesitas un crédito para emitir.",
   "stream.error.overlay_required": "La transmisión desde el móvil requiere el nivel de superposición.",
   "stream.error.active_session": "Ya hay una emisión en curso para este partido.",
-  "stream.error.storage_exhausted": "El almacenamiento de grabaciones está lleno. Inténtalo más tarde.",
+  "stream.error.storage_exhausted": "La capacidad de emisión está llena en este momento. Inténtalo de nuevo dentro de un rato.",
   "stream.error.ingest_unavailable": "El servicio de emisión no está disponible. Inténtalo en un minuto.",
   "stream.error.composed_unavailable": "La emisión con la superposición del marcador aún no está disponible. Emite en directo solo con la cámara.",
   "stream.error.unknown": "No se pudo iniciar. Inténtalo de nuevo.",

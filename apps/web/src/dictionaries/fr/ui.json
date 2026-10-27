@@ -5810,7 +5810,7 @@
   "stream.error.no_credits": "Il vous faut un crédit pour passer en direct.",
   "stream.error.overlay_required": "La diffusion depuis le téléphone nécessite le niveau superposition.",
   "stream.error.active_session": "Une diffusion est déjà en cours pour ce match.",
-  "stream.error.storage_exhausted": "Le stockage des enregistrements est plein. Réessayez plus tard.",
+  "stream.error.storage_exhausted": "La capacité de diffusion est saturée pour le moment. Réessayez dans un petit moment.",
   "stream.error.ingest_unavailable": "Le service de diffusion est indisponible. Réessayez dans une minute.",
   "stream.error.composed_unavailable": "La diffusion avec la superposition du score n'est pas encore disponible. Passez en direct avec la caméra seule.",
   "stream.error.unknown": "Le démarrage a échoué. Réessayez.",

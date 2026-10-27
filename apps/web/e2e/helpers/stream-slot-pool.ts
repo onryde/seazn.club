@@ -1,10 +1,11 @@
 // The STREAM-SLOT POOL — the one derivation of the deployment's stream capacity and of the Postgres advisory-lock keys
 // every stream walkthrough takes before it opens a session (Capture QR v2 PR-2 B8: it was restated in six specs).
 //
-// WHY A POOL. Admission refuses a start once the ingest's storage headroom, after every ACTIVE session's max-duration
-// reservation, is below one more reservation (server/relay/domain/session.ts `admit`: headroom < maxDurationMinutes →
-// storage_exhausted). Reservations are counted across the WHOLE server, so parallel workers going live at once are
-// refused as a storage fault ("Recording storage is full"), not a product one. The capacity is DERIVED from the fake
+// WHY A POOL. Admission refuses a start once the ingest's storage headroom, after every ACTIVE session's reservation, is
+// below one more reservation (server/relay/domain/session.ts `admit`: headroom < the start's reservation →
+// storage_exhausted). Since the owner's 2026-10-26 ruling that reservation rolls with the stream (a buffer at admission, not a
+// full match), so the capacity below, sized on a FULL match per session, is now a deliberately conservative throttle. Reservations are counted across the WHOLE server, so parallel workers going live at once are
+// refused as a storage fault ("Streaming capacity is full"), not a product one. The capacity is DERIVED from the fake
 // ingest's own storage limit and the config's max duration, and handed out as session-level advisory locks held for the
 // test: keys [BASE, BASE + CAPACITY). The first CAPACITY − 1 are the POOL, shared by stream-relay, directory,
 // capture-phone, capture-auto and capture-panel-pr2; the last is stream-credits.spec.ts's own (controller allocation

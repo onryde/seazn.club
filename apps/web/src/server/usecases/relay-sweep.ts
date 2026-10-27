@@ -491,7 +491,7 @@ export async function sweepStreamSessions(
   // 3. HEADROOM — reservations included, expired-but-unread excluded: the same function admission uses, on the reading
   //    fitted to the integer columns (G7).
   const usage = storageUsageForColumns(await deps.drivers.ingest.storageUsage());
-  out.headroomMinutes = await storageHeadroomMinutes(sql, usage, now);
+  out.headroomMinutes = await storageHeadroomMinutes(sql, usage, now, "sweep");   // E1 (owner 2026-10-26): negative → relay.storage_overcommitted, once per pass; the sweep goes on
   if (out.headroomMinutes < MAX_DURATION_MINUTES) {
     log.warn({ headroomMinutes: out.headroomMinutes, ...usage, reservedForOneMatch: MAX_DURATION_MINUTES }, "relay sweep: recording storage headroom below one retained match");
   }

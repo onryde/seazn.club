@@ -5810,7 +5810,7 @@
   "stream.error.no_credits": "Je hebt een tegoed nodig om live te gaan.",
   "stream.error.overlay_required": "Streamen vanaf de telefoon vereist het overlay-niveau.",
   "stream.error.active_session": "Er loopt al een stream voor deze wedstrijd.",
-  "stream.error.storage_exhausted": "De opslag voor opnames is momenteel vol. Probeer het later opnieuw.",
+  "stream.error.storage_exhausted": "De streamcapaciteit is op dit moment vol. Probeer het over een poosje opnieuw.",
   "stream.error.ingest_unavailable": "De streamdienst is niet beschikbaar. Probeer het over een minuut.",
   "stream.error.composed_unavailable": "Streamen met de score-overlay is nog niet beschikbaar. Ga live met alleen de camera.",
   "stream.error.unknown": "Starten is mislukt. Probeer het opnieuw.",

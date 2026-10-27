@@ -45,7 +45,8 @@ import { baseUrl } from "@/lib/oauth";
 import { TARGET_UNREADABLE, checkDestination } from "@/lib/stream-destinations";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { StreamSessionCreated, StreamSessionCurrent } from "@/server/api-v1/schemas";
-import { MAX_DURATION_MINUTES, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "@/server/relay/config";
+import { RESERVATION_BUFFER_MINUTES, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS } from "@/server/relay/config";
+import { RECORDINGS_PER_SESSION } from "@/server/relay/domain/credits";
 import { setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import type { StorageUsage } from "@/server/relay/ports";
@@ -399,7 +400,7 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
       .toMatchObject({ code: "PAYMENT_REQUIRED", feature_key: "streaming.overlay" });
 
     // 503 storage_exhausted — the headroom on the wire is the one the admission RECORDED (its own snapshot row),
-    // and it is below the session's declared maximum, which is the rule that refused it.
+    // and it is below the passthrough start's reservation (one buffer — owner ruling 2026-10-26, E1), which is the rule that refused it.
     const used = 500_000 + Math.floor(Math.random() * 400_000);
     const full = await organiser({ storage: { totalStorageMinutes: used, totalStorageMinutesLimit: used + 1, videoCount: 1 } });
     const storage = await refuse("storage_exhausted", full.fixtureId, { mode: "passthrough", targetId: full.target.id }, 503);
@@ -409,7 +410,7 @@ describe.skipIf(!HAS_DB)("POST/GET …/stream-sessions over HTTP", () => {
        order by taken_at desc limit 1`;
     expect(snap, "the refused admission recorded its measurement").toBeDefined();
     expect(storage).toMatchObject({ code: "storage_exhausted", headroomMinutes: snap!.headroom_minutes });
-    expect(storage.headroomMinutes as number).toBeLessThan(MAX_DURATION_MINUTES);
+    expect(storage.headroomMinutes as number).toBeLessThan(RECORDINGS_PER_SESSION.passthrough * RESERVATION_BUFFER_MINUTES);
     expect(await sessionsOn(full.fixtureId)).toBe(0);
 
     // 409 active_session — `sessionId` is the running one (the second-call test pins its value; here: presence + shape).

@@ -39,10 +39,11 @@ import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CODE_GRACE_AFTER_FINISH_MINUTES, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
   FLY_PERFORMANCE_CPU_MICROS_PER_MONTH, FLY_PERFORMANCE_INCLUDED_GB_PER_CPU, FLY_RAM_MICROS_PER_GB_MONTH, MAX_ANCHOR_DRIFT_SECONDS, MAX_DURATION_MINUTES,
-  PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
+  PHONE_SILENT_FLOOR_SECONDS, PHONE_SILENT_SLACK_SECONDS, PROVISION_TIMEOUT_SECONDS, REQUESTED_TIMEOUT_SECONDS, RESERVATION_BUFFER_MINUTES, RUNNER_DEFAULT_GUEST, RUNNER_DEFAULT_REGION,
   RUNNER_CRASH_CAP, RUNNER_MAX_ATTEMPTS, RUNNER_OBSERVE_SLACK_SECONDS, RUNNER_STOP_GRACE_SECONDS, STALE_HEARTBEAT_SECONDS,
   WARMING_TIMEOUT_MINUTES,
 } from "@/server/relay/config";
+import { RECORDINGS_PER_SESSION } from "@/server/relay/domain/credits";
 import { CRASHES_NONE, failReasonFromExit, machineNameFor, stepRunner, type ExitInfo } from "@/server/relay/domain/runner";
 import { composedUnavailable, disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import type { OutputState, ProviderCallRecorder, RunnerSpec } from "@/server/relay/ports";
@@ -340,10 +341,17 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
   });
 
   // The two C3 tests pin the pool through `admitAgainstPool` (hermetic against other suites' rows — see its comment). Each
-  // leg names the minutes its CLAIM says the test's own rows reserve (the rows' own `max_duration_minutes`, V410's default,
-  // read back — never typed), and asserts the admission's decision over a pool whose every term is known.
-  const reservedBy = async (ids: string[]) =>
-    (await sql<{ m: number }[]>`select coalesce(sum(max_duration_minutes), 0)::int as m from fixture_stream_sessions where id in ${sql(ids)}`)[0]!.m;
+  // leg names the minutes its CLAIM says the test's own rows reserve, and asserts the admission's decision over a pool whose
+  // every term is known. Owner ruling 2026-10-26 (E1): a RUNNING session reserves, per recording, min(its booking,
+  // ceil(elapsed) + RESERVATION_BUFFER_MINUTES) — not its whole booking. Every row these tests seat is PASSTHROUGH (one
+  // recording) with no `warming_at` (elapsed 0 — it has not begun), so each holds exactly one buffer; the claim is read from
+  // the two declarations and the rows' own booking, never from the production read it checks.
+  const reservedBy = async (ids: string[]) => {
+    const booked = (await sql<{ m: number }[]>`select coalesce(sum(least(max_duration_minutes, ${RESERVATION_BUFFER_MINUTES})), 0)::int as m from fixture_stream_sessions
+                                                 where id in ${sql(ids)} and mode = 'passthrough' and warming_at is null`)[0]!.m;
+    expect(booked, "PREMISE: every seated row is a passthrough row with no warming_at, so it holds exactly one buffer").toBe(ids.length * RECORDINGS_PER_SESSION.passthrough * RESERVATION_BUFFER_MINUTES);
+    return booked;
+  };
 
   it("C3 differential: raw headroom sufficient, but other sessions' RESERVATIONS push it under → 503 and no row; the same sessions completed → 201", async () => {
     await retireC3Rows();
@@ -368,13 +376,22 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       }
       expect(others).toHaveLength(3);
       const ownReserved = await reservedBy(others);
-      expect(ownReserved, "three live rows reserve three bookings").toBe(3 * MAX_DURATION_MINUTES);
-      // Raw headroom (limit − used) is ownReserved + the measured foreign baseline — always ≥ MAX_DURATION_MINUTES; the three
-      // rows reserve all of the headroom that is left after the foreign baseline, leaving 0.
+      expect(ownReserved, "three live rows reserve three buffers").toBe(3 * RECORDINGS_PER_SESSION.passthrough * RESERVATION_BUFFER_MINUTES);
+      // Raw headroom (limit − used) is ownReserved + the measured foreign baseline; the three rows reserve all of the
+      // headroom that is left after the foreign baseline, leaving 0.
       const pool = { used: 100, headroomBeforeOwn: ownReserved };
+      sentry.captureError.mockClear();
       const refused = await admitAgainstPool(r, { ...pool, ownReserved });
       expect(refused.snapshot.headroom, "the admission's own figure: the three reservations took it all").toBe(pool.headroomBeforeOwn - ownReserved);
       expect(refused.made).toBeNull();
+      // Review m1 of PR #1041: exactly 0 headroom is a full pool, not an overcommitted one - only NEGATIVE headroom alarms
+      // (owner: "headroom NEGATIVE"). A drifting foreign baseline may make an earlier attempt read negative and report; a report
+      // that carries a headroom of 0 or more is the `<= 0` mutant.
+      const zeroOrMore = sentry.captureError.mock.calls.filter(([, ctx]) => {
+        const c = ctx as { route?: string; extra?: { headroomMinutes?: number } };
+        return c.route === "relay.storage_overcommitted" && (c.extra?.headroomMinutes ?? -1) >= 0;
+      });
+      expect(zeroOrMore, "no overcommit report for a pool with exactly 0 headroom").toHaveLength(0);
       expect(refused.refusal).toMatchObject({ status: 503, code: "storage_exhausted" });
       const [{ n }] = await sql<{ n: number }[]>`
         select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId} and not (id = any(${refused.retired}::uuid[]))`;
@@ -427,6 +444,60 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       expect(admitted.made?.sessionId).toBeDefined();
     } finally {
       await retireC3Rows(own);
+    }
+  });
+
+  // Owner ruling 2026-10-26 (E1): a reservation no longer guarantees a full booking, so the pool can be outgrown by streams
+  // that run long together. That is REPORTED — `relay.storage_overcommitted`, once per admission, numbers only — and never
+  // enforced on a running stream; the start that finds it overcommitted is refused exactly as before (headroom < its reservation).
+  it("E1: an admission that finds the reservations OUTGROWING the pool reports relay.storage_overcommitted ONCE, numbers only, and still refuses 503; a pool with room reports nothing (the positive pair)", async () => {
+    await retireC3Rows();
+    const r = await rig({ credits: 1 });
+    r.tick(C3_CLOCK_JUMP_MS);
+    const rigNow = r.deps.now();
+    const others: string[] = [];
+    const overcommit = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.storage_overcommitted");
+    try {
+      for (let i = 0; i < 3; i++) {
+        const o = await rig({ credits: 1 });
+        const [s] = await sql<{ id: string }[]>`
+          insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
+                                               sport_key, competition_id, division_id, entitlement_via_override)
+          select ${o.fixtureId}, ${o.auth.orgId}, 'passthrough', 'live', ${o.target.id}, ${o.auth.userId}, ${rigNow},
+                 d.sport_key, d.competition_id, f.division_id, true
+            from fixtures f join divisions d on d.id = f.division_id where f.id = ${o.fixtureId}
+          returning id`;
+        others.push(s!.id);
+      }
+      const ownReserved = await reservedBy(others);
+      const SHORT = 10;   // the pool is short of the reservations by this much
+      const pool = { used: 100, headroomBeforeOwn: ownReserved - SHORT };
+      sentry.captureError.mockClear();
+      const refused = await admitAgainstPool(r, { ...pool, ownReserved });
+      expect(refused.snapshot.headroom, "the admission's own figure is NEGATIVE").toBe(-SHORT);
+      expect(refused.refusal, "the refusal is the one a short pool always gave").toMatchObject({ status: 503, code: "storage_exhausted" });
+      const reports = overcommit();
+      expect(reports.length, "once per admission read (admitAgainstPool re-measures a drifting pool: one report per attempt)").toBe(refused.attempts);
+      const [err, ctx] = reports[reports.length - 1]! as [Error, { route: string; orgId?: string; extra: Record<string, unknown> }];
+      expect(err).toBeInstanceOf(Error);
+      expect(ctx.extra, "NUMBERS ONLY: exactly these keys, each a number or the source word").toEqual({
+        source: "admission", headroomMinutes: -SHORT, usedMinutes: pool.used, limitMinutes: expect.any(Number),
+        reservedMinutes: refused.snapshot.reserved, reservingSessions: expect.any(Number),
+      });
+      expect(ctx.extra.reservingSessions as number, "counts the three seated rows at least (foreign rows may add)").toBeGreaterThanOrEqual(others.length);
+      expect(ctx.orgId, "no org rides along").toBeUndefined();
+      const wire = JSON.stringify(reports.map((x) => x[1]));
+      for (const id of [...others, r.auth.orgId, r.fixtureId]) expect(wire, "no id in the report").not.toContain(id);
+
+      // The positive pair: the same rows retired, a pool with room — the admission succeeds and reports NOTHING.
+      await retireC3Rows(others);
+      sentry.captureError.mockClear();
+      const admitted = await admitAgainstPool(r, { ...pool, ownReserved: 0 });
+      expect(admitted.refusal).toBeNull();
+      expect(admitted.snapshot.headroom).toBeGreaterThanOrEqual(0);
+      expect(overcommit(), "a pool with room is silent").toHaveLength(0);
+    } finally {
+      await retireC3Rows(others);
     }
   });
 
@@ -2035,7 +2106,8 @@ describe.skipIf(!HAS_DB)("data captured (ruling 13) — history beside the state
     expect(f!.ingest_protocol).toBe("srt");                                             // the fake reports srt on connect (fakes.test.ts pins it)
     expect(f!.destination_kind).toBe("youtube");
     expect(f!.storage_minutes_at_admission).toBe(120);
-    expect(f!.reserved_minutes).toBe(MAX_DURATION_MINUTES);
+    expect(f!.reserved_minutes, "what the passthrough start reserved at admission (elapsed 0): one recording's buffer — owner ruling 2026-10-26 (E1)")
+      .toBe(RECORDINGS_PER_SESSION.passthrough * RESERVATION_BUFFER_MINUTES);
     const [ledger] = await sql<{ reason: string; session_id: string }[]>`select reason, session_id from org_stream_credits where id = ${f!.credit_ledger_id as string}`;
     expect(ledger).toEqual({ reason: "consume", session_id: sessionId });
   });

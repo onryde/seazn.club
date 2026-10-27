@@ -66,7 +66,7 @@ import { pdfLinkUris } from "../apps/web/e2e/pdf-uris.ts";
 import { sitemapWindowOverride } from "../apps/web/src/lib/sitemap-window.ts";
 // captureV2's automatic stop advances time past the SAME default delay the server runs (the relay's one authority for
 // its numbers). The module is import-free, so it loads under `--experimental-strip-types` (proven before relying on it).
-import { AUTO_STOP_AFTER_RESULT_SECONDS, MAX_DURATION_MINUTES, RELAY_OVERLAY_DELAY_DEFAULT_MS } from "../apps/web/src/server/relay/config.ts";
+import { AUTO_STOP_AFTER_RESULT_SECONDS, RELAY_OVERLAY_DELAY_DEFAULT_MS, RESERVATION_BUFFER_MINUTES } from "../apps/web/src/server/relay/config.ts";
 
 const BASE = process.env.SMOKE_BASE ?? "http://localhost:3000";
 
@@ -20507,8 +20507,8 @@ async function captureV2Suite(): Promise<void> {
         // R2004: this environment names a compositor image (the server's and this process's env agree), so the composed
         // Go live is ADMITTED, and over real HTTP it provisions what the compositor needs: the camera input (with its
         // SRT playback credential, sealed) and the programme input, the destination output on the PROGRAMME (the
-        // session's output input), two matches of storage reserved (owner ruling 2026-10-18, option (a): both record),
-        // and the default overlay delay copied in. Then its Stop, and the next read of the fake Machine completes it, so
+        // session's output input), two recordings' buffers of storage reserved (owner ruling 2026-10-18, option (a): both
+        // record; 2026-10-26 E1: each holds the buffer at admission), and the default overlay delay copied in. Then its Stop, and the next read of the fake Machine completes it, so
         // the passthrough Go live in step 3 admits on the same fixture.
         const csid = (composed.json.data as { sessionId?: string } | undefined)?.sessionId ?? null;
         const ins = csid ? await quiet<{ role: string; ingest_input_id: string | null; playback: boolean }[]>`
@@ -20516,10 +20516,10 @@ async function captureV2Suite(): Promise<void> {
         const [srow] = csid ? await quiet<{ ingest_input_uid: string | null; output_uid: string | null; reserved_minutes: number; overlay_delay_ms: number }[]>`
           select ingest_input_uid, output_uid, reserved_minutes, overlay_delay_ms from fixture_stream_sessions where id = ${csid}` : [];
         step(
-          `R2004: a composed Go live with a compositor image → 201, a camera input (playback stored) and a programme input, the output on the programme, ${2 * MAX_DURATION_MINUTES} minutes reserved, the default delay copied (got ${composed.status} ${composed.json.error?.code ?? ""}, inputs ${ins.map((i) => `${i.role}${i.playback ? "+playback" : ""}`).join(",")}, output input ${srow?.ingest_input_uid === ins[1]?.ingest_input_id ? "programme" : "other"}, reserved ${srow?.reserved_minutes}, delay ${srow?.overlay_delay_ms})`,
+          `R2004: a composed Go live with a compositor image → 201, a camera input (playback stored) and a programme input, the output on the programme, ${2 * RESERVATION_BUFFER_MINUTES} minutes reserved (two recordings, each holding the buffer at admission — owner ruling 2026-10-26), the default delay copied (got ${composed.status} ${composed.json.error?.code ?? ""}, inputs ${ins.map((i) => `${i.role}${i.playback ? "+playback" : ""}`).join(",")}, output input ${srow?.ingest_input_uid === ins[1]?.ingest_input_id ? "programme" : "other"}, reserved ${srow?.reserved_minutes}, delay ${srow?.overlay_delay_ms})`,
           composed.status === 201 && ins.length === 2 && ins[0].role === "camera" && ins[0].playback && ins[1].role === "programme" && !ins[1].playback
             && !!ins[1].ingest_input_id && srow?.ingest_input_uid === ins[1].ingest_input_id && srow?.output_uid != null
-            && srow?.reserved_minutes === 2 * MAX_DURATION_MINUTES && srow?.overlay_delay_ms === RELAY_OVERLAY_DELAY_DEFAULT_MS,
+            && srow?.reserved_minutes === 2 * RESERVATION_BUFFER_MINUTES && srow?.overlay_delay_ms === RELAY_OVERLAY_DELAY_DEFAULT_MS,
         );
         const cstop = csid ? await v1(owner, `/api/v1/fixtures/${fx.fixtureId}/stream-sessions/${csid}/stop`, "POST") : null;
         let cstate: string | undefined;
