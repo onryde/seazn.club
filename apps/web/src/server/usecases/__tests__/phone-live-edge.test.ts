@@ -13,6 +13,8 @@
 //   a late or duplicate DELIVERY ...................... "duplicate and late" (the same `at`, an older `at`)
 //   an outage the phone's beats never reported ........ "silence" (both sides of the window)
 //   a beat after the session ended / ends mid-flight .. "after the session ends", "ends while the beat is in flight"
+//   two copies of one beat in flight after a silence .. "RACE" (one edge: the silence is judged on the locked pairing row)
+//   a superseded Machine's reply ...................... "a superseded Machine's reply" (exactly `ending`, no counter)
 //   a beat that is not the session's phone ............ "only the session's phone"
 //   empty: no phone has been live .................... "no phone history" (the reply omits the field)
 //   persisted, not remembered ......................... "a fresh module graph"
@@ -124,6 +126,19 @@ async function notRespondingAfterS(sid: string): Promise<number> {
   const [p] = await sql<{ answered_poll_seconds: number }[]>`
     select p.answered_poll_seconds from fixture_stream_sessions s join fixture_stream_pairings p on p.id = s.pairing_id where s.id = ${sid}`;
   return NOT_RESPONDING_BEATS * p!.answered_poll_seconds;
+}
+
+/** Wait until some OTHER backend is blocked on a row lock in a statement matching `pattern` (an ILIKE). A race test that
+ *  does not reach this point would pass without ever exercising the lock, so the premise is asserted, not assumed. */
+async function lockWaiter(pattern: string): Promise<void> {
+  let waiting = 0;
+  for (let i = 0; i < 100 && waiting === 0; i++) {
+    [{ n: waiting }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from pg_stat_activity
+       where wait_event_type = 'Lock' and query ilike ${pattern} and pid <> pg_backend_pid()` as { n: number }[];
+    if (waiting === 0) await new Promise((res) => setTimeout(res, 50));
+  }
+  expect(waiting, `PREMISE: a statement matching ${pattern} is waiting on a row lock`).toBeGreaterThan(0);
 }
 
 describe.skipIf(!HAS_DB)("the phone-live edge — phone beat in, relay reply out", () => {
@@ -323,6 +338,70 @@ describe.skipIf(!HAS_DB)("the phone-live edge — phone beat in, relay reply out
     await ender;
     await inFlight;
     expect(await cols(s.S), "the ended session's tracker is untouched").toEqual(before);
+  });
+
+  it("RACE: two copies of one beat in flight after a silence give ONE edge, not two — the silence is judged once, on the pairing row under its lock", async () => {
+    const s = await composedRig();
+    s.r.tick(5 * SEC);
+    await s.phoneBeat("publishing");
+    // The phone goes quiet for the whole window while the relay keeps beating; then one beat is sent twice (the phone abandons a
+    // beat after 10 s and sends the next, so the stuck one and its successor can land together).
+    await s.silentFor(await notRespondingAfterS(s.S));
+    expect(await s.relayBeat(), "PREMISE: the first live is 0, the silence not yet judged").toBe(0);
+    const pairingId = (await sql<{ pairing_id: string }[]>`select pairing_id from fixture_stream_sessions where id = ${s.S}`)[0]!.pairing_id;
+    const lastFlags = async () => (await sql<{ flags: string[] }[]>`
+      select flags from fixture_stream_phone_beats where pairing_id = ${pairingId} order by id desc limit 1`)[0]!.flags;
+
+    const dup = body(s.r, s.phone, { sid: s.S, state: "publishing" });
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    let locked!: () => void;
+    const holding = new Promise<void>((res) => { locked = res; });
+    // A third writer holds the SESSION row, so copy A stops after it took the pairing row and before it commits.
+    const holder = sql.begin(async (tx) => {
+      await tx`select id from fixture_stream_sessions where id = ${s.S} for update`;
+      locked();
+      await gate;
+    });
+    await holding;
+    const a = postBeat(s.r.code, s.r.tok, dup, s.r.deps, s.r.now());
+    await lockWaiter("%phone_live_edge%");   // A is blocked on the session row, holding the pairing row
+    const b = postBeat(s.r.code, s.r.tok, dup, s.r.deps, s.r.now());
+    await lockWaiter("%fixture_stream_pairings%");   // B is queued behind A on the pairing row: it read the same stale silence
+    release();
+    await holder;
+    await Promise.all([a, b]);
+
+    expect(await edgeOf(s.S), "one silence, one edge — however many copies of the beat that ended it").toBe(1);
+    expect(await s.relayBeat(), "and that is what the relay is told").toBe(1);
+    expect(await lastFlags(), "the second copy found the pairing already beaten: the history no longer says the phone is not responding").not.toContain("not_responding");
+    // The positive pair: a later, separate outage is still an edge (the silence is judged afresh from the beat that just moved).
+    await s.silentFor(await notRespondingAfterS(s.S));
+    s.r.tick(1 * SEC);
+    await s.phoneBeat("publishing");
+    expect(await s.relayBeat(), "a second silence is a second edge").toBe(2);
+  });
+
+  it("a superseded Machine's reply carries no counter: attempt 1's late beat is answered exactly `ending`, while the current attempt is served the count", async () => {
+    const s = await composedRig();
+    s.r.tick(5 * SEC);
+    await s.phoneBeat("publishing");
+    s.r.tick(5 * SEC);
+    await s.phoneBeat("reconnecting");
+    s.r.tick(5 * SEC);
+    await s.phoneBeat("publishing");
+    expect(await s.relayBeat(), "PREMISE: attempt 1 is served the count (one outage)").toBe(1);
+    // Attempt 1's final, with no reason: lost → torn down → the ONE retry boots attempt 2 on its own token.
+    await heartbeat(s.S, s.jobToken, { state: "stopped" }, s.r.deps);
+    expect(s.r.runner.created, "PREMISE: attempt 2 booted").toHaveLength(2);
+    const attempt2 = s.r.runner.created[1]!.jobToken;
+    expect(attempt2, "PREMISE: its own token").not.toBe(s.jobToken);
+
+    const late = await heartbeat(s.S, s.jobToken, { state: "playing" }, s.r.deps);
+    expect(late, "the stray is told to drain and nothing else: no counter to nudge it with").toEqual({ desiredState: "ending" });
+    expect(RelayHeartbeatReply.safeParse(late).success).toBe(true);
+    const own = await heartbeat(s.S, attempt2, { state: "playing" }, s.r.deps);
+    expect(own, "the current attempt is served the count (the positive pair)").toEqual({ desiredState: "live", phoneLiveEdge: 1 });
   });
 
   it("through the route: the relay's POST gets the counter inside the house envelope, parsed by the contract's reply twin", async () => {

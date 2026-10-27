@@ -541,7 +541,15 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
     // 3. The beat stored — only a current caller's; any other beat changes nothing (T6, T7, T22).
     const held = mine !== null && open !== null && open.pairing_id === mine.id;
     if (mine !== null) {
-      const notResponding = held && isNotResponding({ held, lastBeatAt: new Date(mine.last_beat_at), answeredPoll: mine.answered_poll_seconds }, now);
+      // Owed 108 fix (b), review m1: the silence BEFORE this beat is judged on the pairing row read under its own lock. `mine` came
+      // from an unlocked read, so a beat in flight beside this one (the phone abandons a beat after 10 s and sends the next) would
+      // judge the same silence twice and raise two edges. The pairing is locked here, at the position of the update below, so the
+      // lock order is unchanged: code, then pairing, then session. A row that is gone leaves the unlocked read standing (the update
+      // below then touches nothing, as it did before).
+      const [judged] = await tx<PairingRow[]>`
+        select id, code_id, phone, last_beat_at, answered_poll_seconds from fixture_stream_pairings where id = ${mine.id} for update`;
+      const prior = judged ?? mine;
+      const notResponding = held && isNotResponding({ held, lastBeatAt: new Date(prior.last_beat_at), answeredPoll: prior.answered_poll_seconds }, now);
       // PR-2 T6 (FP16, R-2): `not_ready_since` is the clock of the CURRENT not-ready stretch, on the server's clock. It starts on
       // the beat that takes not_ready from null to a reason, SURVIVES a change of reason (the phone has been unready the whole
       // time), and a null beat clears it at once; a row with a reason but no clock (from before V431) starts one.

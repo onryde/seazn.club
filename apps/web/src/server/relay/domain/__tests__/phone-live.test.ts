@@ -11,6 +11,7 @@
 //     warn — capture spec W12 — but only `reconnecting` has lost the video).
 //
 // ONE SPORT, on purpose (TEST-STRATEGY rule 6): the inputs are a phone's own report; no sport is involved.
+import fc from "fast-check";
 import { describe, expect, it } from "vitest";
 import { CapturePhoneState } from "@/server/api-v1/capture-schemas";
 import { NO_PHONE_LIVE, PHONE_LIVE_STATES, isPhoneLive, phoneLiveTracked, stepPhoneLive, type PhoneLiveTracker } from "../phone-live";
@@ -180,7 +181,45 @@ describe("stepPhoneLive — late and duplicate beats are not edges", () => {
 });
 
 describe("stepPhoneLive — guards", () => {
-  it("the counter never goes down, over every state × every previous side (anti-vacuity: counts the cases)", () => {
+  it("over ARBITRARY sequences of beats, after EVERY step: never down, at most one per step, null→0 only on a live beat, a late beat changes nothing (anti-vacuity: counts steps, edges and late beats)", () => {
+    const step = fc.record({
+      state: fc.constantFrom(...CapturePhoneState.options),
+      dt: fc.integer({ min: -3, max: 8 }),   // seconds since the previous beat's `at`: mostly forward, with ties and late deliveries
+      silent: fc.boolean(),
+    });
+    let steps = 0, edges = 0, late = 0, firstLive = 0;
+    fc.assert(fc.property(fc.array(step, { minLength: 1, maxLength: 40 }), (beats) => {
+      let t: PhoneLiveTracker = NO_PHONE_LIVE;
+      let clock = 100;
+      for (const b of beats) {
+        const prev = t;
+        clock += b.dt;
+        t = stepPhoneLive(prev, { state: b.state, at: at(clock) }, b.silent);
+        steps++;
+        if (prev.beatAt !== null && at(clock).getTime() < prev.beatAt.getTime()) {
+          late++;
+          expect(t, "a late beat changes nothing").toEqual(prev);
+          continue;
+        }
+        if (prev.edge === null) {
+          expect(t.edge, "the counter appears only on a live beat, at 0").toBe(LIVE.includes(b.state) ? 0 : null);
+          if (t.edge === 0) firstLive++;
+        } else {
+          expect(t.edge, "the counter never goes down").toBeGreaterThanOrEqual(prev.edge);
+          expect(t.edge! - prev.edge, "at most one per beat").toBeLessThanOrEqual(1);
+          if (t.edge! > prev.edge) edges++;
+        }
+        expect(t.live, "the tracker records this beat's side").toBe(LIVE.includes(b.state));
+      }
+    }), { numRuns: 300, seed: 20261027 });
+    // Anti-vacuity: the generator must reach every branch the invariants guard, or this proved nothing.
+    expect(steps, "steps checked").toBeGreaterThan(1000);
+    expect(edges, "edges seen").toBeGreaterThan(100);
+    expect(late, "late beats seen").toBeGreaterThan(100);
+    expect(firstLive, "first lives seen").toBeGreaterThan(100);
+  });
+
+  it("the counter never goes down, over every state × every previous side × every counter value (one step each, not a sequence; anti-vacuity: counts the cases)", () => {
     let checked = 0;
     for (const prevLive of [false, true]) {
       for (const state of CapturePhoneState.options) {

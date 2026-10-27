@@ -49,7 +49,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "52c617eab1de956c46255fc8aa0e568379c064a2cde8199b7e0c4fdd62970003";
+const SHA256 = "284756740ddb7ecf984d5858b19cacb98b3677100e6a69f34bbea4d0c91f97e3";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
