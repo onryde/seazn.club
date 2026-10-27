@@ -1,11 +1,13 @@
-// The claim invite goes through the email outbox (phase 3 wave 3, kind `claim_invite`), from both of its producers:
+// The claim invite goes through the email outbox (phase 3 wave 3, kinds `claim_invite` and `official_invite`), from all of its producers:
 //
 //  - the organiser's console (POST /api/v1/persons/{id}/claim-invites): the claim and the row that mails its EMAIL secret are one tenant
 //    transaction (`createClaimInvite`'s `withTenant`, R3: the row's org is the tenant's), and the request makes the first attempt after
 //    commit, so `email_sent` is its outcome;
 //  - every registration path (F9): each one converges on `inviteUnclaimedMembers`, after its own commit, and its `maybeInviteClaim`
 //    mints the claim and queues the row in one transaction on the pool, then makes the first attempt. Two different entry points are
-//    driven (the team submit and the organiser's approval), through the REAL sweep: its calls are `void`, so the tests poll for the row.
+//    driven (the team submit and the organiser's approval), through the REAL sweep: its calls are `void`, so the tests poll for the row;
+//  - the officials console (POST /api/v1/officials/{id}/invite, kind `official_invite`): the same rail as the console invite, with the
+//    officiating copy, and the row's ref is the official.
 //
 // The row's ref is the person (a re-invite to the same address supersedes the older row), the language is the organisation's default
 // (the person is unclaimed, so there is no account to follow), and the mail carries the EMAIL secret, never the console one.
@@ -38,6 +40,8 @@ import { inviteUnclaimedMembers, putRegistrationSettings } from "@/server/usecas
 import { submitRegistrationGroup } from "@/server/usecases/registration-submit";
 import { approveRegistration } from "@/server/usecases/registration-approval";
 import { POST as claimInvitePost } from "@/app/api/v1/persons/[id]/claim-invites/route";
+import { POST as officialInvitePost } from "@/app/api/v1/officials/[id]/invite/route";
+import { createOfficial } from "@/server/usecases/officials";
 import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
 import { SETTINGS_BASE, asOwner, makeUser, rig, seedOrg } from "./_registration-fixtures";
 import { stubOutboxEnv } from "./_invite-mail";
@@ -50,7 +54,7 @@ const orgs: string[] = [];
 type Delivered = { to: string; subject: string; html: string; text: string; idempotencyKey: string };
 type MailRow = {
   id: string; kind: string; ref_type: string; ref_id: string; org_id: string | null; recipient: string;
-  recipient_user_id: string | null; transactional: boolean; subject: string; status: string;
+  recipient_user_id: string | null; transactional: boolean; subject: string; status: string; attempts: number;
 };
 
 const address = (): string => `${RUN}-${randomUUID().slice(0, 8)}@x.test`;
@@ -85,12 +89,28 @@ async function invite(ownerId: string, personId: string, body: Record<string, un
 /** The rows of `kind` about this ref, oldest first. */
 const rowsOf = (kind: string, refType: string, refId: string) =>
   sql<MailRow[]>`
-    select id, kind, ref_type, ref_id, org_id, recipient, recipient_user_id, transactional, subject, status
+    select id, kind, ref_type, ref_id, org_id, recipient, recipient_user_id, transactional, subject, status, attempts
       from email_outbox where kind = ${kind} and ref_type = ${refType} and ref_id = ${refId}
      order by created_at, id`;
 /** Every claim invite an organisation queued. */
 const claimInvitesOfOrg = (orgId: string) =>
   sql<MailRow[]>`select id, ref_id, recipient, status from email_outbox where kind = 'claim_invite' and org_id = ${orgId}`;
+/** The organiser invites an official through the real route, signed in through the real session. */
+async function inviteOfficial(ownerId: string, officialId: string, body: Record<string, unknown>) {
+  jar.values.clear();
+  await createSession(ownerId);
+  const res = await officialInvitePost(
+    new Request(`${ORIGIN}/api/v1/officials/${officialId}/invite`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    { params: Promise.resolve({ id: officialId }) },
+  );
+  jar.values.clear();
+  const wire = await res.text();
+  return { status: res.status, wire, data: (JSON.parse(wire) as { data?: Record<string, unknown> }).data ?? {} };
+}
 /** The person's newest claim. */
 const claimOf = async (personId: string) =>
   (
@@ -290,6 +310,68 @@ describe.skipIf(!HAS_DB)("the claim invite goes through the outbox (DB)", () => 
     await inviteUnclaimedMembers(o.orgId, entrantId!);
 
     expect(await claimInvitesOfOrg(o.orgId), "no claim invite in the organisation").toEqual([]);
+    expect(transport.deliver, "nothing sent").not.toHaveBeenCalled();
+  });
+});
+
+describe.skipIf(!HAS_DB)("the officiating invite goes through the outbox (DB)", () => {
+  it("inviting an official queues one officiating invite in the org's language and reports email_sent", async () => {
+    const o = await org("nl");
+    const official = await createOfficial(o.owner, { display_name: "Ref Console", role_keys: ["referee"] });
+    const email = address();
+
+    const res = await inviteOfficial(o.ownerId, official.id, { email });
+
+    expect(res.status).toBe(201);
+    expect(res.data.email_sent, "the request's own attempt went out").toBe(true);
+    const rows = await rowsOf("official_invite", "official", official.id);
+    expect(rows).toHaveLength(1);
+    const row = rows[0]!;
+    expect(row).toMatchObject({
+      kind: "official_invite",
+      org_id: o.orgId,
+      recipient: email,
+      recipient_user_id: null,
+      transactional: true,
+      status: "sent",
+    });
+    expect(row.subject).toBe(dictionarySubject("nl", "officialInvite.subject", { orgName: o.name }));
+    expect(dictionarySubject("nl", "officialInvite.subject", { orgName: o.name }), "nl differs from en").not.toBe(
+      dictionarySubject("en", "officialInvite.subject", { orgName: o.name }),
+    );
+    // The mail carries the EMAIL secret of the official's claim, and the response never does.
+    const calls = callsFor(row.id);
+    expect(calls, "one transport call, under the row's own key").toHaveLength(1);
+    const mailed = tokenOf(calls[0]!.text);
+    const [{ person_id: personId }] = await sql<{ person_id: string }[]>`select person_id from officials where id = ${official.id}`;
+    expect(sha256(mailed)).toBe((await claimOf(personId)).email_token_hash);
+    expect(res.wire, "the response never carries the email secret").not.toContain(mailed);
+  });
+
+  it("email_sent is false while the outbox retries", async () => {
+    // The state the reworded notice (`officials.inviteEmailFailed`) describes: not gone yet, and not given up on.
+    const o = await org("nl");
+    const official = await createOfficial(o.owner, { display_name: "Ref Retry", role_keys: ["referee"] });
+    transport.deliver.mockImplementationOnce(async () => ({ ok: false, reason: "http", status: 503, errorName: "service_unavailable", detail: "later" }));
+
+    const res = await inviteOfficial(o.ownerId, official.id, { email: address() });
+
+    expect(res.status).toBe(201);
+    expect(res.data.email_sent).toBe(false);
+    const rows = await rowsOf("official_invite", "official", official.id);
+    expect(rows).toHaveLength(1);
+    expect(rows[0], "the row waits for the worker").toMatchObject({ status: "queued", attempts: 1 });
+  });
+
+  it("empty: an unknown official queues nothing", async () => {
+    const o = await org("nl");
+    const unknown = randomUUID();
+
+    const res = await inviteOfficial(o.ownerId, unknown, { email: address() });
+
+    expect(res.status).toBe(404);
+    expect(await rowsOf("official_invite", "official", unknown)).toEqual([]);
+    expect(await sql`select 1 from email_outbox where kind = 'official_invite' and org_id = ${o.orgId}`, "no officiating invite in the organisation").toHaveLength(0);
     expect(transport.deliver, "nothing sent").not.toHaveBeenCalled();
   });
 });

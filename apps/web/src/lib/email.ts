@@ -328,7 +328,8 @@ export async function claimInviteEmail(args: ClaimInviteArgs, locale: Locale): P
 }
 
 /** Officiating claim invite (PROMPT-57), RENDERED and not sent: the claim invite's rail with officiating copy. `queueClaimInviteEmail`
- *  queues what this returns on the email outbox (kind `official_invite`, transactional). */
+ *  queues what this returns on the email outbox (kind `official_invite`, transactional), in the transaction that mints the official's
+ *  claim (`inviteOfficial`). Nothing sends it directly. */
 export async function officialInviteEmail(args: OfficialInviteArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
   return officialInviteTemplate(args, dict);
@@ -344,17 +345,6 @@ export function appOrigin(): string {
     process.env.NEXT_PUBLIC_BASE_URL ||
     "http://localhost:3000"
   ).replace(/\/$/, "");
-}
-
-/** Officiating claim invite (PROMPT-57) — same rail as claimInviteEmail,
- *  officiating copy. Officials default to en (no stored locale). */
-export async function sendOfficialInviteEmail(
-  to: string,
-  args: OfficialInviteArgs,
-  locale: Locale = "en",
-): Promise<boolean> {
-  const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...officialInviteTemplate(args, dict) });
 }
 
 /** New officiating assignment(s) with accept/decline CTA to /me. */

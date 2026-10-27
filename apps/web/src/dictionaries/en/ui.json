@@ -3405,7 +3405,7 @@
   "officials.inviteEmail": "Email",
   "officials.inviteSend": "Send invite",
   "officials.inviteSent": "Invite sent",
-  "officials.inviteEmailFailed": "Email failed to send — share the link below",
+  "officials.inviteEmailFailed": "The email didn't go out straight away. It may arrive late, or not at all — share the link below to be sure.",
   "officials.inviteLink": "Claim link (shown once)",
   "officials.copy": "Copy",
   "officials.copied": "Copied",

@@ -3360,7 +3360,7 @@
   "officials.inviteEmail": "E-mail",
   "officials.inviteSend": "Uitnodiging versturen",
   "officials.inviteSent": "Uitnodiging verstuurd",
-  "officials.inviteEmailFailed": "E-mail versturen mislukt — deel de link hieronder",
+  "officials.inviteEmailFailed": "De e-mail is niet meteen verstuurd. Hij kan later aankomen, of helemaal niet — deel de link hieronder voor de zekerheid.",
   "officials.inviteLink": "Claimlink (eenmalig getoond)",
   "officials.copy": "Kopiëren",
   "officials.copied": "Gekopieerd",

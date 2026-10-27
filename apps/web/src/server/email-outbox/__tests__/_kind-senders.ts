@@ -40,7 +40,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendGroupOrgRemovedEmail",
   "sendOfficialAssignedEmail",
   "sendOfficialAssignmentChangedEmail",
-  "sendOfficialInviteEmail",
   "sendPassCreditReversalIncompleteAlertEmail",
   "sendPassRungMismatchAlertEmail",
   "sendPassUnknownCompetitionAlertEmail",
@@ -60,11 +59,9 @@ export const SENDER_ALLOWLIST: readonly string[] = [
 
 /** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12). Wave 2's T1 listed its ten kinds before their
  *  producers moved, each kind task (T2-T9) deleted its own, and T10 closed the list again. Wave 3's T1 listed its eight kinds the same
- *  way, in the spec's table order: each kind task (T2-T4) deletes its own, and the last move (T4c) closes the list again. The sweep
- *  covers every kind not listed. */
-export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "official_invite",
-];
+ *  way, each kind task (T2-T4) deleted its own, and the last move (T4c) closed the list again. A later wave that registers a kind before
+ *  its producer moves lists it here until then. The sweep covers every kind not listed. */
+export const NOT_YET_MOVED: readonly OutboxKind[] = [];
 
 /** For every kind, the direct sender its producer still calls (null = the kind has moved: nothing direct is left for it). */
 export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
@@ -85,7 +82,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   sponsor_dispute_lost: null,
   pass_revoked: null,
   trial_ending: null,
-  // Wave 3: each kind's direct sender in lib/email.ts (the spec's kind table cites it by line; the wave-3 plan's table names it).
+  // Wave 3: every one has moved (T2-T4).
   email_verification: null,
   funnel_claim: null,
   email_change_confirmation: null,
@@ -93,7 +90,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   account_deletion: null,
   org_invite: null,
   claim_invite: null,
-  official_invite: "sendOfficialInviteEmail",
+  official_invite: null,
 };
 
 /** How long the allowlist must be while `unmoved` kinds are still on their direct sender: the spec's 49, less one for every phase-3 kind

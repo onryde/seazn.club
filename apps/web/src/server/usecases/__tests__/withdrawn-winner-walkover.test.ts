@@ -612,7 +612,7 @@ describe.skipIf(!HAS_DB)("ruling 116: a withdrawn knockout winner's next tie is 
       const ownerEmail = `owner-${randomUUID().slice(0, 8)}@test.local`;
       const [owner] = await sql<{ id: string }[]>`insert into users (email, display_name, email_verified) values (${ownerEmail}, 'Owner', true) returning id`;
       await sql`insert into org_members (org_id, user_id, role) values (${auth.orgId}, ${owner!.id}, 'owner')`;
-      const invited = await inviteOfficial({ ...auth, via: "session", userId: owner!.id }, official.id, email);
+      const invited = await inviteOfficial({ ...auth, via: "session", userId: owner!.id }, official.id, email, "https://officials.test");
       await claimPerson(invited.secret, user!.id, email);
       mail.assigned.mockClear();
       await patchFixtureOfficials(auth, id, { set: [{ official_id: official.id, role_key: "referee", locked: false }] });

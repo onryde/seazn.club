@@ -3360,7 +3360,7 @@
   "officials.inviteEmail": "Correo",
   "officials.inviteSend": "Enviar invitación",
   "officials.inviteSent": "Invitación enviada",
-  "officials.inviteEmailFailed": "No se pudo enviar el correo — comparte el enlace de abajo",
+  "officials.inviteEmailFailed": "El correo no salió de inmediato. Puede llegar más tarde o no llegar — comparte el enlace de abajo para asegurarte.",
   "officials.inviteLink": "Enlace de reclamación (se muestra una sola vez)",
   "officials.copy": "Copiar",
   "officials.copied": "Copiado",

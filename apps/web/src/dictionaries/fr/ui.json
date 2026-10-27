@@ -3405,7 +3405,7 @@
   "officials.inviteEmail": "E-mail",
   "officials.inviteSend": "Envoyer l'invitation",
   "officials.inviteSent": "Invitation envoyée",
-  "officials.inviteEmailFailed": "Échec de l'envoi — partagez le lien ci-dessous",
+  "officials.inviteEmailFailed": "L'e-mail n'est pas parti tout de suite. Il peut arriver en retard, ou pas du tout — partagez le lien ci-dessous pour en être sûr.",
   "officials.inviteLink": "Lien de réclamation (affiché une seule fois)",
   "officials.copy": "Copier",
   "officials.copied": "Copié",

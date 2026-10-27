@@ -194,11 +194,15 @@ export async function listOfficialBusyElsewhere(auth: AuthCtx): Promise<Official
  * (creating one mirrors how player invites need a person row to bind), stamp
  * officials.email, then mint the claim through the SHARED person-claim rail —
  * same tokens, same 14-day TTL, same email-bound accept. No parallel system.
+ * The officiating invite (kind `official_invite`, ref the official) is queued
+ * on the email outbox in the claim's own transaction, with its link on
+ * `origin`; the caller makes the first attempt with `outboxId` after commit.
  */
 export async function inviteOfficial(
   auth: AuthCtx,
   officialId: string,
   email: string,
+  origin: string,
 ): Promise<{
   official: OfficialRow;
   claim: ClaimRow;
@@ -207,6 +211,8 @@ export async function inviteOfficial(
   emailSecret: string;
   person_name: string;
   org_name: string;
+  /** The queued officiating invite's outbox row. */
+  outboxId: string | null;
 }> {
   const official = await withTenant(auth.orgId, async (tx) => {
     const [row] = await tx<OfficialRow[]>`
@@ -233,12 +239,13 @@ export async function inviteOfficial(
       where id = ${officialId} returning ${tx(COLS)}`;
     return updated!;
   });
-  const { secret, emailSecret, person_name, org_name, ...claim } = await createClaimInvite(
+  const { secret, emailSecret, person_name, org_name, outboxId, ...claim } = await createClaimInvite(
     auth,
     official.person_id!,
     email.trim().toLowerCase(),
+    { kind: "official_invite", refType: "official", refId: officialId, origin, to: email },
   );
-  return { official, claim, secret, emailSecret, person_name, org_name };
+  return { official, claim, secret, emailSecret, person_name, org_name, outboxId };
 }
 
 export async function createOfficial(auth: AuthCtx, input: CreateOfficialInput): Promise<OfficialRow> {

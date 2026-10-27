@@ -142,7 +142,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
     });
     expect(official.person_id).toBeNull();
 
-    const invited = await inviteOfficial(auth, official.id, ref.email);
+    const invited = await inviteOfficial(auth, official.id, ref.email, "https://officials.test");
     // person created + linked, email stamped
     expect(invited.official.person_id).not.toBeNull();
     expect(invited.official.email).toBe(ref.email);
@@ -174,7 +174,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
       display_name: "Ref R",
       role_keys: ["referee"],
     });
-    const invited = await inviteOfficial(auth, official.id, ref.email);
+    const invited = await inviteOfficial(auth, official.id, ref.email, "https://officials.test");
     await claimPerson(invited.secret, ref.id, ref.email);
 
     const pastScheduled = fixtures[0]!.id;
@@ -213,7 +213,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
     const ref = await makeUser("held-ref");
     const { fixtures } = await seedFutureDivision(auth);
     const official = await createOfficial(auth, { display_name: "Ref H", role_keys: ["referee"] });
-    const invited = await inviteOfficial(auth, official.id, ref.email);
+    const invited = await inviteOfficial(auth, official.id, ref.email, "https://officials.test");
     await claimPerson(invited.secret, ref.id, ref.email);
     const held = fixtures[0]!.id;
     const playing = fixtures[1]!.id;
@@ -246,7 +246,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
       display_name: "Ref Cancel",
       role_keys: ["referee"],
     });
-    const invited = await inviteOfficial(auth, official.id, ref.email);
+    const invited = await inviteOfficial(auth, official.id, ref.email, "https://officials.test");
     await claimPerson(invited.secret, ref.id, ref.email);
     const fixtureId = fixtures[0]!.id;
     await patchFixtureOfficials(auth, fixtureId, {
@@ -280,7 +280,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
       display_name: "Ref Court",
       role_keys: ["referee"],
     });
-    const invited = await inviteOfficial(auth, official.id, ref.email);
+    const invited = await inviteOfficial(auth, official.id, ref.email, "https://officials.test");
     await claimPerson(invited.secret, ref.id, ref.email);
 
     const fx1 = fixtures[0]!.id;
@@ -321,7 +321,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
       display_name: "Ref R",
       role_keys: ["referee"],
     });
-    const invited = await inviteOfficial(auth, official.id, ref.email);
+    const invited = await inviteOfficial(auth, official.id, ref.email, "https://officials.test");
     await claimPerson(invited.secret, ref.id, ref.email);
 
     const fixtureId = fixtures[0]!.id;
@@ -382,7 +382,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
       display_name: "Ref B",
       role_keys: ["referee"],
     });
-    const invited = await inviteOfficial(auth, official.id, ref.email);
+    const invited = await inviteOfficial(auth, official.id, ref.email, "https://officials.test");
     await claimPerson(invited.secret, ref.id, ref.email);
 
     await setMyBlackout(ref.id, "2027-01-10", "away");
@@ -412,7 +412,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
       display_name: "Ref M",
       role_keys: ["referee"],
     });
-    const invited = await inviteOfficial(auth, official.id, ref.email);
+    const invited = await inviteOfficial(auth, official.id, ref.email, "https://officials.test");
     await claimPerson(invited.secret, ref.id, ref.email);
     const fixtureId = fixtures[0]!.id;
     await patchFixtureOfficials(auth, fixtureId, {
@@ -471,8 +471,8 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
       display_name: "Ref B-side",
       role_keys: ["umpire"],
     });
-    const invitedA = await inviteOfficial(orgA.auth, officialA.id, ref.email);
-    const invitedB = await inviteOfficial(orgB.auth, officialB.id, ref.email);
+    const invitedA = await inviteOfficial(orgA.auth, officialA.id, ref.email, "https://officials.test");
+    const invitedB = await inviteOfficial(orgB.auth, officialB.id, ref.email, "https://officials.test");
 
     // A pure player claim (no officials row) must never surface here.
     const bystander = await seedOrg();
@@ -558,7 +558,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
       display_name: "Ref Expired",
       role_keys: ["referee"],
     });
-    const invitedC = await inviteOfficial(orgA.auth, officialC.id, "expired@example.com");
+    const invitedC = await inviteOfficial(orgA.auth, officialC.id, "expired@example.com", "https://officials.test");
     await sql`update person_claims set expires_at = now() - interval '1 minute' where id = ${invitedC.claim.id}`;
     const expiredUser = await makeUser("expired-ref");
     expect(await listPendingOfficiatingClaims("expired@example.com")).toHaveLength(0);
@@ -577,7 +577,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
       display_name: "Ref Revoked",
       role_keys: ["referee"],
     });
-    const invitedE = await inviteOfficial(orgA.auth, officialE.id, "revoked@example.com");
+    const invitedE = await inviteOfficial(orgA.auth, officialE.id, "revoked@example.com", "https://officials.test");
     await sql`update person_claims set revoked_at = now() where id = ${invitedE.claim.id}`;
     expect(await listPendingOfficiatingClaims("revoked@example.com")).toHaveLength(0);
 
@@ -586,7 +586,7 @@ describe.skipIf(!HAS_DB)("official onboarding (PROMPT-57)", () => {
       display_name: "Ref Token",
       role_keys: ["referee"],
     });
-    const invitedD = await inviteOfficial(orgA.auth, officialD.id, "token-ref@example.com");
+    const invitedD = await inviteOfficial(orgA.auth, officialD.id, "token-ref@example.com", "https://officials.test");
     const tokenUser = await makeUser("token-ref");
     await claimPerson(invitedD.secret, tokenUser.id, "token-ref@example.com");
     expect((await getMyOfficiating(tokenUser.id)).is_official).toBe(true);

@@ -60,14 +60,16 @@
 //     through the session stand-in) inviting an unclaimed person: the claim and its row are one tenant transaction, in the organisation's
 //     language, and the request makes the first attempt. (The registration paths reach the same helper; claim-invite-outbox.test.ts
 //     drives two of them.)
+//   - official_invite: the route POST of app/api/v1/officials/[id]/invite/route.ts, the organiser of an `nl` organisation (signed in
+//     through the session stand-in) inviting an official to claim their profile: the same rail as the claim invite, with the officiating
+//     copy, in the organisation's language, and the request makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
 // moved, each kind task (wave 2, T2-T9) added the scenario and deleted the entry, and T10 closed the list again. Wave 3's T1 registered
-// its eight kinds the same way: they are in NOT_YET_MOVED until each kind task (wave 3, T2-T4) adds the scenario and deletes the entry,
-// and the last move (T4c) closes the list again. The sweep covers every kind the list does not name. A kind that is neither moved nor
-// listed fails by name, and so does a kind that is listed while it has a scenario (a stale entry would skip the sweep), and so do the
-// three lists when they disagree.
+// its eight kinds the same way, each kind task (wave 3, T2-T4) added the scenario and deleted the entry, and T4c closed the list again,
+// so every kind in the registry is swept. A kind that is neither moved nor listed fails by name, and so does a kind that is listed while
+// it has a scenario (a stale entry would skip the sweep), and so do the three lists when they disagree.
 //
 // Sport: not applicable. These emails do not vary by sport (spec, Test strategy 4).
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -122,6 +124,8 @@ import { POST as changeEmailPost } from "@/app/api/auth/change-email/route";
 import { DELETE as deleteAccount } from "@/app/api/users/me/route";
 import { POST as orgInvitePost } from "@/app/api/orgs/[id]/invites/route";
 import { POST as claimInvitePost } from "@/app/api/v1/persons/[id]/claim-invites/route";
+import { POST as officialInvitePost } from "@/app/api/v1/officials/[id]/invite/route";
+import { createOfficial } from "@/server/usecases/officials";
 import { createPerson } from "@/server/usecases/persons";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
@@ -215,12 +219,6 @@ const SPEC_FACTS: KindFacts = {
   claim_invite: ["literal", true],
   official_invite: ["literal", true],
 };
-
-/** Wave 3's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
- *  kind task (T2-T4) deletes it from NOT_YET_MOVED, and here. The last move (T4c) empties both. */
-const WAVE_3_UNMOVED: readonly OutboxKind[] = [
-  "official_invite",
-];
 
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
  *  addresses this run mails all start with RUN, so the accounts the magic-link route makes and the ones `accountAt` makes are found
@@ -344,14 +342,11 @@ describe("the spec's lists (no database)", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
-    // Waves 1 and 2 are closed (wave 1 T12, wave 2 T10) and wave 3's T1 registered its eight kinds before any producer moved: exactly
-    // those eight are unmoved, and they are exactly the kinds that still name a direct sender. Both sides of the equivalence above have
-    // members to judge.
-    expect(NOT_YET_MOVED, "the unmoved kinds are wave 3's, in the spec's order").toEqual(WAVE_3_UNMOVED);
-    expect(
-      SPEC_KINDS.filter((k) => KIND_DIRECT_SENDER[k] !== null),
-      "and they, and no other kind, still name a direct sender",
-    ).toEqual(WAVE_3_UNMOVED);
+    // Waves 1, 2 and 3 are closed (wave 1 T12, wave 2 T10, wave 3 T4c): every kind has moved, so no kind is listed and none has a direct
+    // sender left. The moved side is what the loop above judged for all of them; the unmoved side of the equivalence has no member to
+    // judge until a later wave registers a kind early.
+    expect(NOT_YET_MOVED, "waves 1 to 3 are closed: every kind has moved to the outbox").toEqual([]);
+    expect(Object.values(KIND_DIRECT_SENDER).filter((x) => x !== null), "and none still names a direct sender").toEqual([]);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
     const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
     expect(new Set(senders).size, "no two kinds share a direct sender").toBe(senders.length);
@@ -1003,6 +998,37 @@ async function claimInviteScenario(): Promise<KindScenario> {
   };
 }
 
+/** The organiser of an organisation whose default language is `nl` invites an official to claim their profile: the official's person
+ *  has no account to follow, so the invite is in the org's language, and the request makes the first attempt. */
+async function officialInviteScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("community");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const [org] = await sql<{ name: string }[]>`update organizations set default_locale = 'nl' where id = ${orgId} returning name`;
+  const official = await createOfficial(asOwner(orgId, ownerId), { display_name: "Sweep Referee", role_keys: ["referee"] });
+  const recipient = address();
+  return {
+    locale: "nl",
+    subjectKey: "officialInvite.subject",
+    subjectVars: { orgName: org!.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      const res = await signedInAs(ownerId, () =>
+        officialInvitePost(
+          new Request(`https://sweep.test/api/v1/officials/${official.id}/invite`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ email: recipient }),
+          }),
+          { params: Promise.resolve({ id: official.id }) },
+        ),
+      );
+      expect(res.status, "premise: the real route answered 201").toBe(201);
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1115,6 +1141,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", claimInvite.subjectKey, claimInvite.subjectVars),
     );
 
+    const officialInvite = await officialInviteScenario();
+    expect(dictionarySubject("nl", officialInvite.subjectKey, officialInvite.subjectVars)).not.toBe(
+      dictionarySubject("en", officialInvite.subjectKey, officialInvite.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1141,14 +1172,14 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         account_deletion: deletion,
         org_invite: orgInvite,
         claim_invite: claimInvite,
+        official_invite: officialInvite,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
 
-    const moved = SPEC_KINDS.filter((k) => !NOT_YET_MOVED.includes(k));
-    expect(out.checked, "anti-vacuity: every kind the spec lists that has moved was swept").toBe(SPEC_KINDS.length - NOT_YET_MOVED.length);
+    expect(out.checked, "anti-vacuity: every kind the spec lists was swept (waves 1 to 3 closed: none is left unmoved)").toBe(SPEC_KINDS.length);
     expect(out.checked).toBeGreaterThan(0);
-    expect(out.kinds, "and they are exactly the spec's moved kinds, in the spec's order").toEqual(moved);
+    expect(out.kinds, "and they are exactly the spec's kinds, in the spec's order").toEqual([...SPEC_KINDS]);
   }, 60_000);
 });
 
