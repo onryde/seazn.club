@@ -13,7 +13,7 @@ reader keeps working. A `YouTubePort` with a live Google driver and a determinis
 `RELAY_DRIVERS`. Go live adds a prepare step that reuses or creates a broadcast on a pooled key (sealed under RELAY_KEK)
 and makes no YouTube call while it holds a lock. `add_output` then reads the pooled key. Ending is computed from facts
 (`fixture_stream_sessions.ended_at`, `fixtures.status`/`finished_at`) by a new first step of the existing stream tick,
-which now fires every minute on both envs. It runs claim → commit → call → finalize. The daily relay sweep gains
+which now fires on every fast firing (every minute on prod, every 5 min on stg — Q1 ruled (b)). It runs claim → commit → call → finalize. The daily relay sweep gains
 health, 30-day refresh and 30-day purge. The relay, the compositor and `docs/contracts/relay-job.v1.json` do not change.
 
 **Tech Stack:** Next (the repo fork, see `AGENTS.md`; read `node_modules/next/dist/docs/` before touching a route),
@@ -73,12 +73,9 @@ executors re-pin each one by symbol (`grep -an <symbol>`) before editing.
 
 ## Owner questions (recommendations built; the controller confirms before the owning batch merges)
 
-- **Q1 (F3), owning task T15.** Moving stg's fast trigger to every minute (D9) also moves stg's **email-outbox** tick
-  from every 5 min to every minute. It also keeps the stg app machine awake all day (the `FAST_TRIGGER` comment).
-  *Recommendation: accept.* The outbox then runs on stg exactly as it does on prod, so stg tests what ships. The cost
-  is stg compute, not a customer cost. The alternative is a per-env `due` on the outbox row (one more table shape),
-  which buys nothing a customer sees.
-- **Q2 (F13), owning task T19.** The privacy page is English-only inline JSX today. *Recommendation: add the DP
+- **Q1 (F3), owning task T15. RULED (b), owner 2026-10-27:** stg's fast trigger stays `*/5`; stg is not kept awake
+  all day; email-outbox cadence unchanged. Stream-tick runs on every fast firing (prod 1 min, stg 5 min).
+- **Q2 (F13), owning task T19. RULED OK, owner 2026-10-27:** English section in the existing page. The privacy page is English-only inline JSX today. *Recommendation: add the DP
   III.A.2 section in English, in that page,* the way the rest of the policy is written. The final legal wording is
   owner prerequisite 2 anyway. If the owner wants the policy localised, that is the whole page, not this section.
   The consent step's wording **is** in all four locales (T9).
@@ -94,7 +91,7 @@ executors re-pin each one by symbol (`grep -an <symbol>`) before editing.
   §Orchestration).
 - **Owner decisions D1–D11 bind** (spec §0): the API path, with no pasted-key fallback (D6). Visibility is chosen at
   connect, Unlisted preselected (D2). Grace is **5 min** (D4). Ending is **2 min** after Stop or result when finished
-  (D5). The consent box is ticked once per connection (D7). The tick runs every minute on both envs (D9). The web app
+  (D5). The consent box is ticked once per connection (D7). The stream tick runs on every fast firing: every minute on prod, every 5 min on stg (D9 as amended by Q1 = b). The web app
   only (D10). **No feature switch, no staff gate** (D11).
 - **Google facts used as expected values** (spec §3.1, typed into tests from the spec, never imported from the code):
   10 concurrent streams per channel, 3 per stream key. Scope `https://www.googleapis.com/auth/youtube` only.
@@ -951,7 +948,7 @@ it("orgIds: [] is refused", …);
 
 **Files:**
 - Modify: `apps/web/src/app/api/cron/stream-tick/route.ts`; `apps/web/src/server/usecases/stream-sessions.ts` (`tickOpenSessions` gains `budgetMs?: number`, default `STREAM_TICK_BUDGET_MS`)
-- Modify: `apps/cron-worker/src/schedule.ts` (stream-tick `due: { kind: "every" }`; `FAST_TRIGGER.stg = MINUTE_CRON`; the doc comments at `:55-57`, `:113-116`, `:140-142` updated to the new truth; failureCounts add `"data.youtube.failed"`), `apps/cron-worker/wrangler.json:24` (`"* * * * *"`)
+- Modify: `apps/cron-worker/src/schedule.ts` (stream-tick `due: { kind: "every" }`; `FAST_TRIGGER` UNCHANGED — stg stays `*/5` (owner Q1 = b, 2026-10-27); the doc comments at `:113-116`, `:140-142` updated to the new truth; failureCounts add `"data.youtube.failed"`). `wrangler.json` UNCHANGED.
 - Test: `apps/web/src/app/api/cron/stream-tick/route.test.ts`, `apps/cron-worker/test/{schedule,drift}.test.ts`
 
 **Interfaces:** the route answer is `StreamTickAnswer & { youtube: YoutubeEndResult }`. The YouTube step runs first,
@@ -966,17 +963,17 @@ it("the YouTube step runs BEFORE the session pass (call order recorded)", …);
 it("a throwing YouTube step → youtube.failed 1, sessions still ticked", …);
 it("the session pass gets 45 s minus what the YouTube step spent (scripted wallClock)", …);
 // cron-worker
-it("stream-tick is due on EVERY fast firing in both envs: 10:01, 10:02, 10:03 each include it (prod and stg)", …);
-it("stg's fast trigger is '* * * * *'; drift: wrangler.json stg crons equal triggersOf('stg')", …);
-it("external-play stays 5-minutely: due at 10:05, not at 10:06", …);   // the positive pair
-it("email-outbox on stg is due every minute (Q1, recommendation built)", …);
-it("firstSlotOfHour on stg is now the :00 slot only", …);
+it("stream-tick is due on EVERY fast firing: prod 10:01, 10:02, 10:03 each include it", …);
+it("stg's fast trigger stays '*/5 * * * *' (owner Q1 = b); stream-tick due at every stg firing 10:05, 10:10", …);
+it("external-play stays 5-minutely on prod: due at 10:05, not at 10:06", …);   // the positive pair
+it("email-outbox cadence unchanged: every fast firing in both envs (prod minute, stg 5 min)", …);
 ```
 
 - [ ] **Step 2–4:** red → implement → run VERIFY (web route) plus the cron-worker VERIFY → green. **MUTATE** the step
   order (move YouTube after the disabled return), killed by the disabled test.
-- [ ] **Step 5: Commit** `feat(youtube): stream tick ends due broadcasts first, every minute on both envs`.
-- **Controller:** confirm Q1 with the owner before the PR leaves draft.
+- [ ] **Step 5: Commit** `feat(youtube): stream tick ends due broadcasts first, on every fast firing`.
+- Note: on stg a broadcast's end can land up to 5 min late (accepted by the owner, Q1 = b); stg acceptance timings
+  in T22's runbook allow for it.
 
 **Four types:** unit + regression (drift, schedule); E2E `youtube-connect.spec.ts › Stop > 5 min` posts the tick route
 (T20); smoke `youtube: stream-tick answers with youtube counters` (T21).
@@ -1176,7 +1173,7 @@ names YouTube API Services` (T21); regression (the existing sections unchanged).
 | D6 refuse, no fallback | T10, T11, T12 |
 | D7 consent once per connection | T7, T8, T9 |
 | D8 shared timer | T14, T15 |
-| D9 stg every minute | T15 (Q1) |
+| D9 tick cadence (amended: stg stays 5 min, Q1 = b) | T15 |
 | D10 web only | Global Constraints |
 | D11 no switch | Branch-and-merge note; no flag anywhere |
 | §5.1–5.4 | T1, T2 |
@@ -1197,5 +1194,5 @@ names YouTube API Services` (T21); regression (the existing sections unchanged).
 | §9.3 mutations | reuse (T10), active ⇒ not due (T13), key-busy (T10), disconnect refusal (T18), scope check (T7) |
 | §9.4 | T20, T21, T22 |
 
-Spec requirements with no owning task: **none**. Two depend on owner rulings: Q1 (stg outbox cadence) and Q2 (privacy
+Spec requirements with no owning task: **none**. Q1 and Q2 ruled by the owner 2026-10-27 (b; English OK) (privacy
 page locale).

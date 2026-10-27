@@ -25,7 +25,7 @@ These are the owner's own answers in this session's chat. Items marked *(my call
 | D6 | **A failure at Go live stops and shows the reason.** No automatic fallback to a pasted key. | "stop and show the reason" |
 | D7 | **A required consent checkbox at Connect** (YouTube Terms + Community Guidelines, rights to stream, Seazn not responsible if YouTube restricts or disables live). Ticked **once per connection**. | "show some required checkbox…", "one per connection" |
 | D8 | **All of this design is done here**, including the shared timer. | "do all design here" |
-| D9 | **stg runs the stream tick every minute too.** | "Ok" (recommendation from this author and r2) |
+| D9 | **stg keeps its 5-minute fast trigger** (amended). The first "Ok" to stg-every-minute was given without knowing it also moves stg's email outbox to every minute and keeps the stg machine awake all day; re-asked with that cost. | "1 b" (2026-10-27) |
 | D10 | Only the **web app** changes. Compositor/relay: none. | "Ok" to the explanation that the key never leaves web + Cloudflare |
 | D11 | **No feature switch.** Connect YouTube ships on in every env; no flag, no staff-only gate. Connect sits under the existing streaming entitlement (the Directory → Streaming tab is already shown only to relay-entitled orgs); Go live keeps today's credit checks. | "no" (asked: hide on prod until Google verification passes?) |
 
@@ -361,8 +361,8 @@ Both in the org's default locale (`organizations.default_locale`).
 ### 6.6 The tick (D8, D9)
 
 Reuse the **existing** stream tick. No new job, no new route:
-- `apps/cron-worker/src/schedule.ts`: stream-tick on **every** fast firing (drop `minuteMod 5`); stg's fast trigger
-  `*/5` → `* * * * *`. Prod is already every minute. Email-outbox shares the fast trigger and is unaffected.
+- `apps/cron-worker/src/schedule.ts`: stream-tick on **every** fast firing (drop `minuteMod 5`) ⇒ every minute on
+  prod; stg's fast trigger stays `*/5` (D9), so on stg an end can land up to 5 min late. Email-outbox unchanged.
 - The stream-tick route gains a step: **end due broadcasts** (§6.4), selected from the broadcasts table directly,
   NOT via sessions (a broadcast can come due after its session is `completed`). It runs **first**, before the
   per-session loop and **before** the route's relay-disabled early return (`route.ts:26`), with its own budget slice,
