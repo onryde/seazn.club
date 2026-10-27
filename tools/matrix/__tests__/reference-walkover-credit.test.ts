@@ -135,9 +135,12 @@ function sheetEvents(sport: string, cfg: Cfg, sheet: Sheet): { pre: StreamEvent[
         ? (footballPhases(cfg.halves as number) ?? []).slice(0, -1).map((phase) => ({ type: "football.period", payload: { phase } }))
         : periodLabels((cfg.periods as { count: number }).count).slice(1).map((to) => ({ type: `${sport}.period.advance`, payload: { to } }));
       if (units.length - 1 > markers.length) throw new SheetUnbuildable(sport, `${units.length} units, but the cfg plays ${markers.length + 1} period(s)`);
+      // W2d T18 (HK-TB-2): the write path refuses a hockey goal without its type, so the sheet's goals are field goals
+      // (`fg`, FIH's open-play goal) — the plain goal a score sheet records, no pc/stroke column moved.
+      const goal = (by: string): StreamEvent => ({ type: `${sport}.goal`, payload: sport === "hockey" ? { by, kind: "fg" } : { by } });
       units.forEach(({ h, a }, i) => {
-        for (let g = 0; g < h; g++) play.push({ type: `${sport}.goal`, payload: { by: H } });
-        for (let g = 0; g < a; g++) play.push({ type: `${sport}.goal`, payload: { by: A } });
+        for (let g = 0; g < h; g++) play.push(goal(H));
+        for (let g = 0; g < a; g++) play.push(goal(A));
         if (i < units.length - 1) play.push(markers[i]!);
       });
       return { pre: [], play };
@@ -337,7 +340,11 @@ const SHEET_VOCABULARY = new Set([
  *  cannot write, so it is 0 — the premise is asserted on the stream, not assumed. */
 function playedRecord(item: Item, key: string, side: Side): number | string {
   const active = resolveVoids(envelopes("as-played", item.events)).map((e) => ({ type: e.type, payload: e.payload as Record<string, unknown> }));
-  const foreign = active.filter((e) => !SHEET_VOCABULARY.has(e.type) || (e.type.endsWith(".goal") && Object.keys(e.payload).some((k) => k !== "by")));
+  // A goal's only own key is `by` — and hockey's field-goal type (W2d T18: the sheet's goals are `fg`, which moves no
+  // pc/stroke column); any other kind is a record this reader does not count.
+  const plainGoalKey = (e: { type: string; payload: Record<string, unknown> }, k: string) =>
+    k === "by" || (e.type === "hockey.goal" && k === "kind" && e.payload.kind === "fg");
+  const foreign = active.filter((e) => !SHEET_VOCABULARY.has(e.type) || (e.type.endsWith(".goal") && Object.keys(e.payload).some((k) => !plainGoalKey(e, k))));
   if (foreign.length > 0) return `the stream records ${JSON.stringify(foreign.map((e) => e.type))}, which this reader does not count`;
   const id = idOf(side);
   const count = (type: string, mine: (p: Record<string, unknown>) => boolean) => active.filter((e) => e.type === type && mine(e.payload)).length;
