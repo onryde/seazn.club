@@ -22,12 +22,19 @@ vi.mock("@/lib/stripe", () => ({
     checkout: { sessions: { create: stripeMock.sessionsCreate } },
   }),
 }));
-// Parked (c): the drift guard's two reporting seams — the one-time staff email and the error report.
+// Parked (c): the drift guard's two reporting seams — the staff alert and the error report. This suite has no database, so
+// the alert's writer (`queueStaffAlert`, which queues it on the email outbox) is stubbed and its CALL is what is asserted: the
+// kind, the ref and the once-key's suffix (lookup key and UTC day, P-W5-5), and the mail its `render` makes. The row itself is
+// proven in relay-checkout-drift-alert.test.ts, which drives the real writer. The writer's own Sentry report never runs here,
+// so the capture counts below are the drift guard's alone. `@/lib/email` is the real module (spread), so the render is real.
 const alertMock = vi.hoisted(() => ({
-  email: vi.fn<(opts: { to: string; lookupKey: string; priceId: string; drift: string }) => Promise<boolean>>(async () => true),
+  queue: vi.fn<(a: { kind: string; refType: string; id: string; suffix?: string; render: () => unknown }) => Promise<string | null>>(
+    async () => "row-id",
+  ),
   capture: vi.fn(),
 }));
-vi.mock("@/lib/email", () => ({ sendStreamPackPriceDriftAlertEmail: alertMock.email }));
+vi.mock("@/lib/email", async (importOriginal) => ({ ...(await importOriginal<typeof import("@/lib/email")>()) }));
+vi.mock("@/server/usecases/staff-alert", () => ({ queueStaffAlert: alertMock.queue }));
 vi.mock("@/lib/sentry", () => ({ captureError: alertMock.capture }));
 
 /** A live Stripe price that charges EXACTLY the table's amounts for `size` — what `stripe:sync` leaves behind — as
@@ -497,17 +504,38 @@ describe("createRelayCheckout", () => {
   // dashboard. The resolver already lists the price on every checkout; it now compares it, and a price that differs is
   // never charged.
   describe("PROD drift guard: a drifted price is refused, never charged, and staff hear once", () => {
-    const OLD_ALERT = process.env.STAFF_ALERT_EMAIL;
     beforeEach(() => {
-      alertMock.email.mockClear();
+      alertMock.queue.mockClear();
       alertMock.capture.mockClear();
-      process.env.STAFF_ALERT_EMAIL = "ops@seazn.test";
-    });
-    afterEach(() => {
-      if (OLD_ALERT === undefined) delete process.env.STAFF_ALERT_EMAIL;
-      else process.env.STAFF_ALERT_EMAIL = OLD_ALERT;
     });
     const args = (size: 1 | 5 | 20) => ({ orgId: "org-1", fixtureId: "fx-1", size, returnUrl: "https://a/?x", currency: "eur" });
+    /** The UTC day the pinned clock (createRelayCheckout's beforeEach) reads: part of the once-key, typed from the pin. */
+    const DAY = "2026-09-28";
+
+    it("a drifted price refuses the checkout and pages once", async () => {
+      const live = synced(5, "price_page_once");
+      live.currency_options.eur = { unit_amount: 1 };
+      stripeMock.pricesList.mockResolvedValueOnce({ data: [live] });
+
+      await expect(createRelayCheckout(args(5))).rejects.toMatchObject({ status: 502, code: "checkout_unavailable" });
+
+      expect(stripeMock.sessionsCreate, "a drifted price is never charged").not.toHaveBeenCalled();
+      expect(alertMock.queue, "one page").toHaveBeenCalledTimes(1);
+      const call = alertMock.queue.mock.calls[0]![0];
+      // P-W5-5: once per price per UTC day, the lookup key beside the day.
+      expect(call).toMatchObject({
+        kind: "staff_stream_pack_price_drift",
+        refType: "stripe_price",
+        id: "price_page_once",
+        suffix: `${streamPack(5)!.lookupKey}:${DAY}`,
+      });
+      const mail = (await call.render()) as { subject: string; text: string };
+      expect(mail.subject).toBe(`Match-credit pack price differs from the table: ${streamPack(5)!.lookupKey}`);
+      expect(mail.text).toContain(
+        `eur: live 1, table ${streamPackPriceAmounts(streamPack(5)!).currency_options.eur!.unit_amount}`,
+      );
+      expect(alertMock.capture, "and one error report").toHaveBeenCalledTimes(1);
+    });
 
     it("any currency off the table — base, option, or missing — is a 502 checkout_unavailable and NO Session is created; the equal price beside it checks out", async () => {
       let checked = 0;
@@ -541,7 +569,7 @@ describe("createRelayCheckout", () => {
       expect(checked).toBe(STREAM_CREDIT_PACKS.length * (1 + 2 * Object.keys(STREAM_PACK_FX).length));
     });
 
-    it("staff are alerted ONCE per drifted price — the same price refused again sends nothing, another drifted price alerts on its own", async () => {
+    it("staff are paged ONCE per drifted price per day in this process — the same price refused again pages nothing, another drifted price pages on its own", async () => {
       const drifted = (id: string) => {
         const p = synced(5, id);
         p.currency_options.eur = { unit_amount: 1 };
@@ -554,21 +582,18 @@ describe("createRelayCheckout", () => {
         refused++;
       }
       expect(refused).toBe(3);
-      expect(alertMock.email, "three refusals of one price, one email").toHaveBeenCalledTimes(1);
-      expect(alertMock.email).toHaveBeenCalledWith(expect.objectContaining({
-        to: "ops@seazn.test", lookupKey: streamPack(5)!.lookupKey, priceId: "price_once_a",
-        drift: expect.stringContaining(`eur: live 1, table ${streamPackPriceAmounts(streamPack(5)!).currency_options.eur!.unit_amount}`),
-      }));
+      expect(alertMock.queue, "three refusals of one price, one page").toHaveBeenCalledTimes(1);
+      expect(alertMock.queue.mock.calls[0]![0]).toMatchObject({ id: "price_once_a", suffix: `${streamPack(5)!.lookupKey}:${DAY}` });
       expect(alertMock.capture, "and one error report").toHaveBeenCalledTimes(1);
       stripeMock.pricesList.mockResolvedValueOnce({ data: [drifted("price_once_b")] });
       await expect(createRelayCheckout(args(5))).rejects.toMatchObject({ status: 502 });
-      expect(alertMock.email, "a different drifted price is news").toHaveBeenCalledTimes(2);
-      expect(alertMock.email.mock.calls.at(-1)![0]).toMatchObject({ priceId: "price_once_b" });
-      // No STAFF_ALERT_EMAIL: nothing to send, but the price is still refused and still reported once.
-      delete process.env.STAFF_ALERT_EMAIL;
+      expect(alertMock.queue, "a different drifted price is news").toHaveBeenCalledTimes(2);
+      expect(alertMock.queue.mock.calls.at(-1)![0]).toMatchObject({ id: "price_once_b" });
+      // A third price: refused, paged and reported on its own (whether the page reaches anyone is the writer's question:
+      // it is silent when STAFF_ALERT_EMAIL is unset). The error report is the guard's own, once per price.
       stripeMock.pricesList.mockResolvedValueOnce({ data: [drifted("price_once_c")] });
       await expect(createRelayCheckout(args(5))).rejects.toMatchObject({ status: 502, code: "checkout_unavailable" });
-      expect(alertMock.email).toHaveBeenCalledTimes(2);
+      expect(alertMock.queue).toHaveBeenCalledTimes(3);
       expect(alertMock.capture).toHaveBeenCalledTimes(3);
     });
 

@@ -128,6 +128,9 @@
 //     park moved the row; billing-events-sweep.test.ts drives the sweep to a row, and two overlapping passes to one), for a Stripe
 //     event, the same way. Not the sweep itself: it is global over billing_events, and that suite clears and counts the same working
 //     set, so a sweep run here would race it under CI's parallel files.
+//   - staff_stream_pack_price_drift: the real `alertStreamPackPriceDrift` (its one site, the drift guard in
+//     `resolveStreamPackPriceId`, awaits it before refusing the checkout; relay-checkout-drift-alert.test.ts drives the real
+//     `createRelayCheckout` to a row), for a drifted Stripe price, the same way.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -229,6 +232,7 @@ import {
   notifyStaffDispute,
   processStripeEvent,
 } from "@/server/usecases/billing-events";
+import { alertStreamPackPriceDrift, StreamPackPriceDriftError } from "@/lib/relay-checkout";
 import { seedOnlineChessRound } from "@/server/usecases/__tests__/_external-play-seed";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision, seedFutureDivision } from "@/server/usecases/__tests__/_seed";
 import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
@@ -1424,6 +1428,24 @@ function stuckEventsScenario(): LiteralKindScenario {
   };
 }
 
+/** The real staff alert for a match-credit pack whose live price drifted from the table, to this run's STAFF_ALERT_EMAIL: no org, no
+ *  account, and the worker makes the first attempt. The subject is the builder's inline English, typed from its source. */
+function streamPackPriceDriftScenario(): LiteralKindScenario {
+  const recipient = address();
+  return {
+    locale: "en",
+    subjectLiteral: "Match-credit pack price differs from the table: seazn_stream_pack_5",
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      vi.stubEnv("STAFF_ALERT_EMAIL", recipient);
+      await alertStreamPackPriceDrift(
+        new StreamPackPriceDriftError("seazn_stream_pack_5", `price_${RUN}_drift_${randomUUID().slice(0, 8)}`, "eur: live 1, table 2925"),
+      );
+    },
+  };
+}
+
 /** The real staff alert for a platform-charge dispute, to this run's STAFF_ALERT_EMAIL, for a `created` subscription dispute of an org
  *  that speaks French: the alert is in the platform locale (en) all the same, it names the org, and the worker makes the first
  *  attempt. */
@@ -2036,6 +2058,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         staff_dispute_alert: staffDispute,
         staff_connect_bank_changed: connectBankChangedScenario(),
         staff_stuck_events: stuckEventsScenario(),
+        staff_stream_pack_price_drift: streamPackPriceDriftScenario(),
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

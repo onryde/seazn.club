@@ -879,7 +879,6 @@ export function streamCreditClawbackAlertEmail(opts: StreamCreditClawbackAlertEm
 }
 
 export interface StreamPackPriceDriftAlertEmail {
-  to: string;
   /** The pack's lookup key — what `stripe:sync` and the checkout both resolve by. */
   lookupKey: string;
   /** The live price whose amounts differ from the table. */
@@ -892,10 +891,11 @@ export interface StreamPackPriceDriftAlertEmail {
  *  Stripe price charging something other than `lib/stream-credit-packs.ts`, the table the Phone tab's tiles quote, so
  *  EVERY checkout for that pack is refused (502) until they agree — nobody is charged a price they were not quoted.
  *  `pnpm stripe:sync` owns these prices (Addendum S), so the usual cause is a hand-edit in the Stripe dashboard; the
- *  remedy is to re-run stripe:sync (it re-mints the price to the table) or fix the table. Sent once per drifted price
- *  per server process (lib/relay-checkout.ts), never per refused checkout.
- *  Ops-only, no user-facing i18n (mirrors the builders above). */
-export async function sendStreamPackPriceDriftAlertEmail(opts: StreamPackPriceDriftAlertEmail): Promise<boolean> {
+ *  remedy is to re-run stripe:sync (it re-mints the price to the table) or fix the table.
+ *  Ops-only, no user-facing i18n (mirrors the builders above). RENDERED here; it is queued on the email outbox by
+ *  `alertStreamPackPriceDrift` (lib/relay-checkout.ts, kind `staff_stream_pack_price_drift`), once per drifted price per
+ *  UTC day, never per refused checkout; nothing sends it directly. */
+export function streamPackPriceDriftAlertEmail(opts: StreamPackPriceDriftAlertEmail): EmailContent {
   const subject = `Match-credit pack price differs from the table: ${opts.lookupKey}`;
   const bodyText =
     `The live Stripe price ${opts.priceId} for ${opts.lookupKey} does not charge what ` +
@@ -913,7 +913,7 @@ export async function sendStreamPackPriceDriftAlertEmail(opts: StreamPackPriceDr
     footerNote: "Automated staff alert — match-credit checkout drift guard (streaming R1).",
   });
   const text = `${bodyText}\n\nlookup key: ${opts.lookupKey} · price: ${opts.priceId} · drift: ${opts.drift}`;
-  return send({ to: opts.to, transactional: true, subject, html, text });
+  return { subject, html, text };
 }
 
 export interface PassCreditReversalIncompleteAlertEmail {

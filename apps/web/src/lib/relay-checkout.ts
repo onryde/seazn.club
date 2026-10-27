@@ -16,9 +16,10 @@ import { HttpError } from "@/lib/errors";
 import { canonicalJson } from "@/lib/canonical-json";
 import { CHECKOUT_BRANDING, CUSTOMER_UPDATE_FOR_TAX } from "@/lib/billing";
 import { type StreamCreditPack, type StreamPackSize, streamPack, streamPackPriceDrift } from "@/lib/stream-credit-packs";
-import { sendStreamPackPriceDriftAlertEmail } from "@/lib/email";
+import { streamPackPriceDriftAlertEmail } from "@/lib/email";
 import { captureError } from "@/lib/sentry";
 import { log } from "@/server/logger";
+import { queueStaffAlert } from "@/server/usecases/staff-alert";
 
 /** Stable per-integration tag (stripe skill: `integration_identifier`) so this
  *  checkout surface is distinguishable from the plan/pass/AI-pack ones in the
@@ -93,7 +94,7 @@ export async function resolveStreamPackPriceId(pack: StreamCreditPack): Promise<
     const diff = drift.map((d) => `${d.at}: live ${d.live ?? "none"}, table ${d.want ?? "none"}`).join("; ");
     const err = new StreamPackPriceDriftError(pack.lookupKey, price.id, diff);
     log.error({ lookupKey: pack.lookupKey, priceId: price.id, drift: diff }, "relay-checkout: pack price differs from the table — checkout refused");
-    alertDriftOnce(err);
+    await alertStreamPackPriceDrift(err);
     throw err;
   }
   return price.id;
@@ -111,17 +112,38 @@ export class StreamPackPriceDriftError extends HttpError {
   }
 }
 
-/** Drifted prices already reported by THIS process. Every checkout for a drifted pack meets the guard, so without it
- *  staff would get an email per tap; once per price per server process is the page, the log line is every refusal. */
+/** Drifted prices already reported by THIS process today, keyed `<price>:<UTC day>`. Every checkout for a drifted pack meets
+ *  the guard, so without it each tap would report to Sentry and reach the alert's insert; the log line is every refusal. The day
+ *  in the key lets a long-lived server page again tomorrow, as the once-key below allows (P-W5-5). */
 const driftAlerted = new Set<string>();
-function alertDriftOnce(err: StreamPackPriceDriftError): void {
-  if (driftAlerted.has(err.priceId)) return;
-  driftAlerted.add(err.priceId);
+
+/** Test seam: forget which drifted prices this process has reported (what a deploy or a second instance starts with), so a test
+ *  can witness the alert's once-key on its own. */
+export function forgetStreamPackDriftAlertsForTests(): void {
+  driftAlerted.clear();
+}
+
+/**
+ * Report a drifted pack price: to Sentry, and to staff as an alert queued on the email outbox (kind
+ * `staff_stream_pack_price_drift`, to STAFF_ALERT_EMAIL, nothing when unset), once per price per UTC day
+ * (`<price>:<lookup key>:<yyyy-mm-dd>`, P-W5-5). While the drift lasts every checkout for the pack is refused, so staff hear
+ * about it again each day it lasts, and fixing the price mints a new price id, a new key. The in-process `Set` short-circuits
+ * the same price on the same day before either report; the once-key holds the page to one across processes. Never throws
+ * (the queue logs and reports its own failure), so the buyer always gets the drift guard's own refusal.
+ */
+export async function alertStreamPackPriceDrift(err: StreamPackPriceDriftError): Promise<void> {
+  const day = new Date().toISOString().slice(0, 10);
+  const seen = `${err.priceId}:${day}`;
+  if (driftAlerted.has(seen)) return;
+  driftAlerted.add(seen);
   captureError(err, { route: "billing/relay-checkout.price_drift", extra: { lookupKey: err.lookupKey, priceId: err.priceId, drift: err.drift } });
-  const to = process.env.STAFF_ALERT_EMAIL;
-  if (to) {
-    void sendStreamPackPriceDriftAlertEmail({ to, lookupKey: err.lookupKey, priceId: err.priceId, drift: err.drift }).catch(() => {});
-  }
+  await queueStaffAlert({
+    kind: "staff_stream_pack_price_drift",
+    refType: "stripe_price",
+    id: err.priceId,
+    suffix: `${err.lookupKey}:${day}`,
+    render: () => streamPackPriceDriftAlertEmail({ lookupKey: err.lookupKey, priceId: err.priceId, drift: err.drift }),
+  });
 }
 
 /**

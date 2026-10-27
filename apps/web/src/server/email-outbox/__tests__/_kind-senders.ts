@@ -32,7 +32,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendAiRunCostAlertEmail",
   "sendEarnGrantVolumeAlertEmail",
   "sendExtraOrgAllowanceAlertEmail",
-  "sendStreamPackPriceDriftAlertEmail",
 ];
 
 /** Kinds whose producer still mails through a `send*`. Wave 1 emptied it (T8-T12). Wave 2's T1 listed its ten kinds before their
@@ -43,7 +42,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
   // Wave 5, in the spec's table order.
-  "staff_stream_pack_price_drift",
   "staff_ai_run_cost",
   "staff_earn_grant_volume",
   "staff_extra_org_allowance",
@@ -103,7 +101,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   staff_dispute_alert: null,
   staff_connect_bank_changed: null,
   staff_stuck_events: null,
-  staff_stream_pack_price_drift: "sendStreamPackPriceDriftAlertEmail",
+  staff_stream_pack_price_drift: null,
   staff_ai_run_cost: "sendAiRunCostAlertEmail",
   staff_earn_grant_volume: "sendEarnGrantVolumeAlertEmail",
   staff_extra_org_allowance: "sendExtraOrgAllowanceAlertEmail",
