@@ -49,7 +49,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "e656867729c9a0a05476ab85501dc61255db6a8826d75c74c195c34ff7f06a23";
+const SHA256 = "52c617eab1de956c46255fc8aa0e568379c064a2cde8199b7e0c4fdd62970003";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
@@ -137,7 +137,8 @@ const OVERLAY_PATH = (fixtureId: string) => `/overlay/fixtures/${fixtureId}`;
 const ROUTES: [prefix: string, def: string, count: number][] = [
   ["session-", "session", 6],
   ["heartbeat-", "heartbeat", 10],
-  ["reply-", "heartbeatReply", 2],
+  // reply-live, reply-ending, and Owed 108 fix (b)'s five: live-edge, live-edge-zero, live-edge-null, and the two invalid.
+  ["reply-", "heartbeatReply", 7],
   // R2007 PR B: the compositor's loopback reply (never "reply-": that prefix is the web heartbeat's 200).
   ["phase-reply-", "phaseReply", 2],
 ];
@@ -288,7 +289,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       total += count;
     }
     expect(names.length, "every fixture was routed").toBe(total);
-    expect(total).toBe(20);
+    expect(total).toBe(25);
     // Every REFUSED entry names a fixture that exists and was swept (a stale entry would excuse nothing, silently).
     expect(refusedSeen).toBe(Object.keys(REFUSED).length);
     expect(refusedSeen).toBe(2);
@@ -328,6 +329,38 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
     const readme = readFileSync(resolve(FIXTURES, "README.md"), "utf8");
     expect(readme).toContain("a present 0 is a measured zero");
     expect(readme).toContain("never sent as 0");
+  });
+
+  it("Owed 108 fix (b): the reply's phoneLiveEdge is OPTIONAL and NULLABLE and a non-negative whole number — a present 0 is a counter, absent and null are 'unknown' — in the twin AND the published bytes", () => {
+    const fileAdmits = fileValidator();
+    const ABSENT = Symbol("absent");
+    // Typed from the owner's contract (2026-10-26): "a non-negative integer, or null", optional.
+    const cases: [label: string, value: unknown, admitted: boolean][] = [
+      ["absent", ABSENT, true], ["null", null, true], ["0 (the first live)", 0, true], ["1", 1, true], ["9007199254740991 (MAX_SAFE_INTEGER)", Number.MAX_SAFE_INTEGER, true],
+      ["-1", -1, false], ["1.5", 1.5, false], ["'2' (a string)", "2", false], ["true", true, false], ["an object", {}, false],
+    ];
+    let checked = 0;
+    for (const [label, value, admitted] of cases) {
+      const reply = value === ABSENT ? { desiredState: "live" } : { desiredState: "live", phoneLiveEdge: value };
+      expect(parses(S.RelayHeartbeatReply, reply), `the twin: ${label}`).toBe(admitted);
+      expect(fileAdmits("heartbeatReply", reply), `the file: ${label}`).toBe(admitted);
+      checked++;
+    }
+    expect(checked).toBe(10);
+    // Only desiredState is required: a reply without the counter is every reply web sent before this field existed.
+    expect(defOf(contract(), "heartbeatReply").required).toEqual(["desiredState"]);
+    expect(Object.keys(propOf(defOf(contract(), "heartbeatReply"), "phoneLiveEdge")).sort()).toEqual(["anyOf", "description"]);
+    expect(admitsNull(propOf(defOf(contract(), "heartbeatReply"), "phoneLiveEdge"))).toBe(true);
+    // The reply stays closed: a key the file does not declare is refused by the bytes (the twin strips it on parse).
+    expect(fileAdmits("heartbeatReply", { desiredState: "live", phoneLiveEdges: 1 }), "a misspelt key").toBe(false);
+    // The vectors: the counter at 2, at its first appearance (0), and null; a negative and a fraction refused.
+    expect(fixture("reply-live-edge")).toEqual({ desiredState: "live", phoneLiveEdge: 2 });
+    expect(fixture("reply-live-edge-zero")).toEqual({ desiredState: "live", phoneLiveEdge: 0 });
+    expect(fixture("reply-live-edge-null")).toEqual({ desiredState: "live", phoneLiveEdge: null });
+    expect(fixture("reply-invalid-live-edge-negative").phoneLiveEdge).toBe(-1);
+    expect(fixture("reply-invalid-live-edge-fractional").phoneLiveEdge).toBe(1.5);
+    // …and the plain reply of a session with no phone history carries no key at all, which the counter's absence must not change.
+    expect(fixture("reply-live")).toEqual({ desiredState: "live" });
   });
 
   it("the overlayUrl `delay=` rule: every composed session carries exactly one, equal to overlayDelayMs; each refused vector breaks it ONE way and the twin names that field alone; the file states the rule", () => {
@@ -460,7 +493,7 @@ describe("the relay-job.v1 contract (docs/contracts/relay-job.v1.json)", () => {
       expect(JSON.stringify(fixture(name)), name).not.toContain(RETIRED_RUNG);
       vectors++;
     }
-    expect(vectors, "anti-vacuity: every vector read").toBe(20);
+    expect(vectors, "anti-vacuity: every vector read").toBe(25);
   });
 
   it("optional-versus-null and absent-versus-zero: each field R2 adds is optional and nullable (file and twin); counters are whole and non-negative, a present 0 admitted; only `state` is required", () => {

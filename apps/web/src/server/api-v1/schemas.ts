@@ -2059,7 +2059,15 @@ export const RelayHeartbeat = z
     }
   });
 export type RelayHeartbeat = z.infer<typeof RelayHeartbeat>;
-export const RelayHeartbeatReply = z.object({ desiredState: z.enum(["live", "ending"]) });
+export const RelayHeartbeatReply = z.object({
+  desiredState: z.enum(["live", "ending"]),
+  /** Owed 108 fix (b): the session's PHONE-LIVE EDGE counter (V475; domain/phone-live.ts) — bumped once each time the phone goes
+   *  from not-live back to live after it had been live, so a relay waiting out its reconnect back-off can reconnect at once.
+   *  The relay acts once per INCREASE. Monotonic for the life of the session and stored, never remembered. 0 at the first-ever
+   *  live (no outage to recover from). Absent — web omits it, and a reader treats null the same — when the session has no phone,
+   *  or its phone has not been live yet: unknown. */
+  phoneLiveEdge: z.number().int().min(0).nullable().optional(),
+});
 export type RelayHeartbeatReply = z.infer<typeof RelayHeartbeatReply>;
 
 /** R2007 PR B (overlay templates spec 2026-10-15 §4.3): the compositor's loopback `GET /phase?after=<seq>` reply, which

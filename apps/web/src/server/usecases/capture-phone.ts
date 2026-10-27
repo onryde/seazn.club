@@ -34,6 +34,7 @@ import { beatAnswer, wireBeatAnswer } from "@/server/relay/domain/beat-answer";
 import { wireEndReason, type DbEndReason } from "@/server/relay/domain/end-reason";
 import { type ClaimOutcome, deadForTakeover, decideClaim, isNotResponding } from "@/server/relay/domain/pairing";
 import { phoneFlagsOf } from "@/server/relay/domain/phone-health";
+import { phoneLiveTracked, stepPhoneLive, type PhoneLiveTracker } from "@/server/relay/domain/phone-live";
 import { pollSecondsFor } from "@/server/relay/domain/poll-seconds";
 import { ACTIVE_STATES, isActive, type FailReason, type SessionState } from "@/server/relay/domain/session";
 import { slotState } from "@/server/relay/domain/slot";
@@ -325,6 +326,8 @@ type Exec = Tx | typeof sql;
 /** The fixture's open session (one per fixture, V421) as the beat reads it. */
 type OpenRow = { id: string; state: SessionState; first_ingest_at: Date | null; start_cause: CaptureStartedBy; pairing_id: string | null };
 type PairingRow = { id: string; code_id: string; phone: string; last_beat_at: Date; answered_poll_seconds: number };
+/** The session's phone-live tracker as stored (V475), read under the row lock with the state it is judged against. */
+type TrackerRow = { state: SessionState; phone_live_edge: number | null; phone_live: boolean | null; phone_live_beat_at: Date | null };
 
 async function openSessionOf(exec: Exec, fixtureId: string): Promise<OpenRow | null> {
   const [row] = await exec<OpenRow[]>`
@@ -550,8 +553,20 @@ export async function postBeat(rawCode: string, tok: string, body: Beat, deps: S
                device_model = coalesce(${body.claim !== null && body.device !== null ? body.device.model : null}, device_model)
          where id = ${mine.id}`;
       if (held && body.sid === open!.id) {
-        await lockOpen();
-        await tx`update fixture_stream_sessions set phone_beat = ${tx.json(raw as never)}, phone_beat_at = ${now} where id = ${open!.id}`;
+        // Owed 108 fix (b): the session's phone-live tracker (V475) moves in the SAME locked write as the beat it judges, so two
+        // beats are folded one after the other and the relay's counter is monotonic. `notResponding` is the silence BEFORE this
+        // beat (read above, before `last_beat_at` moved). A session that is ending or over is not tracked — the relay is being
+        // told to stop, and the state is read on the LOCKED row because the open read above can be a moment stale.
+        const [locked] = await tx<TrackerRow[]>`
+          select state, phone_live_edge, phone_live, phone_live_beat_at from fixture_stream_sessions where id = ${open!.id} for update`;
+        const prev: PhoneLiveTracker = { edge: locked?.phone_live_edge ?? null, live: locked?.phone_live ?? null, beatAt: locked?.phone_live_beat_at ?? null };
+        const t = locked !== undefined && phoneLiveTracked(locked.state)
+          ? stepPhoneLive(prev, { state: body.state, at: new Date(atUtc) }, notResponding)
+          : prev;
+        await tx`update fixture_stream_sessions
+                    set phone_beat = ${tx.json(raw as never)}, phone_beat_at = ${now},
+                        phone_live_edge = ${t.edge}, phone_live = ${t.live}, phone_live_beat_at = ${t.beatAt}
+                  where id = ${open!.id}`;
       }
       await storeHistory(tx, { orgId: resolved.orgId, pairingId: mine.id, sessionId: held ? open!.id : null, beat: body, raw, flags: flagsOf(body, notResponding) }, now);
     }

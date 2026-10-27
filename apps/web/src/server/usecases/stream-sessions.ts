@@ -18,7 +18,7 @@ import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { hasFeature, overrideRow } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import type { CreateStreamSession, RelayHeartbeat, StreamSessionCurrent } from "@/server/api-v1/schemas";
+import type { CreateStreamSession, RelayHeartbeat, RelayHeartbeatReply, StreamSessionCurrent } from "@/server/api-v1/schemas";
 import { RelayJobSession } from "@/server/api-v1/schemas";
 import { resolveTemplate } from "@/components/overlay/template-registry";
 import { checkDestination } from "@/lib/stream-destinations";
@@ -2621,7 +2621,7 @@ async function logProgrammePhase(tx: Tx, cur: Row, beat: RelayHeartbeat, at: Dat
     from: stored, to: phase, attempt: cur.runner_attempts, occurredAt: at });
 }
 
-export async function heartbeat(sessionId: string, token: string, body: RelayHeartbeat, deps: SessionDeps): Promise<{ desiredState: "live" | "ending" }> {
+export async function heartbeat(sessionId: string, token: string, body: RelayHeartbeat, deps: SessionDeps): Promise<RelayHeartbeatReply> {
   const { att } = await verifyRelayToken(token, { sid: sessionId, scope: "relay-job" });
   // R2002 review Q3: the Machine's free text is scrubbed before EITHER store keeps it (its job token, anything
   // JWT-shaped, everything from the first `?`), so last_heartbeat and the sample's raw hold the same detail.
@@ -2711,7 +2711,13 @@ export async function heartbeat(sessionId: string, token: string, body: RelayHea
       && (stopped.type === "callback_stopped" || !isTerminal(cur.state)) && !supersededAttempt(att, cur.runner.attempt)
       ? { type: "runner", trigger: stopped } : null), deps)) ?? s;
   }
-  return { desiredState: s.desiredState };
+  // Owed 108 fix (b): the phone-live edge counter, read fresh from its row (never from `before`, which predates the writes above)
+  // and served on EVERY reply — the relay acts once per increase, so repeating the current value is how it stays idempotent. Absent
+  // while the session has no phone-live history (no phone, or a phone that has not published yet): `null` and absent mean the same
+  // to the relay, and omitting it keeps the reply of every such session exactly what it was before this field existed. The
+  // superseded Machine's drain reply above carries none: a stray must only drain, never be nudged to reconnect.
+  const [live] = await sql<{ phone_live_edge: number | null }[]>`select phone_live_edge from fixture_stream_sessions where id = ${sessionId}`;
+  return live?.phone_live_edge == null ? { desiredState: s.desiredState } : { desiredState: s.desiredState, phoneLiveEdge: live.phone_live_edge };
 }
 
 /** The rung the sizing alarm's dedupe compares a beat with: the previous beat's, when that beat belongs to this attempt.
