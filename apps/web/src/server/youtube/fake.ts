@@ -10,18 +10,26 @@ import { createHash } from "node:crypto";
 //   * A broadcast is `created`, becomes `ready` when bound to a stream, and goes `live` when VIDEO ARRIVES on that stream
 //     (`enableAutoStart=true`). Nothing ends it but `complete()` — `enableAutoStop=false`, so `videoOff` leaves it live.
 //   * Limits are Google's, typed as their own literals below with the page they come from. The 10 is per CHANNEL.
-//   * CHANNELS belong to GRANTS. A refresh token is pinned to a channel the first time the fake sees it (a code exchange, or —
-//     for a token a test seeds from its own database — its first `accessToken`), and every access token minted from it
-//     inherits that channel. Streams and broadcasts belong to a channel: another channel's resource is `youtube_not_found`
-//     to a token (`broadcastLife` says `absent`; a delete of it resolves and removes nothing). By default every grant gets its OWN
-//     fresh channel, so parallel e2e orgs never share one channel's 10-live cap; `setChannels` (or the constructor's
-//     `channels`) pins what the grants made AFTER it get, which is how a test shares a channel or builds a multi-channel picker.
+//   * CHANNELS belong to GRANTS. A refresh token is pinned to a channel when its grant is made (a code exchange) — or, for a
+//     token a test seeds from its own database, the first time it is used: only a token shaped like Google's (`1//…`) is
+//     accepted unseen, any other unknown refresh token is `invalid_grant`. Every access token minted from it inherits the
+//     channel. Streams and broadcasts belong to a channel: another channel's resource is `youtube_not_found` to a token
+//     (`broadcastLife` says `absent`; a delete of it resolves and removes nothing). Every grant gets its OWN fresh channel, so
+//     parallel e2e orgs never share one channel's 10-live cap. A test shares a channel or builds a multi-channel picker with
+//     `setChannels` / `pinChannelsTo` / `setGrantedScope`, which are bound to ONE OAuth STATE: they ride that state's code and
+//     are spent by the one grant it mints, so the next connect is fresh again. (The constructor's `channels` is a unit-test
+//     fixture that every grant sees; the e2e fake is built without it.) An account with NO channel (`channels: []`) cannot
+//     create a stream or a broadcast: `youtube_unavailable` / `youtubeSignupRequired`.
+//   * SERIAL-ONLY CONTROLS: `reset`, and `failNext` / `setLive` / `setAutoVideo` called WITHOUT a channel scope, act on the
+//     whole fake — they are for a serial setup step (T20 calls them from serial setup only). Parallel specs name a grant
+//     (`tokenHandle` -> `{channelId}` scope) or an OAuth state, and so touch nothing of another org's.
 //   * A token that is killed (or revoked) is dead for good, and so is every access token minted from it; the broadcasts it
 //     made keep running, because Google's revoke does not touch a stream already carrying video. A mint lasts 3600 s by the
 //     injected clock; an expired access token is the same 401 a dead one is.
 //   * The OAuth exchange is PKCE: `authorizeUrl` records the state's challenge and redirect URI, `issueCode(state)` (the fake
 //     authorize hop's job) mints a single-use code bound to them, and `exchangeCode` refuses a verifier whose S256 is not the
 //     challenge, another redirect URI, an unknown code and a replayed one — all `invalid_grant`, i.e. `youtube_reconnect_needed`.
+//     A refresh token that came from none of those (a made-up string, a sealed blob, a uuid) is `invalid_grant` too.
 //   * Errors carry a CODE and at most Google's reason token (port.ts) — never an argument, a token or a key. `calls` records
 //     method names and times only.
 //
@@ -44,6 +52,9 @@ const ACCESS_TOKEN_LIFETIME_MS = 3600 * 1000;
 /** YouTube's real RTMP ingest host, so a pooled key from the fake passes the destination allowlist
  *  (lib/stream-destinations.ts) wherever a later task checks one. The fake never opens a socket to it. */
 const FAKE_INGEST_URL = "rtmp://a.rtmp.youtube.com/live2";
+/** Google's refresh tokens begin `1//`. The fake accepts an UNSEEN refresh token only in that shape (a test seeding its own
+ *  database writes one), pinning it to a fresh channel; any other string was never issued and is `invalid_grant`. */
+const GOOGLE_REFRESH_TOKEN_PREFIX = "1//";
 /** The fake's one account, constant: nothing in the product keys off a fake's subject. */
 const FAKE_GOOGLE_SUB = "fake-google-sub";
 /** Where the fake authorize hop lives (T7 owns the route); the fake's `authorizeUrl` points at it on the redirect URI's origin. */
@@ -71,6 +82,9 @@ interface Broadcast {
 /** A refresh token's pinned identity: the channels its grant can see, and the one its API calls act on (the first). */
 interface Grant { channels: Channel[]; channelId: string }
 interface Injection { code: YoutubeErrorCode; reason?: string; channelId?: string }
+/** What `authorizeUrl` recorded for an OAuth state, plus what a test bound to THAT state: the channels the grant it mints gets
+ *  and the scope its code carries. Both ride the first code `issueCode` mints for the state and are spent there. */
+interface Pending { challenge: string; redirectUri: string; channels?: Channel[]; scope?: string }
 /** What the inspector shows of a broadcast: everything it was created with, where it is bound and its life. No credential. */
 export interface BroadcastView {
   channelId: string; title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy; madeForKids: boolean;
@@ -92,14 +106,12 @@ export class FakeYouTube implements YouTubePort {
   readonly calls: { method: string; at: Date }[] = [];
 
   private readonly now: () => Date;
-  /** What the constructor was given, so `reset()` returns to it. `null`: a fresh channel per grant. */
-  private readonly initialChannels: Channel[] | null;
-  private template: Channel[] | null;
+  /** The constructor's `channels` (a unit-test fixture every grant sees), or `null`: a fresh channel per grant. Never changes. */
+  private readonly fixedChannels: Channel[] | null;
   private live: LiveState = "enabled";
   private liveByChannel = new Map<string, LiveState>();
   private auto = false;
   private autoByChannel = new Map<string, boolean>();
-  private grantedScope: string | null = null;
   private seq = 0;
   private streams = new Map<string, Stream>();
   private broadcasts = new Map<string, Broadcast>();
@@ -111,12 +123,11 @@ export class FakeYouTube implements YouTubePort {
   private tokenOf = new Map<string, string>();
   private injected = new Map<PortMethod, Injection[]>();
   /** OAuth state → what `authorizeUrl` was asked for. */
-  private pending = new Map<string, { challenge: string; redirectUri: string }>();
-  private codes = new Map<string, { challenge: string; redirectUri: string; scope: string; used: boolean }>();
+  private pending = new Map<string, Pending>();
+  private codes = new Map<string, { challenge: string; redirectUri: string; scope: string; channels: Channel[] | null; used: boolean }>();
 
   constructor(o: { channels?: Channel[]; now?: () => Date } = {}) {
-    this.initialChannels = o.channels ? o.channels.map((c) => ({ ...c })) : null;
-    this.template = this.initialChannels ? this.initialChannels.map((c) => ({ ...c })) : null;
+    this.fixedChannels = o.channels ? o.channels.map((c) => ({ ...c })) : null;
     this.now = o.now ?? (() => new Date());
   }
 
@@ -140,10 +151,9 @@ export class FakeYouTube implements YouTubePort {
     this.killed.add(refreshToken);
   }
 
-  /** An opaque handle for a refresh token (so an e2e test never sees the token). Stable per token. Seeing a token pins it to
-   *  a channel, so the handle can name that channel (`channelOfHandle`). */
+  /** An opaque handle for a refresh token (so an e2e test never sees the token). Stable per token. A handle is only a name: it
+   *  makes no grant, so `channelOfHandle` of a token the fake never issued is `invalid_grant`. */
   tokenHandle(refreshToken: string): string {
-    this.grantOf(refreshToken);
     let handle = this.handleOf.get(refreshToken);
     if (handle === undefined) {
       handle = `fake-th-${++this.seq}`;
@@ -174,16 +184,18 @@ export class FakeYouTube implements YouTubePort {
     else this.auto = on;
   }
 
-  /** What the grants made AFTER this call can see (the first is the channel their API calls act on). An empty list is a real
-   *  answer: a Google account with no channel. Grants already made keep the channels they were pinned to. */
-  setChannels(c: Channel[]): void {
-    this.template = c.map((x) => ({ ...x }));
+  /** The channels the ONE grant that OAuth `state` mints will see (the first is the channel its API calls act on). An empty
+   *  list is a real answer: a Google account with no channel. Spent by that grant: the next connect gets a fresh channel. The
+   *  state must have been through `authorizeUrl` (unknown state: `youtube_not_found`). */
+  setChannels(c: Channel[], state: string): void {
+    this.pendingOf(state).channels = c.map((x) => ({ ...x }));
   }
 
-  /** The grants made AFTER this call get the channels that handle's grant has: how an e2e RECONNECT lands on the SAME channel (a
-   *  fresh grant otherwise gets a channel of its own, and the reconnect would be refused as a different channel). */
-  pinChannelsTo(handle: string): void {
-    this.template = this.grantOf(this.tokenForHandle(handle)).channels.map((c) => ({ ...c }));
+  /** The ONE grant that OAuth `state` mints gets the channels that handle's grant has: how an e2e RECONNECT lands on the SAME
+   *  channel (a fresh grant otherwise gets a channel of its own, and the reconnect would be refused as a different channel). */
+  pinChannelsTo(handle: string, state: string): void {
+    const p = this.pendingOf(state);
+    p.channels = this.grantOf(this.tokenForHandle(handle)).channels.map((c) => ({ ...c }));
   }
 
   /** Whether live streaming is enabled: the default for every channel, or (with `scope`) for one. */
@@ -192,31 +204,36 @@ export class FakeYouTube implements YouTubePort {
     else this.live = state;
   }
 
-  /** The scope the NEXT codes `issueCode` mints carry (null: exactly the YouTube scope). How a test drives `scope_missing`. */
-  setGrantedScope(scope: string | null): void {
-    this.grantedScope = scope;
+  /** The scope the code `issueCode(state)` mints carries (null: exactly the YouTube scope). How a test drives `scope_missing`.
+   *  Bound to that state and spent by its first code. */
+  setGrantedScope(scope: string | null, state: string): void {
+    const p = this.pendingOf(state);
+    if (scope === null) delete p.scope;
+    else p.scope = scope;
   }
 
   /** The fake authorize hop's job: Google redirecting back with a code. A single-use code bound to the challenge and redirect
-   *  URI the state's `authorizeUrl` recorded. Unknown state -> `youtube_not_found`. `o.scope` beats `setGrantedScope`. */
+   *  URI the state's `authorizeUrl` recorded. Unknown state -> `youtube_not_found`. `o.scope` beats `setGrantedScope`. The
+   *  channels and scope a test bound to the state ride this code and are SPENT: a second code for the state carries none. */
   issueCode(state: string, o: { scope?: string } = {}): string {
-    const p = this.pending.get(state);
-    if (!p) throw new YouTubeError("youtube_not_found", "unknownState");
+    const p = this.pendingOf(state);
     const code = `fake-code-${++this.seq}`;
-    this.codes.set(code, { challenge: p.challenge, redirectUri: p.redirectUri, scope: o.scope ?? this.grantedScope ?? YOUTUBE_SCOPE, used: false });
+    this.codes.set(code, {
+      challenge: p.challenge, redirectUri: p.redirectUri, scope: o.scope ?? p.scope ?? YOUTUBE_SCOPE, channels: p.channels ?? null, used: false,
+    });
+    delete p.channels;
+    delete p.scope;
     return code;
   }
 
   /** Back to the state `new FakeYouTube(sameOptions)` has: no streams, broadcasts, grants, handles, codes, injections or call
-   *  log; every switch (live, autoVideo, granted scope) at its default; the channels the constructor was given. The id counter
-   *  is NOT rewound, so an id from before the reset never names something new. */
+   *  log; every switch (live, autoVideo) at its default. SERIAL-ONLY (see the header). The id counter is NOT rewound, so an id
+   *  from before the reset never names something new. */
   reset(): void {
-    this.template = this.initialChannels ? this.initialChannels.map((c) => ({ ...c })) : null;
     this.live = "enabled";
     this.liveByChannel = new Map();
     this.auto = false;
     this.autoByChannel = new Map();
-    this.grantedScope = null;
     this.streams = new Map();
     this.broadcasts = new Map();
     this.grants = new Map();
@@ -305,7 +322,7 @@ export class FakeYouTube implements YouTubePort {
     url.searchParams.set("state", a.state);
     url.searchParams.set("code_challenge", a.codeChallenge);
     url.searchParams.set("redirect_uri", a.redirectUri);
-    this.pending.set(a.state, { challenge: a.codeChallenge, redirectUri: a.redirectUri });
+    this.pending.set(a.state, { challenge: a.codeChallenge, redirectUri: a.redirectUri });   // a second authorize of a state starts it over
     return url.toString();
   }
 
@@ -319,14 +336,14 @@ export class FakeYouTube implements YouTubePort {
     }
     issued.used = true;
     const refreshToken = `fake-rt-${++this.seq}`;
-    this.grants.set(refreshToken, this.newGrant());
+    this.grants.set(refreshToken, this.newGrant(issued.channels));
     return { refreshToken, scope: issued.scope, googleSub: FAKE_GOOGLE_SUB };
   }
 
   async accessToken(refreshToken: string): Promise<string> {
     this.enter("accessToken", this.grants.get(refreshToken)?.channelId ?? null);
     if (!refreshToken || this.killed.has(refreshToken)) throw new YouTubeError("youtube_reconnect_needed", "invalidGrant");
-    const at = `fake-at-${++this.seq}`;
+    const at = `fake-at-${++this.seq}`;   // grantOf below refuses a refresh token the fake never issued, before any access token exists
     this.access.set(at, { refreshToken, channelId: this.grantOf(refreshToken).channelId, expiresAt: this.now().getTime() + ACCESS_TOKEN_LIFETIME_MS });
     return at;
   }
@@ -345,6 +362,7 @@ export class FakeYouTube implements YouTubePort {
   async insertStream(at: string, a: { title: string }): Promise<{ streamId: string; ingest: { url: string; streamKey: string } }> {
     this.enter("insertStream", this.channelOfAccess(at));
     const who = this.who(at);
+    this.requireChannel(who.refreshToken);
     this.requireLiveEnabled(who.channelId);
     const id = `fakestream${this.pad()}`;
     this.streams.set(id, { id, title: a.title, channelId: who.channelId, video: false });
@@ -364,6 +382,7 @@ export class FakeYouTube implements YouTubePort {
   ): Promise<{ broadcastId: string }> {
     this.enter("insertBroadcast", this.channelOfAccess(at));
     const who = this.who(at);
+    this.requireChannel(who.refreshToken);
     this.requireLiveEnabled(who.channelId);
     // Google answers an invalid title with a 400 that is none of the closed codes, so it is `youtube_unavailable` with its
     // reason token (the same code `mapGoogleError` gives an unrecognised 4xx). Nothing is created.
@@ -448,9 +467,10 @@ export class FakeYouTube implements YouTubePort {
     return this.access.get(at)?.channelId ?? null;
   }
 
-  /** A new grant: the channels the template pins (a copy), or ONE fresh channel nobody else shares. */
-  private newGrant(): Grant {
-    const channels = this.template ? this.template.map((c) => ({ ...c })) : [this.freshChannel()];
+  /** A new grant: the channels its OAuth state pinned, else the constructor's fixture, else ONE fresh channel nobody else shares. */
+  private newGrant(pinned: Channel[] | null): Grant {
+    const given = pinned ?? this.fixedChannels;
+    const channels = given ? given.map((c) => ({ ...c })) : [this.freshChannel()];
     // An account with no channel still owns streams while a test drives it: give it a private owner so the cap is its own.
     return { channels, channelId: channels[0]?.id ?? `UCnone${this.pad()}` };
   }
@@ -461,14 +481,29 @@ export class FakeYouTube implements YouTubePort {
     return { id: `UCfake${String(n).padStart(18, "0")}`, title: `Fake Channel ${n}` };
   }
 
-  /** The grant behind a refresh token, pinned the first time the token is seen. */
+  /** The grant behind a refresh token. A token the fake issued has one; a token it never saw is `invalid_grant` unless it has
+   *  Google's `1//` shape (a test's own seeded token), which gets a grant on a fresh channel the first time it is used. */
   private grantOf(refreshToken: string): Grant {
     let g = this.grants.get(refreshToken);
     if (!g) {
-      g = this.newGrant();
+      if (!refreshToken.startsWith(GOOGLE_REFRESH_TOKEN_PREFIX)) throw new YouTubeError("youtube_reconnect_needed", "invalidGrant");
+      g = this.newGrant(null);
       this.grants.set(refreshToken, g);
     }
     return g;
+  }
+
+  /** The state `authorizeUrl` recorded, or `youtube_not_found` for one it never saw. */
+  private pendingOf(state: string): Pending {
+    const p = this.pending.get(state);
+    if (!p) throw new YouTubeError("youtube_not_found", "unknownState");
+    return p;
+  }
+
+  /** A Google account with no YouTube channel cannot create a stream or a broadcast. Google answers a 403
+   *  `youtubeSignupRequired`, a reason T6's `mapGoogleError` table has no row for, so it lands on `youtube_unavailable`. */
+  private requireChannel(refreshToken: string): void {
+    if (this.grantOf(refreshToken).channels.length === 0) throw new YouTubeError("youtube_unavailable", "youtubeSignupRequired");
   }
 
   private tokenForHandle(handle: string): string {

@@ -20,6 +20,10 @@ import { POST } from "../route";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const START = new Date("2026-10-27T12:00:00Z");
+// RFC 7636 appendix B's vector (the same literals fake.test.ts pins): the route tests drive real OAuth round trips.
+const VERIFIER = "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk";
+const CHALLENGE = "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM";
+const REDIRECT = "https://app.example.test/api/youtube/connect/callback";
 
 const call = (body: unknown) =>
   POST(new Request("http://app.test/api/internal/youtube/fake", {
@@ -59,7 +63,7 @@ describe("POST /api/internal/youtube/fake — refused anywhere a fake must not b
       const fake = new FakeYouTube();
       setYoutubeDriverForTest(fake);
       const touched = vi.spyOn(fake, "setChannels");
-      const res = await call({ op: "setChannels", channels: [{ id: "UCx", title: "X" }] });
+      const res = await call({ op: "setChannels", channels: [{ id: "UCx", title: "X" }], state: "st-gate" });
       expect(res.status).toBe(404);
       expect(touched).not.toHaveBeenCalled();
       // The body is not read before the gate: an invalid body is the same 404, not a 400 that proves the route exists.
@@ -70,22 +74,32 @@ describe("POST /api/internal/youtube/fake — refused anywhere a fake must not b
   for (const envName of ["local", "ci"]) {
     it(`200: fake mode under ENV_NAME=${envName} (the positive pair of the table above)`, async () => {
       vi.stubEnv("ENV_NAME", envName);
-      const res = await call({ op: "setChannels", channels: [{ id: "UCx", title: "X" }] });
-      expect(res.status).toBe(200);
       const fake = theFake();
-      expect(await fake.listMyChannels(await fake.accessToken("rt"))).toEqual([{ id: "UCx", title: "X" }]);
+      fake.authorizeUrl({ state: "st-gate", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
+      const res = await call({ op: "setChannels", channels: [{ id: "UCx", title: "X" }], state: "st-gate" });
+      expect(res.status).toBe(200);
+      const g = await fake.exchangeCode({ code: fake.issueCode("st-gate"), codeVerifier: VERIFIER, redirectUri: REDIRECT });
+      expect(await fake.listMyChannels(await fake.accessToken(g.refreshToken))).toEqual([{ id: "UCx", title: "X" }]);
     });
   }
 });
 
 describe("POST /api/internal/youtube/fake — the ops", () => {
-  it("setChannels pins what LATER grants see; setLive / autoVideo change the fake", async () => {
+  it("setChannels pins what the grant of ONE state sees (the next connect is fresh); setLive / autoVideo change the fake", async () => {
     const fake = theFake();
-    const before = await fake.accessToken("rt-before");
-    expect((await call({ op: "setChannels", channels: [] })).status).toBe(200);
-    const at = await fake.accessToken("rt");
-    expect(await fake.listMyChannels(at)).toEqual([]);
+    const connect = async (state: string) => {
+      const g = await fake.exchangeCode({ code: fake.issueCode(state), codeVerifier: VERIFIER, redirectUri: REDIRECT });
+      return fake.accessToken(g.refreshToken);
+    };
+    fake.authorizeUrl({ state: "st-empty", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
+    fake.authorizeUrl({ state: "st-next", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
+    const before = await fake.accessToken("1//rt-before");
+    expect((await call({ op: "setChannels", channels: [], state: "st-empty" })).status).toBe(200);
+    expect(await fake.listMyChannels(await connect("st-empty"))).toEqual([]);
     expect(await fake.listMyChannels(before), "a grant made before keeps its channel").toHaveLength(1);
+    expect(await fake.listMyChannels(await connect("st-next")), "another state's connect is untouched").toHaveLength(1);
+    expect((await call({ op: "setChannels", channels: [], state: "never-authorized" })).status, "an unknown state").toBe(404);
+    const at = await fake.accessToken("1//rt");   // an account WITH a channel, for the live / autoVideo half
     expect((await call({ op: "setLive", state: "not_enabled" })).status).toBe(200);
     expect(await fake.liveEnabled(at)).toBe("not_enabled");
     expect((await call({ op: "setLive", state: "enabled" })).status).toBe(200);
@@ -103,9 +117,9 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
 
   it("failNext / setLive / autoVideo with a tokenHandle touch only that grant's channel", async () => {
     const fake = theFake();
-    const atA = await fake.accessToken("rt-a");
-    const atB = await fake.accessToken("rt-b");
-    const handleA = fake.tokenHandle("rt-a");
+    const atA = await fake.accessToken("1//rt-a");
+    const atB = await fake.accessToken("1//rt-b");
+    const handleA = fake.tokenHandle("1//rt-a");
     expect((await call({ op: "failNext", method: "insertStream", code: "youtube_unavailable", tokenHandle: handleA })).status).toBe(200);
     await expect(fake.insertStream(atB, { title: "k" }), "B is not A").resolves.toBeDefined();
     await expect(fake.insertStream(atA, { title: "k" })).rejects.toMatchObject({ code: "youtube_unavailable" });
@@ -123,12 +137,20 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     expect((await call({ op: "setLive", state: "blocked", tokenHandle: "fake-th-unknown" })).status, "an unknown handle").toBe(404);
   });
 
-  it("pinChannels: the next grant lands on that handle's channel (an e2e reconnect), and a grant after a plain setChannels does not", async () => {
+  it("pinChannels: the grant of THAT state lands on the handle's channel (an e2e reconnect); the next connect and another state do not", async () => {
     const fake = theFake();
-    const handle = fake.tokenHandle("rt-first");
-    expect((await call({ op: "pinChannels", tokenHandle: handle })).status).toBe(200);
-    expect(fake.channelOf("rt-reconnect")).toBe(fake.channelOf("rt-first"));
-    expect((await call({ op: "pinChannels", tokenHandle: "fake-th-unknown" })).status).toBe(404);
+    const handle = fake.tokenHandle("1//rt-first");
+    const connect = async (state: string) => {
+      const g = await fake.exchangeCode({ code: fake.issueCode(state), codeVerifier: VERIFIER, redirectUri: REDIRECT });
+      return fake.channelOf(g.refreshToken);
+    };
+    for (const state of ["st-pinned", "st-other", "st-after"]) fake.authorizeUrl({ state, codeChallenge: CHALLENGE, redirectUri: REDIRECT });
+    expect((await call({ op: "pinChannels", tokenHandle: handle, state: "st-pinned" })).status).toBe(200);
+    expect(await connect("st-other"), "a state nobody pinned is a fresh channel").not.toBe(fake.channelOf("1//rt-first"));
+    expect(await connect("st-pinned"), "the pinned state shares the first grant's channel").toBe(fake.channelOf("1//rt-first"));
+    expect(await connect("st-after"), "and the pin was spent by that one grant").not.toBe(fake.channelOf("1//rt-first"));
+    expect((await call({ op: "pinChannels", tokenHandle: "fake-th-unknown", state: "st-after" })).status, "an unknown handle").toBe(404);
+    expect((await call({ op: "pinChannels", tokenHandle: handle, state: "never-authorized" })).status, "an unknown state").toBe(404);
   });
 
   it("issueCode mints a code for an authorized state (the fake authorize hop's job) and grantScope sets the scope the next codes carry", async () => {
@@ -142,28 +164,32 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
     expect(code).toEqual(expect.any(String));
     expect((await fake.exchangeCode({ code, codeVerifier: verifier, redirectUri })).scope).toBe("https://www.googleapis.com/auth/youtube");
     expect((await call({ op: "issueCode", state: "never-authorized" })).status, "an unknown state").toBe(404);
-    expect((await call({ op: "grantScope", scope: "https://www.googleapis.com/auth/youtube.readonly" })).status).toBe(200);
+    expect((await call({ op: "grantScope", scope: "https://www.googleapis.com/auth/youtube.readonly", state: "st-1" })).status).toBe(200);
     const narrow = ((await dataOf(await call({ op: "issueCode", state: "st-1" }))) as { code: string }).code;
     expect((await fake.exchangeCode({ code: narrow, codeVerifier: verifier, redirectUri })).scope).toBe("https://www.googleapis.com/auth/youtube.readonly");
-    expect((await call({ op: "grantScope", scope: null })).status).toBe(200);
+    const spent = ((await dataOf(await call({ op: "issueCode", state: "st-1" }))) as { code: string }).code;
+    expect((await fake.exchangeCode({ code: spent, codeVerifier: verifier, redirectUri })).scope, "spent by the first code").toBe("https://www.googleapis.com/auth/youtube");
+    expect((await call({ op: "grantScope", scope: "https://www.googleapis.com/auth/youtube.readonly", state: "st-1" })).status).toBe(200);
+    expect((await call({ op: "grantScope", scope: null, state: "st-1" })).status, "null clears it").toBe(200);
     const back = ((await dataOf(await call({ op: "issueCode", state: "st-1" }))) as { code: string }).code;
     expect((await fake.exchangeCode({ code: back, codeVerifier: verifier, redirectUri })).scope).toBe("https://www.googleapis.com/auth/youtube");
+    expect((await call({ op: "grantScope", scope: "openid", state: "never-authorized" })).status, "an unknown state").toBe(404);
   });
 
   it("reset clears the fake: a killed token lives again, streams and broadcasts are gone, handles are unknown", async () => {
     const fake = theFake();
-    const at = await fake.accessToken("rt-reset");
+    const at = await fake.accessToken("1//rt-reset");
     const { streamId, broadcastId } = await (async () => {
       const s = await fake.insertStream(at, { title: "k" });
       const b = await fake.insertBroadcast(at, bcast());
       await fake.bind(at, b.broadcastId, s.streamId);
       return { streamId: s.streamId, broadcastId: b.broadcastId };
     })();
-    const handle = fake.tokenHandle("rt-reset");
-    fake.killToken("rt-reset");
-    await expect(fake.accessToken("rt-reset"), "PREMISE: dead").rejects.toBeInstanceOf(YouTubeError);
+    const handle = fake.tokenHandle("1//rt-reset");
+    fake.killToken("1//rt-reset");
+    await expect(fake.accessToken("1//rt-reset"), "PREMISE: dead").rejects.toBeInstanceOf(YouTubeError);
     expect((await call({ op: "reset" })).status).toBe(200);
-    await expect(fake.accessToken("rt-reset"), "alive again").resolves.toBeDefined();
+    await expect(fake.accessToken("1//rt-reset"), "alive again").resolves.toBeDefined();
     expect(fake.streamsCount()).toBe(0);
     expect(fake.inspectBroadcast(broadcastId)).toBeNull();
     expect((await call({ op: "videoOn", streamId })).status, "the stream is gone").toBe(404);
@@ -172,7 +198,7 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
 
   it("failNext makes the next call fail once with the code and reason given — and a token-shaped reason is dropped, not stored", async () => {
     const fake = theFake();
-    const at = await fake.accessToken("rt");
+    const at = await fake.accessToken("1//rt");
     expect((await call({ op: "failNext", method: "insertStream", code: "youtube_live_blocked", reason: "livePermissionBlocked" })).status).toBe(200);
     const err = await fake.insertStream(at, { title: "k" }).then(() => null, (e: unknown) => e as YouTubeError);
     expect(err).toBeInstanceOf(YouTubeError);
@@ -186,7 +212,7 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
 
   it("videoOn / videoOff take a streamId; deleteVideo takes a videoId; an unknown id is 404 and changes nothing", async () => {
     const fake = theFake();
-    const at = await fake.accessToken("rt");
+    const at = await fake.accessToken("1//rt");
     const { streamId } = await fake.insertStream(at, { title: "k" });
     const { broadcastId } = await fake.insertBroadcast(at, bcast());
     await fake.bind(at, broadcastId, streamId);
@@ -203,7 +229,7 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
 
   it("videoOn past the channel's 10 is refused 409 with YouTube's own code, and the fake is unchanged", async () => {
     const fake = theFake();
-    const at = await fake.accessToken("rt");
+    const at = await fake.accessToken("1//rt");
     const streams: string[] = [];
     for (let i = 0; i < 11; i++) {
       const { streamId } = await fake.insertStream(at, { title: "k" });
@@ -243,7 +269,10 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
       { op: "failNext", method: "insertStream", code: "youtube_channel_busy" },
       { op: "failNext", method: "mode", code: "youtube_unavailable" },
       { op: "failNext", method: "insertStreem", code: "youtube_unavailable" },
-      { op: "setChannels", channels: [{ id: "UCx" }] },
+      { op: "setChannels", channels: [{ id: "UCx" }], state: "st" },
+      { op: "setChannels", channels: [] },                       // a pin must name its state: no global pin
+      { op: "pinChannels", tokenHandle: "fake-th-1" },
+      { op: "grantScope", scope: null },
       { op: "state", fixtureId: "not-a-uuid" },
       { op: "reset", extra: 1 },
       { op: "grantScope", scope: "" },
@@ -263,22 +292,22 @@ describe("POST /api/internal/youtube/fake — the ops", () => {
 
   it("every op but `state` (which has its own DB-backed suite below) answers 200 to a valid body — the list the plan promises", async () => {
     const fake = theFake();
-    const at = await fake.accessToken("rt");
+    const at = await fake.accessToken("1//rt");
     const { streamId } = await fake.insertStream(at, { title: "k" });
     const { broadcastId } = await fake.insertBroadcast(at, bcast());
     fake.authorizeUrl({ state: "st-sweep", codeChallenge: "c", redirectUri: "https://app.example.test/cb" });
     const valid: Record<string, unknown> = {
-      setChannels: { op: "setChannels", channels: [{ id: "UCx", title: "X" }] },
+      setChannels: { op: "setChannels", channels: [{ id: "UCx", title: "X" }], state: "st-sweep" },
       failNext: { op: "failNext", method: "listMyChannels", code: "youtube_unavailable" },
-      pinChannels: { op: "pinChannels", tokenHandle: fake.tokenHandle("rt-for-pin") },
-      killToken: { op: "killToken", tokenHandle: fake.tokenHandle("rt-for-kill") },
+      pinChannels: { op: "pinChannels", tokenHandle: fake.tokenHandle("1//rt-for-pin"), state: "st-sweep" },
+      killToken: { op: "killToken", tokenHandle: fake.tokenHandle("1//rt-for-kill") },
       videoOn: { op: "videoOn", streamId },
       videoOff: { op: "videoOff", streamId },
       deleteVideo: { op: "deleteVideo", videoId: broadcastId },
       setLive: { op: "setLive", state: "enabled" },
       autoVideo: { op: "autoVideo", on: false },
       issueCode: { op: "issueCode", state: "st-sweep" },
-      grantScope: { op: "grantScope", scope: null },
+      grantScope: { op: "grantScope", scope: null, state: "st-sweep" },
       reset: { op: "reset" },   // last: it clears what the rest set up
     };
     let checked = 0;

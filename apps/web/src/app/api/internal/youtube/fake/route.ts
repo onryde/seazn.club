@@ -12,26 +12,32 @@ const NOT_FOUND = "Not found";
 const Channel = z.object({ id: z.string().min(1).max(64), title: z.string().min(1).max(200) }).strict();
 const Id = z.string().min(1).max(128);
 
-/** The ops (plan R6, extended by fix round 1). Every id they take is a HANDLE or an id the product already shows (a stream id, a
- *  video id, a fixture id) — never a refresh token or a stream key, which an e2e test must not be able to read or supply.
- *  `tokenHandle` on `failNext`, `setLive` and `autoVideo` scopes the control to that grant's CHANNEL, so one org's walkthrough
- *  does not change another's; absent, it is the default for every channel. */
+/** The ops (plan R6, extended by fix rounds 1 and 2). Every id they take is a HANDLE or an id the product already shows (a stream
+ *  id, a video id, a fixture id, an OAuth state) — never a refresh token or a stream key, which an e2e test must not be able to
+ *  read or supply.
+ *
+ *  PARALLEL-SAFE ops name what they touch: a `tokenHandle` (`failNext`, `setLive`, `autoVideo` then scope to that grant's CHANNEL,
+ *  so one org's walkthrough does not change another's), an OAuth `state` (`setChannels`, `pinChannels`, `grantScope`: spent by the
+ *  one grant that state mints), or one resource (`videoOn`, `videoOff`, `deleteVideo`, `killToken`, `issueCode`, `state`).
+ *  SERIAL-ONLY ops name nothing and act on the whole fake: `reset`, and `failNext` / `setLive` / `autoVideo` WITHOUT a
+ *  `tokenHandle`. T20 calls those only from serial setup, never from a spec that runs beside others. */
 const Handle = Id;
+const State = z.string().min(1).max(512);
 const Body = z.discriminatedUnion("op", [
-  z.object({ op: z.literal("setChannels"), channels: z.array(Channel).max(20) }).strict(),
+  z.object({ op: z.literal("setChannels"), channels: z.array(Channel).max(20), state: State }).strict(),
   z.object({
     op: z.literal("failNext"), method: z.enum(FAKE_YOUTUBE_METHODS), code: z.enum(YOUTUBE_ERROR_CODES), reason: z.string().max(200).optional(),
     tokenHandle: Handle.optional(),
   }).strict(),
-  z.object({ op: z.literal("pinChannels"), tokenHandle: Handle }).strict(),
+  z.object({ op: z.literal("pinChannels"), tokenHandle: Handle, state: State }).strict(),
   z.object({ op: z.literal("killToken"), tokenHandle: Handle }).strict(),
   z.object({ op: z.literal("videoOn"), streamId: Id }).strict(),
   z.object({ op: z.literal("videoOff"), streamId: Id }).strict(),
   z.object({ op: z.literal("deleteVideo"), videoId: Id }).strict(),
   z.object({ op: z.literal("setLive"), state: z.enum(["enabled", "not_enabled", "blocked"]), tokenHandle: Handle.optional() }).strict(),
   z.object({ op: z.literal("autoVideo"), on: z.boolean(), tokenHandle: Handle.optional() }).strict(),
-  z.object({ op: z.literal("issueCode"), state: z.string().min(1).max(512) }).strict(),
-  z.object({ op: z.literal("grantScope"), scope: z.string().min(1).max(512).nullable() }).strict(),
+  z.object({ op: z.literal("issueCode"), state: State }).strict(),
+  z.object({ op: z.literal("grantScope"), scope: z.string().min(1).max(512).nullable(), state: State }).strict(),
   z.object({ op: z.literal("reset") }).strict(),
   z.object({ op: z.literal("state"), fixtureId: z.uuid() }).strict(),
 ]);
@@ -57,9 +63,9 @@ export async function POST(req: Request) {
     const body = parsed.data;
     try {
       switch (body.op) {
-        case "setChannels": fake.setChannels(body.channels); return { op: body.op };
+        case "setChannels": fake.setChannels(body.channels, body.state); return { op: body.op };
         case "failNext": fake.failNext(body.method, body.code, body.reason, scopeOf(fake, body.tokenHandle)); return { op: body.op };
-        case "pinChannels": fake.pinChannelsTo(body.tokenHandle); return { op: body.op };
+        case "pinChannels": fake.pinChannelsTo(body.tokenHandle, body.state); return { op: body.op };
         case "killToken": fake.killHandle(body.tokenHandle); return { op: body.op };
         case "videoOn": fake.videoOn(body.streamId); return { op: body.op };
         case "videoOff": fake.videoOff(body.streamId); return { op: body.op };
@@ -68,7 +74,7 @@ export async function POST(req: Request) {
         case "autoVideo": fake.setAutoVideo(body.on, scopeOf(fake, body.tokenHandle)); return { op: body.op };
         // The fake authorize hop's job, for a walkthrough that drives the callback itself. A code alone is no credential.
         case "issueCode": return { op: body.op, code: fake.issueCode(body.state) };
-        case "grantScope": fake.setGrantedScope(body.scope); return { op: body.op };
+        case "grantScope": fake.setGrantedScope(body.scope, body.state); return { op: body.op };
         case "reset": fake.reset(); return { op: body.op };
         case "state": return await fixtureState(fake, body.fixtureId);
       }
