@@ -277,23 +277,55 @@ describe.skipIf(!HAS_DB)("deleting an account queues the deletion notice on the 
     // postgres.js first sends it, and GENERIC, planned without any value, as a named prepared statement may run it after a few calls
     // (`explain (generic_plan)` on the very text postgres.js sends, read back with `describe`). Sequential scans are off so the answer does
     // not depend on how many rows the test table holds (account-deletion-sweep.test.ts's rule). That alone proves nothing here: without the
-    // partial index the planner still finds an index (the ref index, over every sign-in row), so the pin names the partial index.
+    // partial index the planner still finds an index (the ref index, over every sign-in row). WHICH index it picks on a test table depends on
+    // the statistics other suites leave behind (CI picked the ref index once), so the pin on the partial index is taken with every other
+    // index on the table dropped inside a savepoint that is rolled back: there the planner can only use the partial index if the statement
+    // implies its WHERE, which is the thing that can drift. Constraint-backed indexes stay (they cannot be dropped this way).
     type PlanRow = { "QUERY PLAN": string };
     const lines = (rows: readonly PlanRow[]) => rows.map((r) => r["QUERY PLAN"]).join("\n");
-    const { bound, generic, predicate } = await sql.begin(async (tx) => {
-      await tx`set local enable_seqscan = off`;
+    const explainBoth = async (tx: Parameters<typeof scrubEndedStatement>[0]) => {
       const bound = lines(await tx<PlanRow[]>`explain ${scrubEndedStatement(tx)}`);
       const sent = await scrubEndedStatement(tx).describe();
       const generic = lines(await tx.unsafe<PlanRow[]>(`explain (generic_plan) ${sent.string}`));
+      return { bound, generic };
+    };
+    const ROLLBACK = new Error("roll back the dropped indexes");
+    const { open, alone, dropped, predicate } = await sql.begin(async (tx) => {
+      await tx`set local enable_seqscan = off`;
+      const open = await explainBoth(tx);
+      const held: { alone?: { bound: string; generic: string }; dropped: number } = { dropped: 0 };
+      await tx
+        .savepoint(async (sp) => {
+          const others = await sp<{ name: string }[]>`
+            select i.indexrelid::regclass::text as name
+              from pg_index i
+             where i.indrelid = 'email_outbox'::regclass
+               and i.indexrelid <> to_regclass('email_outbox_scrub_idx')
+               and not exists (select 1 from pg_constraint c where c.conindid = i.indexrelid)`;
+          for (const { name } of others) {
+            await sp.unsafe(`drop index ${name}`);
+            held.dropped++;
+          }
+          held.alone = await explainBoth(sp);
+          throw ROLLBACK;
+        })
+        .catch((e: unknown) => {
+          if (e !== ROLLBACK) throw e;
+        });
       const [index] = await tx<{ predicate: string }[]>`
         select pg_get_expr(indpred, indrelid) as predicate from pg_index where indexrelid = to_regclass('email_outbox_scrub_idx')`;
-      return { bound, generic, predicate: index?.predicate ?? "" };
+      return { open, alone: held.alone, dropped: held.dropped, predicate: index?.predicate ?? "" };
     });
-    for (const [name, plan] of [["bound", bound], ["generic", generic]] as const) {
-      expect(plan, `${name}: the rows to scrub come from the scrub's own partial index`).toMatch(
+    // The ref index is among the competitors, so a run that dropped nothing proved nothing.
+    expect(dropped, "anti-vacuity: the competing indexes were dropped (the ref index at least)").toBeGreaterThan(0);
+    expect(alone, "premise: the savepoint explained the statement").toBeDefined();
+    for (const [name, plan] of [["bound", alone!.bound], ["generic", alone!.generic]] as const) {
+      expect(plan, `${name}: the statement can read the rows to scrub from the scrub's own partial index`).toMatch(
         /Index Scan using email_outbox_scrub_idx|Bitmap Index Scan on email_outbox_scrub_idx/,
       );
-      expect(plan, name).not.toMatch(/Seq Scan on email_outbox/);
+    }
+    for (const [name, plan] of [["bound", open.bound], ["generic", open.generic], ["bound alone", alone!.bound], ["generic alone", alone!.generic]] as const) {
+      expect(plan, `${name}: never the whole table`).not.toMatch(/Seq Scan on email_outbox/);
     }
     // SCRUBBED_WHEN_ENDED stays the authority: the index's own WHERE (read back from the catalogue) names every kind of it.
     let kinds = 0;
