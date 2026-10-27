@@ -17,6 +17,8 @@ spec reuses its planner, queue priority and `sponsor_airings`.
 | A3 | **Hide graphics** switch | "Hide graphics" |
 | A4 | **Sponsor controls** | "Play next at next break" · "Skip this card" |
 
+Who may operate (confirmed 2026-10-27): **org editors only** (as Stop); a device-linked remote scorer gets no Graphics section.
+
 Mocks are layout only; the build uses the house theme. This screen was not mocked, so the builder shows the owner
 **2 layout options** (visual companion) before building (standing rule), frontend-design skill in the dispatch.
 
@@ -170,9 +172,9 @@ Graphics tap ─PUT─▶ web: operator state + log ──(next overlay poll, �
 
 ## 7. Open for the owner
 
-1. **Who may operate:** recommendation org editors only (as Stop); a device-linked remote scorer gets no Graphics section.
-2. **Nothing else from my earlier draft is needed in the MVP.** Starting soon already shows automatically until the first
-   camera frame; Hide graphics plus Skip cover what "pause sponsors" was for; "Show now" is covered by Play next.
+None. Who may operate was confirmed 2026-10-27 (§0). Nothing else from the earlier draft is needed in the MVP: Starting soon
+already shows automatically until the first camera frame; Hide graphics plus Skip cover what "pause sponsors" was for;
+"Show now" is covered by Play next.
 
 ## 8. Later
 

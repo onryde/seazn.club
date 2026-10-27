@@ -16,6 +16,13 @@ Captured scenario this fulfils: `2026-09-05-stream-overlay-prompts/_SCENARIO-202
 | D5 | Report contents | The mock (`overview-report.html`): times shown, time on screen, live viewers when shown, link clicks, a frame from the broadcast per showing with "watch this moment". |
 | D6 | Sponsor playback | "Watch this moment" opens the YouTube VOD at the showing. |
 | D7 | Scope | "I need a working MVP" → this cut ("yes"). Mocks are **layout only**; the build uses the house theme. |
+| D8 | Gate? | **No new gate** — rotation and the report wherever streaming is (stream credits are the meter). Confirmed. |
+| D9 | Tier weights | **title 3 · gold 2 · silver 1 · partner 1.** Confirmed. |
+| D10 | OBS streams in the report | **Not counted in the MVP** (an OBS page is public, its beacon forgeable); the report says "composed streams". Confirmed. |
+| D11 | Viewer wording | **"Viewer impressions"** (live viewers at each showing, added up) with **peak live viewers** beside it. Confirmed. |
+| D12 | Default dial | **Normal** for a newly ticked sponsor. Confirmed. |
+| D13 | Ship before YouTube Connect? | **No: build in parallel, release together** with YouTube Connect, so viewers and "watch this moment" are live on day one. |
+| D14 | Rotation continuity | **One rotation per org across all its matches** (a per-org cursor), so on Light a T20's single innings break does not always go to the first title sponsor. |
 
 Pricing (standing owner rule: all scoring and all stages are free, no gate, no upsell; streaming is already metered by
 stream credits): **no new gate. Rotation and the report are available wherever streaming is.** The existing Pro
@@ -132,7 +139,13 @@ the fixture's **already-assigned sponsor moments**.
   every major + every 3rd minor; Busy = every major + every minor. A **90 s cooldown** between sponsor cards (event
   timestamps) thins fast minor breaks (short-format cricket overs).
 - **Rotation:** weighted round robin over ticked sponsors by tier weight **title 3 · gold 2 · silver 1 · partner 1**
-  (§8 confirm). Cycle position = rotation airings planned before this break, so it is stable.
+  (D9). **One rotation per org across all its matches (D14):** the cycle position of a new break is the count of the
+  org's persisted rotation assignments, across all its fixtures, at the moment this break is assigned. The assignment
+  write takes a per-org lock (the session code's `lockOrg` pattern), so two fixtures streaming at once never hand out
+  the same position. Already-assigned breaks are frozen (above), so a re-plan stays deterministic: it reads the
+  positions it was handed rather than recounting. A sponsor unticked mid-cycle is skipped at its position. Test the
+  sequence: two matches back to back continue the cycle; two concurrent fixtures get distinct positions; on Light a
+  T20's single innings break goes to a different sponsor in match 2 than in match 1.
 - **Style by break size:** minor → lower third, 8 s; major → banner, 15 s.
 - Cost: one indexed read per poll, cached with the rest of the live answer (2 s edge window; relay path `no-store`).
 
@@ -305,17 +318,7 @@ refreshed**, and require it deleted **within 7 days** of an in-app disconnect.
 
 ## 8. Open for the owner
 
-1. **Confirm: no new gate** — rotation and the report wherever streaming is (stream credits are the meter).
-2. **Tier weights** title 3 · gold 2 · silver 1 · partner 1 — confirm or change.
-3. **OBS streams in the report.** Recommendation: not counted in the MVP (an OBS page is public, its beacon forgeable);
-   the report says "composed streams".
-4. **Viewer wording.** "Viewer impressions" (live viewers at each showing, added up) with peak live viewers beside it;
-   the mock's "people watching" overstates.
-5. **Default dial** for a newly ticked sponsor: recommendation Normal.
-6. **Ship before YouTube Connect?** If yes, viewers and "watch this moment" show a dash until Connect lands;
-   recommended: build in parallel, release together.
-7. **Rotation continuity:** carry the rotation on across the org's matches (recommended: a per-org cursor, so on Light
-   a T20's single innings break doesn't always go to the first title sponsor) or restart each match?
+None. Every item was answered on 2026-10-27 (owner: "1 rec, 2 rec, 3–8 ok") and moved to §0 as D8–D14.
 
 ## 9. Coordination
 
