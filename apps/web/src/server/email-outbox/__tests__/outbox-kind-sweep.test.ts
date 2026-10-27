@@ -80,6 +80,9 @@
 //   - group_transfer_offer: the real `offerGroupTransfer` of a live billing group to the owner of one of its orgs, whose account is `es`
 //     (the SetupIntent is the Stripe mock's): the notice is queued to the recipient's account in the transaction that makes the offer
 //     live, with no organisation, and the request makes the first attempt.
+//   - group_transfer_complete: the real `offerGroupTransfer` of a community billing group (no live subscription: the immediate path) to
+//     the owner of its org, whose account has no language, in an `fr` org: the notice is queued to the recipient's account in the
+//     handover's own transaction, with no organisation, and the request makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -173,7 +176,7 @@ import { putMyReport, submitMyReport } from "@/server/usecases/match-reports";
 import { refreshDiscipline } from "@/server/usecases/scoring";
 import { createManualSuspension, decideSuspension } from "@/server/usecases/discipline";
 import { offerGroupTransfer } from "@/server/usecases/billing-groups";
-import { seedLiveGroup, seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { seedCommunityGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedSponsorOrg, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { planLabel } from "@/lib/plan-label";
 import { SETTINGS_BASE, asOwner, fakeSession, makeUser, rig, seedOrg, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { DISPATCH_NOW_BUDGET_MS, DISPATCH_NOW_MARGIN_MS, OUTBOX_KINDS, idempotencyKey, type OutboxKind } from "../constants";
@@ -1280,6 +1283,26 @@ async function groupTransferOfferScenario(): Promise<KindScenario> {
   };
 }
 
+/** The payer of a community billing group (no live subscription) hands it to the owner of its org: the immediate path, no card asked
+ *  for. The recipient's account has no language, so the notice is in the org's (`fr`); it is queued to the recipient's account in the
+ *  handover's transaction, and the request makes the first attempt after the tidy-up. */
+async function groupTransferCompleteScenario(): Promise<KindScenario> {
+  const g = await seedCommunityGroup({ orgDefaultLocale: "fr", prefix: RUN });
+  made.orgIds.push(g.orgId);
+  made.userIds.push(g.payer.id, g.heir.id);
+  return {
+    locale: "fr",
+    subjectKey: "transferComplete.subject",
+    subjectVars: {},
+    recipient: g.heir.email,
+    firstAttempt: "request",
+    run: async () => {
+      const out = await offerGroupTransfer({ actorUserId: g.payer.id, subscriptionId: g.groupId, newOwnerUserId: g.heir.id });
+      expect(out, "premise: the real handover moved the group").toMatchObject({ status: "transferred", owner_user_id: g.heir.id });
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1427,6 +1450,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", transferOffer.subjectKey, transferOffer.subjectVars),
     );
 
+    const transferComplete = await groupTransferCompleteScenario();
+    expect(dictionarySubject("fr", transferComplete.subjectKey, transferComplete.subjectVars)).not.toBe(
+      dictionarySubject("en", transferComplete.subjectKey, transferComplete.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1460,6 +1488,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         suspension_served: suspensionServed,
         match_report_submitted: matchReport,
         group_transfer_offer: transferOffer,
+        group_transfer_complete: transferComplete,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

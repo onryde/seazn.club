@@ -38,6 +38,8 @@
 //  - The billing-group transfer offer is driven through the real `offerGroupTransfer` of a live group to the owner of one of its orgs.
 //    It mints a SetupIntent before it queues its notice: while that producer runs, and only then, Stripe is a stub that answers that one
 //    call (every other producer meets the real `getStripe`, as before). Judged once the request's refused (503) first attempt is over.
+//  - The immediate handover's notice is driven through the same `offerGroupTransfer` on a community group (no live subscription and no
+//    Stripe customer, so nothing reaches Stripe), judged the same way.
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 import type Stripe from "stripe";
@@ -69,7 +71,7 @@ import { openRound } from "@/server/usecases/external-play/open-round";
 import { handleRegistrationCheckoutCompleted, handleRegistrationDispute } from "@/server/usecases/registrations";
 import { handleSponsorDispute } from "@/server/usecases/sponsors";
 import { processStripeEvent } from "@/server/usecases/billing-events";
-import { seedLiveGroup, seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
+import { seedCommunityGroup, seedLiveGroup, seedPassOrg, seedSponsorOrder, seedTrialingGroup } from "@/server/usecases/__tests__/_money-fixtures";
 import { offerGroupTransfer } from "@/server/usecases/billing-groups";
 import { fakeSession, seedRegistration, stripeRig } from "@/server/usecases/__tests__/_registration-fixtures";
 import { claimPerson, makeAssignment, makeClaimedOfficial, makeFixture, seedFootballDivision } from "@/server/usecases/__tests__/_seed";
@@ -272,6 +274,13 @@ describe.skipIf(!HAS_DB)("an account kind's sealed body never names its recipien
       }
       // The notice names the group by the org the recipient can reach.
       return { rowIds: await attemptedRowIdsOf("group_transfer_offer", "subscription", g.groupId), positive: literal(g.orgName) };
+    },
+    group_transfer_complete: async () => {
+      const g = await seedCommunityGroup({ prefix: "akb" });
+      const out = await offerGroupTransfer({ actorUserId: g.payer.id, subscriptionId: g.groupId, newOwnerUserId: g.heir.id });
+      expect(out.status, "premise: the real handover moved the group").toBe("transferred");
+      // The notice names the group by the org the recipient can reach.
+      return { rowIds: await attemptedRowIdsOf("group_transfer_complete", "subscription", g.groupId), positive: literal(g.orgName) };
     },
   };
 

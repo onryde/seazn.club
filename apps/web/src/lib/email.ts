@@ -475,19 +475,17 @@ export async function transferOfferEmail(
   return transferOfferTemplate(args.payerName, args.groupName, args.link, dict);
 }
 
-/** A payer handed a whole billing group to this recipient on the IMMEDIATE
- *  (community / no-live-subscription) path — the recipient accepted nothing and
- *  now simply pays for it. Informational; the link goes to the billing settings
- *  of an org they can reach in the group. Distinct from sendTransferOfferEmail. */
-export async function sendTransferCompleteEmail(
-  to: string,
-  payerName: string,
-  groupName: string,
-  link: string,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** A payer handed a whole billing group to this recipient on the IMMEDIATE (community / no-live-subscription) path — the recipient
+ *  accepted nothing and now simply pays for it — RENDERED and not sent. Informational; the link goes to the billing settings of an org
+ *  they can reach in the group. Distinct from transferOfferEmail. `offerGroupTransfer` (billing-groups.ts) queues what this returns on
+ *  the email outbox (kind `group_transfer_complete`, NOT transactional, to the recipient's account) in the transaction that hands the
+ *  group over, in the recipient's language. Nothing sends it directly. */
+export async function transferCompleteEmail(
+  args: { payerName: string; groupName: string; link: string },
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, ...transferCompleteTemplate(payerName, groupName, link, dict) });
+  return transferCompleteTemplate(args.payerName, args.groupName, args.link, dict);
 }
 
 /** A group's payer pushed an org off the shared bill (billing-group detach). The

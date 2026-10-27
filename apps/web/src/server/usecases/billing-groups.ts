@@ -36,7 +36,7 @@ import { intervalForPrice } from "@/lib/billing-manage";
 import { toLocale, type Locale } from "@/lib/i18n-constants";
 import {
   transferOfferEmail,
-  sendTransferCompleteEmail,
+  transferCompleteEmail,
   sendGroupOrgRemovedEmail,
   sendGroupOrgLeftEmail,
 } from "@/lib/email";
@@ -1522,7 +1522,7 @@ export async function offerGroupTransfer(args: {
     const queued = await sql.begin(async (tx) => {
       await tx`
         update billing_group_transfers set setup_intent_id = ${si.id} where id = ${claim.id}`;
-      return queueTransferOffer(tx, { subscriptionId, actorUserId, recipient });
+      return queueTransferNotice(tx, "group_transfer_offer", { subscriptionId, actorUserId, recipient });
     });
     if (queued) deferred(() => dispatchNow([queued]));
 
@@ -1540,21 +1540,17 @@ export async function offerGroupTransfer(args: {
   // already own an org in the group, though — this path has no acceptance step,
   // so org ownership is the only consent in it.
   await assertRecipientOwnsAnOrgInGroup(subscriptionId, recipient.id);
-  const moved = await handOverGroup(group, recipient, null);
-  await finishHandover(moved, recipient, null);
-
-  // BEST-EFFORT notification. The recipient accepted nothing — the group is now
-  // simply on their account and they pay for it — so this is a DIFFERENT,
-  // informational message from the offer email. The transfer is already
-  // committed above; a send failure must never surface as a failed transfer.
-  await notifyTransferCompleteRecipient({
-    subscriptionId,
-    actorUserId,
-    recipientId: recipient.id,
-    recipientEmail: recipient.email,
-  }).catch((err) => {
-    log.error({ err }, "billing-groups: transfer-complete email failed (best-effort)");
+  // The recipient accepted nothing — the group is now simply on their account and they pay for it — so their notice is a DIFFERENT,
+  // informational message from the offer. It is queued in the handover's own transaction (committed <=> queued), so a Stripe tidy-up
+  // that fails after it cannot lose it; a refused enqueue fails the handover (D1). The request makes the first attempt once the tidy-up
+  // is done; if the tidy-up throws, the worker sends it.
+  const queued: string[] = [];
+  const moved = await handOverGroup(group, recipient, null, async (tx) => {
+    const id = await queueTransferNotice(tx, "group_transfer_complete", { subscriptionId, actorUserId, recipient });
+    if (id !== null) queued.push(id);
   });
+  await finishHandover(moved, recipient, null);
+  if (queued.length > 0) deferred(() => dispatchNow(queued));
 
   return { status: "transferred", subscription_id: subscriptionId, owner_user_id: recipient.id };
 }
@@ -1890,6 +1886,7 @@ async function handOverGroup(
   target: GroupRow | { id: string; expectOwner: string; expectCustomer?: string },
   recipient: { id: string; email: string; display_name: string },
   newPaymentMethodId: string | null,
+  inHandover?: (tx: Tx, row: GroupRow) => Promise<void>,
 ): Promise<GroupRow> {
   const expectOwner = "expectOwner" in target ? target.expectOwner : target.owner_user_id;
   const expectCustomer = "expectCustomer" in target ? target.expectCustomer : undefined;
@@ -1918,6 +1915,8 @@ async function handOverGroup(
       returning id`;
     if (!swapped)
       throw new HttpError(409, "This billing group has changed hands since it was offered.");
+    // What else must commit with the swap (the immediate path's notice), on this transaction, after it.
+    if (inHandover) await inHandover(tx, row);
     return row;
   }) as unknown as GroupRow;
 }
@@ -2072,15 +2071,17 @@ async function notifyDetachParties(args: {
 }
 
 /**
- * Queue the transfer-OFFER notice to the recipient (live-sub path, two-phase) on `tx`, the transaction that makes the offer live: kind
- * `group_transfer_offer`, ref `subscription / <group id>`, no organisation (a group can span several), addressed to the recipient's
- * account, in their language (D4: the account's, then the default of the org the link points at), NOT transactional (as the sender
- * never was), with the bound expiry. Links to an org the recipient can reach in the group (see recipientReachableOrg), and uses that
- * org's name as the human label for the group. Returns the row's id, or null when the group has no live org to link to. A refused
- * enqueue throws, failing the offer (D1).
+ * Queue a transfer notice to the recipient on `tx`, the transaction of the fact it reports: `group_transfer_offer` (live-sub path,
+ * two-phase: the transaction that makes the offer live) or `group_transfer_complete` (the immediate handover: the transaction that swaps
+ * the payer). Ref `subscription / <group id>`, no organisation (a group can span several), addressed to the recipient's account, in
+ * their language (D4: the account's, then the default of the org the link points at), NOT transactional (as the senders never were),
+ * with the bound expiry. Links to an org the recipient can reach in the group (see recipientReachableOrg), and uses that org's name as
+ * the human label for the group. Returns the row's id, or null when the group has no live org to link to. A refused enqueue throws,
+ * failing the transfer (D1).
  */
-async function queueTransferOffer(
+async function queueTransferNotice(
   tx: Tx,
+  kind: "group_transfer_offer" | "group_transfer_complete",
   args: { subscriptionId: string; actorUserId: string; recipient: { id: string; email: string } },
 ): Promise<string | null> {
   const { subscriptionId, actorUserId, recipient } = args;
@@ -2088,34 +2089,18 @@ async function queueTransferOffer(
   if (!org) return null; // no reachable org → no meaningful link to send.
   const locale = await recipientLocale(tx, { pick: null, userId: recipient.id, orgDefault: org.default_locale });
   const payerName = await payerDisplayName(tx, actorUserId);
+  const build = kind === "group_transfer_offer" ? transferOfferEmail : transferCompleteEmail;
   return enqueueEmail(tx, {
-    kind: "group_transfer_offer",
+    kind,
     refType: "subscription",
     refId: subscriptionId,
     orgId: null,
     to: recipient.email,
     recipientUserId: recipient.id,
-    ...(await transferOfferEmail({ payerName, groupName: org.name, link: billingSettingsLink(org.slug) }, locale)),
+    ...(await build({ payerName, groupName: org.name, link: billingSettingsLink(org.slug) }, locale)),
     transactional: false,
     expiresAt: expiryWithin(null),
   });
-}
-
-/** Fire the transfer-COMPLETE email to the recipient (community / immediate
- *  handover). Informational, not an offer: they accepted nothing and now simply
- *  pay for the group. Best-effort — the caller wraps this so nothing here can
- *  fail the already-committed transfer. Same recipient-reachable-org link. */
-async function notifyTransferCompleteRecipient(args: {
-  subscriptionId: string;
-  actorUserId: string;
-  recipientId: string;
-  recipientEmail: string;
-}): Promise<void> {
-  const { subscriptionId, actorUserId, recipientId, recipientEmail } = args;
-  const org = await recipientReachableOrg(sql, subscriptionId, recipientId);
-  if (!org) return;
-  const payerName = await payerDisplayName(sql, actorUserId);
-  await sendTransferCompleteEmail(recipientEmail, payerName, org.name, billingSettingsLink(org.slug));
 }
 
 async function transferRecipient(

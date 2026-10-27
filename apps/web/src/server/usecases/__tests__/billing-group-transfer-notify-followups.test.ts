@@ -4,11 +4,17 @@
 //     an org IN THE GROUP they are a member of — not the group's oldest org,
 //     which they may not be able to open.
 //  2. The COMMUNITY (immediate) handover path must also email the recipient, with
-//     a DIFFERENT, informational message ("you now pay for this group"). It must
-//     be best-effort: a throw cannot fail the transfer.
+//     a DIFFERENT, informational message ("you now pay for this group"), queued
+//     WITH the handover (phase 3 wave 4, kind `group_transfer_complete`): in the
+//     transaction that swaps the payer, so a Stripe tidy-up that fails after it
+//     cannot lose the notice. Addressed to the recipient's account, in their
+//     language (D4: the account's, then the default of the org the link points
+//     at), ref `subscription / <group id>`, no organisation, not transactional.
+//     Changed while queued: nothing — a hand-back is a new event with its own row.
 //
-// The offer notice is queued on the email outbox (phase 3 wave 4, kind `group_transfer_offer`); its builder `transferOfferEmail` is
-// WRAPPED, never replaced, so the spy reads the link the real render was given. Only the outbox transport is a double.
+// Both notices are queued on the email outbox (phase 3 wave 4); their builders (`transferOfferEmail`, `transferCompleteEmail`) are
+// WRAPPED, never replaced, so the spies read what the real render was given. Only the outbox transport is a double (and, in one test,
+// Stripe's `customers.update`, spied on the real client to fail once).
 //
 // Own fixture port (12119) so it never contends with the other transfer suites.
 process.env.STRIPE_SECRET_KEY ??= "sk_test_fixture_never_real";
@@ -17,24 +23,25 @@ process.env.STRIPE_MOCK_PORT = "12119";
 
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-// The offer's builder, wrapped; the complete notice's direct sender, steered.
-const { mail, sendTransferCompleteEmail } = vi.hoisted(() => ({
-  mail: { offer: vi.fn<typeof import("@/lib/email").transferOfferEmail>() },
-  sendTransferCompleteEmail: vi.fn<
-    (to: string, payerName: string, groupName: string, link: string, locale?: string) => Promise<boolean>
-  >(async () => true),
+// Both builders, wrapped: the real render runs.
+const mail = vi.hoisted(() => ({
+  offer: vi.fn<typeof import("@/lib/email").transferOfferEmail>(),
+  complete: vi.fn<typeof import("@/lib/email").transferCompleteEmail>(),
 }));
 vi.mock("@/lib/email", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/email")>();
   mail.offer.mockImplementation(actual.transferOfferEmail);
-  return { ...actual, transferOfferEmail: mail.offer, sendTransferCompleteEmail };
+  mail.complete.mockImplementation(actual.transferCompleteEmail);
+  return { ...actual, transferOfferEmail: mail.offer, transferCompleteEmail: mail.complete };
 });
 // The outbox's one network seam: captured, never sent.
 const transport = vi.hoisted(() => ({ deliver: vi.fn() }));
 vi.mock("@/server/email-outbox/transport", () => ({ deliver: transport.deliver }));
 
 import { sql } from "@/lib/db";
+import { getStripe } from "@/lib/stripe";
 import { offerGroupTransfer } from "@/server/usecases/billing-groups";
+import { dictionarySubject } from "@/server/email-outbox/__tests__/_kind-harness";
 import {
   startStripeFixtureServer,
   type StripeFixtureServer,
@@ -68,10 +75,17 @@ afterAll(async () => {
 beforeEach(() => {
   stubOutboxEnv();
   mail.offer.mockClear();
+  mail.complete.mockClear();
   transport.deliver.mockReset().mockImplementation(async () => ({ ok: true, providerId: `re_fnu_${crypto.randomUUID()}` }));
-  sendTransferCompleteEmail.mockReset();
-  sendTransferCompleteEmail.mockResolvedValue(true);
 });
+
+type CompleteRow = { id: string; org_id: string | null; recipient_user_id: string | null; subject: string; transactional: boolean; status: string };
+const completeRows = (groupId: string) =>
+  sql<CompleteRow[]>`
+    select id, org_id, recipient_user_id, subject, transactional, status
+      from email_outbox
+     where kind = 'group_transfer_complete' and ref_type = 'subscription' and ref_id = ${groupId}
+     order by created_at, id`;
 
 describe.skipIf(!HAS_DB)("Follow-up 1: offer email link targets a recipient-reachable org", () => {
   it("uses the slug of an org the recipient is a member of, not the group's oldest org", async () => {
@@ -95,9 +109,10 @@ describe.skipIf(!HAS_DB)("Follow-up 1: offer email link targets a recipient-reac
   });
 });
 
-describe.skipIf(!HAS_DB)("Follow-up 2: community handover emails the recipient", () => {
-  it("sends the transfer-complete email to the recipient after an immediate handover", async () => {
-    const { payer, heir, groupId, slug } = await seedCommunityGroup();
+describe.skipIf(!HAS_DB)("Follow-up 2: community handover queues the transfer-complete notice", () => {
+  it("an immediate handover queues one transfer-complete notice to the recipient, in their language, not the offer notice", async () => {
+    // The recipient's account has no language, so the notice follows the default of the org the link points at (D4).
+    const { payer, heir, groupId, slug, orgName } = await seedCommunityGroup({ orgDefaultLocale: "fr" });
 
     const res = await offerGroupTransfer({
       actorUserId: payer.id,
@@ -107,29 +122,58 @@ describe.skipIf(!HAS_DB)("Follow-up 2: community handover emails the recipient",
     expect(res.status).toBe("transferred");
     expect(res.owner_user_id).toBe(heir.id);
 
-    // Informational email, not the offer email.
+    // Informational notice, not the offer notice.
     expect(mail.offer).not.toHaveBeenCalled();
-    expect(sendTransferCompleteEmail).toHaveBeenCalledTimes(1);
-    const [to, payerName, , link] = sendTransferCompleteEmail.mock.calls[0];
-    expect(to).toBe(heir.email);
-    expect(payerName).toBe("Dana Payer");
-    expect(link).toContain(`/o/${slug}/settings/billing`);
+    const rows = await completeRows(groupId);
+    expect(rows, "one notice for the one handover").toHaveLength(1);
+    expect(rows[0]!.recipient_user_id, "addressed to the recipient's account").toBe(heir.id);
+    expect(rows[0]!.org_id, "a group spans orgs: the notice names none").toBeNull();
+    expect(rows[0]!.transactional).toBe(false);
+    const fr = dictionarySubject("fr", "transferComplete.subject", {});
+    expect(fr).not.toBe(dictionarySubject("en", "transferComplete.subject", {}));
+    expect(rows[0]!.subject).toBe(fr);
+    expect(mail.complete).toHaveBeenCalledTimes(1);
+    const [args, locale] = mail.complete.mock.calls[0]!;
+    expect(locale).toBe("fr");
+    expect(args.payerName).toBe("Dana Payer");
+    expect(args.groupName).toBe(orgName);
+    expect(args.link).toContain(`/o/${slug}/settings/billing`);
+    // The request makes the first attempt.
+    await vi.waitFor(async () => expect((await completeRows(groupId))[0]!.status).toBe("sent"), { timeout: 15_000, interval: 50 });
   });
 
-  it("is best-effort: an email that throws does not roll back the completed transfer", async () => {
+  it("the handover's notice is queued with it, so a failing Stripe tidy-up afterwards does not lose it", async () => {
+    // A community group that kept its Stripe customer: the tidy-up after the handover repoints the invoice contact at Stripe.
+    const { payer, heir, groupId } = await seedCommunityGroup({ customer: `cus_fnu_${crypto.randomUUID().slice(0, 8)}` });
+    const update = vi.spyOn(getStripe().customers, "update").mockRejectedValueOnce(new Error("stripe down"));
+    try {
+      await expect(
+        offerGroupTransfer({ actorUserId: payer.id, subscriptionId: groupId, newOwnerUserId: heir.id }),
+      ).rejects.toThrow("stripe down");
+      expect(update, "premise: the tidy-up reached Stripe and failed there").toHaveBeenCalledTimes(1);
+    } finally {
+      update.mockRestore();
+    }
+
+    // The handover committed before the tidy-up, and its notice with it.
+    const [group] = await sql<{ owner_user_id: string }[]>`select owner_user_id from subscriptions where id = ${groupId}`;
+    expect(group!.owner_user_id).toBe(heir.id);
+    const rows = await completeRows(groupId);
+    expect(rows, "the notice is queued for the worker").toHaveLength(1);
+    expect(rows[0]!.recipient_user_id).toBe(heir.id);
+  });
+
+  it("empty: a second handover by the old payer is refused and queues nothing", async () => {
     const { payer, heir, groupId } = await seedCommunityGroup();
-    sendTransferCompleteEmail.mockRejectedValueOnce(new Error("resend down"));
+    await offerGroupTransfer({ actorUserId: payer.id, subscriptionId: groupId, newOwnerUserId: heir.id });
+    expect(await completeRows(groupId), "premise: the first handover queued its notice").toHaveLength(1);
 
-    const res = await offerGroupTransfer({
-      actorUserId: payer.id,
-      subscriptionId: groupId,
-      newOwnerUserId: heir.id,
+    // The old payer no longer pays for the group, so the second press is refused before anything is written.
+    await expect(offerGroupTransfer({ actorUserId: payer.id, subscriptionId: groupId, newOwnerUserId: heir.id })).rejects.toMatchObject({
+      status: 403,
     });
-    expect(res.status).toBe("transferred");
 
-    // Ownership actually moved despite the email failure.
-    const [group] = await sql<{ owner_user_id: string }[]>`
-      select owner_user_id from subscriptions where id = ${groupId}`;
-    expect(group.owner_user_id).toBe(heir.id);
+    expect(await completeRows(groupId), "the refused handover queued nothing").toHaveLength(1);
+    expect(mail.complete, "and rendered nothing").toHaveBeenCalledTimes(1);
   });
 });
