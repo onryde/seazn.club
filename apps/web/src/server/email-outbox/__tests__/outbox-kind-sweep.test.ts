@@ -243,20 +243,6 @@ const SPEC_FACTS: KindFacts = {
   group_org_left: ["account", false],
 };
 
-/** Wave 4's kinds, typed from the spec's table: registered by T1 before any producer moved, so each is still on its direct sender until its
- *  kind task (T2-T4) deletes it from NOT_YET_MOVED, and here. The last move empties both. */
-const WAVE_4_UNMOVED: readonly OutboxKind[] = [
-  "official_assigned",
-  "official_assignment_changed",
-  "suspension_confirmed",
-  "suspension_served",
-  "match_report_submitted",
-  "group_transfer_offer",
-  "group_transfer_complete",
-  "group_org_removed",
-  "group_org_left",
-];
-
 /** What the real producers create beyond the rows the hand-made scenarios name: the seeded round's people and organisation. (The
  *  addresses this run mails all start with RUN, so the accounts the magic-link route makes and the ones `accountAt` makes are found
  *  by address; a seeded player's address is not ours, so those are tracked by id.) */
@@ -375,10 +361,24 @@ describe("the spec's lists (no database)", () => {
     ]);
   });
 
-  it("the not-yet-moved list names only spec kinds, once each, and leaves at least one kind to sweep", () => {
+  it("the not-yet-moved list names only spec kinds, once each, in the registry's order, none of waves 1 to 3, and leaves at least one kind to sweep", () => {
     expect(new Set(NOT_YET_MOVED).size).toBe(NOT_YET_MOVED.length);
     for (const k of NOT_YET_MOVED) expect(SPEC_KINDS as readonly string[]).toContain(k);
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
+    // Waves 1 to 3 are closed (wave 1 T12, wave 2 T10, wave 3 T4c): none of their kinds may be listed again. They are the spec's first
+    // twenty-five (2 + 5 + 10 + 8), everything before wave 4's first kind in the spec's own list.
+    const closed = SPEC_KINDS.slice(0, SPEC_KINDS.indexOf("official_assigned"));
+    expect(closed, "waves 1 to 3 hold the spec's first twenty-five kinds").toHaveLength(25);
+    let closedChecked = 0;
+    for (const k of closed) {
+      expect(NOT_YET_MOVED, `${k} belongs to a closed wave, so it cannot be unmoved`).not.toContain(k);
+      closedChecked += 1;
+    }
+    expect(closedChecked, "anti-vacuity: every kind of waves 1 to 3 was judged").toBe(25);
+    // In the registry's order, so a kind task deletes its own line and nothing else moves.
+    expect([...NOT_YET_MOVED], "the unmoved kinds are a subsequence of OUTBOX_KINDS, in its order").toEqual(
+      OUTBOX_KINDS.filter((k) => NOT_YET_MOVED.includes(k)),
+    );
   });
 
   it("the three lists agree: a kind is unmoved exactly when its direct sender is still in the allowlist of lib/email's senders", () => {
@@ -397,14 +397,9 @@ describe("the spec's lists (no database)", () => {
       checked += 1;
     }
     expect(checked, "anti-vacuity: every kind was judged").toBe(SPEC_KINDS.length);
-    // Waves 1 to 3 are closed (wave 1 T12, wave 2 T10, wave 3 T4c) and wave 4's T1 registered its nine kinds before any producer moved:
-    // exactly those nine are unmoved, and they are exactly the kinds that still name a direct sender. Both sides of the equivalence
-    // above have members to judge.
-    expect(NOT_YET_MOVED, "the unmoved kinds are wave 4's, in the spec's order").toEqual(WAVE_4_UNMOVED);
-    expect(
-      SPEC_KINDS.filter((k) => KIND_DIRECT_SENDER[k] !== null),
-      "and they, and no other kind, still name a direct sender",
-    ).toEqual(WAVE_4_UNMOVED);
+    // Which kinds are unmoved is NOT_YET_MOVED's alone (the test above holds its shape); the loop holds it to the map and the allowlist
+    // kind by kind. When the last wave-4 move empties it, put back `expect(NOT_YET_MOVED).toEqual([])` and "none still names a direct
+    // sender", as wave 3's T4c left them.
     expect(SPEC_KINDS.length - NOT_YET_MOVED.length).toBeGreaterThan(0);
     const senders = Object.values(KIND_DIRECT_SENDER).filter((x): x is string => x !== null);
     expect(new Set(senders).size, "no two kinds share a direct sender").toBe(senders.length);

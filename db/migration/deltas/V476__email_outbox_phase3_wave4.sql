@@ -5,7 +5,10 @@
 -- WHAT THIS ADDS. Nine kinds, in the table's row order: official_assigned, official_assignment_changed, suspension_confirmed,
 -- suspension_served, match_report_submitted, group_transfer_offer, group_transfer_complete, group_org_removed, group_org_left.
 -- Nothing else: the once-key, the replace rule and the cancel function are V472's, and V474's scrub index serves account_deletion
--- alone, which this wave does not touch. (V475 is another programme's; Flyway accepts the gap if that one lands later.)
+-- alone, which this wave does not touch.
+--
+-- ORDER. V475 is W2d's and must reach main before this migration does: db/flyway.toml sets no outOfOrder, so a database already at
+-- V476 refuses a V475 that arrives after it.
 
 -- Closed set: outbox-schema.test.ts reads this back and requires it to equal constants.ts and the spec's list.
 alter table email_outbox drop constraint email_outbox_kind_valid,
