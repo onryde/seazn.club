@@ -385,6 +385,44 @@ const ROWS: Row[] = [
       await expect(page).toHaveURL(/tab=registrants/);
     },
   },
+  {
+    // Discipline 3A: a pending ban in a football division whose organiser switched discipline ON (the AUTH_STATE org
+    // is Pro, so entitled). Every step through the real API doors — the same rig as discipline.spec.ts.
+    id: "bans_waiting",
+    kind: "bans_waiting",
+    label: en["desk.needsYou.bans_waiting.action"],
+    build: async (request) => {
+      const comp = await apiJson<{ id: string; slug: string }>(request, "/api/v1/competitions", "POST", {
+        name: `Actions bans ${TAG} ${Math.random().toString(36).slice(2, 6)}`, visibility: "public", ends_on: "2030-12-31",
+      });
+      expect(comp.status, "create competition").toBe(201);
+      const div = await apiJson<{ id: string; slug: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`,
+        "POST", { name: "Prem", sport_key: "football", variant_key: "11-a-side" });
+      expect(div.status, "create division").toBe(201);
+      const name = `Booked Player ${TAG} ${Math.random().toString(36).slice(2, 6)}`;
+      const player = await apiJson<{ id: string }>(request, "/api/v1/persons", "POST",
+        { full_name: name, consent: { public_name: true } });
+      expect(player.status, "create person").toBe(201);
+      const ents = await apiJson(request, `/api/v1/divisions/${div.data!.id}/entrants`, "POST", [
+        { kind: "team", display_name: `Rovers ${TAG}`, seed: 1, members: [{ person_id: player.data!.id }] },
+        { kind: "team", display_name: `City ${TAG}`, seed: 2 },
+      ]);
+      expect(ents.status, "add the two teams").toBeLessThan(300);
+      const rules = await apiJson(request, `/api/v1/divisions/${div.data!.id}/discipline-rules`, "PUT", {
+        enabled: true, rules: { accumulation: [], dismissal: [{ key: "red", color: "red", ban_matches: 1 }] },
+      });
+      expect(rules.status, "switch discipline on").toBe(200);
+      const ban = await apiJson(request, `/api/v1/divisions/${div.data!.id}/suspensions`, "POST",
+        { person_id: player.data!.id, matches_total: 1, reason: "Violent conduct" });
+      expect(ban.status, "record a ban — pending until the organiser confirms it").toBe(201);
+      return { compSlug: comp.data!.slug, divSlug: div.data!.slug, landText: name };
+    },
+    // "Review bans" opens the division's Discipline tab, where the pending row's Confirm/Waive are.
+    land: async (page) => {
+      await expect(page).toHaveURL(/tab=discipline/);
+      await assertUsable(page, '[data-testid="pending-row"] button', "confirm or waive the ban");
+    },
+  },
 ];
 
 test.describe("competition desk: every action label lands on the control it names", () => {

@@ -49,7 +49,7 @@ const drawable = (o: Partial<PhaseStage> = {}): PhaseStage =>
 const seedSlotFx = (stageId: string, o: Partial<PhaseFixture> = {}): PhaseFixture =>
   fx({ id: `${stageId}-slot`, stageId, awaitsSeedDraw: true, status: "scheduled", scheduledAt: null, ...o });
 const input = (o: Partial<PhaseInput> = {}): PhaseInput => ({
-  divisionStatus: "active", stages: [stage()], fixtures: [fx()], now: NOW, tz: TZ, awaitingRegistrations: 0, ...o,
+  divisionStatus: "active", stages: [stage()], fixtures: [fx()], now: NOW, tz: TZ, awaitingRegistrations: 0, bansToReview: 0, ...o,
 });
 
 describe("localDateKey", () => {
@@ -736,6 +736,59 @@ describe("resolveAttention", () => {
     expect(resolveAttention(input({ awaitingRegistrations: 2 }))).toContainEqual({ kind: "registrations_waiting", count: 2 });
     expect(resolveAttention(input({ awaitingRegistrations: 0 })).some((a) => a.kind === "registrations_waiting")).toBe(false);
   });
+  // Owner-approved 3A: pending bans in a division whose discipline rules are on (the count arrives already gated —
+  // card-stats joins `discipline_rules.enabled`, the desk zeroes it when the org is not entitled).
+  describe("bans_waiting (discipline 3A)", () => {
+    it("is raised from the count, and an empty count raises nothing", () => {
+      expect(resolveAttention(input({ bansToReview: 2 }))).toContainEqual({ kind: "bans_waiting", count: 2 });
+      expect(resolveAttention(input({ bansToReview: 1 }))).toContainEqual({ kind: "bans_waiting", count: 1 });
+      expect(resolveAttention(input({ bansToReview: 0 })).some((a) => a.kind === "bans_waiting")).toBe(false);
+    });
+    it("is AMBER — time-bound, but it never stops a match being played", () => {
+      expect(ATTENTION_SEVERITY.bans_waiting).toBe("amber");
+    });
+    it("is raised in EVERY division status — a ban recorded before Start is as unreviewed as one after", () => {
+      let checked = 0;
+      for (const divisionStatus of ["setup", "scheduled", "active", "completed"] as const) {
+        expect(resolveAttention(input({ divisionStatus, bansToReview: 1 })), divisionStatus)
+          .toContainEqual({ kind: "bans_waiting", count: 1 });
+        checked++;
+      }
+      expect(checked).toBe(4);
+    });
+    it("never moves the phase: the same division with and without pending bans has the same phase", () => {
+      const shapes: Partial<PhaseInput>[] = [
+        {},
+        { divisionStatus: "setup", stages: [], fixtures: [] },
+        { fixtures: [fx({ id: "a", status: "in_play", hasScorer: true })] },
+        { divisionStatus: "completed", stages: [stage({ status: "complete" })], fixtures: [fx({ id: "a", status: "decided" })] },
+      ];
+      const phases = new Set<string>();
+      for (const o of shapes) {
+        const without = resolvePhase(input({ ...o, bansToReview: 0 }));
+        expect(resolvePhase(input({ ...o, bansToReview: 3 }))).toBe(without);
+        phases.add(without);
+      }
+      // The sweep reaches more than one phase, or it proves nothing about "every" phase.
+      expect(phases.size).toBeGreaterThanOrEqual(3);
+    });
+    it("sits after the match ambers and before the slate registrations row (KIND_ORDER)", () => {
+      const fixtures = [fx({ id: "u", status: "scheduled", scheduledAt: null })];
+      const kinds = resolveAttention(input({ fixtures, bansToReview: 1, awaitingRegistrations: 1 })).map((a) => a.kind);
+      expect(kinds).toEqual(["unscheduled", "bans_waiting", "registrations_waiting"]);
+      // And it leads the masthead over the slate row, whatever order the divisions arrive in.
+      const bans = { kind: "bans_waiting", count: 1 } as const;
+      const regs = { kind: "registrations_waiting", count: 9 } as const;
+      expect(leadingAttention([{ attention: [regs] }, { attention: [bans] }])).toEqual(bans);
+      expect(leadingAttention([{ attention: [bans] }, { attention: [regs] }])).toEqual(bans);
+    });
+    it("does not lift a ledger row — only red outranks the phase", () => {
+      const bans = { kind: "bans_waiting", count: 5 } as const;
+      expect(ledgerRank({ phase: "finished", attention: [bans] })).toBe(ledgerRank({ phase: "finished", attention: [] }));
+      expect(ledgerRank({ phase: "setting_up", attention: [bans] }))
+        .toBeGreaterThan(ledgerRank({ phase: "match_day", attention: [] }));
+    });
+  });
   it("orders red before amber before slate", () => {
     const stages = [drawable()];
     const fixtures = [seedSlotFx("fin"), fx({ id: "u", scheduledAt: null })];
@@ -984,7 +1037,7 @@ describe("isUnscheduledFixture", () => {
     ];
     const row = resolveAttention({
       divisionStatus: "active", stages: [], fixtures,
-      now: "2026-09-05T18:00:00Z", tz: "UTC", awaitingRegistrations: 0,
+      now: "2026-09-05T18:00:00Z", tz: "UTC", awaitingRegistrations: 0, bansToReview: 0,
     }).find((a) => a.kind === "unscheduled");
     expect(row?.kind === "unscheduled" ? row.count : 0).toBe(fixtures.filter(isUnscheduledFixture).length);
   });
@@ -1027,7 +1080,7 @@ describe("isResultMissing", () => {
     const nowIso = "2026-09-05T18:00:00Z";
     const row = resolveAttention({
       divisionStatus: "active", stages: [], fixtures,
-      now: nowIso, tz: "UTC", awaitingRegistrations: 0,
+      now: nowIso, tz: "UTC", awaitingRegistrations: 0, bansToReview: 0,
     }).find((a) => a.kind === "result_missing");
     expect(row?.kind === "result_missing" ? row.fixtureIds : []).toEqual(
       fixtures.filter((f) => isResultMissing(f, Date.parse(nowIso))).map((f) => f.id),

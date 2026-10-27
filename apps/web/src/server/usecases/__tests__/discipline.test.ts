@@ -329,8 +329,8 @@ describe.skipIf(!HAS_DB)("discipline fold (SPEC-1, PROMPT-78)", () => {
     const forfeit = (ctx: Ctx, fx: string, by: string) =>
       scoreEvent(ctx.auth, fx, { expected_seq: 0, type: "core.forfeit", payload: { by, reason: "walkover" } } as never);
     /** Loop R2 N-4: the forfeit, then the console's Undo of it — the ledger keeps both events, the fixture is unplayed
-     *  again, and only the stored STATUS says the forfeit no longer stands (the counter reads every event, voided ones
-     *  too, for who forfeited). */
+     *  again; the counter reads the ACTIVE ledger only (2026-10-27), so the voided forfeit names nobody and is no start —
+     *  and the stored status, back to scheduled, agrees. */
     const forfeitThenVoid = async (ctx: Ctx, fx: string, by: string) => {
       const done = (await forfeit(ctx, fx, by)) as { event_id: string };
       await scoreEvent(ctx.auth, fx, { expected_seq: 1, type: "core.void", payload: { event_id: done.event_id } } as never);

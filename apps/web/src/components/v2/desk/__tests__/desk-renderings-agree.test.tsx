@@ -96,6 +96,8 @@ type Shape = {
   fixtures: PhaseFixture[];
   divisionStatus?: PhaseInput["divisionStatus"];
   awaitingRegistrations?: number;
+  /** Pending bans in a division whose discipline rules are on (owner-approved 3A). */
+  bansToReview?: number;
   entrants?: number;
 };
 
@@ -142,6 +144,10 @@ const SHAPES: Shape[] = [
     stages: [], fixtures: [], divisionStatus: "setup", awaitingRegistrations: 3, entrants: 4,
   },
   {
+    why: "setting_up/bans_waiting — a ban recorded by hand before a ball was kicked, not yet reviewed",
+    stages: [], fixtures: [], divisionStatus: "setup", bansToReview: 1, entrants: 4,
+  },
+  {
     why: "setting_up/none — a division created and not yet touched",
     stages: [], fixtures: [], divisionStatus: "setup", entrants: 4,
   },
@@ -166,6 +172,12 @@ const SHAPES: Shape[] = [
     stages: [st()],
     fixtures: [fxt({ id: "a", status: "scheduled", scheduledAt: FUTURE })],
     awaitingRegistrations: 2,
+  },
+  {
+    why: "scheduled/bans_waiting — a red card last week, the next round dated, the ban not yet reviewed",
+    stages: [st()],
+    fixtures: [fxt({ id: "a" }), fxt({ id: "b", status: "scheduled", scheduledAt: FUTURE })],
+    bansToReview: 1,
   },
   {
     why: "scheduled/none — a settled, dated season",
@@ -214,6 +226,12 @@ const SHAPES: Shape[] = [
     awaitingRegistrations: 1,
   },
   {
+    why: "match_day/bans_waiting — playing today with two bans from the last round still unreviewed",
+    stages: [st()],
+    fixtures: [fxt({ id: "a" }), fxt({ id: "b", status: "in_play", hasScorer: true })],
+    bansToReview: 2,
+  },
+  {
     why: "match_day/none — playing today, everything in hand",
     stages: [st()],
     fixtures: [fxt({ id: "a", status: "in_play", hasScorer: true })],
@@ -255,6 +273,12 @@ const SHAPES: Shape[] = [
     divisionStatus: "completed", awaitingRegistrations: 1,
   },
   {
+    why: "finished/bans_waiting — a red card in the last match of the season, its ban never reviewed",
+    stages: [st({ status: "complete" })],
+    fixtures: [fxt({ id: "a" })],
+    divisionStatus: "completed", bansToReview: 1,
+  },
+  {
     why: "finished/none — a completed season",
     stages: [st({ status: "complete" })],
     fixtures: [fxt({ id: "a" })],
@@ -270,6 +294,7 @@ function resolve(shape: Shape) {
     divisionStatus: shape.divisionStatus ?? "active",
     stages: shape.stages, fixtures: shape.fixtures, now: NOW, tz: TZ,
     awaitingRegistrations: shape.awaitingRegistrations ?? 0,
+    bansToReview: shape.bansToReview ?? 0,
   };
   const phase = resolvePhase(input);
   const attention = resolveAttention(input);

@@ -61,6 +61,9 @@ const KEYS: { key: string; source: string }[] = [
   { key: "history.error.played", source: "src/components/v2/history-panel.tsx" },
   { key: "history.error.played", source: "src/components/v2/stages-panel.tsx" },
   { key: "board.ai.joint.reasonPlayed", source: "src/components/v2/board/ai-competition-console.tsx" },
+  // 2026-10-27: the discipline panel's confirm refused for a player on no entrant (SUSPENSION_NO_ENTRANT) — the same
+  // defect class (its generic catch paints `err.message`), so the same guard.
+  { key: "disc.panel.noEntrant", source: "src/components/discipline/discipline-panel.tsx" },
 ];
 
 /** The two JOINT-card sentences. Grouped because the card is

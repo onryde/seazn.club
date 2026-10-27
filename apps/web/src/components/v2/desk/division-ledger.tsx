@@ -1,13 +1,13 @@
 import type { ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { t } from "@/lib/i18n";
-import type { Dict } from "@/lib/i18n-constants";
+import type { Dict, Locale } from "@/lib/i18n-constants";
 import { routes } from "@/lib/routes";
 import { sportEmoji } from "@/components/discovery-cards";
 import { whenLabel } from "@/lib/division-status-line";
 import type { Attention } from "@/lib/division-phase";
 import type { DeskDivision } from "@/server/usecases/competition-desk";
-import { PhasePill } from "./phase-pill";
+import { BansToReviewPill, PhasePill } from "./phase-pill";
 import { DRAW_DOOR_KEY } from "./needs-you";
 
 export interface LedgerRow {
@@ -215,9 +215,12 @@ export function DivisionLedger({
                         scroll on the page at 320 (the no-h-scroll gate caught
                         it). Padding sits inside the border box and indents
                         without widening. */}
+                    {/* Discipline (3A): the bans pill rides the phase pill's own line, wrapping under it when both do
+                        not fit — organiser-only, like the action below (reviewing a ban is an organiser's job). */}
                     {d && (
-                      <div className="shrink-0 max-md:order-3 max-md:basis-full max-md:pl-10">
+                      <div className="flex shrink-0 flex-wrap items-center gap-1.5 max-md:order-3 max-md:basis-full max-md:pl-10">
                         <PhasePill dict={dict} phase={d.phase} attention={d.attention} />
+                        {canEdit && <BansToReviewPill dict={dict} attention={d.attention} locale={locale as Locale} />}
                       </div>
                     )}
                   </div>
@@ -274,7 +277,11 @@ export function DivisionLedger({
                 <div className="h-1.5 overflow-hidden rounded-full bg-purple-100">
                   <i className={`block h-full rounded-full ${d ? BAR[d.phase] : "bg-purple-300"}`} style={{ width: `${pct}%` }} />
                 </div>
-                <div>{d && <PhasePill dict={dict} phase={d.phase} attention={d.attention} />}</div>
+                {/* The pill track is ledger-wide (130px); a second pill stacks under the phase rather than widening it. */}
+                <div className="flex flex-col items-start gap-1">
+                  {d && <PhasePill dict={dict} phase={d.phase} attention={d.attention} />}
+                  {d && canEdit && <BansToReviewPill dict={dict} attention={d.attention} locale={locale as Locale} />}
+                </div>
                 {/* Fix round 2: this cell exists ONLY when the ledger's
                     template reserves its track (`hasNext`) — and then on
                     EVERY row, even one whose own `next` is empty, so the

@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import en from "@/dictionaries/en/ui.json";
 import { plural } from "@/lib/i18n";
-import { PhasePill, RED_PILL_KEY } from "@/components/v2/desk/phase-pill";
+import { BansToReviewPill, PhasePill, RED_PILL_KEY } from "@/components/v2/desk/phase-pill";
 import { NeedsYou, needsYouItems } from "@/components/v2/desk/needs-you";
 import { DivisionLedger } from "@/components/v2/desk/division-ledger";
 import { resolvePhase, resolveAttention, ATTENTION_SEVERITY, type Attention, type PhaseInput } from "@/lib/division-phase";
@@ -489,6 +489,7 @@ describe("DivisionLedger", () => {
       now: "2026-09-05T09:00:00Z",
       tz: "Europe/London",
       awaitingRegistrations: 0,
+      bansToReview: 0,
     };
     const phase = resolvePhase(phaseInput);
     const attention = resolveAttention(phaseInput);
@@ -691,5 +692,91 @@ describe("DivisionLedger", () => {
         rows={[{ id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null, desk: live, statusLine: "s" }]} />,
     );
     expect(html).toContain("Now: Riverside FC v Harbour CC");
+  });
+});
+
+// Owner-approved 3A (discipline): pending bans on the desk. Empty case first — no bans, no row, no pill.
+describe("bans_waiting — the desk's discipline prompt", () => {
+  const two = [
+    { id: "d1", name: "Premier Division", slug: "premier-division" },
+    { id: "d2", name: "Second Division", slug: "second-division" },
+  ];
+  const bans = (count: number): Attention => ({ kind: "bans_waiting", count });
+  const ledgerRow = (attention: Attention[]) => ({
+    id: "d1", name: "Premier", slug: "premier", sportKey: "football", logoUrl: null,
+    desk: div({ phase: "scheduled", attention }), statusLine: "10 of 15 played",
+  });
+
+  it("no pending bans builds no Needs-you row and no pill", () => {
+    const items = needsYouItems(en, deskOf([div(), div({ division_id: "d2" })]), two, "org", "comp", "en");
+    expect(items.some((i) => i.kind === "bans_waiting")).toBe(false);
+    const html = renderToStaticMarkup(
+      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([])]} />,
+    );
+    expect(html).not.toContain('data-attention-pill="bans_waiting"');
+  });
+
+  it("sums every division's bans into ONE amber row naming the divisions, opening the FIRST one's Discipline tab", () => {
+    const items = needsYouItems(
+      en,
+      deskOf([div({ attention: [bans(2)] }), div({ division_id: "d2", attention: [bans(1)] })]),
+      two, "org", "comp", "en",
+    );
+    const rows = items.filter((i) => i.kind === "bans_waiting");
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.title).toBe("3 bans awaiting your review");
+    expect(rows[0]!.severity).toBe("amber");
+    expect(rows[0]!.sub).toContain("Premier Division, Second Division");
+    expect(rows[0]!.action.href).toBe("/o/org/c/comp/d/premier-division?tab=discipline");
+    expect(rows[0]!.action.label).toBe(en["desk.needsYou.bans_waiting.action"]);
+  });
+
+  it("one ban reads singular; a division without bans is not named", () => {
+    const items = needsYouItems(
+      en, deskOf([div(), div({ division_id: "d2", attention: [bans(1)] })]), two, "org", "comp", "en",
+    );
+    const row = items.find((i) => i.kind === "bans_waiting");
+    expect(row?.title).toBe("1 ban awaiting your review");
+    expect(row?.sub).toContain("Second Division");
+    expect(row?.sub).not.toContain("Premier Division");
+    expect(row?.action.href).toBe("/o/org/c/comp/d/second-division?tab=discipline");
+  });
+
+  it("never outranks a red row: a red attention leads the list, the bans row follows", () => {
+    const d = div({ attention: [bans(4), { kind: "needs_fixtures", stageName: "Finals" }] });
+    const items = needsYouItems(en, desk(d), names, "org", "comp", "en");
+    expect(items.map((i) => i.kind)).toEqual(["needs_fixtures", "bans_waiting"]);
+  });
+
+  it("the ledger row keeps its PHASE pill and gains a counted amber pill beside it — editors only", () => {
+    const editor = renderToStaticMarkup(
+      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([bans(2)])]} />,
+    );
+    expect(editor).toContain('data-attention-pill="bans_waiting"');
+    expect(editor).toContain('data-count="2"');
+    expect(editor).toContain("2 bans to review");
+    // Amber never replaces the phase: the phase pill still reads the phase.
+    expect(editor).toContain('data-pill="scheduled"');
+    expect(editor).not.toContain('data-pill="bans_waiting"');
+    // A viewer cannot confirm a ban, so is not prompted to.
+    const viewer = renderToStaticMarkup(
+      <DivisionLedger canEdit={false} dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([bans(2)])]} />,
+    );
+    expect(viewer).not.toContain('data-attention-pill="bans_waiting"');
+    expect(viewer).toContain('data-pill="scheduled"');
+  });
+
+  it("the pill's own guard: a zero count is no pill, though resolveAttention never raises one (an assumption, asserted)", () => {
+    expect(BansToReviewPill({ dict: en, attention: [bans(0)], locale: "en" })).toBeNull();
+    expect(BansToReviewPill({ dict: en, attention: [], locale: "en" })).toBeNull();
+    expect(BansToReviewPill({ dict: en, attention: [bans(1)], locale: "en" }), "positive pair").not.toBeNull();
+  });
+
+  it("the pill reads singular at one", () => {
+    const html = renderToStaticMarkup(
+      <DivisionLedger canEdit dict={en} org="org" comp="comp" locale="en" now="2026-09-05T09:00:00Z" rows={[ledgerRow([bans(1)])]} />,
+    );
+    expect(html).toContain("1 ban to review");
+    expect(html).not.toContain("1 bans");
   });
 });

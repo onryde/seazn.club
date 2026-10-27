@@ -195,6 +195,11 @@ export interface PhaseInput {
    *  entirely for a division whose venue was ahead of its org. */
   tz: string;
   awaitingRegistrations: number;
+  /** Discipline (owner-approved 3A, 2026-10-27; widened F7): bans awaiting the organiser's review — `pending`
+   *  suspensions, rules on or off, only for an org entitled to `discipline.enforced` on this competition and a sport
+   *  with a discipline model (a Discipline tab to review them on). The caller resolves both conditions and passes 0
+   *  otherwise; nothing here is ever enabled or confirmed. */
+  bansToReview: number;
 }
 
 /** WHICH control the seed-proposal panel is showing for a stage that owes
@@ -259,7 +264,11 @@ export type Attention =
   // W2a (addendum 9): held fixtures — a level bracket result or a recorded abandon that decided nobody — each owed
   // the organiser's settle. Aggregated per division like `result_missing`; `fixtureIds` deep-links a single one.
   | { kind: "needs_decision"; count: number; fixtureIds: string[] }
-  | { kind: "registrations_waiting"; count: number };
+  | { kind: "registrations_waiting"; count: number }
+  // Discipline (owner-approved 3A): pending bans the organiser has not reviewed. Raised in every division status — a
+  // manual ban can be recorded before Start, a card's after the season ends — and only ever as a prompt: a pending ban
+  // blocks nobody until the organiser confirms it.
+  | { kind: "bans_waiting"; count: number };
 
 export type Severity = "red" | "amber" | "slate";
 
@@ -284,6 +293,9 @@ export const ATTENTION_SEVERITY: Record<Attention["kind"], Severity> = {
   not_recording: "amber",
   unscheduled: "amber",
   result_missing: "amber",
+  // AMBER: time-bound (an unreviewed ban lets the player take the next match) but it never stops a match being played,
+  // so it must never outrank the phase the way the stage-blocking reds do.
+  bans_waiting: "amber",
   registrations_waiting: "slate",
 };
 
@@ -370,6 +382,9 @@ const KIND_ORDER: Attention["kind"][] = [
   "not_recording",
   "unscheduled",
   "result_missing",
+  // Last of the ambers: the three above are about MATCHES (a live one unrecorded, one undated, one without a result);
+  // this one is about a person and is reviewed from a different tab.
+  "bans_waiting",
   "registrations_waiting",
 ];
 const SEVERITY_ORDER: Severity[] = ["red", "amber", "slate"];
@@ -957,6 +972,10 @@ export function resolveAttention(input: PhaseInput): Attention[] {
   if (held.length > 0) out.push({ kind: "needs_decision", count: held.length, fixtureIds: held });
   if (input.awaitingRegistrations > 0) {
     out.push({ kind: "registrations_waiting", count: input.awaitingRegistrations });
+  }
+  // Not gated by divisionStatus, like the registrations row above: a pending ban is owed its review in every status.
+  if (input.bansToReview > 0) {
+    out.push({ kind: "bans_waiting", count: input.bansToReview });
   }
   return out.sort(
     (a, b) =>

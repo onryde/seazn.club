@@ -64,6 +64,11 @@ export interface DivisionCardStats {
    *  `registered` so the headline number never reads as "all done" when
    *  some of it is still pending review or a free capacity slot. */
   awaiting_confirmation: number;
+  /** Discipline (owner-approved 3A, widened F7 2026-10-27): `pending` suspensions in this division, rules on or OFF — a
+   *  referee's report and a manual record raise one with the rules off. Entitlement and the sport's discipline model are
+   *  the CALLER's questions — competition-desk.ts zeroes this for an org not entitled to `discipline.enforced` on the
+   *  competition, and for a sport with no Discipline tab. */
+  bans_to_review: number;
   capacity: number | null;
   stage_kinds: string[];
   registration_open: boolean;
@@ -180,6 +185,8 @@ export async function listDivisionCardStats(
         (select count(*)::int from registrations r
           where r.division_id = d.id
             and r.status in ${tx([...AWAITING_CONFIRMATION_STATUSES])}) as awaiting_confirmation,
+        (select count(*)::int from suspensions s
+          where s.division_id = d.id and s.status = 'pending') as bans_to_review,
         rs.capacity,
         coalesce(rs.enabled, false)
           and (rs.opens_at is null or rs.opens_at <= now())

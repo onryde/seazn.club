@@ -9,8 +9,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import { useMsg } from "@/components/i18n/dict-provider";
-import type { Suspension } from "@/server/usecases/discipline";
+import { SUSPENSION_NO_ENTRANT_CODE } from "@/lib/suspension-no-entrant";
+import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
+import type { CoveredMatch, Suspension } from "@/server/usecases/discipline";
+import { parseRoundRoleKey } from "@seazn/engine/competition";
+import { dayKeyInTz } from "@seazn/engine/scheduling/tz";
+import { dayLabel } from "@/lib/day-label";
+import { intlLocaleFor } from "@/lib/public-date-locale";
+import { roundRoleLabel } from "@/lib/round-role-label";
 import { CardGlyph, toneForSource } from "./card-glyph";
 import { ServePips } from "./serve-pips";
 import { ReportDrawer, type MatchReport } from "@/components/officials/report-drawer";
@@ -20,11 +26,14 @@ export function DisciplinePanel({
   initial,
   squad,
   canEdit,
+  tz,
 }: {
   divisionId: string;
   initial: Suspension[];
   squad: { person_id: string; full_name: string }[];
   canEdit: boolean;
+  /** The venue zone a covered match's day is read in (`schedule_settings.tz`) — never the viewer's. */
+  tz: string;
 }) {
   const msg = useMsg();
   const router = useRouter();
@@ -51,7 +60,16 @@ export function DisciplinePanel({
       replace(next);
       router.refresh();
     } catch (err) {
-      setError(err instanceof ApiV1Error ? err.message : msg("disc.panel.failed"));
+      // A confirm for a player on no entrant here is refused (the ban could
+      // never be served): said from the dictionary, keyed on the CODE — the
+      // server's sentence is English.
+      setError(
+        err instanceof ApiV1Error && err.code === SUSPENSION_NO_ENTRANT_CODE
+          ? msg("disc.panel.noEntrant")
+          : err instanceof ApiV1Error
+            ? err.message
+            : msg("disc.panel.failed"),
+      );
     } finally {
       setBusyId(null);
     }
@@ -102,6 +120,7 @@ export function DisciplinePanel({
                       {s.reason} · {msg("disc.panel.matches")} {s.matchesTotal}
                       {s.entrantName ? ` · ${s.entrantName}` : ""}
                     </p>
+                    <CoveredLine covered={s.coveredMatches} tz={tz} pending />
                     {s.triggerVoided && (
                       <span className="mt-1 inline-block rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-500">
                         {msg("disc.panel.triggerVoided")}
@@ -159,6 +178,7 @@ export function DisciplinePanel({
                       {s.reason}
                       {s.entrantName ? ` · ${s.entrantName}` : ""}
                     </p>
+                    <CoveredLine covered={s.coveredMatches} tz={tz} pending={false} />
                   </div>
                 </div>
                 <div className="flex shrink-0 items-center gap-3">
@@ -210,6 +230,53 @@ export function DisciplinePanel({
         </details>
       )}
     </section>
+  );
+}
+
+/**
+ * Owner-approved 4A: WHICH matches a ban covers — "Misses: Round 4 vs Rovers · Sat 2 Nov" on an active ban, "Would
+ * miss: …" on a pending one (nothing is confirmed until the organiser says so). The list is the server's projection
+ * (`coveredMatches`, usecases/discipline.ts), so it moves on as matches are served and is empty once the ban is done —
+ * an empty list renders nothing. A placeholder (no fixture yet) folds with its neighbours into one counted phrase.
+ * The day is read in the VENUE's zone; English reads day-month (`intlLocaleFor`).
+ */
+function CoveredLine({ covered, tz, pending }: { covered: CoveredMatch[]; tz: string; pending: boolean }) {
+  const msg = useMsg();
+  const msgPlural = useMsgPlural();
+  const locale = useLocaleOrDefault();
+  if (covered.length === 0) return null;
+  const parts: string[] = [];
+  let unscheduled = 0;
+  const flush = () => {
+    if (unscheduled > 0) parts.push(msgPlural("disc.panel.missUnscheduled", unscheduled));
+    unscheduled = 0;
+  };
+  for (const m of covered) {
+    const role = m.roundRole === null ? null : parseRoundRoleKey(m.roundRole);
+    if (m.fixtureId === null || role === null) {
+      unscheduled++;
+      continue;
+    }
+    flush();
+    const match = msg("disc.panel.missMatch", {
+      round: roundRoleLabel(msg, role),
+      opponent: m.opponentName ?? msg("schedule.tbd"),
+    });
+    parts.push(
+      m.scheduledAt === null
+        ? match
+        : `${match} · ${dayLabel(dayKeyInTz(Date.parse(m.scheduledAt), tz), intlLocaleFor(locale))}`,
+    );
+  }
+  flush();
+  return (
+    <p
+      className="mt-1 min-w-0 break-words text-xs text-slate-700"
+      data-testid="covered-line"
+      data-covered-count={covered.length}
+    >
+      {msg(pending ? "disc.panel.wouldMiss" : "disc.panel.misses", { matches: parts.join(", ") })}
+    </p>
   );
 }
 

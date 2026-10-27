@@ -6,7 +6,7 @@ import { Globe, MonitorPlay, Printer, UserPlus } from "lucide-react";
 import { StatusChip, divisionChipState } from "@/components/ui/status-chip";
 import { routes } from "@/lib/routes";
 import { resolveLocale } from "@/lib/resolve-locale";
-import { getDictionary, t } from "@/lib/i18n";
+import { getDictionary, plural, t } from "@/lib/i18n";
 import { sportLabel } from "@/lib/scoring-vocab";
 import { variantWord } from "@/lib/variant-label-keys";
 import { pointsLineDict, rulesLineDict } from "@/lib/rules-line";
@@ -87,6 +87,7 @@ import { RulesEditor } from "@/components/discipline/rules-editor";
 import { DisciplinePanel } from "@/components/discipline/discipline-panel";
 import {
   activeSuspensionsByEntrant,
+  countBansToReview,
   divisionSquad,
   getDisciplineRules,
   listSuspensions,
@@ -277,6 +278,8 @@ export default async function DivisionPage({
     // value this page already passes to `StagesPanel`'s `tz` prop below.
     tz: scheduleSettings.tz,
     awaitingRegistrations: 0,
+    // Unread by `resolvePhase` (attention only) — the tab's own dot below carries this page's bans signal.
+    bansToReview: 0,
   });
   // Review wave 3: the panel gets court IDENTITY and display only — same trim
   // the schedule page does, and for the same reason. `listVenues` rows carry
@@ -476,6 +479,14 @@ export default async function DivisionPage({
           ),
         )
       : undefined;
+  // Discipline (owner-approved 3A): bans awaiting the organiser's review, as a dot on the Discipline tab — on EVERY
+  // tab, because a card raises its ban while the organiser is on fixtures or standings, never on Discipline. Rules on
+  // or OFF (F7, 2026-10-27): a referee's report and a manual record raise a pending ban with the rules off, and the
+  // Discipline tab lists it either way. ONE guard: `disciplineRules` is read for editors only, and is null whenever
+  // the sport has no discipline model or the pass-scoped gate (`getDisciplineRules`' `requireFeature`) refused it — so
+  // a viewer, an unentitled org or a tab-less sport never reaches the count. A stored-row count, no fold: read after
+  // the Discipline tab's own fold above, so on that tab the dot and the list cannot disagree.
+  const bansToReview = disciplineRules !== null ? await countBansToReview(auth, id) : 0;
 
   // The standings table and results grid take their words from the PUBLIC
   // dictionary (the same helpers as the hub's table), in this viewer's
@@ -758,6 +769,16 @@ export default async function DivisionPage({
                     widens a tab makes that worse at 320px. Screen readers get
                     the count as words; sighted users get the dot plus the
                     title. */}
+                {/* Discipline (3A): the same dot, the same reasons — inside the label, no width of its own. */}
+                {tabKey === "discipline" && bansToReview > 0 && (
+                  <span
+                    className="ml-1.5 inline-block h-2 w-2 rounded-full bg-amber-500 align-middle"
+                    data-pending-suspensions={bansToReview}
+                    title={t(dict, "disc.tab.pendingHint")}
+                  >
+                    <span className="sr-only">{plural(dict, "disc.tab.pending", bansToReview, locale)}</span>
+                  </span>
+                )}
                 {tabKey === "fixtures" && pendingSeedProposals > 0 && (
                   <span
                     className="ml-1.5 inline-block h-2 w-2 rounded-full bg-amber-500 align-middle"
@@ -1052,6 +1073,9 @@ export default async function DivisionPage({
                     initial={disciplineData.suspensions}
                     squad={disciplineData.squad}
                     canEdit={editable}
+                    // The venue zone — the one zone this page buckets and prints every fixture in (`StagesPanel`'s
+                    // `tz` below), so "Misses: … · Sat 2 Nov" names the same day the run sheet does.
+                    tz={scheduleSettings.tz}
                   />
                 )}
               </>
