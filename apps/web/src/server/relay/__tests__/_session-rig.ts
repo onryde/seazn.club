@@ -88,7 +88,7 @@ export async function holdRig(): Promise<{ auth: AuthCtx; fixtureId: string; tar
 /** YouTube Connect (spec §5.2): an API-backed destination — a `connected` channel connection and the kind `youtube` row
  *  that points at it. The row seals NO key of its own (its keys live in the pool), so it is the "other source" the
  *  exactly-one-source check admits. Written raw, like `rigTarget`: this rig names the columns so a usecase test need not.
- *  The connection's refresh token is a fake envelope nothing here opens (V478's `revoked <=> no token` only needs it
+ *  The connection's refresh token is a fake envelope nothing here opens (V479's `revoked <=> no token` only needs it
  *  present), and the channel id is unique per call (one live connection per channel). */
 export async function rigApiTarget(orgId: string, label = "API rig"): Promise<{ targetId: string; connectionId: string }> {
   const userId = await rigUser();
@@ -125,7 +125,7 @@ export async function sessionOnTarget(orgId: string, fixtureId: string, targetId
 }
 
 /** The same raw session with `api_backed` TRUE — what admission writes for a session on an API-backed destination
- *  (set once, at admission, never changed). Several of these may be active on one destination (V478's index narrows to
+ *  (set once, at admission, never changed). Several of these may be active on one destination (V479's index narrows to
  *  `not api_backed`); two on a PASTED destination would be refused, so a caller seats them on `rigApiTarget` rows. */
 export async function apiSessionOnTarget(orgId: string, fixtureId: string, targetId: string, state: string, exec: Tx | typeof sql = sql): Promise<string> {
   return insertRigSession(orgId, fixtureId, targetId, state, true, exec);

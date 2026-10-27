@@ -114,7 +114,7 @@ executors re-pin each one by symbol (`grep -an <symbol>`) before editing.
 - **Migration:** exactly one delta, `db/migration/deltas/V4NN__youtube_connect.sql`. `V4NN` is a placeholder. Before
   the PR is marked ready and again right before merge, run
   `git fetch origin && git ls-tree --name-only origin/main db/migration/deltas/ | sort -V | tail -1` and take max + 1
-  (origin/main max is V477 today, so expect V478 or later). Then `git mv` and amend the T1 commit while
+  (origin/main max is V477 today, so expect V478 or later; renumbered to V479 on the 2026-10-27 rebase). Then `git mv` and amend the T1 commit while
   unmerged. Load `supabase:supabase-postgres-best-practices` before writing it. Greenfield: no backfill.
 - **Copy:** every user-facing string goes into `apps/web/src/dictionaries/{en,es,fr,nl}/ui.json`, then
   `cd apps/web && npm run i18n:gen-keys` (the keys file is generated; never hand-edit it). YouTube branding: the icon
@@ -955,15 +955,15 @@ stream-tick answers` (T21).
 ### Task 14: The end step
 
 > **Owner D15 (2026-10-27), for R4 sponsors-on-stream:** add `actual_start_at timestamptz null` and
-> `actual_end_at timestamptz null` to `youtube_broadcasts` (amend V478 in place — unmerged; env down/up), and fill
+> `actual_end_at timestamptz null` to `youtube_broadcasts` (amend V479 in place — unmerged; env down/up), and fill
 > both at finalize from YouTube's `snippet.actualStartTime` / `snippet.actualEndTime` (verify the field names in
 > the liveBroadcasts resource docs) on the `transition(complete)` response; if absent there, one
 > `liveBroadcasts.list` (1 unit). Null while live and for a `failed` row. Tests: both set after a normal end (values
 > from the fake's scripted times, not from code), null on a never-live/failed row. R4 FKs its rows to
 > `youtube_broadcasts(id) on delete cascade`, so purges cover it.
 > **Post-T1 amendment:** an `ending` row with no `yt_broadcast_id` finalizes as **`failed`**, never `complete`
-> (V478 check `complete_has_facts` would refuse it forever). `last_error_code` stores OUR code (`^[a-z_:]{1,64}$`,
-> V478 shape check), never Google's camelCase `reason` token — map first.
+> (V479 check `complete_has_facts` would refuse it forever). `last_error_code` stores OUR code (`^[a-z_:]{1,64}$`,
+> V479 shape check), never Google's camelCase `reason` token — map first.
 
 **Files:**
 - Create: `apps/web/src/server/youtube/end-step.ts`

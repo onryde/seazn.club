@@ -51,7 +51,7 @@ async function insertSession(r: Awaited<ReturnType<typeof rig>>, state: string) 
 }
 
 describe.skipIf(!HAS_DB)("__stream_sessions.sql — the constraints are real", () => {
-  it("RLS is enabled AND forced on all EIGHTEEN tables (V410's eight, V430's four, V437's two, V478's four), with zero policies", async () => {
+  it("RLS is enabled AND forced on all EIGHTEEN tables (V410's eight, V430's four, V437's two, V479's four), with zero policies", async () => {
     // The list is read from the migration files themselves (`create table (\w+)` over the
     // stream fold), so a table added later is guarded the day it lands, not the day someone
     // remembers this test. STREAM_TABLES comes from _stream-migration.ts, which

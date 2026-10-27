@@ -58,7 +58,7 @@ export const SUPERUSER_ONLY: ReadonlySet<string> = new Set([
   "fixture_stream_pairings",
   // The phone-beat history (24 h retention); non-tenant sql only, zero policies, R1.
   "fixture_stream_phone_beats",
-  // YouTube Connect (V478, spec §5): V410's pattern — RLS FORCEd, ZERO policies, no trg_set_org, no app_user grant.
+  // YouTube Connect (V479, spec §5): V410's pattern — RLS FORCEd, ZERO policies, no trg_set_org, no app_user grant.
   // Every reader and writer is on the privileged `sql` client with `org_id = $org` in the statement; organisers see
   // projections (the directory's connection list, the fixture panel), never a row.
   // The connected channel and its sealed refresh token (YOUTUBE_TOKEN_KEK); a tenant must never read a credential.

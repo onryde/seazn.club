@@ -5,7 +5,7 @@ import "server-only";
 // plaintext only in memory, for one request.
 //
 // Controller ruling R1: this file owns EVERY statement that writes or reads the token, including the connection's INSERT
-// and the revoke. The reason is V478's two IMMEDIATE checks on `org_youtube_connections`:
+// and the revoke. The reason is V479's two IMMEDIATE checks on `org_youtube_connections`:
 //     (status = 'revoked') = (refresh_token_enc is null)      and      (status = 'revoked') = (revoked_at is not null)
 // A CHECK cannot be deferred, so a revoke written as "null the token" and then "set the status" is refused by the
 // database half-way. Each writer below therefore changes the token, the status and revoked_at in ONE statement, and no
@@ -92,7 +92,7 @@ export async function replaceConnectionToken(tx: Exec, orgId: string, connection
   return rows.length === 1;
 }
 
-/** Revoke: the token is cleared AND the row becomes `revoked` with `revoked_at` — ONE statement, because V478's checks
+/** Revoke: the token is cleared AND the row becomes `revoked` with `revoked_at` — ONE statement, because V479's checks
  *  refuse any other shape (R1). `status_since` moves with the status. `last_error_code` is kept: the cause a dead grant
  *  was revoked for is history. False when the row is already revoked (its first revoke's time and cause stand), another
  *  org's, or missing. This clears OUR copy only; revoking the grant at Google is the caller's separate, outside-the-lock
@@ -133,7 +133,7 @@ export async function takePendingToken(tx: Tx, orgId: string, pendingId: string)
 
 /** The connection's refresh token, in memory for this request only. Null for a missing row, another org's row, or a
  *  revoked one — ONE behaviour, so a foreign id is no oracle for "this connection exists". "Revoked" needs no predicate of
- *  its own: V478's `(status = 'revoked') = (refresh_token_enc is null)` makes a revoked row exactly the row with no token.
+ *  its own: V479's `(status = 'revoked') = (refresh_token_enc is null)` makes a revoked row exactly the row with no token.
  *  A `reconnect_needed` row still holds its (dead) token and opens. A missing or malformed YOUTUBE_TOKEN_KEK throws the
  *  KEK's own sentence; an envelope that will not open under a valid key throws `YoutubeTokenUnreadableError`. */
 export async function openToken(exec: Exec, orgId: string, connectionId: string): Promise<string | null> {

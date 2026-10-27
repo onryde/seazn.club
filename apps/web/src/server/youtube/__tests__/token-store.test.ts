@@ -2,7 +2,7 @@
 // other file to it), so every statement that writes or reads a refresh token is exercised here, against real Postgres,
 // each refusal beside its accepted twin.
 //
-// What these tests are for, and the ruling behind them (controller R1): V478's CHECKs say `revoked <=> no token` and
+// What these tests are for, and the ruling behind them (controller R1): V479's CHECKs say `revoked <=> no token` and
 // `revoked <=> revoked_at`, IMMEDIATE. So a half-revoke is refused by the database, not stored — and that is only a
 // safety net if every writer of those three columns is ONE statement. The revoke test below counts statements.
 //
@@ -247,10 +247,10 @@ describe.skipIf(!HAS_DB)("token-store — the connection's refresh token, sealed
     expect(await openToken(sql, r.orgId, c.connectionId), "restored, it opens again").toBe(c.input.refreshToken);
   });
 
-  it("revokeConnection nulls the token and sets revoked + revoked_at in ONE statement (V478's checks never fire); a second call returns false and the first cause and time stand", async () => {
+  it("revokeConnection nulls the token and sets revoked + revoked_at in ONE statement (V479's checks never fire); a second call returns false and the first cause and time stand", async () => {
     const r = await rig();
     const c = await r.connect();
-    // The premise the one-statement count rests on: V478's immediate checks DO refuse a half-revoke. Without them, "one
+    // The premise the one-statement count rests on: V479's immediate checks DO refuse a half-revoke. Without them, "one
     // statement" would be a style choice rather than a requirement.
     await expect(sql`update org_youtube_connections set refresh_token_enc = null where id = ${c.connectionId}`)
       .rejects.toMatchObject({ code: "23514", constraint_name: "org_youtube_connections_revoked_no_token" });
@@ -343,7 +343,7 @@ describe.skipIf(!HAS_DB)("token-store — the connection's refresh token, sealed
   });
 });
 
-// The OAuth round-trip's intent row holds the sealed token between the callback and the channel pick (V478 §2).
+// The OAuth round-trip's intent row holds the sealed token between the callback and the channel pick (V479 §2).
 describe.skipIf(!HAS_DB)("token-store — the pending grant's token: seal once, take once", () => {
   async function pending(orgId: string, userId: string, expiresInMinutes = 10): Promise<string> {
     const [row] = await sql<{ id: string }[]>`

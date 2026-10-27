@@ -456,7 +456,7 @@ export async function wipeStreamCodeTok(
  *  `reconnect_needed` one still takes keys. Seals BEFORE
  *  any write, so a missing KEK writes nothing. The sealed JSON is built field by field — exactly {url, streamKey} —
  *  whatever else the caller's object carries. `slot` (1..10) and the per-connection uniqueness are the table's own
- *  constraints (V478), not re-checked here: their violations surface as the database's 23505 / 23514. */
+ *  constraints (V479), not re-checked here: their violations surface as the database's 23505 / 23514. */
 export async function insertPooledKey(
   tx: Tx,
   a: { orgId: string; connectionId: string; slot: number; liveStreamId: string; ingest: { url: string; streamKey: string } },

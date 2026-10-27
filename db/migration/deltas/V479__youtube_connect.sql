@@ -1,10 +1,10 @@
--- V478 — YouTube Connect: a channel connection, a pool of stream keys, one broadcast per match.
+-- V479 — YouTube Connect: a channel connection, a pool of stream keys, one broadcast per match.
 -- (design of record docs/superpowers/specs/2026-10-27-youtube-connect-design.md §5; plan task T1.)
 --
 -- VERSION. The plan names this file V4NN; Flyway cannot read a non-numeric version, so the delta carries the number
--- the controller would assign today (origin/main's tail is V477__email_outbox_phase3_wave4.sql). Take max + 1 again
--- at merge (`git mv`, amend while unmerged). A fresh database built from this branch applies 476 then 478 happily
--- (Flyway runs without outOfOrder, and gaps already exist below V410).
+-- the controller would assign today (origin/main's tail is V478__email_outbox_phase3_wave5.sql). Take max + 1 again
+-- at merge (`git mv`, amend while unmerged). Renumbered V478 -> V479 on the 2026-10-27 rebase, when the outbox's wave 5
+-- claimed V478. Flyway runs without outOfOrder, and gaps already exist below V410.
 --
 -- ─── What this adds ────────────────────────────────────────────────────────────────────────────────────────────────
 --   org_youtube_connections   one row per connected channel (spec §5.1)
@@ -16,7 +16,9 @@
 --   public_fixture_youtube_parts_v   the public match page's "Part 1 / Part 2" list, with public_fixtures_v's redaction
 --
 -- Greenfield (RULES.md §Schema): no backfill, no data-copy. Production holds no row that any statement below could
--- refuse — every new table is empty, and the two existing tables only gain a nullable column or a looser NOT NULL.
+-- refuse — every new table is empty, and the two existing tables only gain a nullable column, a looser NOT NULL,
+-- or (fixture_stream_sessions) `api_backed boolean not null default false` with a check that every existing row
+-- satisfies (youtube_broadcast_id is null on all of them).
 --
 -- ─── Sealed, not granted ───────────────────────────────────────────────────────────────────────────────────────────
 -- Every new table takes the stream pattern (V410, V430): RLS ENABLED and FORCED, NO policy, NO trg_set_org, NO grant to

@@ -47,7 +47,7 @@ const ENC_COLUMNS = [
  *  code's sealed tok (capture QR v2 §6.1, V430): RELAY_KEK, opened by crypto.ts, SQL in
  *  secret-columns.ts. `playback_srt_key_enc` (R2004, V462) seals a composed camera's SRT playback `{ passphrase,
  *  streamId }`, the ingest SRT envelope's twin. */
-const STREAM_COLUMNS = ["ingest_rtmps_key_enc", "ingest_srt_key_enc", "playback_srt_key_enc", "pool_rtmp_enc", "rtmp_enc", "tok_enc"];   // R2004 (V462): a composed camera's SRT playback credential; YouTube Connect (V478): the key pool's sealed {url, streamKey}, RELAY_KEK
+const STREAM_COLUMNS = ["ingest_rtmps_key_enc", "ingest_srt_key_enc", "playback_srt_key_enc", "pool_rtmp_enc", "rtmp_enc", "tok_enc"];   // R2004 (V462): a composed camera's SRT playback credential; YouTube Connect (V479): the key pool's sealed {url, streamKey}, RELAY_KEK
 /** Scorer sheets §4.1: the sealed device-link secret, named by exactly one file. */
 const DEVICE_LINK_COLUMNS = ["secret_enc"];
 const DEVICE_LINK_OWNER = "server/usecases/device-links.ts";
@@ -59,10 +59,10 @@ const LICHESS_COLUMNS = ["access_token_enc"];
  *  one file. Named, so a second usecase reaching for the column reds. */
 const LICHESS_OWNER = "server/usecases/external-accounts.ts";
 
-/** YouTube Connect (V478, spec §5.1): the channel's refresh token at rest, on `org_youtube_connections` and on the
+/** YouTube Connect (V479, spec §5.1): the channel's refresh token at rest, on `org_youtube_connections` and on the
  *  short-lived `youtube_connect_pending`, sealed under YOUTUBE_TOKEN_KEK. SQL over it lives in exactly one file — every
  *  write (the connection insert with its token, the token replace, the ONE-statement revoke, the pending seal and
- *  take) and the one read (openToken) — so V478's `revoked <=> no token` checks hold within a single statement each
+ *  take) and the one read (openToken) — so V479's `revoked <=> no token` checks hold within a single statement each
  *  (controller ruling R1). */
 const YOUTUBE_COLUMNS = ["refresh_token_enc"];
 const YOUTUBE_OWNER = "server/youtube/token-store.ts";
