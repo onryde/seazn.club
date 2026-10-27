@@ -415,14 +415,12 @@ export async function suspensionServedEmail(args: Omit<SuspensionServedArgs, "me
   return suspensionServedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
 }
 
-/** One-shot +24h funnel reminder (v3/07 §6). */
-export async function sendFunnelReminderEmail(
-  to: string,
-  args: FunnelEmailArgs,
-  locale: Locale = "en",
-): Promise<boolean> {
+/** The one +24h funnel reminder (v3/07 §6), RENDERED and not sent. The funnel's cron sweep (`api/funnel/remind`) queues what this
+ *  returns on the email outbox (kind `funnel_reminder`, transactional: the link signs its holder in), in the transaction that claims
+ *  the draft, in the language the visitor started it in; the worker makes the first attempt. Nothing sends it directly. */
+export async function funnelReminderEmail(args: FunnelEmailArgs, locale: Locale): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({ to, transactional: true, ...funnelReminderTemplate(args, dict) });
+  return funnelReminderTemplate(args, dict);
 }
 
 /** The confirm-your-new-address link, RENDERED and not sent. The email-change request (`api/auth/change-email`) queues what this

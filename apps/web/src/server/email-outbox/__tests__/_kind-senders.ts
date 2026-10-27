@@ -35,7 +35,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendEarnGrantVolumeAlertEmail",
   "sendExtraOrgAllowanceAlertEmail",
   "sendExtraOrgRepriceFailedAlertEmail",
-  "sendFunnelReminderEmail",
   "sendPassCreditReversalIncompleteAlertEmail",
   "sendPassRungMismatchAlertEmail",
   "sendPassUnknownCompetitionAlertEmail",
@@ -56,7 +55,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
   // Wave 5, in the spec's table order.
-  "funnel_reminder",
   "staff_registration_refund_failed",
   "staff_credit_pack_grant_failed",
   "staff_size_pack_grant_failed",
@@ -114,8 +112,9 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   group_transfer_complete: null,
   group_org_removed: null,
   group_org_left: null,
-  // Wave 5: each kind's direct sender in lib/email.ts (the spec's kind table cites it by line; the T0 re-pin names it).
-  funnel_reminder: "sendFunnelReminderEmail",
+  // Wave 5: each kind's direct sender in lib/email.ts (the spec's kind table cites it by line; the T0 re-pin names it), null once its
+  // task has moved it (T3: the funnel reminder).
+  funnel_reminder: null,
   staff_registration_refund_failed: "sendRegistrationRefundFailedAlertEmail",
   staff_credit_pack_grant_failed: "sendCreditPackGrantFailedAlertEmail",
   staff_size_pack_grant_failed: "sendSizePackGrantFailedAlertEmail",

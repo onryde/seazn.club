@@ -89,6 +89,9 @@
 //   - group_org_left: the real `detachOrgFromGroup` by the owner of an org in a paying group (release), whose payer's account has no
 //     language and whose remaining org is `nl`: the notice is queued to the payer's account in the detach's own transaction, in the
 //     detached org, and the request makes the first attempt.
+//   - funnel_reminder: the cron POST of app/api/funnel/remind/route.ts (the cron secret is the stubbed `CRON_SECRET`, carried by the
+//     `next/headers` stand-in) over a day-old draft a Dutch visitor started: no account and no organisation, so the draft's own language
+//     (Q3); the claim of the draft and its row are one transaction on the pool, and the worker makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -111,8 +114,10 @@ vi.mock("@/lib/rate-limit", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/rate-limit")>()),
   rateLimit: vi.fn(async () => {}),
 }));
+// The funnel reminder's producer is a cron route: its secret is the stubbed CRON_SECRET (beforeEach), carried here.
+const CRON = vi.hoisted(() => `cron-ks-${Math.random().toString(36).slice(2)}`);
 vi.mock("next/headers", () => ({
-  headers: async () => new Headers({ "x-forwarded-for": "203.0.113.78" }),
+  headers: async () => new Headers({ "x-forwarded-for": "203.0.113.78", "x-cron-secret": CRON }),
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
 }));
 // Wave 3's account mail comes from signed-in routes (a staff press, an email change). Their scenario sets who is signed in for its own
@@ -155,6 +160,8 @@ vi.mock("@/lib/stripe", () => ({ getStripe: () => stripeMock.stripe }));
 import { POST as magicLinkPost } from "@/app/api/auth/magic-link/route";
 import { POST as resendVerificationPost } from "@/app/api/admin/users/[id]/resend-verification/route";
 import { POST as funnelStartPost } from "@/app/api/funnel/start/route";
+import { POST as funnelRemindPost } from "@/app/api/funnel/remind/route";
+import { createFunnelDraft } from "@/lib/funnel";
 import { POST as changeEmailPost } from "@/app/api/auth/change-email/route";
 import { DELETE as deleteAccount } from "@/app/api/users/me/route";
 import { POST as orgInvitePost } from "@/app/api/orgs/[id]/invites/route";
@@ -367,6 +374,7 @@ afterAll(async () => {
 beforeEach(() => {
   vi.stubEnv("EMAIL_OUTBOX_KEK", KEK);
   vi.stubEnv("RESEND_API_KEY", "re_test_sweep");
+  vi.stubEnv("CRON_SECRET", CRON);
   deliverMock.mockReset();
   deliverMock.mockImplementation(async () => ({ ok: true, providerId: `re_${RUN}_${randomUUID()}` }));
   stripeMock.checkoutCreate.mockReset().mockImplementation(async () => ({ id: `cs_${RUN}_${randomUUID().slice(0, 8)}`, url: "https://checkout.stripe.test/session" }));
@@ -1075,6 +1083,26 @@ function funnelClaimScenario(): KindScenario {
   };
 }
 
+/** The real +24h cron sweep of the funnel over a day-old draft a Dutch visitor started (`funnel_drafts.locale`, written at /start: Q3):
+ *  no account and no organisation, so the draft's own language; the worker makes the first attempt. */
+function funnelReminderScenario(): KindScenario {
+  const recipient = address();
+  const competitionName = `Sweep Reminder ${RUN}`;
+  return {
+    locale: "nl",
+    subjectKey: "funnelReminder.subject",
+    subjectVars: { competitionName },
+    recipient,
+    firstAttempt: "worker",
+    run: async () => {
+      const draft = await createFunnelDraft(recipient, { name: competitionName, sport: "Badminton", entrants: 8 }, sql, "nl");
+      await sql`update funnel_drafts set created_at = now() - interval '25 hours' where id = ${draft.id}`;
+      const res = await funnelRemindPost(new Request("https://sweep.test/api/funnel/remind", { method: "POST" }));
+      expect(res.status, "premise: the real cron route answered 200").toBe(200);
+    },
+  };
+}
+
 /** The real email-change request by an `es` account: the confirmation goes to the NEW address, in the account's language, and the
  *  request makes the first attempt. */
 async function emailChangeConfirmationScenario(): Promise<KindScenario> {
@@ -1598,6 +1626,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
     const orgLeft = await groupOrgLeftScenario();
     expect(dictionarySubject("nl", orgLeft.subjectKey, orgLeft.subjectVars)).not.toBe(dictionarySubject("en", orgLeft.subjectKey, orgLeft.subjectVars));
 
+    const funnelReminder = funnelReminderScenario();
+    expect(dictionarySubject("nl", funnelReminder.subjectKey, funnelReminder.subjectVars)).not.toBe(
+      dictionarySubject("en", funnelReminder.subjectKey, funnelReminder.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1634,6 +1667,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         group_transfer_complete: transferComplete,
         group_org_removed: orgRemoved,
         group_org_left: orgLeft,
+        funnel_reminder: funnelReminder,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );
