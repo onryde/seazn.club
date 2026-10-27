@@ -549,6 +549,21 @@ describe.skipIf(!HAS_DB)("a sponsorship dispute that closes won tells the org ow
     expect(await rowsOf(WON, [id]), "no won notice").toHaveLength(0);
     expect(enqueueCalls(WON, id), "never asked").toHaveLength(0);
   });
+
+  it("a refunded placement the organiser set to pending stays down when the inquiry closes", async () => {
+    // 'pending' alone is the park marker, and the organiser may write it by hand after the refund. The close brings a placement back
+    // only while its order is still paid, so a refunded sponsor never goes live on its own.
+    const o = await paidOrder({ ownerLocale: "fr", defaultLocale: "en" });
+    const id = newDisputeId();
+
+    await handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_needs_response" }), "created");
+    await handleSponsorChargeRefunded({ payment_intent: o.intent, refunded: true } as unknown as Stripe.Charge);
+    await expect(patchSponsor(ownerAuth(o), o.sponsorId!, { status: "pending" })).resolves.toMatchObject({ status: "pending" });
+    expect((await orderState(o.orderId)).status, "premise: the order is refunded").toBe("refunded");
+
+    await expect(handleSponsorDispute(disputeOf(id, o.intent, { status: "warning_closed" }), "closed")).resolves.toBe(true);
+    expect((await orderState(o.orderId)).sponsor_status, "the placement stays down").toBe("pending");
+  });
 });
 
 // ---------------------------------------------------------------------------------------------------------------------------------
