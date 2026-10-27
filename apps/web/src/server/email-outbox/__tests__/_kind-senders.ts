@@ -38,7 +38,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
   "sendFunnelReminderEmail",
   "sendGroupOrgLeftEmail",
   "sendGroupOrgRemovedEmail",
-  "sendOfficialAssignmentChangedEmail",
   "sendPassCreditReversalIncompleteAlertEmail",
   "sendPassRungMismatchAlertEmail",
   "sendPassUnknownCompetitionAlertEmail",
@@ -62,7 +61,6 @@ export const SENDER_ALLOWLIST: readonly string[] = [
  *  way, in the spec's table order: each kind task (T2-T4) deletes its own, and the last move closes the list again. The sweep covers every
  *  kind not listed, and a-kind-body.test.ts sweeps every account kind not listed. */
 export const NOT_YET_MOVED: readonly OutboxKind[] = [
-  "official_assignment_changed",
   "suspension_confirmed",
   "suspension_served",
   "match_report_submitted",
@@ -103,7 +101,7 @@ export const KIND_DIRECT_SENDER: Readonly<Record<OutboxKind, string | null>> = {
   // Wave 4: each kind's direct sender in lib/email.ts (the spec's kind table cites it by line; the wave-4 plan's table names it), null
   // once its kind task has moved it.
   official_assigned: null,
-  official_assignment_changed: "sendOfficialAssignmentChangedEmail",
+  official_assignment_changed: null,
   suspension_confirmed: "sendSuspensionConfirmedEmail",
   suspension_served: "sendSuspensionServedEmail",
   match_report_submitted: "sendReportSubmittedEmail",

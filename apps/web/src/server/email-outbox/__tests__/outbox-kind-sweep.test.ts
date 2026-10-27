@@ -66,6 +66,9 @@
 //   - official_assigned: the real `patchFixtureOfficials` of an `es` organisation's organiser setting an official (an address, no
 //     account) on a fixture by hand: the notice is queued in the assignment's own tenant transaction, in the organisation's language
 //     (the official has no account to follow), and the request makes the first attempt.
+//   - official_assignment_changed: the real `moveFixture` of a fixture an official (an address, no account) has accepted, in an `nl`
+//     organisation: the change notice is queued in the move's own tenant transaction, in the organisation's language, and the request
+//     makes the first attempt.
 //
 // Each kind task (T8-T12) added its scenario and deleted its entry from NOT_YET_MOVED (in _kind-senders.ts, with its `send*` in
 // SENDER_ALLOWLIST and its KIND_DIRECT_SENDER entry); T12 emptied the list. Wave 2's T1 registered its ten kinds before their producers
@@ -131,6 +134,7 @@ import { POST as orgInvitePost } from "@/app/api/orgs/[id]/invites/route";
 import { POST as claimInvitePost } from "@/app/api/v1/persons/[id]/claim-invites/route";
 import { POST as officialInvitePost } from "@/app/api/v1/officials/[id]/invite/route";
 import { createOfficial, patchFixtureOfficials } from "@/server/usecases/officials";
+import { moveFixture } from "@/server/usecases/schedule";
 import { createPerson } from "@/server/usecases/persons";
 import { POST as registerPost } from "@/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/register/route";
 import { openRound } from "@/server/usecases/external-play/open-round";
@@ -1117,6 +1121,37 @@ async function officialAssignedScenario(): Promise<KindScenario> {
   };
 }
 
+/** The organiser of an organisation whose default language is `nl` moves a fixture an official has accepted. The official has an address
+ *  and no account, so the notice is in the org's language; it is queued in the move's transaction and the request makes the first attempt
+ *  after commit. The fixture moves a day earlier, clear of every other slot on its court. */
+async function officialAssignmentChangedScenario(): Promise<KindScenario> {
+  const { orgId, ownerId } = await seedOrg("pro");
+  made.orgIds.push(orgId);
+  made.userIds.push(ownerId);
+  const [org] = await sql<{ name: string }[]>`update organizations set default_locale = 'nl' where id = ${orgId} returning name`;
+  const owner = asOwner(orgId, ownerId);
+  const { fixtures } = await seedFutureDivision(owner);
+  const recipient = address();
+  const official = await createOfficial(owner, { display_name: "Sweep Moved Ref", role_keys: ["referee"], email: recipient });
+  // Appointed directly (accepted), not through the manual set: that would queue an assignment notice to the same address.
+  await sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+            values (${orgId}, ${fixtures[0]!.id}, ${official.id}, 'referee', 'accepted')`;
+  const [before] = await sql<{ scheduled_at: Date }[]>`select scheduled_at from fixtures where id = ${fixtures[0]!.id}`;
+  const next = new Date(before!.scheduled_at.getTime() - 24 * 60 * MIN).toISOString();
+  return {
+    locale: "nl",
+    subjectKey: "officialChanged.subject",
+    subjectVars: { orgName: org!.name },
+    recipient,
+    firstAttempt: "request",
+    run: async () => {
+      await moveFixture(owner, fixtures[0]!.id, { scheduled_at: next });
+      const [after] = await sql<{ scheduled_at: Date }[]>`select scheduled_at from fixtures where id = ${fixtures[0]!.id}`;
+      expect(after!.scheduled_at.toISOString(), "premise: the real move wrote the new time").toBe(next);
+    },
+  };
+}
+
 /** The account `userId`, signed in, asks to move to `newEmail` through the real route. */
 async function requestEmailChange(userId: string, newEmail: string): Promise<void> {
   const res = await signedInAs(userId, () =>
@@ -1239,6 +1274,11 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
       dictionarySubject("en", officialAssigned.subjectKey, officialAssigned.subjectVars),
     );
 
+    const officialChanged = await officialAssignmentChangedScenario();
+    expect(dictionarySubject("nl", officialChanged.subjectKey, officialChanged.subjectVars)).not.toBe(
+      dictionarySubject("en", officialChanged.subjectKey, officialChanged.subjectVars),
+    );
+
     const out = await forEachOutboxKind(
       {
         magic_link: magicLinkScenario(),
@@ -1267,6 +1307,7 @@ describe.skipIf(!HAS_DB)("every outbox kind is swept through its real producer (
         claim_invite: claimInvite,
         official_invite: officialInvite,
         official_assigned: officialAssigned,
+        official_assignment_changed: officialChanged,
       },
       { notYetMoved: NOT_YET_MOVED, specFacts: SPEC_FACTS },
     );

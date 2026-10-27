@@ -369,18 +369,15 @@ export async function externalPlayInviteEmail(
   return externalPlayInviteTemplate(args, dict);
 }
 
-/** A match the official is assigned to changed time/venue. */
-export async function sendOfficialAssignmentChangedEmail(
-  to: string,
+/** A match the official is assigned to changed time/venue, RENDERED and not sent. `moveFixture` (schedule.ts) queues what this returns on
+ *  the email outbox (kind `official_assignment_changed`, transactional), in the move's transaction, one per assignment role, in the
+ *  official's language. Nothing sends it directly. */
+export async function officialAssignmentChangedEmail(
   args: Omit<OfficialAssignmentChangedArgs, "meUrl">,
-  locale: Locale = "en",
-): Promise<boolean> {
+  locale: Locale,
+): Promise<EmailContent> {
   const dict = await getDictionary(locale, "emails");
-  return send({
-    to,
-    transactional: true,
-    ...officialAssignmentChangedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict),
-  });
+  return officialAssignmentChangedTemplate({ ...args, meUrl: `${appOrigin()}/me` }, dict);
 }
 
 /** A confirmed suspension (SPEC-1) — CTA to the /me suspensions card. Claimed
