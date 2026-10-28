@@ -25,9 +25,11 @@ import { YOUTUBE_EMBED_ORIGIN, youtubeWatchUrl } from "../src/lib/youtube";
 // What it adds over the unit tests (which cannot see layout, paint, real tap area or a real postMessage):
 //   * the player box at 1280, 768 and 320: card-inner width, 16:9 with a 200px floor, nothing painted over it, no sideways page scroll;
 //   * ONE part: the player alone, no "Part" word anywhere, no tab rail; the facade makes no request to youtube-nocookie.com until
-//     the tap, and the tap mounts the privacy-enhanced iframe with autoplay and hands it focus;
-//   * TWO parts: the tab rail above the player (44px tabs, arrow keys), a tab shows that part's facade (never autoplay), and the part
-//     that was playing stops;
+//     the tap, and the tap mounts the privacy-enhanced iframe with autoplay and hands it focus - at MOUNT, before its document has
+//     loaded (a held response proves it), not only once it has;
+//   * TWO parts, in the state the end step really leaves (stream_url = Part 1's address): the tab rail above the player (44px tabs,
+//     arrow keys), NO second "Replay" pill, a tab shows that part's facade (never autoplay), and the part that was playing stops;
+//   * TWO parts and a club's own, different link: the pill renders beside the tabbed player (a named capture, not the default);
 //   * the fallback: an error from the player puts the "Open on YouTube" link in place of the player;
 //   * NO YouTube logo anywhere in the player (the logo only ever sits inside a link to YouTube content).
 test.use({ storageState: { cookies: [], origins: [] } });
@@ -234,13 +236,15 @@ async function rig(page: Page, parts: number, streamUrl: "first-part" | "club" |
 // ---------------------------------------------------------------------------------------------------------------------
 // The network stubs
 // ---------------------------------------------------------------------------------------------------------------------
-interface Net { thumbRequests: string[]; embedRequests: string[] }
+interface Net { thumbRequests: string[]; embedRequests: string[]; /** player documents answered so far */ answered: number; release: () => void }
 
 /** i.ytimg.com answers a generated picture (the ids are not real videos); youtube-nocookie.com answers a stub that speaks the player's
  *  postMessage protocol. `embeddingDisabled` makes it answer the page's `listening` with error 150, as a video whose owner switched
  *  embedding off does. Returns the requests seen, so "no request before the tap" is a count, not a hope. */
-async function stubNetwork(page: Page, opts: { embeddingDisabled: boolean }): Promise<Net> {
-  const net: Net = { thumbRequests: [], embedRequests: [] };
+async function stubNetwork(page: Page, opts: { embeddingDisabled: boolean; holdEmbed?: boolean }): Promise<Net> {
+  const net: Net = { thumbRequests: [], embedRequests: [], answered: 0, release: () => {} };
+  // `holdEmbed`: the player's document is not answered until `net.release()`, so its load event provably has not fired.
+  const held = new Promise<void>((resolveHeld) => { net.release = resolveHeld; });
   await page.route("https://i.ytimg.com/vi/**", async (route) => {
     const id = /\/vi\/([^/]+)\//.exec(route.request().url())?.[1] ?? "";
     net.thumbRequests.push(id);
@@ -251,6 +255,8 @@ async function stubNetwork(page: Page, opts: { embeddingDisabled: boolean }): Pr
   });
   await page.route(`${YOUTUBE_EMBED_ORIGIN}/embed/**`, async (route) => {
     net.embedRequests.push(route.request().url());
+    if (opts.holdEmbed) await held;
+    net.answered++;
     await route.fulfill({
       contentType: "text/html",
       body: `<!doctype html><meta charset="utf-8"><title>stub player</title>
@@ -345,14 +351,15 @@ test("Match page - ONE part is the player alone: facade, no part label, no reque
 // ---------------------------------------------------------------------------------------------------------------------
 test("Match page - TWO parts: Part 1 / Part 2 tabs above the player, a tab shows that part's facade (never autoplay), the playing part stops, at 1280, 768 and 320", async ({ page }) => {
   test.setTimeout(budget({ navs: 2, acts: 10 + WIDTHS.length * 6 }));
-  const r = await rig(page, 2, "club");
+  // stream_url = Part 1's address: what the end step writes on the first completion and never rewrites for Part 2.
+  const r = await rig(page, 2, "first-part");
   const net = await stubNetwork(page, { embeddingDisabled: false });
   await visit(page, r.publicPath);
   const player = page.getByTestId("replay-embed");
   const tabs = player.getByRole("tab");
 
-  // The club's own, different link still shows (the pill), beside the player.
-  await expect(page.getByTestId("public-stream-link"), "a club's own link renders beside the player").toHaveAttribute("href", "https://www.twitch.tv/riversideclub");
+  // The stored link is one of the parts, so the page offers no second "Replay" link beside the tabs.
+  await expect(page.getByTestId("public-stream-link"), "the stored link is Part 1's: no second pill").toHaveCount(0);
   await expect(tabs).toHaveText(["Part 1", "Part 2"]);
   await expect(tabs.nth(0)).toHaveAttribute("aria-selected", "true");
   await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "false");
@@ -407,6 +414,66 @@ test("Match page - TWO parts: Part 1 / Part 2 tabs above the player, a tab shows
   expect(new URL((await player.locator("iframe").getAttribute("src"))!).pathname).toBe(`/embed/${r.ids[1]}`);
   await expectNoLogo(page, "part 2 playing");
   await shot(page, "two-parts-part2-playing-1280");
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 2b. Two parts, and the club's own different link
+// ---------------------------------------------------------------------------------------------------------------------
+test("Match page - TWO parts and a club's own DIFFERENT link: the pill renders beside the tabbed player (a named capture, not the default), at 1280, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ navs: 2, acts: 2 + WIDTHS.length * 5 }));
+  const r = await rig(page, 2, "club");
+  await stubNetwork(page, { embeddingDisabled: false });
+  await visit(page, r.publicPath);
+  const player = page.getByTestId("replay-embed");
+  const pill = page.getByTestId("public-stream-link");
+
+  await expect(pill, "a link that is none of the parts is the club's own and renders").toHaveAttribute("href", "https://www.twitch.tv/riversideclub");
+  await expect(pill).toHaveCount(1);
+  await expect(player.getByRole("tab")).toHaveText(["Part 1", "Part 2"]);
+  // Above the match card, the player inside it.
+  const pillBox = await pill.boundingBox();
+  const playerBox = await player.boundingBox();
+  expect(pillBox!.y + pillBox!.height, "the pill is above the player").toBeLessThanOrEqual(playerBox!.y + 1);
+
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: 900 });
+    const where = `two parts + club link at ${w}`;
+    await expectPlayerBox(page, where);
+    await expectNoLogo(page, where);
+    await expectTappable(pill, `${where}: the pill`);
+    for (const i of [0, 1]) await expectTappable(player.getByRole("tab").nth(i), `${where}: tab ${i + 1}`);
+    await expectNoPageScroll(page, where);
+    await shot(page, `two-parts-club-link-${w}`);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 2c. Focus at mount
+// ---------------------------------------------------------------------------------------------------------------------
+test("Match page - the tap hands focus to the player AT MOUNT, before its document has loaded (a keyboard user is not dropped on the page while it loads)", async ({ page }) => {
+  test.setTimeout(budget({ navs: 2, acts: 6 }));
+  const r = await rig(page, 1, null);
+  // The player's document is held back: its load event cannot fire until the test lets it go.
+  const net = await stubNetwork(page, { embeddingDisabled: false, holdEmbed: true });
+  await visit(page, r.publicPath);
+  const player = page.getByTestId("replay-embed");
+  const facade = player.getByTestId("replay-facade");
+
+  await facade.focus();
+  await expect(facade, "premise: the button the tap lands on has focus").toBeFocused();
+  await facade.click();
+  await expect(player.locator("iframe"), "the tap mounts the player").toHaveCount(1);
+  await expect(facade, "premise: the focused button is gone").toHaveCount(0);
+  expect(net.answered, "premise: the player's document has NOT been answered, so it cannot have loaded").toBe(0);
+  expect(await page.evaluate(() => document.activeElement?.tagName), "focus is on the player already, not on <body>").toBe("IFRAME");
+
+  // Let it load: focus stays with the player.
+  net.release();
+  await expect.poll(() => net.answered, { message: "the player's document was answered" }).toBe(1);
+  await expect.poll(async () => (await embedFrame(page)?.evaluate(() => (window as unknown as { __got: unknown[] }).__got.length)) ?? 0, {
+    message: "the page handshook after the load",
+  }).toBeGreaterThan(0);
+  expect(await page.evaluate(() => document.activeElement?.tagName), "and it is still there after the load").toBe("IFRAME");
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
