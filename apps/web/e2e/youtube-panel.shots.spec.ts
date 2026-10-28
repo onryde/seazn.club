@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { randomBytes, randomUUID } from "node:crypto";
 import { test, expect, type Locator, type Page } from "@playwright/test";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate } from "./helpers";
+import { waitForHydration } from "./directory-kit";
 import { grantRigPackCredits, setRigPlan, signInAs } from "./overlay-kit";
 import { disposeFakePhones, pairedPhone } from "./helpers/fake-capture-phone";
 import { openTargetPicker, selectTarget, targetPicker } from "./helpers/stream-target-picker";
@@ -246,7 +247,13 @@ async function connectChannel(page: Page, channels: { id: string; title: string 
     fired++;
     await route.fulfill({ response: start });
   });
-  await page.getByTestId(trigger).click();
+  // Every landing is a full document load, and a click on server-rendered markup before React hydrates is DROPPED: the card never opens.
+  // `page.route` turns the HTTP cache off, so each landing refetches its ~20 chunks (30-260 ms apiece under four workers) and hydrates well
+  // after the click's own navigation wait resolves. Connect 1 is safe (its URL wait below really waits for `load`); from connect 2 on the
+  // URL ALREADY matches, so that wait gates nothing and the next trigger click (connect 3) lands on un-hydrated markup.
+  const opener = page.getByTestId(trigger);
+  await waitForHydration(opener);
+  await opener.click();
   const submit = page.getByTestId("youtube-connect-submit");
   await expect(submit, "Continue is disabled until the box is ticked").toBeDisabled();
   await page.getByTestId("youtube-consent").check();
