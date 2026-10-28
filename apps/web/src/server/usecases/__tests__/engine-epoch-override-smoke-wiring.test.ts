@@ -14,12 +14,17 @@
 //     lever's default-off claim would be witnessed nowhere.
 // Read from the files themselves - no YAML parser in the repo; the step slicer below is pinned to the workflow's own indentation.
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "../../../../../..");
 const CI = readFileSync(resolve(ROOT, ".github/workflows/ci.yml"), "utf8");
-const SMOKE = readFileSync(resolve(ROOT, "scripts/smoke.ts"), "utf8");
+// The smoke script is split (scripts/smoke/): the SMOKE_ONLY registry is in its entry, the suite, its step count and its labels
+// in the suite's own file, and "who calls it" is a question about every file of the script (main(), the entry, every suite).
+const SMOKE_INDEX = readFileSync(resolve(ROOT, "scripts/smoke/index.ts"), "utf8");
+const SMOKE = readFileSync(resolve(ROOT, "scripts/smoke/suites/epochFloorOverride.ts"), "utf8");
+const SMOKE_FILES = readdirSync(resolve(ROOT, "scripts/smoke"), { recursive: true, encoding: "utf8" }).filter((f) => f.endsWith(".ts"));
+const SMOKE_ALL = SMOKE_FILES.map((f) => readFileSync(resolve(ROOT, "scripts/smoke", f), "utf8")).join("\n");
 const DOCKERFILE = readFileSync(resolve(ROOT, "Dockerfile"), "utf8");
 const OVERRIDE_SRC = readFileSync(resolve(ROOT, "apps/web/src/server/usecases/engine-epoch-override.ts"), "utf8");
 const SCORING_SRC = readFileSync(resolve(ROOT, "apps/web/src/server/usecases/scoring.ts"), "utf8");
@@ -108,7 +113,7 @@ describe("engine-split 5.6 CI smoke: the floor override is witnessed against a t
     expect(t.get("SMOKE_BASE"), "the smoke's base").toBe(`http://localhost:${port}`);
     expect(server!, "health is polled on that port").toContain(`http://localhost:${port}/api/health`);
     expect(t.get("SMOKE_ONLY")).toBe("epochFloorOverride");
-    expect(SMOKE, "epochFloorOverride is a selectable suite").toMatch(/^\s+epochFloorOverride: \(\) => epochFloorOverrideSuite\(\),$/m);
+    expect(SMOKE_INDEX, "epochFloorOverride is a selectable suite").toMatch(/^\s+epochFloorOverride: \(\) => epochFloorOverrideSuite\(\),$/m);
     let checked = 0;
     for (const [k, v] of f) {
       if (k === "LOG_LEVEL") continue; // the one deliberate difference, pinned in the next test
@@ -175,7 +180,8 @@ describe("engine-split 5.6 CI smoke: the floor override is witnessed against a t
     const [count] = /const EPOCH_FLOOR_STEPS = (\d+);/.exec(SMOKE)?.slice(1) ?? [];
     expect(count, "premise: smoke.ts declares its step count").toMatch(/^\d+$/);
     // The count is not just declared: the suite's steps are the ones it counts (each `step(` call outside the helper's own definition).
-    const suite = SMOKE.slice(SMOKE.indexOf("async function epochFloorOverrideSuite"), SMOKE.indexOf("// --- SMOKE_ONLY (review R1)"));
+    // The suite is the last declaration of its own file, so it runs to the end of that file.
+    const suite = SMOKE.slice(SMOKE.indexOf("async function epochFloorOverrideSuite"));
     const stepCalls = [...suite.matchAll(/^\s*step\(/gm)].length;
     expect(stepCalls, "the declared count is the number of step() calls").toBe(Number(count));
     let checked = 0;
@@ -201,7 +207,10 @@ describe("engine-split 5.6 CI smoke: the floor override is witnessed against a t
   });
 
   it("the full smoke is unchanged: main() never calls the suite (it is registered, and only registered)", () => {
-    const uses = [...SMOKE.matchAll(/epochFloorOverrideSuite\(/g)].length;
+    // Not vacuous: the scan reads main(), the entry and the suite's own file, among every file of the script.
+    expect(SMOKE_FILES, `smoke files read: ${SMOKE_FILES.length}`).toEqual(expect.arrayContaining(["main.ts", "index.ts", "suites/epochFloorOverride.ts"]));
+    expect(SMOKE_FILES.length, "every suite file, not just those three").toBeGreaterThan(3);
+    const uses = [...SMOKE_ALL.matchAll(/epochFloorOverrideSuite\(/g)].length;
     // The declaration and the registry entry; a third would be a call from main() or another suite.
     expect(uses, "declaration + registry only").toBe(2);
   });

@@ -73,7 +73,8 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
     expect(checked).toBe(4);
   });
   it("the registry smoke.ts passes in is the one this test assumes", () => {
-    const src = readFileSync(join(import.meta.dirname, "..", "smoke.ts"), "utf8");
+    // The registry lives in the smoke entry, scripts/smoke/index.ts (the smoke split retired scripts/smoke.ts).
+    const src = readFileSync(join(import.meta.dirname, "..", "smoke", "index.ts"), "utf8");
     // Lazy `[\s\S]*?` so the type annotation's `=>` (`Record<string, (c: SubsetCtx) => Promise<void>>`) is skipped
     // and the match stops at `= {`; a `[^=]*` stops at that `=>` and matches nothing (re-review N1). Proven in node
     // against smoke.ts with this registry inserted: 2 names, ["streamTargets", "v1"]; captureV2 joined it (capture QR v2 T12), captureRecord after it (capture record upload),
