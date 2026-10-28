@@ -63,6 +63,19 @@ vi.mock("@/server/usecases/fixtures", async (importOriginal) => {
   };
 });
 
+/** fireDivisionRevalidate, spied: a pass-through that records each call (T16: a part completing must expire the public page). */
+const revalidateHook = vi.hoisted(() => ({ calls: [] as { divisionId: string; competitionId: string | undefined }[] }));
+vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/public-site/revalidate")>();
+  return {
+    ...real,
+    fireDivisionRevalidate: vi.fn((divisionId: string, competitionId?: string) => {
+      revalidateHook.calls.push({ divisionId, competitionId });
+      return real.fireDivisionRevalidate(divisionId, competitionId);
+    }),
+  };
+});
+
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { isYoutubeUrl, youtubeWatchUrl } from "@/lib/youtube";
@@ -125,6 +138,7 @@ beforeEach(() => {
   urlHook.fail = false;
   urlHook.calls = 0;
   urlHook.actors = [];
+  revalidateHook.calls = [];
 });
 afterEach(() => {
   prepareHook.after = null;
@@ -674,6 +688,51 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     expect(await w.step({ at: afterStop(m2, min(6)) })).toMatchObject({ ended: 1 });
     expect(await streamUrlOf(f), "Part 2 did not take the link").toBe(youtubeWatchUrl(m1.ytId));
     expect((await broadcastRow(m2.broadcastId)).state).toBe("complete");
+  });
+
+  it("T16: every completion expires the public page once - Part 1 through the link write, Part 2 and a club's own link through the early return (a part must show without waiting out the cache window)", async () => {
+    const w = await world({ fixtures: 2, credits: 3 });
+    const [f, g] = w.fixtures as [string, string];
+    const [{ division_id: divisionId, competition_id: competitionId }] = await sql<{ division_id: string; competition_id: string }[]>`
+      select f.division_id, d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${f}`;
+    const expectedCall = { divisionId, competitionId };
+    /** The expiries one end-step run fires. Going live and stopping fire their own (the session moves), so only the delta across `step` is the end step's. */
+    const expiriesDuring = async (at: number, expectEnded: number) => {
+      const before = revalidateHook.calls.length;
+      expect(await w.step({ at })).toMatchObject({ ended: expectEnded });
+      return revalidateHook.calls.slice(before);
+    };
+
+    // Part 1: the link is written (setFixtureStreamUrl revalidates) - exactly one expiry, not two.
+    const m1 = await playAndStop(w, f);
+    expect(await expiriesDuring(afterStop(m1, min(6)), 1), "Part 1: one expiry").toEqual([expectedCall]);
+    expect(await streamUrlOf(f)).toBe(youtubeWatchUrl(m1.ytId));
+    expect(urlHook.calls, "premise: Part 1 went through the link write").toBe(1);
+
+    // Part 2: the link is Part 1's and is not rewritten - the page is expired anyway.
+    const m2 = await playAndStop(w, f);
+    expect(await expiriesDuring(afterStop(m2, min(6)), 1), "Part 2: one expiry, from the early-return branch").toEqual([expectedCall]);
+    expect(await streamUrlOf(f), "premise: Part 2 did not take the link").toBe(youtubeWatchUrl(m1.ytId));
+    expect(urlHook.calls, "premise: Part 2 wrote no link, so the expiry did not come from the link write").toBe(1);
+
+    // A club's own link on another fixture: nothing written, the page is still expired (the part is new).
+    await sql`update fixtures set stream_url = 'https://example.com/club-stream' where id = ${g}`;
+    const m3 = await playAndStop(w, g);
+    expect(await expiriesDuring(afterStop(m3, min(6)), 1), "the club-link fixture: one expiry for its part").toEqual([expectedCall]);
+    expect(await streamUrlOf(g)).toBe("https://example.com/club-stream");
+    expect(urlHook.calls, "premise: the club's link was not touched").toBe(1);
+  });
+
+  it("T16: a broadcast that never ran (deleted as never_live) expires nothing - it is not a replay part, so the public page did not change", async () => {
+    const w = await world();
+    const f = w.fixtures[0]!;
+    const { sessionId } = await goLive(w, f);
+    await reachLive(w, f, sessionId, "passthrough");
+    await stopToEnd(w, f, sessionId, "passthrough");
+    const S = (await sessionRow(sessionId)).ended_at!;
+    const before = revalidateHook.calls.length;
+    expect(await w.step({ at: S.getTime() + min(GRACE_MINUTES) }), "premise: the end step ran and deleted it").toEqual({ ...ZERO, neverLive: 1 });
+    expect(revalidateHook.calls.slice(before)).toEqual([]);
   });
 
   it("the replay link is written AS the session's creator, and — when last_session_id was nulled — AS the connection's creator: two distinct people, the exact actor passed to the stream-link path in each branch", async () => {

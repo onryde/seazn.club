@@ -51,6 +51,7 @@ import { captureError } from "@/lib/sentry";
 import { youtubeWatchUrl } from "@/lib/youtube";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { setFixtureStreamUrl } from "@/server/usecases/fixtures";
+import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts } from "./end-rule";
 import { YouTubeError, type BroadcastLifeInfo, type YouTubePort } from "./port";
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken } from "./token-store";
@@ -262,19 +263,28 @@ async function rereadAfterFailure(port: YouTubePort, at: string, row: Claimed, y
 /** The replay URL (spec §6.4, "Part 1" rule): `fixtures.stream_url` takes the watch URL only while it is null — a club's own link wins,
  *  and a later part never replaces an earlier one. Written through the ONE stream-link path (`setFixtureStreamUrl`: validation,
  *  tenant scope, revalidation) as `fillReplayUrl`'s actor: the last session's creator, or — when `last_session_id` was nulled by a session
- *  delete — the connection's. Best effort, and AFTER the row is complete: the parts list reads the complete rows themselves, so a link that could not
+ *  delete — the connection's. When the link is already taken (a later part, or the club's own) nothing is written, but the public match
+ *  page's parts list just grew, so the division's pages are expired here instead (T16). Best effort, and AFTER the row is complete: the parts list reads the complete rows themselves, so a link that could not
  *  be written (or a crash between the two) costs only the back-compat link, and a failure here must never leave an `ending` row
  *  holding its key for good. */
 async function writeReplayUrl(row: Claimed, ytId: string): Promise<void> {
   try {
-    const [r] = await sql<{ stream_url: string | null; actor: string }[]>`
-      select f.stream_url, coalesce(s.created_by, c.created_by) as actor
+    const [r] = await sql<{ stream_url: string | null; actor: string; division_id: string; competition_id: string }[]>`
+      select f.stream_url, coalesce(s.created_by, c.created_by) as actor, f.division_id, d.competition_id
         from youtube_broadcasts b
         join fixtures f on f.id = b.fixture_id
+        join divisions d on d.id = f.division_id
         join org_youtube_connections c on c.id = b.connection_id and c.org_id = b.org_id
         left join fixture_stream_sessions s on s.id = b.last_session_id
        where b.id = ${row.id} and b.org_id = ${row.org_id}`;
-    if (!r || r.stream_url !== null) return;
+    if (!r) return;
+    if (r.stream_url !== null) {
+      // The link is taken (Part 1's, or the club's own), so there is nothing to write - but this completion still changed what the public
+      // match page lists: the part is a new row in the parts view. Writing the link is what used to expire the page (through
+      // `setFixtureStreamUrl`), so a later part must expire it itself or it shows up only when the cache window runs out.
+      fireDivisionRevalidate(r.division_id, r.competition_id);
+      return;
+    }
     const actor: AuthCtx = { orgId: row.org_id, via: "session", userId: r.actor, role: "owner", keyId: null };
     await setFixtureStreamUrl(actor, row.fixture_id, youtubeWatchUrl(ytId));
   } catch (err) {
