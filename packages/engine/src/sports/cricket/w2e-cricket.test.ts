@@ -208,10 +208,18 @@ describe("CK-CH-1 chase overshoot (RB2A-22, SC-C4)", () => {
     );
   });
 
+  // Every cfg cricket declares, plus DLS on (the only way a coarse chase carries a revised target in a walk).
+  const SWEEP_SEEDS = 500;
+  const SWEEP_CFGS = [...declaredCfgs(cricket), { name: "dls", cfg: DLS }];
+  // The sweep's budget is derived from its work, never a flat number beside it. Measured per walk (3000 walks): 0.36 ms alone
+  // (1082 ms), 1.8 ms in a 27-file batch (5325 ms) and 1.9 ms alone at a load average of 42 (5668 ms), past vitest's 5 s
+  // default both times. 5 ms a walk is about 2.5x the worst seen; the default is the floor.
+  const PER_WALK_MS = 5;
+  const SWEEP_TIMEOUT_MS = Math.max(5_000, SWEEP_SEEDS * SWEEP_CFGS.length * PER_WALK_MS);
+
   it("CK-CH-1 the generator's coarse chase never exceeds the bound (500 seeds, count asserted)", () => {
-    const SEEDS = 500;
-    // Every cfg cricket declares, plus DLS on (the only way a coarse chase carries a revised target in a walk).
-    const cfgs = [...declaredCfgs(cricket), { name: "dls", cfg: DLS }];
+    const SEEDS = SWEEP_SEEDS;
+    const cfgs = SWEEP_CFGS;
     let walks = 0;
     let checked = 0;
     let reachedTarget = 0;
@@ -252,7 +260,7 @@ describe("CK-CH-1 chase overshoot (RB2A-22, SC-C4)", () => {
     expect(checked, "coarse chase summaries checked").toBeGreaterThan(0);
     expect(reachedTarget, "coarse chases that reached the target (the bound's edge)").toBeGreaterThan(0);
     expect(dlsTargets, "coarse chases against a DLS target").toBeGreaterThan(0);
-  });
+  }, SWEEP_TIMEOUT_MS);
 });
 
 // ---------------------------------------------------------------------------
