@@ -206,6 +206,16 @@ async function ago(sessionId: string, minutes: number, columns: ("ended_at" | "c
   }
 }
 
+/** Lead the end step's queue. The step is UNFILTERED and takes its candidates oldest-first (`order by created_at, id`) inside a 15 s
+ *  slice, so on a database that has accumulated other suites' due rows a firing can spend its slice on rows older than this file's and
+ *  never reach them. This file's own broadcasts are moved five years back before a firing, so they lead the queue whatever the foreign
+ *  volume is; nothing else about them changes (the end step reads `created_at` only to order candidates and to age an orphan, and an
+ *  orphan is a broadcast no session names - these are all named). Returns how many rows it moved, so a typo'd id cannot pass silently. */
+async function leadTheQueue(...broadcastIds: string[]): Promise<void> {
+  const moved = await sql`update youtube_broadcasts set created_at = created_at - interval '5 years' where id in ${sql(broadcastIds)} returning id`;
+  expect(moved.length, "every one of this file's own broadcasts was moved to the head of the queue").toBe(broadcastIds.length);
+}
+
 interface Counters { ended: number; neverLive: number; orphans: number; failed: number; deferred: number }
 interface Answer {
   ok: boolean;
@@ -226,6 +236,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T15 — POST /api/cron/stream-tick, dr
     // Grace is 5 minutes after Stop (D4): ten minutes on, both are overdue on the real clock.
     await ago(ma.sessionId, 10, ["ended_at"]);
     await ago(mb.sessionId, 10, ["ended_at"]);
+    await leadTheQueue(ma.broadcastId, mb.broadcastId);
     install(a);
     pass.orgIds = [a.orgId];
 
@@ -268,6 +279,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T15 — POST /api/cron/stream-tick, dr
     const m = await playAndStop(w);
     install(w);
     pass.orgIds = [w.orgId];
+    await leadTheQueue(m.broadcastId);
 
     expect((await call()).status).toBe(200);
     expect((await broadcastRow(m.broadcastId)).state, "Stop + a few seconds is inside the 5-minute grace").toBe("live");
@@ -283,6 +295,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T15 — POST /api/cron/stream-tick, dr
     const w = await world();
     const m = await playAndStop(w);
     await ago(m.sessionId, 10, ["ended_at"]);
+    await leadTheQueue(m.broadcastId);
     install(w, "disabled");   // the deployment lost its relay AFTER the match: the broadcast is still YouTube's to end
 
     const r = await call();
@@ -302,6 +315,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T15 — POST /api/cron/stream-tick, dr
     expect(["warming", "provisioning", "requested"], `premise: the session is open (${stuck.state})`).toContain(stuck.state);
     // The warming timeout is 10 minutes: this one has been warming for eleven.
     await ago(sessionId, 11, ["created_at", "warming_at"]);
+    await leadTheQueue(stuck.youtube_broadcast_id!);
     install(w);
     pass.orgIds = [w.orgId];
 
