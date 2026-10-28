@@ -37,6 +37,10 @@ export const FOLD_EPOCH = Object.freeze({
   // W2e T3 (BD-SE-1, X-SE-1) raised badminton to 2: the write path refuses scoring after a black card until its ending (ENDING_SANCTION_PENDING), and golden stream default#11 recorded rallies after one, so it was re-recorded in place (the ending replaces the refused rally, and the walk ends there).
   // W2e T3 (controller ruling on the set-kernel generator) raised table tennis to 2: arbitraryEvent draws only the sport's own sanction levels, so the three floor walks that drew a referee's expulsion draw a penalty there (summary and state moved; outcome and deltas did not), re-recorded in place.
   // W2e T4 (TN-SE-1, X-SE-1; TN-SS-1) raised tennis to 2 (its minor back to 0): the write path refuses scoring after a default until its ending (ENDING_SANCTION_PENDING) and a set summary no set can reach (SET_SCORE_UNREACHABLE); coverage walk default#13 recorded a point after a default, so the ending replaced it in place (the walk ends there), and the floor no longer derives its disqualification story default#700007, which recorded play after a default too.
+  // W2e T5 (RB2A-12, TN-SS-2) rides that same second major: an opt-in key an older phone strips. `set.tiebreakWinBy` (a set tie-break's own margin:
+  // short sets and Fast4 win it 5–4 on a deciding point) lives in tennis's non-strict `set` object, so an older phone strips it (spec E29) and folds
+  // that tie-break to the match's two, while every recorded stream folded the same; the branch stream short-sets#90011 (golden-branches.ts, T13)
+  // now shows the guard a margin of one. T13: a final-set tie-break plays to the match's margin, never the set's own (RBS:349); no recorded stream moved.
   football: 3, cricket: 1, boardgame: 3, carrom: 3, generic: 3, volleyball: 1,
   badminton: 2, tabletennis: 2, tennis: 2, icehockey: 2, hockey: 4,
 } as const satisfies Readonly<Record<string, number>>);
