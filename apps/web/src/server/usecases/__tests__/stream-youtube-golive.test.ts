@@ -695,7 +695,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T11 fix round 1 — after the commit, 
     expect(checked).toBe(MODES.length);
   });
 
-  it("I-3a twin: an org with no credits whose connection is reconnect_needed → 402 no_credits, never youtube_reconnect_needed (an admission refusal outranks every YouTube refusal, spec §6.2 'after those pass') and YouTube is asked nothing; positive pair: with a credit the same Go live IS refused youtube_reconnect_needed", async () => {
+  it("I-3a twin: an org with no credits whose connection is reconnect_needed → 402 no_credits, never youtube_reconnect_needed (the credit check is weighed before YouTube is asked — one admission refusal, not all of them: storage_exhausted comes after) and YouTube is asked nothing; positive pair: with a credit the same Go live IS refused youtube_reconnect_needed", async () => {
     const w = await world({ credits: 0 });
     const f = w.fixtures[0]!;
     await markReconnectNeeded(sql, w.orgId, w.connectionId);
@@ -706,6 +706,22 @@ describe.skipIf(!HAS_DB)("YouTube Connect T11 fix round 1 — after the commit, 
 
     await grantCredits({ orgId: w.orgId, delta: 1, createdBy: await rigUser(), note: "t11 fix 1 twin", idempotencyKey: randomUUID() });
     expect(await refusalOf(goLive(w, f))).toMatchObject({ status: 409, code: "youtube_reconnect_needed", extra: { connectionId: w.connectionId } });
+  });
+
+  it("B4 fix round 1 (m2): storage exhausted is weighed AFTER the YouTube step — a dead grant with an exhausted pool answers youtube_reconnect_needed and the pool is never read; a channel that CAN go live answers storage_exhausted (the openapi text says exactly this)", async () => {
+    // The dead-grant half: the YouTube step refuses first, so the storage read (the first provider call a create makes for itself) never happens.
+    const dead = await world();
+    dead.ingest.storage = { totalStorageMinutes: 500, totalStorageMinutesLimit: 500, videoCount: 1 };
+    const read = vi.spyOn(dead.ingest, "storageUsage");
+    await markReconnectNeeded(sql, dead.orgId, dead.connectionId);
+    expect(await refusalOf(goLive(dead, dead.fixtures[0]!))).toMatchObject({ status: 409, code: "youtube_reconnect_needed", extra: { connectionId: dead.connectionId } });
+    expect(read, "the pool was not even read").not.toHaveBeenCalled();
+
+    // The positive pair: the same exhausted pool, a channel YouTube accepts → the broadcast is made, then storage_exhausted refuses it.
+    const ok = await world();
+    ok.ingest.storage = { totalStorageMinutes: 500, totalStorageMinutesLimit: 500, videoCount: 1 };
+    expect(await refusalOf(goLive(ok, ok.fixtures[0]!))).toMatchObject({ status: 503, code: "storage_exhausted" });
+    expect(callsOf(ok.fake, "insertBroadcast"), "YouTube was asked before storage refused").toBe(1);
   });
 
   it("I-3b (P4): a REUSED broadcast whose restart is refused AFTER the prepare (storage exhausted) goes back to 'live' with its reservation released, nothing deleted at YouTube — the retry half a minute later is admitted into the SAME broadcast, not refused active_session; both modes", async () => {
