@@ -15,14 +15,14 @@
       "phaseSeconds": 2538
     },
     "competition-2": {
-      "mutants": 404,
-      "wallSeconds": 1697,
-      "dryRunSeconds": 156,
-      "phaseSeconds": 1512,
+      "mutants": 1172,
+      "wallSeconds": 2858,
+      "dryRunSeconds": 234,
+      "phaseSeconds": 2595,
       "run": {
-        "id": 39405446403,
-        "job": 118570214604,
-        "sha": "99f86e0b3"
+        "id": 40613426893,
+        "job": 122570305891,
+        "sha": "651d2a735"
       }
     },
     "competition-3": {
@@ -32,27 +32,37 @@
       "phaseSeconds": 70
     },
     "competition-4": {
-      "mutants": 408,
-      "wallSeconds": 449,
-      "dryRunSeconds": 149,
-      "phaseSeconds": 264
+      "mutants": 467,
+      "wallSeconds": 321,
+      "dryRunSeconds": 98,
+      "phaseSeconds": 195,
+      "run": {
+        "id": 40613433464,
+        "job": 122570329238,
+        "sha": "651d2a735"
+      }
     },
     "competition-5": {
-      "mutants": 431,
-      "wallSeconds": 2850,
-      "dryRunSeconds": 115,
-      "phaseSeconds": 2700,
+      "mutants": 493,
+      "wallSeconds": 2225,
+      "dryRunSeconds": 100,
+      "phaseSeconds": 2102,
       "run": {
-        "id": 38442772783,
-        "job": 115453433994,
-        "sha": "3b580141b"
+        "id": 40613440212,
+        "job": 122570354963,
+        "sha": "651d2a735"
       }
     },
     "competition-6": {
-      "mutants": 402,
-      "wallSeconds": 3706,
-      "dryRunSeconds": 159,
-      "phaseSeconds": 3518
+      "mutants": 673,
+      "wallSeconds": 3085,
+      "dryRunSeconds": 248,
+      "phaseSeconds": 2803,
+      "run": {
+        "id": 40613446291,
+        "job": 122570378571,
+        "sha": "651d2a735"
+      }
     },
     "competition-7": {
       "mutants": 350,
@@ -118,10 +128,15 @@
       "phaseSeconds": 80
     },
     "modules-5": {
-      "mutants": 364,
-      "wallSeconds": 2940,
-      "dryRunSeconds": 176,
-      "phaseSeconds": 2728
+      "mutants": 435,
+      "wallSeconds": 4775,
+      "dryRunSeconds": 245,
+      "phaseSeconds": 4508,
+      "run": {
+        "id": 40613452266,
+        "job": 122570414757,
+        "sha": "651d2a735"
+      }
     },
     "modules-6": {
       "mutants": 408,
@@ -225,10 +240,15 @@
       "phaseSeconds": 12837
     },
     "sports-cricket-11": {
-      "mutants": 374,
-      "wallSeconds": 5730,
-      "dryRunSeconds": 100,
-      "phaseSeconds": 5603
+      "mutants": 432,
+      "wallSeconds": 2898,
+      "dryRunSeconds": 219,
+      "phaseSeconds": 2646,
+      "run": {
+        "id": 40613458339,
+        "job": 122570415920,
+        "sha": "651d2a735"
+      }
     },
     "sports-cricket-12": {
       "mutants": 384,
@@ -336,14 +356,14 @@
       "phaseSeconds": 10394
     },
     "sports-period-8": {
-      "mutants": 356,
-      "wallSeconds": 5272,
-      "dryRunSeconds": 187,
-      "phaseSeconds": 5023,
+      "mutants": 450,
+      "wallSeconds": 7758,
+      "dryRunSeconds": 235,
+      "phaseSeconds": 7499,
       "run": {
-        "id": 38442638111,
-        "job": 115453024602,
-        "sha": "3b580141b"
+        "id": 40613497243,
+        "job": 122570515255,
+        "sha": "651d2a735"
       }
     },
     "sports-period-9": {
@@ -353,10 +373,15 @@
       "phaseSeconds": 15611
     },
     "sports-setbased-1": {
-      "mutants": 304,
-      "wallSeconds": 6957,
-      "dryRunSeconds": 102,
-      "phaseSeconds": 6828
+      "mutants": 365,
+      "wallSeconds": 7140,
+      "dryRunSeconds": 216,
+      "phaseSeconds": 6896,
+      "run": {
+        "id": 40613510398,
+        "job": 122570552689,
+        "sha": "651d2a735"
+      }
     },
     "sports-setbased-2": {
       "mutants": 398,
@@ -377,21 +402,26 @@
       "phaseSeconds": 11774
     },
     "sports-setbased-5": {
-      "mutants": 414,
-      "wallSeconds": 4258,
-      "dryRunSeconds": 100,
-      "phaseSeconds": 4127,
+      "mutants": 508,
+      "wallSeconds": 10207,
+      "dryRunSeconds": 179,
+      "phaseSeconds": 9999,
       "run": {
-        "id": 38442616068,
-        "job": 115452885447,
-        "sha": "3b580141b"
+        "id": 40613517378,
+        "job": 122570600941,
+        "sha": "651d2a735"
       }
     },
     "sports-setbased-6": {
-      "mutants": 391,
-      "wallSeconds": 11755,
-      "dryRunSeconds": 199,
-      "phaseSeconds": 11519
+      "mutants": 456,
+      "wallSeconds": 2430,
+      "dryRunSeconds": 168,
+      "phaseSeconds": 2236,
+      "run": {
+        "id": 40613525109,
+        "job": 122570606038,
+        "sha": "651d2a735"
+      }
     },
     "sports-nested-1": {
       "mutants": 242,
@@ -429,14 +459,14 @@
       }
     },
     "sports-other-2": {
-      "mutants": 467,
-      "wallSeconds": 6819,
-      "dryRunSeconds": 185,
-      "phaseSeconds": 6606,
+      "mutants": 540,
+      "wallSeconds": 4636,
+      "dryRunSeconds": 218,
+      "phaseSeconds": 4393,
       "run": {
-        "id": 39405571358,
-        "job": 118574525143,
-        "sha": "99f86e0b3"
+        "id": 40613470868,
+        "job": 122570440985,
+        "sha": "651d2a735"
       }
     },
     "sports-other-3": {
@@ -479,14 +509,14 @@
       }
     },
     "sports-other-7": {
-      "mutants": 396,
-      "wallSeconds": 4120,
-      "dryRunSeconds": 170,
-      "phaseSeconds": 3919,
+      "mutants": 452,
+      "wallSeconds": 4056,
+      "dryRunSeconds": 174,
+      "phaseSeconds": 3854,
       "run": {
-        "id": 38442704937,
-        "job": 115453190271,
-        "sha": "3b580141b"
+        "id": 40613477570,
+        "job": 122570456227,
+        "sha": "651d2a735"
       }
     }
   },
@@ -605,7 +635,7 @@
       }
     },
     "sports-period-2": {
-      "mutants": 388,
+      "mutants": 412,
       "lost": 0,
       "parts": {
         "sports-period-2": {
@@ -621,33 +651,33 @@
           }
         },
         "sports-period-11": {
-          "mutants": 119,
+          "mutants": 143,
           "basis": "measured",
-          "wallSeconds": 3840,
-          "dryRunSeconds": 172,
-          "phaseSeconds": 3638,
+          "wallSeconds": 4250,
+          "dryRunSeconds": 232,
+          "phaseSeconds": 3995,
           "run": {
-            "id": 37532657110,
-            "job": 112505753247,
-            "sha": "0920dbf5e"
+            "id": 40613490569,
+            "job": 122570519340,
+            "sha": "651d2a735"
           }
         }
       }
     },
     "sports-period-9": {
-      "mutants": 422,
+      "mutants": 409,
       "lost": 1,
       "parts": {
         "sports-period-9": {
-          "mutants": 72,
+          "mutants": 59,
           "basis": "measured",
-          "wallSeconds": 2242,
-          "dryRunSeconds": 178,
-          "phaseSeconds": 2036,
+          "wallSeconds": 1432,
+          "dryRunSeconds": 221,
+          "phaseSeconds": 1180,
           "run": {
-            "id": 37583585117,
-            "job": 112668631253,
-            "sha": "543ee2b53"
+            "id": 40613503922,
+            "job": 122570558563,
+            "sha": "651d2a735"
           }
         },
         "sports-period-13": {
@@ -690,7 +720,7 @@
       "cancelledPart": {
         "leg": "sports-period-9",
         "cut": "src/sports/period/kernel.ts:2648-2832 (makePeriodModule.declaredPointsSets up to makePeriodModule.arbitraryEvent.if#10)",
-        "mutants": 240,
+        "mutants": 227,
         "wallSeconds": 13004,
         "dryRunSeconds": 188,
         "attempts": {
@@ -714,7 +744,7 @@
       }
     },
     "sports-period-1": {
-      "mutants": 321,
+      "mutants": 351,
       "lost": 0,
       "parts": {
         "sports-period-1": {
@@ -730,15 +760,15 @@
           }
         },
         "sports-period-10": {
-          "mutants": 129,
+          "mutants": 159,
           "basis": "measured",
-          "wallSeconds": 4464,
-          "dryRunSeconds": 174,
-          "phaseSeconds": 4255,
+          "wallSeconds": 4441,
+          "dryRunSeconds": 229,
+          "phaseSeconds": 4188,
           "run": {
-            "id": 37532539994,
-            "job": 112505368627,
-            "sha": "0920dbf5e"
+            "id": 40613484239,
+            "job": 122570498118,
+            "sha": "651d2a735"
           }
         }
       }
@@ -786,7 +816,7 @@
       }
     },
     "sports-nested-5": {
-      "mutants": 470,
+      "mutants": 490,
       "lost": 3,
       "parts": {
         "sports-nested-5": {
@@ -814,15 +844,15 @@
           }
         },
         "sports-nested-7": {
-          "mutants": 118,
+          "mutants": 138,
           "basis": "measured",
-          "wallSeconds": 931,
-          "dryRunSeconds": 117,
-          "phaseSeconds": 781,
+          "wallSeconds": 955,
+          "dryRunSeconds": 169,
+          "phaseSeconds": 753,
           "run": {
-            "id": 38442795927,
-            "job": 115453499384,
-            "sha": "3b580141b"
+            "id": 40613464751,
+            "job": 122570433014,
+            "sha": "651d2a735"
           }
         },
         "sports-nested-8": {
