@@ -15,7 +15,8 @@ import "server-only";
 //      from "the call is in flight"). A crash is retried once the lease lapses; a failure replaces it with the backoff.
 //   2. CALL   (no lock). An access token from the sealed refresh token, then `broadcastLife`. `ready` / `created` / `absent`, or an
 //      orphan → `deleteBroadcast` → the row fails (`never_live` / `orphan`). `live` / `testing` → `complete`. `complete` → nothing
-//      to call. `revoked` (Google's life when the channel's grant is gone) → `youtube_reconnect_needed`.
+//      to call. `revoked` (Google: "removed by an administrator action" — the BROADCAST is gone, not the channel's grant) → nothing to
+//      call and nothing a reconnect could change: the row fails `broadcast_revoked`, the connection is left exactly as it was.
 //   3. FINALIZE (one statement). `update … where id and state = 'ending'` — finalize never moves any other state, so it cannot
 //      resurrect a row something else has settled. Once it has moved a row to `complete`, the replay URL goes through
 //      `setFixtureStreamUrl`, only when the fixture has no link of its own.
@@ -83,6 +84,7 @@ const CODE_TOKEN_UNREADABLE = "youtube_token_unreadable";
 const CODE_UNEXPECTED = "end_step_error";
 const CODE_NEVER_LIVE = "never_live";
 const CODE_ORPHAN = "orphan";
+const CODE_REVOKED = "broadcast_revoked";
 
 /** A failure with a code of ours and nothing else to say (no token, no body). */
 class EndStepCodeError extends Error {
@@ -100,16 +102,25 @@ interface Claimed {
 
 type Outcome =
   | { kind: "complete"; startedAt: Date | null; endedAt: Date | null }
-  | { kind: "failed"; code: typeof CODE_NEVER_LIVE | typeof CODE_ORPHAN };
+  | { kind: "failed"; code: typeof CODE_NEVER_LIVE | typeof CODE_ORPHAN | typeof CODE_REVOKED };
 type Tag = "ended" | "neverLive" | "orphan" | "failed" | "reconnect" | "none";
 
+/** What a report names: the row, never a fact from it. */
+type Reportable = { id: string; org_id: string };
+
 /** A port call. Whatever it throws becomes a YouTubeError: a driver maps Google's answers already, and anything else it lets
- *  through (it should not) is YouTube not answering. The original is dropped, never wrapped: it may hold what must not be kept. */
-async function viaPort<T>(call: () => Promise<T>): Promise<T> {
+ *  through (it should not) is YouTube not answering. The original is dropped, never wrapped: it may hold what must not be kept.
+ *  It is REPORTED, though — a driver bug that backs off forever must not be silent — as a fresh error that names only the original's
+ *  class and the broadcast's id. */
+async function viaPort<T>(call: () => Promise<T>, row: Reportable): Promise<T> {
   try {
     return await call();
   } catch (err) {
     if (err instanceof YouTubeError) throw err;
+    const kind = (err instanceof Error ? err.name : typeof err).replace(/[^A-Za-z]/g, "").slice(0, 64);
+    captureError(new Error(`youtube end step: a port call raised a non-port error (${kind})`), {
+      orgId: row.org_id, route: "youtube.end_step.port", extra: { broadcastId: row.id },
+    });
     throw new YouTubeError("youtube_unavailable");
   }
 }
@@ -180,34 +191,37 @@ async function callYouTube(port: YouTubePort, row: Claimed): Promise<Outcome> {
 
   const refresh = await openToken(sql, row.org_id, row.connection_id);
   if (refresh === null) throw new EndStepCodeError(CODE_TOKEN_MISSING);
-  const at = await viaPort(() => port.accessToken(refresh));
+  const at = await viaPort(() => port.accessToken(refresh), row);
   if (orphan) {
-    await viaPort(() => port.deleteBroadcast(at, ytId));
+    await viaPort(() => port.deleteBroadcast(at, ytId), row);
     return { kind: "failed", code: CODE_ORPHAN };
   }
-  const info = await viaPort(() => port.broadcastLife(at, ytId));
-  const settled = await settleNotLive(port, at, ytId, info);
+  const info = await viaPort(() => port.broadcastLife(at, ytId), row);
+  const settled = await settleNotLive(port, at, row, ytId, info);
   if (settled) return settled;
   // live | testing: end it.
   try {
-    await viaPort(() => port.complete(at, ytId));
+    await viaPort(() => port.complete(at, ytId), row);
   } catch (err) {
     const rest = await rereadAfterFailure(port, at, row, ytId);
     if (rest) return rest;
     throw err;
   }
-  return completedTimes(port, at, ytId, info);
+  return completedTimes(port, at, row, ytId, info);
 }
 
 /** What a life that is NOT live says to do; null for `live` / `testing` (the caller ends those). */
-async function settleNotLive(port: YouTubePort, at: string, ytId: string, info: BroadcastLifeInfo): Promise<Outcome | null> {
+async function settleNotLive(port: YouTubePort, at: string, row: Reportable, ytId: string, info: BroadcastLifeInfo): Promise<Outcome | null> {
   switch (info.life) {
     case "revoked":
-      throw new YouTubeError("youtube_reconnect_needed");   // R5
+      // YouTube removed the broadcast (an administrator action — Google's definition of `revoked`). Terminal and nothing to ask: no
+      // complete, no delete, and no reconnect prompt (the channel's grant is fine; a reconnect would clear the backoff and read
+      // `revoked` again). The row fails and, like any failed row, frees its key.
+      return { kind: "failed", code: CODE_REVOKED };
     case "created":
     case "ready":
     case "absent":
-      await viaPort(() => port.deleteBroadcast(at, ytId));   // never went live: nothing to replay (a delete of an absent one resolves)
+      await viaPort(() => port.deleteBroadcast(at, ytId), row);   // never went live: nothing to replay (a delete of an absent one resolves)
       return { kind: "failed", code: CODE_NEVER_LIVE };
     case "complete":
       return { kind: "complete", startedAt: info.actualStartAt, endedAt: info.actualEndAt };
@@ -220,11 +234,14 @@ async function settleNotLive(port: YouTubePort, at: string, ytId: string, info: 
 /** After `complete` succeeds: YouTube's actual times. The transition's response does not say (the port's `complete` returns nothing and
  *  the driver asks for `part=status` only), so ONE `liveBroadcasts.list` (1 quota unit) reads both. Informational: a failed read, or a
  *  time YouTube leaves out, is null and never keeps the broadcast from finishing. */
-async function completedTimes(port: YouTubePort, at: string, ytId: string, before: BroadcastLifeInfo): Promise<Outcome> {
+async function completedTimes(port: YouTubePort, at: string, row: Reportable, ytId: string, before: BroadcastLifeInfo): Promise<Outcome> {
   try {
-    const after = await viaPort(() => port.broadcastLife(at, ytId));
+    const after = await viaPort(() => port.broadcastLife(at, ytId), row);
     return { kind: "complete", startedAt: after.actualStartAt ?? before.actualStartAt, endedAt: after.actualEndAt };
-  } catch {
+  } catch (err) {
+    // Reported, not swallowed: the row completes without its end time and nothing will fetch it later. `err` is a YouTubeError here
+    // (viaPort makes it one): a code, never a body.
+    captureError(err, { orgId: row.org_id, route: "youtube.end_step.actual_times", extra: { broadcastId: row.id } });
     return { kind: "complete", startedAt: before.actualStartAt, endedAt: null };
   }
 }
@@ -235,11 +252,11 @@ async function rereadAfterFailure(port: YouTubePort, at: string, row: Claimed, y
   if (row.attempts + 1 < COMPLETE_FAILURES_BEFORE_REREAD) return null;
   let info: BroadcastLifeInfo;
   try {
-    info = await viaPort(() => port.broadcastLife(at, ytId));
+    info = await viaPort(() => port.broadcastLife(at, ytId), row);
   } catch {
     return null;
   }
-  return settleNotLive(port, at, ytId, info);
+  return settleNotLive(port, at, row, ytId, info);
 }
 
 /** The replay URL (spec §6.4, "Part 1" rule): `fixtures.stream_url` takes the watch URL only while it is null — a club's own link wins,
@@ -311,6 +328,7 @@ async function endOne(port: YouTubePort, c: Candidate, o: { now: () => Date; hoo
   const moved = await finalize(row, outcome, o.now());
   if (!moved) return "none";
   if (outcome.kind === "complete") return "ended";
+  // `neverLive` counts every failed row that is not an orphan: it ran no replay (never live, or removed by YouTube).
   return outcome.code === CODE_ORPHAN ? "orphan" : "neverLive";
 }
 

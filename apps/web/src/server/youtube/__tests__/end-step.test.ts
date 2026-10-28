@@ -42,13 +42,14 @@ vi.mock("@/server/youtube/prepare", async (importOriginal) => {
 });
 
 /** setFixtureStreamUrl, spied: a pass-through unless a test arms `fail` (the next call throws, once). */
-const urlHook = vi.hoisted(() => ({ fail: false, calls: 0 }));
+const urlHook = vi.hoisted(() => ({ fail: false, calls: 0, actors: [] as { fixtureId: string; userId: string | null }[] }));
 vi.mock("@/server/usecases/fixtures", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/usecases/fixtures")>();
   return {
     ...real,
     setFixtureStreamUrl: vi.fn(async (...a: Parameters<typeof real.setFixtureStreamUrl>) => {
       urlHook.calls++;
+      urlHook.actors.push({ fixtureId: a[1], userId: a[0].userId ?? null });
       if (urlHook.fail) {
         urlHook.fail = false;
         throw new Error("the replay link write failed");
@@ -119,6 +120,7 @@ beforeEach(() => {
   sentry.captureError.mockClear();
   urlHook.fail = false;
   urlHook.calls = 0;
+  urlHook.actors = [];
 });
 afterEach(() => {
   prepareHook.after = null;
@@ -153,7 +155,7 @@ async function override(orgId: string, key: string, value: boolean) {
 
 /** An org with the relay, `fixtures` fixtures each with a present phone, `credits` match credits, and a channel connected through
  *  the real save (its connection and API destination). Its own FakeYouTube, so every count is this test's. */
-async function world(o: { fixtures?: number; credits?: number; connectAfterMs?: number } = {}): Promise<World> {
+async function world(o: { fixtures?: number; credits?: number; connectAfterMs?: number; connectionUser?: string } = {}): Promise<World> {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const n = o.fixtures ?? 1;
@@ -167,7 +169,7 @@ async function world(o: { fixtures?: number; credits?: number; connectAfterMs?: 
   for (const f of fixtures) await pairPresentPhone(f);
   if ((o.credits ?? 1) > 0) await grantCredits({ orgId: auth.orgId, delta: o.credits ?? 1, createdBy: await rigUser(), note: "t14", idempotencyKey: randomUUID() });
   await spendMonthlyStreamGrant(auth.orgId);
-  const c = await connectChannel({ auth, orgId: auth.orgId, userId: auth.userId });
+  const c = await connectChannel({ auth, orgId: auth.orgId, userId: o.connectionUser ?? auth.userId });
 
   let now = Date.now();
   const ingest = new FakeIngest({ clock: () => now, connectAfterMs: o.connectAfterMs ?? 3000 });
@@ -655,7 +657,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     expect((await broadcastRow(m2.broadcastId)).state).toBe("complete");
   });
 
-  it("Part 2 never replaces Part 1: a second broadcast on the fixture completes later and the stream_url stays the first part's; the actor falls back to the connection's creator when last_session_id was nulled", async () => {
+  it("Part 2 never replaces Part 1: a second broadcast on the fixture completes later and the stream_url stays the first part's (a link is still written when last_session_id was nulled)", async () => {
     const w = await world({ credits: 2 });
     const f = w.fixtures[0]!;
     const m1 = await playAndStop(w, f);
@@ -668,6 +670,62 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     expect(await w.step({ at: afterStop(m2, min(6)) })).toMatchObject({ ended: 1 });
     expect(await streamUrlOf(f), "Part 2 did not take the link").toBe(youtubeWatchUrl(m1.ytId));
     expect((await broadcastRow(m2.broadcastId)).state).toBe("complete");
+  });
+
+  it("the replay link is written AS the session's creator, and — when last_session_id was nulled — AS the connection's creator: two distinct people, the exact actor passed to the stream-link path in each branch", async () => {
+    const connectionUser = await rigUser();
+    const w = await world({ fixtures: 2, credits: 2, connectionUser });
+    expect(connectionUser, "premise: two different people").not.toBe(w.userId);
+    const [f1, f2] = w.fixtures as [string, string];
+    const m1 = await playAndStop(w, f1);   // started by the organiser, w.userId
+    const m2 = await playAndStop(w, f2);
+    await sql`update youtube_broadcasts set last_session_id = null where id = ${m2.broadcastId}`;
+    expect(await w.step({ at: afterStop(m2, min(6)) })).toEqual({ ...ZERO, ended: 2 });
+    const byFixture = new Map(urlHook.actors.map((a) => [a.fixtureId, a.userId]));
+    expect(urlHook.actors, "one link write per fixture").toHaveLength(2);
+    expect(byFixture.get(f1), "session branch: the organiser who ran the session").toBe(w.userId);
+    expect(byFixture.get(f2), "fallback branch: the person who connected the channel").toBe(connectionUser);
+    expect(await streamUrlOf(f1)).toBe(youtubeWatchUrl(m1.ytId));
+    expect(await streamUrlOf(f2)).toBe(youtubeWatchUrl(m2.ytId));
+  });
+
+  it("a port that throws something that is NOT a port refusal (a driver bug) is recorded as youtube_unavailable AND reported once, with ids only: the original message — which could hold a secret — is in no report", async () => {
+    const w = await world();
+    const m = await playAndStop(w, w.fixtures[0]!);
+    const secret = `ya29.${randomBytes(12).toString("hex")}`;
+    w.fake.broadcastLife = async () => { throw new TypeError(`cannot read ${secret}`); };
+    expect(await w.step({ at: afterStop(m, min(6)) })).toEqual({ ...ZERO, failed: 1 });
+    const row = await broadcastRow(m.broadcastId);
+    expect(row).toMatchObject({ state: "ending", attempts: 1 });
+    expectOurCode(row, "youtube_unavailable");
+    expect(sentry.captureError, "reported once, not swallowed").toHaveBeenCalledTimes(1);
+    const [err, ctx] = sentry.captureError.mock.calls[0] as [unknown, { orgId?: string; route?: string; extra?: Record<string, unknown> }];
+    expect(err).toBeInstanceOf(Error);
+    expect(ctx).toMatchObject({ orgId: w.orgId, extra: { broadcastId: m.broadcastId } });
+    const everything = [String((err as Error).message), String((err as Error).stack), JSON.stringify(ctx)].join("\n");
+    expect(everything, "the original message is not in the report").not.toContain(secret);
+    expect(everything, "nor is the channel's token").not.toContain(w.token);
+  });
+
+  it("a failed read of YouTube's actual times is reported (once, ids only) and never keeps the broadcast from completing; the start time from the first read is kept, the end is null", async () => {
+    const w = await world();
+    const m = await playAndStop(w, w.fixtures[0]!);
+    const lifeReal = w.fake.broadcastLife.bind(w.fake);
+    let reads = 0;
+    w.fake.broadcastLife = async (...a: Parameters<typeof lifeReal>) => {
+      if (++reads === 2) throw new YouTubeError("youtube_unavailable");   // the read after `complete`
+      return lifeReal(...a);
+    };
+    expect(await w.step({ at: afterStop(m, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+    expect(reads, "premise: the second read was reached").toBe(2);
+    const row = await broadcastRow(m.broadcastId);
+    expect(row.state).toBe("complete");
+    expect(row.actual_start_at!.getTime(), "the first read's start time stands (the scripted video instant)").toBe(m.startedAtMs);
+    expect(row.actual_end_at, "the end time was not read").toBeNull();
+    expect(sentry.captureError).toHaveBeenCalledTimes(1);
+    const [, ctx] = sentry.captureError.mock.calls[0] as [unknown, { orgId?: string; extra?: Record<string, unknown> }];
+    expect(ctx).toMatchObject({ orgId: w.orgId, extra: { broadcastId: m.broadcastId } });
+    expect(JSON.stringify(sentry.captureError.mock.calls)).not.toContain(w.token);
   });
 
   it("a replay-link write that fails does NOT keep the broadcast from ending: it completes, the failure is reported (no secret in it), and the parts list still has it", async () => {
@@ -1002,6 +1060,25 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     expect(checked).toBe(variants.length);
   });
 
+  it("a failure that lands AFTER another firing completed the row leaves it alone: recordFailure only touches an open row (the row stays complete, attempts 0, no backoff, no error code)", async () => {
+    const w = await world();
+    const m = await playAndStop(w, w.fixtures[0]!);
+    const t0 = afterStop(m, min(6));
+    const realToken = w.fake.accessToken.bind(w.fake);
+    let tokens = 0;
+    w.fake.accessToken = async (...a: Parameters<typeof realToken>) => {
+      if (++tokens === 2) throw new YouTubeError("youtube_unavailable");   // the stalled first firing's call, after the second one finished
+      return realToken(...a);
+    };
+    let second: YoutubeEndResult | null = null;
+    const first = await w.step({ at: t0, hooks: { afterClaim: async () => { second = await w.step({ at: t0 + 3 * MIN }); } } });
+    expect(second, "the second firing (past the first lease) completed it").toEqual({ ...ZERO, ended: 1 });
+    expect(tokens, "premise: the first firing's call was reached and refused").toBe(2);
+    expect(first.ended, "the stalled firing ended nothing").toBe(0);
+    expect(callsOf(w.fake, "complete")).toBe(1);
+    expect(await broadcastRow(m.broadcastId)).toMatchObject({ state: "complete", attempts: 0, next_attempt_at: null, last_error_code: null });
+  });
+
   it("a connection revoked between the claim and the call (no token left): failed 'youtube_token_missing' with backoff, reported once with ids only, and the revoked connection's row is not a candidate again", async () => {
     const w = await world();
     const m = await playAndStop(w, w.fixtures[0]!);
@@ -1053,19 +1130,27 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     expect(await w.step({ at: t0 + 1 * MIN })).toEqual({ ...ZERO, ended: 1 });
   });
 
-  it("broadcastLife 'revoked' → handled as youtube_reconnect_needed: the connection goes reconnect_needed, the row stays ending with backoff, complete/delete are not called", async () => {
-    const w = await world();
-    const m = await playAndStop(w, w.fixtures[0]!);
+  it("broadcastLife 'revoked' (YouTube removed the broadcast by administrator action: NOT a lost grant) → the row is finalized FAILED 'broadcast_revoked' with no call after the life read, the connection stays connected, its key is free, and the next Go live on the channel is not refused", async () => {
+    const w = await world({ fixtures: 2, credits: 2 });
+    const [fa, fb] = w.fixtures as [string, string];
+    const m = await playAndStop(w, fa);
     w.fake.revokeBroadcast(m.ytId);
     const t0 = afterStop(m, min(6));
-    expect(await w.step({ at: t0 })).toEqual(ZERO);
-    expect(await connectionStatus(w.connectionId)).toBe("reconnect_needed");
+    const before = w.fake.calls.length;
+    expect(await w.step({ at: t0 }), "settled, not a failure to retry").toEqual({ ...ZERO, neverLive: 1 });
+    const asked = w.fake.calls.slice(before).map((c) => c.method);
+    expect(asked, "the life was read").toContain("broadcastLife");
+    expect(asked.slice(asked.lastIndexOf("broadcastLife") + 1), "nothing is asked after the life read: no complete, no delete").toEqual([]);
     const row = await broadcastRow(m.broadcastId);
-    expect(row.state).toBe("ending");
-    expectOurCode(row, "youtube_reconnect_needed");
-    expect(row.next_attempt_at!.getTime()).toBe(t0 + 1 * MIN);
-    expect(callsOf(w.fake, "complete")).toBe(0);
-    expect(callsOf(w.fake, "deleteBroadcast")).toBe(0);
+    expect(row).toMatchObject({ state: "failed", attempts: 0, next_attempt_at: null, actual_start_at: null, actual_end_at: null });
+    expectOurCode(row, "broadcast_revoked");
+    expect(await connectionStatus(w.connectionId), "the club's grant is fine: no reconnect prompt").toBe("connected");
+    expect(await streamUrlOf(fa), "a removed broadcast has no replay").toBeNull();
+    expect(await w.step({ at: t0 + 10 * MIN }), "a settled row is not a candidate again").toEqual(ZERO);
+    // The channel is usable: Go live on another fixture is admitted, on the freed key (0 insertStream).
+    const next = await goLive(w, fb);
+    expect(w.issued, "A's key was free: B grew no stream").toHaveLength(1);
+    expect((await sessionRow(next.sessionId)).youtube_broadcast_id).not.toBe(m.broadcastId);
   });
 
   it("an EndRuleInvariantError on one broadcast does not stop the pass: it is caught PER broadcast, reported with a code, the row gets backoff and OUR code, and the next broadcast still ends", async () => {
@@ -1260,9 +1345,9 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
 
   // ═══ key freeing, end to end ═══════════════════════════════════════════════════════════════════════════════════════
   for (const mode of ["passthrough", "composed"] as const) {   // B4 batch forward: both modes
-    it(`${mode}: key freeing end to end — Go live A → Stop → the step past due → complete → Go live B on ANOTHER fixture takes A's key with 0 insertStream, and its output carries that key`, async () => {
-      const w = await world({ fixtures: 2, credits: 2 });
-      const [fa, fb] = w.fixtures as [string, string];
+    it(`${mode}: key freeing end to end — Go live A → Stop → the step past due → complete → Go live C on a DIFFERENT fixture takes A's key with 0 insertStream, and its output carries that key`, async () => {
+      const w = await world({ fixtures: 3, credits: 3 });
+      const [fa, fb, fc] = w.fixtures as [string, string, string];
       const a = await playAndStop(w, fa, mode);
       expect(w.issued, "premise: one key issued for A").toHaveLength(1);
       // While A still holds the key (not yet ended), a second Go live must NOT take it: a second stream is grown.
@@ -1270,14 +1355,16 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
       expect(w.issued, "A's broadcast is open, so its key is held: B grew its own").toHaveLength(2);
       await reachLive(w, fb, held.sessionId, mode);
       await stopToEnd(w, fb, held.sessionId, mode);
-      // Now end A (and B, which is due too) with the step, then go live on a third fixture's worth: re-use fa's key.
+      // Now end A (and B, which is due too) with the step, then go live on the THIRD fixture: it re-uses A's key.
       const stepAt = Math.max(afterStop(a, min(6)), (await sessionRow(held.sessionId)).ended_at!.getTime() + min(6));
       expect(await w.step({ at: stepAt })).toEqual({ ...ZERO, ended: 1, neverLive: 1 });   // A ran (video on); B's video never arrived
       expect((await broadcastRow(a.broadcastId)).state).toBe("complete");
       const streams = w.issued.length;
-      const c = await goLive(w, fa, mode);   // the same fixture again is a NEW broadcast (A's is complete); it takes the lowest free key
+      const c = await goLive(w, fc, mode);   // another fixture: it takes the lowest free key — A's
       expect(w.issued, "no stream was inserted: a freed key was reused").toHaveLength(streams);
       const cs = await sessionRow(c.sessionId);
+      const onFixture = (await sql<{ fixture_id: string }[]>`select fixture_id from fixture_stream_sessions where id = ${c.sessionId}`)[0]!.fixture_id;
+      expect(onFixture, "premise: the final Go live is on a different fixture from A and B").toBe(fc);
       expect(cs.youtube_broadcast_id).not.toBe(a.broadcastId);
       expect(fp(w.outputs.at(-1)!.target), "the output carries the first (lowest-slot) key, freed by the end step").toBe(fp(w.issued[0]!));
     });
@@ -1310,11 +1397,11 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     expect(w.issued, "the freed key is taken again").toHaveLength(streams);
   });
 
-  it("an output that could not be released keeps the key HELD even though its broadcast is complete (freeKey's unreleased-output clause, through the real Stop and the real end step); once released — by the retry the same fixture's next Go live runs — the key is taken again", async () => {
+  for (const mode of ["passthrough", "composed"] as const) it(`${mode}: an output that could not be released keeps the key HELD even though its broadcast is complete (freeKey's unreleased-output clause, through the real Stop and the real end step); once released — by the retry the same fixture's next Go live runs — the key is taken again`, async () => {
     const w = await world({ fixtures: 2, credits: 3 });
     const [fa, fb] = w.fixtures as [string, string];
     w.breakRelease.on = true;
-    const a = await playAndStop(w, fa);   // the Stop's release fails: reported, the output stays on its input
+    const a = await playAndStop(w, fa, mode);   // the Stop's release fails: reported, the output stays on its input
     const out = (await sql<{ output_uid: string | null; output_released_at: Date | null }[]>`select output_uid, output_released_at from fixture_stream_sessions where id = ${a.sessionId}`)[0]!;
     expect(out.output_uid, "premise: an output was added").not.toBeNull();
     expect(out.output_released_at, "premise: and not released").toBeNull();
@@ -1322,15 +1409,15 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     expect((await broadcastRow(a.broadcastId)).state, "premise: the broadcast is complete").toBe("complete");
 
     // Another fixture, same channel: A's broadcast is complete, but its output may still be publishing to the key.
-    const b = await goLive(w, fb);
+    const b = await goLive(w, fb, mode);
     expect(w.issued, "A's key is still being published to: B must grow its own").toHaveLength(2);
     expect(fp(w.outputs.at(-1)!.target)).toBe(fp(w.issued[1]!));
-    await stopToEnd(w, fb, b.sessionId, "passthrough");
+    await stopToEnd(w, fb, b.sessionId, mode);
 
     // Cloudflare answers again. The retry owner for an API key's unreleased output is the SAME fixture's next admission
     // (releasePriorOutputs; the daily sweep is the other): A goes live again, releases its old output, and takes the freed key.
     w.breakRelease.on = false;
-    await goLive(w, fa);
+    await goLive(w, fa, mode);
     expect((await sql<{ output_released_at: Date | null }[]>`select output_released_at from fixture_stream_sessions where id = ${a.sessionId}`)[0]!.output_released_at, "premise: released at that admission").not.toBeNull();
     expect(w.issued, "A's old output was released, so its freed key was taken: 0 insertStream").toHaveLength(2);
     expect(fp(w.outputs.at(-1)!.target)).toBe(fp(w.issued[0]!));
