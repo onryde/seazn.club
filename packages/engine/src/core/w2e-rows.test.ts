@@ -5,13 +5,20 @@
 // and the sport module never sees either event, so nothing it holds - score, period, outcome - can move. A decided match cannot be
 // suspended. The expected values are the row's own statement, checked on the real football, hockey and ice hockey modules.
 //
+// X-DV-1 (Task 17, SC-P13): draws on a ladder, double-elimination, stepladder or page-playoff stage are not built, by design. The engine half
+// is the declaration every sport makes (`supportsDraws` is false in those stage kinds, whatever the config) and the kernel's stage sets
+// (`forbidsLevelResult`). What the product then does with a level result there - holds it for the organiser's settle (X-BR-2) or, for generic,
+// refuses it (GN-KO-1) - is those rows' and is proved in apps/web.
+//
 // Every fold is PAD-SHAPED (`strictFromSeq: 0`): the write path.
 import { describe, expect, it } from "vitest";
-import { EngineError } from "../core/errors.ts";
+import { EngineError, EngineErrorCode } from "../core/errors.ts";
 import { foldMatch, foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "../core/events.ts";
-import type { LineupPair } from "../core/types.ts";
+import { DRAW_KINDS, forbidsLevelResult, StageKind, type LineupPair } from "../core/types.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
+import { declaredCfgs } from "../testkit/declared-cfgs.ts";
+import { forEachSport } from "../testkit/for-each-sport.ts";
 import { defaultLineupPair, makeEnvelope } from "../testkit/helpers.ts";
 
 const STRICT = { strictFromSeq: 0 } as const;
@@ -170,5 +177,81 @@ describe("X-SU-1 core.suspend and core.resume on the goal sports record a stoppa
       const resuspended = foldFull(sport, [START, SUSPEND, RESUME, ["core.void", {}, "e-2"]]);
       expect(resuspended.stoppage, `${sport.key} void resume`).toEqual({ reason: "floodlight failure", eventId: "e-1" });
     }
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// X-DV-1 (SC-P13) - draws on a ladder, double-elimination, stepladder or page-playoff stage: not built, by design
+// ---------------------------------------------------------------------------------------------------------------------
+
+describe("X-DV-1 no sport can end a ladder, double-elimination, stepladder or page-playoff match level: supportsDraws is false there under every config", () => {
+  // The four stage kinds of the row's text, by their StageKind values.
+  const NO_DRAW_KINDS = ["ladder", "double_elim", "stepladder", "page_playoff"] as const;
+
+  /** Every config a sport declares, plus carrom's tieBoard "draw" house rule: no declared carrom variant turns it on, and it is the one
+   *  switch that makes a carrom table match drawable. */
+  const cfgsOf = (m: AnySportModule): Array<{ name: string; cfg: unknown }> => [
+    ...declaredCfgs<unknown>(m as never),
+    ...(m.key === "carrom" ? [{ name: "tieBoard draw", cfg: m.configSchema.parse({ tieBoard: "draw" }) as unknown }] : []),
+  ];
+
+  it("X-DV-1 the four stage kinds are real StageKind values, and the kernel forbids a level result in each", () => {
+    for (const kind of NO_DRAW_KINDS) {
+      expect(StageKind.options, kind).toContain(kind);
+      expect(forbidsLevelResult(kind), kind).toBe(true);
+      // None of them is a stage kind that takes draws.
+      expect(DRAW_KINDS.has(kind), kind).toBe(false);
+    }
+    // The negative pair: a table stage kind does not forbid one.
+    for (const kind of DRAW_KINDS) expect(forbidsLevelResult(kind), kind).toBe(false);
+    expect(DRAW_KINDS.size).toBeGreaterThan(0);
+  });
+
+  it("X-DV-1 every sport, under every declared config, supports no draw on the four stage kinds and reaches no level result there", () => {
+    let pairs = 0;
+    let checked = 0;
+    const sports = forEachSport(({ module: m }) => {
+      for (const { name, cfg } of cfgsOf(m)) {
+        pairs++;
+        for (const kind of NO_DRAW_KINDS) {
+          expect(m.supportsDraws(cfg as never, kind), `${m.key} ${name} ${kind}`).toBe(false);
+          expect([...m.reachableResultKinds(cfg as never, kind)], `${m.key} ${name} ${kind} reachable level results`).toEqual([]);
+          checked++;
+        }
+      }
+    });
+    expect(sports).toBe(builtinModules.length);
+    expect(pairs).toBeGreaterThan(builtinModules.length);
+    expect(checked).toBe(pairs * NO_DRAW_KINDS.length);
+  });
+
+  it("X-DV-1 the sweep is not vacuous: wherever a table CAN draw, the four kinds still cannot", () => {
+    // Anti-vacuity: a sweep over sports that never draw anywhere would pass on `return false` everywhere. These are the (sport, config) pairs
+    // whose table stage supports a draw, read from the engine's own declarations.
+    const drawCapable: Array<{ key: string; name: string; cfg: unknown }> = [];
+    forEachSport(({ module: m }) => {
+      for (const { name, cfg } of cfgsOf(m)) if (m.supportsDraws(cfg as never, "league")) drawCapable.push({ key: m.key, name, cfg });
+    });
+    expect(drawCapable.length).toBeGreaterThan(0);
+    // The sports with a draw-capable config include the goal sports, the board game, generic, carrom (its house rule) and a cricket Test.
+    const sports = new Set(drawCapable.map((d) => d.key));
+    for (const key of ["football", "hockey", "icehockey", "boardgame", "generic", "carrom", "cricket"]) expect(sports.has(key), key).toBe(true);
+    // The set sports never draw at all.
+    for (const key of ["volleyball", "badminton", "tabletennis", "tennis"]) expect(sports.has(key), key).toBe(false);
+    let checked = 0;
+    for (const { key, name, cfg } of drawCapable) {
+      const module = builtinModules.find((m) => m.key === key)!;
+      for (const kind of NO_DRAW_KINDS) {
+        expect(module.supportsDraws(cfg as never, "league"), `${key} ${name} league`).toBe(true);
+        expect(module.supportsDraws(cfg as never, kind), `${key} ${name} ${kind}`).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBe(drawCapable.length * NO_DRAW_KINDS.length);
+  });
+
+  it("X-DV-1 the engine declares DRAW_NOT_ALLOWED (a table stage whose sport cannot draw) and LEVEL_RESULT_IN_BRACKET (a generic draw in these stages) as error codes", () => {
+    expect(EngineErrorCode.options).toContain("DRAW_NOT_ALLOWED");
+    expect(EngineErrorCode.options).toContain("LEVEL_RESULT_IN_BRACKET");
   });
 });
