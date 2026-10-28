@@ -33,8 +33,15 @@ vi.mock("@/server/usecases/stream-sessions", () => ({
 vi.mock("@/components/nav", () => ({ Nav: () => <nav data-testid="nav" /> }));
 // The panel renders the labels it is handed, so a test can see the LIST arrive, not only the panel.
 vi.mock("@/components/v2/stream-destinations-panel", () => ({
-  StreamDestinationsPanel: ({ targets, canEdit }: { targets: { id: string; label: string }[]; canEdit: boolean }) => (
-    <div data-testid="stream-destinations-panel" data-can-edit={String(canEdit)}>{targets.map((t) => <span key={t.id} data-target-label={t.label} />)}</div>
+  StreamDestinationsPanel: ({ targets, canEdit, landing }: { targets: { id: string; label: string }[]; canEdit: boolean; landing?: { code: string; pendingId: string | null } | null }) => (
+    <div
+      data-testid="stream-destinations-panel"
+      data-can-edit={String(canEdit)}
+      data-landing-code={landing ? landing.code : "none"}
+      data-landing-pending={landing?.pendingId ?? "none"}
+    >
+      {targets.map((t) => <span key={t.id} data-target-label={t.label} />)}
+    </div>
   ),
 }));
 
@@ -43,8 +50,10 @@ import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/dri
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 
 const ORG = "org-1";
-const render = async () => {
-  const { prelude } = await prerender(await StreamingPage());
+type Params = { youtube?: string | string[]; pending?: string | string[] };
+const page = (params: Params = {}) => StreamingPage({ searchParams: Promise.resolve(params) });
+const render = async (params: Params = {}) => {
+  const { prelude } = await prerender(await page(params));
   return new Response(prelude).text();
 };
 const PANEL = 'data-testid="stream-destinations-panel"';
@@ -116,7 +125,7 @@ describe("Streaming page — offered exactly when the fixture panel offers Go li
       m.listStreamTargets.mockClear();
       m.expireTargetHolders.mockClear();
       apply();
-      await expect(StreamingPage(), why).rejects.toMatchObject(NOT_FOUND);
+      await expect(page(), why).rejects.toMatchObject(NOT_FOUND);
       expect(m.listStreamTargets, why).not.toHaveBeenCalled();
       expect(m.expireTargetHolders, why).not.toHaveBeenCalled();
       checked++;
@@ -125,7 +134,7 @@ describe("Streaming page — offered exactly when the fixture panel offers Go li
   });
 
   it("the positive pair of the three refusals: the same org, with both keys on and a running relay, is NOT a 404 (a guard that 404s everyone would pass the test above)", async () => {
-    await expect(StreamingPage()).resolves.toBeDefined();
+    await expect(page()).resolves.toBeDefined();
   });
 
   it("a viewer (not an editor) is offered the page too — every member sees the list; only the actions are an editor's (the panel takes canEdit)", async () => {
@@ -138,5 +147,36 @@ describe("Streaming page — offered exactly when the fixture panel offers Go li
 
   it("the owner's canEdit reaches the panel as true (the positive pair of the viewer case)", async () => {
     expect(await render()).toContain('data-can-edit="true"');
+  });
+
+  it("hands the panel the connect round trip's landing — what the callback put in the query — in the one shape the panel takes", async () => {
+    const PENDING = "7c9e6679-7425-40de-944b-e07fc1f90ae7";
+    const cases: [string, Params, string, string][] = [
+      ["no query", {}, "none", "none"],
+      ["a banner code", { youtube: "denied" }, "denied", "none"],
+      ["connected", { youtube: "connected" }, "connected", "none"],
+      ["a pick carries its pending grant", { youtube: "pick", pending: PENDING }, "pick", PENDING],
+      ["a pick with no pending id cannot open a picker: it reads as expired", { youtube: "pick" }, "expired", "none"],
+      ["a pick with a junk pending id reads as expired too", { youtube: "pick", pending: "not-a-uuid" }, "expired", "none"],
+      ["a code that is not one of ours shows nothing", { youtube: "<script>" }, "none", "none"],
+      ["a repeated parameter reads its first value", { youtube: ["unavailable", "denied"] }, "unavailable", "none"],
+    ];
+    let checked = 0;
+    for (const [why, params, code, pending] of cases) {
+      const html = await render(params);
+      expect(html, why).toContain(`data-landing-code="${code}"`);
+      expect(html, why).toContain(`data-landing-pending="${pending}"`);
+      checked++;
+    }
+    expect(checked, "every case ran").toBe(cases.length);
+  });
+
+  it("a landing never changes what the page reads or whether it exists: a 404 stays a 404, the list is still read", async () => {
+    setRelayDriversForTest(disabledRelayDrivers());
+    await expect(page({ youtube: "connected" })).rejects.toMatchObject(NOT_FOUND);
+    expect(m.listStreamTargets).not.toHaveBeenCalled();
+    setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });
+    await render({ youtube: "connected" });
+    expect(m.listStreamTargets).toHaveBeenCalledTimes(1);
   });
 });

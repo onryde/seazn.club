@@ -15,6 +15,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { baseUrlFromHeaders } from "@/lib/base-url";
 import { captureError } from "@/lib/sentry";
+import { youtubeLandingFrom } from "@/lib/youtube";
 import { requirePageAuth } from "@/server/page-auth";
 import { streamingPageOffered } from "@/server/stream-panel-context";
 import { listStreamTargets } from "@/server/usecases/stream-targets";
@@ -24,7 +25,7 @@ import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessi
 // Replace key / Remove render only for canEdit (owner or admin), matching the API's write gate. Read server-side
 // through the same use-case the API serves, so the list, its key hints and its "in use" badges are the API's projection,
 // never a second query.
-export default async function StreamingPage() {
+export default async function StreamingPage({ searchParams }: { searchParams: Promise<{ youtube?: string | string[]; pending?: string | string[] }> }) {
   const { auth, canEdit } = await requirePageAuth();
   if (!(await streamingPageOffered(auth.orgId))) notFound();
   const locale = await resolveLocale();
@@ -42,6 +43,8 @@ export default async function StreamingPage() {
     captureError(err, { orgId: auth.orgId, route: "streaming.expire_holders" });
   }
   const targets = await listStreamTargets(auth, auth.orgId);
+  // Where the YouTube connect round trip landed (`?youtube=<code>[&pending=<id>]`): read once, here, into the one shape the panel takes.
+  const landing = youtubeLandingFrom(await searchParams);
 
   return (
     <DictProvider dict={ui} locale={locale}>
@@ -53,7 +56,7 @@ export default async function StreamingPage() {
           <h1 className="page-title">{t(ui, "streaming.title")}</h1>
           <p className="mt-1 max-w-xl text-sm text-slate-500">{t(ui, "streaming.desc")}</p>
         </div>
-        <StreamDestinationsPanel orgId={auth.orgId} canEdit={canEdit} targets={targets} locale={locale} />
+        <StreamDestinationsPanel orgId={auth.orgId} canEdit={canEdit} targets={targets} locale={locale} landing={landing} />
       </main>
     </DictProvider>
   );

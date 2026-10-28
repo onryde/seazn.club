@@ -82,3 +82,29 @@ export function youtubeLanding(code: YoutubeLandingCode, pendingId?: string): st
 export function youtubeLandingCode(value: string | null | undefined): YoutubeLandingCode | null {
   return (YOUTUBE_LANDING_CODES as readonly string[]).includes(value ?? "") ? (value as YoutubeLandingCode) : null;
 }
+
+/** The pending grant id on a landing is a UUID (the pending row's primary key); anything else is not one of ours. */
+const PENDING_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** One landing as the page reads it: the outcome code and, for a `pick`, the pending grant to choose a channel from. */
+export type YoutubeLanding = { code: YoutubeLandingCode; pendingId: string | null };
+
+/** What the Streaming page was handed in its query: the outcome code (`?youtube=`) and, for a `pick`, the pending grant's id
+ *  (`&pending=`). A value that is not one of ours shows nothing (`null`). A `pick` WITHOUT a well-formed pending id cannot open a
+ *  picker (there is nothing to pick from), so it reads as `expired` — the honest sentence for a link that no longer works —
+ *  rather than as an empty picker that asks the server about a junk id. Pure and client-safe: the page calls it once. */
+export function youtubeLandingFrom(
+  params: { youtube?: string | string[]; pending?: string | string[] },
+): YoutubeLanding | null {
+  const first = (v: string | string[] | undefined): string | undefined => (Array.isArray(v) ? v[0] : v);
+  const code = youtubeLandingCode(first(params.youtube));
+  if (code === null) return null;
+  if (code !== "pick") return { code, pendingId: null };
+  const pending = first(params.pending);
+  return pending !== undefined && PENDING_ID.test(pending) ? { code, pendingId: pending } : { code: "expired", pendingId: null };
+}
+
+/** What a destination row's label becomes when its connection is revoked (token-store.ts `revokeConnection` writes it, the channel's
+ *  title being Authorized Data that must not outlive a revoke, DP III.E.4). It is a DATABASE literal, English: any surface that
+ *  shows an archived row's label reads it through `youtubeTargetLabel` (components/v2/youtube-connect-panel.tsx), which localizes it. */
+export const YOUTUBE_DISCONNECTED_LABEL = "YouTube channel (disconnected)";

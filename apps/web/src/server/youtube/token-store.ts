@@ -17,6 +17,7 @@ import "server-only";
 // missing or malformed YOUTUBE_TOKEN_KEK throws the KEK's own sentence (crypto.ts), which names the variable and never
 // a value. Sealing happens BEFORE any write, so a missing KEK writes nothing.
 import type { Tx, sql } from "@/lib/db";
+import { YOUTUBE_DISCONNECTED_LABEL } from "@/lib/youtube";
 import { assertKek, openWith, sealWith } from "@/server/relay/crypto";
 
 /** Structurally the plan's `YoutubePrivacy` (lib/youtube.ts, T5). Declared here because that module does not exist yet;
@@ -96,7 +97,7 @@ export async function replaceConnectionToken(tx: Exec, orgId: string, connection
 /** What the destination row's label becomes when its connection is revoked: the channel's title is Authorized Data and must
  *  not outlive the revoke (DP III.E.4, spec §3.4). The label is the one copy this statement scrubs; the pending row's
  *  `channels` (expiry sweep) and broadcast titles (disconnect purge) are cleared elsewhere. */
-const DISCONNECTED_LABEL = "YouTube channel (disconnected)";
+const DISCONNECTED_LABEL = YOUTUBE_DISCONNECTED_LABEL;
 
 /** Revoke: ONE statement that (1) clears the token and makes the row `revoked` with `revoked_at` — V479's checks refuse any
  *  other shape (R1); `status_since` moves with the status; `last_error_code` is kept (the cause a dead grant was revoked for
