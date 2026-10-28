@@ -32,11 +32,20 @@ const at = (hhmm: string) => new Date(`2030-06-01T${hhmm}:00Z`);
 
 const GENERIC_DIVISION_CONFIG = { resultMode: "score", allowDraws: true, points: { w: 3, d: 1, l: 0 }, progressScore: false };
 
-const savedKek = process.env.YOUTUBE_TOKEN_KEK;
-beforeAll(() => { process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex"); });
+// The file owns its keys. `.env.local` supplies RELAY_KEK on a developer machine and CI's job does not, so a suite that
+// reads it from there is green locally and "RELAY_KEK is not set" on every case in CI (the rig mints a stream code under it).
+const ENV = ["RELAY_KEK", "YOUTUBE_TOKEN_KEK", "RELAY_IMAGE"] as const;
+const savedEnv = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
+beforeAll(() => {
+  process.env.RELAY_KEK = randomBytes(32).toString("hex");
+  process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
+  process.env.RELAY_IMAGE = "registry.fly.io/seazn-relay:t16-test";
+});
 afterAll(() => {
-  if (savedKek === undefined) delete process.env.YOUTUBE_TOKEN_KEK;
-  else process.env.YOUTUBE_TOKEN_KEK = savedKek;
+  for (const k of ENV) {
+    if (savedEnv[k] === undefined) delete process.env[k];
+    else process.env[k] = savedEnv[k];
+  }
 });
 
 interface Seeded { orgId: string; orgSlug: string; compSlug: string; divSlug: string; divisionId: string; fixtureIds: [string, string]; connectionId: string }
