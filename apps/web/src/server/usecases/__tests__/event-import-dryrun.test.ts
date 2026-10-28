@@ -6,6 +6,7 @@ vi.mock("@/server/engine-db/fixture-cfg", async (importOriginal) => {
   return { ...real, resolveFixtureCfg: vi.fn(real.resolveFixtureCfg) };
 });
 
+import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
@@ -123,6 +124,58 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
     });
     expect(typed.results[0]!.error, "the typed stream is not refused").toBeUndefined();
     expect(typed.results[0]!.status, "the typed stream is imported").not.toBe("rejected");
+  });
+
+  // W2e Task 2 (spec 2026-10-28 §5.2, E25). The import is the second strict write path: it folds every event under the
+  // write path, so play after a match-ending sanction with no ending is refused by name, and the same stream with the
+  // ending (core.forfeit{disqualified} against the sanctioned side) imports. Every declared end level, from the engine's
+  // own declarations.
+  it("X-SE-1 event import refuses scoring after an ending sanction: import.fold_rejected, ENDING_SANCTION_PENDING, writes NOTHING; with the ending, it imports", async () => {
+    /** One point to `side` in each declaring sport's own event (test input). A declaring sport missing here reds below. */
+    type Ev = { type: string; payload: Record<string, unknown> };
+    const PLAY: Readonly<Record<string, (side: string) => Ev>> = {
+      badminton: (side) => ({ type: "badminton.rally", payload: { wonBy: side } }),
+      tennis: (side) => ({ type: "tennis.point", payload: { by: side } }),
+    };
+    const ends = builtinModules.flatMap((m) => (m.sanctionEnding?.endLevels ?? []).map((level) => ({ m, level })));
+    expect(ends.length, "the engine declares end levels (zero = nothing checked)").toBeGreaterThan(0);
+    let checked = 0;
+    for (const { m, level } of ends) {
+      const play = PLAY[m.key];
+      expect(play, `${m.key}: a point event for this declaring sport`).toBeDefined();
+      const s = await seedBracket({ sport: m.key, variant: Object.keys(m.variants)[0]!, stageKind: "league", entrants: 2 });
+      const fixtureId = s.fixtureIds[0]!;
+      const [fx] = await sql<{ home: string; away: string }[]>`
+        select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${fixtureId}`;
+      const stream = (after: Ev): Ev[] => [
+        { type: "core.start", payload: {} },
+        play!(fx!.home),
+        { type: m.sanctionEnding!.eventType, payload: { by: fx!.away, level } },
+        after, // ← index 3
+      ];
+      const report = await importEvents(s.auth, s.divisionId, {
+        import_id: `imp-ending-pending-${m.key}-${level}`,
+        streams: [{ fixture: { id: fixtureId }, events: stream(play!(fx!.home)) }],
+      });
+      // ENDING_SANCTION_PENDING names the sanction ({by, level}), not an event, so the report carries no eventIndex.
+      expect(report.results[0], `${m.key}/${level}`).toMatchObject({
+        status: "rejected",
+        eventsAppended: 0,
+        error: { code: "import.fold_rejected", engineCode: "ENDING_SANCTION_PENDING" },
+      });
+      const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
+      expect(n, `${m.key}/${level}: nothing written`).toBe(0);
+
+      // The control: the same stream with the ending after the sanction imports, and the match is decided by it.
+      const ended = await importEvents(s.auth, s.divisionId, {
+        import_id: `imp-ending-recorded-${m.key}-${level}`,
+        streams: [{ fixture: { id: fixtureId }, events: stream({ type: "core.forfeit", payload: { by: fx!.away, reason: "disqualified" } }) }],
+      });
+      expect(ended.results[0]!.error, `${m.key}/${level}: the ended stream is not refused`).toBeUndefined();
+      expect(ended.results[0]!.status, `${m.key}/${level}: the ended stream is imported`).not.toBe("rejected");
+      checked++;
+    }
+    expect(checked).toBe(ends.length);
   });
 
   it("rejects a fixture that already has events", async () => {

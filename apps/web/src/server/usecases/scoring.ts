@@ -11,7 +11,7 @@ import { rateLimit } from "@/lib/rate-limit";
 import { hasFeature, requireFeature } from "@/lib/entitlements";
 import { deferred } from "@/lib/deferred";
 import { divisionScoringClosed } from "@/lib/division-phase";
-import { EngineError } from "@seazn/engine/core";
+import { EngineError, lastLiveEvent, scorerMayForfeit } from "@seazn/engine/core";
 import { foldEpochOf } from "@seazn/engine/sport";
 import { epochFloorOverrideOrOff, judgeEngineEpoch } from "./engine-epoch-override";
 import { appendEvent, replayOutcomeFor, resolveModule, rulesVersionNow } from "@/server/engine-db";
@@ -575,7 +575,14 @@ async function assertEntitledToScore(
   // and void. Placed before the device and scorer branches so neither can let one through; 403 → FORBIDDEN on the
   // wire. The pad reads the same predicate (pad-host.tsx), so the two cannot drift. The authority is this request's
   // AuthCtx, resolved once at the door: a role change lands on the next request.
-  if (isOrganiserOnlyEvent(input.type, input.payload) && (auth.via === "device_link" || subjectToScorerCapabilityGates(auth))) {
+  // ONE exception, D13 (spec 2026-10-28 §5.2, rule X-SE-3): a scorer — a device link or an official scorer alike — may
+  // record the ENDING of the side's own match-ending sanction, `core.forfeit` right after it (`isOwnSanctionEnding`
+  // below). Every other scorer forfeit stays organiser-only.
+  if (
+    isOrganiserOnlyEvent(input.type, input.payload) &&
+    (auth.via === "device_link" || subjectToScorerCapabilityGates(auth)) &&
+    !(await isOwnSanctionEnding(auth.orgId, fixtureId, sport, input))
+  ) {
     const verb =
       input.type === "core.settle"
         ? "settle"
@@ -662,6 +669,42 @@ async function assertEntitledToScore(
 interface FixtureSport {
   key: string;
   moduleVersion: string;
+}
+
+/**
+ * D13 (spec 2026-10-28 §5.2, D3 (1), D12; rule X-SE-3) — is this scorer's `core.forfeit` the ending of the side's own
+ * match-ending sanction? The pad records an ending sanction as two appends: the sanction, then its ending. The ending is a
+ * forfeit, which is organiser-only (X-ST-2), so without this a scorer could record a black card and never its ending, and
+ * ENDING_SANCTION_PENDING (X-SE-1) would refuse everything after it. The engine's `scorerMayForfeit` answers it:
+ * `forfeit{disqualified}` right after an end-level sanction (badminton black card, tennis default) against the same side,
+ * `forfeit{retired}` right after a prompt-level one (volleyball expulsion or disqualification: the team cannot field six).
+ * "Right after" is the ledger's LAST LIVE event (`lastLiveEvent`: no `core.void`, nothing a void targets), so after the
+ * scorer voids its own ending the sanction is last again and it may confirm the ending again.
+ *
+ * Judged on the ledger the REQUEST names: the rows up to its `expected_seq`, and only when that row is there. If the append
+ * succeeds the forfeit follows exactly those rows (the ledger is append-only and the append checks `expected_seq`), so no
+ * event can slip between this read and the write. A stale request passes here and meets SEQ_CONFLICT at the append (the
+ * pad resyncs and asks again), which also lets a keyed retry of an ending that already landed reach its durable replay
+ * instead of a 403. A request ahead of the ledger names rows that do not exist: no exception.
+ *
+ * Only a `core.forfeit` with a sanctioned side and one of the two ending reasons, on a sport that declares an ending, reads
+ * the ledger; every other organiser-only request is refused without a query.
+ */
+async function isOwnSanctionEnding(orgId: string, fixtureId: string, sport: FixtureSport, input: AppendEventRequest): Promise<boolean> {
+  if (input.type !== "core.forfeit") return false;
+  const payload = input.payload as { by?: unknown; reason?: unknown } | null | undefined;
+  const by = payload?.by;
+  const reason = payload?.reason;
+  if (typeof by !== "string" || (reason !== "disqualified" && reason !== "retired")) return false;
+  const sportModule = resolveModule(sport.key, sport.moduleVersion);
+  if (sportModule.sanctionEnding === undefined) return false;
+  const rows = await withTenant(orgId, (tx) => tx<{ id: string; seq: number; type: string; payload: unknown; voids_event_id: string | null }[]>`
+    select id, seq, type, payload, voids_event_id from score_events
+    where fixture_id = ${fixtureId} and seq <= ${input.expected_seq}
+    order by seq`);
+  if (rows.at(-1)?.seq !== input.expected_seq) return false;
+  const ledger = rows.map((r) => ({ id: r.id, type: r.type, payload: r.payload, voids: r.voids_event_id }));
+  return scorerMayForfeit(sportModule, lastLiveEvent(ledger), { by, reason });
 }
 
 /**
