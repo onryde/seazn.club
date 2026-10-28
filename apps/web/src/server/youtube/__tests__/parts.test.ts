@@ -18,7 +18,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
-import { youtubeWatchUrl } from "@/lib/youtube";
+import { linkIsOneOfParts, youtubeWatchUrl } from "@/lib/youtube";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { pairPresentPhone, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
@@ -73,16 +73,64 @@ async function rig(o: { fixtures?: number; start?: boolean } = {}): Promise<Rig>
 async function broadcast(
   r: Pick<Rig, "orgId" | "connectionId">,
   fixtureId: string,
-  o: { state: string; ytId?: string | null; completedAt?: Date | null; id?: string },
+  o: { state: string; ytId?: string | null; completedAt?: Date | null; id?: string; createdAt?: Date },
 ): Promise<{ id: string; ytId: string | null }> {
   const ytId = o.ytId === undefined ? vid() : o.ytId;
   const completedAt = o.completedAt === undefined ? (o.state === "complete" ? new Date() : null) : o.completedAt;
   const [row] = await sql<{ id: string }[]>`
-    insert into youtube_broadcasts (id, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at)
+    insert into youtube_broadcasts (id, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at, created_at)
     values (${o.id ?? randomUUID()}, ${r.orgId}, ${r.connectionId}, ${fixtureId}, ${ytId}, 'Match', 'unlisted', ${o.state},
-            ${o.state === "reserved" ? new Date(Date.now() + 5 * MIN) : null}, ${completedAt})
+            ${o.state === "reserved" ? new Date(Date.now() + 5 * MIN) : null}, ${completedAt}, ${o.createdAt ?? sql`now()`})
     returning id`;
   return { id: row!.id, ytId };
+}
+
+/** An org with a connected channel, one started fixture and what the REAL producers need (the session usecases, the end step), on a scripted
+ *  clock. `playAndStop` is Go live -> live -> video arrives -> a minute of play -> Stop, and answers the broadcast the fake minted. */
+async function streamRig() {
+  const seeded = await seedOrg();
+  const auth = { ...seeded.auth, userId: await rigUser() };
+  const d = await divisionRig(auth, { entrants: 2 });
+  const f = d.fixtureIds[0]!;
+  for (const key of ["streaming.overlay", "streaming.relay"]) {
+    await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason) values (${auth.orgId}, ${key}, true, 't16 unit')
+              on conflict (org_id, feature_key) do update set bool_value = true`;
+  }
+  await invalidateOrgEntitlements(auth.orgId);
+  await pairPresentPhone(f);
+  await grantCredits({ orgId: auth.orgId, delta: 2, createdBy: await rigUser(), note: "t16", idempotencyKey: randomUUID() });
+  await spendMonthlyStreamGrant(auth.orgId);
+  const c = await connect({ auth, orgId: auth.orgId, userId: auth.userId });
+
+  let now = Date.now();
+  const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
+  ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: 100_000_000, videoCount: 0 };
+  const fake = new FakeYouTube({ now: () => new Date(now) });
+  const deps: SessionDeps = { drivers: { ingest, runner: new FakeRunner() }, now: () => new Date(now), appUrl: "http://app.test", youtube: fake };
+
+  const playAndStop = async (): Promise<string> => {
+    await pairPresentPhone(f, { at: deps.now() });
+    const { sessionId } = await organiserStart(auth, f, { mode: "passthrough", targetId: c.targetId }, deps);
+    now += 3000;
+    expect((await currentSession(auth, f, deps))!.state, "premise: the session went live").toBe("live");
+    const [session] = await sql<{ youtube_broadcast_id: string }[]>`select youtube_broadcast_id from fixture_stream_sessions where id = ${sessionId}`;
+    const [b] = await sql<{ yt_broadcast_id: string }[]>`select yt_broadcast_id from youtube_broadcasts where id = ${session!.youtube_broadcast_id}`;
+    const ytId = b!.yt_broadcast_id;
+    now += SEC;
+    fake.videoOn(fake.inspectBroadcast(ytId)!.streamId!);
+    now += MIN;
+    await stopSession(auth, f, sessionId, deps);
+    fake.videoOff(fake.inspectBroadcast(ytId)!.streamId!);
+    return ytId;
+  };
+  return {
+    auth, f, fake, playAndStop,
+    advance: (ms: number) => { now += ms; },
+    endAll: () => endDueBroadcasts(fake, { now: () => new Date(now), budgetMs: 15_000, orgIds: [auth.orgId] }),
+    /** The panel reads the same list off the session view it already polls (`replayParts` beside `replayUrl`). */
+    panelParts: async () => (await currentSession(auth, f, deps))!.replayParts,
+    streamUrl: async () => (await sql<{ stream_url: string | null }[]>`select stream_url from fixtures where id = ${f}`)[0]!.stream_url,
+  };
 }
 
 describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () => {
@@ -98,13 +146,14 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     expect(await fixtureReplayParts(r.orgId, f)).toEqual([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]);
   });
 
-  it("parts are numbered in the order they FINISHED, not the order they were inserted or sorted by id; a tie on the finish time breaks by id", async () => {
+  it("parts are numbered in the order they were STARTED, not the order they finished, were inserted or sorted by id; a tie on the start breaks by id", async () => {
     const r = await rig();
     const f = r.fixtures[0]!;
-    // The later-finished row is inserted FIRST, and its id sorts BELOW the earlier row's: insertion order and id order are both wrong.
+    // Part 1 started first and finished LAST (its end was retried): the restart's row finished before it. That row is inserted FIRST and
+    // its id sorts BELOW Part 1's - so completion order, insertion order and id order are all wrong.
     const [lowId, highId] = [randomUUID(), randomUUID()].sort() as [string, string];
-    const late = await broadcast(r, f, { state: "complete", completedAt: at("11:00"), id: lowId });
-    const early = await broadcast(r, f, { state: "complete", completedAt: at("10:00"), id: highId });
+    const late = await broadcast(r, f, { state: "complete", createdAt: at("11:00"), completedAt: at("11:30"), id: lowId });
+    const early = await broadcast(r, f, { state: "complete", createdAt: at("10:00"), completedAt: at("12:00"), id: highId });
     const expected = [
       { partNo: 1, url: youtubeWatchUrl(early.ytId!) },
       { partNo: 2, url: youtubeWatchUrl(late.ytId!) },
@@ -112,12 +161,14 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     expect(await replayParts(f)).toEqual(expected);
     expect(await fixtureReplayParts(r.orgId, f)).toEqual(expected);
 
-    // A tie: three rows, one instant, inserted in DESCENDING id order - the id decides.
+    // A tie: three rows, one start instant, inserted in DESCENDING id order and finishing in descending id order too - the id decides.
     const g = await rig();
     const tieFixture = g.fixtures[0]!;
     const ids = [randomUUID(), randomUUID(), randomUUID()].sort();
     const made: Record<string, string> = {};
-    for (const id of [...ids].reverse()) made[id] = (await broadcast(g, tieFixture, { state: "complete", completedAt: at("12:00"), id })).ytId!;
+    for (const [i, id] of [...ids].reverse().entries()) {
+      made[id] = (await broadcast(g, tieFixture, { state: "complete", createdAt: at("12:00"), completedAt: at(`1${3 + i}:00`), id })).ytId!;
+    }
     const tied = ids.map((id, i) => ({ partNo: i + 1, url: youtubeWatchUrl(made[id]!) }));
     expect(await replayParts(tieFixture)).toEqual(tied);
     expect(await fixtureReplayParts(g.orgId, tieFixture)).toEqual(tied);
@@ -198,62 +249,22 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
 
   // ---- the real producer ----------------------------------------------------------------------------------------------------
   it("RESTART AFTER COMPLETION through the real end step: complete b1, Go live again, complete b2 gives Part 1 then Part 2, in that order, and the panel's read agrees with the public one", async () => {
-    const seeded = await seedOrg();
-    const auth = { ...seeded.auth, userId: await rigUser() };
-    const d = await divisionRig(auth, { entrants: 2 });
-    const f = d.fixtureIds[0]!;
-    for (const key of ["streaming.overlay", "streaming.relay"]) {
-      await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason) values (${auth.orgId}, ${key}, true, 't16 unit')
-                on conflict (org_id, feature_key) do update set bool_value = true`;
-    }
-    await invalidateOrgEntitlements(auth.orgId);
-    await pairPresentPhone(f);
-    await grantCredits({ orgId: auth.orgId, delta: 2, createdBy: await rigUser(), note: "t16", idempotencyKey: randomUUID() });
-    await spendMonthlyStreamGrant(auth.orgId);
-    const c = await connect({ auth, orgId: auth.orgId, userId: auth.userId });
-
-    let now = Date.now();
-    const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
-    ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: 100_000_000, videoCount: 0 };
-    const fake = new FakeYouTube({ now: () => new Date(now) });
-    const deps: SessionDeps = { drivers: { ingest, runner: new FakeRunner() }, now: () => new Date(now), appUrl: "http://app.test", youtube: fake };
-
-    /** Go live -> live -> video arrives -> a minute of play -> Stop; returns the broadcast the fake minted for it. */
-    const playAndStop = async (): Promise<string> => {
-      await pairPresentPhone(f, { at: deps.now() });
-      const { sessionId } = await organiserStart(auth, f, { mode: "passthrough", targetId: c.targetId }, deps);
-      now += 3000;
-      expect((await currentSession(auth, f, deps))!.state, "premise: the session went live").toBe("live");
-      const [session] = await sql<{ youtube_broadcast_id: string }[]>`select youtube_broadcast_id from fixture_stream_sessions where id = ${sessionId}`;
-      const [b] = await sql<{ yt_broadcast_id: string }[]>`select yt_broadcast_id from youtube_broadcasts where id = ${session!.youtube_broadcast_id}`;
-      const ytId = b!.yt_broadcast_id;
-      now += SEC;
-      fake.videoOn(fake.inspectBroadcast(ytId)!.streamId!);
-      now += MIN;
-      await stopSession(auth, f, sessionId, deps);
-      fake.videoOff(fake.inspectBroadcast(ytId)!.streamId!);
-      return ytId;
-    };
-    const endAll = () => endDueBroadcasts(fake, { now: () => new Date(now), budgetMs: 15_000, orgIds: [auth.orgId] });
-
-    // The panel reads the same list off the session view it already polls (`replayParts` beside `replayUrl`).
-    const panelParts = async () => (await currentSession(auth, f, deps))!.replayParts;
+    const { auth, f, playAndStop, advance, endAll, panelParts, streamUrl } = await streamRig();
 
     expect(await replayParts(f), "premise: nothing yet").toEqual([]);
     const first = await playAndStop();
     expect(await panelParts(), "a session that has not been ended at YouTube yet has no part").toEqual([]);
     expect(await replayParts(f), "Part 1 is not a part until the end step completes it").toEqual([]);
-    now += 6 * MIN;
+    advance(6 * MIN);
     expect(await endAll()).toMatchObject({ ended: 1 });
     expect(await replayParts(f)).toEqual([{ partNo: 1, url: youtubeWatchUrl(first) }]);
     expect(await panelParts(), "one part: the panel lists it").toEqual([{ partNo: 1, url: youtubeWatchUrl(first) }]);
-    const streamUrl = async () => (await sql<{ stream_url: string | null }[]>`select stream_url from fixtures where id = ${f}`)[0]!.stream_url;
     expect(await streamUrl(), "the end step wrote Part 1's address as the fixture's link").toBe(youtubeWatchUrl(first));
 
     const second = await playAndStop();
     expect(second, "premise: the second Go live is a NEW broadcast").not.toBe(first);
     expect(await replayParts(f), "Part 2 is still open: only Part 1 is listed").toEqual([{ partNo: 1, url: youtubeWatchUrl(first) }]);
-    now += 6 * MIN;
+    advance(6 * MIN);
     expect(await endAll()).toMatchObject({ ended: 1 });
     const expected = [
       { partNo: 1, url: youtubeWatchUrl(first) },
@@ -266,5 +277,39 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     // never replaces it - so a club's single link is never mistaken for a part, and a part is never shown twice.
     expect(await streamUrl(), "Part 2 did not take the link").toBe(youtubeWatchUrl(first));
     expect(await streamUrl()).not.toBe(youtubeWatchUrl(second));
+  });
+
+  it("PART 1 FINISHES LAST (its end is retried), through the real end step: the restart's broadcast completes first, yet once both are done Part 1 is the one that STARTED first - on the public read, the organiser's and the panel's - and the stored link is one of the parts, never a second link", async () => {
+    const { auth, f, fake, playAndStop, advance, endAll, panelParts, streamUrl } = await streamRig();
+    const first = await playAndStop();
+    advance(6 * MIN);   // Part 1's end is due: the restart finds it due, claims it `ending` and makes a NEW broadcast
+    const second = await playAndStop();
+    expect(second, "premise: the restart is a new broadcast").not.toBe(first);
+    advance(6 * MIN);   // both are due now
+    fake.failNext("complete", "youtube_unavailable");   // Part 1's `complete` (oldest first) fails once and backs off a minute
+    expect(await endAll(), "Part 1's end failed, the restart's went through").toMatchObject({ ended: 1, failed: 1 });
+    // The restart's broadcast finished FIRST, so until Part 1 lands it is the only part and carries number 1.
+    expect(await replayParts(f), "only the broadcast that has finished is a part").toEqual([{ partNo: 1, url: youtubeWatchUrl(second) }]);
+    const linkAfterFirstPass = await streamUrl();
+
+    advance(2 * MIN);   // past Part 1's backoff
+    expect(await endAll(), "Part 1's retry").toMatchObject({ ended: 1 });
+    const done = await sql<{ yt_broadcast_id: string; completed_at: Date }[]>`
+      select yt_broadcast_id, completed_at from youtube_broadcasts where fixture_id = ${f} and state = 'complete'`;
+    const finishedAt = (ytId: string) => done.find((d) => d.yt_broadcast_id === ytId)!.completed_at.getTime();
+    expect(done, "premise: both broadcasts are complete").toHaveLength(2);
+    expect(finishedAt(first), "premise: Part 1 finished AFTER the restart's broadcast").toBeGreaterThan(finishedAt(second));
+
+    const expected = [
+      { partNo: 1, url: youtubeWatchUrl(first) },
+      { partNo: 2, url: youtubeWatchUrl(second) },
+    ];
+    expect(await replayParts(f), "public: numbered by start").toEqual(expected);
+    expect(await fixtureReplayParts(auth.orgId, f), "organiser: the same numbers").toEqual(expected);
+    expect(await panelParts(), "panel: the same numbers").toEqual(expected);
+    // The end step writes the link only into an empty one, so the first FINALIZER holds it and Part 1's late completion leaves it alone.
+    // What the page's dedupe needs is only that it is one of the parts.
+    expect(await streamUrl(), "the later completion did not rewrite the link").toBe(linkAfterFirstPass);
+    expect(linkIsOneOfParts((await streamUrl())!, expected), "the stored link is one of the parts, so the page shows no second pill").toBe(true);
   });
 });

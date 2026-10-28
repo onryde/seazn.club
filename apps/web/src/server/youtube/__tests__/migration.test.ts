@@ -110,15 +110,17 @@ async function broadcast(
     ytId?: string | null;
     /** Default: now for a `complete` row (a part must know when it finished), null for every other state. */
     completedAt?: Date | null;
+    /** When the broadcast was STARTED (its row created): a part's number follows this. Default: the statement's now(). */
+    createdAt?: Date;
   },
 ): Promise<string> {
   const reservedUntil = o.reservedUntil ?? o.state === "reserved";
   const ytId = o.ytId === undefined ? `yt-${uniq()}` : o.ytId;
   const completedAt = o.completedAt === undefined ? (o.state === "complete" ? new Date() : null) : o.completedAt;
   const [row] = await sql<{ id: string }[]>`
-    insert into youtube_broadcasts (id, org_id, connection_id, fixture_id, key_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at)
+    insert into youtube_broadcasts (id, org_id, connection_id, fixture_id, key_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at, created_at)
     values (${o.id ?? randomUUID()}, ${w.orgId}, ${o.connection}, ${o.fixture}, ${o.key}, ${ytId}, 'Match', ${o.privacy ?? "unlisted"}, ${o.state},
-            ${reservedUntil ? new Date(Date.now() + 5 * 60_000) : null}, ${completedAt})
+            ${reservedUntil ? new Date(Date.now() + 5 * 60_000) : null}, ${completedAt}, ${o.createdAt ?? sql`now()`})
     returning id`;
   return row!.id;
 }
@@ -627,7 +629,7 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
   });
 
   // ---- the parts view -------------------------------------------------------------------------------------------------------
-  it("the parts view lists complete rows only, numbered by completion (not insertion), per fixture, tie-broken by id — and nothing for a setup or private division", async () => {
+  it("the parts view lists complete rows only, numbered by START (created_at - not completion, insertion or id), per fixture, tie-broken by id — and nothing for a setup or private division", async () => {
     const w = await world(4);
     const [f1, f3, f2] = [w.fixtures[0]!, w.fixtures[1]!, w.fixtures[2]!];   // f1 and f3 share a division; f2 is in another
     const c = await connection(w);
@@ -640,17 +642,17 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
     // The empty case first: a fixture with no broadcasts has no parts.
     expect(await parts(f1)).toEqual([]);
 
-    // f1: the LATER-completed row is inserted FIRST, so completion order differs from insertion order.
-    // Ids too: the later row's id sorts BELOW the earlier row's, so ordering by id (or by insertion) is the wrong answer.
+    // f1: Part 1 was STARTED first but finished LAST (its end was retried, say) - after the restart's broadcast had already finished.
+    // The restart's row is inserted FIRST and its id sorts BELOW Part 1's, so insertion order, id order and completion order are ALL wrong.
     const [lowId, highId] = [randomUUID(), randomUUID()].sort() as [string, string];
-    const late = await broadcast(w, { connection: c, fixture: f1, key: k1, state: "complete", completedAt: at("11:00"), id: lowId });
-    const early = await broadcast(w, { connection: c, fixture: f1, key: k1, state: "complete", completedAt: at("10:00"), id: highId });
+    const late = await broadcast(w, { connection: c, fixture: f1, key: k1, state: "complete", createdAt: at("11:00"), completedAt: at("11:30"), id: lowId });
+    const early = await broadcast(w, { connection: c, fixture: f1, key: k1, state: "complete", createdAt: at("10:00"), completedAt: at("12:00"), id: highId });
     await broadcast(w, { connection: c, fixture: f1, key: k1, state: "failed" });
     await broadcast(w, { connection: c, fixture: f1, key: k1, state: "live" });   // open on k1; the complete + failed rows hold nothing
     const f1Parts = await parts(f1);
     expect(f1Parts.map((p) => p.part_no)).toEqual([1, 2]);
     expect(f1Parts.map((p) => p.video_id)).toEqual([await videoOf(early), await videoOf(late)]);
-    expect(f1Parts.map((p) => p.completed_at.toISOString())).toEqual([at("10:00").toISOString(), at("11:00").toISOString()]);
+    expect(f1Parts.map((p) => p.completed_at.toISOString()), "completed_at is still the finish time, whatever the number").toEqual([at("12:00").toISOString(), at("11:30").toISOString()]);
     expect(f1Parts.every((p) => p.fixture_id === f1)).toBe(true);
 
     // Numbering is per fixture: another fixture's first part is part 1 again.
@@ -659,9 +661,12 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
     expect(f2Parts.map((p) => p.part_no)).toEqual([1]);
     expect(f2Parts[0]!.video_id).toBe(await videoOf(other));
 
-    // A tie on completed_at is broken by id: three rows, one instant, inserted in DESCENDING id order.
+    // A tie on created_at is broken by id: three rows, one start instant, inserted in DESCENDING id order, and finishing in DESCENDING id
+    // order too (the lowest id last) - so ordering by completion would be the exact reverse of the right answer.
     const ids = [randomUUID(), randomUUID(), randomUUID()].sort();
-    for (const id of [...ids].reverse()) await broadcast(w, { connection: c, fixture: f3, key: k1, state: "complete", completedAt: at("12:00"), id });
+    for (const [i, id] of [...ids].reverse().entries()) {
+      await broadcast(w, { connection: c, fixture: f3, key: k1, state: "complete", createdAt: at("12:00"), completedAt: at(`1${3 + i}:00`), id });
+    }
     const tied = await parts(f3);
     expect(tied.map((p) => p.part_no)).toEqual([1, 2, 3]);
     expect(tied.map((p) => p.video_id)).toEqual(await Promise.all(ids.map(videoOf)));

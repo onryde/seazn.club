@@ -20,3 +20,27 @@ alter table youtube_broadcasts
 alter table youtube_broadcasts
   add constraint youtube_broadcasts_actual_times_only_complete
     check (state = 'complete' or (actual_start_at is null and actual_end_at is null));
+
+-- ─── public_fixture_youtube_parts_v: a part's number follows when the broadcast STARTED ────────────────────────────────
+-- V479 numbered the parts by completed_at. That is the wrong clock: a broadcast that started first and was ended LATE (its `complete`
+-- call failed and backed off, while the restart's broadcast went through) would be numbered Part 2 behind the video that started
+-- after it, and the numbers would be told differently by what the match page lists and what the organiser's panel lists. A
+-- part is a stretch of the match, so it is numbered in the order the stretches STARTED: the broadcast row's created_at (the row is
+-- made when Go live admits the start; a restart makes a later row), ties broken by id so the numbering is stable.
+--
+-- V479 is merged, so its view is replaced here, never edited. This V480 is not merged, so it carries the replacement: `create or
+-- replace view` keeps the columns, names, types and order exactly (fixture_id, video_id, part_no, completed_at), which is all
+-- Postgres allows a replace to do, and the grant state is untouched (the view is still not granted to app_user; V479's §7 header).
+-- Greenfield (RULES.md §Schema): a view has no data to move.
+create or replace view public_fixture_youtube_parts_v as
+  select b.fixture_id,
+         b.yt_broadcast_id as video_id,
+         (row_number() over (partition by b.fixture_id order by b.created_at, b.id))::int as part_no,
+         b.completed_at
+  from youtube_broadcasts b
+  join fixtures f     on f.id = b.fixture_id
+  join divisions d    on d.id = f.division_id
+  join competitions c on c.id = d.competition_id
+  where b.state = 'complete'
+    and d.status <> 'setup'
+    and c.visibility in ('public', 'unlisted');

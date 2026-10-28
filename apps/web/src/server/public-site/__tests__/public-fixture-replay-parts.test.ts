@@ -66,11 +66,11 @@ async function seed(o: { divisionStatus?: "active" | "setup" } = {}): Promise<Se
   return { orgId, orgSlug, compSlug, divSlug, divisionId, fixtureIds: fixtureIds as [string, string], connectionId: c.connectionId };
 }
 
-async function completeBroadcast(s: Seeded, fixtureId: string, completedAt: Date): Promise<string> {
+async function completeBroadcast(s: Seeded, fixtureId: string, completedAt: Date, startedAt?: Date): Promise<string> {
   const ytId = vid();
   await sql`
-    insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at)
-    values (${s.orgId}, ${s.connectionId}, ${fixtureId}, ${ytId}, 'Match', 'unlisted', 'complete', ${completedAt})`;
+    insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at, created_at)
+    values (${s.orgId}, ${s.connectionId}, ${fixtureId}, ${ytId}, 'Match', 'unlisted', 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
   return ytId;
 }
 
@@ -93,13 +93,13 @@ describe.skipIf(!HAS_DB)("getPublicFixture carries the fixture's replay parts (T
     expect((await load(s, f))!.parts).toEqual([{ partNo: 1, url: youtubeWatchUrl(ytId) }]);
   });
 
-  it("two parts come back in the order they finished, and the other fixture of the division carries none of them", async () => {
+  it("two parts come back in the order they STARTED (not finished), and the other fixture of the division carries none of them", async () => {
     const s = await seed();
     seeded.push(s.orgId);
     const [f1, f2] = s.fixtureIds;
-    // Part 2 is inserted first: insertion order is the wrong answer.
-    const later = await completeBroadcast(s, f1, at("11:00"));
-    const earlier = await completeBroadcast(s, f1, at("10:00"));
+    // Part 1 started first and finished last; the restart's row is inserted first and finished first: insertion and completion order are wrong.
+    const later = await completeBroadcast(s, f1, at("11:30"), at("11:00"));
+    const earlier = await completeBroadcast(s, f1, at("12:00"), at("10:00"));
     expect((await load(s, f1))!.parts).toEqual([
       { partNo: 1, url: youtubeWatchUrl(earlier) },
       { partNo: 2, url: youtubeWatchUrl(later) },

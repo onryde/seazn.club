@@ -1,8 +1,10 @@
 import "server-only";
 // server/youtube/parts.ts - a fixture's replay PARTS (plan T16): its complete YouTube broadcasts, numbered 1, 2, ... in the order
-// they finished. A restart after a Stop makes a NEW broadcast, so a long match can have several; one part is the common case.
+// they STARTED. A restart after a Stop makes a NEW broadcast, so a long match can have several; one part is the common case. The
+// number follows the start (the broadcast row's created_at), not the finish: a broadcast whose end was retried can finish after the
+// one that started later, and it is still the earlier stretch of the match.
 //
-// Two reads, one numbering rule (completion time, ties broken by id - the same as the public view):
+// Two reads, one numbering rule (start time, ties broken by id - V480 replaces the public view with exactly this):
 //   replayParts(fixtureId)               the PUBLIC read (the match page). It reads public_fixture_youtube_parts_v, whose WHERE is
 //                                        public_fixtures_v's redaction: a competition that is not public or unlisted, and a division
 //                                        still in setup, have no row. The view is NOT granted to app_user (plan R7), so this runs on the
@@ -38,7 +40,7 @@ export async function replayParts(fixtureId: string): Promise<ReplayPart[]> {
 /** This ORGANISATION's parts for this fixture, in order. Another organisation's fixture id gets nothing. */
 export async function fixtureReplayParts(orgId: string, fixtureId: string): Promise<ReplayPart[]> {
   const rows = await sql<PartRow[]>`
-    select (row_number() over (order by b.completed_at, b.id))::int as part_no, b.yt_broadcast_id as video_id
+    select (row_number() over (order by b.created_at, b.id))::int as part_no, b.yt_broadcast_id as video_id
       from youtube_broadcasts b
      where b.org_id = ${orgId} and b.fixture_id = ${fixtureId} and b.state = 'complete'
      order by part_no`;

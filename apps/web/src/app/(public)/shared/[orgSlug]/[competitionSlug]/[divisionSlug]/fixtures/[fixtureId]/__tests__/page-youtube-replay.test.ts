@@ -74,11 +74,11 @@ async function seed(o: { divisionStatus?: "active" | "setup"; locale?: string } 
   return { orgId, orgSlug, compSlug, divSlug, fixtureId, divisionId, connectionId: c.connectionId };
 }
 
-async function completeBroadcast(s: Seeded, completedAt: Date): Promise<string> {
+async function completeBroadcast(s: Seeded, completedAt: Date, startedAt?: Date): Promise<string> {
   const ytId = vid();
   await sql`
-    insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at)
-    values (${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${ytId}, 'Match', 'unlisted', 'complete', ${completedAt})`;
+    insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at, created_at)
+    values (${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${ytId}, 'Match', 'unlisted', 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
   return ytId;
 }
 const setFixture = (s: Seeded, status: string, streamUrl: string | null) =>
@@ -198,12 +198,12 @@ describe.skipIf(!HAS_DB)("the public match page shows the match's YouTube replay
     expect(html.indexOf("public-stream-link")).toBeLessThan(html.indexOf('data-testid="replay-embed"'));
   });
 
-  it("two parts: Part 1 and Part 2 tabs in the order the broadcasts finished, Part 1 showing, Part 2's video not loaded yet", async () => {
+  it("two parts: Part 1 and Part 2 tabs in the order the broadcasts STARTED, Part 1 showing, Part 2's video not loaded yet", async () => {
     const s = await open();
     await setFixture(s, "decided", null);
-    // Part 2 is inserted first: insertion order is the wrong answer.
-    const later = await completeBroadcast(s, at("11:00"));
-    const earlier = await completeBroadcast(s, at("10:00"));
+    // Part 1 started first and finished last; the restart's row is inserted first and finished first: insertion and completion order are wrong.
+    const later = await completeBroadcast(s, at("11:30"), at("11:00"));
+    const earlier = await completeBroadcast(s, at("12:00"), at("10:00"));
     const html = await pageHtml(s);
     const tabs = [...player(html).matchAll(/<button [^>]*role="tab"[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
     expect(tabs).toEqual(["Part 1", "Part 2"]);
