@@ -404,6 +404,9 @@ describe("JOBS table", () => {
       "billing-events": ["data.failed", "data.alerted"],
       "billing-quantity": ["data.failed", "data.orphanGroups.failed", "data.addonPrices.mismatched"],
       "billing-grant": ["data.failed"],
+      // T17: the relay-sweep route's daily YouTube pass - YoutubeDailyResult.failed (a connection or leg that threw, a refresh batch
+      // YouTube could not answer, a broadcast the end step can never settle), at data.youtube.failed. `reconnectNeeded` is NOT a failure.
+      "relay-sweep": ["data.youtube.failed"],
       // T7b: stream-tick's StreamTickResult.failed — `deferred` is NOT a failure (reached at the next firing). T15: and the
       // YouTube end step's YoutubeEndResult.failed (broadcasts that failed this pass and will be retried), at data.youtube.failed.
       "stream-tick": ["data.failed", "data.youtube.failed"],
