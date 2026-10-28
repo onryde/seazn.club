@@ -206,6 +206,24 @@ describe("TN-SS-1 a set summary must be a score the set can reach (SC-S1; RBS:34
     expect(unreachable).toBeGreaterThan(0);
   });
 
+  it("TN-SS-1 a score past an already finished set (7–0, 8–0, 9–3) is SET_SCORE_UNREACHABLE in the tie-break set and the advantage set alike, and its message names no tie-break; a set that is not finished (6–5) stays INVALID_EVENT", () => {
+    // RBS:343-344 (Rule 6): a set is won at six games two clear, so 6–0 and 6–3 end it and no game follows. Before W2e the
+    // one-step check refused these as INVALID_EVENT; the walk-back answers them as unreachable (docs/api-v1-breaking-changes.md).
+    // An advantage set has no tie-break, so a sentence about "this set's tie-break" would be false there (Task 4 review M4).
+    let checked = 0;
+    for (const [name, cfg] of [["tie-break set", cfgFor("tour")], ["advantage set", advantageCfg()]] as const) {
+      for (const [home, away] of [[7, 0], [8, 0], [9, 3], [3, 9]] as const) {
+        const e = refusal(() => started(cfg).summary(home, away));
+        expect(e.code, `${name} ${home}-${away}`).toBe("SET_SCORE_UNREACHABLE");
+        expect(e.message, `${name} ${home}-${away}`).not.toMatch(/tie-?break/i);
+        checked++;
+      }
+      expect(refusal(() => started(cfg).summary(6, 5)).code, `${name} 6-5`).toBe("INVALID_EVENT");
+      checked++;
+    }
+    expect(checked).toBe(10);
+  });
+
   it("TN-SS-1 the walk-back is bounded by the pad's own games field: the advantage set's bound is taken, one past it refused", () => {
     // The pad's set-score fields carry the engine's declared maximum (padSpec); an advantage set has no games ceiling in
     // the rulebook (RBS:344, n ≥ 7), so the write path takes every n–(n−2) up to that declared maximum and nothing past it.

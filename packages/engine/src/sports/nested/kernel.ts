@@ -1411,7 +1411,7 @@ function applySetSummary(
   if (strict && !reachableLiveGames(prevH, prevA, rules)) {
     throw new EngineError(
       "SET_SCORE_UNREACHABLE",
-      `set score ${home}–${away} cannot happen under this set's tie-break: no game leads to it from a score the set can reach`,
+      `set score ${home}–${away} cannot happen in this set: no game leads to it from a score the set can reach`,
       { home, away, rules },
     );
   }
