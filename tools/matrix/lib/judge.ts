@@ -6,7 +6,8 @@
 //   harnessFaults  one run's faults (D6), by class;
 //   statesAcross   the per-case states of K runs, compared (ruling 61);
 //   regressions    a run against the committed baseline, restricted to the exact
-//                  ids a sample planned (D13, review C3c);
+//                  ids a sample planned (D13, review C3c), naming the baseline cases
+//                  that restriction skips (D16, E20);
 //   forceBaselineStates  the baseline as it is judged: the ids owner ruling 70 holds red, read red;
 //   matchPlanIds   a run's case ids against the planner's, for the plan the run
 //                  recorded (ruling T4-IDS): CI runs have no lock entry, so this
@@ -23,7 +24,7 @@ import { CASE_STATES, LAYERS, VACUOUS_REASONS, isPlannedShape, type CaseResultV2
 /** Every way the judge refuses to judge (exit 2, nothing written). Each is the Error's own `name`. */
 export const JUDGE_REFUSALS = [
   "RunUnreadable", "RunNotV3", "TooFewRuns", "RunRepeated", "RunsDisagree", "NoCases", "PlanMissing", "PlanUnknown", "PlanIdsMismatch", "ScopeMismatch",
-  "ExpectUnreadable", "ExpectedAbsent", "UnexpectedCase", "RerunMissing", "NoneCompared", "CaseIdsDiffer", "BaselineUnreadable",
+  "ExpectUnreadable", "ExpectedSkipsUnreadable", "ExpectedAbsent", "UnexpectedCase", "RerunMissing", "NoneCompared", "CaseIdsDiffer", "BaselineUnreadable",
 ] as const;
 export type JudgeRefusalName = (typeof JUDGE_REFUSALS)[number];
 
@@ -120,21 +121,24 @@ export function forceBaselineStates<T extends RunLike>(baseline: T, forced: Read
 /** `baseline` against `now`, restricted to EXACTLY the ids in `expected` — never a cell or a scenario: the baseline's
  *  `league|cricket|test|LIFECYCLE|cricket#…` cases share a cell and a scenario with the fixed sample's
  *  `league|cricket|<variant>|LIFECYCLE`, and a cell filter would report them absent on every PR (review C3c).
- *  `compared` counts expected cases present in both runs; `absent` lists expected cases the baseline held and `now` lacks. */
-export function regressions(baseline: RunLike, now: RunLike, expected: readonly string[]): { compared: number; regressed: { caseId: string; was: CaseState; now: CaseState; reason: string }[]; absent: string[] } {
+ *  `compared` counts expected cases present in both runs; `absent` lists expected cases the baseline held and `now` lacks.
+ *  `skippedIds` lists, in baseline order, every baseline case `expected` does not name (D16, E20): the restriction above used to
+ *  drop them without a word, so a case renamed out of `expected` (3×15 renames badminton's) was never judged and never missed. */
+export function regressions(baseline: RunLike, now: RunLike, expected: readonly string[]): { compared: number; regressed: { caseId: string; was: CaseState; now: CaseState; reason: string }[]; absent: string[]; skippedIds: string[] } {
   const want = new Set(expected);
   const nowBy = new Map(now.cases.map((c) => [c.caseId, c]));
   const regressed: { caseId: string; was: CaseState; now: CaseState; reason: string }[] = [];
   const absent: string[] = [];
+  const skippedIds: string[] = [];
   let compared = 0;
   for (const b of baseline.cases) {
-    if (!want.has(b.caseId)) continue; // not planned by this sample (review C3c)
+    if (!want.has(b.caseId)) { skippedIds.push(b.caseId); continue; } // not planned by this sample (review C3c) — counted, D16
     const n = nowBy.get(b.caseId);
     if (n === undefined) { if (HELD.has(b.state)) absent.push(b.caseId); continue; }
     compared++;
     if (HELD.has(b.state) && !HELD.has(n.state)) regressed.push({ caseId: b.caseId, was: b.state, now: n.state, reason: n.reason });
   }
-  return { compared, regressed, absent };
+  return { compared, regressed, absent, skippedIds };
 }
 
 // ---------------------------------------------------------------------------------------------------------------
@@ -222,6 +226,12 @@ export const JudgeOutSchema = z.strictObject({
   plannedNotRun: z.enum(["allow", "refuse"]).nullable(),
   /** Cases compared: the plan's ids (`faults`), the cases every run holds (`across`), the expected cases in both runs (`regression`). Never 0. */
   compared: z.number().int().min(1),
+  /** D16: `regression` only. The baseline cases `--expect` does not name (`skippedIds`, `skipped` their count) and, of those, the ones
+   *  `--expected-skips` does not list (`unexpectedSkips`, each one a reason for exit 1). Zero and empty for the modes that skip nothing,
+   *  and for a verdict written before D16. */
+  skipped: z.number().int().min(0).default(0),
+  skippedIds: z.array(z.string().min(1)).default([]),
+  unexpectedSkips: z.array(z.string().min(1)).default([]),
   faults: z.array(z.strictObject({ run: z.string().min(1), caseId: z.string().min(1), kind: z.enum(FAULT_KINDS), reason: z.string() })),
   differing: z.array(z.strictObject({ caseId: z.string().min(1), states: z.array(z.string().min(1)).min(2) })),
   /** What `statesAcross` returns; the CLI refuses a non-empty list (CaseIdsDiffer) before it writes a verdict, so a file's is always []. */

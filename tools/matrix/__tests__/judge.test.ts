@@ -21,6 +21,7 @@ import { mergeShards, type ShardInput } from "../lib/merge.ts";
 import { EXIT_CODES } from "../lib/exit-codes.ts";
 import { CASE_STATES, VACUOUS_REASONS, decideState, parseResults, type CaseResult, type CaseState, type CheckResult, type RunResults } from "../lib/results.ts";
 import { planSliceCases } from "../lib/slice.ts";
+import { baselineL3Path } from "../lib/pr-sample.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { main } from "../judge.ts";
 import { planOf, runSlice, scopeOf } from "../run.ts";
@@ -243,6 +244,8 @@ describe("regressions (D13; Review Focus 4)", () => {
     expect(r.regressed[0]).toEqual({ caseId: "b", was: "works", now: "red", reason: "y" });
     expect(r.absent).toEqual(["d"]);
     expect(r.compared).toBe(3);
+    // D16 / E20: the baseline case the sample did not plan is no longer dropped silently — it is named.
+    expect(r.skippedIds).toEqual(["e"]);
   });
 
   it("⛔→❌ IS a regression: a held refusal that stops being held (the pair of '⛔→✅ is not')", () => {
@@ -264,14 +267,15 @@ describe("regressions (D13; Review Focus 4)", () => {
 
   it("an expected id the baseline does not hold is neither compared nor absent; and a case the sample did not plan is ignored even when it regressed", () => {
     const r = regressions(run([ok("a")]), run([ok("a"), ok("n", "red", "new")]), ["a", "n"]);
-    expect(r).toEqual({ compared: 1, regressed: [], absent: [] });
+    expect(r).toEqual({ compared: 1, regressed: [], absent: [], skippedIds: [] });
     const ignored = regressions(run([ok("a"), ok("z")]), run([ok("a"), ok("z", "red", "q")]), ["a"]);
     expect(ignored.regressed).toEqual([]);
     expect(ignored.compared).toBe(1);
+    expect(ignored.skippedIds).toEqual(["z"]);
   });
 
   it("the empty expect list compares nothing", () => {
-    expect(regressions(run([ok("a")]), run([ok("a", "red", "x")]), [])).toEqual({ compared: 0, regressed: [], absent: [] });
+    expect(regressions(run([ok("a")]), run([ok("a", "red", "x")]), [])).toEqual({ compared: 0, regressed: [], absent: [], skippedIds: ["a"] });
   });
 });
 
@@ -714,8 +718,138 @@ describe("judge regression --baseline B --now N --expect E [--rerun R] (D13; Rev
     // `league|cricket|test|LIFECYCLE|cricket#…` shares a cell and a scenario with the sample's `league|cricket|<variant>|LIFECYCLE`.
     const sibling = "league|cricket|test|LIFECYCLE|cricket#1";
     const sampled = "league|cricket|t20|LIFECYCLE";
-    expect(reg(run([ok(sibling), ok(sampled)]), run([ok(sampled)]), [sampled])).toBe(0);
+    // The expect list is a sample on purpose (D16): `--sample` says the baseline's other cases are not this run's to judge.
+    expect(reg(run([ok(sibling), ok(sampled)]), run([ok(sampled)]), [sampled], undefined, ["--sample"])).toBe(0);
     expect(out.join("")).toContain("compared 1 cases");
+  });
+});
+
+// --- D16 (E20): the judge counts what it compared and what it skipped, and refuses a skip nobody expected ------------------
+
+describe("judge regression: compared, skipped, and the skips it refuses (D16; E20)", () => {
+  const skips = (list: unknown): string => put("skips.json", list);
+  const reg = (base: RunResults, now: RunResults, expect_: string[], extra: string[] = []): number =>
+    judgeCli(["regression", "--baseline", f(base), "--now", f(now), "--expect", ids(expect_), ...extra]);
+  const verdictOf = (extra: string[], base: RunResults, now: RunResults, expect_: string[]): { code: number; json: ReturnType<typeof parseJudgeOut> } => {
+    const p = join(dir, `d16-${++n}.json`);
+    const code = reg(base, now, expect_, [...extra, "--json-out", p]);
+    return { code, json: parseJudgeOut(JSON.parse(readFileSync(p, "utf8"))) };
+  };
+  // The baseline holds two cases the new run no longer has under that id (a rename); the new run is `a` and `b`.
+  const BASE = (): RunResults => run([ok("a"), ok("b"), ok("old1"), ok("old2")]);
+  const NOW = (): RunResults => run([ok("a"), ok("b")], { runId: "now-d16" });
+
+  it("judge counts compared and skipped cases: printed, and written to --json-out with the ids", () => {
+    const { code, json } = verdictOf(["--expected-skips", skips(["old1", "old2"])], BASE(), NOW(), ["a", "b"]);
+    expect(code).toBe(0);
+    expect(out.join("")).toContain("compared 2 cases");
+    expect(out.join("")).toContain("skipped 2 cases (2 expected, 0 unexpected)");
+    expect(json).toMatchObject({ mode: "regression", exit: 0, compared: 2, skipped: 2, skippedIds: ["old1", "old2"], unexpectedSkips: [] });
+    // …and a run that skips nothing says so with a zero, never by leaving the count out.
+    out = [];
+    const none = verdictOf([], run([ok("a"), ok("b")]), NOW(), ["a", "b"]);
+    expect(none.code).toBe(0);
+    expect(out.join("")).toContain("skipped 0 cases (0 expected, 0 unexpected)");
+    expect(none.json).toMatchObject({ compared: 2, skipped: 0, skippedIds: [], unexpectedSkips: [] });
+  });
+
+  it("a baseline case missing from --expect and not in --expected-skips fails the run, named unexpected_skip — with no flag, with an empty list, and with a list that covers only some", () => {
+    let checked = 0;
+    for (const [what, extra, want] of [
+      ["no flag", [], ["old1", "old2"]],
+      ["an empty list", ["--expected-skips", skips([])], ["old1", "old2"]],
+      ["a list covering old2 only", ["--expected-skips", skips(["old2"])], ["old1"]],
+      ["a list naming an id that is not a skip", ["--expected-skips", skips(["zzz"])], ["old1", "old2"]],
+    ] as const) {
+      out = [];
+      const { code, json } = verdictOf([...extra], BASE(), NOW(), ["a", "b"]);
+      expect(code, what).toBe(1);
+      expect(json, what).toMatchObject({ exit: 1, compared: 2, skipped: 2, skippedIds: ["old1", "old2"], unexpectedSkips: want, regressed: [] });
+      for (const id of want) expect(out.join(""), `${what}: ${id}`).toContain(`[unexpected_skip] ${id}`);
+      expect(out.join(""), what).toContain(`skipped 2 cases (${2 - want.length} expected, ${want.length} unexpected)`);
+      expect(out.join(""), what).toContain(`exit 1: ${EXIT_CODES[1]}`);
+      checked++;
+    }
+    expect(checked).toBe(4);
+  });
+
+  it("a listed skip passes — and listing it hides no regression, and an unexpected skip is not cleared by --rerun", () => {
+    expect(reg(BASE(), NOW(), ["a", "b"], ["--expected-skips", skips(["old1", "old2"])])).toBe(0);
+    // the list is the skips, not a pass: a case that regressed still fails the run
+    out = [];
+    expect(reg(BASE(), run([ok("a", "red", "boom"), ok("b")], { runId: "now-d16" }), ["a", "b"], ["--expected-skips", skips(["old1", "old2"])])).toBe(1);
+    expect(out.join("")).toMatch(/a: works → red — boom/);
+    // the other direction: no regression, one unexpected skip, and a re-run (which only clears regressions) does not clear it
+    out = [];
+    const rerun = f(run([ok("a"), ok("b")], { runId: "now-d16-r" }));
+    expect(reg(BASE(), NOW(), ["a", "b"], ["--rerun", rerun])).toBe(1);
+    expect(out.join("")).toContain("[unexpected_skip] old1");
+  });
+
+  it("zero compared stays a refusal however long the skip list is: a skip list cannot launder a vacuous run", () => {
+    expect(reg(run([ok("q")]), run([ok("a")]), ["a"], ["--expected-skips", skips(["q"])])).toBe(2);
+    expect(said()).toMatch(/NoneCompared/);
+  });
+
+  it("--sample: a deliberate subset's other baseline cases are counted as skipped and not refused; a regression still fails; it excludes --expected-skips and is regression-only", () => {
+    const { code, json } = verdictOf(["--sample"], BASE(), NOW(), ["a", "b"]);
+    expect(code).toBe(0);
+    expect(json).toMatchObject({ exit: 0, compared: 2, skipped: 2, skippedIds: ["old1", "old2"], unexpectedSkips: [] });
+    expect(out.join("")).toContain("skipped 2 cases (--sample");
+    expect(reg(BASE(), run([ok("a", "red", "boom"), ok("b")], { runId: "now-d16" }), ["a", "b"], ["--sample"])).toBe(1);
+    let usage = 0;
+    for (const argv of [
+      ["regression", "--baseline", f(BASE()), "--now", f(NOW()), "--expect", ids(["a", "b"]), "--sample", "--expected-skips", skips([])],
+      ["faults", f(planRun()), "--sample"],
+      ["faults", f(planRun()), "--expected-skips", skips([])],
+      ["across", f(planRun([], { runId: "r1" })), f(planRun([], { runId: "r2" })), "--sample"],
+    ]) {
+      err = [];
+      expect(judgeCli(argv), argv[0]).toBe(2);
+      expect(err.join(""), argv[0]).toMatch(/usage:/);
+      usage++;
+    }
+    expect(usage).toBe(4);
+  });
+
+  it("--expected-skips must be a JSON list of distinct ids: anything else is ExpectedSkipsUnreadable (exit 2, nothing written); an empty list is fine", () => {
+    const p = join(dir, `d16-${++n}.json`);
+    let refused = 0;
+    for (const bad of [put("skips.json", "{\"a\":1}"), put("skips.json", "not json"), skips(["x", "x"]), skips([""]), join(dir, "no-such-skips.json")]) {
+      err = [];
+      expect(reg(BASE(), NOW(), ["a", "b"], ["--expected-skips", bad, "--json-out", p])).toBe(2);
+      expect(said()).toMatch(/ExpectedSkipsUnreadable/);
+      refused++;
+    }
+    expect(refused).toBe(5);
+    expect(existsSync(p)).toBe(false);
+    expect(reg(run([ok("a"), ok("b")]), NOW(), ["a", "b"], ["--expected-skips", skips([])])).toBe(0);
+  });
+
+  it("E20 against the REAL committed baseline: a sport's cases renamed in the new run are skipped — refused unlisted, passed when listed (the 3x15 rename)", () => {
+    const baseline = JSON.parse(readFileSync(baselineL3Path(), "utf8")) as RunResults;
+    // The renamed cases: every badminton case of the committed baseline (its sport is the second field of the id).
+    const renamed = baseline.cases.filter((c) => c.caseId.split("|")[1] === "badminton").map((c) => c.caseId);
+    expect(renamed.length, "the committed baseline holds badminton cases (anti-vacuity)").toBeGreaterThan(0);
+    const kept = baseline.cases.filter((c) => c.caseId.split("|")[1] !== "badminton");
+    expect(kept.length + renamed.length).toBe(baseline.cases.length);
+    const now = { ...baseline, runId: "d16-renamed", cases: kept };
+    const keptIds = kept.map((c) => c.caseId);
+    const base = join(dir, `d16-base-${++n}.json`);
+    writeFileSync(base, JSON.stringify(baseline));
+    const run_ = (extra: string[]): { code: number; json: ReturnType<typeof parseJudgeOut> } => {
+      const p = join(dir, `d16-${++n}.json`);
+      const code = judgeCli(["regression", "--baseline", base, "--now", f(now), "--expect", ids(keptIds), ...extra, "--json-out", p]);
+      return { code, json: parseJudgeOut(JSON.parse(readFileSync(p, "utf8"))) };
+    };
+    const refused = run_([]);
+    expect(refused.code).toBe(1);
+    expect(refused.json.skippedIds).toEqual(renamed);
+    expect(refused.json.unexpectedSkips).toEqual(renamed);
+    expect(refused.json.compared).toBe(kept.length);
+    const listed = run_(["--expected-skips", skips(renamed)]);
+    expect(listed.code, said()).toBe(0);
+    expect(listed.json).toMatchObject({ exit: 0, compared: kept.length, skipped: renamed.length, unexpectedSkips: [] });
   });
 });
 
@@ -769,8 +903,9 @@ describe("--json-out <path> (PF-1): the judge's verdict as JSON, in the shape T8
 
   it("the schema refuses what the producer never writes: another version, an exit of 2, zero compared, an unknown field", () => {
     const good = { version: 1, mode: "faults", exit: 0, layer: "L3", runs: ["r"], plannedNotRun: "allow", compared: 1, faults: [], differing: [], missing: [], regressed: [], absent: [] };
-    expect(parseJudgeOut(good)).toEqual(good);
-    for (const bad of [{ ...good, version: 2 }, { ...good, exit: 2 }, { ...good, compared: 0 }, { ...good, extra: 1 }, { ...good, mode: "other" }]) expect(() => parseJudgeOut(bad)).toThrow();
+    // The D16 fields default to "nothing skipped" for a verdict that does not name them (a faults or across verdict skips nothing).
+    expect(parseJudgeOut(good)).toEqual({ ...good, skipped: 0, skippedIds: [], unexpectedSkips: [] });
+    for (const bad of [{ ...good, version: 2 }, { ...good, exit: 2 }, { ...good, compared: 0 }, { ...good, extra: 1 }, { ...good, mode: "other" }, { ...good, skipped: -1 }, { ...good, skippedIds: [""] }, { ...good, unexpectedSkips: [1] }]) expect(() => parseJudgeOut(bad)).toThrow();
   });
 
   it("--json-out takes a path: without one it is usage", () => {
