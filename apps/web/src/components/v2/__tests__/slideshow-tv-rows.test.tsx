@@ -672,6 +672,22 @@ describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds
     expect(draw(plainSlide)).toContain("North Harbour Rovers");
   });
 
+  it("a split slide carrying a ratio column is refused by name: no table that splits can rank on point_ratio", async () => {
+    // standings-view-w2d.test.ts proves the premise for every sport, cfg and kind (the cascade refuses point_ratio
+    // wherever OT pays apart), so the split has no ratio template; a slide that arrives with one anyway is refused.
+    const iihf = await iihfSlide();
+    if (iihf.kind !== "standings") throw new Error("premise");
+    const withRatio: Slide = { ...iihf, rows: iihf.rows.map((r) => ({ ...r, pointRatio: "1.000" })) };
+    const draw = (slide: Slide) =>
+      renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", liveHref: "/x", labels: slideshowLabels("en") }));
+    expect(() => draw(withRatio)).toThrow("standings slide: no grid template for 6/1 result columns with a ratio column");
+    // The positive pair: a plain slide with the ratio draws its ratio track.
+    const plainWithRatio: Slide = { ...plainSlide, rows: plainSlide.kind === "standings" ? plainSlide.rows.map((r) => ({ ...r, pointRatio: "1.250" })) : [] };
+    const html = draw(plainWithRatio);
+    expect(html).toContain("grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem_6rem]");
+    expect(html).toContain("1.250");
+  });
+
   /** Every standings grid on the board (header first), as class tokens and its cells' text, hidden-from-AT ones dropped. */
   const gridsOf = (html: string) =>
     [...html.matchAll(/<div class="((?:relative )?grid [^"]*grid-cols-\[[^"]*)"[^>]*>(.*?)<\/div>(?=<div|<\/div>)/g)].map((m) => ({
