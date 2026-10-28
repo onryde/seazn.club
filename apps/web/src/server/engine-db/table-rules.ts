@@ -43,6 +43,9 @@ export interface LoadedTableRules extends TableRulesPin {
   /** PS-7b: the sport layer for this stage (`module.defaultTiebreakers(stageKind, mergedCfg)`, PS-7c), for the editor's
    *  Reset; the UI never calls the module. */
   readonly sportDefault: readonly TiebreakerKey[];
+  /** W2e Task 8c (CK-BO-2): the over length the stage's cfg plays (cricket's `ballsPerOver`; The Hundred's is five), which
+   *  the table prints net run rate per. Absent where the cfg names none (every other sport) or the sport cannot read it. */
+  readonly ballsPerOver?: number;
 }
 
 /** W2d: every outcome a stage rule can name — a win or loss however decided, an unplayed loss, a draw, a tie, a no
@@ -153,6 +156,16 @@ function askedOrElse<T>(module: AnySportModule, mergedCfg: unknown, ask: (cfg: u
   }
 }
 
+/** The over length a merged cfg plays, as the sport parses it: a positive whole `ballsPerOver`, else none. The table only
+ *  PRINTS by it (net run rate), so a cfg the sport cannot read answers none and the display's default stands, as for
+ *  `sportDefault`; nothing ranked or paid depends on it. A sport without the key answers none. */
+function ballsPerOverOf(module: AnySportModule, mergedCfg: unknown): number | undefined {
+  const parsed = module.configSchema.safeParse(mergedCfg);
+  if (!parsed.success) return undefined;
+  const n = (parsed.data as Record<string, unknown>).ballsPerOver;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
 function reachableOf(module: AnySportModule, mergedCfg: unknown, kind: string): ReadonlySet<OutcomeKey> {
   const stageKind = StageKind.safeParse(kind);
   if (!stageKind.success) return EVERY_OUTCOME;
@@ -180,6 +193,7 @@ export function tableRulesOf(row: TableRulesRow, module: AnySportModule): Loaded
     divisionTiebreakers: pinned === null ? divisionOrderOf(row) : null,
     pinned,
   });
+  const ballsPerOver = ballsPerOverOf(module, mergedCfg);
   return {
     points: rules.points,
     tiebreakers: rules.tiebreakers,
@@ -188,6 +202,7 @@ export function tableRulesOf(row: TableRulesRow, module: AnySportModule): Loaded
     pinnedAt: pinned === null ? null : row.pinnedAt,
     reachable: reachableOf(module, mergedCfg, row.kind),
     sportDefault: askedOrElse(module, mergedCfg, (cfg) => module.defaultTiebreakers(stageKind, cfg), []),
+    ...(ballsPerOver === undefined ? {} : { ballsPerOver }),
   };
 }
 
@@ -267,6 +282,10 @@ export interface StageTableRulesDoc {
   readonly reachable: readonly OutcomeKey[];
   readonly sportDefault: readonly TiebreakerKey[];
   readonly primary: AnySportModule["primaryTableKey"];
+  /** W2e Task 8c (CK-BO-2): the stage's over length (`LoadedTableRules.ballsPerOver`), what net run rate is printed per.
+   *  Absent for a sport with none - and on a document cached before this field existed, which reads as the default
+   *  six-ball over until it is revalidated. */
+  readonly ballsPerOver?: number;
 }
 
 /** One stage's rules as a document (`tableRulesOf`, its Set spread to an array): what `stageTableRulesDocs` serves, and
@@ -282,6 +301,7 @@ export function stageTableRulesDocOf(row: TableRulesRow, module: AnySportModule)
     reachable: [...rules.reachable],
     sportDefault: rules.sportDefault,
     primary: module.primaryTableKey,
+    ...(rules.ballsPerOver === undefined ? {} : { ballsPerOver: rules.ballsPerOver }),
   };
 }
 

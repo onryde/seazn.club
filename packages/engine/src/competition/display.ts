@@ -8,6 +8,7 @@
 // cascade compares them by cross-multiplication and never stores a float);
 // the Swiss metrics (buchholz/buchholz_cut1/sberger) are materialised into
 // row.metrics by rankStandings because they need the assembled ledger.
+import { EngineError } from "../core/errors.ts";
 import type { DecidedIn, TiebreakerKey } from "../sport/module.ts";
 import type { StandingsRow } from "./standings.ts";
 
@@ -86,16 +87,39 @@ export function ratioText(won: number, lost: number, decimals: number): string {
 }
 
 /**
+ * W2e Task 8c (owner D19; CK-BO-2) — the over length net run rate is per when a competition names none: cricket's standard
+ * six-ball over, the default of its `ballsPerOver` (held to the schema's by display-nrr-scale.test.ts, so this is not a
+ * second source of truth). The ledger counts BALLS (`balls_faced_eff`, `balls_bowled_eff`); a competition that plays
+ * another over (The Hundred's five) passes its own.
+ */
+export const DEFAULT_BALLS_PER_OVER = 6;
+
+/** A competition's over length, refused when it is no whole number of balls above zero: it divides every NRR printed, and
+ *  a NaN or zero there would print "NaN" or "0.000" for a table that has a perfectly good ledger. */
+export function overLengthOf(ballsPerOver: number): number {
+  if (!Number.isInteger(ballsPerOver) || ballsPerOver <= 0) {
+    throw new EngineError("CONFIG_INVALID", `an over length is a whole number of balls above zero, not ${ballsPerOver}`, { ballsPerOver });
+  }
+  return ballsPerOver;
+}
+
+/**
  * Display text for a derived metric on one row, or null when the row cannot
  * produce it (no ledger yet). NRR is signed per convention (+0.412).
+ *
+ * NRR is runs PER OVER (ECB The Hundred Playing Conditions 2026, 16.9.4(a): "the average runs per over scored by that
+ * team" less "the average runs per over scored against that team"; 17.1: an over "shall comprise 5 balls"), so it scales
+ * by the competition's over length: `ballsPerOver` (default `DEFAULT_BALLS_PER_OVER`). The ORDER the cascade ranks on is
+ * the integer cross-multiplication in tiebreakers.ts, which has no scale; only this printed value does.
  */
-export function derivedMetricText(row: StandingsRow, key: TiebreakerKey): string | null {
+export function derivedMetricText(row: StandingsRow, key: TiebreakerKey, ballsPerOver: number = DEFAULT_BALLS_PER_OVER): string | null {
   switch (key) {
     case "nrr": {
+      const bpo = overLengthOf(ballsPerOver);
       const bf = metric(row, "balls_faced_eff");
       const bb = metric(row, "balls_bowled_eff");
       if (bf === 0 || bb === 0) return "—";
-      const nrr = (6 * metric(row, "runs_for")) / bf - (6 * metric(row, "runs_against")) / bb;
+      const nrr = (bpo * metric(row, "runs_for")) / bf - (bpo * metric(row, "runs_against")) / bb;
       const text = nrr.toFixed(3);
       return nrr > 0 ? `+${text}` : text;
     }
@@ -137,10 +161,13 @@ export function derivedMetricText(row: StandingsRow, key: TiebreakerKey): string
 export interface TableLayout {
   readonly apart: readonly Exclude<DecidedIn, "regulation">[];
   readonly unit: "whole" | "half";
+  /** W2e Task 8c (CK-BO-2) — the over length the table's net run rate is per (`derivedMetricText`): the competition's own
+   *  `ballsPerOver`, five on The Hundred. `DEFAULT_BALLS_PER_OVER` where a stage names none. Read by NRR alone. */
+  readonly ballsPerOver: number;
 }
 
 /** A table with no rules to read (a stage the loader refused): W and L as folded, whole points. */
-export const PLAIN_LAYOUT: TableLayout = { apart: [], unit: "whole" };
+export const PLAIN_LAYOUT: TableLayout = { apart: [], unit: "whole", ballsPerOver: DEFAULT_BALLS_PER_OVER };
 
 /** The result columns a table prints: played, the W/L split, draws, points. */
 export type ResultColumnKey = "played" | "won" | "otw" | "otl" | "drawn" | "lost" | "points";
