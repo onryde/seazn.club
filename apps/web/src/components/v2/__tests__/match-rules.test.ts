@@ -9,6 +9,8 @@
 // build()'s key name reds here rather than silently producing a config the
 // server-side configSchema rejects.
 import { describe, expect, it } from "vitest";
+import { hockey } from "@seazn/engine/sports/hockey";
+import { icehockey } from "@seazn/engine/sports/icehockey";
 import { buildRuleOverride, hydrateRuleValues } from "../match-rules";
 
 describe("buildRuleOverride — icehockey overtime, the values-param collapse", () => {
@@ -36,12 +38,34 @@ describe("buildRuleOverride — icehockey overtime, the values-param collapse", 
 describe("buildRuleOverride — hockey shootout, the same pattern with a fixed clock", () => {
   it("reads the sibling attempts value and keeps clockSeconds at the FIH fixed 8", () => {
     expect(buildRuleOverride("hockey", { shootout: "on", shootoutAttempts: "8" })).toEqual({
-      shootout: { attempts: 8, suddenDeath: true, clockSeconds: 8 },
+      shootout: { attempts: 8, clockSeconds: 8 },
     });
   });
 
   it("blank primary skips the group", () => {
     expect(buildRuleOverride("hockey", { shootoutAttempts: "8" })).toEqual({});
+  });
+});
+
+describe("buildRuleOverride — the shoot-out builders write the engine's declared shape (W2e D4, HK-SO-2 IH-SO-2)", () => {
+  // W2e deleted `shootout.suddenDeath` (declared, never read). A builder that still wrote it would lean on the engine's
+  // deploy-window strip for ever; the expected keys are the ones each sport's own shoot-out preset declares (parsed, so a
+  // variant that inherits the base shoot-out is read the way the engine reads it).
+  it("hockey (fih-shootout) and ice hockey (iihf) write exactly their preset's shoot-out keys, with the attempts typed", () => {
+    const cases = [
+      { sport: "hockey", preset: hockey.configSchema.parse(hockey.variants["fih-shootout"]) },
+      { sport: "icehockey", preset: icehockey.configSchema.parse(icehockey.variants.iihf) },
+    ];
+    let checked = 0;
+    for (const { sport, preset } of cases) {
+      const declared = (preset as { shootout?: Record<string, unknown> | null }).shootout;
+      expect(declared, `${sport}: the preset declares a shoot-out`).toBeTruthy();
+      const built = buildRuleOverride(sport, { shootout: "on", shootoutAttempts: "3" }) as { shootout?: Record<string, unknown> };
+      expect(Object.keys(built.shootout ?? {}).sort(), sport).toEqual(Object.keys(declared ?? {}).sort());
+      expect(built.shootout?.attempts, sport).toBe(3);
+      checked += 1;
+    }
+    expect(checked).toBe(cases.length);
   });
 });
 

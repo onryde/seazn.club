@@ -65,7 +65,8 @@ export const ICEHOCKEY_RULES: RuleField[] = [
     kind: "bool",
     build: (v, values) =>
       v === "on"
-        ? { shootout: { attempts: Number(values.shootoutAttempts || 5), suddenDeath: true } }
+        ? // W2e (D4): no `suddenDeath`; it was declared and never read, and the engine no longer has it.
+          { shootout: { attempts: Number(values.shootoutAttempts || 5) } }
         : { shootout: null },
     read: (config) => (recordAt(config, "shootout") !== undefined ? "on" : config.shootout === null || config.shootout === false ? "off" : undefined),
   },
