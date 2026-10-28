@@ -733,7 +733,8 @@ run again under the new engine, written back where the stream already sits. Two 
 fold recomputes) must change. Not `REBASELINE_GOLDEN=1`: that keeps every recorded event byte for byte, so it cannot change
 one, and a ledger the engine now refuses does not fold to be recomputed. Not `EXTEND_GOLDEN=1`: it never touches an existing
 stream, and a stream with the same `config#seed` is already there. Not `UPDATE_GOLDEN=1`: it rewrites everything. A stream below
-the stride (a generator walk) is never re-derived this way.
+the stride (a generator walk) is never re-derived by this batch reproduction: see "Re-recording a coverage-walk stream"
+below for the one case that needs it.
 
 **What it owes: a MAJOR for that sport**, in the same PR. The epoch guard keys a stream by `config#seed`, and a stream whose
 events, lineups or raw config differ is counted **removed and added** (`scripts/fold-epoch-guard.ts`), so an in-place
@@ -771,6 +772,28 @@ if (moved.length !== 1 || id(batch.streams[moved[0]!]!) !== target) throw new Er
 corpus.streams[batch.start + moved[0]!] = reproduced[moved[0]!]!;
 writeCorpus(corpus);
 ```
+
+## Re-recording a coverage-walk stream (W2e Task 6)
+
+A stream below the stride is an `extendCorpus` coverage walk (`buildStream` at a small seed), so `floorBatches` and
+`reproduceFloorBatch` do not reach it. One case still needs its recorded events changed: a NEW STRICT REFUSAL refuses an event
+such a stream recorded (W2e's cricket chase bound, `CHASE_OVERSHOOT`, refused `test#40` and `default#102`). `REBASELINE_GOLDEN=1`
+cannot repair it for the reason above, so it is a one-off scratch script with the floor-batch script's discipline:
+
+1. **Find the set by probe.** Fold every committed stream strictly; the streams whose fold throws the new code are the set.
+   Never choose it from a spec or a plan: three documents named one stream where two broke.
+2. **Refuse unless exactly that set differs.** The script names the expected identities and the expected refusal code and
+   writes nothing otherwise. Every other stream stays byte for byte, identity and position unchanged, and so does the
+   header.
+3. **Re-derive whole, or clamp in place.** Rebuild the walk with today's generator and compare it with the committed stream
+   as it stands BEFORE the engine change. If it reproduces byte for byte, re-derive the stream whole (the same `buildStream`
+   call `extendCorpus` made). If it does not (the generator moved after the stream was recorded), a whole re-derivation would
+   swap it for an unrelated stream and could lose the coverage it was added for: keep every event before the refused one and
+   replace the refused event alone with the value the corrected generator draws, which is the refusal's own bound when the
+   fix is a clamp that draws no rng. Then refold the state with the recorded config spliced back and slim it as
+   `extendCorpus` does.
+4. **Idempotent.** A second run reports nothing to re-record. Check the plain golden replay and `fold-epoch:check`; the
+   re-record owes the sport a MAJOR, as for a floor stream.
 
 ## Branch streams (W2c Task 16c)
 
