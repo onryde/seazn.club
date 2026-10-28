@@ -15,7 +15,24 @@ import { describe, expect, it } from "vitest";
 import { FOLD_EPOCH } from "./fold-epoch.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 
-const SPORTS_DIR = fileURLToPath(new URL("../sports/", import.meta.url));
+/** Under Stryker this file runs from a COPY of the package, `<engine>/.stryker-tmp/sandbox-<id>/`, and the copy of every file a leg
+ *  mutates is INSTRUMENTED: each string literal becomes `stryMutAct_x("n") ? "" : "extra_time"`, so a scan of the copy reads a win
+ *  method `""` that no module writes, and the dry run fails (sports-cricket-2/-3/-5, run 40728636895: `cricket writes win method ""`).
+ *  The checkout's own `src/` sits two levels up, untouched, and is what the scan reads - the way golden-policy.test.ts names the
+ *  checkout's paths from inside a sandbox (outOfSandbox). `module.outcomeMethods` is still the sandbox's, so a mutant that empties a
+ *  declaration (cricket's `winMethodTable("cricket", {...})` to `{}`) still fails the `toContain` below and is killed. Outside a
+ *  sandbox the path is unchanged. */
+const SANDBOX = /\.stryker-tmp\/sandbox-[A-Za-z0-9_-]+\//;
+const outOfSandbox = (path: string): string => path.replace(SANDBOX, "");
+const SPORTS_DIR = outOfSandbox(fileURLToPath(new URL("../sports/", import.meta.url)));
+
+/** Stryker's instrumentation helpers (`stryNS_<hash>`, `stryCov_<hash>`, `stryMutAct_<hash>`): a source that carries one is a
+ *  sandbox copy, and a scan of it is the false red above. The mapping is an assumption; this makes it a guard with a name. */
+const INSTRUMENTED = /\bstry(?:NS|Cov|MutAct)_[0-9a-f]+/;
+const refuseInstrumented = (path: string, text: string): string => {
+  if (INSTRUMENTED.test(text)) throw new Error(`${path} is Stryker-instrumented: the scan must read the checkout's source, not a sandbox copy`);
+  return text;
+};
 
 /** The source directories each registered module folds from: its own, plus the kernel it is a preset of. Held to the
  *  registry below — a sport with no row, or a row for no sport, fails. */
@@ -57,7 +74,7 @@ const scanFile = (path: string, out: Scan): void => {
   let own = fileScans.get(path);
   if (own === undefined) {
     own = { literals: new Set(), templateHeads: new Set(), unresolved: 0 };
-    scanSource(path, readFileSync(path, "utf8"), own);
+    scanSource(path, refuseInstrumented(path, readFileSync(path, "utf8")), own);
     fileScans.set(path, own);
   }
   for (const l of own.literals) out.literals.add(l);
@@ -182,5 +199,26 @@ describe("X-PT-2: the win methods a module's source writes are its declared outc
       if (module.outcomeMethods.includes("golden_goal")) declares++;
     });
     expect(declares).toBe(0); // so a fold that wrote it would fail the sweep above
+  });
+});
+
+describe("the scan reads the checkout's source, never a Stryker sandbox's instrumented copy", () => {
+  it("outOfSandbox takes the one sandbox segment out of a Stryker copy's path, and leaves every other path alone", () => {
+    const checkout = "/work/seazn.club/packages/engine/src/sports/";
+    expect(outOfSandbox("/work/seazn.club/packages/engine/.stryker-tmp/sandbox-36Ol7J/src/sports/")).toBe(checkout);
+    expect(outOfSandbox(checkout)).toBe(checkout);
+    for (const other of [
+      "/work/seazn.club/packages/engine/.stryker-tmp/other/src/sports/",
+      "/work/seazn.club/packages/engine/.stryker-tmp/sandbox-/src/sports/",
+      "/work/seazn.club/packages/engine/src/.stryker-tmp/sandbox-36Ol7J",
+    ]) expect(outOfSandbox(other), other).toBe(other);
+  });
+
+  it("a file carrying Stryker's instrumentation is refused by name, and a pristine one is returned as read", () => {
+    // The shape Stryker 10 wrote into a sandbox copy of cricket.ts (a `decideWin` argument, as scanned above).
+    const instrumented = 'return decideWin(state, chaseSide, stryMutAct_9fa48("14") ? "" : (stryCov_9fa48("14"), "regulation"), {});';
+    expect(() => refuseInstrumented("sandbox/cricket.ts", instrumented)).toThrow(/sandbox\/cricket\.ts.*instrumented/);
+    const pristine = 'return decideWin(state, chaseSide, "regulation", {});';
+    expect(refuseInstrumented("cricket.ts", pristine)).toBe(pristine);
   });
 });
