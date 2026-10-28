@@ -27,8 +27,9 @@ import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
+import { YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeRefusalCode, type YoutubeRefusalCode } from "@/lib/youtube";
 import type {
-  StreamEndReason, StreamFailReason, StreamLostCountdown, StreamPhone, StreamSessionCurrent,
+  StreamEndReason, StreamFailReason, StreamLostCountdown, StreamPhone, StreamSessionCurrent, StreamTarget,
 } from "@/server/api-v1/schemas";
 
 /** Prompt watch 4 closed: `live-score.tsx` exports no POLL_MS after W1's lift;
@@ -157,10 +158,12 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
   max_duration: "stream.phone.ended.reason.max_duration",
 };
 
-/** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. */
+/** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. The YouTube refusals (spec §6.2,
+ *  YouTube Connect T12) are spread from lib/youtube.ts's own list — the ONE declaration the server's prepare step throws from — so a
+ *  seventh YouTube code does not compile here until it has copy (`CREATE_ERROR_KEYS`) and a fix (`YOUTUBE_REFUSAL_FIX`). */
 export const CREATE_ERROR_CODES = [
   "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
-  "composed_unavailable", "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "unknown",
+  "composed_unavailable", "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", ...YOUTUBE_REFUSAL_CODES, "unknown",
 ] as const;
 export type CreateErrorCode = (typeof CREATE_ERROR_CODES)[number];
 
@@ -181,8 +184,37 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   destination_not_allowed: "stream.error.destination_not_allowed",
   target_unreadable: "stream.error.target_unreadable",
   plan_lacks_relay: "stream.error.plan_lacks_relay",
+  // YouTube Connect T12 (spec §6.2): one sentence per refusal, the reason only — "nothing was started or charged" is the panel's own
+  // line under it (`stream.youtube.refused.nothing`), said once for all six.
+  youtube_reconnect_needed: "stream.error.youtube_reconnect_needed",
+  youtube_live_not_enabled: "stream.error.youtube_live_not_enabled",
+  youtube_live_blocked: "stream.error.youtube_live_blocked",
+  youtube_limit_reached: "stream.error.youtube_limit_reached",
+  youtube_channel_busy: "stream.error.youtube_channel_busy",
+  youtube_unavailable: "stream.error.youtube_unavailable",
   unknown: "stream.error.unknown",
 };
+
+/** What the organiser's panel puts where Go live was, for each YouTube refusal (owner's Option B, 2026-10-27: the fix REPLACES the
+ *  button). `reconnect`: the channel's grant is dead, so a link to the Streaming page, where Reconnect lives. `retry`: the refusal
+ *  is one a retry on the same destination may clear (YouTube did not answer, its quota for new streams is spent for now, the
+ *  channel's ten streams are all live) — so the same Go live, asked again (controller ruling, T12 fix round 1; it is the same split
+ *  `YOUTUBE_REFUSAL_REMEDY` makes for the phone's start). `none`: nothing Seazn or the club can do from here (a channel not yet
+ *  enabled for live, one YouTube restricted): the way on is another destination, which every refusal offers. A Record over the
+ *  declaration, so a new code does not compile until placed. */
+export const YOUTUBE_REFUSAL_FIX: Record<YoutubeRefusalCode, "reconnect" | "retry" | "none"> = {
+  youtube_reconnect_needed: "reconnect",
+  youtube_live_not_enabled: "none",
+  youtube_live_blocked: "none",
+  youtube_limit_reached: "retry",
+  youtube_channel_busy: "retry",
+  youtube_unavailable: "retry",
+};
+
+/** The YouTube refusal a create failure is, or null for every other code (the panel draws these differently). */
+export function youtubeRefusalOf(code: CreateFailureCode): YoutubeRefusalCode | null {
+  return isYoutubeRefusalCode(code) ? code : null;
+}
 
 /** `target_in_use` without a match to name (the index race's `{ holder: null }`, or a holder whose fixture was deleted). */
 const TARGET_IN_USE_ELSEWHERE_KEY: MessageKey = "stream.error.target_in_use.unknown";
@@ -216,6 +248,9 @@ export function createErrorCode(err: unknown): CreateErrorCode {
   if (w.code === DESTINATION_NOT_ALLOWED) return "destination_not_allowed";
   if (w.code === TARGET_UNREADABLE) return "target_unreadable";
   if (w.code === "PAYMENT_REQUIRED" && PLAN_GATE_FEATURES.includes(w.extra.feature_key as string)) return "plan_lacks_relay";
+  // A YouTube refusal rides the wire as its own lower-case code (prepare.ts `youtubeRefusal`). Only the six this list names: a
+  // `youtube_*` code a newer server adds reads as `unknown` (the generic retry line) — never as its raw code on screen.
+  if (isYoutubeRefusalCode(w.code)) return w.code;
   return "unknown";
 }
 
@@ -270,7 +305,8 @@ export function inUseText(msg: Msg, h: CreateErrorHolder): string {
 export function createErrorText(error: { code: CreateFailureCode; holder: CreateErrorHolder | null }, msg: Msg): string {
   if (error.code === "target_in_use") return error.holder ? inUseText(msg, error.holder) : msg(TARGET_IN_USE_ELSEWHERE_KEY);
   if (error.code === TARGET_REMOVED) return msg("stream.error.target_removed");
-  return msg(CREATE_ERROR_KEYS[error.code]);
+  // `{max}` belongs to youtube_channel_busy alone (the pool's ten-streams cap, lib/youtube.ts); a key without the placeholder ignores it.
+  return msg(CREATE_ERROR_KEYS[error.code], { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL });
 }
 
 export const INGEST_STATE_KEYS: Record<"connected" | "disconnected" | "unknown", MessageKey> = {
@@ -513,6 +549,40 @@ export const AUTO_REFUSAL_KEYS: Record<AutoRefusal, MessageKey> = {
   unavailable: "stream.auto.refusal.unavailable",
 };
 
+/** B4 fix round 1, I-2: the destination an automatic start tried, as far as the strip needs it — whether it is a connected YouTube
+ *  channel and, if so, the channel's own state. `youtube: null` is a pasted key. */
+export type AutoDestination = { youtube: Pick<NonNullable<StreamTarget["youtube"]>, "status" | "liveState"> | null } | null;
+
+/** The destination the SERVER resolved for this fixture (`phone.destination`, the one `fixtureStreamTarget` hands the automatic start),
+ *  found in the panel's own list of destinations. Null when no destination resolved, or the list does not hold it (archived since,
+ *  or not read yet): the strip then says what the stored word says. */
+export function autoDestinationOf(phone: StreamPhone | null, targets: readonly StreamTarget[]): AutoDestination {
+  const id = phone?.destination?.id ?? null;
+  const t = id === null ? undefined : targets.find((x) => x.id === id);
+  return t ? { youtube: t.youtube } : null;
+}
+
+/** The stored refusal words are the column's closed set (V431), so a YouTube destination's refusals share two of them: `no_destination`
+ *  (the club must fix the destination) and `unavailable` (retry). Against a connected channel the strip says the real reason when it can
+ *  be KNOWN: a not-enabled / restricted channel is read from the channel's OWN state (the Streaming page's `liveState`), which prepare
+ *  records when YouTube refuses, so "no destination" is not said beside a destination that is right there.
+ *
+ *  `unavailable` cannot be attributed. It is the one word stored for YouTube's quota, the channel's ten-streams cap and YouTube not
+ *  answering — AND for Seazn's own storage_exhausted / ingest_unavailable, which a start meets AFTER a clean prepare (stream-auto.ts
+ *  `autoStartRefusalOf`). Naming YouTube for it blamed YouTube for Seazn's refusals (B4 fix round 2, F1), so over a connected channel it
+ *  reads a line that names no cause (`stream.auto.refusal.retry`), and over a pasted key — where only Seazn's own refusals can store it —
+ *  the generic "streaming service" line. Anything else that does not say more than the stored word — a healthy or unchecked channel, a
+ *  dead grant (the page says Reconnect), a pasted key — keeps it. */
+function autoReasonKey(refusal: AutoRefusal, destination: AutoDestination | undefined): MessageKey {
+  const y = destination?.youtube ?? null;
+  if (y !== null && refusal === "unavailable") return "stream.auto.refusal.retry";
+  if (y !== null && refusal === "no_destination" && y.status === "connected") {
+    if (y.liveState === "not_enabled") return "stream.auto.refusal.youtube_live_not_enabled";
+    if (y.liveState === "blocked") return "stream.auto.refusal.youtube_live_blocked";
+  }
+  return AUTO_REFUSAL_KEYS[refusal];
+}
+
 /** §7.4: "the same remedies as the manual refusals (Buy credits, Manage destinations)" — the two that have one. */
 export const AUTO_REFUSAL_REMEDY: Record<AutoRefusal, AutoRefusalRemedy | undefined> = {
   no_credit: "buy",
@@ -543,12 +613,12 @@ const waitingLine = (f: PhoneFacts): PhoneLinePart[] => [...modePart(f), ...mode
 
 /** The automatic start's refusal as a strip — null with no read model, no settings row, or no refusal served. The server
  *  serves a refusal only while the automatic start could still fire, so its presence alone is the verdict. */
-export function autoRefusalStrip(phone: StreamPhone | null): PhoneStrip | null {
+export function autoRefusalStrip(phone: StreamPhone | null, destination?: AutoDestination): PhoneStrip | null {
   const refusal = phone?.auto?.refusal ?? null;
   if (refusal === null) return null;
   const remedy = AUTO_REFUSAL_REMEDY[refusal];
   return {
-    tone: "amber", icon: "alert", lead: "stream.auto.refused", leadVars: { reason: AUTO_REFUSAL_KEYS[refusal] }, body: null,
+    tone: "amber", icon: "alert", lead: "stream.auto.refused", leadVars: { reason: autoReasonKey(refusal, destination) }, body: null,
     ...(remedy ? { remedy } : {}),
   };
 }
@@ -661,7 +731,7 @@ export function phoneDetails(phone: StreamPhone | null): ({ kind: "dataUsed"; mb
  * `session.countdown` is the ONLY source of a countdown: an input that is down is not one (mutant: render it whenever
  * the input is down → the O5 case reds).
  */
-export function phoneStrip(phone: StreamPhone | null, session: StreamSessionCurrent | null): PhoneStrip | null {
+export function phoneStrip(phone: StreamPhone | null, session: StreamSessionCurrent | null, destination?: AutoDestination): PhoneStrip | null {
   if (phone?.legacy) return null;
   const state = readyStateOf(phone, session);
   const facts = phone?.phone ?? null;
@@ -696,7 +766,7 @@ export function phoneStrip(phone: StreamPhone | null, session: StreamSessionCurr
     case "paired": {
       // PR-2: an automatic start the server refused (and could still retry) takes the strip; else the phone's identity
       // (§7.5 model, §7.4 mode) — none when the phone named neither, as before.
-      const refused = autoRefusalStrip(phone);
+      const refused = autoRefusalStrip(phone, destination);
       if (refused) return refused;
       const line = facts ? identityLine(facts) : [];
       return line.length > 0 ? { tone: "slate", icon: "phone", lead: null, body: null, line } : null;

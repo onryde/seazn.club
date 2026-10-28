@@ -26,6 +26,68 @@ export const YOUTUBE_REFUSAL_CODES = [
 ] as const;
 export type YoutubeRefusalCode = (typeof YOUTUBE_REFUSAL_CODES)[number];
 
+/** "10 active streams allowed per channel" (support.google.com/youtube/answer/2474026, spec §3.1) — the ONE authority for the number.
+ *  The server's pool (server/youtube/prepare.ts) refuses the 11th concurrent stream with `youtube_channel_busy`, and the panel's copy
+ *  for that refusal names this number (`stream.error.youtube_channel_busy` carries `{max}`), so they cannot disagree. The database's
+ *  floor under it is V479's `youtube_stream_keys_slot_range` (slot between 1 and 10), held equal by lib/__tests__/youtube-cap.test.ts. */
+export const YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL = 10;
+
+/** The two refusals that are a fact about the CHANNEL, not about one broadcast, and the live state the Streaming page reads each as
+ *  (`liveState` on the connection view). ONE table for the writer (prepare.ts records the refusal on the connection) and the reader
+ *  (connections.ts `liveStateOf` turns the recorded code back into the state), so what Go live learns and what the page says cannot
+ *  disagree. A Record over a subset of the declaration, so a code outside it is not a live state. */
+export const YOUTUBE_LIVE_STATE_OF_REFUSAL = {
+  youtube_live_not_enabled: "not_enabled",
+  youtube_live_blocked: "blocked",
+} as const satisfies Partial<Record<YoutubeRefusalCode, string>>;
+export type YoutubeLiveStateRefusal = keyof typeof YOUTUBE_LIVE_STATE_OF_REFUSAL;
+export const isYoutubeLiveStateRefusal = (c: unknown): c is YoutubeLiveStateRefusal =>
+  typeof c === "string" && Object.hasOwn(YOUTUBE_LIVE_STATE_OF_REFUSAL, c);
+
+/** How long a recorded not-enabled / blocked reading of a channel is believed by Go live (controller ruling, B4 fix round 1, I-2):
+ *  inside it a Go live (and an automatic start's every retry) is refused with the same code and NO call to YouTube; after it the next
+ *  Go live asks YouTube again. Judged on the time the refusal was recorded (`last_health_at`). */
+export const YOUTUBE_LIVE_STATE_FRESH_MINUTES = 10;
+
+/** Is this a link to YouTube itself? A replay URL is the club's own `stream_url` when it set one (nothing overwrites it), so the
+ *  YouTube mark may sit on a link only if the link really goes to YouTube: https on youtube.com (any subdomain) or youtu.be. */
+export function isYoutubeUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:") return false;
+  const host = u.hostname.toLowerCase();
+  return host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be";
+}
+
+/** A channel's own page on YouTube. The YouTube logo is only ever drawn as a link back to YouTube (owner, 2026-10-28, from YouTube's
+ *  branding terms: "any logo used within an application must be clickable and link back to YouTube content"), and a connected channel
+ *  row's link is this. `/channel/<id>` is the canonical form that needs only the channel id Google returned at connect (a `@handle` URL
+ *  would need a lookup). The id is one path segment: encoded, so nothing in it can leave the path or change the host. */
+export function youtubeChannelUrl(channelId: string): string {
+  return `https://www.youtube.com/channel/${encodeURIComponent(channelId)}`;
+}
+
+export const isYoutubeRefusalCode = (c: unknown): c is YoutubeRefusalCode => (YOUTUBE_REFUSAL_CODES as readonly unknown[]).includes(c);
+
+/** Who can act on a refused Go live, for the surfaces whose vocabulary is smaller than the organiser's panel: the phone's own
+ *  start (capture QR v2 §6.7.2) and the automatic start (§7.2). `fix_destination`: the club changes something about its YouTube
+ *  destination (reconnect the channel, enable live streaming, a channel YouTube blocked), so the phone says `no_destination` and the
+ *  column stores `no_destination`. `retry`: nothing the club changes in the destination (YouTube's quota, the channel's ten-stream
+ *  cap, YouTube not answering), so both say `unavailable` and a retry may succeed. A Record over the declaration, so a new code does
+ *  not compile until it is placed. */
+export const YOUTUBE_REFUSAL_REMEDY: Record<YoutubeRefusalCode, "fix_destination" | "retry"> = {
+  youtube_reconnect_needed: "fix_destination",
+  youtube_live_not_enabled: "fix_destination",
+  youtube_live_blocked: "fix_destination",
+  youtube_limit_reached: "retry",
+  youtube_channel_busy: "retry",
+  youtube_unavailable: "retry",
+};
+
 /** The replay link for a broadcast: a YouTube broadcast id is also the id of its video. */
 export const youtubeWatchUrl = (videoId: string): string => `https://www.youtube.com/watch?v=${videoId}`;
 

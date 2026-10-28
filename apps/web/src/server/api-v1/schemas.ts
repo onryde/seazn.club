@@ -2106,13 +2106,15 @@ export type StreamTargetHolder = z.infer<typeof StreamTargetHolder>;
 /** YouTube Connect (T8, spec §5.1): a connection's visibility vocabulary — lib/youtube.ts's list, imported, not retyped. */
 export const YoutubePrivacy = z.enum(YOUTUBE_PRIVACIES);
 
-/** What the Streaming page shows of a connected channel (never a token, a channel id or Google's own words). `status` is the
+/** What the Streaming page shows of a connected channel (never a token or Google's own words). `channelId` is the channel's PUBLIC id
+ *  (the one in its youtube.com/channel/<id> address): the row's YouTube logo links to it (owner, 2026-10-28). `status` is the
  *  two LIVE states — a revoked connection has no view. `liveState` is what the health check last learned about the channel's
  *  ability to stream: `unknown` until a check has run since the token last changed, while the grant is dead (nothing can be asked of YouTube), and for a result this build does not map; `enabled` only for a clean one.
  *  `termsOutdated`: the consent text moved on since this connection was consented — Go live is never blocked by it (spec
  *  §6.1.5). `openBroadcasts`: how many of this connection's broadcasts are neither complete nor failed (created, bound, reserved, live or ending). */
 export const YoutubeConnectionView = z.object({
   connectionId: z.string(),
+  channelId: z.string(),
   channelTitle: z.string(),
   privacy: YoutubePrivacy,
   madeForKids: z.boolean(),

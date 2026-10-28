@@ -67,7 +67,12 @@ import { StreamLostCountdown, StreamSessionState, StreamTargetKind, type StreamP
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { resolveStreamTarget, type SavedStreamTarget } from "@/lib/stream-destinations";
 import { STREAM_TARGET_TABLE, STREAM_TARGET_TABLE_ROWS, rowName } from "@/lib/__tests__/_stream-target-table";
-import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
+import { platformName } from "@/components/v2/stream-platform-mark";
+import { YoutubeIcon } from "@/components/v2/youtube-icon";
+import { FixtureDestinationPicker, type FixtureDestinationPickerProps } from "@/components/v2/fixture-destination-picker";
+import { ReplayCopyButton } from "@/components/v2/stream-replay-copy";
+import { STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeUrl } from "@/lib/youtube";
+import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "@/components/v2/refusal-focus";
 import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
 import QRCode from "qrcode";
 import { SeaznQrImage, SeaznQrPlaceholder } from "@/components/v2/seazn-qr-image";
@@ -263,6 +268,14 @@ const byTestId = (tree: ReactElement[], id: string): ReactElement | undefined =>
   tree.find((el) => attr(el, "data-testid") === id);
 const allTestIds = (tree: ReactElement[], id: string): ReactElement[] =>
   tree.filter((el) => attr(el, "data-testid") === id);
+/** The destination picker in a body tree. Its own markup — the trigger, the rows, the keyboard — is fixture-destination-picker.test.tsx's;
+ *  what the PANEL owes it is what it hands over: the list, the selection, the red field, the refusal it is described by. */
+const destPicker = (tree: ReactElement[]): ReactElement | undefined => tree.find((el) => el.type === FixtureDestinationPicker);
+const destPickerProps = (tree: ReactElement[]): FixtureDestinationPickerProps => {
+  const el = destPicker(tree);
+  if (!el) throw new Error("no destination picker in the tree");
+  return propsOf(el) as unknown as FixtureDestinationPickerProps;
+};
 
 
 const click = (el: ReactElement | undefined): void => {
@@ -1020,7 +1033,7 @@ const BODY: PhoneTabBodyProps = {
   planGate: false, stopFailed: false, checkoutOpen: false, currency: "gbp", split: null, monthlyAllowance: 0, restart: null, pickFailed: false,
   phoneLostMinutes: 20, autoStopMinutes: 3, autoPending: null, autoFailed: false, takeoverDismissedAt: null, tz: "Europe/London",
   onToggleAuto: () => {}, onDismissTakeover: () => {},
-  onSelectTarget: () => {}, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
+  onSelectTarget: () => {}, onPickAnother: () => {}, pickerOpenSignal: 0, onRetryTargets: () => {}, onGoLive: () => {}, onStop: () => {}, onCancel: () => {},
   onBuy: () => {}, onAgain: () => {}, onCopy: () => {}, onToggleCode: () => {}, onReissue: () => {}, onRetryCode: () => {},
   onShowBuy: () => {}, onTileIntent: () => {}, score: SCORE_OFF,
 };
@@ -1153,7 +1166,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
   it("balance 2 and no session: idle controls, the first destination selected — and NO feed-mode control (spec §3.1)", () => {
     const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
     expect(textAt(tree, "stream-balance")).toBe(m("stream.phone.credits.other", { n: 2 }));
-    expect(attr(byTestId(tree, "stream-target")!, "value")).toBe("t1");
+    expect(destPickerProps(tree).selectedId).toBe("t1");
     // T9b: the disabled "With scorebug — Coming soon" control is gone, and the radiogroup with it (passthrough only).
     for (const id of ["stream-mode", "stream-mode-clean", "stream-mode-scorebug"]) expect(byTestId(tree, id), id).toBeUndefined();
     const html = renderToStaticMarkup(<PhoneTabBody {...BODY} view={null} balance={2} targets={ok(TARGETS)} selectedTargetId="t1" />);
@@ -1218,7 +1231,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     for (const selectedTargetId of [null, "t1"]) {
       const tree = body({ view: null, balance: 2, targets: [], selectedTargetId });
       expect(textAt(tree, "stream-dest-empty"), String(selectedTargetId)).toContain(m("stream.dest.empty"));
-      expect(byTestId(tree, "stream-target"), "no select over nothing").toBeUndefined();
+      expect(destPicker(tree), "no picker over nothing").toBeUndefined();
       expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, String(selectedTargetId)).toBe(true);
     }
   });
@@ -1991,10 +2004,15 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
     expect(warmers.map((el) => attr(el, "data-testid")).sort()).toEqual(STREAM_CREDIT_PACKS.map((p) => `stream-buy-pack-${p.size}`).sort());
   });
 
-  it("B7: each native select names its selection in a title, so a clipped option is still readable", () => {
+  it("B7: the picker is handed the whole list and the selection (its name carries a title in the picker's own tests), inside a min-w-0 box so a long name cannot widen the panel", () => {
     const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" });
-    expect(attr(byTestId(tree, "stream-target")!, "title")).toBe(`Alt (${platformName(m, "twitch")})`);
-    expect(String(attr(byTestId(tree, "stream-target")!, "className")).split(/\s+/)).toEqual(expect.arrayContaining(["w-full", "min-w-0"]));
+    expect(destPickerProps(tree).selectedId).toBe("t2");
+    expect(destPickerProps(tree).targets.map((t) => t.id)).toEqual(TARGETS.map((t) => t.id));
+    // The picker sits inside a box whose class keeps a long destination name from widening the panel: the picker's own root
+    // carries min-w-0 (fixture-destination-picker.test.tsx), and the panel gives it a field wrapper with the same.
+    const holder = tree.find((el) => el.type === "div" && [attr(el, "children")].flat().some((c) => (c as ReactElement | undefined)?.type === FixtureDestinationPicker));
+    expect(holder, "the picker has a direct wrapper in the panel").toBeDefined();
+    expect(String(attr(holder!, "className")).split(/\s+/), "the wrapper lets a long name shrink").toContain("min-w-0");
   });
 
   // T9b (spec §3.1): the chain says the state, so in the tab the pill is for assistive tech only — still `aria-live`, still
@@ -2073,7 +2091,7 @@ describe("T8 — the destination picker: Directory manages, the panel picks (D1)
   it("one destination: the select and Go live ENABLED (the positive pair of the empty case)", () => {
     const tree = body({ view: null, balance: 2, targets: [TARGETS[0]!], selectedTargetId: "t1" });
     expect(byTestId(tree, "stream-dest-empty")).toBeUndefined();
-    expect(attr(byTestId(tree, "stream-target")!, "value")).toBe("t1");
+    expect(destPickerProps(tree).selectedId).toBe("t1");
     expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBeFalsy();
   });
 
@@ -2081,9 +2099,8 @@ describe("T8 — the destination picker: Directory manages, the panel picks (D1)
     let checked = 0;
     for (const fixtureId of ["f-1", "f-2"]) {
       const tree = body({ fixtureId, view: null, balance: 2, targets: [TARGETS[0]!], selectedTargetId: "t1" });
-      const select = byTestId(tree, "stream-target")!;
-      expect(attr(select, "id"), fixtureId).toBe(`stream-target-${fixtureId}`);
-      const label = tree.find((el) => el.type === "label" && attr(el, "htmlFor") === attr(select, "id"));
+      expect(destPickerProps(tree).id, fixtureId).toBe(`stream-target-${fixtureId}`);
+      const label = tree.find((el) => el.type === "label" && attr(el, "htmlFor") === destPickerProps(tree).id);
       expect(label, `${fixtureId}: a <label> names the select`).toBeDefined();
       checked++;
     }
@@ -2097,7 +2114,7 @@ describe("T8 — the destination picker: Directory manages, the panel picks (D1)
     expect(attr(err, "role")).toBe("alert");
     expect(textOf(err)).toContain(m("stream.dest.loadError"));
     expect(byTestId(tree, "stream-dest-empty"), "an unread list is not an empty one").toBeUndefined();
-    expect(byTestId(tree, "stream-target")).toBeUndefined();
+    expect(destPicker(tree)).toBeUndefined();
     expect(propsOf(byTestId(tree, "stream-go-live")!).disabled, "no Go live on a list nobody read").toBe(true);
     expect(textAt(tree, "stream-dest-retry")).toBe(m("stream.dest.retry"));
     click(byTestId(tree, "stream-dest-retry"));
@@ -2106,16 +2123,17 @@ describe("T8 — the destination picker: Directory manages, the panel picks (D1)
 
   it("loading: neither 'none' nor an error, no select, and Go live waits", () => {
     const tree = body({ view: null, balance: 2, targets: { status: "loading" }, selectedTargetId: "t1" });
-    for (const id of ["stream-dest-empty", "stream-dest-load-error", "stream-target"]) expect(byTestId(tree, id), id).toBeUndefined();
+    for (const id of ["stream-dest-empty", "stream-dest-load-error"]) expect(byTestId(tree, id), id).toBeUndefined();
+    expect(destPicker(tree), "no picker while loading").toBeUndefined();
     expect(propsOf(byTestId(tree, "stream-go-live")!).disabled).toBe(true);
   });
 
-  it("each option names the destination AND its platform — every stored kind, legacy ones included", () => {
+  it("the picker is handed EVERY destination — every stored kind, legacy ones included (how each reads is fixture-destination-picker.test.tsx's sweep)", () => {
     const all = StreamTargetKind.options.map((kind, i) => ({ ...TARGETS[0]!, id: `k${i}`, kind, label: `Dest ${i}` }));
-    const select = byTestId(body({ view: null, balance: 2, targets: all, selectedTargetId: "k0" }), "stream-target")!;
-    const options = walk(propsOf(select).children as ReactElement[]).filter((el) => el.type === "option");
-    expect(options.map((o) => textOf(o))).toEqual(all.map((t) => `${t.label} (${platformName(m, t.kind)})`));
-    expect(options.length, "every stored kind was offered").toBe(StreamTargetKind.options.length);
+    const handed = destPickerProps(body({ view: null, balance: 2, targets: all, selectedTargetId: "k0" })).targets;
+    expect(handed.map((t) => t.id)).toEqual(all.map((t) => t.id));
+    expect(handed.map((t) => t.kind)).toEqual(StreamTargetKind.options);
+    expect(handed.length, "every stored kind was offered").toBe(StreamTargetKind.options.length);
   });
 
   it("a target_in_use refusal names the match and links 'Open Match {n}' to its page; a holder whose fixture is gone shows no link", () => {
@@ -2341,46 +2359,39 @@ describe("PhoneTabBody — the T9b frame: one credits line, Ready's order, the i
 
   it("Ready's DOM order (mockup state 1): Manage destinations, the picker, a full-width Go live, then the credits line", () => {
     const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
-    const order = ["stream-manage-destinations", "stream-target", "stream-go-live", "stream-credits-line"].map((id) => {
-      const i = tree.findIndex((el) => attr(el, "data-testid") === id);
-      expect(i, `${id} rendered`).toBeGreaterThan(-1);
+    const order = [
+      ["stream-manage-destinations", (el: ReactElement) => attr(el, "data-testid") === "stream-manage-destinations"],
+      ["the picker", (el: ReactElement) => el.type === FixtureDestinationPicker],
+      ["stream-go-live", (el: ReactElement) => attr(el, "data-testid") === "stream-go-live"],
+      ["stream-credits-line", (el: ReactElement) => attr(el, "data-testid") === "stream-credits-line"],
+    ].map(([name, is]) => {
+      const i = tree.findIndex(is as (el: ReactElement) => boolean);
+      expect(i, `${String(name)} rendered`).toBeGreaterThan(-1);
       return i;
     });
     expect([...order].sort((a, b) => a - b)).toEqual(order);
     const go = String(attr(byTestId(tree, "stream-go-live")!, "className")).split(" ");
     for (const c of ["btn-primary", "w-full", "min-h-12"]) expect(go, c).toContain(c);
-    // The picker shows the selected destination's platform mark inside the field, and a chevron at its end.
-    const mark = tree.find((el) => el.type === PlatformMark);
-    expect(mark && propsOf(mark).kind, "the mark is the SELECTED destination's").toBe("youtube");
-    expect(propsOf(byTestId(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" }), "stream-target")!).value).toBe("t2");
-    const markT2 = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" }).find((el) => el.type === PlatformMark);
-    expect(markT2 && propsOf(markT2).kind).toBe("twitch");
-    const select = String(attr(byTestId(tree, "stream-target")!, "className")).split(" ");
-    for (const c of ["appearance-none", "min-w-0", "pr-9", "truncate"]) expect(select, c).toContain(c);
+    // The picker is told the SELECTED destination — it draws that destination's mark inside the field (its own tests).
+    expect(destPickerProps(tree).selectedId).toBe("t1");
+    expect(destPickerProps(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t2" })).selectedId).toBe("t2");
   });
 
-  it("n1: with a list and NO selection the picker shows a placeholder 'Pick a destination', no platform mark, Go live disabled; a selection has no placeholder", () => {
+  it("n1: with a list and NO selection the picker is told so (it shows its placeholder, no mark, no selected row — its own tests) and Go live is disabled; a selection is handed over as is", () => {
     const none = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: null });
-    const select = byTestId(none, "stream-target")!;
-    expect(attr(select, "value")).toBe("");
-    const options = walk(select).filter((el) => el.type === "option");
-    expect(options.map((o) => attr(o, "value"))).toEqual(["", "t1", "t2"]);
-    expect(textOf(options[0]!)).toBe(m("stream.dest.pick"));
-    expect(attr(options[0]!, "disabled"), "the placeholder cannot be chosen back").toBe(true);
-    expect(none.some((el) => el.type === PlatformMark), "no mark for nothing").toBe(false);
+    expect(destPickerProps(none).selectedId).toBeNull();
+    expect(destPickerProps(none).targets.map((t) => t.id), "the list is still offered").toEqual(["t1", "t2"]);
     expect(propsOf(byTestId(none, "stream-go-live")!).disabled).toBe(true);
-    // The positive pair: a selection, no placeholder.
+    // The positive pair: a selection, handed over.
     const picked = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" });
-    expect(walk(byTestId(picked, "stream-target")!).filter((el) => el.type === "option").map((o) => attr(o, "value"))).toEqual(["t1", "t2"]);
+    expect(destPickerProps(picked).selectedId).toBe("t1");
   });
 
   it("in use (mockup state 5): the picker turns red and says why under itself, Open Match beside it, and Go live waits", () => {
     const createError = { code: "target_in_use" as const, holder: IN_USE_HOLDER };
     const tree = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError });
-    const select = byTestId(tree, "stream-target")!;
-    expect(String(attr(select, "className"))).toMatch(/(^|\s)border-red-300(\s|$)/);
-    expect(attr(select, "aria-invalid")).toBe(true);
-    const box = tree.find((el) => attr(el, "id") === attr(select, "aria-describedby"))!;
+    expect(destPickerProps(tree).invalid, "the picker's field turns red").toBe(true);
+    const box = tree.find((el) => attr(el, "id") === destPickerProps(tree).describedBy)!;
     expect(box, "aria-describedby names the box").toBeDefined();
     expect(attr(box, "role")).toBe("alert");
     const inBox = walk(box);
@@ -2393,8 +2404,8 @@ describe("PhoneTabBody — the T9b frame: one credits line, Ready's order, the i
     expect(allTestIds(tree, "stream-create-error"), "said once").toHaveLength(1);
     // The positive pair: any OTHER refusal leaves the picker alone, Go live tappable, the sentence at the foot.
     const other = body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: "storage_exhausted", holder: null } });
-    expect(attr(byTestId(other, "stream-target")!, "aria-invalid")).toBeUndefined();
-    expect(String(attr(byTestId(other, "stream-target")!, "className"))).not.toContain("border-red-300");
+    expect(destPickerProps(other).invalid, "any other refusal leaves the field alone").toBeFalsy();
+    expect(destPickerProps(other).describedBy).toBeUndefined();
     expect(propsOf(byTestId(other, "stream-go-live")!).disabled).toBeFalsy();
     expect(textAt(other, "stream-create-error")).toBe(m("stream.error.storage_exhausted" as MessageKey));
   });
@@ -2436,7 +2447,7 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
       const sw = byTestId(tree, "stream-auto-switch");
       expect(sw, name).toBeDefined();
       expect([sw!.type, attr(sw!, "role"), attr(sw!, "aria-checked")], name).toEqual(["button", "switch", on]);
-      expect(tree.indexOf(byTestId(tree, "stream-target")!), `${name}: under the picker`).toBeLessThan(tree.indexOf(sw!));
+      expect(tree.indexOf(destPicker(tree)!), `${name}: under the picker`).toBeLessThan(tree.indexOf(sw!));
       expect(tree.indexOf(sw!), `${name}: above Go live`).toBeLessThan(tree.indexOf(byTestId(tree, "stream-go-live")!));
       expect(textAt(tree, "stream-auto-switch"), name).toContain("Stream the match automatically");
       checked++;
@@ -2631,6 +2642,37 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
     expect([stripOf(forced)?.caret, stripOf(forced)?.onBuy]).toEqual([false, undefined]);
     // The EMPTY case: credits only with no refusal stays the heading and the card alone.
     expect(stripOf(body({ view: null, balance: 0, targets: TARGETS, selectedTargetId: "t1" }))).toBeUndefined();
+  });
+
+  it("B4 fix round 1 (I-2): the automatic start refused against a connected channel reads the channel's OWN reason — the destination is the one the SERVER resolved (phone.destination) found in the list; Ready and credits-only alike; a pasted key, or a healthy channel, keeps the stored word (the seam: the container hands the body the list, the body hands the strip the destination)", () => {
+    const ch = (liveState: NonNullable<StreamTarget["youtube"]>["liveState"]): StreamTarget[] => [
+      { ...TARGETS[0]!, youtube: { connectionId: "c-1", channelId: "UC7xK2mQ9rVbN4tLpA1sZ0wE", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState, termsOutdated: false, openBroadcasts: 0 } },
+      TARGETS[1]!,
+    ];
+    const refusedAt = (id: string, refusal: Auto["refusal"]) =>
+      readModel({ auto: auto({ refusal }), destination: { id, label: "Club", source: "saved" } });
+    const reason = (tree: ReactElement[]) => (stripOf(tree)?.strip.leadVars as { reason: string } | undefined)?.reason;
+    let checked = 0;
+    for (const [state, key] of [
+      ["not_enabled", "stream.auto.refusal.youtube_live_not_enabled"], ["blocked", "stream.auto.refusal.youtube_live_blocked"],
+      ["enabled", "stream.auto.refusal.no_destination"], ["unknown", "stream.auto.refusal.no_destination"],
+    ] as const) {
+      expect(reason(body({ ...READY, targets: ch(state), phone: refusedAt("t1", "no_destination") })), `Ready / ${state}`).toBe(key);
+      // Credits only (B3) draws the strip through the other call site: the same destination must reach it.
+      expect(reason(body({ view: null, balance: 0, targets: ch(state), selectedTargetId: "t1", phone: refusedAt("t1", "no_destination") })), `credits only / ${state}`).toBe(key);
+      checked += 2;
+    }
+    // The retry class over a channel reads the line that names no cause (F1: Seazn's own storage / ingest refusals store the same
+    // word); the pasted key (t2) is still "the streaming service".
+    expect(reason(body({ ...READY, targets: ch("enabled"), phone: refusedAt("t1", "unavailable") }))).toBe("stream.auto.refusal.retry");
+    expect(reason(body({ ...READY, targets: ch("enabled"), phone: refusedAt("t2", "unavailable") })), "a pasted key").toBe("stream.auto.refusal.unavailable");
+    // The server's destination is the one that counts, not the picker's: the picked row (t1) is a not-enabled channel, but the automatic
+    // start tried t2 (a pasted key) — its stored word stands.
+    expect(reason(body({ ...READY, targets: ch("not_enabled"), phone: refusedAt("t2", "no_destination") })), "the resolved destination, not the picked one").toBe("stream.auto.refusal.no_destination");
+    // No list yet: the stored word, never a guess.
+    expect(reason(body({ ...READY, targets: { status: "loading" }, phone: refusedAt("t1", "no_destination") })), "targets still loading").toBe("stream.auto.refusal.no_destination");
+    checked += 4;
+    expect(checked, "anti-vacuity").toBe(12);
   });
 
   it("T11 (FP22, owner ruling Q-D): Details carries data used and the app version AFTER the runner's chips, each omitted when null", () => {
@@ -3205,7 +3247,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     const gone = track(await mount({ current: null, targets: TARGETS, saved: { row: true, targetId: "t9" } }));
     expect(bodyOf(gone).selectedTargetId).toBeNull();
     const shown = walk(expandWithHooks(PhoneTabBody, bodyOf(gone)));
-    expect(attr(byTestId(shown, "stream-target")!, "value"), "the placeholder").toBe("");
+    expect(destPickerProps(shown).selectedId, "the placeholder").toBeNull();
     expect(propsOf(byTestId(shown, "stream-go-live")!).disabled, "Go live held").toBe(true);
   });
 
@@ -3314,7 +3356,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       bodyOf(island).onAgain();
       await settle();
       const ready = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
-      expect(byTestId(ready, "stream-target"), "PREMISE — Ready, the picker shown").toBeDefined();
+      expect(destPicker(ready), "PREMISE — Ready, the picker shown").toBeDefined();
       expect(byTestId(ready, "stream-pick-error"), "no stale alert at Ready").toBeUndefined();
       checked++;
     }
@@ -4485,7 +4527,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
     expect(bodyOf(island).selectedTargetId).toBeNull();
     // What the organiser sees: the placeholder, and Go live disabled.
     const shown = walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
-    expect(attr(byTestId(shown, "stream-target")!, "value")).toBe("");
+    expect(destPickerProps(shown).selectedId).toBeNull();
     expect(propsOf(byTestId(shown, "stream-go-live")!).disabled, "no destination, no start").toBe(true);
 
     // A LATER return re-reads the list (t1 still there): still nothing picked, still the sentence.
@@ -4791,6 +4833,222 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(lazySheet(island.tree())).toBeUndefined();
     });
   });
+
+  // ─── YouTube Connect T12 fix round 1 (I1, I2): a YouTube refusal THROUGH THE CONTAINER ─────────────────────────────────────────────
+  // The static-body tests above hand the body a `createError`; none of them can see the wiring that SETS it, CLEARS it, or re-opens the
+  // picker — those are `PhoneTab`'s closures, and a green body suite is blind to a dropped clause in them (the reviewer's M1/M2/M3/M7
+  // all survived). Here the refusal arrives as the REAL `ApiV1Error` the transport throws, the way `apiV1` raises one off the wire.
+  describe("T12 fix round 1: a YouTube refusal through the container — in off the wire, and every way out of it", () => {
+    const ytView = (over: Partial<NonNullable<StreamTarget["youtube"]>> = {}): NonNullable<StreamTarget["youtube"]> => ({
+      connectionId: "c-1", channelId: "UC7xK2mQ9rVbN4tLpA1sZ0wE", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0, ...over,
+    });
+    /** `t1` as an API-backed YouTube destination (the shared TARGETS' `t1` carries no connection), then the twitch `t2`. */
+    const channelList = (y: Partial<NonNullable<StreamTarget["youtube"]>> = {}): StreamTarget[] => [{ ...TARGETS[0]!, youtube: ytView(y) }, TARGETS[1]!];
+    /** Go live refused as the server's `youtubeRefusal` / the route's error mapper put it on the wire (the real status per code). */
+    const WIRE_STATUS: Record<(typeof YOUTUBE_REFUSAL_CODES)[number], number> = {
+      youtube_reconnect_needed: 409, youtube_live_not_enabled: 409, youtube_live_blocked: 409, youtube_limit_reached: 429, youtube_channel_busy: 409, youtube_unavailable: 503,
+    };
+    const refuse = (code: string, status = 409) => () => { throw new ApiV1Error(`YouTube refused Go live: ${code}`, status, code, { connectionId: "c-1" }); };
+    const treeOf = (island: { tree: () => ReactElement[] }) => walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+    /** Select `t1`, ask Go live, let the refusal land. */
+    const refusedAt = async (s: Server, island: { tree: () => ReactElement[] }, code: string, status?: number) => {
+      bodyOf(island).onSelectTarget("t1");
+      s.create = refuse(code, status);
+      bodyOf(island).onGoLive();
+      await settle();
+    };
+    const ONE_LIVE = () => session({ state: "live", startedAt: "2026-09-14T11:50:00.000Z" });
+
+    it("(a) each of the six refusals off the real wire draws the block with ITS code, replaces Go live, and leaves the picker red — never the raw code", async () => {
+      let checked = 0;
+      for (const code of YOUTUBE_REFUSAL_CODES) {
+        const s = serve({ current: null, targets: channelList() });
+        const island = await mount(s);
+        await refusedAt(s, island, code, WIRE_STATUS[code]);
+        expect(bodyOf(island).createError, `${code}: the container recorded the wire code and no holder`).toEqual({ code, holder: null });
+        const t = treeOf(island);
+        expect(attr(byTestId(t, "stream-youtube-refusal")!, "data-code"), `${code}: the block`).toBe(code);
+        expect(byTestId(t, "stream-go-live"), `${code}: Go live is replaced`).toBeUndefined();
+        expect(textAt(t, "stream-create-error"), `${code}: its sentence`).toBe(m(`stream.error.${code}` as MessageKey, { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL }));
+        expect(JSON.stringify(t.map((el) => textOf(el))), `${code}: the raw code is never on screen`).not.toContain("youtube_");
+        expect(propsOf(t.find((el) => el.type === FixtureDestinationPicker)!).invalid, `${code}: the field is red`).toBe(true);
+        island.unmount();
+        checked++;
+      }
+      expect(checked, "anti-vacuity: all six").toBe(YOUTUBE_REFUSAL_CODES.length);
+    });
+
+    it("(a) the positive pair: a youtube_* code the six do not declare reads as the generic line — no block, Go live still there", async () => {
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "youtube_made_up", 409);
+      expect(bodyOf(island).createError).toEqual({ code: "unknown", holder: null });
+      const t = treeOf(island);
+      expect(byTestId(t, "stream-youtube-refusal")).toBeUndefined();
+      expect(byTestId(t, "stream-go-live"), "Go live stays").toBeDefined();
+      expect(textAt(t, "stream-create-error")).toBe(m("stream.error.unknown"));
+    });
+
+    it("(b) 'Use another destination' clears the refusal AND asks the picker to open — once per tap (the signal 0 -> 1 -> 2), so a second refusal opens it again", async () => {
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      expect(bodyOf(island).pickerOpenSignal, "premise: nothing has asked it to open").toBe(0);
+      await refusedAt(s, island, "youtube_live_blocked");
+      expect(bodyOf(island).createError?.code).toBe("youtube_live_blocked");
+      bodyOf(island).onPickAnother();
+      await settle();
+      expect(bodyOf(island).createError, "the refusal went with the tap").toBeNull();
+      expect(bodyOf(island).pickerOpenSignal, "the first tap").toBe(1);
+      expect(byTestId(treeOf(island), "stream-youtube-refusal"), "the block is gone").toBeUndefined();
+      expect(byTestId(treeOf(island), "stream-go-live"), "…and Go live is back").toBeDefined();
+      // A second refusal, a second tap: the signal MOVES AGAIN (a flag that stayed true would open the picker once and never again).
+      bodyOf(island).onGoLive();
+      await settle();
+      expect(bodyOf(island).createError?.code, "refused again").toBe("youtube_live_blocked");
+      bodyOf(island).onPickAnother();
+      await settle();
+      expect(bodyOf(island).createError).toBeNull();
+      expect(bodyOf(island).pickerOpenSignal, "the second tap").toBe(2);
+      expect(bodyOf(island).selectedTargetId, "opening the picker picks nothing — the choice stays until the organiser changes it").toBe("t1");
+    });
+
+    it("(c) picking a destination clears a YouTube refusal (all six) — but a refusal about something else (storage) is NOT the pick's to clear", async () => {
+      let checked = 0;
+      for (const code of YOUTUBE_REFUSAL_CODES) {
+        const s = serve({ current: null, targets: channelList() });
+        const island = await mount(s);
+        await refusedAt(s, island, code, WIRE_STATUS[code]);
+        expect(bodyOf(island).createError?.code, `${code}: premise — refused`).toBe(code);
+        bodyOf(island).onSelectTarget("t2");
+        await settle();
+        expect(bodyOf(island).createError, `${code}: the pick answers it`).toBeNull();
+        expect(bodyOf(island).selectedTargetId).toBe("t2");
+        island.unmount();
+        checked++;
+      }
+      expect(checked, "anti-vacuity: all six").toBe(YOUTUBE_REFUSAL_CODES.length);
+      // The negative pair: a storage refusal outlives a pick (it is about the venue's storage, not the destination).
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "storage_exhausted", 503);
+      expect(bodyOf(island).createError?.code, "premise: a non-YouTube refusal").toBe("storage_exhausted");
+      bodyOf(island).onSelectTarget("t2");
+      await settle();
+      expect(bodyOf(island).createError?.code, "kept: the pick said nothing about storage").toBe("storage_exhausted");
+    });
+
+    it("(c) a pick that clears a refusal is also ONE save — the PUT carries the chosen id; the refusal does not make the pick forget to write", async () => {
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "youtube_unavailable", 503);
+      const puts = () => apiV1.mock.calls.filter(([url, o]) => `${o?.method ?? "GET"} ${url}` === SETTINGS);
+      expect(puts(), "premise: the first pick (t1) saved once").toHaveLength(1);
+      expect(puts()[0]![1]?.json).toEqual({ targetId: "t1" });
+      expect(bodyOf(island).createError?.code).toBe("youtube_unavailable");
+      bodyOf(island).onSelectTarget("t2");
+      await settle();
+      expect(puts(), "the second pick saved once more").toHaveLength(2);
+      expect(puts()[1]![1]?.json).toEqual({ targetId: "t2" });
+      expect(bodyOf(island).createError).toBeNull();
+    });
+
+    it("(d) a refusal that is still held when a session is up (the phone's own start won the race) keeps its generic line on the live card — no block, and the sentence is still said", async () => {
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "youtube_unavailable", 503);
+      expect(byTestId(treeOf(island), "stream-youtube-refusal"), "premise: the block is up at Ready").toBeDefined();
+      s.current = ONE_LIVE();
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(bodyOf(island).view?.state, "premise: the card is live now").toBe("live");
+      expect(bodyOf(island).createError?.code, "the refusal is still held").toBe("youtube_unavailable");
+      const t = treeOf(island);
+      expect(byTestId(t, "stream-youtube-refusal"), "no block over a live card").toBeUndefined();
+      expect(byTestId(t, "stream-youtube-retry")).toBeUndefined();
+      expect(allTestIds(t, "stream-create-error"), "the sentence is said once, at the foot").toHaveLength(1);
+      expect(textAt(t, "stream-create-error")).toBe(m("stream.error.youtube_unavailable"));
+    });
+
+    // ─── I2: the refusal outlives its cause unless a fresh read clears it ─────────────────────────────────────────────────────────────
+    // The organiser's real round trip: Go live is refused ("reconnect YouTube"), they open the Streaming page in a NEW tab (the link has
+    // target=_blank), reconnect, and come back. The panel never remounts, so ONLY the tab-return re-read can tell the block it is stale.
+    it("I2: a dead-grant refusal is cleared by the tab return that finds the channel CONNECTED (Go live is back) and kept while it still reads reconnect_needed", async () => {
+      const { doc, win } = stubPage();
+      // The server's own order: the refusal MARKS the connection reconnect_needed, so the list the next read serves says so.
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "youtube_reconnect_needed");
+      s.targets = channelList({ status: "reconnect_needed", liveState: "unknown" });
+      doc.dispatchEvent(new Event("visibilitychange"));
+      win.dispatchEvent(new Event("focus"));
+      await settle();
+      expect(bodyOf(island).createError?.code, "still reconnect_needed: the refusal is still TRUE, so it stays").toBe("youtube_reconnect_needed");
+      expect(byTestId(treeOf(island), "stream-youtube-refusal")).toBeDefined();
+      expect(byTestId(treeOf(island), "stream-go-live"), "Go live stays replaced").toBeUndefined();
+      // Reconnected on the Streaming page. A reconnect leaves liveState `unknown` until a health check runs (connections.ts liveStateOf)
+      // — the organiser must not have to wait for one to get Go live back.
+      s.targets = channelList({ status: "connected", liveState: "unknown" });
+      win.dispatchEvent(new Event("focus"));
+      await settle();
+      expect(bodyOf(island).createError, "the grant is alive: the refusal is stale and gone").toBeNull();
+      expect(byTestId(treeOf(island), "stream-youtube-refusal")).toBeUndefined();
+      expect(byTestId(treeOf(island), "stream-go-live"), "Go live is back").toBeDefined();
+      expect(bodyOf(island).selectedTargetId, "the choice was kept throughout").toBe("t1");
+    });
+
+    it("I2: a not-enabled / restricted refusal clears only when the read finds the channel's live state `enabled`; not_enabled, blocked and unknown keep it", async () => {
+      const { win } = stubPage();
+      let checked = 0;
+      for (const code of ["youtube_live_not_enabled", "youtube_live_blocked"] as const) {
+        const s = serve({ current: null, targets: channelList() });
+        const island = await mount(s);
+        await refusedAt(s, island, code);
+        for (const [liveState, cleared] of [["not_enabled", false], ["blocked", false], ["unknown", false], ["enabled", true]] as const) {
+          s.targets = channelList({ liveState });
+          win.dispatchEvent(new Event("focus"));
+          await settle();
+          if (!cleared) {
+            expect(bodyOf(island).createError?.code, `${code} vs ${liveState}: not proven mended — kept`).toBe(code);
+          } else {
+            expect(bodyOf(island).createError, `${code} vs ${liveState}: a clean check — cleared`).toBeNull();
+          }
+          checked++;
+        }
+        island.unmount();
+      }
+      expect(checked, "anti-vacuity: two codes x four states").toBe(8);
+    });
+
+    it("I2: the retry-class refusals are NEVER cleared by a re-read — they carry their own Try again (a healthy channel says nothing about quota, ten live, or YouTube's silence)", async () => {
+      const { win } = stubPage();
+      let checked = 0;
+      for (const code of ["youtube_limit_reached", "youtube_channel_busy", "youtube_unavailable"] as const) {
+        const s = serve({ current: null, targets: channelList() });
+        const island = await mount(s);
+        await refusedAt(s, island, code, WIRE_STATUS[code]);
+        s.targets = channelList({ status: "connected", liveState: "enabled" });
+        win.dispatchEvent(new Event("focus"));
+        await settle();
+        expect(bodyOf(island).createError?.code, `${code}: a healthy channel does not answer it`).toBe(code);
+        expect(byTestId(treeOf(island), "stream-youtube-retry"), `${code}: Try again is still there`).toBeDefined();
+        island.unmount();
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
+
+    it("I2: the destination is GONE from the re-read (archived in Directory) — a channel refusal about it is cleared with the selection, never left over a picker with nothing picked", async () => {
+      const { win } = stubPage();
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "youtube_reconnect_needed");
+      s.targets = [TARGETS[1]!];
+      win.dispatchEvent(new Event("focus"));
+      await settle();
+      expect(bodyOf(island).selectedTargetId, "the removed choice is cleared").toBeNull();
+      expect(bodyOf(island).createError, "…and so is the refusal that was about it").toBeNull();
+    });
+  });
 });
 
 // ─── R2006 (owner ruling 2026-10-19, "Option C"): the score on the Phone tab ───────────────────────────────────────────
@@ -4841,7 +5099,7 @@ describe("R2006: PhoneTabBody — the score card, Camera only, the score back, a
     expect(textAt(cam, "stream-camera-only")).toBe(`${m("stream.mode.cameraOnlyTitle")} ${m("stream.mode.cameraOnlyBody")}`);
     const tree = body({ ...READY, score: score({ available: true, stored: null }) });
     const at = (id: string) => tree.indexOf(byTestId(tree, id)!);
-    expect(at("stream-target")).toBeLessThan(at("stream-score"));
+    expect(tree.indexOf(destPicker(tree)!)).toBeLessThan(at("stream-score"));
     expect(at("stream-score")).toBeLessThan(at("stream-go-live"));
     expect(at("stream-go-live")).toBeLessThan(at("stream-mode-toggle"));
   });
@@ -5517,5 +5775,287 @@ describe("PR #989 review m1: useProvidedPhoneSession — the provider's session 
     renderToStaticMarkup(<Probe fixtureId="f-1" />);
     expect(seen).toEqual(["composed:live", null, null]);
     expect(apiV1, "a reader never reads").not.toHaveBeenCalled();
+  });
+});
+
+
+// ─── YouTube Connect T12 (owner's Option B, 2026-10-27): the six YouTube refusals, the fix that replaces Go live, the replay row ──
+// Expected values are the SPEC's (§6.2 / §6.9, owner's Option B), typed here from it and never read back from the panel's own table:
+// the channel's grant is dead -> a link to the Streaming page; a refusal a retry on the same destination may clear (YouTube did not
+// answer, its quota for new streams is spent, the channel's ten streams are all live — the controller's ruling of fix round 1) -> the
+// same Go live asked again; the two with nothing to fix from here (not enabled for live, restricted) -> only "Use another destination".
+// The copy is read from the dictionary by its key.
+describe("T12: a YouTube refusal replaces Go live with the fix that fits its cause", () => {
+  const FIX_OF: Record<(typeof YOUTUBE_REFUSAL_CODES)[number], "reconnect" | "retry" | "none"> = {
+    youtube_reconnect_needed: "reconnect",
+    youtube_live_not_enabled: "none",
+    youtube_live_blocked: "none",
+    youtube_limit_reached: "retry",
+    youtube_channel_busy: "retry",
+    youtube_unavailable: "retry",
+  };
+  /** The refusals a retry on the same destination may clear — derived from the table above, so a code moved between classes moves with it. */
+  const RETRY_CODES = YOUTUBE_REFUSAL_CODES.filter((c) => FIX_OF[c] === "retry");
+  const refused = (code: string, over: Record<string, unknown> = {}) =>
+    body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: code as never, holder: null }, ...over });
+
+  it("premise: the spec's table names exactly the declared refusal codes — none missing, none invented", () => {
+    expect(Object.keys(FIX_OF).sort()).toEqual([...YOUTUBE_REFUSAL_CODES].sort());
+    expect(YOUTUBE_REFUSAL_CODES.length).toBeGreaterThan(0);
+    // The sweep below must be able to tell the three fixes apart, or one wrong swap hides behind another.
+    expect(new Set(Object.values(FIX_OF)).size).toBe(3);
+    // …and the retry class is the three the controller named (a class with one member could not tell "retry" from "unavailable").
+    expect(RETRY_CODES).toEqual(["youtube_limit_reached", "youtube_channel_busy", "youtube_unavailable"]);
+  });
+
+  it("every one of the six: its own reason, 'nothing was started or charged', no Go live, its fix, the picker red and described by it", () => {
+    let checked = 0;
+    for (const code of YOUTUBE_REFUSAL_CODES) {
+      const tree = refused(code);
+      const box = byTestId(tree, "stream-youtube-refusal");
+      expect(box, `${code}: the refusal block`).toBeDefined();
+      expect(attr(box!, "data-code"), code).toBe(code);
+      expect(attr(box!, "role"), code).toBe("alert");
+      // `{max}` is the busy sentence's cap, filled at render from the one constant (lib/youtube.ts).
+      expect(textAt(tree, "stream-create-error"), `${code}: its own sentence`).toBe(m(`stream.error.${code}` as MessageKey, { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL }));
+      expect(textAt(tree, "stream-create-error"), `${code}: no placeholder on screen`).not.toMatch(/[{}]/);
+      expect(textAt(tree, "stream-youtube-refusal-title"), code).toBe(m("stream.youtube.refused.title", { label: "Club" }));
+      expect(textAt(tree, "stream-youtube-refusal-note"), code).toBe(m("stream.youtube.refused.nothing"));
+      expect(allTestIds(tree, "stream-create-error"), `${code}: said once, not again at the foot`).toHaveLength(1);
+      expect(byTestId(tree, "stream-go-live"), `${code}: the refusal REPLACES Go live`).toBeUndefined();
+      expect(byTestId(tree, "stream-credits-line"), `${code}: no "Uses 1 credit" over a button that is not there`).toBeUndefined();
+      const fix = FIX_OF[code];
+      expect(byTestId(tree, "stream-youtube-reconnect") !== undefined, `${code}: reconnect link`).toBe(fix === "reconnect");
+      expect(byTestId(tree, "stream-youtube-retry") !== undefined, `${code}: retry button`).toBe(fix === "retry");
+      expect(byTestId(tree, "stream-youtube-pick-another"), `${code}: every refusal offers another destination`).toBeDefined();
+      expect(destPickerProps(tree).invalid, `${code}: the field is red`).toBe(true);
+      expect(destPickerProps(tree).describedBy, `${code}: described by the block`).toBe(attr(box!, "id"));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all six refusals were driven").toBe(YOUTUBE_REFUSAL_CODES.length);
+    expect(checked).toBe(6);
+  });
+
+  it("Reconnect is a link to the Streaming page — /streaming, never the Directory tab that no longer exists", () => {
+    const link = byTestId(refused("youtube_reconnect_needed"), "stream-youtube-reconnect")!;
+    expect(attr(link, "href")).toBe("/streaming");
+    expect(attr(link, "href")).toBe(STREAMING_PAGE_HREF);
+    expect(String(attr(link, "href"))).not.toContain("directory");
+    expect(link.type, "a link, not a button that navigates by script").toBe("a");
+    expect(textOf(link).trim()).toBe(m("stream.youtube.refused.reconnect"));
+    // It leaves the match's page in a new tab, so the organiser's scoring page is not lost; and carries noopener.
+    expect(attr(link, "target")).toBe("_blank");
+    expect(String(attr(link, "rel"))).toContain("noopener");
+  });
+
+  it("Try again IS Go live asked again, for every refusal a retry may clear: it calls the panel's own start, and waits while one is in flight or the phone is not ready", () => {
+    let checked = 0;
+    for (const code of RETRY_CODES) {
+      const onGoLive = vi.fn();
+      const tree = refused(code, { onGoLive });
+      click(byTestId(tree, "stream-youtube-retry"));
+      expect(onGoLive, code).toHaveBeenCalledTimes(1);
+      expect(textOf(byTestId(tree, "stream-youtube-retry")!).trim(), code).toBe(m("stream.youtube.refused.retry"));
+      expect(propsOf(byTestId(tree, "stream-youtube-retry")!).disabled, `${code}: idle, selected, ready: tappable`).toBeFalsy();
+      // The positive pair: the same predicate that holds Go live holds Try again.
+      expect(propsOf(byTestId(refused(code, { busy: true }), "stream-youtube-retry")!).disabled, `${code}: a start in flight`).toBe(true);
+      expect(propsOf(byTestId(refused(code, { selectedTargetId: null }), "stream-youtube-retry")!).disabled, `${code}: nothing selected`).toBe(true);
+      // "Use another destination" stays beside it — the retry never replaces the way out.
+      expect(byTestId(tree, "stream-youtube-pick-another"), `${code}: still offered`).toBeDefined();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the whole retry class was driven").toBe(3);
+    // The other two classes have NO Try again: a retry on a dead grant or a restricted channel cannot succeed.
+    for (const code of YOUTUBE_REFUSAL_CODES.filter((c) => FIX_OF[c] !== "retry")) {
+      expect(byTestId(refused(code), "stream-youtube-retry"), `${code}: no Try again`).toBeUndefined();
+    }
+  });
+
+  it("the BLOCK takes focus when it appears — ref, tabIndex -1, role=alert, keyed by its code, the house ring — whichever action is enabled; one Tab then reaches the first ENABLED action", () => {
+    // The re-review's regression: the refusal commits while the start is in flight (busy), when Try again is disabled. A focus target
+    // that is "the first enabled button" lands on Use another destination for the retry class. The block is the same target in both.
+    let checked = 0;
+    const FIRST_ACTION_OF = { reconnect: "stream-youtube-reconnect", retry: "stream-youtube-retry", none: "stream-youtube-pick-another" } as const;
+    for (const code of YOUTUBE_REFUSAL_CODES) {
+      for (const busy of [false, true]) {
+        const where = `${code}${busy ? " (start still in flight)" : ""}`;
+        const tree = refused(code, { busy });
+        const block = byTestId(tree, "stream-youtube-refusal")!;
+        expect(block, `${where}: the block`).toBeDefined();
+        expect(attr(block, "ref"), `${where}: focuses itself as it attaches`).toBe(focusRefusalBlock);
+        expect(attr(block, "tabIndex"), `${where}: focusable by script, not a tab stop of its own`).toBe(-1);
+        expect(attr(block, "role"), where).toBe("alert");
+        // A new code is a new key, so a second refusal (or the same one after Try again unmounted the block) focuses again.
+        expect(block.key, `${where}: keyed by the code`).toBe(code);
+        const classes = String(attr(block, "className")).split(/\s+/);
+        for (const token of REFUSAL_FOCUS_RING.split(/\s+/)) expect(classes, `${where}: the keyboard ring ${token}`).toContain(token);
+        expect(tree.some((el) => attr(el, "ref") === focusRefusalBlock && el !== block), `${where}: no second focus target`).toBe(false);
+        // One Tab from the block reaches the first ENABLED action in DOM order: the fix, unless its button is disabled by the start in flight.
+        const actions = walk(propsOf(block).children as ReactElement[]).filter((el) => el.type === "a" || el.type === "button");
+        const firstEnabled = String(attr(actions.find((el) => !propsOf(el).disabled)!, "data-testid"));
+        const expected = busy && FIX_OF[code] === "retry" ? "stream-youtube-pick-another" : FIRST_ACTION_OF[FIX_OF[code]];
+        expect(firstEnabled, `${where}: the first enabled action in Tab order`).toBe(expected);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: six codes x in flight or not").toBe(YOUTUBE_REFUSAL_CODES.length * 2);
+    // The positive pair of the regression: the retry class really does have a DISABLED first action while in flight.
+    expect(RETRY_CODES.length).toBeGreaterThan(0);
+    expect(propsOf(byTestId(refused(RETRY_CODES[0]!, { busy: true }), "stream-youtube-retry")!).disabled).toBe(true);
+    // No refusal, no block — nothing takes focus on a plain Ready card (nor on a generic refusal).
+    const takers = (tree: ReactElement[]) => tree.filter((el) => attr(el, "ref") === focusRefusalBlock).length;
+    expect(takers(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" }))).toBe(0);
+    expect(takers(refused("unknown")), "a non-YouTube refusal draws no block").toBe(0);
+    expect(takers(refused("youtube_unavailable")), "the positive pair: one taker for a YouTube refusal").toBe(1);
+  });
+
+  it("'Use another destination' is the panel's own handler, on every refusal", () => {
+    let checked = 0;
+    for (const code of YOUTUBE_REFUSAL_CODES) {
+      const onPickAnother = vi.fn();
+      click(byTestId(refused(code, { onPickAnother }), "stream-youtube-pick-another"));
+      expect(onPickAnother, code).toHaveBeenCalledTimes(1);
+      checked++;
+    }
+    expect(checked).toBe(YOUTUBE_REFUSAL_CODES.length);
+  });
+
+  it("a code that is NOT a declared YouTube refusal draws nothing of this: the generic line at the foot, Go live still there, never the raw code", () => {
+    // `youtube_made_up` reaches the panel as `unknown` (createErrorCode, stream-session-view.test.ts) — the generic sentence.
+    const tree = refused("unknown");
+    expect(byTestId(tree, "stream-youtube-refusal")).toBeUndefined();
+    expect(byTestId(tree, "stream-go-live"), "Go live stays").toBeDefined();
+    expect(destPickerProps(tree).invalid).toBeFalsy();
+    expect(textAt(tree, "stream-create-error")).toBe(m("stream.error.unknown"));
+    for (const raw of ["youtube_", "made_up"]) expect(JSON.stringify(tree.map((el) => textOf(el))), raw).not.toContain(raw);
+    // …and a non-YouTube refusal elsewhere still lands at the foot exactly as before (the regression this block must not cause).
+    const exhausted = refused("storage_exhausted");
+    expect(byTestId(exhausted, "stream-youtube-refusal")).toBeUndefined();
+    expect(textAt(exhausted, "stream-create-error")).toBe(m("stream.error.storage_exhausted" as MessageKey));
+    expect(byTestId(exhausted, "stream-go-live")).toBeDefined();
+  });
+
+  it("a refusal only ever replaces Go live where Go live was drawn: a live, warming, ended or failed card keeps the GENERIC line — the sentence is still said, once, and the picker is not red", () => {
+    const CARDS = [
+      ["live", session({ state: "live", startedAt: "2026-09-14T11:50:00Z" })],
+      ["warming", session({ state: "warming" })],
+      ["ended", session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" })],
+      ["failed", session({ state: "failed", failReason: "target_rejected" })],
+    ] as const;
+    let checked = 0;
+    for (const [name, view] of CARDS) {
+      for (const code of YOUTUBE_REFUSAL_CODES) {
+        const tree = body({ view, balance: 1, createError: { code, holder: null } });
+        expect(byTestId(tree, "stream-youtube-refusal"), `${name}/${code}: no block over a card that is not Ready`).toBeUndefined();
+        expect(byTestId(tree, "stream-youtube-retry"), `${name}/${code}`).toBeUndefined();
+        expect(tree.some((el) => attr(el, "ref") === focusRefusalBlock), `${name}/${code}: nothing takes focus`).toBe(false);
+        // The suppression is of the BLOCK only — the refusal is still said, in the dictionary's words, exactly once.
+        const lines = allTestIds(tree, "stream-create-error");
+        expect(lines, `${name}/${code}: the generic line is drawn once`).toHaveLength(1);
+        expect(textOf(lines[0]!).replace(/\s+/g, " ").trim(), `${name}/${code}`).toBe(m(`stream.error.${code}` as MessageKey, { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL }));
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: four cards x six codes").toBe(CARDS.length * YOUTUBE_REFUSAL_CODES.length);
+  });
+
+  it("the destination's name in the title is the DICTIONARY's when it is the archived literal (read in es, where it differs from the stored English)", () => {
+    const es = uiDict("es");
+    const archived = TARGETS.map((t, i) => (i === 0 ? { ...t, label: YOUTUBE_DISCONNECTED_LABEL } : t));
+    const html = renderToStaticMarkup(
+      <DictProvider dict={es} locale="es">
+        <PhoneTabBody {...BODY} view={null} balance={2} targets={ok(archived)} selectedTargetId="t1" createError={{ code: "youtube_reconnect_needed", holder: null }} />
+      </DictProvider>,
+    );
+    const title = /data-testid="stream-youtube-refusal-title"[^>]*>([^<]*)</.exec(html)?.[1] ?? "";
+    expect(es["streaming.youtube.disconnectedLabel"], "premise: es differs from the stored English").not.toBe(YOUTUBE_DISCONNECTED_LABEL);
+    expect(title).toBe(es["stream.youtube.refused.title"]!.replace("{label}", es["streaming.youtube.disconnectedLabel"]!));
+    expect(title).not.toContain("disconnected");
+    // The reason is the es sentence too — the copy rides the locale, not the code.
+    expect(html).toContain(es["stream.error.youtube_reconnect_needed"]!);
+  });
+});
+
+describe("T12: after a match — the replay row, and the destination's name read in the customer's language", () => {
+  const ENDED = { state: "completed" as const, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" as const };
+  const REPLAY = "https://www.youtube.com/watch?v=abc";
+
+  it("the row says when it ran in the VENUE's zone (BST: 12:00 to 12:45), then offers Watch replay and Copy link for the same URL", () => {
+    const tree = body({ view: session({ ...ENDED, replayUrl: REPLAY }), balance: 1 });
+    expect(byTestId(tree, "stream-replay-row")).toBeDefined();
+    expect(textAt(tree, "stream-replay-times")).toBe(m("stream.replay.times", { start: "12:00", end: "12:45" }));
+    expect(textAt(tree, "stream-replay-times")).toBe("12:00 to 12:45");
+    expect(attr(byTestId(tree, "stream-replay")!, "href")).toBe(REPLAY);
+    const copy = tree.find((el) => el.type === ReplayCopyButton);
+    expect(copy, "a Copy link").toBeDefined();
+    expect(propsOf(copy!).url, "copies the link it watches").toBe(REPLAY);
+    // Another zone moves the times, so the line is the venue's and not the server's.
+    const kolkata = body({ view: session({ ...ENDED, replayUrl: REPLAY }), balance: 1, tz: "Asia/Kolkata" });
+    expect(textAt(kolkata, "stream-replay-times")).toBe(m("stream.replay.times", { start: "16:30", end: "17:15" }));
+  });
+
+  it("no end time reads 'Started {time}'; never started shows no times at all; no replay means no row", () => {
+    const open = body({ view: session({ ...ENDED, endedAt: null, replayUrl: REPLAY }), balance: 1 });
+    expect(textAt(open, "stream-replay-times")).toBe(m("stream.replay.timesOpen", { start: "12:00" }));
+    const never = body({ view: session({ ...ENDED, startedAt: null, replayUrl: REPLAY }), balance: 1 });
+    expect(byTestId(never, "stream-replay-times"), "no invented times").toBeUndefined();
+    expect(byTestId(never, "stream-replay"), "…but the link is still there").toBeDefined();
+    const none = body({ view: session({ ...ENDED }), balance: 1 });
+    expect(byTestId(none, "stream-replay-row"), "nothing to replay").toBeUndefined();
+    expect(byTestId(none, "stream-replay")).toBeUndefined();
+    expect(none.some((el) => el.type === ReplayCopyButton)).toBe(false);
+    expect(byTestId(none, "stream-again"), "the card still renders").toBeDefined();
+  });
+
+  it("a YouTube destination's replay link wears the official icon INSIDE the link (so the logo is clickable and leads to YouTube); another platform's does not", () => {
+    const yt = byTestId(body({ view: session({ ...ENDED, replayUrl: REPLAY, target: { id: "t1", kind: "youtube", label: "Club" } }), balance: 1 }), "stream-replay")!;
+    expect(yt.type, "the icon's parent IS the replay anchor").toBe("a");
+    expect(isYoutubeUrl(propsOf(yt).href as string), "the anchor leads to YouTube").toBe(true);
+    const icons = walk(propsOf(yt).children as ReactElement[]).filter((el) => el.type === YoutubeIcon);
+    expect(icons.map((el) => propsOf(el).size)).toEqual(["sm"]);
+    const tw = byTestId(body({ view: session({ ...ENDED, replayUrl: "https://www.twitch.tv/videos/1", target: { id: "t2", kind: "twitch", label: "Alt" } }), balance: 1 }), "stream-replay")!;
+    expect(walk(propsOf(tw).children as ReactElement[]).filter((el) => el.type === YoutubeIcon)).toHaveLength(0);
+  });
+
+  it("m3: the mark follows the LINK, not the destination's kind — a YouTube-kind destination whose club-set replay URL is another site's wears no YouTube icon", () => {
+    // `stream_url` is the club's own link when it set one, and nothing overwrites it: a YouTube destination can replay anywhere.
+    const marks = (replayUrl: string, kind: "youtube" | "twitch" = "youtube") => {
+      const link = byTestId(body({ view: session({ ...ENDED, replayUrl, target: { id: "t1", kind, label: "Club" } }), balance: 1 }), "stream-replay")!;
+      return walk(propsOf(link).children as ReactElement[]).filter((el) => el.type === YoutubeIcon).length;
+    };
+    expect(marks("https://www.twitch.tv/videos/1"), "youtube kind, twitch link: no icon").toBe(0);
+    expect(marks("https://example.com/vod/1"), "youtube kind, own site: no icon").toBe(0);
+    expect(marks("https://youtube.com.evil.example/watch?v=1"), "a look-alike host: no icon").toBe(0);
+    // The positive pair: both YouTube hosts, so the gate is not simply off.
+    expect(marks("https://www.youtube.com/watch?v=abc"), "youtube.com").toBe(1);
+    expect(marks("https://youtu.be/abc"), "youtu.be").toBe(1);
+    // And the icon follows the link even where the destination's kind is not YouTube.
+    expect(marks("https://youtu.be/abc", "twitch"), "twitch kind, YouTube link: the link is YouTube's").toBe(1);
+  });
+
+  it("EVERY place that prints the 'ending' destination passes it through youtubeTargetLabel — the card AND the stop probe (the probe needs a live provider, so its call site is swept)", () => {
+    const src = readFileSync(join(__dirname, "..", "fixture-stream-panel.tsx"), "utf8");
+    const sites = [...src.matchAll(/msg\("stream\.phone\.ending",\s*\{([^}]*)\}\)/g)].map((m) => m[1]!);
+    expect(sites.length, "anti-vacuity: the card's and the probe's call sites were both found").toBeGreaterThanOrEqual(2);
+    for (const [i, args] of sites.entries()) {
+      expect(args, `call site ${i}: the destination is localised, never the raw stored label`).toMatch(/destination:\s*youtubeTargetLabel\(msg,/);
+    }
+  });
+
+  it("the ending line and the Signal path name a disconnected channel in the dictionary's words (read in es), never the stored English literal", () => {
+    const es = uiDict("es");
+    const view = session({ state: "ending", target: { id: "t1", kind: "youtube", label: YOUTUBE_DISCONNECTED_LABEL } });
+    const html = renderToStaticMarkup(
+      <DictProvider dict={es} locale="es">
+        <PhoneTabBody {...BODY} view={view} balance={1} />
+      </DictProvider>,
+    );
+    const ending = /data-testid="stream-ending"[^>]*>([^<]*)</.exec(html)?.[1] ?? "";
+    expect(ending).toBe(es["stream.phone.ending"]!.replace("{destination}", es["streaming.youtube.disconnectedLabel"]!));
+    expect(html, "the stored literal appears nowhere").not.toContain(YOUTUBE_DISCONNECTED_LABEL);
+    // The Signal path draws the destination too: the same es label is in the markup, so it was localised there as well.
+    expect(html.split(es["streaming.youtube.disconnectedLabel"]!).length - 1, "the label is drawn by the ending line AND the chain").toBeGreaterThanOrEqual(2);
+    // The positive pair: the customer's own label passes through untouched.
+    expect(textAt(body({ view: session({ state: "ending", target: { id: "t1", kind: "youtube", label: "Club TV" } }), balance: 1 }), "stream-ending")).toBe(m("stream.phone.ending", { destination: "Club TV" }));
   });
 });

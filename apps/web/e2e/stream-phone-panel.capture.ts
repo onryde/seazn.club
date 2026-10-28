@@ -39,6 +39,7 @@ import { join } from "node:path";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll } from "./helpers";
 import { setRigPlan, signInAs } from "./overlay-kit";
 import { expectQrDecodesAsPainted, qrModulesOf } from "./helpers/qr-enlarge";
+import { selectTarget } from "./helpers/stream-target-picker";
 
 const DIR = process.env.PHONE_PANEL_SHOTS_DIR;
 const FLAG_OFF = process.env.PHONE_PANEL_FLAG_OFF === "1";
@@ -283,17 +284,17 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
         ? route.fulfill({ status: 500, json: { ok: false, error: { code: "internal", message: "staged" } } })
         : route.fallback());
       await page.route(SETTINGS, refuse);
-      const serverAnswer = await scope.getByTestId("stream-target").inputValue();
+      const serverAnswer = (await scope.getByTestId("stream-target").getAttribute("data-value")) ?? "";
       expect(serverAnswer, "premise: the server's answer is the oldest, Riverside TV").toBe(target.data!.id);
-      await scope.getByTestId("stream-target").selectOption(silentDest.data!.id);
+      await selectTarget(scope, silentDest.data!.id);
       await expect(scope.getByTestId("stream-pick-error")).toHaveText(EN["stream.dest.pickFailed"]!, { timeout: POLL_WAIT_MS });
-      await expect(scope.getByTestId("stream-target"), "back on the server's answer").toHaveValue(serverAnswer);
+      await expect(scope.getByTestId("stream-target"), "back on the server's answer").toHaveAttribute("data-value", serverAnswer);
       await shoot(page, scope, "02b-ready-pick-failed");
       await page.unroute(SETTINGS, refuse);
-      await scope.getByTestId("stream-target").selectOption(silentDest.data!.id);
-      await scope.getByTestId("stream-target").selectOption(target.data!.id);
+      await selectTarget(scope, silentDest.data!.id);
+      await selectTarget(scope, target.data!.id);
       await expect(scope.getByTestId("stream-pick-error")).toHaveCount(0);
-      await expect(scope.getByTestId("stream-target")).toHaveValue(target.data!.id);
+      await expect(scope.getByTestId("stream-target")).toHaveAttribute("data-value", target.data!.id);
 
       // 3. Paired, the code shown again (the same code, re-shown), and 4. Revoke & reissue's confirm (declined).
       await scope.getByTestId("stream-code-disclosure").locator("summary").click();
@@ -367,7 +368,7 @@ test.describe("capture QR v2 — the organiser panel's phone states", () => {
       await undo();
 
       // The second session: the never-receiving destination, picked (a pick, the organiser's own), then Go live (REAL).
-      await scope.getByTestId("stream-target").selectOption(silentDest.data!.id);
+      await selectTarget(scope, silentDest.data!.id);
       await expect(scope.getByTestId("stream-go-live")).toBeEnabled({ timeout: POLL_WAIT_MS });
       await scope.getByTestId("stream-go-live").click();
       await expect(scope.getByTestId("stream-waiting")).toBeVisible({ timeout: POLL_WAIT_MS });

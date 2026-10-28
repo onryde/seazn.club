@@ -152,8 +152,9 @@ function isRealRoute(method: string, url: string): boolean {
 
 // ─── builders ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 type View = NonNullable<StreamTarget["youtube"]>;
+const CHANNEL_ID = "UC7xK2mQ9rVbN4tLpA1sZ0wE";
 const view = (over: Partial<View> = {}): View => ({
-  connectionId: "c-1", channelTitle: "Riverside FC", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled",
+  connectionId: "c-1", channelId: CHANNEL_ID, channelTitle: "Riverside FC", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled",
   termsOutdated: false, openBroadcasts: 0, ...over,
 });
 const channel = (y: Partial<View> = {}, over: Partial<StreamTarget> = {}): StreamTarget => ({
@@ -718,8 +719,16 @@ describe("a connected channel's row", () => {
     expect(plain(rowHtml(channel({ privacy: "private", madeForKids: false })))).toContain(`${m("streaming.youtube.privacy.private")} · ${m("streaming.youtube.row.kidsNo")}`);
   });
 
-  it("a YouTube mark sits beside the row and a held channel shows its holder badge", () => {
-    expect(rowHtml(channel())).toContain('data-platform-mark="youtube"');
+  it("the row's YouTube logo is a link to the channel on YouTube (owner 2026-10-28), and a held channel shows its holder badge", () => {
+    const row = rowHtml(channel());
+    const a = /<a\b[^>]*data-testid="youtube-logo-link"[^>]*>/.exec(row)?.[0];
+    expect(a, "the logo is wrapped in an anchor").toBeDefined();
+    expect(a).toContain(`href="https://www.youtube.com/channel/${CHANNEL_ID}"`);
+    expect(a).toContain('target="_blank"');
+    expect(a).toContain('rel="noopener noreferrer"');
+    expect(a, "named '<channel> on YouTube'").toContain(`aria-label="${m("streaming.youtube.channelLink", { name: "Riverside FC" })}"`);
+    expect(m("streaming.youtube.channelLink", { name: "Riverside FC" })).toBe("Riverside FC on YouTube");
+    expect(row, "the neutral platform tile is NOT also drawn: one mark per row").not.toContain('data-platform-mark="youtube"');
     const html = renderToStaticMarkup(
       <DictProvider dict={messages as unknown as Dict} locale="en"><ul><YoutubeChannelRow t={channel()} canEdit orgId="o" badge={<span data-testid="stream-dest-badge">Live on Match 5</span>} /></ul></DictProvider>,
     );
@@ -950,7 +959,8 @@ describe("the panel with YouTube Connect", () => {
     expect(html).toMatch(/data-testid="stream-dest-empty"[\s\S]*data-testid="stream-dest-empty-add"[\s\S]*data-testid="youtube-connect-empty"/);
     expect(plain(html)).toContain(m("streamDest.empty"));
     expect(plain(html)).toContain(m("streaming.youtube.connect"));
-    expect(html.match(/data-platform-mark="youtube"/g)).toHaveLength(1);
+    expect(html.match(/data-platform-mark="youtube"/g), "the Connect button wears no mark").toBeNull();
+    expect(html.match(/data-youtube-icon="/g), "the Connect button draws no logo (a logo must be a link; a button is not one)").toBeNull();
     expect(m("streamDest.empty"), "the empty copy names the connect path too").toMatch(/Connect your YouTube channel/);
   });
 
@@ -1099,5 +1109,117 @@ describe("the copy", () => {
     // A JSX text node or a string prop that reads as a sentence: letters and spaces, a capital first, 3+ words.
     const sentences = [...SOURCE.matchAll(/>\s*([A-Z][A-Za-z']+(?: [A-Za-z']+){2,}[.!?]?)\s*</g)].map((x) => x[1]);
     expect(sentences, "hardcoded English in JSX").toEqual([]);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// T12 polish (owner-approved 2026-10-28, from the B3 sign-off): four things the owner saw on the Streaming page.
+describe("T12 polish: the Streaming page", () => {
+  const tokens = (html: string, testid: string): string[] => {
+    const tag = new RegExp(`<[a-z]+\\b[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0] ?? "";
+    return (/\bclass="([^"]*)"/.exec(tag)?.[1] ?? "").split(/\s+/).filter(Boolean);
+  };
+
+  it("1. every secondary action on a channel row reads as a BUTTON at rest (house `btn-ghost`: border and fill), never bare text — across every state", () => {
+    // The rows that carry a secondary action: Settings always; Review terms when the terms moved on (primary only when it must be first).
+    const states: [string, Partial<View>][] = [
+      ["connected", {}],
+      ["reconnect needed", { status: "reconnect_needed" }],
+      ["terms moved on", { termsOutdated: true }],
+      ["dead grant AND terms moved on", { status: "reconnect_needed", termsOutdated: true }],
+    ];
+    let checked = 0;
+    for (const [name, y] of states) {
+      const html = rowHtml(channel(y));
+      for (const id of ["youtube-settings", "youtube-review-terms", "youtube-reconnect"]) {
+        if (!html.includes(`data-testid="${id}"`)) continue;
+        const t = tokens(html, id);
+        // Primary or ghost — either way a filled or bordered control. A bare `btn` is the plain text the owner rejected.
+        expect(t.includes("btn-ghost") || t.includes("btn-primary"), `${name}: ${id} is a button at rest (${t.join(" ")})`).toBe(true);
+        checked++;
+      }
+      expect(tokens(html, "youtube-settings"), `${name}: Settings is the quiet one, not the loud one`).not.toContain("btn-primary");
+    }
+    expect(checked, "anti-vacuity: the actions that exist across the four states (Settings; Reconnect + Settings; Review + Settings; Review + Settings)").toBe(1 + 2 + 2 + 2);
+    // Review terms is the loud one ONLY while the dead grant needs it first.
+    expect(tokens(rowHtml(channel({ termsOutdated: true })), "youtube-review-terms")).toContain("btn-ghost");
+    expect(tokens(rowHtml(channel({ status: "reconnect_needed", termsOutdated: true })), "youtube-review-terms")).toContain("btn-primary");
+  });
+
+  it("2. the empty card hides its Connect YouTube while the channel picker is open (one way in), and shows it everywhere else", () => {
+    const picking = panelHtml({ targets: [], landing: { code: "pick", pendingId: PENDING } });
+    expect(picking, "the picker is the way in").toContain('data-testid="youtube-picker"');
+    expect(picking, "no second Connect YouTube beside it").not.toContain('data-testid="youtube-connect-empty"');
+    expect(picking, "Add destination is untouched").toContain('data-testid="stream-dest-empty-add"');
+    // The positive pairs: no landing, and a landing that is not a pick, both still offer it.
+    expect(panelHtml({ targets: [] })).toContain('data-testid="youtube-connect-empty"');
+    expect(panelHtml({ targets: [], landing: { code: "connected", pendingId: null } })).toContain('data-testid="youtube-connect-empty"');
+    // A viewer cannot pick, so nothing opens and nothing is hidden.
+    expect(panelHtml({ targets: [], canEdit: false, landing: { code: "pick", pendingId: PENDING } })).not.toContain('data-testid="youtube-picker"');
+  });
+
+  it("3. the landing banner centres its sentence against Dismiss from 768 up (md:items-center) and stays a stacked column on a phone, for EVERY code", () => {
+    // Every landing the banner has a sentence for: all but `pick`, which opens the picker instead.
+    const bannerCodes = YOUTUBE_LANDING_CODES.filter((c) => c !== "pick");
+    let checked = 0;
+    for (const code of bannerCodes) {
+      const t = tokens(renderToStaticMarkup(<YoutubeLandingNotice code={code} />), "youtube-landing");
+      expect(t, `${code}: centred beside the button from md`).toContain("md:items-center");
+      expect(t, `${code}: phone stacks`).toContain("max-md:flex-col");
+      expect(t, `${code}: the phone's alignment is untouched`).toContain("items-start");
+      checked++;
+    }
+    expect(checked, "every banner code").toBe(bannerCodes.length);
+    expect(checked).toBe(11);
+  });
+
+  it("4. the logo appears ONLY as the channel row's link: the pasted-key row wears the neutral tile, the Connect buttons wear nothing", () => {
+    const html = panelHtml({ targets: [channel(), pasted()] });
+    // One logo on the page: the channel row's. It is inside an anchor to the channel.
+    expect(html.match(/data-youtube-icon="/g), "the channel row's logo, and no other").toHaveLength(1);
+    expect(html).toMatch(new RegExp(`<a\\b[^>]*href="https://www\\.youtube\\.com/channel/${CHANNEL_ID}"[^>]*><svg[^>]*data-youtube-icon="md"`));
+    // The pasted row keeps its alignment with a neutral tile (one platform mark on the page: the pasted row's).
+    expect(html.match(/data-platform-mark="youtube"/g), "the pasted-key row's neutral tile").toHaveLength(1);
+    const pastedRow = /<li data-testid="stream-dest-row"[\s\S]*?<\/li>/.exec(html)![0];
+    expect(pastedRow).toContain('data-platform-mark="youtube"');
+    expect(pastedRow, "the pasted row draws no logo").not.toContain("data-youtube-icon");
+    // The toolbar's Connect YouTube: words only.
+    const connect = /<button[^>]*data-testid="youtube-connect"[^>]*>[\s\S]*?<\/button>/.exec(html)![0];
+    expect(connect).toContain(m("streaming.youtube.connect"));
+    expect(connect, "no mark in the Connect button").not.toMatch(/data-platform-mark|data-youtube-icon|<svg/);
+    // The empty card's Connect: the same.
+    const empty = panelHtml({ targets: [] });
+    expect(empty.match(/data-youtube-icon="/g)).toBeNull();
+    expect(/<button[^>]*data-testid="youtube-connect-empty"[^>]*>[\s\S]*?<\/button>/.exec(empty)![0]).not.toMatch(/data-platform-mark|data-youtube-icon|<svg/);
+  });
+
+  it("4b. every channel row is its own link, to its own channel (two channels: two links, two ids)", () => {
+    const other = "UCq8Zp3nW2yHcB6vTdR4eXjA";
+    const html = panelHtml({
+      targets: [channel({}, { id: "t-a" }), channel({ connectionId: "c-2", channelId: other, channelTitle: "Riverside Juniors" }, { id: "t-b", label: "Riverside Juniors" })],
+    });
+    const hrefs = [...html.matchAll(/<a\b[^>]*href="(https:\/\/www\.youtube\.com\/[^"]+)"[^>]*><svg/g)].map((x) => x[1]);
+    expect(hrefs, "one logo link per channel row, each to that row's channel").toEqual([
+      `https://www.youtube.com/channel/${CHANNEL_ID}`,
+      `https://www.youtube.com/channel/${other}`,
+    ]);
+    const labels = [...html.matchAll(/<a\b[^>]*aria-label="([^"]+)"[^>]*><svg/g)].map((x) => x[1]);
+    expect(labels).toEqual(["Riverside FC on YouTube", "Riverside Juniors on YouTube"]);
+  });
+
+  it("4c. the link's accessible name is in the viewer's language (es/fr/nl carry the channel's name too)", () => {
+    let checked = 0;
+    for (const l of LOCALES) {
+      const html = renderToStaticMarkup(
+        <DictProvider dict={localeDict(l) as unknown as Dict} locale={l}><ul><YoutubeChannelRow t={channel()} canEdit orgId="o" badge={null} /></ul></DictProvider>,
+      );
+      const label = /<a\b[^>]*aria-label="([^"]+)"[^>]*><svg/.exec(html)?.[1];
+      expect(label, l).toBe(esc(localeDict(l)["streaming.youtube.channelLink"]!.replace("{name}", "Riverside FC")));
+      expect(label, `${l}: names the channel and YouTube`).toMatch(/Riverside FC/);
+      expect(label, `${l}: names YouTube`).toMatch(/YouTube/);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    expect(LOCALES.length).toBe(4);
   });
 });

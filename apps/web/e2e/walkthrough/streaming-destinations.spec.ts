@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll } from "../helpers";
 import { setRigPlan, signInAs } from "../overlay-kit";
 import { storeCameraOnly } from "../helpers/stream-mode";
+import { expectSelectedTarget, offeredTargetIds, offeredTargetNames, selectTarget, targetPicker } from "../helpers/stream-target-picker";
 import { STREAM_PLATFORMS, type StreamPlatform } from "../../src/lib/stream-destinations";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import {
@@ -350,8 +351,8 @@ for (const width of [320, 1280] as const) {
 
     // 3. PICK it on a match and GO LIVE.
     let body = await openPhoneTab(page, rig, f.no);
-    await body.getByTestId("stream-target").selectOption(id);
-    await expect(body.getByTestId("stream-target").locator("option:checked")).toContainText(label);
+    await selectTarget(body, id);
+    await expectSelectedTarget(body, label, "youtube");
     await streamSlot();
     await pairedPhone(page); // W5: Go live needs a paired phone
     await body.getByTestId("stream-go-live").click();
@@ -417,7 +418,8 @@ for (const width of [320, 1280] as const) {
     await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.ended"), { timeout: POLL_WAIT_MS });
     await body.getByTestId("stream-again").click();
     await expect(body.getByTestId("stream-state-pill")).toHaveText(en("stream.phone.state.idle"));
-    await expect(body.getByTestId("stream-target").locator(`option[value="${id}"]`), "gone from the fixture picker").toHaveCount(0);
+    // The org's only destination is gone, so there is no list to open at all (the empty state below says so).
+    await expect(targetPicker(body), "gone from the fixture picker").toHaveCount(0);
     await expect(body.getByTestId("stream-dest-empty"), "the org's only destination is gone: the picker's empty state").toBeVisible();
 
     // 7. RE-ADD the same key under a new name: the SAME destination comes back (D2).
@@ -871,7 +873,10 @@ for (const width of [320, 768, 1280] as const) {
     const yt = await addTargetApi(page, rig.orgId, { label: `Court 1 ${rig.tag}` });
     const tw = await addTargetApi(page, rig.orgId, { label: `Twitch ${rig.tag}`, kind: "twitch", streamKey: twitchKey() });
     const body = await openPhoneTab(page, rig, rig.fixtures[0]!.no);
-    await expect(body.getByTestId("stream-target").locator("option")).toHaveText([`${yt.label} (${BRAND.youtube})`, `${tw.label} (${BRAND.twitch})`]);
+    expect(await offeredTargetNames(body), "the list offers both, oldest first").toEqual([yt.label, tw.label]);
+    const optionRows = body.getByTestId("stream-target-option");
+    await expect(optionRows.nth(0).getByTestId("stream-target-kind"), "a pasted key says what it is").toHaveText(en("stream.dest.kind.key", { platform: BRAND.youtube }));
+    await expect(optionRows.nth(1).getByTestId("stream-target-kind")).toHaveText(en("stream.dest.kind.key", { platform: BRAND.twitch }));
     await expect(body.getByTestId("stream-target-add"), "D1: no inline add").toHaveCount(0);
     await expect(body.locator('input[type="password"]'), "D1: no key field on the match").toHaveCount(0);
     const link = body.getByTestId("stream-manage-destinations");
@@ -913,7 +918,7 @@ for (const width of [320, 1280] as const) {
     await page.setViewportSize({ width, height });
     const rig = await seedRig(page, { entrants: 2 });
     const f = rig.fixtures[0]!;
-    const picker = (b: Locator) => b.getByTestId("stream-target");
+    const picker = targetPicker;
     const goLive = (b: Locator) => b.getByTestId("stream-go-live");
 
     // 1. NO destinations: the empty copy, and Go live disabled.
@@ -936,8 +941,8 @@ for (const width of [320, 1280] as const) {
 
     // 3. Back to the match (no reload): the picker offers it, picked, and Go live is enabled.
     await returnTo(page);
-    await expect(picker(body).locator("option"), "the return re-read the list").toHaveText([`${first} (${BRAND.youtube})`], { timeout: SAVE_MS });
-    await expect(picker(body)).toHaveValue(added!.id);
+    await expect.poll(() => offeredTargetNames(body), { message: "the return re-read the list", timeout: SAVE_MS }).toEqual([first]);
+    await expect(picker(body)).toHaveAttribute("data-value", added!.id);
     await expect(goLive(body)).toBeEnabled();
     await expect(body.getByTestId("stream-dest-empty")).toHaveCount(0);
     await expectNoHorizontalScroll(page);
@@ -963,10 +968,10 @@ for (const width of [320, 1280] as const) {
     await expect(dir.getByTestId("stream-dest-form")).toHaveCount(0, { timeout: SAVE_MS });
     const [b] = await listApi(page, rig.orgId);
     await returnTo(page);
-    await expect(picker(body)).toHaveValue(b!.id, { timeout: SAVE_MS });
+    await expect(picker(body)).toHaveAttribute("data-value", b!.id, { timeout: SAVE_MS });
     const removed = await page.request.delete(`/api/v1/orgs/${rig.orgId}/stream-targets/${b!.id}`);
     expect(removed.status(), "SETUP: removed elsewhere").toBe(200);
-    await expect(picker(body), "premise: nothing told this tab yet").toHaveValue(b!.id);
+    await expect(picker(body), "premise: nothing told this tab yet").toHaveAttribute("data-value", b!.id);
     await goLive(body).click();
     await expect(body.getByTestId("stream-dest-empty"), "the stale choice is gone with it: the empty state").toBeVisible({ timeout: SAVE_MS });
     await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/streaming");
@@ -981,23 +986,24 @@ for (const width of [320, 1280] as const) {
     const keep = await addTargetApi(page, rig.orgId, { label: `Keep ${rig.tag}` });
     const gone = await addTargetApi(page, rig.orgId, { label: `Gone ${rig.tag}`, kind: "twitch", streamKey: twitchKey() });
     await returnTo(page);
-    await expect(picker(body).locator("option"), "the return read both").toHaveCount(2, { timeout: SAVE_MS });
-    await picker(body).selectOption(gone.id);
+    await expect.poll(async () => (await offeredTargetIds(body)).length, { message: "the return read both", timeout: SAVE_MS }).toBe(2);
+    await selectTarget(body, gone.id);
     expect((await page.request.delete(`/api/v1/orgs/${rig.orgId}/stream-targets/${gone.id}`)).status(), "SETUP: removed elsewhere").toBe(200);
     await goLive(body).click();
     await expect(body.getByTestId("stream-create-error")).toHaveText(en("stream.error.target_removed"), { timeout: SAVE_MS });
-    await expect(picker(body), "cleared — NOT the other destination in its place").toHaveValue("");
-    await expect(picker(body).locator("option:checked")).toHaveText(en("stream.dest.pick"));
-    await expect(picker(body).locator("option")).toHaveText([en("stream.dest.pick"), `Keep ${rig.tag} (${BRAND.youtube})`]);
+    await expect(picker(body), "cleared — NOT the other destination in its place").toHaveAttribute("data-value", "");
+    await expect(picker(body).getByTestId("stream-target-placeholder")).toHaveText(en("stream.dest.pick"));
+    expect(await offeredTargetNames(body), "the list now offers only what is left").toEqual([`Keep ${rig.tag}`]);
     await expect(goLive(body), "no destination picked, nothing to start").toBeDisabled();
     await expectNoHorizontalScroll(page);
     await shot(page.locator('[data-role="fixture-stream-body"]'), `n1-${width}-removed-placeholder.png`);
     await returnTo(page);
-    await expect(picker(body), "a later return picks nothing for them").toHaveValue("");
+    await expect(picker(body), "a later return picks nothing for them").toHaveAttribute("data-value", "");
     await expect(body.getByTestId("stream-create-error"), "…and keeps the explanation").toHaveText(en("stream.error.target_removed"));
-    await picker(body).selectOption(keep.id);
+    await selectTarget(body, keep.id);
     await expect(body.getByTestId("stream-create-error"), "the pick answers it").toHaveCount(0);
-    await expect(picker(body).locator("option"), "and the placeholder goes").toHaveText([`Keep ${rig.tag} (${BRAND.youtube})`]);
+    await expect(picker(body).getByTestId("stream-target-placeholder"), "and the placeholder goes").toHaveCount(0);
+    await expectSelectedTarget(body, `Keep ${rig.tag}`, "youtube");
     await expect(goLive(body)).toBeEnabled();
     expect(await sessionsOf(rig.orgId), "still nothing started").toEqual([]);
     await dir.close();

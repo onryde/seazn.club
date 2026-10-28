@@ -17,7 +17,7 @@
 // because nothing in stream-sessions.ts reads the sport except the admission SNAPSHOT, which copies `divisions.sport_key`
 // verbatim — and the Db test compares that copy to its source row rather than to a sport literal.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { randomBytes, randomInt, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -33,8 +33,8 @@ import { FAKE_CONNECTING_KEY_PREFIX, FAKE_REJECT_KEY_PREFIX, FakeIngest, FakeRec
 import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { routes } from "@/lib/routes";
 import { admit, holdStateOf, type AdmitInput, type SessionState } from "@/server/relay/domain/session";
-import { apiSessionOnTarget, pairPresentPhone, resealTargetDestination, rigApiTarget, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
-import { ApiBackedTargetError, KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readFirstInput, readTargetSecret } from "@/server/relay/secret-columns";
+import { apiSessionOnTarget, pairPresentPhone, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { ApiBackedTargetError, KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readFirstInput, readPooledKey, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CODE_GRACE_AFTER_FINISH_MINUTES, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
@@ -56,6 +56,7 @@ import {
 import { reissueStreamCode } from "../stream-codes";
 import { createStreamTarget, listStreamTargets, patchStreamTarget, removeStreamTarget } from "../stream-targets";
 import { connect as connectYoutubeChannel } from "@/server/youtube/__tests__/_connect-rig";
+import { FakeYouTube } from "@/server/youtube/fake";
 import { getFixtureState } from "../fixtures";
 import { scoreEvent } from "../scoring";
 import {
@@ -107,10 +108,18 @@ const HAS_DB = !!process.env.DATABASE_URL;
 // and input would otherwise throw "RELAY_KEK is not set". The developer's is put back afterwards, or removed when there
 // was none — never assigned `undefined`, which Node stores as the string "undefined". It is never printed.
 const savedKek = process.env.RELAY_KEK;
-beforeAll(() => { process.env.RELAY_KEK = randomBytes(32).toString("hex"); });
+// YouTube Connect T11: a Go live on an API-backed destination opens the connection's sealed refresh token (YOUTUBE_TOKEN_KEK)
+// to prepare its broadcast — this file's own key, put back the same way.
+const savedTokenKek = process.env.YOUTUBE_TOKEN_KEK;
+beforeAll(() => {
+  process.env.RELAY_KEK = randomBytes(32).toString("hex");
+  process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
+});
 afterAll(() => {
   if (savedKek === undefined) delete process.env.RELAY_KEK;
   else process.env.RELAY_KEK = savedKek;
+  if (savedTokenKek === undefined) delete process.env.YOUTUBE_TOKEN_KEK;
+  else process.env.YOUTUBE_TOKEN_KEK = savedTokenKek;
   if (POOL_APP.saved === undefined) delete process.env.PGAPPNAME;
   else process.env.PGAPPNAME = POOL_APP.saved;
 });
@@ -334,8 +343,22 @@ async function rig(opts: { connectAfterMs?: number; overlay?: boolean; relay?: b
 }
 
 const body = (targetId: string, mode: "passthrough" | "composed" = "passthrough") => ({ mode, targetId });
-/** YouTube Connect T3: did a start get refused as "the destination is held"? (`null` = the start did not throw.) */
-const refusedAsHeld = (err: unknown) => (err as { code?: string } | null)?.code === "target_in_use";
+/** YouTube Connect T11: an API-backed destination that really STREAMS — a channel connected through the real save (so its
+ *  sealed token opens and Go live can prepare a broadcast), and `deps` with a FakeYouTube of this start's own. */
+async function streamingApiTarget(r: { auth: { orgId: string; userId: string } & Parameters<typeof organiserStart>[0] }, deps: SessionDeps) {
+  const c = await connectYoutubeChannel({ auth: r.auth, orgId: r.auth.orgId, userId: r.auth.userId });
+  return { targetId: c.targetId, deps: { ...deps, youtube: new FakeYouTube() } };
+}
+/** T3's API-door cases, tightened by T11 (post-T3 amendment): a start that gets past the doors is ADMITTED — exactly one
+ *  active session on the fixture, api_backed, naming the broadcast it streams into. */
+async function expectAdmittedOnApi(err: unknown, fixtureId: string): Promise<void> {
+  expect(err, `admitted on the API destination (got ${(err as Error | null)?.message ?? "no error"})`).toBeNull();
+  const rows = await sql<{ api_backed: boolean; youtube_broadcast_id: string | null }[]>`
+    select api_backed, youtube_broadcast_id from fixture_stream_sessions where fixture_id = ${fixtureId} and state in ${sql([...ACTIVE_STATES])}`;
+  expect(rows, "one active session").toHaveLength(1);
+  expect(rows[0]!.api_backed).toBe(true);
+  expect(rows[0]!.youtube_broadcast_id, "it streams into a prepared broadcast").not.toBeNull();
+}
 
 /** A7 (capture QR v2 T6) — this file's start helper. W5 refuses every organiser start with no present phone, and no start
  *  below except the W5 cases is ABOUT the phone: each re-beats its fixture's pairing on the start's OWN clock first (a
@@ -3931,25 +3954,26 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
   // YouTube Connect T3 (spec §5.2): the destination is the unit of exclusivity for PASTED rows only. One channel streams several
   // matches at once (the key pool exists for it), so each of the three destination doors — the active holder, the prior
   // Machine teardown, the prior output release — is narrowed to pasted targets, by the TARGET's source (`youtube_connection_id`),
-  // and each is a negative beside its positive twin on the same set-up. Until T11 admits an API target, a start that gets
-  // PAST the doors dies at the key read (`ApiBackedTargetError`); every API case here therefore asserts "not refused
-  // target_in_use" and what the door did or did not CALL, never what happens after it.
+  // and each is a negative beside its positive twin on the same set-up. T11 (post-T3 amendment): a start that gets PAST the
+  // doors on an API target is now ADMITTED into a prepared broadcast, so every API case asserts that real outcome
+  // (`expectAdmittedOnApi`) beside what the door did or did not CALL.
   it.each(["pasted", "api"] as const)("T3 holder door (%s): fixture B's start on a destination fixture A is actively streaming to is refused target_in_use ONLY when the destination is a pasted key — an API-backed one has no holder", async (kind) => {
     const { r, a, b } = await twoFixturesOneTarget();
     const exclusive = kind === "pasted";
-    const targetId = exclusive ? r.target.id : (await rigApiTarget(r.auth.orgId, "Channel")).targetId;
+    const api = exclusive ? null : await streamingApiTarget(r, r.deps);
+    const targetId = api?.targetId ?? r.target.id;
     const heldBy = exclusive
       ? (await createSession(r.auth, a, body(targetId), r.deps)).sessionId
       : await apiSessionOnTarget(r.auth.orgId, a, targetId, "live");
     expect(ACTIVE_STATES, "premise: A's session is active").toContain((await r.row(heldBy)).state);
     const ingestSpy = vi.spyOn(r.ingest, "createLiveInput");
     try {
-      const err = await createSession(r.auth, b, body(targetId), r.deps).then(() => null, (e: unknown) => e);
+      const err = await createSession(r.auth, b, body(targetId), api?.deps ?? r.deps).then(() => null, (e: unknown) => e);
       if (exclusive) {
         expect(err).toMatchObject({ status: 409, code: "target_in_use" });
         expect(ingestSpy, "the pasted refusal is early: no provider call").not.toHaveBeenCalled();
       } else {
-        expect(refusedAsHeld(err), `an API destination is not held by A (got ${(err as Error | null)?.message ?? "no error"})`).toBe(false);
+        await expectAdmittedOnApi(err, b);   // an API destination is not held by A: B streams beside it
       }
     } finally {
       ingestSpy.mockRestore();
@@ -3962,10 +3986,10 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
   async function zombieOn(kind: "pasted" | "api") {
     const z = await zombieOnTarget();
     if (kind === "pasted") return { ...z, targetId: z.r.target.id };
-    const { targetId } = await rigApiTarget(z.r.auth.orgId, "Channel");
+    const { targetId, deps } = await streamingApiTarget(z.r, z.flaky);
     const moved = await sql`update fixture_stream_sessions set target_id = ${targetId}, api_backed = true where id = ${z.old} returning id`;
     expect(moved, "premise: the ended session moved onto the API destination").toHaveLength(1);
-    return { ...z, targetId };
+    return { ...z, targetId, flaky: deps };
   }
 
   it.each(["pasted", "api"] as const)("T3 prior-Machine door (%s): another fixture's ENDED composed session with a Machine still listed on the SAME destination is destroyed (and holds the destination while that fails) ONLY for a pasted key — on an API destination B's admission destroys nothing and refuses nothing", async (kind) => {
@@ -3979,7 +4003,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the destination guard (one live se
       expect(destroyCalls.slice(callsBefore), "the pasted leftover is tried exactly once").toEqual([machine]);
       expect((await forceDestroysOf(old)).length, "…and recorded on A's ledger").toBe(eventsBefore + 1);
     } else {
-      expect(refusedAsHeld(err), `not held (got ${(err as Error | null)?.message ?? "no error"})`).toBe(false);
+      await expectAdmittedOnApi(err, b);
       expect(destroyCalls.slice(callsBefore), "nothing is destroyed on an API destination").toEqual([]);
       expect((await forceDestroysOf(old)).length, "…and nothing is recorded on A's ledger").toBe(eventsBefore);
       expect((await r.runner.list()).map((m) => m.runnerId), "A's Machine is left alone").toContain(machine);
@@ -4489,19 +4513,20 @@ describe.skipIf(!HAS_DB)("C1: a passthrough session's Cloudflare OUTPUT is remov
     expect((await facts(old)).output_uid, "premise: A recorded an output").not.toBeNull();
     const exclusive = kind === "pasted";
     let targetId = r.target.id;
+    let deps = cf.deps;
     if (!exclusive) {
-      targetId = (await rigApiTarget(r.auth.orgId, "Channel")).targetId;
+      ({ targetId, deps } = await streamingApiTarget(r, cf.deps));
       const moved = await sql`update fixture_stream_sessions set target_id = ${targetId}, api_backed = true where id = ${old} returning id`;
       expect(moved, "premise: the ended session moved onto the API destination").toHaveLength(1);
     }
     const before = (await releaseRows(old)).map((x) => `${x.result}:${x.reason}`);
-    const err = await createSession(r.auth, f2, body(targetId), cf.deps).then(() => null, (e: unknown) => e);
+    const err = await createSession(r.auth, f2, body(targetId), deps).then(() => null, (e: unknown) => e);
     const after = (await releaseRows(old)).map((x) => `${x.result}:${x.reason}`);
     if (exclusive) {
       expect(err).toMatchObject({ status: 409, code: "target_in_use" });
       expect(after, "the pasted leftover's release is retried once").toEqual([...before, "failed:admission"]);
     } else {
-      expect(refusedAsHeld(err), `not held (got ${(err as Error | null)?.message ?? "no error"})`).toBe(false);
+      await expectAdmittedOnApi(err, f2);
       expect(after, "an API destination's leftover output is not B's to retry").toEqual(before);
       expect((await facts(old)).output_released_at, "…and it is still owed").toBeNull();
     }
@@ -5236,17 +5261,11 @@ describe.skipIf(!HAS_DB)("T4: output {state, since} on the projection, and the s
   });
 });
 
-// YouTube Connect (T8 fix round 1, I2): B3 merges before T11, so until `prepare` replaces the key read an API-backed destination
-// (no key of its own) must meet Go live as the SAME clean refusal an unreadable key does — never ApiBackedTargetError's 500.
-describe.skipIf(!HAS_DB)("Go live on an API-BACKED destination (before T11's prepare)", () => {
-  const savedTokenKek = process.env.YOUTUBE_TOKEN_KEK;
-  beforeAll(() => { process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex"); });
-  afterAll(() => {
-    if (savedTokenKek === undefined) delete process.env.YOUTUBE_TOKEN_KEK;
-    else process.env.YOUTUBE_TOKEN_KEK = savedTokenKek;
-  });
-
-  it("an org whose ONLY destination is API-backed: Go live is 422 TARGET_UNREADABLE (not a 500) — twice — with no session row, the credit ledger unmoved, and NO provider call (addOutput 0); a pasted destination beside it still starts", async () => {
+// YouTube Connect T11 supersedes T8's interim refusal (T8 fix round 1, I2): an API-backed destination (no key of its own) is no
+// longer met with the pasted key's 422 TARGET_UNREADABLE — Go live prepares a broadcast and streams into it. The full suite is
+// stream-youtube-golive.test.ts; this is the regression twin of the test T8 wrote here, on the same set-up.
+describe.skipIf(!HAS_DB)("Go live on an API-BACKED destination (T11: streams into a prepared broadcast)", () => {
+  it("an org whose ONLY destination is API-backed: Go live is ADMITTED — never 422 TARGET_UNREADABLE — the session names its broadcast, and its one Cloudflare output carries that broadcast's pooled key", async () => {
     const rec = new FakeRecorder();
     const r = await rig({ credits: 1, recorder: rec });
     // The rig's pasted destination goes; the org's only one is the connected channel's (a real save, real rows).
@@ -5255,40 +5274,25 @@ describe.skipIf(!HAS_DB)("Go live on an API-BACKED destination (before T11's pre
     const [row] = await sql<{ youtube_connection_id: string | null }[]>`select youtube_connection_id from org_stream_targets where id = ${api.targetId}`;
     expect(row, "the fixture really is API-backed: a connection behind it").toMatchObject({ youtube_connection_id: api.connectionId });
     await expect(sql.begin((tx) => readTargetSecret(tx, r.auth.orgId, api.targetId)), "and no key of its own: the key reader says so by name").rejects.toBeInstanceOf(ApiBackedTargetError);
-    const money = async () => (await sql<{ n: number; net: number }[]>`
-      select count(*)::int as n, coalesce(sum(delta), 0)::int as net from org_stream_credits where org_id = ${r.auth.orgId}`)[0];
-    const before = await money();
-    expect(before!.net, "the rig's credit is there to be spent — or 'unmoved' could not fail").toBe(1);
-    // The runner the attempts are handed is NAMED, so the assertion below reads the instance that would have created one (r.runner is not it).
-    const refusedRunner = new FakeRunner({ recorder: rec });
-    const refusedDeps: SessionDeps = { ...r.deps, drivers: { ...r.deps.drivers, runner: refusedRunner } };
+    const youtube = new FakeYouTube();
+    // What Cloudflare is asked to publish to, as fingerprints (a key never reaches a failure message).
+    const fp = (t: { url: string; streamKey: string }) => createHash("sha256").update(`${t.url}\n${t.streamKey}`).digest("hex").slice(0, 12);
+    const published: string[] = [];
+    const addOutput = r.ingest.addOutput.bind(r.ingest);
+    r.ingest.addOutput = async (inputId, target, meta) => { published.push(fp(target)); return addOutput(inputId, target, meta); };
 
-    let refused = 0;
-    for (const attempt of ["first", "second"]) {
-      const err = await createSession(r.auth, r.fixtureId, body(api.targetId, "composed"), refusedDeps).then(() => null, (e: unknown) => e);
-      expect(err, `${attempt} Go live: a typed refusal, not the key reader's own error`).toBeInstanceOf(HttpError);
-      expect(err, attempt).toMatchObject({ status: 422, code: TARGET_UNREADABLE });
-      refused++;
-    }
-    expect(refused, "anti-vacuity: both attempts refused").toBe(2);
-    r.tick(3000);
-    expect(await currentSession(r.auth, r.fixtureId, refusedDeps), "nothing to project").toBeNull();
-    expect(await money(), "no credit spent, no ledger row").toEqual(before);
-    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from fixture_stream_sessions where org_id = ${r.auth.orgId}`;
-    expect(n, "no session row, in any state").toBe(0);
+    const err = await createSession(r.auth, r.fixtureId, body(api.targetId, "composed"), { ...r.deps, youtube }).then(() => null, (e: unknown) => e);
+    expect((err as { code?: string } | null)?.code, "never the pasted key's replace-the-key refusal").not.toBe(TARGET_UNREADABLE);
+    await expectAdmittedOnApi(err, r.fixtureId);
+    expect(youtube.calls.filter((c) => c.method === "insertBroadcast"), "one broadcast made at YouTube").toHaveLength(1);
     await new Promise((res) => setImmediate(res));
-    expect(rec.calls.filter((c) => c.operation === "addOutput"), "addOutput was never asked").toHaveLength(0);
-    expect(rec.calls.map((c) => c.operation), "the refusal is the probe's: no provider call of any kind").toEqual([]);
-    expect(refusedRunner.created, "no runner was created for the refused attempts (composed is the mode that creates one)").toEqual([]);
-
-    // The positive pair, through the SAME deps (recorder and runner instance) in the SAME mode: the org's PASTED destination starts,
-    // so the zeros above came from a recorder and a runner that DO see a start.
-    const pasted = await createStreamTarget(r.auth, r.auth.orgId, { kind: "youtube", label: "Pasted", streamKey: "yt-key" });
-    const { sessionId } = await createSession(r.auth, r.fixtureId, body(pasted.id, "composed"), refusedDeps);
-    expect((await r.row(sessionId)).state).toBe("warming");
-    await new Promise((res) => setImmediate(res));
-    expect(rec.calls.length, "the recorder sees the admitted start").toBeGreaterThan(0);
-    expect(refusedRunner.created, "the admitted composed start created its runner").toHaveLength(1);
+    expect(rec.calls.filter((c) => c.operation === "addOutput"), "one Cloudflare output").toHaveLength(1);
+    // ...and it carries THAT broadcast's pooled key — the one its row names, opened by the pool's own reader — not the rig's pasted key.
+    const [b] = await sql<{ key_id: string }[]>`select key_id from youtube_broadcasts where fixture_id = ${r.fixtureId}`;
+    const pooled = fp(await sql.begin((tx) => readPooledKey(tx, r.auth.orgId, b!.key_id)));
+    expect(published, "exactly one output published").toHaveLength(1);
+    expect(published[0], "the output carries the broadcast's pooled key").toBe(pooled);
+    expect(published[0], "and not a pasted key of the rig's").not.toBe(fp({ url: STREAM_PLATFORM_PRESETS.youtube, streamKey: "yt-key" }));
   });
 });
 

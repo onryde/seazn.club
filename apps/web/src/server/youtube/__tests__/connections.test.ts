@@ -26,7 +26,7 @@ import { startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { createStreamTarget, listStreamTargets } from "@/server/usecases/stream-targets";
 import { insertPending } from "@/server/youtube/connect-flow";
 import {
-  connectionViews, pendingChannels, pickYoutubeChannel, saveConnectionFromGrant, updateConnectionSettings,
+  connectionViews, pendingChannels, pickYoutubeChannel, recordLiveState, saveConnectionFromGrant, updateConnectionSettings,
 } from "@/server/youtube/connections";
 import { openToken, revokeConnection } from "@/server/youtube/token-store";
 import { SCOPE, channelId, colleague, connect, fake, grant, org, type Org } from "./_connect-rig";
@@ -48,7 +48,7 @@ afterEach(() => { consent.version = 1; });
 interface ConnRow {
   id: string; org_id: string; channel_id: string | null; channel_title: string | null; google_sub: string | null; granted_scope: string;
   default_privacy: string; made_for_kids: boolean; consent_by: string; consent_at: Date; consent_version: number; status: string;
-  status_since: Date; last_error_code: string | null; created_by: string; revoked_at: Date | null;
+  status_since: Date; last_error_code: string | null; last_health_at: Date | null; created_by: string; revoked_at: Date | null;
 }
 const connRows = (orgId: string) => sql<ConnRow[]>`select * from org_youtube_connections where org_id = ${orgId} order by created_at, id`;
 const connRow = async (id: string): Promise<ConnRow> => (await sql<ConnRow[]>`select * from org_youtube_connections where id = ${id}`)[0]!;
@@ -554,11 +554,12 @@ describe.skipIf(!HAS_DB)("updateConnectionSettings", () => {
     expect(await connRow(c.connectionId)).toEqual(before);
   });
 
-  it("the reply is the Streaming page's view of the connection: channel title, privacy, kids flag, status, live state, terms, open broadcasts", async () => {
+  it("the reply is the Streaming page's view of the connection: the channel's id and title, privacy, kids flag, status, live state, terms, open broadcasts", async () => {
     const o = await org();
-    const c = await connect(o, { channels: [{ id: channelId(), title: "Rovers TV" }], madeForKids: true });
+    const id = channelId();
+    const c = await connect(o, { channels: [{ id, title: "Rovers TV" }], madeForKids: true });
     expect(await updateConnectionSettings(o.auth, o.orgId, c.connectionId, { privacy: "private" })).toEqual({
-      connectionId: c.connectionId, channelTitle: "Rovers TV", privacy: "private", madeForKids: true, status: "connected",
+      connectionId: c.connectionId, channelId: id, channelTitle: "Rovers TV", privacy: "private", madeForKids: true, status: "connected",
       liveState: "unknown", termsOutdated: false, openBroadcasts: 0,
     });
   });
@@ -648,6 +649,43 @@ describe.skipIf(!HAS_DB)("the Streaming page's view of a connection", () => {
     expect(checked, "anti-vacuity: rows checked").toBe(10);
   });
 
+  it("recordLiveState (B4 fix round 1, I-2): a code and a stamp on a CONNECTED row of THIS org read back as the page's own liveState; null clears the code (and is itself a check); a foreign org's id, and a dead grant, are written nothing (5 rows checked)", async () => {
+    const o = await org();
+    const other = await org();
+    const c = await connect(o);
+    const state = async () => (await connectionViews(o.orgId)).get(c.connectionId)!.liveState;
+    const stamp = async () => (await connRow(c.connectionId)).last_health_at;
+    expect(await state(), "empty case: never checked").toBe("unknown");
+    expect(await stamp()).toBeNull();
+    let checked = 0;
+
+    // [code, the page's word] — typed from spec §6.9, not read from the writer.
+    for (const [code, word] of [["youtube_live_not_enabled", "not_enabled"], ["youtube_live_blocked", "blocked"]] as const) {
+      expect(await recordLiveState(sql, o.orgId, c.connectionId, code), code).toBe(true);
+      expect(await state(), code).toBe(word);
+      expect((await connRow(c.connectionId)).last_error_code, code).toBe(code);
+      checked++;
+    }
+    const blockedAt = (await stamp())!;
+    expect(await recordLiveState(sql, o.orgId, c.connectionId, null)).toBe(true);
+    expect(await state(), "a clean bind clears it").toBe("enabled");
+    expect((await connRow(c.connectionId)).last_error_code).toBeNull();
+    expect((await stamp())!.getTime(), "…and is a check of its own").toBeGreaterThanOrEqual(blockedAt.getTime());
+    checked++;
+
+    // Negative pairs: another org's call, and a dead grant, write nothing.
+    const before = await connRow(c.connectionId);
+    expect(await recordLiveState(sql, other.orgId, c.connectionId, "youtube_live_blocked")).toBe(false);
+    expect(await connRow(c.connectionId), "a foreign org changed nothing").toEqual(before);
+    checked++;
+    await sql`update org_youtube_connections set status = 'reconnect_needed', status_since = now() where id = ${c.connectionId}`;
+    const dead = await connRow(c.connectionId);
+    expect(await recordLiveState(sql, o.orgId, c.connectionId, "youtube_live_blocked")).toBe(false);
+    expect(await connRow(c.connectionId), "a dead grant says nothing about live state").toEqual(dead);
+    checked++;
+    expect(checked, "anti-vacuity").toBe(5);
+  });
+
   it("openBroadcasts counts the connection's broadcasts that are neither complete nor failed ('ending' included), and no other connection's", async () => {
     const o = await org();
     const { fixtureId } = await startedDivisionWithFixture(o.auth);
@@ -683,7 +721,8 @@ describe.skipIf(!HAS_DB)("the Streaming page's view of a connection", () => {
 describe.skipIf(!HAS_DB)("the Streaming page's destination list (listStreamTargets)", () => {
   it("an API row carries the connection's view, keyHint null, inUse null and no watch link; a pasted row beside it carries youtube null", async () => {
     const o = await org();
-    const c = await connect(o, { channels: [{ id: channelId(), title: "Rovers TV" }], privacy: "public" });
+    const id = channelId();
+    const c = await connect(o, { channels: [{ id, title: "Rovers TV" }], privacy: "public" });
     const pasted = await createStreamTarget(o.auth, o.orgId, { kind: "youtube", label: "Court 1", streamKey: `key-${randomBytes(12).toString("hex")}` });
 
     const list = await listStreamTargets(o.auth, o.orgId);
@@ -692,10 +731,14 @@ describe.skipIf(!HAS_DB)("the Streaming page's destination list (listStreamTarge
     expect(api).toMatchObject({
       kind: "youtube", label: "Rovers TV", watchUrl: null, keyHint: null, inUse: null,
       youtube: {
-        connectionId: c.connectionId, channelTitle: "Rovers TV", privacy: "public", madeForKids: false, status: "connected", liveState: "unknown",
+        connectionId: c.connectionId, channelId: id, channelTitle: "Rovers TV", privacy: "public", madeForKids: false, status: "connected", liveState: "unknown",
         termsOutdated: false, openBroadcasts: 0,
       },
     });
+    // The view carries the channel's PUBLIC id for the logo link, and nothing secret: no token, no grant, no Google subject.
+    const keys = Object.keys(api.youtube!).sort();
+    expect(keys).toEqual(["channelId", "channelTitle", "connectionId", "liveState", "madeForKids", "openBroadcasts", "privacy", "status", "termsOutdated"]);
+    expect(JSON.stringify(api)).not.toMatch(/token|google_sub|refresh/i);
     const paste = list.find((t) => t.id === pasted.id)!;
     expect(paste.youtube).toBeNull();
     expect(typeof paste.keyHint).toBe("string");

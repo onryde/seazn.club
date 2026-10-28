@@ -29,7 +29,12 @@ import { fetchRelayCheckoutClientSecret } from "@/lib/billing-checkout-client";
 import { captureQrV2Text, type CaptureQrV2 } from "@/lib/capture-qr";
 import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
-import { PlatformMark, platformName } from "./stream-platform-mark";
+import { FixtureDestinationPicker } from "./fixture-destination-picker";
+import { platformName } from "./stream-platform-mark";
+import { YoutubeIcon } from "./youtube-icon";
+import { ReplayCopyButton } from "./stream-replay-copy";
+import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "./refusal-focus";
+import { channelStatus, youtubeTargetLabel } from "./youtube-connect-panel";
 import { D3Warning, PhoneStripView, SignalChain } from "./stream-signal-chain";
 import { SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
 import { useProvidedPhoneSession, useSharedPhoneSession } from "./stream-session-provider";
@@ -64,6 +69,7 @@ import {
   createErrorIsNotFound,
   createErrorText,
   d3Warning,
+  autoDestinationOf,
   autoRefusalStrip,
   AUTO_WONT_START_KEY,
   autoSwitchNote,
@@ -78,6 +84,8 @@ import {
   composedSessionOpen,
   readyStateOf,
   restartLine,
+  YOUTUBE_REFUSAL_FIX,
+  youtubeRefusalOf,
   type CreateFailureCode,
   type CreateErrorHolder,
   type PhoneTabState,
@@ -85,7 +93,7 @@ import {
 } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { fmtNumber, fmtTime } from "@/lib/format";
-import { STREAMING_PAGE_HREF } from "@/lib/youtube";
+import { STREAMING_PAGE_HREF, YOUTUBE_REFUSAL_REMEDY, isYoutubeUrl, type YoutubeRefusalCode } from "@/lib/youtube";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamMode, StreamPhone, StreamSessionCurrent, StreamTarget } from "@/server/api-v1/schemas";
 
@@ -725,12 +733,21 @@ export function PhoneStopProbe({ fixtureId, label }: { fixtureId: string; label?
       )}
       {s.state === "ending" && (
         <p data-testid="stream-ending" className="text-xs text-slate-600">
-          {msg("stream.phone.ending", { destination: v.target.label })}
+          {msg("stream.phone.ending", { destination: youtubeTargetLabel(msg, v.target.label) })}
         </p>
       )}
       {s.stopFailed && stopError(msg, s.state)}
     </div>
   );
+}
+
+/** Has the fact a `fix_destination` YouTube refusal reported been put right, as this fresh list reads it? A dead grant (`reconnect_needed`)
+ *  is mended the moment the connection reads `connected` — whatever its `liveState`: a reconnect resets that to `unknown` until a health
+ *  check has run since the token changed (server/youtube/connections.ts `liveStateOf`), so waiting for `enabled` would keep the block
+ *  over a channel the organiser had just reconnected. The other two (not enabled for live, restricted) are about the channel's live
+ *  state, which only a clean check (`enabled`, tone `ok`) can mend. */
+export function youtubeRefusalIsStale(refusal: YoutubeRefusalCode, y: NonNullable<StreamTarget["youtube"]>): boolean {
+  return refusal === "youtube_reconnect_needed" ? y.status === "connected" : channelStatus(y).tone === "ok";
 }
 
 /**
@@ -817,6 +834,8 @@ export function PhoneTab({
   const pickedHere = useRef(false);
   // B8 re-review n-5: the last pick's save failed — the picker went back to the server's answer, and says so.
   const [pickFailed, setPickFailed] = useState(false);
+  // YouTube Connect T12: each "Use another destination" on a YouTube refusal bumps this; the picker opens on the change.
+  const [pickerOpenSignal, setPickerOpenSignal] = useState(0);
   const serverPick = useRef<string | null>(null);
   const listShown = useRef<StreamTarget[] | null>(null);
   const settleSelection = useCallback((): string | null => {
@@ -862,6 +881,16 @@ export function PhoneTab({
         // and only here, where the list's `inUse` is fresh.
         const shownTarget = next === null ? undefined : list.find((t) => t.id === next);
         setCreateError((e) => (e?.code === "target_in_use" && !shownTarget?.inUse ? null : e));
+        // YouTube Connect T12 (fix round 1, I2): a refusal that was about the CHANNEL's own state (a dead grant, not yet enabled for
+        // live, restricted — `fix_destination`) goes stale once the fix is made elsewhere: the organiser reconnected on the Streaming
+        // page and came back, and this read finds the channel healthy (or the destination gone). Judged on the SHOWN selection, here
+        // where the list is fresh. A refusal that is still true (the channel still reads unhealthy) stays, and so does every
+        // retry-class one (quota, ten live, YouTube silent): those carry their own Try again.
+        setCreateError((e) => {
+          const refusal = e === null ? null : youtubeRefusalOf(e.code);
+          if (refusal === null || YOUTUBE_REFUSAL_REMEDY[refusal] !== "fix_destination") return e;
+          return shownTarget?.youtube && !youtubeRefusalIsStale(refusal, shownTarget.youtube) ? e : null;
+        });
         // B5 review m-2: an EMPTY list has nothing to "pick another" from — the empty state (No destinations yet + Manage)
         // says what to do, and a "removed" line kept past it would later sit beside an enabled Go live.
         if (list.length === 0) setCreateError((e) => (e?.code === TARGET_REMOVED ? null : e));
@@ -1218,14 +1247,14 @@ export function PhoneTab({
         // is exactly what the next start is asking about. No session ever → nothing consumed → no window (W23).
         restart={view?.restart ?? null}
         pickFailed={pickFailed}
-        // n1: a pick is the organiser's own answer — the refusal that was about the previous choice (removed, or held by
-        // another match) goes with it. Any other refusal stays until the next attempt. (The hold needs no reset: a picked
+        // n1: a pick is the organiser's own answer — the refusal that was about the previous choice (removed, held by
+        // another match, or refused by YouTube — T12) goes with it. Any other refusal stays until the next attempt. (The hold needs no reset: a picked
         // selection only empties again through another removal, which holds it again.)
         onSelectTarget={(id) => {
           pickedHere.current = true;
           selectedRef.current = id;
           setSelectedTargetId(id);
-          setCreateError((e) => (e && (e.code === TARGET_REMOVED || e.code === "target_in_use") ? null : e));
+          setCreateError((e) => (e && (e.code === TARGET_REMOVED || e.code === "target_in_use" || youtubeRefusalOf(e.code) !== null) ? null : e));
           setPickFailed(false);
           // §6.7.3: the picker writes the fixture's pre-pick on change — what the phone's own start streams to. A PICK is
           // the only write: opening the panel, or following the server's answer, saves nothing (I-1).
@@ -1239,6 +1268,11 @@ export function PhoneTab({
             setPickFailed(true);
           });
         }}
+        onPickAnother={() => {
+          setCreateError(null);
+          setPickerOpenSignal((n) => n + 1);
+        }}
+        pickerOpenSignal={pickerOpenSignal}
         onRetryTargets={() => setTargetsTry((n) => n + 1)}
         onGoLive={() => void onGoLive()}
         onStop={() => {
@@ -1666,6 +1700,10 @@ export interface PhoneTabBodyProps {
    *  waive the credit for; at balance 0 it is what keeps Go live reachable instead of the forced chooser. */
   restart: StreamSessionCurrent["restart"];
   onSelectTarget: (id: string) => void;
+  /** YouTube Connect T12: a refusal's "Use another destination" — the panel clears the refusal and bumps `pickerOpenSignal`, which
+   *  opens the picker's list and focuses it. */
+  onPickAnother: () => void;
+  pickerOpenSignal: number;
   /** B8 re-review n-5: the last pick did not save — the picker shows the server's answer again, and a line says why. */
   pickFailed: boolean;
   /** Re-read the destination list after a failed read. */
@@ -1697,11 +1735,6 @@ const PILL: Record<PhoneTabState, string> = {
 };
 
 const CHIP = "rounded-md bg-slate-100 px-2 py-1 text-[11px] text-slate-700";
-/** A select or input: the 44-px phone floor, and `.input`'s own focus ring (globals.css) — no new focus style. `min-w-0`
- *  (B7) so a native select with a long option shrinks to its box instead of setting it. */
-const FIELD =
-  "min-h-11 w-full min-w-0 rounded-md border border-slate-200 bg-white text-sm text-slate-800 outline-none focus:border-purple-500 focus:ring-2 focus:ring-purple-200";
-
 /** §8a: solid red, deliberately NOT `.btn-danger` (a white outline) — the one irreversible control on a panel that is
  *  on air. It opens the repo's confirm dialog. Shared by the tab and the stop probe (G2). */
 const STOP_BUTTON =
@@ -1837,7 +1870,6 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const stopFailure = p.stopFailed ? stopError(msg, state) : null;
   const targetList = p.targets.status === "ok" ? p.targets.list : [];
   const selected = targetList.find((t) => t.id === p.selectedTargetId);
-  const optionText = (t: StreamTarget) => `${t.label} (${platformName(msg, t.kind)})`;
   // A target_in_use refusal whose holder still has a page to open (T8): the Open Match link.
   const inUseHolder = p.createError?.code === "target_in_use" ? p.createError.holder : null;
   // §3.2: the Signal path is drawn to the session's destination, or — with none — to the picked one. Neither (credits
@@ -1854,7 +1886,10 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // Option B rev 2: the phone's one message, in a strip under the chain (caret on the Phone node). Go live names it.
   // PR-2 (§7.4): credits only (B3) still says why an automatic start did not begin — the refusal alone; the tiles are its
   // remedy, so the strip offers no second Buy credits.
-  const strip = matchOver ? null : creditsOnly ? autoRefusalStrip(p.phone) : phoneStrip(p.phone, p.view);
+  // B4 fix round 1 (I-2): the automatic start's refusal is stored as one of the column's few words; read against the destination the
+  // server resolved for it (a connected channel, with its own live state) it says the real reason.
+  const autoDest = autoDestinationOf(p.phone, targetList);
+  const strip = matchOver ? null : creditsOnly ? autoRefusalStrip(p.phone, autoDest) : phoneStrip(p.phone, p.view, autoDest);
   const stripBuy = buyCard ? undefined : p.onShowBuy;
   // PR-2 T12 (§7.5): the takeover notice — the server's 30 minutes, this viewer's dismissal, the button to press first
   // (Stop live, Cancel while waiting). Only where Revoke & reissue is in reach (the fold or the code card): not credits
@@ -1872,9 +1907,16 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const summary = state === "ended" || state === "failed";
   const pickerId = `stream-target-${p.fixtureId}`;
   const inUseId = `stream-in-use-${p.fixtureId}`;
+  const refusalId = `stream-youtube-refusal-${p.fixtureId}`;
   // Mockup state 5: a target_in_use refusal at Ready is drawn on the picker — the red field, the box under it, and Go
-  // live held until the organiser picks again (or the destination is freed).
+  // live held. The hold lifts when the destination is freed (a fresh list read), when the organiser picks a DIFFERENT
+  // destination, or on a reload; re-picking the held one is a no-op (the picker saves nothing for the selected row).
   const inUseBox = state === "idle" && !buyCard && p.createError?.code === "target_in_use";
+  // YouTube Connect T12 (spec §6.2, owner's Option B): a Go live that YouTube (or the channel's own state) refused is drawn at
+  // Ready where Go live was — the reason, "nothing was started or charged", and the fix that fits the cause — with the picker's
+  // field red above it. Only where the Ready block is drawn; anywhere else the refusal falls to the generic line at the bottom.
+  const ytRefusal = state === "idle" && !buyCard && !matchOver && p.createError ? youtubeRefusalOf(p.createError.code) : null;
+  const ytRefusalBox = ytRefusal !== null;
   // Spec §3.1: "Uses 1 credit · {n} credits · Buy more" — three parts, never one interpolated sentence (word order and
   // plural agreement differ by locale). "Uses 1 credit" only while Go live is the action under it and the start would
   // spend one (not inside the reuse window, I-1). The balance keeps the plural key's own text (`stream.phone.credits.*`
@@ -2108,6 +2150,69 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // §7.4 "behind a tap" (Q-D): the phone's data used and app version, after the runner's chips in Details (Live/Ending).
   const extraChips = phoneDetails(p.phone);
 
+  // T8: only a LOADED, non-empty list can start — `targetList` is empty while the read is pending or failed, so a failed or pending
+  // read offers nothing to stream to, and neither does a selection left over from before. Mockup state 5: a destination another
+  // match holds cannot start until it is picked again or freed. §6.12 (W5): and only with a phone paired and answering.
+  const goLiveDisabled = p.busy || !p.selectedTargetId || targetList.length === 0 || inUseBox || !canGoLive(ready);
+  const refusalFix = ytRefusal ? YOUTUBE_REFUSAL_FIX[ytRefusal] : null;
+  const refusalBlock =
+    ytRefusal && p.createError ? (
+      // Focus goes to the BLOCK when it appears (it replaced the Go live the organiser had just pressed): the block commits while the
+      // start is still in flight, so Try again is disabled then — focusing a button would land on a different one. One Tab reaches the first
+      // enabled action. The key makes each refusal — another code, or the same one after Try again — focus again (refusal-focus.tsx).
+      <div
+        key={ytRefusal}
+        ref={focusRefusalBlock}
+        tabIndex={-1}
+        id={refusalId}
+        data-testid="stream-youtube-refusal"
+        data-code={ytRefusal}
+        data-fix={refusalFix ?? undefined}
+        role="alert"
+        className={`min-w-0 rounded-lg border border-red-200 bg-red-50 p-3.5 text-sm text-red-800 ${REFUSAL_FOCUS_RING}`}
+      >
+        {selected && (
+          <p className="flex gap-2 font-semibold">
+            <CircleAlert aria-hidden className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.8} />
+            <span data-testid="stream-youtube-refusal-title" className="min-w-0 [overflow-wrap:anywhere]">
+              {msg("stream.youtube.refused.title", { label: youtubeTargetLabel(msg, selected.label) })}
+            </span>
+          </p>
+        )}
+        <p data-testid="stream-create-error" className="mt-1">
+          {createErrorText(p.createError, msg)}
+        </p>
+        <p data-testid="stream-youtube-refusal-note" className="mt-1">
+          {msg("stream.youtube.refused.nothing")}
+        </p>
+        {refusalFix === "reconnect" && (
+          <a
+            data-testid="stream-youtube-reconnect"
+            href={STREAMING_PAGE_HREF}
+            target="_blank"
+            rel="noopener"
+            className="btn btn-primary mt-3 min-h-12 w-full text-base"
+          >
+            {msg("stream.youtube.refused.reconnect")}
+            <ExternalLink aria-hidden className="h-4 w-4" strokeWidth={1.8} />
+          </a>
+        )}
+        {refusalFix === "retry" && (
+          <button type="button" data-testid="stream-youtube-retry" disabled={goLiveDisabled} onClick={p.onGoLive} className="btn btn-primary mt-3 min-h-12 w-full text-base">
+            {msg("stream.youtube.refused.retry")}
+          </button>
+        )}
+        <button
+          type="button"
+          data-testid="stream-youtube-pick-another"
+          onClick={p.onPickAnother}
+          className="mt-1.5 inline-flex min-h-11 w-full items-center justify-center text-sm font-medium text-red-800 underline decoration-red-300 underline-offset-2 hover:decoration-red-700"
+        >
+          {msg("stream.youtube.refused.pickAnother")}
+        </button>
+      </div>
+    ) : null;
+
   return (
     // P5: the root marker the chooser's Close looks Buy more up from.
     <div data-phone-body>
@@ -2119,7 +2224,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       {/* §3.2 (T9a): the Signal path replaces §8a's stepper — one drawing at every width; only its destination label
           moves (under its node at ≥ 768, its own line below). None at all while credits-only (B3). */}
       {drawn?.chain && (
-        <SignalChain chain={drawn.chain} destination={{ kind: drawn.to.kind, label: drawn.to.label }}>
+        <SignalChain chain={drawn.chain} destination={{ kind: drawn.to.kind, label: youtubeTargetLabel(msg, drawn.to.label) }}>
           {strip && <PhoneStripView id={stripId} strip={strip} caret onBuy={stripBuy} />}
         </SignalChain>
       )}
@@ -2215,44 +2320,16 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                 {msg("stream.dest.empty")}
               </p>
             ) : p.targets.status === "ok" ? (
-              // Mockup state 1: the platform's mark inside the field, a chevron at its end. `min-w-0` down the chain and
-              // `pr-9` so a long label stops before the chevron instead of running under it (B7, the 320 picker).
-              <div className="relative mt-1 min-w-0">
-                {selected && (
-                  <span className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2">
-                    <PlatformMark kind={selected.kind} size="sm" />
-                  </span>
-                )}
-                <select
+              // Owner's Option B (YouTube Connect T12): a custom list — what each destination IS and how it is, before Go live.
+              <div className="mt-1 min-w-0">
+                <FixtureDestinationPicker
                   id={pickerId}
-                  data-testid="stream-target"
-                  // B7: a phone's native select clips a long label — the title still names the selection.
-                  title={selected ? optionText(selected) : undefined}
-                  value={p.selectedTargetId ?? ""}
-                  onChange={(e) => p.onSelectTarget(e.target.value)}
-                  aria-invalid={inUseBox || undefined}
-                  aria-describedby={inUseBox ? inUseId : undefined}
-                  className={`${FIELD} appearance-none truncate pr-9 ${selected ? "pl-10" : "pl-3"} ${
-                    inUseBox ? "border-red-300 ring-1 ring-red-200" : ""
-                  }`}
-                >
-                  {!selected && (
-                    // n1: nothing picked (the choice was removed in Directory) — a placeholder, never a destination
-                    // chosen for them. Disabled, so it cannot be picked back.
-                    <option value="" disabled>
-                      {msg("stream.dest.pick")}
-                    </option>
-                  )}
-                  {targetList.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {optionText(t)}
-                    </option>
-                  ))}
-                </select>
-                <ChevronRight
-                  aria-hidden
-                  className="pointer-events-none absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 rotate-90 text-slate-600"
-                  strokeWidth={1.8}
+                  targets={targetList}
+                  selectedId={p.selectedTargetId}
+                  onSelect={p.onSelectTarget}
+                  invalid={inUseBox || ytRefusalBox}
+                  describedBy={inUseBox ? inUseId : ytRefusalBox ? refusalId : undefined}
+                  openSignal={p.pickerOpenSignal}
                 />
               </div>
             ) : null}
@@ -2307,21 +2384,20 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                   <span className="min-w-0">{msg("stream.mode.unavailable")}</span>
                 </p>
               )}
-              <button
-                type="button"
-                data-testid="stream-go-live"
-                data-mode={scoreMode}
-                // T8: only a LOADED, non-empty list can start — `targetList` is empty while the read is pending or failed, so a
-                // failed or pending read offers nothing to stream to, and neither does a selection left over from before.
-                // Mockup state 5: a destination another match holds cannot start until it is picked again or freed.
-                // §6.12 (W5): and only with a phone paired and answering — the strip above says why not.
-                disabled={p.busy || !p.selectedTargetId || targetList.length === 0 || inUseBox || !canGoLive(ready)}
-                aria-describedby={strip ? stripId : undefined}
-                onClick={p.onGoLive}
-                className="btn btn-primary min-h-12 w-full text-base"
-              >
-                {msg("stream.phone.goLive")}
-              </button>
+              {refusalBlock ?? (
+                <button
+                  type="button"
+                  data-testid="stream-go-live"
+                  data-mode={scoreMode}
+                  // `goLiveDisabled` (above): only a loaded, non-empty list, a free destination and a phone answering can start.
+                  disabled={goLiveDisabled}
+                  aria-describedby={strip ? stripId : undefined}
+                  onClick={p.onGoLive}
+                  className="btn btn-primary min-h-12 w-full text-base"
+                >
+                  {msg("stream.phone.goLive")}
+                </button>
+              )}
               {p.score.available && (
                 // Option C: the secondary choice is a small link under the ONE Go live — Camera only, or the score back.
                 <div className="flex justify-center">
@@ -2342,7 +2418,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                   {msg("stream.mode.saveFailed")}
                 </p>
               )}
-              {creditsLine}
+              {!refusalBlock && creditsLine}
             </div>
           </div>
         </div>
@@ -2395,7 +2471,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             </div>
           ) : (
             <p data-testid="stream-ending" className="text-xs text-slate-600">
-              {msg("stream.phone.ending", { destination: p.view.target.label })}
+              {msg("stream.phone.ending", { destination: youtubeTargetLabel(msg, p.view.target.label) })}
             </p>
           )}
           {state === "live" && p.view.mode === "composed" && (
@@ -2483,18 +2559,34 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             )}
           </div>
           {restartEl}
+          {p.view.replayUrl && (
+            // Owner's Option B (YouTube Connect T12): the replay is a row — when it ran, then Watch replay and Copy link. A YouTube
+            // destination's link wears the official icon (inside the link, so the mark is clickable and leads to YouTube).
+            <div data-testid="stream-replay-row" className="min-w-0 space-y-2 rounded-lg border border-slate-200 p-3">
+              {p.view.startedAt !== null && (
+                <p data-testid="stream-replay-times" className="text-sm text-slate-700">
+                  {p.view.endedAt
+                    ? msg("stream.replay.times", { start: fmtTime(p.tz, p.view.startedAt), end: fmtTime(p.tz, p.view.endedAt) })
+                    : msg("stream.replay.timesOpen", { start: fmtTime(p.tz, p.view.startedAt) })}
+                </p>
+              )}
+              <div className="flex flex-col gap-2 md:flex-row">
+                <a
+                  data-testid="stream-replay"
+                  href={p.view.replayUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="btn btn-ghost min-h-11 w-full gap-2.5 md:min-h-10 md:w-auto"
+                >
+                  {/* The mark follows the LINK, not the destination: a club's own stream_url is never overwritten with YouTube's. */}
+                  {isYoutubeUrl(p.view.replayUrl) && <YoutubeIcon size="sm" />}
+                  {msg("stream.phone.replay")}
+                </a>
+                <ReplayCopyButton url={p.view.replayUrl} />
+              </div>
+            </div>
+          )}
           <div className="flex flex-col gap-2 md:flex-row">
-            {p.view.replayUrl && (
-              <a
-                data-testid="stream-replay"
-                href={p.view.replayUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="btn btn-ghost min-h-11 w-full md:min-h-10 md:w-auto"
-              >
-                {msg("stream.phone.replay")}
-              </a>
-            )}
             <button
               type="button"
               data-testid="stream-again"
@@ -2532,7 +2624,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
       {stopFailure && <div className="mt-3">{stopFailure}</div>}
 
       {/* A refused create — in whatever state the refusal left the tab. An in-use refusal at Ready is under the picker. */}
-      {p.createError && !inUseBox && (
+      {p.createError && !inUseBox && !ytRefusalBox && (
         <p data-testid="stream-create-error" role="alert" className="mt-3 text-xs text-red-700">
           {createErrorText(p.createError, msg)}
         </p>

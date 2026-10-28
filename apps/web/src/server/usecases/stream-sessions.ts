@@ -48,8 +48,11 @@ import { elapsedMinutesSince, endedReservationMinutes, headroomAfterReservations
 import { composedUnavailable, relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import {
-  ApiBackedTargetError, TargetSecretUnreadableError, lockStreamTarget, readCameraPlayback, readFirstInput, readTargetSecret, storeInputCredentials, storePlaybackCredentials, wipeStreamCodeTok,
+  TargetSecretUnreadableError, lockStreamTarget, readCameraPlayback, readFirstInput, readPooledKey, readTargetSecret, storeInputCredentials, storePlaybackCredentials, wipeStreamCodeTok,
 } from "@/server/relay/secret-columns";
+import { youtubeDriver } from "@/server/youtube/driver";
+import type { YouTubePort } from "@/server/youtube/port";
+import { abandonPrepared, attachPrepared, prepareYoutubeBroadcast, youtubeRefusal } from "@/server/youtube/prepare";
 import { scrubBeatText } from "@/server/relay/sanitise";
 import { CAMERA_LIVE_PHASE, PROGRAMME_PHASE_EVENT, latestLiveRung, recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
@@ -70,10 +73,15 @@ export { ACTIVE_STATES, TERMINAL_STATES };
  *  read) for these alone. The domain decides a consume only from `warming`, and states only move forward. */
 const CAN_STILL_CONSUME: readonly Session["state"][] = ["requested", "provisioning", "warming"];
 
-export interface SessionDeps { drivers: RelayDrivers; now: () => Date; appUrl: string }
+/** `youtube` (YouTube Connect T11): the port a Go live on an API-backed destination prepares its broadcast through. Optional
+ *  so a rig that streams only to pasted keys need not name one; absent, it is the process's driver (`youtubeOf`). */
+export interface SessionDeps { drivers: RelayDrivers; now: () => Date; appUrl: string; youtube?: YouTubePort }
 export function defaultDeps(appUrl: string): SessionDeps {
-  return { drivers: relayDrivers(), now: () => new Date(), appUrl };
+  // `youtube` is resolved when READ, not here: `youtubeDriver()` throws on a misspelt YOUTUBE_DRIVER, and every stream route
+  // builds these deps — a Stop or a heartbeat on a pasted-key match must not fail on a YouTube setting it never uses.
+  return { drivers: relayDrivers(), now: () => new Date(), appUrl, get youtube() { return youtubeDriver(); } };
 }
+const youtubeOf = (deps: SessionDeps): YouTubePort => deps.youtube ?? youtubeDriver();
 
 // ---------------------------------------------------------------------------
 // Persistence — the only SQL over fixture_stream_sessions' mutable columns.
@@ -161,6 +169,37 @@ async function lockRow(tx: Tx, id: string): Promise<Row | null> {
 async function readRow(id: string, exec: Tx | typeof sql = sql): Promise<Row | null> {
   const [row] = await exec<Row[]>`select ${cols()} from fixture_stream_sessions where id = ${id}`;
   return row ?? null;
+}
+
+/** What `readSessionDestination` needs of a session: its org, its destination row and the broadcast it streams into. */
+type DestinationRow = { org_id: string; target_id: string; youtube_broadcast_id: string | null };
+async function destinationRowOf(exec: Tx | typeof sql, sessionId: string): Promise<DestinationRow> {
+  const [row] = await exec<DestinationRow[]>`
+    select org_id, target_id, youtube_broadcast_id from fixture_stream_sessions where id = ${sessionId}`;
+  if (!row) throw new Error(`stream session ${sessionId} not found`);
+  return row;
+}
+
+/** YouTube Connect T11 (spec §5.2, §6.2): where a session's Cloudflare output goes, DECRYPTED for this request only. A session
+ *  that names a broadcast streams to that broadcast's POOLED key (`readPooledKey`), never a key of the destination's own (an
+ *  API-backed row has none); any other session to its pasted destination's key (`readTargetSecret`). Both reads are org-scoped,
+ *  and the broadcast is read with a plain select and no lock: its callers (the add_output effect, which runs after `apply`'s
+ *  commit, and the relay job's facts) hold no lock that the end step's broadcast → session order could cross (§6.3). A broadcast
+ *  with no key cannot have been attached (`attachPrepared` matches the key), so it is refused by name, never guessed. */
+export async function readSessionDestination(tx: Tx, row: DestinationRow): Promise<{ url: string; streamKey: string }> {
+  if (row.youtube_broadcast_id === null) return readTargetSecret(tx, row.org_id, row.target_id);
+  const [b] = await tx<{ key_id: string | null }[]>`
+    select key_id from youtube_broadcasts where id = ${row.youtube_broadcast_id} and org_id = ${row.org_id}`;
+  if (!b || b.key_id === null) throw new Error(`stream session: broadcast ${row.youtube_broadcast_id} has no pooled key to stream to`);
+  return readPooledKey(tx, row.org_id, b.key_id);
+}
+
+/** The LOCKED destination row's source (the caller holds `lockStreamTarget`'s lock): its connection when it is API-backed, else
+ *  null. What admission decides `api_backed` from (post-T3 amendment), so the session's flag and its target always agree. */
+async function targetConnectionId(tx: Tx, orgId: string, targetId: string): Promise<string | null> {
+  const [t] = await tx<{ connection_id: string | null }[]>`
+    select youtube_connection_id as connection_id from org_stream_targets where id = ${targetId} and org_id = ${orgId}`;
+  return t?.connection_id ?? null;
 }
 
 /** Persists the aggregate INCLUDING the runner sub-state — invariant 4: the
@@ -919,7 +958,8 @@ async function runEffects(session: Session, effects: Effect[], deps: SessionDeps
           // R2004: the session's OUTPUT input — passthrough's camera (the phone's input), composed's programme (Input B,
           // the compositor's), so a composed destination key reaches Cloudflare and never the Machine (spec §5.3).
           const input = await readFirstInput(tx, current.id, current.mode === "composed" ? "programme" : "camera");
-          return { inputId: input?.ingestInputId ?? null, target: await readTargetSecret(tx, current.orgId, (await readRow(current.id, tx))!.target_id) };
+          // T11: the pasted destination's key, or the pooled key of the broadcast an API-backed session streams into.
+          return { inputId: input?.ingestInputId ?? null, target: await readSessionDestination(tx, await destinationRowOf(tx, current.id)) };
         })) as { inputId: string | null; target: { url: string; streamKey: string } };
         if (inputId) {
           let outputUid: string;
@@ -1442,13 +1482,9 @@ function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headro
  *  remedy, logged with the fixture, target and kind only. Any other error (a missing RELAY_KEK is one: secret-columns
  *  rethrows it, M3) is returned unchanged for the caller to throw. */
 function unreadableRefusal(err: unknown, fixtureId: string, targetId: string): unknown {
-  // YouTube Connect: an API-backed destination has no key of its own to open, so a Go live on it would be ApiBackedTargetError's
-  // 500. It is the existing unreadable-destination refusal until T11 replaces this read with `prepare` (one pooled key per broadcast).
-  // The row's kind is `youtube` by construction (connections.ts ensureDestination), which is a platform: the "replace the key" remedy.
-  if (err instanceof ApiBackedTargetError) {
-    log.warn({ fixtureId, targetId, kind: "youtube" }, "stream session: the destination is API-backed and has no key to read — start refused until the broadcast path ships");
-    return TargetUnreadableError.forKind("youtube");
-  }
+  // YouTube Connect T11: an API-backed destination never reaches this read (both callers branch on the row's source first), so
+  // T8's interim mapping of its ApiBackedTargetError to the "replace the key" copy is gone — that remedy is meaningless for a
+  // connection. Were one ever to arrive, it is returned unchanged: a named 500, never the pasted key's copy.
   if (!(err instanceof TargetSecretUnreadableError)) return err;
   log.warn({ fixtureId, targetId, kind: err.kind }, "stream session: the saved destination will not open — start refused; the organiser replaces the key");
   return TargetUnreadableError.forKind(err.kind);
@@ -1464,12 +1500,38 @@ function unreadableRefusal(err: unknown, fixtureId: string, targetId: string): u
  *  destination model's DEST_REGRESSION_FA5_UNREADABLE (stream-sessions.test.ts). */
 async function refuseUnreadableTarget(
   orgId: string, fixtureId: string, targetId: string, admitsBarStorage: (activeSessionId: string | null) => boolean,
-): Promise<void> {
-  await sql.begin(async (tx) => {
-    if (!(await lockStreamTarget(tx, orgId, targetId))) return;
-    if (!admitsBarStorage(await activeSessionIdFor(fixtureId, tx))) return;
+): Promise<boolean> {
+  // YouTube Connect T11: answers whether the probe PASSED on this org's active row — the gate for preparing a broadcast, which
+  // must refuse nothing `admit` would answer first (F-A5) and must never be made for a start the admission is about to refuse.
+  return (await sql.begin(async (tx) => {
+    if (!(await lockStreamTarget(tx, orgId, targetId))) return false;
+    if (!admitsBarStorage(await activeSessionIdFor(fixtureId, tx))) return false;
+    // An API-backed row has no key of its own to open: its key is the pooled one `prepare` picks next, opened in admission.
+    if ((await targetConnectionId(tx, orgId, targetId)) !== null) return true;
     await readTargetSecret(tx, orgId, targetId).catch((err: unknown) => { throw unreadableRefusal(err, fixtureId, targetId); });
-  });
+    return true;
+  })) as boolean;
+}
+
+/** T11, post-T2 amendment: a pooled key that will not open under a valid RELAY_KEK (`TargetSecretUnreadableError`, kind
+ *  `youtube`, its id the KEY's) is never the pasted key's "replace the key" refusal — an API row has no key to replace. It is
+ *  `youtube_unavailable` (503) naming the connection; the caller's abandon then deletes the prepared broadcast. A missing or
+ *  malformed RELAY_KEK (rethrown by secret-columns, M3) and anything else is returned unchanged, for the caller to throw. */
+function pooledKeyRefusal(err: unknown, fixtureId: string, targetId: string, connectionId: string): unknown {
+  if (!(err instanceof TargetSecretUnreadableError)) return err;
+  log.warn({ fixtureId, targetId, keyId: err.targetId, connectionId }, "stream session: the broadcast's pooled stream key will not open — start refused youtube_unavailable");
+  return youtubeRefusal("youtube_unavailable", connectionId);
+}
+
+/** T11 (TEST-STRATEGY rule 4): the destination's source decides whether a broadcast was prepared, so a mismatch at the insert is
+ *  a caller bug, refused by name. Reachable only through a race the probe cannot see (its answer and the locked row's differ). */
+class PreparedMismatchError extends Error {
+  constructor(apiBacked: boolean, fixtureId: string, targetId: string) {
+    super(apiBacked
+      ? `startBroadcast: an API-backed destination reached the session insert with no prepared broadcast (fixture ${fixtureId}, target ${targetId})`
+      : `startBroadcast: a pasted destination reached the session insert with a prepared broadcast (fixture ${fixtureId}, target ${targetId})`);
+    this.name = "PreparedMismatchError";
+  }
 }
 
 export type { StartCause };
@@ -1722,12 +1784,29 @@ export async function startBroadcast(
   // this org's ACTIVE row (an archived or foreign id falls through to `admit`'s 404, never an oracle), only when `admit`
   // would otherwise pass (F-A5, see `refuseUnreadableTarget`), and the read inside the admission transaction stays the
   // authority for everything that row lock protects.
-  await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
+  const probed = await refuseUnreadableTarget(orgId, fixtureId, body.targetId, (activeSessionId) => admit({
     overlay, relay, balance, restartWithinReuseWindow, targetBelongsToOrg: true, phone: opts.phone, mode: body.mode, composedUnavailable: composedRunnerDown,
     headroomMinutes: reservationMinutes(body.mode, MAX_DURATION_MINUTES), maxDurationMinutes: MAX_DURATION_MINUTES,   // storage not weighed yet: it cannot refuse here (R2004: in either mode)
     activeSessionId: activeSessionId ?? priorMachineSessionId,
   }).ok);
-  const usage = await deps.drivers.ingest.storageUsage().then(storageUsageForColumns);   // outside the transaction; G7: fitted to the integer columns
+  // YouTube Connect T11 (spec §6.2): an API-backed destination streams into a broadcast prepared at YouTube HERE — once the
+  // probe has passed (so nothing `admit` answers first is outranked, F-A5), after the destination doors above (so a Stop → Go
+  // live inside the grace has released the prior output and torn down the prior Machine, and the key frees and is reused), and
+  // before the storage read. Outside every transaction: prepare holds no lock across a YouTube call. Null for a pasted row.
+  // Server-side only: neither the broadcast nor the Prepared ever comes from the request.
+  // The port is a THUNK (T11 fix round 1, m3): prepare resolves it only for an API row, so a misspelt YOUTUBE_DRIVER cannot fail a
+  // pasted-key Go live, phone start or automatic start. `abandonPrepared` below is reached only with a Prepared, i.e. an API row.
+  const youtube = () => youtubeOf(deps);
+  const prepared = probed ? await prepareYoutubeBroadcast({ orgId, fixtureId, targetId: body.targetId, now: deps.now(), startCause: opts.startCause }, youtube) : null;
+  // T11 (R12, spec §6.2): ANY throw between the prepare and the session's commit — the storage read, every admission refusal
+  // and the 23505 mappers below, a pooled key that will not open, a mismatch — abandons the prepared broadcast before it is
+  // rethrown: deleted at YouTube with its row `failed`, or a reused one's reservation released; never left "upcoming" for the
+  // orphan sweep. Chained AFTER the transaction has rolled back, so no lock is held across the YouTube call.
+  const abandonThenRethrow = async (err: unknown): Promise<never> => {
+    if (prepared !== null) await abandonPrepared(prepared, youtube());
+    throw err;
+  };
+  const usage = await deps.drivers.ingest.storageUsage().then(storageUsageForColumns).catch(abandonThenRethrow);   // outside the transaction; G7: fitted to the integer columns
   const viaOverride = relayOverride?.bool_value === true;
 
   const sessionId = await (sql.begin(async (tx) => {
@@ -1755,11 +1834,20 @@ export async function startBroadcast(
     // organiser's to fix, so it is a typed 422 naming the remedy — thrown inside this transaction, so no row is written
     // and nothing is spent (the credit is consumed only at live). M1: `refuseUnreadableTarget` already asked this before
     // the storage read; this read, under the row lock, stays the authority (a Replace key cannot interleave with it).
-    const saved = await readTargetSecret(tx, orgId, body.targetId).catch((err: unknown) => { throw unreadableRefusal(err, fixtureId, body.targetId); });
-    const destination = checkDestination(saved.url);
-    if (!destination.ok) {
-      log.warn({ fixtureId, targetId: body.targetId, rule: destination.rule }, "stream session: a saved destination the allowlist no longer admits — start refused");
-      throw new DestinationNotAllowedError(destination.rule);
+    // T11 (post-T3 amendment): the LOCKED row's source decides `api_backed`, so the session's flag and its target agree. An
+    // API-backed row has no saved key to re-check: its broadcast's pooled key is opened instead, so one that will not open is
+    // refused here — inside this transaction, before anything is written — as youtube_unavailable, never "replace the key".
+    const connectionId = await targetConnectionId(tx, orgId, body.targetId);
+    if ((connectionId !== null) !== (prepared !== null)) throw new PreparedMismatchError(connectionId !== null, fixtureId, body.targetId);
+    if (connectionId !== null && prepared !== null) {
+      await readPooledKey(tx, orgId, prepared.keyId).catch((err: unknown) => { throw pooledKeyRefusal(err, fixtureId, body.targetId, connectionId); });
+    } else {
+      const saved = await readTargetSecret(tx, orgId, body.targetId).catch((err: unknown) => { throw unreadableRefusal(err, fixtureId, body.targetId); });
+      const destination = checkDestination(saved.url);
+      if (!destination.ok) {
+        log.warn({ fixtureId, targetId: body.targetId, rule: destination.rule }, "stream session: a saved destination the allowlist no longer admits — start refused");
+        throw new DestinationNotAllowedError(destination.rule);
+      }
     }
     // Db + Dc: the ADMISSION SNAPSHOT, written in the same statement as the row it describes.
     // These are snapshot facts with no FKs (`fixture_id` already joins) — they answer "what was
@@ -1774,7 +1862,7 @@ export async function startBroadcast(
                                            storage_minutes_at_admission, reserved_minutes, destination_kind,
                                            sport_key, competition_id, division_id, fixture_scheduled_at,
                                            venue_id, venue_address, org_timezone, entitlement_via_override,
-                                           start_cause, code_id, pairing_id, overlay_delay_ms)
+                                           start_cause, code_id, pairing_id, overlay_delay_ms, api_backed, youtube_broadcast_id)
       select ${fixtureId}, ${orgId}, ${body.mode}, 'requested', ${body.targetId},
              -- R2004 decision 7: the organiser's template CHOICE is copied, never resolved here (a retired id still reads,
              -- then resolves at every reader); a themeId the create names wins. The running session never moves with it.
@@ -1792,7 +1880,10 @@ export async function startBroadcast(
                ? sql`0`
                : body.overlayDelayMs === undefined
                  ? sql`coalesce(st.overlay_delay_ms, ${RELAY_OVERLAY_DELAY_DEFAULT_MS}::int)`
-                 : sql`${body.overlayDelayMs ?? RELAY_OVERLAY_DELAY_DEFAULT_MS}::int`}
+                 : sql`${body.overlayDelayMs ?? RELAY_OVERLAY_DELAY_DEFAULT_MS}::int`},
+             -- T11 (post-T1 amendment): written ONCE, here, and never updated — V479's broadcast_implies_api_backed holds them
+             -- together, and the per-target index exempts an api_backed session from the moment it exists.
+             ${connectionId !== null}, ${prepared?.broadcastId ?? null}
         from fixtures f
         join divisions d on d.id = f.division_id
         join organizations o on o.id = ${orgId}
@@ -1806,6 +1897,8 @@ export async function startBroadcast(
     // session (composed: one whose overlay page would name no fixture). Inside the transaction: nothing is written.
     if (!s) throw new HttpError(404, "fixture not found");
     const sid = s.id;
+    // T11: the prepared broadcast goes live WITH its session — one transaction, so neither commits without the other.
+    if (prepared !== null) await attachPrepared(tx, prepared, sid);
     await tx`insert into fixture_stream_inputs (session_id, slot) values (${sid}, 0)`;   // M3: same transaction
     // R2004: a composed session's programme input (Input B) — the compositor publishes to it and the output attaches to it.
     if (body.mode === "composed") await tx`insert into fixture_stream_inputs (session_id, slot, role) values (${sid}, 0, 'programme')`;
@@ -1842,9 +1935,22 @@ export async function startBroadcast(
       throw new HttpError(409, "that destination is already streaming for another fixture", "target_in_use", { holder: null });
     }
     throw err;
-  });
+  }).catch(abandonThenRethrow);
 
-  await provisionSession(sessionId, deps);
+  try {
+    await provisionSession(sessionId, deps);
+  } catch (err) {
+    // T11 fix round 1 (I-1): the admission HAS committed, so `abandonThenRethrow` is behind us. When provisioning then deletes the
+    // session (Cloudflare refused the input: `provisionSession` removes the row and answers 503 ingest_unavailable), the FK nulls the
+    // broadcast's `last_session_id` and leaves a NEW broadcast `live` with no session: the end rule never ends it (no session has
+    // used it), its pooled key stays held, and it stays "upcoming" at YouTube (spec §6.2: deleted, never left upcoming).
+    // `abandonPrepared` fails and deletes it — and only a row with no session: one whose session still exists keeps its
+    // `last_session_id` and is left to that session's own end. A REUSED broadcast is left as it is, by `abandonPrepared`'s own
+    // reused branch (it releases a reservation and never deletes): its earlier sessions stay on it, so it stays `live` and the end
+    // rule ends it at their Stop + the grace; deleting it would delete a video that streamed.
+    if (prepared !== null) await abandonPrepared(prepared, youtube());
+    throw err;
+  }
   return { sessionId };
 }
 
@@ -2891,8 +2997,9 @@ export async function sessionFactsForJob(sessionId: string, token: string, deps:
   const pageToken = await mintRelayToken({ sid: sessionId, scope: "relay-page", expiresAt: relayTokenExpiry(s) });
   const base = { sessionId, fixtureId: s.fixtureId, mode: s.mode, themeId: row.theme_id, overlayDelayMs: row.overlay_delay_ms, maxDurationMinutes: s.maxDurationMinutes, pageToken };
   if (s.mode !== "composed") {
-    // Passthrough has no Machine; its shape is today's, for contract completeness.
-    const target = (await sql.begin((tx) => readTargetSecret(tx, s.orgId, row.target_id))) as { url: string; streamKey: string };
+    // Passthrough has no Machine; its shape is today's, for contract completeness. T11: an API-backed session's is its
+    // broadcast's pooled key — the same destination its Cloudflare output carries.
+    const target = (await sql.begin(async (tx) => readSessionDestination(tx, await destinationRowOf(tx, sessionId)))) as { url: string; streamKey: string };
     return { ...base, target };
   }
   // #981 follow-up (C07 review; coordinator decision): the overlay page is `/overlay/fixtures/<fixtureId>`, and a fixture

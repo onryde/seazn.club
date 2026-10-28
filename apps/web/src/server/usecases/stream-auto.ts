@@ -9,6 +9,7 @@ import "server-only";
 import { sql } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
+import { isYoutubeRefusalCode, YOUTUBE_REFUSAL_REMEDY } from "@/lib/youtube";
 import { log } from "@/server/logger";
 import { AUTO_START_RETRY_SECONDS, PHONE_SILENT_FLOOR_SECONDS, tunable } from "@/server/relay/config";
 import { autoStartVerdict, type AutoStartRefusal, type PhoneMode } from "@/server/relay/domain/auto-stream";
@@ -31,6 +32,10 @@ export type AutoStartResult =
 export function autoStartRefusalOf(err: unknown): AutoStartRefusal | "already_running" | null {
   if (err instanceof PaymentRequiredError) return "not_entitled";
   if (!(err instanceof HttpError)) return null;
+  // YouTube Connect T11 (fix round 1, I-2): an API-backed destination's start can be refused by YouTube or by the channel's pool
+  // (prepare.ts) — read from the ONE declaration. Stored, so the organiser's strip shows why nothing started (spec §6.2 D6), and
+  // never unmapped: an unmapped error is reported to Sentry on every retry.
+  if (isYoutubeRefusalCode(err.code)) return YOUTUBE_REFUSAL_REMEDY[err.code] === "fix_destination" ? "no_destination" : "unavailable";
   switch (err.code) {
     case "overlay_required": return "not_entitled";
     case "no_credits": return "no_credit";

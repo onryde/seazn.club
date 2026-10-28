@@ -27,7 +27,7 @@ import { messages } from "@/lib/messages";
 import { v1 } from "@/server/api-v1/http";
 import { CaptureNotReady, CapturePhoneState } from "@/server/api-v1/capture-schemas";
 import {
-  StreamEndReason, StreamFailReason, StreamIngest, StreamLostCountdown, StreamOutput, StreamSessionState, type StreamPhone,
+  StreamEndReason, StreamFailReason, StreamIngest, StreamLostCountdown, StreamOutput, StreamSessionState, type StreamPhone, type StreamTarget,
 } from "@/server/api-v1/schemas";
 import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usecases/stream-targets";
 import {
@@ -40,7 +40,11 @@ import {
   AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, AUTO_WONT_START_KEY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoOperatorHint, autoRefusalStrip, autoStopLine, autoSwitchNote,
   healthLine, phoneDetails, takeoverLineKey, takeoverNotice, type PhoneLinePart, type TakeoverAct,
   PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRefusal, readClearsW5, type CreateFailureCode, type PresenceWatch,
+  YOUTUBE_REFUSAL_FIX, youtubeRefusalOf, autoDestinationOf,
 } from "../stream-session-view";
+import { YOUTUBE_LIVE_STATE_OF_REFUSAL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, YOUTUBE_REFUSAL_REMEDY } from "../youtube";
+import { autoStartRefusalOf } from "@/server/usecases/stream-auto";
+import { youtubeRefusal } from "@/server/youtube/prepare";
 import fc from "fast-check";
 import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
 import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
@@ -216,6 +220,17 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["PAYMENT_REQUIRED streaming.relay", new PaymentRequiredError(RELAY_PLAN_GATES.relay), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED streaming.overlay", new PaymentRequiredError(RELAY_PLAN_GATES.overlay), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED, an unrelated feature", new PaymentRequiredError("formats.double_elim"), "unknown"],
+    // YouTube Connect T12 (spec §6.2): the six refusals the prepare step throws, each with the status the route's own documentation
+    // gives it (openapi.ts POST /fixtures/{id}/stream-sessions) and the connection in the extras.
+    ["youtube_reconnect_needed 409", new HttpError(409, "YouTube refused Go live: youtube_reconnect_needed", "youtube_reconnect_needed", { connectionId: "c-1" }), "youtube_reconnect_needed"],
+    ["youtube_live_not_enabled 409", new HttpError(409, "YouTube refused Go live: youtube_live_not_enabled", "youtube_live_not_enabled", { connectionId: "c-1" }), "youtube_live_not_enabled"],
+    ["youtube_live_blocked 409", new HttpError(409, "YouTube refused Go live: youtube_live_blocked", "youtube_live_blocked", { connectionId: "c-1" }), "youtube_live_blocked"],
+    ["youtube_limit_reached 429", new HttpError(429, "YouTube refused Go live: youtube_limit_reached", "youtube_limit_reached", { connectionId: "c-1" }), "youtube_limit_reached"],
+    ["youtube_channel_busy 409", new HttpError(409, "YouTube refused Go live: youtube_channel_busy", "youtube_channel_busy", { connectionId: "c-1" }), "youtube_channel_busy"],
+    ["youtube_unavailable 503", new HttpError(503, "YouTube refused Go live: youtube_unavailable", "youtube_unavailable", { connectionId: "c-1" }), "youtube_unavailable"],
+    // A youtube_* code this build has no copy for is the generic retry line — and its raw code is never shown (see the T12 describe).
+    ["a youtube_* code a newer server adds", new HttpError(409, "YouTube refused Go live: youtube_quota_week", "youtube_quota_week", { connectionId: "c-1" }), "unknown"],
+    ["a code that only STARTS with one of ours", new HttpError(409, "x", "youtube_unavailable_soon", { connectionId: "c-1" }), "unknown"],
     ["NOT_FOUND 404 (target_not_found)", new HttpError(404, "stream target not found"), "unknown"],
     ["FORBIDDEN 403 (no signed-in user)", new HttpError(403, "a signed-in organiser is required"), "unknown"],
     ["a code the union does not name", new HttpError(409, "session is not running", "not_active"), "unknown"],
@@ -281,7 +296,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     let checked = 0;
     for (const code of CREATE_ERROR_CODES) {
       if (code === "target_in_use") continue;
-      expect(createErrorText({ code, holder: null }, msg), code).toBe(msg(CREATE_ERROR_KEYS[code]));
+      // The busy sentence's `{max}` is the cap (lib/youtube.ts) — the one variable `createErrorText` fills; every other entry has none.
+      expect(createErrorText({ code, holder: null }, msg), code).toBe(msg(CREATE_ERROR_KEYS[code], { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL }));
       checked++;
     }
     expect(checked).toBe(CREATE_ERROR_CODES.length - 1);
@@ -1165,6 +1181,193 @@ describe("PR-2 §7.4 — the automatic start's refusal (served only while it cou
     ]);
   });
 
+  // B4 fix round 1, I-2: the stored word for "the club must fix its YouTube destination" is `no_destination` (the column's closed
+  // vocabulary), and for "retry" is `unavailable`. Read against a destination that is a connected channel, `no_destination` would say
+  // "no destination" beside a destination that is right there — so the strip reads the reason from the channel's OWN state, which the
+  // panel already holds. B4 fix round 2, F1: `unavailable` is ALSO what Seazn's own storage / ingest refusals store, so it is the one
+  // word the strip must never attribute to YouTube.
+  describe("the reason is the channel's own when the destination is a connected YouTube channel", () => {
+    type Y = NonNullable<StreamTarget["youtube"]>;
+    const ch = (over: Partial<Y> = {}): Y => ({
+      connectionId: "c-1", channelId: "UC7xK2mQ9rVbN4tLpA1sZ0wE", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled",
+      termsOutdated: false, openBroadcasts: 0, ...over,
+    });
+    const refused = (refusal: (typeof AUTO_START_REFUSALS)[number], youtube: Y | null | "no-destination") =>
+      autoRefusalStrip(
+        readModel({ auto: { enabled: true, refusal, wontStart: null, stopApplies: null } }),
+        youtube === "no-destination" ? null : { youtube },
+      )!;
+    const reasonKey = (refusal: (typeof AUTO_START_REFUSALS)[number], youtube: Y | null | "no-destination") =>
+      (refused(refusal, youtube).leadVars as { reason: string }).reason;
+    const sentence = (k: string) => msg("stream.auto.refused", { reason: msg(k) });
+
+    it("not enabled for live / restricted → the channel's own sentence, still with the Manage destinations remedy; the strip a customer reads (English) is typed here from the copy, not derived", () => {
+      expect(reasonKey("no_destination", ch({ liveState: "not_enabled" }))).toBe("stream.auto.refusal.youtube_live_not_enabled");
+      expect(reasonKey("no_destination", ch({ liveState: "blocked" }))).toBe("stream.auto.refusal.youtube_live_blocked");
+      expect(sentence(reasonKey("no_destination", ch({ liveState: "not_enabled" })))).toBe(
+        "Automatic start couldn't begin: This channel isn't enabled for live yet. YouTube can take up to 24 hours.",
+      );
+      expect(sentence(reasonKey("no_destination", ch({ liveState: "blocked" })))).toBe(
+        "Automatic start couldn't begin: YouTube has restricted live streaming on this channel.",
+      );
+      expect(refused("no_destination", ch({ liveState: "not_enabled" })).remedy, "the fix is still on the Streaming page").toBe("manage");
+    });
+
+    it("a retry-class refusal against a connected channel reads the line that names NO cause, whatever the channel's state; the same refusal against a pasted key keeps the generic words (F1: the stored word cannot say whose refusal it was)", () => {
+      let checked = 0;
+      for (const y of [ch({ liveState: "enabled" }), ch({ liveState: "unknown" }), ch({ liveState: "not_enabled" }), ch({ liveState: "blocked" }), ch({ status: "reconnect_needed" })]) {
+        expect(reasonKey("unavailable", y), `${y.status} / ${y.liveState}`).toBe("stream.auto.refusal.retry");
+        checked++;
+      }
+      expect(checked, "anti-vacuity: five channel states").toBe(5);
+      // What a customer reads (English), typed from the copy on purpose: the brief's sentence, and not a word about who refused.
+      expect(sentence("stream.auto.refusal.retry")).toBe("Automatic start couldn't begin: The stream couldn't start right now. Try again in a minute.");
+      // The brand appears in no locale's line: it is the one sentence that cannot know whose refusal it reports.
+      for (const l of LOCALES) expect(dict(l)["stream.auto.refusal.retry"], l).not.toMatch(/youtube/i);
+      // The paired cases keep Seazn's own generic sentence.
+      expect(reasonKey("unavailable", null), "a pasted key").toBe("stream.auto.refusal.unavailable");
+      expect(reasonKey("unavailable", "no-destination"), "no destination read").toBe("stream.auto.refusal.unavailable");
+    });
+
+    // The seam, driven through its REAL producer (TEST-STRATEGY: a fixture on both ends proves the fixture): every refusal a start can
+    // meet goes through `autoStartRefusalOf` — the mapper stream-auto.ts stores from, prepare's own `youtubeRefusal` for the YouTube
+    // ones — and the stored word it answers is read by the strip over a connected channel.
+    it("F1: Seazn's own storage_exhausted / ingest_unavailable over a YouTube destination never name YouTube, in any locale; a YouTube refusal the stored word cannot tell apart from them reads the SAME strip; the two channel-state refusals still name YouTube, and only from the channel's own state (positive pair)", () => {
+      const stored = (err: unknown): (typeof AUTO_START_REFUSALS)[number] => {
+        const w = autoStartRefusalOf(err);
+        if (w === null || w === "already_running") throw new Error(`the mapper stored nothing for ${String(err)}`);
+        return w;
+      };
+      const stripOver = (word: (typeof AUTO_START_REFUSALS)[number], y: Y | null) =>
+        autoRefusalStrip(readModel({ auto: { enabled: true, refusal: word, wontStart: null, stopApplies: null } }), y === null ? { youtube: null } : { youtube: y })!;
+      const read = (word: (typeof AUTO_START_REFUSALS)[number], y: Y | null, l: (typeof LOCALES)[number]) => {
+        const s = stripOver(word, y);
+        const d = dict(l);
+        return d[s.lead!]!.replace("{reason}", d[(s.leadVars as { reason: string }).reason]!);
+      };
+      const STATES = ["enabled", "unknown", "not_enabled", "blocked"] as const;
+      const SEAZN_OWN = [
+        new HttpError(503, "x", "storage_exhausted", { headroomMinutes: 0 }), new HttpError(503, "x", "ingest_unavailable"),
+      ];
+      let checked = 0;
+
+      for (const err of SEAZN_OWN) {
+        const word = stored(err);
+        expect(word, `premise: ${err.code} is stored as the retry word`).toBe("unavailable");
+        for (const liveState of STATES) {
+          for (const l of LOCALES) {
+            expect(read(word, ch({ liveState }), l), `${err.code} / ${liveState} / ${l}`).not.toMatch(/youtube/i);
+            checked++;
+          }
+        }
+      }
+      expect(checked, "anti-vacuity: 2 refusals x 4 states x 4 locales").toBe(32);
+
+      // A YouTube refusal whose stored word is the same word cannot be told from Seazn's: it must read the very same strip.
+      const baseline = (liveState: (typeof STATES)[number]) => stripOver(stored(SEAZN_OWN[0]), ch({ liveState }));
+      let indistinct = 0;
+      for (const code of YOUTUBE_REFUSAL_CODES) {
+        const word = stored(youtubeRefusal(code, "c-1"));
+        if (word !== "unavailable") continue;
+        for (const liveState of STATES) {
+          expect(stripOver(word, ch({ liveState })), `${code} / ${liveState}`).toEqual(baseline(liveState));
+          indistinct++;
+        }
+      }
+      expect(indistinct, "anti-vacuity: the 3 retry-class YouTube refusals x 4 states").toBe(12);
+
+      // The positive pair: a refusal the stored word DOES attribute (the channel's own live state) still names YouTube — from the
+      // channel's state, and from nothing else (a pasted key with the same word does not).
+      let named = 0;
+      for (const code of Object.keys(YOUTUBE_LIVE_STATE_OF_REFUSAL) as (keyof typeof YOUTUBE_LIVE_STATE_OF_REFUSAL)[]) {
+        const word = stored(youtubeRefusal(code, "c-1"));
+        expect(word, `premise: ${code} is stored as no_destination`).toBe("no_destination");
+        for (const l of LOCALES) {
+          expect(read(word, ch({ liveState: YOUTUBE_LIVE_STATE_OF_REFUSAL[code] }), l), `${code} / ${l}`).toMatch(/youtube/i);
+          expect(read(word, null, l), `${code} / ${l}: a pasted key says nothing of YouTube`).not.toMatch(/youtube/i);
+          named++;
+        }
+      }
+      expect(named, "anti-vacuity: 2 refusals x 4 locales").toBe(8);
+    });
+
+    it("everything else is the generic reason: a healthy / unchecked / reconnect-needed channel under no_destination, a pasted key, no destination read, and every other refusal even over a not-enabled channel (the pairs of the rows above; 14 checked)", () => {
+      let checked = 0;
+      const generic = (k: (typeof AUTO_START_REFUSALS)[number]) => AUTO_REFUSAL_KEYS[k];
+      for (const [label, y] of [
+        ["enabled", ch({ liveState: "enabled" })],
+        ["unknown", ch({ liveState: "unknown" })],
+        ["reconnect_needed + not_enabled (a dead grant reads Reconnect, not this)", ch({ status: "reconnect_needed", liveState: "not_enabled" })],
+        ["a pasted key", null],
+        ["no destination read", "no-destination" as const],
+      ] as const) {
+        expect(reasonKey("no_destination", y), label).toBe(generic("no_destination"));
+        checked++;
+      }
+      for (const r of ["no_credit", "not_entitled", "destination_in_use"] as const) {
+        for (const liveState of ["not_enabled", "blocked"] as const) {
+          expect(reasonKey(r, ch({ liveState })), `${r} / ${liveState}`).toBe(generic(r));
+          checked++;
+        }
+      }
+      expect(checked).toBe(11);
+      // …and a liveState this build does not know (the wire may grow one) fails to the generic words, never to a channel claim.
+      expect(reasonKey("no_destination", ch({ liveState: "tomorrow" as Y["liveState"] }))).toBe(generic("no_destination"));
+      expect(reasonKey("unavailable", ch({ liveState: "tomorrow" as Y["liveState"] })), "…and a retry is the neutral line for any channel state").toBe("stream.auto.refusal.retry");
+      expect(refused("no_destination", ch({ liveState: "enabled" })).remedy).toBe("manage");
+      expect(refused("unavailable", ch()).remedy).toBeUndefined();
+      checked += 4;
+      expect(checked).toBe(15);
+    });
+
+    it("the paired Ready strip takes the destination too (phoneStrip's third argument), and a strip without it is the old one", () => {
+      const auto = { enabled: true, refusal: "no_destination" as const, wontStart: null, stopApplies: null };
+      const withDest = phoneStrip(readModel({ auto }), null, { youtube: ch({ liveState: "blocked" }) });
+      expect(withDest?.leadVars).toEqual({ reason: "stream.auto.refusal.youtube_live_blocked" });
+      expect(phoneStrip(readModel({ auto }), null)?.leadVars).toEqual({ reason: "stream.auto.refusal.no_destination" });
+    });
+
+    it("autoDestinationOf finds the destination the SERVER resolved (phone.destination) in the panel's list — and nothing when there is none, or the list does not hold it (5 rows)", () => {
+      const list: StreamTarget[] = [
+        { id: "t-ch", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: null, inUse: null, youtube: ch({ liveState: "not_enabled" }) },
+        { id: "t-key", kind: "twitch", label: "Alt", watchUrl: null, createdAt: "2026-09-02T10:00:00.000Z", keyHint: "abc", inUse: null, youtube: null },
+      ];
+      const at = (id: string) => readModel({ destination: { id, label: "x", source: "saved" } });
+      expect(autoDestinationOf(at("t-ch"), list)?.youtube?.liveState).toBe("not_enabled");
+      expect(autoDestinationOf(at("t-key"), list), "a pasted key: a destination with no channel").toEqual({ youtube: null });
+      expect(autoDestinationOf(at("t-gone"), list), "archived since").toBeNull();
+      expect(autoDestinationOf(readModel({ destination: null }), list), "no destination resolved").toBeNull();
+      expect(autoDestinationOf(null, list), "no read model").toBeNull();
+    });
+
+    it("the three new reasons exist in all four locales; English opens capitalised (its own sentence), the clause reasons are the MANUAL refusal's sentence verbatim in English and lower-cased mid-sentence elsewhere (a brand opening it stays as written)", () => {
+      const NEW = ["stream.auto.refusal.youtube_live_not_enabled", "stream.auto.refusal.youtube_live_blocked", "stream.auto.refusal.retry"];
+      expect(inEveryLocale(NEW)).toBe(3 * LOCALES.length);
+      const MANUAL: Record<string, string> = {
+        "stream.auto.refusal.youtube_live_not_enabled": "stream.error.youtube_live_not_enabled",
+        "stream.auto.refusal.youtube_live_blocked": "stream.error.youtube_live_blocked",
+      };
+      let checked = 0;
+      for (const l of LOCALES) {
+        const d = dict(l);
+        for (const [auto, manual] of Object.entries(MANUAL)) {
+          const want = l === "en" || d[manual]!.startsWith("YouTube") ? d[manual]! : d[manual]!.charAt(0).toLocaleLowerCase() + d[manual]!.slice(1);
+          expect(d[auto], `${l} ${auto}`).toBe(want);
+          checked++;
+        }
+        for (const k of NEW) {
+          const text = d[k]!;
+          const first = text.charAt(0);
+          // A sentence opening with the brand keeps its capital everywhere; any other opens capitalised in English and lower case elsewhere.
+          const capital = text.startsWith("YouTube") || l === "en";
+          expect(first === first.toLocaleUpperCase() && first !== first.toLocaleLowerCase(), `${l} ${k}: "${text}"`).toBe(capital);
+          checked++;
+        }
+      }
+      expect(checked).toBe(LOCALES.length * (2 + 3));
+    });
+  });
+
   it("the EMPTY cases: no read model, no settings row (`auto: null`), and a row with no refusal → no strip", () => {
     expect(autoRefusalStrip(null)).toBeNull();
     expect(autoRefusalStrip(readModel({ auto: null }))).toBeNull();
@@ -1442,7 +1645,13 @@ describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone cle
     // was asked after the refusal.
     const W5 = new Set<string>(["phone_not_paired", "phone_not_responding"]);
     type Ev = { k: "ask" } | { k: "land"; present: boolean } | { k: "refuse"; code: CreateFailureCode };
-    const code = fc.constantFrom<CreateFailureCode>(...CREATE_ERROR_CODES, TARGET_REMOVED);
+    // The two W5 codes are drawn on their own branch as well as among all codes: the property's anti-vacuity counters below
+    // need W5 refusals to be common, and they must stay common as the set of create codes grows (T12 added six YouTube codes,
+    // which thinned a uniform draw until the fixed seed saw no stale answer at all).
+    const code = fc.oneof(
+      fc.constantFrom<CreateFailureCode>(...W5_REFUSAL_CODES),
+      fc.constantFrom<CreateFailureCode>(...CREATE_ERROR_CODES, TARGET_REMOVED),
+    );
     const ev: fc.Arbitrary<Ev> = fc.oneof(
       fc.constant<Ev>({ k: "ask" }),
       fc.boolean().map<Ev>((present) => ({ k: "land", present })),
@@ -1475,5 +1684,114 @@ describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone cle
     expect(steps, "anti-vacuity: steps driven").toBeGreaterThan(0);
     expect(clears, "anti-vacuity: some W5 errors were cleared").toBeGreaterThan(0);
     expect(staleKept, "anti-vacuity: some stale present answers landed over a W5 error").toBeGreaterThan(0);
+  });
+});
+
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe("YouTube Connect T12 — every YouTube Go live refusal reaches the panel with its own copy and its fix", () => {
+  // The rulebook: spec §6.2's table (six codes), the owner's Option B (T4, 2026-10-27: the fix REPLACES the Go live button) and the
+  // controller's ruling of T12 fix round 1: a refusal a retry on the same destination may clear (YouTube's quota, the channel's ten
+  // live streams, YouTube not answering) offers "Try again". Typed here from them, never read back from the code under test.
+  const SPEC_CODES = [
+    "youtube_reconnect_needed", "youtube_live_not_enabled", "youtube_live_blocked", "youtube_limit_reached", "youtube_channel_busy", "youtube_unavailable",
+  ] as const;
+  const FIX: Record<(typeof SPEC_CODES)[number], "reconnect" | "retry" | "none"> = {
+    youtube_reconnect_needed: "reconnect",   // §6.2: "Reconnect YouTube" -> the Streaming page
+    youtube_live_not_enabled: "none",        // nothing to do from here: YouTube can take up to 24 hours
+    youtube_live_blocked: "none",            // YouTube's own restriction
+    youtube_limit_reached: "retry",          // "Try later or pick another destination" — a later Go live may clear it
+    youtube_channel_busy: "retry",           // ten streams already live on the channel — one may have ended
+    youtube_unavailable: "retry",            // "YouTube didn't answer. Try again."
+  };
+
+  it("the declaration, the create-error set and the fix table are all the spec's six, each exactly once", () => {
+    expect([...YOUTUBE_REFUSAL_CODES].sort()).toEqual([...SPEC_CODES].sort());
+    let checked = 0;
+    for (const code of SPEC_CODES) {
+      expect((CREATE_ERROR_CODES as readonly string[]).filter((c) => c === code), `${code} in CREATE_ERROR_CODES`).toHaveLength(1);
+      expect(YOUTUBE_REFUSAL_FIX[code], code).toBe(FIX[code]);
+      expect(CREATE_ERROR_KEYS[code], code).toBe(`stream.error.${code}`);
+      // The panel's "Try again" and the phone's `unavailable` are one split, declared twice: a refusal a retry may clear is `retry`
+      // in BOTH tables (YOUTUBE_REFUSAL_REMEDY is the phone/auto-start's), so the surfaces cannot disagree about which refusals clear.
+      expect(YOUTUBE_REFUSAL_FIX[code] === "retry", `${code}: panel retry <=> remedy retry`).toBe(YOUTUBE_REFUSAL_REMEDY[code] === "retry");
+      checked++;
+    }
+    expect(checked).toBe(6);
+    expect(SPEC_CODES.filter((c) => FIX[c] === "retry"), "the retry class is exactly the three the controller named").toEqual(["youtube_limit_reached", "youtube_channel_busy", "youtube_unavailable"]);
+    // Nothing else claims to be a YouTube refusal: the fix table has no extra entry, and no other create code reads as one.
+    expect(Object.keys(YOUTUBE_REFUSAL_FIX).sort()).toEqual([...SPEC_CODES].sort());
+    const others = CREATE_ERROR_CODES.filter((c) => !(SPEC_CODES as readonly string[]).includes(c));
+    expect(others.length, "the other create codes").toBeGreaterThan(5);
+    for (const c of others) expect(youtubeRefusalOf(c), c).toBeNull();
+    expect(youtubeRefusalOf(TARGET_REMOVED)).toBeNull();
+  });
+
+  it("youtubeRefusalOf names the code for each of the six", () => {
+    let checked = 0;
+    for (const code of SPEC_CODES) {
+      expect(youtubeRefusalOf(code), code).toBe(code);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("each refusal reads its OWN sentence off the real wire, in all four locales: distinct, no placeholder left, and the raw code is never on screen", async () => {
+    const sentences = new Set<string>();
+    let checked = 0;
+    for (const code of SPEC_CODES) {
+      const status = code === "youtube_limit_reached" ? 429 : code === "youtube_unavailable" ? 503 : 409;
+      const got = createErrorCode(await wire(new HttpError(status, `YouTube refused Go live: ${code}`, code, { connectionId: "c-1" })));
+      expect(got, code).toBe(code);
+      const text = createErrorText({ code: got, holder: null }, msg);
+      // `{max}` is the busy sentence's only placeholder (the cap, lib/youtube.ts) — filled at render, so the rule is "no {…} left".
+      expect(text, code).toBe((messages as Record<string, string>)[`stream.error.${code}`]!.replaceAll("{max}", String(YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL)));
+      expect(text, `${code}: nothing unfilled`).not.toMatch(/[{}]/);
+      expect(text, `${code}: not the generic retry line`).not.toBe(msg(CREATE_ERROR_KEYS.unknown));
+      expect(text, code).not.toContain("youtube_");
+      sentences.add(text);
+      for (const l of LOCALES) {
+        const t = dict(l)[`stream.error.${code}`];
+        expect(t, `${l} ${code}`).toBeTypeOf("string");
+        // The cap's placeholder is the ONE brace a refusal's dictionary entry may carry, and only the busy one carries it.
+        expect(t!.replaceAll("{max}", ""), `${l} ${code}`).not.toMatch(/[{}]|youtube_/);
+        expect(t!.includes("{max}"), `${l} ${code}: {max} on the busy sentence alone`).toBe(code === "youtube_channel_busy");
+        expect(t!.trim().length, `${l} ${code}`).toBeGreaterThan(10);
+      }
+      checked++;
+    }
+    expect(checked, "all six refusals").toBe(6);
+    expect(sentences.size, "no two refusals share a sentence").toBe(6);
+    // The shared lines the refusal block adds around each sentence exist in all four locales too.
+    const SHARED = ["stream.youtube.refused.title", "stream.youtube.refused.nothing", "stream.youtube.refused.reconnect", "stream.youtube.refused.retry", "stream.youtube.refused.pickAnother"];
+    expect(inEveryLocale(SHARED)).toBe(SHARED.length * LOCALES.length);
+  });
+
+  it("B4 fix round 1 (m4): the busy sentence says the ten are IN USE, not 'live' — a key held by a grace, an ending or an unreleased output is not a stream anyone can see — and still carries the cap; English typed from the copy", () => {
+    // The pool counts every key a broadcast or a still-publishing output holds (prepare.ts), so "streams live" over-claimed.
+    expect(msg("stream.error.youtube_channel_busy", { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL })).toBe("This channel already has 10 streams in use.");
+    expect(YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, "the cap the sentence names").toBe(10);
+    let checked = 0;
+    for (const l of LOCALES) {
+      const t = dict(l)["stream.error.youtube_channel_busy"]!;
+      expect(t, l).toContain("{max}");
+      // The word that over-claimed, per locale: live / en directo / en cours / live (the old sentences' own words).
+      expect(t, `${l}: no 'live' claim`).not.toMatch(/\blive\b|en directo|en cours/i);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("an unknown youtube_* code falls back to the generic error — never its raw code (the empty case of the closed set)", async () => {
+    let checked = 0;
+    for (const raw of ["youtube_quota_week", "youtube_unavailable_soon", "YOUTUBE_UNAVAILABLE", "youtube_", "youtube"]) {
+      const got = createErrorCode(await wire(new HttpError(409, "x", raw, { connectionId: "c-1" })));
+      expect(got, raw).toBe("unknown");
+      const text = createErrorText({ code: got, holder: null }, msg);
+      expect(text, raw).toBe(msg(CREATE_ERROR_KEYS.unknown));
+      expect(text.toLowerCase(), raw).not.toContain(raw.toLowerCase());
+      checked++;
+    }
+    expect(checked).toBe(5);
   });
 });

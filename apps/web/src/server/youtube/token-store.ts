@@ -94,6 +94,19 @@ export async function replaceConnectionToken(tx: Exec, orgId: string, connection
   return rows.length === 1;
 }
 
+/** A DEAD GRANT seen in use (T10 F5; T14's end step and the health check take the same transition): a `connected` row moves
+ *  to `reconnect_needed`, `status_since = now()`, `last_error_code` the refusal code — so the Streaming page offers Reconnect.
+ *  The token is KEPT (only a revoke clears it, R1; a reconnect replaces it). False, and nothing written, for a row that is not
+ *  `connected` — already reconnect_needed (its first time stands), revoked (history), another org's, or missing. */
+export async function markReconnectNeeded(tx: Exec, orgId: string, connectionId: string): Promise<boolean> {
+  const rows = await tx<{ id: string }[]>`
+    update org_youtube_connections
+       set status = 'reconnect_needed', status_since = now(), last_error_code = 'youtube_reconnect_needed'
+     where id = ${connectionId} and org_id = ${orgId} and status = 'connected'
+    returning id`;
+  return rows.length === 1;
+}
+
 /** What the destination row's label becomes when its connection is revoked: the channel's title is Authorized Data and must
  *  not outlive the revoke (DP III.E.4, spec §3.4). The label is the one copy this statement scrubs; the pending row's
  *  `channels` (expiry sweep) and broadcast titles (disconnect purge) are cleared elsewhere. */

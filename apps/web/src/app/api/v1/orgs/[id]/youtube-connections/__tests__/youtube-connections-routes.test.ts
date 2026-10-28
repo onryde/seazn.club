@@ -318,11 +318,12 @@ describe.skipIf(!HAS_DB)("PATCH a connection's settings", () => {
   it("200 with the connection's view; the change is stored; the list shows it", async () => {
     const o = await org();
     signedInAs(o.userId);
-    const c = await connect(o, { channels: [{ id: channelId(), title: "Rovers TV" }] });
+    const rovers = { id: channelId(), title: "Rovers TV" };
+    const c = await connect(o, { channels: [rovers] });
     const res = await patch(o.orgId, c.connectionId, { privacy: "private", madeForKids: true });
     expect(res.status).toBe(200);
     expect((await json(res)).data).toEqual({
-      connectionId: c.connectionId, channelTitle: "Rovers TV", privacy: "private", madeForKids: true, status: "connected",
+      connectionId: c.connectionId, channelId: rovers.id, channelTitle: "Rovers TV", privacy: "private", madeForKids: true, status: "connected",
       liveState: "unknown", termsOutdated: false, openBroadcasts: 0,
     });
     expect(await connectionRow(c.connectionId)).toMatchObject({ default_privacy: "private", made_for_kids: true });
