@@ -7,13 +7,55 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-28 — a set target below 5, or a tennis best of 1 with a match tie-break, is refused when written
+
+W2e ruling 31: a volleyball or table tennis set is played to at least 5
+points. ITF Appendix VI: a match tie-break REPLACES a deciding set, and a best
+of 1 has no set to replace. Both are now asked whenever a config is written.
+Neither is a schema rule: a config stored before this change still loads,
+replays and plays.
+
+**What changed.**
+
+| Write path | Before | Now |
+|---|---|---|
+| `POST /api/v1/competitions/{id}/divisions`, `PATCH /api/v1/divisions/{id}`, `POST` and `PUT /api/v1/divisions/{id}/stages` (a stage's `rules`), `PUT /api/v1/stages/{id}/rules`, `PUT /api/v1/fixtures/{id}/rules`: a volleyball or table tennis config whose `setTo` or `finalSetTo` is below 5 (as the division, stage and match formats resolve) | accepted | 422, `error.code` `"CONFIG_INVALID"`, `error.issues` `[{ "path": [], "message": "A set must be played to at least 5 points." }]`, nothing written |
+| The same paths, a tennis config with `bestOf: 1` and a `finalSet` of `{ "matchTiebreakTo": n }` | accepted | 422 `"CONFIG_INVALID"`, `error.issues` `[{ "path": [], "message": "A match tie-break replaces a deciding set; best of 1 has none." }]`, nothing written |
+| `POST /api/v1/competitions/from-template`, a template whose division or stage resolves to either config | instantiated | 422, `error.code` `"TEMPLATE_INSTANTIATION_FAILED"` with `divisionIndex`, `stageIndex` and `cause` (the sentence), nothing written |
+| `PATCH /api/v1/divisions/{id}` and `PUT /api/v1/stages/{id}/rules`, a save that would leave an unstarted match's own format (`PUT /fixtures/{id}/rules`) one of these configs (a division saved to best of 1 beside a match's own match tie-break) | accepted | 422 `"CONFIG_INVALID"` naming the match: `error.fixture_id` and the same `error.issues` |
+
+Badminton, on the same set kernel, has no such floor. A best of 1 whose final
+set is a final-set tie-break (`{ "tiebreakTo": 10 }`) or the same as any other
+set is still accepted.
+
+**What replaces it.** Write a set target of 5 or more; for a one-set tennis
+match, a final-set tie-break (`finalSet: { "tiebreakTo": 10 }`) or best of 3
+with the match tie-break. To change a division or stage under a match that has
+its own format, set that match back to its stage's format first.
+
+**What a consumer sees.**
+
+```json
+{ "ok": false, "error": { "code": "CONFIG_INVALID", "message": "invalid volleyball config: A set must be played to at least 5 points.", "issues": [{ "path": [], "message": "A set must be played to at least 5 points." }] }, "requestId": "…" }
+```
+
+Key on `error.code` and the issues' `message`, not on `error.message`.
+
+Only a new write is judged; a stored config that breaks one still loads and
+plays as before. The release's migration counts stored configs below the floor
+and stops the deploy if it finds any, so none is left that every later save of
+its division would refuse.
+
 ## 2026-10-28 — a short-set tie-break ends at 5–4 (Fast4 and the new short-sets format)
 
 ITF Appendix VI §2's short-set tie-break is the first to five points "with a
 deciding point if the score reaches four all", so its margin is one. The set's
 config carries that margin as a new optional key, `set.tiebreakWinBy`; absent,
 a set tie-break plays to the match's `tiebreak.winBy` as before. The match
-tie-break always plays to `tiebreak.winBy`.
+tie-break and a final-set tie-break (`finalSet.tiebreakTo`, App VI §5's ten-point
+decider) always play to `tiebreak.winBy`, whatever `set.tiebreakWinBy` says:
+short sets with a final-set tie-break to ten end the decider two clear (11–9),
+never at 10–9.
 
 **What changed.**
 
