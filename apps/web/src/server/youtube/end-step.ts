@@ -104,7 +104,35 @@ interface Claimed {
 type Outcome =
   | { kind: "complete"; startedAt: Date | null; endedAt: Date | null }
   | { kind: "failed"; code: typeof CODE_NEVER_LIVE | typeof CODE_ORPHAN | typeof CODE_REVOKED };
-type Tag = "ended" | "neverLive" | "orphan" | "failed" | "reconnect" | "none";
+type Tag = "ended" | "neverLive" | "orphan" | "failed" | "reconnect" | "deferred" | "none";
+
+/** The pass's slice ran out between two YouTube calls of one row. Not a failure and not a port refusal: the row keeps its claim and its
+ *  lease and the next firing that finds the lease lapsed carries on from the beginning of its calls (every one of them is idempotent
+ *  against what YouTube already holds: a complete broadcast reads `complete`, a deleted one `absent`). */
+class BudgetSpent extends Error {
+  constructor() {
+    super("budget_spent");
+    this.name = "BudgetSpent";
+  }
+}
+
+/** The port, for one row, with every call gated on the slice: a call starts only while the pass's slice has time left (`room`), else
+ *  it throws `BudgetSpent` without calling. The slice used to gate only the START of a row, and one row is up to five calls of 10 s
+ *  each - ~65 s against the Worker's 60. Now a pass overruns its slice by at most the one call in flight (`YOUTUBE_CALL_BOUND_MS`).
+ *  `Object.create` keeps the driver's own state and methods; only the four calls the end step makes are replaced. */
+function gated(port: YouTubePort, room: () => boolean): YouTubePort {
+  const g = Object.create(port) as YouTubePort;
+  const gate = <A extends unknown[], R>(call: (...a: A) => Promise<R>) =>
+    async (...a: A): Promise<R> => {
+      if (!room()) throw new BudgetSpent();
+      return call.apply(port, a);
+    };
+  g.accessToken = gate(port.accessToken);
+  g.broadcastLife = gate(port.broadcastLife);
+  g.complete = gate(port.complete);
+  g.deleteBroadcast = gate(port.deleteBroadcast);
+  return g;
+}
 
 /** What a report names: the row, never a fact from it. */
 type Reportable = { id: string; org_id: string };
@@ -117,7 +145,7 @@ async function viaPort<T>(call: () => Promise<T>, row: Reportable): Promise<T> {
   try {
     return await call();
   } catch (err) {
-    if (err instanceof YouTubeError) throw err;
+    if (err instanceof YouTubeError || err instanceof BudgetSpent) throw err;
     const kind = (err instanceof Error ? err.name : typeof err).replace(/[^A-Za-z]/g, "").slice(0, 64);
     captureError(new Error(`youtube end step: a port call raised a non-port error (${kind})`), {
       orgId: row.org_id, route: "youtube.end_step.port", extra: { broadcastId: row.id },
@@ -240,6 +268,9 @@ async function completedTimes(port: YouTubePort, at: string, row: Reportable, yt
     const after = await viaPort(() => port.broadcastLife(at, ytId), row);
     return { kind: "complete", startedAt: after.actualStartAt ?? before.actualStartAt, endedAt: after.actualEndAt };
   } catch (err) {
+    // No slice left for the read: the broadcast IS complete at YouTube, so the row waits for the next firing, which reads `complete`
+    // and its times in one call. (A read that FAILED completes the row without them, below.)
+    if (err instanceof BudgetSpent) throw err;
     // Reported, not swallowed: the row completes without its end time and nothing will fetch it later. `err` is a YouTubeError here
     // (viaPort makes it one): a code, never a body.
     captureError(err, { orgId: row.org_id, route: "youtube.end_step.actual_times", extra: { broadcastId: row.id } });
@@ -329,12 +360,19 @@ async function recordFailure(orgId: string, id: string, code: string, now: Date)
 }
 
 /** One candidate, start to finish. Anything it throws is the caller's per-broadcast failure. */
-async function endOne(port: YouTubePort, c: Candidate, o: { now: () => Date; hooks?: EndStepHooks }): Promise<Tag> {
+async function endOne(port: YouTubePort, c: Candidate, o: { now: () => Date; room: () => boolean; hooks?: EndStepHooks }): Promise<Tag> {
   const now = o.now();
   const row = await claim(c, now);
   if (!row) return "none";
   await o.hooks?.afterClaim?.(row.id);
-  const outcome = await callYouTube(port, row);
+  let outcome: Outcome;
+  try {
+    outcome = await callYouTube(gated(port, o.room), row);
+  } catch (err) {
+    // The slice ran out between calls: the row stays `ending` under its lease (claimed, no attempt counted, no code), not a failure.
+    if (err instanceof BudgetSpent) return "deferred";
+    throw err;
+  }
   const moved = await finalize(row, outcome, o.now());
   if (!moved) return "none";
   if (outcome.kind === "complete") return "ended";
@@ -362,8 +400,9 @@ async function failOne(c: Candidate, err: unknown, now: Date): Promise<Tag> {
 }
 
 /** Run one pass of the end step. `orgIds` (test-only) scopes the selection; an empty list is refused — `org_id in ()` read as "no
- *  filter" would end every organisation's broadcasts. `wallClock` scripts the budget's clock; rows not started before `budgetMs` has gone
- *  are counted `deferred` (not a failure: the next firing reaches them). */
+ *  filter" would end every organisation's broadcasts. `wallClock` scripts the budget's clock. A row or a YouTube call is started only while
+ *  `budgetMs` has time left; a row not started, or left between two of its calls, is counted `deferred` (not a failure: the next
+ *  firing reaches it - a row left between calls keeps its claim and its two-minute lease, so that is the firing after the lease). */
 export async function endDueBroadcasts(
   port: YouTubePort,
   o: { now: () => Date; budgetMs: number; wallClock?: () => number; orgIds?: readonly string[]; hooks?: EndStepHooks },
@@ -374,17 +413,19 @@ export async function endDueBroadcasts(
   }
   const wallClock = o.wallClock ?? Date.now;
   const started = wallClock();
+  /** Time left in the slice. The ONE rule for starting a row and for starting each call of one. */
+  const room = () => wallClock() - started < o.budgetMs;
   const out: YoutubeEndResult = { ended: 0, neverLive: 0, orphans: 0, failed: 0, deferred: 0 };
   const candidates = await candidatesOf(o.now(), orgIds);
   for (let i = 0; i < candidates.length; i++) {
-    if (wallClock() - started >= o.budgetMs) {
-      out.deferred = candidates.length - i;
+    if (!room()) {
+      out.deferred += candidates.length - i;
       break;
     }
     const c = candidates[i]!;
     let tag: Tag;
     try {
-      tag = await endOne(port, c, o);
+      tag = await endOne(port, c, { now: o.now, room, ...(o.hooks ? { hooks: o.hooks } : {}) });
     } catch (err) {
       try {
         tag = await failOne(c, err, o.now());
@@ -398,6 +439,7 @@ export async function endDueBroadcasts(
     else if (tag === "neverLive") out.neverLive++;
     else if (tag === "orphan") out.orphans++;
     else if (tag === "failed") out.failed++;
+    else if (tag === "deferred") out.deferred++;
   }
   return out;
 }

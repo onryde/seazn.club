@@ -100,7 +100,7 @@ import { revokeConnection } from "../token-store";
 import { EndRuleInvariantError } from "../end-rule";
 import { endDueBroadcasts, type EndStepHooks, type YoutubeEndResult } from "../end-step";
 import { FakeYouTube } from "../fake";
-import { YouTubeError } from "../port";
+import { YOUTUBE_CALL_BOUND_MS, YouTubeError } from "../port";
 import { prepareYoutubeBroadcast } from "../prepare";
 import { connect as connectChannel, grant, refreshToken } from "./_connect-rig";
 
@@ -1298,10 +1298,15 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     const matches: Match[] = [];
     for (const f of w.fixtures) matches.push(await playAndStop(w, f));
     let clock = 0;
+    // The first row's LAST call (the times read after `complete`) is the slow one: every call is gated now, so a slow call earlier in the
+    // row would defer the row itself (the test below this one) rather than end it and defer the others.
+    const realLife = w.fake.broadcastLife.bind(w.fake);
+    let completes = 0;
     const realComplete = w.fake.complete.bind(w.fake);
-    w.fake.complete = async (at, id) => {
-      const r = await realComplete(at, id);
-      clock += 16_000;   // the first end took its 16 s
+    w.fake.complete = async (at, id) => { completes++; return realComplete(at, id); };
+    w.fake.broadcastLife = async (at, id) => {
+      const r = await realLife(at, id);
+      if (completes > 0 && clock === 0) clock += 16_000;   // the first end took its 16 s
       return r;
     };
     const at = afterStop(matches.at(-1)!, min(6));
@@ -1313,6 +1318,58 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     const second = await w.step({ at: at + SEC, wallClock: () => 0 });
     expect(second.ended, "the next firing ends the rest").toBe(2);
     expect(second.deferred).toBe(0);
+  });
+
+  it("the budget gates EVERY YouTube call, not only the start of a row: a row started near the slice end is deferred between its calls - never `complete`d past the slice - keeps its claim, and the next firing finishes it", async () => {
+    // Each variant makes ONE named call slow (the scripted clock moves `ms` after it returns); what the row does next is the finding.
+    const variants: { name: string; after: "accessToken" | "broadcastLife" | "complete"; ms: number; deferred: boolean; completeCalls: number }[] = [
+      { name: "the token call used the slice up", after: "accessToken", ms: BUDGET_MS, deferred: true, completeCalls: 0 },
+      { name: "the first life read used the slice up (the reviewer's case: no `complete` past the slice)", after: "broadcastLife", ms: BUDGET_MS + 40_000, deferred: true, completeCalls: 0 },
+      { name: "`complete` itself used the slice up (YouTube holds it complete; the times read waits)", after: "complete", ms: BUDGET_MS, deferred: true, completeCalls: 1 },
+      { name: "1 ms of slice left after the token call: the whole row still runs (the gate does not over-refuse)", after: "accessToken", ms: BUDGET_MS - 1, deferred: false, completeCalls: 1 },
+    ];
+    let checked = 0;
+    for (const v of variants) {
+      const w = await world();
+      const m = await playAndStop(w, w.fixtures[0]!);
+      let clock = 0;
+      const real = (w.fake[v.after] as (...a: never[]) => Promise<unknown>).bind(w.fake);
+      (w.fake as unknown as Record<string, unknown>)[v.after] = async (...a: never[]) => {
+        const r = await real(...a);
+        if (clock === 0) clock += v.ms;   // only the first call of that name: a later pass's call is not slow
+        return r;
+      };
+      const at = afterStop(m, min(6));
+      const first = await w.step({ at, wallClock: () => clock, budgetMs: BUDGET_MS });
+      const row1 = await broadcastRow(m.broadcastId);
+      if (!v.deferred) {
+        expect(first, `${v.name}: ran to the end`).toEqual({ ...ZERO, ended: 1 });
+        expect(row1.state, v.name).toBe("complete");
+        checked++;
+        continue;
+      }
+      expect(first, `${v.name}: deferred, not failed`).toEqual({ ...ZERO, deferred: 1 });
+      expect(callsOf(w.fake, "complete"), `${v.name}: \`complete\` calls in the slice`).toBe(v.completeCalls);
+      // No call at all after the slice was gone: the slow call was the row's last.
+      const names = w.fake.calls.map((c) => c.method).filter((n) => ["accessToken", "broadcastLife", "complete", "deleteBroadcast"].includes(n));
+      expect(names.at(-1), `${v.name}: the slow call was the last one made`).toBe(v.after);
+      // Claimed, leased, untouched: not failed, no attempt counted, no error code, no replay link yet.
+      expect(row1, v.name).toMatchObject({ state: "ending", attempts: 0, last_error_code: null, completed_at: null });
+      expect(row1.next_attempt_at!.getTime(), `${v.name}: leased from the claim`).toBe(at + 2 * MIN);
+      expect(await streamUrlOf(w.fixtures[0]!), `${v.name}: the link waits for the row to complete`).toBeNull();
+      // The firing after the lease lapses finishes it, and `complete` was called exactly once across both passes.
+      expect(await w.step({ at: at + 3 * MIN, wallClock: () => 0 }), `${v.name}: the later firing`).toEqual({ ...ZERO, ended: 1 });
+      expect(callsOf(w.fake, "complete"), `${v.name}: one \`complete\` in all`).toBe(1);
+      const row2 = await broadcastRow(m.broadcastId);
+      expect(row2, v.name).toMatchObject({ state: "complete", attempts: 0, last_error_code: null });
+      expect(row2.actual_end_at, `${v.name}: YouTube's end time arrived with the later pass`).toBeInstanceOf(Date);
+      expect(await streamUrlOf(w.fixtures[0]!), `${v.name}: Part 1's link`).toBe(youtubeWatchUrl(m.ytId));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every variant ran").toBe(variants.length);
+    // The arithmetic the gate buys, from the constants: a call starts only while the slice has time left, so a pass ends within the slice
+    // plus the ONE call in flight - not the slice plus a row's five calls (~65 s against the Worker's 60).
+    expect(BUDGET_MS + YOUTUBE_CALL_BOUND_MS, "slice + one call fits well inside the tick's 45 s").toBeLessThan(45_000);
   });
 
   it("V480's floor: the database itself refuses actual times on a row that is not `complete` (a live one, a failed one), and accepts them on a complete one", async () => {

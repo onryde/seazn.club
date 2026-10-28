@@ -15,7 +15,7 @@ import "server-only";
 // No retry and no logging here: the callers own backoff and they log codes.
 import { GOOGLE_AUTH_URL, GOOGLE_TOKEN_URL, googleConfigured } from "@/lib/oauth";
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
-import { YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type YoutubeErrorCode, type YouTubePort } from "./port";
+import { YOUTUBE_CALL_BOUND_MS, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type YoutubeErrorCode, type YouTubePort } from "./port";
 
 const API = "https://www.googleapis.com/youtube/v3";
 /** OAuth 2.0 token revocation (…/oauth2/web-server, "Token revocation"). Google's example puts `token` in the query string; we
@@ -25,8 +25,8 @@ const GOOGLE_REVOKE_URL = "https://oauth2.googleapis.com/revoke";
  *  prescribes a POST with the token in the body). Best effort: see `subjectOf`. */
 const GOOGLE_TOKENINFO_URL = "https://oauth2.googleapis.com/tokeninfo";
 
-/** One request, from `fetch` to the last byte of the body, has this long. */
-const REQUEST_TIMEOUT_MS = 10_000;
+/** One request, from `fetch` to the last byte of the body, has this long (the port's call bound: the end step budgets with it). */
+const REQUEST_TIMEOUT_MS = YOUTUBE_CALL_BOUND_MS;
 /** videos.list takes at most 50 ids per call. */
 const MAX_VIDEO_IDS_PER_CALL = 50;
 /** A broadcast title: 1–100 characters (liveBroadcasts.insert "invalidTitle"), and neither `<` nor `>` (the videos resource's
