@@ -31,9 +31,9 @@ async function endYoutube(deps: SessionDeps): Promise<YoutubeEndResult> {
   try {
     return await endDueBroadcasts(deps.youtube ?? youtubeDriver(), { now: deps.now, budgetMs: YOUTUBE_END_BUDGET_MS });
   } catch (err) {
-    // The step's own errors carry codes and ids only (end-step.ts SECRETS), and what can escape it whole is the database or a
-    // misspelt setting: nothing here is a token or a key.
-    log.error({ err: err instanceof Error ? err.message : String(err) }, "stream tick: the YouTube end step threw");
+    // The log names the error's class only, never its message (a database error can echo a connection string), as viaPort
+    // does in end-step.ts; the whole error goes to Sentry, whose own scrubbing applies.
+    log.error({ errClass: err instanceof Error ? err.name : typeof err }, "stream tick: the YouTube end step threw");
     captureError(err, { route: "cron.stream_tick.youtube" });
     return { ...STEP_FAILED };
   }

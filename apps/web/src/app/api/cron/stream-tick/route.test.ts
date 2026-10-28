@@ -12,6 +12,7 @@
 // whose `data.failed` is missing reads "unreadable" there, i.e. degraded: one Sentry event per hour from every
 // relay-disabled deployment. So the disabled answer must carry `failed: 0`.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { log } from "@/server/logger";
 
 // apps/cron-worker is outside the Fly image's build context (.dockerignore), and ci.yml type-checks apps/web INSIDE that
 // image, where a static import of it is TS2307. The specifiers are computed so tsc never resolves them; vitest, which runs
@@ -183,7 +184,12 @@ describe("POST /api/cron/stream-tick", () => {
     m.deps.mockReturnValue(m.sentinel);
     m.end.mockRejectedValue(new Error("database down: password=hunter2"));
     m.tick.mockResolvedValue({ ticked: 2, ended: 1, failed: 0, deferred: 0 });
+    const logged = vi.spyOn(log, "error");
     const res = await POST(req());
+    expect(logged, "logged once").toHaveBeenCalledTimes(1);
+    expect(JSON.stringify(logged.mock.calls), "the log names the class, never the message").not.toContain("hunter2");
+    expect(logged.mock.calls[0]![0]).toEqual({ errClass: "Error" });
+    logged.mockRestore();
     expect(res.status).toBe(200);
     const text = await res.text();
     expect(JSON.parse(text)).toEqual({ ok: true, data: { ticked: 2, ended: 1, failed: 0, deferred: 0, youtube: { ended: 0, neverLive: 0, orphans: 0, failed: 1, deferred: 0 } } });
