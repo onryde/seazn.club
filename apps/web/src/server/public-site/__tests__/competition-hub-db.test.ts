@@ -129,24 +129,11 @@ async function seed(): Promise<Scene> {
 
   // A standings snapshot WITHOUT any scoring: the hub must publish a table
   // from the persisted snapshot, and nothing in this file scores a fixture, so
-  // no `player_stat_snapshots` row can exist. `org_id` is filled by the
-  // `set_org_from_parent('stages','stage_id')` trigger (V225).
-  const entrants = await sql<{ id: string }[]>`
-    select id from entrants where division_id = ${division.id} order by seed`;
-  await sql`
-    insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq)
-    values (${stage!.id}, null, ${sql.json(
-      entrants.map((e, i) => ({
-        entrantId: e.id,
-        played: 0,
-        won: 0,
-        drawn: 0,
-        lost: 0,
-        points: 0,
-        metrics: {},
-        rank: i + 1,
-      })),
-    )}, 0)`;
+  // no `player_stat_snapshots` row can exist. The generate above wrote it — the
+  // stage's LEVEL table (W2d concern 2, spec §5.7) — so no row is seeded by hand.
+  const [{ n: stored }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from standings_snapshots where stage_id = ${stage!.id} and pool_id is null`;
+  if (stored !== 1) throw new Error(`rig: the generate wrote ${stored} table(s) for the league, not 1`);
 
   // A THIRD, public competition holding one knockout division — kept apart
   // from the league scene above so none of its assertions (every match in one

@@ -20,6 +20,7 @@ import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { isHeadToHeadKey } from "./cascade-rules.ts";
 import { decidedInFor } from "./decided-in.ts";
+import { isLevelTable } from "./display.ts";
 import { payout, setsToWinOf } from "./points.ts";
 import { crossGroupOrder, PRE_W2D_CROSS_GROUP, resolveProgression, type ProgressionSpec, type SourceTables } from "./progression.ts";
 import { completeTableStage, crossGroupRulesOf, type TableFixture, type TableStage } from "./stage.ts";
@@ -294,6 +295,22 @@ describe("W2d T12 — the empty pools: a level row stays level (T5 M4)", () => {
     const mixed = groupStage(football, [voided[0]!, FOOTBALL_GROUPS[1]!], { rngSeed: 11 });
     const rows = crossGroupOrder(mixed.tables.pools.map((p) => p.rows[0]!), mixed.tables.crossGroup!.order, undefined, { rngSeed: 11 }).rows;
     expect(rows.map((r) => [r.entrantId, r.level === true])).toEqual([["b1", false], ["y1", true]]);
+  });
+
+  it("MD-1 (W2d T17) a cross-group comparison is a level table only when EVERY candidate is level: one candidate from a played group is a counted fixture, so not every rank prints '–' (anti-goal 3, §5.8 step 1)", () => {
+    // The one producer of a MIXED table: candidates from an empty group beside a played one (T5 M4, above).
+    const voided = FOOTBALL_GROUPS.map((g): Group => ({ ...g, status: "void" }));
+    const empty = groupStage(football, voided, { rngSeed: 11 });
+    const allLevel = crossGroupOrder(empty.tables.pools.map((p) => p.rows[0]!), empty.tables.crossGroup!.order, undefined, { rngSeed: 11 }).rows;
+    expect(allLevel.length).toBe(2);
+    expect(isLevelTable(allLevel), "every candidate from an empty table").toBe(true);
+    const mixed = groupStage(football, [voided[0]!, FOOTBALL_GROUPS[1]!], { rngSeed: 11 });
+    const rows = crossGroupOrder(mixed.tables.pools.map((p) => p.rows[0]!), mixed.tables.crossGroup!.order, undefined, { rngSeed: 11 }).rows;
+    expect(rows.filter((r) => r.level === true).length, "premise: the table is mixed — one level, one not").toBe(1);
+    expect(isLevelTable(rows), "one candidate from a played group").toBe(false);
+    // And the played comparison: no candidate level.
+    const played = groupStage(football, FOOTBALL_GROUPS, { rngSeed: 11 });
+    expect(isLevelTable(crossGroupOrder(played.tables.pools.map((p) => p.rows[0]!), played.tables.crossGroup!.order, undefined, { rngSeed: 11 }).rows)).toBe(false);
   });
 });
 

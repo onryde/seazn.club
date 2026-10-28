@@ -1198,9 +1198,10 @@ describe("X-SR-4 rule-errors: the W2c code table", () => {
     expect(ruleErrorMessage("TIEBREAK_KEY_INVALID", { refusal: { index: 1, key: "buchholz", reason: "stage_format", need: "swiss" } })).toBe("Buchholz can't be used here: only in Swiss stages");
     expect(ruleErrorMessage("TIEBREAK_KEY_INVALID", { refusal: { index: 2, key: "diff", reason: "last", need: "lots" } })).toMatch(/can't be used here: the order must end with a drawing of lots$/);
     expect(ruleErrorMessage("POINTS_OUTCOME_UNCOVERED", { uncovered: ["set:2-1"] })).toBe("This stage can end with a set score of 2-1, and its points don't say what that pays.");
-    // Fix round 1 I2: W2c's restored wording (the owner's copy), the splits by their labels.
+    // Fix round 1 I2 restored W2c's wording ("can't be set per stage yet"); W2d Task 16's editor states every split, so the
+    // sentence now says what to do — fill in each one — with the splits by their labels.
     expect(ruleErrorMessage("POINTS_SPLIT_FLATTENED", { splits: ["otLoss", "otWin"] })).toBe(
-      "These points can't be set per stage yet — this division scores overtime wins, overtime losses separately.",
+      "Fill in what these points pay for each one — this division scores overtime wins, overtime losses separately.",
     );
     expect(ruleErrorMessage("FIXTURE_HAS_OWN_FORMAT", { match: "Match 3" })).toBe(
       "Match 3 has its own format, and this would delete it — set it back to its stage's format first.",

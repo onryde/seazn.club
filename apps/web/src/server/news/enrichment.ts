@@ -13,6 +13,7 @@
 // same rule). `settings.orgTz` is the governing clock — callers resolve it
 // via `resolveVenueTz(null, organizations.timezone)`, never `settings.tz`
 // (#448, display-only).
+import { isLevelTable } from "@seazn/engine/competition";
 import { dayKeyInTz, hhmmInTz, ymdAddDays, zonedTimeToUtc } from "@seazn/engine/scheduling/tz";
 import { DASH } from "./draft-templates";
 
@@ -120,6 +121,8 @@ export interface RankedEntrantRow {
    *  (engine's `StandingsRow.rank?`) — such a row cannot be compared. */
   rank?: number;
   points: number;
+  /** W2d (X-TB-6): every row of a started table with nothing counted is level — its order is the seed list. */
+  level?: boolean;
 }
 
 export interface Climber {
@@ -136,12 +139,17 @@ export interface Climber {
  * from `previous` (newly added to the table) or with no `rank` on either
  * side is excluded from consideration, never thrown on. No `previous`
  * snapshot at all (first-ever computation for this stage) -> null.
+ *
+ * W2d concern 2 (spec §5.7, anti-goal 3): a LEVEL table on either side -> null. Its `rank` is the seed order, not a
+ * place, so there is nothing to climb from or to — and since the generate writes a table stage's level table, every
+ * first result rolls one into `previous`.
  */
 export function biggestClimber(
   current: readonly RankedEntrantRow[],
   previous: readonly RankedEntrantRow[] | null | undefined,
 ): Climber | null {
   if (!previous || previous.length === 0) return null;
+  if (isLevelTable(previous) || isLevelTable(current)) return null;
   const prevByEntrant = new Map(previous.map((r) => [r.entrantId, r]));
   const candidates: { entrantId: string; from: number; to: number; delta: number; pointsGained: number }[] = [];
   for (const row of current) {

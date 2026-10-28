@@ -37,6 +37,7 @@ import { createDivision } from "@/server/usecases/divisions";
 import { createEntrants } from "@/server/usecases/entrants";
 import { createStages } from "@/server/usecases/stages";
 import { defaultOrderOf } from "@seazn/engine/testkit";
+import { chessRoundRobin, levelLeague, type StoredTable } from "@/server/engine-db/__tests__/helpers/stored-table-rows";
 
 type StandingsSlide = Extract<Slide, { kind: "standings" }>;
 
@@ -113,6 +114,9 @@ function normalTable(module_: { metrics: TableViewInput["metricSpecs"] }, cascad
     id: "t",
     division: { id: "d1", slug: "open", name: "Open" },
     caption: "League",
+    // W2d T17: no stage rules (a plain whole-point layout) and no date — these suites pin the rest of the view
+    rules: null,
+    dateOf: () => null,
     fullHref: "/",
     rows: snapshotRows.map(engineRow),
     metricSpecs: module_.metrics,
@@ -221,6 +225,49 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
   });
 });
 
+// ---- W2d T17 fix 1 (I3): the slide prints what the public table prints --------
+// RB2B-17: chess points are shown 1 / ½ / 0 "on every surface"; anti-goal 3: on a table with no counted fixture "no row
+// is shown or marked as first". Rows and rules from the engine's producers (`stored-table-rows`); the expected text is
+// FIDE's arithmetic, never the builder's.
+describe("W2d T17 fix 1: the standings slide prints the public table's points and places (RB2B-17, X-TB-6)", () => {
+  const IDS = ["c1", "c2", "c3", "c4"] as const;
+  const NAMES = { c1: "Anand", c2: "Bela", c3: "Clara", c4: "Dmitri" } as Record<string, string>;
+  async function slideOf(table: StoredTable, rules: unknown = table.doc): Promise<StandingsSlide> {
+    const slides = await buildPublicDivisionSlides({
+      division: { id: "d1", name: "Open" },
+      stages: [{ id: "sl", kind: "league", name: "League", table_rules: rules as never }],
+      pools: [],
+      fixtures: [],
+      standings: [{ stage_id: "sl", pool_id: null, rows: table.rows }],
+      entrants: table.rows.map((r) => ({ id: r.entrantId, display_name: NAMES[r.entrantId] ?? r.entrantId })),
+    });
+    const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
+    if (!slide) throw new Error("no standings slide built");
+    return slide;
+  }
+
+  it("chess: the stored half-points print 1½ / 1 / ½ / 0 (FIDE: A beat B, drew C, lost to D), places as ranked", async () => {
+    const chess = chessRoundRobin(IDS);
+    expect(chess.rows.find((r) => r.entrantId === "c1")!.points, "premise: the snapshot stores half-points").toBe(3);
+    const slide = await slideOf(chess);
+    expect(slide.rows.map((r) => [r.rank, r.name, r.points])).toEqual([["1", "Anand", "1½"], ["2", "Dmitri", "1"], ["3", "Clara", "½"], ["4", "Bela", "0"]]);
+    expect(slide.level).toBe(false);
+    // The pair: the same rows with no rules (a hand-built input) print the stored number — the unit is the rules'.
+    expect((await slideOf(chess, { tiebreakers: chess.doc.tiebreakers })).rows.map((r) => r.points)).toEqual(["3", "2", "1", "0"]);
+  });
+
+  it("a level table: every rank '–' and the slide says level (no first row); one counted result brings places back", async () => {
+    const level = levelLeague(["e1", "e2", "e3"]);
+    expect(level.rows.every((r) => r.level === true), "premise: the engine marks the empty table level").toBe(true);
+    const slide = await slideOf(level);
+    expect(slide.rows.map((r) => r.rank)).toEqual(["–", "–", "–"]);
+    expect(slide.level).toBe(true);
+    const played = await slideOf(chessRoundRobin(IDS));
+    expect(played.rows.map((r) => r.rank)).toEqual(["1", "2", "3", "4"]);
+    expect(played.level).toBe(false);
+  });
+});
+
 // ---- the organiser twin, through its real producer ---------------------------
 
 describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (organiser board, DB)", () => {
@@ -231,6 +278,8 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
     /** The division's own cascade override, set by direct SQL (it is what the
      *  organiser select must READ; the settings write path is not under test). */
     tiebreakers: string[] | null = null,
+    /** W2d T17: the snapshot's rows by entrant name, as the engine stored them (default: `snapshotRows`). */
+    rowsOf?: (idOf: ReadonlyMap<string, string>) => unknown[],
   ) {
     const { auth } = await seedOrg();
     const comp = await createCompetition(auth, { ends_on: "2030-12-31", name: "Ratio Cup", visibility: "public", branding: {} });
@@ -256,7 +305,7 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
     const stored = await sql<{ id: string; display_name: string }[]>`
       select id, display_name from entrants where division_id = ${division.id}`;
     const idOf = new Map(stored.map((e) => [e.display_name, e.id]));
-    const rows = snapshotRows.map((r, i) => ({ ...r, entrantId: idOf.get(LEDGER[i]!.name)! }));
+    const rows = rowsOf?.(idOf) ?? snapshotRows.map((r, i) => ({ ...r, entrantId: idOf.get(LEDGER[i]!.name)! }));
     await sql`
       insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq)
       values (${stage!.id}, null, ${sql.json(rows as never)}, 0)`;
@@ -280,6 +329,20 @@ describe.skipIf(!HAS_DB)("slideshow standings slide — the Pts ratio column (or
     const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
     expect(slide, "a standings slide").toBeDefined();
     expect(slide!.rows.map((r) => r.pointRatio)).toEqual(LEDGER.map((l) => l.want));
+  });
+
+  it("W2d T17 fix 1: a chess division's board prints the stored half-points as 1½ (RB2B-17), through the loader's rules", async () => {
+    const names = LEDGER.map((l) => l.name);
+    const { auth, division } = await seededDivision("boardgame", "classical", {}, null, (idOf) => {
+      const [a, b, c, d] = names.map((n) => idOf.get(n)!);
+      return chessRoundRobin([a!, b!, c!, d!]).rows;
+    });
+    const slides = await buildDivisionSlides(auth, division.id, "Open");
+    const slide = slides.find((s): s is StandingsSlide => s.kind === "standings");
+    expect(slide, "a standings slide").toBeDefined();
+    // Mexico beat Canada, drew Japan, lost to Ghana: FIDE 1 + ½ + 0 = 1½.
+    expect(slide!.rows.map((r) => [r.name, r.points])).toEqual([["Mexico", "1½"], ["Ghana", "1"], ["Japan", "½"], ["Canada", "0"]]);
+    expect(slide!.level).toBe(false);
   });
 
   it("a division whose cascade has no point_ratio (generic) renders the slide as it always was", async () => {

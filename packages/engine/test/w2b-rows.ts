@@ -19,6 +19,8 @@ export const OPEN = "⬜ open";
  *    until owner ruling 113 (2026-10-11) settled its wording ("Amends X-RS-1, X-RT-1 and X-WD-6"), so it carries 113;
  *  - X-WO-1 and VB-RT-1 carry owner ruling 108 (2026-10-11), which changed their text: a credited result pays the table
  *    points of its credited score (a volleyball side at fault at two sets all takes the 3-2 loss's point);
+ *    X-WO-1 now carries owner ruling 182 (W2d D6, 2026-10-20), which amended 108's text: a sport may declare a
+ *    loss-not-played value and table tennis declares 0 (ITTF 3.7.5.1); no other sport declares one (W2d Task 21, the fold);
  *  - X-RS-1 carries owner ruling 113 (2026-10-11), which changed its text after ruling 112 (a walkover stays
  *    recordable after the start until something is played): nothing played means not started, for every reason, and a
  *    retirement waits for play; ruling 114 keeps 112's "played" (any sport event, scoring or not). X-RT-1 carried 113 too;
@@ -41,7 +43,7 @@ export const W2B_ROWS: Readonly<Record<string, Readonly<Record<string, string>>>
   "cross-sport.md": {
     "X-RS-1": signed(118, "2026-10-12"), "X-RS-2": signed(83), "X-RS-3": signed(83),
     "X-DW-1": signed(84), "X-DW-2": signed(84), "X-DW-3": signed(84), "X-DW-4": signed(85),
-    "X-WO-1": signed(108, "2026-10-11"), "X-RT-1": signed(118, "2026-10-12"),
+    "X-WO-1": signed(182, "2026-10-20"), "X-RT-1": signed(118, "2026-10-12"),
     "X-AB-1": signed(120, "2026-10-12"), "X-AB-2": signed(88), "X-AB-3": signed(88), "X-AB-4": signed(89),
     "X-WD-1": signed(90), "X-WD-2": signed(90), "X-WD-3": signed(90), "X-WD-4": signed(90),
     "X-PS-1": signed(127, "2026-10-13"), "X-PS-2": signed(120, "2026-10-12"), "X-DE-1": signed(93), "X-WD-5": signed(90),

@@ -19,7 +19,7 @@ import { EngineError } from "../core/errors.ts";
 import { shuffle } from "../core/rng.ts";
 import type { EntrantId, StandingsDelta } from "../core/types.ts";
 import type { PartialScheduleKey, TiebreakerKey } from "../sport/module.ts";
-import { RATIO_LEDGERS, type RatioKey } from "./display.ts";
+import { RATIO_LEDGERS, fieldGoalsOf, ledgerDifference, type RatioKey } from "./display.ts";
 import {
   foldResults,
   resultsAmong,
@@ -408,15 +408,10 @@ function ratioComparator(key: RatioKey): RunComparator {
 // RATIO_LEDGERS pair the ratio of that ledger reads (BWF 16.2.3 "games
 // difference", 16.2.4 "points difference"), greater first. A row recording
 // neither half has no difference at all and sorts last, as `diff` does (#429);
-// one recorded half reads the other as 0, as the ratio does.
+// one recorded half reads the other as 0, as the ratio does. The difference is
+// display.ts's `ledgerDifference` — the one formula its column prints (T17).
 function differenceComparator(key: "set_ratio" | "point_ratio"): RunComparator {
-  const [won, lost] = RATIO_LEDGERS[key];
-  const difference = (row: StandingsRow): number | undefined => {
-    const w = metricOf(row, [won]);
-    const l = metricOf(row, [lost]);
-    return w === undefined && l === undefined ? undefined : (w ?? 0) - (l ?? 0);
-  };
-  return (a, b) => compareRecorded(difference(a), difference(b));
+  return (a, b) => compareRecorded(ledgerDifference(a, key), ledgerDifference(b, key));
 }
 
 // `wins` (W2d B2): the W column, less the overtime wins under winsCount
@@ -426,12 +421,9 @@ function winsOf(row: StandingsRow, ctx: RankContext): number {
   return ctx.winsCount === "regulation" ? row.won - ledgerOf(row, ["won_ot"]) : row.won;
 }
 
-// `field_goals` (W2d B3, FIH GTR App. 3): every goal not scored from a penalty
-// corner or a penalty stroke. An own goal is in `gf` (credited to the side it
-// benefits) and in no `goals_<kind>` ledger, so it counts. Missing reads 0.
-function fieldGoals(row: StandingsRow): number {
-  return ledgerOf(row, ["gf"]) - ledgerOf(row, ["goals_pc"]) - ledgerOf(row, ["goals_stroke"]);
-}
+// `field_goals` (W2d B3, FIH GTR App. 3) is display.ts's `fieldGoalsOf`: every
+// goal not scored from a penalty corner or a penalty stroke — the one formula
+// its column prints (T17).
 
 // The keys the refinement driver handles itself, because they need the tied
 // class (a mini-table, the class size, the stored draw) rather than a pairwise
@@ -448,8 +440,9 @@ interface RunContext extends RankContext {
   // in game points. Built once per call, and only when the cascade has sberger.
   readonly poolLedger: SwissTable | undefined;
   // Why a conditional step left a class unsplit (anti-goal 2), by entrant.
-  // A later split clears it (markTieBreak), except `h2h_incomplete`; a residual
-  // tie keeps it.
+  // A later split clears it (markTieBreak), except `h2h_incomplete`, which every
+  // later trace carries until a head-to-head step answers it (`h2hAnswered`); a
+  // residual tie keeps it.
   readonly notes: Map<EntrantId, TieBreakNote>;
   // W2d (ST-G12): `scheduledPairs` when it says anything (non-empty), else
   // undefined — every mini-schedule complete.
@@ -502,7 +495,7 @@ const COMPARATORS: Readonly<Record<PlainKey, RunComparator>> = {
   point_diff: differenceComparator("point_ratio"),
   // ATP 4.01 C.3-2: more matches played ranks higher ("a 2-1 record beats 2-0").
   matches_played: (a, b) => sgn(a.played - b.played),
-  field_goals: (a, b) => sgn(fieldGoals(a) - fieldGoals(b)),
+  field_goals: (a, b) => sgn(fieldGoalsOf(a) - fieldGoalsOf(b)),
 };
 
 // Inside an h2h block each key is its plain twin applied to the mini-table:
@@ -552,13 +545,16 @@ function groupBySort(cls: StandingsRow[], cmp: RunComparator, run: RunContext): 
 // Record on every row of a just-split tie group which cascade rule separated
 // it (doc 09 §2 tie-explanation popover). Later, finer splits overwrite — the
 // snapshot keeps the finest rule that applied to each row. A split answers any
-// earlier "could not split" note, so the note goes.
+// earlier "could not split" note, so the note goes — except `h2h_incomplete`.
 function markTieBreak(cls: readonly StandingsRow[], key: string, run: RunContext): void {
   const ids = cls.map((row) => row.entrantId);
   for (const row of cls) {
-    row.tieBreak = { key, with: ids.filter((id) => id !== row.entrantId) };
-    // W2d (ST-G12): a skipped head-to-head stays unanswered — no later step re-runs it for these rows.
-    if (run.notes.get(row.entrantId) !== "h2h_incomplete") run.notes.delete(row.entrantId);
+    // W2d (ST-G12; anti-goal 2, spec §5.6): a head-to-head step skipped for an incomplete mini-schedule stays unanswered
+    // — no later step re-runs it for these rows — so whatever splits them instead (fewest played, GD, seed, any step
+    // that is not head-to-head) says so on the trace. A head-to-head step that runs answers it first (`h2hAnswered`).
+    const incomplete = run.notes.get(row.entrantId) === "h2h_incomplete";
+    row.tieBreak = { key, with: ids.filter((id) => id !== row.entrantId), ...(incomplete ? { note: "h2h_incomplete" as const } : {}) };
+    if (!incomplete) run.notes.delete(row.entrantId);
   }
 }
 
@@ -696,6 +692,12 @@ function h2hIncomplete(cls: StandingsRow[], run: RunContext): StandingsRow[][] {
   return [cls];
 }
 
+// W2d T17 (anti-goal 2): a head-to-head step that runs on a COMPLETE mini-schedule answers an earlier skip — its class
+// (a strict part of the skipped one) has played every meeting — so "not complete" no longer explains these rows.
+function h2hAnswered(cls: readonly StandingsRow[], run: RunContext): void {
+  for (const row of cls) if (run.notes.get(row.entrantId) === "h2h_incomplete") run.notes.delete(row.entrantId);
+}
+
 // W2d (IH-TB-2): the block's class has an incomplete mini-schedule. The sport's
 // partial-schedule order ranks it (IIHF RBG:349-350), each split traced as the
 // block's own would be; whatever stays level goes on down the stage's order,
@@ -738,6 +740,7 @@ function h2hBlock(
   // W2d (ST-G12): the block reads a mini-table only when it is complete. (A
   // re-applied or excluded sub-group of a complete class is complete.)
   if (!scheduleComplete(cls, run)) return partialSchedule(cls, run);
+  h2hAnswered(cls, run);
   if (modifier === "h2h_exclusion") return h2hExclusion(cls, keys, run);
   const ordered = h2hPass(cls, keys, run);
   if (modifier !== "h2h_reapply") return ordered;
@@ -805,6 +808,7 @@ function h2hTwo(cls: StandingsRow[], explain: boolean, run: RunContext): Standin
   if (cls.length === 2) {
     // W2d (ST-G12): a match between them still to be decided — the matches so far are not "the match between them".
     if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);
+    h2hAnswered(cls, run);
     const mini = miniTable(cls, run);
     const groups = groupBySort(mini.rows, COMPARATORS.points, run);
     if (groups.length > 1) {
@@ -872,6 +876,7 @@ function refine(classes: StandingsRow[][], steps: readonly Step[], run: RunConte
           if (cls.length <= 1) return [cls];
           // W2d (ST-G12): direct encounter among a tied set that has not played out its meetings does not split.
           if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);
+          h2hAnswered(cls, run);
           const groups = directRefine(cls, run);
           if (explain && groups.length > 1) markTieBreak(cls, "direct", run);
           return groups;

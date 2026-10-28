@@ -407,6 +407,9 @@ interface PeriodAdapterSpec {
   stale: { raw: unknown; phase: string; narrow: unknown };
   /** A phase label no cfg of this sport declares. */
   alien: string;
+  /** W2d T18 (HK-TB-2, B3) — the goal type the scenarios' goals carry, where the sport's write path requires one (FIH:
+   *  a field goal). Absent ⇒ the goals stay typeless, which is the sport's ordinary goal (IIHF). */
+  goalKind?: string;
 }
 
 function periodAdapter(spec: PeriodAdapterSpec): TimeKernelAdapter {
@@ -428,7 +431,11 @@ function periodAdapter(spec: PeriodAdapterSpec): TimeKernelAdapter {
   // every case below with a §3.4 release.
   const goal = (stamp?: GameTime): ModuleEvent => ({
     type: `${module.key}.goal`,
-    payload: { by: home, ...(stamp === undefined ? {} : { at: stamp }) },
+    payload: {
+      by: home,
+      ...(spec.goalKind === undefined ? {} : { kind: spec.goalKind }),
+      ...(stamp === undefined ? {} : { at: stamp }),
+    },
   });
   const advance = (to: string, stamp?: GameTime): ModuleEvent => ({
     type: `${module.key}.period.advance`,
@@ -570,6 +577,7 @@ const fihAdapter = periodAdapter({
   // the `fih-shootout` cfg and unorderable under the plain outdoor one.
   stale: { raw: { shootout: { attempts: 5, suddenDeath: true } }, phase: "SHOOTOUT", narrow: {} },
   alien: "P1",
+  goalKind: "fg",
 });
 
 for (const adapter of [footballAdapter, iceAdapter, fihAdapter]) {

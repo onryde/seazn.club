@@ -7,6 +7,7 @@ import { EngineError } from "../core/errors.ts";
 import { awardReasonOf } from "../sport/forfeit-credit.ts";
 import type { AnySportModule, AwardScoreKeys, DecidedIn, MatchPointsBounds } from "../sport/module.ts";
 import { DECIDED_IN } from "./decided-in.ts";
+import type { TableLayout } from "./display.ts";
 import type { FixtureResult, StandingsRow } from "./standings.ts";
 import { AGAINST_KEYS, DIFF_KEYS, FOR_KEYS } from "./tiebreakers.ts";
 
@@ -457,6 +458,26 @@ export function reachableOutcomes(module: AnySportModule, cfg: unknown, stageKin
   for (const k of ["draw", "tie", "noResult"] as const) if (level.has(k)) out.add(k);
   for (const score of module.reachableSetScores?.(parsed) ?? []) out.add(`set:${score}`);
   return out;
+}
+
+/**
+ * W2d (spec §5.7; RBG §3.4, lines 343-344) — how a stage's table lays out its result columns under `rule`, over the
+ * outcomes the stage can produce (`reachableOutcomes`). A decision beyond regulation is counted APART (IIHF's OTW/OTL,
+ * "OT and GWS decisions both land in OTW/OTL") when the stage can reach it, the table books it a win (a draw-plus-bonus
+ * shoot-out is a draw on the table, B2) and the rule pays it differently from a regulation result on either side
+ * (`byChain`, the chain `payout` pays by): a split nobody is paid for is not a column (D9). A set-score map pays by set
+ * score, never by decision. `unit` is the rule's own.
+ */
+export function tableLayoutOf(rule: PointsRule, reachable: Iterable<OutcomeKey>): TableLayout {
+  const reach = new Set(reachable);
+  const apart = (["ot", "so"] as const).filter(
+    (d) =>
+      rule.bySetScore === undefined &&
+      reach.has(`win.${d}`) &&
+      !(d === "so" && rule.shootoutAs === "draw_plus_bonus") &&
+      (byChain(rule.win, d) !== rule.win.regulation || byChain(rule.loss, d) !== rule.loss.regulation),
+  );
+  return { apart, unit: rule.unit };
 }
 
 /** A rule field a stage can never pay (I1): a `bySetScore` map where the sport keeps no set table. */

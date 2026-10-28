@@ -6,6 +6,36 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 // and dated; this page IS the versioning promise (v3/08 §3).
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
+    date: "2026-10-28",
+    title: "Breaking: the standings export refuses a table with no results",
+    lines: [
+      "GET /divisions/{id}/exports/standings with no stored table now answers 404 STANDINGS_NOT_AVAILABLE (\"no standings yet\"), not 404 NOT_FOUND.",
+      "A division whose stored tables are all empty, or have no counted result yet, now gets the same 404 instead of a document with no rows or with the seed order printed as ranks. If a later stage's table is empty, the export prints the newest stage table that has results.",
+      "Chess and other half-point tables now print Pts as the public table does (\"1½\", not the stored 3); in XLSX that cell is text. Whole-point sports keep a numeric Pts cell.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
+    title: "Breaking: an imported hockey goal must record its type",
+    lines: [
+      "POST /divisions/{id}/events/import now rejects a stream whose hockey.goal has no payload.kind, as POST /fixtures/{id}/events does since 2026-10-27.",
+      "The call still returns 200. That stream's result is rejected with error.code import.fold_rejected and error.engineCode GOAL_KIND_REQUIRED, and nothing is written for its fixture. Other streams in the call are judged on their own.",
+      "Send kind: \"fg\" if the type is unknown. Ice hockey and every other sport are unchanged.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-27",
+    title: "Breaking: a hockey goal must record its type",
+    lines: [
+      "POST /fixtures/{id}/events with type hockey.goal now requires payload.kind: fg (field goal), pc (penalty corner), stroke (penalty stroke) or og (own goal, credited to the other side).",
+      "An untyped hockey goal is refused with 422 GOAL_KIND_REQUIRED (\"a goal in this sport must record its type\") and nothing is written. Send kind: \"fg\" if the type is unknown — what an untyped goal always counted as.",
+      "Untyped goals already recorded still replay as field goals and can still be voided. Ice hockey and every other sport are unchanged.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
     date: "2026-07-11",
     title: "Scoped keys, pins and rate-limit headers",
     lines: [
@@ -34,11 +64,8 @@ export default function ChangelogPage() {
         <p className="font-semibold text-slate-900">The promise</p>
         <p className="mt-1">
           Additive changes (new endpoints, new optional fields) land in place and
-          are announced here. Breaking changes never land in place — they get a
-          new version path (<code className="font-mono text-xs">/api/v2</code>)
-          and the old one keeps working through a sunset window announced months
-          ahead, with <code className="font-mono text-xs">Sunset</code> headers on
-          deprecated routes.
+          are announced here. Breaking changes are rare. Each one is listed here
+          with its date, what changed and what to send instead.
         </p>
       </div>
 

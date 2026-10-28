@@ -1,0 +1,47 @@
+[
+ {
+  "id": "t19-st-g29-field-goals-column-dropped",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "  { key: \"field_goals\", label: \"FG\", decimals: 0 },\n",
+  "replace": "  /*MUT*/\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "a column per new key in the order: set_diff, point_diff, field_goals"
+   }
+  ]
+ },
+ {
+  "id": "t19-st-g9-own-rule-tie-pays-zero",
+  "file": "packages/engine/src/competition/points.ts",
+  "find": "  const value = rule[key];\n",
+  "replace": "  const value = key === \"tie\" ? /*MUT*/ 0 : rule[key];\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/tables-rulebook.test.ts"
+    ],
+    "name": "CK-PT-1 under a stage's own rule a tie pays 1, not the 0 the W2c conversion paid"
+   }
+  ]
+ },
+ {
+  "id": "t19-p22-sberger-swiss-only-again",
+  "file": "packages/engine/src/competition/cascade-rules.ts",
+  "find": "  sberger: {},\n",
+  "replace": "  sberger: { swissOnly: true } /*MUT*/,\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/defaults-sweep.test.ts"
+    ],
+    "name": "X-TB-3 FB-TB-1 BG-TB-1 every sport × declared cfg × table kind: the default passes validateCascade"
+   }
+  ]
+ }
+]

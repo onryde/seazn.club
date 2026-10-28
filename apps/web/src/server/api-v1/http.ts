@@ -93,6 +93,8 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   STAGE_SEAT_DEPARTED: 409,
   // W2c (D7) — a malformed Armageddon (it names no Black), like INVALID_EVENT: the scorer re-sends it complete.
   TIEBREAK_COLOUR_REQUIRED: 422,
+  // W2d T18 (HK-TB-2, PS-7d) — a hockey goal without its type, beside INVALID_EVENT: the scorer re-sends it typed.
+  GOAL_KIND_REQUIRED: 422,
 };
 
 // HTTP status → stable machine code for non-engine errors.

@@ -123,6 +123,27 @@ describe("biggestClimber", () => {
     const current = [row("a", 2, 9), row("new", 1, 12)];
     expect(biggestClimber(current, previous)).toBeNull();
   });
+
+  // W2d concern 2 (spec §5.7, anti-goal 3): a LEVEL table (nothing counted yet) has no places — its `rank` is the seed
+  // order, never a position. Since the generate writes the level table, the first result rolls it into `previous_rows`;
+  // reading its ranks as places named a seed-4 winner "up from 4th to 1st".
+  const level = (entrantId: string, rank: number) => ({ entrantId, rank, points: 0, level: true });
+  const ranked = (rows: readonly { entrantId: string; rank: number; points: number }[]) =>
+    rows.map((r) => ({ entrantId: r.entrantId, rank: r.rank, points: r.points }));
+  it("W2d: out of a LEVEL previous table nobody climbs — its ranks are the seed order, not places", () => {
+    const previous = [level("a", 1), level("b", 2), level("c", 3), level("d", 4)];
+    const current = [row("d", 1, 3), row("b", 2, 0), row("c", 3, 0), row("a", 4, 0)];
+    expect(biggestClimber(current, previous)).toBeNull();
+    // The positive pair: the same move out of a RANKED table is a climb (d: 4th → 1st).
+    expect(biggestClimber(current, ranked(previous))).toEqual({ entrantId: "d", from: 4, to: 1 });
+  });
+
+  it("W2d: into a LEVEL current table (a void re-levelled it) nobody climbs either", () => {
+    const previous = [row("a", 1, 3), row("b", 2, 0), row("c", 3, 0)];
+    const current = [level("c", 1), level("b", 2), level("a", 3)];
+    expect(biggestClimber(current, previous)).toBeNull();
+    expect(biggestClimber(ranked(current), previous)).toEqual({ entrantId: "c", from: 3, to: 1 });
+  });
 });
 
 describe("computeLeaderboardMoves — leaderboard diff math", () => {

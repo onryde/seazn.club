@@ -7,7 +7,9 @@
   method. A builder check of the first draft raised further questions, and the owner answered them the same day
   ("All ok"); they are recorded as B1–B5 (§3). Items marked **orchestrator's call** are the f-w2d orchestrator's, not
   the owner's (`_RULES.md` R4, AGENTS.md class 17), and are to be put to the owner. Items marked **author's call** are
-  this spec's own choices where the decisions are silent. §17 lists them.
+  this spec's own choices where the decisions are silent. §17 lists them. **Approved by the owner 2026-10-20 at
+  `8168a0b92a`** (plan header). At the fold (W2d Task 21, 2026-10-28) D1–D11 became programme rulings 177–187, B1–B5
+  rulings 188–192, OC1–OC3 rulings 193–195 and the approval ruling 196, in `_INDEX.md`'s "Owner rulings".
 - **Worktree / branch:** spec on `/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2d`, branch
   `docs/format-matrix-w2d`, from `origin/main` `dec7b95d90`. The build branch is a fresh `feat/format-matrix-w2d` off
   main **after W2c (`feat/format-matrix-w2c`) merges** (D1).
@@ -202,6 +204,9 @@ code-facts F1–F12, docs-facts §7, and this spec's own reads (marked "spec").
 | P24 | Football `fair_play` with `fairPlay:false` is refused or ignored | It is emitted as 0 for every side, so the key is inert | `football.ts:1724` (spec) |
 | P25 | The tie what-if works for every sport | It returns null unless `points` is the first key, so a wins-first order loses it | `competition/tie-what-if.ts:54-60` (spec) |
 | P26 | One place resolves a division's cascade | Six files each resolve `tiebreakers ?? defaultTiebreakers` themselves | §6 rows W1–W6 (spec) |
+| P27 | A football shoot-out is scored with `football.penalty` kicks (§5.2, §13.5, brief Task 14) | `football.penalty` is an in-play penalty kick awarded to a side. A shoot-out kick is `football.shootout.kick`, applied in the SHOOTOUT phase | `football.ts:340-341,464-465,2233-2236` (T14) |
+| P28 | The stage activation writers are `usecases/stages.ts:2813` and `:3644` (§5.4, §6 W13, §13.5) | The lines moved. The two `pinStageTableRules` calls in the activating transactions are now at `:3051` and `:3889` | `usecases/stages.ts:3051,3889` (T14) |
+| P29 | The public standings serve the order's `source` and `pinnedAt` (§13 Smoke, brief Task 14) | `PublicDivisionStandings` serves rows only. `source` and `pinnedAt` come from the authed `GET /stages/{id}` `tableRules`, so the smoke reads them there (an authed read, a deviation from the brief's "public standings") and reads the order from the public route | `api-v1/schemas.ts:1441,1487-1492`; `scripts/smoke.ts:7576-7579` (T14) |
 
 ## 5. Engine design
 
@@ -234,7 +239,7 @@ Each sport module declares two things:
 
 | Sport | Reachable set | Events that prove OT / SO (fold → `outcome.method`) |
 |---|---|---|
-| football | regulation; `ot` if the stage's `extraTime.enabled`; `so` if `shootout` | `football.period` closing FT/ET → `regulation`/`extra_time` (`football.ts:1024-1038`); `football.penalty` kicks in the SHOOTOUT phase → `shootout` (`:1640-1656`); pad action `pad.football.action.shootoutKick` (`:2351`) |
+| football | regulation; `ot` if the stage's `extraTime.enabled`; `so` if `shootout` | `football.period` closing FT/ET → `regulation`/`extra_time` (`football.ts:1024-1038`); `football.shootout.kick` kicks in the SHOOTOUT phase → `shootout` (`:1640-1656`; P27: not `football.penalty`); pad action `pad.football.action.shootoutKick` (`:2351`) |
 | ice hockey | regulation; `ot` if `overtime ≠ null`; `so` if `shootout ≠ null` (IIHF default both; recreational neither, `icehockey.ts:194-199`) | `icehockey.period.advance` closing OT → `extra_time` (`period/kernel.ts:1039-1042,1173`); `icehockey.goal` in sudden-death OT (`:1141-1142`); `icehockey.shootout.attempt` → `shootout` (`:1325-1353`); event names `:1904-1910`; pad action `pad.<sport>.action.shootoutAttempt` (`:2087`) |
 | hockey (FIH) | regulation; `so` if `shootout ≠ null` (fih-shootout, or stage rules); `ot` if `overtime ≠ null` | the same kernel events under `hockey.*` |
 | cricket | regulation (`regulation`, `innings`, `dls`, wickets/runs margins); `so` if the stage's `superOver` (`super_over`, `boundary_count`) | `cricket.ts:966,986,1001,1187,1881,1884,1895` |
@@ -587,7 +592,7 @@ survivors stay W2e's.
 | W7 | `server/public-site/standings-view.ts:370,391`, `division-qualification.ts:53`, `qualification-view.ts:152,317` | cascade + module bounds | effective rules; bounds from `pointsRuleBounds` |
 | W8 | `components/public-site/standings-table.tsx:161-164`, `lib/tiebreak-label.ts:21` | popover with old keys | new key labels, "Drawn by lots on…", "head-to-head not complete", "level" |
 | W9 | `api/v1/stages/[id]/standings` (+`/override`), public `…/divisions/[divisionSlug]/standings` | rows | rows + `won_ot/won_so/lost_ot/lost_so`, `tieBreak.drawnAt`, `level` |
-| W10 | recompute triggers `usecases/scoring.ts:972`, `stages.ts:2287,2876,4972,5030`, `admin-fixture-config.ts:381` | unchanged | unchanged (they all go through W1) |
+| W10 | recompute triggers `usecases/scoring.ts:972`, `stages.ts:2287,2876,4972,5030`, `admin-fixture-config.ts:381` | unchanged | unchanged (they all go through W1). **Amended 2026-10-27 (Concern 2, programme ruling 217):** the triggers gain the generate and a seed confirm (`REAL_TABLE_KINDS`, `emptyFold: "skip"`), and a roster delete and Unpair (`"drop"`); the export skips level and empty tables. Programme decision log, W2d entry |
 | W11 | Swiss `buildSwissTable` (`tiebreakers.ts:723`) | reads post-rule `delta.points` | unchanged values for the defaults (parity sweep); 3/1/0 never offered on Swiss. Round-robin SB/direct read game points, not table points (B5) |
 | W13 | stage activation, `usecases/stages.ts:2813,3644` | `status = 'active'` | writes the pin in the same statement's transaction (§5.4, OC2) |
 | W14 | hockey pad goal action (`period/kernel.ts:1986`) | goal type optional | goal type required for hockey (FIH) (B3) |
@@ -812,7 +817,7 @@ test.** Every sweep and property returns its count, and zero checked is a failur
    - each check reports its count, and 0 fails.
 5. **Real producer → consumer** (class 1). Pad events go through the real `POST /api/v1/fixtures/{id}/events`, then the
    recompute, then `GET` the public standings:
-   - football group stage with shoot-out on: `football.penalty` kicks → `won_so`, the public row shows D for both and
+   - football group stage with shoot-out on: `football.shootout.kick` kicks (P27) → `won_so`, the public row shows D for both and
      the winner's 2 points (B2);
    - hockey (FIH) goal through the pad with a goal type → `field_goals` (B3), and a goal without one refused;
    - IIHF: `icehockey.period.advance` into OT + `icehockey.goal` → OTW/OTL and 2/1;

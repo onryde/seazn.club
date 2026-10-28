@@ -155,6 +155,9 @@ describe("buildTableView — cellNotes, parallel to cells", () => {
     id: "div-s1-overall",
     division: { id: "d1", slug: "div", name: "Div" },
     caption: "League",
+    // W2d T17: no stage rules (a plain whole-point layout) and no date — these suites pin the rest of the view
+    rules: null,
+    dateOf: () => null,
     fullHref: "/shared/o/c/div?tab=standings",
     rows,
     metricSpecs: [],

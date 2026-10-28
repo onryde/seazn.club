@@ -90,7 +90,12 @@ export async function putStageRules(
     tiebreakers?: readonly TiebreakerKey[] | null;
     crossGroupTiebreakers?: readonly TiebreakerKey[] | null;
   },
-): Promise<{ rules: Record<string, unknown> | null; points: PointsRule | null }> {
+): Promise<{
+  rules: Record<string, unknown> | null;
+  points: PointsRule | null;
+  tiebreakers: TiebreakerKey[] | null;
+  crossGroupTiebreakers: TiebreakerKey[] | null;
+}> {
   // The rule as the engine reads it (defaults applied), parsed here as well as at the route: an internal caller reaches
   // this usecase with no schema in front of it.
   const points = input.points === undefined || input.points === null ? input.points : PointsRule.parse(input.points);
@@ -285,15 +290,22 @@ export async function putStageRules(
       {
         rules: Record<string, unknown> | null;
         points: PointsRule | null;
+        tiebreakers: TiebreakerKey[] | null;
+        cross_group: TiebreakerKey[] | null;
         snapshots: boolean;
       }[]
     >`
       select config -> 'rules' as rules, config -> 'points' as points,
+             config -> 'tiebreakers' as tiebreakers, config -> 'crossGroupTiebreakers' as cross_group,
              exists (select 1 from standings_snapshots ss where ss.stage_id = ${stageId}) as snapshots
         from stages where id = ${stageId}`;
     return {
       rules: after!.rules ?? null,
       points: after!.points ?? null,
+      // The stage's OWN stored arms (SQL NULL arrives as null), never a resolved order: that is the loader's alone
+      // (table-rules-single-resolver.test.ts).
+      tiebreakers: after!.tiebreakers,
+      crossGroupTiebreakers: after!.cross_group,
       // A table already cached (a Swiss bye, an event-less walkover) is re-folded under the new points or order after the
       // commit: `getStandings` answers from the snapshot, and nothing else re-folds a stage nobody has played in.
       refold: writesTable && after!.snapshots,
@@ -314,6 +326,6 @@ export async function putStageRules(
   // void), so there is no promise left floating either way.
   if (out.refold) await recomputeStandings(auth.orgId, stageId);
   fireDivisionRevalidate(out.divisionId, out.competitionId);
-  // The answer stays `{rules, points}` (`StageRules` on the wire): the orders' HTTP arm and their answer are Task 13's.
-  return { rules: out.rules, points: out.points };
+  // The stage's four own arms as they now stand (`StageRules` on the wire, W2d Task 13).
+  return { rules: out.rules, points: out.points, tiebreakers: out.tiebreakers, crossGroupTiebreakers: out.crossGroupTiebreakers };
 }

@@ -17,8 +17,11 @@ import type { PageCtx, DivisionWhere } from "./ctx.ts";
 import { READS_ONLY, awaitScreen, navBudget, shoot, visit } from "./ctx.ts";
 import { DATA, NAME } from "../selectors.ts";
 import { paths } from "./paths.ts";
+import { LEVEL_RANK } from "@seazn/engine/competition";
 
-export interface UiTable { rows: { rank: number; name: string }[] }
+/** `rank` null: the row is LEVEL — the table has no counted result yet, so the page prints `LEVEL_RANK` ("–") and no
+ *  place (W2d T17, X-TB-6; anti-goal 3). */
+export interface UiTable { rows: { rank: number | null; name: string }[] }
 
 export class UnreadableStandingsRow extends Error {
   readonly row: number;
@@ -32,14 +35,18 @@ export class UnreadableStandingsRow extends Error {
 /** One table's rows from its [rank cell text, name] pairs, IN THE ORDER THE
  *  PAGE SHOWS THEM — never re-sorted: the comparison with the API table
  *  (Task 6) must see a page that orders its rows wrongly. The rank is the
- *  cell's leading number; a row without one, or without a name, is refused. */
+ *  cell's leading number, or null when the cell leads with the level mark
+ *  (W2d T17: an empty table prints "–" and a spoken "level" after it); a row
+ *  with neither, or without a name, is refused. */
 export function tablesFromCells(cells: readonly (readonly string[])[]): UiTable {
   return {
     rows: cells.map((row, i) => {
-      const rank = /^\s*(\d+)/.exec(row[0] ?? "")?.[1];
+      const text = row[0] ?? "";
+      const rank = /^\s*(\d+)/.exec(text)?.[1];
+      const level = rank === undefined && text.trimStart().startsWith(LEVEL_RANK);
       const name = (row[1] ?? "").trim();
-      if (row.length < 2 || rank === undefined || name === "") throw new UnreadableStandingsRow(i + 1, row);
-      return { rank: Number(rank), name };
+      if (row.length < 2 || (rank === undefined && !level) || name === "") throw new UnreadableStandingsRow(i + 1, row);
+      return { rank: level ? null : Number(rank), name };
     }),
   };
 }

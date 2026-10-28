@@ -10,7 +10,7 @@ Ice hockey shares the same underlying clock and period model but almost nothing 
 
 ## Goals
 
-Tap **Goal** and pick who scored from the roster, or leave it unattributed and confirm; the goal counts either way (see [crediting the player](/help/scoring/attribution)). Field hockey records no assists.
+Tap **Goal** and the pad first asks **What kind of goal?**, offering **Field goal**, **Penalty corner**, **Penalty stroke** and **Own goal**. Nothing is recorded until you answer, because the table breaks ties on field goals and so every goal needs its type. An own goal counts for the other side. Then pick who scored from the roster, or leave it unattributed and confirm; the goal counts either way (see [crediting the player](/help/scoring/attribution)). Field hockey records no assists.
 
 A penalty corner or penalty stroke gets its own **Set piece awarded** entry as it's given, separate from the goal it may or may not lead to — penalty corners awarded is the sport's signature statistic, and it counts whether or not anything came of it.
 
@@ -30,7 +30,9 @@ The timer on the pad is a hint only: tap **Release** when the clock says the sus
 
 ## Standings
 
-FIH outdoor pays 3/1/0 with draws standing. On shoot-out formats the table counts a shoot-out as a draw for both sides plus a bonus point for the team that wins it — with a draw worth 1, a shoot-out win is worth 2 and a shoot-out loss 1, and neither side is credited a win. Ties break on goal difference, then goals for, then head-to-head.
+FIH outdoor pays 3/1/0 with draws standing. On shoot-out formats the table counts a shoot-out as a draw for both sides plus a bonus point for the team that wins it — with a draw worth 1, a shoot-out win is worth 2 and a shoot-out loss 1, and neither side is credited a win.
+
+Teams level on points are split by matches won, goal difference and goals for; then by points, matches won, goal difference and goals for counted only in the matches between the tied teams; then by field goals; and last by lot. The table's **FG** column shows each team's field goals: every goal not scored from a penalty corner or a penalty stroke. An own goal counts as a field goal for the side it is credited to.
 
 ## Common questions
 

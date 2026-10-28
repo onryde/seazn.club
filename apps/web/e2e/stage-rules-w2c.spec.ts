@@ -12,7 +12,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { legacyPointsRule, pointsRuleAwardReachesTable } from "@seazn/engine/competition";
+import { PointsRule, pointsRuleAwardReachesTable, reachableOutcomes } from "@seazn/engine/competition";
 import { BRACKET_KINDS } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
@@ -645,8 +645,14 @@ async function holdRefresh(page: Page): Promise<{ seen: () => number; release: (
 }
 
 const DIVISION_BASE = { win: 4, draw: 2, loss: 1 };
-/** W2d: what the editor's three boxes save, as an outcome-keyed rule — the engine's reading of the W2c boxes. */
-const editorRule = (base: { win: number; draw: number; loss: number }) => legacyPointsRule({ base });
+/** W2d T16 (spec §5.3, §9 "Points section, widened"): the editor opens at the rule the stage PLAYS. With no rule of its own
+ *  and no pin that is the sport's own rule for a league stage under the division's cfg (`tablePointsRule`, as the engine
+ *  parses the cfg), and a Save of the boxes sends that shape: football's shoot-out booked `draw_plus_bonus` (B2), a set
+ *  sport's set table. Derived from the engine, never a body typed here (the W2c three-box reading is retired). */
+const sportLeagueRule = (sport: string, cfg: Record<string, unknown>): PointsRule => {
+  const m = builtinModules.find((x) => x.key === sport)!;
+  return PointsRule.parse((m.tablePointsRule as unknown as (c: unknown, k: string) => unknown)(m.configSchema.parse(cfg), "league"));
+};
 
 /** Only for the owner's per-screen verdict capture: the section cropped at 1280 / 768 / 320 into a SCRATCH dir, no page scroll
  *  at any of them. Unset in CI - never the repo. A tall viewport so the section is not clipped by the fold. */
@@ -671,6 +677,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   const rig = await seedPointsLeague(request, "football", { label: "points-football", config: { points: DIVISION_BASE }, entrantKind: "team" });
   const m = builtinModules.find((x) => x.key === "football")!;
   expect(pointsRuleAwardReachesTable(m), "premise: a goal sport's table reads a walkover score").toBe(true);
+  const divisionCfg = { ...(m.variants[rig.variant] as Record<string, unknown>), points: DIVISION_BASE };
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
   const section = sectionOf(page, rig.stageId);
@@ -680,7 +687,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   await expect(section.getByTestId("stage-points-use-division")).toBeChecked();
   await expect(section.getByTestId("stage-points-win")).toHaveCount(0);
   await expect(section.getByTestId("stage-points-save")).toHaveCount(0);
-  const divisionSentence = rulesLineText(PUB, pointsLine(editorRule(DIVISION_BASE)));
+  const divisionSentence = rulesLineText(PUB, pointsLine(sportLeagueRule("football", divisionCfg)));
   await expect(section.getByTestId("stage-points-preview")).toHaveText(divisionSentence);
 
   // Own points: the boxes start at the division's numbers (the prefill is the division, not a default of the editor's).
@@ -698,7 +705,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
   await section.getByTestId("stage-points-walkover-l").fill("2");
   await section.getByTestId("stage-points-award-w").fill("3");
   await section.getByTestId("stage-points-award-l").fill("0");
-  const want = { ...editorRule(DIVISION_BASE), forfeit: { winnerPoints: 7, loserPoints: 2, awardScore: [3, 0] as [number, number] } };
+  const want = { ...sportLeagueRule("football", divisionCfg), forfeit: { winnerPoints: 7, loserPoints: 2, awardScore: [3, 0] as [number, number] } };
   await shootSection(page, section, "editor", () => openMore(section));
   await expect(section.getByTestId("stage-points-preview"), "the live preview is the public line's own words").toHaveText(rulesLineText(PUB, pointsLine(want, { awardReaches: true })));
   const put = nextPointsPut(page, rig.stageId);
@@ -725,7 +732,7 @@ test("football league: the section prefills the DIVISION's points, saves a walko
 
   // Owner: "make sure that works" - a SECOND save of a DIFFERENT value, then a reload: the new rule is what is stored, what
   // the form holds and what the summary says (the first one is not).
-  const want2 = { ...editorRule({ ...DIVISION_BASE, win: 5 }), forfeit: { winnerPoints: 6, loserPoints: 1, awardScore: [3, 0] as [number, number] } };
+  const want2 = { ...sportLeagueRule("football", { ...divisionCfg, points: { ...DIVISION_BASE, win: 5 } }), forfeit: { winnerPoints: 6, loserPoints: 1, awardScore: [3, 0] as [number, number] } };
   const words2 = rulesLineText(PUB, pointsLine(want2, { awardReaches: true }));
   expect(words2, "premise: the second rule reads differently from the first").not.toBe(rulesLineText(PUB, pointsLine(want, { awardReaches: true })));
   await again.getByTestId("stage-points-win").fill("5");
@@ -787,15 +794,26 @@ test("badminton league: a set sport shows the walkover points and NO score box, 
   const rig = await seedPointsLeague(request, "badminton", { label: "points-badminton" });
   const m = builtinModules.find((x) => x.key === "badminton")!;
   expect(pointsRuleAwardReachesTable(m), "premise: a set sport's table never reads a walkover score").toBe(false);
-  const pair = (parsedCfg("badminton", rig.variant).pointsMap as Record<string, [number, number]>)["*"]!;
-  const base = { win: pair[0], draw: 0, loss: pair[1] };
+  const cfg = parsedCfg("badminton", rig.variant);
+  const pair = (cfg.pointsMap as Record<string, [number, number]>)["*"]!;
+  // W2d T16 (D10(a)): under a set table the win and the loss pay through one row per final set score the stage reaches,
+  // as the engine answers; there is no plain win box.
+  const scores = [...reachableOutcomes(m, cfg as never, "league")].filter((k) => k.startsWith("set:")).map((k) => k.slice("set:".length));
+  expect(scores.length, "premise: a badminton league reaches final set scores").toBeGreaterThan(0);
   await page.goto(await divisionPath(request, rig.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
   const section = sectionOf(page, rig.stageId);
   await expect(section).toBeVisible({ timeout: STEP_MS });
   await section.getByTestId("stage-points-use-division").uncheck();
   await expect(section.getByTestId("stage-points-draw"), "a sport that cannot draw has no draw box").toHaveCount(0);
-  await expect(section.getByTestId("stage-points-win")).toHaveValue(String(base.win));
+  await expect(section.getByTestId("stage-points-win"), "under a set table: no plain win box").toHaveCount(0);
+  let setRows = 0;
+  for (const s of scores) {
+    await expect(section.getByTestId(`stage-points-set-${s}-w`), `${s}: the division's pair, the winner`).toHaveValue(String(pair[0]));
+    await expect(section.getByTestId(`stage-points-set-${s}-l`), `${s}: the division's pair, the loser`).toHaveValue(String(pair[1]));
+    setRows++;
+  }
+  expect(setRows, "set rows checked").toBe(scores.length);
   await openMore(section);
   await expect(section.getByTestId("stage-points-walkover-w")).toBeVisible();
   await expect(section.getByTestId("stage-points-award-w"), "I3: the server refuses a walkover score here, so none is offered").toHaveCount(0);
@@ -807,7 +825,7 @@ test("badminton league: a set sport shows the walkover points and NO score box, 
   const sent = (await put).postDataJSON() as { points: { forfeit?: Record<string, unknown> } };
   expect(Object.keys(sent)).toEqual(["points"]);
   expect(sent.points.forfeit, "no awardScore key on a set sport").toEqual({ winnerPoints: 5, loserPoints: 1 });
-  const want = { ...editorRule(base), forfeit: { winnerPoints: 5, loserPoints: 1 } };
+  const want = { ...sportLeagueRule("badminton", m.variants[rig.variant] as Record<string, unknown>), forfeit: { winnerPoints: 5, loserPoints: 1 } };
   await expect.poll(() => storedPoints(request, rig.divisionId, rig.stageId), { timeout: STEP_MS }).toEqual(want);
   // W2d Task 10 (PS-5d): pinned at generate, re-pinned by the save above, so the walkover pays the saved 5 / 1.
   await rig.start();
@@ -882,7 +900,11 @@ test("generic bonus editor: the margin bonuses are offered where the sport feeds
   await expect.poll(async () => ((await storedPoints(request, divisionId, stageId)) as { bonuses: unknown[] } | null)?.bonuses, { timeout: STEP_MS }).toEqual([]);
 });
 
-test("ice hockey: a division that scores overtime separately gets the can't-set-per-stage state - the reason, no input, nothing sent (W2d T10 fix round 1 I2); the server refuses a flat stage rule there; a stored own rule is read beside the reason and clears; the plain variant keeps the editor", async ({ page, request }) => {
+// W2d Task 16 retired fix round 1 I2's "can't be set per stage yet" state: the widened section states every split the sport
+// pays apart (spec §9 "Points section, widened"), so IIHF's overtime is two boxes, a save sends the split, and the server's
+// flat-over-split guard (POINTS_SPLIT_FLATTENED) is said INLINE when a draft would still drop one. The numbers are the
+// rulebook's (IIHF 3-2-1-0: a regulation win 3, an overtime or shoot-out win 2 and its loss 1, a regulation loss 0).
+test("ice hockey (IIHF): the editor states the overtime split - its boxes open at the rulebook's 3/2/1/0, a save sends the split and the server stores it; half a split is kept and both overtime boxes left empty are refused inline before Save; the server still refuses a flat rule; a stored flat rule is said inline and clears; the plain variant keeps the editor", async ({ page, request }) => {
   test.setTimeout(180_000);
   const m = builtinModules.find((x) => x.key === "icehockey")!;
   const variants = Object.keys(m.variants);
@@ -892,7 +914,8 @@ test("ice hockey: a division that scores overtime separately gets the can't-set-
   expect(split, "premise: the rulebooks split an ice-hockey variant (iihf)").toBeDefined();
   expect(plain, "premise: and one they do not").toBeDefined();
   const reasons = RULEBOOK_SPLITS[`icehockey/${split}`]!;
-  // The sentence the product renders, read off the en dictionary (W2c's copy, restored).
+  const IIHF = { win: 3, winOt: 2, lossOt: 1, loss: 0 };
+  // The refusal the product renders, read off the en dictionary.
   const sentence = L["rules.err.pointsRuleInexpressible"]!.replace(
     "{reason}",
     L["rules.err.pointsSplit"]!.replace("{fields}", reasons.map((r) => L[`rules.err.pointsSplit.${r}`]!).join(", ")),
@@ -901,43 +924,75 @@ test("ice hockey: a division that scores overtime separately gets the can't-set-
   await page.goto(await divisionPath(request, a.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   await dismissCookieBanner(page);
   const section = sectionOf(page, a.stageId);
-  // The editor's boxes are a flat rule: a Save here would pay an overtime win as regulation's. So: the reason, and nothing to send.
-  await expect(section).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: STEP_MS });
-  await expect(section.getByTestId("stage-points-inexpressible")).toHaveText(sentence);
-  await expect(section.locator("input, select, button"), "no control: nothing can be sent").toHaveCount(0);
+  await expect(section).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(section.getByTestId("stage-points-inexpressible"), "the not-yet state is gone").toHaveCount(0);
+  // Inheriting: what the stage plays, row by row - the overtime rows are there.
+  await expect(section.getByTestId("stage-points-row-win-ot")).toContainText(L["stagePoints.row.winOt"]!);
+  await expect(section.getByTestId("stage-points-row-loss-ot")).toContainText(L["stagePoints.row.lossOt"]!);
+  await section.getByTestId("stage-points-use-division").uncheck();
+  await expect(section.getByTestId("stage-points-win")).toHaveValue(String(IIHF.win));
+  await expect(section.getByTestId("stage-points-win-ot")).toHaveValue(String(IIHF.winOt));
+  await expect(section.getByTestId("stage-points-loss-ot")).toHaveValue(String(IIHF.lossOt));
+  await expect(section.getByTestId("stage-points-loss")).toHaveValue(String(IIHF.loss));
+  await expect(section.getByTestId("stage-points-refusal"), "the sport's own split: nothing to refuse").toHaveCount(0);
   await expectNoHorizontalScroll(page);
-  await shootSection(page, section, "split-state");
-  // Defence in depth: the server refuses the flat rule the editor would have sent, typed, and stores nothing.
-  const rule = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, tie: 0, noResult: 0, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] };
-  const refused = await apiJson<unknown>(request, `/api/v1/stages/${a.stageId}/rules`, "PUT", { points: rule });
+  await shootSection(page, section, "split-editor");
+
+  // ONE overtime box left empty is still a split (spec D9: a blank row pays its fallback, here a win's; the loss in
+  // overtime keeps its 1), so nothing is refused and Save stays on.
+  await section.getByTestId("stage-points-win-ot").fill("");
+  await expect(section.getByTestId("stage-points-loss-ot"), "the other overtime box keeps its split").toHaveValue(String(IIHF.lossOt));
+  await expect(section.getByTestId("stage-points-refusal"), "half a split is a rule the organiser can state").toHaveCount(0);
+  await expect(section.getByTestId("stage-points-save")).toBeEnabled();
+  // BOTH left empty is the flat rule over IIHF's split (no shoot-out box holds one either: the sport's rule has none): the
+  // server's refusal (POINTS_SPLIT_FLATTENED), said before Save, and Save is off.
+  await expect(section.getByTestId("stage-points-win-so"), "premise: the shoot-out boxes hold no split").toHaveValue("");
+  await expect(section.getByTestId("stage-points-loss-so")).toHaveValue("");
+  await section.getByTestId("stage-points-loss-ot").fill("");
+  await expect(section.getByTestId("stage-points-refusal")).toHaveText(sentence);
+  await expect(section.getByTestId("stage-points-save")).toBeDisabled();
+  // Filled again, moved off the sport's numbers: the save sends the split and the server stores it.
+  await section.getByTestId("stage-points-win-ot").fill(String(IIHF.winOt));
+  await section.getByTestId("stage-points-loss-ot").fill(String(IIHF.lossOt));
+  await section.getByTestId("stage-points-win").fill("4");
+  await expect(section.getByTestId("stage-points-refusal")).toHaveCount(0);
+  const put = nextPointsPut(page, a.stageId);
+  await section.getByTestId("stage-points-save").click();
+  const sent = (await put).postDataJSON() as { points: { win: Record<string, number>; loss: Record<string, number> } };
+  expect([sent.points.win.regulation, sent.points.win.ot, sent.points.loss.ot, sent.points.loss.regulation], "the split is in the body").toEqual([4, IIHF.winOt, IIHF.lossOt, IIHF.loss]);
+  await expect.poll(async () => ((await storedPoints(request, a.divisionId, a.stageId)) as { win?: { ot?: number } } | null)?.win?.ot, { timeout: STEP_MS }).toBe(IIHF.winOt);
+
+  // Defence in depth: the server refuses a flat rule from any other caller, typed, and keeps what is stored.
+  const flat = { win: { regulation: 3 }, draw: 1, loss: { regulation: 0 }, tie: 0, noResult: 0, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [] };
+  const refused = await apiJson<unknown>(request, `/api/v1/stages/${a.stageId}/rules`, "PUT", { points: flat });
   expect(refused.status, "a flat rule over IIHF's split").toBe(422);
   expect(refused.error, "typed, naming the splits").toMatchObject({ code: "POINTS_SPLIT_FLATTENED", splits: [...reasons] });
-  expect(await storedPoints(request, a.divisionId, a.stageId), "nothing stored").toBeNull();
+  expect(((await storedPoints(request, a.divisionId, a.stageId)) as { win?: { ot?: number } } | null)?.win?.ot, "the split rule kept").toBe(IIHF.winOt);
 
-  // A stage that STORES its own rule anyway (an API caller's, or a row from before): read beside the reason, and it clears.
+  // A stage that STORES a flat rule anyway (a row from before the guard): its boxes open at it, the refusal says why it
+  // cannot be saved as it is, and ticking back to the division's points clears it.
   const own = { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result" as const, unit: "whole" as const, bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } };
   await withDb(async (sql) => {
     await sql`update stages set config = config || ${sql.json({ points: own })} where id = ${a.stageId}`;
   });
   await page.reload({ waitUntil: "load" });
   const stored = sectionOf(page, a.stageId);
-  await expect(stored).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: STEP_MS });
-  await expect(stored.getByTestId("stage-points-inexpressible")).toHaveText(sentence);
-  await expect(stored.getByTestId("stage-points-readonly")).toHaveText(L["stagePoints.ownPoints"]!);
-  await expect(stored.getByTestId("stage-points-preview"), "the rule it plays, in the public line's words").toHaveText(rulesLineText(PUB, pointsLine(own, { awardReaches: pointsRuleAwardReachesTable(m) })));
-  await expect(stored.locator("input, select"), "still no input").toHaveCount(0);
+  await expect(stored).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(stored).toHaveAttribute("data-stage-points-basis", "own");
+  await expect(stored.getByTestId("stage-points-use-division")).not.toBeChecked();
+  await expect(stored.getByTestId("stage-points-win")).toHaveValue(String(own.win.regulation));
+  await expect(stored.getByTestId("stage-points-refusal")).toHaveText(sentence);
   await expectNoHorizontalScroll(page);
-  await shootSection(page, stored, "stored-split");
+  await shootSection(page, stored, "stored-flat");
+  await stored.getByTestId("stage-points-use-division").check();
   const clearPut = nextPointsPut(page, a.stageId);
-  await stored.getByTestId("stage-points-clear").click();
+  await stored.getByTestId("stage-points-save").click();
   expect((await clearPut).postDataJSON(), "the clear sends the strict body, points null").toEqual({ points: null });
   await expect.poll(() => storedPoints(request, a.divisionId, a.stageId), { timeout: STEP_MS }).toBeNull();
-  await page.reload({ waitUntil: "load" });
-  await expect(sectionOf(page, a.stageId).getByTestId("stage-points-clear"), "a reload: nothing stored, nothing to clear").toHaveCount(0, { timeout: STEP_MS });
-  await expect(sectionOf(page, a.stageId)).toHaveAttribute("data-stage-points-state", "inexpressible");
   const b = await seedStage(request, "icehockey", { kind: "league", label: "points-plain", variant: plain });
   await page.goto(await divisionPath(request, b.divisionId, "?tab=fixtures"), { waitUntil: "load" });
-  await expect(sectionOf(page, b.stageId), "the positive pair: no split, the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(sectionOf(page, b.stageId), "the plain variant: the editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  await expect(sectionOf(page, b.stageId).getByTestId("stage-points-row-win-ot"), "and no overtime row of its own").toHaveCount(0);
 });
 
 test("a knockout stage has no points section (no table to rank), a league of the same division does", async ({ page, request }) => {

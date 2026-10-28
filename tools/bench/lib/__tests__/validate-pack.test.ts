@@ -3137,7 +3137,8 @@ describe("engine facts that make two of this file's mirrors unfalsifiable today"
     for (const [key, variantKey, markerType] of period) {
       const sportModule = byKey(key);
       const cfg = cfgOf(sportModule, variantKey);
-      const goal = { type: `${key}.goal`, payload: { by: "@e-home" } };
+      // W2d T18: a hockey goal carries its type — the pack fold is strict, and the write path refuses one without.
+      const goal = { type: `${key}.goal`, payload: key === "hockey" ? { by: "@e-home", kind: "fg" } : { by: "@e-home" } };
       const events = fillPeriodMarkers({
         stage: undefined,
         variantKey: variantKey,

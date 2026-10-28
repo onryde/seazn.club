@@ -5912,41 +5912,147 @@ test("W2c stage points section at every width: the sentence, More, the walkover 
   expect(here, `the points section's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls(section));
   await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 
-  // --- ice hockey (a division that scores overtime separately): the can't-set-per-stage state (W2d T10 fix round 1 I2) ------
-  // The editor's boxes are a flat rule, which would pay IIHF's overtime win as regulation's: the section says why and sends
-  // nothing. The splitting variant is the rulebooks' (`_points-split-rulebook.ts`).
+  // --- ice hockey (a division that scores overtime separately): the editor states the split (W2d T16 retired T10 fix round 1
+  // I2's not-yet card). The overtime boxes hold the floor, nothing clips, the control set is 1280's. The splitting variant is
+  // the rulebooks' (`_points-split-rulebook.ts`).
   const hockey = builtinModules.find((m) => m.key === "icehockey")!;
   const splitVariant = Object.keys(hockey.variants).find((v) => RULEBOOK_SPLITS[`icehockey/${v}`] !== undefined);
   expect(splitVariant, "premise: the rulebooks split an ice-hockey variant (iihf)").toBeDefined();
   const ih = await seed("icehockey", splitVariant, "icehockey");
   await page.goto(await divisionPath(page.request, ih.divisionId, "?tab=fixtures"), { waitUntil: "load" });
   const card = page.getByTestId(`stage-points-${ih.stageId}`);
-  await expect(card).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: 20_000 });
-  await expect(card.getByTestId("stage-points-inexpressible"), "the reason is on the card").toBeVisible();
-  await expect(card.locator("input, select, button"), "no control: nothing can be sent").toHaveCount(0);
+  await expect(card).toHaveAttribute("data-stage-points-state", "editor", { timeout: 20_000 });
+  await expect(card.getByTestId("stage-points-row-win-ot"), "the overtime row is on the card").toBeVisible();
+  await card.getByTestId("stage-points-use-division").uncheck();
+  for (const id of ["stage-points-win", "stage-points-win-ot", "stage-points-loss-ot", "stage-points-loss"]) await assertTapFloor(card.getByTestId(id), `ice hockey ${id}`);
   const cclip = await overflowingIn(page, `[data-testid="stage-points-${ih.stageId}"]`, "*", "the ice hockey section is missing");
   expect(cclip.clipped, `nothing in the ice hockey section is clipped at ${projectWidth}`).toEqual([]);
   await expectNoHorizontalScroll(page);
+  await openMoreHere(card); // the walkover row and bonuses are folded on a phone; 1280 shows them (class 22)
+  const ihHere = await visibleControls(card);
+  expect(ihHere, "the overtime boxes are among the controls read").toEqual(expect.arrayContaining(["stage-points-win-ot", "stage-points-loss-ot"]));
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(ihHere, `the ice hockey editor's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls(card));
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
 
-  // --- the same division, a stage that STORES its own rule: read beside the reason, its one control (clear) on the 44px floor,
-  // nothing clipped, the same control set as 1280 ------------------------------------------------------------------------
+  // --- the same division, a stage that STORES a flat rule (a row from before the guard): the editor opens at it with the
+  // refusal inline; the refusal line wraps inside the card, nothing clipped, the same control set as 1280 -----------------
   await withDb(async (sql) => {
     await sql`update stages set config = config || ${sql.json({ points: { win: { regulation: 4 }, draw: 1, loss: { regulation: 0 }, shootoutAs: "result", unit: "whole", bonuses: [], forfeit: { winnerPoints: 3, loserPoints: 1 } } })} where id = ${ih.stageId}`;
   });
   await page.reload({ waitUntil: "load" });
   const legacy = page.getByTestId(`stage-points-${ih.stageId}`);
-  await expect(legacy).toHaveAttribute("data-stage-points-state", "inexpressible", { timeout: 20_000 });
-  await expect(legacy.getByTestId("stage-points-readonly"), "its own rule is read").toBeVisible();
-  await expect(legacy.locator("input, select"), "still no input").toHaveCount(0);
-  await assertTapFloor(legacy.getByTestId("stage-points-clear"), "Use the division's points (ice hockey)");
+  await expect(legacy).toHaveAttribute("data-stage-points-basis", "own", { timeout: 20_000 });
+  await expect(legacy.getByTestId("stage-points-refusal"), "the refusal is on the card").toBeVisible();
+  await assertTapFloor(legacy.getByTestId("stage-points-use-division").locator("xpath=ancestor::label[1]"), "Use the division's points (ice hockey)");
   const lclip = await overflowingIn(page, `[data-testid="stage-points-${ih.stageId}"]`, "*", "the stored-rule section is missing");
   expect(lclip.clipped, `nothing in the stored-rule section is clipped at ${projectWidth}`).toEqual([]);
   await expectNoHorizontalScroll(page);
+  await openMoreHere(legacy);
   const legacyHere = await visibleControls(legacy);
-  expect(legacyHere.length, "the stored-rule state's one control was read").toBe(1);
+  expect(legacyHere.length, "the stored-rule editor's controls were read").toBeGreaterThan(3);
   await page.setViewportSize({ width: 1280, height: 900 });
-  expect(legacyHere, `the stored-rule state's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls(legacy));
+  expect(legacyHere, `the stored-rule editor's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls(legacy));
   await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+});
+
+// W2d Task 15 (spec §9 "Tie-breaks"): the stage's Tie-breaks section at every width. One DOM, branched: the heading, the badge
+// and the lock line stay visible, the ordered list folds behind ONE phone disclosure below md (AGENTS.md class 22: wait on
+// `toBeAttached`, open the fold only where its toggle is the visible kind). The evidence: the list's controls (the arrows,
+// remove, "+ Add step", Reset, Save) hold the 44px floor, nothing clips or scrolls, the visible control set (membership,
+// order, repeats) is 1280's, and a started stage's lock line fits with no control left.
+test("W2d stage Tie-breaks section at every width: the fold opens, the arrows, remove, add, reset and Save hold the 44px floor, nothing clips or scrolls, the control set matches 1280, and the locked state fits", async ({
+  page,
+  request,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const projectWidth = page.viewportSize()!.width;
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2d T15 tie-breaks ${TAG}-${testInfo.project.name}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: "tie-breaks division",
+    sport_key: "football",
+    variant_key: "11-a-side",
+  });
+  expect(div.status, `division: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const added = await addEntrantsViaApi(request, div.data!.id, [`Asha FC ${TAG}`, `Bala FC ${TAG}`, `Chen FC ${TAG}`], "team");
+  expect(added.status, "entrants").toBeLessThan(300);
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", { seq: 1, kind: "league", name: "Pool A" });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  const stageId = stage.data!.id;
+
+  /** The section's visible controls in DOM order (the phone toggle left out: it is the one phone-only control), by testid. */
+  const visibleControls = (root: Locator) =>
+    root.evaluate((el) =>
+      Array.from(el.querySelectorAll<HTMLElement>("input, select, button"))
+        .filter((c) => c.getAttribute("data-role") !== "phone-disclosure-toggle")
+        .filter((c) => {
+          const r = c.getBoundingClientRect();
+          return r.width > 0 && r.height > 0 && getComputedStyle(c).visibility !== "hidden";
+        })
+        .map((c) => c.getAttribute("data-testid") ?? c.tagName),
+    );
+  const openFold = async (root: Locator): Promise<void> => {
+    const toggle = root.locator('[data-role="phone-disclosure-toggle"]');
+    if ((await toggle.isVisible()) && (await toggle.getAttribute("aria-expanded")) !== "true") await toggle.click();
+  };
+
+  await page.goto(await divisionPath(page.request, div.data!.id, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const section = page.getByTestId(`stage-tiebreaks-${stageId}`);
+  await expect(section).toBeAttached({ timeout: 20_000 });
+  await expect(section).toHaveAttribute("data-state", "editor");
+  await expect(section.getByTestId("stage-tiebreaks-badge"), "the badge stays outside the fold").toBeVisible();
+  const toggle = section.locator('[data-role="phone-disclosure-toggle"]');
+  const phone = projectWidth < 768;
+  expect(await toggle.isVisible(), `the fold's toggle is a phone control (${projectWidth})`).toBe(phone);
+  if (phone) {
+    await assertTapFloor(toggle, "Show the order");
+    await expect(section.getByTestId("stage-tiebreaks-list"), "the list is folded on a phone").toBeHidden();
+  }
+  await openFold(section);
+  await expect(section.getByTestId("stage-tiebreaks-list")).toBeVisible();
+  // A middle step moves: its arrows and remove on the floor (the first and last steps are pinned and carry none).
+  const rows = section.locator('[data-testid^="stage-tiebreaks-row-"]');
+  const n = await rows.count();
+  expect(n, "the order has middle steps").toBeGreaterThan(2);
+  for (const id of ["stage-tiebreaks-down-1", "stage-tiebreaks-remove-1", "stage-tiebreaks-up-2", "stage-tiebreaks-reset"]) await assertTapFloor(section.getByTestId(id), id);
+  await section.getByTestId("stage-tiebreaks-remove-1").click(); // a step removed: "+ Add step" offers it back, Save shows
+  await assertTapFloor(section.getByTestId("stage-tiebreaks-add"), "+ Add step");
+  await assertTapFloor(section.getByTestId("stage-tiebreaks-save"), "Save order");
+  const clip = await overflowingIn(page, `[data-testid="stage-tiebreaks-${stageId}"]`, "*", "the tie-breaks section is missing");
+  expect(clip.clipped, `nothing in the tie-breaks section is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const dims = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(dims.scroll, `${projectWidth}: scrollWidth ${dims.scroll} within clientWidth ${dims.client}`).toBeLessThanOrEqual(dims.client);
+  const here = await visibleControls(section);
+  expect(here.length, "the section's controls were read").toBeGreaterThan(5);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  expect(here, `the tie-breaks section's visible control set at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await visibleControls(section));
+  await page.setViewportSize({ width: projectWidth, height: page.viewportSize()!.height });
+
+  // Generated and a first match started: the server lists the stage (`formatLockedStageIds`) — the lock line names it, the
+  // order is still listed, and no control is left at any width.
+  const gen = await apiJson<{ fixtures: { id: string }[] }>(request, `/api/v1/stages/${stageId}/generate`, "POST");
+  expect(gen.status, `generate: ${JSON.stringify(gen.error)}`).toBeLessThan(300);
+  const started = await apiJson(request, `/api/v1/divisions/${div.data!.id}/start`, "POST");
+  expect(started.status, `start division: ${JSON.stringify(started.error)}`).toBeLessThan(300);
+  const first = await apiJson(request, `/api/v1/fixtures/${gen.data!.fixtures[0]!.id}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+  expect(first.status, `start match: ${JSON.stringify(first.error)}`).toBe(201);
+  await page.reload({ waitUntil: "load" });
+  const locked = page.getByTestId(`stage-tiebreaks-${stageId}`);
+  await expect(locked).toHaveAttribute("data-state", "locked", { timeout: 20_000 });
+  await expect(locked.getByTestId("stage-tiebreaks-locked")).toBeVisible();
+  await openFold(locked);
+  await expect(locked.getByTestId("stage-tiebreaks-list")).toBeVisible();
+  expect(await visibleControls(locked), "locked: no control").toEqual([]);
+  const lclip = await overflowingIn(page, `[data-testid="stage-tiebreaks-${stageId}"]`, "*", "the locked tie-breaks section is missing");
+  expect(lclip.clipped, `nothing in the locked section is clipped at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
 });
 
 // W2c Task 19 (S2, S4): the match rules block on the fixture console, and the run sheet's "Format changed" chip, at every
@@ -6372,4 +6478,144 @@ test("arbiter round column: below md the column leads the page; from md it is th
     `[arbiter-column ${width}px] data-phase=${phase}; ${relations.length}/${expectedRelations} layout relations held (${relations.join("; ")}); ${counts.join("; ")}; ` +
       `control set ${here!.length} at ${width}px vs ${desk!.length} at 1280 (column ${inColumn(here!).length} vs ${inColumn(desk!).length}, waiting list ${inWaiting(here!).length} vs ${inWaiting(desk!).length})`,
   );
+});
+
+// ── W2d Task 17: the public table's new columns at every width ─────────────────────────────────────────────────────────
+//
+// SPEC §5.7 (IIHF OTW/OTL, RBG:343-344; chess half-points, D10(b)). One ice hockey league of three under IIHF rules, seeded
+// through the real event route: Ash beats Birch in overtime (an OTW for Ash, an OTL for Birch) and Birch beats Cedar in
+// regulation. Both public tables — the division page and the hub's Table tab — print OTW and OTL at this width, and the
+// OT result is in its own column, not in W. Nothing scrolls the page sideways; the division table's own sideways scroll
+// is a reachable rail (a tab stop with a name, AGENTS class 23), never clipped content. This block seeds its own league
+// and reads nothing an earlier test left (the file is serial: a red here is a floor for the count, class 21). Its helpers
+// are imported inside the test, so the file's import block is untouched.
+test("W2d T17 public standings: IIHF OTW/OTL columns on both public tables, no horizontal page scroll", async ({ page, request }) => {
+  test.setTimeout(180_000);
+  const vp = projectViewport();
+  expect(vp, "a width project declares its viewport").not.toBeNull();
+  const width = vp!.width;
+  const kit = await import("./spectator-w2-kit");
+  const org = await kit.activeOrgSlug(request);
+  const competition = await kit.publicCompetition(request, { name: `T17 OTW ${TAG} ${width}`, orgId: org.id });
+  const div = await kit.division(request, competition.id, { name: "IIHF", sport_key: "icehockey", variant_key: "iihf" });
+  const names = [`Ash Otw ${TAG}`, `Birch Otw ${TAG}`, `Cedar Otw ${TAG}`];
+  const created = await addEntrantsViaApi(request, div.id, names, "team");
+  expect(created.status, "the field was created").toBe(201);
+  const [ash, birch, cedar] = created.ids as [string, string, string];
+  const fixtures = await kit.leagueFixtures(request, div.id);
+  const fx = (x: string, y: string) => {
+    const f = fixtures.find((r) => [r.home_entrant_id, r.away_entrant_id].sort().join() === [x, y].sort().join());
+    expect(f, "a fixture pairs them").toBeDefined();
+    return f!.id;
+  };
+  const game = async (fixtureId: string, regulation: string[], overtime: string | null) => {
+    const s = await kit.eventStream(request, fixtureId);
+    await s.post("core.start", {});
+    await s.post("icehockey.period.advance", { to: "P2" });
+    for (const by of regulation) await s.post("icehockey.goal", { by });
+    await s.post("icehockey.period.advance", { to: "P3" });
+    await s.post("icehockey.period.advance", { to: "FT" });
+    if (overtime !== null) await s.post("icehockey.goal", { by: overtime });
+  };
+  await game(fx(ash, birch), [ash, birch], ash); // 2-1 in overtime
+  await game(fx(birch, cedar), [birch, birch, cedar], null); // 2-1 in regulation
+  const otw = kit.dictString("en", "table.abbr.otw");
+  const otl = kit.dictString("en", "table.abbr.otl");
+
+  // ── the division page ──
+  await page.goto(`/shared/${org.slug}/${competition.slug}/${div.slug}?tab=standings`, { waitUntil: "load" });
+  const panel = page.locator("#panel-standings");
+  await expect(panel).toBeVisible();
+  const headers = await panel.locator('thead th span[aria-hidden="true"]').allInnerTexts();
+  expect(headers, `the division table's header letters at ${width}px`).toEqual(expect.arrayContaining([otw, otl]));
+  const cellsOf = async (name: string) =>
+    panel.locator("tbody tr", { hasText: name }).first().locator("td").allInnerTexts();
+  const col = (key: string) => headers.indexOf(key);
+  // the header letters are the data columns only (# and Team carry none); a body row is td(rank), th(name), then a td per
+  // data column — so data column i is td i + 1
+  expect(col(otw), "premise: OTW is a column").toBeGreaterThanOrEqual(0);
+  const ashCells = await cellsOf(names[0]!);
+  expect(ashCells[col(otw) + 1]?.trim(), "Ash's overtime win is in OTW").toBe("1");
+  expect(ashCells[col("W") + 1]?.trim(), "…and not in W").toBe("0");
+  const birchCells = await cellsOf(names[1]!);
+  expect(birchCells[col(otl) + 1]?.trim(), "Birch's overtime loss is in OTL").toBe("1");
+  expect(birchCells[col("W") + 1]?.trim(), "Birch's regulation win is in W").toBe("1");
+  await expectNoHorizontalScroll(page);
+  const { clipped, scrollable } = await overflowingIn(page, "#panel-standings", "table,div,span,th,td", "the standings panel was not in the DOM");
+  expect(clipped, `the division table clips content at ${width}px`).toEqual([]);
+  for (const box of scrollable) expect(box, "a scrolling box that is not keyboard-reachable").toMatch(/tabindex=0$/);
+  // Anti-vacuity (T17 fix 1, m6): at 320 the division table's nine columns do not fit, so the loop above checked a rail.
+  if (width <= 320) expect(scrollable.length, "anti-vacuity: the 320 division table scrolls in a rail the loop checked").toBeGreaterThanOrEqual(1);
+
+  // ── the hub's Table tab ──
+  await page.goto(`/shared/${org.slug}/${competition.slug}?tab=table`, { waitUntil: "load" });
+  const hub = page.getByTestId("mh-tab-panel-table");
+  await expect(hub).toBeVisible();
+  // T17 fix 1 (m2): on a phone the split table shows GP and Pts and folds W · OTW · OTL · L behind "Show all columns";
+  // from md up nothing folds. Points stays on screen, inside the table's box, without a swipe (AGENTS #22: open the fold
+  // only when its toggle is visible — at 768/834 it is md:hidden).
+  const pts = hub.locator('th[data-col="points"]').first();
+  await expect(pts).toBeVisible();
+  const box = await hub.getByTestId(/-scroll$/).first().boundingBox();
+  const ptsBox = await pts.boundingBox();
+  expect(box && ptsBox, "the hub table and its Points header have boxes").toBeTruthy();
+  expect(ptsBox!.x + ptsBox!.width, `Points ends inside the table's box at ${width}px`).toBeLessThanOrEqual(box!.x + box!.width + 0.5);
+  const more = hub.locator('[data-testid$="-more"]').first();
+  if (await more.isVisible()) {
+    await expect(hub.locator('th[data-col="otw"]').first(), "folded on a phone until asked").toBeHidden();
+    await more.click();
+    await expect(more).toHaveAttribute("aria-expanded", "true");
+  }
+  await expect(hub.locator('th[data-col="otw"]').first()).toBeVisible();
+  await expect(hub.locator('th[data-col="otl"]').first()).toBeVisible();
+  await expectNoHorizontalScroll(page);
+  console.log(`[t17-otw ${width}px] division headers ${headers.join(" ")}; Ash ${ashCells.join(" ")}; scrollable ${scrollable.length}`);
+});
+
+// --- W2d T18 (HK-TB-2): the hockey goal-type question at every width ------------------------------------------------
+// A hockey goal tap opens "What kind of goal?" before anything is queued (the engine refuses an untyped FIH goal,
+// GOAL_KIND_REQUIRED). The question is a new surface in the dock slot, so it owes the pad's own width bar here: every
+// choice and Cancel at the 44px floor and hit-testable by a finger, nothing clipped, no page scroll, and the same
+// choices in the same order as 1280. Not folded behind a phone disclosure (class 22 does not apply): it is the dock.
+test("hockey v3 pad (W2d T18): the goal-type question holds the 44px floor, hit-tests, clips nothing, does not scroll, and offers the 1280 choices in order", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const fx = await seedRosteredFixture(request, { ...v3SkinSeed("hockey", "HKT"), emitCoreStart: true });
+  const projectWidth = page.viewportSize()!.width;
+  const question = page.getByTestId("score-pad").getByTestId("pad-dock-choice");
+  const controls = () =>
+    question
+      .locator('[data-testid^="pad-dock-chip-"], [data-testid="pad-dock-cancel"]')
+      .evaluateAll((els) => els.map((e) => e.getAttribute("data-testid")!));
+  const ask = async () => {
+    await padTile(page, "goal-home").click();
+    await expect(question, "a hockey goal tap opens the goal-type question").toBeVisible({ timeout: 20_000 });
+  };
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await ask();
+  const here = await controls();
+  expect(here.length, "anti-vacuity: three goal types, Own goal and Cancel were read").toBeGreaterThanOrEqual(5);
+  for (const id of here) await assertTapFloor(question.getByTestId(id), `goal-type question ${id} at ${projectWidth}`);
+  const clip = await overflowingIn(page, '[data-testid="pad-dock-choice"]', "*", "the goal-type question is missing");
+  expect(clip.clipped, `nothing in the question is clipped at ${projectWidth}`).toEqual([]);
+  expect(clip.scrollable, `the question has no scroll rail at ${projectWidth}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  const widths = await page.evaluate(() => ({ scroll: document.documentElement.scrollWidth, client: document.documentElement.clientWidth }));
+  expect(widths.scroll, `${projectWidth}: scrollWidth ${widths.scroll} within clientWidth ${widths.client}`).toBeLessThanOrEqual(widths.client);
+  await question.getByTestId("pad-dock-cancel").click();
+  await expect(question).toHaveCount(0, { timeout: 5_000 });
+
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await ask();
+  expect(here, `the question's controls at ${projectWidth} vs 1280: membership, order, repeats`).toEqual(await controls());
+  await question.getByTestId("pad-dock-cancel").click();
+  await expect(question).toHaveCount(0, { timeout: 5_000 });
+  // Asking twice and cancelling twice wrote nothing.
+  const events = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`);
+  expect(events.data!.filter((e) => e.type === "hockey.goal"), "a cancelled question writes no goal").toEqual([]);
+  console.log(`[hockey goal-type ${projectWidth}px] ${here.length} controls hit-tested; scrollWidth ${widths.scroll}/${widths.client}`);
 });

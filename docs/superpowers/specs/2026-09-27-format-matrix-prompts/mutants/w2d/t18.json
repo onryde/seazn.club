@@ -1,0 +1,337 @@
+[
+ {
+  "id": "t18-kernel-strict-dropped",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "  if (strict && kindRequired && kind === undefined) {\n",
+  "replace": "  if (kindRequired && kind === undefined) {\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/period/goal-kind-required.test.ts"
+    ],
+    "name": "HK-TB-2 replay of a ledger holding an untyped goal"
+   }
+  ]
+ },
+ {
+  "id": "t18-kernel-kind-required-dropped",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "  if (strict && kindRequired && kind === undefined) {\n",
+  "replace": "  if (strict && kind === undefined) {\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/period/goal-kind-required.test.ts"
+    ],
+    "name": "HK-TB-2 B3 a strict hockey.goal with no kind is refused GOAL_KIND_REQUIRED"
+   }
+  ]
+ },
+ {
+  "id": "t18-kernel-refuses-own-goal",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "  if (strict && kindRequired && kind === undefined) {\n",
+  "replace": "  if (strict && kindRequired && (kind === undefined || kind === \"og\")) {\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/period/goal-kind-required.test.ts"
+    ],
+    "name": "PS-7d an own goal"
+   }
+  ]
+ },
+ {
+  "id": "t18-hockey-preset-flag-off",
+  "file": "packages/engine/src/sports/hockey/hockey.ts",
+  "find": "  goalKindRequired: true,\n",
+  "replace": "  goalKindRequired: false,\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/period/goal-kind-required.test.ts"
+    ],
+    "name": "HK-TB-2 B3 a strict hockey.goal with no kind is refused GOAL_KIND_REQUIRED"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/period/goal-kind-required.test.ts"
+    ],
+    "name": "the generator a conformance walk folds strictly"
+   }
+  ]
+ },
+ {
+  "id": "t18-generator-emits-untyped",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "        const kind = drawn === undefined && goalKindRequired ? \"fg\" : drawn;\n",
+  "replace": "        const kind = drawn;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/period/goal-kind-required.test.ts"
+    ],
+    "name": "the generator a conformance walk folds strictly"
+   }
+  ]
+ },
+ {
+  "id": "t18-generator-types-every-sport",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "        const kind = drawn === undefined && goalKindRequired ? \"fg\" : drawn;\n",
+  "replace": "        const kind = drawn === undefined ? \"fg\" : drawn;\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/sports/period/goal-kind-required.test.ts"
+    ],
+    "name": "the generator a conformance walk folds strictly"
+   }
+  ]
+ },
+ {
+  "id": "t18-http-status-not-422",
+  "file": "apps/web/src/server/api-v1/http.ts",
+  "find": "  GOAL_KIND_REQUIRED: 422,\n",
+  "replace": "  GOAL_KIND_REQUIRED: 400,\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/api-v1/__tests__/http.test.ts"
+    ],
+    "name": "maps EngineError GOAL_KIND_REQUIRED"
+   }
+  ]
+ },
+ {
+  "id": "t18-dock-choice-off",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/period-shared.ts",
+  "find": "    if (spec.goalKindRequired === true && payload?.kind === undefined) {\n",
+  "replace": "    if (false) {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "every shipped variant, every band: the goal tile"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "the bare tap is refused GOAL_KIND_REQUIRED"
+   }
+  ]
+ },
+ {
+  "id": "t18-dock-choice-skips-fg",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/period-shared.ts",
+  "find": "        if (kind === \"og\") continue;\n",
+  "replace": "        if (kind === \"og\" || kind === \"fg\") continue;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "every shipped variant, every band: the goal tile"
+   }
+  ]
+ },
+ {
+  "id": "t18-dock-choice-drops-own-goal",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/period-shared.ts",
+  "find": "      if ((cfg.goalKinds ?? []).includes(\"og\")) {\n        choice.push(",
+  "replace": "      if (false) {\n        choice.push(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "every shipped variant, every band: the goal tile"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "Own goal credits the OTHER side"
+   }
+  ]
+ },
+ {
+  "id": "t18-enrichment-repeats-kind-chips",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/period-shared.ts",
+  "find": "    const required = spec.goalKindRequired === true;\n",
+  "replace": "    const required = false;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "after the choice the dock is the ordinary enrichment dock"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "hockey: a typed goal with its scorer named is complete"
+   }
+  ]
+ },
+ {
+  "id": "t18-web-skin-flag-off",
+  "file": "apps/web/src/components/v2/scorepad/v3/skins/hockey.tsx",
+  "find": "  goalKindRequired: true,\n",
+  "replace": "  goalKindRequired: false,\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "each period skin declares the choice exactly where"
+   }
+  ]
+ },
+ {
+  "id": "t18-plan-choose-reads-hold",
+  "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+  "find": "    return \"choose\";\n",
+  "replace": "    return \"hold\";\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "no dock or an empty one sends; a dock with chips holds"
+   }
+  ]
+ },
+ {
+  "id": "t18-plan-unanswerable-guard-dropped",
+  "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+  "find": "    if (!dock.chips.some((chip) => chip.mutate(base)[required] !== undefined)) {\n",
+  "replace": "    if (false) {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "a requirement no chip can answer is a skin defect"
+   }
+  ]
+ },
+ {
+  "id": "t18-plan-ignores-met-requirement",
+  "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+  "find": "  if (dock !== null && required !== undefined && (payload ?? {})[required] === undefined) {\n",
+  "replace": "  if (dock !== null && required !== undefined) {\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "no dock or an empty one sends; a dock with chips holds"
+   }
+  ]
+ },
+ {
+  "id": "t18-claim-once-dropped",
+  "file": "apps/web/src/components/v2/scorepad/v3/detail-dock.tsx",
+  "find": "      if (claimed) return null;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "choiceController claims SYNCHRONOUSLY"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "a chip tap hands that chip to onChoose exactly once"
+   }
+  ]
+ },
+ {
+  "id": "t18-cancel-inert",
+  "file": "apps/web/src/components/v2/scorepad/v3/detail-dock.tsx",
+  "find": "          data-testid=\"pad-dock-cancel\"\n          onClick={onCancel}\n",
+  "replace": "          data-testid=\"pad-dock-cancel\"\n          onClick={undefined}\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "renders the question and every answer, NO countdown"
+   }
+  ]
+ },
+ {
+  "id": "t18-fr1-partial-legacy-untyped",
+  "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+  "find": "  if (spec.requires !== undefined && payload[spec.requires] === undefined) return false;\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "with or without its scorer, at every band"
+   }
+  ]
+ },
+ {
+  "id": "t18-fr1-admits-tap-always",
+  "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+  "find": "  return !questionOpen;\n",
+  "replace": "  return true;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "m3: a second tap while the question is open is refused"
+   }
+  ]
+ },
+ {
+  "id": "t18-fr1-takeback-ignores-question",
+  "file": "apps/web/src/components/v2/scorepad/v3/pad-host.tsx",
+  "find": "  if (questionOpen) return { kind: \"cancel-question\" };\n",
+  "replace": "",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/scorepad/v3/__tests__/hockey-goal-type.test.ts"
+    ],
+    "name": "m2: Take back while the question is open cancels the QUESTION"
+   }
+  ]
+ }
+]

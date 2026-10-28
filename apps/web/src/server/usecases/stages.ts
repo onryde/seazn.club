@@ -52,6 +52,7 @@ import {
   type StandingsRow,
   type TakeRule,
 } from "@seazn/engine/competition";
+import type { TiebreakerKey } from "@seazn/engine/sport";
 import { completeStageIfReady, recomputeStandings, type CompleteResult } from "@/server/engine-db";
 import { resolveModule } from "@/server/engine-db";
 // L3/#414 pass 3 — not re-exported through the engine-db barrel (index.ts),
@@ -59,7 +60,7 @@ import { resolveModule } from "@/server/engine-db";
 // rather than re-deriving lane/thirdPlace from round/position (never
 // arithmetic — see parseExtKey's own comment).
 import { parseExtKey, bracketWinnerLoser, loadCrossGroupRules, rankedStageStandings } from "@/server/engine-db/competition";
-import { pinStageTableRules } from "@/server/engine-db/table-rules";
+import { pinStageTableRules, stageTableRulesDocs, type StageTableRulesDoc } from "@/server/engine-db/table-rules";
 import { assertAdvancingSeat, assertNoLevelSeat, fedSeatOccupant } from "@/server/engine-db/level-seat";
 import { killsLoserEdge, lockDivisionConfigShared, lockStageSeats } from "@/server/engine-db/fed-seats";
 import { hasActiveAbandonSql } from "@/server/engine-db/recorded-abandon";
@@ -331,6 +332,57 @@ export async function listStages(auth: AuthCtx, divisionId: string): Promise<Sta
     if (!division) throw new HttpError(404, "division not found");
     return tx<StageRow[]>`
       select ${tx(STAGE_COLS)} from stages where division_id = ${divisionId} order by seq`;
+  });
+}
+
+/** W2d Task 13 (spec §7): a stage's table rules on the API's stage document (`StageTableRules` on the wire). */
+export interface StageTableRulesWire {
+  tiebreakers: { keys: TiebreakerKey[]; source: StageTableRulesDoc["sources"]["tiebreakers"]; pinnedAt: string | null; sportDefault: TiebreakerKey[] };
+  crossGroup: { keys: TiebreakerKey[] };
+  points: { rule: StageTableRulesDoc["points"]; source: StageTableRulesDoc["sources"]["points"]; pinnedAt: string | null };
+  reachableOutcomes: StageTableRulesDoc["reachable"][number][];
+}
+export type StageWithTableRulesRow = StageRow & { tableRules: StageTableRulesWire | null };
+
+/** The loader's document (`stageTableRulesDocs`) as the API serves it: the order with the layer it came from, its pin and
+ *  the sport's own default for the stage (PS-7b: read off the sport, never the winning order), the cross-group order, the
+ *  points with theirs, and the outcomes they range over. One pin date: a stage is pinned whole. */
+function tableRulesWireOf(doc: StageTableRulesDoc): StageTableRulesWire {
+  return {
+    tiebreakers: { keys: [...doc.tiebreakers], source: doc.sources.tiebreakers, pinnedAt: doc.pinnedAt, sportDefault: [...doc.sportDefault] },
+    crossGroup: { keys: [...doc.crossGroup] },
+    points: { rule: doc.points, source: doc.sources.points, pinnedAt: doc.pinnedAt },
+    reachableOutcomes: [...doc.reachable],
+  };
+}
+
+/** Each stage row with its table rules, in one read (`stageTableRulesDocs`): null where the loader refuses the stage's
+ *  rules (logged there) — the API shows no order rather than a guessed one (R3). */
+async function withTableRules(tx: Tx, rows: readonly StageRow[]): Promise<StageWithTableRulesRow[]> {
+  const docs = await stageTableRulesDocs(tx, rows.map((r) => r.id));
+  return rows.map((r) => {
+    const doc = docs[r.id];
+    return { ...r, tableRules: doc === undefined ? null : tableRulesWireOf(doc) };
+  });
+}
+
+/** GET /divisions/{id}/stages (W2d Task 13): `listStages` with each stage's table rules. The pages keep `listStages`. */
+export async function listStagesWithTableRules(auth: AuthCtx, divisionId: string): Promise<StageWithTableRulesRow[]> {
+  return withTenant(auth.orgId, async (tx) => {
+    const [division] = await tx`select 1 from divisions where id = ${divisionId}`;
+    if (!division) throw new HttpError(404, "division not found");
+    const rows = await tx<StageRow[]>`
+      select ${tx(STAGE_COLS)} from stages where division_id = ${divisionId} order by seq`;
+    return withTableRules(tx, rows);
+  });
+}
+
+/** GET /stages/{id} (W2d Task 13): one stage with its table rules. */
+export async function getStageWithTableRules(auth: AuthCtx, stageId: string): Promise<StageWithTableRulesRow> {
+  return withTenant(auth.orgId, async (tx) => {
+    const rows = await tx<StageRow[]>`select ${tx(STAGE_COLS)} from stages where id = ${stageId}`;
+    if (rows.length === 0) throw new HttpError(404, "stage not found");
+    return (await withTableRules(tx, rows))[0]!;
   });
 }
 
@@ -2176,8 +2228,8 @@ interface GenerateWrite {
   outcome: GenerateOutcome;
   divisionId: string;
   competitionId: string;
-  /** Swiss Pair next: how many shells were seated this pass (0 on mint). */
-  swissSeatedCount?: number;
+  /** The stage's kind: whether it has a table to refold after the write (`REAL_TABLE_KINDS`). */
+  kind: string;
 }
 
 /** What a Generate press may ask for beyond "generate". */
@@ -2468,7 +2520,11 @@ export async function unpairSwissRound(
   // Bye awards (and their removal) never go through appendEvent, so the
   // standings snapshot would otherwise keep the unpaired bye's points until
   // the next scored match — Dan after Unpair R3. Fold from the cleared rows.
-  await recomputeStandings(auth.orgId, stageId);
+  // `"drop"` (W2d concern 2, review m5): unpairing round 1 leaves the shells
+  // seating nobody — a fold with no row, so the stored table goes too and the
+  // page reads as it did after the mint ("No standings yet"), not a header-only
+  // table.
+  await recomputeStandings(auth.orgId, stageId, undefined, { emptyFold: "drop" });
 
   await fireStageRevalidate(auth.orgId, stageId);
   afterScheduleWrite(write.divisionId, write.competitionId, "schedule", []);
@@ -2542,6 +2598,9 @@ async function generateStageFixturesWrite(
     });
     if (pre?.seeded) {
       const write = await generateProgressionSetupFixtures(auth, stageId);
+      // No refold here (W2d concern 2 ruling): a `timing: "setup"` stage's fixtures are placeholders that name no
+      // entrant, so its fold has no row — there is no table to show until the seeding fills the seats, never a table of
+      // placeholders. The seeding that fills them refolds (`confirmSeedProposal` → `refoldStageTable`).
       const outcome = write.outcome;
       await fireStageRevalidate(auth.orgId, stageId);
       if (outcome.created > 0) {
@@ -3051,16 +3110,16 @@ async function generateStageFixturesWrite(
       },
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
-      swissSeatedCount,
+      kind: stage.kind,
     };
   });
   const outcome = write.outcome;
-  // Pair next seats bye awards without score_events — same snapshot trap as
-  // Unpair. Recompute whenever a Swiss round was seated so the table shows
-  // the bye win immediately (Finn/Gus), not after the next real match.
-  if ((write.swissSeatedCount ?? 0) > 0) {
-    await recomputeStandings(auth.orgId, stageId);
-  }
+  // W2d concern 2 (spec §5.7, anti-goal 3; owner 2026-10-27): a table stage's table exists from the generate that
+  // created its fixtures — LEVEL, every rank "–", no leader — so a visitor sees the table the organiser's Standings read
+  // would otherwise write lazily (`getStandings`), never "No standings yet" for the same state. `created` counts a Swiss
+  // seating too, so Pair next still refolds the bye awards it seats without score_events (same snapshot trap as Unpair:
+  // the bye win shows at once, Finn/Gus). The kind gate and the empty-fold rule are `refoldStageTable`'s.
+  if (outcome.created > 0) await refoldStageTable(auth.orgId, { id: stageId, kind: write.kind }, "skip");
   await fireStageRevalidate(auth.orgId, stageId);
   // Activation funnel (feature 1): fixtures exist → the tournament is playable.
   if (outcome.created > 0) {
@@ -3874,6 +3933,7 @@ async function generateProgressionSetupFixtures(auth: AuthCtx, stageId: string):
       outcome: { created, existing: gen.length - created, fixtures },
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
+      kind: stage.kind,
     };
   });
 }
@@ -4479,6 +4539,33 @@ export async function resolveBracketSeats(tx: Tx, stageId: string): Promise<stri
 // BRACKET_KINDS mirrors engine-db/competition.ts's own list — losersOfRound
 // only makes sense sourced from one of these.
 export const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
+
+/**
+ * W2d concern 2 (spec §5.7, anti-goal 3) — refold a table stage's stored table after a write that seats or unseats its
+ * entrants with no result: the generate and a seed-proposal confirm (`"skip"`), a roster delete (`"drop"`). One gate for
+ * all three: `REAL_TABLE_KINDS`, the kinds scoring refolds on a result (usecases/scoring.ts `TABLE_KINDS`, pinned equal
+ * by generate-level-table.test.ts) — a bracket has no table. `emptyFold` is engine-db `recomputeStandings`'s: `"skip"`
+ * stores no fold that places nobody (a Swiss mint, a pooled stage before results, placeholders); `"drop"` also deletes
+ * the stored tables the fold no longer produces, so a deleted entrant's row never outlives them.
+ *
+ * Best-effort, after the write has committed (review m4): a refold that throws (a rank-time refusal, anti-goal 2) is
+ * logged, never turned into a failed write the caller would retry into a no-op. The stage's table is then whatever was
+ * stored before the write until the next result's refold — or, when nothing is stored, the organiser's Standings read
+ * (`getStandings` recomputes only on a miss). So a failed refold after Pair next, a regenerate or a roster delete leaves
+ * the previous table (a deleted entrant's row included) until that result (review n3).
+ */
+export async function refoldStageTable(
+  orgId: string,
+  stage: { id: string; kind: string },
+  emptyFold: "skip" | "drop",
+): Promise<void> {
+  if (!REAL_TABLE_KINDS.has(stage.kind)) return;
+  try {
+    await recomputeStandings(orgId, stage.id, undefined, { emptyFold });
+  } catch (err) {
+    log.error({ err, event: "stage_table_refold_failed", stageId: stage.id, emptyFold }, "stage_table_refold_failed");
+  }
+}
 // Exported (F3 review item 5): stage-seeding.ts's sourcesToTables needs the
 // SAME set to know when a source needs bracket data for a roundLosers take
 // rule — see loadBracketFixtures' own export note below.
@@ -5157,7 +5244,9 @@ export interface StandingsOut {
   stage_id: string;
   pool_id: string | null;
   rows: unknown[];
-  computed_through_seq: number;
+  /** The stored snapshot's int8 watermark as postgres.js serves a bigint (a decimal string); 0 for a table folded on the
+   *  read. The wire documents the same (`StandingsSnapshot`). */
+  computed_through_seq: string | 0;
   updated_at: string | null;
 }
 
@@ -5889,6 +5978,7 @@ export async function confirmSeedProposal(
       divisionId: stage.division_id,
       competitionId: division!.competition_id,
       filledFixtureIds: [...filledFixtureIds],
+      kind: stage.kind,
     };
   });
 
@@ -5896,6 +5986,9 @@ export async function confirmSeedProposal(
     { event: "stage_seeded", stageId, proposalId: input.proposalId, edits: input.edits?.length ?? 0 },
     "stage_seeded",
   );
+  // W2d concern 2 (review I3): the seats are filled — a `timing: "setup"` table stage's table exists from here, LEVEL,
+  // the same way the generate writes one (its placeholders had none to show, the generate's RULING).
+  await refoldStageTable(auth.orgId, { id: stageId, kind: committed.kind }, "skip");
   await fireStageRevalidate(auth.orgId, stageId);
   // R10g (review-r10f G1): the confirm names entrants into the bracket, and the
   // hub and each filled fixture's match centre show those names. So after the

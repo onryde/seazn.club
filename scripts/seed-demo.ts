@@ -320,8 +320,9 @@ function resultEvents(
       // First FIH game: a draw with a green + yellow card (team-short both
       // times) so the demo shows cards and a drawn league row.
       const scenario = fihSeeded++;
+      // W2d T18: the write path refuses a hockey goal without its type (GOAL_KIND_REQUIRED) — a plain goal is a field goal.
       const goal = (by: string, extra?: Record<string, unknown>) =>
-        events.push({ type: "hockey.goal", payload: { by, ...(extra ?? {}) } });
+        events.push({ type: "hockey.goal", payload: { by, kind: "fg", ...(extra ?? {}) } });
       const adv = (to: string) => events.push({ type: "hockey.period.advance", payload: { to } });
       if (scenario === 0) {
         goal(w, { kind: "pc" });

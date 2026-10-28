@@ -253,12 +253,14 @@ describe("table.* / format.* dictionary coverage (final-review fix F2)", () => {
     expect(FORMAT_KEYS.sort()).toEqual(["format.cricket.overs", "format.minutes", "format.sets.bestOf"]);
   });
 
-  it("standings-table-view.tsx really does ask for these six keys (a scan is not a read)", () => {
+  it("standings-table-view.tsx really does ask for these seven keys (a scan is not a read)", () => {
+    // W2d T17: `table.level`, the rank cell's spoken word on a table with no counted result (X-TB-6).
     expect(COMPONENT_KEYS.sort()).toEqual([
       "table.col.rank",
       "table.empty",
       "table.fewer",
       "table.fullDivision",
+      "table.level",
       "table.more",
       "table.team",
     ]);

@@ -116,7 +116,9 @@ const divisionData = () => ({
   org: org(),
   competition: { id: "c1", name: "Southend Premier League", slug: "spl", branding: null },
   division: { id: "d1", name: "Men's T8", slug: "mens-t8" },
-  standings: [{ rows: [{ rank: 1, entrantId: "e1", played: 3, points: 9 }] }],
+  // W2d T17: the card prints its table under its own stage's rules (`getPublicDivision` always carries `stages`).
+  stages: [{ id: "s1", table_rules: null }],
+  standings: [{ stage_id: "s1", rows: [{ rank: 1, entrantId: "e1", played: 3, points: 9 }] }],
   entrants: [{ id: "e1", kind: "team", display_name: "Southend Blue Blazers" }],
 });
 

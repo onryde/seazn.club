@@ -43,23 +43,9 @@ export const CHECKER_FILES: readonly string[] = [
  *  proof commit deletes the entry and fills the row's `proved by`; W2c Task 23 requires the map empty.
  *  W2d's rows (spec 2026-10-20 Appendix A, signed 2026-10-24): the value names the first W2d task whose "Rule rows" line
  *  lists the row (plan 2026-10-20-format-matrix-w2d.md). Each wave's proof commit deletes the entry and fills `proved by`;
- *  W2d Task 21 requires the map empty for W2d ids. */
-export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([
-  ["X-TB-1", "W2d Task 8"], ["X-TB-2", "W2d Task 7"], ["X-TB-3", "W2d Task 6"], ["X-TB-4", "W2d Task 5"],
-  ["X-TB-5", "W2d Task 6"], ["X-TB-6", "W2d Task 5"], ["X-TB-7", "W2d Task 6"], ["X-TB-8", "W2d Task 12"],
-  ["X-PT-2", "W2d Task 1"], ["X-PT-3", "W2d Task 2"], ["X-PT-4", "W2d Task 1"],
-  ["FB-PT-1", "W2d Task 2"], ["FB-TB-1", "W2d Task 11"], ["FB-TB-2", "W2d Task 4"], ["FB-TB-3", "W2d Task 11"], ["FB-TB-4", "W2d Task 6"],
-  ["HK-PT-1", "W2d Task 3"], ["HK-PT-2", "W2d Task 3"], ["HK-TB-1", "W2d Task 4"], ["HK-TB-2", "W2d Task 4"],
-  ["IH-PT-1", "W2d Task 2"], ["IH-PT-2", "W2d Task 3"], ["IH-TB-1", "W2d Task 4"], ["IH-TB-2", "W2d Task 12"],
-  ["BG-PT-1", "W2d Task 3"], ["BG-TB-1", "W2d Task 4"], ["BG-TB-2", "W2d Task 11"], ["BG-TB-3", "W2d Task 4"],
-  ["CK-PT-1", "W2d Task 2"], ["CK-PT-2", "W2d Task 2"], ["CK-TB-1", "W2d Task 11"],
-  ["VB-PT-1", "W2d Task 3"], ["VB-PT-2", "W2d Task 2"], ["VB-PT-3", "W2d Task 2"], ["VB-TB-1", "W2d Task 11"], ["VB-TB-2", "W2d Task 4"],
-  ["BD-TB-1", "W2d Task 4"],
-  ["TT-PT-1", "W2d Task 2"], ["TT-TB-1", "W2d Task 4"],
-  ["TN-TB-1", "W2d Task 4"], ["TN-TB-2", "W2d Task 11"],
-  ["CA-TB-1", "W2d Task 11"],
-  ["GN-TB-1", "W2d Task 11"],
-]);
+ *  W2d Task 21 requires the map empty for W2d ids.
+ *  W2d Task 21 (the fold) emptied it: all 43 W2d rows now name their proving tests and are signed by ruling 197. */
+export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([]);
 
 /** Rule rows write every engine path as `packages/engine/...`, in the monorepo and in the engine's own repo alike: the prefix is
  *  part of the row's text, not of the checkout. Rows whose path starts with it are the ENGINE's to check (test/rules-reference.test.ts);

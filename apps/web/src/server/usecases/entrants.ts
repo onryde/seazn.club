@@ -30,7 +30,7 @@ import { gateRosterEligibility, type EligibilityIssue } from "./registration-eli
 // One-way edge (stages.ts does not import this module): a status flip has to
 // reach the seed proposals that were computed over the old field, and a
 // pre-Start DELETE has to leave the swiss rounds it was seated in coherent.
-import { markFieldChangeSeedProposalsStale, unseatSwissRoundsSeatingEntrant } from "./stages";
+import { markFieldChangeSeedProposalsStale, refoldStageTable, unseatSwissRoundsSeatingEntrant } from "./stages";
 import { followRosterEdit, type RosterNamePerson } from "@/lib/entrant-roster-name";
 import { dropNamedPublicDocuments, fireScoreRevalidate } from "@/server/public-site/revalidate";
 import { retireCompetitionPlayerMatches } from "@/server/public-site/player-matches-cache-keys";
@@ -573,10 +573,24 @@ export async function deleteEntrant(auth: AuthCtx, id: string): Promise<void> {
     // Read BEFORE the delete: `on delete set null` leaves nothing to find the
     // fixtures this entrant sat in by afterwards.
     const where = await entrantPublicScope(tx, row);
+    // The division's stages that have a table to refresh (W2d concern 2, review
+    // I1): any with fixtures (the generate stored a table) or a stored table
+    // (one an undo left behind).
+    const tables = await tx<{ id: string; kind: string }[]>`
+      select s.id, s.kind from stages s
+       where s.division_id = ${row.division_id}
+         and (exists (select 1 from fixtures f where f.stage_id = s.id)
+              or exists (select 1 from standings_snapshots ss where ss.stage_id = s.id))`;
     await tx`delete from entrants where id = ${id}`;
-    return where;
+    return { where, tables };
   });
-  refreshEntrantPublicPages(refresh, { entrantId: id, deleted: true });
+  // The generate stored each table stage's LEVEL table, this entrant's row in
+  // it. The FK nulls the seats, not the snapshot, so without this refold the
+  // public table names the deleted entrant by its raw id until the next result.
+  // `"drop"`: a fold that no longer places anybody (a Swiss round back on its
+  // shells, an undone generate) takes its stored table with it.
+  for (const stage of refresh.tables) await refoldStageTable(auth.orgId, stage, "drop");
+  refreshEntrantPublicPages(refresh.where, { entrantId: id, deleted: true });
 }
 
 /** `entrants.status` values that mean "no longer in the field" — the

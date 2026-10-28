@@ -59,6 +59,10 @@ describe("localisedDocError", () => {
     expect(localisedDocError("BRACKET_NOT_AVAILABLE", msg)).toBe("t:documents.bracketUnavailable");
   });
 
+  it("localises a division with no standings to print yet (W2d: a level or empty table)", () => {
+    expect(localisedDocError("STANDINGS_NOT_AVAILABLE", msg)).toBe("t:documents.standingsUnavailable");
+  });
+
   it("returns null for an unmapped code so the caller keeps the server's own message", () => {
     expect(localisedDocError("SOMETHING_ELSE", msg)).toBeNull();
     expect(localisedDocError(undefined, msg)).toBeNull();

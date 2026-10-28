@@ -560,7 +560,11 @@ function footballModel(ctx: TapAdapterContext, goal: (side: "home" | "away") => 
   };
 }
 
-/** hockey / icehockey as Step 0 saw them: a goal tile writes `{by}`; the
+/** The dock chip a tap selector names (`pad-dock-chip-<id>`). */
+const CHIP_ID = /^\[data-testid="pad-dock-chip-([^"]+)"\]$/;
+
+/** hockey / icehockey as Step 0 saw them: a goal tile writes `{by}` (hockey, since W2d T18: the tile, then the
+ *  type chip, writes `{by, kind}`); the
  *  advance tile writes `{to, at}`, where `to` is what the ENGINE says comes
  *  next (the summary's detail.nextAdvance, which the skin reads) and `at` the
  *  current play phase at elapsed 0 (whistleAt with no clock). */
@@ -573,6 +577,13 @@ function periodModel(
   return (taps: readonly string[], ledger: readonly LedgerRow[]): RowIn[] => {
     if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
     for (const side of ["home", "away"] as const) {
+      // W2d T18: a hockey goal tile writes nothing on its own — its type chip answers the choice, then it holds.
+      if (sport === "hockey") {
+        const chip = taps.length === 2 && taps[0] === TILE(`goal-${side}`) ? CHIP_ID.exec(taps[1]!) : null;
+        if (chip !== null) return [{ type: `${sport}.goal`, payload: { by: ctx.entrants[side], kind: chip[1] === "ownGoal" ? "og" : chip[1]!.slice("kind:".length) } }];
+        if (taps.length === 1 && taps[0] === TILE(`goal-${side}`)) return [];
+        continue;
+      }
       if (taps.length === 1 && taps[0] === TILE(`goal-${side}`)) return [{ type: `${sport}.goal`, payload: { by: ctx.entrants[side] } }];
     }
     if (taps.length !== 1 || taps[0] !== TILE("advance")) return [];
@@ -589,7 +600,8 @@ function periodModel(
  *  nextAdvance, advance to it, until the engine names none. */
 function engineAdvances(sport: "hockey" | "icehockey", cfg: unknown): string[] {
   const m = sport === "hockey" ? hockey : icehockey;
-  const evs: StreamEvent[] = [START, { type: `${sport}.goal`, payload: { by: HOME } }];
+  // W2d T18: a hockey goal carries its type (the write path refuses one without; this fold is strict).
+  const evs: StreamEvent[] = [START, { type: `${sport}.goal`, payload: sport === "hockey" ? { by: HOME, kind: "fg" } : { by: HOME } }];
   const out: string[] = [];
   for (;;) {
     const { state } = foldStream(m, cfg, HOME, AWAY, evs);
@@ -857,10 +869,20 @@ describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s
   it("goal routes to its side's tile; a goal by no entrant, or an advance off {to}, is refused by name", () => {
     const cfg = resolveSportCfg(sport, offlineBuilderDefault(sport));
     const ctx: TapAdapterContext = { cfg, entrants: { home: HOME, away: AWAY } };
-    expect(pad.stepsFor({ type: `${sport}.goal`, payload: { by: HOME } }, ctx)).toEqual([{ kind: "tile", tileId: periodGoalTile("home") }]);
-    expect(pad.stepsFor({ type: `${sport}.goal`, payload: { by: AWAY } }, ctx)).toEqual([{ kind: "tile", tileId: periodGoalTile("away") }]);
-    for (const payload of [null, {}, { by: "stranger" }, { by: HOME, person: "p1" }] as unknown[]) {
-      expect(() => pad.stepsFor({ type: `${sport}.goal`, payload }, ctx), JSON.stringify(payload)).toThrow(/goal payload .* is not \{by: one of the fixture's entrants\}/);
+    if (sport === "hockey") {
+      // W2d T18: the tile, then the type's chip — og is the existing Own goal flag.
+      expect(pad.stepsFor({ type: `${sport}.goal`, payload: { by: HOME, kind: "fg" } }, ctx)).toEqual([{ kind: "tile", tileId: periodGoalTile("home") }, { kind: "chip", chipId: "kind:fg" }]);
+      expect(pad.stepsFor({ type: `${sport}.goal`, payload: { by: AWAY, kind: "pc" } }, ctx)).toEqual([{ kind: "tile", tileId: periodGoalTile("away") }, { kind: "chip", chipId: "kind:pc" }]);
+      expect(pad.stepsFor({ type: `${sport}.goal`, payload: { by: AWAY, kind: "og" } }, ctx)).toEqual([{ kind: "tile", tileId: periodGoalTile("away") }, { kind: "chip", chipId: "ownGoal" }]);
+      for (const payload of [null, {}, { by: "stranger", kind: "fg" }, { by: HOME }, { by: HOME, kind: "" }, { by: HOME, kind: "fg", person: "p1" }] as unknown[]) {
+        expect(() => pad.stepsFor({ type: `${sport}.goal`, payload }, ctx), JSON.stringify(payload)).toThrow(/goal payload .* is not \{by: one of the fixture's entrants, kind: the goal's type\}/);
+      }
+    } else {
+      expect(pad.stepsFor({ type: `${sport}.goal`, payload: { by: HOME } }, ctx)).toEqual([{ kind: "tile", tileId: periodGoalTile("home") }]);
+      expect(pad.stepsFor({ type: `${sport}.goal`, payload: { by: AWAY } }, ctx)).toEqual([{ kind: "tile", tileId: periodGoalTile("away") }]);
+      for (const payload of [null, {}, { by: "stranger" }, { by: HOME, person: "p1" }, { by: HOME, kind: "fg" }] as unknown[]) {
+        expect(() => pad.stepsFor({ type: `${sport}.goal`, payload }, ctx), JSON.stringify(payload)).toThrow(/goal payload .* is not \{by: one of the fixture's entrants\}/);
+      }
     }
     pad.stepsFor(START, ctx);
     for (const payload of [null, {}, { to: "" }, { to: "FT", at: { period: "P1", elapsed: 0 } }] as unknown[]) {
@@ -873,7 +895,7 @@ describe.each([["hockey", hockeyPad], ["icehockey", icehockeyPad]] as const)("%s
     const cfg = resolveSportCfg(sport, offlineBuilderDefault(sport));
     const evs = generateStream(req(sport, cfg, { kind: "win", winner: "home" }));
     const g = evs.find((e) => e.type === `${sport}.goal`)!;
-    expect(compareRow(g, { id: "r2", seq: 2, type: g.type, payload: { by: HOME } }, pad)).toEqual({ verdict: "equal", note: null });
+    expect(compareRow(g, { id: "r2", seq: 2, type: g.type, payload: sport === "hockey" ? { by: HOME, kind: "fg" } : { by: HOME } }, pad)).toEqual({ verdict: "equal", note: null });
     const a = evs.find((e) => e.type === `${sport}.period.advance`)!;
     const first = sport === "hockey" ? "Q1" : "P1";
     expect(compareRow(a, { id: "r3", seq: 3, type: a.type, payload: { ...(a.payload as object), at: { period: first, elapsed: 0 } } }, pad).verdict).toBe("mismatch");

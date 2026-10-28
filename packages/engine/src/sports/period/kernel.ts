@@ -1107,12 +1107,21 @@ function applyGoal(
   state: PeriodState,
   payload: z.infer<typeof PeriodGoal>,
   strict: boolean,
+  kindRequired: boolean,
 ): PeriodState {
   if (!isPlayPhase(state)) {
     wrongPhase(`goal not allowed in phase "${state.phase}"`, { phase: state.phase });
   }
   const by = sideOf(state, payload.by);
   const kind = payload.kind;
+  // W2d T18 (HK-TB-2, B3) — `kindRequired` is `PeriodPreset.goalKindRequired`, resolved by the caller (the same threading
+  // `applyShot` takes). STRICT ONLY: a recorded untyped goal was legal when it was written, refusing it on replay would
+  // make the fixture unreadable with no event to void, and B3 reads it as a field goal. An own goal is typed (`og`).
+  if (strict && kindRequired && kind === undefined) {
+    throw new EngineError("GOAL_KIND_REQUIRED", "a goal in this sport must record its type", {
+      goalKinds: state.cfg.goalKinds,
+    });
+  }
   // STRICT ONLY (§3.3 seam) wherever the condition reads cfg. `goalKinds` and
   // `assists` are lists an organiser edits, and refusing a recorded goal because
   // its kind was later removed from the list makes the fixture unreadable with
@@ -1977,6 +1986,19 @@ export interface PeriodPreset {
   // sport that should not offer shot detail is not silently handed the
   // event just because it shares this kernel.
   shotTracking?: boolean;
+  /**
+   * W2d T18 (HK-TB-2, B3; owner PS-7d 2026-10-24) — every goal must say HOW it was scored, because this sport's ranking
+   * reads it: FIH GTR App. 3 ranks level teams on field goals (every goal not scored from a penalty corner or a penalty
+   * stroke, own goals included), which the table reads as gf − goals_pc − goals_stroke. An untyped corner goal would
+   * count as a field goal, so the WRITE path refuses an untyped `<key>.goal` with GOAL_KIND_REQUIRED (`applyGoal`).
+   *
+   * STRICT ONLY, unlike `shotTracking`: this flag was false when ledgers that hold untyped goals were written (an older
+   * pad, the API before W2d), so replay must keep folding them, and B3 reads such a goal as a field goal. A preset flag
+   * and not a cfg key because it is a fact about the federation's ranking, never an organiser's choice, and a cfg
+   * default would land in every recorded config. Omitted or `false` ⇒ the goal type stays optional (IIHF ranks on no
+   * goal type). `hockey` sets it; `icehockey` does not.
+   */
+  goalKindRequired?: boolean;
 }
 
 export function makePeriodModule(
@@ -1994,6 +2016,7 @@ export function makePeriodModule(
   // `setPieceKinds`: see `PeriodPreset.shotTracking`'s own comment.
   const shotType = `${preset.key}.shot`;
   const shotTracking = preset.shotTracking === true;
+  const goalKindRequired = preset.goalKindRequired === true;
   // One per module, built here so the init handshake it keys on cannot leak
   // between two sports sharing this kernel (see `sports/squad-state.ts`).
   const squadAdopter = makeSquadAdopter<PeriodState>();
@@ -2550,7 +2573,7 @@ export function makePeriodModule(
         if (state.phase !== "pre") wrongPhase("already started");
         return pushPeriod(state, periodLabels(state.cfg)[0] as string);
       case goalType:
-        return applyGoal(state, parsePayload(PeriodGoal, ev.payload, ev.type), strict);
+        return applyGoal(state, parsePayload(PeriodGoal, ev.payload, ev.type), strict, goalKindRequired);
       case advanceType:
         return applyAdvance(state, parsePayload(PeriodAdvance, ev.payload, ev.type), strict);
       case clockType:
@@ -3077,12 +3100,16 @@ export function makePeriodModule(
       if (roll < 0.62) {
         const side = randomSide();
         const kinds = state.cfg.goalKinds.filter((k) => k !== "fg" && k !== "og");
-        const kind =
+        const drawn =
           rng() < 0.25 && kinds.length > 0
             ? (kinds[Math.floor(rng() * kinds.length)] as string)
             : rng() < 0.05
               ? "og"
               : undefined;
+        // W2d T18 — a sport that requires the type (`goalKindRequired`) gets the goal it would have left untyped as a
+        // field goal, which is what B3 reads an untyped goal as. No rng draw is added or moved, so every walk (the
+        // golden floor's and branches' reproductions among them) is the walk it was, with `fg` where it had no kind.
+        const kind = drawn === undefined && goalKindRequired ? "fg" : drawn;
         const withAssists = state.cfg.assists && kind !== "og" && rng() < 0.4;
         const attributed = rng() < 0.5;
         // W4a T10 follow-up — the scorer's OWN period label for the goal log.

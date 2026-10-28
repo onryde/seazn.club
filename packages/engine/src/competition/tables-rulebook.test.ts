@@ -1102,7 +1102,9 @@ function decidedPositions(book: Book): Set<number> {
   return covered;
 }
 
-describe("W2d T11 — rulebook scenarios per sport (spec §13.1)", () => {
+// The case titles below are data, which the rules checker cannot read, so this group names the rows that only these cases prove
+// (W2d Task 21, the proof fold): each id here leads at least one case title in its sport's book.
+describe("W2d T11 — rulebook scenarios per sport (spec §13.1): BG-TB-2, CK-TB-1, VB-TB-1, TN-TB-2, CA-TB-1 and GN-TB-1", () => {
   it("states the book's scope first: one book per registry sport, no book for a sport the registry lacks", () => {
     const registry = builtinModules.map((m) => m.key).sort();
     expect(registry.length).toBeGreaterThan(0);

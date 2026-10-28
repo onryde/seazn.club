@@ -82,6 +82,8 @@ describe("EngineError", () => {
       "LINEUP_NOT_SUPPORTED",
       // W2c (D7) — appended last, existing order frozen. An Armageddon tie-break recorded without who had Black.
       "TIEBREAK_COLOUR_REQUIRED",
+      // W2d T18 (HK-TB-2, PS-7d) — appended last, existing order frozen. A hockey goal written without its type.
+      "GOAL_KIND_REQUIRED",
     ]);
   });
 });

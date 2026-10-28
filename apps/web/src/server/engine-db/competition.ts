@@ -671,10 +671,12 @@ async function writeSnapshot(
  * Writes EVERY pool the fold produced, each under its OWN key — `pool_id`
  * null only for the "" pool, i.e. the single non-pool table. This is
  * pool-safety held HERE rather than at each call site, because none of the
- * four (usecases/stages.ts `getStandings` + `overrideStandings`,
- * usecases/scoring.ts `onDecided`, usecases/admin-fixture-config.ts) knows
- * whether the stage it is recomputing has pools: `overrideStandings` passes
- * no pool at all, and the other three forward a FIXTURE's own `pool_id`.
+ * callers (usecases/stages.ts `getStandings`, `overrideStandings`,
+ * `unpairSwissRound` and `refoldStageTable` — the generate, a seed confirm,
+ * a roster delete —, usecases/scoring.ts `onDecided`, usecases/stage-rules.ts,
+ * usecases/admin-fixture-config.ts) knows whether the stage it is recomputing
+ * has pools: most pass no pool at all, and scoring and the fixture-config
+ * edit forward a FIXTURE's own `pool_id`.
  *
  * It used to write only the asked-for pool, and pick it with
  * `find(...) ?? tables.pools[0]` — then persist that fallback under the
@@ -693,11 +695,24 @@ async function writeSnapshot(
  * to that key — including "no poolId given" on a pooled stage, which has no
  * overall table to return. `getStandings` (the only caller that reads it)
  * surfaces that as an empty table rather than a wrong one.
+ *
+ * `emptyFold` (W2d concern 2) — what a pool whose fold has no row does. A fold with no row is no table (the engine's
+ * `isLevelTable`: "No rows is no table"):
+ * - `"write"` (default): stored like any other, as every caller before W2d did.
+ * - `"skip"`: not written. The generate's and a seed confirm's refold (usecases/stages.ts `refoldStageTable`): fixtures
+ *   may seat nobody yet (a Swiss mint's shells), and a pooled stage's pool membership comes from results
+ *   (`entrantsOfPool`), so before the first one every pool folds to nothing. Written, either would replace the public
+ *   page's "No standings yet" with a table of no rows.
+ * - `"drop"`: not written, AND every stored table of the stage the fold did not just write is deleted — so the stored
+ *   tables are exactly the fold's non-empty pools. A write that UNSEATS entrants without a result passes it (a roster
+ *   delete, Unpair): the fold no longer places the departed, and a table it no longer produces must not keep their rows
+ *   (a deleted entrant's row named by its raw id, review concern-2 I1).
  */
 export async function recomputeStandings(
   orgId: string,
   stageId: string,
   poolId?: string,
+  opts: { emptyFold?: "write" | "skip" | "drop" } = {},
 ): Promise<readonly StandingsRow[]> {
   return withTenant(orgId, async (tx) => {
     const inputs = await loadStageInputs(tx, stageId);
@@ -707,8 +722,17 @@ export async function recomputeStandings(
     // back the one we were asked for. Any lots it draws are stored first and the
     // table re-ranked from the stored rows (§5.8), so the snapshot is the stored order.
     const { tables } = await rankWithStoredLots(tx, inputs);
+    const emptyFold = opts.emptyFold ?? "write";
+    const written: string[] = [];
     for (const pool of tables.pools) {
+      if (emptyFold !== "write" && pool.rows.length === 0) continue;
       await writeSnapshot(tx, stageId, pool.pool || null, pool.rows, inputs.division.seq);
+      written.push(pool.pool || "");
+    }
+    if (emptyFold === "drop") {
+      await tx`
+        delete from standings_snapshots
+         where stage_id = ${stageId} and coalesce(pool_id::text, '') <> all(${written}::text[])`;
     }
     const target = tables.pools.find((p) => (p.pool || null) === (poolId ?? null));
     return target ? target.rows : [];

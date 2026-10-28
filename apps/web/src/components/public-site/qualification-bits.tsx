@@ -104,6 +104,24 @@ export function QualLegend({ legend }: { legend: QualTableT["legend"] }) {
   );
 }
 
+/** W2d T17 — a tie note's lines (`tieNoteText` joins them with "\n"): the sentence as it always was, then each later
+ *  line — why a step did not apply, the date a drawing of lots was made — on its own line, quieter. A one-line note is
+ *  the plain text, byte for byte as before. Spans, not `<p>`: it renders inside the popover's `<span>` panel. */
+export function TieNoteText({ text }: { text: string }) {
+  const [first, ...rest] = text.split("\n");
+  if (rest.length === 0) return <>{first}</>;
+  return (
+    <>
+      {first}
+      {rest.map((line, i) => (
+        <span key={i} data-testid="tie-note-line" className="mt-1 block text-ink-muted">
+          {line}
+        </span>
+      ))}
+    </>
+  );
+}
+
 /** Popover content, in the spec's order: headline, if-you-lose, tie note,
  *  what-if. Spans set `block`, not `<p>`/`<div>`: it renders inside the
  *  popover's panel, which is a `<span>` (phrasing content only). */
@@ -122,7 +140,7 @@ export function QualPopoverBody({ qual, tieNote }: { qual: QualRowT | null; tieN
       ) : null}
       {tieNote ? (
         <span data-testid="qual-tie-note" className="block">
-          {tieNote}
+          <TieNoteText text={tieNote} />
         </span>
       ) : null}
       {qual?.whatIf ? (

@@ -1,0 +1,1115 @@
+[
+ {
+  "id": "t17-points-half-bypassed",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "  if (unit === \"whole\") return `${points}`;",
+  "replace": "  if (/*MUT*/ true) return `${points}`;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "BG-PT-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "BG-PT-1"
+   }
+  ]
+ },
+ {
+  "id": "t17-level-table-never",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "  return rows.length > 0 && rows.every((r) => r.level === true);",
+  "replace": "  return /*MUT*/ false && rows.every((r) => r.level === true);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-level-table-empty-rows",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "  return rows.length > 0 && rows.every((r) => r.level === true);",
+  "replace": "  return /*MUT*/ rows.every((r) => r.level === true);",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-rank-text-level-ignored",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "  if (level) return LEVEL_RANK;",
+  "replace": "  if (/*MUT*/ false) return LEVEL_RANK;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-won-keeps-ot",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "      return `${row.won - beyond(\"won\")}`;",
+  "replace": "      return `${row.won /*MUT*/}`;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   }
+  ]
+ },
+ {
+  "id": "t17-otl-reads-won",
+  "file": "packages/engine/src/competition/display.ts",
+  "find": "      return `${beyond(\"lost\")}`;",
+  "replace": "      return `${beyond(/*MUT*/ \"won\")}`;",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   }
+  ]
+ },
+ {
+  "id": "t17-apart-ignores-reach",
+  "file": "packages/engine/src/competition/points.ts",
+  "find": "      reach.has(`win.${d}`) &&\n",
+  "replace": "      /*MUT*/ true &&\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "every sport's table layout"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "a draw-plus-bonus shoot-out"
+   }
+  ]
+ },
+ {
+  "id": "t17-apart-books-dpb-shootout",
+  "file": "packages/engine/src/competition/points.ts",
+  "find": "      !(d === \"so\" && rule.shootoutAs === \"draw_plus_bonus\") &&\n",
+  "replace": "      /*MUT*/ true &&\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "a draw-plus-bonus shoot-out"
+   }
+  ]
+ },
+ {
+  "id": "t17-apart-unpaid-split",
+  "file": "packages/engine/src/competition/points.ts",
+  "find": "      (byChain(rule.win, d) !== rule.win.regulation || byChain(rule.loss, d) !== rule.loss.regulation),\n",
+  "replace": "      /*MUT*/ true,\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "every sport's table layout"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "a draw-plus-bonus shoot-out"
+   }
+  ]
+ },
+ {
+  "id": "t17-apart-loser-side-dropped",
+  "file": "packages/engine/src/competition/points.ts",
+  "find": "      (byChain(rule.win, d) !== rule.win.regulation || byChain(rule.loss, d) !== rule.loss.regulation),\n",
+  "replace": "      (byChain(rule.win, d) !== rule.win.regulation /*MUT*/),\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "a draw-plus-bonus shoot-out"
+   }
+  ]
+ },
+ {
+  "id": "t17-apart-never",
+  "file": "packages/engine/src/competition/points.ts",
+  "find": "  return { apart, unit: rule.unit };",
+  "replace": "  return { apart: /*MUT*/ [], unit: rule.unit };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   }
+  ]
+ },
+ {
+  "id": "t17-unit-always-whole",
+  "file": "packages/engine/src/competition/points.ts",
+  "find": "  return { apart, unit: rule.unit };",
+  "replace": "  return { apart, unit: /*MUT*/ \"whole\" };",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "BG-PT-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "BG-PT-1"
+   }
+  ]
+ },
+ {
+  "id": "t17-view-tie-note-on-level",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "      tieBreakText: level ? null : tieNoteText(",
+  "replace": "      tieBreakText: /*MUT*/ tieNoteText(",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-view-rank-on-level",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "      rank: level ? null : (r.rank ?? null),",
+  "replace": "      rank: /*MUT*/ (r.rank ?? null),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-view-qual-on-level",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "  const qual = level ? null : (input.qualification ?? null);",
+  "replace": "  const qual = /*MUT*/ (input.qualification ?? null);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-view-champion-on-level",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "      champion: !level && input.championId === r.entrantId,",
+  "replace": "      champion: /*MUT*/ input.championId === r.entrantId,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-tie-note-line-dropped",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "  if (tb.note !== undefined) lines.push(msg(TIE_NOTE_KEYS[tb.note]));",
+  "replace": "  if (/*MUT*/ false) lines.push(msg(TIE_NOTE_KEYS[tb.note]));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "anti-goal 2"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "head-to-head not complete"
+   }
+  ]
+ },
+ {
+  "id": "t17-drawn-at-line-dropped",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "  if (drawn !== null) lines.push(msg(\"table.tieNote.drawnAt\", { date: drawn }));",
+  "replace": "  if (/*MUT*/ false && drawn !== null) lines.push(msg(\"table.tieNote.drawnAt\", { date: drawn }));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-4"
+   }
+  ]
+ },
+ {
+  "id": "t17-two-team-note-mislabelled",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "  h2h_two_not_applicable: \"table.tieNote.h2hTwoNotApplicable\",",
+  "replace": "  h2h_two_not_applicable: /*MUT*/ \"table.tieNote.h2hIncomplete\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "anti-goal 2"
+   }
+  ]
+ },
+ {
+  "id": "t17-incomplete-note-mislabelled",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "  h2h_incomplete: \"table.tieNote.h2hIncomplete\",",
+  "replace": "  h2h_incomplete: /*MUT*/ \"table.tieNote.h2hTwoNotApplicable\",",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "head-to-head not complete"
+   }
+  ]
+ },
+ {
+  "id": "t17-caption-never-pinned",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "    pinned: date === null ? msg(\"div.detail.tiebreak.live\") : msg(\"div.detail.tiebreak.pinned\", { date }),",
+  "replace": "    pinned: /*MUT*/ msg(\"div.detail.tiebreak.live\"),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "the division caption is per stage"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/qualification-plumbing.test.tsx"
+    ],
+    "name": "W2d T17: the caption is per stage"
+   }
+  ]
+ },
+ {
+  "id": "t17-caption-source-fixed",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "    source: msg(ORDER_SOURCE_KEYS[rules.sources.tiebreakers]),",
+  "replace": "    source: msg(/*MUT*/ ORDER_SOURCE_KEYS.sport),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "the division caption is per stage"
+   }
+  ]
+ },
+ {
+  "id": "t17-layout-no-rules",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "  return rules === null || rules === undefined ? PLAIN_LAYOUT : tableLayoutOf(rules.points, rules.reachable);",
+  "replace": "  return /*MUT*/ PLAIN_LAYOUT;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "BG-PT-1"
+   }
+  ]
+ },
+ {
+  "id": "t17-otw-otl-columns-never",
+  "file": "apps/web/src/lib/public-site.ts",
+  "find": "    ...(apart\n",
+  "replace": "    ...(/*MUT*/ false\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   }
+  ]
+ },
+ {
+  "id": "t17-division-tie-trigger-on-level",
+  "file": "apps/web/src/components/public-site/standings-table.tsx",
+  "find": "                  ) : row.tieBreak && !level ? (",
+  "replace": "                  ) : row.tieBreak /*MUT*/ ? (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-division-qual-on-level",
+  "file": "apps/web/src/components/public-site/standings-table.tsx",
+  "find": "  const qualification = level ? null : qualificationIn;",
+  "replace": "  const qualification = /*MUT*/ qualificationIn;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-division-leader-on-level",
+  "file": "apps/web/src/components/public-site/standings-table.tsx",
+  "find": "  const leader = (row: StandingsRow) => !level && row.rank === 1;",
+  "replace": "  const leader = (row: StandingsRow) => /*MUT*/ row.rank === 1;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-division-medal-on-level",
+  "file": "apps/web/src/components/public-site/standings-table.tsx",
+  "find": "    const rank = level ? undefined : row.rank;",
+  "replace": "    const rank = /*MUT*/ row.rank;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-6"
+   }
+  ]
+ },
+ {
+  "id": "t17-division-no-rules",
+  "file": "apps/web/src/components/public-site/standings-table.tsx",
+  "find": "  const layout = tableLayoutFor(rules);",
+  "replace": "  const layout = tableLayoutFor(/*MUT*/ null);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "BG-PT-1"
+   }
+  ]
+ },
+ {
+  "id": "t17-division-date-zone-dropped",
+  "file": "apps/web/src/components/public-site/standings-table.tsx",
+  "find": "  const dateOf = (iso: string) => formatPublicInstant(locale, tz, iso, { dateStyle: \"medium\" });",
+  "replace": "  const dateOf = (iso: string) => formatPublicInstant(locale, /*MUT*/ \"UTC\", iso, { dateStyle: \"medium\" });",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "X-TB-4"
+   }
+  ]
+ },
+ {
+  "id": "t17-what-if-always-points",
+  "file": "apps/web/src/server/public-site/qualification-view.ts",
+  "find": "  const whatIfKeys = byWins ? WHAT_IF_WINS_KEYS : WHAT_IF_POINTS_KEYS;",
+  "replace": "  const whatIfKeys = /*MUT*/ WHAT_IF_POINTS_KEYS;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view.test.ts"
+    ],
+    "name": "what-if on a wins table"
+   }
+  ]
+ },
+ {
+  "id": "t17-what-if-always-wins",
+  "file": "apps/web/src/server/public-site/qualification-view.ts",
+  "find": "  const whatIfKeys = byWins ? WHAT_IF_WINS_KEYS : WHAT_IF_POINTS_KEYS;",
+  "replace": "  const whatIfKeys = /*MUT*/ WHAT_IF_WINS_KEYS;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/qualification-view.test.ts"
+    ],
+    "name": "what-if on a wins table"
+   }
+  ]
+ },
+ {
+  "id": "t17-shared-page-drops-rules",
+  "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
+  "find": "                    rules={stage.table_rules}\n",
+  "replace": "                    rules={/*MUT*/ null}\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/standings-pool-order-wiring.test.ts"
+    ],
+    "name": "W2d T17: both pages hand"
+   }
+  ]
+ },
+ {
+  "id": "t17-embed-page-drops-rules",
+  "file": "apps/web/src/app/embed/divisions/[id]/[widget]/page.tsx",
+  "find": "              rules={stage.table_rules}\n",
+  "replace": "              rules={/*MUT*/ null}\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/standings-pool-order-wiring.test.ts"
+    ],
+    "name": "W2d T17: both pages hand"
+   }
+  ]
+ },
+ {
+  "id": "t17-shared-page-drops-zone",
+  "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/page.tsx",
+  "find": "                    tz={tz}\n",
+  "replace": "                    tz={/*MUT*/ \"UTC\"}\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/public-site/__tests__/standings-pool-order-wiring.test.ts"
+    ],
+    "name": "W2d T17: both pages hand"
+   }
+  ]
+ },
+ {
+  "id": "t17-console-drops-rules",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "find": "                        rules={stageOrder(stage.id)}\n",
+  "replace": "                        rules={/*MUT*/ null}\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/qualification-plumbing.test.tsx"
+    ],
+    "name": "W2d T17: the console's table is handed"
+   }
+  ]
+ },
+ {
+  "id": "t17-console-caption-dropped",
+  "file": "apps/web/src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/page.tsx",
+  "find": "                  if (note === null) return null;\n",
+  "replace": "                  if (/*MUT*/ true) return null;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/o/[orgSlug]/c/[compSlug]/d/[divSlug]/__tests__/qualification-plumbing.test.tsx"
+    ],
+    "name": "W2d T17: the caption is per stage"
+   }
+  ]
+ },
+ {
+  "id": "t17-matrix-page-level-unread",
+  "file": "tools/matrix/lib/browser/pages/standings.ts",
+  "find": "      const level = rank === undefined && text.trimStart().startsWith(LEVEL_RANK);",
+  "replace": "      const level = /*MUT*/ false && rank === undefined && text.trimStart().startsWith(LEVEL_RANK);",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/page-objects.test.ts"
+    ],
+    "name": "W2d T17 .X-TB-6.: a level table's rank cell"
+   }
+  ]
+ },
+ {
+  "id": "t17-matrix-api-level-ignored",
+  "file": "tools/matrix/lib/driver/browser-driver.ts",
+  "find": "  byRank(rows).map((r) => ({ rank: r.level === true ? null : r.rank, name: names.get(r.entrantId) ?? r.entrantId }));",
+  "replace": "  byRank(rows).map((r) => ({ rank: /*MUT*/ r.rank, name: names.get(r.entrantId) ?? r.entrantId }));",
+  "killers": [
+   {
+    "cwd": ".",
+    "files": [
+     "tools/matrix/__tests__/browser-driver.test.ts"
+    ],
+    "name": "W2d T17 .X-TB-6.: a level table"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-note-never-on-trace",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "...(incomplete ? { note: \"h2h_incomplete\" as const } : {})",
+  "replace": "...(/*MUT*/ false ? { note: \"h2h_incomplete\" as const } : {})",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 IH-TB-2 IIHF partial schedule"
+   },
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 T17 fix 1: a later head-to-head step"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "through the ranking pass"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-answered-block-dropped",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "return partialSchedule(cls, run);\n  h2hAnswered(cls, run);\n",
+  "replace": "return partialSchedule(cls, run);\n  /*MUT*/\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 T17 fix 1: a later head-to-head step"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "through the ranking pass"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-answered-two-dropped",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "    if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);\n    h2hAnswered(cls, run);\n",
+  "replace": "    if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);\n    /*MUT*/\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 T17 fix 1: a later head-to-head step"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-answered-direct-dropped",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "          if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);\n          h2hAnswered(cls, run);\n",
+  "replace": "          if (!scheduleComplete(cls, run)) return h2hIncomplete(cls, run);\n          /*MUT*/\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 T17 fix 1: a later head-to-head step"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-answered-noop",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "  for (const row of cls) if (run.notes.get(row.entrantId) === \"h2h_incomplete\") run.notes.delete(row.entrantId);\n}",
+  "replace": "  void cls; void run; /*MUT*/\n}",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/partial-schedule.test.ts"
+    ],
+    "name": "X-TB-8 T17 fix 1: a later head-to-head step"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "through the ranking pass"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-layout-by-set-score-split",
+  "file": "packages/engine/src/competition/points.ts",
+  "find": "      rule.bySetScore === undefined &&\n",
+  "replace": "      /*MUT*/ true &&\n",
+  "killers": [
+   {
+    "cwd": "packages/engine",
+    "files": [
+     "src/competition/display-w2d.test.ts"
+    ],
+    "name": "a draw-plus-bonus shoot-out"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-og-unit-dropped",
+  "file": "apps/web/src/server/og/model.ts",
+  "find": "  const unit = tableLayoutFor(input.rules).unit;",
+  "replace": "  const unit = tableLayoutFor(/*MUT*/ null).unit;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/og/__tests__/og-model.test.ts"
+    ],
+    "name": "a chess table prints"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/opengraph-image-locale.test.tsx"
+    ],
+    "name": "W2d T17 fix 1: a chess division"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-og-leader-on-level",
+  "file": "apps/web/src/server/og/model.ts",
+  "find": "      leader: !level && i === 0,",
+  "replace": "      leader: /*MUT*/ i === 0,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/og/__tests__/og-model.test.ts"
+    ],
+    "name": "a level table"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/opengraph-image-locale.test.tsx"
+    ],
+    "name": "W2d T17 fix 1: a level table"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-og-rank-level-ignored",
+  "file": "apps/web/src/server/og/model.ts",
+  "find": "rankText({ rank: r.rank }, level)",
+  "replace": "rankText({ rank: r.rank }, /*MUT*/ false)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/og/__tests__/og-model.test.ts"
+    ],
+    "name": "a level table"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/opengraph-image-locale.test.tsx"
+    ],
+    "name": "W2d T17 fix 1: a level table"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-og-rankless-dash",
+  "file": "apps/web/src/server/og/model.ts",
+  "find": "      rank: r.rank === null ? LEVEL_RANK : ",
+  "replace": "      rank: /*MUT*/ false ? LEVEL_RANK : ",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/og/__tests__/og-model.test.ts"
+    ],
+    "name": "a row the ranking pass left without a place"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-og-route-sibling-rules",
+  "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/opengraph-image.tsx",
+  "find": "data?.stages.find((s) => s.id === table?.stage_id)",
+  "replace": "data?.stages.find((s) => /*MUT*/ s.id !== table?.stage_id)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/opengraph-image-locale.test.tsx"
+    ],
+    "name": "W2d T17 fix 1: a chess division"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-og-route-leader-by-index",
+  "file": "apps/web/src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/opengraph-image.tsx",
+  "find": "color: row.leader ? theme.accent : theme.muted,",
+  "replace": "color: /*MUT*/ i === 0 ? theme.accent : theme.muted,",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/app/(public)/shared/[orgSlug]/[competitionSlug]/[divisionSlug]/__tests__/opengraph-image-locale.test.tsx"
+    ],
+    "name": "W2d T17 fix 1: a level table"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-slide-unit-dropped",
+  "file": "apps/web/src/server/slideshow-data.ts",
+  "find": "pointsText(r.points, shape.layout.unit)",
+  "replace": "pointsText(r.points, /*MUT*/ \"whole\")",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/slideshow-point-ratio.test.ts"
+    ],
+    "name": "chess: the stored half-points"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/slideshow-point-ratio.test.ts"
+    ],
+    "name": "W2d T17 fix 1: a chess division"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-slide-layout-plain",
+  "file": "apps/web/src/server/slideshow-data.ts",
+  "find": "  layout: rules?.points === undefined || rules.reachable === undefined ? PLAIN_LAYOUT : ",
+  "replace": "  layout: /*MUT*/ true ? PLAIN_LAYOUT : ",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/slideshow-point-ratio.test.ts"
+    ],
+    "name": "chess: the stored half-points"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/slideshow-point-ratio.test.ts"
+    ],
+    "name": "W2d T17 fix 1: a chess division"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-slide-rank-level-ignored",
+  "file": "apps/web/src/server/slideshow-data.ts",
+  "find": "rankText({ ...r, rank: r.rank ?? i + 1 }, level)",
+  "replace": "rankText({ ...r, rank: r.rank ?? i + 1 }, /*MUT*/ false)",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/slideshow-point-ratio.test.ts"
+    ],
+    "name": "a level table: every rank"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-slide-level-never",
+  "file": "apps/web/src/server/slideshow-data.ts",
+  "find": "  const level = isLevelTable(engineRows);",
+  "replace": "  const level = /*MUT*/ false && isLevelTable(engineRows);",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/__tests__/slideshow-point-ratio.test.ts"
+    ],
+    "name": "a level table: every rank"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-slide-bar-on-level",
+  "file": "apps/web/src/components/v2/slideshow.tsx",
+  "find": "                      {i === 0 && !slide.level && (",
+  "replace": "                      {i === 0 /*MUT*/ && (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/slideshow-tv-rows.test.tsx"
+    ],
+    "name": "W2d T17 fix 1"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-slide-chip-on-level",
+  "file": "apps/web/src/components/v2/slideshow.tsx",
+  "find": "                        {i === 0 && !slide.level ? (",
+  "replace": "                        {i === 0 /*MUT*/ ? (",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/components/v2/__tests__/slideshow-tv-rows.test.tsx"
+    ],
+    "name": "W2d T17 fix 1"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-posts-recap-level-kept",
+  "file": "apps/web/src/server/usecases/org-posts.ts",
+  "find": "  if (!table || table.length === 0 || isLevelTable(table)) return [];",
+  "replace": "  if (!table || table.length === 0 /*MUT*/) return [];",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/org-posts.test.ts"
+    ],
+    "name": "a level table"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-posts-digest-level-kept",
+  "file": "apps/web/src/server/usecases/org-posts.ts",
+  "find": "        if (!snap || snap.rows.length === 0 || isLevelTable(snap.rows)) return;",
+  "replace": "        if (!snap || snap.rows.length === 0 /*MUT*/) return;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/org-posts.test.ts"
+    ],
+    "name": "a level table"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-posts-unit-whole",
+  "file": "apps/web/src/server/usecases/org-posts.ts",
+  "find": "  return tableLayoutFor((await stageTableRulesDocs(tx, [stageId]))[stageId]).unit;",
+  "replace": "  return /*MUT*/ \"whole\" as const;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/org-posts.test.ts"
+    ],
+    "name": "a chess round recap and digest"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-posts-recap-stored-points",
+  "file": "apps/web/src/server/usecases/org-posts.ts",
+  "find": "    points: pointsText(r.points, unit),\n  }));",
+  "replace": "    points: /*MUT*/ String(r.points),\n  }));",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/org-posts.test.ts"
+    ],
+    "name": "a chess round recap and digest"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-posts-digest-stored-points",
+  "file": "apps/web/src/server/usecases/org-posts.ts",
+  "find": "            points: pointsText(r.points, unit),",
+  "replace": "            points: /*MUT*/ String(r.points),",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/usecases/__tests__/org-posts.test.ts"
+    ],
+    "name": "a chess round recap and digest"
+   }
+  ]
+ },
+ {
+  "id": "t17f1-compact-split-ignored",
+  "file": "apps/web/src/server/public-site/standings-view.ts",
+  "find": "  layout.apart.length > 0 ? SPLIT_COMPACT_KEYS : COMPACT_KEYS;",
+  "replace": "  /*MUT*/ COMPACT_KEYS;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/public-site/__tests__/standings-view-w2d.test.ts"
+    ],
+    "name": "IH-PT-1"
+   }
+  ]
+ }
+]

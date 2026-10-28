@@ -584,8 +584,8 @@
  {
   "id": "t20-ui-reset-partial",
   "file": "apps/web/src/components/v2/division-settings.tsx",
-  "find": "    setPartialSave(false);\n    setRulesSave(rules);",
-  "replace": "    setRulesSave(rules);",
+  "find": "    setPartialSave(false);\n    setKeptPinned([]);\n    setRulesSave(rules);",
+  "replace": "    setKeptPinned([]);\n    setRulesSave(rules);",
   "killers": [
    {
     "cwd": "apps/web",
@@ -599,8 +599,8 @@
  {
   "id": "t20-ui-reset-list",
   "file": "apps/web/src/components/v2/division-settings.tsx",
-  "find": "    setRefusedList([]);\n    setPartialSave(false);\n    setRulesSave(rules);",
-  "replace": "    setPartialSave(false);\n    setRulesSave(rules);",
+  "find": "    setRefusedList([]);\n    setPartialSave(false);\n    setKeptPinned([]);\n    setRulesSave(rules);",
+  "replace": "    setPartialSave(false);\n    setKeptPinned([]);\n    setRulesSave(rules);",
   "killers": [
    {
     "cwd": "apps/web",

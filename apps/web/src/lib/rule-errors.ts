@@ -27,7 +27,7 @@ export const RULE_ERROR_STATUS = {
    *  overtime, shoot-out or not-played split, no set-score table, a shoot-out booked as a result) written to a stage whose
    *  sport pays an outcome it reaches its own way (`sportPointsSplits`, lib/stage-points-splits.ts): saved, it would pay
    *  that outcome as a plain win or loss. `extra.splits` names what the sport pays apart (`SPLIT_REASON_KEYS`). The
-   *  stage points editor never sends one (it shows "can't be set per stage yet" there); this is its defence in depth. */
+   *  stage points editor never sends one (W2d Task 16: it states every split); this is its defence in depth. */
   POINTS_SPLIT_FLATTENED: 422,
   /** W2c Task 14 — a delete (rebuild, Undo of a generation, pool clear, Swiss reshape) that would take a match's own
    *  format with it (`fixture-override-guards.ts`). The organiser sets that match back to its stage's format first. */
@@ -200,6 +200,27 @@ export function refusedFieldsOf(data: unknown): RefusedField[] | null {
     out.push({ field, code: code as RefusedField["code"], stageId, stageName });
   }
   return out.length === 0 ? null : out;
+}
+
+/** W2d (PR B carry from Task 13, I3): a pinned stage a division save did not reach — PATCH /divisions/{id}'s 200
+ *  `stagesKeptPinned` (`PatchedDivision`). The save landed; the stage keeps the points and order it started with. */
+export interface KeptPinnedStage {
+  stageId: string;
+  name: string;
+}
+
+/** The `stagesKeptPinned` list a division save's 200 carries, as the wire may say it: only well-formed entries, in the
+ *  server's order, each stage once; empty when none (an older server, a save that reached every stage). */
+export function keptPinnedOf(data: unknown): KeptPinnedStage[] {
+  const list = isRecord(data) ? data.stagesKeptPinned : undefined;
+  if (!Array.isArray(list)) return [];
+  const out: KeptPinnedStage[] = [];
+  for (const k of list) {
+    if (!isRecord(k) || typeof k.stageId !== "string" || typeof k.name !== "string") continue;
+    if (out.some((o) => o.stageId === k.stageId)) continue;
+    out.push({ stageId: k.stageId, name: k.name });
+  }
+  return out;
 }
 
 /** The fit reasons' sentences (ui.json); their en copy IS `FORMAT_FIT_REASONS` (pinned). */

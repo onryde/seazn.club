@@ -1,6 +1,6 @@
 // W2d Task 10 fix round 1, I2 (owner decision 2026-10-26) — the divisions whose OWN points a flat stage rule (the stage
 // points editor's three boxes: one amount per win, per loss, per draw, tie and no result) cannot say, each with what it
-// pays apart. From the rulebooks, never from the predicate under test (`pointsEditorFits`, `sportPointsSplits`):
+// pays apart. From the rulebooks, never from the predicate under test (`draftRefusal`, `sportPointsSplits`):
 //   - IIHF (icehockey/iihf): a win in overtime or a shoot-out pays 2 and its loss 1, against regulation's 3/0 (3-2-1-0);
 //   - FIVB (volleyball/indoor): a 3-2 result pays the winner 2 and the loser 1, against a 3-0 or 3-1's 3/0;
 //   - ICC (cricket, every format): a tie and a no result pay each side 1, which the editor's tie and no result (0) cannot;

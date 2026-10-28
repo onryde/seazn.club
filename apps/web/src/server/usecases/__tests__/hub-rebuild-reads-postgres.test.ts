@@ -129,11 +129,10 @@ async function seed(): Promise<Scene> {
   const { fixtures } = await generateStageFixtures(auth, stage!.id);
   const entrants = await sql<{ id: string }[]>`
     select id from entrants where division_id = ${division.id} order by seed`;
-  await sql`
-    insert into standings_snapshots (stage_id, pool_id, rows, computed_through_seq)
-    values (${stage!.id}, null, ${sql.json(
-      entrants.map((e, i) => ({ entrantId: e.id, played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, rank: i + 1 })),
-    )}, 0)`;
+  // The generate wrote the stage's LEVEL table (W2d concern 2, spec §5.7): the pre-score table the score moves below.
+  const [{ n: stored }] = await sql<{ n: number }[]>`
+    select count(*)::int as n from standings_snapshots where stage_id = ${stage!.id} and pool_id is null`;
+  if (stored !== 1) throw new Error(`rig: the generate wrote ${stored} table(s) for the league, not 1`);
   return {
     orgSlug,
     compSlug: competition.slug,

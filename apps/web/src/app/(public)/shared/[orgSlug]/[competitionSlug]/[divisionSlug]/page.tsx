@@ -338,6 +338,9 @@ export default async function DivisionHomePage({ params }: Props) {
                     }
                     dict={dict}
                     qualification={qualification}
+                    rules={stage.table_rules}
+                    locale={orgLocale}
+                    tz={tz}
                   />
                   {poolFixtures.length > 0 && (
                     <details>

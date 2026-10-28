@@ -41,6 +41,8 @@ const scene = vi.hoisted(() => ({
 }));
 const stagesSpies = vi.hoisted(() => ({
   listStages: vi.fn(async () => scene.stages),
+  // W2d Task 15: the page reads every stage's table rules (the Tie-breaks section) on the fixtures tab.
+  listStagesWithTableRules: vi.fn(async () => []),
   getStandings: vi.fn(async (_auth: unknown, stageId: string, poolId?: string) => scene.snaps[`${stageId}:${poolId ?? ""}`] ?? { rows: [] }),
   getSeedProposal: vi.fn(),
   getStageRosterDrift: vi.fn(),
@@ -121,6 +123,8 @@ import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
 import nlPublic from "@/dictionaries/nl/public.json";
+import enUi from "@/dictionaries/en/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
 import { defaultOrderOf } from "@seazn/engine/testkit";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
@@ -499,6 +503,58 @@ describe("organiser console — the tie-break cascade caption says the sport's w
         )
       : [];
     expect(words).toEqual([]);
+  });
+
+  /** W2d T17: the stage's own line under its caption — where its order came from, and whether it is pinned. */
+  async function orderSourceLine(): Promise<string | null> {
+    const root = await DivisionPage({
+      params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
+      searchParams: Promise.resolve({ tab: "standings" }),
+    });
+    const line = elements(root).filter((el) =>
+      String((el.props as { "data-testid"?: string })["data-testid"] ?? "").startsWith("stage-order-source-"),
+    );
+    expect(line.length, "one source line per captioned stage").toBeLessThanOrEqual(1);
+    const textOf = (n: unknown): string =>
+      typeof n === "string" || typeof n === "number" ? String(n) : Array.isArray(n) ? n.map(textOf).join("") : isValidElement(n) ? textOf((n.props as { children?: unknown }).children) : "";
+    return line[0] === undefined ? null : textOf(line[0]);
+  }
+  const fill = (text: string, date: string) => text.replace("{date}", date);
+
+  it("W2d T17: the caption is per stage and says where its order came from and that it is pinned — the day it was pinned, in the viewer's words", async () => {
+    swissScene();
+    // a pending stage on the sport's order: not pinned yet
+    captionMeta(GENERIC, DIVISION_CFG);
+    expect(await orderSourceLine()).toBe(`${enUi["div.detail.tiebreak.source.sport"]} ${enUi["div.detail.tiebreak.live"]}`);
+    // a started stage with its own order: pinned, and the day (the division's zone, UTC here)
+    const pinned = { ...rulesFor("swiss"), pinnedAt: "2026-10-20T09:30:00.000Z", sources: { ...rulesFor("swiss").sources, tiebreakers: "stage" as const } };
+    qual.listStageQualificationMeta.mockResolvedValue(new Map([["sw", { ...meta({ swiss_rounds: 3 }), table_rules: pinned }]]));
+    expect(await orderSourceLine()).toBe(`${enUi["div.detail.tiebreak.source.stage"]} ${fill(enUi["div.detail.tiebreak.pinned"], "20 Oct 2026")}`);
+    // a French viewer reads the French sentences and a French date
+    scene.locale = "fr";
+    const frDate = new Intl.DateTimeFormat("fr", { dateStyle: "medium", timeZone: "UTC" }).format(new Date("2026-10-20T09:30:00.000Z"));
+    expect(await orderSourceLine()).toBe(`${frUi["div.detail.tiebreak.source.stage"]} ${fill(frUi["div.detail.tiebreak.pinned"], frDate)}`);
+    // a stage the loader refused: no caption, so no source line (R3)
+    scene.locale = "en";
+    qual.listStageQualificationMeta.mockResolvedValue(new Map([["sw", { ...meta({ swiss_rounds: 3 }), table_rules: null }]]));
+    expect(await orderSourceLine()).toBeNull();
+  });
+
+  it("W2d T17: the console's table is handed its stage's rules and the viewer's locale and zone (half-points, OTW/OTL, the lots date)", async () => {
+    swissScene();
+    captionMeta(GENERIC, DIVISION_CFG);
+    const root = await DivisionPage({
+      params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
+      searchParams: Promise.resolve({ tab: "standings" }),
+    });
+    const tables = elements(root).filter((el) => el.type === StandingsTable);
+    expect(tables.length, "anti-vacuity: the console drew a table").toBeGreaterThan(0);
+    for (const table of tables) {
+      const props = table.props as { rules?: unknown; locale?: string; tz?: string };
+      expect(props.rules).toEqual(rulesFor("swiss"));
+      expect(props.locale).toBe("en");
+      expect(props.tz).toBe("UTC");
+    }
   });
 
   it("generic: plain 'difference' and 'total scored', never the goal/run catch-all", async () => {

@@ -20,7 +20,7 @@ import { join } from "node:path";
 import { resolvePositions, type AnySportModule, type PadSpec } from "@seazn/engine/sport";
 import { initSquads } from "@seazn/engine/core";
 import { CLOCK_NUDGE_SECONDS, adjustClock, initClock, startClock, reseatClock, elapsedOf, stampOf } from "../clock";
-import { stampFor } from "../pad-host";
+import { dockFor, softCommitPlan, stampFor } from "../pad-host";
 import { answerStep, backStep, currentStep, initialSheetState, resolveInitial } from "../guided-sheet";
 import type { GuidedSheetState } from "../guided-sheet";
 import type { GuidedSheetSpec, GuidedSheetStep, SheetNumberStep, PadHostView, SwapSlot, TileSpec } from "../types";
@@ -122,6 +122,19 @@ function tileEvent(tiles: readonly TileSpec[], id: string): { type: string; payl
   const action = tile!.action;
   expect("event" in action, `tile "${id}" is not a direct-event tile`).toBe(true);
   return (action as { event: { type: string; payload: Record<string, unknown> } }).event;
+}
+
+/**
+ * W2d T18 — what the pad actually SENDS for one tap. Ordinarily the tap's own payload; but a tap whose dock asks a
+ * REQUIRED question (`softCommitPlan` → "choose": a hockey goal's type) sends nothing until it is answered, and then
+ * sends one of the answered payloads. So "the fold accepts what the pad emits" is judged on every one of those —
+ * never on the bare tap, which the host does not queue. Never empty: a "choose" dock has at least one answer
+ * (`softCommitPlan` refuses one without).
+ */
+function padSends(sport: Sport, view: PadHostView, type: string, payload: Record<string, unknown>): Record<string, unknown>[] {
+  const dock = dockFor(sport.factory(T), type, view, payload);
+  if (softCommitPlan(dock, payload) !== "choose") return [payload];
+  return dock!.chips.map((chip) => chip.mutate(payload));
 }
 
 // ---------------------------------------------------------------------------
@@ -363,9 +376,12 @@ describe("what the pad emits is what the fold accepts", () => {
         const tiles = sport.factory(T).tiles(view);
         for (const side of ["home", "away"] as const) {
           const goal = tileEvent(tiles, `goal-${side}`);
-          expect(phaseVerdict(sport.module, state, goal.type, goal.payload)).toBe("accepted");
+          for (const sent of padSends(sport, view, goal.type, goal.payload)) {
+            expect(phaseVerdict(sport.module, state, goal.type, sent), `${side}: ${JSON.stringify(sent)}`).toBe("accepted");
+          }
         }
-        const after = foldPeriod(sport.module, cfg, [["core.start"], [e.goal, tileEvent(tiles, "goal-home").payload]]);
+        const home = tileEvent(tiles, "goal-home");
+        const after = foldPeriod(sport.module, cfg, [["core.start"], [e.goal, padSends(sport, view, home.type, home.payload)[0]]]);
         expect((after.goals as { home: number }).home).toBe(1);
       });
 
@@ -1257,10 +1273,26 @@ describe("what each sport's goal dock offers", () => {
           "accepted",
         );
       }
-      // The kind chips are the cfg's own list, minus the two the dock words
-      // differently (`fg` is the default, `og` is the own-goal flag).
-      const kinds = (cfg as { goalKinds: string[] }).goalKinds.filter((k) => k !== "fg" && k !== "og");
+      // The kind chips are the cfg's own list, minus `og` (the own-goal flag).
+      // `fg` is the default and needs no chip — EXCEPT where the goal cannot be
+      // sent without its type (W2d T18, hockey): there the untyped goal's dock
+      // is the choice, and Field goal is its first answer. That flag is pinned
+      // to the engine's own refusal by `hockey-goal-type.test.ts`.
+      const required = sport.spec.goalKindRequired === true;
+      expect(dock.requires).toBe(required ? "kind" : undefined);
+      const kinds = (cfg as { goalKinds: string[] }).goalKinds.filter((k) => k !== "og" && (required || k !== "fg"));
       expect(dock.chips.filter((c) => c.id.startsWith("kind:")).map((c) => c.id.slice(5))).toEqual(kinds);
+      if (required) {
+        // …and the dock that follows the answer — empty net, the scorer — folds on the typed goal.
+        const typed = { by: "H", kind: kinds[0]! };
+        const next = sport.factory(T).dock(`${sport.key}.goal`, view, typed)!;
+        expect(next.chips.length, `${sport.key}: the typed goal's dock offers nothing`).toBeGreaterThan(0);
+        for (const chip of next.chips) {
+          expect(phaseVerdict(sport.module, state, `${sport.key}.goal`, chip.mutate(typed)), `${sport.key}/typed/${chip.id}`).toBe(
+            "accepted",
+          );
+        }
+      }
     }
   });
 });
@@ -2147,10 +2179,11 @@ describe("no tile is ever drawn for something the fold would refuse", () => {
             if (!("event" in tile.action)) continue;
             const type = tile.action.event.type;
             expect(bands[type], `${row.label}/b${band}: ${type} above band`).toBeLessThanOrEqual(band);
-            expect(
-              phaseVerdict(sport.module, row.state, type, tile.action.event.payload),
-              `${row.label}/b${band}: tile ${tile.id}`,
-            ).toBe("accepted");
+            for (const sent of padSends(sport, view, type, tile.action.event.payload as Record<string, unknown>)) {
+              expect(phaseVerdict(sport.module, row.state, type, sent), `${row.label}/b${band}: tile ${tile.id}`).toBe(
+                "accepted",
+              );
+            }
           }
         }
       }

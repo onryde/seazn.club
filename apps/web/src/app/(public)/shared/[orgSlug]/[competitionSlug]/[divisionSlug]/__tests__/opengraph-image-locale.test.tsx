@@ -19,6 +19,7 @@ import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
 import nl from "@/dictionaries/nl/public.json";
+import { chessRoundRobin, levelLeague, type StoredTable } from "@/server/engine-db/__tests__/helpers/stored-table-rows";
 
 const captured: { tree: ReactElement | null } = { tree: null };
 vi.mock("next/og", () => ({
@@ -34,7 +35,8 @@ const state = vi.hoisted(() => ({
   locale: "en",
   youth: false,
   kind: "individual",
-  rows: [] as { rank: number; entrantId: string; played: number; points: number }[],
+  rows: [] as { rank: number; entrantId: string; played: number; points: number; level?: boolean }[],
+  rules: null as unknown,
   missing: false,
 }));
 
@@ -51,8 +53,12 @@ vi.mock("@/server/public-site/data", () => ({
           entrants: [
             { id: "e1", kind: state.kind, display_name: "Maya Kapoor" },
             { id: "e2", kind: state.kind, display_name: "Leo Ng" },
+            { id: "e3", kind: state.kind, display_name: "Clara" },
+            { id: "e4", kind: state.kind, display_name: "Dmitri" },
           ],
-          standings: [{ rows: state.rows }],
+          // W2d T17: the table names its stage, and the stage carries the rules the one loader serves.
+          stages: [{ id: "s-other", table_rules: null }, { id: "s1", table_rules: state.rules }],
+          standings: [{ stage_id: "s1", rows: state.rows }],
         },
 }));
 
@@ -89,7 +95,7 @@ async function draw(): Promise<string> {
 }
 
 beforeEach(() => {
-  Object.assign(state, { locale: "en", youth: false, kind: "individual", rows: [], missing: false });
+  Object.assign(state, { locale: "en", youth: false, kind: "individual", rows: [], rules: null, missing: false });
 });
 
 describe("division share card — drawn in the org's locale", () => {
@@ -137,6 +143,34 @@ describe("division share card — drawn in the org's locale", () => {
       expect(html).toContain(`>${esc(line(locale, "og.tagline"))}<`);
     });
   }
+
+  // W2d T17 fix 1 (I3): the route hands the model the TABLE'S OWN stage's rules (a sibling stage's would print chess's
+  // stored half-points), so the card prints what the public table prints. FIDE 1 / ½ / 0: Anand (e1) beat Bela (e2),
+  // drew Clara (e3) and lost to Dmitri (e4) — 1½; the leader is drawn in the accent, never a level table's top row.
+  const storedRows = (t: StoredTable) =>
+    t.rows.map((r) => ({ rank: r.rank!, entrantId: r.entrantId, played: r.played, points: r.points, ...(r.level === true ? { level: true } : {}) }));
+  it("W2d T17 fix 1: a chess division's card prints the leader's 1½, not the stored 3", async () => {
+    const chess = chessRoundRobin(["e1", "e2", "e3", "e4"]);
+    Object.assign(state, { rows: storedRows(chess), rules: chess.doc });
+    const html = await draw();
+    expect(html).toContain(">Pts 1½<");
+    expect(html).toContain(">Pts ½<");
+    expect(html).not.toContain(">Pts 3<");
+  });
+  // Each row's place cell: its colour (the accent marks the leader) and its text.
+  const placeCells = (html: string) =>
+    [...html.matchAll(/width:44px;color:([^;]+);font-weight:800">([^<]*)</g)].map((m) => ({ color: m[1]!, text: m[2]! }));
+  it("W2d T17 fix 1: a level table's card prints '–' for every place and no row in the accent", async () => {
+    Object.assign(state, { rows: ROWS, rules: null });
+    const played = placeCells(await draw());
+    expect(played.map((c) => c.text), "the pair: a played table prints its places").toEqual(["1", "2"]);
+    expect(played[0]!.color, "the pair: a played table's leader is drawn in the accent").not.toBe(played[1]!.color);
+    const level = levelLeague(["e1", "e2", "e3"]);
+    Object.assign(state, { rows: storedRows(level).map((r) => ({ ...r, rank: r.rank ?? 1 })), rules: level.doc });
+    const cells = placeCells(await draw());
+    expect(cells.map((c) => c.text)).toEqual(["–", "–", "–"]);
+    expect(cells.every((c) => c.color === played[1]!.color), "no level row in the accent").toBe(true);
+  });
 
   // No division means no org, so English is the only locale there is: this
   // pins that the placeholder name now comes from the dictionary. A literal

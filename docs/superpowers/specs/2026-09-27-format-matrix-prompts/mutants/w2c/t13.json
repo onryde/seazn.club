@@ -419,8 +419,8 @@
  {
   "id": "t13-body-one-arm-sent",
   "file": "apps/web/src/server/api-v1/schemas.ts",
-  "find": ".refine((b) => b.rules !== undefined || b.points !== undefined, \"send `rules`, `points` or both\");",
-  "replace": ".refine((b) => true || b.rules !== undefined || b.points !== undefined, \"send `rules`, `points` or both\");",
+  "find": "(b) => b.rules !== undefined || b.points !== undefined || b.tiebreakers !== undefined || b.crossGroupTiebreakers !== undefined,",
+  "replace": "(b) => true || b.rules !== undefined || b.points !== undefined || b.tiebreakers !== undefined || b.crossGroupTiebreakers !== undefined,",
   "killers": [
    {
     "cwd": "apps/web",
@@ -501,8 +501,8 @@
  {
   "id": "t13-put-decider-named",
   "file": "apps/web/src/server/api-v1/schemas.ts",
-  "find": "    points: PointsRule.nullable().optional(),\n  })\n  .refine(",
-  "replace": "    points: PointsRule.nullable().optional(),\n    shootout: z.unknown().optional(),\n  })\n  .refine(",
+  "find": "    crossGroupTiebreakers: z.array(TiebreakerKeyS).meta({ examples: [[\"points\", \"diff\", \"for\", \"lots\"]] }).nullable().optional(),\n  })\n  .refine(",
+  "replace": "    crossGroupTiebreakers: z.array(TiebreakerKeyS).meta({ examples: [[\"points\", \"diff\", \"for\", \"lots\"]] }).nullable().optional(),\n    shootout: z.unknown().optional(),\n  })\n  .refine(",
   "killers": [
    {
     "cwd": "apps/web",

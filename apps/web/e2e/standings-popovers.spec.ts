@@ -972,3 +972,188 @@ test.describe("carrom board ratio over the frozen rank column", () => {
     await expectNoHorizontalScroll(page);
   });
 });
+
+// ── W2d Task 17: the lots note, the level table and the head-to-head notes ─────────────────────────────────────────────
+//
+// SPEC §5.7 / §9 (X-TB-4 display, X-TB-6, anti-goals 2 and 3), on both public surfaces. Four seeds, each through the real
+// event route, each the smallest table that reaches its case:
+//  - LOTS: a generic league of four. Ash and Birch both beat their other opponent 1-0 and drew each other 0-0, so they are
+//    level on every step the generic order asks before lots; the product draws and STORES the order (`stage_lots_draws`)
+//    and the row carries `tieBreak.drawnAt`. The popover's second line is the dictionary's "Drawn by lots on {date}".
+//  - LEVEL: a generic league of three, started, nothing played. The organiser's own read computes the first snapshot (no
+//    result has landed to do it): every row level, so every rank prints "–", no leader row, and no tie marker — the rows
+//    still carry the ranking pass's trace, which would explain a place the table does not print.
+//  - H2H INCOMPLETE: the same LOTS table's losers. Cedar and Dunmore are level on every plain step and have NOT met, so
+//    the generic order's head-to-head step cannot run (X-TB-8) and lots decide: the popover says head-to-head is not
+//    complete, then when the lots were drawn. (Measured on the product 2026-10-27: an ice hockey pair that has not met is
+//    ordered by IIHF's partial-schedule order instead, whose seed step always splits, so its popover carries no note.)
+//  - H2H TWO: a badminton cycle of three (BWF 16.2): each beat the next 2-0, 21-15 21-15, level on every ledger; head-to-head
+//    is asked for two only, so the popover says it did not split a class of three.
+// Every expected word is the dictionary's (`dictString`), never the component's; every date is formatted here from the
+// stored instant the API serves.
+test.describe("W2d T17: the lots note, the level table and the head-to-head notes", () => {
+  const T17 = {
+    lots: { a: `Ash Lots ${TAG}`, b: `Birch Lots ${TAG}`, c: `Cedar Lots ${TAG}`, d: `Dunmore Lots ${TAG}` },
+    level: { a: `Abbey Level ${TAG}`, b: `Brook Level ${TAG}`, c: `Castle Level ${TAG}` },
+    shuttle: { a: `Ash Shuttle ${TAG}`, b: `Birch Shuttle ${TAG}`, c: `Cedar Shuttle ${TAG}` },
+  } as const;
+  type Seeded = { path: string; hub: string; ids: Record<string, string>; stageId: string };
+  const seeded: Partial<Record<keyof typeof T17, Seeded>> = {};
+  let ctx: BrowserContext | undefined;
+  let lotsDrawnAt = "";
+
+  test.beforeAll(async ({ browser }) => {
+    test.setTimeout(Math.max(FLOOR_MS, 120 * API_CALL_MS));
+    ctx = await browser.newContext();
+    const request = ctx.request;
+    const org = await activeOrgSlug(request);
+    const make = async (
+      key: keyof typeof T17,
+      sport: { sport_key: string; variant_key: string },
+      kind: "individual" | "team",
+      play: (fx: (x: string, y: string) => Promise<{ id: string; home: string }>, ids: Record<string, string>) => Promise<void>,
+    ) => {
+      const competition = await publicCompetition(request, { name: `T17 ${key} ${TAG}`, orgId: org.id });
+      const div = await division(request, competition.id, { name: `T17 ${key}`, ...sport });
+      const names = T17[key] as Record<string, string>;
+      const created = await addEntrantsViaApi(request, div.id, Object.values(names), kind);
+      expect(created.status, `${key}: the field was created`).toBe(201);
+      const ids = Object.fromEntries(Object.keys(names).map((k, i) => [k, created.ids[i]!]));
+      const fixtures = await leagueFixtures(request, div.id);
+      const fx = async (x: string, y: string) => {
+        const f = fixtures.find((r) => [r.home_entrant_id, r.away_entrant_id].sort().join() === [ids[x], ids[y]].sort().join());
+        expect(f, `${key}: a fixture pairs ${x} with ${y}`).toBeDefined();
+        return { id: f!.id, home: f!.home_entrant_id! };
+      };
+      await play(fx, ids);
+      const stageId = (fixtures[0] as unknown as { stage_id: string }).stage_id;
+      seeded[key] = { path: `/shared/${org.slug}/${competition.slug}/${div.slug}?tab=standings`, hub: `/shared/${org.slug}/${competition.slug}?tab=table`, ids, stageId };
+    };
+    const generic = { sport_key: "generic", variant_key: "score" };
+    const genericResult = async (f: { id: string; home: string }, x: string, xs: number, ys: number) => {
+      const s = await eventStream(request, f.id);
+      await s.post("generic.result", f.home === x ? { p1Score: xs, p2Score: ys } : { p1Score: ys, p2Score: xs });
+    };
+    await make("lots", generic, "individual", async (fx, ids) => {
+      await genericResult(await fx("a", "c"), ids.a!, 1, 0);
+      await genericResult(await fx("b", "d"), ids.b!, 1, 0);
+      await genericResult(await fx("a", "b"), ids.a!, 0, 0);
+    });
+    await make("level", generic, "individual", async () => {});
+    // The organiser reads the table first: no result has landed, so this read computes the (level) snapshot.
+    const levelRows = await apiJson<{ rows: { level?: boolean }[] }>(request, `/api/v1/stages/${seeded.level!.stageId}/standings`);
+    expect(levelRows.data?.rows.length, "premise: the level table has its three rows").toBe(3);
+    expect(levelRows.data?.rows.every((r) => r.level === true), "premise: the API marks every row level").toBe(true);
+    await make("shuttle", { sport_key: "badminton", variant_key: "bwf" }, "individual", async (fx, ids) => {
+      for (const [w, l] of [["a", "b"], ["b", "c"], ["c", "a"]] as const) {
+        const f = await fx(w, l);
+        const s = await eventStream(request, f.id);
+        await s.post("core.start", {});
+        for (let g = 0; g < 2; g++) await s.post("badminton.game.summary", f.home === ids[w] ? { home: 21, away: 15 } : { home: 15, away: 21 });
+      }
+    });
+    // The lots draw's stored instant, as the API serves it (the date the popover prints is this one's).
+    const lotsRows = await apiJson<{ rows: { entrantId: string; tieBreak?: { key: string; drawnAt?: string } }[] }>(
+      request,
+      `/api/v1/stages/${seeded.lots!.stageId}/standings`,
+    );
+    const ash = lotsRows.data?.rows.find((r) => r.entrantId === seeded.lots!.ids.a);
+    expect(ash?.tieBreak?.key, "premise: Ash and Birch are split by lots").toBe("lots");
+    lotsDrawnAt = ash?.tieBreak?.drawnAt ?? "";
+    expect(lotsDrawnAt, "premise: the stored draw's instant is served").not.toBe("");
+  });
+
+  test.afterAll(async () => {
+    await ctx?.close().catch(() => {});
+  });
+
+  /** The calendar days the stored instant can fall on in any zone, as the page spells them: English medium dates are
+   *  day-month ("28 Oct 2026"), never the US "Oct 28, 2026" a bare "en" gives Intl (owner ruling 2026-09-16, cited at
+   *  lib/public-date-locale.ts). Typed from the ruling, not imported from that helper: the oracle is not the code under test. */
+  const drawnLines = (iso: string) =>
+    ["Etc/GMT+12", "UTC", "Etc/GMT-14"].map((timeZone) =>
+      dictString("en", "table.tieNote.drawnAt", {
+        date: new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone }).format(new Date(iso)),
+      }),
+    );
+
+  for (const surface of ["division page", "hub Table tab"] as const) {
+    const pathOf = (s: Seeded) => (surface === "division page" ? s.path : s.hub);
+    const tieOf = (page: Page, id: string) =>
+      surface === "division page" ? page.getByTestId(`standings-tie-${id}`) : bySuffix(page, `-tie-${id}`);
+    const ready = async (page: Page) => {
+      if (surface === "division page") await expect(page.locator("#panel-standings")).toBeVisible();
+      else await expect(page.getByTestId("mh-tab-panel-table")).toBeVisible();
+    };
+
+    test(`${surface}: X-TB-4 a lots-decided row's popover says 'Drawn by lots on {date}' from tieBreak.drawnAt`, async ({ browser }) => {
+      const page = await spectator(browser, { width: 1280, height: 900 });
+      await page.goto(pathOf(seeded.lots!), { waitUntil: "load" });
+      await ready(page);
+      const trigger = tieOf(page, seeded.lots!.ids.a!);
+      const panel = await panelOf(trigger);
+      await trigger.click();
+      await expectOpen(trigger, panel);
+      const line = panel.getByTestId("tie-note-line");
+      await expect(line).toHaveCount(1);
+      expect(drawnLines(lotsDrawnAt), "the popover's date is the stored draw's").toContain((await line.innerText()).trim());
+      // the note's first line is still the tie sentence, naming the row it was drawn against
+      await expect(panel).toContainText(T17.lots.b);
+    });
+
+    test(`${surface}: X-TB-6 a level table prints every rank '–', no leader row, no tie marker`, async ({ browser }) => {
+      const page = await spectator(browser, { width: 1280, height: 900 });
+      await page.goto(pathOf(seeded.level!), { waitUntil: "load" });
+      await ready(page);
+      const scope = surface === "division page" ? page.locator("#panel-standings") : page.getByTestId("mh-tab-panel-table");
+      // The standings table's own rows: its named scroll region. The division page also mounts the round-robin results
+      // matrix (`results-matrix.tsx`, no region) in the same panel, whose rows are not standings rows.
+      const table = scope.getByRole("region").filter({ has: page.locator("table") });
+      await expect(table, "one standings table in the panel").toHaveCount(1);
+      const rows = table.locator("tbody tr");
+      await expect(rows).toHaveCount(3);
+      let checked = 0;
+      for (const id of Object.values(seeded.level!.ids)) {
+        await expect(tieOf(page, id), "no tie marker on a level row").toHaveCount(0);
+        checked++;
+      }
+      expect(checked).toBe(3);
+      const firstCells = await rows.evaluateAll((trs) => trs.map((tr) => (tr.querySelector("td,th") as HTMLElement | null)?.innerText.trim() ?? ""));
+      expect(firstCells.every((text) => text.startsWith("–")), `every rank cell leads with the level dash: ${JSON.stringify(firstCells)}`).toBe(true);
+      await expect(scope.getByText(dictString("en", "table.level"), { exact: true })).toHaveCount(3);
+      await expect(scope.locator(".bg-amber-50, .bg-amber-50\\/60"), "no leader row on a level table").toHaveCount(0);
+    });
+
+    test(`${surface}: head-to-head not complete (the tied pair has not met) — the popover says so, then when the lots were drawn`, async ({ browser }) => {
+      const page = await spectator(browser, { width: 1280, height: 900 });
+      await page.goto(pathOf(seeded.lots!), { waitUntil: "load" });
+      await ready(page);
+      const trigger = tieOf(page, seeded.lots!.ids.c!);
+      const panel = await panelOf(trigger);
+      await trigger.click();
+      await expectOpen(trigger, panel);
+      const lines = panel.getByTestId("tie-note-line");
+      await expect(lines).toHaveCount(2);
+      await expect(lines.first()).toHaveText(dictString("en", "table.tieNote.h2hIncomplete"));
+      expect(drawnLines(lotsDrawnAt)).toContain((await lines.nth(1).innerText()).trim());
+    });
+
+    test(`${surface}: anti-goal 2 a badminton class of three — head-to-head applies to two only, and the popover says so`, async ({ browser }) => {
+      const page = await spectator(browser, { width: 1280, height: 900 });
+      await page.goto(pathOf(seeded.shuttle!), { waitUntil: "load" });
+      await ready(page);
+      let checked = 0;
+      for (const id of Object.values(seeded.shuttle!.ids)) {
+        const trigger = tieOf(page, id);
+        const panel = await panelOf(trigger);
+        await trigger.click();
+        await expectOpen(trigger, panel);
+        await expect(panel.getByTestId("tie-note-line").first()).toHaveText(dictString("en", "table.tieNote.h2hTwoNotApplicable"));
+        await page.keyboard.press("Escape");
+        await expectClosed(trigger, panel);
+        checked++;
+      }
+      expect(checked, "every row of the class of three").toBe(3);
+    });
+  }
+});

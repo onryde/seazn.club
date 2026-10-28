@@ -31,6 +31,7 @@ import { ALL_FILTER, CONSOLE_MOUNTED_TESTIDS, RUN_SHEET_FILTER_OPTIONS, type Def
 import { GeneratedWithoutFixtureNumbers, MD_BREAKPOINT_PX, completeStageUi, completionShots, expectedFoldBranch, generateUi, judgeFoldBranch, newestCreatedFixtureNo, openFold, openFoldIfFolded, railSheetSelector, railTriggerSelector } from "../lib/browser/pages/stage-rail.ts";
 import { NEEDS_DECISION } from "../lib/browser/pages/needs-decision.ts";
 import { UnreadableStandingsRow, standingsCellsOf, tablesFromCells } from "../lib/browser/pages/standings.ts";
+import { LEVEL_RANK } from "@seazn/engine/competition";
 import { DATA, NAME, TESTID, templateCardTestid, templateLabel } from "../lib/browser/selectors.ts";
 import { UnknownTemplate } from "../lib/templates.ts";
 import { RefusedCall } from "../lib/driver/types.ts";
@@ -269,6 +270,16 @@ describe("tablesFromCells: the standings a page shows, as it shows them", () => 
     expect(tablesFromCells(cells).rows).toEqual([{ rank: 1, name: "Ann" }, { rank: 2, name: "Cal" }, { rank: 3, name: "Dee" }, { rank: 12, name: "Eve" }]);
     // A second read of the same cells answers the same (pure).
     expect(tablesFromCells(cells)).toEqual(tablesFromCells(cells));
+  });
+
+  it("W2d T17 (X-TB-6): a level table's rank cell — the '–' and its spoken word — reads as no place, never a guessed one", () => {
+    // standings-table.tsx rankChip on a level table: <span aria-hidden>–</span><span class="sr-only">{table.level}</span>
+    const cells = [["–Level, no results yet", "Ann"], ["  –Level, no results yet", "Bea"]];
+    expect(tablesFromCells(cells).rows).toEqual([{ rank: null, name: "Ann" }, { rank: null, name: "Bea" }]);
+    expect(LEVEL_RANK, "premise: the mark the page prints is the engine's").toBe("–");
+    // a level row still needs its name; a ranked row still reads its number (the positive pair)
+    expect(() => tablesFromCells([["–", ""]])).toThrow(UnreadableStandingsRow);
+    expect(tablesFromCells([["1", "Ann"]]).rows).toEqual([{ rank: 1, name: "Ann" }]);
   });
 
   it("a row it cannot read is refused by name and position, never guessed", () => {

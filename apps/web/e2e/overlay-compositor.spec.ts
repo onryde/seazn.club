@@ -543,7 +543,7 @@ async function seedBadmintonOverlayFixture(page: Page): Promise<OverlayRig> {
  *  phase ladder is READ OFF THE ENGINE (`summary.detail.nextAdvance`), one goal first so a level score cannot send it
  *  to a shoot-out. */
 async function decideHockey(page: Page, rig: OverlayRig): Promise<void> {
-  await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+  await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId, kind: "fg" });
   for (let guard = 0; guard < 10; guard++) {
     const state = await apiJson<{ status: string; summary: { detail?: { nextAdvance?: string | null } } | null }>(
       page.request,
@@ -781,7 +781,7 @@ test("E7 moments by scene: Reconnecting airs the slab after the delay, Starting 
     script.serve("reconnecting");
     await expectScene(cef.page, A1.reconnecting.live, "E7 reconnecting");
     const t0 = Date.now();
-    await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+    await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId, kind: "fg" });
     const seen0 = await slabSeenAt(cef.page, latest + 1_000);
     expect(seen0, "the slab airs during Reconnecting").not.toBeNull();
     expect(seen0! - t0, "no sooner than the URL's delay").toBeGreaterThanOrEqual(DELAY_MS);
@@ -815,7 +815,7 @@ test("E7 moments by scene: Reconnecting airs the slab after the delay, Starting 
     script.serve("waiting");
     await expectScene(cef.page, A1.waiting.live, "E7 starting");
     const t1 = Date.now();
-    await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.awayEntrantId });
+    await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.awayEntrantId, kind: "fg" });
     const seen1 = await slabSeenAt(cef.page, latest + 1_000);
     expect(seen1, "the slab airs over Starting soon").not.toBeNull();
     expect(seen1! - t1).toBeGreaterThanOrEqual(DELAY_MS);
@@ -825,7 +825,7 @@ test("E7 moments by scene: Reconnecting airs the slab after the delay, Starting 
     // Leg 3 — Final drops the moment: over the whole hold, nothing attaches.
     script.serve("final");
     await expectScene(cef.page, A1.final.live, "E7 final");
-    await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+    await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId, kind: "fg" });
     let samples = 0;
     const until = Date.now() + FINAL_HOLD_MS;
     while (Date.now() < until) {

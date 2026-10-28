@@ -118,7 +118,7 @@ test("hockey — goal and red card, on the bug", async ({ page, browser }) => {
   await view.goto(`/overlay/fixtures/${rig.fixtureId}?style=bug`);
   const slab = view.locator('[data-testid="overlay-moment"]');
 
-  await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+  await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId, kind: "fg" });
   await settled(view);
   await expect(slab).toHaveAttribute("data-tone", "led");
   await shoot(view, "hockey-bug-goal");
@@ -199,6 +199,7 @@ test("hockey — a penalty stroke names its taker AND says stroke, on the bar", 
   await sendEvent(page.request, rig.fixtureId, "hockey.goal", {
     by: rig.homeEntrantId,
     person: taker,
+    kind: "fg", // W2d T18: a hockey goal carries its type; a field goal adds nothing to the line
   });
   await settled(view);
   await expect(slab).toHaveAttribute("data-kind", "goal");
@@ -278,7 +279,7 @@ test("reduced motion — the slab still appears, it just does not slide", async 
   });
   const view = await ctx.newPage();
   await view.goto(`/overlay/fixtures/${rig.fixtureId}?style=bug`);
-  await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId });
+  await sendEvent(page.request, rig.fixtureId, "hockey.goal", { by: rig.homeEntrantId, kind: "fg" });
   await settled(view);
   await shoot(view, "hockey-bug-goal-reduced");
   await ctx.close();

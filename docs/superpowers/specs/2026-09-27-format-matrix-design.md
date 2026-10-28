@@ -459,6 +459,12 @@ format/sport; **every audit ID must be closed or ruled by programme end**.
 | **W9 — operational [O]** (lane) | schedule, devices, registration, division admin | the [O] list (§4), the division-level 🚫 scenarios **D1 merge, D2 split, R13 move an entrant between divisions** (build-or-refuse rulings), #880, bench findings: cross-competition court double-booking (`schedule.ts:939`), `solver_unavailable`, `start_window` never blocks, inert `crossPersonClash`, no engine request, `lang` until hydration |
 | **W10 — sweep** (lane) | unrelated issues + one privacy defect + shadow invariants | **ST-G22 first** (recap/digest bypasses youth-name masking — a privacy defect), #878 browser Sentry, then **production shadow invariants** (§7.5, reusing the harness's invariant functions), #858 admin URL, #853 player card, #843 roster i18n |
 
+**W2d amendment (2026-10-28, programme ruling 183, D7).** ST-G4, ST-G12 and ST-G13 moved from W5 to W2d, which
+built them (the cross-group order per stage, the IIHF partial-schedule order, stored lots). The W5 row above still
+names ST-G4 and ST-G13 because this table is the W1d baseline's routing (`tools/matrix/catalogue/gap-routing.json`,
+held by `gap-routing.test.ts`); re-routing them rewrites committed W1d evidence, which is not done (W2d false
+premise 21 in `_INDEX.md`).
+
 **Order.** W1a → W1b → W1c → W1-driving → W1d → W2 → W3 → W4 → W5 → W6 → W7 in sequence —
 they share the engine and `stages.ts` (5,794 lines). W8, W9, W10 run in
 **parallel lanes** in their own worktrees; each lane proves its file set

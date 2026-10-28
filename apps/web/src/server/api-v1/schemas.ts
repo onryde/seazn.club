@@ -12,7 +12,8 @@ import { HardConstraint, type ConflictDetailKind } from "@seazn/engine/schedulin
 import { AWARD_REASONS } from "@seazn/engine/core";
 // Type-only (erased under strip-types, so openapi-gen.ts still loads this
 // file bare): the TakeRuleSchema tie below compares against it.
-import type { TakeRule } from "@seazn/engine/competition";
+import type { OutcomeKey, TableRulesSource, TakeRule, TieBreakNote } from "@seazn/engine/competition";
+import type { PartialScheduleKey, TiebreakerKey } from "@seazn/engine/sport";
 // W2c Task 13: a stage's own points ARE the engine's PointsRule (the owner of the shape), reused rather than restated —
 // `@seazn/engine/competition` loads bare under strip-types, as `@seazn/engine/core` does above.
 import { PointsRule } from "@seazn/engine/competition";
@@ -1054,6 +1055,17 @@ export type TakeRuleSchemaMatchesEngineFields = AssertTrue<
   MutuallyAssignable<WireDeepRequired<TakeRuleWire>, WireDeepRequired<TakeRule>>
 >;
 
+// W2d (m8): the API's tie-break vocabularies are the engine's declared ones, exactly — a key or note added to the
+// engine's `TiebreakerKey`, `PartialScheduleKey` or `TieBreakNote` that the wire cannot name fails `tsc`. It binds the
+// declarations, not each writer: a standings row's `tieBreak.key` is typed `string` in the engine (`markTieBreak`).
+export type TiebreakerKeySchemaMatchesEngine = AssertTrue<MutuallyAssignable<z.infer<typeof TiebreakerKeyS>, TiebreakerKey>>;
+export type TieBreakKeySchemaMatchesEngine = AssertTrue<MutuallyAssignable<z.infer<typeof TieBreakKeyS>, PartialScheduleKey>>;
+export type TieBreakNoteSchemaMatchesEngine = AssertTrue<MutuallyAssignable<z.infer<typeof TieBreakNoteS>, TieBreakNote>>;
+export type TableRulesSourceSchemaMatchesEngine = AssertTrue<MutuallyAssignable<z.infer<typeof TableRulesSourceS>, TableRulesSource>>;
+export type OutcomeKeySchemaMatchesEngine = AssertTrue<
+  MutuallyAssignable<(typeof FIXED_OUTCOME_KEYS)[number], Exclude<OutcomeKey, `set:${number}-${number}`>>
+>;
+
 const SeededMapEntryS = z.object({ slot: z.string().min(1).max(20), source: z.string().min(1).max(40) }).strict();
 
 const ProgressionSourceS = z
@@ -1291,7 +1303,8 @@ export const StageCourtTags = z.object({
  *  unstarted match's own format still fitting (409
  *  FIXTURE_OWN_FORMAT_NO_LONGER_FITS).
  *
- *  W2c Task 13 (ST-G8): two arms, `rules` and `points`, each left as stored when
+ *  W2c Task 13 (ST-G8) and W2d Task 13: four arms, `rules`, `points`,
+ *  `tiebreakers` and `crossGroupTiebreakers`, each left as stored when
  *  omitted, at least one sent. `points` is the stage's own PointsRule (the
  *  engine's shape), written whole; `null` removes it. The key set is CLOSED: a
  *  misspelled arm was silently stripped before (and answered 200 having saved
@@ -1302,14 +1315,26 @@ export const PutStageRules = z
     ...TOP_LEVEL_DECIDER_REFUSALS,
     rules: z.record(z.string(), z.unknown()).nullable().optional(),
     points: PointsRule.nullable().optional(),
+    /** W2d (spec §5.4, §5.5): the stage's own tie-break order, validated on the stage's kind (422 TIEBREAK_KEY_INVALID,
+     *  `extra.refusals`); `null` clears it back to the division's order (else the sport's). */
+    tiebreakers: z.array(TiebreakerKeyS).meta({ examples: [["points", "h2h_points", "diff", "for", "lots"]] }).nullable().optional(),
+    /** W2d (spec §5.9): the stage's own cross-group order (entrants from different groups); `null` derives it again. */
+    crossGroupTiebreakers: z.array(TiebreakerKeyS).meta({ examples: [["points", "diff", "for", "lots"]] }).nullable().optional(),
   })
-  .refine((b) => b.rules !== undefined || b.points !== undefined, "send `rules`, `points` or both");
+  .refine(
+    (b) => b.rules !== undefined || b.points !== undefined || b.tiebreakers !== undefined || b.crossGroupTiebreakers !== undefined,
+    "send `rules`, `points`, `tiebreakers`, `crossGroupTiebreakers` or any of them together",
+  );
 export type PutStageRules = z.infer<typeof PutStageRules>;
 
 export const StageRules = z.object({
   rules: z.record(z.string(), z.unknown()).nullable(),
   /** The stage's own points rule as stored, or null when it plays the division's points (W2c Task 13). */
   points: PointsRule.nullable(),
+  /** W2d: the stage's own order as stored, or null when it ranks by the division's (else the sport's). */
+  tiebreakers: z.array(TiebreakerKeyS).nullable(),
+  /** W2d: the stage's own cross-group order as stored, or null when it is derived from the order (§5.9). */
+  crossGroupTiebreakers: z.array(TiebreakerKeyS).nullable(),
 });
 
 /** W2c (X-SR-2, X-SR-5) — one match's own format over its stage's. Values unconstrained HERE for the same openapi-gen
@@ -1373,6 +1398,97 @@ export const Stage = z.object({
   config: z.record(z.string(), z.unknown()),
   progression: z.record(z.string(), z.unknown()).nullable(),
   status: z.enum(["pending", "active", "complete"]),
+});
+
+// ---------------------------------------------------------------------------
+// W2d (spec §7, §10) — a table stage's rules as the loader reads them, and the
+// standings rows they rank. Response shapes: documented, never parsed on the
+// way out (a row this API wrote is never 400'd by its own reader).
+// ---------------------------------------------------------------------------
+
+/** The layer a stage's order or points came from (`TableRulesSource`): its own, its division's, its sport's, or — in a
+ *  pin only — what the W2d migration found it ranking by. */
+export const TableRulesSourceS = z.enum(["stage", "division", "sport", "migrated"]);
+
+/** One outcome a stage can produce, as its points rule names it (`OutcomeKey`, spec §5.3): a win or loss per way it was
+ *  decided, a loss not played, a level result, or a final set score `set:W-L`. */
+const FIXED_OUTCOME_KEYS = [
+  "win.regulation", "win.ot", "win.so", "loss.regulation", "loss.ot", "loss.so", "loss.unplayed", "draw", "tie", "noResult",
+] as const;
+export const OutcomeKeyS = z.union([z.enum(FIXED_OUTCOME_KEYS), z.string().regex(/^set:\d+-\d+$/)]);
+
+/** GET /stages/{id} and GET /divisions/{id}/stages — the stage's table rules (spec §7): the order it ranks by, where the
+ *  order came from and when the stage was pinned to it (the generate that activates a stage pins it; a pinned stage keeps
+ *  its rules while the division's move, `stagesKeptPinned`), the sport's own default for the stage (the editor's Reset,
+ *  PS-7b: never the winning order), the cross-group order (§5.9), the points with their source and pin, and every
+ *  outcome those points range over (`reachableOutcomes`). */
+export const StageTableRules = z.object({
+  tiebreakers: z.object({
+    keys: z.array(TiebreakerKeyS),
+    source: TableRulesSourceS,
+    /** When the stage was pinned to its rules (the DB's own stamp); null while it is not. */
+    pinnedAt: z.string().nullable(),
+    sportDefault: z.array(TiebreakerKeyS),
+  }),
+  crossGroup: z.object({ keys: z.array(TiebreakerKeyS) }),
+  points: z.object({ rule: PointsRule, source: TableRulesSourceS, pinnedAt: z.string().nullable() }),
+  reachableOutcomes: z.array(OutcomeKeyS),
+});
+export type StageTableRules = z.infer<typeof StageTableRules>;
+
+/** A stage with its table rules: null where the stage's rules do not read (a build this server no longer carries, a
+ *  cfg its sport cannot read) — the reader shows no order rather than a guessed one. */
+export const StageWithTableRules = Stage.extend({ tableRules: StageTableRules.nullable() });
+
+/** A tie-break reason on a standings row: a cascade key, or `fewest_played` (a partial schedule's step, IIHF RBG). */
+export const TieBreakKeyS = z.enum([...TiebreakerKeyS.options, "fewest_played"]);
+/** Why a conditional step left a residual tie unsplit (`TieBreakNote`, W2d §2.3). */
+export const TieBreakNoteS = z.enum(["h2h_two_not_applicable", "h2h_incomplete"]);
+
+/** One ranked row of a stage's table (engine `StandingsRow`). `metrics` is the sport's ledger; `won_ot`/`won_so`/
+ *  `lost_ot`/`lost_so` (1, only when 1 for a match) count the wins and losses decided beyond regulation (spec §5.7).
+ *  `tieBreak` names the step that split the row from the rows it was tied with (`drawnAt`: the date a stored lots draw
+ *  was made, §5.8); `level` is true on every row of a table with no counted fixture. */
+export const StandingsRow = z.object({
+  entrantId: z.string(),
+  played: z.number(),
+  won: z.number(),
+  drawn: z.number(),
+  lost: z.number(),
+  points: z.number(),
+  metrics: z
+    .object({
+      won_ot: z.number().optional(),
+      won_so: z.number().optional(),
+      lost_ot: z.number().optional(),
+      lost_so: z.number().optional(),
+    })
+    .catchall(z.number()),
+  rank: z.number().optional(),
+  rankLocked: z.boolean().optional(),
+  tieUnbroken: z.boolean().optional(),
+  tieBreak: z
+    .object({ key: TieBreakKeyS, with: z.array(z.string()), note: TieBreakNoteS.optional(), drawnAt: z.string().optional() })
+    .optional(),
+  level: z.boolean().optional(),
+});
+
+/** GET /stages/{id}/standings — one pool's (or the stage's) table as last folded. `computed_through_seq` is the stored
+ *  snapshot's bigint watermark, served as the DB prints it (a decimal string), and 0 for a table folded on the read. */
+export const StandingsSnapshot = z.object({
+  stage_id: Uuid,
+  pool_id: Uuid.nullable(),
+  rows: z.array(StandingsRow),
+  computed_through_seq: z.union([z.string().regex(/^\d+$/).meta({ examples: ["42"] }), z.literal(0)]),
+  updated_at: z.string().nullable(),
+});
+
+/** GET /public/…/divisions/{divisionSlug}/standings — every published table of the division. */
+export const PublicDivisionStandings = z.object({
+  division_id: Uuid,
+  standings: z.array(
+    z.object({ stage_id: Uuid, pool_id: Uuid.nullable(), rows: z.array(StandingsRow), updated_at: z.string().nullable() }),
+  ),
 });
 
 // ---------------------------------------------------------------------------

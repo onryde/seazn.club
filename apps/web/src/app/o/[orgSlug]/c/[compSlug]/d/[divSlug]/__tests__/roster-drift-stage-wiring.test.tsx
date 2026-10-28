@@ -11,6 +11,8 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
 const stagesSpies = vi.hoisted(() => ({
   listStages: vi.fn(),
+  // W2d Task 15: the page reads every stage's table rules (the Tie-breaks section) on the fixtures tab.
+  listStagesWithTableRules: vi.fn(async () => []),
   getStandings: vi.fn(async () => ({ rows: [] })),
   getSeedProposal: vi.fn(),
   getStageRosterDrift: vi.fn(),

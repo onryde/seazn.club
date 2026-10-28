@@ -10,21 +10,21 @@
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "FB-PT-1 football group, shootout on"
+    "name": "(?<!API v1: )FB-PT-1 football group, shootout on"
    },
    {
     "cwd": "apps/web",
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "IH-PT-1 icehockey an overtime goal"
+    "name": "(?<!API v1: )IH-PT-1 icehockey an overtime goal"
    },
    {
     "cwd": "apps/web",
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "IH-PT-1 icehockey a game-winning shot"
+    "name": "(?<!API v1: )IH-PT-1 icehockey a game-winning shot"
    }
   ]
  },
@@ -39,7 +39,7 @@
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "HK-TB-1 winsCount"
+    "name": "(?<!API v1: )HK-TB-1 winsCount"
    }
   ]
  },
@@ -54,14 +54,14 @@
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "B5 chess round robin under the 3/1/0 preset: Sonneborn-Berger"
+    "name": "(?<!API v1: )B5 chess round robin under the 3/1/0 preset: Sonneborn-Berger"
    },
    {
     "cwd": "apps/web",
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "B5 chess round robin under the 3/1/0 preset: direct encounter"
+    "name": "(?<!API v1: )B5 chess round robin under the 3/1/0 preset: direct encounter"
    }
   ]
  },
@@ -91,7 +91,7 @@
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "X-TB-7 the cross-group door in PR A is an ORDER save"
+    "name": "(?<!API v1: )X-TB-7 the cross-group door in PR A is an ORDER save"
    }
   ]
  },
@@ -106,14 +106,14 @@
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "X-TB-3 a wins-first sport's DEFAULT reaches the public qualification view"
+    "name": "(?<!API v1: )X-TB-3 a wins-first sport's DEFAULT reaches the public qualification view"
    },
    {
     "cwd": "apps/web",
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "X-TB-3 volleyball races in matches WON"
+    "name": "(?<!API v1: )X-TB-3 volleyball races in matches WON"
    }
   ]
  },
@@ -128,7 +128,7 @@
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "BD-WO-1 under BWF"
+    "name": "(?<!API v1: )BD-WO-1 under BWF"
    }
   ]
  },
@@ -143,14 +143,14 @@
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "empty case first: a generated stage is pinned by the real generate"
+    "name": "(?<!API v1: )empty case first: a generated stage is pinned by the real generate"
    },
    {
     "cwd": "apps/web",
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "X-TB-2 the pin comes from the real generate"
+    "name": "(?<!API v1: )X-TB-2 the pin comes from the real generate"
    }
   ]
  },
@@ -165,7 +165,7 @@
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "X-TB-2 the pin comes from the real generate"
+    "name": "(?<!API v1: )X-TB-2 the pin comes from the real generate"
    }
   ]
  },
@@ -180,7 +180,7 @@
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "X-TB-2 the pin comes from the real generate"
+    "name": "(?<!API v1: )X-TB-2 the pin comes from the real generate"
    }
   ]
  },
@@ -195,7 +195,169 @@
     "files": [
      "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
     ],
-    "name": "X-TB-3 volleyball races in matches WON"
+    "name": "(?<!API v1: )X-TB-3 volleyball races in matches WON"
+   }
+  ]
+ },
+ {
+  "id": "t14-api-generate-route-inert",
+  "file": "apps/web/src/app/api/v1/stages/[id]/generate/route.ts",
+  "find": "    return generateStageFixtures(auth, id, body.pairing ? { pairing: body.pairing } : {});\n",
+  "replace": "    return { fixtures: [], unused: [auth.orgId, id, body, typeof generateStageFixtures] };\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: empty case first"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: X-TB-2 the pin comes from the real generate"
+   }
+  ]
+ },
+ {
+  "id": "t14-api-events-route-drops-payload",
+  "file": "apps/web/src/app/api/v1/fixtures/[id]/events/route.ts",
+  "find": "    return reply(201, await scoreEvent(auth, id, body));\n",
+  "replace": "    return reply(201, await scoreEvent(auth, id, { ...body, payload: {} }));\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: FB-PT-1 football group, shootout on"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: TT-PT-1 a table-tennis walkover"
+   }
+  ]
+ },
+ {
+  "id": "t14-api-fixture-rules-route-drops-rules",
+  "file": "apps/web/src/app/api/v1/fixtures/[id]/rules/route.ts",
+  "find": "    return writeFixtureRulesOverride(auth, [id], body.rules);\n",
+  "replace": "    return writeFixtureRulesOverride(auth, [id], null);\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: X-TB-2 the pin comes from the real generate"
+   }
+  ]
+ },
+ {
+  "id": "t14-api-public-standings-serves-no-rows",
+  "file": "apps/web/src/server/usecases/public.ts",
+  "find": "      select stage_id, pool_id, rows, updated_at\n      from public_standings_v where division_id = ${division.id}`;\n",
+  "replace": "      select stage_id, pool_id, '[]'::jsonb as rows, updated_at\n      from public_standings_v where division_id = ${division.id}`;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: CK-PT-1 a cricket tie"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: X-TB-2 the pin comes from the real generate"
+   }
+  ]
+ },
+ {
+  "id": "t14-field-goals-counts-every-goal",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "return ledgerOf(row, [\"gf\"]) - ledgerOf(row, [\"goals_pc\"]) - ledgerOf(row, [\"goals_stroke\"]);",
+  "replace": "return ledgerOf(row, [\"gf\"]) /*MUT*/;",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "(?<!API v1: )HK-TB-2 hockey goals typed"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: HK-TB-2 hockey goals typed"
+   }
+  ]
+ },
+ {
+  "id": "t14-hk-kernel-drops-goal-kind",
+  "file": "packages/engine/src/sports/period/kernel.ts",
+  "find": "if (kind !== undefined && kind !== \"og\" && kind !== \"fg\") {",
+  "replace": "if (false /*MUT*/) {",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "(?<!API v1: )HK-TB-2 hockey goals typed"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: HK-TB-2 hockey goals typed"
+   }
+  ]
+ },
+ {
+  "id": "t14-api-public-standings-asks-for-a-user",
+  "file": "apps/web/src/app/api/v1/public/orgs/[orgSlug]/competitions/[slug]/divisions/[divisionSlug]/standings/route.ts",
+  "find": "    await publicRateLimit(req);\n",
+  "replace": "    await publicRateLimit(req);\n    await (await import(\"@/lib/auth\")).requireUser(); /*MUT*/\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: CK-PT-1 a cricket tie"
+   }
+  ]
+ },
+ {
+  "id": "t14-ranks-not-places",
+  "file": "packages/engine/src/competition/tiebreakers.ts",
+  "find": "    row.rank = index + 1;\n",
+  "replace": "    row.rank = 1 /*MUT*/;\n",
+  "killers": [
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "(?<!API v1: )TT-PT-1 a table-tennis walkover"
+   },
+   {
+    "cwd": "apps/web",
+    "files": [
+     "src/server/engine-db/__tests__/tables-producer-consumer.test.ts"
+    ],
+    "name": "API v1: TT-PT-1 a table-tennis walkover"
    }
   ]
  }

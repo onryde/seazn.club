@@ -11,6 +11,8 @@ import { isValidElement, type ReactElement, type ReactNode } from "react";
 const pageAuth = vi.hoisted(() => ({ requireDivisionPage: vi.fn() }));
 const stagesSpies = vi.hoisted(() => ({
   listStages: vi.fn(),
+  // W2d Task 15: the page reads every stage's table rules (the Tie-breaks section) on the fixtures tab.
+  listStagesWithTableRules: vi.fn<(auth: unknown, divisionId: string) => Promise<unknown[]>>(async () => []),
   getStandings: vi.fn(async () => ({ rows: [] })),
   getSeedProposal: vi.fn(),
   getStageRosterDrift: vi.fn(),
@@ -262,5 +264,44 @@ describe("the fixtures tab hands the stage points card each pinned stage's point
     expect(qualSpies.listPinnedStagePoints).toHaveBeenCalledTimes(1);
     expect(qualSpies.listPinnedStagePoints.mock.calls[0]![1], "the table stages only").toEqual([LEAGUE.id]);
     expect(props.pinnedStagePoints, "the seam is wired: the card has the pin").toEqual({ [LEAGUE.id]: PIN });
+  });
+});
+
+// W2d Task 15 — the Tie-breaks section's seam on the page: the page asks the API's one loader (`listStagesWithTableRules`)
+// once for THIS division on the fixtures tab, and hands StagesPanel the table rules of each TABLE stage whose rules read; a
+// bracket stage's (its sport's league reading, served for the API) and a null (rules that do not read) are not handed, so
+// the card shows no guessed order. Another tab does not ask.
+describe("W2d Task 15: the page hands StagesPanel each table stage's table rules", () => {
+  const LEAGUE = { id: "stage-lg", name: "Pool A", kind: "league", seq: 1, status: "active", config: {}, progression: null };
+  const GROUP = { id: "stage-gp", name: "Groups", kind: "group", seq: 2, status: "setup", config: {}, progression: null };
+  const RULES = { tiebreakers: { keys: ["points", "diff", "lots"], source: "sport", pinnedAt: null, sportDefault: ["points", "diff", "lots"] }, crossGroup: { keys: ["points", "lots"] }, points: { rule: {}, source: "sport", pinnedAt: null }, reachableOutcomes: [] };
+  beforeEach(() => {
+    pageAuth.requireDivisionPage.mockReset().mockResolvedValue(PAGE);
+    stagesSpies.listStages.mockReset().mockResolvedValue([LEAGUE, GROUP, { ...KO_STAGE, seq: 3 }]);
+    stagesSpies.getSeedProposal.mockReset();
+    stagesSpies.getStageRosterDrift.mockReset().mockResolvedValue({ ghosts: [], unplaced: [] });
+    fixtureSpies.listDivisionFixtures.mockReset().mockResolvedValue([]);
+    deskSpies.listFixturesAwaitingSettle.mockReset().mockResolvedValue(new Set());
+    qualSpies.listPinnedStagePoints.mockReset().mockResolvedValue({});
+    stagesSpies.listStagesWithTableRules.mockReset().mockResolvedValue([
+      { ...LEAGUE, tableRules: RULES },
+      { ...GROUP, tableRules: null },
+      { ...KO_STAGE, seq: 3, tableRules: RULES },
+    ]);
+  });
+
+  it("asked once, for this division; only the table stage whose rules read is handed", async () => {
+    const props = find(await renderTab(), StagesPanel)!.props as { stageTableRules?: unknown };
+    expect(stagesSpies.listStagesWithTableRules).toHaveBeenCalledTimes(1);
+    expect(stagesSpies.listStagesWithTableRules.mock.calls[0]![1], "this division").toBe("div-1");
+    expect(props.stageTableRules, "the seam is wired: the league's rules, not the null group's, not the knockout's").toEqual({ [LEAGUE.id]: RULES });
+  });
+
+  it("another tab does not ask", async () => {
+    await DivisionPage({
+      params: Promise.resolve({ orgSlug: "org", compSlug: "comp", divSlug: "div" }),
+      searchParams: Promise.resolve({ tab: "entrants" }),
+    });
+    expect(stagesSpies.listStagesWithTableRules).not.toHaveBeenCalled();
   });
 });

@@ -1,11 +1,16 @@
 // hockey and icehockey: one pad shape, because the product builds both from
 // one file (period-shared.ts) and the matrix generates both from one
 // generator (streams/period.ts). The references into period-shared.ts:
-//  - :421-422 the event names `${k}.goal` and `${k}.period.advance`;
-//  - :901-913 the goal tiles `goal-${side}`, writing `{by}`;
-//  - :948-966 the `advance` tile: ONE tap to whatever the engine names next
-//    (detail.nextAdvance), and :961 always stamps `at` beside `to` (the
-//    whistle: whistleAt, :518-532).
+//  - :436-437 the event names `${k}.goal` and `${k}.period.advance`;
+//  - :916-928 the goal tiles `goal-${side}`, writing `{by}`;
+//  - :963-981 the `advance` tile: ONE tap to whatever the engine names next
+//    (detail.nextAdvance), and :976 always stamps `at` beside `to` (the
+//    whistle: whistleAt, :533-547).
+// W2d T18 (HK-TB-2): a HOCKEY goal tile no longer holds `{by}` — its dock is a
+// CHOICE of the goal's type (`DockSpec.requires`), and nothing is queued until
+// a chip answers it. So a hockey goal is the tile, then its type's chip
+// (`kind:<k>`, or `ownGoal` for og), and the row is `{by, kind}`. Ice hockey's
+// goal still holds `{by}`.
 // Step 0 (2026-09-30, 320, fih-outdoor and iihf, rosterless team entrants)
 // saw a goal tile HOLD and write `{by}` alone (equal), and each advance tap
 // write `{to, at: {period, elapsed: 0}}` at once. An object is no tolerable
@@ -24,7 +29,7 @@ import { periodLabels } from "../streams/period.ts";
 import { judgeKeys, judgeOneRow, type Stamp } from "./judge.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
-/** What the advance tile stamps beside `to` (period-shared.ts:961, Step 0
+/** What the advance tile stamps beside `to` (period-shared.ts:976, Step 0
  *  2026-09-30: `{period: "Q1", elapsed: 0}`): the phase it leaves and the
  *  seconds into it, nothing else. */
 const AT_STAMP: Stamp = {
@@ -38,9 +43,9 @@ const AT_STAMP: Stamp = {
   },
 };
 
-/** period-shared.ts:952 (text-pinned in pad-adapters.test.ts). */
+/** period-shared.ts:967 (text-pinned in pad-adapters.test.ts). */
 export const PERIOD_ADVANCE_TILE = "advance";
-/** period-shared.ts:904 (text-pinned). */
+/** period-shared.ts:919 (text-pinned). */
 export const periodGoalTile = (side: "home" | "away"): string => `goal-${side}`;
 
 /** The advances a match walks, in order: every label after the first, then FT. */
@@ -59,14 +64,28 @@ export function makePeriodPad(sport: "hockey" | "icehockey"): MatrixPadAdapter {
   const tapped = new Map<string, number>();
   const fixtureOf = (ctx: TapAdapterContext) => `${ctx.entrants.home}|${ctx.entrants.away}`;
 
+  // W2d T18: the sport whose goal cannot be sent without its type (the engine's GOAL_KIND_REQUIRED, the skin's
+  // `goalKindRequired`). Hockey alone — FIH ranks on field goals; IIHF on no goal type.
+  const typed = sport === "hockey";
   function goalSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep[] {
     const p = (payload ?? {}) as Record<string, unknown>;
     const side = p.by === ctx.entrants.home ? "home" : p.by === ctx.entrants.away ? "away" : null;
-    if (payload === null || typeof payload !== "object" || Object.keys(p).length !== 1 || side === null) {
-      throw new Error(`${sport}Pad: ${goal} payload ${JSON.stringify(payload)} is not {by: one of the fixture's entrants}`);
+    const keys = Object.keys(p).sort().join(",");
+    const shapeOk = typed ? keys === "by,kind" && typeof p.kind === "string" && p.kind !== "" : keys === "by";
+    if (payload === null || typeof payload !== "object" || !shapeOk || side === null) {
+      throw new Error(
+        `${sport}Pad: ${goal} payload ${JSON.stringify(payload)} is not {by: one of the fixture's entrants${typed ? ", kind: the goal's type" : ""}}`,
+      );
     }
-    // The tile HOLDS; the replay's closing releaseHold sends it now.
-    return [{ kind: "tile", tileId: periodGoalTile(side) }];
+    if (!typed) {
+      // The tile HOLDS; the replay's closing releaseHold sends it now.
+      return [{ kind: "tile", tileId: periodGoalTile(side) }];
+    }
+    // The tile opens the type CHOICE; the chip answers it, and the answered goal HOLDS like any other tap.
+    return [
+      { kind: "tile", tileId: periodGoalTile(side) },
+      { kind: "chip", chipId: p.kind === "og" ? "ownGoal" : `kind:${String(p.kind)}` },
+    ];
   }
 
   function advanceSteps(payload: unknown, ctx: TapAdapterContext): readonly TapStep[] {
@@ -91,7 +110,7 @@ export function makePeriodPad(sport: "hockey" | "icehockey"): MatrixPadAdapter {
       {
         eventType: advance,
         writes: [advance],
-        why: "period-shared.ts:961 — the advance tile stamps `at` {period, elapsed} beside `to` (Step 0 2026-09-30: row keys [at, to]); an object is no tolerable id, so its judge holds `to` to the event and `at` to the shape the tile stamps",
+        why: "period-shared.ts:976 — the advance tile stamps `at` {period, elapsed} beside `to` (Step 0 2026-09-30: row keys [at, to]); an object is no tolerable id, so its judge holds `to` to the event and `at` to the shape the tile stamps",
         rowsFor: () => 1,
         // Fix round 1 (I-1): the label the pad wrote is the one the event names.
         judge: (event, rows) => judgeOneRow(rows, "the advance tile", (row) => judgeKeys(event, row, { required: ["to"], stamped: { at: AT_STAMP } })),
@@ -106,7 +125,7 @@ export function makePeriodPad(sport: "hockey" | "icehockey"): MatrixPadAdapter {
       if (event.type === advance) return advanceSteps(event.payload, ctx);
       throw new Error(`${sport}Pad: no tap route for ${event.type} (a generator emitting it owes a route here)`);
     },
-    // Step 0: the goal rows' keys were exactly [by]; the advance is a fallback.
+    // Step 0: the goal rows' keys were exactly [by] ([by, kind] for hockey since W2d T18); the advance is a fallback.
     tolerableExtraKeys: () => [],
   };
 }
