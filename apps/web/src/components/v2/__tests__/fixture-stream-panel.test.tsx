@@ -6066,8 +6066,10 @@ describe("T12: after a match — the replay row, and the destination's name read
 // With no parts it is the single row T12 built. The logo follows the LINK: drawn when `isYoutubeUrl(row.url)`, never otherwise.
 describe("T16: after a match - the replay parts", () => {
   const ENDED = { state: "completed" as const, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" as const };
-  const P1 = { partNo: 1, url: "https://www.youtube.com/watch?v=aaaaaaaaaaa" };
-  const P2 = { partNo: 2, url: "https://www.youtube.com/watch?v=bbbbbbbbbbb" };
+  const P1 = { partNo: 1, url: "https://www.youtube.com/watch?v=aaaaaaaaaaa", private: false };
+  const P2 = { partNo: 2, url: "https://www.youtube.com/watch?v=bbbbbbbbbbb", private: false };
+  const PRIV1 = { partNo: 1, url: "https://www.youtube.com/watch?v=ppppppppppp", private: true };
+  const PRIV2 = { partNo: 2, url: "https://www.youtube.com/watch?v=qqqqqqqqqqq", private: true };
   const TWITCH_VOD = "https://www.twitch.tv/videos/1";
   const links = (tree: ReactElement[]) => allTestIds(tree, "stream-replay");
   const hrefs = (tree: ReactElement[]) => links(tree).map((el) => attr(el, "href"));
@@ -6176,6 +6178,63 @@ describe("T16: after a match - the replay parts", () => {
     expect(html).toContain(es["stream.url.label"]!);
     expect(html).toContain(es["stream.replay.latestSession"]!.split("{times}")[0]!.trim());
     expect(html).not.toContain(en["stream.replay.latestSession"]!.split("{times}")[0]!.trim());
+  });
+
+  it("I1 (owner ruling A): a part that is PRIVATE on YouTube is still listed for the organiser - link, Copy link and all - with the 'Private on YouTube' note beside it; public parts carry no note", () => {
+    const NOTE = m("streaming.youtube.replay.private");
+    const notes = (tree: ReactElement[]) => allTestIds(tree, "stream-replay-private").map((el) => textOf(el).replace(/\s+/g, " ").trim());
+    expect(NOTE, "premise: the note has words").toBeTruthy();
+
+    // Empty case of the note: no private part, no note anywhere (the twin below is what makes this silence a fact).
+    const open = body({ view: session({ ...ENDED, replayUrl: P1.url, replayParts: [P1, P2] }), balance: 1 });
+    expect(notes(open)).toEqual([]);
+    expect(allTestIds(open, "stream-replay-private")).toHaveLength(0);
+
+    // Private only: the one row stays (the organiser's own data), unlabelled as a single part, and says it is private.
+    const only = body({ view: session({ ...ENDED, replayParts: [PRIV1] }), balance: 1 });
+    expect(byTestId(only, "stream-replay-row"), "the row exists").toBeDefined();
+    expect(hrefs(only)).toEqual([PRIV1.url]);
+    expect(copies(only)).toEqual([PRIV1.url]);
+    expect(labels(only), "one part is just the replay").toEqual([]);
+    expect(notes(only)).toEqual([NOTE]);
+
+    // Mixed: Part 1 public, Part 2 private - both listed with their Part labels, the note on Part 2 ONLY.
+    const mixed = body({ view: session({ ...ENDED, replayUrl: P1.url, replayParts: [P1, PRIV2] }), balance: 1 });
+    expect(hrefs(mixed)).toEqual([P1.url, PRIV2.url]);
+    expect(labels(mixed)).toEqual([m("streaming.youtube.part", { n: 1 }), m("streaming.youtube.part", { n: 2 })]);
+    const items = allTestIds(mixed, "stream-replay-item");
+    expect(items).toHaveLength(2);
+    const inside = (item: ReactElement) => walk(propsOf(item).children as ReactElement[]);
+    expect(allTestIds(inside(items[0]!), "stream-replay-part"), "premise: the walk reaches inside an item").toHaveLength(1);
+    expect(allTestIds(inside(items[0]!), "stream-replay-private"), "Part 1 is public: no note").toHaveLength(0);
+    expect(allTestIds(inside(items[1]!), "stream-replay-private").map((el) => textOf(el).replace(/\s+/g, " ").trim()), "Part 2 is private: the note").toEqual([NOTE]);
+
+    // Both private: a note on each.
+    const both = body({ view: session({ ...ENDED, replayParts: [PRIV1, PRIV2] }), balance: 1 });
+    expect(notes(both)).toEqual([NOTE, NOTE]);
+
+    // A club's own link beside a private part is not private: no note on it.
+    const own = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [PRIV1] }), balance: 1 });
+    expect(hrefs(own)).toEqual([PRIV1.url, TWITCH_VOD]);
+    expect(notes(own), "the note is on the private part only").toEqual([NOTE]);
+    expect(allTestIds(inside(allTestIds(own, "stream-replay-item")[1]!), "stream-replay"), "premise: the walk reaches the club link's own anchor").toHaveLength(1);
+    expect(allTestIds(inside(allTestIds(own, "stream-replay-item")[1]!), "stream-replay-private")).toHaveLength(0);
+  });
+
+  it("the note reads in the locale's own words (es, fr, nl)", () => {
+    const en = uiDict("en");
+    for (const locale of ["es", "fr", "nl"] as const) {
+      const dict = uiDict(locale);
+      expect(dict["streaming.youtube.replay.private"], `premise: ${locale} is translated`).toBeTruthy();
+      expect(dict["streaming.youtube.replay.private"], `premise: ${locale} differs from English`).not.toBe(en["streaming.youtube.replay.private"]);
+      const html = renderToStaticMarkup(
+        <DictProvider dict={dict} locale={locale}>
+          <PhoneTabBody {...BODY} view={session({ ...ENDED, replayParts: [PRIV1] })} balance={1} />
+        </DictProvider>,
+      );
+      expect(html, locale).toContain(dict["streaming.youtube.replay.private"]!);
+      expect(html, `${locale}: not the English words`).not.toContain(en["streaming.youtube.replay.private"]!);
+    }
   });
 
   it("the logo follows each LINK: on a YouTube part, not on the club's Twitch link beside it", () => {

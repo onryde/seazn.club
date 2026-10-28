@@ -110,16 +110,16 @@ describe("the embed and thumbnail addresses", () => {
 // The two rules the public match page and the organiser's panel share about the fixture's own `stream_url` beside the replay parts:
 // a link that IS one of the parts is not listed twice, and a different one still is.
 describe("linkIsOneOfParts / replayRows: the club's own link beside the parts", () => {
-  const P1 = { partNo: 1, url: `https://www.youtube.com/watch?v=${ID}` };
-  const P2 = { partNo: 2, url: `https://www.youtube.com/watch?v=${ID2}` };
+  const P1 = { partNo: 1, url: `https://www.youtube.com/watch?v=${ID}`, private: false };
+  const P2 = { partNo: 2, url: `https://www.youtube.com/watch?v=${ID2}`, private: false };
   const TWITCH = "https://www.twitch.tv/club";
 
   it("EMPTY CASE FIRST: no parts means no link is 'one of the parts', and the rows are just the club's own link, if any", () => {
     expect(linkIsOneOfParts(P1.url, [])).toBe(false);
     expect(replayRows(null, [])).toEqual([]);
     expect(replayRows("", [])).toEqual([]);
-    expect(replayRows(TWITCH, [])).toEqual([{ key: "own", url: TWITCH, partNo: null }]);
-    expect(replayRows(P1.url, []), "a YouTube link with no parts is still just the club's link").toEqual([{ key: "own", url: P1.url, partNo: null }]);
+    expect(replayRows(TWITCH, [])).toEqual([{ key: "own", url: TWITCH, partNo: null, private: false }]);
+    expect(replayRows(P1.url, []), "a YouTube link with no parts is still just the club's link").toEqual([{ key: "own", url: P1.url, partNo: null, private: false }]);
   });
 
   it("a link is one of the parts by VIDEO: the identical string, or the same video in another YouTube spelling - and nothing else", () => {
@@ -139,11 +139,19 @@ describe("linkIsOneOfParts / replayRows: the club's own link beside the parts", 
   it("the rows are every part in order, then the club's own link only when it is not one of them", () => {
     expect(replayRows(P1.url, [P1, P2]).map((r) => [r.key, r.partNo])).toEqual([["part-1", 1], ["part-2", 2]]);
     expect(replayRows(TWITCH, [P1, P2])).toEqual([
-      { key: "part-1", url: P1.url, partNo: 1 }, { key: "part-2", url: P2.url, partNo: 2 }, { key: "own", url: TWITCH, partNo: null },
+      { key: "part-1", url: P1.url, partNo: 1, private: false }, { key: "part-2", url: P2.url, partNo: 2, private: false },
+      { key: "own", url: TWITCH, partNo: null, private: false },
     ]);
     expect(replayRows(null, [P1]).map((r) => r.url)).toEqual([P1.url]);
     // Keys are unique (they key a React list).
     const rows = replayRows(TWITCH, [P1, P2]);
     expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
+  });
+
+  it("a part's privacy (private on YouTube, the organiser's flag) travels with its row; the club's own link is never private", () => {
+    const hidden = { partNo: 2, url: `https://www.youtube.com/watch?v=${ID2}`, private: true };
+    expect(replayRows(TWITCH, [P1, hidden]).map((r) => [r.key, r.private])).toEqual([["part-1", false], ["part-2", true], ["own", false]]);
+    // A private part whose video the club's link also names is still the part (listed once, flagged), not a second row.
+    expect(replayRows(hidden.url, [P1, hidden]).map((r) => [r.key, r.private])).toEqual([["part-1", false], ["part-2", true]]);
   });
 });

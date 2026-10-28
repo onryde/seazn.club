@@ -1458,6 +1458,7 @@
   "streaming.youtube.replay.playerTitle": "Replay du match",
   "streaming.youtube.replay.playerTitlePart": "Replay du match, partie {n}",
   "streaming.youtube.replay.unavailable": "Cette vidéo ne peut pas être lue ici. Ouvrez-la sur YouTube.",
+  "streaming.youtube.replay.private": "Privé sur YouTube",
   "streamDest.add": "Ajouter une destination",
   "streamDest.listLabel": "Destinations de diffusion",
   "streamDest.platform": "Plateforme",

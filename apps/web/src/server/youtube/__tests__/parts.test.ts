@@ -13,6 +13,9 @@
 // Go live again, complete b2 (class 1: a seam is proven through its real producer). Expected urls are typed from the broadcast ids
 // the FAKE YouTube minted and the broadcast rows hold, never taken back out of replayParts.
 //
+// Privacy (owner ruling A, 2026-10-28): a broadcast that is PRIVATE on YouTube is hidden from the public read and listed - flagged
+// `private: true` - on the organiser's. So the two numberings agree unless privacies are mixed: the public numbers what it shows.
+//
 // Sport: not applicable - streaming is sport-agnostic (global-constraints "Test rules"); every rig rides `generic`.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -52,6 +55,10 @@ afterAll(() => {
 /** An 11-character id of a real video's shape (the fake mints the same shape). */
 const vid = () => `t16${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 const at = (hhmm: string) => new Date(`2030-06-01T${hhmm}:00Z`);
+/** The ORGANISER's shape of a list of parts: each part plus whether its broadcast is private on YouTube (false unless `priv` says so,
+ *  index by index). The public read has no such flag. */
+const mine = (parts: readonly { partNo: number; url: string }[], priv: readonly boolean[] = []) =>
+  parts.map((p, i) => ({ ...p, private: priv[i] ?? false }));
 
 interface Rig { auth: AuthCtx; orgId: string; connectionId: string; fixtures: string[]; divisionId: string; competitionId: string }
 
@@ -73,13 +80,13 @@ async function rig(o: { fixtures?: number; start?: boolean } = {}): Promise<Rig>
 async function broadcast(
   r: Pick<Rig, "orgId" | "connectionId">,
   fixtureId: string,
-  o: { state: string; ytId?: string | null; completedAt?: Date | null; id?: string; createdAt?: Date },
+  o: { state: string; ytId?: string | null; completedAt?: Date | null; id?: string; createdAt?: Date; privacy?: "unlisted" | "public" | "private" },
 ): Promise<{ id: string; ytId: string | null }> {
   const ytId = o.ytId === undefined ? vid() : o.ytId;
   const completedAt = o.completedAt === undefined ? (o.state === "complete" ? new Date() : null) : o.completedAt;
   const [row] = await sql<{ id: string }[]>`
     insert into youtube_broadcasts (id, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at, created_at)
-    values (${o.id ?? randomUUID()}, ${r.orgId}, ${r.connectionId}, ${fixtureId}, ${ytId}, 'Match', 'unlisted', ${o.state},
+    values (${o.id ?? randomUUID()}, ${r.orgId}, ${r.connectionId}, ${fixtureId}, ${ytId}, 'Match', ${o.privacy ?? "unlisted"}, ${o.state},
             ${o.state === "reserved" ? new Date(Date.now() + 5 * MIN) : null}, ${completedAt}, ${o.createdAt ?? sql`now()`})
     returning id`;
   return { id: row!.id, ytId };
@@ -87,7 +94,7 @@ async function broadcast(
 
 /** An org with a connected channel, one started fixture and what the REAL producers need (the session usecases, the end step), on a scripted
  *  clock. `playAndStop` is Go live -> live -> video arrives -> a minute of play -> Stop, and answers the broadcast the fake minted. */
-async function streamRig() {
+async function streamRig(o: { privacy?: "unlisted" | "public" | "private" } = {}) {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const d = await divisionRig(auth, { entrants: 2 });
@@ -100,7 +107,7 @@ async function streamRig() {
   await pairPresentPhone(f);
   await grantCredits({ orgId: auth.orgId, delta: 2, createdBy: await rigUser(), note: "t16", idempotencyKey: randomUUID() });
   await spendMonthlyStreamGrant(auth.orgId);
-  const c = await connect({ auth, orgId: auth.orgId, userId: auth.userId });
+  const c = await connect({ auth, orgId: auth.orgId, userId: auth.userId }, o.privacy ? { privacy: o.privacy } : {});
 
   let now = Date.now();
   const ingest = new FakeIngest({ clock: () => now, connectAfterMs: 3000 });
@@ -125,6 +132,9 @@ async function streamRig() {
   };
   return {
     auth, f, fake, playAndStop,
+    /** The channel's default for the NEXT Go live (a broadcast row keeps the privacy it was made with). */
+    setChannelPrivacy: (privacy: "unlisted" | "public" | "private") =>
+      sql`update org_youtube_connections set default_privacy = ${privacy} where id = ${c.connectionId}`,
     advance: (ms: number) => { now += ms; },
     endAll: () => endDueBroadcasts(fake, { now: () => new Date(now), budgetMs: 15_000, orgIds: [auth.orgId] }),
     /** The panel reads the same list off the session view it already polls (`replayParts` beside `replayUrl`). */
@@ -143,7 +153,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
 
     const b = await broadcast(r, f, { state: "complete", completedAt: at("10:00") });
     expect(await replayParts(f)).toEqual([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]);
-    expect(await fixtureReplayParts(r.orgId, f)).toEqual([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]);
+    expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]));
   });
 
   it("parts are numbered in the order they were STARTED, not the order they finished, were inserted or sorted by id; a tie on the start breaks by id", async () => {
@@ -159,7 +169,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
       { partNo: 2, url: youtubeWatchUrl(late.ytId!) },
     ];
     expect(await replayParts(f)).toEqual(expected);
-    expect(await fixtureReplayParts(r.orgId, f)).toEqual(expected);
+    expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine(expected));
 
     // A tie: three rows, one start instant, inserted in DESCENDING id order and finishing in descending id order too - the id decides.
     const g = await rig();
@@ -171,7 +181,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     }
     const tied = ids.map((id, i) => ({ partNo: i + 1, url: youtubeWatchUrl(made[id]!) }));
     expect(await replayParts(tieFixture)).toEqual(tied);
-    expect(await fixtureReplayParts(g.orgId, tieFixture)).toEqual(tied);
+    expect(await fixtureReplayParts(g.orgId, tieFixture)).toEqual(mine(tied));
   });
 
   it("only COMPLETE broadcasts are parts: failed, created, bound, reserved, live and ending rows are not listed and take no number", async () => {
@@ -189,13 +199,13 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
       { partNo: 2, url: youtubeWatchUrl(second.ytId!) },
     ];
     expect(await replayParts(f)).toEqual(expected);
-    expect(await fixtureReplayParts(r.orgId, f)).toEqual(expected);
+    expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine(expected));
 
     // The open row becomes a part the moment it completes (a second call sees the change), numbered after the others.
     await sql`update youtube_broadcasts set state = 'complete', completed_at = ${at("11:30")} where id = ${open.id}`;
     const after = [...expected, { partNo: 3, url: youtubeWatchUrl(open.ytId!) }];
     expect(await replayParts(f)).toEqual(after);
-    expect(await fixtureReplayParts(r.orgId, f)).toEqual(after);
+    expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine(after));
   });
 
   it("another fixture's parts never leak in: each fixture numbers from 1", async () => {
@@ -205,7 +215,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     const b = await broadcast(r, f2, { state: "complete", completedAt: at("09:00") });
     expect(await replayParts(f1)).toEqual([{ partNo: 1, url: youtubeWatchUrl(a.ytId!) }]);
     expect(await replayParts(f2)).toEqual([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]);
-    expect(await fixtureReplayParts(r.orgId, f1)).toEqual([{ partNo: 1, url: youtubeWatchUrl(a.ytId!) }]);
+    expect(await fixtureReplayParts(r.orgId, f1)).toEqual(mine([{ partNo: 1, url: youtubeWatchUrl(a.ytId!) }]));
   });
 
   // ---- redaction (public) and tenancy (organiser) ---------------------------------------------------------------------------
@@ -216,7 +226,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     const expected = [{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }];
     expect((await sql<{ status: string }[]>`select status from divisions where id = ${r.divisionId}`)[0]!.status, "premise: the division is in setup").toBe("setup");
     expect(await replayParts(f), "public: setup division").toEqual([]);
-    expect(await fixtureReplayParts(r.orgId, f), "organiser: their own data").toEqual(expected);
+    expect(await fixtureReplayParts(r.orgId, f), "organiser: their own data").toEqual(mine(expected));
 
     await startDivision(r.auth, r.divisionId);
     expect((await sql<{ status: string }[]>`select status from divisions where id = ${r.divisionId}`)[0]!.status, "premise: the division left setup").not.toBe("setup");
@@ -232,7 +242,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     for (const [visibility, publicSees] of [["private", false], ["unlisted", true], ["public", true]] as const) {
       await sql`update competitions set visibility = ${visibility} where id = ${r.competitionId}`;
       expect(await replayParts(f), `public read, ${visibility}`).toEqual(publicSees ? expected : []);
-      expect(await fixtureReplayParts(r.orgId, f), `organiser read, ${visibility}`).toEqual(expected);
+      expect(await fixtureReplayParts(r.orgId, f), `organiser read, ${visibility}`).toEqual(mine(expected));
       checked++;
     }
     expect(checked, "anti-vacuity: all three visibilities were asserted").toBe(3);
@@ -243,8 +253,53 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     const other = await rig();
     const f = r.fixtures[0]!;
     const b = await broadcast(r, f, { state: "complete", completedAt: at("10:00") });
-    expect(await fixtureReplayParts(r.orgId, f), "positive pair: the owner sees it").toEqual([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]);
+    expect(await fixtureReplayParts(r.orgId, f), "positive pair: the owner sees it").toEqual(mine([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]));
     expect(await fixtureReplayParts(other.orgId, f)).toEqual([]);
+  });
+
+  // ---- private on YouTube (owner ruling A) ----------------------------------------------------------------------------------
+  it("a PRIVATE broadcast: the public read skips it (empty case first: private only is no public part), the organiser's read lists it flagged private - and flips to public/unlisted are parts on both", async () => {
+    const r = await rig();
+    const f = r.fixtures[0]!;
+    const hidden = await broadcast(r, f, { state: "complete", completedAt: at("10:00"), createdAt: at("09:00"), privacy: "private" });
+    expect(await replayParts(f), "private only: nothing public").toEqual([]);
+    expect(await fixtureReplayParts(r.orgId, f), "the organiser keeps it, flagged").toEqual(mine([{ partNo: 1, url: youtubeWatchUrl(hidden.ytId!) }], [true]));
+
+    // Positive pair: the broadcast's privacy is the ONLY difference. The same row made public / unlisted is a part on both reads.
+    let checked = 0;
+    for (const privacy of ["public", "unlisted"] as const) {
+      const g = await rig();
+      const gf = g.fixtures[0]!;
+      const b = await broadcast(g, gf, { state: "complete", completedAt: at("10:00"), createdAt: at("09:00"), privacy });
+      expect(await replayParts(gf), `public read, ${privacy}`).toEqual([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }]);
+      expect(await fixtureReplayParts(g.orgId, gf), `organiser read, ${privacy}`).toEqual(mine([{ partNo: 1, url: youtubeWatchUrl(b.ytId!) }], [false]));
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both non-private privacies were asserted").toBe(2);
+  });
+
+  it("MIXED privacy: the organiser numbers every complete broadcast, the public only the ones it shows - the numbers may differ, and nothing is renumbered on the organiser's side", async () => {
+    const r = await rig();
+    const f = r.fixtures[0]!;
+    // Part 1 public, Part 2 private: public sees ONE part (number 1); the organiser sees both.
+    const p1 = await broadcast(r, f, { state: "complete", completedAt: at("10:00"), createdAt: at("09:00"), privacy: "unlisted" });
+    const p2 = await broadcast(r, f, { state: "complete", completedAt: at("12:00"), createdAt: at("11:00"), privacy: "private" });
+    expect(await replayParts(f)).toEqual([{ partNo: 1, url: youtubeWatchUrl(p1.ytId!) }]);
+    expect(await fixtureReplayParts(r.orgId, f)).toEqual(mine([
+      { partNo: 1, url: youtubeWatchUrl(p1.ytId!) },
+      { partNo: 2, url: youtubeWatchUrl(p2.ytId!) },
+    ], [false, true]));
+
+    // Part 1 private, Part 2 public: the public's Part 1 is the organiser's Part 2 (accepted: the organiser's numbers never move).
+    const g = await rig();
+    const gf = g.fixtures[0]!;
+    const q1 = await broadcast(g, gf, { state: "complete", completedAt: at("10:00"), createdAt: at("09:00"), privacy: "private" });
+    const q2 = await broadcast(g, gf, { state: "complete", completedAt: at("12:00"), createdAt: at("11:00"), privacy: "public" });
+    expect(await replayParts(gf), "public: the later one is the first it shows").toEqual([{ partNo: 1, url: youtubeWatchUrl(q2.ytId!) }]);
+    expect(await fixtureReplayParts(g.orgId, gf), "organiser: still Part 1 private, Part 2 public").toEqual(mine([
+      { partNo: 1, url: youtubeWatchUrl(q1.ytId!) },
+      { partNo: 2, url: youtubeWatchUrl(q2.ytId!) },
+    ], [true, false]));
   });
 
   // ---- the real producer ----------------------------------------------------------------------------------------------------
@@ -258,7 +313,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     advance(6 * MIN);
     expect(await endAll()).toMatchObject({ ended: 1 });
     expect(await replayParts(f)).toEqual([{ partNo: 1, url: youtubeWatchUrl(first) }]);
-    expect(await panelParts(), "one part: the panel lists it").toEqual([{ partNo: 1, url: youtubeWatchUrl(first) }]);
+    expect(await panelParts(), "one part: the panel lists it").toEqual(mine([{ partNo: 1, url: youtubeWatchUrl(first) }]));
     expect(await streamUrl(), "the end step wrote Part 1's address as the fixture's link").toBe(youtubeWatchUrl(first));
 
     const second = await playAndStop();
@@ -271,8 +326,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
       { partNo: 2, url: youtubeWatchUrl(second) },
     ];
     expect(await replayParts(f)).toEqual(expected);
-    expect(await fixtureReplayParts(auth.orgId, f)).toEqual(expected);
-    expect(await panelParts(), "two parts: the panel's session view lists both, in order").toEqual(expected);
+    expect(await fixtureReplayParts(auth.orgId, f)).toEqual(mine(expected));
+    expect(await panelParts(), "two parts: the panel's session view lists both, in order").toEqual(mine(expected));
     // The contract the public page's dedupe (`linkIsOneOfParts`) and the panel's "Replay" row rely on: the link is Part 1's and Part 2
     // never replaces it - so a club's single link is never mistaken for a part, and a part is never shown twice.
     expect(await streamUrl(), "Part 2 did not take the link").toBe(youtubeWatchUrl(first));
@@ -305,11 +360,44 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
       { partNo: 2, url: youtubeWatchUrl(second) },
     ];
     expect(await replayParts(f), "public: numbered by start").toEqual(expected);
-    expect(await fixtureReplayParts(auth.orgId, f), "organiser: the same numbers").toEqual(expected);
-    expect(await panelParts(), "panel: the same numbers").toEqual(expected);
+    expect(await fixtureReplayParts(auth.orgId, f), "organiser: the same numbers").toEqual(mine(expected));
+    expect(await panelParts(), "panel: the same numbers").toEqual(mine(expected));
     // The end step writes the link only into an empty one, so the first FINALIZER holds it and Part 1's late completion leaves it alone.
     // What the page's dedupe needs is only that it is one of the parts.
     expect(await streamUrl(), "the later completion did not rewrite the link").toBe(linkAfterFirstPass);
     expect(linkIsOneOfParts((await streamUrl())!, expected), "the stored link is one of the parts, so the page shows no second pill").toBe(true);
+  });
+
+  it("PRIVATE through the real producers (Go live on a private channel, the real end step): the match completes, the fixture gets no link, the public read has nothing and the panel's session view lists the part flagged private", async () => {
+    const { auth, f, playAndStop, advance, endAll, panelParts, streamUrl } = await streamRig({ privacy: "private" });
+    expect(await replayParts(f), "premise: nothing yet").toEqual([]);
+    const only = await playAndStop();
+    advance(6 * MIN);
+    expect(await endAll()).toMatchObject({ ended: 1 });
+    expect((await sql<{ privacy: string }[]>`select privacy from youtube_broadcasts where fixture_id = ${f} and yt_broadcast_id = ${only}`)[0]!.privacy, "premise: the producer made a private broadcast").toBe("private");
+    expect(await streamUrl(), "no link for a private video").toBeNull();
+    expect(await replayParts(f), "the public sees no part").toEqual([]);
+    const expected = mine([{ partNo: 1, url: youtubeWatchUrl(only) }], [true]);
+    expect(await fixtureReplayParts(auth.orgId, f), "the organiser's read lists it").toEqual(expected);
+    expect(await panelParts(), "and so does the session view the panel polls").toEqual(expected);
+  });
+
+  it("A channel switched from private to unlisted between two matches' broadcasts: each broadcast keeps the privacy it was made with - Part 1 stays private, Part 2 is public, and the link is Part 2's (the first public one to finish)", async () => {
+    const { auth, f, playAndStop, advance, endAll, panelParts, streamUrl, setChannelPrivacy } = await streamRig({ privacy: "private" });
+    const first = await playAndStop();
+    advance(6 * MIN);
+    expect(await endAll()).toMatchObject({ ended: 1 });
+    expect(await streamUrl()).toBeNull();
+
+    await setChannelPrivacy("unlisted");
+    const second = await playAndStop();
+    expect(second, "premise: a new broadcast").not.toBe(first);
+    advance(6 * MIN);
+    expect(await endAll()).toMatchObject({ ended: 1 });
+    const mineBoth = mine([{ partNo: 1, url: youtubeWatchUrl(first) }, { partNo: 2, url: youtubeWatchUrl(second) }], [true, false]);
+    expect(await fixtureReplayParts(auth.orgId, f)).toEqual(mineBoth);
+    expect(await panelParts()).toEqual(mineBoth);
+    expect(await replayParts(f), "public: only the unlisted one, as its own Part 1").toEqual([{ partNo: 1, url: youtubeWatchUrl(second) }]);
+    expect(await streamUrl(), "the link is the public part's").toBe(youtubeWatchUrl(second));
   });
 });

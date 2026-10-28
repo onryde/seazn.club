@@ -99,6 +99,13 @@ export interface ReplayPart {
   url: string;
 }
 
+/** The ORGANISER's part: the same plus whether the broadcast is PRIVATE on YouTube. The public never sees a private broadcast (owner
+ *  ruling 2026-10-28), so the public shape has no such flag; the organiser's panel lists it and says so. Its `partNo` numbers every
+ *  complete broadcast, so it may differ from the number the public page gives the same video when privacies are mixed. */
+export interface OrganiserReplayPart extends ReplayPart {
+  private: boolean;
+}
+
 // --- The public match page's replay player (T16) --------------------------------------------------------------------------------
 // The player is a click-to-play facade: nothing is loaded from Google but the video's thumbnail until the person taps, and then the
 // iframe comes from YouTube's privacy-enhanced host. The CSP (src/proxy.ts) allows exactly these two origins and no other.
@@ -144,11 +151,11 @@ export function linkIsOneOfParts(link: string, parts: readonly ReplayPart[]): bo
 /** The links the organiser's after-match area lists: every part in order, then the fixture's own `stream_url` when it is NOT one of
  *  the parts (a club's own different link still shows; the end step's Part 1 link is not shown twice). `partNo` is null for the
  *  club's own link. */
-export function replayRows(streamUrl: string | null, parts: readonly ReplayPart[]): { key: string; url: string; partNo: number | null }[] {
+export function replayRows(streamUrl: string | null, parts: readonly OrganiserReplayPart[]): { key: string; url: string; partNo: number | null; private: boolean }[] {
   const own = streamUrl !== null && streamUrl !== "" && !linkIsOneOfParts(streamUrl, parts);
   return [
-    ...parts.map((p) => ({ key: `part-${p.partNo}`, url: p.url, partNo: p.partNo })),
-    ...(own ? [{ key: "own", url: streamUrl, partNo: null }] : []),
+    ...parts.map((p) => ({ key: `part-${p.partNo}`, url: p.url, partNo: p.partNo, private: p.private })),
+    ...(own ? [{ key: "own", url: streamUrl, partNo: null, private: false }] : []),
   ];
 }
 

@@ -7745,6 +7745,7 @@ export type DictionaryKey =
   | "streaming.youtube.replay.play"
   | "streaming.youtube.replay.playerTitle"
   | "streaming.youtube.replay.playerTitlePart"
+  | "streaming.youtube.replay.private"
   | "streaming.youtube.replay.region"
   | "streaming.youtube.replay.tabs"
   | "streaming.youtube.replay.unavailable"

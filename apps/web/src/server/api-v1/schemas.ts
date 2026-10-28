@@ -1891,8 +1891,9 @@ export const StreamSessionCurrent = z
      *  (a restart after a Stop is a new broadcast; one whose end was retried can finish after a later one and keeps its number).
      *  `[]` when no YouTube broadcast has completed (a pasted-key destination never has any). Read for THIS organisation, whatever the
      *  competition's visibility; `replayUrl` stays the single link the fixture holds (the first part to finish, unless the club set its
-     *  own). */
-    replayParts: z.array(z.object({ partNo: z.number().int().min(1), url: z.string() }).strict()),
+     *  own). `private` is true for a broadcast that is PRIVATE on YouTube: the organiser keeps it here and the panel says so, the public
+     *  match page never shows it (and its number counts every complete broadcast, so it can differ from the public page's). */
+    replayParts: z.array(z.object({ partNo: z.number().int().min(1), url: z.string(), private: z.boolean() }).strict()),
     target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
     fixtureDecided: z.boolean(),
     /** W2a loop R, M2: the fixture is HELD (`needs_decision` — a level bracket result awaiting the organiser's settle).

@@ -42751,11 +42751,15 @@
                                   },
                                   "url": {
                                     "type": "string"
+                                  },
+                                  "private": {
+                                    "type": "boolean"
                                   }
                                 },
                                 "required": [
                                   "partNo",
-                                  "url"
+                                  "url",
+                                  "private"
                                 ],
                                 "additionalProperties": false
                               }
@@ -43007,7 +43011,8 @@
                     "replayParts": [
                       {
                         "partNo": 1,
-                        "url": "example"
+                        "url": "example",
+                        "private": true
                       }
                     ],
                     "target": {
@@ -43530,11 +43535,15 @@
                               },
                               "url": {
                                 "type": "string"
+                              },
+                              "private": {
+                                "type": "boolean"
                               }
                             },
                             "required": [
                               "partNo",
-                              "url"
+                              "url",
+                              "private"
                             ],
                             "additionalProperties": false
                           }
@@ -43781,7 +43790,8 @@
                     "replayParts": [
                       {
                         "partNo": 1,
-                        "url": "example"
+                        "url": "example",
+                        "private": true
                       }
                     ],
                     "target": {

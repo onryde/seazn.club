@@ -2589,6 +2589,13 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                         {msg("streaming.youtube.part", { n: row.partNo })}
                       </p>
                     )}
+                    {/* A broadcast that is PRIVATE on YouTube stays on this list - it is the organiser's own replay - but the public match
+                        page never shows it (owner ruling 2026-10-28), so say so beside it. Its number counts every complete broadcast. */}
+                    {row.private && (
+                      <p data-testid="stream-replay-private" className="text-sm text-slate-600">
+                        {msg("streaming.youtube.replay.private")}
+                      </p>
+                    )}
                     <div className="flex flex-col gap-2 md:flex-row">
                       <a
                         data-testid="stream-replay"
