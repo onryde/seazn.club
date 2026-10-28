@@ -33,6 +33,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 
 import { hockey } from "@seazn/engine/sports/hockey";
+import ui from "@/dictionaries/en/ui.json";
 
 const PAGE = join(process.cwd(), "content/help/scoring/hockey.md");
 
@@ -197,6 +198,61 @@ describe("field hockey help copy ⇄ the engine's own format declarations", () =
         ).toBe(true);
       }
     }
+  });
+
+  // W2d final review m4: the Standings line said "goal difference, then goals for, then head-to-head" through two waves
+  // after the engine's order changed (matches won first, field goals before lots). The ORDER is read from the module's
+  // own `defaultTiebreakers`; only the words per key are typed here, and a key with no words reds, so a new step owes
+  // the page a phrase.
+  it("names the league tie-break order in the engine's own order (defaultTiebreakers)", () => {
+    const PHRASE: Readonly<Record<string, string | null>> = {
+      points: null, // the table ranks on points; the page splits teams "level on points"
+      wins: "matches won",
+      diff: "goal difference",
+      for: "goals for",
+      h2h_points: "between the tied teams",
+      h2h_wins: "between the tied teams",
+      h2h_diff: "between the tied teams",
+      h2h_for: "between the tied teams",
+      field_goals: "field goals",
+      lots: "by lot",
+    };
+    const section = markdown.split(/^## Standings$/m)[1]?.split(/^## /m)[0] ?? "";
+    expect(section.length, "hockey.md has a Standings section").toBeGreaterThan(0);
+    const order = hockey.defaultTiebreakers("league", cfgFor("fih-outdoor") as never);
+    let cursor = 0;
+    let checked = 0;
+    let previous: string | null = null;
+    for (const key of order) {
+      expect(key in PHRASE, `no words for the engine's tie-break key "${key}": the page owes it a phrase`).toBe(true);
+      const phrase = PHRASE[key];
+      if (phrase === null || phrase === previous) continue; // the h2h block is one phrase
+      const at = section.indexOf(phrase, cursor);
+      expect(at, `hockey.md's Standings does not name "${phrase}" (${key}) after the step before it`).toBeGreaterThan(-1);
+      cursor = at + phrase.length;
+      previous = phrase;
+      checked++;
+    }
+    expect(checked, "tie-break steps checked").toBe(6);
+  });
+
+  it("names every answer the pad's goal-type question offers (cfg goalKinds, in the pad's own words)", () => {
+    const section = markdown.split(/^## Goals$/m)[1]?.split(/^## /m)[0] ?? "";
+    expect(section.length, "hockey.md has a Goals section").toBeGreaterThan(0);
+    const dict = ui as Record<string, string>;
+    const title = dict["pad.hockey.dock.goal.kind.title"];
+    expect(title, "premise: the pad titles the question").toBeDefined();
+    expect(section, "the Goals section quotes the question").toContain(`**${title}**`);
+    const kinds = (cfgFor("fih-outdoor") as unknown as { goalKinds: string[] }).goalKinds;
+    let checked = 0;
+    for (const kind of kinds) {
+      const label = dict[kind === "og" ? "pad.hockey.dock.ownGoal" : `pad.hockey.kind.${kind}`];
+      expect(label, `premise: the pad labels goal kind "${kind}"`).toBeDefined();
+      expect(section, `the Goals section names the "${label}" answer`).toContain(`**${label}**`);
+      checked++;
+    }
+    expect(checked, "goal kinds checked").toBe(kinds.length);
+    expect(checked).toBeGreaterThan(0);
   });
 
   it("says a red card has no duration to quote", () => {
