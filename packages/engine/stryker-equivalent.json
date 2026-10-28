@@ -524,55 +524,55 @@
       "reason": "With no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined`, and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key)."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:297:72 ArrayDeclaration → []",
+      "mutant": "src/sports/generic/generic.ts:294:72 ArrayDeclaration → []",
       "original": "[\"for\", \"against\", \"diff\"]",
       "line": "if (by === \"both\") return doubleWalkoverCredit(played[0], played[1], [\"for\", \"against\", \"diff\"]);",
       "reason": "sideMetrics (and zeroMetrics) always return exactly {for, against, diff} in that order, so the union of the played ledgers' keys already is the declared list: same keys, same order, same zeroed perSide and excluded."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:761:57 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:756:57 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = genericForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "genericForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:761:69 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:756:69 StringLiteral → \"\"",
       "original": "\"both\"",
       "line": "const credit = genericForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "With by \"\" the credit is the walkover arm's: both records 0-0-0 over the same keys {for, against, diff}; laid over the played ledger that is exactly the double walkover's all-zero metrics (excluded only re-zeroes zeros)."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:763:72 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:758:72 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "build(\"home\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"home\"), credit, \"home\")),",
       "reason": "The played ledger read for side \"\" is overwritten key for key: the double-walkover credit carries 0 for for, against and diff, the only keys generic's ledger has."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:763:89 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:758:89 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "build(\"home\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"home\"), credit, \"home\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:764:72 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:759:72 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "build(\"away\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"away\"), credit, \"away\")),",
       "reason": "The played ledger read for side \"\" is overwritten key for key: the double-walkover credit carries 0 for for, against and diff, the only keys generic's ledger has."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:764:89 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:759:89 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "build(\"away\", 0, 0, 1, 0, creditedMetrics(sideMetrics(state, \"away\"), credit, \"away\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:298:7 ConditionalExpression → false",
+      "mutant": "src/sports/generic/generic.ts:295:7 ConditionalExpression → false",
       "original": "reason === \"bye\"",
       "line": "if (reason === \"bye\") return { perSide: played, excluded: [] };",
       "reason": "A bye is reached only through the competition's bye writers (ruling 104: the only reason-less awards are theirs; awardByeDelta passes an init state) — a fixture nobody played, so the recorded score the walkover arm would keep and the played ledger are both 0-0."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:298:18 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:295:18 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (reason === \"bye\") return { perSide: played, excluded: [] };",
       "reason": "A bye is reached only through the competition's bye writers (ruling 104: the only reason-less awards are theirs; awardByeDelta passes an init state) — a fixture nobody played, so the recorded score the walkover arm would keep and the played ledger are both 0-0."
@@ -764,25 +764,25 @@
       "reason": "Differs from `o !== null` only for a null option, and zod `.options` never holds null: a union's are schemas, an enum's are its string or number values (`typeof null === \"object\"` is the only case the operand exists for)."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:242:43 ConditionalExpression → false",
+      "mutant": "src/sports/generic/generic.ts:239:43 ConditionalExpression → false",
       "original": "outcome?.kind !== \"award\"",
       "line": "if (state.forfeitAward === undefined || outcome?.kind !== \"award\") return null;",
       "reason": "A generic state holds a forfeitAward only beside the award outcome written with it (the core.forfeit arm of apply sets both in one object, and every other event is refused or leaves the outcome alone once decided: sports/generic/generic.test.ts, 'a held stage award always sits beside an award outcome'), so `outcome?.kind !== \"award\"` is false whenever the first operand lets the line run; the check only narrows the type for awardReasonOf."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:242:43 OptionalChaining → outcome.kind",
+      "mutant": "src/sports/generic/generic.ts:239:43 OptionalChaining → outcome.kind",
       "original": "outcome?.kind",
       "line": "if (state.forfeitAward === undefined || outcome?.kind !== \"award\") return null;",
       "reason": "A generic state holds a forfeitAward only beside the award outcome written with it (sports/generic/generic.test.ts, 'a held stage award always sits beside an award outcome'), so whenever this line runs past `state.forfeitAward === undefined` the outcome is non-null and `outcome.kind` reads the same value as `outcome?.kind`; the null the `?.` guards never reaches it."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:244:7 ConditionalExpression → false",
+      "mutant": "src/sports/generic/generic.ts:241:7 ConditionalExpression → false",
       "original": "reason === \"bye\"",
       "line": "if (reason === \"bye\") return null;",
       "reason": "The condition is never true where it runs: awardedLine passes line 242 only with a held forfeitAward, which only generic's core.forfeit arm writes (generic.ts:677, `git grep -n forfeitAward packages/engine/src/sports/generic` names no other writer), and a core.forfeit's reason is a FORFEIT_REASON, never `bye` (CoreForfeit refuses it: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'); a bye is the system's award and is never folded through apply. Mutating it to `false` removes a branch nothing takes. It stays to narrow AwardReason to ForfeitReason for genericForfeitCredit."
     },
     {
-      "mutant": "src/sports/generic/generic.ts:244:18 StringLiteral → \"\"",
+      "mutant": "src/sports/generic/generic.ts:241:18 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (reason === \"bye\") return null;",
       "reason": "`reason === \"\"` is false for every reason that reaches this line, exactly as `reason === \"bye\"` is: a held forfeitAward comes only from a core.forfeit, whose reason is one of the four FORFEIT_REASONS (CoreForfeit refuses `bye`: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'), so neither form ever returns null here."
