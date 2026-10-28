@@ -348,6 +348,60 @@ describe("the picker, driven", () => {
     expect(p.picked).toEqual(["t-bad"]);
   });
 
+  // B4 fix round 1, I-3 (WCAG 2.4.7 focus visible, 1.4.11 non-text contrast): the arrow keys move `aria-activedescendant`, and that is all a
+  // keyboard user has to see where they are — the row's background (slate-50 for the active row, purple-50 for the selected one) is about
+  // 1.04:1 against white, so neither could be told from a plain row. The indicator is an inset ring in the house accent, on the active row
+  // only and whether or not it is also the selected one.
+  describe("the keyboard-active row is visibly marked (I-3)", () => {
+    /** The house accent (`--ps-accent`, globals.css) — the colour the keyboard ring is drawn in everywhere else; Tailwind's violet-600. */
+    const ACCENT = /--ps-accent:\s*(#[0-9a-f]{6})/i.exec(readFileSync(join(__dirname, "..", "..", "..", "app", "globals.css"), "utf8"))![1]!;
+    const channelOf = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
+    const luminance = (hex: string) => { const [r, g, b] = channelOf(hex) as [number, number, number]; return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+    const contrast = (a: string, b: string) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number]; return (hi + 0.05) / (lo + 0.05); };
+    const RING = ["ring-2", "ring-inset", "ring-violet-600"];
+    const classesOf = (el: ReactElement) => String(attr(el, "className")).split(/\s+/);
+    const ringed = (p: ReturnType<typeof mount>) => p.options().filter((o) => RING.every((t) => classesOf(o).includes(t))).map((o) => attr(o, "data-target-id"));
+
+    it("the ring's colour is the house accent and clears 3:1 against white and against the selected row's tint (the tint's own contrast with white is NOT the signal: ~1.04)", () => {
+      expect(ACCENT.toLowerCase(), "the declaration the ring token stands for").toBe("#7c3aed");
+      expect(contrast(ACCENT, "#ffffff")).toBeGreaterThanOrEqual(3);
+      expect(contrast(ACCENT, "#faf5ff"), "against purple-50, the selected row's background").toBeGreaterThanOrEqual(3);
+      expect(contrast("#faf5ff", "#ffffff"), "premise: the old selected-row tint alone was no indicator").toBeLessThan(1.1);
+      expect(contrast("#f8fafc", "#ffffff"), "premise: nor was the old active-row tint (slate-50)").toBeLessThan(1.1);
+    });
+
+    it("ArrowDown / ArrowUp / Home / End: exactly the active row carries the ring, at every step — including when it is the SELECTED row (which keeps its own tint and check)", () => {
+      const p = mount({ selectedId: "t-ok" });
+      expect(ringed(p), "closed: no list, no ring").toEqual([]);
+      p.key("Enter");
+      expect(p.activeTarget(), "premise: opening lands on the selected row").toBe("t-ok");
+      expect(ringed(p), "active AND selected: still ringed").toEqual(["t-ok"]);
+      expect(classesOf(p.options().find((o) => attr(o, "data-target-id") === "t-ok")!), "…and keeps the selected tint").toContain("bg-purple-50");
+      let checked = 0;
+      for (const k of ["ArrowDown", "ArrowDown", "ArrowDown", "ArrowDown", "ArrowUp", "End", "Home"]) {
+        p.key(k);
+        expect(ringed(p), `after ${k}: one ring, on the active row`).toEqual([p.activeTarget()]);
+        // The selected row, once it is NOT active, carries its tint and no ring: the two signals are independent.
+        const sel = p.options().find((o) => attr(o, "aria-selected") === true)!;
+        if (attr(sel, "data-target-id") !== p.activeTarget()) {
+          expect(classesOf(sel), `after ${k}: the selected row alone`).toContain("bg-purple-50");
+          expect(RING.some((t) => classesOf(sel).includes(t)), `after ${k}: the selected row is not the active one`).toBe(false);
+        }
+        checked++;
+      }
+      expect(checked, "anti-vacuity").toBe(7);
+    });
+
+    it("the ring follows a pointer too (a hover makes a row active), and a list with a different selection rings the right row", () => {
+      const p = mount({ selectedId: "t-warn" });
+      p.key("Enter");
+      expect(ringed(p)).toEqual(["t-warn"]);
+      const hovered = p.options().find((o) => attr(o, "data-target-id") === "t-key")!;
+      (attr(hovered, "onMouseEnter") as () => void)();
+      expect(ringed(p), "the hovered row now carries it, and the selected one no longer does").toEqual(["t-key"]);
+    });
+  });
+
   it("a list that shrinks while it is open never leaves the active descendant on a row that is gone", () => {
     const p = mount({ selectedId: "t-ok" });
     p.key("Enter");

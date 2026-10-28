@@ -13,7 +13,8 @@
 //
 // Semantics: the W3C "select-only combobox" — the trigger is a <button role="combobox"> that keeps focus, the list is a
 // role="listbox" of role="option"s, and the arrow keys move `aria-activedescendant`. Typing the first letters of a destination's name
-// jumps to it (a buffered prefix match, reset after a pause), as a native <select> did. A visible <label htmlFor={id}> names it (a
+// jumps to it (a buffered prefix match, reset after a pause), as a native <select> did. The active row wears an inset violet-600 ring
+// (the house accent), independent of the selected row's tint — a tint alone is ~1.04:1 against white and shows nothing. A visible <label htmlFor={id}> names it (a
 // button is a labelable element). One DOM at every width; the rows are at least 56 px, past the 44 px tap floor.
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Check, ChevronRight } from "lucide-react";
@@ -260,7 +261,11 @@ export function FixtureDestinationPicker({ id, targets, selectedId, onSelect, in
                 data-active={i === activeIndex ? "true" : undefined}
                 onClick={() => pick(i)}
                 onMouseEnter={() => setActive(i)}
-                className={`flex min-h-14 min-w-0 cursor-pointer items-center gap-3 px-3 py-2 ${isSelected ? "bg-purple-50" : i === activeIndex ? "bg-slate-50" : "bg-white"}`}
+                // The row the keyboard (or pointer) is on carries an inset accent ring — the one signal a keyboard user has, since the
+                // tints below are ~1.04:1 against white — whether or not it is also the picked row (which keeps its tint and check).
+                className={`flex min-h-14 min-w-0 cursor-pointer items-center gap-3 px-3 py-2 ${isSelected ? "bg-purple-50" : i === activeIndex ? "bg-slate-50" : "bg-white"}${
+                  i === activeIndex ? " ring-2 ring-inset ring-violet-600" : ""
+                }`}
               >
                 <Identity t={t} row={row} />
                 {isSelected && <Check aria-hidden className="h-4 w-4 shrink-0 text-purple-700" strokeWidth={2} />}

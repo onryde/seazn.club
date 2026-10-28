@@ -17,6 +17,7 @@ export function focusRefusalBlock(block: HTMLElement | null): void {
   block?.focus();
 }
 
-/** The house keyboard ring (globals.css's `:where(a, button, …):focus-visible` is 2px, offset 2px, the accent), for a box that is not a
- *  link or a button: shown to a keyboard user, not painted for a pointer user whose press the focus follows. */
-export const REFUSAL_FOCUS_RING = "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400";
+/** The house keyboard ring (globals.css's `:where(a, button, …):focus-visible` is 2px, offset 2px, the accent `--ps-accent` = #7c3aed =
+ *  violet-600), for a box that is not a link or a button: shown to a keyboard user, not painted for a pointer user whose press the
+ *  focus follows. violet-600 itself: the lighter violet-400 was ~2.7:1 against white, under the 3:1 a focus indicator needs. */
+export const REFUSAL_FOCUS_RING = "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-600";
