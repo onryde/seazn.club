@@ -691,7 +691,8 @@ describe("CK-RR-1 net run rate under DLS or revised overs (ICC 16.10.7, RB2A-20,
 //
 // ICC Men's T20 World Cup 2026 Playing Conditions 21.18 (verbatim, the PC PDF of a0-findings #18): "When No ball has been
 // called, neither batter shall be out under any of the Playing Conditions except clause 34 (Hit the ball twice), clause 37
-// (Obstructing the field) or clause 38 (Run out)." MCC Law 21.18 reads the same with "Laws" for "Playing Conditions".
+// (Obstructing the field) or clause 38 (Run out)." The MCC Laws of Cricket (Law 21.18) are NOT quoted here: their text was
+// never retrieved for this task, so nothing below rests on them (reviewer M3, Task 8b).
 // 21.19.2, the free hit that follows: "the striker can be dismissed only under the circumstances that apply for a No ball,
 // even if the delivery for the free hit is called Wide." 22.9, a wide: "neither batter shall be out under any of the
 // Playing Conditions except clause 35 (Hit wicket), clause 37 (Obstructing the field), clause 38 (Run out) or clause 39
@@ -802,6 +803,21 @@ describe("CK-NB-1 dismissals off a no ball (ICC 21.18, D8)", () => {
     expect(refused).toBe(MODES.length - ICC_21_18.length);
     expect(refused).toBeGreaterThan(0);
     expect(legalPair).toBe(MODES.length);
+  });
+
+  it("CK-NB-1 the red-ball (test) variant is bound the same: bowled off a no ball is refused, run out stands (the engine restricts by delivery, not by format)", () => {
+    // Reviewer M1 (Task 8b): every sweep above is T20. The clause quoted in this file is the limited-overs conditions' (21.18);
+    // the Laws' own text for a red-ball match was not retrieved (M3), so this pins ENGINE behaviour across formats, not a
+    // second source: a refusal that read the cfg's limited-overs shape would pass the T20 sweep and fail here.
+    const redBall = (specs: readonly Spec[]) => foldMatch(cricket, TWO_INNINGS, lineupsFor(TWO_INNINGS), ledger(specs), STRICT_ALL);
+    expect(TWO_INNINGS.ballsPerInnings, "premise: the test variant has no over limit").toBeNull();
+    expect(refusalOf(() => redBall([["core.start"], delivery(0, 1, { extras: NO_BALL, wicket: wicketOf("bowled", "H-p1") })]))).toEqual({
+      code: "INVALID_EVENT",
+      message: '"bowled" cannot dismiss on a no ball',
+    });
+    expect(refusalOf(() => redBall([["core.start"], delivery(0, 1, { extras: NO_BALL, wicket: wicketOf("runout", "H-p1") })]))).toBeNull();
+    // its positive pair: bowled on a legal ball stands in a red-ball match
+    expect(refusalOf(() => redBall([["core.start"], delivery(0, 1, { wicket: wicketOf("bowled", "H-p1") })]))).toBeNull();
   });
 
   it("CK-NB-1 a stored bowled off a no ball (a pre-W2e ledger) still folds on the read path", () => {
@@ -949,6 +965,17 @@ describe("CK-WD-1 dismissals off a wide (ICC 22.9, D8)", () => {
     expect(refused).toBe(MODES.length - ICC_22_9.length);
     expect(refused).toBeGreaterThan(0);
     expect(legalPair).toBe(MODES.length);
+  });
+
+  it("CK-WD-1 the red-ball (test) variant is bound the same: bowled off a wide is refused, stumped stands (the engine restricts by delivery, not by format)", () => {
+    // Reviewer M1 (Task 8b); see the CK-NB-1 red-ball case for why this is engine behaviour and not a second citation.
+    const redBall = (specs: readonly Spec[]) => foldMatch(cricket, TWO_INNINGS, lineupsFor(TWO_INNINGS), ledger(specs), STRICT_ALL);
+    expect(TWO_INNINGS.ballsPerInnings, "premise: the test variant has no over limit").toBeNull();
+    expect(refusalOf(() => redBall([["core.start"], delivery(0, 1, { extras: WIDE, wicket: wicketOf("bowled", "H-p1") })]))).toEqual({
+      code: "INVALID_EVENT",
+      message: '"bowled" cannot dismiss on a wide',
+    });
+    expect(refusalOf(() => redBall([["core.start"], delivery(0, 1, { extras: WIDE, wicket: wicketOf("stumped", "H-p1") })]))).toBeNull();
   });
 
   it("CK-WD-1 a stored bowled off a wide (a pre-W2e ledger) still folds on the read path", () => {
