@@ -146,15 +146,36 @@ const ROOMY_STORAGE_MINUTES = 100_000_000;
 /** Drawn sequences per run of the lifecycle model (the last describe). Each draws a fresh org, two fixtures and one destination. */
 const MODEL_RUNS = 15;
 
-/** How far a C3 test's rig clock jumps: past every row another suite writes at the real now, which is by then past its wall
- *  clock / warming / requested / provision timeout and so excluded by the policy. */
+/** How far a C3 test's rig clock jumps. The jump FREEZES the pool against the passage of time (both reads of an attempt are at
+ *  fixed clocks), and most rows another suite writes at the real now are past their wall clock / warming / requested /
+ *  provision timeout there, so the policy excludes them. NOT every row — measured 2026-10-28 (each file run alone against
+ *  one fresh database, the reservation read taken at this clock), these still COUNT:
+ *   - a composed session left `ending` (or requested / provisioning) with its Machine told to stop. The policy answers
+ *     `grace_expired` at EVERY clock past the grace, and the reservation read counts that as still recording — both
+ *     recordings' whole booking, 600 minutes — until a read or the daily sweep ends the row. No clock jump excludes it. This
+ *     file leaves 6–8 per run (its composed-stop tests, all after the C3 ones); stream-tick.test.ts's R2008 describe leaves
+ *     ~29 and makes them throughout its run, and relay-internal-routes, relay-sweep, stream-auto-stop,
+ *     stream-composed-free-gaps, stream-composed-inputs and phone-live-edge each make or end some while they run;
+ *   - a row anchored LATER than this clock: stream-composed-inputs.test.ts seats sessions ~800 days out, and a session that
+ *     has not started yet, or ended later than this clock, is not ended by it (the reverse never holds: this file's rows
+ *     are past their wall clock at that file's clock).
+ *  CI runs every one of those files in the same job as this one (smoke-db-usecases: `src/server/usecases/[i-z]*`, one
+ *  Postgres, a thread pool), so any of them can make or end such a row between an attempt's baseline read and its
+ *  admission's read: the pool then moves by up to 600 minutes either way. That drift is what `admitAgainstPool` re-measures,
+ *  and why every C3 assertion is judged on the SETTLED attempt alone. */
 const C3_CLOCK_JUMP_MS = 400 * 86_400_000;
 /** One full booking past the rig clock. Every row a C3 test seeds is anchored AT or BEFORE the rig clock and books at most
  *  MAX_DURATION_MINUTES (V410's CHECK caps `max_duration_minutes` there), so the policy has ended every one of them by this
  *  offset — the wall clock is its first rule. */
 const OWN_ROWS_EXPIRED_MS = (MAX_DURATION_MINUTES + 1) * 60_000;
+/** The far edge of `retireC3Rows`' sweep, in days from the real now. Every row a C3 test seats sits within a booking of a rig
+ *  clock C3_CLOCK_JUMP_MS past ITS run's now (an older run's leftover, nearer still), so 30 days past the jump is margin — and
+ *  well short of stream-composed-inputs.test.ts's ~800 days. */
+const C3_RETIRE_BAND_DAYS = C3_CLOCK_JUMP_MS / 86_400_000 + 30;
 /** Admissions tried before a C3 pool that never settles is a red (see `admitAgainstPool`). */
 const POOL_ATTEMPTS = 5;
+/** One `relay.storage_overcommitted` report as the Sentry spy saw it: the error and its context. */
+type OvercommitReport = [Error, { route: string; orgId?: string; extra: Record<string, unknown> }];
 
 /** The DB-wide reservation baseline at a clock where this test's own rows cannot count (OWN_ROWS_EXPIRED_MS), read through
  *  the admission's own read — observed, never typed. */
@@ -167,15 +188,18 @@ async function foreignBaseline(r: { deps: SessionDeps }): Promise<number> {
 
 /** Rows the C3 tests seat at the rig's far-future clock, retired. A run killed before its `finally` leaves them active, and
  *  at the next run's clock (minutes later) a warming one still COUNTS while the baseline — measured a booking later — does
- *  not, so every attempt would disagree with its own snapshot. Nothing else in the tree anchors a session this far ahead
- *  (the only far-future ticks are this file's C3 tests), so the predicate cannot touch another suite's rows. */
+ *  not, so every attempt would disagree with its own snapshot. The sweep is BANDED to this file's clock (C3_RETIRE_BAND_DAYS):
+ *  stream-composed-inputs.test.ts also anchors sessions far ahead — a LIVE one ~800 days out in its "RUNNING stream" STG case —
+ *  and CI runs it beside this file on one database, so an unbounded `> now() + 30 days` can retire that test's running stream
+ *  from under it. */
 async function retireC3Rows(ids?: string[]): Promise<void> {
   if (ids) {
     if (ids.length) await sql`update fixture_stream_sessions set state = 'completed', ended_at = now() where id in ${sql(ids)} and state in ${sql([...ACTIVE_STATES])}`;
     return;
   }
   await sql`update fixture_stream_sessions set state = 'completed', ended_at = now()
-             where state in ${sql([...ACTIVE_STATES])} and coalesce(started_at, created_at) > now() + interval '30 days'`;
+             where state in ${sql([...ACTIVE_STATES])} and coalesce(started_at, created_at) > now() + interval '30 days'
+               and coalesce(started_at, created_at) < now() + make_interval(days => ${C3_RETIRE_BAND_DAYS})`;
 }
 
 /** A C3 admission, made HERMETIC (lane-close sweep; Task 11 report "C3 + B", review G8). The pool is ONE account-wide figure
@@ -183,15 +207,17 @@ async function retireC3Rows(ids?: string[]): Promise<void> {
  *  org, because recording storage is one Cloudflare account — so it is NOT scoped to this test's org. A row another suite
  *  wrote between the old one-off measurement and the admission's read flipped these tests either way (G8: 1 in 4 scoped
  *  runs). Three moves make every ASSERTED admission exact:
- *   1. the rig clock is FROZEN far past every other file's rows (C3_CLOCK_JUMP_MS), so only a concurrent WRITE can move
- *      the reservation set — never the passage of time;
+ *   1. the rig clock is FROZEN (C3_CLOCK_JUMP_MS), so only a concurrent WRITE can move the reservation set — never the
+ *      passage of time. Other suites' rows can still count at that clock (C3_CLOCK_JUMP_MS lists which); they hold still
+ *      between an attempt's two reads unless one is made or ended inside that window;
  *   2. the foreign baseline is measured INSIDE the admission call — the fake's `storageUsage`, a few statements before the
  *      admission's own read — at a clock where this test's rows cannot count (`foreignBaseline`), so whether THEY count
  *      is never assumed by the measurement;
  *   3. the admission RECORDS what it read: its storage snapshot is written in the transaction that decides. An attempt
  *      counts only when that snapshot reserved exactly baseline + `ownReserved` — the minutes the test's claim says its
  *      own rows hold. Otherwise a concurrent write moved the pool inside the window: the attempt proves nothing either
- *      way, any session it made is retired, and the admission is measured again, at most POOL_ATTEMPTS times.
+ *      way — nor do its overcommit reports, or its silence — any session it made is retired, and the admission is measured
+ *      again, at most POOL_ATTEMPTS times.
  *  A pool that never settles is a RED with every attempt's numbers, never a pass — and a false claim (the policy stops
  *  counting a row it should) can never settle, so it reds the same way; `after` (the baseline re-read once the attempt
  *  returned) tells the two apart in the message: a baseline stable across every attempt is not drift. */
@@ -205,6 +231,10 @@ async function admitAgainstPool(
   /** `relay.storage_overcommitted` reports made by the SETTLED attempt alone. A discarded attempt read a pool that moved under
    *  it, so its report (or silence) is that drifted read's, not the settled admission's (CI run 40688809103: one stray report). */
   overcommitReports: number;
+  /** Those reports themselves (`overcommitReports` is their count), for a test that reads the settled admission's numbers. A
+   *  discarded attempt may have reported (drifted UP: a more negative read, E1b) or stayed silent (drifted DOWN past the
+   *  shortfall: a non-negative read, E1c), so neither "the last report" nor "one report per attempt" is the settled one's. */
+  settledReports: OvercommitReport[];
 }> {
   const at = r.deps.now();
   const tried: { foreign: number; reserved: number; after: number }[] = [];
@@ -224,7 +254,8 @@ async function admitAgainstPool(
       const callsBefore = sentry.captureError.mock.calls.length;
       const outcome = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps).then(
         (made) => ({ made, refusal: null as unknown }), (refusal: unknown) => ({ made: null, refusal }));
-      const overcommitReports = sentry.captureError.mock.calls.slice(callsBefore).filter(([, ctx]) => (ctx as { route?: string }).route === "relay.storage_overcommitted").length;
+      const reports = sentry.captureError.mock.calls.slice(callsBefore)
+        .filter(([, ctx]) => (ctx as { route?: string }).route === "relay.storage_overcommitted") as OvercommitReport[];
       const snaps = await sql<{ reserved: number; headroom: number }[]>`
         select reserved_minutes as reserved, headroom_minutes as headroom from stream_storage_snapshots
          where id > ${mark}::bigint and source = 'admission' and taken_at = ${at} and used_minutes = ${pool.used} and limit_minutes = ${limit}`;
@@ -233,7 +264,9 @@ async function admitAgainstPool(
       expect(snaps, "one admission, one snapshot").toHaveLength(1);
       const snapshot = snaps[0]!;
       tried.push({ foreign, reserved: snapshot.reserved, after: await foreignBaseline(r) });
-      if (snapshot.reserved === foreign + pool.ownReserved) return { ...outcome, snapshot, attempts: tried.length, retired, overcommitReports };
+      if (snapshot.reserved === foreign + pool.ownReserved) {
+        return { ...outcome, snapshot, attempts: tried.length, retired, overcommitReports: reports.length, settledReports: reports };
+      }
       if (outcome.made) {
         retired.push(outcome.made.sessionId);
         await retireC3Rows([outcome.made.sessionId]);
@@ -490,9 +523,11 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       const refused = await admitAgainstPool(r, { ...pool, ownReserved });
       expect(refused.snapshot.headroom, "the admission's own figure is NEGATIVE").toBe(-SHORT);
       expect(refused.refusal, "the refusal is the one a short pool always gave").toMatchObject({ status: 503, code: "storage_exhausted" });
-      const reports = overcommit();
-      expect(reports.length, "once per admission read (admitAgainstPool re-measures a drifting pool: one report per attempt)").toBe(refused.attempts);
-      const [err, ctx] = reports[reports.length - 1]! as [Error, { route: string; orgId?: string; extra: Record<string, unknown> }];
+      // Once per admission READ, judged on the SETTLED attempt alone: a discarded attempt read a pool that moved under it, and
+      // reported its own, more negative read (drifted UP, E1b) or nothing at all (drifted DOWN by SHORT or more, E1c) — so
+      // neither the count over every attempt nor the last report overall is the settled admission's.
+      expect(refused.overcommitReports, "once per admission read: the settled admission reported exactly once").toBe(1);
+      const [err, ctx] = refused.settledReports[0]!;
       expect(err).toBeInstanceOf(Error);
       expect(ctx.extra, "NUMBERS ONLY: exactly these keys, each a number or the source word").toEqual({
         source: "admission", headroomMinutes: -SHORT, usedMinutes: pool.used, limitMinutes: expect.any(Number),
@@ -500,7 +535,7 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       });
       expect(ctx.extra.reservingSessions as number, "counts the three seated rows at least (foreign rows may add)").toBeGreaterThanOrEqual(others.length);
       expect(ctx.orgId, "no org rides along").toBeUndefined();
-      const wire = JSON.stringify(reports.map((x) => x[1]));
+      const wire = JSON.stringify(overcommit().map((x) => x[1]));   // every attempt's reports, a discarded one's too
       for (const id of [...others, r.auth.orgId, r.fixtureId]) expect(wire, "no id in the report").not.toContain(id);
 
       // The positive pair: the same rows retired, a pool with room — the admission succeeds and reports NOTHING.
@@ -557,6 +592,91 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       expect(admitted.snapshot.headroom).toBeGreaterThanOrEqual(0);
     } finally {
       await retireC3Rows(drift);
+    }
+  });
+
+  // E1's first half (the refusal) under drift both ways — what concurrent suites making and ending stop-marked composed sessions
+  // (600 minutes at any clock, see C3_CLOCK_JUMP_MS) do to it in CI. Three reserving rows are SEATED after attempt 0's baseline
+  // read (its admission finds them: drifted UP, a more negative read that reports) and RETIRED after attempt 1's (its admission
+  // finds them gone: drifted DOWN, headroom −SHORT plus their minutes — room to ADMIT, its session retired, and NO report).
+  // Attempt 2 settles. "One report per attempt" reads 2 against 3 (the false claim E1 made until 2026-10-28), the FIRST report
+  // is attempt 0's, and only the settled attempt's own reports are the claim. Each drift row is warmed a whole booking before
+  // the rig clock and anchored at the baseline's, so it holds its whole booking at both clocks: either drift outweighs one
+  // stray concurrent composed row's whole claim in the same window.
+  it("E1c: a discarded attempt the pool drifted DOWN under reads non-negative and reports NOTHING; the settled refusal reports once, and its report is the one read", async () => {
+    await retireC3Rows();
+    const r = await rig({ credits: 2 });
+    r.tick(C3_CLOCK_JUMP_MS);
+    const rigNow = r.deps.now();
+    const baselineAt = new Date(rigNow.getTime() + OWN_ROWS_EXPIRED_MS);
+    const others: string[] = [];
+    const drift: string[] = [];
+    const driftRigs = [await rig({ credits: 1 }), await rig({ credits: 1 }), await rig({ credits: 1 })];
+    const overcommit = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.storage_overcommitted");
+    const seat = async (o: Awaited<ReturnType<typeof rig>>, startedAt: Date, warmingAt: Date | null) => {
+      const [s] = await sql<{ id: string }[]>`
+        insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at, warming_at,
+                                             sport_key, competition_id, division_id, entitlement_via_override)
+        select ${o.fixtureId}, ${o.auth.orgId}, 'passthrough', 'live', ${o.target.id}, ${o.auth.userId}, ${startedAt}, ${warmingAt},
+               d.sport_key, d.competition_id, f.division_id, true
+          from fixtures f join divisions d on d.id = f.division_id where f.id = ${o.fixtureId}
+        returning id`;
+      return s!.id;
+    };
+    try {
+      for (let i = 0; i < 3; i++) others.push(await seat(await rig({ credits: 1 }), rigNow, null));
+      const ownReserved = await reservedBy(others);
+      const SHORT = 10;   // E1's shortfall
+      const pool = { used: 100, headroomBeforeOwn: ownReserved - SHORT };
+      sentry.captureError.mockClear();
+      // `r` holds two credits: the drifted-down attempt is ADMITTED (its session then retired), and the settled one must still
+      // reach the pool rather than stop at no_credits.
+      const refused = await admitAgainstPool(r, { ...pool, ownReserved }, async (attempt) => {
+        if (attempt === 0) for (const o of driftRigs) drift.push(await seat(o, baselineAt, new Date(rigNow.getTime() - MAX_DURATION_MINUTES * 60_000)));
+        if (attempt === 1) await retireC3Rows(drift);
+      });
+      expect(drift, "the drift seated its rows on attempt 0").toHaveLength(driftRigs.length);
+      expect(refused.attempts, "both drifts forced a retry (else nothing here was discarded)").toBeGreaterThanOrEqual(3);
+      expect(overcommit().length, "two reports at least: the drifted-UP attempt's own read, and the settled one's").toBeGreaterThanOrEqual(2);
+      expect(refused.retired.length, "the drifted-DOWN read had ROOM: that discarded attempt was admitted, its session retired").toBeGreaterThanOrEqual(1);
+      expect(overcommit().length, "…and reported NOTHING: fewer reports than attempts").toBeLessThan(refused.attempts);
+      expect(refused.snapshot.headroom, "the settled admission's own figure is NEGATIVE").toBe(-SHORT);
+      expect(refused.refusal).toMatchObject({ status: 503, code: "storage_exhausted" });
+      expect(refused.overcommitReports, "once per admission read: the settled refusal reported exactly once").toBe(1);
+      const [, ctx] = refused.settledReports[0]!;
+      expect(ctx.extra, "the report is the SETTLED read's").toMatchObject({ source: "admission", headroomMinutes: -SHORT, reservedMinutes: refused.snapshot.reserved });
+    } finally {
+      await retireC3Rows([...others, ...drift]);
+    }
+  });
+
+  // `retireC3Rows`' sweep is BANDED to this file's clock: stream-composed-inputs.test.ts runs a LIVE session ~800 days out (its
+  // FAR_MS) beside this file in CI, and an unbounded sweep would retire it mid-test. The row past the band sits a day beyond its
+  // edge, not at 800 days — a live row there would itself move that file's pool. The positive pair: a row at the C3 clock IS
+  // retired, so the band is not simply empty.
+  it("retireC3Rows' sweep retires a row at the C3 clock and leaves one a day past its band (short of stream-composed-inputs' ~800 days) running", async () => {
+    const COMPOSED_INPUTS_FAR_DAYS = 800;   // stream-composed-inputs.test.ts FAR_MS
+    expect(C3_RETIRE_BAND_DAYS + 1, "PREMISE: the band ends short of stream-composed-inputs' clock").toBeLessThan(COMPOSED_INPUTS_FAR_DAYS);
+    const seated: { id: string; ms: number }[] = [];
+    try {
+      for (const ms of [C3_CLOCK_JUMP_MS, (C3_RETIRE_BAND_DAYS + 1) * 86_400_000]) {
+        const o = await rig({ credits: 1 });
+        const [s] = await sql<{ id: string }[]>`
+          insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
+                                               sport_key, competition_id, division_id, entitlement_via_override)
+          select ${o.fixtureId}, ${o.auth.orgId}, 'passthrough', 'live', ${o.target.id}, ${o.auth.userId}, ${new Date(Date.now() + ms)},
+                 d.sport_key, d.competition_id, f.division_id, true
+            from fixtures f join divisions d on d.id = f.division_id where f.id = ${o.fixtureId}
+          returning id`;
+        seated.push({ id: s!.id, ms });
+      }
+      await retireC3Rows();
+      const states = await sql<{ id: string; state: string }[]>`select id, state from fixture_stream_sessions where id in ${sql(seated.map((x) => x.id))}`;
+      expect(states, "both rows read back").toHaveLength(2);
+      expect(states.find((x) => x.id === seated[0]!.id)?.state, "a row at this file's C3 clock is retired").toBe("completed");
+      expect(states.find((x) => x.id === seated[1]!.id)?.state, "a row past the band is NOT this file's to retire").toBe("live");
+    } finally {
+      if (seated.length) await sql`update fixture_stream_sessions set state = 'completed', ended_at = now() where id in ${sql(seated.map((x) => x.id))} and state = 'live'`;
     }
   });
 
