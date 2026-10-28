@@ -193,10 +193,27 @@ describe("R157 labels and help come through the dictionary, in all four locales"
     expect(judged).toBe(declared(cricket, "superOverStillTied").enum!.length);
   });
 
-  it("R157 the help for 'most boundaries' says what the engine counts: ball-by-ball boundaries only, a summary innings none", () => {
+  // The caveat the engine's own behaviour makes necessary (the web pad never sends `boundaries`, so a summary innings counts
+  // none under `boundary_count`), required of the help in EVERY locale: the two phrases each language uses for "ball by ball"
+  // and "summary" are the copy's, typed here because they are what the help must say, not what the code under test says.
+  const CAVEAT: Record<string, [RegExp, RegExp]> = {
+    en: [/ball by ball/i, /summary/i],
+    es: [/bola a bola/i, /resumen/i],
+    fr: [/balle par balle/i, /résumé/i],
+    nl: [/bal voor bal/i, /samenvatting/i],
+  };
+  it("R157 the help for 'most boundaries' says what the engine counts, in every locale: ball-by-ball boundaries only, a summary innings none", () => {
     const field = fieldOf("cricket", "superOverStillTied")!;
-    expect(field.help).toMatch(/ball by ball/i);
-    expect(field.help).toMatch(/summary/i);
+    let judged = 0;
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      const text = LOCALES[locale]![field.helpKey!]!;
+      const [ballByBall, summary] = CAVEAT[locale]!;
+      expect(text, `${locale}: names ball-by-ball scoring`).toMatch(ballByBall);
+      expect(text, `${locale}: names a summary innings`).toMatch(summary);
+      judged++;
+    }
+    expect(judged, "all four locales were judged").toBe(Object.keys(LOCALES).length);
+    expect(field.help, "the English fallback is the same copy").toBe(LOCALES.en![field.helpKey!]);
   });
 
   // M2 (review): the rolling-subs help names the variants that set it. The set is the ENGINE's (the football presets that carry
