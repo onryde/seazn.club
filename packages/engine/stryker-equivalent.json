@@ -779,7 +779,7 @@
       "mutant": "src/sports/generic/generic.ts:241:7 ConditionalExpression → false",
       "original": "reason === \"bye\"",
       "line": "if (reason === \"bye\") return null;",
-      "reason": "The condition is never true where it runs: awardedLine passes line 242 only with a held forfeitAward, which only generic's core.forfeit arm writes (generic.ts:677, `git grep -n forfeitAward packages/engine/src/sports/generic` names no other writer), and a core.forfeit's reason is a FORFEIT_REASON, never `bye` (CoreForfeit refuses it: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'); a bye is the system's award and is never folded through apply. Mutating it to `false` removes a branch nothing takes. It stays to narrow AwardReason to ForfeitReason for genericForfeitCredit."
+      "reason": "The condition is never true where it runs: awardedLine passes line 239 only with a held forfeitAward, which only generic's core.forfeit arm writes (generic.ts:672, `git grep -n forfeitAward packages/engine/src/sports/generic` names no other writer), and a core.forfeit's reason is a FORFEIT_REASON, never `bye` (CoreForfeit refuses it: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'); a bye is the system's award and is never folded through apply. Mutating it to `false` removes a branch nothing takes. It stays to narrow AwardReason to ForfeitReason for genericForfeitCredit."
     },
     {
       "mutant": "src/sports/generic/generic.ts:241:18 StringLiteral → \"\"",

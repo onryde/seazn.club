@@ -7,6 +7,42 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-28 — a generic division's config no longer carries `progressScore`
+
+The generic sport (the fallback for a sport Seazn does not model) had a
+`progressScore` key in its division `config`, a flag carried over from the v1
+stepladder import. Nothing ever read it: it changed no score, no standing and
+no screen. It is removed.
+
+**What changed.** `config.progressScore` is no longer part of a generic
+division's config. A request that still sends it is not refused: the key is
+dropped, and the rest of the config is read as before.
+
+| Path | Before | Now |
+|---|---|---|
+| `POST /api/v1/competitions/{id}/divisions` and `PATCH /api/v1/divisions/{id}`, a generic division's `config` | `progressScore` was accepted (a boolean, default `false`) and stored | accepted and dropped: 200 as before, and the stored `config` has no `progressScore` |
+| `GET /api/v1/divisions/{id}`, `config` | `progressScore: false` (or `true`) present | absent once the stored copy is removed (see below) |
+
+**What replaces it.** Nothing: the key did nothing. Stop sending it, and stop
+reading it.
+
+**What a consumer sees.** No error. A client that sends the old default
+(`"progressScore": false`) keeps working unchanged. A client that reads
+`config.progressScore` gets `undefined` where it used to get a boolean.
+
+**Data.** Existing stored copies are removed by W2e's data migration (Task
+13b), which runs before the deploy. Until it has run, a stored copy is still
+there and still ignored. The generic sport's fold epoch is raised from 3 to 4
+(every recorded match state embeds its config), so the server's epoch gate
+refuses a native scoring client that still sends epoch 3 for a generic fixture
+until it updates.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, decision D6. The pinning test is
+`packages/engine/src/sports/generic/w2e-generic.test.ts`.
+
 ## 2026-10-28 — a carrom adjustment may not exceed the game target
 
 A carrom umpire adjustment (Laws 51 and 55: a penalty, or points due) moves one

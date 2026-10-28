@@ -65,7 +65,8 @@ describe("D6 generic declares no progressScore", () => {
   });
 
   it("D6 generic declares no progressScore: a fresh parse of every shipped variant carries exactly the keys generic still declares", () => {
-    // Read from the schema's own declaration, so a key added later moves this with it.
+    // The declared keys are read from the schema and compared with a typed literal: a key added to generic later turns this red,
+    // and whoever adds it updates the list (and the preset expectation below) on purpose.
     const declared = Object.keys(z.toJSONSchema(generic.configSchema, { io: "input", target: "draft-2020-12" }).properties ?? {}).sort();
     expect(declared).toEqual(["abandonPolicy", "allowDraws", "points", "resultMode"]);
     for (const [name, preset] of Object.entries(generic.variants)) {

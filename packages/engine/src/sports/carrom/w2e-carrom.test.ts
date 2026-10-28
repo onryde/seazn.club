@@ -120,6 +120,7 @@ describe("CA-AD-1 carrom.game.adjust is bounded by gameTo on the write path (SC-
         const out = refusalOf(() => strictFold([...high, adjust(side, -(g + 1))], c));
         expect(out?.code, `${label} -${g + 1}`).toBe("ADJUST_OUT_OF_RANGE");
         expect(out?.data, `${label} -${g + 1}`).toEqual({ delta: -(g + 1), gameTo: g });
+        expect(out?.message, `${label} -${g + 1}`).toBe(REFUSAL_MESSAGE);
         // -g: inside the range, so it is NOT the new refusal. The existing rule stops it (the score is g-1).
         const below = refusalOf(() => strictFold([...high, adjust(side, -g)], c));
         expect(below?.code, `${label} -${g}`).toBe("INVALID_EVENT");

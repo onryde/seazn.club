@@ -7,6 +7,15 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-10-28",
+    title: "Breaking: a generic division's config no longer carries progressScore",
+    lines: [
+      "The generic sport's division config had a progressScore flag, carried over from the v1 stepladder import. Nothing ever read it, so it is removed: GET /divisions/{id} stops returning config.progressScore once the stored copies are migrated.",
+      "POST /competitions/{id}/divisions and PATCH /divisions/{id} do not refuse a config that still sends it: the key is dropped and the rest of the config is read as before. Stored copies are removed by the W2e data migration, which runs before the deploy. The generic sport's fold epoch is now 4: a native scoring client still on epoch 3 must update.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
     title: "Breaking: a carrom adjustment may not exceed the game target",
     lines: [
       "A carrom.game.adjust is now refused when its delta is more than gameTo points either way: 25 by default, 29 for the club-29 variant, or the match's own game target. The scorer's app already offered exactly that range.",
