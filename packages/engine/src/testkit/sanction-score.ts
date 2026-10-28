@@ -23,9 +23,10 @@ export const SANCTION_SWEEP_EVENTS = 400;
  * seeds draw one within the first few events (a badminton walk then never reaches a rally). So is a sanction at a level
  * the module declares as match-ending (W2e X-SE-1): the generator's next draw is its ending, a forfeit, so taking it would
  * end the walk there too. Every event taken is the generator's own legal draw for the state it was drawn in. `states[i]`
- * is the state after `events[i]`.
+ * is the state after `events[i]`. Exported for its guard (`sanction-ending.test.ts`, Task 3 review M1): a walk of a module
+ * that declares an end level goes past the first such card instead of stalling on the forfeit that answers it.
  */
-function playWalk(module: AnySportModule, cfg: unknown, lineups: LineupPair, seed: number): { events: EventEnvelope[]; states: unknown[] } {
+export function playWalk(module: AnySportModule, cfg: unknown, lineups: LineupPair, seed: number): { events: EventEnvelope[]; states: unknown[] } {
   if (module.arbitraryEvent === undefined) throw new Error(`${module.key} has no arbitraryEvent to walk`);
   const rng = mulberry32(seed);
   let state: unknown = module.init(cfg, lineups);

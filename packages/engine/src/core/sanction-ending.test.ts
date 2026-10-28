@@ -27,7 +27,15 @@ import { resolvePositions } from "../sport/catalog.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
 import { buildStream, defaultLineupPair, makeEnvelope } from "../testkit/helpers.ts";
-import { expectSanctionMovesNoScore, sanctionEventTypeOf, sanctionLevelsOf } from "../testkit/sanction-score.ts";
+import {
+  expectSanctionMovesNoScore,
+  playWalk,
+  SANCTION_SWEEP_EVENTS,
+  SANCTION_SWEEP_SEEDS,
+  sanctionEventTypeOf,
+  sanctionLevelsOf,
+} from "../testkit/sanction-score.ts";
+import type { AnySportModule } from "../sport/module.ts";
 
 // ---------------------------------------------------------------------------
 // The stub sport. First side to TARGET points wins. `stub.sanction` is a record only (it moves no score, like every
@@ -538,6 +546,54 @@ describe("X-SE-2 a sanction alone moves no score (anti-goal 4)", () => {
     // Anti-vacuity: zero (module, level) pairs, or zero live states, is a failure.
     expect(swept.length).toBeGreaterThan(0);
     expect(states).toBeGreaterThan(0);
+  });
+
+  it("X-SE-2 the sweep's walk goes PAST an end-level card: it is redrawn, so the walk still plays to its decision (Task 3 review M1)", () => {
+    // A walk that took a black card or a default would be answered by the generator's forfeit, which the walk redraws, so
+    // it would stall there until its draw budget ran out: the sweep would then check only the states before the card,
+    // silently. Every walk of a declaring module must therefore end decided, or at its full length, with no end-level
+    // card in it — and the generator must have OFFERED it one (counted here, through the module's own declaration).
+    // The seeds are the sweep's own and more: a black card is rare in a badminton walk, and none of the sweep's six seeds
+    // draws one, so the sweep's seeds alone would leave badminton's redraw unexercised.
+    const seeds = Array.from({ length: 40 }, (_, i) => i + 1);
+    expect(seeds, "the sweep's own walks are among these").toEqual(expect.arrayContaining([...SANCTION_SWEEP_SEEDS]));
+    const walks: Record<string, number> = {};
+    const offered: Record<string, number> = {};
+    forEachSport(({ key, module }) => {
+      const decl = module.sanctionEnding;
+      if (decl === undefined || decl.endLevels.length === 0) return;
+      const isEnding = (e: { type: string; payload: unknown }) =>
+        e.type === decl.eventType && decl.endLevels.includes((e.payload as { level?: string }).level ?? "");
+      walks[key] = offered[key] = 0;
+      // The same module with a counting generator: Object.create keeps every other method and its `this`.
+      const counted = Object.create(module, {
+        arbitraryEvent: {
+          value: (state: unknown, rng: () => number) => {
+            const e = module.arbitraryEvent!(state, rng);
+            if (e !== null && isEnding(e)) offered[key]!++;
+            return e;
+          },
+        },
+      }) as AnySportModule;
+      for (const { name, cfg } of declaredCfgs(module)) {
+        const lineups = defaultLineupPair(resolvePositions(module, cfg));
+        for (const seed of seeds) {
+          const where = `${key} cfg ${name} seed ${seed}`;
+          const { events, states } = playWalk(counted, cfg, lineups, seed);
+          expect(events.filter(isEnding), `${where}: the walk took an end-level card`).toEqual([]);
+          const decided = states.length > 0 && module.outcome(states.at(-1)) !== null;
+          expect(decided || events.length === SANCTION_SWEEP_EVENTS, `${where}: the walk stopped after ${events.length} events, undecided`).toBe(true);
+          walks[key]++;
+        }
+      }
+      expect(offered[key], `${key}: no walk was offered a ${decl.endLevels.join("/")} card, so the redraw went unexercised`).toBeGreaterThan(0);
+    });
+    // The declaring modules are spec §5.2's (badminton, tennis), not a list typed here twice.
+    expect(Object.keys(walks).sort()).toEqual(
+      Object.keys(SPEC_5_2).filter((k) => (SPEC_5_2[k]?.endLevels.length ?? 0) > 0).sort(),
+    );
+    // Counted at the pin (2026-10-28): badminton 160 walks, 8 offered a black card; tennis 200 walks, 31 offered a default.
+    expect(Object.values(walks).every((n) => n > 0), JSON.stringify({ walks, offered })).toBe(true);
   });
 });
 
