@@ -799,7 +799,7 @@ Branch streams carry `seed` in `[BRANCH_SEED_BASE, FLOOR_SEED_STRIDE)` (90001
 and up): above every generator seed, below the floor's stride, so the floor's
 reproduction and keep-rule never count them. They are appended streams, so they
 owe no version bump. They add configs, appended at the end of `configs`; no
-existing stream or config changes. The eleven stories today: football
+existing stream or config changes. The thirteen stories today: football
 `shootoutAttempts` (and its sudden-death arm), hockey `q4_stands`, carrom and
 generic `share`, the `award` abandon with a withdrawal's expunge for football,
 hockey and ice hockey, football's level (draw) arm, ice hockey's level
@@ -808,7 +808,16 @@ can stand there (R16-3), and tennis's `set.tiebreakWinBy` (W2e TN-SS-2): short
 sets whose tie-break closes 5–4 on its deciding point (`short-sets#90011`,
 recorded under the config Task 5's `short-sets#1` already names). Its verdict
 needs no refold: a tie-break closed one point clear of the runner-up is a
-margin of one by itself, and the match's two refuses the same summary. Five verdicts (the two award expunge arms, the
+margin of one by itself, and the match's two refuses the same summary. A
+summary never reaches the point fold, though, so two more tennis stories PLAY
+their tie-breaks (W2e T13 fix round 1): `short-sets#90012` closes 5–4 on a
+`tennis.point`, and `short-sets-final-tiebreak-10#90013` (both margins in one
+config) plays the decider's tie-break through 10–9 to 11–9. A generator walk
+plays a tie-break point by point about never within `WALK_MAX`, so these two
+builders step the FOLD instead (`stepFold`): every event is folded strictly
+from the state the kernel holds, the winners kept level up to the score the
+rule is about and then one side's. No score line is typed: the fold decides
+when the set, the tie-break and the match end. Five verdicts (the two award expunge arms, the
 4th quarter, the flagged level award `reachesLevelAwardFlagged` and the football
 level draw `reachesAwardLevelDraw`) carry no replay differential: an abandon is
 applied only to a match still in play, so a ledger that ends on one and holds a
