@@ -11,9 +11,9 @@ import { YOUTUBE_CONSENT_VERSION, YOUTUBE_PRIVACIES, youtubeLanding } from "@/li
 import { pkceChallenge, pkceVerifier } from "@/server/external-play/pkce";
 import { log } from "@/server/logger";
 import { streamingPageOffer } from "@/server/stream-panel-context";
-import { PENDING_LIFETIME_SECONDS, insertPending, reconnectTarget, unusableConnectKeys } from "@/server/youtube/connect-flow";
+import { PENDING_LIFETIME_SECONDS, insertPending, offerRefusal, reconnectTarget, seatFrozen, unusableConnectKeys } from "@/server/youtube/connect-flow";
 import { youtubeDriver } from "@/server/youtube/driver";
-import { YouTubeError } from "@/server/youtube/port";
+import { YouTubeError, type YouTubePort } from "@/server/youtube/port";
 
 /** Short-lived cookies that only need to survive the round trip to Google and back — the same shape as the Lichess flow's.
  *  They carry the `state` and the PKCE verifier and nothing else: the intent (org, user, consent) is the pending row. */
@@ -47,10 +47,12 @@ function originIsOurs(req: Request): boolean {
 
 /** Start connecting a YouTube channel (a form POST from the Streaming page's consent step): record the consent, then send the
  *  browser to Google (or, in CI, to the fake authorize hop). Every browser-facing refusal that is not a bad request lands on
- *  the Streaming page with `?youtube=<code>`; a bad request (no consent, a viewer, a foreign org) is the plain status. */
+ *  the Streaming page with `?youtube=<code>` - a form POST is a top-level navigation, so a bare status would be raw JSON in a tab;
+ *  a bad request (no consent, a viewer, a foreign org) is the plain status. */
 export async function POST(req: Request) {
   return handler(async () => {
-    if (!originIsOurs(req)) throw new HttpError(403, "Cross-origin request refused");
+    // A form from another origin: a landing, not a JSON 403 in the person's tab. Nothing is read or written first.
+    if (!originIsOurs(req)) return redirectLocal(youtubeLanding("forbidden"), 303);
     const user = await requireUser();
 
     const fd = await req.formData().catch(() => null);
@@ -64,11 +66,13 @@ export async function POST(req: Request) {
     if (!role) throw new HttpError(404, "Not found");
     if (!(EDITOR_ROLES as readonly string[]).includes(role)) throw new HttpError(403, "Only an owner or admin can connect YouTube");
 
+    // An over-quota admin seat is read-only (doc 10 §2.4), here as on the v1 routes: a frozen admin must not connect a channel.
+    if (await seatFrozen(body.orgId, user.id)) return redirectLocal(youtubeLanding("forbidden"), 303);
+
     // The Streaming page is offered only to an org entitled to the relay, on a deployment that can start a stream. The page and the
     // nav ask `streamingPageOffered`, which is derived from this very function, so a hand-made POST gets what the page would not offer.
-    const offer = await streamingPageOffer(body.orgId);
-    if (offer === "not_entitled") return redirectLocal(youtubeLanding("forbidden"), 303);
-    if (offer === "not_configured") return redirectLocal(youtubeLanding("not_configured"), 303);
+    const refused = offerRefusal(await streamingPageOffer(body.orgId));
+    if (refused) return redirectLocal(youtubeLanding(refused), 303);
 
     // D7: ONE consent per connection. A reconnect of a connection whose consent is on the CURRENT text needs no new tick (its
     // own record is carried forward); a first connect, or a connection consented to older wording, must tick the box.
@@ -84,11 +88,21 @@ export async function POST(req: Request) {
       return redirectLocal(youtubeLanding("not_configured"), 303);
     }
 
+    // Which YouTube this process talks to is chosen by YOUTUBE_DRIVER, and a misspelt value cannot build a driver. Found HERE, before
+    // the redirect, it is a clean landing; found at the callback (which stays defensive) the state is already spent and it is a 500.
+    let driver: YouTubePort;
+    try {
+      driver = youtubeDriver();
+    } catch {
+      log.error({ orgId: body.orgId }, "youtube connect: YOUTUBE_DRIVER names no driver this process can build; nobody was sent to Google");
+      return redirectLocal(youtubeLanding("not_configured"), 303);
+    }
+
     const state = randomBytes(32).toString("base64url");
     const verifier = pkceVerifier();
     let authorizeUrl: string;
     try {
-      authorizeUrl = youtubeDriver().authorizeUrl({ state, codeChallenge: pkceChallenge(verifier), redirectUri: youtubeRedirectUri(req) });
+      authorizeUrl = driver.authorizeUrl({ state, codeChallenge: pkceChallenge(verifier), redirectUri: youtubeRedirectUri(req) });
     } catch (err) {
       // The live driver refuses, synchronously, when Seazn's own Google client config is missing: a clean landing, not a 500.
       if (err instanceof YouTubeError && err.reason === "notConfigured") {

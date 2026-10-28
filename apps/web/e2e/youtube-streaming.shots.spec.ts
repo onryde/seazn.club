@@ -205,29 +205,51 @@ async function addKeyDestination(page: Page, orgId: string, label: string): Prom
 /** Channel ids unique to this run: the fake numbers its fresh channels from 1, and the database outlives it. */
 const channel = (title: string) => ({ id: `UC${randomUUID().replace(/-/g, "").slice(0, 22)}`, title });
 
-const offered = new WeakMap<Page, { id: string; title: string }[]>();
-/** Tell the fake YouTube which channels the NEXT grant (the one this OAuth `state` mints) has, before the browser reaches the hop. The
- *  route is installed once per page; a later call only changes what it offers. */
+/** What the helper below was last told to offer for a page, and how many connects it has served. */
+const offers = new WeakMap<Page, { channels: { id: string; title: string }[]; fired: number }>();
+/** Tell the fake YouTube which channels the NEXT grant (the one this OAuth `state` mints) has, BEFORE the browser follows the redirect to
+ *  the fake authorize hop. The route is installed once per page; a later call only changes what it offers.
+ *
+ *  It routes the ORIGINAL form POST to `/api/youtube/connect` - the only request of this flow Playwright hands to a handler. The hop that
+ *  follows is a 303 REDIRECT target, and a route handler is called for the first URL of a redirect chain only: a handler on
+ *  `fake-authorize` never ran, so the fake fell back to "Fake Channel n" and every step below that needs a chosen channel was inert. So:
+ *  let the start run with `maxRedirects: 0`, read the `state` out of its Location, post the control `setChannels` for that state, then
+ *  fulfil the browser with the very response the start gave (303, Location and both OAuth cookies intact). `**` + the exact path, so the
+ *  callback (`/api/youtube/connect/callback`) is not matched. `connectThroughConsent` asserts the helper ran once per connect. */
 async function offerChannels(page: Page, channels: { id: string; title: string }[]): Promise<void> {
-  const installed = offered.has(page);
-  offered.set(page, channels);
-  if (installed) return;
-  await page.route("**/api/youtube/connect/fake-authorize**", async (route) => {
-    const state = new URL(route.request().url()).searchParams.get("state");
-    const res = await page.request.post("/api/internal/youtube/fake", { data: { op: "setChannels", channels: offered.get(page), state } });
+  const installed = offers.get(page);
+  if (installed) {
+    installed.channels = channels;
+    return;
+  }
+  const slot = { channels, fired: 0 };
+  offers.set(page, slot);
+  await page.route("**/api/youtube/connect", async (route) => {
+    const start = await route.fetch({ maxRedirects: 0 });
+    expect(start.status(), "SETUP: the start answers with the 303 to the authorize hop").toBe(303);
+    const state = new URL(start.headers()["location"] ?? "", "http://localhost").searchParams.get("state");
+    expect(state, "SETUP: the start's Location carries the OAuth state").toBeTruthy();
+    const res = await page.request.post("/api/internal/youtube/fake", { data: { op: "setChannels", channels: slot.channels, state } });
     expect(res.status(), "SETUP: the fake accepts the channels for this state").toBe(200);
-    await route.continue();
+    slot.fired++;
+    await route.fulfill({ response: start });
   });
 }
 
-/** Open the consent step, tick, and press Continue: the real form POST, the real route, the fake Google, the real callback. */
+/** Open the consent step, tick, and press Continue: the real form POST, the real route, the fake Google, the real callback. The channel offer
+ *  must have been installed (`offerChannels`) and must have run exactly once for this connect: a helper that silently did nothing is the
+ *  failure this guards (the fake would mint "Fake Channel n" and the steps that read a chosen title would be asserting a fixture). */
 async function connectThroughConsent(page: Page): Promise<void> {
+  const slot = offers.get(page);
+  expect(slot, "SETUP: offerChannels ran before this connect").toBeDefined();
+  const before = slot!.fired;
   const submit = page.getByTestId("youtube-connect-submit");
   await expect(submit, "Continue is disabled until the box is ticked").toBeDisabled();
   await page.getByTestId("youtube-consent").check();
   await expect(submit).toBeEnabled();
   await Promise.all([page.waitForURL(/\/streaming\?youtube=/), submit.click()]);
   await declineCookies(page);
+  expect(slot!.fired - before, "the channel offer ran once for this connect (the fake was told which channels this state mints)").toBe(1);
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -285,6 +307,13 @@ test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player (
     await page.context().addCookies([{ name: "seazn_locale", value: locale, url: new URL(page.url()).origin }]);
     await page.setViewportSize({ width: 1280, height: 900 });
     await open(page, "/streaming");
+    // The locale witness: the page really is in this locale (a cookie that silently failed would measure English four times). The Streaming
+    // item's name and, below lg, Sign-out's name (its label is hidden there) come from this locale's own dictionary, by role + name.
+    await expect(page.getByTestId("nav-streaming"), `${locale}: the nav speaks ${locale}`).toHaveAttribute("aria-label", dictOf("console", locale)["nav.streaming"] ?? "");
+    await expect(
+      page.locator("header.app-gantry").getByRole("button", { name: dictOf("console", locale)["nav.signOut"] ?? "" }),
+      `${locale}: Sign out is named in ${locale}`,
+    ).toBeVisible();
     const links = await page.locator("header.app-gantry nav a").count();
     expect(links, `${locale}: Dashboard, Directory, Streaming, Settings and Player home`).toBe(5);
     for (const w of NAV_WIDTHS) {

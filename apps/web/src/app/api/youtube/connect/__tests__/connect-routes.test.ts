@@ -60,6 +60,7 @@ import { pkceChallenge } from "@/server/external-play/pkce";
 import { log } from "@/server/logger";
 import { fingerprintYoutubeChannel, openWith } from "@/server/relay/crypto";
 import { ApiBackedTargetError, readTargetSecret } from "@/server/relay/secret-columns";
+import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 import { listStreamTargets } from "@/server/usecases/stream-targets";
 import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { setYoutubeDriverForTest } from "@/server/youtube/driver";
@@ -137,6 +138,27 @@ async function rig(role: "owner" | "admin" | "viewer" = "owner"): Promise<Rig> {
   await sql`insert into org_members (org_id, user_id, role) values (${auth.orgId}, ${userId}, ${role})`;
   session.user = { id: userId };
   return { orgId: auth.orgId, userId };
+}
+
+/** Over-quota seats (doc 10 §2.4): the org holds more members than the plan's `members.max`, so its OLDEST admin seat is read-only. The cap
+ *  is read from the plan's own declaration, never typed here; the seat that freezes is `r.userId`'s (made the oldest), and the premise is
+ *  checked with the engine's own `frozenMemberIds` so a changed cap fails HERE, loudly, instead of leaving a test that freezes nobody.
+ *  Returns the newest of the other admins - a seat that is NOT frozen. */
+async function freezeSeat(r: Rig): Promise<string> {
+  const [row] = await sql<{ int_value: number | null }[]>`select int_value from plan_entitlements where plan_key = 'community' and feature_key = 'members.max'`;
+  const cap = row?.int_value;
+  expect(cap, "PREMISE: the community plan has a finite members.max").toBeTypeOf("number");
+  await sql`update org_members set role = 'admin', created_at = now() - interval '1000 hours' where org_id = ${r.orgId} and user_id = ${r.userId}`;
+  const others: string[] = [];
+  for (let i = 0; i < cap!; i++) {
+    const u = await newUser();
+    await sql`insert into org_members (org_id, user_id, role, created_at) values (${r.orgId}, ${u}, 'admin', now() - make_interval(hours => ${i + 1}))`;
+    others.push(u);
+  }
+  const frozen = await frozenMemberIds(r.orgId);
+  expect(frozen.has(r.userId), "PREMISE: this admin's seat is frozen").toBe(true);
+  expect(frozen.has(others[0]!), "PREMISE: the newest other admin's seat is not").toBe(false);
+  return others[0]!;
 }
 
 interface PendingRow {
@@ -319,23 +341,31 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     expect((await pendingRows(r.orgId))[0]!.made_for_kids).toBe(false);
   });
 
-  it("a present Origin that is not this site's is 403 (nothing written); an absent Origin and our own pass", async () => {
+  it("a present Origin that is not this site's lands forbidden - a 303 to the Streaming page, never raw JSON in a browser tab - and writes nothing; an absent Origin and our own pass to the authorize hop", async () => {
     const r = await rig();
+    const HOP_PATH = "/api/youtube/connect/fake-authorize";
+    let checked = 0;
     for (const origin of ["https://evil.example", "http://localhost:3999", "null", "https://localhost"]) {
       const res = await START(startReq(form(r), { origin }));
-      expect(res.status, origin).toBe(403);
+      expect(landed(res), origin).toEqual(LANDS("forbidden"));
+      expect(res.headers.get("content-type") ?? "", `${origin}: not a JSON body`).not.toMatch(/json/);
+      checked++;
     }
+    expect(checked, "anti-vacuity: four foreign origins").toBe(4);
     expect(await pendingRows(r.orgId)).toEqual([]);
     expect(jar.values.size).toBe(0);
-    expect((await START(startReq(form(r), { origin: "http://localhost" }))).status, "our own origin").toBe(303);
-    expect((await START(startReq(form(r)))).status, "no Origin header").toBe(303);
+    const own = await START(startReq(form(r), { origin: "http://localhost" }));
+    expect([own.status, new URL(own.headers.get("location")!).pathname], "our own origin").toEqual([303, HOP_PATH]);
+    const none = await START(startReq(form(r)));
+    expect([none.status, new URL(none.headers.get("location")!).pathname], "no Origin header").toEqual([303, HOP_PATH]);
   });
 
   it("the Origin is judged against the origin the flow RETURNS to: with YOUTUBE_REDIRECT_URI pinned, its origin is the only one accepted", async () => {
     vi.stubEnv("YOUTUBE_REDIRECT_URI", "http://app.example.test:3000/api/youtube/connect/callback");
     const r = await rig();
-    expect((await START(startReq(form(r), { origin: "http://localhost" }))).status, "the request's own host is not the pinned one").toBe(403);
-    expect((await START(startReq(form(r), { origin: "http://app.example.test:3000" }))).status).toBe(303);
+    expect(landed(await START(startReq(form(r), { origin: "http://localhost" }))), "the request's own host is not the pinned one").toEqual(LANDS("forbidden"));
+    const pinned = await START(startReq(form(r), { origin: "http://app.example.test:3000" }));
+    expect([pinned.status, new URL(pinned.headers.get("location")!).pathname]).toEqual([303, "/api/youtube/connect/fake-authorize"]);
   });
 
   it("a reconnect names a live connection of THIS org: another org's, a missing one and a revoked one are 404 and write nothing; this org's is recorded on the pending row", async () => {
@@ -438,6 +468,53 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     // g) another org's connection is no carried consent: 404, as ever.
     const theirs = await start({ connectionId: foreign.connectionId, consent: undefined });
     expect([theirs.res.status, theirs.added]).toEqual([404, 0]);
+  });
+
+  it("a frozen seat (an over-quota admin, doc 10 §2.4) lands forbidden at the START - no row, no cookie, no authorize URL - the same seat the v1 pick route refuses; an unfrozen admin and an owner of the SAME org go ahead", async () => {
+    const r = await rig("admin");
+    const unfrozen = await freezeSeat(r);
+    const res = await START(startReq(form(r)));
+    expect(landed(res)).toEqual(LANDS("forbidden"));
+    expect(await pendingRows(r.orgId), "no pending row").toEqual([]);
+    expect(jar.values.size, "no cookie").toBe(0);
+    expect(callsOf("authorizeUrl"), "no authorize URL was built").toBe(0);
+
+    // The positive pair, in the same org: a seat that is not frozen, then an owner (owners are exempt from the freeze).
+    session.user = { id: unfrozen };
+    expect(landed(await START(startReq(form(r)))).path, "an unfrozen admin").toBe("/api/youtube/connect/fake-authorize");
+    const owner = await newUser();
+    await sql`insert into org_members (org_id, user_id, role, created_at) values (${r.orgId}, ${owner}, 'owner', now() - interval '2000 hours')`;
+    expect((await frozenMemberIds(r.orgId)).has(owner), "PREMISE: an owner is never in the frozen set").toBe(false);
+    session.user = { id: owner };
+    expect(landed(await START(startReq(form(r)))).path, "an owner").toBe("/api/youtube/connect/fake-authorize");
+    // And the frozen seat is still refused after both (a second call is not a different answer).
+    session.user = { id: r.userId };
+    expect(landed(await START(startReq(form(r)))), "the frozen seat, again").toEqual(LANDS("forbidden"));
+  });
+
+  it("a YOUTUBE_DRIVER this process cannot build (a typo) is refused at the START as not_configured - no 500, no pending row, no cookie - rather than after the state is spent; fake, live and unset still go ahead", async () => {
+    const r = await rig();
+    setYoutubeDriverForTest(null);   // the real selection by YOUTUBE_DRIVER, not the test's installed fake
+    let checked = 0;
+    for (const bad of ["fakee", "Fake", "livee", "yes"]) {
+      vi.stubEnv("YOUTUBE_DRIVER", bad);
+      const res = await START(startReq(form(r)));
+      expect(landed(res), bad).toEqual(LANDS("not_configured"));
+      expect(await pendingRows(r.orgId), `${bad}: no pending row`).toEqual([]);
+      expect(jar.values.size, `${bad}: no cookie`).toBe(0);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: four misspelt values").toBe(4);
+    // The positive pair: the three values that name a driver (blank = the fake outside production) reach the authorize URL.
+    vi.stubEnv("GOOGLE_CLIENT_ID", "client-id.apps.example");
+    vi.stubEnv("GOOGLE_CLIENT_SECRET", "client-secret-value");
+    const goes: [string, string][] = [["fake", "/api/youtube/connect/fake-authorize"], ["", "/api/youtube/connect/fake-authorize"], ["live", "/o/oauth2/v2/auth"]];
+    for (const [value, path] of goes) {
+      vi.stubEnv("YOUTUBE_DRIVER", value);
+      setYoutubeDriverForTest(null);
+      const ok = await START(startReq(form(r)));
+      expect([ok.status, new URL(ok.headers.get("location")!).pathname], `YOUTUBE_DRIVER=${JSON.stringify(value)}`).toEqual([303, path]);
+    }
   });
 
   it("refuses BEFORE sending anyone to Google when a key the callback needs is unusable (YOUTUBE_TOKEN_KEK or RELAY_KEK, unset or malformed): not_configured, no pending row, no cookie, no authorize built", async () => {
@@ -740,6 +817,44 @@ describe.skipIf(!HAS_DB)("GET /api/youtube/connect/callback — the landing", ()
     expect(landed((await finish(f)).res).youtube).toBe("connected");
   });
 
+  it("what the start allowed is re-read at the callback, not trusted for the ten minutes between: a seat frozen since, the relay withdrawn since (forbidden), or the deployment's relay gone since (not_configured) is refused - the grant revoked, nothing saved, save never called; the same flow with nothing changed connects", async () => {
+    const cases: [string, "owner" | "admin", (r: Rig) => Promise<void>, string][] = [
+      ["the admin's seat was frozen after the start (doc 10 §2.4)", "admin", async (r) => { await freezeSeat(r); }, "forbidden"],
+      ["the relay entitlement was withdrawn after the start", "owner", async (r) => { await grantFeature(r.orgId, "streaming.relay", false); }, "forbidden"],
+      ["the deployment lost its relay after the start", "owner", async () => { setRelayDriversForTest(disabledRelayDrivers()); }, "not_configured"],
+    ];
+    let checked = 0;
+    for (const [name, role, change, lands] of cases) {
+      const r = await rig(role);
+      const f = await begin(r);   // the start went ahead: at THAT moment nothing was wrong
+      await change(r);
+      const exchange = vi.spyOn(fake, "exchangeCode");
+      const revokesBefore = callsOf("revoke");
+      const savesBefore = save.fn.mock.calls.length;
+      const { res } = await finish(f);
+      expect(landed(res), name).toEqual(LANDS(lands));
+      expect(callsOf("revoke") - revokesBefore, `${name}: the just-issued grant is given back`).toBe(1);
+      expect(await isDead(await minted(exchange)), `${name}: dead at Google`).toBe(true);
+      expect(save.fn.mock.calls.length - savesBefore, `${name}: save never ran`).toBe(0);
+      expect(await connectionCount(r.orgId), `${name}: nothing stored`).toBe(0);
+      expect(await pendingRows(r.orgId), `${name}: pending row gone`).toEqual([]);
+      exchange.mockRestore();
+      setRelayDriversForTest(null);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: three changes").toBe(3);
+
+    // The sequence: withdrawn mid-flow is refused; once the entitlement is back, a NEW flow in the same org connects.
+    const r = await rig();
+    const f1 = await begin(r);
+    await grantFeature(r.orgId, "streaming.relay", false);
+    expect(landed((await finish(f1)).res).youtube, "withdrawn between start and callback").toBe("forbidden");
+    await grantFeature(r.orgId, "streaming.relay", true);
+    const f2 = await begin(r);
+    expect(landed((await finish(f2)).res).youtube, "entitled again").toBe("connected");
+    expect(await connectionCount(r.orgId)).toBe(1);
+  });
+
   it("denied: Google's access_denied (with the right state) -> denied, the code is never exchanged, the pending row is dropped; the same error with a wrong state is expired", async () => {
     const r = await rig();
     const f = await begin(r);
@@ -905,6 +1020,8 @@ describe.skipIf(!HAS_DB)("a grant is never revoked while a live connection uses 
     const refusals: [string, (r: Rig, state: string) => Promise<void>, string][] = [
       ["scope_missing", async (_r, s) => fake.setGrantedScope("https://www.googleapis.com/auth/userinfo.email", s), "scope_missing"],
       ["forbidden", async (r) => { await sql`update org_members set role = 'viewer' where org_id = ${r.orgId} and user_id = ${r.userId}`; }, "forbidden"],
+      ["frozen seat", async (r) => { await freezeSeat(r); }, "forbidden"],
+      ["relay withdrawn", async (r) => { await grantFeature(r.orgId, "streaming.relay", false); }, "forbidden"],
     ];
     // [how a live connection elsewhere holds the grant, applied to the flow's state, returns the seeded connection's token]
     const holders: [string, (state: string, ch: string) => Promise<string | null>][] = [
@@ -950,7 +1067,7 @@ describe.skipIf(!HAS_DB)("a grant is never revoked while a live connection uses 
         checked++;
       }
     }
-    expect(checked, "anti-vacuity: 2 refusals x 3 holders").toBe(6);
+    expect(checked, "anti-vacuity: 4 refusals x 3 holders").toBe(12);
   });
 
   it("the grant's channels cannot be READ (YouTube did not answer): that is not 'no channel' and not a reason to revoke — on the main path (unavailable) and on a refusal that must look (scope_missing), held or not; the holder's token still works", async () => {

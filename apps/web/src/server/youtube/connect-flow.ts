@@ -8,8 +8,10 @@ import "server-only";
 import { createHash, randomUUID } from "node:crypto";
 import { sql, type Tx } from "@/lib/db";
 import type { OrgRole } from "@/lib/types";
-import type { YoutubePrivacy } from "@/lib/youtube";
+import type { YoutubeLandingCode, YoutubePrivacy } from "@/lib/youtube";
 import { hasValidKek, type KekName } from "@/server/relay/crypto";
+import type { StreamingPageOffer } from "@/server/stream-panel-context";
+import { frozenMemberIds } from "@/server/usecases/entitlement-freeze";
 
 /** How long a connect attempt lives: the cookies' Max-Age and the pending row's expiry are this one number. */
 export const PENDING_LIFETIME_SECONDS = 600;
@@ -80,6 +82,22 @@ export async function storeGrant(
 export async function roleNow(orgId: string, userId: string): Promise<OrgRole | null> {
   const [row] = await sql<{ role: OrgRole }[]>`select role from org_members where org_id = ${orgId} and user_id = ${userId}`;
   return row?.role ?? null;
+}
+
+/** Is this member's seat frozen by the plan's `members.max` (doc 10 §2.4: an over-quota admin is read-only until the owner frees seats;
+ *  owners are never in the set)? The v1 routes refuse a frozen admin's write through `requireOrgAuth`; the connect flow is a browser
+ *  route that does not pass through it, so it asks here, at the start AND at the callback, and a frozen admin gets the same answer on
+ *  every path (a single-channel connect and a picker pick used to differ). */
+export async function seatFrozen(orgId: string, userId: string): Promise<boolean> {
+  return (await frozenMemberIds(orgId)).has(userId);
+}
+
+/** What a refusal of the Streaming page's offer lands as, or null when the page is offered. ONE table for the start and for the
+ *  callback (which asks again: an entitlement can be withdrawn in the ten minutes between), so the two cannot drift. */
+export function offerRefusal(offer: StreamingPageOffer): YoutubeLandingCode | null {
+  if (offer === "not_entitled") return "forbidden";
+  if (offer === "not_configured") return "not_configured";
+  return null;
 }
 
 /** The live connection a reconnect is for: this org's, not revoked. Its channel is the only channel the new grant may be for;

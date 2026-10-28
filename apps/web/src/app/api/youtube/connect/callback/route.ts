@@ -6,9 +6,10 @@ import { YOUTUBE_OAUTH_STATE_COOKIE, YOUTUBE_OAUTH_VERIFIER_COOKIE, youtubeRedir
 import { EDITOR_ROLES } from "@/lib/types";
 import { YOUTUBE_SCOPE, youtubeLanding, type YoutubeLandingCode } from "@/lib/youtube";
 import { log } from "@/server/logger";
+import { streamingPageOffer } from "@/server/stream-panel-context";
 import { sql } from "@/lib/db";
 import { sealPendingToken } from "@/server/youtube/token-store";
-import { claimPending, dropPending, grantInUse, reconnectTarget, roleNow, storeGrant } from "@/server/youtube/connect-flow";
+import { claimPending, dropPending, grantInUse, offerRefusal, reconnectTarget, roleNow, seatFrozen, storeGrant } from "@/server/youtube/connect-flow";
 import { saveConnectionFromGrant } from "@/server/youtube/connections";
 import { youtubeDriver } from "@/server/youtube/driver";
 import { YouTubeError, type YouTubePort } from "@/server/youtube/port";
@@ -119,6 +120,12 @@ async function callback(req: Request): Promise<Response> {
     // A fresh read, never the pending row's word and never the cache: the role may have gone since the start.
     const role = await roleNow(pending.orgId, user.id);
     if (!role || !(EDITOR_ROLES as readonly string[]).includes(role)) return await refuse("forbidden");
+    // The rest of what the start allowed is read again too, for the same reason: the start was up to ten minutes ago. A seat frozen
+    // since (doc 10 §2.4, as the v1 pick route refuses it) and an entitlement or relay gone since are refused like a lost role - the
+    // grant is given back by `refuse` under its usual rule (never one a live connection holds) - and nothing is saved.
+    if (await seatFrozen(pending.orgId, user.id)) return await refuse("forbidden");
+    const offerLost = offerRefusal(await streamingPageOffer(pending.orgId));
+    if (offerLost) return await refuse(offerLost);
 
     // Membership of the space-separated list, never a substring: `…/auth/youtube.readonly` is not `…/auth/youtube`.
     if (!scope.split(/\s+/).includes(YOUTUBE_SCOPE)) return await refuse("scope_missing");

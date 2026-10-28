@@ -109,7 +109,7 @@ export async function createStreamTarget(auth: AuthCtx, orgId: string, body: Cre
   const watchUrl = watch ? watch.data : null;
   // A19 + D2: the same destination again is the EXISTING target (unchanged — owner decision (a)), or its most recently
   // archived row restored under this body's label and watch link (insertStreamTarget), so the reply is the STORED row —
-  // never this body echoed onto an id it did not write — plus the `outcome`, the only way the Directory can tell
+  // never this body echoed onto an id it did not write — plus the `outcome`, the only way the Streaming page can tell
   // "already saved as {label}" from a save.
   const stored = (await sql.begin((tx) =>
     insertStreamTarget(tx, { orgId, kind: body.kind, label, watchUrl, rtmp: { url: destination.url, streamKey } }),
@@ -122,7 +122,7 @@ export async function createStreamTarget(auth: AuthCtx, orgId: string, body: Cre
 }
 
 /** Spec §5.2 — 409 TARGET_IN_USE, naming the match that holds the destination. Uppercase: the spec's code for the
- *  Directory's refusals (Go live's own refusal keeps its lowercase `target_in_use`). */
+ *  Streaming page's refusals (Go live's own refusal keeps its lowercase `target_in_use`). */
 export function targetHeld(h: TargetHolder): HttpError {
   return new HttpError(
     409,
@@ -148,7 +148,7 @@ async function isApiBacked(exec: Tx | typeof sql, orgId: string, targetId: strin
   return row?.api === true;
 }
 
-/** M5 (B1 review): a label is trimmed exactly as the key is — the schema's min(1) admits "   ", which the Directory
+/** M5 (B1 review): a label is trimmed exactly as the key is — the schema's min(1) admits "   ", which the Streaming page
  *  would render as a blank name — and nothing left is a 422. */
 function labelOf(raw: string): string {
   const label = raw.trim();

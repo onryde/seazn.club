@@ -730,7 +730,7 @@ const STREAM_SESSION_CREATE_ERRORS = {
   }),
   409: scopedErrorEnvelope({
     sessionId: { type: ["string", "null"], format: "uuid", description: "On active_session (409): the fixture's running session — resume it rather than start another" },
-    // T3 (spec §5.5): the Directory's holder shape (stream-target-holders.ts wireHolder), nullable here alone.
+    // T3 (spec §5.5): the Streaming page's holder shape (stream-target-holders.ts wireHolder), nullable here alone.
     holder: {
       ...STREAM_TARGET_HOLDER_PROPERTIES,
       type: ["object", "null"],
