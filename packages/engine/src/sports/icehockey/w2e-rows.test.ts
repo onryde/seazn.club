@@ -4,7 +4,7 @@
 // never from the code under test. Both rows are `deviation` rows because of the limits below.
 //
 // Several tests are marked "limit": they pin where the engine does NOT follow the IIHF article (a penalty-shot goal, coincidental minors
-// and a double minor under Rule 16.2/18.2; the delayed clock of a third penalty under Rule 26.1). They are the engine's behaviour as it is,
+// and a double minor's delayed-penalty goal under Rule 18.2; the delayed clock of a third penalty under Rule 26.1; a goal against a running double minor is an engine limit the rule book does not speak to). They are the engine's behaviour as it is,
 // recorded in the row's text and in a0-findings A0.9, not a ruling that the article is wrong.
 //
 // Every fold is PAD-SHAPED (`strictFromSeq: 0`): the write path.
