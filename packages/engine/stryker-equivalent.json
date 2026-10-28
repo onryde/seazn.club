@@ -302,85 +302,85 @@
       "reason": "With no winnerPerson the mutant hands decideResult `extra.winnerPerson: undefined` instead of omitting the key; decideResult is the only reader, tests `extra.winnerPerson !== undefined` for its draw guard and `=== undefined` before writing state, so it refuses and writes exactly as before."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:1092:56 StringLiteral → \"\"",
+      "mutant": "src/sports/carrom/carrom.ts:1099:56 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = carromForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "carromForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:649:7 ConditionalExpression → default:",
+      "mutant": "src/sports/carrom/carrom.ts:656:7 ConditionalExpression → default:",
       "original": "default:",
       "line": "default:",
       "reason": "The default clause only holds a `break`, so removing it leaves an event type that matches no case doing the same thing (nothing). Ran carrom.mutation.test.ts with the clause removed: still green."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:873:7 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:880:7 ConditionalExpression → true",
       "original": "cfgParsed.success",
       "line": "if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {",
       "reason": "With an unparseable cfg `cfgParsed.data` is undefined, and every path that can decide a result (a board, an adjustment, a settle) reads `state.cfg` inside the try, throws, and is swallowed; forfeits are no personal result here (resultInStats), so nothing is credited either way. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:873:57 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:880:57 ConditionalExpression → true",
       "original": "home !== undefined",
       "line": "if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {",
       "reason": "The guard before it requires `ctx.entrants.length === 2`, so entrants[0] is always defined. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:873:79 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:880:79 ConditionalExpression → true",
       "original": "away !== undefined",
       "line": "if (cfgParsed.success && ctx.entrants.length === 2 && home !== undefined && away !== undefined) {",
       "reason": "The guard before it requires `ctx.entrants.length === 2`, so entrants[1] is always defined. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:875:42 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/sports/carrom/carrom.ts:882:42 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "home: { entrantId: home.id, slots: [] },",
       "reason": "The synthetic lineup's slots are never read: carrom's init and apply use only entrantId (the comment above the fold says so). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:876:42 ArrayDeclaration → [\"Stryker was here\"]",
+      "mutant": "src/sports/carrom/carrom.ts:883:42 ArrayDeclaration → [\"Stryker was here\"]",
       "original": "[]",
       "line": "away: { entrantId: away.id, slots: [] },",
       "reason": "The synthetic lineup's slots are never read: carrom's init and apply use only entrantId (the comment above the fold says so). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:889:18 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:896:18 ConditionalExpression → true",
       "original": "outcome !== null",
       "line": "} else if (outcome !== null && (outcome.kind === \"win\" || outcome.kind === \"award\")) {",
       "reason": "A null outcome (a live or abandoned match) reaches `outcome.kind`, which throws a TypeError inside the try whose catch credits nothing, exactly what skipping the branch does; a non-null outcome here is a draw (a double walkover never gets this far: resultInStats is false for it, and no_result is never produced by carrom.outcome/outcomeOf). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:893:18 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:900:18 ConditionalExpression → true",
       "original": "outcome !== null",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "A null outcome (a live or abandoned match) reaches `outcome.kind`, which throws a TypeError inside the try whose catch credits nothing, exactly what skipping the branch does; a non-null outcome here is a draw (a double walkover never gets this far: resultInStats is false for it, and no_result is never produced by carrom.outcome/outcomeOf). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:893:18 LogicalOperator → outcome !== null || outcome.kind === \"draw\" || outcome.kind === \"no_result\"",
+      "mutant": "src/sports/carrom/carrom.ts:900:18 LogicalOperator → outcome !== null || outcome.kind === \"draw\" || outcome.kind === \"no_result\"",
       "original": "outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "A null outcome (a live or abandoned match) reaches `outcome.kind`, which throws a TypeError inside the try whose catch credits nothing, exactly what skipping the branch does; a non-null outcome here is a draw (a double walkover never gets this far: resultInStats is false for it, and no_result is never produced by carrom.outcome/outcomeOf). Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:893:39 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:900:39 ConditionalExpression → true",
       "original": "outcome.kind === \"draw\"",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "The kinds that reach this branch are draw and null (null fails `outcome !== null` first); a double walkover is excluded by resultInStats and no_result is never produced. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:893:66 ConditionalExpression → false",
+      "mutant": "src/sports/carrom/carrom.ts:900:66 ConditionalExpression → false",
       "original": "outcome.kind === \"no_result\"",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "carrom.outcome and outcomeOf never produce no_result (the module's outcomes are win, draw, award and double_walkover, plus the kernel's settle win/award), so this operand is false for every outcome that gets here. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:893:66 EqualityOperator → outcome.kind !== \"no_result\"",
+      "mutant": "src/sports/carrom/carrom.ts:900:66 EqualityOperator → outcome.kind !== \"no_result\"",
       "original": "outcome.kind === \"no_result\"",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "After `draw` is false the only outcome left that could differ is a double walkover, which resultInStats excludes before this branch; no_result is never produced. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:893:83 StringLiteral → \"\"",
+      "mutant": "src/sports/carrom/carrom.ts:900:83 StringLiteral → \"\"",
       "original": "\"no_result\"",
       "line": "} else if (outcome !== null && (outcome.kind === \"draw\" || outcome.kind === \"no_result\")) {",
       "reason": "no_result is never produced by carrom.outcome or outcomeOf, so what the literal reads never decides a branch. Ran a 195-case probe (13 event streams x 5 configs x 1/2/3 entrants, through aggregatePlayerStats) with this mutant applied: output identical to the original."
@@ -392,7 +392,7 @@
       "reason": "With live false, unitNumber gives max(started, max(1, completed)) against the original max(started, completed + 1) while outcome is null; there an open game exists (phase live) or nothing has started (pre), and an abandoned match has completed = started - 1 too, so completed + 1 = started (or 1 = 1) and both sides agree. Ran 372 prefixes (4 configs, with abandon and forfeits at 4 depths) with the mutant applied: position and breaker identical to the original; the same probe did detect the mutant live = true."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:1012:33 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:1019:33 ConditionalExpression → true",
       "original": "current !== undefined",
       "line": "state.phase === \"live\" && current !== undefined",
       "reason": "Phase live always has an open game (core.start seeds one, bankGame opens the next in the same step), so current is defined whenever the first operand holds and the mutant never changes the result. Ran the same 372-prefix probe with the mutant applied: summaries identical to the original."
@@ -452,13 +452,13 @@
       "reason": "With leader null (level score) the mutant evaluates `game.score[null] >= cfg.gameTo`, and `game.score[null]` is undefined, so the comparison is false (undefined >= n is false for every n); the line falls through exactly as the original's false does."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:1014:41 ArithmeticOperator → state.games.length + 1",
+      "mutant": "src/sports/carrom/carrom.ts:1021:41 ArithmeticOperator → state.games.length + 1",
       "original": "state.games.length - 1",
       "line": "breakerOf(state.firstBreak, state.games.length - 1, current.boards.length)",
       "reason": "breakerOf reads gameIndex only through `(gameIndex + boardIndex) % 2`, and length + 1 differs from length - 1 by 2, so the parity, and the breaker the summary reports, is identical."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:1236:12 EqualityOperator → adjust.delta <= 0",
+      "mutant": "src/sports/carrom/carrom.ts:1243:12 EqualityOperator → adjust.delta <= 0",
       "original": "adjust.delta < 0",
       "line": "(adjust.delta < 0 ? adjust.entrantId : opponentOf(adjust.entrantId));",
       "reason": "The branch is reached only for an adjust that parsed through CarromGameAdjust, whose delta refine rejects 0, so delta is never 0 here and `< 0` and `<= 0` agree."
@@ -674,13 +674,13 @@
       "reason": "The flag only moves the played ledger's `wins` value; every chess award credit carries wins, white and black for both sides (creditFor over two sideMetrics of the unplayed state), and creditedMetrics lays it over the played ledger, so no played value is observable."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:558:7 ConditionalExpression → true",
+      "mutant": "src/sports/carrom/carrom.ts:565:7 ConditionalExpression → true",
       "original": "reason !== \"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and carrom's board summary and adjustment refuse outside phase \"live\", so an admitted walkover's state has no games and gamesWon 0-0: reading them adds nothing."
     },
     {
-      "mutant": "src/sports/carrom/carrom.ts:558:18 StringLiteral → \"\"",
+      "mutant": "src/sports/carrom/carrom.ts:565:18 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and carrom's board summary and adjustment refuse outside phase \"live\", so an admitted walkover's state has no games and gamesWon 0-0: reading them adds nothing."
