@@ -5,16 +5,18 @@
 // and the sport module never sees either event, so nothing it holds - score, period, outcome - can move. A decided match cannot be
 // suspended. The expected values are the row's own statement, checked on the real football, hockey and ice hockey modules.
 //
-// X-DV-1 (Task 17, SC-P13): draws on a ladder, double-elimination, stepladder or page-playoff stage are not built, by design. The engine half
-// is the declaration every sport makes (`supportsDraws` is false in those stage kinds, whatever the config) and the kernel's stage sets
-// (`forbidsLevelResult`). What the product then does with a level result there - holds it for the organiser's settle (X-BR-2) or, for generic,
-// refuses it (GN-KO-1) - is those rows' and is proved in apps/web.
+// X-DV-1 (Task 17, SC-P13): draws on a ladder, double-elimination, stepladder or page-playoff stage are not built as a table result, by
+// design. The engine half is the declaration every sport makes (`supportsDraws` is false in those stage kinds, whatever the config, and no
+// table-paid level result is reachable there) and the kernel's stage sets (`forbidsLevelResult`). A level SCORE is still folded as a draw by
+// the sport module (the fold does not know the stage); the stage then holds it for the organiser's settle (`settleOffered`), which is the
+// engine half of X-BR-2. What the web door does with it - stores it `needs_decision` (X-BR-2), or refuses a generic one (GN-KO-1) - is those
+// rows' and is proved in apps/web.
 //
 // Every fold is PAD-SHAPED (`strictFromSeq: 0`): the write path.
 import { describe, expect, it } from "vitest";
-import { EngineError, EngineErrorCode } from "../core/errors.ts";
-import { foldMatch, foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "../core/events.ts";
-import { DRAW_KINDS, forbidsLevelResult, StageKind, type LineupPair } from "../core/types.ts";
+import { EngineError } from "../core/errors.ts";
+import { foldMatch, foldMatchWithStoppage, outcomeOf, settleOffered, type EventEnvelope } from "../core/events.ts";
+import { DRAW_KINDS, forbidsLevelResult, isLevelOutcome, StageKind, type LineupPair } from "../core/types.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { declaredCfgs } from "../testkit/declared-cfgs.ts";
@@ -207,7 +209,7 @@ describe("X-DV-1 no sport can end a ladder, double-elimination, stepladder or pa
     expect(DRAW_KINDS.size).toBeGreaterThan(0);
   });
 
-  it("X-DV-1 every sport, under every declared config, supports no draw on the four stage kinds and reaches no level result there", () => {
+  it("X-DV-1 every sport, under every declared config, supports no draw on the four stage kinds and pays no level result into a table there", () => {
     let pairs = 0;
     let checked = 0;
     const sports = forEachSport(({ module: m }) => {
@@ -215,7 +217,7 @@ describe("X-DV-1 no sport can end a ladder, double-elimination, stepladder or pa
         pairs++;
         for (const kind of NO_DRAW_KINDS) {
           expect(m.supportsDraws(cfg as never, kind), `${m.key} ${name} ${kind}`).toBe(false);
-          expect([...m.reachableResultKinds(cfg as never, kind)], `${m.key} ${name} ${kind} reachable level results`).toEqual([]);
+          expect([...m.reachableResultKinds(cfg as never, kind)], `${m.key} ${name} ${kind} table-paid level results`).toEqual([]);
           checked++;
         }
       }
@@ -250,8 +252,43 @@ describe("X-DV-1 no sport can end a ladder, double-elimination, stepladder or pa
     expect(checked).toBe(drawCapable.length * NO_DRAW_KINDS.length);
   });
 
-  it("X-DV-1 the engine declares DRAW_NOT_ALLOWED (a table stage whose sport cannot draw) and LEVEL_RESULT_IN_BRACKET (a generic draw in these stages) as error codes", () => {
-    expect(EngineErrorCode.options).toContain("DRAW_NOT_ALLOWED");
-    expect(EngineErrorCode.options).toContain("LEVEL_RESULT_IN_BRACKET");
+  it("X-DV-1 a level score is still folded as a draw on each of the four kinds, and the stage holds it for the organiser's settle where a table keeps it", () => {
+    // The fold does not know the stage: a level score is a draw whichever kind it is played in. What differs is the kernel's answer to "is this
+    // match owed the organiser's settle?" (`settleOffered`): yes on a bracket kind (held, X-BR-2), no in a table (the draw is a result).
+    // One level fold per sport that can reach a draw (the set sports cannot: test above). Generic's draw is refused at the web door
+    // (GN-KO-1) but its fold is the same.
+    interface Level { key: string; cfg: unknown; lineups: LineupPair; specs: Spec[] }
+    const level = (key: string, cfg: unknown, specs: Spec[]): Level => {
+      const module = moduleOf(key);
+      return { key, cfg: module.configSchema.parse(cfg), lineups: defaultLineupPair(module.positions), specs };
+    };
+    const levels: Level[] = [
+      level("football", {}, [START, ["football.goal", { by: "H" }], ["football.period", { phase: "HT" }], ["football.goal", { by: "A" }], ["football.period", { phase: "FT" }]]),
+      level("boardgame", {}, [START, ["boardgame.result", { winner: null, method: "agreement" }]]),
+      level("carrom", { gameTo: 100, maxBoards: 1, bestOf: 1, tieBoard: "draw" }, [START, ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 0, queenTo: null }]]),
+      level("generic", declaredCfgs<unknown>(moduleOf("generic") as never).find((c) => c.name === "score")?.cfg ?? {}, [START, ["generic.result", { isDraw: true, p1Score: 1, p2Score: 1 }]]),
+    ];
+    let held = 0;
+    let kept = 0;
+    for (const { key, cfg, lineups, specs } of levels) {
+      const module = moduleOf(key);
+      const folded = foldMatchWithStoppage(module, cfg, lineups, stream(specs), STRICT);
+      const outcome = outcomeOf(module, folded);
+      expect(outcome, `${key} folds the level score to a draw`).toEqual({ kind: "draw" });
+      expect(isLevelOutcome(outcome), key).toBe(true);
+      const facts = { outcome, abandoned: false, state: folded.state };
+      for (const kind of NO_DRAW_KINDS) {
+        expect(settleOffered(module, kind, facts), `${key} ${kind}: held for the organiser's settle`).toBe(true);
+        held++;
+      }
+      // The negative pair: a table kind keeps the same draw as its result.
+      for (const kind of DRAW_KINDS) {
+        expect(settleOffered(module, kind, facts), `${key} ${kind}: the draw is a result`).toBe(false);
+        kept++;
+      }
+    }
+    expect(held).toBe(levels.length * NO_DRAW_KINDS.length);
+    expect(kept).toBe(levels.length * DRAW_KINDS.size);
+    expect(levels.length).toBeGreaterThan(1);
   });
 });
