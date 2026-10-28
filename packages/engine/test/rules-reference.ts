@@ -48,20 +48,13 @@ export const CHECKER_FILES: readonly string[] = [
 /** W2e's rows (spec 2026-10-28 section 8, signed 2026-10-28 as `W2e-D<n>`): the value names the task of the W2e plan that proves the row. The proving
  *  commit deletes the entry and fills `proved by`; every W2e entry is to be gone before PR A merges. */
 export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([
-  ["X-SE-1", "Task 1"],
-  ["X-SE-2", "Task 1"],
-  ["BD-VR-1", "Task 3"],
-  ["BD-SE-1", "Task 3"],
   ["BD-SV-1", "Task 16"],
   ["BD-DV-1", "Task 16"],
-  ["VB-SE-1", "Task 3"],
   ["VB-CF-1", "Task 13"],
   ["VB-RO-1", "Task 16"],
   ["TT-CF-1", "Task 13"],
   ["TT-SE-1", "Task 16"],
   ["TT-TO-1", "Task 16"],
-  ["TN-SE-1", "Task 4"],
-  ["TN-SS-1", "Task 4"],
   ["TN-SS-2", "Task 5"],
   ["TN-CF-1", "Task 13"],
   ["TN-SE-2", "Task 16"],

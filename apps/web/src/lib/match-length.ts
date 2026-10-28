@@ -43,6 +43,8 @@ const VARIANT_OVERRIDE: Record<string, number> = {
   "football:youth": 50,
   // Badminton / table tennis by rally length.
   "badminton:bwf": 40,
+  // W2e (author's call): 3×15 sits between `short` (11) and `bwf` (21).
+  "badminton:bwf-3x15": 30,
   "badminton:short": 25,
   "tabletennis:bo5": 20,
   "tabletennis:bo7": 30,

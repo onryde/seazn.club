@@ -15,6 +15,7 @@ import {
   type EventEnvelope,
 } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
+import type { SanctionEndingDecl } from "../../core/sanction-ending.ts";
 import {
   scoreSegment,
   unitNumber,
@@ -1545,12 +1546,22 @@ export interface SetBasedPreset {
    * the umpire's ladder — DOMAIN.tabletennis.md:36), and volleyball uses the
    * FIVB four verbatim.
    *
-   * SCOPE: this bounds THE PAD ONLY. `eventSchema` keeps the full union (a
-   * referee removal that was recorded must still parse, and narrowing it
-   * would move frozen goldens), `arbitraryEvent` keeps generating all four,
-   * and `discipline.colors` keeps projecting all four.
+   * SCOPE: this bounds the pad and, since W2e, `arbitraryEvent` (a walk draws
+   * only a card this sport's umpire can show; W2e Task 3 re-recorded the table
+   * tennis floor streams that held a referee's `expulsion`). `eventSchema`
+   * keeps the full union (a referee removal that was recorded must still parse,
+   * and narrowing it would move frozen goldens), and `discipline.colors` keeps
+   * projecting all four.
    */
   sanctionLevels: readonly SetBasedSanctionLevel[];
+  /**
+   * W2e (spec 2026-10-28 §5.2; D3 (1), D12; X-SE-1) — which of `sanctionLevels` END the match (badminton's black card)
+   * and which only prompt the pad's "can the team still field six?" (volleyball). Read by the core fold
+   * (`ENDING_SANCTION_PENDING`), the scoring route's scorer exception (D13) and the pad, through the module's
+   * `sanctionEnding`; and by `arbitraryEvent` below, which follows an end-level sanction with its ending. Omitted = no
+   * sanction of this sport ends a match or prompts (table tennis: ITTF's cards are a warning and a penalty point).
+   */
+  sanctionEnding?: SanctionEndingDecl;
   /**
    * R5-1 — the service rules THIS federation plays (`SetBasedServeRotation`).
    *
@@ -2222,6 +2233,9 @@ export function makeSetBasedModule(
   const timeoutType = `${preset.key}.timeout`;
   const sanctionType = `${preset.key}.sanction`;
   const subType = `${preset.key}.sub`;
+  // W2e X-SE-1 — the sanction levels that END a match in this sport (`SetBasedPreset.sanctionEnding`); none when it
+  // declares none. Read by `arbitraryEvent` and `coarsen` below.
+  const endLevels: readonly string[] = preset.sanctionEnding?.endLevels ?? [];
   // Dotted like the period kernel's `<key>.suspension.start` — the `.start`
   // suffix is load-bearing shorthand for "there is no `.end`": expedite runs to
   // the end of the match (ITTF 2.15.4) and nothing ever stops it.
@@ -2461,6 +2475,8 @@ export function makeSetBasedModule(
     variants: preset.variants,
     ruleKeys: preset.ruleKeys,
     ...(preset.entrantModel === undefined ? {} : { entrantModel: preset.entrantModel }),
+    // W2e X-SE-1 — the sanction levels that end a match or prompt (see `SetBasedPreset.sanctionEnding`).
+    ...(preset.sanctionEnding === undefined ? {} : { sanctionEnding: preset.sanctionEnding }),
     // S8/#417 — always populated: the kernel default (`points_won` +
     // matches/sets_won/sets_lost) merges with whatever this preset declares,
     // never merely spread when present. See `mergePlayerStats`.
@@ -2719,6 +2735,13 @@ export function makeSetBasedModule(
     arbitraryEvent(state, rng: Rng): ModuleEvent<SetBasedEv> | null {
       if (state.phase === "pre") return { type: "core.start", payload: {} };
       if (state.phase !== "live") return null;
+      // W2e X-SE-1 (spec 2026-10-28 §5.2) — a match-ending sanction is followed by its ending at once: while one stands
+      // in a live match, the write path takes nothing else but an abandon, so a walk that drew anything else would be a
+      // ledger the write path refuses. The latest one is the one that waits (`latestEndingSanction`). Draws no rng.
+      const ending = (state.sanctions ?? []).filter((s) => endLevels.includes(s.level)).at(-1);
+      if (ending !== undefined) {
+        return { type: "core.forfeit", payload: { by: state.entrants[ending.by], reason: "disqualified" } };
+      }
 
       const randomEntrant = () => (rng() < 0.5 ? state.entrants.home : state.entrants.away);
       // W4 — the testkit's lineups are `${entrantId}-p{n}` (helpers.ts), so the
@@ -2746,8 +2769,10 @@ export function makeSetBasedModule(
         if (type === expediteType) return { type, payload: {} };
         if (type === timeoutType) return { type, payload: { by, technical: rng() < 0.3 } };
         if (type === sanctionType) {
-          const levels = SetBasedSanctionLevel.options;
-          const level = levels[Math.floor(rng() * levels.length)] as (typeof levels)[number];
+          // W2e (controller ruling, Task 3): only a card this sport's umpire can show — the pad's own list, so table
+          // tennis never draws the referee's `expulsion` or `disqualification`.
+          const levels = preset.sanctionLevels;
+          const level = levels[Math.floor(rng() * levels.length)]!;
           return { type, payload: { by, level, person: randomPerson(by) } };
         }
         if (type === subType) {
@@ -2915,6 +2940,16 @@ export function makeSetBasedModule(
           // already discards `returns`); with nothing counted it is the only
           // reading of the set there is, so keep it.
           if (a !== 0 || b !== 0) continue;
+          out.push({ type: event.type, payload: event.payload });
+          continue;
+        }
+        // W2e X-SE-1 — except a sanction at a level that ENDS the match: on the
+        // write path nothing but its ending (or an abandon) follows it, so the
+        // open set is flushed BEFORE it, as at any other event that stops play.
+        // Flushed after it, the set's snapshot would follow the sanction and
+        // the strict coarse fold would refuse it (ENDING_SANCTION_PENDING).
+        if (event.type === sanctionType && endLevels.includes((event.payload as SetBasedSanction).level)) {
+          flushPartial();
           out.push({ type: event.type, payload: event.payload });
           continue;
         }

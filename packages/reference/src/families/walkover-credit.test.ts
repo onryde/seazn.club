@@ -262,7 +262,7 @@ describe("walkover-credit: the rally-point set sports (VB, TT, BD)", () => {
     expect(ret("tabletennis", "bo7", [11, 9, 5], [9, 11, 11])).toEqual(single(w, mirrorSets(w), true));
   });
   it("BD-WO-1: 2-0 games, each 21-0 — and the stage's own target (X-WO-1): short 11, BWF 3x15 15", () => {
-    for (const [name, w] of [[DEFAULT, sets(2, 0, 42, 0)], ["bwf", sets(2, 0, 42, 0)], ["short", sets(2, 0, 22, 0)], ["bwf 3x15 (from 2027-01-04, stage match rules)", sets(2, 0, 30, 0)]] as const) {
+    for (const [name, w] of [[DEFAULT, sets(2, 0, 42, 0)], ["bwf", sets(2, 0, 42, 0)], ["short", sets(2, 0, 22, 0)], ["bwf-3x15", sets(2, 0, 30, 0)]] as const) {
       expect(wo("badminton", name), name).toEqual(single(w, mirrorSets(w), false));
     }
   });
@@ -611,7 +611,7 @@ describe("walkover-credit's vocabulary is the product's (the registry, each spor
       }
     });
     expect(sports).toBe(11);
-    expect(checked).toBe(41); // 44 entries less 3 named extras (hockey frozen at 3, volleyball best of 3, badminton 3x15)
+    expect(checked).toBe(42); // 44 entries less 2 named extras (hockey frozen at 3, volleyball best of 3); badminton's 3x15 is declared since W2e
   });
 
   it("each cfg key the data writes exists in the sport's configSchema (and the schema accepts the value written)", () => {
@@ -656,7 +656,7 @@ describe("walkover-credit's vocabulary is the product's (the registry, each spor
       }
     });
     expect(sports).toBe(11);
-    expect(names).toBe(41); // zero compared would be a vacuous green
+    expect(names).toBe(42); // zero compared would be a vacuous green
     expect(keys).toBeGreaterThan(names - 2); // every declared entry but chess's two writes a key
     // A listed difference that is no longer a difference fails too: the list is cleared, never left stale.
     expect([...diffs].sort(), `the data and the engine's declaration differ at: ${diffs.join("; ")}`).toEqual(Object.keys(EXPECTED_DIFFERENCES).sort());
@@ -674,7 +674,7 @@ describe("walkover-credit's vocabulary is the product's (the registry, each spor
         else { expect(fromEngine, `${key} ${name}`).toEqual(fromData); same++; }
       }
     });
-    expect(same + differ).toBe(41);
+    expect(same + differ).toBe(42);
     expect(differ).toBe(Object.keys(EXPECTED_DIFFERENCES).length);
   });
 

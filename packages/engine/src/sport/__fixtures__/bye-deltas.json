@@ -1600,6 +1600,68 @@
         }
       ]
     },
+    "bwf-3x15": {
+      "home": [
+        {
+          "entrantId": "W",
+          "played": 1,
+          "won": 1,
+          "drawn": 0,
+          "lost": 0,
+          "points": 2,
+          "metrics": {
+            "sets_won": 0,
+            "sets_lost": 0,
+            "points_won": 0,
+            "points_lost": 0
+          }
+        },
+        {
+          "entrantId": "__bye__",
+          "played": 1,
+          "won": 0,
+          "drawn": 0,
+          "lost": 1,
+          "points": 0,
+          "metrics": {
+            "sets_won": 0,
+            "sets_lost": 0,
+            "points_won": 0,
+            "points_lost": 0
+          }
+        }
+      ],
+      "away": [
+        {
+          "entrantId": "__bye__",
+          "played": 1,
+          "won": 0,
+          "drawn": 0,
+          "lost": 1,
+          "points": 0,
+          "metrics": {
+            "sets_won": 0,
+            "sets_lost": 0,
+            "points_won": 0,
+            "points_lost": 0
+          }
+        },
+        {
+          "entrantId": "W",
+          "played": 1,
+          "won": 1,
+          "drawn": 0,
+          "lost": 0,
+          "points": 2,
+          "metrics": {
+            "sets_won": 0,
+            "sets_lost": 0,
+            "points_won": 0,
+            "points_lost": 0
+          }
+        }
+      ]
+    },
     "short": {
       "home": [
         {

@@ -8,6 +8,8 @@ runContract(badminton, BADMINTON_RULES, {
   crossField: {
     "-/cap/15": "cap must be ≥ the set target",
     "bwf/cap/15": "cap must be ≥ the set target",
+    "bwf-3x15/setTo/30": "cap must be ≥ the set target",
+    "bwf-3x15/finalSetTo/30": "cap must be ≥ the set target",
     "short/setTo/30": "cap must be ≥ the set target",
     "short/finalSetTo/30": "cap must be ≥ the set target",
   },

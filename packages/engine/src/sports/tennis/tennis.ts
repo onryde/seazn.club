@@ -53,6 +53,11 @@ const nestedTennis = makeNestedModule({
     allowSquadGrowth: false,
   }),
   entrantModel: { kinds: ["individual", "pair"], defaultKind: "individual" },
+  // W2e (spec 2026-10-28 §5.2; D3 (1), D13; TN-SE-1): a `default` (the last step of the ITF Code of Conduct's point
+  // penalty schedule) ends the match against the defaulted player; it is followed by its ending, core.forfeit
+  // {reason: "disqualified"}, with X-RT-1's credit (TN-RT-1). The other three levels are records. No tennis level only
+  // prompts (D12 is volleyball's).
+  sanctionEnding: { eventType: "tennis.sanction", endLevels: ["default"], promptLevels: [] },
   // W2d (SPEC §5.10, TN-TB-1): 4.01 C.3 — matches won, then matches played, then for each of set and game ratio the
   // two-way head-to-head first; then the seed, then lots (the product's own final step).
   defaultTiebreakers: ["wins", "matches_played", "h2h_two", "set_ratio", "h2h_two", "game_ratio", "h2h_two", "seed", "lots"],

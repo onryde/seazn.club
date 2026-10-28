@@ -20,6 +20,7 @@ import {
   type EventEnvelope,
 } from "../../core/events.ts";
 import type { Rng } from "../../core/rng.ts";
+import type { SanctionEndingDecl } from "../../core/sanction-ending.ts";
 import { DurationSeconds, GameTime, compareGameTime } from "../../core/time.ts";
 import {
   currentUnit,
@@ -847,7 +848,7 @@ function generatorSetElapsed(state: NestedState): number {
 // Deciding-set resolution — which rules govern the set about to be played.
 // ---------------------------------------------------------------------------
 
-interface SetRules {
+export interface SetRules {
   gamesTo: number;
   winBy: number;
   tiebreakAt: number | null;
@@ -897,6 +898,43 @@ function setGamesWinner(h: number, a: number, rules: SetRules): Side | null {
   const lo = Math.min(h, a);
   if (hi >= rules.gamesTo && hi - lo >= rules.winBy) return winner;
   return null;
+}
+
+/** The most games one side of a set can hold that the pad's set-score field takes (`gamesFieldBound`'s set half): the
+ *  target with a deuce margin, or, for an advantage set (no tie-break, so no games ceiling), a plausibility sentinel. */
+const UNBOUNDED_ADVANTAGE_SET_SENTINEL = 200;
+function setGamesBound(set: { gamesTo: number; winBy: number; tiebreakAt: number | null }): number {
+  return set.tiebreakAt === null ? UNBOUNDED_ADVANTAGE_SET_SENTINEL : set.gamesTo + set.winBy + 2;
+}
+
+/**
+ * W2e SC-S1 (spec 2026-10-28 §5.5; TN-SS-1; RBS:343-350) — whether `h`–`a` is a LIVE games score a set under `rules` can
+ * reach: one from which a further plain game is played. True iff `h`–`a` is neither a finished score nor the tie-break
+ * score (`tiebreakAt`–`tiebreakAt`, where the tie-break is the next game), and a path of one game at a time leads to it
+ * from 0–0 through live scores only. So 7–6 is not live with the tie-break at 6-all (it comes only from 6–6, the tie-break,
+ * or 7–5, a finished set), which is why 8–6 cannot happen there; with the tie-break at 3-all and games to 6, 3–3 can be
+ * stepped around (4–2 → 4–3), so 7–6 is live and 8–6 is a real set. A walk-back, not the closed form "the loser's games
+ * are below `tiebreakAt`", which holds only while `tiebreakAt ≥ gamesTo − 1` (`set` is an API rule key: any shape can be
+ * stored).
+ *
+ * Memoised in one table per call, filled forward from 0–0, and bounded by the pad's own set-score field
+ * (`setGamesBound`): a live score at the bound has no final the pad can enter, so the table never exceeds bound² cells
+ * whatever a client sends.
+ */
+export function reachableLiveGames(h: number, a: number, rules: SetRules): boolean {
+  const bound = setGamesBound(rules);
+  if (!Number.isInteger(h) || !Number.isInteger(a) || h < 0 || a < 0 || h >= bound || a >= bound) return false;
+  const live = (x: number, y: number): boolean =>
+    setGamesWinner(x, y, rules) === null && !(rules.tiebreakAt !== null && x === rules.tiebreakAt && y === rules.tiebreakAt);
+  const width = a + 1;
+  const reached = new Uint8Array((h + 1) * width);
+  for (let x = 0; x <= h; x++) {
+    for (let y = 0; y <= a; y++) {
+      const fromBefore = (x === 0 && y === 0) || (x > 0 && reached[(x - 1) * width + y] === 1) || (y > 0 && reached[x * width + y - 1] === 1);
+      reached[x * width + y] = fromBefore && live(x, y) ? 1 : 0;
+    }
+  }
+  return reached[h * width + a] === 1;
 }
 
 // ---------------------------------------------------------------------------
@@ -1367,11 +1405,15 @@ function applySetSummary(
   const winner: Side = gamesWinner ?? (home >= away ? "home" : "away");
   const prevH = winner === "home" ? home - 1 : home;
   const prevA = winner === "away" ? away - 1 : away;
-  const wasLive =
-    setGamesWinner(prevH, prevA, rules) === null &&
-    !(rules.tiebreakAt !== null && prevH === rules.tiebreakAt && prevA === rules.tiebreakAt);
-  if (strict && (prevH < 0 || prevA < 0 || !wasLive)) {
-    invalid("set summary is not a reachable final score", { home, away, rules });
+  // W2e SC-S1 (TN-SS-1) — the score before the last game must be one the set can REACH, walking back to 0–0, not merely
+  // one that is still live (the one-step check took 8–6 with the tie-break at 6-all, through a 7–6 only 6–6 leads to).
+  // `strict` only, as every cfg-derived refusal here: a summary recorded before W2e still banks on replay.
+  if (strict && !reachableLiveGames(prevH, prevA, rules)) {
+    throw new EngineError(
+      "SET_SCORE_UNREACHABLE",
+      `set score ${home}–${away} cannot happen under this set's tie-break: no game leads to it from a score the set can reach`,
+      { home, away, rules },
+    );
   }
   return bankSet(state, winner, { home, away });
 }
@@ -1470,6 +1512,13 @@ export interface NestedPreset {
    * `() => DEFAULT_LINEUP_POLICY` to get it.
    */
   lineupPolicy?: (cfg: NestedCfg) => LineupPolicy;
+  /**
+   * W2e (spec 2026-10-28 §5.2; D3 (1), D13; X-SE-1, TN-SE-1) — the sanction levels that END the match (tennis's
+   * `default`). Read by the core fold (`ENDING_SANCTION_PENDING`), the scoring route's scorer exception (D13) and the pad,
+   * through the module's `sanctionEnding`; and by `arbitraryEvent` below, which follows an end-level sanction with its
+   * ending. Omitted = no sanction of this sport ends a match.
+   */
+  sanctionEnding?: SanctionEndingDecl;
 }
 
 const METRICS: MetricSpec[] = [
@@ -1560,11 +1609,7 @@ function nestedPosition(state: NestedState): MatchPosition {
  *  a generous open-ended sentinel instead — the same plausibility-sentinel
  *  pattern cricket's padSpec uses for `ballsPerInnings: null`. */
 function gamesFieldBound(cfg: NestedCfg): number {
-  const UNBOUNDED_ADVANTAGE_SET_SENTINEL = 200;
-  const base =
-    cfg.set.tiebreakAt === null
-      ? UNBOUNDED_ADVANTAGE_SET_SENTINEL
-      : cfg.set.gamesTo + cfg.set.winBy + 2;
+  const base = setGamesBound(cfg.set);
   const mtb =
     cfg.finalSet !== "same" && "matchTiebreakTo" in cfg.finalSet ? cfg.finalSet.matchTiebreakTo + 2 : 0;
   return Math.max(base, mtb);
@@ -2017,6 +2062,9 @@ export function makeNestedModule(
   const sanctionType = `${preset.key}.sanction`;
   const interruptionType = `${preset.key}.interruption`;
   const gameAwardType = `${preset.key}.game.award`;
+  // W2e X-SE-1 — the sanction levels that END a match in this sport (`NestedPreset.sanctionEnding`); none when it declares
+  // none. Read by `arbitraryEvent` below.
+  const endLevels: readonly string[] = preset.sanctionEnding?.endLevels ?? [];
   // S6/#416 (W5) — type string -> its own payload schema, by reference, the
   // SAME 5 schema objects `NestedEv` unions (top of this file). Unlike the
   // set-based kernel, this is a true bijection with no kernel-union
@@ -2345,6 +2393,8 @@ export function makeNestedModule(
 
     officialLabel: preset.officialLabel,
     ...(preset.entrantModel === undefined ? {} : { entrantModel: preset.entrantModel }),
+    // W2e X-SE-1 — the sanction levels that end a match (see `NestedPreset.sanctionEnding`).
+    ...(preset.sanctionEnding === undefined ? {} : { sanctionEnding: preset.sanctionEnding }),
     // S8/#417 — always populated: the kernel default (`points_won` +
     // matches/sets_won/sets_lost/games_won) merges with whatever this preset
     // declares, never merely spread when present. See `mergePlayerStats`.
@@ -2364,6 +2414,13 @@ export function makeNestedModule(
     arbitraryEvent(state, rng: Rng): ModuleEvent<NestedEv> | null {
       if (state.phase === "pre") return { type: "core.start", payload: {} };
       if (state.phase !== "live") return null;
+      // W2e X-SE-1 (spec 2026-10-28 §5.2) — a match-ending sanction is followed by its ending at once: while one stands
+      // in a live match, the write path takes nothing else but an abandon, so a walk that drew anything else would be a
+      // ledger the write path refuses. The latest one is the one that waits (`latestEndingSanction`). Draws no rng.
+      const ending = (state.sanctions ?? []).filter((s) => endLevels.includes(s.level)).at(-1);
+      if (ending !== undefined) {
+        return { type: "core.forfeit", payload: { by: state.entrants[ending.by], reason: "disqualified" } };
+      }
 
       const randomEntrant = () => (rng() < 0.5 ? state.entrants.home : state.entrants.away);
       // W4 — the testkit's lineups are `${entrantId}-p{n}` (helpers.ts), so the

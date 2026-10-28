@@ -5,6 +5,9 @@ import { z } from "zod";
 import { EngineError } from "../core/errors.ts";
 import { SETTLE_METHODS, settledMethod, type CoreEv, type EventEnvelope, type FoldableModule, type FoldContext } from "../core/events.ts";
 import type { LineupPolicy, SquadState } from "../core/lineup.ts";
+import type { SanctionEndingDecl } from "../core/sanction-ending.ts";
+// W2e — a sport author declares `sanctionEnding` here; the type lives in core, which the fold reads it from.
+export type { SanctionEndingDecl } from "../core/sanction-ending.ts";
 import type { MatchPosition } from "../core/position.ts";
 import type { Rng } from "../core/rng.ts";
 import type {
@@ -880,6 +883,16 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // `lineupPolicy: () => DEFAULT_LINEUP_POLICY` rather than omitting it.
   lineupPolicy?(cfg: Cfg): LineupPolicy;
   onLineup?(state: State, squads: SquadState): State;
+  /**
+   * W2e (spec 2026-10-28 §5.2; D3 (1), D12, D13; rule X-SE-1) — restated from FoldableModule (src/core/events.ts) because
+   * this is the interface a sport author reads. Which levels of the sport's sanction event END the match (`endLevels`:
+   * badminton's black card, tennis's default), and after which the pad asks whether a team can still field six
+   * (`promptLevels`: volleyball, D12). The ending is the recorded `core.forfeit` that follows the sanction; until it is
+   * written, and while the match is neither decided nor abandoned, the write path refuses scoring
+   * (`ENDING_SANCTION_PENDING`). A declaration owes `sanctionEndingIssues(decl)` to be []. Absent ⇒ no sanction ends a
+   * match.
+   */
+  readonly sanctionEnding?: SanctionEndingDecl;
   variants: Record<string, Partial<Cfg>>; // named presets: t20, odi, beach, blitz…
   /**
    * W2c (spec §4.1 as amended) — the game rule of who may set which cfg key, at which scope, for which stage kinds and

@@ -7,7 +7,12 @@
 import type { MessageKey } from "@/lib/messages";
 
 export const VARIANT_LABEL_KEYS: Readonly<Record<string, Readonly<Record<string, MessageKey>>>> = {
-  badminton: { bwf: "variant.badminton.bwf", short: "variant.badminton.short" },
+  // `bwf-3x15` (W2e): the dictionary key drops the hyphen, as carrom's `club-29` and table tennis's `hardbat-21` do.
+  badminton: {
+    bwf: "variant.badminton.bwf",
+    "bwf-3x15": "variant.badminton.bwf3x15",
+    short: "variant.badminton.short",
+  },
   boardgame: {
     classical: "variant.boardgame.classical",
     rapid: "variant.boardgame.rapid",

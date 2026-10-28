@@ -18,6 +18,9 @@ import { slateStateOf } from "@/components/overlay/overlay-slate";
 import { GALLERY_RESULT_VARIANT_SPORTS, GALLERY_SNAPSHOT_KINDS } from "@/components/overlay/gallery-matrix";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { CORE_EVENT_SCHEMAS, isKernelOwnedEventType, kernelOwnsEvent } from "@seazn/engine/core";
+import { defaultLineupPair } from "@seazn/engine/testkit";
+import { resolvePositions } from "@seazn/engine/sport";
+import { resolveLatestModule } from "@/server/engine-db/registry";
 import { GALLERY_SIDES, galleryResultVariants, gallerySnapshots, walkToDecision } from "../gallery-snapshots";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -211,4 +214,52 @@ describe("walkToDecision — the sample walk only ever applies play", () => {
     expect(applied).toEqual(["probe.point"]);
     expect(played.map((e) => e.type)).toEqual(["probe.point"]);
   });
+});
+
+describe("walkToDecision — a match-ending sanction is redrawn like the forfeit it calls for (W2e X-SE-1, Task 3 review M2)", () => {
+  // W2e spec §5.2: a badminton disqualification and a tennis default end the match. The generator follows such a card with
+  // its forfeit (X-SE-1), so a walk that took the card would draw nothing but core.forfeit next and throw "kept yielding".
+  // The levels are read from each module's own declaration, never typed here.
+  const SEEDS = Array.from({ length: 40 }, (_, i) => i + 1);
+  const declaring = OVERLAY_SPORT_KEYS.filter((k) => (resolveLatestModule(k).sanctionEnding?.endLevels.length ?? 0) > 0);
+
+  it("premise: the overlay sports that declare a match-ending level are spec §5.2's two", () => {
+    expect([...declaring].sort()).toEqual(["badminton", "tennis"]);
+  });
+
+  it.each(["badminton", "tennis"])(
+    "%s: every seeded walk decides by play with no ending card in it, and some walk was OFFERED one (anti-vacuity)",
+    (sportKey) => {
+      const real = resolveLatestModule(sportKey);
+      const decl = real.sanctionEnding!;
+      const isEnding = (e: { type: string; payload: unknown }) =>
+        e.type === decl.eventType && decl.endLevels.includes((e.payload as { level?: string }).level ?? "");
+      let offered = 0;
+      let walksOffered = 0;
+      let walks = 0;
+      for (const seed of SEEDS) {
+        const before = offered;
+        // The same module, whose generator is counted: Object.create keeps every other method and its `this`.
+        const counted = Object.create(real, {
+          arbitraryEvent: {
+            value: (state: unknown, rng: () => number) => {
+              const e = real.arbitraryEvent!(state as never, rng);
+              if (e !== null && isEnding(e)) offered++;
+              return e;
+            },
+          },
+        }) as AnySportModule;
+        const cfg = real.configSchema.parse({});
+        const lineups = defaultLineupPair(resolvePositions(real, cfg));
+        const played = walkToDecision(sportKey, counted, cfg, lineups, seed);
+        walks++;
+        if (offered > before) walksOffered++;
+        expect(played.filter(isEnding), `${sportKey} seed ${seed}: an ending card was applied`).toEqual([]);
+        expect(played.filter((e) => e.type.startsWith("core.") && e.type !== "core.start"), `${sportKey} seed ${seed}`).toEqual([]);
+      }
+      console.log(`${sportKey}: ${walks} walks, ${walksOffered} offered an ending card, ${offered} cards redrawn`);
+      expect(walks).toBe(SEEDS.length);
+      expect(walksOffered, `${sportKey}: no seed drew a ${decl.endLevels.join("/")} card — the sweep proved nothing`).toBeGreaterThan(0);
+    },
+  );
 });

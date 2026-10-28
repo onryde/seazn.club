@@ -34,16 +34,20 @@ export const FOLD_EPOCH = Object.freeze({
   // type (GOAL_KIND_REQUIRED), so a phone that still sends an untyped goal must update, and the corpus's untyped goals were
   // re-recorded as field goals (kind "fg"). As with the lineup refusal, it is the write path that refuses: replay is lenient,
   // and a recorded untyped goal still folds as a field goal.
+  // W2e T3 (BD-SE-1, X-SE-1) raised badminton to 2: the write path refuses scoring after a black card until its ending (ENDING_SANCTION_PENDING), and golden stream default#11 recorded rallies after one, so it was re-recorded in place (the ending replaces the refused rally, and the walk ends there).
+  // W2e T3 (controller ruling on the set-kernel generator) raised table tennis to 2: arbitraryEvent draws only the sport's own sanction levels, so the three floor walks that drew a referee's expulsion draw a penalty there (summary and state moved; outcome and deltas did not), re-recorded in place.
+  // W2e T4 (TN-SE-1, X-SE-1; TN-SS-1) raised tennis to 2 (its minor back to 0): the write path refuses scoring after a default until its ending (ENDING_SANCTION_PENDING) and a set summary no set can reach (SET_SCORE_UNREACHABLE); coverage walk default#13 recorded a point after a default, so the ending replaced it in place (the walk ends there), and the floor no longer derives its disqualification story default#700007, which recorded play after a default too.
   football: 3, cricket: 1, boardgame: 3, carrom: 3, generic: 3, volleyball: 1,
-  badminton: 1, tabletennis: 1, tennis: 1, icehockey: 2, hockey: 4,
+  badminton: 2, tabletennis: 2, tennis: 2, icehockey: 2, hockey: 4,
 } as const satisfies Readonly<Record<string, number>>);
 export type FoldEpochSport = keyof typeof FOLD_EPOCH;
 // The same sports as FOLD_EPOCH: `satisfies` over its keys makes a sport missing here, or one only here, a type error.
 export const FOLD_MINOR = Object.freeze({
   // W2d T11 (TN-TB-2, RB2A-11) raised tennis one MINOR: the nested kernel's table `gamesOf` credits a won match tie-break as one game
   // to its winner, so a stream ending in one moves its standings deltas (games_won/games_lost) and no state, outcome or summary.
+  // W2e T4 reset it to 0 with tennis's second MAJOR.
   football: 0, cricket: 0, boardgame: 0, carrom: 0, generic: 0, volleyball: 0,
-  badminton: 0, tabletennis: 0, tennis: 1, icehockey: 0, hockey: 0,
+  badminton: 0, tabletennis: 0, tennis: 0, icehockey: 0, hockey: 0,
 } as const satisfies Readonly<Record<FoldEpochSport, number>>);
 
 function entryOf(table: Readonly<Record<string, number>>, name: "FOLD_EPOCH" | "FOLD_MINOR", sport: string): number {

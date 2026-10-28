@@ -7,6 +7,26 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-10-28",
+    title: "Breaking: a tennis set score no set can reach is refused",
+    lines: [
+      "POST /fixtures/{id}/events refuses a tennis.set_summary in plain games whose score no set can reach under its tie-break (8–6 or 9–7 with the tie-break at 6-all, 5–3 in a Fast4 set) with 422 SET_SCORE_UNREACHABLE, and nothing is written.",
+      "POST /divisions/{id}/events/import rejects such a stream the same way: error.code import.fold_rejected, error.engineCode SET_SCORE_UNREACHABLE, nothing written for its fixture.",
+      "Send the score that was played; a set that went to the tie-break is 7–6 (or 4–3 in Fast4) with its tb points. Summaries recorded before the change still replay as recorded.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
+    title: "Breaking: a match-ending sanction must be followed by its ending",
+    lines: [
+      "After a badminton disqualification (black card) or a tennis default, POST /fixtures/{id}/events refuses every event but core.forfeit and core.abandon with 422 ENDING_SANCTION_PENDING, and nothing is written.",
+      "POST /divisions/{id}/events/import rejects such a stream the same way: error.code import.fold_rejected, error.engineCode ENDING_SANCTION_PENDING, nothing written for its fixture.",
+      "Send the ending, core.forfeit with by the sanctioned entrant and reason \"disqualified\", or void the sanction. Ledgers recorded before the change still replay as recorded. Every other sanction level and sport is unchanged.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
     title: "Breaking: the standings export refuses a table with no results",
     lines: [
       "GET /divisions/{id}/exports/standings with no stored table now answers 404 STANDINGS_NOT_AVAILABLE (\"no standings yet\"), not 404 NOT_FOUND.",

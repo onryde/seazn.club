@@ -98,6 +98,16 @@ export const EngineErrorCode = z.enum([
   // an untyped goal still folds, and that goal counts as a field goal. Named, not CONFIG_INVALID, because the scorer sees
   // it. data.goalKinds lists the kinds the sport records. Appended last, existing order frozen.
   "GOAL_KIND_REQUIRED",
+  // W2e X-SE-1 (spec 2026-10-28 §5.2, D3 (1)): a scoring event after a sanction at a level the sport declares as match-ending
+  // (`SportModule.sanctionEnding`), before its ending (`core.forfeit{disqualified}`) is recorded. The WRITE path's refusal only
+  // (core/events.ts): a ledger written before W2e with play after such a sanction still folds as recorded. core.forfeit and
+  // core.abandon stay admitted; voiding the sanction lifts it. data: { by, level }. Appended last, existing order frozen.
+  "ENDING_SANCTION_PENDING",
+  // W2e SC-S1 (spec 2026-10-28 §5.5, D8; TN-SS-1): a tennis set summary in plain games whose score before its last game no
+  // set can reach (`reachableLiveGames`, sports/nested/kernel.ts): 8–6 or 9–7 with the tie-break at 6-all, 5–3 in a Fast4
+  // set (3-all goes to the tie-break). The WRITE path's refusal only: a summary recorded before W2e still folds as recorded.
+  // data: { home, away, rules }. Appended last, existing order frozen.
+  "SET_SCORE_UNREACHABLE",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 
