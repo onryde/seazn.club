@@ -247,6 +247,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     expect(await endAll()).toMatchObject({ ended: 1 });
     expect(await replayParts(f)).toEqual([{ partNo: 1, url: youtubeWatchUrl(first) }]);
     expect(await panelParts(), "one part: the panel lists it").toEqual([{ partNo: 1, url: youtubeWatchUrl(first) }]);
+    const streamUrl = async () => (await sql<{ stream_url: string | null }[]>`select stream_url from fixtures where id = ${f}`)[0]!.stream_url;
+    expect(await streamUrl(), "the end step wrote Part 1's address as the fixture's link").toBe(youtubeWatchUrl(first));
 
     const second = await playAndStop();
     expect(second, "premise: the second Go live is a NEW broadcast").not.toBe(first);
@@ -260,5 +262,9 @@ describe.skipIf(!HAS_DB)("YouTube Connect T16 - a fixture's replay parts", () =>
     expect(await replayParts(f)).toEqual(expected);
     expect(await fixtureReplayParts(auth.orgId, f)).toEqual(expected);
     expect(await panelParts(), "two parts: the panel's session view lists both, in order").toEqual(expected);
+    // The contract the public page's dedupe (`linkIsOneOfParts`) and the panel's "Replay" row rely on: the link is Part 1's and Part 2
+    // never replaces it - so a club's single link is never mistaken for a part, and a part is never shown twice.
+    expect(await streamUrl(), "Part 2 did not take the link").toBe(youtubeWatchUrl(first));
+    expect(await streamUrl()).not.toBe(youtubeWatchUrl(second));
   });
 });

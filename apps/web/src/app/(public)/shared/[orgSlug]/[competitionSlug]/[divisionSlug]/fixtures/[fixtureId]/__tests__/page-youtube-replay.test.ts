@@ -164,6 +164,28 @@ describe.skipIf(!HAS_DB)("the public match page shows the match's YouTube replay
     expect(pill(await pageHtml(s)), "a link that is not one of the parts shows").not.toBeNull();
   });
 
+  it("TWO parts and a stream_url that is Part 1 (the realistic state: the end step wrote Part 1's link and Part 2 never rewrites it): both tabs, and no second 'Replay' pill", async () => {
+    const s = await open();
+    const part1 = await completeBroadcast(s, at("10:00"));
+    const part2 = await completeBroadcast(s, at("11:00"));
+    await setFixture(s, "decided", youtubeWatchUrl(part1));
+    const html = await pageHtml(s);
+    const tabs = [...player(html).matchAll(/<button [^>]*role="tab"[^>]*>(.*?)<\/button>/g)].map((m) => m[1]);
+    expect(tabs, "premise: both parts are offered").toEqual(["Part 1", "Part 2"]);
+    expect(html, "the stored link is one of the parts, so no pill").not.toContain("public-stream-link");
+    expect(openLinks(html), "the open link follows the part showing (Part 1)").toHaveLength(1);
+    expect(openLinks(html)[0]).toContain(`href="${youtubeWatchUrl(part1)}"`);
+    expect(html.split(youtubeWatchUrl(part1)).length - 1, "Part 1's address appears once, as the open link").toBe(1);
+    // The link may equally be Part 2's (a club that re-pasted the later video): the dedupe is over ALL the parts, not the first.
+    await setFixture(s, "decided", youtubeWatchUrl(part2));
+    const html2 = await pageHtml(s);
+    expect([...player(html2).matchAll(/role="tab"/g)], "premise: still both tabs").toHaveLength(2);
+    expect(html2).not.toContain("public-stream-link");
+    // Negative twin: a link that is neither part DOES show, on the same two-part page.
+    await setFixture(s, "decided", TWITCH);
+    expect(pill(await pageHtml(s))).toContain(`href="${TWITCH}"`);
+  });
+
   it("a club's own DIFFERENT stream_url still renders, beside the player", async () => {
     const s = await open();
     await setFixture(s, "decided", TWITCH);
