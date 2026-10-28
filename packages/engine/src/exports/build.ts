@@ -107,6 +107,22 @@ export function buildTimetable(
   return base("timetable", title, sections, opts);
 }
 
+// The result columns a caller that declares none gets (every engine consumer outside apps/web).
+const RESULT_COLUMNS = ["P", "W", "D", "L"];
+
+/** A row's result cells under `declared` (W2d follow-up m3): the caller's, paired with its headers — or, with no
+ *  declaration, the row's own counts. A row that does not pair is refused, never printed shifted. */
+function resultCells(r: ExportStandingsRow, declared: readonly string[] | undefined): readonly (string | number)[] {
+  if (declared === undefined) {
+    if (r.results !== undefined) throw new EngineError("CONFIG_INVALID", `standings: ${r.name} carries result cells but no result columns are declared`, {});
+    return [r.played, r.won, r.drawn, r.lost];
+  }
+  if (r.results?.length !== declared.length) {
+    throw new EngineError("CONFIG_INVALID", `standings: ${r.name} has ${r.results?.length ?? "no"} result cells for ${declared.length} columns`, {});
+  }
+  return r.results;
+}
+
 /** Standings (29 May landscape): base columns + the sport's metric ledger. */
 export function buildStandings(
   title: string,
@@ -114,17 +130,24 @@ export function buildStandings(
   opts: BuildOpts,
 ): DocModel {
   const metricColumns = opts.metricColumns ?? [];
-  const columns = ["#", "Team", "P", "W", "D", "L", ...metricColumns, "Pts"];
+  const headers = opts.i18n?.standingsHeaders;
+  if (headers !== undefined && headers.metrics.length !== metricColumns.length) {
+    throw new EngineError("CONFIG_INVALID", `standings: ${headers.metrics.length} metric headers for ${metricColumns.length} metric columns`, {});
+  }
+  const columns = [
+    "#",
+    headers?.team ?? "Team",
+    ...(opts.resultColumns ?? RESULT_COLUMNS),
+    ...(headers?.metrics ?? metricColumns),
+    headers?.points ?? "Pts",
+  ];
   const hasBadges = rows.some((r) => r.badgeUrl != null);
   const table = {
     columns,
     rows: rows.map((r, i) => [
       i + 1,
       r.name,
-      r.played,
-      r.won,
-      r.drawn,
-      r.lost,
+      ...resultCells(r, opts.resultColumns),
       ...metricColumns.map((m) => r.metrics[m] ?? 0),
       r.points,
     ]),

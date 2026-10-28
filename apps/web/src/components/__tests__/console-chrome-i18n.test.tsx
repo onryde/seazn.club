@@ -33,6 +33,16 @@ describe("console chrome i18n", () => {
     expect(html).not.toContain("Sign out");
   });
 
+  it("LogoutButton's visible label appears from `sm` by default (the player home's own header is unchanged) and from `lg` when the gantry asks; both are named by aria-label", () => {
+    const tokens = (html: string) => (html.match(/<span class="([^"]*)">Sign out<\/span>/)?.[1] ?? "").split(/\s+/);
+    const base = renderToStaticMarkup(<LogoutButton label="Sign out" />);
+    const gantry = renderToStaticMarkup(<LogoutButton label="Sign out" labelFrom="lg" />);
+    expect(tokens(base)).toEqual(["hidden", "sm:inline"]);
+    expect(tokens(gantry)).toEqual(["hidden", "lg:inline"]);
+    expect(base).toContain('aria-label="Sign out"');
+    expect(gantry).toContain('aria-label="Sign out"');
+  });
+
   it("HelpMenu labels its trigger from the provided labels slice", () => {
     const html = renderToStaticMarkup(<HelpMenu labels={{ ...helpLabels, menu: "Aide" }} />);
     expect(html).toContain('aria-label="Aide"');

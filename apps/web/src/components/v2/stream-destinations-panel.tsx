@@ -1,6 +1,7 @@
 "use client";
-// Directory → Streaming (spec 2026-09-30 §4, owner rulings D1 D2 D6). Destinations are managed HERE only; the fixture
-// panel picks one. Remove is an archive (D2) and is refused while a match is live OR waiting on it — the row says which.
+// The Streaming page's destinations (spec 2026-09-30 §4, owner rulings D1 D2 D6; moved from the Directory 2026-10-27). Destinations
+// are managed HERE only; the fixture panel picks one. A YouTube channel connected through Google (YouTube Connect, youtube-connect-panel.tsx)
+// lists beside the pasted-key destinations and is told apart by DATA (`youtube` on the target), never by its kind. Remove is an archive (D2) and is refused while a match is live OR waiting on it — the row says which.
 // Follows venues-panel.tsx: inline forms and cards, no modals, `useConfirm` for Remove, `router.refresh()` after each
 // mutation, `apiV1` for every call.
 //
@@ -22,7 +23,11 @@ import {
 } from "@/lib/stream-destinations";
 import { keyShapeWarning } from "@/lib/stream-key-shape";
 import type { StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
+import type { YoutubeLanding } from "@/lib/youtube";
 import { PlatformMark, platformName } from "./stream-platform-mark";
+import {
+  YoutubeChannelPicker, YoutubeChannelRow, YoutubeConnectCard, YoutubeLandingNotice, wireOf, youtubeTargetLabel,
+} from "./youtube-connect-panel";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 type RowOp = "rename" | "replace" | "remove";
@@ -39,15 +44,6 @@ export function destinationMutationOutcome(status: number, _op: RowOp): "refresh
 /** D2: Replace key and Remove are locked while a match is live OR waiting on the destination. */
 export function rowLock(t: Pick<StreamTarget, "inUse">): { locked: boolean; matchNo: number | null } {
   return t.inUse ? { locked: true, matchNo: t.inUse.matchNo } : { locked: false, matchNo: null };
-}
-
-/** The `status` / `code` / `extra` of an `ApiV1Error` (lib/client-v1.ts), read structurally — `null` for anything that
- *  never reached the server (a network TypeError, an abort, a non-object). */
-function wireOf(err: unknown): { status: number; code: string; extra: Record<string, unknown> } | null {
-  if (typeof err !== "object" || err === null) return null;
-  const { status, code, extra } = err as { status?: unknown; code?: unknown; extra?: unknown };
-  if (typeof status !== "number" || typeof code !== "string") return null;
-  return { status, code, extra: typeof extra === "object" && extra !== null ? (extra as Record<string, unknown>) : {} };
 }
 
 /** The admin seat an over-quota org has frozen (auth.ts `requireOrgAuth` → entitlement-freeze.ts
@@ -112,7 +108,7 @@ type Run = <T>(op: Op, kind: StreamTargetKind, call: () => Promise<T>) => Promis
 type AddBody = { kind: StreamPlatform; label: string; streamKey: string; watchUrl?: string };
 
 export function StreamDestinationsPanel({
-  orgId, canEdit, targets, locale, initialAddOpen = false,
+  orgId, canEdit, targets, locale, landing = null, initialAddOpen = false, initialConnectOpen = false,
 }: {
   orgId: string;
   /** Owner or admin (the page's `canEdit`, the API's write gate). Every member sees the list; only these see actions. */
@@ -120,12 +116,18 @@ export function StreamDestinationsPanel({
   targets: StreamTarget[];
   /** For the "added {date}" subline — the page's locale, formatted the same on server and client. */
   locale: string;
+  /** What the YouTube connect round trip landed with (`?youtube=<code>[&pending=<id>]`, read once by the page): a banner, or the
+   *  channel picker for a `pick`. Everyone who can see the page sees the banner; only an editor gets the picker. */
+  landing?: YoutubeLanding | null;
   /** Test seam: opens the add form on first render. The page never passes it. */
   initialAddOpen?: boolean;
+  /** Test seam: opens the YouTube consent step on first render. The page never passes it. */
+  initialConnectOpen?: boolean;
 }) {
   const msg = useMsg();
   const router = useRouter();
   const [addOpen, setAddOpen] = useState(initialAddOpen);
+  const [connectOpen, setConnectOpen] = useState(initialConnectOpen);
   const [addError, setAddError] = useState<string | null>(null);
 
   const run: Run = async (op, kind, call) => {
@@ -146,30 +148,48 @@ export function StreamDestinationsPanel({
     }
   };
 
+  // Adding a pasted key and connecting a channel are two ways in; one form open at a time, so the page never asks for both.
   const openAdd = () => {
     setAddError(null);
+    setConnectOpen(false);
     setAddOpen(true);
   };
+  const openConnect = () => {
+    setAddError(null);
+    setAddOpen(false);
+    setConnectOpen(true);
+  };
+
+  // The connected channels and the pasted-key destinations are told apart by what the row CARRIES, not by its kind.
+  const channels = targets.filter((t) => t.youtube !== null);
+  const keys = targets.filter((t) => t.youtube === null);
+  const connectButton = (testid: string) => (
+    <button type="button" data-testid={testid} aria-expanded={connectOpen} onClick={() => (connectOpen ? setConnectOpen(false) : openConnect())} className="btn btn-ghost min-h-11">
+      <PlatformMark kind="youtube" size="sm" />
+      {msg("streaming.youtube.connect")}
+    </button>
+  );
 
   return (
     <div data-testid="stream-destinations" className="space-y-4">
+      {landing && landing.code !== "pick" && <YoutubeLandingNotice code={landing.code} />}
+      {canEdit && landing?.code === "pick" && landing.pendingId !== null && <YoutubeChannelPicker orgId={orgId} pendingId={landing.pendingId} />}
       {canEdit && targets.length > 0 && (
-        <div>
+        <div className="flex flex-wrap gap-2 max-md:flex-col">
           <button
             type="button"
             data-testid="stream-dest-add"
             aria-expanded={addOpen}
-            onClick={() => {
-              setAddError(null);
-              setAddOpen((v) => !v);
-            }}
+            onClick={() => (addOpen ? setAddOpen(false) : openAdd())}
             className="btn btn-primary min-h-11"
           >
             <Plus aria-hidden className="h-4 w-4" strokeWidth={2} />
             {msg("streamDest.add")}
           </button>
+          {connectButton("youtube-connect")}
         </div>
       )}
+      {canEdit && connectOpen && <YoutubeConnectCard orgId={orgId} onCancel={() => setConnectOpen(false)} />}
       {canEdit && addOpen && (
         <AddForm
           onCancel={() => {
@@ -203,20 +223,44 @@ export function StreamDestinationsPanel({
             <MonitorPlay className="h-5 w-5" strokeWidth={1.75} />
           </span>
           <p className="max-w-md text-sm text-slate-600">{msg("streamDest.empty")}</p>
-          {canEdit && !addOpen && (
-            <button type="button" data-testid="stream-dest-empty-add" onClick={openAdd} className="btn btn-primary min-h-11">
-              <Plus aria-hidden className="h-4 w-4" strokeWidth={2} />
-              {msg("streamDest.add")}
-            </button>
+          {canEdit && (
+            <div className="flex flex-wrap justify-center gap-2 max-md:w-full max-md:flex-col">
+              {!addOpen && (
+                <button type="button" data-testid="stream-dest-empty-add" onClick={openAdd} className="btn btn-primary min-h-11">
+                  <Plus aria-hidden className="h-4 w-4" strokeWidth={2} />
+                  {msg("streamDest.add")}
+                </button>
+              )}
+              {!connectOpen && connectButton("youtube-connect-empty")}
+            </div>
           )}
         </div>
       ) : (
-        <div className="card overflow-visible">
-          <ul className="divide-y divide-slate-100" aria-label={msg("streamDest.listLabel")}>
-            {targets.map((t) => (
-              <DestinationRow key={t.id} t={t} canEdit={canEdit} locale={locale} orgId={orgId} run={run} />
-            ))}
-          </ul>
+        <div className="space-y-4">
+          {channels.length > 0 && (
+            <section>
+              {keys.length > 0 && <h2 className="mb-2 text-sm font-semibold text-slate-700">{msg("streaming.youtube.channels")}</h2>}
+              <div className="card overflow-visible">
+                <ul data-testid="youtube-channel-list" className="divide-y divide-slate-100" aria-label={msg("streaming.youtube.channels")}>
+                  {channels.map((t) => (
+                    <YoutubeChannelRow key={t.id} t={t} canEdit={canEdit} orgId={orgId} badge={badgeOf(t, msg)} />
+                  ))}
+                </ul>
+              </div>
+            </section>
+          )}
+          {keys.length > 0 && (
+            <section>
+              {channels.length > 0 && <h2 className="mb-2 text-sm font-semibold text-slate-700">{msg("streaming.keys.heading")}</h2>}
+              <div className="card overflow-visible">
+                <ul className="divide-y divide-slate-100" aria-label={msg("streamDest.listLabel")}>
+                  {keys.map((t) => (
+                    <DestinationRow key={t.id} t={t} canEdit={canEdit} locale={locale} orgId={orgId} run={run} />
+                  ))}
+                </ul>
+              </div>
+            </section>
+          )}
         </div>
       )}
     </div>
@@ -579,7 +623,7 @@ export function DestinationRow({
       <div className="flex items-start gap-3 md:items-center">
         <PlatformMark kind={t.kind} size="md" />
         <div className="min-w-0 flex-1">
-          <p className="truncate font-semibold text-slate-900">{t.label}</p>
+          <p className="truncate font-semibold text-slate-900">{youtubeTargetLabel(msg, t.label)}</p>
           <p data-testid="stream-dest-subline" className="truncate text-xs text-slate-500">{subline}</p>
           {badge && <div className="min-w-0 md:hidden">{badge}</div>}
         </div>

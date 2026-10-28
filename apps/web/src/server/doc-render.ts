@@ -182,10 +182,41 @@ function drawBracket(doc: PDFKit.PDFDocument, model: DocModel): void {
   doc.fillColor(PALETTE.ink);
 }
 
+// A column is set as numbers (right-aligned) when every cell is a count, a time or a score. "½" is a digit here: a chess
+// table spells its points in half-points ("1½", FIDE 1 / ½ / 0), the engine's own `pointsText`, and they align like 2.
 function isNumericColumn(table: DocTable, i: number): boolean {
   return table.rows.length > 0 &&
     table.rows.every((r) => r[i] === "" || typeof r[i] === "number" ||
-      /^[\d.,:%+\-–—\s]*$/.test(String(r[i] ?? "")));
+      /^[\d½.,:%+\-–—\s]*$/.test(String(r[i] ?? "")));
+}
+
+const CELL_PAD = 8; // drawRow insets each cell 4pt on both sides
+
+/** W2d follow-up (review m2): the shared-out widths, with no column narrower than its header — or, for a count, its
+ *  widest cell — measured in the font it prints in. A character-count share let one long team name squeeze a portrait
+ *  page's 3-letter headers (Pts, IIHF's OTW / OTL) down to "…". The room a floor needs comes out of the text columns,
+ *  widest first (a standings' team name, which already ellipsises), never below their own header. A table whose floors
+ *  cannot all fit the page keeps the plain shares, as before, rather than pushing a column off the edge. */
+function fitColumns(
+  doc: PDFKit.PDFDocument,
+  table: DocTable,
+  numeric: readonly boolean[],
+  shares: readonly number[],
+): number[] {
+  doc.font(FONT.bodyMed).fontSize(8.5);
+  const headers = table.columns.map((c) => doc.widthOfString(String(c)));
+  doc.font(FONT.body).fontSize(9);
+  const floors = headers.map((h, i) =>
+    CELL_PAD + (numeric[i] ? Math.max(h, ...table.rows.map((r) => doc.widthOfString(String(r[i] ?? "")))) : h));
+  const out = shares.map((w, i) => Math.max(w, floors[i]!));
+  let owed = out.reduce((a, b) => a + b, 0) - shares.reduce((a, b) => a + b, 0);
+  const givers = out.map((_, i) => i).filter((i) => !numeric[i]).sort((a, b) => out[b]! - out[a]!);
+  for (const i of givers) {
+    const give = Math.min(owed, out[i]! - floors[i]!);
+    out[i] = out[i]! - give;
+    owed -= give;
+  }
+  return owed > 0.001 ? [...shares] : out;
 }
 
 function drawTable(
@@ -203,8 +234,8 @@ function drawTable(
     return Math.min(Math.max(maxLen, 3), 40);
   });
   const total = weights.reduce((a, b) => a + b, 0);
-  const colW = weights.map((w) => (w / total) * width);
   const numeric = table.columns.map((_, i) => isNumericColumn(table, i));
+  const colW = fitColumns(doc, table, numeric, weights.map((w) => (w / total) * width));
   const rowHeight = 18;
   // PROMPT-60: tables carrying rowBadges indent the name column (index 1) so
   // crested and crestless rows align; the crest draws in the indent.

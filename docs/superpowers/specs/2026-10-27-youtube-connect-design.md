@@ -19,7 +19,7 @@ These are the owner's own answers in this session's chat. Items marked *(my call
 |---|---|---|
 | D1 | Build direction **b**: the YouTube Data API creates a fresh broadcast per Go live. No help-text-only fix. | Relayed by r2 ("I think b is better"), then confirmed in this session. |
 | D2 | **Visibility is chosen at connect time**, **Unlisted** preselected, Public / Private allowed. | "Probably unlisted we can ask to choose when they connect to oauth" |
-| D3 | Connection is managed in **Directory → Streaming**, beside pasted-key destinations. | "and Directory -> Streaming?" (corrected an earlier draft) |
+| D3 | Connection is managed on a **top-nav Streaming page**, beside pasted-key destinations. The Directory loses its Streaming tab (no redirect for old links — owner: "we don't need a forward"). Shown only when the org has the streaming entitlement. *(Amended 2026-10-27; was Directory → Streaming.)* | "and Directory -> Streaming?" (corrected an earlier draft); amended: "Let's move Streaming in top menu?" → option **A** (move, not shortcut) |
 | D4 | **Join a quick restart into the same video**: after Stop, the broadcast stays open for a **5-minute grace window**, and the same match going live again continues it. | Ran the stg join test (§3.3): "single video only". 5 min: "yes fine" |
 | D5 | **When the match is finished, end the broadcast 2 minutes after Stop** (or 2 minutes after the result, when the result comes inside the grace window). | "yes, after 2 mins?", then "Ok" to the ending table in §6.4 |
 | D6 | **A failure at Go live stops and shows the reason.** No automatic fallback to a pasted key. | "stop and show the reason" |

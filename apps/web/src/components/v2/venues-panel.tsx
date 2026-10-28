@@ -249,7 +249,7 @@ export function VenuesPanel({
       </label>
 
       {visibleVenues.length === 0 ? (
-        <p className="card p-6 text-center text-sm text-slate-400">{msg("venues.empty")}</p>
+        <p className="card p-6 text-center text-sm text-slate-500">{msg("venues.empty")}</p>
       ) : (
         <div className="space-y-3">
           {visibleVenues.map((venue) => (
@@ -441,7 +441,7 @@ function VenueCard({
           />
         </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
-          {archived && <span className="badge bg-slate-200 text-slate-500">{msg("venues.venue.archived")}</span>}
+          {archived && <span className="badge bg-slate-200 text-slate-700">{msg("venues.venue.archived")}</span>}
           {canEdit && dirty && !archived && (
             <button type="button" disabled={busy || !name.trim()} onClick={saveVenue} className="btn btn-primary px-2.5 py-1.5 text-xs">
               {msg("venues.venue.save")}
@@ -458,7 +458,7 @@ function VenueCard({
             </button>
           )}
           {canEdit && (
-            <button type="button" disabled={busy} onClick={deleteVenue} className="text-xs text-red-500 underline hover:text-red-700">
+            <button type="button" disabled={busy} onClick={deleteVenue} className="text-xs text-red-700 underline hover:text-red-800">
               {msg("venues.venue.delete")}
             </button>
           )}
@@ -466,9 +466,9 @@ function VenueCard({
       </div>
 
       <div className="space-y-2 border-t border-slate-100 pt-3">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{msg("venues.courts.title")}</p>
+        <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">{msg("venues.courts.title")}</p>
         {visibleCourts.length === 0 ? (
-          <p className="text-xs text-slate-400">{msg("venues.courts.empty")}</p>
+          <p className="text-xs text-slate-500">{msg("venues.courts.empty")}</p>
         ) : (
           <ul className="space-y-2">
             {visibleCourts.map((court, i) => (
@@ -609,7 +609,7 @@ function CourtRow({
             className="input min-w-0 flex-1 text-sm font-medium"
             aria-label={msg("venues.court.editName")}
           />
-          {archived && <span className="badge bg-slate-200 text-slate-500">{msg("venues.court.archived")}</span>}
+          {archived && <span className="badge bg-slate-200 text-slate-700">{msg("venues.court.archived")}</span>}
           {canEdit && dirty && !archived && (
             <button type="button" disabled={busy || !name.trim()} onClick={saveName} className="btn btn-primary shrink-0 px-2.5 py-1.5 text-xs">
               {msg("venues.venue.save")}
@@ -674,7 +674,7 @@ function CourtRow({
           </button>
         )}
         {canEdit && (
-          <button type="button" disabled={busy} onClick={deleteCourt} className="text-red-500 underline hover:text-red-700">
+          <button type="button" disabled={busy} onClick={deleteCourt} className="text-red-700 underline hover:text-red-800">
             {msg("venues.court.delete")}
           </button>
         )}
@@ -751,7 +751,7 @@ function WeekdayRow({
         )}
       </div>
       {ranges.length === 0 ? (
-        <p className="pl-11 text-xs text-slate-400">{msg("venues.calendar.dayClosed")}</p>
+        <p className="pl-11 text-xs text-slate-500">{msg("venues.calendar.dayClosed")}</p>
       ) : (
         <ul className="space-y-1.5 pl-11">
           {ranges.map(({ h, index }) => (
@@ -764,7 +764,7 @@ function WeekdayRow({
                 disabled={disabled}
                 onChange={(v) => onUpdateRange(index, "open_min", v)}
               />
-              <span aria-hidden className="text-xs text-slate-400">
+              <span aria-hidden className="text-xs text-slate-500">
                 {"–"}
               </span>
               <DateTimeField
@@ -779,7 +779,7 @@ function WeekdayRow({
                 <button
                   type="button"
                   onClick={() => onRemoveRange(index)}
-                  className="text-xs text-red-500 underline hover:text-red-700"
+                  className="text-xs text-red-700 underline hover:text-red-800"
                 >
                   {msg("venues.calendar.removeRange")}
                 </button>
@@ -815,7 +815,7 @@ function ExceptionsEditor({
   return (
     <div className="space-y-2">
       {exceptions.length === 0 ? (
-        <p className="text-xs text-slate-400">{msg("venues.calendar.noExceptions")}</p>
+        <p className="text-xs text-slate-500">{msg("venues.calendar.noExceptions")}</p>
       ) : (
         <ul className="space-y-2">
           {exceptions.map((e, index) => (
@@ -858,7 +858,7 @@ function ExceptionsEditor({
                       if (m !== null) onUpdate(index, { open_min: m });
                     }}
                   />
-                  <span aria-hidden className="text-xs text-slate-400">
+                  <span aria-hidden className="text-xs text-slate-500">
                     {"–"}
                   </span>
                   <DateTimeField
@@ -878,7 +878,7 @@ function ExceptionsEditor({
                 <button
                   type="button"
                   onClick={() => onRemove(index)}
-                  className="ml-auto text-xs text-red-500 underline hover:text-red-700"
+                  className="ml-auto text-xs text-red-700 underline hover:text-red-800"
                 >
                   {msg("venues.calendar.removeException")}
                 </button>
@@ -959,7 +959,7 @@ function CourtCalendarEditor({
   return (
     <div className="space-y-4 rounded-lg bg-slate-50 p-3">
       <div>
-        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
           {msg("venues.calendar.weeklyHours")}
         </p>
         <div className="space-y-2">
@@ -990,7 +990,7 @@ function CourtCalendarEditor({
       </div>
 
       <div>
-        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+        <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-slate-500">
           {msg("venues.calendar.exceptions")}
         </p>
         <p className="mb-2 text-xs text-slate-500">{msg("venues.calendar.exceptionsDesc")}</p>

@@ -1,5 +1,5 @@
 import Link from "@/components/ui/console-link";
-import { CircleUserRound, LayoutDashboard, Settings, Users } from "lucide-react";
+import { CircleUserRound, LayoutDashboard, Radio, Settings, Users } from "lucide-react";
 import { HelpMenu } from "@/components/help-menu";
 import { getActiveOrgId, getCurrentUser, getUserOrgs } from "@/lib/auth";
 import { pickActiveOrg } from "@/lib/active-org";
@@ -12,6 +12,9 @@ import { ProductTour } from "@/components/product-tour";
 import { hasAnyCompetitions } from "@/server/usecases/competitions";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
+import { STREAMING_PAGE_HREF } from "@/lib/youtube";
+import { captureError } from "@/lib/sentry";
+import { streamingPageOffered } from "@/server/stream-panel-context";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 
@@ -57,6 +60,17 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
     }
   }
   const logoUrl = activeOrg ? orgLogoUrl(activeOrg) : null;
+  // The Streaming item (owner, 2026-10-27) is shown to exactly the orgs the Streaming page exists for — the page's own predicate,
+  // asked for the org the chrome is showing, never guessed client-side. A failed read hides the item (and is reported): the chrome
+  // must not take a page down, and a missing link is the honest fail-closed answer for a page that would 404.
+  let streamingOffered = false;
+  if (activeOrg) {
+    try {
+      streamingOffered = await streamingPageOffered(activeOrg.id);
+    } catch (err) {
+      captureError(err, { orgId: activeOrg.id, route: "nav.streaming_offered" });
+    }
+  }
   const isPlayer = !!user && (await hasClaimedProfile(user.id));
   // #516: the 4-link dual-role nav (below) doesn't fit this row's #349
   // budget at 640-1023px with every label shown — the display-name span was
@@ -80,7 +94,28 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
   // the first width anything actually verifies. No matrix width changes
   // behaviour (below 640 was already icons; 768 and up still shows labels),
   // so this closes a live clipping defect without moving any gate.
+  //
+  // Streaming (2026-10-27) made it five items, and the budget above stopped holding. Measured in a browser, every width x
+  // locale, Sign out ran past the viewport: 18px at 320 and 3px at 335 (all four locales, the 4-link org nav), 22px at 350 and
+  // 12px at 360 (a claimed player: five icons), fr 768-836 (74px at 768) and nl 768-780 (14px) where the labels are on. Owner,
+  // 2026-10-28, "tighten": three levers and no more. (1) Below `sm` each link's side padding is 6px, not 8, and the links
+  // touch (gap-0): 4px of width each and 6px of gap, 22px on the 4-link nav and 28px on the 5-link one, which is what 320 and
+  // 350 needed; icons, type and link height are unchanged. (2) Sign out is its icon alone below `lg` (LogoutButton
+  // `labelFrom="lg"`; aria-label and title keep its translated name), worth 70-109px in the 768-1023 band. (3) Nothing else
+  // moves: tablets keep their labels (`md` for four links, `lg` for five), the display name and the org chip are as they were.
+  // The new budget fits at 320, 335, 350, 360, 390, 640, 700, 768, 800, 836, 1023, 1024 and 1280 in en/es/fr/nl, for both the
+  // org nav and the dual-role nav (the report's table); the tightest cell is 4px of slack at 320.
+  //
+  // B3 (CI e2e, nav-org-chip-overflow "the chip still SHOWS the club name at 768"): the fifth labelled item fitted the row but left the
+  // org chip 37px of text at 768, against the 8 characters (64px) the chip exists to show. The row's only flexible item is that chip,
+  // so what the labelled links cost it is what it loses. Where the labels are on (`md` to `lg`, the 4-link org nav only) the links'
+  // side padding is 4px, not 12, and returns to 12 at `lg`. Measured with the 38-character club name: 8px and 6px each leave fr
+  // at 768 short of 8 characters (40px and 56px visible of 60.7 needed; nl 60px at 8px); 4px clears every cell at 768/800/836/900/1023
+  // in en/es/fr/nl (72px visible at the tightest, fr 768, and 114px in en). Nothing else moves: labels, type, link height, the display
+  // name and Sign out are as they were. The dual-role nav is icon-only until `lg`, has the room, and keeps its 12px - a 4px pad on a
+  // bare 16px icon would be a 24px target.
   const navLabelClass = isPlayer ? "hidden lg:inline" : "hidden md:inline";
+  const navLinkClass = `flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3${isPlayer ? "" : " md:px-1 lg:px-3"}`;
   // Tour targets editor flows (rename org, create competition) — viewers skip it.
   const canTour =
     !!user && !!activeOrg && (EDITOR_ROLES as readonly string[]).includes(activeOrg.role);
@@ -186,7 +221,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 joueur" / "Inicio del jugador" — multi-word labels with real
                 wrap points that would hit the exact "Sign out" failure fix
                 round 1 found, invisibly to every automated check here. */}
-            <nav className="flex shrink-0 items-center gap-0.5">
+            <nav className="flex shrink-0 items-center gap-0 sm:gap-0.5">
               {/* Labels collapse to icons under `md` (navLabelClass: `lg` for
                   the 4-link dual-role case, #516 above; `md` rather than the
                   original `sm` since W3 measured the 640-767 band no width
@@ -195,7 +230,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               <Link
                 href={activeOrg ? routes.orgHome(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.dashboard")}
-                className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                className={navLinkClass}
               >
                 <LayoutDashboard className="h-4 w-4" strokeWidth={1.75} />
                 <span className={navLabelClass}>{t(dict, "nav.dashboard")}</span>
@@ -203,15 +238,26 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               <Link
                 href="/directory"
                 aria-label={t(dict, "nav.directory")}
-                className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                className={navLinkClass}
               >
                 <Users className="h-4 w-4" strokeWidth={1.75} />
                 <span className={navLabelClass}>{t(dict, "nav.directory")}</span>
               </Link>
+              {streamingOffered && (
+                <Link
+                  href={STREAMING_PAGE_HREF}
+                  aria-label={t(dict, "nav.streaming")}
+                  data-testid="nav-streaming"
+                  className={navLinkClass}
+                >
+                  <Radio className="h-4 w-4" strokeWidth={1.75} />
+                  <span className={navLabelClass}>{t(dict, "nav.streaming")}</span>
+                </Link>
+              )}
               <Link
                 href={activeOrg ? routes.orgSettings(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.settings")}
-                className="flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                className={navLinkClass}
               >
                 <Settings className="h-4 w-4" strokeWidth={1.75} />
                 <span className={navLabelClass}>{t(dict, "nav.settings")}</span>
@@ -231,7 +277,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                 <Link
                   href={routes.me()}
                   aria-label={t(dict, "nav.playerHome")}
-                  className="hidden min-[350px]:flex items-center gap-1.5 rounded-md px-2 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                  className="hidden min-[350px]:flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
                 >
                   <CircleUserRound className="h-4 w-4" strokeWidth={1.75} />
                   <span className={navLabelClass}>{t(dict, "nav.playerHome")}</span>
@@ -293,7 +339,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
             <span className="mx-1 hidden min-w-0 truncate text-sm font-medium text-cream/85 lg:block">
               {user.display_name}
             </span>
-            <LogoutButton label={t(dict, "nav.signOut")} />
+            <LogoutButton label={t(dict, "nav.signOut")} labelFrom="lg" />
           </div>
         ) : (
           <Link

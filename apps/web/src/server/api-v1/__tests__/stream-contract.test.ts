@@ -17,7 +17,7 @@ import { EVENT_SOURCES } from "@/server/relay/telemetry";
 import { deltaText, lastCheckList, MIGRATION, STREAM_DELTA_COUNT, STREAM_DELTA_FILES } from "@/server/relay/__tests__/_stream-migration";
 import {
   DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_DESTINATION_HOSTS, STREAM_KEY_EMPTY, STREAM_PLATFORMS,
-  STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE,
+  STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE, YOUTUBE_USE_DISCONNECT,
 } from "@/lib/stream-destinations";
 
 /** The quoted members of `<column> text … check (<column> in ('a','b'))` inside ONE table of V410. */
@@ -497,7 +497,7 @@ describe("the relay's routes are never key-reachable", () => {
     const sessionErr422 = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!.responses["422"]!.content["application/json"].schema.properties.error;
     expect([...(sessionErr422.properties!.rule!.enum ?? [])].sort()).toEqual([...DESTINATION_REFUSALS].sort());
     // T2b: Replace key re-checks the platform's preset through the same validator (replaceTargetKey's `undialable`), so
-    // PATCH's 422 documents the same `rule` — the THIRD named route; DELETE has no 422 at all.
+    // PATCH's 422 documents the same `rule` — the THIRD named route; DELETE's 422 (YOUTUBE_USE_DISCONNECT only) has no `rule`.
     const patchErr422 = doc.paths["/api/v1/orgs/{id}/stream-targets/{targetId}"]!.patch!.responses["422"]!.content["application/json"].schema.properties.error;
     expect([...(patchErr422.properties!.rule!.enum ?? [])].sort()).toEqual([...DESTINATION_REFUSALS].sort());
     const refusesDestinations = new Set([
@@ -525,15 +525,16 @@ describe("the relay's routes are never key-reachable", () => {
 
   // N1/N2 (B1 review): every 422 these routes answer carries a machine code (lib/stream-destinations.ts), and the spec
   // names each one — in the route's summary AND on its 422's `code`. Which route throws which is the usecases' own
-  // (stream-targets.ts create/patch, stream-sessions.ts createSession); DELETE has no 422 at all.
-  it("N1/N2: each stream route's coded 422s are named in its summary and on its 422 `code`; DELETE documents no 422", () => {
+  // (stream-targets.ts create/patch/remove, stream-sessions.ts createSession); DELETE's only 422 is YOUTUBE_USE_DISCONNECT.
+  it("N1/N2: each stream route's coded 422s are named in its summary and on its 422 `code`; DELETE documents exactly one, YOUTUBE_USE_DISCONNECT", () => {
     type Doc = {
       paths: Record<string, Record<string, { summary?: string; responses: Record<string, { content: { "application/json": { schema: { properties: { error: { properties: { code: { description?: string } } } } } } } }> }>>;
     };
     const doc = buildOpenApiDocument() as Doc;
     const CODED_422: [string, string, string[]][] = [
       ["/api/v1/orgs/{id}/stream-targets", "post", [DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY]],
-      ["/api/v1/orgs/{id}/stream-targets/{targetId}", "patch", [DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY, TARGET_UNREADABLE]],
+      ["/api/v1/orgs/{id}/stream-targets/{targetId}", "patch", [DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY, TARGET_UNREADABLE, YOUTUBE_USE_DISCONNECT]],
+      ["/api/v1/orgs/{id}/stream-targets/{targetId}", "delete", [YOUTUBE_USE_DISCONNECT]],
       ["/api/v1/fixtures/{id}/stream-sessions", "post", [DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE]],
     ];
     let checked = 0;
@@ -546,8 +547,14 @@ describe("the relay's routes are never key-reachable", () => {
         checked++;
       }
     }
-    expect(checked).toBe(9);
-    expect(doc.paths["/api/v1/orgs/{id}/stream-targets/{targetId}"]!.delete!.responses["422"]).toBeUndefined();
+    expect(checked).toBe(11);   // 3 + 5 + 1 + 2: create, patch (now with YOUTUBE_USE_DISCONNECT), delete (new), go live
+    // DELETE's 422 names exactly the one code it can answer — not the ones Remove never refuses — and carries no `rule`.
+    const deleteCode = doc.paths["/api/v1/orgs/{id}/stream-targets/{targetId}"]!.delete!.responses["422"]!.content["application/json"].schema.properties.error.properties.code.description ?? "";
+    expect(deleteCode).toContain(YOUTUBE_USE_DISCONNECT);
+    for (const never of [DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY, TARGET_UNREADABLE]) {
+      expect(deleteCode, `Remove never answers ${never}`).not.toContain(never);
+    }
+    expect(Object.keys((doc.paths["/api/v1/orgs/{id}/stream-targets/{targetId}"]!.delete!.responses["422"]!.content["application/json"].schema.properties.error as { properties: Record<string, unknown> }).properties)).not.toContain("rule");
     // The negative twin: a code a route never answers is not named on it — Go live never refuses a blank key or name.
     const goLive = doc.paths["/api/v1/fixtures/{id}/stream-sessions"]!.post!;
     for (const never of [STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY]) expect(goLive.summary, never).not.toContain(never);

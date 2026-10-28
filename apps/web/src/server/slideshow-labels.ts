@@ -34,6 +34,9 @@ export interface SlideshowLabels {
   won: string;
   drawn: string;
   lost: string;
+  /** W2d follow-up (m8): IIHF's overtime-or-shoot-out wins and losses (RBG:343-344), the public table's letters. */
+  otw: string;
+  otl: string;
   points: string;
   /** The standings slide's ratio column, shown only when the division's cascade
    *  ranks on `point_ratio` (the normal table's "Pts ratio"). */
@@ -81,6 +84,8 @@ export function slideshowLabels(locale: string | null | undefined): SlideshowLab
     won: m("slideshow.col.won"),
     drawn: m("slideshow.col.drawn"),
     lost: m("slideshow.col.lost"),
+    otw: m("slideshow.col.otw"),
+    otl: m("slideshow.col.otl"),
     points: m("slideshow.col.points"),
     pointRatio: m("slideshow.col.pointRatio"),
     round: m("slideshow.round"),

@@ -1,4 +1,5 @@
-// Directory → Streaming (spec 2026-09-30 §4 / §9.2; owner rulings D1, D2, D6) — the ONE place an organiser manages
+// The Streaming page (spec 2026-09-30 §4 / §9.2; owner rulings D1, D2, D6; its own top-nav page since 2026-10-27, it was the Directory's
+// Streaming tab) — the ONE place an organiser manages
 // where their matches stream to, walked by hand through a REAL production server on RELAY_DRIVERS=fake.
 //
 // Every case asserts through the UI and reads the API (or the table) back as the witness. Setup reaches a state by SQL
@@ -62,13 +63,13 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
 const LIVE_WAIT_MS = liveWaitMs(FAKE_CONNECT_MS);
 const SEED_MS = 60_000;
 const CYCLE_MS = cycleMs(FAKE_CONNECT_MS);
-/** One page load (a Directory or fixture page). Each case adds `NAVS * NAV_MS`, NAVS counted by reading the case. */
+/** One page load (the Streaming or a fixture page). Each case adds `NAVS * NAV_MS`, NAVS counted by reading the case. */
 const NAV_MS = 30_000;
 /** One mutation round trip: the request and the `router.refresh()` that re-reads the list. */
 const SAVE_MS = POLL_WAIT_MS;
 
 /** This file's longest hold: one go-live → stop cycle with the held destination's eight round trips (case E). */
-const POOL_HOLD = { file: "directory-stream-destinations.spec.ts", holdMs: CYCLE_MS + 8 * SAVE_MS } as const;
+const POOL_HOLD = { file: "streaming-destinations.spec.ts", holdMs: CYCLE_MS + 8 * SAVE_MS } as const;
 /** The pool's one wait for a key (it was 3 cycles here — shorter than capture-phone's W23 hold). */
 const SLOT_WAIT_MS = POOL_SLOT_WAIT_MS;
 
@@ -240,9 +241,9 @@ async function stopApi(page: Page, orgId: string, fixtureId: string): Promise<vo
 }
 
 async function openStreaming(page: Page): Promise<Locator> {
-  await page.goto("/directory?tab=streaming");
+  await page.goto("/streaming");
   const panel = page.getByTestId("stream-destinations");
-  await expect(panel, "the Streaming tab rendered its panel").toBeVisible({ timeout: NAV_MS });
+  await expect(panel, "the Streaming page rendered its panel").toBeVisible({ timeout: NAV_MS });
   return panel;
 }
 const rowOf = (page: Page, id: string): Locator => page.locator(`[data-testid="stream-dest-row"][data-target-id="${id}"]`);
@@ -322,7 +323,7 @@ for (const width of [320, 1280] as const) {
   test(`S @${width}: empty → add YouTube → pick it on a match and Go live → Remove and Replace BLOCKED naming the match → Stop → Remove (a double tap sends ONE) → gone from the list AND the picker → re-add the same key restores the SAME destination → Replace key → add Twitch`, async ({
     page,
   }) => {
-    const NAVS = 9; // directory ×5, fixture ×3, + the rig's sign-in
+    const NAVS = 9; // streaming ×5, fixture ×3, + the rig's sign-in
     const SAVES = 7; // add, remove, re-add, the A19 repeat, replace, twitch, + go live / stop round trips
     test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + NAVS * NAV_MS + SAVES * SAVE_MS);
     await page.setViewportSize({ width, height: width < 768 ? 700 : 900 });
@@ -667,7 +668,7 @@ test("7: the empty state — the copy and its own Add, which opens the form; cap
 // ===========================================================================
 test("8+9: three rows (one HELD, one Twitch, one legacy with an unreadable key) — the phone ⋯ menu hit-tested at 320, and no horizontal scroll at 320, 768 and 1280", async ({ page }) => {
   const WIDTHS = [320, 768, 1280] as const;
-  test.setTimeout(Math.max(120_000, SEED_MS + CYCLE_MS + SLOT_WAIT_MS) + (WIDTHS.length + 1) * NAV_MS);
+  test.setTimeout(Math.max(120_000, SEED_MS + CYCLE_MS + SLOT_WAIT_MS) + (WIDTHS.length + 2) * NAV_MS /* + the Directory strip check */);
   const rig = await seedRig(page, { entrants: 2 });
   const f = rig.fixtures[0]!;
   const held = await addTargetApi(page, rig.orgId, { label: `Centre court ${rig.tag} — a long destination name`, streamKey: ytKey() });
@@ -709,11 +710,6 @@ test("8+9: three rows (one HELD, one Twitch, one legacy with an unreadable key) 
   });
   expect(hit, "a tap at ⋯'s centre lands on ⋯").toBe(true);
   expect(await tapTargets(panel), "the panel's controls were hit-tested").toBeGreaterThan(3);
-  // m5: the Directory's tab strip — Streaming included — meets the same floor at 320 (it scrolls; each is brought in).
-  const strip = page.getByRole("navigation", { name: en("directory.sections") });
-  const tabCount = await strip.locator("a[href]").count();
-  expect(tabCount, "the strip holds every Directory tab").toBeGreaterThanOrEqual(5);
-  expect(await tapTargets(strip), "every Directory tab was hit-tested").toBe(tabCount);
   await menu.click();
   await expect(row.getByRole("menuitem")).toHaveCount(3);
   await expect(row.getByTestId("stream-dest-locked")).toHaveText([
@@ -725,6 +721,15 @@ test("8+9: three rows (one HELD, one Twitch, one legacy with an unreadable key) 
   // The free row's menu: nothing locked.
   await rowOf(page, tw.id).getByTestId("stream-dest-menu").click();
   await expect(rowOf(page, tw.id).getByTestId("stream-dest-locked")).toHaveCount(0);
+  // m5, moved with the tab (owner, 2026-10-27): the Directory's tab strip keeps meeting the same floor at 320 (it scrolls; each is
+  // brought in) — now FOUR tabs, and none of them Streaming, which is a top-nav page of its own.
+  await page.goto("/directory");
+  const strip = page.getByRole("navigation", { name: en("directory.sections") });
+  await expect(strip).toBeVisible({ timeout: NAV_MS });
+  const tabCount = await strip.locator("a[href]").count();
+  expect(tabCount, "the strip holds the Directory's four tabs").toBe(4);
+  await expect(strip.locator('a[href="/directory?tab=streaming"]'), "Streaming is not a Directory tab any more").toHaveCount(0);
+  expect(await tapTargets(strip), "every Directory tab was hit-tested").toBe(tabCount);
 });
 
 /** The 44-px floor, hit-tested (stream-relay.spec.ts's expectTapTargets). Returns how many it checked. */
@@ -838,7 +843,7 @@ test("O: a second org lists none of the first org's destinations, and cannot ren
   const t = await addTargetApi(page, first.orgId, { label: `Mine ${first.tag}` });
   await seedRig(page); // signs the page in as the SECOND org's owner
   await openStreaming(page);
-  await expect(page.getByTestId("stream-dest-empty"), "the second org's Directory is empty").toBeVisible();
+  await expect(page.getByTestId("stream-dest-empty"), "the second org's Streaming page is empty").toBeVisible();
   await expect(rowOf(page, t.id)).toHaveCount(0);
   const base = `/api/v1/orgs/${first.orgId}/stream-targets`;
   const answers = [
@@ -858,7 +863,7 @@ test("O: a second org lists none of the first org's destinations, and cannot ren
 // 10 — the fixture panel's picker, and "Manage destinations" (T8, D1)
 // ===========================================================================
 for (const width of [320, 768, 1280] as const) {
-  test(`10 @${width}: the fixture panel's picker names each destination and its platform, offers no inline add, and 'Manage destinations' opens Directory → Streaming in a NEW tab`, async ({ page }) => {
+  test(`10 @${width}: the fixture panel's picker names each destination and its platform, offers no inline add, and 'Manage destinations' opens the Streaming page in a NEW tab`, async ({ page }) => {
     const NAVS = 2; // the fixture page, the new tab
     test.setTimeout(SEED_MS + NAVS * NAV_MS + SAVE_MS);
     await page.setViewportSize({ width, height: 900 });
@@ -876,15 +881,15 @@ for (const width of [320, 768, 1280] as const) {
     await shot(page.locator('[data-role="fixture-stream-body"]'), `10-${width}-picker.png`);
     const [tab] = await Promise.all([page.context().waitForEvent("page"), link.click()]);
     await tab.waitForLoadState();
-    await expect(tab).toHaveURL(/\/directory\?tab=streaming$/);
-    await expect(tab.locator('a[href="/directory?tab=streaming"]'), "the Streaming tab is the current one").toHaveAttribute("aria-current", "page");
+    await expect(tab).toHaveURL(/\/streaming$/);
+    await expect(tab.getByTestId("nav-streaming"), "the top-nav carries the Streaming item, pointing at this page").toHaveAttribute("href", "/streaming");
     await expect(tab.locator(`[data-testid="stream-dest-row"][data-target-id="${yt.id}"]`)).toBeVisible({ timeout: NAV_MS });
     await tab.close();
   });
 }
 
 // ===========================================================================
-// I1 (B4 review) — the picker follows Directory WITHOUT a reload. "Manage destinations" opens Directory in a NEW tab
+// I1 (B4 review) — the picker follows the Streaming page WITHOUT a reload. "Manage destinations" opens it in a NEW tab
 // (D1), so the organiser's round trip — add or remove there, come back — never remounts the match's tab: the return
 // itself re-reads the list. Two pages in ONE context (the same signed-in organiser), the order an organiser takes.
 // ===========================================================================
@@ -900,8 +905,8 @@ async function returnTo(page: Page): Promise<void> {
 }
 
 for (const width of [320, 1280] as const) {
-  test(`I1 @${width}: no destinations → add in the NEW Directory tab → back: offered, Go live enabled → remove there → back: gone → a choice removed while the tab stayed open: Go live says it was removed and drops it`, async ({ page }) => {
-    const NAVS = 3; // the rig's sign-in, the fixture page, the Directory tab
+  test(`I1 @${width}: no destinations → add on the NEW Streaming page tab → back: offered, Go live enabled → remove there → back: gone → a choice removed while the tab stayed open: Go live says it was removed and drops it`, async ({ page }) => {
+    const NAVS = 3; // the rig's sign-in, the fixture page, the Streaming page tab
     const SAVES = 9; // add, remove, add, the API remove, the refused Go live; n1: two adds, the API remove, the refused Go live
     test.setTimeout(SEED_MS + NAVS * NAV_MS + SAVES * SAVE_MS + 3 * SAVE_MS /* three returns */);
     const height = width < 768 ? 700 : 900;
@@ -918,7 +923,7 @@ for (const width of [320, 1280] as const) {
     await expect(picker(body)).toHaveCount(0);
     await expect(goLive(body)).toBeDisabled();
 
-    // 2. Manage destinations → Directory in a NEW tab → add one there.
+    // 2. Manage destinations → the Streaming page in a NEW tab → add one there.
     const [dir] = await Promise.all([page.context().waitForEvent("page"), body.getByTestId("stream-manage-destinations").click()]);
     await dir.setViewportSize({ width, height });
     await dir.waitForLoadState();
@@ -927,7 +932,7 @@ for (const width of [320, 1280] as const) {
     const addForm = await addViaForm(dir, { platform: "youtube", label: first, key: ytKey() }, "stream-dest-empty-add");
     await expect(addForm).toHaveCount(0, { timeout: SAVE_MS });
     const [added] = await listApi(page, rig.orgId);
-    expect(added?.label, "the API holds what the Directory tab saved").toBe(first);
+    expect(added?.label, "the API holds what the Streaming page saved").toBe(first);
 
     // 3. Back to the match (no reload): the picker offers it, picked, and Go live is enabled.
     await returnTo(page);
@@ -938,7 +943,7 @@ for (const width of [320, 1280] as const) {
     await expectNoHorizontalScroll(page);
     await shot(page.locator('[data-role="fixture-stream-body"]'), `fix1-I1-${width}-picker-after-return.png`);
 
-    // 4. Remove it in Directory, come back: gone, and Go live disabled again.
+    // 4. Remove it on the Streaming page, come back: gone, and Go live disabled again.
     await dir.bringToFront();
     const row = rowOf(dir, added!.id);
     await tapAction(row, "remove", width);
@@ -951,7 +956,7 @@ for (const width of [320, 1280] as const) {
 
     // 5. A choice removed while this tab stayed OPEN (another organiser, no return to announce it): picked here, then
     //    Go live answers 404 — the tab re-reads and drops it. It was the ONLY one, so the answer is the empty state with
-    //    its way to Directory, not "removed, pick another" (B5 review m-2: there is nothing to pick). Nothing starts.
+    //    its way to the Streaming page, not "removed, pick another" (B5 review m-2: there is nothing to pick). Nothing starts.
     await dir.bringToFront();
     const second = `Court 2 ${rig.tag}`;
     await addViaForm(dir, { platform: "twitch", label: second, key: twitchKey() }, "stream-dest-empty-add");
@@ -964,7 +969,7 @@ for (const width of [320, 1280] as const) {
     await expect(picker(body), "premise: nothing told this tab yet").toHaveValue(b!.id);
     await goLive(body).click();
     await expect(body.getByTestId("stream-dest-empty"), "the stale choice is gone with it: the empty state").toBeVisible({ timeout: SAVE_MS });
-    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/directory?tab=streaming");
+    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/streaming");
     await expect(body.getByTestId("stream-create-error"), "no 'pick another' with nothing to pick").toHaveCount(0);
     await expect(goLive(body)).toBeDisabled();
     expect(await sessionsOf(rig.orgId), "nothing started").toEqual([]);

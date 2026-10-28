@@ -30,7 +30,7 @@ import { streamPrefsOf } from "@/server/usecases/stream-codes";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
 import { relayCredits } from "@/server/usecases/stream-sessions";
 
-/** The ONE decision of whether Stream is offered, and how far (M-5, final review: the Directory's Streaming tab asks
+/** The ONE decision of whether Stream is offered, and how far (M-5, final review: the org's Streaming page asks
  *  this too, so it and the fixture panel cannot disagree). `entitled` is the panel (`streaming.overlay`); `relayEntitled`
  *  adds the Phone tab's relay (`streaming.relay`, read only when entitled); `relayDisabled` is a relay-entitled org on a
  *  deployment that cannot start a stream.
@@ -55,6 +55,24 @@ export async function relayOffer(
   const relayEntitled = entitled && (await hasFeature(orgId, "streaming.relay", competitionId));
   const relayDisabled = relayEntitled && relayUnavailable();
   return { entitled, relayEntitled, relayDisabled, composedAvailable: relayEntitled && !composedUnavailable() };
+}
+
+/** Whether the org's top-nav Streaming page exists for it (owner, 2026-10-27: Streaming is its own page), and if not, WHY: offered
+ *  exactly when the fixture panel offers Go live — entitled to the panel AND the relay (`not_entitled` otherwise), on a deployment
+ *  that can start a stream (`not_configured` otherwise). Org-wide (no competition), like the page. The connect start needs the
+ *  reason (a landing code per refusal); the page and the nav need only the yes/no, `streamingPageOffered`, which is DERIVED from
+ *  this - so the three cannot drift. */
+export type StreamingPageOffer = "offered" | "not_entitled" | "not_configured";
+export async function streamingPageOffer(orgId: string): Promise<StreamingPageOffer> {
+  const offer = await relayOffer(orgId);
+  if (!offer.relayEntitled) return "not_entitled";
+  return offer.relayDisabled ? "not_configured" : "offered";
+}
+
+/** The yes/no of `streamingPageOffer`: the page, its nav item asks THIS, so a link is never shown to a page that would 404 and a
+ *  hand-made URL gets what the nav would not offer. */
+export async function streamingPageOffered(orgId: string): Promise<boolean> {
+  return (await streamingPageOffer(orgId)) === "offered";
 }
 
 /** Capture QR v2 (carry 2, owner 2026-10-04): the PostHog flag that offers the phone-camera option — UI-only (the routes

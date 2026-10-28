@@ -303,8 +303,8 @@ const WALKTHROUGH_SPECS: string[] = [
   "directory-officials-roles.spec.ts",
   "directory-player-identity.spec.ts",
   "directory-venues-courts.spec.ts",
-  // The Streaming tab (2026-09-30): destinations' add, shape warning, rename, replace key, remove=archive, the in-use lock (waiting and live), re-add restores, the empty state, the phone ⋯ menu, and (T8) the fixture picker's Manage destinations link.
-  "directory-stream-destinations.spec.ts",
+  // The Streaming page (2026-09-30 as a Directory tab; its own top-nav page since 2026-10-27): destinations' add, shape warning, rename, replace key, remove=archive, the in-use lock (waiting and live), re-add restores, the empty state, the phone ⋯ menu, and (T8) the fixture picker's Manage destinations link.
+  "streaming-destinations.spec.ts",
 
   // Spectator surface W1 (Task 15) — the anonymous match centre. Split
   // across two files so each stays under budget: cricket matches A (tapped
@@ -1363,6 +1363,76 @@ describe("RELAY_KEK reaches every fake-relay server, generated per run", () => {
       scanned++;
       expect(yml.match(/^\s+RELAY_KEK:/gm) ?? [], `${wf}: an env map sets RELAY_KEK`).toEqual([]);
       expect(yml.match(/RELAY_KEK=[0-9a-fA-F]{16,}/g) ?? [], `${wf}: a literal RELAY_KEK value`).toEqual([]);
+    }
+    expect(scanned).toBe(WORKFLOW_FILES.length);
+  });
+});
+
+// YouTube Connect (plan T7, pulled forward from T20/T21). The connect flow runs through the FAKE YouTube in CI, and three things have to
+// reach every server that runs fake relay drivers or the first e2e that connects a channel reds for an environmental reason:
+//  - YOUTUBE_DRIVER=fake. Under NODE_ENV=production (what `server.js` runs) an UNSET YOUTUBE_DRIVER is LIVE, so the connect start
+//    would send the browser to Google;
+//  - ENV_NAME=ci, which the fake's own routes (the control route, the authorize hop) require on top of the mode;
+//  - YOUTUBE_TOKEN_KEK, generated per run like RELAY_KEK (the callback seals the refresh token with it; unset, the start refuses);
+//  - on the servers the specs reach on :3000, YOUTUBE_REDIRECT_URI pinned to the browser's own origin. The standalone server binds
+//    0.0.0.0, so a base URL taken from the request would send the authorize hop to an origin whose cookies are not the browser's.
+describe("the fake YouTube reaches every fake-relay server, its key generated per run", () => {
+  const WORKFLOW_FILES = ["e2e.yml", "ci.yml"];
+  const read = (wf: string) => readFileSync(join(REPO_ROOT, ".github/workflows", wf), "utf8");
+  const stripComments = (text: string) =>
+    text
+      .split("\n")
+      .map((line) => line.replace(/(^|\s)#.*$/, ""))
+      .join("\n");
+  /** Every Start server `env:` map that sets RELAY_DRIVERS=fake, as the text from its `env:` to its `run:`, with its job. */
+  function fakeRelayServers() {
+    const found: { where: string; env: string; before: string }[] = [];
+    for (const wf of WORKFLOW_FILES) {
+      const yml = stripComments(read(wf));
+      const jobStarts = [...yml.matchAll(/^ {2}([a-z0-9_-]+):\n/gm)].map((m) => ({ name: m[1]!, at: m.index! }));
+      for (const fake of yml.matchAll(/^\s+RELAY_DRIVERS:\s*fake\s*$/gm)) {
+        const envAt = yml.lastIndexOf("        env:\n", fake.index);
+        const runAt = yml.indexOf("        run:", fake.index);
+        const job = [...jobStarts].reverse().find((j) => j.at < fake.index!);
+        found.push({ where: `${wf}:${job!.name}:${yml.slice(0, fake.index).split("\n").length}`, env: yml.slice(envAt, runAt), before: yml.slice(job!.at, envAt) });
+      }
+    }
+    return found;
+  }
+
+  it("every fake-relay server also runs YOUTUBE_DRIVER=fake under ENV_NAME=ci, with the redirect URI pinned to http://localhost:3000", () => {
+    const servers = fakeRelayServers();
+    // Anti-vacuity: e2e.yml's three jobs and ci.yml's three smoke servers.
+    expect(servers.length, "fake-relay Start server envs found").toBeGreaterThanOrEqual(6);
+    let checked = 0;
+    for (const s of servers) {
+      expect(s.env, `${s.where}: YOUTUBE_DRIVER`).toMatch(/^\s+YOUTUBE_DRIVER:\s*fake\s*$/m);
+      expect(s.env, `${s.where}: ENV_NAME`).toMatch(/^\s+ENV_NAME:\s*ci\s*$/m);
+      // The one literal everywhere: the browser's origin for the servers specs reach on :3000, and — because the composed-smoke and
+      // epoch-override guards require the side servers to carry every env of the first — the same value on those, which never
+      // run the connect flow.
+      expect(/^\s+YOUTUBE_REDIRECT_URI:\s*(\S+)\s*$/m.exec(s.env)?.[1], `${s.where}: YOUTUBE_REDIRECT_URI`).toBe("http://localhost:3000/api/youtube/connect/callback");
+      checked++;
+    }
+    expect(checked).toBe(servers.length);
+  });
+
+  it("each job whose server runs the fake relay generates YOUTUBE_TOKEN_KEK into $GITHUB_ENV before it starts", () => {
+    const missing = fakeRelayServers().filter(
+      (s) => !(/echo "YOUTUBE_TOKEN_KEK=\$kek" >> "\$GITHUB_ENV"/.test(s.before) && /\bkek=\$\(openssl rand -hex 32\)/.test(s.before)),
+    );
+    expect(fakeRelayServers().length, "servers checked").toBeGreaterThanOrEqual(6);
+    expect(missing.map((s) => s.where), "servers that start with no generated YOUTUBE_TOKEN_KEK").toEqual([]);
+  });
+
+  it("no workflow assigns YOUTUBE_TOKEN_KEK a value (a literal key in a public repo, or an env that shadows the generated one)", () => {
+    let scanned = 0;
+    for (const wf of WORKFLOW_FILES) {
+      const yml = stripComments(read(wf));
+      expect(yml.length, `${wf} read`).toBeGreaterThan(0);
+      scanned++;
+      expect(yml.match(/^\s+YOUTUBE_TOKEN_KEK:/gm) ?? [], `${wf}: an env map sets YOUTUBE_TOKEN_KEK`).toEqual([]);
+      expect(yml.match(/YOUTUBE_TOKEN_KEK=[0-9a-fA-F]{16,}/g) ?? [], `${wf}: a literal YOUTUBE_TOKEN_KEK value`).toEqual([]);
     }
     expect(scanned).toBe(WORKFLOW_FILES.length);
   });

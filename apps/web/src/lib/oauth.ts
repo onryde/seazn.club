@@ -10,6 +10,13 @@ export const LICHESS_OAUTH_NEXT_COOKIE = "seazn_lichess_oauth_next";
  *  way as state — see server/external-play/pkce.ts. */
 export const LICHESS_OAUTH_VERIFIER_COOKIE = "seazn_lichess_oauth_verifier";
 
+/** YouTube Connect (a channel connection, NOT sign-in): its own cookie pair, so a concurrent Google sign-in or Lichess link
+ *  can neither steal nor invalidate this flow's state (the same reason Lichess has its own). The state cookie carries the
+ *  random `state` only; the OAuth intent (org, user, consent) lives in the `youtube_connect_pending` row it keys. */
+export const YOUTUBE_OAUTH_STATE_COOKIE = "seazn_youtube_oauth_state";
+/** The PKCE code_verifier of the YouTube Connect round trip (server/external-play/pkce.ts), httpOnly like the state. */
+export const YOUTUBE_OAUTH_VERIFIER_COOKIE = "seazn_youtube_oauth_verifier";
+
 export const GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth";
 export const GOOGLE_TOKEN_URL = "https://oauth2.googleapis.com/token";
 export const GOOGLE_USERINFO_URL =
@@ -43,6 +50,14 @@ export function baseUrl(req: Request): string {
 /** The Google redirect URI (must be registered in the Google console). */
 export function googleRedirectUri(req: Request): string {
   return process.env.GOOGLE_REDIRECT_URI || `${baseUrl(req)}/api/auth/google/callback`;
+}
+
+/** The redirect URI of the YouTube Connect callback (must be registered in the Google console, as an authorized redirect
+ *  URI of the SAME OAuth client sign-in uses). `YOUTUBE_REDIRECT_URI` pins it; otherwise it is the app's base URL plus the
+ *  callback path. The same function builds the authorize request's `redirect_uri` and the code exchange's, which Google
+ *  requires to match exactly. */
+export function youtubeRedirectUri(req: Request): string {
+  return process.env.YOUTUBE_REDIRECT_URI || `${baseUrl(req)}/api/youtube/connect/callback`;
 }
 
 export interface GoogleProfile {

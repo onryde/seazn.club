@@ -9,6 +9,7 @@ import { platformName } from "@/components/v2/stream-platform-mark";
 import type { Chain, ChainNode, ChainWord, LinkStyle, NodeTone } from "@/lib/stream-chain";
 import type { MessageKey } from "@/lib/messages";
 import { fmtNumber } from "@/lib/format";
+import { STREAMING_PAGE_HREF } from "@/lib/youtube";
 import { durationLabel, type D3Box, type PhoneLinePart, type PhoneStrip } from "@/lib/stream-session-view";
 import type { StreamTargetKind } from "@/server/api-v1/schemas";
 
@@ -313,7 +314,7 @@ const REMEDY_LINK =
  *  with the server's countdown, or the O5 reason. A status box; with a chain above it, a caret points at the phone node.
  *  `id` is what Go live's `aria-describedby` names. Decides nothing: `strip` is `phoneStrip`'s answer.
  *  PR-2 (Option A): the line under the lead (or the strip's only text), and an auto-start refusal's remedy — Buy credits
- *  only when the panel hands a handler (`onBuy`), Manage destinations a new-tab link to Directory → Streaming. */
+ *  only when the panel hands a handler (`onBuy`), Manage destinations a new-tab link to the Streaming page. */
 export function PhoneStripView({ id, strip, caret, onBuy }: { id: string; strip: PhoneStrip; caret: boolean; onBuy?: () => void }) {
   const msg = useMsg();
   const locale = useLocaleOrDefault();
@@ -339,7 +340,7 @@ export function PhoneStripView({ id, strip, caret, onBuy }: { id: string; strip:
         {msg("stream.auto.buyCredits")}
       </button>
     ) : strip.remedy === "manage" ? (
-      <a data-testid="stream-auto-remedy-manage" href="/directory?tab=streaming" target="_blank" rel="noopener" className={REMEDY_LINK}>
+      <a data-testid="stream-auto-remedy-manage" href={STREAMING_PAGE_HREF} target="_blank" rel="noopener" className={REMEDY_LINK}>
         {msg("stream.dest.manage")}
       </a>
     ) : null;
@@ -412,7 +413,7 @@ export function D3Warning({ cause, kind }: { cause: D3Box; kind: StreamTargetKin
           <span>{msg("stream.output.warning", { platform: platformName(msg, kind) })}</span>{" "}
           <a
             data-testid="stream-output-open-directory"
-            href="/directory?tab=streaming"
+            href={STREAMING_PAGE_HREF}
             target="_blank"
             rel="noopener"
             className="inline-flex min-h-11 items-center font-medium text-amber-900 underline decoration-amber-400 underline-offset-2 hover:decoration-amber-600 md:min-h-0"

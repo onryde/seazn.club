@@ -292,7 +292,7 @@ export function PersonsPanel({
               rows={filtered}
               keyOf={(p) => p.id}
               empty={
-                <p className="px-4 py-6 text-center text-sm text-slate-400">
+                <p className="px-4 py-6 text-center text-sm text-slate-500">
                   {msg("persons.empty")}
                 </p>
               }

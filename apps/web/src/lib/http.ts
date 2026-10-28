@@ -38,8 +38,11 @@ export { HttpError, PaymentRequiredError } from "@/lib/errors";
  * The one thing that must stay ABSOLUTE is a URL a third party resolves rather
  * than the browser — `googleRedirectUri()` is registered with Google and has
  * to name a real origin. This helper is for our own paths only.
+ *
+ * `status` is 307 unless the caller says otherwise. 303 is for the answer to a POST that must be followed with a GET
+ * (a form submit that ends on a page): the browser must not repeat the POST at the destination.
  */
-export function redirectLocal(path: string, status: 307 | 308 = 307): NextResponse {
+export function redirectLocal(path: string, status: 303 | 307 | 308 = 307): NextResponse {
   // PERCENT-ENCODE, because a Location header is a ByteString. Setting one to
   // a value containing any character above U+00FF throws — not a bad
   // redirect, a 500. The absolute spellings this helper replaces did the

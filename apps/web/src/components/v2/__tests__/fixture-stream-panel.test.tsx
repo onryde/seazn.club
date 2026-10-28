@@ -663,8 +663,8 @@ const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
 });
 
 const TARGETS: StreamTarget[] = [
-  { id: "t1", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: "abc", inUse: null },
-  { id: "t2", kind: "twitch", label: "Alt", watchUrl: null, createdAt: "2026-09-02T10:00:00.000Z", keyHint: null, inUse: null },
+  { id: "t1", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: "abc", inUse: null, youtube: null },
+  { id: "t2", kind: "twitch", label: "Alt", watchUrl: null, createdAt: "2026-09-02T10:00:00.000Z", keyHint: null, inUse: null, youtube: null },
 ];
 
 describe("the Phone tab reads the §5.3 gate, then hands the container the context (D15)", () => {
@@ -2045,7 +2045,7 @@ describe("PhoneTabBody — every §8a state, from the projection alone", () => {
 
 // ─── T8: the picker picks from Directory (D1) ────────────────────────────────────────────────────────────────────────
 describe("T8 — the destination picker: Directory manages, the panel picks (D1)", () => {
-  it("D1: no inline add anywhere — no add button, no destination form, no key field in ANY state; 'Manage destinations' opens the Directory tab in a new tab", () => {
+  it("D1: no inline add anywhere — no add button, no destination form, no key field in ANY state; 'Manage destinations' opens the Streaming page in a new tab", () => {
     let checked = 0;
     for (const [name, tree] of bodyStates()) {
       for (const id of ["stream-target-add", "stream-target-form", "stream-dest-form", "stream-target-key", "stream-dest-key"]) {
@@ -2061,7 +2061,7 @@ describe("T8 — the destination picker: Directory manages, the panel picks (D1)
       const link = byTestId(body({ view: null, balance: 2, targets, selectedTargetId: null }), "stream-manage-destinations");
       expect(link, targets.status).toBeDefined();
       expect(link!.type).toBe("a");
-      expect(attr(link!, "href")).toBe("/directory?tab=streaming");
+      expect(attr(link!, "href")).toBe("/streaming");
       expect(attr(link!, "target")).toBe("_blank");
       expect(attr(link!, "rel")).toBe("noopener");
       expect(textOf(link!)).toBe(m("stream.dest.manage"));
@@ -4507,7 +4507,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   // B8 review I-1 narrows this edge: the offer is the SERVER's (`fixtureStreamTarget`). With nothing ever SAVED, the first
   // destination added after the list emptied is the oldest, offered. A saved choice that was removed stays none on the
   // server — so a destination added after it is NOT offered: the organiser picks it (the last steps below).
-  it("n1's edge: a removal that EMPTIES the list holds nothing — with nothing saved, the next destination added is a first one, offered (directory-stream-destinations I1, steps 4→5)", async () => {
+  it("n1's edge: a removal that EMPTIES the list holds nothing — with nothing saved, the next destination added is a first one, offered (streaming-destinations I1, steps 4→5)", async () => {
     const { doc } = stubPage();
     const s = serve({ current: null, targets: [TARGETS[0]!] });
     const island = track(await mount(s));

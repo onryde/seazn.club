@@ -392,6 +392,12 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /orgs/:id/stream-targets",
   "PATCH /orgs/:id/stream-targets/:targetId",
   "DELETE /orgs/:id/stream-targets/:targetId",
+  // YouTube Connect (T8): a connected channel acts AS the channel (its refresh token can create and end broadcasts there), the
+  // pick spends a grant that belongs to the signed-in person, and a consent names the person who gave it — a key has none.
+  // Same family as the stream targets above: never key-reachable.
+  "POST /orgs/:id/youtube-connections",
+  "GET /orgs/:id/youtube-connections/pending/:pendingId",
+  "PATCH /orgs/:id/youtube-connections/:connectionId",
   "POST /registrations/:id/refund",
   // Online chess (T19, D12): opening a round emails real people and starts a
   // clock against them, and its stamp names the USER who opened it

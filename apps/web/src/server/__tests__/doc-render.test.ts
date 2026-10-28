@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 // Font-encoding-proof spy: records every draw call by intercepting pdfkit.
-const rec = { text: [] as string[], images: 0, fills: [] as string[], strokes: [] as string[] };
+const rec = { text: [] as string[], images: 0, fills: [] as string[], strokes: [] as string[], cells: [] as { text: string; x: number; align?: string }[] };
 vi.mock("pdfkit", () => {
   class FakeDoc {
     page = { width: 595.28, height: 841.89 };
@@ -13,7 +13,11 @@ vi.mock("pdfkit", () => {
     fillColor() { return this; }
     strokeColor(c?: string) { if (typeof c === "string") rec.strokes.push(c); return this; }
     lineWidth() { return this; }
-    text(s: unknown) { rec.text.push(String(s)); return this; }
+    text(s: unknown, x?: number, _y?: number, o?: { align?: string }) {
+      rec.text.push(String(s));
+      rec.cells.push({ text: String(s), x: x ?? NaN, ...(o?.align !== undefined ? { align: o.align } : {}) });
+      return this;
+    }
     image() { rec.images++; return this; }
     rect() { return this; } roundedRect() { return this; } circle() { return this; }
     moveTo() { return this; } lineTo() { return this; } stroke() { return this; }
@@ -28,7 +32,8 @@ vi.mock("pdfkit", () => {
 });
 
 import { docModelToPdf } from "../doc-render";
-import type { DocModel } from "@seazn/engine/exports";
+import { buildStandings, buildTimetable, type DocModel } from "@seazn/engine/exports";
+import { pointsText } from "@seazn/engine/competition";
 
 const model = (branding?: DocModel["branding"]): DocModel => ({
   kind: "timetable", title: "Summer League — Div 1",
@@ -40,7 +45,7 @@ const model = (branding?: DocModel["branding"]): DocModel => ({
 });
 
 async function render(m: DocModel) {
-  rec.text = []; rec.images = 0; rec.fills = []; rec.strokes = [];
+  rec.text = []; rec.images = 0; rec.fills = []; rec.strokes = []; rec.cells = [];
   await docModelToPdf(m);
   return rec;
 }
@@ -75,6 +80,65 @@ describe("doc-render tables", () => {
     expect(r.text.join(" ")).toContain("Time");     // header cell
     expect(r.text.join(" ")).toContain("Falcons");  // data cell
     expect(r.fills).toContain("#150b36");            // night header-row background
+  });
+});
+
+// W2d follow-up (re-review §5): a chess table prints its points in half-points ("1½", FIDE's 1 / ½ / 0, RB2B-17), and the
+// PDF must set that column as the number it is — right-aligned like every other count — not as text. The cells are the
+// engine's own spelling (`pointsText` over stored half-points), never typed.
+describe("doc-render tables: a points column in half-points aligns as a number", () => {
+  /** Each column's alignment in the drawn table, read from the cells' draw calls (header row first). */
+  async function alignments(m: DocModel): Promise<Record<string, string[]>> {
+    const r = await render(m);
+    const table = m.sections[0]!.table!;
+    const out: Record<string, string[]> = {};
+    for (const row of [table.columns, ...table.rows]) {
+      // One draw call per cell, left to right; match them by text, in order, from the first header cell on.
+      row.forEach((cell, i) => {
+        const call = r.cells.find((c) => c.text === String(cell) && c.align !== undefined && !(c as { used?: boolean }).used);
+        if (call === undefined) throw new Error(`no draw call for cell "${cell}"`);
+        (call as { used?: boolean }).used = true;
+        (out[table.columns[i]!] ??= []).push(call.align!);
+      });
+    }
+    return out;
+  }
+  // FIDE: a win 1, a draw ½, a loss 0, stored in half-points (2 / 1 / 0): 1½ (one win, one draw), 2 (two wins), ½, 0.
+  const chess = (stored: number[]) =>
+    buildStandings(
+      "Chess Open — Standings",
+      stored.map((points, i) => ({ name: `Player ${i + 1}`, played: 2, won: 1, drawn: 1, lost: 0, points: pointsText(points, "half"), metrics: { wins: 1 } })),
+      { printedAt: "2026-10-28", metricColumns: ["wins"] },
+    );
+
+  it("chess: the Pts column is right-aligned for 1½ and for 2, and every other column is set as it always was", async () => {
+    const model = chess([3, 4, 1, 0]);
+    expect(model.sections[0]!.table!.rows.map((r) => r.at(-1)), "premise: the engine's half-point spellings").toEqual(["1½", "2", "½", "0"]);
+    const a = await alignments(model);
+    expect(a["Pts"], "Pts, the header and all four cells").toEqual(Array(5).fill("right"));
+    // Every other column: the counts right, the name left (as before this change).
+    let checked = 0;
+    for (const col of ["#", "P", "W", "D", "L", "wins"]) {
+      expect(a[col], col).toEqual(Array(5).fill("right"));
+      checked++;
+    }
+    expect(a["Team"], "Team").toEqual(Array(5).fill("left"));
+    expect(checked + 2, "columns checked").toBe(model.sections[0]!.table!.columns.length);
+  });
+
+  it("a column that is only ½ steps is a number too; one with any word in it stays text (the positive pair)", async () => {
+    expect((await alignments(chess([1, 1])))["Pts"]).toEqual(Array(3).fill("right"));
+    // A timetable's columns, as before: the times and the score right (header with them), the names, the court and the
+    // stage left — "Pool ½" carries a ½ AND a word, so it stays text.
+    const tt = buildTimetable(
+      "Cup",
+      [{ id: "f1", at: "09:00", court: "Court 1", stageName: "Pool ½", round: 1, home: "Ash", away: "Birch", result: "2–1" }],
+      { printedAt: "2026-10-28" },
+    );
+    const a = await alignments(tt);
+    expect(a, "Time, Court, Home, result, Away, Stage").toEqual({
+      Time: ["right", "right"], Court: ["left", "left"], Home: ["left", "left"], "": ["right", "right"], Away: ["left", "left"], Stage: ["left", "left"],
+    });
   });
 });
 

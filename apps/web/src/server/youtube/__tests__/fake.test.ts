@@ -1431,3 +1431,45 @@ describe("seedGrant, renameChannel and removeChannel", () => {
     expect((again as YouTubeError).reason, "removing it twice is a typo, not a no-op").toBe("unknownChannel");
   });
 });
+
+describe("redirectUriOf: where the fake authorize hop sends the browser back (T7)", () => {
+  it("answers the redirect URI the state's authorizeUrl RECORDED, per state, and a second authorize of a state starts it over", () => {
+    const f = new FakeYouTube();
+    const a = "https://a.example.test/api/youtube/connect/callback";
+    const b = "https://b.example.test/api/youtube/connect/callback";
+    f.authorizeUrl({ state: "ru-1", codeChallenge: CHALLENGE, redirectUri: a });
+    f.authorizeUrl({ state: "ru-2", codeChallenge: CHALLENGE, redirectUri: b });
+    // Two states, two answers: one global "last redirect URI" would give both the same.
+    expect(f.redirectUriOf("ru-1")).toBe(a);
+    expect(f.redirectUriOf("ru-2")).toBe(b);
+    f.authorizeUrl({ state: "ru-1", codeChallenge: CHALLENGE, redirectUri: b });
+    expect(f.redirectUriOf("ru-1"), "authorizing a state again starts it over").toBe(b);
+  });
+
+  it("an unknown state is youtube_not_found/unknownState, and so is every state after reset (what was recorded is gone)", () => {
+    const f = new FakeYouTube();
+    const refusal = (state: string) => {
+      try {
+        f.redirectUriOf(state);
+      } catch (e) {
+        return e as YouTubeError;
+      }
+      throw new Error("expected redirectUriOf to throw");
+    };
+    expect([refusal("never-authorized").code, refusal("never-authorized").reason]).toEqual(["youtube_not_found", "unknownState"]);
+    f.authorizeUrl({ state: "ru-3", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
+    expect(f.redirectUriOf("ru-3")).toBe(REDIRECT);   // PREMISE: it was known until the reset
+    f.reset();
+    expect(refusal("ru-3").code).toBe("youtube_not_found");
+  });
+
+  it("is a read: it logs no port call and spends nothing (the state still mints its code afterwards)", async () => {
+    const f = new FakeYouTube();
+    f.authorizeUrl({ state: "ru-4", codeChallenge: CHALLENGE, redirectUri: REDIRECT });
+    const before = f.calls.length;
+    f.redirectUriOf("ru-4");
+    f.redirectUriOf("ru-4");
+    expect(f.calls.length).toBe(before);
+    await expect(f.exchangeCode({ code: f.issueCode("ru-4"), codeVerifier: VERIFIER, redirectUri: REDIRECT })).resolves.toEqual(expect.objectContaining({ scope: "https://www.googleapis.com/auth/youtube" }));
+  });
+});
