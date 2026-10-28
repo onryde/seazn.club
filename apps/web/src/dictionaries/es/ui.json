@@ -2012,6 +2012,7 @@
   "documents.error": "No se pudo preparar ese documento.",
   "documents.ticketsUnavailable": "Aún no hay inscripciones confirmadas, así que no hay entradas para imprimir.",
   "documents.bracketUnavailable": "Esta división aún no tiene cuadro eliminatorio.",
+  "documents.standingsUnavailable": "Aún no hay clasificación que imprimir: aparece en cuanto se registra un resultado.",
   "documents.pdf": "PDF",
   "documents.xlsx": "XLSX",
   "schedule.working": "Procesando…",

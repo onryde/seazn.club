@@ -2192,6 +2192,7 @@ export type DictionaryKey =
   | "documents.rosters"
   | "documents.rota"
   | "documents.standings"
+  | "documents.standingsUnavailable"
   | "documents.tickets"
   | "documents.ticketsUnavailable"
   | "documents.title"

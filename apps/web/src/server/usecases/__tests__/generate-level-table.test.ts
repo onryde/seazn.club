@@ -31,7 +31,7 @@ import { tableOrderOf } from "@/server/engine-db/table-rules";
 import { getPublicDivision, type StandingsSnapshotRow } from "@/server/public-site/data";
 import { assembleDigestStandings } from "@/server/usecases/org-posts";
 import { startDivision } from "@/server/usecases/schedule";
-import { completeStage, computeSeedProposal, confirmSeedProposal, generateStageFixtures, REAL_TABLE_KINDS, unpairSwissRound } from "@/server/usecases/stages";
+import { completeStage, computeSeedProposal, confirmSeedProposal, generateStageFixtures, getStandings, REAL_TABLE_KINDS, unpairSwissRound } from "@/server/usecases/stages";
 import { deleteEntrant } from "@/server/usecases/entrants";
 import { createPerson } from "@/server/usecases/persons";
 import { buildDivisionDocModel } from "@/server/usecases/exports";
@@ -463,7 +463,7 @@ describe.skipIf(!HAS_DB)("W2d concern 2 fix round 1 — the stored table follows
     const s = await scene({ entrants: 4 });
     await generateStageFixtures(s.auth, s.stageId);
     expect((await snapshotsOf(s.stageId))[0]?.rows.every((r) => r.level === true), "premise: the generate stored a level table").toBe(true);
-    await expect(exportedStandings(s), "a level table is no standings to print (anti-goal 3: no row is marked first)").rejects.toMatchObject({ status: 404 });
+    await expect(exportedStandings(s), "a level table is no standings to print (anti-goal 3: no row is marked first)").rejects.toMatchObject({ status: 404, code: "STANDINGS_NOT_AVAILABLE" });
     // The positive pair: one counted result, and the export prints places — the winner first, not seed 1.
     await startDivision(s.auth, s.divisionId);
     await genericResult(s.auth, s.stageId, s.entrants[3]!, s.entrants[0]!, 1, 0);
@@ -509,10 +509,54 @@ describe.skipIf(!HAS_DB)("W2d concern 2 fix round 1 — the stored table follows
     expectLevel(await publicTablesOf(s), [e4, e3, e2], "the seeded pool after the confirm");
   });
 
+  it("n1: an EMPTY stored table is nothing to export either — a minted Swiss whose Standings the organiser opened", async () => {
+    // single-sport: the export reads the stored table (sport-agnostic)
+    const s = await scene({ entrants: 4, stages: { seq: 1, kind: "swiss", name: "Swiss", config: { rounds: 3 } } });
+    await generateStageFixtures(s.auth, s.stageId);
+    await getStandings(s.auth, s.stageId);
+    const stored = await snapshotsOf(s.stageId);
+    expect(stored.map((t) => t.rows.length), "premise: the organiser's read stored a table of no rows").toEqual([0]);
+    await expect(exportedStandings(s), "a table of no rows is no standings to print").rejects.toMatchObject({ status: 404, code: "STANDINGS_NOT_AVAILABLE" });
+  });
+
+  it("n1: a later 2-pool group's empty tables (its Standings opened) do not displace the finished stage's table in the export", async () => {
+    // single-sport: the export's stage pick is the division's (sport-agnostic)
+    const s = await scene({
+      entrants: 8,
+      stage: 1,
+      stages: [
+        { seq: 1, kind: "league", name: "Phase 1", config: {} },
+        {
+          seq: 2,
+          kind: "group",
+          name: "Groups",
+          config: { pools: { count: 2 } },
+          progression: { sources: [{ stage: "previous", take: [{ kind: "rankRange", from: 1, to: 8 }] }], placement: "rank_order", timing: "on_complete" },
+        },
+      ] as CreateStages,
+    });
+    const phase1 = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, phase1);
+    await startDivision(s.auth, s.divisionId);
+    await reverseSeedRound(s, phase1);
+    await completeStage(s.auth, phase1);
+    await generateStageFixtures(s.auth, s.stageId);
+    await getStandings(s.auth, s.stageId);
+    const pools = await snapshotsOf(s.stageId);
+    expect(pools.map((t) => t.rows.length), "premise: the groups' read stored two tables of no rows").toEqual([0, 0]);
+    // Phase 1's real order: the lower seed won every match — E8 7 wins down to E1 0.
+    expect(await exportedStandings(s), "the export prints Phase 1's final table, not an empty one").toEqual(
+      [8, 7, 6, 5, 4, 3, 2, 1].map((n, i) => ({ place: i + 1, name: `E${n}`, played: 7 })),
+    );
+  });
+
   it("m1: every stage kind outside the table kinds — the generate stores no table (registry sweep over StageKind, counted)", async () => {
     // The spec's table kinds (§5.7: a bracket has no table; scoring folds no other kind on a result): league, group, swiss.
     const tableKinds = ["league", "group", "swiss"];
     const CONFIG: Record<string, Record<string, unknown>> = { americano: { mode: "americano", courtCount: 1, rounds: 1 }, ladder: { challengeRange: 2 } };
+    // Not a witness: a ladder's fixtures come from individual challenges (`issueChallenge`), so its generate creates 0
+    // and never reaches the refold gate. Pinned as a premise below, so a ladder that starts generating reds here.
+    const WITNESSLESS = new Set(["ladder"]);
     let checked = 0;
     for (const kind of StageKind.options.filter((k) => !tableKinds.includes(k))) {
       const s = await scene({ entrants: 4, stages: { seq: 1, kind, name: kind, config: CONFIG[kind] ?? {} } as CreateStages });
@@ -523,11 +567,15 @@ describe.skipIf(!HAS_DB)("W2d concern 2 fix round 1 — the stored table follows
           await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${id}, ${person.id}, ${s.auth.orgId})`;
         }
       const out = await generateStageFixtures(s.auth, s.stageId);
-      if (kind !== "ladder") expect(out.created, `premise: ${kind} generated fixtures`).toBeGreaterThan(0);
       expect(await snapshotsOf(s.stageId), `${kind}: no table stored`).toEqual([]);
+      if (WITNESSLESS.has(kind)) {
+        expect(out.created, `premise: ${kind}'s generate creates nothing (so it is no witness)`).toBe(0);
+        continue;
+      }
+      expect(out.created, `premise: ${kind} generated fixtures (so the refold gate was reached)`).toBeGreaterThan(0);
       checked++;
     }
-    expect(checked, "every non-table kind StageKind declares").toBe(StageKind.options.length - tableKinds.length);
+    expect(checked, "every non-table kind StageKind declares that generates fixtures").toBe(StageKind.options.length - tableKinds.length - WITNESSLESS.size);
     expect(checked).toBeGreaterThan(0);
   });
 

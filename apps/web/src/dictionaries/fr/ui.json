@@ -2012,6 +2012,7 @@
   "documents.error": "Impossible de préparer ce document.",
   "documents.ticketsUnavailable": "Aucune inscription confirmée pour l’instant : il n’y a pas de billets à imprimer.",
   "documents.bracketUnavailable": "Cette division n’a pas encore de tableau à élimination directe.",
+  "documents.standingsUnavailable": "Aucun classement à imprimer pour l’instant — il apparaît dès qu’un résultat est enregistré.",
   "documents.pdf": "PDF",
   "documents.xlsx": "XLSX",
   "schedule.working": "Traitement en cours…",

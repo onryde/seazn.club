@@ -4549,8 +4549,10 @@ export const REAL_TABLE_KINDS = new Set(["league", "group", "swiss"]);
  * the stored tables the fold no longer produces, so a deleted entrant's row never outlives them.
  *
  * Best-effort, after the write has committed (review m4): a refold that throws (a rank-time refusal, anti-goal 2) is
- * logged, never turned into a failed write the caller would retry into a no-op. The next result's refold, or the
- * organiser's Standings read (`getStandings`), writes the table.
+ * logged, never turned into a failed write the caller would retry into a no-op. The stage's table is then whatever was
+ * stored before the write until the next result's refold — or, when nothing is stored, the organiser's Standings read
+ * (`getStandings` recomputes only on a miss). So a failed refold after Pair next, a regenerate or a roster delete leaves
+ * the previous table (a deleted entrant's row included) until that result (review n3).
  */
 export async function refoldStageTable(
   orgId: string,

@@ -467,11 +467,13 @@ export async function buildDivisionDocModel(
           join stages s on s.id = ss.stage_id
           where s.division_id = ${divisionId}
           order by s.seq desc, ss.updated_at desc`;
-        // W2d concern 2 (anti-goal 3, X-TB-6; review I2): a LEVEL table — nothing counted, the one the generate stores —
-        // has no places, and `#` would print seed 1 first. It is no standings to print: skipped, so a later stage's
-        // level table never displaces a finished stage's real one, and a division with only level tables has none yet.
-        const snapshot = snapshots.find((s) => !isLevelTable(s.rows));
-        if (!snapshot) throw new HttpError(404, "no standings yet");
+        // W2d concern 2 (anti-goal 3, X-TB-6; review I2, n1): a LEVEL table — nothing counted, the one the generate
+        // stores — has no places, and `#` would print seed 1 first; a table of NO rows (a minted Swiss or a pooled
+        // stage before results, once the organiser's Standings read stored it) has nothing at all. Neither is standings
+        // to print: skipped, so a later stage's never displaces a finished stage's real table, and a division with only
+        // those has none yet. `STANDINGS_NOT_AVAILABLE` is the documents menu's localised line (review n2).
+        const snapshot = snapshots.find((s) => s.rows.length > 0 && !isLevelTable(s.rows));
+        if (!snapshot) throw new HttpError(404, "no standings yet", "STANDINGS_NOT_AVAILABLE");
         const names = await tx<{ id: string; display_name: string; badge_url: string | null }[]>`
           select id, display_name, badge_url from entrants where division_id = ${divisionId}`;
         const nameById = new Map(names.map((n) => [n.id, n.display_name]));

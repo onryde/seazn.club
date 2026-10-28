@@ -2012,6 +2012,7 @@
   "documents.error": "Couldn't prepare that document.",
   "documents.ticketsUnavailable": "No confirmed registrations yet, so there are no tickets to print.",
   "documents.bracketUnavailable": "This division has no knockout bracket yet.",
+  "documents.standingsUnavailable": "No standings to print yet — they appear once a result is recorded.",
   "documents.pdf": "PDF",
   "documents.xlsx": "XLSX",
   "schedule.working": "Working…",

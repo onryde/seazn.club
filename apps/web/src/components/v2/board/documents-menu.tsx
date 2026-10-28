@@ -29,14 +29,17 @@ export function dismissesMenu(
  *  the organiser's own language. Anything absent from this map falls back to
  *  the server's English message — never to a generic error, which would throw
  *  away detail the server took trouble to provide. */
-const DOC_ERROR_KEYS: Record<string, "documents.ticketsUnavailable" | "documents.bracketUnavailable"> = {
+type DocErrorKey = "documents.ticketsUnavailable" | "documents.bracketUnavailable" | "documents.standingsUnavailable";
+const DOC_ERROR_KEYS: Record<string, DocErrorKey> = {
   TICKETS_NOT_AVAILABLE: "documents.ticketsUnavailable",
   BRACKET_NOT_AVAILABLE: "documents.bracketUnavailable",
+  // W2d concern 2: only level (nothing counted) or empty tables are stored yet — the export prints no places.
+  STANDINGS_NOT_AVAILABLE: "documents.standingsUnavailable",
 };
 
 export function localisedDocError(
   code: string | undefined,
-  msg: (key: "documents.ticketsUnavailable" | "documents.bracketUnavailable") => string,
+  msg: (key: DocErrorKey) => string,
 ): string | null {
   const key = code ? DOC_ERROR_KEYS[code] : undefined;
   return key ? msg(key) : null;
