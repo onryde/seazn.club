@@ -34,8 +34,9 @@ export const FOLD_EPOCH = Object.freeze({
   // type (GOAL_KIND_REQUIRED), so a phone that still sends an untyped goal must update, and the corpus's untyped goals were
   // re-recorded as field goals (kind "fg"). As with the lineup refusal, it is the write path that refuses: replay is lenient,
   // and a recorded untyped goal still folds as a field goal.
+  // W2e T3 (BD-SE-1, X-SE-1) raised badminton to 2: the write path refuses scoring after a black card until its ending (ENDING_SANCTION_PENDING), and golden stream default#11 recorded rallies after one, so it was re-recorded in place (the ending replaces the refused rally, and the walk ends there).
   football: 3, cricket: 1, boardgame: 3, carrom: 3, generic: 3, volleyball: 1,
-  badminton: 1, tabletennis: 1, tennis: 1, icehockey: 2, hockey: 4,
+  badminton: 2, tabletennis: 1, tennis: 1, icehockey: 2, hockey: 4,
 } as const satisfies Readonly<Record<string, number>>);
 export type FoldEpochSport = keyof typeof FOLD_EPOCH;
 // The same sports as FOLD_EPOCH: `satisfies` over its keys makes a sport missing here, or one only here, a type error.
