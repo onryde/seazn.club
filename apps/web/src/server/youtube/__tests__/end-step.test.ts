@@ -45,20 +45,26 @@ vi.mock("@/server/youtube/prepare", async (importOriginal) => {
   };
 });
 
-/** setFixtureStreamUrl, spied: a pass-through unless a test arms `fail` (the next call throws, once). */
-const urlHook = vi.hoisted(() => ({ fail: false, calls: 0, actors: [] as { fixtureId: string; userId: string | null }[] }));
+/** setFixtureStreamUrlIfEmpty (the end step's own write, F-m3), spied: a pass-through unless a test arms `fail` (the next call throws,
+ *  once). `results` is each call's `written` flag: a completion that found the link taken still calls it (and expires the page). */
+const urlHook = vi.hoisted(() => ({ fail: false, before: null as null | (() => Promise<void>), calls: 0, actors: [] as { fixtureId: string; userId: string | null }[], results: [] as boolean[] }));
 vi.mock("@/server/usecases/fixtures", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/server/usecases/fixtures")>();
   return {
     ...real,
-    setFixtureStreamUrl: vi.fn(async (...a: Parameters<typeof real.setFixtureStreamUrl>) => {
+    setFixtureStreamUrlIfEmpty: vi.fn(async (...a: Parameters<typeof real.setFixtureStreamUrlIfEmpty>) => {
       urlHook.calls++;
       urlHook.actors.push({ fixtureId: a[1], userId: a[0].userId ?? null });
+      const before = urlHook.before;   // run once, at the instant the end step has decided to write and has not yet written
+      urlHook.before = null;
+      if (before) await before();
       if (urlHook.fail) {
         urlHook.fail = false;
         throw new Error("the replay link write failed");
       }
-      return real.setFixtureStreamUrl(...a);
+      const out = await real.setFixtureStreamUrlIfEmpty(...a);
+      urlHook.results.push(out.written);
+      return out;
     }),
   };
 });
@@ -136,8 +142,10 @@ afterAll(() => {
 beforeEach(() => {
   sentry.captureError.mockClear();
   urlHook.fail = false;
+  urlHook.before = null;
   urlHook.calls = 0;
   urlHook.actors = [];
+  urlHook.results = [];
   revalidateHook.calls = [];
 });
 afterEach(() => {
@@ -690,7 +698,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     expect((await broadcastRow(m2.broadcastId)).state).toBe("complete");
   });
 
-  it("T16: every completion expires the public page once - Part 1 through the link write, Part 2 and a club's own link through the early return (a part must show without waiting out the cache window)", async () => {
+  it("T16: every completion expires the public page once - Part 1 when it takes the link, Part 2 and a club's own link when the link is taken (a part must show without waiting out the cache window)", async () => {
     const w = await world({ fixtures: 2, credits: 3 });
     const [f, g] = w.fixtures as [string, string];
     const [{ division_id: divisionId, competition_id: competitionId }] = await sql<{ division_id: string; competition_id: string }[]>`
@@ -707,20 +715,37 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     const m1 = await playAndStop(w, f);
     expect(await expiriesDuring(afterStop(m1, min(6)), 1), "Part 1: one expiry").toEqual([expectedCall]);
     expect(await streamUrlOf(f)).toBe(youtubeWatchUrl(m1.ytId));
-    expect(urlHook.calls, "premise: Part 1 went through the link write").toBe(1);
+    expect(urlHook.results, "premise: Part 1 wrote the link").toEqual([true]);
 
     // Part 2: the link is Part 1's and is not rewritten - the page is expired anyway.
     const m2 = await playAndStop(w, f);
     expect(await expiriesDuring(afterStop(m2, min(6)), 1), "Part 2: one expiry, from the early-return branch").toEqual([expectedCall]);
     expect(await streamUrlOf(f), "premise: Part 2 did not take the link").toBe(youtubeWatchUrl(m1.ytId));
-    expect(urlHook.calls, "premise: Part 2 wrote no link, so the expiry did not come from the link write").toBe(1);
+    expect(urlHook.results, "premise: Part 2 asked and found the link taken").toEqual([true, false]);
 
     // A club's own link on another fixture: nothing written, the page is still expired (the part is new).
     await sql`update fixtures set stream_url = 'https://example.com/club-stream' where id = ${g}`;
     const m3 = await playAndStop(w, g);
     expect(await expiriesDuring(afterStop(m3, min(6)), 1), "the club-link fixture: one expiry for its part").toEqual([expectedCall]);
     expect(await streamUrlOf(g)).toBe("https://example.com/club-stream");
-    expect(urlHook.calls, "premise: the club's link was not touched").toBe(1);
+    expect(urlHook.results, "premise: the club's link was asked about and not touched").toEqual([true, false, false]);
+  });
+
+  it("THE RACE (F-m3): a club link saved after the end step decided to write and before the write lands is NOT overwritten - the guard is the UPDATE's own, not a read that came before it", async () => {
+    const w = await world({ fixtures: 2, credits: 2 });
+    const [f, g] = w.fixtures as [string, string];
+    const CLUB = "https://www.twitch.tv/riversideclub";
+    const m1 = await playAndStop(w, f);
+    urlHook.before = async () => { await sql`update fixtures set stream_url = ${CLUB} where id = ${f}`; };
+    expect(await w.step({ at: afterStop(m1, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+    expect(urlHook.results, "premise: the end step reached its write").toEqual([false]);
+    expect(await streamUrlOf(f), "the club's link, saved in the window, stands").toBe(CLUB);
+    expect((await broadcastRow(m1.broadcastId)).state, "the part still completed").toBe("complete");
+    // The same fixture shape with no club link: the end step does write (so the test above is about the race, not about a write that never happens).
+    const m2 = await playAndStop(w, g);
+    expect(await w.step({ at: afterStop(m2, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+    expect(await streamUrlOf(g)).toBe(youtubeWatchUrl(m2.ytId));
+    expect(urlHook.results).toEqual([false, true]);
   });
 
   it("T16: a broadcast that never ran (deleted as never_live) expires nothing - it is not a replay part, so the public page did not change", async () => {

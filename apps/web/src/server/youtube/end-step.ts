@@ -19,7 +19,7 @@ import "server-only";
 //      call and nothing a reconnect could change: the row fails `broadcast_revoked`, the connection is left exactly as it was.
 //   3. FINALIZE (one statement). `update … where id and state = 'ending'` — finalize never moves any other state, so it cannot
 //      resurrect a row something else has settled. Once it has moved a row to `complete`, the replay URL goes through
-//      `setFixtureStreamUrl`, only when the fixture has no link of its own.
+//      `setFixtureStreamUrlIfEmpty`: written only while the fixture has no link of its own, and the pages expire either way.
 //
 // ORPHANS (P4, the controller's binding predicate). An orphan is a broadcast NO SESSION REFERENCES that is older than 10 minutes — not
 // a list of states. That one predicate covers a `created`/`bound` row nobody ever streamed into, a `created` row with a key but no
@@ -50,8 +50,7 @@ import { sql, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
 import { youtubeWatchUrl } from "@/lib/youtube";
 import type { AuthCtx } from "@/server/api-v1/auth";
-import { setFixtureStreamUrl } from "@/server/usecases/fixtures";
-import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
+import { setFixtureStreamUrlIfEmpty } from "@/server/usecases/fixtures";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts } from "./end-rule";
 import { YouTubeError, type BroadcastLifeInfo, type YouTubePort } from "./port";
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken } from "./token-store";
@@ -291,33 +290,25 @@ async function rereadAfterFailure(port: YouTubePort, at: string, row: Claimed, y
   return settleNotLive(port, at, row, ytId, info);
 }
 
-/** The replay URL (spec §6.4, "Part 1" rule): `fixtures.stream_url` takes the watch URL only while it is null — a club's own link wins,
- *  and a later part never replaces an earlier one. Written through the ONE stream-link path (`setFixtureStreamUrl`: validation,
- *  tenant scope, revalidation) as `fillReplayUrl`'s actor: the last session's creator, or — when `last_session_id` was nulled by a session
- *  delete — the connection's. When the link is already taken (a later part, or the club's own) nothing is written, but the public match
- *  page's parts list just grew, so the division's pages are expired here instead (T16). Best effort, and AFTER the row is complete: the parts list reads the complete rows themselves, so a link that could not
- *  be written (or a crash between the two) costs only the back-compat link, and a failure here must never leave an `ending` row
- *  holding its key for good. */
+/** The replay URL (spec §6.4, "Part 1" rule): `fixtures.stream_url` takes the watch URL only while it is empty - a club's own link wins,
+ *  and a later part never replaces an earlier one. Written through the stream-link path's conditional variant
+ *  (`setFixtureStreamUrlIfEmpty`: the same validation, tenant scope and revalidation), whose UPDATE itself carries the `is null` guard:
+ *  there is no read before the write, so a club link saved in between cannot be overwritten. It expires the division's pages whether or
+ *  not it wrote - the part that just completed is on the match page's parts list either way (T16). The actor is `fillReplayUrl`'s: the
+ *  last session's creator, or - when `last_session_id` was nulled by a session delete - the connection's. Best effort, and AFTER the row
+ *  is complete: the parts list reads the complete rows themselves, so a link that could not be written (or a crash between the two)
+ *  costs only the back-compat link, and a failure here must never leave an `ending` row holding its key for good. */
 async function writeReplayUrl(row: Claimed, ytId: string): Promise<void> {
   try {
-    const [r] = await sql<{ stream_url: string | null; actor: string; division_id: string; competition_id: string }[]>`
-      select f.stream_url, coalesce(s.created_by, c.created_by) as actor, f.division_id, d.competition_id
+    const [r] = await sql<{ actor: string }[]>`
+      select coalesce(s.created_by, c.created_by) as actor
         from youtube_broadcasts b
-        join fixtures f on f.id = b.fixture_id
-        join divisions d on d.id = f.division_id
         join org_youtube_connections c on c.id = b.connection_id and c.org_id = b.org_id
         left join fixture_stream_sessions s on s.id = b.last_session_id
        where b.id = ${row.id} and b.org_id = ${row.org_id}`;
     if (!r) return;
-    if (r.stream_url !== null) {
-      // The link is taken (Part 1's, or the club's own), so there is nothing to write - but this completion still changed what the public
-      // match page lists: the part is a new row in the parts view. Writing the link is what used to expire the page (through
-      // `setFixtureStreamUrl`), so a later part must expire it itself or it shows up only when the cache window runs out.
-      fireDivisionRevalidate(r.division_id, r.competition_id);
-      return;
-    }
     const actor: AuthCtx = { orgId: row.org_id, via: "session", userId: r.actor, role: "owner", keyId: null };
-    await setFixtureStreamUrl(actor, row.fixture_id, youtubeWatchUrl(ytId));
+    await setFixtureStreamUrlIfEmpty(actor, row.fixture_id, youtubeWatchUrl(ytId));
   } catch (err) {
     captureError(err, { orgId: row.org_id, route: "youtube.end_step.replay_url", extra: { broadcastId: row.id } });
   }
