@@ -91,7 +91,7 @@ export default defineConfig([
     // member access inherits it. That accounts for 205 of the 498 errors this
     // tree carried when the gate was switched on (2026-09-06). The other 293
     // are FIXED, not suppressed: 271 by `eslint --fix`, 20 by hand, and two
-    // pinned to named lines in `smoke.ts`, which has the same `call()` shape
+    // pinned to named lines in `scripts/smoke/`, which has the same `call()` shape
     // but keeps all six rules on everywhere else.
     //
     // Relaxed rather than typed BECAUSE typing them means writing ~200

@@ -142,7 +142,7 @@ overflow hides behind it") applied literally.
 3. `npx vitest run src/lib/__tests__/visual-manifest.test.ts` — a dangling
    reference, an unresolved placeholder, an unknown check name or a
    bare-heading `awaitSelector` fails here, in seconds.
-4. Extend `visualSeedRoutesSuite` (`scripts/smoke.ts:16561`) if your row adds a
+4. Extend `visualSeedRoutesSuite` (`scripts/smoke/suites/visualSeedRoutes.ts`) if your row adds a
    route or an `awaitSelector`. That suite is the manifest's server-side
    counterpart — it proves the routes still answer with the markup the manifest
    awaits, through HTTP rather than a browser — but it **hardcodes both routes

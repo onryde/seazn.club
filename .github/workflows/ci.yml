@@ -760,7 +760,7 @@ jobs:
   #
   # Both jobs also carry the FULL original env block unchanged, even where a
   # given job doesn't obviously need every var (e.g. smoke-db doesn't run
-  # scripts/smoke.ts's AI fixture) — narrowing per-job risks silently
+  # scripts/smoke/'s AI fixture) — narrowing per-job risks silently
   # starving a test that reads one of these without it being obvious from
   # this file. An unused env var is free; a silently-skipped assertion is not.
   # -------------------------------------------------------------------------
@@ -824,7 +824,7 @@ jobs:
       LICHESS_TOKEN_KEK: 9a8b7c6d5e4f30211203f4e5d6c7b8a99a8b7c6d5e4f30211203f4e5d6c7b8a9
       NEXT_PUBLIC_SUPABASE_URL: ""
       NEXT_TELEMETRY_DISABLED: "1"
-      # v4 AI smoke (scripts/smoke.ts v4AiSuite): point the server's
+      # v4 AI smoke (scripts/smoke/suites/v4Ai.ts): point the server's
       # Anthropic provider at the smoke-started model fixture on 4319 with a
       # non-empty dummy key, so the fixture-gated AI checks actually run in CI
       # instead of silently skipping. Mirrors e2e.yml. No real Anthropic call.
@@ -835,7 +835,7 @@ jobs:
       # exercise real test-mode Stripe instead of skipping (`pm: skipped …`).
       # Withheld from fork PRs (they skip); present on the owner's branch PRs.
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
-      # Job-scoped so the server under test and scripts/smoke.ts share ONE
+      # Job-scoped so the server under test and scripts/smoke/ share ONE
       # value — that is the whole requirement. It is an HMAC secret between two
       # processes in this container, never a real Stripe endpoint secret, and
       # the only reader is api/webhooks/stripe. Without it passRungLSuite (v17
@@ -1046,7 +1046,7 @@ jobs:
       # fails loudly either way — "did not run at all" is a red, not a skip — so
       # this coupling cannot rot into silent non-coverage.
 
-      # `scripts/smoke.ts` (which also needs the placement container) now runs
+      # `scripts/smoke/index.ts` (which also needs the placement container) now runs
       # in the separate smoke-e2e job below, with its own container — so
       # nothing later in THIS job needs placement, and teardown at the end of
       # this job is just housekeeping, not a dependency the way it used to be.
@@ -1515,7 +1515,7 @@ jobs:
       STRIPE_SECRET_KEY: ${{ secrets.STRIPE_SECRET_KEY }}
       STRIPE_WEBHOOK_SECRET: whsec_ci_smoke
       # x-cron-secret for /api/cron/* (billing-quantity, p72). Job-level so the
-      # server and scripts/smoke.ts read ONE value; without it the route throws
+      # server and scripts/smoke/ read ONE value; without it the route throws
       # "CRON_SECRET is not configured" and the right-secret legs skip. CI-only
       # dummy, same convention as e2e.yml.
       CRON_SECRET: ci-only-smoke-cron-secret-0123456789
@@ -1524,7 +1524,7 @@ jobs:
       # Registration/sponsor checkout mint a destination charge against
       # org.stripe_account_id, and Stripe rejects a destination that isn't a
       # real connected account with transfers active — this is what makes
-      # that path testable in CI at all. Read by scripts/smoke.ts's
+      # that path testable in CI at all. Read by scripts/smoke/'s
       # registrationPaidLoopSuite (RS006) and sponsorsSuite's Connect-gated
       # checkout leg; both skip their destination-charge assertion when this
       # is unset — counted as a pass, but never silently: the label reads
