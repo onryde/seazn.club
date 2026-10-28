@@ -235,9 +235,9 @@ describe("the logo is only ever drawn inside a link to YouTube", () => {
       expect(openingTag, `${s.file}: the anchor has an href`).toMatch(/\bhref=/);
       if (s.file.endsWith("youtube-icon.tsx")) expect(openingTag, "the link goes to the channel's page").toContain("href={youtubeChannelUrl(channelId)}");
       if (s.file.endsWith("fixture-stream-panel.tsx")) {
-        expect(openingTag, "the replay link").toContain("href={p.view.replayUrl}");
+        expect(openingTag, "the replay link").toContain("href={row.url}");
         // The icon follows the LINK: it is drawn only when the link really goes to YouTube.
-        expect(between.slice(-200), "gated by isYoutubeUrl").toContain("isYoutubeUrl(p.view.replayUrl)");
+        expect(between.slice(-200), "gated by isYoutubeUrl").toContain("isYoutubeUrl(row.url)");
       }
       checked++;
     }

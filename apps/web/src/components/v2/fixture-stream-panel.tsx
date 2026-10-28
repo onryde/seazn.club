@@ -93,7 +93,7 @@ import {
 } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { fmtNumber, fmtTime } from "@/lib/format";
-import { STREAMING_PAGE_HREF, YOUTUBE_REFUSAL_REMEDY, isYoutubeUrl, type YoutubeRefusalCode } from "@/lib/youtube";
+import { STREAMING_PAGE_HREF, YOUTUBE_REFUSAL_REMEDY, isYoutubeUrl, replayRows, type YoutubeRefusalCode } from "@/lib/youtube";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamMode, StreamPhone, StreamSessionCurrent, StreamTarget } from "@/server/api-v1/schemas";
 
@@ -2559,33 +2559,50 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
             )}
           </div>
           {restartEl}
-          {p.view.replayUrl && (
-            // Owner's Option B (YouTube Connect T12): the replay is a row — when it ran, then Watch replay and Copy link. A YouTube
-            // destination's link wears the official icon (inside the link, so the mark is clickable and leads to YouTube).
-            <div data-testid="stream-replay-row" className="min-w-0 space-y-2 rounded-lg border border-slate-200 p-3">
-              {p.view.startedAt !== null && (
-                <p data-testid="stream-replay-times" className="text-sm text-slate-700">
-                  {p.view.endedAt
-                    ? msg("stream.replay.times", { start: fmtTime(p.tz, p.view.startedAt), end: fmtTime(p.tz, p.view.endedAt) })
-                    : msg("stream.replay.timesOpen", { start: fmtTime(p.tz, p.view.startedAt) })}
-                </p>
-              )}
-              <div className="flex flex-col gap-2 md:flex-row">
-                <a
-                  data-testid="stream-replay"
-                  href={p.view.replayUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="btn btn-ghost min-h-11 w-full gap-2.5 md:min-h-10 md:w-auto"
-                >
-                  {/* The mark follows the LINK, not the destination: a club's own stream_url is never overwritten with YouTube's. */}
-                  {isYoutubeUrl(p.view.replayUrl) && <YoutubeIcon size="sm" />}
-                  {msg("stream.phone.replay")}
-                </a>
-                <ReplayCopyButton url={p.view.replayUrl} />
+          {(() => {
+            // YouTube Connect T16 (O6): the after-match area lists the match's replay PARTS (a restart makes a second broadcast),
+            // then the club's own link when it is not one of them. With no parts it is the single row it always was.
+            const parts = p.view.replayParts;
+            const rows = replayRows(p.view.replayUrl, parts);
+            if (rows.length === 0) return null;
+            return (
+              // Owner's Option B (YouTube Connect T12): the replay is a row — when it ran, then Watch replay and Copy link. A YouTube
+              // destination's link wears the official icon (inside the link, so the mark is clickable and leads to YouTube).
+              <div data-testid="stream-replay-row" className="min-w-0 space-y-2 rounded-lg border border-slate-200 p-3">
+                {p.view.startedAt !== null && (
+                  <p data-testid="stream-replay-times" className="text-sm text-slate-700">
+                    {p.view.endedAt
+                      ? msg("stream.replay.times", { start: fmtTime(p.tz, p.view.startedAt), end: fmtTime(p.tz, p.view.endedAt) })
+                      : msg("stream.replay.timesOpen", { start: fmtTime(p.tz, p.view.startedAt) })}
+                  </p>
+                )}
+                {rows.map((row) => (
+                  <div key={row.key} data-testid="stream-replay-item" className="min-w-0 space-y-1">
+                    {/* A part is labelled only when there are two or more: one part is just the replay. */}
+                    {row.partNo !== null && parts.length > 1 && (
+                      <p data-testid="stream-replay-part" className="text-sm font-semibold text-slate-900">
+                        {msg("streaming.youtube.part", { n: row.partNo })}
+                      </p>
+                    )}
+                    <div className="flex flex-col gap-2 md:flex-row">
+                      <a
+                        data-testid="stream-replay"
+                        href={row.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="btn btn-ghost min-h-11 w-full gap-2.5 md:min-h-10 md:w-auto"
+                      >
+                        {/* The mark follows the LINK, not the destination: a club's own stream_url is never overwritten with YouTube's. */}
+                        {isYoutubeUrl(row.url) && <YoutubeIcon size="sm" />}
+                        {msg("stream.phone.replay")}
+                      </a>
+                      <ReplayCopyButton url={row.url} />
+                    </div>
+                  </div>
+                ))}
               </div>
-            </div>
-          )}
+            );
+          })()}
           <div className="flex flex-col gap-2 md:flex-row">
             <button
               type="button"

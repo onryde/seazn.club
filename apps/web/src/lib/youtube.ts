@@ -92,6 +92,13 @@ export const YOUTUBE_REFUSAL_REMEDY: Record<YoutubeRefusalCode, "fix_destination
 /** The replay link for a broadcast: a YouTube broadcast id is also the id of its video. */
 export const youtubeWatchUrl = (videoId: string): string => `https://www.youtube.com/watch?v=${videoId}`;
 
+/** One replay part of a fixture: its place in the order the broadcasts finished (1-based) and the video's watch address. Plain data,
+ *  so the server reader (server/youtube/parts.ts), the match page and the browser-side player all speak the one shape. */
+export interface ReplayPart {
+  partNo: number;
+  url: string;
+}
+
 // --- The public match page's replay player (T16) --------------------------------------------------------------------------------
 // The player is a click-to-play facade: nothing is loaded from Google but the video's thumbnail until the person taps, and then the
 // iframe comes from YouTube's privacy-enhanced host. The CSP (src/proxy.ts) allows exactly these two origins and no other.
@@ -124,6 +131,25 @@ export function youtubeVideoId(url: string): string | null {
     candidate = segments[1]!;
   }
   return candidate !== null && YOUTUBE_VIDEO_ID.test(candidate) ? candidate : null;
+}
+
+/** Is `link` the video one of the parts already is? Compared by VIDEO, so `youtu.be/<id>`, `/live/<id>` and `watch?v=<id>` are one
+ *  video; a link that is not a YouTube video address can only match by being the identical string. The ONE rule the public match
+ *  page ("never the same replay twice") and the organiser's panel both apply to the fixture's own `stream_url`. */
+export function linkIsOneOfParts(link: string, parts: readonly ReplayPart[]): boolean {
+  const id = youtubeVideoId(link);
+  return parts.some((p) => p.url === link || (id !== null && youtubeVideoId(p.url) === id));
+}
+
+/** The links the organiser's after-match area lists: every part in order, then the fixture's own `stream_url` when it is NOT one of
+ *  the parts (a club's own different link still shows; the end step's Part 1 link is not shown twice). `partNo` is null for the
+ *  club's own link. */
+export function replayRows(streamUrl: string | null, parts: readonly ReplayPart[]): { key: string; url: string; partNo: number | null }[] {
+  const own = streamUrl !== null && streamUrl !== "" && !linkIsOneOfParts(streamUrl, parts);
+  return [
+    ...parts.map((p) => ({ key: `part-${p.partNo}`, url: p.url, partNo: p.partNo })),
+    ...(own ? [{ key: "own", url: streamUrl, partNo: null }] : []),
+  ];
 }
 
 const assertVideoId = (id: string): string => {

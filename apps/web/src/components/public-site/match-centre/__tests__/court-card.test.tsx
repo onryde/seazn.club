@@ -485,3 +485,34 @@ describe("CourtCard — a long entrant name ellipses instead of pushing the scor
     expect(away).toContain('data-testid="mc-score-1"');
   });
 });
+
+// YouTube Connect T16 (owner ruling O1, layout B): the replay player lives INSIDE the court card, directly under the scoreline. The
+// card knows nothing of YouTube - the page hands it a node - so what is pinned here is the slot: present only when given, inside the
+// slab, after the score rows and before the freshness line, and the card is byte-identical without it.
+describe("CourtCard replay slot", () => {
+  const marker = <section data-testid="replay-slot-probe">REPLAY</section>;
+
+  it("renders nothing extra without a replay: the card is byte-identical to one given an explicit undefined and to one given null", () => {
+    const bare = renderToStaticMarkup(<CourtCard header={decidedHeader} dict={dict} />);
+    expect(renderToStaticMarkup(<CourtCard header={decidedHeader} dict={dict} replay={undefined} />)).toBe(bare);
+    expect(renderToStaticMarkup(<CourtCard header={decidedHeader} dict={dict} replay={null} />)).toBe(bare);
+    expect(bare).not.toContain("replay-slot-probe");
+  });
+
+  it("renders the replay inside the card, after both score rows and before the card's closing accent bar", () => {
+    const html = renderToStaticMarkup(<CourtCard header={decidedHeader} dict={dict} replay={marker} />);
+    expect(html).toContain('data-testid="replay-slot-probe"');
+    const at = html.indexOf('data-testid="replay-slot-probe"');
+    expect(at, "after the second side's score").toBeGreaterThan(html.indexOf('data-testid="mc-score-1"'));
+    // The slab's closing accent bar is the last child; the replay is before it, so it is inside the card, not beside it.
+    const bar = html.indexOf('<div aria-hidden="true" class="h-1 ');
+    expect(bar, "premise: the accent bar is found").toBeGreaterThan(0);
+    expect(at).toBeLessThan(bar);
+  });
+
+  it("sits before the freshness line on a live match, so the live clock stays the card's last word", () => {
+    const html = renderToStaticMarkup(<CourtCard header={liveHeader} dict={dict} replay={marker} />);
+    expect(html).toContain('data-testid="mc-updated-at"');
+    expect(html.indexOf("replay-slot-probe")).toBeLessThan(html.indexOf('data-testid="mc-updated-at"'));
+  });
+});

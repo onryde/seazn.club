@@ -20,6 +20,7 @@ import { getPublicFixture, type PublicFixture } from "@/server/public-site/data"
 import { sportsEventJsonLd } from "@/lib/public-site";
 import { publicThemeStyle } from "@/lib/public-theme";
 import { MatchCentreWithTabParam } from "@/components/public-site/match-centre/match-centre-with-tab-param";
+import { ReplayEmbed } from "@/components/public-site/match-centre/replay-embed";
 import type { LiveFixtureData } from "@/components/public-site/live-score-data";
 import { ShareButton } from "@/components/share-button";
 import { PosterButton } from "@/components/public-site/poster-button";
@@ -36,6 +37,7 @@ import { assertTimeControl } from "@/server/external-play/time-controls";
 import type { BoardgameClockInput } from "@/server/external-play/clock";
 import { shareTextFor } from "./share-text";
 import { streamLinkLabelKey } from "./stream-link";
+import { replayPlan } from "./replay-plan";
 import { resolveSlotLabel } from "@/lib/slot-label";
 import { toLocale } from "@/lib/i18n-constants";
 import type { Dict } from "@/lib/i18n-constants";
@@ -255,6 +257,8 @@ export default async function FixturePage({ params }: Props) {
   const watchDoc: PublicWatchDoc = { roundOpened: data.roundOpened, roundOpenedAt: data.roundOpenedAt, externalPlay: data.externalPlay };
   const basePath = `/shared/${org.slug}/${competition.slug}/${division.slug}`;
   const decidedLine = decidedLineFor(fixture, entrantNames, msgFn, division.sport_key, data.matchCentre, dict);
+  // T16 — the replay parts the player lists, and whether the club's own link still shows beside it (replay-plan.ts).
+  const plan = replayPlan({ status: fixture.status, streamUrl: fixture.stream_url ?? null, parts: data.parts });
 
   const jsonLd = sportsEventJsonLd({
     name: t(ui, "fixture.meta.jsonLdName", { home, away, division: division.name, competition: competition.name }),
@@ -412,9 +416,12 @@ export default async function FixturePage({ params }: Props) {
               a void fixture — that is why this renders on the KEY and not on
               `stream_url` alone (§3.9: nothing for cancelled/abandoned/
               forfeited, whatever the organiser saved). */}
+        {/* YouTube Connect T16 — which of the two the page shows is `replayPlan`'s call (replay-plan.ts, swept over every status):
+            the YouTube replay parts become the player inside the court card below, and this pill stays for the club's own link
+            only - never a second link to a video the player already carries. With no parts it is exactly what it always was. */}
         {(() => {
           const labelKey = streamLinkLabelKey(fixture.status);
-          return fixture.stream_url && labelKey ? (
+          return fixture.stream_url && labelKey && plan.showOwnLink ? (
             <p className="mb-4">
               <a
                 data-testid="public-stream-link"
@@ -454,6 +461,7 @@ export default async function FixturePage({ params }: Props) {
           initial={initial}
           realtime={realtime}
           dict={dict}
+          replay={plan.parts.length > 0 ? <ReplayEmbed parts={plan.parts} /> : undefined}
         />
       </div>
     </DictProvider>

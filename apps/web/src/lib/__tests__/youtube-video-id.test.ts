@@ -7,7 +7,7 @@
 // never read back from the function. A video id is 11 characters from [A-Za-z0-9_-] (the shape the fake driver mints too,
 // server/youtube/fake.ts), which is a fact about YouTube, restated here as a literal.
 import { describe, expect, it } from "vitest";
-import { youtubeEmbedUrl, youtubeThumbnailUrl, youtubeVideoId } from "../youtube";
+import { linkIsOneOfParts, replayRows, youtubeEmbedUrl, youtubeThumbnailUrl, youtubeVideoId } from "../youtube";
 
 const ID = "dQw4w9WgXcQ";
 const ID2 = "a-B_c1D2e3F";
@@ -104,5 +104,46 @@ describe("the embed and thumbnail addresses", () => {
       expect(() => youtubeEmbedUrl(bad, "https://seazn.club"), bad).toThrow(/video id/);
       expect(() => youtubeThumbnailUrl(bad), bad).toThrow(/video id/);
     }
+  });
+});
+
+// The two rules the public match page and the organiser's panel share about the fixture's own `stream_url` beside the replay parts:
+// a link that IS one of the parts is not listed twice, and a different one still is.
+describe("linkIsOneOfParts / replayRows: the club's own link beside the parts", () => {
+  const P1 = { partNo: 1, url: `https://www.youtube.com/watch?v=${ID}` };
+  const P2 = { partNo: 2, url: `https://www.youtube.com/watch?v=${ID2}` };
+  const TWITCH = "https://www.twitch.tv/club";
+
+  it("EMPTY CASE FIRST: no parts means no link is 'one of the parts', and the rows are just the club's own link, if any", () => {
+    expect(linkIsOneOfParts(P1.url, [])).toBe(false);
+    expect(replayRows(null, [])).toEqual([]);
+    expect(replayRows("", [])).toEqual([]);
+    expect(replayRows(TWITCH, [])).toEqual([{ key: "own", url: TWITCH, partNo: null }]);
+    expect(replayRows(P1.url, []), "a YouTube link with no parts is still just the club's link").toEqual([{ key: "own", url: P1.url, partNo: null }]);
+  });
+
+  it("a link is one of the parts by VIDEO: the identical string, or the same video in another YouTube spelling - and nothing else", () => {
+    expect(linkIsOneOfParts(P1.url, [P1, P2])).toBe(true);
+    expect(linkIsOneOfParts(P2.url, [P1, P2])).toBe(true);
+    for (const spelling of [`https://youtu.be/${ID}`, `https://www.youtube.com/live/${ID}`, `https://m.youtube.com/watch?v=${ID}&t=3`]) {
+      expect(linkIsOneOfParts(spelling, [P1]), spelling).toBe(true);
+    }
+    expect(linkIsOneOfParts(P2.url, [P1]), "another video").toBe(false);
+    expect(linkIsOneOfParts(TWITCH, [P1, P2]), "another site").toBe(false);
+    // A non-YouTube part can only be matched by being the identical string (there is no id to compare).
+    const odd = { partNo: 1, url: "https://example.com/vod/7" };
+    expect(linkIsOneOfParts("https://example.com/vod/7", [odd])).toBe(true);
+    expect(linkIsOneOfParts("https://example.com/vod/8", [odd])).toBe(false);
+  });
+
+  it("the rows are every part in order, then the club's own link only when it is not one of them", () => {
+    expect(replayRows(P1.url, [P1, P2]).map((r) => [r.key, r.partNo])).toEqual([["part-1", 1], ["part-2", 2]]);
+    expect(replayRows(TWITCH, [P1, P2])).toEqual([
+      { key: "part-1", url: P1.url, partNo: 1 }, { key: "part-2", url: P2.url, partNo: 2 }, { key: "own", url: TWITCH, partNo: null },
+    ]);
+    expect(replayRows(null, [P1]).map((r) => r.url)).toEqual([P1.url]);
+    // Keys are unique (they key a React list).
+    const rows = replayRows(TWITCH, [P1, P2]);
+    expect(new Set(rows.map((r) => r.key)).size).toBe(rows.length);
   });
 });

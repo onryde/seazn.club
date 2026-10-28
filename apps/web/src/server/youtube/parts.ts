@@ -15,13 +15,9 @@ import "server-only";
 // A part is `{ partNo, url }`. The url is the video's watch URL: a broadcast id is also its video id. Only `complete` rows count - a
 // failed, open or ending broadcast is not a replay yet (V479's check: a complete row always has a finish time and a video id).
 import { sql } from "@/lib/db";
-import { youtubeWatchUrl } from "@/lib/youtube";
+import { youtubeWatchUrl, type ReplayPart } from "@/lib/youtube";
 
-export interface ReplayPart {
-  /** 1-based, in the order the broadcasts finished. */
-  partNo: number;
-  url: string;
-}
+export type { ReplayPart };
 
 interface PartRow {
   part_no: number;

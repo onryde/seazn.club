@@ -6059,3 +6059,85 @@ describe("T12: after a match — the replay row, and the destination's name read
     expect(textAt(body({ view: session({ state: "ending", target: { id: "t1", kind: "youtube", label: "Club TV" } }), balance: 1 }), "stream-ending")).toBe(m("stream.phone.ending", { destination: "Club TV" }));
   });
 });
+
+// ─── YouTube Connect T16 (O6): the after-match area lists the replay PARTS ──────────────────────────────────────────────────
+// A restart makes a second broadcast, so a fixture can have two replays. The area lists every part (from COMPLETE broadcasts, read by
+// the organiser-scoped `replayParts` on the polled session view), then the club's own stream_url when it is not one of the parts.
+// With no parts it is the single row T12 built. The logo follows the LINK: drawn when `isYoutubeUrl(row.url)`, never otherwise.
+describe("T16: after a match - the replay parts", () => {
+  const ENDED = { state: "completed" as const, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" as const };
+  const P1 = { partNo: 1, url: "https://www.youtube.com/watch?v=aaaaaaaaaaa" };
+  const P2 = { partNo: 2, url: "https://www.youtube.com/watch?v=bbbbbbbbbbb" };
+  const TWITCH_VOD = "https://www.twitch.tv/videos/1";
+  const links = (tree: ReactElement[]) => allTestIds(tree, "stream-replay");
+  const hrefs = (tree: ReactElement[]) => links(tree).map((el) => attr(el, "href"));
+  const copies = (tree: ReactElement[]) => tree.filter((el) => el.type === ReplayCopyButton).map((el) => propsOf(el).url);
+  const labels = (tree: ReactElement[]) => allTestIds(tree, "stream-replay-part").map((el) => textOf(el).replace(/\s+/g, " ").trim());
+  const iconsIn = (link: ReactElement) => walk(propsOf(link).children as ReactElement[]).filter((el) => el.type === YoutubeIcon).length;
+
+  it("EMPTY CASE FIRST: no parts and no link is no row at all; no parts and a link is the one row it always was, with no part label", () => {
+    const none = body({ view: session({ ...ENDED, replayParts: [] }), balance: 1 });
+    expect(byTestId(none, "stream-replay-row")).toBeUndefined();
+    expect(links(none)).toHaveLength(0);
+    const one = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [] }), balance: 1 });
+    expect(hrefs(one)).toEqual([TWITCH_VOD]);
+    expect(labels(one)).toEqual([]);
+    expect(copies(one)).toEqual([TWITCH_VOD]);
+  });
+
+  it("one part and no stream_url: the row exists (it used to need a stream_url) and links the part; no part label for a single part", () => {
+    const tree = body({ view: session({ ...ENDED, replayParts: [P1] }), balance: 1 });
+    expect(byTestId(tree, "stream-replay-row")).toBeDefined();
+    expect(hrefs(tree)).toEqual([P1.url]);
+    expect(copies(tree)).toEqual([P1.url]);
+    expect(labels(tree), "one part is just the replay").toEqual([]);
+  });
+
+  it("one part and a stream_url that IS that part (what the end step writes): listed once, not twice", () => {
+    const tree = body({ view: session({ ...ENDED, replayUrl: P1.url, replayParts: [P1] }), balance: 1 });
+    expect(hrefs(tree)).toEqual([P1.url]);
+    expect(copies(tree)).toEqual([P1.url]);
+    // The same video in another spelling is the same video.
+    const spelled = body({ view: session({ ...ENDED, replayUrl: "https://youtu.be/aaaaaaaaaaa", replayParts: [P1] }), balance: 1 });
+    expect(hrefs(spelled)).toEqual([P1.url]);
+  });
+
+  it("two parts: both listed in order, each labelled with its own number, each with its own Copy link; the times line is shown once", () => {
+    const tree = body({ view: session({ ...ENDED, replayUrl: P1.url, replayParts: [P1, P2] }), balance: 1 });
+    expect(hrefs(tree)).toEqual([P1.url, P2.url]);
+    expect(copies(tree), "each copy button copies the link beside it").toEqual([P1.url, P2.url]);
+    expect(labels(tree)).toEqual([m("streaming.youtube.part", { n: 1 }), m("streaming.youtube.part", { n: 2 })]);
+    expect(allTestIds(tree, "stream-replay-times")).toHaveLength(1);
+    expect(allTestIds(tree, "stream-replay-item")).toHaveLength(2);
+  });
+
+  it("a club's own DIFFERENT link is listed after the parts, unlabelled; one part plus a different link is two rows and no part label", () => {
+    const tree = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [P1, P2] }), balance: 1 });
+    expect(hrefs(tree)).toEqual([P1.url, P2.url, TWITCH_VOD]);
+    expect(labels(tree)).toHaveLength(2);
+    const single = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [P1] }), balance: 1 });
+    expect(hrefs(single)).toEqual([P1.url, TWITCH_VOD]);
+    expect(labels(single), "with one part there is no part label even beside another link").toEqual([]);
+  });
+
+  it("the logo follows each LINK: on a YouTube part, not on the club's Twitch link beside it", () => {
+    const tree = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [P1, P2] }), balance: 1 });
+    const l = links(tree);
+    expect(l.map(iconsIn)).toEqual([1, 1, 0]);
+    // Each icon sits INSIDE its anchor: the anchors' hrefs lead to YouTube exactly where the icon is.
+    expect(l.map((el) => isYoutubeUrl(attr(el, "href") as string))).toEqual([true, true, false]);
+  });
+
+  it("the label reads in the locale's words (es), the link text too", () => {
+    const es = uiDict("es");
+    const html = renderToStaticMarkup(
+      <DictProvider dict={es} locale="es">
+        <PhoneTabBody {...BODY} view={session({ ...ENDED, replayParts: [P1, P2] })} balance={1} />
+      </DictProvider>,
+    );
+    expect(uiDict("en")["streaming.youtube.part"], "premise: es differs").not.toBe(es["streaming.youtube.part"]);
+    expect(html).toContain(es["streaming.youtube.part"]!.replace("{n}", "1"));
+    expect(html).toContain(es["streaming.youtube.part"]!.replace("{n}", "2"));
+    expect(html).not.toContain(uiDict("en")["streaming.youtube.part"]!.replace("{n}", "2"));
+  });
+});
