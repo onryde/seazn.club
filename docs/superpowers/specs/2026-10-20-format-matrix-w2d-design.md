@@ -237,7 +237,7 @@ Each sport module declares two things:
 
 | Sport | Reachable set | Events that prove OT / SO (fold → `outcome.method`) |
 |---|---|---|
-| football | regulation; `ot` if the stage's `extraTime.enabled`; `so` if `shootout` | `football.period` closing FT/ET → `regulation`/`extra_time` (`football.ts:1024-1038`); `football.penalty` kicks in the SHOOTOUT phase → `shootout` (`:1640-1656`); pad action `pad.football.action.shootoutKick` (`:2351`) |
+| football | regulation; `ot` if the stage's `extraTime.enabled`; `so` if `shootout` | `football.period` closing FT/ET → `regulation`/`extra_time` (`football.ts:1024-1038`); `football.shootout.kick` kicks in the SHOOTOUT phase → `shootout` (`:1640-1656`; P27: not `football.penalty`); pad action `pad.football.action.shootoutKick` (`:2351`) |
 | ice hockey | regulation; `ot` if `overtime ≠ null`; `so` if `shootout ≠ null` (IIHF default both; recreational neither, `icehockey.ts:194-199`) | `icehockey.period.advance` closing OT → `extra_time` (`period/kernel.ts:1039-1042,1173`); `icehockey.goal` in sudden-death OT (`:1141-1142`); `icehockey.shootout.attempt` → `shootout` (`:1325-1353`); event names `:1904-1910`; pad action `pad.<sport>.action.shootoutAttempt` (`:2087`) |
 | hockey (FIH) | regulation; `so` if `shootout ≠ null` (fih-shootout, or stage rules); `ot` if `overtime ≠ null` | the same kernel events under `hockey.*` |
 | cricket | regulation (`regulation`, `innings`, `dls`, wickets/runs margins); `so` if the stage's `superOver` (`super_over`, `boundary_count`) | `cricket.ts:966,986,1001,1187,1881,1884,1895` |
@@ -815,7 +815,7 @@ test.** Every sweep and property returns its count, and zero checked is a failur
    - each check reports its count, and 0 fails.
 5. **Real producer → consumer** (class 1). Pad events go through the real `POST /api/v1/fixtures/{id}/events`, then the
    recompute, then `GET` the public standings:
-   - football group stage with shoot-out on: `football.penalty` kicks → `won_so`, the public row shows D for both and
+   - football group stage with shoot-out on: `football.shootout.kick` kicks (P27) → `won_so`, the public row shows D for both and
      the winner's 2 points (B2);
    - hockey (FIH) goal through the pad with a goal type → `field_goals` (B3), and a goal without one refused;
    - IIHF: `icehockey.period.advance` into OT + `icehockey.goal` → OTW/OTL and 2/1;

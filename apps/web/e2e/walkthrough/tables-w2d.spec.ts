@@ -12,14 +12,20 @@
 // head-to-head for two; table tennis W2, a played loss 1, an unplayed loss 0 (D6); ATP 4.01 C.3-2 matches played before
 // head-to-head; FIDE 1/½/0 shown "1½" (D10 b) and Sonneborn-Berger; carrom 2/1/0; generic 3/1/0. The ORDERS the editor
 // starts from are the engine's own declarations (`defaultTiebreakers`, `tablePresets`, `validateCascade`); every word is
-// read from the dictionaries the product renders.
+// read from the dictionaries the product renders, or from the engine's own label where the product prints one (a
+// notation column, `DERIVED_METRICS`).
+//
+// THE STAGE'S OWN POINTS (T16, fix round 1 I2). Three tests save a stage's OWN rule through the stage's Points section —
+// a preset chip and the boxes — and read the table it pays, each on a rig where that rule pays OTHER than the sport's
+// (AGENTS.md class 19: a rule equal to the default cannot witness the seam): hockey's shoot-out bonus, chess 3/1/0,
+// cricket's tie and no result (ST-G9's path).
 //
 // A red here that is not this file's own arithmetic is a W2d defect in the owning task's files — never loosen it. The pad
 // offering the kicks in a football GROUP stage (spec §5.2's "pad finding") is the one the spec names in advance.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
-import { LEVEL_RANK, isHeadToHeadKey, validateCascade, type CascadeContext } from "@seazn/engine/competition";
+import { DERIVED_METRICS, LEVEL_RANK, isHeadToHeadKey, validateCascade, type CascadeContext } from "@seazn/engine/competition";
 import type { TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { HOLD_MS } from "../../src/components/v2/scorepad/queue";
@@ -41,6 +47,15 @@ const say = (key: string, vars: Record<string, string | number> = {}): string =>
   return raw.replace(/\{(\w+)\}/g, (hole, name: string) => (name in vars ? String(vars[name]) : hole));
 };
 const stepWord = (key: string): string => say(`div.detail.tiebreak.rule.${key}`);
+const escapeRe = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+/** A derived column as the engine declares it: its label (a notation column's header IS the label in every locale,
+ *  standings-view.ts `NOTATION_HEADERS`) and the decimals its cell prints. */
+const derived = (key: string): { label: string; decimals: number } => {
+  const m = DERIVED_METRICS.find((x) => x.key === key);
+  if (m === undefined) throw new Error(`the engine declares no derived column "${key}"`);
+  return { label: m.label, decimals: m.decimals };
+};
 
 /** A public table column's word, as the header's `title` carries it (`columnHeader`, standings-view.ts). */
 const COL = {
@@ -57,7 +72,7 @@ const COL = {
   fieldGoals: dictString("en", "table.col.fieldGoals"),
   for: dictString("en", "table.col.for"),
   // A notation column prints the engine's own label in every locale (`NOTATION_HEADERS`).
-  sberger: "SB",
+  sberger: derived("sberger").label,
 } as const;
 
 // Budgets DERIVED from the pad's hold (AGENTS.md class 20): every tap soft-commits and lands only after HOLD_MS.
@@ -110,7 +125,18 @@ interface FixtureState {
 interface ServedRules {
   tiebreakers: { keys: TiebreakerKey[]; source: string; pinnedAt: string | null };
   crossGroup: { keys: TiebreakerKey[] };
-  points: { rule: { win: { regulation: number }; draw?: number; loss: { regulation: number } }; source: string; pinnedAt: string | null };
+  points: { rule: RuleLike; source: string; pinnedAt: string | null };
+}
+/** The fields of a `PointsRule` these tests read (the engine's own declarations, and what the API serves). */
+interface RuleLike {
+  win: { regulation: number };
+  loss: { regulation: number };
+  draw?: number;
+  soBonus?: number;
+  tie?: number;
+  noResult?: number;
+  shootoutAs?: string;
+  unit?: string;
 }
 type LedgerEvent = { id: string; seq: number; type: string; payload: Record<string, unknown> };
 
@@ -325,6 +351,45 @@ const removeHarmless = (keep: (key: TiebreakerKey, i: number) => boolean) => asy
   return order.filter((_, j) => j !== at);
 };
 
+/** The sport's own points for a stage of `kind` under `cfg` (the layer a stage with no rule of its own plays). */
+const sportRule = (m: Mod, cfg: unknown, kind: StageKind): RuleLike => (m.tablePointsRule as unknown as (c: unknown, k: StageKind) => RuleLike)(cfg, kind);
+/** A preset as the sport declares it (`tablePresets`, spec §5.10): the rule its chip in the Points section fills in. */
+function presetRule(m: Mod, kind: StageKind, id: string): RuleLike {
+  const presets = m.tablePresets?.(kind).points ?? [];
+  const found = presets.find((p) => p.id === id);
+  expect(found, `premise: ${m.key} declares the "${id}" points preset for a ${kind} (it has: ${presets.map((p) => p.id).join(", ")})`).toBeDefined();
+  return found!.rule as RuleLike;
+}
+
+/** The organiser saves the stage's OWN points in its Points section (T16): untick "use the division's points", `edit`
+ *  works the chips and boxes, Save sends the strict PUT. Before, the stage plays the sport's rule; after, the API serves
+ *  the stage's own rule holding `want`. */
+async function savePoints(page: Page, request: APIRequestContext, r: Rig, stageId: string, edit: (section: Locator) => Promise<void>, want: Partial<RuleLike>): Promise<void> {
+  const before = await servedRules(request, stageId);
+  expect([before.points.source, before.points.pinnedAt], "before the save the pending stage plays the sport's rule").toEqual(["sport", null]);
+  await page.goto(await divisionPath(request, r.divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const section = page.getByTestId(`stage-points-${stageId}`);
+  await expect(section).toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+  const useDivision = section.getByTestId("stage-points-use-division");
+  await expect(useDivision, "the stage inherits its points").toBeChecked();
+  await useDivision.uncheck();
+  await edit(section);
+  const put = page.waitForRequest((q) => q.method() === "PUT" && new URL(q.url()).pathname === `/api/v1/stages/${stageId}/rules`, { timeout: STEP_MS });
+  await section.getByTestId("stage-points-save").click();
+  const body = (await put).postDataJSON() as { points?: unknown };
+  expect(Object.keys(body), "the strict body: the points alone").toEqual(["points"]);
+  expect(body.points, "the rule the section sends").toMatchObject(want);
+  await expect.poll(async () => (await servedRules(request, stageId)).points.source, { message: "the stage's own points", timeout: STEP_MS }).toBe("stage");
+  expect((await servedRules(request, stageId)).points.rule, "the API serves the rule the section saved").toMatchObject(want);
+}
+/** After generate: the pin keeps the stage's OWN points (X-TB-2), not the sport's. */
+async function expectOwnPointsPinned(request: APIRequestContext, stageId: string, want: Partial<RuleLike>): Promise<void> {
+  const pinned = await servedRules(request, stageId);
+  expect([pinned.points.source, pinned.points.pinnedAt !== null], "generating pinned the stage's own points").toEqual(["stage", true]);
+  expect(pinned.points.rule, "the pinned rule is the one the section saved").toMatchObject(want);
+}
+
 // ── the pad (v3) ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const pad = (page: Page) => page.locator('[data-testid="score-pad"]');
@@ -445,6 +510,9 @@ async function expectPublicTable(page: Page, path: string, want: readonly Want[]
   await page.setViewportSize({ width: 1280, height: 900 });
   return seen.t!;
 }
+/** The leader row's mark (`standings-table-view.tsx`: rank 1's row class). ONE selector for the level table's negative
+ *  and its positive pair, so a renamed class reds the positive instead of passing the negative vacuously. */
+const LEADER_ROW = "#panel-standings tbody tr.bg-amber-50\\/60";
 /** The first public read after generate: the level table (X-TB-6, T17 + concern 2) — every rank the level dash, no
  *  leader row, every entrant listed. */
 async function expectLevelTable(page: Page, path: string, field: readonly Who[]): Promise<void> {
@@ -458,7 +526,13 @@ async function expectLevelTable(page: Page, path: string, field: readonly Who[])
     checked++;
   }
   expect(checked, "anti-vacuity: every rank cell was read").toBe(field.length);
-  await expect(page.locator("#panel-standings .bg-amber-50, #panel-standings .bg-amber-50\\/60"), "no leader row on a level table").toHaveCount(0);
+  await expect(page.locator(LEADER_ROW), "no leader row on a level table").toHaveCount(0);
+}
+/** The positive pair of the level table's "no leader row": a played table marks its leader, and only it. */
+async function expectLeaderRow(page: Page, name: string): Promise<void> {
+  const leader = page.locator(LEADER_ROW);
+  await expect(leader, "a played table marks exactly one leader row").toHaveCount(1);
+  await expect(leader.locator("th[scope=row] span[title]"), "the leader row is the table's first").toHaveAttribute("title", name);
 }
 
 /** Five cells of a row: played, won, drawn, lost, points. */
@@ -550,10 +624,11 @@ test.describe("goals: football, hockey, ice hockey, best third", () => {
     ], "football group shoot-out");
   });
 
-  test("hockey Pro League: the goal type is asked on the pad, the shoot-out is D for both and +1 for its winner, and the field-goals column counts only the field goals", async ({ page, request, browser }) => {
+  test("hockey, the FIH shoot-out variant: the goal type is asked on the pad, the shoot-out is D for both and +1 for its winner, and the field-goals column counts only the field goals", async ({ page, request, browser }) => {
     test.setTimeout(budget({ taps: 3, api: 40, publicReads: 1 }));
     const HK = mod("hockey");
-    // FIH Pro League as the engine declares it: the `fih-shootout` variant (its points ARE the `pro_league` preset).
+    // The `fih-shootout` variant: its points are the `pro_league` preset's (hockey.ts tablePresets), played on the sport's
+    // rule. The preset CHIP, saved as a stage's own rule, is the next test's.
     const r = await rig(request, { label: "Hockey PL", sport: "hockey", variant: "fih-shootout", kind: "team", size: 3, rostered: true, stages: [{ seq: 1, kind: "league", name: "League" }] });
     const stageId = r.stageIds[0]!;
     const kinds = (HK.configSchema.parse(r.cfg) as { goalKinds: string[] }).goalKinds;
@@ -595,7 +670,62 @@ test.describe("goals: football, hockey, ice hockey, best third", () => {
       { name: A.name, cells: { ...pwdlp(2, 1, 1, 0, "5"), [COL.fieldGoals]: "3" } },
       { name: B.name, cells: { ...pwdlp(2, 1, 1, 0, "4"), [COL.fieldGoals]: "0" } },
       { name: C.name, cells: { ...pwdlp(2, 0, 0, 2, "0"), [COL.fieldGoals]: "0" } },
-    ], "hockey Pro League");
+    ], "hockey FIH shoot-out");
+  });
+
+  test("hockey, FIH default with a stage shoot-out: the Pro League chip, then a shoot-out bonus of 2, saved as the stage's own points pay the shoot-out winner 3 and its loser 1 (the sport's rule pays 2/1)", async ({ page, request, browser }) => {
+    test.setTimeout(budget({ taps: 0, api: 30, publicReads: 1 }));
+    const HK = mod("hockey");
+    // The stage's own match rules turn the shoot-out on (the format the `fih-shootout` variant declares, read through the
+    // engine's schema); the division is FIH's default, which has none.
+    const shootout = (HK.configSchema.parse(HK.variants["fih-shootout"]) as { shootout: unknown }).shootout;
+    expect(shootout, "premise: FIH declares a shoot-out format").not.toBeNull();
+    const r = await rig(request, { label: "Hockey own", sport: "hockey", variant: "fih-outdoor", kind: "team", size: 3, rostered: false, stages: [{ seq: 1, kind: "league", name: "League", config: { rules: { shootout } } }] });
+    const stageId = r.stageIds[0]!;
+    expect((HK.configSchema.parse(r.cfg) as { shootout: unknown }).shootout, "premise: the FIH default division has no shoot-out").toBeNull();
+    const merged = HK.configSchema.parse({ ...r.cfg, shootout });
+    // What each layer pays a shoot-out under B2 (booked a draw for both, the winner +soBonus; an absent soBonus pays 1):
+    const B2_ABSENT_BONUS = 1;
+    const sport = sportRule(HK, merged, "league");
+    const preset = presetRule(HK, "league", "pro_league");
+    const OWN_BONUS = 2;
+    expect([sport.shootoutAs, preset.shootoutAs], "premise: FIH books a shoot-out as a draw plus a bonus").toEqual(["draw_plus_bonus", "draw_plus_bonus"]);
+    const sportWinner = sport.draw! + (sport.soBonus ?? B2_ABSENT_BONUS);
+    const ownWinner = preset.draw! + OWN_BONUS;
+    expect(ownWinner, "premise: the stage's own rule pays the shoot-out winner other than the sport's rule").not.toBe(sportWinner);
+    expect(preset.draw! + (preset.soBonus ?? B2_ABSENT_BONUS), "the Pro League chip ALONE pays what the sport's rule pays (no differential), so the bonus is typed over it").toBe(sportWinner);
+    const want: Partial<RuleLike> = { win: { regulation: preset.win.regulation }, loss: { regulation: preset.loss.regulation }, draw: preset.draw!, soBonus: OWN_BONUS, shootoutAs: "draw_plus_bonus" };
+    await savePoints(page, request, r, stageId, async (section) => {
+      const chip = section.getByTestId("stage-points-preset-pro_league");
+      await chip.click();
+      await expect(chip, "the Pro League chip fills the boxes").toHaveAttribute("aria-pressed", "true");
+      const bonus = section.getByTestId("stage-points-so-bonus");
+      await expect(bonus, "the chip's shoot-out bonus, as the preset declares it").toHaveValue(String(preset.soBonus));
+      await bonus.fill(String(OWN_BONUS));
+      await expect(chip, "a bonus typed over the chip is the stage's own rule, no longer the preset").toHaveAttribute("aria-pressed", "false");
+    }, want);
+    const fixtures = await generateAndStart(request, r, stageId, HK.defaultTiebreakers("league", merged as never), "sport");
+    await expectOwnPointsPinned(request, stageId, want);
+    const [A, B, C] = r.field as [Who, Who, Who];
+    const toFt: Ev[] = [["hockey.period.advance", { to: "Q2" }], ["hockey.period.advance", { to: "Q3" }], ["hockey.period.advance", { to: "Q4" }], ["hockey.period.advance", { to: "FT" }]];
+    // A v B 1-1 (field goals), A wins the shoot-out; B beats C 1-0. C v A is not played.
+    const ab = between(fixtures, A, B);
+    await play(request, ab, [["core.start"], ["hockey.goal", { by: A.id, kind: "fg" }], ["hockey.goal", { by: B.id, kind: "fg" }], ...toFt]);
+    expect(await shootoutTo(request, ab, A, "hockey.shootout.attempt"), "anti-vacuity: shoot-out attempts").toBeGreaterThan(0);
+    await expectDecided(request, ab, { winner: A.id, method: "shootout" }, "A won the shoot-out");
+    await play(request, between(fixtures, B, C), [["core.start"], ["hockey.goal", { by: B.id, kind: "fg" }], ...toFt]);
+    await expectDecided(request, between(fixtures, B, C), { winner: B.id }, "B beat C");
+
+    // The stage's own rule: A the shoot-out winner draw + 2 = 3 (the sport's rule: 2); B the loser's draw 1 + a regulation
+    // win 3 = 4; C 0.
+    const loser = preset.draw!;
+    const win = preset.win.regulation;
+    const visitor = await spectator(browser, { width: 1280, height: 900 });
+    await expectPublicTable(visitor, r.path, [
+      { name: B.name, cells: pwdlp(2, 1, 1, 0, String(loser + win)) },
+      { name: A.name, cells: pwdlp(1, 0, 1, 0, String(ownWinner)) },
+      { name: C.name, cells: pwdlp(1, 0, 0, 1, String(preset.loss.regulation)) },
+    ], "hockey own shoot-out bonus");
   });
 
   test("ice hockey IIHF: an overtime goal tapped and a game-winning shot book OTW/OTL, 3-2-1-0", async ({ page, request, browser }) => {
@@ -669,10 +799,13 @@ test.describe("goals: football, hockey, ice hockey, best third", () => {
       expect([at > 0, sportDefault[at + 1]], "premise: football's group order asks goal difference, then goals for").toEqual([true, "for"]);
       return moveDown(at)(sportDefault, ctx, section);
     });
+    // §5.9: between groups, the order with every head-to-head step removed (teams from different groups never met).
     const cross = own.filter((k) => !isHeadToHeadKey(k));
+    expect(cross.length, "premise: the edited order holds head-to-head steps for the cross-group order to drop").toBeLessThan(own.length);
     const fixtures = await generateAndStart(request, r, groupId, own);
-    // X-TB-7: between groups the pin's order without its head-to-head steps, shown read-only on the editor.
-    expect((await servedRules(request, groupId)).crossGroup.keys.filter((k) => !isHeadToHeadKey(k)), "the cross-group order served").toEqual(cross);
+    // X-TB-7: the pin's cross-group order, compared WHOLE (a served list that kept a head-to-head step must red here),
+    // shown read-only on the editor.
+    expect((await servedRules(request, groupId)).crossGroup.keys, "the cross-group order served").toEqual(cross);
     const section = await openEditor(page, request, r.divisionId, groupId);
     await expect(section.getByTestId("stage-tiebreaks-cross-group")).toHaveText(say("stageTiebreaks.crossGroup", { steps: cross.map(stepWord).join(", ") }));
 
@@ -883,14 +1016,28 @@ test.describe("tennis", () => {
 // ── cricket ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 test.describe("cricket", () => {
-  test("cricket: a tie pays 1 each and a no-result (abandoned before a chase, from the console) 1 each", async ({ page, request, browser }) => {
-    test.setTimeout(budget({ taps: 1, api: 20, publicReads: 1 }));
+  test("cricket: under the stage's own 4/2/2 points typed in its Points section, a tie pays 2 each and a no-result (abandoned before a chase, from the console) 2 each — the sport's 2/1/1 would pay 1 (ST-G9)", async ({ page, request, browser }) => {
+    test.setTimeout(budget({ taps: 1, api: 25, publicReads: 1 }));
     const CR = mod("cricket");
     const r = await rig(request, { label: "T20", sport: "cricket", variant: "t20", kind: "team", size: 3, rostered: false, stages: [{ seq: 1, kind: "league", name: "League" }] });
     const stageId = r.stageIds[0]!;
-    const balls = (CR.configSchema.parse(r.cfg) as { ballsPerInnings: number }).ballsPerInnings;
+    const cfg = CR.configSchema.parse(r.cfg);
+    const balls = (cfg as { ballsPerInnings: number }).ballsPerInnings;
     const own = await editOrder(page, request, r, stageId, CR, "league", removeHarmless((_k, i) => i < 1));
+    // ST-G9 is a tie under a stage's OWN rule (W2c's conversion paid it 0). The organiser's league pays a win 4 and a tie
+    // or a no result 2 each, so every number differs from the sport's ICC 2/1/1 and from the defect's 0.
+    const OWN = { win: 4, loss: 0, tie: 2, noResult: 2 } as const;
+    const sport = sportRule(CR, cfg, "league");
+    expect([sport.tie === OWN.tie, sport.noResult === OWN.noResult, sport.win.regulation === OWN.win], "premise: the sport's rule pays each outcome other than the stage's").toEqual([false, false, false]);
+    const want: Partial<RuleLike> = { win: { regulation: OWN.win }, loss: { regulation: OWN.loss }, tie: OWN.tie, noResult: OWN.noResult };
+    await savePoints(page, request, r, stageId, async (section) => {
+      await section.getByTestId("stage-points-win").fill(String(OWN.win));
+      await section.getByTestId("stage-points-loss").fill(String(OWN.loss));
+      await section.getByTestId("stage-points-tie").fill(String(OWN.tie));
+      await section.getByTestId("stage-points-no-result").fill(String(OWN.noResult));
+    }, want);
     const fixtures = await generateAndStart(request, r, stageId, own);
+    await expectOwnPointsPinned(request, stageId, want);
     const [A, B, C] = r.field as [Who, Who, Who];
     const innings = (runs: number, wickets: number, legalBalls = balls): Ev => ["cricket.innings.summary", { runs, wickets, legalBalls }];
     // A v B tie: 150 each.
@@ -910,13 +1057,14 @@ test.describe("cricket", () => {
     await page.getByTestId("score-prompt-reason").fill("Rain");
     await page.getByTestId("score-prompt-submit").click();
     await expectDecided(request, bc, { kind: "no_result" }, "B v C is a no result");
-    // W 2, tie 1, NR 1: A 1 + 2 = 3, B 1 + 1 = 2, C 1 + 0 = 1.
+    // The stage's own W 4, tie 2, NR 2: A tie 2 + win 4 = 6, B tie 2 + NR 2 = 4, C NR 2 + loss 0 = 2 (the sport's 2/1/1
+    // would pay 3, 2, 1).
     const visitor = await spectator(browser, { width: 1280, height: 900 });
     await expectPublicTable(visitor, r.path, [
-      { name: A.name, cells: { [COL.played]: "2", [COL.won]: "1", [COL.ties]: "1", [COL.noResults]: "0", [COL.points]: "3" } },
-      { name: B.name, cells: { [COL.played]: "2", [COL.won]: "0", [COL.ties]: "1", [COL.noResults]: "1", [COL.points]: "2" } },
-      { name: C.name, cells: { [COL.played]: "2", [COL.won]: "0", [COL.ties]: "0", [COL.noResults]: "1", [COL.points]: "1" } },
-    ], "cricket tie and no result");
+      { name: A.name, cells: { [COL.played]: "2", [COL.won]: "1", [COL.ties]: "1", [COL.noResults]: "0", [COL.points]: String(OWN.tie + OWN.win) } },
+      { name: B.name, cells: { [COL.played]: "2", [COL.won]: "0", [COL.ties]: "1", [COL.noResults]: "1", [COL.points]: String(OWN.tie + OWN.noResult) } },
+      { name: C.name, cells: { [COL.played]: "2", [COL.won]: "0", [COL.ties]: "0", [COL.noResults]: "1", [COL.points]: String(OWN.noResult + OWN.loss) } },
+    ], "cricket own tie and no result");
   });
 });
 
@@ -954,16 +1102,55 @@ test.describe("boards: chess, carrom", () => {
     await result(A, D, A);
     await result(C, A, C);
     await result(C, D, C);
-    // FIDE 1/½/0: C ½+1+1 = 2½, A ½+1+0 = 1½, B ½+½+½ = 1½, D 0+½+0 = ½. A and B drew each other. Sonneborn-Berger: A
-    // (beat D ½, drew B 1½/2) 1¼, B (drew A, C, D: (1½ + 2½ + ½)/2) 2¼ → B above A; on wins (A 1, B 0) A would be.
+    // FIDE 1/½/0: C ½+1+1 = 2½, A ½+1+0 = 1½, B ½+½+½ = 1½, D 0+½+0 = ½. A and B drew each other. Sonneborn-Berger
+    // (FIDE C.07: the scores of the opponents beaten, plus half those drawn with): C 1½ + ½ + ¾ = 2¾, B (1½ + 2½ + ½)/2
+    // = 2¼, A ½ + ¾ = 1¼, D ¾ → B above A; on wins (A 1, B 0) A would be. The cell prints the engine's declared decimals.
+    const sb = (v: number): string => v.toFixed(derived("sberger").decimals);
     await expectPublicTable(visitor, r.path, [
-      { name: C.name, cells: pwdlp(3, 2, 1, 0, "2½") },
-      { name: B.name, cells: pwdlp(3, 0, 3, 0, "1½") },
-      { name: A.name, cells: pwdlp(3, 1, 1, 1, "1½") },
-      { name: D.name, cells: pwdlp(3, 0, 1, 2, "½") },
+      { name: C.name, cells: { ...pwdlp(3, 2, 1, 0, "2½"), [COL.sberger]: sb(2.75) } },
+      { name: B.name, cells: { ...pwdlp(3, 0, 3, 0, "1½"), [COL.sberger]: sb(2.25) } },
+      { name: A.name, cells: { ...pwdlp(3, 1, 1, 1, "1½"), [COL.sberger]: sb(1.25) } },
+      { name: D.name, cells: { ...pwdlp(3, 0, 1, 2, "½"), [COL.sberger]: sb(0.75) } },
     ], "chess round robin");
-    const t = tableWith(await publicTables(visitor), C.name);
-    expect(t!.headers, "the order asks Sonneborn-Berger: its column shows").toContain(COL.sberger);
+    // The level table's "no leader row" (the first read above), paired: a played table marks its leader.
+    await expectLeaderRow(visitor, C.name);
+  });
+
+  test("chess round robin under the 3/1/0 chip saved as the stage's own points: a win reads 3 and a draw 1 on the public table, not FIDE's 1 and ½", async ({ page, request, browser }) => {
+    test.setTimeout(budget({ taps: 0, api: 20, publicReads: 1 }));
+    const CH = mod("boardgame");
+    const r = await rig(request, { label: "Chess 310", sport: "boardgame", variant: "classical", kind: "individual", size: 3, rostered: false, stages: [{ seq: 1, kind: "league", name: "Round robin" }] });
+    const stageId = r.stageIds[0]!;
+    const cfg = CH.configSchema.parse(r.cfg);
+    const sport = sportRule(CH, cfg, "league");
+    const three = presetRule(CH, "league", "three_one_zero");
+    // The sport's rule is FIDE's, stored in half-points (a win 2 = one point shown); the chip's is whole 3/1/0.
+    const shown = (rule: RuleLike, n: number) => (rule.unit === "half" ? n / 2 : n);
+    expect([shown(sport, sport.win.regulation), shown(three, three.win.regulation)], "premise: the chip's win differs from the sport's").toEqual([1, 3]);
+    const want: Partial<RuleLike> = { win: { regulation: three.win.regulation }, loss: { regulation: three.loss.regulation }, draw: three.draw!, unit: three.unit! };
+    await savePoints(page, request, r, stageId, async (section) => {
+      const chip = section.getByTestId("stage-points-preset-three_one_zero");
+      await chip.click();
+      await expect(chip, "the 3/1/0 chip fills the boxes").toHaveAttribute("aria-pressed", "true");
+      await expect(section.getByTestId("stage-points-win"), "the chip's win").toHaveValue(String(three.win.regulation));
+    }, want);
+    const fixtures = await generateAndStart(request, r, stageId, CH.defaultTiebreakers("league", cfg as never), "sport");
+    await expectOwnPointsPinned(request, stageId, want);
+    const [A, B, C] = r.field as [Who, Who, Who];
+    const result = async (x: Who, y: Who, winner: Who | null) =>
+      play(request, between(fixtures, x, y), [["core.start"], ["boardgame.result", winner === null ? { winner: null, method: "agreement" } : { winner: winner.id, method: "checkmate" }]]);
+    // A beats B, B beats C, A draws C: every total differs, so no tie-break is asked.
+    await result(A, B, A);
+    await result(B, C, B);
+    await result(A, C, null);
+    // 3/1/0 as the chip declares it: A 3 + 1 = 4, B 3 + 0 = 3, C 0 + 1 = 1 (FIDE would show 1½, 1, ½).
+    const [w, d, l] = [three.win.regulation, three.draw!, three.loss.regulation];
+    const visitor = await spectator(browser, { width: 1280, height: 900 });
+    await expectPublicTable(visitor, r.path, [
+      { name: A.name, cells: pwdlp(2, 1, 1, 0, String(w + d)) },
+      { name: B.name, cells: pwdlp(2, 1, 0, 1, String(w + l)) },
+      { name: C.name, cells: pwdlp(2, 0, 1, 1, String(l + d)) },
+    ], "chess 3/1/0 own points");
   });
 
   test("carrom: three level on points and wins, split by the games ratio", async ({ page, request, browser }) => {
@@ -1005,8 +1192,8 @@ function forFirst(order: readonly TiebreakerKey[]): { at: number; keys: Tiebreak
 }
 
 test.describe("generic", () => {
-  test("generic: a draw settled from the pad's tally, and goals for moved above the difference in the editor ranks the higher-scoring of two level", async ({ page, request, browser }) => {
-    test.setTimeout(budget({ taps: 3, api: 10, publicReads: 2 }));
+  test("generic: a draw settled from the pad's tally, and goals for moved above the difference in the editor ranks the higher-scoring of two level; a voided result moves the table back", async ({ page, request, browser }) => {
+    test.setTimeout(budget({ taps: 3, api: 14, publicReads: 3 }));
     const G = mod("generic");
     const r = await rig(request, { label: "Generic", sport: "generic", variant: "score", kind: "individual", size: 3, rostered: false, stages: [{ seq: 1, kind: "league", name: "League" }] });
     const stageId = r.stageIds[0]!;
@@ -1041,6 +1228,21 @@ test.describe("generic", () => {
       { name: A.name, cells: { ...pwdlp(2, 1, 1, 0, "4"), [COL.for]: "3" } },
       { name: C.name, cells: { ...pwdlp(2, 0, 0, 2, "0"), [COL.for]: "4" } },
     ], "generic goals for first");
+    await expectLeaderRow(visitor, B.name);
+
+    // The sequence (TEST-STRATEGY): the organiser voids A v C's result, and the table moves back — A loses that win and its
+    // two goals, C its loss; B, untouched, stays on top.
+    const ac = between(fixtures, A, C);
+    const decided = (await ledger(request, ac.id)).filter((e) => e.type === "generic.result");
+    expect(decided.length, "anti-vacuity: A v C's result is on its ledger").toBe(1);
+    await play(request, ac, [["core.void", { event_id: decided[0]!.id }]]);
+    await expect.poll(async () => (await fixtureState(request, ac.id)).outcome, { message: "the void undid A v C's result", timeout: STEP_MS }).toBeNull();
+    await expectPublicTable(visitor, r.path, [
+      { name: B.name, cells: { ...pwdlp(2, 1, 1, 0, "4"), [COL.for]: "6" } },
+      { name: A.name, cells: { ...pwdlp(1, 0, 1, 0, "1"), [COL.for]: "1" } },
+      { name: C.name, cells: { ...pwdlp(1, 0, 0, 1, "0"), [COL.for]: "4" } },
+    ], "generic after a void");
+    await expectLeaderRow(visitor, B.name);
   });
 });
 
@@ -1082,7 +1284,7 @@ test("pin: a started stage's public table does not move after the division defau
   await page.goto(await divisionPath(request, r.divisionId, "?tab=settings"), { waitUntil: "load" });
   await dismissCookieBanner(page);
   await expect(page.getByTestId("division-settings")).toBeVisible({ timeout: STEP_MS });
-  await page.getByRole("button", { name: /^Format/ }).click();
+  await page.getByRole("button", { name: new RegExp(`^${escapeRe(say("divset.format"))}`) }).click();
   const win = page.getByRole("spinbutton", { name: say("divset.win") });
   await expect(win, "the division's win points, as stored (generic 3/1/0)").toHaveValue("3");
   await win.fill("4");
