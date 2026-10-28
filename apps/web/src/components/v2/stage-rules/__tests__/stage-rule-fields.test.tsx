@@ -9,6 +9,9 @@ import { deciderKeysFor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import { SPORT_RULES } from "@/lib/match-rules";
 import { stageFieldsFor } from "@/lib/rule-scope";
@@ -25,10 +28,12 @@ const render = (
   divisionConfig: Record<string, unknown> = {},
   variant: string | null = null,
   resolved: Record<string, unknown> | null = null,
+  dict: Dict = enUi as Dict,
+  locale: "en" | "es" | "fr" | "nl" = "en",
 ): string => {
   const mod = builtinModules.find((m) => m.key === sportKey)!;
   return renderToStaticMarkup(
-    <DictProvider dict={enUi as Dict} locale="en">
+    <DictProvider dict={dict} locale={locale}>
       <StageRuleFields sportKey={sportKey} module={mod} kind={kind} variant={variant} values={values} onChange={() => undefined} disabled={false} divisionConfig={divisionConfig} resolved={resolved} />
     </DictProvider>,
   );
@@ -257,5 +262,83 @@ describe("a decider's detail is held while the decider is off, with the reason b
     const markup = render("badminton", "league", {}, division, null, resolvedStageCfg(mod, division, "league", {}));
     expect(markup).not.toContain("stage-rule-detail-off-");
     expect(held(markup)).toBe(false);
+  });
+});
+
+// W2e Task 28 (owner D5, ruling 157): the five fields are on the screen, in the language of the page, and the still-tied
+// policy is held while the super over is off. Static markup (no DOM): whether the control is there, disabled, and what it
+// says; picking a value and saving it is the e2e's (`stage-rules-w2e.spec.ts`).
+describe("R157 the five fields are drawn by the real stage row, from the dictionary", () => {
+  const blockOf = (markup: string, top: string): string => {
+    const start = markup.indexOf(`data-testid="stage-rule-field-${top}"`);
+    expect(start, `${top} is rendered`).toBeGreaterThan(-1);
+    const next = markup.indexOf('data-testid="stage-rule-field-', start + 10);
+    return markup.slice(start, next === -1 ? undefined : next);
+  };
+  const plain = (markup: string): string => markup.replaceAll("&#x27;", "'");
+  const heldSelect = (block: string): boolean => /<select[^>]*\sdisabled(=""|\s|>)/.test(block);
+  const cricket = builtinModules.find((m) => m.key === "cricket")!;
+  const division = cricket.configSchema.parse(cricket.variants.t20) as Record<string, unknown>;
+  const cricketAt = (rules: Record<string, unknown>, dict: Dict = enUi as Dict, locale: "en" | "es" | "fr" | "nl" = "en", values: Record<string, string> = {}): string =>
+    render("cricket", "knockout", values, division, "t20", resolvedStageCfg(cricket, division, "knockout", rules), dict, locale);
+
+  it("R157 superOverStillTied is disabled while the super over is off, with the reason beside it, and free while it is on", () => {
+    const off = cricketAt({ superOver: false });
+    expect(heldSelect(blockOf(off, "superOverStillTied"))).toBe(true);
+    expect(off).toContain('data-testid="stage-rule-detail-off-superOverStillTied"');
+    expect(off).toContain("Only used when Super over on a tie is on");
+    const on = cricketAt({ superOver: true });
+    expect(heldSelect(blockOf(on, "superOverStillTied"))).toBe(false);
+    expect(on).not.toContain("stage-rule-detail-off-");
+    // A held SELECT reads as held, as a held number does (the shared `.select` has no disabled look of its own).
+    expect(blockOf(off, "superOverStillTied")).toContain("[&amp;_select]:bg-slate-100");
+    expect(blockOf(on, "superOverStillTied")).not.toContain("[&amp;_select]:bg-slate-100");
+    // The result floor is a plain format field: free with the super over off.
+    expect(/<input[^>]*\sdisabled/.test(blockOf(off, "minOversForResult"))).toBe(false);
+  });
+
+  it("R157 the still-tied select offers exactly the engine's three policies, behind Default, and shows the one the stage holds", () => {
+    const markup = cricketAt({ superOver: true }, enUi as Dict, "en", { superOverStillTied: "shared" });
+    const block = blockOf(markup, "superOverStillTied");
+    expect([...block.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1])).toEqual(["", "repeat", "boundary_count", "shared"]);
+    expect(block).toMatch(/<option value="shared" selected=""/);
+    expect(block).toContain("Another super over (ICC)");
+    expect(block).toContain("Most boundaries wins");
+    expect(block).toContain("Leave it as a tie");
+    expect(block).toContain('data-source="stage"');
+  });
+
+  it("R157 the labels, help and options are the page's language: Spanish, French and Dutch show their own words, not the English", () => {
+    let judged = 0;
+    for (const [locale, dict] of [["es", esUi], ["fr", frUi], ["nl", nlUi]] as const) {
+      const markup = plain(cricketAt({ superOver: true }, dict as unknown as Dict, locale));
+      for (const key of ["rules.field.superOverStillTied.label", "rules.field.superOverStillTied.help", "rules.field.superOverStillTied.option.boundary_count", "rules.field.minOversForResult.label", "rules.field.minOversForResult.help"] as const) {
+        const text = (dict as unknown as Record<string, string>)[key]!;
+        const english = (enUi as unknown as Record<string, string>)[key]!;
+        expect(markup, `${locale}: ${key}`).toContain(text);
+        expect(markup, `${locale}: ${key} is not left in English`).not.toContain(english);
+        judged++;
+      }
+    }
+    expect(judged).toBe(15);
+  });
+
+  it("R157 the football and carrom fields are drawn too: the rolling-subs toggle (Default/On/Off), the concussion count, the coin value", () => {
+    const football = plain(render("football", "league"));
+    expect(blockOf(football, "rollingSubs")).toContain("Rolling substitutions");
+    expect([...blockOf(football, "rollingSubs").matchAll(/<option value="([^"]*)"/g)].map((m) => m[1])).toEqual(["", "on", "off"]);
+    expect(blockOf(football, "concussionSubs")).toMatch(/<input[^>]*type="number"[^>]*min="0"/);
+    expect(plain(render("carrom", "league"))).toContain("Points per coin left on the board");
+    expect(blockOf(render("carrom", "league"), "pointsPerCoin")).toMatch(/<input[^>]*type="number"[^>]*min="1"/);
+  });
+
+  it("R157 a number control's placeholder names the division's value (the engine default), so the field opens at what the stage plays", () => {
+    const odi = cricket.configSchema.parse(cricket.variants.odi) as Record<string, unknown>;
+    const markup = render("cricket", "league", {}, odi, "odi", resolvedStageCfg(cricket, odi, "league", {}));
+    expect(blockOf(markup, "minOversForResult")).toContain(`placeholder="Default (${String(odi.minOversForResult)})"`);
+    expect(odi.minOversForResult, "premise: the ODI floor differs from the schema's own default").not.toBe((cricket.configSchema.parse({}) as Record<string, unknown>).minOversForResult);
+    const carrom = builtinModules.find((m) => m.key === "carrom")!;
+    const club = carrom.configSchema.parse(Object.values(carrom.variants)[0]) as Record<string, unknown>;
+    expect(blockOf(render("carrom", "league", {}, club), "pointsPerCoin")).toContain(`placeholder="Default (${String(club.pointsPerCoin)})"`);
   });
 });

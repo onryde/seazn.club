@@ -52,6 +52,22 @@ export const CARROM_RULES: RuleField[] = [
     build: (v) => ({ bestOf: Number(v) }),
     read: readNumber("bestOf"),
   },
+  // W2e Task 28 (owner D5, ruling 157) - what each coin left on the board is worth to the board winner (Law 52(b)(ii)). A
+  // stage key the engine has always read (default 1); the editor never offered it. The engine gives it no maximum, so the
+  // five here is the web's own bound: nine coins at five points stay inside the game target's own range.
+  {
+    key: "pointsPerCoin",
+    edits: ["pointsPerCoin"],
+    label: "Points per coin left on the board",
+    labelKey: "rules.field.pointsPerCoin.label",
+    help: "The board winner scores this for each coin the other side still has on the board. ICF: 1.",
+    helpKey: "rules.field.pointsPerCoin.help",
+    kind: "number",
+    min: 1,
+    max: 5,
+    build: (v) => ({ pointsPerCoin: Number(v) }),
+    read: readNumber("pointsPerCoin"),
+  },
   {
     key: "queenPoints",
     edits: ["queenPoints"],

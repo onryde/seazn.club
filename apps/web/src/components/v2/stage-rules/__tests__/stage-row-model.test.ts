@@ -64,11 +64,12 @@ describe("stage row model (I9 killers for t17)", () => {
     expect(share(carrom, { tieBoard: "draw" })).toEqual({ value: "share", disabled: false, reasonKey: null });
   });
 
-  // The brief's version of this case asserted that EVERY declared stage key is edited by a shown field. That is a false
-  // premise: five stage keys have no curated field at all (below), so the case is split into what is true. First, each
-  // sport's shown fields are exactly the curated fields whose every key the engine declares for the stage - recomputed
-  // here from `ruleKeys` and the field table, not read back from `stageFieldsShown` - and then the keys no field edits are
-  // pinned as a ratchet: the day one gains a field, this list shrinks on purpose.
+  // The brief's version of this case asserted that EVERY declared stage key is edited by a shown field. That was a false
+  // premise until W2e Task 28: five stage keys had no curated field at all (ruling 157), so the case was split into what
+  // was true - each sport's shown fields are exactly the curated fields whose every key the engine declares for the stage,
+  // recomputed here from `ruleKeys` and the field table, not read back from `stageFieldsShown` - and the keys no field
+  // edits were pinned as a ratchet. Task 28 (owner D5) added the five fields, so the ratchet is now EMPTY: a stage key the
+  // engine declares and no field edits fails this, and the day one is declared without a field, the list below names it.
   it("every sport shows its stage fields: exactly the curated fields the engine's stage keys allow (counted)", () => {
     let cells = 0;
     let fields = 0;
@@ -88,7 +89,7 @@ describe("stage row model (I9 killers for t17)", () => {
       expect(["league", ...BRACKET_KINDS].some((k) => stageFieldsShown(m, k as StageKind, null).length > 0), m.key).toBe(true);
   });
 
-  it("the stage keys no curated field edits are exactly the five known gaps (a ratchet: it shrinks when a field is added)", () => {
+  it("no declared stage key lacks a field in the row (the W2e ratchet is empty: ruling 157 closed by D5)", () => {
     const uncurated = new Set<string>();
     let keys = 0;
     for (const m of builtinModules)
@@ -99,9 +100,7 @@ describe("stage row model (I9 killers for t17)", () => {
           if (!stageFieldsShown(m, kind, null).some((f) => f.edits.some((e) => e.split(".")[0] === top))) uncurated.add(`${m.key}:${key}`);
         }
     expect(keys).toBeGreaterThan(300);
-    expect([...uncurated].sort()).toEqual([
-      "carrom:pointsPerCoin", "cricket:minOversForResult", "cricket:superOverStillTied", "football:concussionSubs", "football:rollingSubs",
-    ]);
+    expect([...uncurated].sort()).toEqual([]);
   });
 });
 
@@ -250,6 +249,8 @@ describe("a detail of a decider is held while its decider is off - the pairing i
     football: { shootoutAttempts: "shootout" },
     hockey: { shootoutAttempts: "shootout" },
     icehockey: { overtimeMinutes: "overtime", shootoutAttempts: "shootout" },
+    // W2e Task 28 (ruling 157, Task 7): what a tied super over does only means something while the super over is on.
+    cricket: { superOverStillTied: "superOver" },
   };
 
   it("exactly the rulebook's fields are details, every other field of every sport is not (counted)", () => {
@@ -563,9 +564,10 @@ describe("the stage sections: every shown field is in exactly one section (count
         }
         const decidersTop = new Set(deciderKeysFor(m, kind, null));
         for (const f of sections.find((s) => s.id === "deciders")?.fields ?? []) {
-          // A deciders field edits a decider key, or a bounded detail of one (`matchBound`: the kicks of a shoot-out).
+          // A deciders field edits a decider key, or a detail of one (`detailOf`, the engine's own pairing: the kicks of a
+          // shoot-out, a tied super over's policy).
           const tops = f.edits.map((e) => e.split(".")[0]!);
-          expect(tops.every((t) => decidersTop.has(t) || m.ruleKeys?.[t]?.matchBound !== undefined), `${m.key}/${kind}: ${f.key}`).toBe(true);
+          expect(tops.every((t) => decidersTop.has(t) || m.ruleKeys?.[t]?.detailOf !== undefined), `${m.key}/${kind}: ${f.key}`).toBe(true);
           withDeciders++;
         }
         fields += shown.length;

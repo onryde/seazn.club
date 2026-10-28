@@ -74,6 +74,20 @@ export const FOOTBALL_RULES: RuleField[] = [
     build: (v) => ({ maxSubs: Number(v) }),
     read: readNumber("maxSubs"),
   },
+  // W2e Task 28 (owner D5, ruling 157) - the two substitution knobs the editor never offered. Rolling subs let a substituted
+  // player return and lift the cap (the engine never applies `maxSubs` under it); the youth, small-sided and mini-soccer
+  // variants set it, 11-a-side does not. Optional with no engine default, so a blank control stores nothing.
+  {
+    key: "rollingSubs",
+    edits: ["rollingSubs"],
+    label: "Rolling substitutions",
+    labelKey: "rules.field.rollingSubs.label",
+    help: "Substituted players may come back on and there is no cap on substitutions. On in the youth and small-sided variants; off in 11-a-side.",
+    helpKey: "rules.field.rollingSubs.help",
+    kind: "bool",
+    build: (v) => ({ rollingSubs: v === "on" }),
+    read: readBool("rollingSubs"),
+  },
   {
     key: "subWindows",
     edits: ["subWindows"],
@@ -84,6 +98,22 @@ export const FOOTBALL_RULES: RuleField[] = [
     max: 10,
     build: (v) => ({ subWindows: Number(v) }),
     read: readNumber("subWindows"),
+  },
+  // A COUNT of extra substitutes (IFAB concussion trial), held outside `maxSubs`. Absent means the trial is not in force
+  // here, and the kernel then refuses a concussion substitute; 0 is a value of its own and is stored. The engine gives it
+  // no maximum; the trial allows two, so five is the web's own generous bound.
+  {
+    key: "concussionSubs",
+    edits: ["concussionSubs"],
+    label: "Concussion substitutes",
+    labelKey: "rules.field.concussionSubs.label",
+    help: "Extra substitutes a side may use for a suspected concussion, on top of Substitutes allowed. Blank = none (the trial is not in force).",
+    helpKey: "rules.field.concussionSubs.help",
+    kind: "number",
+    min: 0,
+    max: 5,
+    build: (v) => ({ concussionSubs: Number(v) }),
+    read: readNumber("concussionSubs"),
   },
   {
     key: "sinBinMinutes",

@@ -1,12 +1,31 @@
 // The shape of one curated match-rule field. Split out of `lib/match-rules.ts`
 // so every per-sport file can import it without importing the registry
 // (`./index`). Client-safe like the rest of this directory: no "use client", no
-// JSX, no `@/components` or `@/server` import.
+// JSX, no `@/components` or `@/server` import. The one `@/` import is a TYPE (`MessageKey`), which is erased: nothing
+// loads at runtime, so tools/matrix still loads this directory under plain `node --experimental-strip-types`.
+import type { MessageKey } from "@/lib/messages";
+
+/** One choice of a `select` field. `labelKey` localizes `label` exactly as `RuleField.labelKey` does the field's. */
+export interface RuleFieldOption {
+  value: string;
+  label: string;
+  labelKey?: MessageKey;
+}
 
 export interface RuleField {
   key: string;
+  /** The English text. Canonical English like every rule label (design 2026-09-17), and the FALLBACK of `labelKey`. */
   label: string;
+  /**
+   * W2e Task 28 (owner D5, ruling 157): the dictionary key that localizes `label`, in all four locales. A field that
+   * names one is drawn from the dictionary (`RuleFieldControl`); one that does not keeps its English `label`, as every
+   * field did before D5. The English dictionary value and `label` are the same sentence (pinned in `w2e-fields.test.ts`),
+   * so the fallback and the localized text cannot drift.
+   */
+  labelKey?: MessageKey;
   help?: string;
+  /** `help`'s dictionary key, as `labelKey` is `label`'s. */
+  helpKey?: MessageKey;
   /**
    * W2c X-SR-1 — the engine `ruleKeys` entries this field edits, as declared cfg paths ("overtime.minutes", "set").
    * REQUIRED, so the compiler lists every field that has not named its key. `lib/rule-scope.ts` sorts fields into the
@@ -20,7 +39,7 @@ export interface RuleField {
   kind: "number" | "bool" | "select" | "sequence";
   min?: number;
   max?: number;
-  options?: { value: string; label: string }[];
+  options?: RuleFieldOption[];
   /**
    * A `sequence` field only (W2c Task 17): the raw value that stands for the EMPTY list. A blank raw value means "unset"
    * everywhere in the editor, so a list the organiser has emptied on purpose ("no tie-break games": a drawn game is held

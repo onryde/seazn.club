@@ -101,7 +101,7 @@ export function StageRuleFields({
                     key={field.key}
                     data-testid={`stage-rule-field-${topSegment(field)}`}
                     data-source={set ? "stage" : "division"}
-                    className={`min-w-0 rounded-lg border border-slate-200 px-3 py-2 ${inert ? "bg-slate-50 [&_input]:bg-slate-100" : "bg-white"} ${field.kind === "sequence" ? "sm:col-span-2 lg:col-span-3" : ""}`}
+                    className={`min-w-0 rounded-lg border border-slate-200 px-3 py-2 ${inert ? "bg-slate-50 [&_input]:bg-slate-100 [&_select]:bg-slate-100" : "bg-white"} ${field.kind === "sequence" ? "sm:col-span-2 lg:col-span-3" : ""}`}
                   >
                     <RuleFieldControl
                       sportKey={sportKey}

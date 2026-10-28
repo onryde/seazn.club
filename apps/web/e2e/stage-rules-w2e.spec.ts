@@ -1,0 +1,252 @@
+// W2e Task 28 (B1-1; owner D5, ruling 157) - the five stage keys the engine reads and no editor offered, driven the way an
+// organiser drives them: the division page's Fixtures tab, a stage card, "Edit rules", a change, Save, a reload, and what the
+// API then stores. Carrom `pointsPerCoin`, cricket `minOversForResult` and `superOverStillTied`, football `rollingSubs` and
+// `concussionSubs`.
+//
+// What a node-env vitest cannot see (AGENTS.md class 2) is what this file is for: that each control is on the screen of a real
+// stage, that a click lands the value the field says and the API stores exactly that, that a reload hydrates it back, that
+// the still-tied policy is held while the super over is off, and that a started stage holds all five read-only while the API
+// still refuses a write.
+//
+// WHERE THE EXPECTED VALUES COME FROM (class 19: pin what a control OPENS AT, not only that it is there). The value each
+// control opens at is the engine's own: the variant preset the division is created from (`module.variants`, then
+// `configSchema.parse` for the schema's default), read back through the API for the placeholder the page prints. Every value
+// the test then saves DIFFERS from that, so a control that wrote the default (or nothing) cannot pass. Every sentence is read
+// from the dictionary the product renders; none is typed here.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { expect, test, type APIRequestContext, type Locator, type Page } from "@playwright/test";
+import { builtinModules } from "@seazn/engine/sports";
+import { TAG, apiJson, divisionPath, seedRosteredFixture } from "./helpers";
+import { dismissCookieBanner } from "./scorepad-a11y-kit";
+import { SPORT_RULES, type RuleField } from "../src/lib/match-rules";
+
+const L = JSON.parse(readFileSync(fileURLToPath(new URL("../src/dictionaries/en/ui.json", import.meta.url)), "utf8")) as Record<string, string>;
+
+const STEP_MS = 20_000;
+
+/** One ruling-157 field, the stage it is driven on, and the value it is set to. */
+interface Case {
+  sport: string;
+  variant: string;
+  /** A stage kind that offers the field AND leaves it free: a knockout carries the super over on, so the still-tied policy opens enabled. */
+  kind: "league" | "knockout";
+  key: string;
+  /** The raw value typed or picked in the control. */
+  set: string;
+  /** What the stage then stores for the key. */
+  stored: unknown;
+}
+
+const CASES: readonly Case[] = [
+  { sport: "carrom", variant: "icf", kind: "league", key: "pointsPerCoin", set: "2", stored: 2 },
+  { sport: "cricket", variant: "odi", kind: "knockout", key: "minOversForResult", set: "8", stored: 8 },
+  { sport: "cricket", variant: "t20", kind: "knockout", key: "superOverStillTied", set: "shared", stored: "shared" },
+  // The youth variant plays rolling substitutions, so Off is a change the preset would not make on its own.
+  { sport: "football", variant: "youth", kind: "knockout", key: "rollingSubs", set: "off", stored: false },
+  { sport: "football", variant: "11-a-side", kind: "knockout", key: "concussionSubs", set: "2", stored: 2 },
+];
+
+const moduleOf = (sport: string) => builtinModules.find((m) => m.key === sport)!;
+const fieldOf = (c: Case): RuleField => SPORT_RULES[c.sport]!.find((f) => f.key === c.key)!;
+/** The engine's own value for the key under the variant: the schema's parse of the preset (its default where the preset names none). */
+const engineValue = (c: Case): unknown => (moduleOf(c.sport).configSchema.parse(moduleOf(c.sport).variants[c.variant]) as Record<string, unknown>)[c.key];
+
+interface StageRead {
+  config: { rules?: Record<string, unknown> | null };
+}
+
+/** A competition + one division of `sport`/`variant` + one stage of `kind`, through the API, NOT started. */
+async function seedStage(request: APIRequestContext, c: Case, label: string): Promise<{ divisionId: string; stageId: string }> {
+  const comp = await apiJson<{ id: string }>(request, "/api/v1/competitions", "POST", {
+    ends_on: "2030-12-31",
+    name: `W2e T28 ${label} ${c.key} ${TAG}-${Math.random().toString(36).slice(2, 6)}`,
+    visibility: "private",
+  });
+  expect(comp.status, `competition: ${JSON.stringify(comp.error)}`).toBeLessThan(300);
+  const div = await apiJson<{ id: string }>(request, `/api/v1/competitions/${comp.data!.id}/divisions`, "POST", {
+    name: `${c.sport} ${label}`,
+    sport_key: c.sport,
+    variant_key: c.variant,
+  });
+  expect(div.status, `division ${c.sport}/${c.variant}: ${JSON.stringify(div.error)}`).toBeLessThan(300);
+  const stage = await apiJson<{ id: string }>(request, `/api/v1/divisions/${div.data!.id}/stages`, "POST", {
+    seq: 1,
+    kind: c.kind,
+    name: c.kind === "league" ? "League" : "Knockout",
+  });
+  expect(stage.status, `stage: ${JSON.stringify(stage.error)}`).toBeLessThan(300);
+  return { divisionId: div.data!.id, stageId: stage.data!.id };
+}
+
+/** `GET /stages/{id}`: the stage as the API serves it. The stored rules are what the page must have saved. */
+async function storedRules(request: APIRequestContext, stageId: string): Promise<Record<string, unknown> | null> {
+  const res = await apiJson<StageRead>(request, `/api/v1/stages/${stageId}`);
+  expect(res.status, "GET /stages/{id}").toBe(200);
+  return res.data!.config.rules ?? null;
+}
+
+async function divisionConfig(request: APIRequestContext, divisionId: string): Promise<Record<string, unknown>> {
+  const res = await apiJson<{ config: Record<string, unknown> }>(request, `/api/v1/divisions/${divisionId}`);
+  expect(res.status, "GET /divisions/{id}").toBe(200);
+  return res.data!.config;
+}
+
+async function openRow(page: Page, request: APIRequestContext, divisionId: string, stageId: string): Promise<Locator> {
+  await page.goto(await divisionPath(request, divisionId, "?tab=fixtures"), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  const row = page.getByTestId(`stage-format-row-${stageId}`);
+  await expect(row, "the stage rules row is on the Fixtures tab").toBeVisible({ timeout: STEP_MS });
+  return row;
+}
+
+async function openEditor(row: Locator): Promise<void> {
+  await row.getByTestId("stage-format-edit").click();
+  await expect(row.getByTestId("stage-format-editor")).toBeVisible({ timeout: STEP_MS });
+}
+
+/** The block a field is drawn in, and its control (a number input, or a select for a toggle or a choice). */
+const blockOf = (row: Locator, c: Case): Locator => row.getByTestId(`stage-rule-field-${c.key}`);
+const controlOf = (row: Locator, c: Case): Locator => blockOf(row, c).locator(fieldOf(c).kind === "number" ? "input" : "select").first();
+
+test("the five ruling-157 fields exist in the tables, each with its dictionary label (the cases below are all of them)", () => {
+  expect(CASES.length).toBe(5);
+  for (const c of CASES) {
+    const field = fieldOf(c);
+    expect(field, `${c.sport}.${c.key} has a field`).toBeDefined();
+    expect(field.labelKey, `${c.key} labelKey`).toBeDefined();
+    expect(L[field.labelKey!], `${c.key} has English copy`).toBe(field.label);
+    // Premise of the "opens at" check: the saved value is not what the control opens at.
+    expect(c.stored, `${c.key}: the saved value must differ from the engine's own`).not.toEqual(engineValue(c));
+  }
+});
+
+for (const c of CASES) {
+  test(`${c.sport}.${c.key}: opens at the engine's default, saves ${JSON.stringify(c.stored)}, is read back from GET /stages/{id} and again after a reload`, async ({ page, request }) => {
+    test.setTimeout(150_000);
+    const field = fieldOf(c);
+    const { divisionId, stageId } = await seedStage(request, c, "edit");
+    const before = await storedRules(request, stageId);
+    expect(Object.hasOwn(before ?? {}, c.key), `${c.key}: a new stage stores nothing for it - it inherits`).toBe(false);
+
+    const row = await openRow(page, request, divisionId, stageId);
+    await openEditor(row);
+    const block = blockOf(row, c);
+    const control = controlOf(row, c);
+    await expect(block, `${c.key} is on the stage's editor`).toBeVisible();
+    // The label is the dictionary's, in the language of the page.
+    await expect(block).toContainText(L[field.labelKey!]!);
+
+    // OPENS AT: blank (inherit), saying "Division"; a number's placeholder names the value the division holds, which is the
+    // engine's own where the variant names one (the ODI result floor, 20).
+    await expect(control).toHaveValue("");
+    await expect(block).toHaveAttribute("data-source", "division");
+    if (field.kind === "number") {
+      const cfg = await divisionConfig(request, divisionId);
+      const preset = moduleOf(c.sport).variants[c.variant] as Record<string, unknown>;
+      if (Object.hasOwn(preset, c.key)) expect(cfg[c.key], `${c.key}: the division holds the variant's value`).toEqual(preset[c.key]);
+      const named = typeof cfg[c.key] === "number" ? `${L["rules.default"]!} (${cfg[c.key]})` : L["rules.default"]!;
+      await expect(control).toHaveAttribute("placeholder", named);
+    } else if (field.kind === "bool") {
+      await expect(control.locator("option")).toHaveText([L["rules.default"]!, L["rules.on"]!, L["rules.off"]!]);
+    } else {
+      await expect(control.locator("option")).toHaveText([L["rules.default"]!, ...field.options!.map((o) => L[o.labelKey!]!)]);
+    }
+
+    // The still-tied policy is held while the super over is off, with the reason beside it, and free while it is on.
+    if (c.key === "superOverStillTied") {
+      const superOver = row.getByTestId("stage-rule-field-superOver").locator("select");
+      const held = row.getByTestId("stage-rule-detail-off-superOverStillTied");
+      const switchLabel = SPORT_RULES.cricket!.find((f) => f.key === "superOver")!.label;
+      await expect(control, "the knockout preset plays the super over, so the policy opens free").toBeEnabled();
+      await expect(held).toHaveCount(0);
+      await superOver.selectOption("off");
+      await expect(control, "no super over, no policy").toBeDisabled();
+      await expect(held).toHaveText(L["stageRules.detail.off"]!.replace("{decider}", switchLabel));
+      await superOver.selectOption("on");
+      await expect(control).toBeEnabled();
+      await expect(held).toHaveCount(0);
+    }
+
+    // SET and SAVE.
+    if (field.kind === "number") await control.fill(c.set);
+    else await control.selectOption(c.set);
+    await expect(block).toHaveAttribute("data-source", "stage");
+    await row.getByTestId("stage-format-save").click();
+    await expect(row.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
+
+    // The API stores exactly the key the field builds, and nothing else moved (the edit touched one field).
+    const after = await storedRules(request, stageId);
+    expect(after, `${c.key}: the save stored rules`).not.toBeNull();
+    expect(after![c.key], `${c.key} stored`).toEqual(c.stored);
+    expect(Object.keys(after!).sort(), "only the edited key was added to what the stage held").toEqual([...Object.keys(before ?? {}), c.key].sort());
+
+    // A reload hydrates the control from the stored rules.
+    await page.reload({ waitUntil: "load" });
+    const row2 = page.getByTestId(`stage-format-row-${stageId}`);
+    await expect(row2).toBeVisible({ timeout: STEP_MS });
+    await openEditor(row2);
+    await expect(controlOf(row2, c), `${c.key} reopens as saved`).toHaveValue(c.set);
+    await expect(blockOf(row2, c)).toHaveAttribute("data-source", "stage");
+
+    // Use division rules: the stage inherits again and the key is gone. (Cancel closes the editor; the button lives on the collapsed row.)
+    await row2.getByTestId("stage-format-cancel").click();
+    await expect(row2.getByTestId("stage-format-editor")).toHaveCount(0, { timeout: STEP_MS });
+    const clear = row2.getByTestId("stage-format-clear");
+    await expect(clear).toBeVisible({ timeout: STEP_MS });
+    await clear.click();
+    await expect(row2.getByTestId("stage-format-clear")).toHaveCount(0, { timeout: STEP_MS });
+    expect(Object.hasOwn((await storedRules(request, stageId)) ?? {}, c.key), `${c.key}: cleared`).toBe(false);
+  });
+}
+
+for (const c of CASES) {
+  test(`${c.sport}.${c.key}: the W2c lock holds it read-only on a started stage and the API refuses a write with STAGE_FORMAT_LOCKED`, async ({ page, request }) => {
+    test.setTimeout(150_000);
+    // The still-tied policy is also held by the super over being off; give the stage its super over first so that, in the
+    // started stage, the LOCK is the only thing that can disable it (and the unstarted twin below is free).
+    const rules = c.key === "superOverStillTied" ? { superOver: true } : null;
+
+    // A started stage of this sport: a rostered fixture, the stage rules laid before the first event, then core.start.
+    const seeded = await seedRosteredFixture(request, {
+      label: `W2e T28 lock ${c.key} ${TAG}`,
+      sportKey: c.sport,
+      variantKey: c.variant,
+      home: [{ fullName: `W2e Lock Home ${c.key} ${TAG}` }],
+      away: [{ fullName: `W2e Lock Away ${c.key} ${TAG}` }],
+      entrantKind: c.sport === "carrom" ? "individual" : "team",
+      skipLineups: true,
+    });
+    const stages = await apiJson<{ id: string }[]>(request, `/api/v1/divisions/${seeded.divisionId}/stages`);
+    expect(stages.status, "GET stages").toBe(200);
+    const stageId = stages.data![0]!.id;
+    if (rules !== null) {
+      const put = await apiJson(request, `/api/v1/stages/${stageId}/rules`, "PUT", { rules });
+      expect(put.status, `stage rules before the start: ${JSON.stringify(put.error)}`).toBeLessThan(300);
+    }
+    const started = await apiJson(request, `/api/v1/fixtures/${seeded.fixtureId}/events`, "POST", { expected_seq: 0, type: "core.start", payload: {} });
+    expect(started.status, `core.start: ${JSON.stringify(started.error)}`).toBe(201);
+
+    const row = await openRow(page, request, seeded.divisionId, stageId);
+    await expect(row.getByTestId("stage-format-locked"), "the row says the stage has started").toBeVisible();
+    await row.getByTestId("stage-format-view").click();
+    await expect(blockOf(row, c), `${c.key} is shown in the read-only view`).toBeVisible();
+    await expect(controlOf(row, c), `${c.key} is held`).toBeDisabled();
+
+    // The server says no regardless of what the page showed.
+    const put = await apiJson(request, `/api/v1/stages/${stageId}/rules`, "PUT", { rules: { [c.key]: c.stored } });
+    expect(put.status, "a started stage's rules are refused").toBe(409);
+    expect(put.error?.code).toBe("STAGE_FORMAT_LOCKED");
+    expect(Object.hasOwn((await storedRules(request, stageId)) ?? {}, c.key), `${c.key}: nothing was stored`).toBe(false);
+
+    // The positive pair: an UNSTARTED stage of the same sport, variant and rules has the same field free.
+    const fresh = await seedStage(request, { ...c, kind: "league" }, "unlocked");
+    if (rules !== null) {
+      const put2 = await apiJson(request, `/api/v1/stages/${fresh.stageId}/rules`, "PUT", { rules });
+      expect(put2.status, `stage rules: ${JSON.stringify(put2.error)}`).toBeLessThan(300);
+    }
+    const row2 = await openRow(page, request, fresh.divisionId, fresh.stageId);
+    await openEditor(row2);
+    await expect(controlOf(row2, c), `${c.key} is free on a stage that has not started`).toBeEnabled();
+  });
+}

@@ -6,7 +6,9 @@
 // option for a saved value the picker cannot offer, and the same inherited placeholder: two editors that cannot drift.
 //
 // Field labels and options are sport-rules vocabulary, kept canonical English like sport and format names; only the
-// picker chrome (Default / On / Off) localizes.
+// picker chrome (Default / On / Off) localizes - EXCEPT a field that names a dictionary key (`labelKey`, `helpKey`, an
+// option's `labelKey`): W2e Task 28 (owner D5) asks the five ruling-157 fields for all four locales, so those are drawn
+// from the dictionary and every other field keeps its English `label`. The English text is the fallback either way.
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { RuleField } from "@/lib/match-rules";
 import { ruleOptionLabel } from "@/lib/match-rules";
@@ -59,13 +61,15 @@ export function RuleFieldControl({
   describedBy?: string;
 }) {
   const msg = useMsg();
+  const label = field.labelKey === undefined ? field.label : msg(field.labelKey);
+  const help = field.helpKey === undefined ? field.help : msg(field.helpKey);
   const offered = field.kind === "bool" ? ["on", "off"] : (field.options ?? []).map((o) => o.value);
   const unofferable = field.kind !== "sequence" && value !== "" && !offered.includes(value);
 
   if (field.kind === "sequence") {
     return (
       <div className="block">
-        <span className="label">{field.label}</span>
+        <span className="label">{label}</span>
         <SequenceField
           field={field}
           value={value}
@@ -73,14 +77,14 @@ export function RuleFieldControl({
           disabled={disabled}
           inheritedValue={sequenceInherits === undefined ? undefined : field.read?.(sequenceInherits)}
         />
-        {field.help && <span className="mt-0.5 block text-[11px] text-slate-600">{field.help}</span>}
+        {help && <span className="mt-0.5 block text-[11px] text-slate-600">{help}</span>}
       </div>
     );
   }
 
   return (
     <label className="block">
-      <span className="label">{field.label}</span>
+      <span className="label">{label}</span>
       {field.kind === "number" ? (
         <input
           type="number"
@@ -120,16 +124,16 @@ export function RuleFieldControl({
           ) : (
             (field.options ?? []).map((o) => (
               <option key={o.value} value={o.value} disabled={optionStates?.get(o.value)?.disabled === true}>
-                {o.label}
+                {o.labelKey === undefined ? o.label : msg(o.labelKey)}
               </option>
             ))
           )}
         </select>
       )}
-      {field.help && (
+      {help && (
         /* R3.5/Task P - was text-slate-400 (2.63:1 on the .card this span renders inside at both call sites, under the
            WCAG AA 4.5:1 floor); text-slate-600 clears 7.58:1. Every field's help text renders through here. */
-        <span className="mt-0.5 block text-[11px] text-slate-600">{field.help}</span>
+        <span className="mt-0.5 block text-[11px] text-slate-600">{help}</span>
       )}
     </label>
   );
