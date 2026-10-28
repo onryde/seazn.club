@@ -7,6 +7,56 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-28 — a cricket chase total may not pass the winning run
+
+A chase ends at the winning run, and a boundary counts in full (ICC Playing
+Conditions 16.5.1 and 16.5.3, MCC Law 16.5). From one run short, the last
+delivery can add at most 7 runs: a no-ball hit for six. So a chase total above
+the target minus 1 plus 7 cannot have happened. Both scoring write paths now
+refuse one.
+
+**What changed.** A `cricket.innings.summary` for the chasing innings was
+accepted with any `payload.runs` and is now refused when `runs` is above
+target − 1 + 7. The chasing innings is the second innings of a one-innings
+match and the fourth of a two-innings match. The target is the other side's
+total plus 1, or the revised target once a `cricket.revise` (DLS or a
+confirmed target) has set one. In a two-innings match it is the other side's
+aggregate lead plus 1. Earlier innings have no bound, and ball-by-ball
+scoring (`cricket.ball`) is unchanged.
+
+| Path | Before | Now |
+|---|---|---|
+| `POST /api/v1/fixtures/{id}/events` | accepted, and the chase recorded the total | 422, `error.code` `"CHASE_OVERSHOOT"`, nothing written |
+| `POST /api/v1/divisions/{id}/events/import` | imported | 200; that stream is rejected with `"import.fold_rejected"`, `engineCode` `"CHASE_OVERSHOOT"`, and nothing is written for its fixture |
+
+**What replaces it.** Send the total the chase ended on. It is at most the
+target minus 1 plus 7.
+
+**What a consumer sees.** On the scoring endpoint:
+
+```json
+{ "ok": false, "error": { "code": "CHASE_OVERSHOOT", "message": "a chase ends at the winning run — check the total" }, "requestId": "…" }
+```
+
+On the import route, the stream's result (this refusal carries no
+`eventIndex`; the other streams in the call are judged on their own):
+
+```json
+{ "fixture": "…", "status": "rejected", "eventsAppended": 0, "error": { "code": "import.fold_rejected", "engineCode": "CHASE_OVERSHOOT" } }
+```
+
+Key on `error.code`, not on the message text.
+
+**No data migration was required.** Only a NEW write is judged. A chase total
+already in a match's ledger still replays to the result it recorded, and a
+void of it is accepted.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, rule CK-CH-1 (rulebook RB2A-22, SC-C4). The pinning
+test is `packages/engine/src/sports/cricket/w2e-cricket.test.ts`.
+
 ## 2026-10-28 — the standings export refuses a table with no results
 
 The standings export used to print the newest stage's stored table, even one

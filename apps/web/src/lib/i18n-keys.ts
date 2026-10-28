@@ -2241,6 +2241,7 @@ export type DictionaryKey =
   | "empty"
   | "engineError.ABANDONED_SETTLE_OR_VOID"
   | "engineError.ALREADY_DECIDED"
+  | "engineError.CHASE_OVERSHOOT"
   | "engineError.CONFIG_INVALID"
   | "engineError.DOUBLE_WALKOVER_NO_NEXT_MATCH"
   | "engineError.DRAW_NOT_ALLOWED"

@@ -7,6 +7,16 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-10-28",
+    title: "Breaking: a cricket chase total may not pass the winning run",
+    lines: [
+      "A cricket.innings.summary for the chasing innings (the second of a one-innings match, the fourth of a two-innings match) is now refused when payload.runs is above the target minus 1 plus 7: a chase ends at the winning run, and the most the last ball adds from one run short is a no-ball hit for six.",
+      "POST /fixtures/{id}/events answers 422 CHASE_OVERSHOOT (\"a chase ends at the winning run — check the total\") and nothing is written. POST /divisions/{id}/events/import still returns 200; that stream is rejected with error.code import.fold_rejected and error.engineCode CHASE_OVERSHOOT.",
+      "The target is the other side's total plus 1, or a revised (DLS or confirmed) target. Earlier innings and ball-by-ball scoring are unchanged, and a chase total already recorded still replays and can be voided.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
     title: "Breaking: the standings export refuses a table with no results",
     lines: [
       "GET /divisions/{id}/exports/standings with no stored table now answers 404 STANDINGS_NOT_AVAILABLE (\"no standings yet\"), not 404 NOT_FOUND.",

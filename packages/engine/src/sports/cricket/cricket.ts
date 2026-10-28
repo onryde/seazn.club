@@ -810,6 +810,14 @@ export function chaseTarget(state: CricketState): number {
   return aggregate(state, opponent(chaseSide)) - own + 1;
 }
 
+// W2e T6 (CK-CH-1, RB2A-22): a chase ends AT the winning run and a boundary counts in full (ICC PC 16.5.1/16.5.3, Law
+// 16.5), so from one run short the most one delivery adds is a no-ball (1) hit for six (6). A chase total above
+// target − 1 + 7 cannot have happened. Read with the chase innings already open: its DLS target is set when it opens.
+const WINNING_BALL_MAX_RUNS = 7;
+function chaseMaxRuns(state: CricketState): number {
+  return chaseTarget(state) - 1 + WINNING_BALL_MAX_RUNS;
+}
+
 function openInnings(state: CricketState): { innings: InningsState; index: number } | null {
   const index = state.innings.length - 1;
   const innings = state.innings[index];
@@ -1710,6 +1718,16 @@ function applySummary(
   }
   if (strict && payload.declared === true && next.cfg.inningsPerSide !== 2) {
     invalid("declarations apply to two-innings matches only");
+  }
+  // W2e T6 (CK-CH-1, RB2A-22): a coarse chase total past the winning run. STRICT ONLY, for the §3.3 reason above and
+  // because the bound moves with a revised target: a ledger that already holds such a total keeps folding to the result
+  // it recorded (a summary written before W2e, or under a target a later revise lowered).
+  if (strict && isChaseIndex(next, index) && payload.runs > chaseMaxRuns(next)) {
+    throw new EngineError("CHASE_OVERSHOOT", "a chase ends at the winning run — check the total", {
+      runs: payload.runs,
+      target: chaseTarget(next),
+      max: chaseMaxRuns(next),
+    });
   }
   const updated: InningsState = {
     ...innings,
@@ -4166,7 +4184,12 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
             : bowledOut
               ? 1 + Math.floor(rng() * limit)
               : limit;
-        const runs = Math.floor(rng() * 220);
+        // W2e T6 (CK-CH-1) — a chase stops at the winning run's bound, read off the chase as it would open (a DLS target
+        // is set then). Clamped rather than redrawn, so it consumes no rng: a walk that never overshot is the walk it was.
+        const drawn = Math.floor(rng() * 220);
+        const runs = isChaseIndex(state, nextIndex)
+          ? Math.min(drawn, chaseMaxRuns(createInnings(state, "coarse")))
+          : drawn;
         // W4a follow-up — a coarse innings entered PROGRESSIVELY. `partial`
         // leaves the innings open (spec §2.3: the totals may only grow), which
         // is how a coarse scorer records a match while it is still being
@@ -4210,7 +4233,9 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
       const allOut = allOutWickets(state, innings.battingSide);
       const wicketRoom = allOut - innings.wickets;
       const ballRoom = innings.ballsLimit === null ? 60 : innings.ballsLimit - innings.legalBalls;
-      const runs = innings.runs + Math.floor(rng() * 120);
+      // W2e T6 (CK-CH-1) — the same clamp as the one-event branch above: no rng drawn for it.
+      const grown = innings.runs + Math.floor(rng() * 120);
+      const runs = isChaseIndex(state, open.index) ? Math.min(grown, chaseMaxRuns(state)) : grown;
       return {
         type: "cricket.innings.summary",
         payload: {

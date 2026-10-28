@@ -653,6 +653,8 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   TIEBREAK_COLOUR_REQUIRED: "engineError.TIEBREAK_COLOUR_REQUIRED",
   // W2d T18 (HK-TB-2, PS-7d) — pad-visible, so it names what to do.
   GOAL_KIND_REQUIRED: "engineError.GOAL_KIND_REQUIRED",
+  // W2e T6 (CK-CH-1, RB2A-22) — pad-visible: the over-summary sheet's total.
+  CHASE_OVERSHOOT: "engineError.CHASE_OVERSHOOT",
 };
 
 /**

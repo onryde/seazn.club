@@ -84,6 +84,8 @@ describe("EngineError", () => {
       "TIEBREAK_COLOUR_REQUIRED",
       // W2d T18 (HK-TB-2, PS-7d) — appended last, existing order frozen. A hockey goal written without its type.
       "GOAL_KIND_REQUIRED",
+      // W2e T6 (CK-CH-1, RB2A-22) — appended last, existing order frozen. A coarse cricket chase total past the winning run.
+      "CHASE_OVERSHOOT",
     ]);
   });
 });

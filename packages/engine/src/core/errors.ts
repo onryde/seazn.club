@@ -98,6 +98,11 @@ export const EngineErrorCode = z.enum([
   // an untyped goal still folds, and that goal counts as a field goal. Named, not CONFIG_INVALID, because the scorer sees
   // it. data.goalKinds lists the kinds the sport records. Appended last, existing order frozen.
   "GOAL_KIND_REQUIRED",
+  // W2e T6 (CK-CH-1, RB2A-22, SC-C4): a coarse cricket chase total past the winning run (above target − 1 + 7: a no-ball
+  // hit for six off the last needed run). The WRITE path's refusal only (`sports/cricket/cricket.ts` applySummary): a ledger
+  // that already holds one still folds to its recorded result. Named, because the scorer sees it. data.target and data.max
+  // give the target and the largest total it allows. Appended last, existing order frozen.
+  "CHASE_OVERSHOOT",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 

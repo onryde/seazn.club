@@ -101,6 +101,7 @@ describe("v1 envelope", () => {
     ["LEVEL_RESULT_SEATED", 500], // an assertion: only reachable through a bug
     ["TIEBREAK_COLOUR_REQUIRED", 422], // W2c D7: an Armageddon that names no Black
     ["GOAL_KIND_REQUIRED", 422], // W2d T18 (PS-7d): a hockey goal without its type
+    ["CHASE_OVERSHOOT", 422], // W2e T6 (CK-CH-1): a coarse chase total past the winning run
   ] as const)("maps EngineError %s → %d", async (code, status) => {
     const res = await v1(async () => {
       throw new EngineError(code, "boom");

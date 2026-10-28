@@ -44,6 +44,8 @@ export const ENGINE_HTTP_STATUS: Readonly<Record<EngineErrorCode, number>> = Obj
   TIEBREAK_COLOUR_REQUIRED: 422,
   // W2d T18 (PS-7d) — a hockey goal without its type: the scorer re-sends it typed.
   GOAL_KIND_REQUIRED: 422,
+  // W2e T6 (CK-CH-1) — a coarse chase total past the winning run: the scorer re-sends the total.
+  CHASE_OVERSHOOT: 422,
 });
 
 /** The `?? 422` of http.ts:158 — what the product answers an EngineError whose

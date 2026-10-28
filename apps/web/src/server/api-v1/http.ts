@@ -95,6 +95,8 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   TIEBREAK_COLOUR_REQUIRED: 422,
   // W2d T18 (HK-TB-2, PS-7d) — a hockey goal without its type, beside INVALID_EVENT: the scorer re-sends it typed.
   GOAL_KIND_REQUIRED: 422,
+  // W2e T6 (CK-CH-1, RB2A-22) — a coarse chase total past the winning run, beside INVALID_EVENT: the scorer re-sends the total.
+  CHASE_OVERSHOOT: 422,
 };
 
 // HTTP status → stable machine code for non-engine errors.
