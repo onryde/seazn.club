@@ -216,6 +216,10 @@ export interface ExportStandingsRow {
   /** Whole points as a number; a half-point table's total as the table prints it (`pointsText`: "1½"), W2d RB2B-17. */
   points: number | string;
   metrics: Record<string, number>;
+  /** W2d follow-up (m3): the row's result cells, paired by index with `BuildOpts.resultColumns` — the caller's table
+   *  declaration (IIHF's P · W · OTW · OTL · D · L, with W and L regulation only, RBG:343-344). Absent: no result
+   *  columns were declared, and the row prints its own played, won, drawn and lost. */
+  results?: readonly (string | number)[];
   /** PROMPT-60: entrant crest URL (already resolved) — reaches the PDF. */
   badgeUrl?: string | null;
 }
@@ -269,6 +273,10 @@ export interface BuildOpts {
   description?: string;
   landscape?: boolean;
   metricColumns?: string[]; // standings extra columns, in order
+  /** W2d follow-up (m3): the standings' result-column headers, in order, between Team and the metrics — the caller's
+   *  table declaration (the web export hands the public table's own); every row's `results` holds their cells. Absent:
+   *  the historic P · W · D · L. */
+  resultColumns?: readonly string[];
   /** Pre-resolved (caller's locale) strings for table chrome that build.ts
    *  itself has no locale to render — mirrors how home/away are already
    *  resolved via resolveSlotLabel before reaching this module. Every field
