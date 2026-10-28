@@ -181,7 +181,7 @@ async function override(orgId: string, key: string, value: boolean) {
 
 /** An org with the relay, `fixtures` fixtures each with a present phone, `credits` match credits, and a channel connected through
  *  the real save (its connection and API destination). Its own FakeYouTube, so every count is this test's. */
-async function world(o: { fixtures?: number; credits?: number; connectAfterMs?: number; connectionUser?: string } = {}): Promise<World> {
+async function world(o: { fixtures?: number; credits?: number; connectAfterMs?: number; connectionUser?: string; privacy?: "unlisted" | "public" | "private" } = {}): Promise<World> {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const n = o.fixtures ?? 1;
@@ -195,7 +195,7 @@ async function world(o: { fixtures?: number; credits?: number; connectAfterMs?: 
   for (const f of fixtures) await pairPresentPhone(f);
   if ((o.credits ?? 1) > 0) await grantCredits({ orgId: auth.orgId, delta: o.credits ?? 1, createdBy: await rigUser(), note: "t14", idempotencyKey: randomUUID() });
   await spendMonthlyStreamGrant(auth.orgId);
-  const c = await connectChannel({ auth, orgId: auth.orgId, userId: o.connectionUser ?? auth.userId });
+  const c = await connectChannel({ auth, orgId: auth.orgId, userId: o.connectionUser ?? auth.userId }, o.privacy ? { privacy: o.privacy } : {});
 
   let now = Date.now();
   const ingest = new FakeIngest({ clock: () => now, connectAfterMs: o.connectAfterMs ?? 3000 });
@@ -746,6 +746,49 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     expect(await w.step({ at: afterStop(m2, min(6)) })).toEqual({ ...ZERO, ended: 1 });
     expect(await streamUrlOf(g)).toBe(youtubeWatchUrl(m2.ytId));
     expect(urlHook.results).toEqual([false, true]);
+  });
+
+  it("I1 (owner ruling A): a broadcast that is PRIVATE on YouTube is completed but writes NO link and expires nothing - the public never sees it; the same shape unlisted writes the link", async () => {
+    const hidden = await world({ credits: 2, privacy: "private" });
+    const f = hidden.fixtures[0]!;
+    const m = await playAndStop(hidden, f);
+    expect((await sql<{ privacy: string }[]>`select privacy from youtube_broadcasts where id = ${m.broadcastId}`)[0]!.privacy, "premise: the broadcast row is private").toBe("private");
+    const before = revalidateHook.calls.length;
+    expect(await hidden.step({ at: afterStop(m, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+    expect((await broadcastRow(m.broadcastId)).state, "it still completes (the organiser's replay)").toBe("complete");
+    expect(await streamUrlOf(f), "no link: a private video is no pill").toBeNull();
+    expect(urlHook.calls, "the link path was not even asked").toBe(0);
+    expect(revalidateHook.calls.slice(before), "the public page did not change, so nothing is expired").toEqual([]);
+
+    // Positive pair: the same flow on an unlisted channel writes the link and expires the page (so the zeroes above are the guard).
+    const open = await world({ credits: 2, privacy: "unlisted" });
+    const g = open.fixtures[0]!;
+    const n = await playAndStop(open, g);
+    const beforeOpen = revalidateHook.calls.length;
+    expect(await open.step({ at: afterStop(n, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+    expect(await streamUrlOf(g)).toBe(youtubeWatchUrl(n.ytId));
+    expect(urlHook.calls).toBe(1);
+    expect(revalidateHook.calls.slice(beforeOpen)).toHaveLength(1);
+  });
+
+  it("I1: the BROADCAST ROW's own privacy decides (stored when Go live made it), not the channel's default at the time it ends - in both directions", async () => {
+    // Made private, the channel then set to unlisted: still no link.
+    const a = await world({ credits: 2, privacy: "private" });
+    const fa = a.fixtures[0]!;
+    const ma = await playAndStop(a, fa);
+    await sql`update org_youtube_connections set default_privacy = 'unlisted' where id = ${a.connectionId}`;
+    expect(await a.step({ at: afterStop(ma, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+    expect(await streamUrlOf(fa), "made private: the channel's later default does not publish it").toBeNull();
+    expect(urlHook.calls).toBe(0);
+
+    // Made unlisted, the channel then set to private: the link is still written.
+    const b = await world({ credits: 2, privacy: "unlisted" });
+    const fb = b.fixtures[0]!;
+    const mb = await playAndStop(b, fb);
+    await sql`update org_youtube_connections set default_privacy = 'private' where id = ${b.connectionId}`;
+    expect(await b.step({ at: afterStop(mb, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+    expect(await streamUrlOf(fb), "made unlisted: the channel's later default does not hide it").toBe(youtubeWatchUrl(mb.ytId));
+    expect(urlHook.calls).toBe(1);
   });
 
   it("T16: a broadcast that never ran (deleted as never_live) expires nothing - it is not a replay part, so the public page did not change", async () => {

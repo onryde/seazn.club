@@ -5,7 +5,9 @@
 //
 // What the loader owes the page: the parts in order (empty first), nothing for a division still in setup (an unreleased
 // division must not leak a replay), a later part visible on the NEXT uncached read (a second call), another fixture's parts
-// never mixed in, and a cache entry whose key moved when the document's shape did (a stale `-v8` entry has no `parts`).
+// never mixed in, a cache entry whose key moved when the document's shape did (a stale `-v8` entry has no `parts`), and (owner ruling
+// 2026-10-28, option A) nothing for a broadcast that is PRIVATE on YouTube: its facade would be a dead tap and its link "This video is
+// private", so the public never sees it, and the parts that remain are numbered among themselves.
 //
 // unstable_cache is a Next server-runtime API - passthrough under vitest, as in this directory's other loader suites.
 // Real Postgres required; skipped without DATABASE_URL.
@@ -66,11 +68,11 @@ async function seed(o: { divisionStatus?: "active" | "setup" } = {}): Promise<Se
   return { orgId, orgSlug, compSlug, divSlug, divisionId, fixtureIds: fixtureIds as [string, string], connectionId: c.connectionId };
 }
 
-async function completeBroadcast(s: Seeded, fixtureId: string, completedAt: Date, startedAt?: Date): Promise<string> {
+async function completeBroadcast(s: Seeded, fixtureId: string, completedAt: Date, startedAt?: Date, privacy: "unlisted" | "public" | "private" = "unlisted"): Promise<string> {
   const ytId = vid();
   await sql`
     insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at, created_at)
-    values (${s.orgId}, ${s.connectionId}, ${fixtureId}, ${ytId}, 'Match', 'unlisted', 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
+    values (${s.orgId}, ${s.connectionId}, ${fixtureId}, ${ytId}, 'Match', ${privacy}, 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
   return ytId;
 }
 
@@ -131,5 +133,39 @@ describe.skipIf(!HAS_DB)("getPublicFixture carries the fixture's replay parts (T
     await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state)
               values (${s.orgId}, ${s.connectionId}, ${f}, ${vid()}, 'Match', 'unlisted', 'live')`;
     expect((await load(s, f))!.parts).toEqual([]);
+  });
+
+  // ---- private on YouTube (owner ruling A, 2026-10-28) ---------------------------------------------------------------------
+  it("a PRIVATE broadcast is not a public part (the empty case: private only, so the loader carries none) - while unlisted and public ones are, on the same fixture shape", async () => {
+    const s = await seed();
+    seeded.push(s.orgId);
+    const [f1, f2] = s.fixtureIds;
+    await completeBroadcast(s, f1, at("10:00"), at("09:00"), "private");
+    expect((await load(s, f1))!.parts, "private only: nothing public").toEqual([]);
+
+    // Positive pair: the same shape with each of the other two privacies IS a part (so the silence above is the filter, not the seed).
+    const unlisted = await completeBroadcast(s, f2, at("10:00"), at("09:00"), "unlisted");
+    expect((await load(s, f2))!.parts).toEqual([{ partNo: 1, url: youtubeWatchUrl(unlisted) }]);
+    const g = await seed();
+    seeded.push(g.orgId);
+    const open = await completeBroadcast(g, g.fixtureIds[0], at("10:00"), at("09:00"), "public");
+    expect((await load(g, g.fixtureIds[0]))!.parts).toEqual([{ partNo: 1, url: youtubeWatchUrl(open) }]);
+  });
+
+  it("MIXED privacy: Part 1 unlisted + Part 2 private lists ONE part (number 1); Part 1 private + Part 2 unlisted lists the unlisted one as number 1 - the public numbers only what it shows", async () => {
+    const s = await seed();
+    seeded.push(s.orgId);
+    const [f1, f2] = s.fixtureIds;
+    const visibleFirst = await completeBroadcast(s, f1, at("10:00"), at("09:00"), "unlisted");
+    await completeBroadcast(s, f1, at("12:00"), at("11:00"), "private");
+    expect((await load(s, f1))!.parts, "the private Part 2 is not listed").toEqual([{ partNo: 1, url: youtubeWatchUrl(visibleFirst) }]);
+
+    await completeBroadcast(s, f2, at("10:00"), at("09:00"), "private");
+    const visibleSecond = await completeBroadcast(s, f2, at("12:00"), at("11:00"), "unlisted");
+    expect((await load(s, f2))!.parts, "the private Part 1 is skipped; the next one is the first the public sees").toEqual([{ partNo: 1, url: youtubeWatchUrl(visibleSecond) }]);
+    // Two visible around a private one: consecutive numbers (no gap where the private one was).
+    const third = await completeBroadcast(s, f2, at("14:00"), at("13:00"), "public");
+    expect((await load(s, f2))!.parts.map((p) => p.partNo), "no gap where the private part was").toEqual([1, 2]);
+    expect((await load(s, f2))!.parts[1]!.url).toBe(youtubeWatchUrl(third));
   });
 });

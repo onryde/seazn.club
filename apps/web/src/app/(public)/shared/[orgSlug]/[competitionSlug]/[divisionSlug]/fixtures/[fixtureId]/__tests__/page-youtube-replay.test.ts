@@ -13,7 +13,9 @@
 //   - a stream_url that IS Part 1 (what the end step writes): shown once, in the player, never again as the pill;
 //   - a club's own, different stream_url: still renders, beside the player;
 //   - a division still in setup: nothing (neither the parts nor the link leave an unreleased division);
-//   - a cancelled fixture: nothing, whatever is stored.
+//   - a cancelled fixture: nothing, whatever is stored;
+//   - a broadcast that is PRIVATE on YouTube (owner ruling 2026-10-28, option A): neither a player nor a pill (it would be a dead tap
+//     and "This video is private"); beside a visible part it is simply not there, and the visible one is "the replay", unlabelled.
 // Real Postgres required; skipped without DATABASE_URL.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { randomBytes, randomUUID } from "node:crypto";
@@ -74,11 +76,11 @@ async function seed(o: { divisionStatus?: "active" | "setup"; locale?: string } 
   return { orgId, orgSlug, compSlug, divSlug, fixtureId, divisionId, connectionId: c.connectionId };
 }
 
-async function completeBroadcast(s: Seeded, completedAt: Date, startedAt?: Date): Promise<string> {
+async function completeBroadcast(s: Seeded, completedAt: Date, startedAt?: Date, privacy: "unlisted" | "public" | "private" = "unlisted"): Promise<string> {
   const ytId = vid();
   await sql`
     insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at, created_at)
-    values (${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${ytId}, 'Match', 'unlisted', 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
+    values (${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${ytId}, 'Match', ${privacy}, 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
   return ytId;
 }
 const setFixture = (s: Seeded, status: string, streamUrl: string | null) =>
@@ -261,5 +263,45 @@ describe.skipIf(!HAS_DB)("the public match page shows the match's YouTube replay
     await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state)
               values (${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${vid()}, 'Match', 'unlisted', 'live')`;
     expect(await pageHtml(s)).not.toContain("replay-embed");
+  });
+
+  it("a PRIVATE channel's replay is hidden from the public page: no player, no pill, none of its address - the twin with an unlisted broadcast renders the player", async () => {
+    const s = await open();
+    await setFixture(s, "decided", null);   // the end step writes no link for a private broadcast, so the fixture holds none
+    const secret = await completeBroadcast(s, at("10:00"), at("09:00"), "private");
+    const html = await pageHtml(s);
+    expect(html).not.toContain("replay-embed");
+    expect(html).not.toContain("replay-facade");
+    expect(html).not.toContain("public-stream-link");
+    expect(html, "its video id is nowhere in the page").not.toContain(secret);
+    // Positive pair: the same fixture, once an unlisted broadcast completes, shows a player for THAT one (so the silence above is a fact).
+    const visible = await completeBroadcast(s, at("12:00"), at("11:00"), "unlisted");
+    const after = await pageHtml(s);
+    expect(after).toContain('data-testid="replay-embed"');
+    expect(after).toContain(`src="https://i.ytimg.com/vi/${visible}/hqdefault.jpg"`);
+    expect(after, "the private one is still not on the page").not.toContain(secret);
+  });
+
+  it("MIXED: Part 1 unlisted + Part 2 private shows the one visible replay with NO 'Part 1' label and no tab rail; a club's own link beside a private-only match still renders", async () => {
+    const s = await open();
+    await setFixture(s, "decided", null);
+    const visible = await completeBroadcast(s, at("10:00"), at("09:00"), "unlisted");
+    const hidden = await completeBroadcast(s, at("12:00"), at("11:00"), "private");
+    const html = await pageHtml(s);
+    expect([...html.matchAll(/data-testid="replay-embed"/g)], "exactly one player").toHaveLength(1);
+    expect(player(html)).not.toContain('role="tablist"');
+    expect(html).not.toMatch(/\bPart [0-9]/);
+    expect(openLinks(html)).toHaveLength(1);
+    expect(openLinks(html)[0]).toContain(`href="${youtubeWatchUrl(visible)}"`);
+    expect(html).not.toContain(hidden);
+
+    // A club's own link on a match whose only broadcast is private: the pill is the club's own and renders; nothing of YouTube does.
+    const t = await open();
+    await setFixture(t, "decided", TWITCH);
+    const hiddenOnly = await completeBroadcast(t, at("10:00"), at("09:00"), "private");
+    const onlyOwn = await pageHtml(t);
+    expect(pill(onlyOwn)).toContain(`href="${TWITCH}"`);
+    expect(onlyOwn).not.toContain("replay-embed");
+    expect(onlyOwn).not.toContain(hiddenOnly);
   });
 });

@@ -28,6 +28,14 @@ alter table youtube_broadcasts
 -- part is a stretch of the match, so it is numbered in the order the stretches STARTED: the broadcast row's created_at (the row is
 -- made when Go live admits the start; a restart makes a later row), ties broken by id so the numbering is stable.
 --
+-- A broadcast that is PRIVATE on YouTube is not a part the public can see (owner ruling 2026-10-28, option A): its facade would be a
+-- dead tap and its link "This video is private". The filter is the BROADCAST ROW's own `privacy` (stored when Go live made it), never
+-- the channel's current default, so a channel switched to private later does not hide an unlisted match and one switched to unlisted
+-- does not publish a private one. The numbering runs over the rows that remain (the filter is in the WHERE, ahead of the window), so
+-- the public numbers what it shows: Part 1 unlisted + Part 2 private is ONE part, number 1, and the match page labels none. The
+-- organiser's own read (server/youtube/parts.ts `fixtureReplayParts`) does not use this view: it lists every complete broadcast,
+-- private ones marked, and its numbers may therefore differ from the public's when privacies mix.
+--
 -- V479 is merged, so its view is replaced here, never edited. This V480 is not merged, so it carries the replacement: `create or
 -- replace view` keeps the columns, names, types and order exactly (fixture_id, video_id, part_no, completed_at), which is all
 -- Postgres allows a replace to do, and the grant state is untouched (the view is still not granted to app_user; V479's §7 header).
@@ -42,5 +50,6 @@ create or replace view public_fixture_youtube_parts_v as
   join divisions d    on d.id = f.division_id
   join competitions c on c.id = d.competition_id
   where b.state = 'complete'
+    and b.privacy <> 'private'
     and d.status <> 'setup'
     and c.visibility in ('public', 'unlisted');

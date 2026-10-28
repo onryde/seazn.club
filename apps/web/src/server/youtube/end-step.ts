@@ -297,16 +297,22 @@ async function rereadAfterFailure(port: YouTubePort, at: string, row: Claimed, y
  *  not it wrote - the part that just completed is on the match page's parts list either way (T16). The actor is `fillReplayUrl`'s: the
  *  last session's creator, or - when `last_session_id` was nulled by a session delete - the connection's. Best effort, and AFTER the row
  *  is complete: the parts list reads the complete rows themselves, so a link that could not be written (or a crash between the two)
- *  costs only the back-compat link, and a failure here must never leave an `ending` row holding its key for good. */
+ *  costs only the back-compat link, and a failure here must never leave an `ending` row holding its key for good. A broadcast that is
+ *  PRIVATE on YouTube writes no link at all and expires nothing: the public never shows it (public_fixture_youtube_parts_v filters it
+ *  too), so a link to it would be a pill that leads to "This video is private". */
 async function writeReplayUrl(row: Claimed, ytId: string): Promise<void> {
   try {
-    const [r] = await sql<{ actor: string }[]>`
-      select coalesce(s.created_by, c.created_by) as actor
+    const [r] = await sql<{ actor: string; privacy: string }[]>`
+      select coalesce(s.created_by, c.created_by) as actor, b.privacy
         from youtube_broadcasts b
         join org_youtube_connections c on c.id = b.connection_id and c.org_id = b.org_id
         left join fixture_stream_sessions s on s.id = b.last_session_id
        where b.id = ${row.id} and b.org_id = ${row.org_id}`;
     if (!r) return;
+    // A PRIVATE broadcast is nobody's public link (owner ruling A, 2026-10-28): a watch URL on the match page is a dead tap, "This video
+    // is private". The broadcast's OWN privacy decides (stored when Go live made it), never the channel's current default. Nothing
+    // public changed, so nothing is expired either - the organiser's panel reads the row itself.
+    if (r.privacy === "private") return;
     const actor: AuthCtx = { orgId: row.org_id, via: "session", userId: r.actor, role: "owner", keyId: null };
     await setFixtureStreamUrlIfEmpty(actor, row.fixture_id, youtubeWatchUrl(ytId));
   } catch (err) {
