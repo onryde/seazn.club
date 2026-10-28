@@ -40,7 +40,9 @@ const RULE = {
 
 type Ev = { type: string; payload?: Record<string, unknown> };
 /** Ice hockey under the iihf variant (overtime then a shoot-out). `H` is the home side, `A` the away side. The shoot-out
- *  stream is the golden corpus's recorded `default` seed 80 (H wins on the 11th round), its misconduct dropped. */
+ *  stream began as the golden corpus's recorded `default` seed 80 (H wins on the 11th attempt), its misconduct dropped;
+ *  W2e re-recorded that stream in the IIHF tie-break order, and this one keeps H the winner with A shooting first in the
+ *  tie-break (IIHF 84.4 IX). */
 const SCRIPTS: { name: string; method: string; decidedIn: "ot" | "so"; events: Ev[] }[] = [
   {
     name: "an overtime goal",
@@ -65,8 +67,9 @@ const SCRIPTS: { name: string; method: string; decidedIn: "ot" | "so"; events: E
       { type: "icehockey.period.advance", payload: { to: "FT" } },
       { type: "icehockey.period.advance", payload: { to: "FT" } },
       ...Array.from({ length: 10 }, (_, i): Ev => ({ type: "icehockey.shootout.attempt", payload: { by: i % 2 === 0 ? "H" : "A", scored: true } })),
-      { type: "icehockey.shootout.attempt", payload: { by: "H", scored: true } },
+      // W2e (IIHF 84.4 IX): A shot second in the five, so A opens the tie-break; A misses, H scores and wins the duel.
       { type: "icehockey.shootout.attempt", payload: { by: "A", scored: false } },
+      { type: "icehockey.shootout.attempt", payload: { by: "H", scored: true } },
     ],
   },
 ];

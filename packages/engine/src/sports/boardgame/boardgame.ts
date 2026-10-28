@@ -317,6 +317,27 @@ function parsePayload<T>(schema: z.ZodType<T>, payload: unknown, type: string): 
 // Result application
 // ---------------------------------------------------------------------------
 
+/**
+ * W2e BG-RS-1 (RB2B-20, D8; FIDE Laws of Chess Arts 5.1, 5.2 and 9.2 to 9.6): a result's method must agree with its winner.
+ * A method only a decisive game ends by (checkmate, resignation, time, illegal move) needs a winner, and a method only a
+ * drawn game ends by (agreement, stalemate, insufficient material, repetition, the fifty-move rule, a dead position) needs
+ * none. `adjudication` is in both lists, so an arbiter's ruling is free either way, and an absent method has nothing to
+ * contradict. `forfeit` and `double_forfeit` are in neither: the schema's own refinement judges them. The two lists are the
+ * pad's, so the write path refuses exactly what the pad never offers.
+ */
+function requireMethodAgreesWithWinner(winner: string | null, method: BoardgameMethod | undefined): void {
+  if (method === undefined) return;
+  const decisive = (DECISIVE_METHODS as readonly string[]).includes(method);
+  const drawn = (DRAWN_METHODS as readonly string[]).includes(method);
+  const contradicts = winner === null ? decisive && !drawn : drawn && !decisive;
+  if (!contradicts) return;
+  throw new EngineError(
+    "RESULT_METHOD_CONTRADICTS_WINNER",
+    "the method does not fit the result: a win needs checkmate, resignation, time, illegal move or adjudication, and a draw needs a drawing method",
+    { method, winner },
+  );
+}
+
 function decideResult(
   state: BoardgameState,
   winner: string | null,
@@ -593,7 +614,8 @@ export const BOARDGAME_EVENT_SCHEMAS: Readonly<Record<string, z.ZodTypeAny>> = {
 const BOARD_MAX = 200; // team-match board-number sentinel
 
 // Every decisive method needs a winner; every drawn/no-result method needs
-// none — `decideResult` refuses `winnerPerson` whenever winner is null, so
+// none (W2e BG-RS-1: `requireMethodAgreesWithWinner` refuses a contradiction on the write path; the web pad imports
+// these two lists rather than restating them) — `decideResult` refuses `winnerPerson` whenever winner is null, so
 // the two actions below never share a field. "adjudication" appears in BOTH:
 // an arbiter's discretionary ruling (FIDE Art. 5.2) can go either way.
 //
@@ -601,8 +623,8 @@ const BOARD_MAX = 200; // team-match board-number sentinel
 // `core.forfeit` with its reason, in chess as in the other ten sports (award, credit, stats skip and public tag alike);
 // `boardgame.result{forfeit | double_forfeit}` stays readable only for streams written before W2b, and the append
 // guard refuses it on write. The schema's method/winner refinement would also refuse a winnerless "forfeit".
-const DECISIVE_METHODS = ["checkmate", "resign", "time", "adjudication", "illegal_move"] as const;
-const DRAWN_METHODS = [
+export const DECISIVE_METHODS = ["checkmate", "resign", "time", "adjudication", "illegal_move"] as const;
+export const DRAWN_METHODS = [
   "agreement", "stalemate", "insufficient", "adjudication",
   "repetition", "fifty_move", "dead_position",
 ] as const;
@@ -911,7 +933,10 @@ export const boardgame: SportModule<BoardgameCfg, BoardgameEv, BoardgameState> =
         // `winner` omitted reads exactly like explicit `null` (see the
         // schema's own comment) — coerced once, here, so `decideResult`
         // keeps its existing `string | null` signature unchanged.
-        return decideResult(state, payload.winner ?? null, payload.method, {
+        const winner = payload.winner ?? null;
+        // W2e BG-RS-1 (RB2B-20, D8): STRICT ONLY, so a result recorded before the rule replays to what it recorded.
+        if (isStrictFold(ctx)) requireMethodAgreesWithWinner(winner, payload.method);
+        return decideResult(state, winner, payload.method, {
           ...(payload.moves === undefined ? {} : { moves: payload.moves }),
           ...(payload.winnerPerson === undefined ? {} : { winnerPerson: payload.winnerPerson }),
         });

@@ -102,7 +102,7 @@ const UNSETTABLE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     tiebreak: "forced on for every bracket stage by bracketDeciders; the organiser's decider is the tiebreakRungs list, whose EMPTY list is \"no tie-break games\" (BG-KO-1, BG-KO-3)",
   },
   carrom: {},
-  generic: { progressScore: "a pad display switch, not a result rule" },
+  generic: {},
 };
 
 /** THE RULEBOOK: spec §4.1 Q5, owner-approved (docs/superpowers/specs/2026-10-13-format-matrix-w2c-design.md:160-166),
@@ -272,6 +272,9 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     football: { shootoutAttempts: "shootout" },
     hockey: { "shootout.attempts": "shootout" },
     icehockey: { "overtime.minutes": "overtime", "shootout.attempts": "shootout" },
+    // W2e Task 7 (A1c-2, ruling 157): what a TIED super over does (repeat / boundary count / shared) is only asked while
+    // the super over is on (cricket DOMAIN.md, "Super over"; `canEndLevel` reads it under `cfg.superOver` alone).
+    cricket: { superOverStillTied: "superOver" },
   };
 
   it("every bounded key is a whole decider or the detail of one: `detailOf` names a declared decider of the same sport, and the pairs are the rulebook's (counted)", () => {
@@ -295,6 +298,71 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(bounded).toBe(deciderCount());
     expect(details).toBe(Object.values(DETAILS).reduce((n, d) => n + Object.keys(d).length, 0));
     expect(details).toBeGreaterThan(0);
+  });
+
+  // Single-sport on purpose: `superOverStillTied` is cricket's key and no other sport declares one; the all-sport population
+  // (every `detailOf` in the registry is the rulebook's pair, counted) is the sweep above.
+  it("cricket superOverStillTied is a detail of superOver", () => {
+    const cricket = sport("cricket");
+    const facts = cricket.ruleKeys!;
+    expect(facts.superOverStillTied, "premise: the key is declared").toBeDefined();
+    expect(facts.superOverStillTied!.detailOf, "held by the super over").toBe("superOver");
+    expect(facts.superOver?.decider, "the super over is a declared whole decider").toBe(true);
+    // Still a stage key (the field is per stage, never per match) and still no decider of its own: the knockout
+    // preselection and the "no decider" notice read `decider: true`, and a policy is not what settles a level match.
+    expect(facts.superOverStillTied!.scope).toBe("stage");
+    expect(facts.superOverStillTied!.decider).toBeUndefined();
+    // Positive pair, on the stage a knockout creates: the pairing moved nothing about which keys the stage carries.
+    expect(stageKeysFor(cricket, "knockout", "t20")).toContain("superOverStillTied");
+    expect(deciderKeysFor(cricket, "knockout", "t20")).toContain("superOver");
+    expect(deciderKeysFor(cricket, "knockout", "t20")).not.toContain("superOverStillTied");
+    // The negative pair: cricket's other stage keys are not details (a pairing declared too widely would hold them too).
+    const details = Object.entries(facts).filter(([, f]) => f.detailOf !== undefined).map(([k]) => k);
+    expect(details).toEqual(["superOverStillTied"]);
+    expect(Object.keys(facts).length, "the other cricket keys were walked").toBeGreaterThan(details.length);
+  });
+
+  // W2e Task 7 (controller ruling, Task 28 anti-goal 3): a detail offered where its decider cannot exist is a control that is
+  // held for ever. The oracle is the schema's own refusal (`CricketCfg` rejects a super over unless one innings a side, CK-SO-1),
+  // not the `appliesTo` under test.
+  it("cricket superOverStillTied is offered exactly on the variants that can play a super over, in every stage kind (counted)", () => {
+    const cricket = sport("cricket");
+    const offered: string[] = [];
+    const refused: string[] = [];
+    for (const [name, variant] of Object.entries(cricket.variants)) {
+      const canPlay = cricket.configSchema.safeParse({ ...variant, superOver: true }).success;
+      (canPlay ? offered : refused).push(name);
+      for (const kind of KINDS) {
+        expect(stageKeysFor(cricket, kind, name).includes("superOverStillTied"), `${name}/${kind}: the still-tied policy`).toBe(canPlay);
+        expect(deciderKeysFor(cricket, kind, name).includes("superOver"), `${name}/${kind}: the super over itself`).toBe(canPlay);
+      }
+    }
+    // Both populations are non-empty (a sweep over an empty side proves nothing), and the two formats named in CK-SO-1 are on
+    // the right sides: a two-innings test match never goes to a super over; the limited-overs formats do.
+    expect(offered.length).toBeGreaterThan(0);
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused).toContain("test");
+    for (const v of ["t20", "odi", "hundred"]) expect(offered, v).toContain(v);
+    // The division level (no variant) is never narrowed, as for every other key.
+    expect(stageKeysFor(cricket, "knockout", null)).toContain("superOverStillTied");
+  });
+
+  it("a detail is offered exactly where its decider is: no registry sport declares a detail wider than its decider (counted)", () => {
+    let details = 0;
+    let cells = 0;
+    for (const m of builtinModules)
+      for (const [key, fact] of Object.entries(m.ruleKeys ?? {})) {
+        if (fact.detailOf === undefined) continue;
+        const decider = m.ruleKeys![fact.detailOf]!;
+        details++;
+        for (const kind of [null, ...KINDS])
+          for (const variant of [null, ...Object.keys(m.variants)]) {
+            expect(ruleKeyApplies(fact, kind, variant), `${m.key}.${key} vs ${fact.detailOf} at ${String(kind)}/${String(variant)}`).toBe(ruleKeyApplies(decider, kind, variant));
+            cells++;
+          }
+      }
+    expect(details).toBe(Object.values(DETAILS).reduce((n, d) => n + Object.keys(d).length, 0));
+    expect(cells).toBeGreaterThan(details);
   });
 
   it("Q5 (rulebook): each sport's match, stage and points keys are exactly Q5's lists plus the plan's, restricted to its schema", () => {
@@ -355,7 +423,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(whole).toBeGreaterThan(0);
   });
 
-  it("appliesTo is carried by exactly carrom tieBoard and the two share-the-points abandon policies (DRAW_KINDS), chess tiebreakRungs (BRACKET_KINDS), and cricket superOver and dls (the variants the schema lets switch them on)", () => {
+  it("appliesTo is carried by exactly carrom tieBoard and the two share-the-points abandon policies (DRAW_KINDS), chess tiebreakRungs (BRACKET_KINDS), and cricket superOver, its still-tied policy and dls (the variants the schema lets switch them on)", () => {
     const ck = sport("cricket");
     const ckVariants = ck.variants as Record<string, object>;
     const variantsWhere = (on: Record<string, unknown>): string[] =>
@@ -367,10 +435,12 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
       "generic.abandonPolicy": { stageKinds: sorted(DRAW_KINDS) },
       "boardgame.tiebreakRungs": { stageKinds: sorted(BRACKET_KINDS) }, // W2c BG-KO-3: the rung list is a bracket stage's, like the tie-break it orders
       "cricket.superOver": { variants: variantsWhere({ superOver: true }) },
+      // W2e Task 7: the still-tied policy is a detail of the super over, so it is offered on the same variants and no others.
+      "cricket.superOverStillTied": { variants: variantsWhere({ superOver: true }) },
       "cricket.dls": { variants: variantsWhere({ dls: { enabled: true, edition: "standard" } }) },
     };
     // The variant axis is not degenerate: each cricket list leaves out a variant, and holds one.
-    for (const key of ["cricket.superOver", "cricket.dls"]) {
+    for (const key of ["cricket.superOver", "cricket.superOverStillTied", "cricket.dls"]) {
       expect(expected[key]!.variants!.length, key).toBeGreaterThan(0);
       expect(expected[key]!.variants!.length, key).toBeLessThan(Object.keys(ckVariants).length);
     }
@@ -390,6 +460,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     let offered = 0;
     let refused = 0;
     let narrowed = 0;
+    let narrowedDetails = 0;
     const noOnValue = new Set<string>();
     for (const m of builtinModules) {
       const presets: [string | null, Record<string, unknown>][] = Object.entries(m.variants).map(([v, p]) => [v, m.configSchema.parse(p) as Record<string, unknown>]);
@@ -418,11 +489,15 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
             }
           cells++;
         }
-        // Not over-narrowed: a key a variant list leaves out is one the schema refuses there.
+        // Not over-narrowed: a key a variant list leaves out is one the schema refuses there. A DETAIL's own value is a plain
+        // choice the schema takes anywhere (cricket's `superOverStillTied: "repeat"` parses on a test match), so what it is left out
+        // for is that its DECIDER is refused there (W2e Task 7): the oracle for a detail is the decider's.
         for (const [k, f] of Object.entries(m.ruleKeys ?? {}))
           if (variant !== null && f.appliesTo?.variants !== undefined && !f.appliesTo.variants.includes(variant)) {
-            expect(parsesOn.get(k.split(".")[0]!), `${m.key}/${variant}: ${k} left out, yet the schema accepts it`).toBe(false);
+            const oracle = (f.detailOf ?? k).split(".")[0]!;
+            expect(parsesOn.get(oracle), `${m.key}/${variant}: ${k} left out, yet the schema accepts ${oracle}`).toBe(false);
             narrowed++;
+            if (f.detailOf !== undefined) narrowedDetails++;
           }
       }
     }
@@ -430,6 +505,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(offered).toBeGreaterThan(0);
     expect(refused).toBeGreaterThan(0); // the variant axis refuses something (cricket's test match: no super over, no DLS)
     expect(narrowed).toBeGreaterThan(0);
+    expect(narrowedDetails, "a detail left out of a variant was checked against its decider").toBeGreaterThan(0);
     // Optional keys no declared cfg (and no bracket decider) gives a value: the engine names no ON state for them, and
     // any value here would be the test's own invention. Pinned, so the skip stays visible and a new one goes red.
     expect(sorted(noOnValue)).toEqual(sorted([
@@ -623,7 +699,7 @@ describe("X-SR-2 checkFixtureOverride", () => {
   const fb = sport("football");
   const tennis = sport("tennis");
   const chess = sport("boardgame");
-  const stage = { periods: { count: 3, minutes: 20 }, overtime: { kind: "sudden_death", minutes: 10, skaters: 3 }, shootout: { attempts: 5, suddenDeath: true } };
+  const stage = { periods: { count: 3, minutes: 20 }, overtime: { kind: "sudden_death", minutes: 10, skaters: 3 }, shootout: { attempts: 5 } };
 
   it("empty override: ok, nothing changed", () => {
     expect(checkFixtureOverride(ice, "knockout", null, stage, {})).toEqual({ ok: true, changed: [] });

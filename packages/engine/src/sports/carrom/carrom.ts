@@ -443,6 +443,13 @@ function applyAdjust(
   if (state.phase !== "live") wrongPhase(`adjustment not allowed in phase "${state.phase}"`);
   const side = sideOf(state, payload.entrantId);
   const { game, index } = openGame(state);
+  // W2e CA-AD-1 (SC-O9), STRICT ONLY: a delta moves a score by 1 to `gameTo` points either way, the pad's own range (padSpec);
+  // the lower bound is the schema's (a non-zero integer). It runs BEFORE the below-zero rule: an open game's score is under
+  // `gameTo`, so a deduction past the range would otherwise always read "below zero".
+  if (strict && Math.abs(payload.delta) > state.cfg.gameTo) {
+    const data = { delta: payload.delta, gameTo: state.cfg.gameTo };
+    throw new EngineError("ADJUST_OUT_OF_RANGE", "an adjustment moves a score by at most the points needed to win the game", data);
+  }
   const raw = game.score[side] + payload.delta;
   // STRICT ONLY (§3.3 seam). The running score this delta is applied to is a
   // PROJECTION of cfg — flipping `queenFollowsBoard` or lowering `queenCapAt`

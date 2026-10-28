@@ -88,7 +88,7 @@ is initialised with.
 | Abandonment | all | n/a | `core.abandon`, `Cfg.abandonPolicy` → `State.replayFlagged`, `summary.detail.abandoned` | modelled | `replay` leaves the fixture undecided; `award` decides for the leader (level ⇒ `no_result`). |
 | Forfeit / walkover | all | entrant | `core.forfeit`, `Cfg.awardScore` | modelled | Awards the configured score to the opponent. |
 | Kick from the penalty mark, and whether it scored | all, in knockout stages | kicker `person` | `Ev.FootballShootoutKick` → `State.shootout.kicks[]` | modelled | Kicker must be on the pitch; shootout kicks never touch `State.goals`. |
-| Shootout order and alternation | as above | entrant | `expectedKicker()` in `sports/period/shootout.ts` | modelled | Out-of-turn kicks are rejected. |
+| Shootout order and alternation | as above | entrant | `expectedKicker(kicks, "ifab", attempts)` in `sports/period/shootout.ts` | modelled | Out-of-turn kicks are rejected. The first five's order continues for every pair (the `"ifab"` order; hockey and ice hockey take their federations' own since W2e). |
 | Shootout early decision and sudden death | as above | entrant | `shootoutDecision()` | modelled | Best-of-five with early decision once the lead exceeds the opponent's remaining kicks, then sudden-death pairs. |
 | Which side takes the first kick | as above | entrant | the `by` of the first recorded kick | modelled | The recorded order *is* the coin-toss result; no separate field needed. |
 | Keeper facing a shootout kick, and how a kick missed | as above | keeper | — | deferred | Niche even in an elite match record, and the wrong fidelity for tiers 0–3. |

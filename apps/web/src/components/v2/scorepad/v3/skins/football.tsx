@@ -53,7 +53,7 @@ import type { FidelityBand } from "@seazn/engine/sport";
 // `import { eligibleBowlers, nextBattingSide, reviewsRemaining } from
 // "@seazn/engine/sports/cricket"`.
 import type { SquadState } from "@seazn/engine/core";
-import { expectedKicker, shootoutTally, type ShootoutKick } from "@seazn/engine/sports/football";
+import { footballNextKicker, shootoutTally, type ShootoutKick } from "@seazn/engine/sports/football";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import type { SportTone } from "../sport-theme";
@@ -237,7 +237,7 @@ interface FootballStateShape {
   asOf?: GameTimeShape;
   /** R3.5 — `football.ts`'s own `State.shootout`. `kicks` typed as the SHARED
    *  `ShootoutKick[]` (not a hand-mirrored `{side;scored}[]`), so this file
-   *  can never drift from what `expectedKicker`/`shootoutTally` themselves
+   *  can never drift from what `footballNextKicker`/`shootoutTally` themselves
    *  accept. `null` before the phase reaches SHOOTOUT; `{kicks: []}` from
    *  the moment it does, even before the first kick — the engine sets it in
    *  the same step it sets `phase: "SHOOTOUT"` (football.ts's
@@ -546,12 +546,12 @@ export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
  * gate `phaseAllows("football.shootout.kick", …)` already applies to the
  * tile — a stray `state.shootout` object must not resurrect the cue once the
  * match has moved on, e.g. to `done`), and at zero kicks, where
- * `expectedKicker` returning `null` is a REAL answer (either side may start)
+ * `footballNextKicker` returning `null` is a REAL answer (either side may start)
  * rather than a missing one.
  *
  * Feeds BOTH surfaces this ruling touches from ONE computation: the
  * `buildScorebug` LED strip item below, and `buildTiles`' disabled-tile
- * gate (which reads `expectedKicker` directly, since it has no `t` to
+ * gate (which reads `footballNextKicker` directly, since it has no `t` to
  * resolve text with).
  *
  * Why this exists at all, beyond convenience: `applyShootoutKick` hard-
@@ -563,7 +563,7 @@ export function resolvePhase(view: Pick<PadHostView, "state">): PadPhase {
 export function kickerCue(rawState: unknown, t: TFn): string | undefined {
   const s = asState(rawState);
   if (readPhase(s) !== "SHOOTOUT" || !s.shootout) return undefined;
-  const next = expectedKicker(s.shootout.kicks);
+  const next = footballNextKicker(s.shootout.kicks);
   return next === null ? undefined : t(SIDE_LABEL[next]);
 }
 
@@ -616,7 +616,7 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
     strip.push({ id: "clock", label: t("scorepad.skin.football.header.clock"), value: clock, tone: "led" });
   }
   // R3.5/Task F — whose kick is next, the engine's own alternation rule
-  // (`expectedKicker`) surfaced BEFORE the refusal rather than explaining it
+  // (`footballNextKicker`) surfaced BEFORE the refusal rather than explaining it
   // after. `kickerCue` returns `undefined` at zero kicks (either side may
   // start — a real answer) and outside SHOOTOUT entirely, so this item is
   // simply never pushed in either case, the same "honest when there is
@@ -798,7 +798,7 @@ export function buildTiles(view: PadHostView): TileSpec[] {
   // the fold could hold, and "whose side kicks next" is not a person fact.
   // The LED cue is the mechanism that actually reaches the scorer here.)
   if (offerable("football.shootout.kick")) {
-    const next = state.shootout ? expectedKicker(state.shootout.kicks) : null;
+    const next = state.shootout ? footballNextKicker(state.shootout.kicks) : null;
     for (const side of SIDES) {
       tiles.push({
         id: kickSheetKey(side),

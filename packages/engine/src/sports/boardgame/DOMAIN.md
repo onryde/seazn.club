@@ -29,7 +29,7 @@ Schema-path prefixes: `Ev.` = an event payload branch, `Cfg.` = config,
 | Points 1 / ½ / 0 as exact integers | all | entrant | `Cfg.scoring.{win,draw,loss}` (half-points ×2) | modelled | keeps Buchholz/SB integer arithmetic exact |
 | Ended by checkmate / resignation / flag fall / agreement / stalemate / insufficient material | all | entrant | `Ev.BoardgameResult.method` | modelled | pre-existing vocabulary |
 | Ended by default (no-show) or double default | all | entrant | `core.forfeit`, `method: "double_forfeit"` | modelled | double default folds to `no_result`, 0–0 |
-| Ended by adjudication | all | entrant | `method: "adjudication"` | modelled | |
+| Ended by adjudication | all | entrant | `method: "adjudication"` | modelled | the one method both lists hold: accepted with or without a winner. Every other method must agree with its winner (BG-RS-1, RB2B-20): a decisive one needs a winner, a drawing one needs none, and the strict write path refuses a contradiction `RESULT_METHOD_CONTRADICTS_WINNER` |
 | Draw by threefold / fivefold repetition (Art. 9.2, 9.6.1) | all | entrant | `Ev.BoardgameResult.method = "repetition"` | extended | new enum member; folds to `State.method` and `summary.detail.method` |
 | Draw by the 50-move claim / 75-move rule (Art. 9.3, 9.6.2) | all | entrant | `method = "fifty_move"` | extended | new enum member, same fold |
 | Draw by dead position (Art. 5.2.2) | all | entrant | `method = "dead_position"` | extended | deliberately distinct from `insufficient`, which is the flag-fall material rule (Art. 6.9) |

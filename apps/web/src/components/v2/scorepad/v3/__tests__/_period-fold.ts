@@ -196,9 +196,9 @@ export function shootoutCfgOf(module: AnySportModule): { variant: string; cfg: u
  * sides scored in play, which the shoot-out must NOT move. Attempts alternate
  * by asking the kernel whose turn it is (`expectedKicker`, via the summary),
  * home scoring and away missing, until the kernel itself leaves the SHOOTOUT
- * phase. Nothing here decides how many attempts that takes: `attempts` and
- * `suddenDeath` are the cfg's, and best-of-five with an early clinch ends at
- * three apiece.
+ * phase. Nothing here decides how many attempts that takes: `attempts` is
+ * the cfg's (W2e deleted the never-read `suddenDeath`), the order is the
+ * federation's, and best-of-five with an early clinch ends at three apiece.
  */
 export function decidedShootout(
   module: AnySportModule,

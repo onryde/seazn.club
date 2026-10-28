@@ -140,9 +140,10 @@ export const hockey = makePeriodModule({
   variants: {
     "fih-outdoor": {},
     // Pro-League style: a shoot-out settles drawn matches, SO win worth a
-    // bonus point (App 12: 5 attempts, 8 s each, then sudden death).
+    // bonus point (App 12: 5 attempts, 8 s each, then further series of five, each decided as soon as one side leads
+    // after equal numbers; HK-SO-1 below for who opens each series).
     "fih-shootout": {
-      shootout: { attempts: 5, suddenDeath: true, clockSeconds: 8 },
+      shootout: { attempts: 5, clockSeconds: 8 },
       // W2d (B2, HK-PT-2): the shoot-out is a draw on the table plus a bonus point to its winner (2/1, booked D).
       points: { win: 3, draw: 1, loss: 0, soBonus: 1 },
       // HK-AB-2 (W2c, H-15): the FIH tournament rule - an abandon replays until the 4th quarter has started, then the
@@ -244,6 +245,9 @@ export const hockey = makePeriodModule({
   // W2d (B2, X-PT-4) — an FIH table books a shoot-out as a draw plus a bonus point; HK-TB-1 — FIH "matches won"
   // counts regulation wins only.
   shootoutAs: "draw_plus_bonus",
+  // W2e (HK-SO-1, RB2B-10) — FIH GTR App 12 §20c/§21b: the side that opened a series of five defends the first attempt
+  // of the next, and the opener alternates for every series.
+  shootoutOrder: "fih-series",
   winsCount: "regulation",
   playerStats,
   // SPEC-1 — FIH card grades the discipline rules editor may accumulate/ban on.

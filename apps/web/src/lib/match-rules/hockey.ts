@@ -25,9 +25,9 @@ export const HOCKEY_RULES: RuleField[] = [
     build: (v, values) =>
       v === "on"
         ? {
+            // W2e (D4): no `suddenDeath`; it was declared and never read, and the engine no longer has it.
             shootout: {
               attempts: Number(values.shootoutAttempts || 5),
-              suddenDeath: true,
               clockSeconds: 8,
             },
           }

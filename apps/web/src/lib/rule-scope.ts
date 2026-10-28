@@ -78,7 +78,7 @@ export function buildFragment(
   for (const f of fields) {
     const v = values[f.key];
     if (v === undefined || v === "") continue;
-    const built = f.build(v, values);
+    const built = f.build(v, values, stageResolved);
     for (const key of f.edits) {
       const path = key.split(".");
       const leaf = Object.keys(built).length > 0 ? path.reduce<unknown>((o, k) => (isObj(o) ? o[k] : undefined), built) : Number(v);

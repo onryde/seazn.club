@@ -757,12 +757,15 @@ export interface RuleKeyFact {
    *  `shorter` bound: the bound compares a match's value against it instead of reading the missing key as "off" (fix
    *  round 1, ruling). Pinned to the engine's own constant by the module's test. Absent = a missing key is off. */
   readonly whenAbsent?: number;
-  /** A bounded DETAIL of a decider, not a decider itself: the key of the decider it only means something under (the kicks
-   *  of a shoot-out under `shootout`, the minutes of an overtime under `overtime`). Declared, not inferred from the key's
+  /** A DETAIL of a decider, not a decider itself: the key of the decider it only means something under (the kicks of a
+   *  shoot-out under `shootout`, the minutes of an overtime under `overtime`: bounded lengths; or a policy, cricket's
+   *  `superOverStillTied` under `superOver`: what a tied super over does). Declared, not inferred from the key's
    *  spelling: football's `shootoutAttempts` is a flat key beside its decider, the period kernel's are dotted paths
    *  beneath theirs. The stage editor reads it to hold such a field while its decider is off, and to place it with the
-   *  deciders; the sweep in `rule-keys.test.ts` fails a bounded key that is neither a decider nor a detail of one, and a
-   *  `detailOf` that names a key which is not a declared decider. */
+   *  deciders; a detail must also be OFFERED exactly where its decider is (the same `appliesTo`), or the editor lists a
+   *  field that can never be enabled. The sweeps in `rule-keys.test.ts` fail a bounded key that is neither a decider nor a
+   *  detail of one, a `detailOf` that names a key which is not a declared decider, and a detail whose `appliesTo` differs
+   *  from its decider's. */
   readonly detailOf?: string;
   /** A WHOLE decider: the key that, on, settles a level match (extra time, penalties, overtime, the shoot-out, the
    *  super over, chess tie-break games, carrom's tie board). The knockout preselection reads it through

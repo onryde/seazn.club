@@ -108,6 +108,26 @@ export const EngineErrorCode = z.enum([
   // set (3-all goes to the tie-break). The WRITE path's refusal only: a summary recorded before W2e still folds as recorded.
   // data: { home, away, rules }. Appended last, existing order frozen.
   "SET_SCORE_UNREACHABLE",
+  // W2e T6 (CK-CH-1, RB2A-22, SC-C4): a coarse cricket chase total past the winning run (above target − 1 + 7: a no-ball
+  // hit for six off the last needed run). The WRITE path's refusal only (`sports/cricket/cricket.ts` applySummary): a ledger
+  // that already holds one still folds to its recorded result. Named, because the scorer sees it. data.target and data.max
+  // give the target and the largest total it allows; they are ENGINE-SIDE only, on the thrown error:
+  // api-v1 forwards just the code and the message for this code (`v1()` in server/api-v1/http.ts builds no `extra` for
+  // it). Appended last, existing order frozen.
+  "CHASE_OVERSHOOT",
+  // W2e T10 (BG-RS-1, RB2B-20): a board-game `boardgame.result` whose method contradicts its winner: a method only a decisive
+  // game ends by (checkmate, resignation, time, illegal move) with no winner, or one only a drawn game ends by (agreement,
+  // stalemate, insufficient material, repetition, the fifty-move rule, a dead position) with one. The WRITE path's refusal
+  // only (`sports/boardgame/boardgame.ts` requireMethodAgreesWithWinner): a ledger that already holds one still folds to its
+  // recorded result. Named, because the scorer sees it. data.method and data.winner are what was sent. Appended last,
+  // existing order frozen.
+  "RESULT_METHOD_CONTRADICTS_WINNER",
+  // W2e T11 (CA-AD-1, SC-O9): a carrom `carrom.game.adjust` that moves a side's score by more than the match's `gameTo` (the
+  // pad offers 1 to gameTo points either way). The WRITE path's refusal only (`sports/carrom/carrom.ts` applyAdjust): a ledger
+  // that already holds one still folds to its recorded result. A delta of 0 is the event schema's own refusal (INVALID_EVENT).
+  // Named, because the scorer sees it. data.delta and data.gameTo are what was sent and the bound it was judged against.
+  // Appended last, existing order frozen.
+  "ADJUST_OUT_OF_RANGE",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 

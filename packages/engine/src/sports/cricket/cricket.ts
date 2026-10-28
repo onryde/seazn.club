@@ -810,6 +810,14 @@ export function chaseTarget(state: CricketState): number {
   return aggregate(state, opponent(chaseSide)) - own + 1;
 }
 
+// W2e T6 (CK-CH-1, RB2A-22): a chase ends AT the winning run and a boundary counts in full (ICC PC 16.5.1/16.5.3, Law
+// 16.5), so from one run short the most one delivery adds is a no-ball (1) hit for six (6). A chase total above
+// target − 1 + 7 cannot have happened. Read with the chase innings already open: its DLS target is set when it opens.
+const WINNING_BALL_MAX_RUNS = 7;
+function chaseMaxRuns(state: CricketState): number {
+  return chaseTarget(state) - 1 + WINNING_BALL_MAX_RUNS;
+}
+
 function openInnings(state: CricketState): { innings: InningsState; index: number } | null {
   const index = state.innings.length - 1;
   const innings = state.innings[index];
@@ -1155,6 +1163,34 @@ const CRICKET_FORFEIT_PHASE: Record<CricketState["phase"], ForfeitPhase> = {
   final: "over",
 };
 
+// The DLS par of the open chase when play ends (spec §2.3), or null when the chase cannot be decided by DLS: no open
+// chase, DLS off, no quota, or fewer than the minimum overs faced. The ONE authority for both readers: `applyAbandon`
+// decides the result by it, and the NRR credit (CK-RR-1, ICC 16.10.7, `nrrCredits`) credits Team 1 with it. The abandon
+// changes none of its inputs, so the decided state answers as the state it was decided from.
+function dlsAbandonmentPar(state: CricketState): { chase: InningsState; par: number } | null {
+  const open = openInnings(state);
+  const chase = open !== null && isChaseIndex(state, open.index) ? open.innings : null;
+  const minBalls = state.cfg.minOversForResult * state.cfg.ballsPerOver;
+  if (
+    chase === null ||
+    !state.cfg.dls.enabled ||
+    state.quota === null ||
+    chase.legalBalls < minBalls ||
+    state.r1 === null ||
+    state.r2 === null ||
+    chase.ballsLimit === null
+  ) {
+    return null;
+  }
+  const s1 = (state.innings[0] as InningsState).runs;
+  const remaining = resourcesFromBalls(
+    chase.ballsLimit - chase.legalBalls,
+    chase.wickets,
+    allOutWickets(state, chase.battingSide),
+  );
+  return { chase, par: dlsPar(s1, state.r1, state.r2, state.r2 - remaining) };
+}
+
 // core.abandon — spec §2.3: no_result below the minimum, DLS par decision
 // beyond it (method 'dls'); 2-innings matches are drawn.
 function applyAbandon(state: CricketState): CricketState {
@@ -1166,25 +1202,9 @@ function applyAbandon(state: CricketState): CricketState {
     // Main match already tied; the abandoned decider leaves the tie standing.
     return { ...state, phase: "done", outcome: { kind: "tie" }, margin: null };
   }
-  const open = openInnings(state);
-  const chase = open !== null && isChaseIndex(state, open.index) ? open.innings : null;
-  const minBalls = state.cfg.minOversForResult * state.cfg.ballsPerOver;
-  if (
-    chase !== null &&
-    state.cfg.dls.enabled &&
-    state.quota !== null &&
-    chase.legalBalls >= minBalls &&
-    state.r1 !== null &&
-    state.r2 !== null &&
-    chase.ballsLimit !== null
-  ) {
-    const s1 = (state.innings[0] as InningsState).runs;
-    const remaining = resourcesFromBalls(
-      chase.ballsLimit - chase.legalBalls,
-      chase.wickets,
-      allOutWickets(state, chase.battingSide),
-    );
-    const par = dlsPar(s1, state.r1, state.r2, state.r2 - remaining);
+  const decided = dlsAbandonmentPar(state);
+  if (decided !== null) {
+    const { chase, par } = decided;
     if (chase.runs > par) {
       const runs = chase.runs - par;
       return decideWin(state, chase.battingSide, "dls", { kind: "runs", value: runs });
@@ -1203,6 +1223,24 @@ function applyAbandon(state: CricketState): CricketState {
 // ---------------------------------------------------------------------------
 
 const BOWLER_CREDITED_KINDS = new Set(["bowled", "caught", "lbw", "stumped", "hitwicket"]);
+
+type WicketKind = z.infer<typeof CricketWicket>["kind"];
+
+/** W2e T8b (CK-NB-1, D8) — the modes of dismissal that stand off a no ball. ICC Men's T20 World Cup 2026 Playing
+ *  Conditions 21.18 (MCC Law 21.18 alike): "When No ball has been called, neither batter shall be out under any of the
+ *  Playing Conditions except clause 34 (Hit the ball twice), clause 37 (Obstructing the field) or clause 38 (Run out)." */
+const NO_BALL_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["hitballtwice", "obstructed", "runout"]);
+
+/** W2e T8b (CK-WD-1, D8) — the modes of dismissal that stand off a wide. ICC Men's T20 World Cup 2026 Playing Conditions
+ *  22.9: "When Wide ball has been called, neither batter shall be out under any of the Playing Conditions except clause 35
+ *  (Hit wicket), clause 37 (Obstructing the field), clause 38 (Run out) or clause 39 (Stumped)." */
+const WIDE_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["hitwicket", "obstructed", "runout", "stumped"]);
+
+/** The free hit's (spec §2.2, CK-FH-1). ICC 21.19.2 gives it the no ball's three ("only under the circumstances that apply
+ *  for a No ball"); the engine leaves hit the ball twice out, CK-FH-1's recorded deviation (W2e ruling I-2). */
+const FREE_HIT_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(
+  [...NO_BALL_DISMISSAL_KINDS].filter((kind) => kind !== "hitballtwice"),
+);
 
 // W4 — which dismissals put a fielder in the scorebook, and under which column.
 const FIELDER_CREDIT_COLUMN: Record<string, keyof FieldingCredit> = {
@@ -1494,8 +1532,18 @@ function applyDelivery(
   }
   if (payload.wicket !== undefined) {
     const wicket = payload.wicket;
-    if (fine.freeHitPending && wicket.kind !== "runout" && wicket.kind !== "obstructed") {
+    if (fine.freeHitPending && !FREE_HIT_DISMISSAL_KINDS.has(wicket.kind)) {
       invalid(`"${wicket.kind}" cannot dismiss on a free hit`);
+    }
+    // W2e T8b (CK-NB-1, ICC 21.18; CK-WD-1, ICC 22.9): off a no ball or a wide only the modes its clause names stand.
+    // STRICT ONLY: new rules over ledgers that may already hold such a ball, so a stored one keeps folding to the result
+    // it recorded (the CK-CH-1 seam). On a free hit the free-hit check above has already run (21.19.2 binds it even when
+    // the delivery is called wide).
+    if (ctx.strictFold && extras?.kind === "noball" && !NO_BALL_DISMISSAL_KINDS.has(wicket.kind)) {
+      invalid(`"${wicket.kind}" cannot dismiss on a no ball`);
+    }
+    if (ctx.strictFold && extras?.kind === "wide" && !WIDE_DISMISSAL_KINDS.has(wicket.kind)) {
+      invalid(`"${wicket.kind}" cannot dismiss on a wide`);
     }
     if (wicket.out !== striker && wicket.out !== nonStriker) {
       invalid(`"${wicket.out}" is not at the crease`);
@@ -1693,11 +1741,14 @@ function applySummary(
       got: { runs: payload.runs, wickets: payload.wickets, legalBalls: payload.legalBalls },
     });
   }
-  // THREE STRICT-ONLY CHECKS (§3.3 seam), all three cfg-derived: `allOut`
-  // follows `playersPerSide`, `ballsLimit` follows `ballsPerInnings`, and the
-  // declaration rule follows `inningsPerSide`. Lowering any of them refuses a
-  // summary the ledger already holds, on every read, with nothing to void — a
-  // T20 division re-cut to 10 overs would take every recorded innings dark.
+  // FOUR STRICT-ONLY CHECKS (§3.3 seam). The first three are cfg-derived:
+  // `allOut` follows `playersPerSide`, `ballsLimit` follows `ballsPerInnings`,
+  // and the declaration rule follows `inningsPerSide`. Lowering any of them
+  // refuses a summary the ledger already holds, on every read, with nothing to
+  // void — a T20 division re-cut to 10 overs would take every recorded innings
+  // dark. The fourth, the chase bound (CK-CH-1, below), is STATE-derived: it
+  // moves with `revisedTarget`, so a revise that lowers the target does the same
+  // to a total recorded under the old one.
   const allOut = allOutWickets(next, innings.battingSide);
   if (strict && payload.wickets > allOut) {
     invalid(`wickets exceed all-out (${allOut})`, { wickets: payload.wickets });
@@ -1710,6 +1761,16 @@ function applySummary(
   }
   if (strict && payload.declared === true && next.cfg.inningsPerSide !== 2) {
     invalid("declarations apply to two-innings matches only");
+  }
+  // W2e T6 (CK-CH-1, RB2A-22): a coarse chase total past the winning run. STRICT ONLY, for the §3.3 reason above and
+  // because the bound moves with a revised target: a ledger that already holds such a total keeps folding to the result
+  // it recorded (a summary written before W2e, or under a target a later revise lowered).
+  if (strict && isChaseIndex(next, index) && payload.runs > chaseMaxRuns(next)) {
+    throw new EngineError("CHASE_OVERSHOOT", "a chase ends at the winning run — check the total", {
+      runs: payload.runs,
+      target: chaseTarget(next),
+      max: chaseMaxRuns(next),
+    });
   }
   const updated: InningsState = {
     ...innings,
@@ -3540,6 +3601,56 @@ export function padSpec(cfg: CricketCfg): PadSpec {
   );
 }
 
+/** One innings' NRR credit: the runs its batting side is credited with, off the balls it is credited with facing. */
+interface NrrCredit {
+  battingSide: Side;
+  runs: number;
+  balls: number;
+}
+
+/**
+ * W2e T8 (CK-RR-1; RB2A-20, SC-C5; D18) — the NRR credit of each innings, per ICC Men's T20 World Cup 2026 Playing
+ * Conditions 16.10.7, for every cricket match (no config key, no freeze: D18 reverses D14). A side's runs for / balls faced
+ * are its own innings' credit, its runs against / balls bowled the opponent's (`standingsDelta` sums them).
+ * - As played: the runs, off the balls faced, except that an all-out innings counts its full allocated quota (its
+ *   `ballsLimit` at close, so a revised one). A timeless innings (no quota) counts the balls faced (CK-RR-2).
+ * - "abandoned but a result is achieved under DLS": Team 1 is credited with Team 2's par score on abandonment
+ *   (`dlsAbandonmentPar`, the par the result was decided by) off the overs Team 2 faced; Team 2's innings as played.
+ * - "concluded with DLS having been applied at an earlier point" — a revised target (`targetSource`: DLS-computed or the
+ *   umpire's) or a revised chase allocation (the rule row reads "decided by DLS or with revised overs" as one): Team 1 is
+ *   credited with one run less than Team 2's final target, off the total overs allocated to Team 2; Team 2 as played.
+ * Only a one-innings match has a "Team 2 to reach the target" (a two-innings match cannot be revised, and is drawn on
+ * abandonment). A chase still open has a result only from an abandonment; one the par did not decide (unreachable from the
+ * fold) is credited as played. The super over is never here: it is not in `state.innings`.
+ */
+function nrrCredits(state: CricketState): NrrCredit[] {
+  const credited = (innings: InningsState): number =>
+    innings.ballsLimit !== null && innings.wickets >= allOutWickets(state, innings.battingSide)
+      ? innings.ballsLimit
+      : innings.legalBalls;
+  const played = state.innings.map((innings) => ({
+    battingSide: innings.battingSide,
+    runs: innings.runs,
+    balls: credited(innings),
+  }));
+  const [team1, chase] = state.innings;
+  if (state.cfg.inningsPerSide !== 1 || team1 === undefined || chase === undefined) return played;
+  if (!chase.closed) {
+    const decided = dlsAbandonmentPar(state);
+    if (decided === null) return played;
+    return [
+      { battingSide: team1.battingSide, runs: decided.par, balls: chase.legalBalls },
+      { battingSide: chase.battingSide, runs: chase.runs, balls: chase.legalBalls },
+    ];
+  }
+  const revised = state.targetSource !== null || chase.ballsLimit !== state.cfg.ballsPerInnings;
+  if (!revised || chase.ballsLimit === null) return played;
+  return [
+    { battingSide: team1.battingSide, runs: chaseTarget(state) - 1, balls: chase.ballsLimit },
+    { battingSide: chase.battingSide, runs: chase.runs, balls: credited(chase) },
+  ];
+}
+
 /** Cricket's ledger keys (`cricket.metrics`); the first five are the NRR operands and the run difference. */
 const CRICKET_LEDGER_KEYS = ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff", "run_diff", "ties", "no_results"] as const;
 const CRICKET_NRR_KEYS = ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff", "run_diff"] as const;
@@ -3620,7 +3731,11 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     ballsPerInnings: { scope: "match" },
     maxOversPerBowler: { scope: "match" },
     superOver: SUPER_OVER_KEY,
-    superOverStillTied: { scope: "stage" },
+    // CK-SO-1 / ruling 157 (W2e Task 7) — what a TIED super over does is only asked while the super over is on: the stage
+    // editor holds the field while `superOver` is off (`detailOf`), and it is offered only on the variants that can play a
+    // super over at all (`SUPER_OVER_KEY.appliesTo`: a two-innings test match has none, so the field would be held for
+    // ever), so it is never a control that does nothing.
+    superOverStillTied: { scope: "stage", detailOf: "superOver", appliesTo: SUPER_OVER_KEY.appliesTo },
     dls: { scope: "stage", appliesTo: { variants: ["t20", "odi", "hundred"] } },
     minOversForResult: { scope: "stage" },
     playersPerSide: { scope: "stage" },
@@ -3915,27 +4030,22 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   // spec §2.4/§2.6 — integer NRR ledger; NRR itself is computed at rank time
   // from these integers (never stored as a float).
   standingsDelta(outcome, cfg, _ctx: StageCtx, state): [StandingsDelta, StandingsDelta] {
-    const allOutFor = (side: Side) => allOutWickets(state, side);
-    // spec §2.4 — a bowled-out side is charged its full quota; DLS-revised
-    // matches use the revised quota (the innings' ballsLimit at close).
-    const effectiveBalls = (innings: InningsState): number => {
-      if (innings.ballsLimit !== null && innings.wickets >= allOutFor(innings.battingSide)) {
-        return innings.ballsLimit;
-      }
-      return innings.legalBalls;
-    };
+    // The played ledger, from `nrrCredits`, which holds both rules: a bowled-out side is charged its full quota (spec §2.4),
+    // and a DLS or revised-overs match credits ICC 16.10.7's operands (W2e T8, CK-RR-1). Built only for a result decided
+    // on the field (a win or a tie); a forfeit, a draw and a no result start from the zeroed ledger below.
     const ledger = (side: Side): Record<string, number> => {
+      const credits = nrrCredits(state);
       let runsFor = 0;
       let ballsFaced = 0;
       let runsAgainst = 0;
       let ballsBowled = 0;
-      for (const innings of state.innings) {
-        if (innings.battingSide === side) {
-          runsFor += innings.runs;
-          ballsFaced += effectiveBalls(innings);
+      for (const credit of credits) {
+        if (credit.battingSide === side) {
+          runsFor += credit.runs;
+          ballsFaced += credit.balls;
         } else {
-          runsAgainst += innings.runs;
-          ballsBowled += effectiveBalls(innings);
+          runsAgainst += credit.runs;
+          ballsBowled += credit.balls;
         }
       }
       return {
@@ -4166,7 +4276,12 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
             : bowledOut
               ? 1 + Math.floor(rng() * limit)
               : limit;
-        const runs = Math.floor(rng() * 220);
+        // W2e T6 (CK-CH-1) — a chase stops at the winning run's bound, read off the chase as it would open (a DLS target
+        // is set then). Clamped rather than redrawn, so it consumes no rng: a walk that never overshot is the walk it was.
+        const drawn = Math.floor(rng() * 220);
+        const runs = isChaseIndex(state, nextIndex)
+          ? Math.min(drawn, chaseMaxRuns(createInnings(state, "coarse")))
+          : drawn;
         // W4a follow-up — a coarse innings entered PROGRESSIVELY. `partial`
         // leaves the innings open (spec §2.3: the totals may only grow), which
         // is how a coarse scorer records a match while it is still being
@@ -4210,7 +4325,9 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
       const allOut = allOutWickets(state, innings.battingSide);
       const wicketRoom = allOut - innings.wickets;
       const ballRoom = innings.ballsLimit === null ? 60 : innings.ballsLimit - innings.legalBalls;
-      const runs = innings.runs + Math.floor(rng() * 120);
+      // W2e T6 (CK-CH-1) — the same clamp as the one-event branch above: no rng drawn for it.
+      const grown = innings.runs + Math.floor(rng() * 120);
+      const runs = isChaseIndex(state, open.index) ? Math.min(grown, chaseMaxRuns(state)) : grown;
       return {
         type: "cricket.innings.summary",
         payload: {

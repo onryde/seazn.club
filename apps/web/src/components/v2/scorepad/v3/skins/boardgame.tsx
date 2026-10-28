@@ -84,7 +84,15 @@
 //     `padSpec` alone.
 "use client";
 import { deciderPending, resolveVoids, type Settlement, type SettleMethod, type SquadState } from "@seazn/engine/core";
-import { ARMAGEDDON_RESULTS, boardgame, effectiveRungs, type BoardgameState, type TiebreakRung } from "@seazn/engine/sports/boardgame";
+import {
+  ARMAGEDDON_RESULTS,
+  boardgame,
+  DECISIVE_METHODS as ENGINE_DECISIVE_METHODS,
+  DRAWN_METHODS as ENGINE_DRAWN_METHODS,
+  effectiveRungs,
+  type BoardgameState,
+  type TiebreakRung,
+} from "@seazn/engine/sports/boardgame";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
@@ -141,15 +149,13 @@ function withinBand(eventType: string, band: FidelityBand): boolean {
 }
 
 /**
- * `padSpec(cfg)`'s own decisive/drawn method vocabularies, restated because
- * `boardgame.ts` keeps them module-private (`DECISIVE_METHODS`/
- * `DRAWN_METHODS`, boardgame.ts:378-385) — the same "restate, then prove
- * equal to the source of truth" posture badminton's `SANCTION_LEVELS` takes,
- * pinned equal to the real field's `values` in `__tests__/boardgame.test.ts`.
- * "adjudication" appears in both: an arbiter's discretionary ruling (FIDE
- * Art. 5.2) can go either way. Consumed by `buildDock` below: a decisive
- * half tap's dock offers exactly the first list, the draw tile's dock exactly
- * the second, never one flat list (R7-10).
+ * `padSpec(cfg)`'s own decisive/drawn method vocabularies, IMPORTED from the engine (W2e T10, BG-RS-1): the write path
+ * refuses a result whose method is in only one list against the winner it was given, so a second copy here could offer a
+ * chip the server refuses. They are the engine's exports re-typed `readonly string[]` (the dock compares them to string
+ * ids), never restated; `__tests__/boardgame.test.ts` pins them equal to the real field's `values`.
+ * "adjudication" appears in both: an arbiter's discretionary ruling (FIDE Art. 5.2) can go either way. Consumed by
+ * `buildDock` below: a decisive half tap's dock offers exactly the first list, the draw tile's dock exactly the second,
+ * never one flat list (R7-10).
  *
  * W2b (D15): no `forfeit` / `double_forfeit`. Both are retired on write for
  * EVERY writer (append-event.ts `RETIRED_ON_WRITE_SPORT_EVENTS`; the engine's
@@ -157,25 +163,11 @@ function withinBand(eventType: string, band: FidelityBand): boolean {
  * recorded through the console's forfeit dialog like every other sport's
  * (UI-1). A chip for either would be a tap the server refuses for everybody.
  */
-export const DECISIVE_METHODS: readonly string[] = [
-  "checkmate",
-  "resign",
-  "time",
-  "adjudication",
-  "illegal_move",
-];
-export const DRAWN_METHODS: readonly string[] = [
-  "agreement",
-  "stalemate",
-  "insufficient",
-  "adjudication",
-  "repetition",
-  "fifty_move",
-  "dead_position",
-];
+export const DECISIVE_METHODS: readonly string[] = ENGINE_DECISIVE_METHODS;
+export const DRAWN_METHODS: readonly string[] = ENGINE_DRAWN_METHODS;
 
-/** `boardgame.ts`'s own field sentinel (`BOARD_MAX`), restated for the
- *  identical module-private reason `DECISIVE_METHODS` above states — pinned
+/** `boardgame.ts`'s own field sentinel (`BOARD_MAX`), restated because
+ *  `boardgame.ts` keeps it module-private (unlike the two method lists above, which it exports) — pinned
  *  equal to `padSpec(cfg)`'s real field bound in the test file. (`MOVES_MAX`
  *  does not live here any more: the move count was a guided-sheet step, and
  *  tapModel S's dock is chips only — see `buildDock`'s own doc.) */

@@ -3548,7 +3548,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -3652,7 +3652,7 @@
             "dls": "on"
           },
           "overrides": {
-            "ballsPerInnings": 306,
+            "ballsPerInnings": 255,
             "maxOversPerBowler": 26,
             "dls": {
               "enabled": true,
@@ -3874,7 +3874,7 @@
             "playersPerSide": "11"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 50,
             "superOver": true,
             "playersPerSide": 11
@@ -3986,7 +3986,7 @@
             "playersPerSide": "7"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -4098,7 +4098,7 @@
             "dls": "on"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -4210,7 +4210,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -4321,7 +4321,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -4430,7 +4430,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -4541,7 +4541,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -4652,7 +4652,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -4763,7 +4763,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -4874,7 +4874,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -4985,7 +4985,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -5096,7 +5096,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -5207,7 +5207,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -5318,7 +5318,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -5429,7 +5429,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -5540,7 +5540,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -5651,7 +5651,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {
@@ -5762,7 +5762,7 @@
             "playersPerSide": "3"
           },
           "overrides": {
-            "ballsPerInnings": 600,
+            "ballsPerInnings": 500,
             "maxOversPerBowler": 1,
             "superOver": true,
             "dls": {

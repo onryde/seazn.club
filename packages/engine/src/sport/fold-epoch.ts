@@ -41,8 +41,13 @@ export const FOLD_EPOCH = Object.freeze({
   // short sets and Fast4 win it 5–4 on a deciding point) lives in tennis's non-strict `set` object, so an older phone strips it (spec E29) and folds
   // that tie-break to the match's two, while every recorded stream folded the same; the branch stream short-sets#90011 (golden-branches.ts, T13)
   // now shows the guard a margin of one. T13: a final-set tie-break plays to the match's margin, never the set's own (RBS:349); no recorded stream moved.
-  football: 3, cricket: 1, boardgame: 3, carrom: 3, generic: 3, volleyball: 1,
-  badminton: 2, tabletennis: 2, tennis: 2, icehockey: 2, hockey: 4,
+  // W2e T6 (CK-CH-1, RB2A-22) raised cricket to 2: the write path refuses a coarse chase total past target - 1 + 7 (CHASE_OVERSHOOT), and golden streams 24 and 29 recorded one, so both were re-recorded in place.
+  // W2e T9 (HK-SO-1/2, IH-SO-1/2, RB2B-10) raised hockey to 5 and icehockey to 3: the write path refuses a shoot-out attempt out of the federation's order (FIH series / IIHF tie-break) and `summary.shootoutNext` names that side, `shootout.suddenDeath` is gone from the cfg (a phone that still sends it has it stripped), and hockey streams 17, 21 and icehockey 3, 4, 12 were re-recorded in place.
+  // W2e T10 (BG-RS-1, RB2B-20) raised boardgame to 4: the write path refuses a `boardgame.result` whose method contradicts its winner (RESULT_METHOD_CONTRADICTS_WINNER), so a phone that still sends one must update. No recorded stream holds one, so no golden stream was re-recorded; replay is lenient and a stored contradiction still folds to its recorded result.
+  // W2e T11 (CA-AD-1, SC-O9) raised carrom to 4: the write path refuses a `carrom.game.adjust` that moves a score by more than the match's gameTo (ADJUST_OUT_OF_RANGE), so a phone that still sends one must update. No recorded stream holds one (13 recorded adjusts, none above 1 point), so no golden stream was re-recorded; replay is lenient and a stored out-of-range adjust still folds to its recorded result.
+  // W2e T12 (D6) raised generic to 4: the inert `progressScore` cfg key is deleted (nothing ever read it). No event folds differently, but every state embeds its config, so the 106 recorded states in 64 streams lost the key and the recorded configs were converted (the key removed as text, then REBASELINE_GOLDEN); a phone that still sends the key has it stripped on parse, and a ledger stored with it still folds to the same outcome, summary and standings delta. Removing the stored copies is Task 13b's pre-deploy data migration (W2e), not part of this change.
+  football: 3, cricket: 2, boardgame: 4, carrom: 4, generic: 4, volleyball: 1,
+  badminton: 2, tabletennis: 2, tennis: 2, icehockey: 3, hockey: 5,
 } as const satisfies Readonly<Record<string, number>>);
 export type FoldEpochSport = keyof typeof FOLD_EPOCH;
 // The same sports as FOLD_EPOCH: `satisfies` over its keys makes a sport missing here, or one only here, a type error.
@@ -50,7 +55,8 @@ export const FOLD_MINOR = Object.freeze({
   // W2d T11 (TN-TB-2, RB2A-11) raised tennis one MINOR: the nested kernel's table `gamesOf` credits a won match tie-break as one game
   // to its winner, so a stream ending in one moves its standings deltas (games_won/games_lost) and no state, outcome or summary.
   // W2e T4 reset it to 0 with tennis's second MAJOR.
-  football: 0, cricket: 0, boardgame: 0, carrom: 0, generic: 0, volleyball: 0,
+  // W2e T8 (CK-RR-1, ICC 16.10.7) raised cricket one MINOR: a DLS or revised-overs result credits Team 1 the par or the final target - 1 off Team 2's overs, so golden stream 25 (default#844) moves its NRR deltas and no state, outcome or summary.
+  football: 0, cricket: 1, boardgame: 0, carrom: 0, generic: 0, volleyball: 0,
   badminton: 0, tabletennis: 0, tennis: 0, icehockey: 0, hockey: 0,
 } as const satisfies Readonly<Record<FoldEpochSport, number>>);
 

@@ -76,12 +76,51 @@ export function shootoutDecision(
   return null;
 }
 
-// The side due to kick next, or null when either side may start.
-export function expectedKicker(kicks: readonly ShootoutKick[]): ShootoutSide | null {
+/**
+ * W2e (RB2B-10) — which side opens a pair once both have taken the same number. Every order alternates within a pair and
+ * opens the first `attempts` pairs with the side that took the first attempt; they differ after that:
+ * - `"ifab"`: football. The order the first five set continues for every pair (football/DOMAIN.md "Shootout order and
+ *   alternation").
+ * - `"fih-series"`: FIH General Tournament Regulations (Outdoor) May 2025, Appendix 12. 20c: "the team whose player took
+ *   the first shoot-out in a series defends the first shoot-out of the next series"; 21b: "the team which starts each
+ *   shoot-out series alternates for each series". A series is `attempts` pairs (five in App 12), so the opener flips at
+ *   every series boundary.
+ * - `"iihf-tiebreak"`: IIHF Official Rule Book 2026-27, Rule 84.4 IX: "The team that shot second in the first five
+ *   Penalty Shot will start first in the "tie-break shots"". No later alternation is named, so that side opens every
+ *   duel after the first `attempts` pairs.
+ * Before W2e every sport used the `"ifab"` order; the period kernel refuses an out-of-order attempt on the strict write
+ * path only, so a shoot-out stored in the old order still refolds.
+ */
+export type ShootoutOrder = "ifab" | "fih-series" | "iihf-tiebreak";
+
+/** The side due to kick next, or null when either side may start. `attempts` is the first round's length per side (the
+ *  cfg's), which is also an FIH series' length. */
+export function expectedKicker(
+  kicks: readonly ShootoutKick[],
+  order: ShootoutOrder,
+  attempts: number,
+): ShootoutSide | null {
+  // Every cfg schema holds `attempts` a positive integer; anything else would move every boundary without a sign.
+  if (!Number.isInteger(attempts) || attempts < 1) {
+    throw new RangeError(`expectedKicker: attempts must be a positive integer, got ${String(attempts)}`);
+  }
   if (kicks.length === 0) return null;
   const taken = countTaken(kicks);
-  if (taken.home === taken.away) return (kicks[0] as ShootoutKick).side;
-  return taken.home < taken.away ? "home" : "away";
+  if (taken.home !== taken.away) return taken.home < taken.away ? "home" : "away";
+  const first = (kicks[0] as ShootoutKick).side;
+  const pairs = taken.home; // completed pairs
+  switch (order) {
+    case "ifab":
+      return first;
+    case "fih-series":
+      return Math.floor(pairs / attempts) % 2 === 0 ? first : opponent(first);
+    case "iihf-tiebreak":
+      return pairs < attempts ? first : opponent(first);
+    default: {
+      const unknown: never = order;
+      throw new RangeError(`expectedKicker: unknown shoot-out order ${String(unknown)}`);
+    }
+  }
 }
 
 /** Scored tallies per side — the scorebug's "(GWS 2–1)" numbers. A void kick

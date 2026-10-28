@@ -2377,7 +2377,7 @@ function StageFormatRow({
   function openEditor() {
     // FRAGMENT, never `effective`. See the header. The fragment IN FORCE: what the last save answered while the props
     // still predate it, else the props' own.
-    const hydrated = stageFormatEditorValues(sportKey, { ...stageConfig, rules });
+    const hydrated = stageFormatEditorValues(sportKey, { ...stageConfig, rules }, divisionConfig);
     setValues(hydrated);
     setOpened(hydrated);
     setError(null);
@@ -2642,8 +2642,12 @@ function isPlainRules(value: unknown): value is Record<string, unknown> {
 export function stageFormatEditorValues(
   sportKey: string,
   stageConfig: Record<string, unknown>,
+  divisionConfig: Record<string, unknown> = {},
 ): Record<string, string> {
-  return hydrateRuleValues(sportKey, isPlainRules(stageConfig.rules) ? stageConfig.rules : {});
+  // `divisionConfig` is the fragment's `inherited`, never a source of values: it only gives a scaled field its scale (cricket's
+  // overs count in the division's over length - five on The Hundred - which a fragment that names an innings does not
+  // carry). A key the fragment omits still reads blank.
+  return hydrateRuleValues(sportKey, isPlainRules(stageConfig.rules) ? stageConfig.rules : {}, divisionConfig);
 }
 
 /**

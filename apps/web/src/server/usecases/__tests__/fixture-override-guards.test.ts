@@ -235,8 +235,8 @@ const BOUND_CASES: BoundCase[] = [
   },
   {
     sport: "hockey", variant: "fih-shootout", key: "shootout",
-    wide: { attempts: 5, suddenDeath: true, clockSeconds: 8 }, own: { attempts: 3, suddenDeath: true, clockSeconds: 8 },
-    tooShort: { attempts: 2, suddenDeath: true, clockSeconds: 8 }, fits: { attempts: 4, suddenDeath: true, clockSeconds: 8 },
+    wide: { attempts: 5, clockSeconds: 8 }, own: { attempts: 3, clockSeconds: 8 },
+    tooShort: { attempts: 2, clockSeconds: 8 }, fits: { attempts: 4, clockSeconds: 8 },
   },
 ];
 /** The refusal, with the cfg path it names (`field`, M3: the client says WHICH rule no longer fits with it). */

@@ -575,7 +575,7 @@ const fihAdapter = periodAdapter({
   //
   // §6 instead uses the shoot-out itself: a card shown there is stampable under
   // the `fih-shootout` cfg and unorderable under the plain outdoor one.
-  stale: { raw: { shootout: { attempts: 5, suddenDeath: true } }, phase: "SHOOTOUT", narrow: {} },
+  stale: { raw: { shootout: { attempts: 5 } }, phase: "SHOOTOUT", narrow: {} },
   alien: "P1",
   goalKind: "fg",
 });

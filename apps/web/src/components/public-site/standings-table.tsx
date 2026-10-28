@@ -173,7 +173,7 @@ export function StandingsTable({
   // plain cell — never a button that explains nothing. `end`: these columns
   // sit at the table's right, so the panel hangs left, inside the scroll box.
   const derivedCell = (row: StandingsRow, key: string) => {
-    const text = derivedMetricText(row, key as TiebreakerKey) ?? "—";
+    const text = derivedMetricText(row, key as TiebreakerKey, layout.ballsPerOver) ?? "—";
     const note = ratioNote(row, key, msg);
     if (note === null) return text;
     return (

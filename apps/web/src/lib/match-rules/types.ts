@@ -35,8 +35,21 @@ export interface RuleField {
    * rendered inputs jointly describe (e.g. a clock or an overtime block).
    * A field that only renders its own input and contributes nothing on its
    * own returns {} unconditionally.
+   *
+   * `inherited` (W2e Task 8c, owner D19) is the config the value falls back to - the one every caller of this directory
+   * already threads for the best-of-1 fold: the division's saved config for a stage fragment or the Settings tab, the
+   * stage's resolved cfg for a match, the variant's preset for the builder. A field whose number is a SCALED one reads the
+   * scale from it (cricket's overs count in `inherited.ballsPerOver`, five on The Hundred), and declares which keys in
+   * `context`. Absent: the field's own default, exactly as before the argument existed.
    */
-  build: (value: string, values: Record<string, string>) => Record<string, unknown>;
+  build: (value: string, values: Record<string, string>, inherited?: Record<string, unknown>) => Record<string, unknown>;
+  /**
+   * The cfg keys, beyond `edits`, that `build` and `read` convert by, taken from `inherited` (cricket's `overs`:
+   * `ballsPerOver`). Declared so a caller that knows only a variant's preset (the division builder) can hand over exactly
+   * those keys - `ruleContextFor` - and not the whole preset, which would change what the builder shows as a default or
+   * a best-of.
+   */
+  context?: readonly string[];
   /**
    * What to emit when THIS field's own raw value is BLANK. Most fields have
    * no opinion when blank — a blank `halfMinutes` leaves whatever's already
@@ -70,6 +83,10 @@ export interface RuleField {
    * that is not a regression: a `build` that writes a DIFFERENT key than
    * `field.key`, derives a scaled number, or picks among several literal
    * shapes needs an inverse as bespoke as itself, field by field.
+   *
+   * `inherited` is `build`'s: the config the value falls back to. A scaled number (cricket's overs) needs the scale of
+   * the config it is read against, and a stage's FRAGMENT does not carry it - the division's does. It supplies the SCALE
+   * only: a value the fragment does not carry still reads blank.
    */
-  read?: (config: Record<string, unknown>) => string | undefined;
+  read?: (config: Record<string, unknown>, inherited?: Record<string, unknown>) => string | undefined;
 }

@@ -27,7 +27,6 @@ const CFG: GenericCfg = {
   resultMode: "score",
   allowDraws: true,
   points: { w: 3, d: 1, l: 0 },
-  progressScore: false,
 };
 
 const CTX: StageCtx = { kind: "group" };

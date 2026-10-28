@@ -657,6 +657,12 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   ENDING_SANCTION_PENDING: "engineError.ENDING_SANCTION_PENDING",
   // W2e SC-S1 (TN-SS-1) — pad-visible: the scorer typed a set score the set's tie-break makes impossible (8–6 at 6-all).
   SET_SCORE_UNREACHABLE: "engineError.SET_SCORE_UNREACHABLE",
+  // W2e T6 (CK-CH-1, RB2A-22) — pad-visible: the over-summary sheet's total.
+  CHASE_OVERSHOOT: "engineError.CHASE_OVERSHOOT",
+  // W2e T10 (BG-RS-1, RB2B-20) — pad-visible: a board-game result tapped with a method that does not fit it.
+  RESULT_METHOD_CONTRADICTS_WINNER: "engineError.RESULT_METHOD_CONTRADICTS_WINNER",
+  // W2e T11 (CA-AD-1, SC-O9) — pad-visible: a carrom adjustment past the game target.
+  ADJUST_OUT_OF_RANGE: "engineError.ADJUST_OUT_OF_RANGE",
 };
 
 /**

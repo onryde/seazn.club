@@ -187,6 +187,9 @@ export interface QualificationViewInput {
   /** W2d T9 (P25, D11): the sport's primary table measure (`primaryTableKey`). An order that starts with it — or with
    *  `points` — decides places on a measure the view can bound; absent: "points". */
   primary?: AnySportModule["primaryTableKey"];
+  /** W2e Task 8c (CK-BO-2): the over length a net run rate in the what-if's "Now: you X, they Y" is printed per - the
+   *  loader's `ballsPerOver`, the table's own scale. Absent: the display's default. */
+  ballsPerOver?: number;
   entrantNames: Readonly<Record<string, string>>;
   msg: (key: TKey, vars?: Record<string, string | number>) => string;
   plural: (key: string, count: number, vars?: Record<string, string | number>) => string;
@@ -587,14 +590,14 @@ export function buildQualificationView(i: QualificationViewInput): Qualification
     // The average match counts only matches with a ledger (T3-⚠3).
     const ruleInAverage = ruleScoreInAverage(r, decidingKey);
     const noLedger = tableFx.filter((f) => seats(f, r.entrantId) && counted(f) && ledgerless(f, i.awardAddsToLedger, ruleInAverage, meta)).length;
-    const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly, primary });
+    const w: TieWhatIf | null = tieWhatIf({ ...r, played: r.played - noLedger }, rival, cascade, { winsOnly, primary, ballsPerOver: i.ballsPerOver });
     if (w === null) return null;
     const name = i.entrantNames[rival.entrantId] ?? rival.entrantId;
     const vars = { rival: name, rule: tieBreakRule(w.key, i.msg, r, ordered, [rival.entrantId]) };
     const assumption = i.msg("table.qual.whatIf.assumption", { rival: name });
     const rule = (): { text: string; assumption: null } => {
-      const mine = tieKeyValue(r, w.key);
-      const theirs = tieKeyValue(rival, w.key);
+      const mine = tieKeyValue(r, w.key, i.ballsPerOver);
+      const theirs = tieKeyValue(rival, w.key, i.ballsPerOver);
       return {
         text:
           mine !== null && theirs !== null

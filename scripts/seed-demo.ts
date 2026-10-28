@@ -186,7 +186,8 @@ function resultEvents(
         type: "cricket.toss",
         payload: { wonBy: fx.home, elected: "bat" },
       });
-      const chase = homeWins ? first - (5 + rnd(40)) : first + 1 + rnd(20);
+      // W2e CK-CH-1: a winning chase ends at most a no-ball six past one short (first + 7), or the API refuses it.
+      const chase = homeWins ? first - (5 + rnd(40)) : first + 1 + rnd(7);
       // Over-by-over: a few progressive innings.summary updates (engine
       // enforces monotone growth) — the same event the over-by-over pad emits
       // — then close. Stepped in quarters to keep the seed fast.

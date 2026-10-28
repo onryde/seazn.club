@@ -8,7 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SETTLE_METHODS } from "@seazn/engine/core";
-import { ARMAGEDDON_RESULTS, BoardgameMethod, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
+import { ARMAGEDDON_RESULTS, BoardgameMethod, DECISIVE_METHODS, DRAWN_METHODS, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
 import { cricket } from "@seazn/engine/sports/cricket";
 import { football } from "@seazn/engine/sports/football";
@@ -1217,10 +1217,13 @@ function boardgameModel(ctx: TapAdapterContext) {
 describe("boardgame", () => {
   let skin = "";
   beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "boardgame.tsx"), "utf8"); });
-  const listOf = (name: string): string[] => {
-    const m = new RegExp(`export const ${name}: readonly string\\[\\] = \\[([^\\]]*)\\];`).exec(skin);
-    expect(m, `boardgame.tsx no longer exports ${name} as a literal list`).not.toBeNull();
-    return [...m![1]!.matchAll(/"([^"]+)"/g)].map((x) => x[1]!);
+  // W2e T10 (BG-RS-1): the skin no longer restates the two lists, it re-exports the ENGINE's (the write path refuses a result
+  // whose method is in only one list against the winner it was given). So the list is the engine's own, and the skin is
+  // pinned to take it from there rather than to carry a literal of its own.
+  const listOf = (name: "DECISIVE_METHODS" | "DRAWN_METHODS"): string[] => {
+    const wired = new RegExp(`export const ${name}: readonly string\\[\\] = ENGINE_${name};`);
+    expect(skin, `boardgame.tsx no longer takes ${name} from the engine`).toMatch(wired);
+    return [...(name === "DECISIVE_METHODS" ? DECISIVE_METHODS : DRAWN_METHODS)];
   };
 
   it("boardgame: a draw's steps never tap a half — the draw tile then its method chip; a win is the winner's half then its method chip", () => {
