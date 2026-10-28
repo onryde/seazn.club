@@ -75,7 +75,6 @@ export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, strin
   ["IH-SO-2", "Task 9"],
   ["BG-RS-1", "Task 10"],
   ["CA-AD-1", "Task 11"],
-  ["GN-DV-1", "Task 17"],
 ]);
 
 /** Rule rows write every engine path as `packages/engine/...`, in the monorepo and in the engine's own repo alike: the prefix is
