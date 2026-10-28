@@ -112,6 +112,12 @@ export const EngineErrorCode = z.enum([
   // recorded result. Named, because the scorer sees it. data.method and data.winner are what was sent. Appended last,
   // existing order frozen.
   "RESULT_METHOD_CONTRADICTS_WINNER",
+  // W2e T11 (CA-AD-1, SC-O9): a carrom `carrom.game.adjust` that moves a side's score by more than the match's `gameTo` (the
+  // pad offers 1 to gameTo points either way). The WRITE path's refusal only (`sports/carrom/carrom.ts` applyAdjust): a ledger
+  // that already holds one still folds to its recorded result. A delta of 0 is the event schema's own refusal (INVALID_EVENT).
+  // Named, because the scorer sees it. data.delta and data.gameTo are what was sent and the bound it was judged against.
+  // Appended last, existing order frozen.
+  "ADJUST_OUT_OF_RANGE",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 

@@ -4202,6 +4202,7 @@
   "engineError.GOAL_KIND_REQUIRED": "Indica el tipo de gol: gol de campo, córner corto o penalti.",
   "engineError.CHASE_OVERSHOOT": "Una persecución termina con la carrera ganadora: revisa el total.",
   "engineError.RESULT_METHOD_CONTRADICTS_WINNER": "Una victoria exige jaque mate, abandono, tiempo, jugada ilegal o adjudicación, y las tablas exigen un método de tablas: revisa el método.",
+  "engineError.ADJUST_OUT_OF_RANGE": "Un ajuste no puede superar los puntos necesarios para ganar una partida: revisa los puntos.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named": "Ese motivo no se puede registrar {phase}. Aquí se admite: {allowed}.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak": "No se puede registrar una doble incomparecencia en el desempate: la partida se jugó. Aquí se admite, para un solo lado: {allowed}.",
   "forfeit.phase.pre": "antes de que empiece el partido",

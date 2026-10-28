@@ -4202,6 +4202,7 @@
   "engineError.GOAL_KIND_REQUIRED": "Indiquez le type de but : but de champ, corner de pénalité ou stroke.",
   "engineError.CHASE_OVERSHOOT": "Une poursuite s'arrête à la course gagnante : vérifiez le total.",
   "engineError.RESULT_METHOD_CONTRADICTS_WINNER": "Une victoire exige un mat, un abandon, le temps, un coup illégal ou une adjudication, et une nulle exige un mode de nulle : vérifiez le mode.",
+  "engineError.ADJUST_OUT_OF_RANGE": "Un ajustement ne peut pas dépasser les points nécessaires pour gagner une partie : vérifiez les points.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named": "Ce motif ne peut pas être enregistré {phase}. Autorisé ici : {allowed}.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak": "Un double forfait ne peut pas être enregistré pendant le départage : la partie a été jouée. Autorisé ici, pour un seul camp : {allowed}.",
   "forfeit.phase.pre": "avant le début du match",

@@ -2240,6 +2240,7 @@ export type DictionaryKey =
   | "embed.title"
   | "empty"
   | "engineError.ABANDONED_SETTLE_OR_VOID"
+  | "engineError.ADJUST_OUT_OF_RANGE"
   | "engineError.ALREADY_DECIDED"
   | "engineError.CHASE_OVERSHOOT"
   | "engineError.CONFIG_INVALID"

@@ -48,6 +48,8 @@ export const ENGINE_HTTP_STATUS: Readonly<Record<EngineErrorCode, number>> = Obj
   CHASE_OVERSHOOT: 422,
   // W2e T10 (BG-RS-1) — a board-game result whose method contradicts its winner: the scorer re-sends the result.
   RESULT_METHOD_CONTRADICTS_WINNER: 422,
+  // W2e T11 (CA-AD-1) — a carrom adjustment past the game target: the scorer re-sends the points.
+  ADJUST_OUT_OF_RANGE: 422,
 });
 
 /** The `?? 422` of http.ts:158 — what the product answers an EngineError whose

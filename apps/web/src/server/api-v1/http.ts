@@ -99,6 +99,8 @@ export const ENGINE_HTTP: Record<EngineErrorCode, number> = {
   CHASE_OVERSHOOT: 422,
   // W2e T10 (BG-RS-1, RB2B-20) — a board-game result whose method contradicts its winner, beside INVALID_EVENT: the scorer re-sends the result.
   RESULT_METHOD_CONTRADICTS_WINNER: 422,
+  // W2e T11 (CA-AD-1, SC-O9) — a carrom adjustment past the game target, beside INVALID_EVENT: the scorer re-sends the points.
+  ADJUST_OUT_OF_RANGE: 422,
 };
 
 // HTTP status → stable machine code for non-engine errors.

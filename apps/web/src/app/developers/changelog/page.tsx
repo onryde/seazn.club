@@ -7,6 +7,16 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-10-28",
+    title: "Breaking: a carrom adjustment may not exceed the game target",
+    lines: [
+      "A carrom.game.adjust is now refused when its delta is more than gameTo points either way: 25 by default, 29 for the club-29 variant, or the match's own game target. The scorer's app already offered exactly that range.",
+      "POST /fixtures/{id}/events answers 422 ADJUST_OUT_OF_RANGE and nothing is written. POST /divisions/{id}/events/import still returns 200; that stream is rejected with error.code import.fold_rejected and error.engineCode ADJUST_OUT_OF_RANGE.",
+      "A delta of 0 or a fraction, and a deduction that would take a score below zero, were already refused as INVALID_EVENT and still are. An adjustment already recorded still replays and can be voided.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
     title: "Breaking: a board-game result's method must agree with its winner",
     lines: [
       "A boardgame.result is now refused when its method contradicts its winner: checkmate, resign, time or illegal_move with a null or omitted winner, or agreement, stalemate, insufficient, repetition, fifty_move or dead_position with a winner named.",

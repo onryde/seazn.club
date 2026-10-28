@@ -7,6 +7,56 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-28 — a carrom adjustment may not exceed the game target
+
+A carrom umpire adjustment (Laws 51 and 55: a penalty, or points due) moves one
+side's score in the open game by a few points. The scorer's app already offers
+1 up to the game target (25 in the ICF Laws, Law 56a, and 29 in the club-29
+variant) in either direction; the API did not check. Both scoring write paths
+now do.
+
+**What changed.** A `carrom.game.adjust` was accepted with any non-zero integer
+`delta`. It is now refused when `delta` is more than `gameTo` points either
+way (`gameTo` is the match's game target: 25 by default, 29 for club-29, or the
+match's own setting). A `delta` of `0` or a fraction was already refused as
+`INVALID_EVENT` and still is. A deduction that would take the score below zero
+was already refused as `INVALID_EVENT` and still is; the range is judged
+first.
+
+| Path | Before | Now |
+|---|---|---|
+| `POST /api/v1/fixtures/{id}/events` | accepted, and the open game's score moved by the whole delta | 422, `error.code` `"ADJUST_OUT_OF_RANGE"`, nothing written |
+| `POST /api/v1/divisions/{id}/events/import` | imported | 200; that stream is rejected with `"import.fold_rejected"`, `engineCode` `"ADJUST_OUT_OF_RANGE"`, and nothing is written for its fixture |
+
+**What replaces it.** Send a `delta` between `-gameTo` and `gameTo`, not zero.
+To move a score further than that, send more than one adjustment, each one
+inside the range.
+
+**What a consumer sees.** On the scoring endpoint:
+
+```json
+{ "ok": false, "error": { "code": "ADJUST_OUT_OF_RANGE", "message": "an adjustment moves a score by at most the points needed to win the game" }, "requestId": "…" }
+```
+
+On the import route, the stream's result (this refusal carries no
+`eventIndex`; the other streams in the call are judged on their own):
+
+```json
+{ "fixture": "…", "status": "rejected", "eventsAppended": 0, "error": { "code": "import.fold_rejected", "engineCode": "ADJUST_OUT_OF_RANGE" } }
+```
+
+Key on `error.code`, not on the message text.
+
+**No data migration was required.** Only a NEW write is judged. No recorded
+adjustment in the golden corpus (13 across 23 streams) is above 1 point, and an
+adjustment already in a match's ledger still replays to the score it recorded.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, rule CA-AD-1 (audit row SC-O9). The pinning test is
+`packages/engine/src/sports/carrom/w2e-carrom.test.ts`.
+
 ## 2026-10-28 — a board-game result's method must agree with its winner
 
 A chess game is won by checkmate, resignation, time or a second illegal move,

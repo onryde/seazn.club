@@ -103,6 +103,7 @@ describe("v1 envelope", () => {
     ["GOAL_KIND_REQUIRED", 422], // W2d T18 (PS-7d): a hockey goal without its type
     ["CHASE_OVERSHOOT", 422], // W2e T6 (CK-CH-1): a coarse chase total past the winning run
     ["RESULT_METHOD_CONTRADICTS_WINNER", 422], // W2e T10 (BG-RS-1): a board-game result whose method contradicts its winner
+    ["ADJUST_OUT_OF_RANGE", 422], // W2e T11 (CA-AD-1): a carrom adjustment past the game target
   ] as const)("maps EngineError %s → %d", async (code, status) => {
     const res = await v1(async () => {
       throw new EngineError(code, "boom");

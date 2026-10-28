@@ -88,6 +88,8 @@ describe("EngineError", () => {
       "CHASE_OVERSHOOT",
       // W2e T10 (BG-RS-1, RB2B-20) — appended last, existing order frozen. A board-game result whose method contradicts its winner.
       "RESULT_METHOD_CONTRADICTS_WINNER",
+      // W2e T11 (CA-AD-1, SC-O9) — appended last, existing order frozen. A carrom adjustment past the game target.
+      "ADJUST_OUT_OF_RANGE",
     ]);
   });
 });
