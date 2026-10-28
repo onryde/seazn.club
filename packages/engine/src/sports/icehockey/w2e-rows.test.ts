@@ -193,12 +193,33 @@ describe("IH-SU-1 a goal ends the conceding side's running minor or bench minor 
     expect(coincidental.suspensions.map((s) => s.side)).toEqual(["home"]);
   });
 
-  it("IH-SU-1 limit: a double minor is never released by a goal (IIHF 18.2 washes one of its two minors out for a goal scored during the delay)", () => {
+  it("IH-SU-1 limit: a goal while a double minor is running never releases it, and reaches past it to a plain minor beside it", () => {
+    // The running-penalty case. (Rule 18.2 is the DELAY case, next test; this one claims no article for the running double minor: Rule 16.2
+    // names minors and bench minors only.)
     const state = fold(cfgOf(), start, card("double_minor", A, { at: at("P1", 100) }), goal(H, { at: at("P1", 200) }));
     expect(state.suspensions.map((s) => s.classKey)).toEqual(["double_minor"]);
     // A plain minor beside it is the one the goal reaches.
     const beside = fold(cfgOf(), start, card("double_minor", A, { at: at("P1", 100) }), card("minor", A, { at: at("P1", 150) }), goal(H, { at: at("P1", 200) }));
     expect(beside.suspensions.map((s) => s.classKey)).toEqual(["double_minor"]);
+  });
+
+  it("IH-SU-1 limit: a goal scored during the delay does not wash out one of a double minor's two minors (IIHF 18.2): the full four minutes run from the stamp", () => {
+    // 18.2: "When a double-minor penalty has been signaled by the Referee and the non-offending team scores during the delay, one of the minor
+    // penalties shall be washed out and the penalized Player will serve the remaining two minutes." The engine has no delay model (the
+    // delayed call is a core.note, DOMAIN.md): the goal is a fact BEFORE the card exists, so the card, when entered, still carries the class
+    // nominal of 4 minutes. A stamp of 100 + 240 s gives expiry 340, where 18.2 would give 100 + 120 = 220.
+    const delayShaped = fold(cfgOf(), start, ["core.note", { text: "delayed penalty signalled" }], goal(H, { at: at("P1", 90) }), card("double_minor", A, { at: at("P1", 100) }));
+    expect(delayShaped.goals).toEqual({ home: 1, away: 0 });
+    expect(delayShaped.suspensions.map((s) => [s.classKey, s.expiresAt])).toEqual([["double_minor", at("P1", 340)]]);
+    // The goal changes nothing about the card, whichever of the two the ledger holds first (a card entered at the goal's own instant).
+    const sameInstant = fold(cfgOf(), start, goal(H, { at: at("P1", 100) }), card("double_minor", A, { at: at("P1", 100) }));
+    expect(sameInstant.suspensions.map((s) => s.expiresAt)).toEqual([at("P1", 340)]);
+    // The contrast that makes the number mean something: with no goal at all the expiry is the same 340, so the goal washed nothing out.
+    const noGoal = fold(cfgOf(), start, card("double_minor", A, { at: at("P1", 100) }));
+    expect(noGoal.suspensions.map((s) => s.expiresAt)).toEqual([at("P1", 340)]);
+    // The scorer's way to record what 18.2 gives is the event's own `minutes` override: 2 minutes from the stamp, 100 + 120.
+    const byHand = fold(cfgOf(), start, goal(H, { at: at("P1", 90) }), card("double_minor", A, { at: at("P1", 100), minutes: 2 }));
+    expect(byHand.suspensions.map((s) => s.expiresAt)).toEqual([at("P1", 220)]);
   });
 });
 
