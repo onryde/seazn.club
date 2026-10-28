@@ -4201,6 +4201,7 @@
   "engineError.TIEBREAK_COLOUR_REQUIRED": "Record who had Black.",
   "engineError.GOAL_KIND_REQUIRED": "Record the goal type: field goal, penalty corner or penalty stroke.",
   "engineError.CHASE_OVERSHOOT": "A chase ends at the winning run — check the total.",
+  "engineError.RESULT_METHOD_CONTRADICTS_WINNER": "A win needs checkmate, resignation, time, illegal move or adjudication, and a draw needs a drawing method — check the method.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named": "That reason can't be recorded {phase}. Allowed here: {allowed}.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak": "A double walkover can't be recorded in the tie-break: the game was played. Allowed here, for one side: {allowed}.",
   "forfeit.phase.pre": "before the match starts",

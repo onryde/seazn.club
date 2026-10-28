@@ -7,6 +7,16 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-10-28",
+    title: "Breaking: a board-game result's method must agree with its winner",
+    lines: [
+      "A boardgame.result is now refused when its method contradicts its winner: checkmate, resign, time or illegal_move with a null or omitted winner, or agreement, stalemate, insufficient, repetition, fifty_move or dead_position with a winner named.",
+      "POST /fixtures/{id}/events answers 422 RESULT_METHOD_CONTRADICTS_WINNER and nothing is written. POST /divisions/{id}/events/import still returns 200; that stream is rejected with error.code import.fold_rejected and error.engineCode RESULT_METHOD_CONTRADICTS_WINNER.",
+      "adjudication is accepted with or without a winner, and a result with no method is unchanged. A contradicting result already recorded still replays and can be voided.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
     title: "Breaking: a cricket chase total may not pass the winning run",
     lines: [
       "A cricket.innings.summary for the chasing innings (the second of a one-innings match, the fourth of a two-innings match) is now refused when payload.runs is above the target minus 1 plus 7: a chase ends at the winning run, and the most the last ball adds from one run short is a no-ball hit for six.",

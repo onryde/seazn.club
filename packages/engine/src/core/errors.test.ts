@@ -86,6 +86,8 @@ describe("EngineError", () => {
       "GOAL_KIND_REQUIRED",
       // W2e T6 (CK-CH-1, RB2A-22) — appended last, existing order frozen. A coarse cricket chase total past the winning run.
       "CHASE_OVERSHOOT",
+      // W2e T10 (BG-RS-1, RB2B-20) — appended last, existing order frozen. A board-game result whose method contradicts its winner.
+      "RESULT_METHOD_CONTRADICTS_WINNER",
     ]);
   });
 });

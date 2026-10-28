@@ -7,6 +7,58 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-28 — a board-game result's method must agree with its winner
+
+A chess game is won by checkmate, resignation, time or a second illegal move,
+and drawn by agreement, stalemate, insufficient material, repetition, the
+fifty-move rule or a dead position (FIDE Laws of Chess Articles 5.1, 5.2 and
+9.2 to 9.6). A result that says "won by stalemate" or "drawn by checkmate" cannot
+have happened. Both scoring write paths now refuse one.
+
+**What changed.** A `boardgame.result` was accepted with any `method` beside
+any `winner`. It is now refused when its `method` is one only a decisive game
+ends by (`checkmate`, `resign`, `time`, `illegal_move`) and `winner` is `null`
+or left out, or one only a drawn game ends by (`agreement`, `stalemate`,
+`insufficient`, `repetition`, `fifty_move`, `dead_position`) and `winner` names
+an entrant. `adjudication` can go either way and is accepted in both shapes, and
+a result with no `method` has nothing to contradict. `forfeit` and
+`double_forfeit` were already refused on write (a chess forfeit is a
+`core.forfeit` with a reason, W2b).
+
+| Path | Before | Now |
+|---|---|---|
+| `POST /api/v1/fixtures/{id}/events` | accepted, and the game recorded the winner or the draw as sent | 422, `error.code` `"RESULT_METHOD_CONTRADICTS_WINNER"`, nothing written |
+| `POST /api/v1/divisions/{id}/events/import` | imported | 200; that stream is rejected with `"import.fold_rejected"`, `engineCode` `"RESULT_METHOD_CONTRADICTS_WINNER"`, and nothing is written for its fixture |
+
+**What replaces it.** Send a `method` that fits the result: a decisive one with
+the winner's entrant id, a drawing one with `winner` `null` (or left out), or
+no `method` at all.
+
+**What a consumer sees.** On the scoring endpoint:
+
+```json
+{ "ok": false, "error": { "code": "RESULT_METHOD_CONTRADICTS_WINNER", "message": "the method does not fit the result: a win needs checkmate, resignation, time, illegal move or adjudication, and a draw needs a drawing method" }, "requestId": "…" }
+```
+
+On the import route, the stream's result (this refusal carries no
+`eventIndex`; the other streams in the call are judged on their own):
+
+```json
+{ "fixture": "…", "status": "rejected", "eventsAppended": 0, "error": { "code": "import.fold_rejected", "engineCode": "RESULT_METHOD_CONTRADICTS_WINNER" } }
+```
+
+Key on `error.code`, not on the message text.
+
+**No data migration was required.** Only a NEW write is judged. No recorded
+result in the golden corpus (76 across 85 streams) contradicts, and a result
+already in a match's ledger still replays to the outcome it recorded.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, rule BG-RS-1 (rulebook RB2B-20). The pinning test is
+`packages/engine/src/sports/boardgame/w2e-boardgame.test.ts`.
+
 ## 2026-10-28 — a cricket chase total may not pass the winning run
 
 A chase ends at the winning run, and a boundary counts in full (ICC Playing

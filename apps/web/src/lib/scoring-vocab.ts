@@ -655,6 +655,8 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   GOAL_KIND_REQUIRED: "engineError.GOAL_KIND_REQUIRED",
   // W2e T6 (CK-CH-1, RB2A-22) — pad-visible: the over-summary sheet's total.
   CHASE_OVERSHOOT: "engineError.CHASE_OVERSHOOT",
+  // W2e T10 (BG-RS-1, RB2B-20) — pad-visible: a board-game result tapped with a method that does not fit it.
+  RESULT_METHOD_CONTRADICTS_WINNER: "engineError.RESULT_METHOD_CONTRADICTS_WINNER",
 };
 
 /**

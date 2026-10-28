@@ -4201,6 +4201,7 @@
   "engineError.TIEBREAK_COLOUR_REQUIRED": "Geef aan wie zwart had.",
   "engineError.GOAL_KIND_REQUIRED": "Geef het soort doelpunt aan: veldgoal, strafcorner of strafbal.",
   "engineError.CHASE_OVERSHOOT": "Een achtervolging eindigt bij de winnende run: controleer het totaal.",
+  "engineError.RESULT_METHOD_CONTRADICTS_WINNER": "Een winst vraagt om mat, opgave, tijd, een onreglementaire zet of een arbitrale uitspraak, en remise vraagt om een remisemethode: controleer de methode.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named": "Die reden kan niet worden vastgelegd {phase}. Hier toegestaan: {allowed}.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak": "Een dubbele walk-over kan niet worden vastgelegd in de tiebreak: de partij is gespeeld. Hier toegestaan, voor één kant: {allowed}.",
   "forfeit.phase.pre": "voor de start van de wedstrijd",

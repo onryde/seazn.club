@@ -105,6 +105,13 @@ export const EngineErrorCode = z.enum([
   // api-v1 forwards just the code and the message for this code (`v1()` in server/api-v1/http.ts builds no `extra` for
   // it). Appended last, existing order frozen.
   "CHASE_OVERSHOOT",
+  // W2e T10 (BG-RS-1, RB2B-20): a board-game `boardgame.result` whose method contradicts its winner: a method only a decisive
+  // game ends by (checkmate, resignation, time, illegal move) with no winner, or one only a drawn game ends by (agreement,
+  // stalemate, insufficient material, repetition, the fifty-move rule, a dead position) with one. The WRITE path's refusal
+  // only (`sports/boardgame/boardgame.ts` requireMethodAgreesWithWinner): a ledger that already holds one still folds to its
+  // recorded result. Named, because the scorer sees it. data.method and data.winner are what was sent. Appended last,
+  // existing order frozen.
+  "RESULT_METHOD_CONTRADICTS_WINNER",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
 

@@ -2259,6 +2259,7 @@ export type DictionaryKey =
   | "engineError.MODULE_NOT_FOUND"
   | "engineError.NON_MONOTONIC_TIME"
   | "engineError.QUALIFICATION_INVALID"
+  | "engineError.RESULT_METHOD_CONTRADICTS_WINNER"
   | "engineError.SCHEDULE_CONFLICT"
   | "engineError.SEEDING_BESTNTH_UNEQUAL_POOLS"
   | "engineError.SEEDING_MAP_SLOT_INVALID"
