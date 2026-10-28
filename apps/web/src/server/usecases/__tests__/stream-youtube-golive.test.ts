@@ -14,7 +14,8 @@
 // Expected values are the spec's and Google's literals, typed here and never imported from the code under test:
 //   - grace is 5 minutes after Stop (D4): a restart 4 minutes after Stop reuses the broadcast, 6 minutes after does not;
 //   - "10 active streams allowed per channel" (support.google.com/youtube/answer/2474026, spec §3.1);
-//   - spec §9.2 names SIX refusal codes; statuses 409, except youtube_limit_reached 429 and youtube_unavailable 503 (plan T10).
+//   - spec §9.2 names the refusal codes (the sweep walks YOUTUBE_REFUSAL_CODES, so a new code reds it); statuses 409, except
+//     youtube_limit_reached 429 and youtube_unavailable 503 (plan T10).
 //
 // Sport: not applicable — streaming is sport-agnostic (global-constraints "Test rules"); every rig rides `generic`.
 // Secrets: a stream key is compared by FINGERPRINT (`fp`), so a failing assertion never prints one.
@@ -62,7 +63,7 @@ import { ApiV1Error, apiV1 } from "@/lib/client-v1";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { CREATE_ERROR_KEYS, createErrorCode } from "@/lib/stream-session-view";
-import { YOUTUBE_CONSENT_VERSION } from "@/lib/youtube";
+import { YOUTUBE_CONSENT_VERSION, YOUTUBE_REFUSAL_CODES } from "@/lib/youtube";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { v1 } from "@/server/api-v1/http";
 import { RelayJobSession } from "@/server/api-v1/schemas";
@@ -72,10 +73,11 @@ import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { archiveStreamTarget, readFirstInput } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import { connect as connectChannel } from "@/server/youtube/__tests__/_connect-rig";
-import { readEndFacts } from "@/server/youtube/end-rule";
+import { broadcastEndDueAt, readEndFacts } from "@/server/youtube/end-rule";
 import { FakeYouTube } from "@/server/youtube/fake";
 import type { YoutubeErrorCode } from "@/server/youtube/port";
 import { abandonPrepared, prepareYoutubeBroadcast, type Prepared } from "@/server/youtube/prepare";
+import { markReconnectNeeded } from "@/server/youtube/token-store";
 import { divisionRig, seedOrg } from "./_rig";
 import { grantCredits } from "../stream-credits";
 import { createStreamTarget } from "../stream-targets";
@@ -90,8 +92,6 @@ const STATUS_OF: Record<string, number> = {
   youtube_reconnect_needed: 409, youtube_live_not_enabled: 409, youtube_live_blocked: 409,
   youtube_limit_reached: 429, youtube_channel_busy: 409, youtube_unavailable: 503,
 };
-/** §9.2: the six refusal codes a Go live on a YouTube destination can meet. */
-const REFUSAL_CODE_COUNT = 6;
 const OPEN = ["created", "bound", "reserved", "live"];
 
 const MIN = 60_000;
@@ -160,7 +160,7 @@ async function world(o: { fixtures?: number; credits?: number } = {}): Promise<W
   await override(auth.orgId, "streaming.relay", true);
   const fixtures = d.fixtureIds.slice(0, n);
   for (const f of fixtures) await pairPresentPhone(f);
-  await grantCredits({ orgId: auth.orgId, delta: o.credits ?? 1, createdBy: await rigUser(), note: "t11", idempotencyKey: randomUUID() });
+  if ((o.credits ?? 1) > 0) await grantCredits({ orgId: auth.orgId, delta: o.credits ?? 1, createdBy: await rigUser(), note: "t11", idempotencyKey: randomUUID() });
   await spendMonthlyStreamGrant(auth.orgId);
   const c = await connectChannel({ auth, orgId: auth.orgId, userId: auth.userId });
 
@@ -316,12 +316,14 @@ describe.skipIf(!HAS_DB)("YouTube Connect T11 — Go live streams into the prepa
     expect(fp(w.outputs.at(-1)!.target)).not.toBe(fp(w.issued[0]!));
   });
 
-  it("each refusal code: refused with that code and status, credit ledger rows unchanged, addOutput calls 0, no open broadcast, no Cloudflare input created, nothing abandoned (prepare refused before handing anything over) — checked === 6", async () => {
-    // Five come from YouTube (a bind refused after the broadcast WAS made, so "no open broadcast" is not vacuous); the sixth is
-    // the pool's own: ten keys in use on ten open broadcasts.
-    const VIA_PORT: YoutubeErrorCode[] = ["youtube_reconnect_needed", "youtube_live_not_enabled", "youtube_live_blocked", "youtube_limit_reached", "youtube_unavailable"];
+  it("each refusal code YOUTUBE_REFUSAL_CODES declares (§9.2): refused with that code and status, credit ledger rows unchanged, addOutput calls 0, no open broadcast, no Cloudflare input created, nothing abandoned (prepare refused before handing anything over) — checked === the declaration's length", async () => {
+    // The set is the DECLARATION's (a 7th code reds this sweep, in the loop and at the end), the statuses are the spec's. All but
+    // one come from YouTube (a bind refused after the broadcast WAS made, so "no open broadcast" is not vacuous); the other,
+    // youtube_channel_busy, is the pool's own: ten keys in use on ten open broadcasts. The T11-originated 503 (a pooled key that
+    // will not open) carries the already-listed youtube_unavailable and has its own test below.
     const seen = new Set<string>();
-    for (const code of [...VIA_PORT, "youtube_channel_busy"]) {
+    for (const code of YOUTUBE_REFUSAL_CODES) {
+      expect(STATUS_OF[code], `${code}: the spec states a status for it`).toBeDefined();
       const busy = code === "youtube_channel_busy";
       const w = await world({ fixtures: busy ? CHANNEL_STREAM_CAP + 1 : 1 });
       const f = w.fixtures.at(-1)!;
@@ -348,7 +350,9 @@ describe.skipIf(!HAS_DB)("YouTube Connect T11 — Go live streams into the prepa
       if (!busy) expect(callsOf(w.fake, "insertBroadcast"), `${code}: premise — the broadcast was made before the refusal`).toBe(1);
       seen.add(code);
     }
-    expect(seen.size).toBe(REFUSAL_CODE_COUNT);
+    expect(seen.size, "checked every declared code").toBe(YOUTUBE_REFUSAL_CODES.length);
+    expect([...seen].sort(), "and the rulebook's statuses name exactly the declared codes").toEqual(Object.keys(STATUS_OF).sort());
+    expect(YOUTUBE_REFUSAL_CODES.length, "anti-vacuity: the declaration is not empty").toBeGreaterThan(0);
   });
 
   it("a refusal from YouTube is followed by a Go live that streams (the sequence): a transient bind refusal, then the retry is admitted into a fresh broadcast", async () => {
@@ -577,5 +581,185 @@ describe.skipIf(!HAS_DB)("YouTube Connect T11 — Go live streams into the prepa
     const err = await sql`update fixture_stream_sessions set api_backed = false where id = ${sessionId}`.then(() => null, (e: unknown) => e);
     expect(err).toMatchObject({ code: "23514", constraint_name: "fixture_stream_sessions_broadcast_implies_api_backed" });
     expect((await sessionRow(sessionId)).api_backed).toBe(true);
+  });
+});
+
+// ---- fix round 1 (review of 7263955bb3..17297b8b28): I-1, I-3, m3 ------------------------------------------------------
+describe.skipIf(!HAS_DB)("YouTube Connect T11 fix round 1 — after the commit, the probe gate, the reused abandon, the lazy port", () => {
+  const MODES = ["passthrough", "composed"] as const;
+
+  /** Cloudflare will not make the Go live's input: `provisionSession`'s catch deletes the session AFTER the admission committed
+   *  (the one provisioning failure that leaves no session behind). Returns the restore. */
+  function breakIngest(w: World): () => void {
+    const real = w.ingest.createLiveInput;
+    w.ingest.createLiveInput = async () => { throw new Error("cloudflare createLiveInput failed (test)"); };
+    return () => { w.ingest.createLiveInput = real; };
+  }
+
+  it("I-1: a provisioning failure AFTER the admission commit on a NEW broadcast → 503 ingest_unavailable, no session AND no broadcast: deleted at YouTube once, its row 'failed' (admission_refused), the key FREE — the next Go live (the same fixture, or another) reuses that key, no second liveStream grown; both modes", async () => {
+    let checked = 0;
+    for (const mode of MODES) {
+      for (const retryOn of ["the same fixture", "another fixture"] as const) {
+        const label = `${mode}, retry on ${retryOn}`;
+        const w = await world({ fixtures: 2, credits: 2 });
+        const [f0, f1] = w.fixtures as [string, string];
+        const restore = breakIngest(w);
+        vi.mocked(abandonPrepared).mockClear();
+        const before = await ledger(w.orgId);
+        let err: unknown;
+        try {
+          err = await refusalOf(goLive(w, f0, mode));
+        } finally {
+          restore();
+        }
+        expect(err, label).toMatchObject({ status: 503, code: "ingest_unavailable" });
+        expect(await sessionsOn(f0), `${label}: the session was deleted`).toBe(0);
+        const [b, ...more] = await broadcastsOf(f0);
+        expect(more, label).toEqual([]);
+        expect(b, `${label}: the broadcast is not left 'live' with no session`).toMatchObject({ state: "failed", last_error_code: "admission_refused" });
+        expect(vi.mocked(abandonPrepared), label).toHaveBeenCalledTimes(1);
+        expect(callsOf(w.fake, "deleteBroadcast"), `${label}: deleted at YouTube, once`).toBe(1);
+        expect(w.fake.broadcastsCount(), `${label}: nothing left "upcoming" at YouTube`).toBe(0);
+        expect(await ledger(w.orgId), `${label}: nothing charged`).toEqual(before);
+        expect(w.issued, `${label}: premise — the failed attempt grew the channel's one key`).toHaveLength(1);
+
+        const { sessionId } = await goLive(w, retryOn === "the same fixture" ? f0 : f1, mode);
+        expect(w.issued, `${label}: the freed key is reused — no second liveStream`).toHaveLength(1);
+        const next = await broadcastRow((await sessionRow(sessionId)).youtube_broadcast_id!);
+        expect(next, label).toMatchObject({ state: "live", last_session_id: sessionId, key_id: b!.key_id });
+        checked++;
+      }
+    }
+    expect(checked, "2 modes x 2 retries").toBe(MODES.length * 2);
+  });
+
+  it("I-1 (reused): the same failure on a REUSED broadcast (Stop → Go live inside the grace, Cloudflare refuses) → 503; the broadcast is NOT deleted at YouTube, stays live, the end rule still governs it from the first session's Stop (S + 5 min), and the retry is admitted into the SAME broadcast on the same key; both modes", async () => {
+    let checked = 0;
+    for (const mode of MODES) {
+      const w = await world({ credits: 2 });
+      const f = w.fixtures[0]!;
+      const first = await goLive(w, f, mode);
+      await reachLive(w, f, first.sessionId, mode);
+      await stopToEnd(w, f, first.sessionId, mode);
+      const s1 = await sessionRow(first.sessionId);
+      const bid = s1.youtube_broadcast_id!;
+      w.tick(4 * MIN);   // inside the 5-min grace: the restart reuses the broadcast
+
+      const restore = breakIngest(w);
+      vi.mocked(abandonPrepared).mockClear();
+      let err: unknown;
+      try {
+        err = await refusalOf(goLive(w, f, mode));
+      } finally {
+        restore();
+      }
+      expect(err, mode).toMatchObject({ status: 503, code: "ingest_unavailable" });
+      expect(await sessionsOn(f), `${mode}: only the first session is left`).toBe(1);
+      expect(callsOf(w.fake, "deleteBroadcast"), `${mode}: a reused broadcast is never deleted at YouTube`).toBe(0);
+      expect(w.fake.broadcastsCount(), mode).toBe(1);
+      expect(await broadcastRow(bid), `${mode}: still the fixture's open broadcast`).toMatchObject({ state: "live", key_id: expect.any(String) });
+      expect(await openOn(f), mode).toBe(1);
+      const facts = await readEndFacts(sql, bid);
+      expect(facts.latestEndedAt?.getTime(), `${mode}: S is still the first session's Stop`).toBe(s1.ended_at!.getTime());
+      expect(broadcastEndDueAt(facts, w.deps.now())?.getTime(), `${mode}: due at S + ${GRACE_MINUTES} min`).toBe(s1.ended_at!.getTime() + GRACE_MINUTES * MIN);
+
+      w.tick(30_000);   // 4.5 min after the Stop, still inside the grace
+      const retry = await goLive(w, f, mode);
+      expect((await sessionRow(retry.sessionId)).youtube_broadcast_id, `${mode}: the retry continues the same video`).toBe(bid);
+      expect(callsOf(w.fake, "insertBroadcast"), mode).toBe(1);
+      expect(w.issued, `${mode}: one key`).toHaveLength(1);
+      expect(await broadcastRow(bid), mode).toMatchObject({ state: "live", last_session_id: retry.sessionId });
+      checked++;
+    }
+    expect(checked).toBe(MODES.length);
+  });
+
+  it("I-3a (P2): a second Go live on a fixture that is already streaming → 409 active_session and asks YouTube NOTHING — the probe gate keeps quota off a start admission will refuse; both modes", async () => {
+    let checked = 0;
+    for (const mode of MODES) {
+      const w = await world();
+      const f = w.fixtures[0]!;
+      const first = await goLive(w, f, mode);
+      const calls = w.fake.calls.length;
+      expect(calls, `${mode}: premise — the first Go live did talk to YouTube`).toBeGreaterThan(0);
+      vi.mocked(prepareYoutubeBroadcast).mockClear();
+      vi.mocked(abandonPrepared).mockClear();
+      expect(await refusalOf(goLive(w, f, mode)), mode).toMatchObject({ status: 409, code: "active_session" });
+      expect(w.fake.calls.slice(calls).map((c) => c.method), `${mode}: zero YouTube calls`).toEqual([]);
+      expect(vi.mocked(prepareYoutubeBroadcast), `${mode}: prepare was never asked`).not.toHaveBeenCalled();
+      expect(vi.mocked(abandonPrepared), mode).not.toHaveBeenCalled();
+      expect(await sessionsOn(f), mode).toBe(1);
+      expect(await broadcastRow((await sessionRow(first.sessionId)).youtube_broadcast_id!), mode).toMatchObject({ state: "live", last_session_id: first.sessionId });
+      checked++;
+    }
+    expect(checked).toBe(MODES.length);
+  });
+
+  it("I-3a twin: an org with no credits whose connection is reconnect_needed → 402 no_credits, never youtube_reconnect_needed (an admission refusal outranks every YouTube refusal, spec §6.2 'after those pass') and YouTube is asked nothing; positive pair: with a credit the same Go live IS refused youtube_reconnect_needed", async () => {
+    const w = await world({ credits: 0 });
+    const f = w.fixtures[0]!;
+    await markReconnectNeeded(sql, w.orgId, w.connectionId);
+    const [c] = await sql<{ status: string }[]>`select status from org_youtube_connections where id = ${w.connectionId}`;
+    expect(c!.status, "premise: the grant is dead").toBe("reconnect_needed");
+    expect(await refusalOf(goLive(w, f))).toMatchObject({ status: 402, code: "no_credits" });
+    expect(w.fake.calls, "YouTube was asked nothing").toEqual([]);
+
+    await grantCredits({ orgId: w.orgId, delta: 1, createdBy: await rigUser(), note: "t11 fix 1 twin", idempotencyKey: randomUUID() });
+    expect(await refusalOf(goLive(w, f))).toMatchObject({ status: 409, code: "youtube_reconnect_needed", extra: { connectionId: w.connectionId } });
+  });
+
+  it("I-3b (P4): a REUSED broadcast whose restart is refused AFTER the prepare (storage exhausted) goes back to 'live' with its reservation released, nothing deleted at YouTube — the retry half a minute later is admitted into the SAME broadcast, not refused active_session; both modes", async () => {
+    let checked = 0;
+    for (const mode of MODES) {
+      const w = await world({ credits: 2 });
+      const f = w.fixtures[0]!;
+      const first = await goLive(w, f, mode);
+      await reachLive(w, f, first.sessionId, mode);
+      await stopToEnd(w, f, first.sessionId, mode);
+      const bid = (await sessionRow(first.sessionId)).youtube_broadcast_id!;
+      w.tick(4 * MIN);   // inside the grace: the restart reuses (reserves) the broadcast
+
+      w.ingest.storage = { totalStorageMinutes: 500, totalStorageMinutesLimit: 500, videoCount: 1 };
+      vi.mocked(abandonPrepared).mockClear();
+      expect(await refusalOf(goLive(w, f, mode)), mode).toMatchObject({ status: 503, code: "storage_exhausted" });
+      expect(vi.mocked(abandonPrepared), mode).toHaveBeenCalledTimes(1);
+      expect((vi.mocked(abandonPrepared).mock.calls[0]![0] as Prepared).reused, `${mode}: premise — the abandoned prepare was a REUSE`).toBe(true);
+      const [b] = await sql<{ state: string; reserved_until: Date | null }[]>`select state, reserved_until from youtube_broadcasts where id = ${bid}`;
+      expect(b, `${mode}: the reservation is released`).toEqual({ state: "live", reserved_until: null });
+      expect(callsOf(w.fake, "deleteBroadcast"), `${mode}: a reused broadcast is never deleted at YouTube`).toBe(0);
+
+      w.ingest.storage = { totalStorageMinutes: 0, totalStorageMinutesLimit: ROOMY_STORAGE_MINUTES, videoCount: 0 };
+      w.tick(30_000);
+      const retry = await goLive(w, f, mode);   // not `active_session` on a reservation nobody holds
+      expect((await sessionRow(retry.sessionId)).youtube_broadcast_id, `${mode}: the retry continues the same video`).toBe(bid);
+      expect(callsOf(w.fake, "insertBroadcast"), mode).toBe(1);
+      checked++;
+    }
+    expect(checked).toBe(MODES.length);
+  });
+
+  it("m3: a misspelt YOUTUBE_DRIVER cannot break a PASTED destination's Go live (the port is resolved only for an API row); an API row fails by name with nothing written; positive pair: a good setting streams the API row", async () => {
+    const w = await world({ fixtures: 2 });
+    const [a, b] = w.fixtures as [string, string];
+    const pasted = await createStreamTarget(w.auth, w.orgId, { kind: "youtube", label: "Pasted", streamKey: `pasted-${randomUUID()}` });
+    // deps with NO youtube: the port is the process's driver, which a bad YOUTUBE_DRIVER makes throw when it is resolved.
+    const bare: SessionDeps = { drivers: w.deps.drivers, now: w.deps.now, appUrl: w.deps.appUrl };
+    vi.stubEnv("YOUTUBE_DRIVER", "bogus");
+    try {
+      const { sessionId } = await goLive(w, a, "passthrough", pasted.id, bare);
+      expect(await sessionRow(sessionId), "the pasted Go live was admitted").toMatchObject({ api_backed: false, youtube_broadcast_id: null, state: "warming" });
+      expect(w.outputs).toHaveLength(1);
+
+      const before = await ledger(w.orgId);
+      const err = await refusalOf(goLive(w, b, "passthrough", w.targetId, bare));
+      expect((err as Error).message, "the API row fails by name").toMatch(/YOUTUBE_DRIVER must be "fake" or "live"/);
+      expect(await sessionsOn(b)).toBe(0);
+      expect(await broadcastsOf(b)).toEqual([]);
+      expect(await ledger(w.orgId)).toEqual(before);
+    } finally {
+      vi.unstubAllEnvs();
+    }
+    const { sessionId } = await goLive(w, b);
+    expect(await sessionRow(sessionId), "positive pair").toMatchObject({ api_backed: true, state: "warming" });
   });
 });

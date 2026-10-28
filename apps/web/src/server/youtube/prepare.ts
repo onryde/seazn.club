@@ -34,7 +34,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import { routes } from "@/lib/routes";
 import { captureError } from "@/lib/sentry";
 import { siteOrigin } from "@/lib/site-origin";
-import { YOUTUBE_REFUSAL_CODES, type YoutubePrivacy, type YoutubeRefusalCode } from "@/lib/youtube";
+import { isYoutubeRefusalCode, type YoutubePrivacy, type YoutubeRefusalCode } from "@/lib/youtube";
 import { insertPooledKey } from "@/server/relay/secret-columns";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts, type EndFacts } from "./end-rule";
 import { YouTubeError, type YouTubePort } from "./port";
@@ -42,6 +42,10 @@ import { broadcastDescription, broadcastTitle } from "./title";
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken } from "./token-store";
 
 export type Prepared = { broadcastId: string; reused: boolean; keyId: string };
+
+/** The port, or a thunk for it. A caller that serves pasted destinations too passes the thunk, so the port (the process's driver,
+ *  which throws on a misspelt YOUTUBE_DRIVER) is resolved only once the destination is known to be an API row (T11 fix round 1, m3). */
+export type PortSource = YouTubePort | (() => YouTubePort);
 
 /** Spec §6.2 "~2 min" (plan P6): how long a reused broadcast is held for the admission that reserved it. */
 export const YOUTUBE_RESERVATION_MINUTES = 2;
@@ -81,13 +85,11 @@ export function youtubeRefusal(code: YoutubeRefusalCode, connectionId: string): 
 const activeSession = (): HttpError =>
   new HttpError(409, "a session is already running for this fixture", "active_session", { sessionId: null });
 
-const isRefusalCode = (c: unknown): c is YoutubeRefusalCode => (YOUTUBE_REFUSAL_CODES as readonly unknown[]).includes(c);
-
 /** The refusal code a failure carries: a port error's code (a missing resource is `youtube_unavailable` — no refusal of its
  *  own), or one of this file's own refusals. Null for anything else (a database fault, a KEK fault). */
 function refusalCodeOf(err: unknown): YoutubeRefusalCode | null {
   if (err instanceof YouTubeError) return err.code === "youtube_not_found" ? "youtube_unavailable" : err.code;
-  if (err instanceof HttpError && isRefusalCode(err.code)) return err.code;
+  if (err instanceof HttpError && isYoutubeRefusalCode(err.code)) return err.code;
   return null;
 }
 
@@ -117,7 +119,7 @@ interface Ctx {
  *  unlapsed reservation (or a session is live on the fixture's broadcast on another channel). 404 for a destination or a fixture
  *  that is not this org's, before any port call. Never holds a lock across a port call. */
 export async function prepareYoutubeBroadcast(
-  a: { orgId: string; fixtureId: string; targetId: string; now: Date }, port: YouTubePort,
+  a: { orgId: string; fixtureId: string; targetId: string; now: Date }, portOf: PortSource,
 ): Promise<Prepared | null> {
   const [target] = await sql<{ connection_id: string | null; status: string | null; privacy: YoutubePrivacy | null; made_for_kids: boolean | null }[]>`
     select t.youtube_connection_id as connection_id, c.status, c.default_privacy as privacy, c.made_for_kids
@@ -137,6 +139,7 @@ export async function prepareYoutubeBroadcast(
     throw youtubeRefusal("youtube_reconnect_needed", connectionId);
   }
 
+  const port = typeof portOf === "function" ? portOf() : portOf;
   const at = await accessTokenFor(a.orgId, connectionId, port);
   const ctx: Ctx = {
     orgId: a.orgId, fixtureId: a.fixtureId, connectionId, privacy: target.privacy, madeForKids: target.made_for_kids, now: a.now,
@@ -463,9 +466,11 @@ async function failRow(ctx: Ctx, rowId: string, ytId: string | null, code: Youtu
 }
 
 /** A refused admission: created-new → deleteBroadcast at YouTube + row 'failed' code 'admission_refused', only while the row is
- *  still 'created'/'bound' (a row another admission reserved meanwhile is left to it); reused → reservation released (state back
- *  to 'live' when last_session_id is set, else 'bound' — or 'created' for a row YouTube has no broadcast for yet). Never throws
- *  (reports). */
+ *  still 'created'/'bound' (a row another admission reserved meanwhile is left to it) — or 'live' with NO session (T11 fix round
+ *  1, I-1: the admission committed, then provisioning deleted the session, and the FK nulled `last_session_id`; a new broadcast
+ *  nobody streams into would otherwise stay "upcoming" and hold its key for good; one whose session still exists has
+ *  `last_session_id` set and is left to that session); reused → reservation released (state back to 'live' when last_session_id
+ *  is set, else 'bound' — or 'created' for a row YouTube has no broadcast for yet). Never throws (reports). */
 export async function abandonPrepared(p: Prepared, port: YouTubePort): Promise<void> {
   try {
     if (p.reused) {
@@ -478,7 +483,7 @@ export async function abandonPrepared(p: Prepared, port: YouTubePort): Promise<v
     }
     const [row] = await sql<{ org_id: string; connection_id: string; yt_broadcast_id: string | null }[]>`
       update youtube_broadcasts set state = 'failed', last_error_code = 'admission_refused'
-       where id = ${p.broadcastId} and state in ('created', 'bound')
+       where id = ${p.broadcastId} and (state in ('created', 'bound') or (state = 'live' and last_session_id is null))
       returning org_id, connection_id, yt_broadcast_id`;
     if (!row || row.yt_broadcast_id === null) return;
     const ytId = row.yt_broadcast_id;

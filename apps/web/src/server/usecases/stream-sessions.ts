@@ -1794,14 +1794,16 @@ export async function startBroadcast(
   // live inside the grace has released the prior output and torn down the prior Machine, and the key frees and is reused), and
   // before the storage read. Outside every transaction: prepare holds no lock across a YouTube call. Null for a pasted row.
   // Server-side only: neither the broadcast nor the Prepared ever comes from the request.
-  const youtube = youtubeOf(deps);
+  // The port is a THUNK (T11 fix round 1, m3): prepare resolves it only for an API row, so a misspelt YOUTUBE_DRIVER cannot fail a
+  // pasted-key Go live, phone start or automatic start. `abandonPrepared` below is reached only with a Prepared, i.e. an API row.
+  const youtube = () => youtubeOf(deps);
   const prepared = probed ? await prepareYoutubeBroadcast({ orgId, fixtureId, targetId: body.targetId, now: deps.now() }, youtube) : null;
   // T11 (R12, spec §6.2): ANY throw between the prepare and the session's commit — the storage read, every admission refusal
   // and the 23505 mappers below, a pooled key that will not open, a mismatch — abandons the prepared broadcast before it is
   // rethrown: deleted at YouTube with its row `failed`, or a reused one's reservation released; never left "upcoming" for the
   // orphan sweep. Chained AFTER the transaction has rolled back, so no lock is held across the YouTube call.
   const abandonThenRethrow = async (err: unknown): Promise<never> => {
-    if (prepared !== null) await abandonPrepared(prepared, youtube);
+    if (prepared !== null) await abandonPrepared(prepared, youtube());
     throw err;
   };
   const usage = await deps.drivers.ingest.storageUsage().then(storageUsageForColumns).catch(abandonThenRethrow);   // outside the transaction; G7: fitted to the integer columns
@@ -1935,7 +1937,20 @@ export async function startBroadcast(
     throw err;
   }).catch(abandonThenRethrow);
 
-  await provisionSession(sessionId, deps);
+  try {
+    await provisionSession(sessionId, deps);
+  } catch (err) {
+    // T11 fix round 1 (I-1): the admission HAS committed, so `abandonThenRethrow` is behind us. When provisioning then deletes the
+    // session (Cloudflare refused the input: `provisionSession` removes the row and answers 503 ingest_unavailable), the FK nulls the
+    // broadcast's `last_session_id` and leaves a NEW broadcast `live` with no session: the end rule never ends it (no session has
+    // used it), its pooled key stays held, and it stays "upcoming" at YouTube (spec §6.2: deleted, never left upcoming).
+    // `abandonPrepared` fails and deletes it — and only a row with no session: one whose session still exists keeps its
+    // `last_session_id` and is left to that session's own end. A REUSED broadcast is left as it is, by `abandonPrepared`'s own
+    // reused branch (it releases a reservation and never deletes): its earlier sessions stay on it, so it stays `live` and the end
+    // rule ends it at their Stop + the grace; deleting it would delete a video that streamed.
+    if (prepared !== null) await abandonPrepared(prepared, youtube());
+    throw err;
+  }
   return { sessionId };
 }
 

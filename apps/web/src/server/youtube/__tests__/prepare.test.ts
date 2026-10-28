@@ -790,6 +790,36 @@ describe.skipIf(!HAS_DB)("abandonPrepared and attachPrepared", () => {
     expect(await row(first.broadcastId)).toEqual(after);
   });
 
+  it("abandonPrepared (T11 fix round 1, I-1): a NEW broadcast left 'live' with no session — admission committed, then provisioning deleted the session and the FK nulled last_session_id — is failed and deleted at YouTube; the same row WITH its session is left alone, a REUSED prepare never deletes it, and a second abandon changes nothing", async () => {
+    const w = await world();
+    const f = w.fixtures[0]!;
+    const { p, sessionId } = await goLive(w, f);
+    expect(p.reused, "premise: a new broadcast").toBe(false);
+
+    // Negative pair: a live broadcast whose session still exists is that session's, not an orphan.
+    await abandonPrepared(p, w.fake);
+    expect(await row(p.broadcastId)).toMatchObject({ state: "live", last_session_id: sessionId });
+    expect(callsOf(w.fake, "deleteBroadcast")).toBe(0);
+
+    // provisionSession's catch: the session row goes (V479's FK is on delete set null).
+    await sql`delete from fixture_stream_sessions where id = ${sessionId}`;
+    expect(await row(p.broadcastId), "premise: live, no session").toMatchObject({ state: "live", last_session_id: null });
+
+    // A reused prepare is the other half of the split: it releases a reservation and never deletes.
+    await abandonPrepared({ ...p, reused: true }, w.fake);
+    expect(await row(p.broadcastId)).toMatchObject({ state: "live", last_session_id: null });
+    expect(callsOf(w.fake, "deleteBroadcast")).toBe(0);
+
+    await abandonPrepared(p, w.fake);
+    expect(await row(p.broadcastId)).toMatchObject({ state: "failed", last_error_code: "admission_refused" });
+    expect(callsOf(w.fake, "deleteBroadcast")).toBe(1);
+    expect(w.fake.broadcastsCount()).toBe(0);
+    const after = await row(p.broadcastId);
+    await abandonPrepared(p, w.fake);
+    expect(await row(p.broadcastId)).toEqual(after);
+    expect(callsOf(w.fake, "deleteBroadcast"), "a second abandon deletes nothing more").toBe(1);
+  });
+
   it("abandonPrepared leaves a row another admission reserved meanwhile, and never throws when YouTube cannot be reached (reports)", async () => {
     const w = await world(2);
     const [f1, f2] = w.fixtures as [string, string];
