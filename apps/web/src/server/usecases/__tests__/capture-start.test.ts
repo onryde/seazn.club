@@ -18,6 +18,7 @@ import { CaptureRefusalError, captureRefusal } from "@/server/api-v1/capture-htt
 import { CaptureBeat, CaptureRefusal, CaptureStartOk } from "@/server/api-v1/capture-schemas";
 import { spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
 import { connect as connectChannel } from "@/server/youtube/__tests__/_connect-rig";
+import { connectionViews } from "@/server/youtube/connections";
 import { FakeYouTube } from "@/server/youtube/fake";
 import { youtubeRefusal } from "@/server/youtube/prepare";
 import { markReconnectNeeded } from "@/server/youtube/token-store";
@@ -392,5 +393,20 @@ describe.skipIf(!HAS_DB)("postStart on an API-backed pre-pick — a YouTube refu
     expect(fake.broadcastsCount(), "the refused attempt left nothing at YouTube").toBe(0);
     const { sid } = await start(r, A);
     expect((await sessionsOf(r.fixtureId)).map((s) => s.id)).toEqual([sid]);
+  });
+
+  // B4 fix round 2, F2: the record of a refused channel is for the AUTOMATIC start's retries; the operator's Start is a person's tap.
+  it("F2 — the operator's Start is a human tap: after a not-enabled refusal the next Start (inside the window) asks YouTube again, is admitted on its broadcast, and the channel reads enabled", async () => {
+    const { r, A, yt, fake } = await apiReady();
+    fake.failNext("bind", "youtube_live_not_enabled");
+    expect(await refused(start(r, A)), "premise: refused for the channel's live state").toEqual({ status: 409, body: { code: "no_destination", message: expect.any(String) } });
+    expect((await connectionViews(r.auth.orgId)).get(yt.connectionId)!.liveState, "premise: the refusal is on record").toBe("not_enabled");
+    const binds = fake.calls.filter((c) => c.method === "bind").length;
+
+    const { sid } = await start(r, A);
+    expect(fake.calls.filter((c) => c.method === "bind").length - binds, "YouTube was asked").toBe(1);
+    const [s] = await sql<{ api_backed: boolean; start_cause: string }[]>`select api_backed, start_cause from fixture_stream_sessions where id = ${sid}`;
+    expect(s).toMatchObject({ api_backed: true, start_cause: "operator" });
+    expect((await connectionViews(r.auth.orgId)).get(yt.connectionId)!.liveState, "a success clears the record").toBe("enabled");
   });
 });

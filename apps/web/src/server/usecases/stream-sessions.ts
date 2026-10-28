@@ -1797,7 +1797,7 @@ export async function startBroadcast(
   // The port is a THUNK (T11 fix round 1, m3): prepare resolves it only for an API row, so a misspelt YOUTUBE_DRIVER cannot fail a
   // pasted-key Go live, phone start or automatic start. `abandonPrepared` below is reached only with a Prepared, i.e. an API row.
   const youtube = () => youtubeOf(deps);
-  const prepared = probed ? await prepareYoutubeBroadcast({ orgId, fixtureId, targetId: body.targetId, now: deps.now() }, youtube) : null;
+  const prepared = probed ? await prepareYoutubeBroadcast({ orgId, fixtureId, targetId: body.targetId, now: deps.now(), startCause: opts.startCause }, youtube) : null;
   // T11 (R12, spec §6.2): ANY throw between the prepare and the session's commit — the storage read, every admission refusal
   // and the 23505 mappers below, a pooled key that will not open, a mismatch — abandons the prepared broadcast before it is
   // rethrown: deleted at YouTube with its row `failed`, or a reused one's reservation released; never left "upcoming" for the

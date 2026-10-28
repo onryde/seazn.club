@@ -5,9 +5,11 @@ import "server-only";
 // whose admission was refused.
 //
 //   1. The connection, reached from the destination row (`org_stream_targets.youtube_connection_id`). Not `connected` →
-//      youtube_reconnect_needed, before any port call. A channel whose not-enabled / restricted refusal is on record and still fresh
-//      (YOUTUBE_LIVE_STATE_FRESH_MINUTES) → that same refusal, before any port call (B4 fix round 1, I-2: an automatic start retries
-//      every minute, and each retry would cost a YouTube call and a failed row). An access token from the sealed refresh token (in
+//      youtube_reconnect_needed, before any port call. For an AUTOMATIC start alone, a channel whose not-enabled / restricted refusal is
+//      on record and still fresh (YOUTUBE_LIVE_STATE_FRESH_MINUTES) → that same refusal, before any port call (B4 fix round 1, I-2: an
+//      automatic start retries every minute, and each retry would cost a YouTube call and a failed row). A human's tap — the
+//      organiser's Go live, the phone operator's Start — always asks YouTube (fix round 2, F2): the club may have enabled live at YouTube
+//      a minute ago, and a person is owed YouTube's current answer, not a replayed one. An access token from the sealed refresh token (in
 //      memory only). A `youtube_reconnect_needed` from ANY port call (a dead grant) moves the connection to reconnect_needed first (F5).
 //   2. A short transaction: the fixture's OPEN broadcast (`created|bound|live|reserved`; `ending` is never selected, so a claimed
 //      row is never reused), locked `for update` (no skip). A reservation not yet lapsed is another Go live mid-admission →
@@ -41,6 +43,7 @@ import { siteOrigin } from "@/lib/site-origin";
 import {
   YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, isYoutubeLiveStateRefusal, isYoutubeRefusalCode, type YoutubePrivacy, type YoutubeRefusalCode,
 } from "@/lib/youtube";
+import type { StartCause } from "@/server/relay/domain/session";
 import { insertPooledKey } from "@/server/relay/secret-columns";
 import { freshLiveRefusal, recordLiveState } from "./connections";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts, type EndFacts } from "./end-rule";
@@ -126,7 +129,7 @@ interface Ctx {
  *  unlapsed reservation (or a session is live on the fixture's broadcast on another channel). 404 for a destination or a fixture
  *  that is not this org's, before any port call. Never holds a lock across a port call. */
 export async function prepareYoutubeBroadcast(
-  a: { orgId: string; fixtureId: string; targetId: string; now: Date }, portOf: PortSource,
+  a: { orgId: string; fixtureId: string; targetId: string; now: Date; startCause: StartCause }, portOf: PortSource,
 ): Promise<Prepared | null> {
   const [target] = await sql<{
     connection_id: string | null; status: string | null; privacy: YoutubePrivacy | null; made_for_kids: boolean | null;
@@ -150,8 +153,9 @@ export async function prepareYoutubeBroadcast(
     throw youtubeRefusal("youtube_reconnect_needed", connectionId);
   }
   // B4 fix round 1, I-2: the channel was refused for its live state a moment ago — say so again without asking YouTube. Writes nothing:
-  // a refusal that renewed its own stamp would never let the window lapse.
-  const recorded = freshLiveRefusal(target, a.now);
+  // a refusal that renewed its own stamp would never let the window lapse. Fix round 2, F2: for the AUTOMATIC start only — its retries are
+  // what the record spares; an organiser's or an operator's tap asks YouTube every time, and a success clears the record (`noteLiveState`).
+  const recorded = a.startCause === "automatic" ? freshLiveRefusal(target, a.now) : null;
   if (recorded !== null) throw youtubeRefusal(recorded, connectionId);
 
   const port = typeof portOf === "function" ? portOf() : portOf;

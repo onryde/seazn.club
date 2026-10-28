@@ -73,6 +73,7 @@ import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { archiveStreamTarget, readFirstInput } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import { connect as connectChannel } from "@/server/youtube/__tests__/_connect-rig";
+import { connectionViews } from "@/server/youtube/connections";
 import { broadcastEndDueAt, readEndFacts } from "@/server/youtube/end-rule";
 import { FakeYouTube } from "@/server/youtube/fake";
 import type { YoutubeErrorCode } from "@/server/youtube/port";
@@ -252,6 +253,23 @@ describe.skipIf(!HAS_DB)("YouTube Connect T11 — Go live streams into the prepa
     expect(fp(w.outputs[0]!.target), "the destination's own saved key (D6: the platform preset's url)").toBe(fp({ url: STREAM_PLATFORM_PRESETS.youtube, streamKey: pastedKey }));
   });
 
+  // B4 fix round 2, F2, through the REAL producer (createSession → prepare): the record of a refused channel is for an AUTOMATIC start's
+  // retries; the organiser's own tap is answered by YouTube every time.
+  it("F2 — the organiser's Go live is never answered from the record of a refused channel: after a not-enabled refusal the very next Go live (same minute, inside the window) asks YouTube, is admitted, and the channel reads enabled; prepare was handed the organiser cause both times", async () => {
+    const w = await world();
+    const f = w.fixtures[0]!;
+    w.fake.failNext("bind", "youtube_live_not_enabled");
+    expect(await refusalOf(goLive(w, f)), "premise: the first Go live was refused for the channel's live state").toMatchObject({ code: "youtube_live_not_enabled" });
+    expect((await connectionViews(w.orgId)).get(w.connectionId)!.liveState, "premise: the refusal is on record").toBe("not_enabled");
+    const binds = callsOf(w.fake, "bind");
+
+    const { sessionId } = await goLive(w, f);
+    expect(callsOf(w.fake, "bind") - binds, "YouTube was asked").toBe(1);
+    expect(await sessionRow(sessionId)).toMatchObject({ api_backed: true });
+    expect((await connectionViews(w.orgId)).get(w.connectionId)!.liveState, "a success clears the record").toBe("enabled");
+    expect(vi.mocked(prepareYoutubeBroadcast).mock.calls.map(([a]) => a.startCause)).toEqual(["organiser", "organiser"]);
+  });
+
   for (const mode of ["passthrough", "composed"] as const) {   // §9.2: both
     it(`${mode}: Go live on an API row → the session names the broadcast it streams into (api_backed), the broadcast is live with the session, and FakeIngest.addOutput got the POOLED {url, streamKey} YouTube issued — never a key of the destination's own`, async () => {
       const w = await world();
@@ -329,7 +347,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T11 — Go live streams into the prepa
       const f = w.fixtures.at(-1)!;
       if (busy) {
         // The ten, through prepare itself (the producer of open broadcasts and pooled keys).
-        for (const other of w.fixtures.slice(0, CHANNEL_STREAM_CAP)) await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: other, targetId: w.targetId, now: w.deps.now() }, w.fake);
+        for (const other of w.fixtures.slice(0, CHANNEL_STREAM_CAP)) await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: other, targetId: w.targetId, now: w.deps.now(), startCause: "organiser" }, w.fake);
         expect(w.issued, "premise: the channel's ten keys are all in use").toHaveLength(CHANNEL_STREAM_CAP);
       } else {
         w.fake.failNext("bind", code as YoutubeErrorCode);

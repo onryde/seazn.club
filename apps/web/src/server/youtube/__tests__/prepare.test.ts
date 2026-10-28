@@ -40,6 +40,7 @@ import { connectionViews, updateConnectionSettings } from "@/server/youtube/conn
 import { EndRuleInvariantError, readEndFacts } from "@/server/youtube/end-rule";
 import { FAKE_YOUTUBE_METHODS, FakeYouTube } from "@/server/youtube/fake";
 import type { YoutubeErrorCode, YouTubePort } from "@/server/youtube/port";
+import type { StartCause } from "@/server/relay/domain/session";
 import { abandonPrepared, attachPrepared, prepareYoutubeBroadcast, type Prepared } from "@/server/youtube/prepare";
 import { markReconnectNeeded, replaceConnectionToken } from "@/server/youtube/token-store";
 import { connect, org, type Org } from "./_connect-rig";
@@ -98,10 +99,15 @@ async function world(n = 1): Promise<World> {
   };
 }
 
-const prep = (w: World, fixtureId: string, o: { now?: Date; port?: YouTubePort; targetId?: string; orgId?: string } = {}) =>
+/** `startCause` defaults to the organiser's own tap — the case almost every test here is about; the ones about the AUTOMATIC start's
+ *  retries (the channel-state short-circuit) pass it, and the F2 test sweeps all three causes. */
+const prep = (w: World, fixtureId: string, o: { now?: Date; port?: YouTubePort; targetId?: string; orgId?: string; startCause?: StartCause } = {}) =>
   prepareYoutubeBroadcast(
-    { orgId: o.orgId ?? w.orgId, fixtureId, targetId: o.targetId ?? w.targetId, now: o.now ?? new Date() }, o.port ?? w.fake,
+    { orgId: o.orgId ?? w.orgId, fixtureId, targetId: o.targetId ?? w.targetId, now: o.now ?? new Date(), startCause: o.startCause ?? "organiser" },
+    o.port ?? w.fake,
   );
+/** The automatic start's retry: the one cause that believes a recorded channel state without asking YouTube. */
+const prepAuto = (w: World, fixtureId: string, o: { now?: Date; port?: YouTubePort } = {}) => prep(w, fixtureId, { ...o, startCause: "automatic" });
 const must = async (p: Promise<Prepared | null>): Promise<Prepared> => {
   const r = await p;
   if (r === null) throw new Error("prepare answered null for an API destination");
@@ -828,7 +834,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — the channel's live state (
     expect(silent, "three codes x three steps").toBe(9);
   });
 
-  it("SEQUENCE: refused (not enabled) → the next Go live inside the window is refused with the SAME code and ZERO port calls and writes nothing (not even a refreshed stamp) → after the window YouTube is asked again → a clean bind reads enabled", async () => {
+  it("SEQUENCE (the automatic start's retries): refused (not enabled) → the next AUTOMATIC start inside the window is refused with the SAME code and ZERO port calls and writes nothing (not even a refreshed stamp) → after the window YouTube is asked again → a clean bind reads enabled", async () => {
     let swept = 0;
     for (const code of Object.keys(LIVE_STATE_OF)) {
       const w = await world(1);
@@ -840,13 +846,13 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — the channel's live state (
       const calls = w.fake.calls.length;
 
       // Inside the window: 9 minutes (not 5, not 15: the ruling's ten).
-      const inside = await refusal(prep(w, f, { now: await afterRecorded(w, LIVE_STATE_FRESH_MINUTES - 1) }));
+      const inside = await refusal(prepAuto(w, f, { now: await afterRecorded(w, LIVE_STATE_FRESH_MINUTES - 1) }));
       expect(inside, code).toMatchObject({ status: 409, code, extra: { connectionId: w.connectionId } });
       expect(w.fake.calls.length, `${code}: YouTube was asked nothing`).toBe(calls);
       expect((await rowsOf(f)).length, `${code}: no failed row either`).toBe(rows);
       expect((await facts(w)).last_health_at?.getTime(), `${code}: the refusal does not renew its own window`).toBe(first.last_health_at!.getTime());
       // The very edge: ten minutes is no longer "fresher than ten minutes".
-      const justInside = await refusal(prep(w, f, { now: minutesAfter(first.last_health_at!, LIVE_STATE_FRESH_MINUTES - 1 / 60) }));
+      const justInside = await refusal(prepAuto(w, f, { now: minutesAfter(first.last_health_at!, LIVE_STATE_FRESH_MINUTES - 1 / 60) }));
       expect(justInside.code, `${code}: 9 min 59 s is still inside`).toBe(code);
       expect(w.fake.calls.length).toBe(calls);
 
@@ -869,6 +875,67 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — the channel's live state (
     expect(swept, "anti-vacuity: both codes").toBe(2);
   });
 
+  // B4 fix round 2, F2: the record exists to stop an AUTOMATIC start's every-minute retries costing a YouTube call each. A human tap is
+  // different: an organiser who has just enabled live at YouTube and taps Go live again within the window must get YouTube's answer,
+  // not a ten-minute-old "up to 24 hours" — so the organiser's tap and the phone operator's tap always ask.
+  it("F2 — the record is believed by the AUTOMATIC start alone: inside the window the organiser's and the operator's Go live each ask YouTube (one bind) and a clean answer clears the record; the automatic start asks nothing and leaves the record as it was (2 codes x 3 causes)", async () => {
+    const CAUSES: readonly StartCause[] = ["organiser", "operator", "automatic"];
+    const bindsOf = (w: World) => w.fake.calls.filter((c) => c.method === "bind").length;
+    let asked = 0;
+    let believed = 0;
+    for (const code of Object.keys(LIVE_STATE_OF)) {
+      for (const cause of CAUSES) {
+        const w = await world(1);
+        const f = w.fixtures[0]!;
+        w.fake.failNext("bind", code as YoutubeErrorCode);
+        await refusal(prep(w, f));   // the record: YouTube refused for the channel's live state
+        const recorded = await facts(w);
+        expect(recorded, `${code}/${cause}: premise — the record is there`).toMatchObject({ last_error_code: code });
+        const inside = await afterRecorded(w, LIVE_STATE_FRESH_MINUTES - 1);
+        const binds = bindsOf(w);
+        const calls = w.fake.calls.length;
+
+        if (cause === "automatic") {
+          expect((await refusal(prep(w, f, { now: inside, startCause: cause }))).code, `${code}/${cause}`).toBe(code);
+          expect(w.fake.calls.length, `${code}/${cause}: YouTube was asked nothing`).toBe(calls);
+          expect(await facts(w), `${code}/${cause}: the record is untouched`).toEqual(recorded);
+          believed++;
+          continue;
+        }
+        // YouTube now says yes (the club enabled live a minute ago): the tap is answered by YouTube, and the record clears.
+        const ok = await must(prep(w, f, { now: inside, startCause: cause }));
+        expect(ok.reused, `${code}/${cause}`).toBe(false);
+        expect(bindsOf(w) - binds, `${code}/${cause}: YouTube was asked once`).toBe(1);
+        expect(await liveOf(w), `${code}/${cause}: a success clears the recorded state`).toBe("enabled");
+        const after = await facts(w);
+        expect(after, `${code}/${cause}`).toMatchObject({ status: "connected", last_error_code: null });
+        expect(after.last_health_at!.getTime(), `${code}/${cause}: …and is itself a check`).toBeGreaterThan(recorded.last_health_at!.getTime());
+        asked++;
+      }
+    }
+    expect(asked, "anti-vacuity: 2 codes x the 2 human causes").toBe(4);
+    expect(believed, "anti-vacuity: 2 codes x the automatic cause").toBe(2);
+  });
+
+  it("F2 — a human tap inside the window that YouTube STILL refuses is YouTube's own answer, asked once, and it renews the record (a stale record is never replayed to a person)", async () => {
+    let swept = 0;
+    for (const code of Object.keys(LIVE_STATE_OF)) {
+      const w = await world(1);
+      const f = w.fixtures[0]!;
+      w.fake.failNext("bind", code as YoutubeErrorCode);
+      await refusal(prep(w, f));
+      const recorded = await facts(w);
+      const binds = w.fake.calls.filter((c) => c.method === "bind").length;
+      w.fake.failNext("bind", code as YoutubeErrorCode);
+      const again = await refusal(prep(w, f, { now: await afterRecorded(w, LIVE_STATE_FRESH_MINUTES - 1), startCause: "organiser" }));
+      expect(again.code, code).toBe(code);
+      expect(w.fake.calls.filter((c) => c.method === "bind").length - binds, `${code}: asked once`).toBe(1);
+      expect((await facts(w)).last_health_at!.getTime(), `${code}: a fresh refusal renews the record`).toBeGreaterThan(recorded.last_health_at!.getTime());
+      swept++;
+    }
+    expect(swept, "anti-vacuity: both codes").toBe(2);
+  });
+
   it("the recorded reading is believed only while the page would read it as that state: a check older than the token, a reconnect since, or another code → YouTube is asked (positive pair: the same row, a check since the token, refuses with no call)", async () => {
     const w = await world();
     const f = w.fixtures[0]!;
@@ -877,7 +944,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — the channel's live state (
 
     // Positive pair first: a fresh `blocked` since the token → refused, no call.
     await sql`update org_youtube_connections set last_error_code = 'youtube_live_blocked', last_health_at = now() where id = ${w.connectionId}`;
-    expect((await refusal(prep(w, f))).code).toBe("youtube_live_blocked");
+    expect((await refusal(prepAuto(w, f))).code).toBe("youtube_live_blocked");
     expect(calls()).toBe(0);
 
     // The reading predates the token (the token was replaced after it, without the code being cleared): liveStateOf says unknown, so
@@ -885,25 +952,25 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — the channel's live state (
     await sql`update org_youtube_connections set status_since = now() + interval '1 minute' where id = ${w.connectionId}`;
     expect(await liveOf(w), "premise: the page reads unknown").toBe("unknown");
     const before = calls();
-    const ok = await must(prep(w, f));
+    const ok = await must(prepAuto(w, f));
     expect(calls(), "YouTube was asked").toBeGreaterThan(before);
     expect(ok.reused).toBe(false);
     await sql`update youtube_broadcasts set state = 'failed' where id = ${ok.broadcastId}`;
 
     // A reconnect (the real writer) clears the code: the next Go live asks YouTube although the reading was minutes old.
     await sql`update org_youtube_connections set last_error_code = 'youtube_live_not_enabled', last_health_at = now(), status_since = now() - interval '1 hour' where id = ${w.connectionId}`;
-    expect((await refusal(prep(w, f))).code, "premise: believed again").toBe("youtube_live_not_enabled");
+    expect((await refusal(prepAuto(w, f))).code, "premise: believed again").toBe("youtube_live_not_enabled");
     // The grant the fake knows (a reconnect re-seals the token Google issued; an invented one would not exchange).
     expect(await replaceConnectionToken(sql, w.orgId, w.connectionId, w.token)).toBe(true);
     const beforeReconnect = calls();
-    await must(prep(w, f));
+    await must(prepAuto(w, f));
     expect(calls(), "after a reconnect YouTube is asked").toBeGreaterThan(beforeReconnect);
 
     // Any other recorded code is not a live state.
     await sql`update youtube_broadcasts set state = 'failed' where fixture_id = ${f}`;
     await sql`update org_youtube_connections set last_error_code = 'youtube_unavailable', last_health_at = now(), status_since = now() - interval '1 hour' where id = ${w.connectionId}`;
     const beforeOther = calls();
-    await must(prep(w, f));
+    await must(prepAuto(w, f));
     expect(calls(), "an unrecognised code is not believed").toBeGreaterThan(beforeOther);
   });
 
