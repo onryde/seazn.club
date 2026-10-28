@@ -1,7 +1,7 @@
-// scripts/smoke/harness.ts — the state and helpers scripts/smoke.ts's suites share: the check counters (private here: read them
+// scripts/smoke/harness.ts — the state and helpers the smoke suites (scripts/smoke/suites/) share: the check counters (private here: read them
 // with `counts()`, move them only through `check`), the per-suite manifest recorder (`suite`, `writeManifest`), sessions and the
 // HTTP helpers (`raw`, `call`, `v1`), sign-in, the DB and billing helpers, and the run's `tag`. A helper used by exactly one suite
-// lives with that suite, not here. Runs under `node --experimental-strip-types` like smoke.ts: relative imports carry `.ts`.
+// lives with that suite, not here. Runs under `node --experimental-strip-types` like the rest of scripts/smoke/: relative imports carry `.ts`.
 import { createHmac } from "node:crypto";
 import { writeFileSync } from "node:fs";
 import postgres from "postgres";
@@ -67,7 +67,7 @@ export async function raw(
   // giving `call()` a non-`any` return, which reds ~18k lines of untyped member
   // access at tsc — a real piece of work, deliberately not this change's. The
   // three seed/repro scripts with the same shape are relaxed per-file in
-  // eslint.config.mjs; smoke.ts is pinned to these two lines instead so every
+  // eslint.config.mjs; scripts/smoke/ is pinned to these two lines instead so every
   // other unsafe-any in it still errors.
   // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   const json = await res.json().catch(() => ({ ok: false, error: "no json" }));
@@ -565,7 +565,7 @@ export async function postPaidRegistrationWebhook(args: {
  * preferring a test one (registration-currency.live.test.ts's own
  * `expect(key.startsWith("sk_test"))` guard, same idea). Accepts a
  * *restricted* test key too (`rk_test_…`) — this env's own STRIPE_SECRET_KEY
- * is one. Dynamic import matches paymentMethodSuite's own convention above —
+ * is one. Dynamic import matches paymentMethodSuite's own convention (suites/paymentMethod.ts) —
  * this plain `node --experimental-strip-types` runner has no `@/lib/stripe`
  * alias to import from. Caller must already have confirmed STRIPE_SECRET_KEY
  * is set (the usual skip-shape check).
@@ -585,7 +585,7 @@ export async function smokeStripe() {
  * a destination charge in the same shape createRegistrationCheckout uses
  * (`transfer_data.destination` + `application_fee_amount`), confirmed
  * directly with the `pm_card_visa` test token — the same headless-card
- * mechanism paymentMethodSuite above already relies on to attach a real
+ * mechanism paymentMethodSuite (suites/paymentMethod.ts) already relies on to attach a real
  * card with no client-side step.
  *
  * This deliberately does NOT try to complete a real Checkout Session:

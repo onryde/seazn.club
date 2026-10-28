@@ -300,7 +300,7 @@ common_env() {
 }
 smoke_env() {
   common_env
-  # `scripts/smoke.ts` signs in by reading `login_url` off the magic-link
+  # `scripts/smoke/` signs in by reading `login_url` off the magic-link
   # response, and the standalone server it drives runs as NODE_ENV=production.
   # Production no longer exposes that link on a failed send (it used to, which
   # meant a Resend outage handed out sign-in links), so a production-mode

@@ -101,7 +101,7 @@ report as running.
 
 - Unit tests
 - E2E tests (Playwright)
-- Smoke tests (this repo's `scripts/smoke.ts` pattern)
+- Smoke tests (this repo's `scripts/smoke/` pattern)
 - Regression tests covering the specific bug/behavior being changed
 
 A task is not "done" until all four exist and pass. A task with no literal
