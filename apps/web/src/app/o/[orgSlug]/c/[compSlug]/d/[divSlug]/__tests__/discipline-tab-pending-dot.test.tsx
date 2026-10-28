@@ -13,6 +13,7 @@ const stagesSpies = vi.hoisted(() => ({
   getStandings: vi.fn(async () => ({ rows: [] })),
   getSeedProposal: vi.fn(),
   getStageRosterDrift: vi.fn(async () => ({ ghosts: [], unplaced: [] })),
+  listStagesWithTableRules: vi.fn(async () => []),
 }));
 
 vi.mock("@/server/page-auth", () => pageAuth);

@@ -89,7 +89,7 @@ const SCRIPTS: Record<string, SportScript> = {
     variant: "fih-outdoor",
     card: "red",
     cardEvent: (ctx) => ["hockey.suspension.start", { by: ctx.entrantA, person: ctx.personX, class: "red" }],
-    fullTime: (ctx) => [["hockey.goal", { by: ctx.entrantB }], ...["Q2", "Q3", "Q4", "FT"].map((to): [string, object] => ["hockey.period.advance", { to }])],
+    fullTime: (ctx) => [["hockey.goal", { by: ctx.entrantB, kind: "fg" }], ...["Q2", "Q3", "Q4", "FT"].map((to): [string, object] => ["hockey.period.advance", { to }])],
   },
   icehockey: {
     variant: "iihf",
