@@ -158,11 +158,14 @@ for (const c of CASES) {
     await expect(control).toHaveValue("");
     await expect(block).toHaveAttribute("data-source", "division");
     if (field.kind === "number") {
-      const cfg = await divisionConfig(request, divisionId);
-      const preset = moduleOf(c.sport).variants[c.variant] as Record<string, unknown>;
-      if (Object.hasOwn(preset, c.key)) expect(cfg[c.key], `${c.key}: the division holds the variant's value`).toEqual(preset[c.key]);
-      const named = typeof cfg[c.key] === "number" ? `${L["rules.default"]!} (${cfg[c.key]})` : L["rules.default"]!;
+      // The placeholder names the ENGINE's value for the variant (class 19: never the stored config the page might merely echo);
+      // a key the engine gives no value (football's concussion allowance: absent = not in force) says plain "Default".
+      const engine = engineValue(c);
+      const named = typeof engine === "number" ? `${L["rules.default"]!} (${engine})` : L["rules.default"]!;
       await expect(control).toHaveAttribute("placeholder", named);
+      // And the division really holds that value, so the page and the engine are one fact (the premise, kept apart from the check above).
+      const cfg = await divisionConfig(request, divisionId);
+      if (typeof engine === "number") expect(cfg[c.key], `${c.key}: the division holds the engine's value`).toEqual(engine);
     } else if (field.kind === "bool") {
       await expect(control.locator("option")).toHaveText([L["rules.default"]!, L["rules.on"]!, L["rules.off"]!]);
     } else {
