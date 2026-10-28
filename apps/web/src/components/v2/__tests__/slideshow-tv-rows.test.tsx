@@ -46,6 +46,8 @@ vi.mock("next/navigation", () => ({
 import { Slideshow } from "@/components/v2/slideshow";
 import { buildPublicDivisionSlides, type FixtureSlideItem, type Slide, type StandingsSlideColumn } from "@/server/slideshow-data";
 import { iihfLeague } from "@/server/engine-db/__tests__/helpers/stored-table-rows";
+import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
+import { builtinModules } from "@seazn/engine/sports";
 import { slideshowLabels } from "@/server/slideshow-labels";
 import { ratioText } from "@seazn/engine/competition";
 import { getDictionary } from "@/lib/i18n";
@@ -658,15 +660,16 @@ describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds
   };
 
   it("a column shape no grid template declares is refused by name, not drawn on a template with the wrong track count", async () => {
-    // The two shapes the builder makes (every sport: 4 shown / IIHF: 6 with only P compact) each have a template; any
-    // other — here the split with nothing folding, 6/6 — has none, and a board of mismatched tracks would misalign every
-    // count under the wrong header. The refusal is the guard; render it through the board itself.
+    // The shapes the builder makes (a table that can draw: 4 shown; one that cannot: 3; IIHF: 5, or 6 with a booked draw,
+    // with only P compact — export review I2) each have a template; any other — here the split with nothing folding, 5/5 —
+    // has none, and a board of mismatched tracks would misalign every count under the wrong header. The refusal is the
+    // guard; render it through the board itself.
     const iihf = await iihfSlide();
     if (iihf.kind !== "standings") throw new Error("premise");
     const unfolded: Slide = { ...iihf, columns: iihf.columns.map((c) => ({ ...c, compact: true })) };
     const draw = (slide: Slide) =>
       renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", liveHref: "/x", labels: slideshowLabels("en") }));
-    expect(() => draw(unfolded)).toThrow("standings slide: no grid template for 6/6 result columns");
+    expect(() => draw(unfolded)).toThrow("standings slide: no grid template for 5/5 result columns");
     // The positive pair: the builder's own shapes draw.
     expect(draw(iihf)).toContain("OTW");
     expect(draw(plainSlide)).toContain("North Harbour Rovers");
@@ -680,7 +683,7 @@ describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds
     const withRatio: Slide = { ...iihf, rows: iihf.rows.map((r) => ({ ...r, pointRatio: "1.000" })) };
     const draw = (slide: Slide) =>
       renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", liveHref: "/x", labels: slideshowLabels("en") }));
-    expect(() => draw(withRatio)).toThrow("standings slide: no grid template for 6/1 result columns with a ratio column");
+    expect(() => draw(withRatio)).toThrow("standings slide: no grid template for 5/1 result columns with a ratio column");
     // The positive pair: a plain slide with the ratio draws its ratio track.
     const plainWithRatio: Slide = { ...plainSlide, rows: plainSlide.kind === "standings" ? plainSlide.rows.map((r) => ({ ...r, pointRatio: "1.250" })) : [] };
     const html = draw(plainWithRatio);
@@ -712,15 +715,15 @@ describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds
   }
   const rowTokens = (html: string) => gridsOf(html).find((g) => g.tokens.includes("relative"))!.tokens;
 
-  it("heads #, the entrant, P · W · OTW · OTL · D · L and Pts in the board's own words, and each row prints the builder's cells in that order", async () => {
+  it("heads #, the entrant, P · W · OTW · OTL · L and Pts in the board's own words (RBG §3.4: no D), and each row prints the builder's cells in that order", async () => {
     const slide = await iihfSlide();
     const labels = slideshowLabels("en");
     const [header, ...rows] = gridsOf(board(slide));
-    expect(header!.cells.map((c) => c.text)).toEqual(["#", labels.entrant, labels.played, labels.won, labels.otw, labels.otl, labels.drawn, labels.lost, labels.points]);
+    expect(header!.cells.map((c) => c.text)).toEqual(["#", labels.entrant, labels.played, labels.won, labels.otw, labels.otl, labels.lost, labels.points]);
     expect(rows).toHaveLength(6);
     // RBG §3.4: Ash 5 played, 1 regulation win, 2 OT/GWS wins, 2 OT/GWS losses, no regulation loss — 9 points.
     const ash = rows.find((r) => r.cells[1]?.text === "Ash")!;
-    expect(ash.cells.map((c) => c.text)).toEqual(["1", "Ash", "5", "1", "2", "2", "0", "0", "9"]);
+    expect(ash.cells.map((c) => c.text)).toEqual(["1", "Ash", "5", "1", "2", "2", "0", "9"]);
     if (slide.kind !== "standings") throw new Error("premise");
     for (const row of rows) {
       const r = slide.rows.find((x) => x.name === row.cells[1]!.text)!;
@@ -733,11 +736,11 @@ describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds
     const labels = slideshowLabels("en");
     const [header, ...rows] = gridsOf(html);
     const folded = (cells: { cls: string; text: string }[]) => cells.filter((c) => /(^|\s)max-lg:hidden(\s|$)/.test(c.cls)).map((c) => c.text);
-    expect(folded(header!.cells)).toEqual([labels.won, labels.otw, labels.otl, labels.drawn, labels.lost]);
-    for (const row of rows) expect(folded(row.cells), row.cells[1]!.text).toHaveLength(5);
+    expect(folded(header!.cells)).toEqual([labels.won, labels.otw, labels.otl, labels.lost]);
+    for (const row of rows) expect(folded(row.cells), row.cells[1]!.text).toHaveLength(4);
     // Below lg the template has a track for each cell still shown; from lg, one for every cell.
     for (const g of [header!, ...rows]) {
-      expect(tracksOf(g.tokens), "below lg: #, entrant, P, Pts").toHaveLength(header!.cells.length - 5);
+      expect(tracksOf(g.tokens), "below lg: #, entrant, P, Pts").toHaveLength(header!.cells.length - 4);
       expect(lgTracksOf(g.tokens), "from lg: every cell").toHaveLength(header!.cells.length);
     }
     // The plain board is as it always was: no fold, no second template.
@@ -792,5 +795,74 @@ describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds
     }
     expect(checked, "8 labels").toBe(8);
     expect(wider).toEqual([]);
+  });
+});
+
+// ---- Export review I2 (2026-10-28): the board prints D exactly where the stage can draw ---------------------------------
+//
+// A stage that can never draw (every set sport: a set match always has a winner; IIHF: RBG §3.4 line 343,
+// "GP · W · OTW · OTL · L") prints no D, as the public table never does; football's league can end level and keeps it from
+// the first round. Each slide is the BUILDER's own (`buildPublicDivisionSlides` over the stage's real rules doc), drawn
+// by the board itself, so a shape with no grid template would throw here.
+describe("export review I2: the kiosk board prints D only where the stage can draw — without for IIHF and set sports, with for football", () => {
+  const NAMES = ["Ash", "Birch", "Cedar"];
+  const decided = NAMES.map((n, i) => ({ entrantId: n, played: 2, won: 2 - i, drawn: 0, lost: i, points: 6 - 3 * i, rank: i + 1, metrics: {} }));
+  async function slideFor(sport: string, variant: string): Promise<Slide> {
+    const m = builtinModules.find((x) => x.key === sport);
+    if (m === undefined) throw new Error(`premise: ${sport} ships`);
+    const doc = unpinnedRulesDoc({ module: m, divisionConfig: m.variants[variant] });
+    const slides = await buildPublicDivisionSlides({
+      division: { id: "d1", name: "Open", sport_key: m.key, module_version: m.version },
+      stages: [{ id: "sl", kind: "league", name: "League", table_rules: doc }],
+      pools: [],
+      fixtures: [],
+      standings: [{ stage_id: "sl", pool_id: null, rows: decided }],
+      entrants: NAMES.map((n) => ({ id: n, display_name: n })),
+    });
+    const slide = slides.find((x) => x.kind === "standings");
+    if (slide === undefined) throw new Error(`premise: ${sport}: the builder made a standings slide`);
+    return slide;
+  }
+  /** The board's header cells (hidden-from-AT dropped) and its row grid's class tokens. */
+  const drawn = (html: string) => {
+    const grids = [...html.matchAll(/<div class="((?:relative )?grid [^"]*grid-cols-\[[^"]*)"[^>]*>(.*?)<\/div>(?=<div|<\/div>)/g)].map((g) => ({
+      tokens: g[1]!.split(/\s+/).filter(Boolean),
+      cells: [...g[2]!.matchAll(/<span(?![^>]*aria-hidden)[^>]*>([^<]*)<\/span>/g)].map((x) => x[1]!),
+    }));
+    if (grids.length < 2) throw new Error("premise: the board drew a header and rows");
+    return { header: grids[0]!.cells, rows: grids.slice(1) };
+  };
+
+  it("badminton and volleyball (set sports), IIHF ice hockey: no D on the board; football: D; every row a cell under every header, one track each (volleyball's Pts ratio too)", async () => {
+    const labels = slideshowLabels("en");
+    const cases = [
+      { sport: "badminton", variant: "bwf", want: [labels.played, labels.won, labels.lost] },
+      { sport: "volleyball", variant: Object.keys(builtinModules.find((m) => m.key === "volleyball")!.variants)[0]!, want: [labels.played, labels.won, labels.lost] },
+      { sport: "icehockey", variant: "iihf", want: [labels.played, labels.won, labels.otw, labels.otl, labels.lost] },
+      { sport: "football", variant: "11-a-side", want: [labels.played, labels.won, labels.drawn, labels.lost] },
+    ];
+    let checked = 0;
+    for (const c of cases) {
+      const slide = await slideFor(c.sport, c.variant);
+      const html = board(slide);
+      const { header, rows } = drawn(html);
+      // A division whose order ranks on point_ratio (FIVB's volleyball) carries the ratio track after Pts: the no-draw
+      // shape's ratio template.
+      const ratio = slide.kind === "standings" && slide.rows.some((r) => r.pointRatio !== undefined);
+      if (c.sport === "volleyball") expect(ratio, "premise: volleyball's board carries its Pts ratio").toBe(true);
+      expect(header, `${c.sport}: the board's header`).toEqual(["#", labels.entrant, ...c.want, labels.points, ...(ratio ? [labels.pointRatio] : [])]);
+      expect(rows, `${c.sport}: a row per entrant`).toHaveLength(NAMES.length);
+      for (const r of rows) {
+        expect(r.cells, `${c.sport}: a cell under every header`).toHaveLength(header.length);
+        // one template track per cell (from lg, where every count shows): nothing drawn under the wrong header
+        const lg = r.tokens.find((t) => t.startsWith("lg:grid-cols-["));
+        const tracks = (lg === undefined ? r.tokens.find((t) => t.startsWith("grid-cols-["))! : lg).replace(/^(lg:)?grid-cols-\[|\]$/g, "").split("_")
+          .reduce((n, raw) => n + (/^repeat\((\d+),/.exec(raw) ? Number(/^repeat\((\d+),/.exec(raw)![1]) : 1), 0);
+        expect(tracks, `${c.sport}: one track per cell`).toBe(header.length);
+      }
+      expect(header.includes(labels.drawn), `${c.sport}: D on the board`).toBe(c.sport === "football");
+      checked++;
+    }
+    expect(checked).toBe(4);
   });
 });

@@ -39,9 +39,11 @@ const L = {
   points: enUi["slideshow.col.points"],
   pointRatio: enUi["slideshow.col.pointRatio"],
 };
-/** The header a slide had before the column existed, then the one with it. */
+/** The header a slide had before the column existed (a stage that can draw: the generic division, `score` variant),
+ *  then a badminton board's with it: no D, since a set match always has a winner and the public table never prints a D
+ *  for a stage that cannot draw (export review I2, 2026-10-28). */
 const HEADER = ["#", L.entrant, L.played, L.won, L.drawn, L.lost, L.points];
-const HEADER_WITH_RATIO = [...HEADER, L.pointRatio];
+const HEADER_WITH_RATIO = ["#", L.entrant, L.played, L.won, L.lost, L.points, L.pointRatio];
 
 /** One API round trip against a local production build, with headroom. */
 const API_CALL_MS = 1_500;
@@ -204,7 +206,7 @@ test.describe("organiser slideshow: the standings slide's Pts ratio column", () 
     expect(table.header).toEqual(HEADER_WITH_RATIO);
     expect(Object.keys(table.rows).sort()).toEqual(["Mina", "Rita"]);
     for (const [name, cells] of Object.entries(table.rows)) {
-      expect(cells, `${name}'s cells: rank, entrant, P, W, D, L, Pts, ratio`).toHaveLength(HEADER_WITH_RATIO.length);
+      expect(cells, `${name}'s cells: rank, entrant, P, W, L, Pts, ratio`).toHaveLength(HEADER_WITH_RATIO.length);
       expect(cells.slice(2, 3), `${name} played one`).toEqual(["1"]);
     }
     // Home won both games 21-0, and which of the two entrants is home is the

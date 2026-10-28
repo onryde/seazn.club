@@ -516,10 +516,12 @@ export async function buildDivisionDocModel(
         const layout = tableLayoutFor(rules);
         const { unit } = layout;
         // W2d follow-up (final review m3; RBG §3.4): the result columns are the public table's own declaration under the
-        // stage's layout (`fixedResultColumns`: IIHF's P · W · OTW · OTL · D · L, every other table P · W · D · L), and each
-        // cell is the public table's (`resultColumnText`: W and L leave out the decisions counted apart) — so a hockey
-        // club's PDF no longer folds its overtime wins into W. A count stays a NUMBER cell, as before.
-        const results = fixedResultColumns(layout);
+        // stage's layout (`fixedResultColumns`: IIHF's P · W · OTW · OTL · L), and each cell is the public table's
+        // (`resultColumnText`: W and L leave out the decisions counted apart) — so a hockey club's PDF no longer folds its
+        // overtime wins into W. A count stays a NUMBER cell, as before. D prints where the stage can reach a draw (its
+        // reachable outcomes, export review I2) or a row holds one — asked over the WHOLE stage, so every pool prints one
+        // shape and the sheet one column grid.
+        const results = fixedResultColumns(layout, rules?.reachable, stageTables.flatMap((x) => x.rows));
         const cascade = tableOrderOf(rules);
         const tables = stageTables.map((table) => {
           const level = isLevelTable(table.rows);

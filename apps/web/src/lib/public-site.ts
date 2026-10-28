@@ -226,8 +226,8 @@ export interface StandingsColumn {
 /**
  * A table's result columns, in print order: P, W, the decisions counted apart when `apart` (IIHF's OTW and OTL, W2d spec
  * §5.7, RBG §3.4), D when `draws`, L. Points is not one of them: it prints after the sport's metrics. THE declaration —
- * `standingsColumns` asks it with `draws` = "a row has a draw"; the fixed-shape tables (the organiser export, the kiosk:
- * `fixedResultColumns`) ask it with `draws` on, the shape they always printed.
+ * `standingsColumns` asks it with `draws` = "a row has a draw" (`tableHasDraw`); the fixed-shape tables (the organiser
+ * export, the kiosk: `fixedResultColumns`) ask it with `draws` = "the stage can reach a draw, or a row has one".
  */
 export function resultColumns(apart: boolean, draws: boolean): StandingsColumn[] {
   return [
@@ -244,6 +244,11 @@ export function resultColumns(apart: boolean, draws: boolean): StandingsColumn[]
   ];
 }
 
+/** THE public table's D test (`standingsColumns`): a row of the table holds a draw. */
+export function tableHasDraw(rows: readonly Pick<StandingsRowLike, "drawn">[]): boolean {
+  return rows.some((r) => r.drawn > 0);
+}
+
 /**
  * `apart` (W2d spec §5.7; RBG §3.4): the table counts its decisions beyond regulation in their own columns — IIHF's
  * GP · W · OTW · OTL · L — from the engine's `tableLayoutOf` (`apart.length > 0`); W and L then leave them out
@@ -256,7 +261,7 @@ export function standingsColumns(
   derivedSpecs: readonly { key: string; label: string; decimals: number }[],
   apart = false,
 ): StandingsColumn[] {
-  const columns = resultColumns(apart, rows.some((r) => r.drawn > 0));
+  const columns = resultColumns(apart, tableHasDraw(rows));
   for (const spec of metricSpecs) {
     if (spec.display === false) continue;
     if (!rows.some((r) => spec.key in r.metrics)) continue;

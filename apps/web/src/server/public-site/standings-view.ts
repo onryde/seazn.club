@@ -42,7 +42,7 @@ import {
   type TieBreakNote,
 } from "@seazn/engine/competition";
 import type { PartialScheduleKey, TiebreakerKey } from "@seazn/engine/sport";
-import { resultColumns, standingsColumns, formatMetric, type MetricSpecLike, type StandingsColumn } from "@/lib/public-site";
+import { resultColumns, standingsColumns, tableHasDraw, formatMetric, type MetricSpecLike, type StandingsColumn } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { TableViewT } from "./competition-hub-schema";
@@ -435,12 +435,22 @@ export function tableColumns(
   return standingsColumns(metricSpecs, cascade, rows, DERIVED_METRICS, layout.apart.length > 0);
 }
 
-/** W2d follow-up (final review m3, m8) — the result columns of a FIXED-shape table, the organiser export and the kiosk:
- *  the public table's own declaration under the stage's layout (IIHF's P · W · OTW · OTL · L, RBG:343-344), with D on
- *  every table, where the public table prints it only once a draw exists — a printed sheet and a TV board keep one shape
- *  all season, as both always have. Their cells are `cellText`'s, the public table's. */
-export function fixedResultColumns(layout: TableLayout): StandingsColumn[] {
-  return resultColumns(layout.apart.length > 0, true);
+/** W2d follow-up (final review m3, m8; export review I2, 2026-10-28) — the result columns of a FIXED-shape table, the
+ *  organiser export and the kiosk: the public table's own declaration under the stage's layout (IIHF's
+ *  P · W · OTW · OTL · L, RBG:343-344). D prints where the stage can reach a draw — the engine's own declaration, its
+ *  reachable outcomes (`reachableResultKinds`: a draw the sport stands, or a shoot-out booked as one, B2) — from the
+ *  first round, where the public table waits for the first draw: a printed sheet and a TV board keep one shape all
+ *  season. A stage that can never draw (IIHF, every set sport) prints no D, as the public table never does. And D prints
+ *  on any table that holds a draw (`tableHasDraw`, the public table's own test), so a sheet never hides a booked one; a
+ *  stage the loader refused (no reachable outcomes to read) keeps D, as before. `rows`: every row the shape covers (the
+ *  export's: the whole stage, so each pool prints one shape). Cells are `cellText`'s, the public table's. */
+export function fixedResultColumns(
+  layout: TableLayout,
+  reachable: readonly OutcomeKey[] | null | undefined,
+  rows: readonly Pick<StandingsRow, "drawn">[],
+): StandingsColumn[] {
+  const draws = reachable === null || reachable === undefined || reachable.includes("draw") || tableHasDraw(rows);
+  return resultColumns(layout.apart.length > 0, draws);
 }
 
 /** W2d T17 (anti-goal 2, X-TB-8): why a conditional step left a tie unsplit, as the tie popover says it. Spelled out

@@ -41,8 +41,8 @@ import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
 /** The result columns a standings slide prints between the entrant and Pts (W2d follow-up, final review m8): the public
- *  table's own declaration for a fixed-shape table (`fixedResultColumns`) — P · W · D · L, and IIHF's P · W · OTW · OTL ·
- *  D · L (RBG:343-344). */
+ *  table's own declaration for a fixed-shape table (`fixedResultColumns`) — P · W · D · L, D only where the stage can
+ *  reach a draw (P · W · L for a set sport), and IIHF's P · W · OTW · OTL · L (RBG:343-344). */
 export type StandingsSlideColumnKey = "played" | "won" | "otw" | "otl" | "drawn" | "lost";
 
 export interface StandingsSlideColumn {
@@ -82,6 +82,9 @@ interface StandingsShape {
   cascade: readonly string[];
   /** W2d T17: the stage's table layout (`tableLayoutFor`, the public table's own) — its points unit. */
   layout: TableLayout;
+  /** The outcomes the stage can reach (export review I2): whether its board prints D (`fixedResultColumns`). Absent: a
+   *  hand-built input or a stage the loader refused — D, as before. */
+  reachable?: readonly OutcomeKey[];
 }
 
 /** A stage's loaded rules as these builders receive them: the organiser's from `stageTableRulesDocs`, the public one's
@@ -119,6 +122,7 @@ const stageShape = (metricSpecs: readonly MetricSpecLike[], rules: StageRulesInp
   metricSpecs,
   cascade: rules?.tiebreakers ?? [],
   layout: rules?.points === undefined || rules.reachable === undefined ? PLAIN_LAYOUT : tableLayoutFor({ points: rules.points, reachable: rules.reachable }),
+  ...(rules?.reachable === undefined ? {} : { reachable: rules.reachable }),
 });
 
 /** A snapshot row as `standings_snapshots` persists it. `metrics` is optional
@@ -154,8 +158,9 @@ function standingsSlideRows(
     (c) => c.kind === "derived" && c.key === "point_ratio",
   );
   // W2d follow-up (final review m8; RBG §3.4): the result columns are the public table's own declaration under the
-  // stage's layout, and each cell its own text — no second column list and no second W.
-  const results = fixedResultColumns(shape.layout);
+  // stage's layout, and each cell its own text — no second column list and no second W. D where the stage can reach a
+  // draw, or this table holds one (export review I2): an IIHF or set-sport board prints none, as the public table.
+  const results = fixedResultColumns(shape.layout, shape.reachable, engineRows);
   const folds = shape.layout.apart.length > 0;
   const compact = compactKeysOf(shape.layout);
   const columns = results.map((c) => ({ key: c.key as StandingsSlideColumnKey, compact: !folds || compact.has(c.key) }));

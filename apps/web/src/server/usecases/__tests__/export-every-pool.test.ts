@@ -200,28 +200,49 @@ async function onePerPool(fam: Family, s: Scene, pools: readonly { id: string; k
 
 describe.skipIf(!HAS_DB)("export every pool — a group stage's standings export prints each group, in group order, headed", () => {
   for (const fam of FAMILIES) {
-    it(`${fam.sport}: a 2-group stage, one result per group, the two tables tied on updated_at — two sections, A then B, each headed, each its own rows`, async () => {
+    it(`${fam.sport}: a 2-group stage, one result per group, the two tables tied on updated_at, then B newer and first in the export's own read — two sections, A then B, each headed, each its own rows`, async () => {
       // the brief's three families: generic, a set-based sport (badminton) and ice hockey
       const s = await pooled(fam, 2);
       const played = await onePerPool(fam, s, s.pools);
       const stored = await snapshotsOf(s.stageId);
       expect(stored.map((x) => x.rows.length).sort(), "premise: each group stored its own table of the two who played").toEqual([2, 2]);
       expect(new Set(stored.map((x) => x.updated_at)).size, "premise: one refold writes every pool, so the two tie on updated_at").toBe(1);
+      // Review m1: a tie leaves the order to the database — a coin flip, which a lost sort could win. Make every order but
+      // the key say B first. The export's own read (its SQL, no sort of its own) returns the stage's tables in some order;
+      // the pool it returns first is relabelled B (the two pools swap key and name), and B's updated_at moves past A's. Only
+      // the stage's own pool order (`byPoolOrder`: the key) then prints A first.
+      const unsorted = async () =>
+        (await sql<{ pool_id: string }[]>`
+          select ss.pool_id from standings_snapshots ss join stages s on s.id = ss.stage_id
+           where s.division_id = ${s.divisionId} order by s.seq desc`).map((x) => x.pool_id);
+      const first = (await unsorted())[0]!;
+      if (s.pools.find((p) => p.id === first)!.key === "A") {
+        const [x, y] = [s.pools[0]!, s.pools[1]!];
+        await sql`update pools set key = '_', name = '_' where id = ${x.id}`;
+        await sql`update pools set key = 'A', name = 'A' where id = ${y.id}`;
+        await sql`update pools set key = 'B', name = 'B' where id = ${x.id}`;
+      }
+      const pools = await poolsOf(s.stageId);
+      const [pa, pb] = [pools[0]!, pools[1]!];
+      await sql`update standings_snapshots set updated_at = now() + interval '1 hour' where stage_id = ${s.stageId} and pool_id = ${pb.id}`;
+      const byTime = await sql<{ pool_id: string }[]>`select pool_id from standings_snapshots where stage_id = ${s.stageId} order by updated_at desc`;
+      expect(byTime.map((x) => x.pool_id), "premise: updated_at says B first").toEqual([pb.id, pa.id]);
+      expect(await unsorted(), "premise: the export's own read returns B first").toEqual([pb.id, pa.id]);
 
       const doc = await exportOf(s);
       // The engine's pool membership comes from resulted fixtures (`entrantsOfPool`), so each group's table is the pair
       // that played: its winner first, then its loser. The public read serves those same rows for each pool.
       const { tables } = await publicTables(s);
       expect(printed(doc), `${fam.sport}: every group, in the stored key order, headed by its public caption`).toEqual(
-        s.pools.map((p) => {
+        pools.map((p) => {
           const { winner, loser } = played.get(p.id)!;
           return { heading: caption(GROUPS, p.key), rows: [[1, s.name(winner)], [2, s.name(loser)]] };
         }),
       );
-      for (const p of s.pools) {
+      for (const p of pools) {
         const pub = tables.find((x) => x.pool_id === p.id);
         expect(pub, `premise: the public read serves group ${p.key}`).toBeDefined();
-        const section = doc.sections[s.pools.indexOf(p)]!;
+        const section = doc.sections[pools.indexOf(p)]!;
         expect(section.table!.rows.map((r) => r[1]), `group ${p.key}: the public table's rows, in its order`).toEqual(publicNames(s, pub!.rows));
       }
       // A second call prints the same document.
@@ -262,6 +283,13 @@ describe.skipIf(!HAS_DB)("export every pool — a group stage's standings export
       { heading: caption(GROUPS, c.key), rows: rowsOf(c) },
     ]);
     expect(doc.sections[1]!.table!.columns.slice(0, 2), "B's header row is printed").toEqual(["#", t(EN, "table.team")]);
+    // Review m3: B's header is the public table's over no rows (no metric any row carries) — with D, which a stage that can
+    // draw prints from the first round (`fixedResultColumns`: the public table waits for the first draw), before L.
+    const emptyPublic = publicHeader(renderPublic(pub.stage, [], s));
+    const D = t(EN, "table.abbr.drawn");
+    expect(emptyPublic, "premise: the public table shows no D before a draw").not.toContain(D);
+    const lost = emptyPublic.indexOf(t(EN, "table.abbr.lost"));
+    expect(doc.sections[1]!.table!.columns.slice(2), "B's header: the public table's, D before L").toEqual([...emptyPublic.slice(0, lost), D, ...emptyPublic.slice(lost)]);
 
     // The level guard. No product path stores a LEVEL table for one pool of a pooled stage today: pool membership comes
     // from resulted fixtures, so an unplayed pool, a voided result and a withdrawal's expunge all store `[]` (measured
@@ -411,4 +439,106 @@ describe.skipIf(!HAS_DB)("export only the metrics the public table shows — eve
     // The witness: the old rule (the module's first four metrics) prints a different set for at least one sport.
     expect(differsFromFirstFour, "sports where the public selection is not the first four metrics").toBeGreaterThan(0);
   });
+});
+
+// ── Export review I2 (2026-10-28): D only where the stage can draw ──────────────────────────────────────────────────
+// The export printed D on every table (`fixedResultColumns`, #1057), the public table only once a row holds a draw — so a
+// set sport's or an IIHF sheet carried a D column that can never be anything but 0 (RBG §3.4 line 343: "GP · W · OTW ·
+// OTL · L"). The export now asks the stage's reachable outcomes (the engine's declaration) and the public table's own
+// test (`tableHasDraw`). For every sport and table kind, as played (a walkover: the result every sport takes alike), and
+// with a draw booked in the stored table (the state both readers see once one is played), the export's result columns are
+// the public table's: D excluded where the stage cannot draw, included once a draw is on the table — and, the fixed shape,
+// included from the first round where the stage can draw, where the public table waits for the first one.
+type SweepKind = "league" | "group" | "swiss";
+const SWEEP_KINDS: readonly SweepKind[] = ["league", "group", "swiss"];
+
+/** A started table stage of `kind` with one walkover per table: a league or Swiss of 2, a group of 2 pools of 2. */
+async function walkoverTable(m: (typeof builtinModules)[number], kind: SweepKind): Promise<Scene> {
+  const variant = Object.keys(m.variants)[0];
+  if (variant === undefined) throw new Error(`premise: ${m.key} declares a variant`);
+  const stages =
+    kind === "league" ? undefined : kind === "group" ? groupStage(2) : { seq: 1, kind: "swiss" as const, name: "Swiss", config: { rounds: 1 } };
+  const s = await scene({ sport: m.key, variant, entrants: kind === "group" ? 4 : 2, ...(stages === undefined ? {} : { stages: stages as CreateStages }) });
+  if (kind === "swiss") {
+    await startDivision(s.auth, s.divisionId);
+    await generateStageFixtures(s.auth, s.stageId);
+  } else {
+    await generateStageFixtures(s.auth, s.stageId);
+    await startDivision(s.auth, s.divisionId);
+  }
+  const fixtures = await sql<{ id: string; away: string }[]>`
+    select id, away_entrant_id as away from fixtures
+     where stage_id = ${s.stageId} and home_entrant_id is not null and away_entrant_id is not null`;
+  expect(fixtures.length, `${m.key} ${kind}: premise: one seated fixture per table`).toBe(kind === "group" ? 2 : 1);
+  for (const f of fixtures) {
+    await post(s.auth, f.id, "core.forfeit", { by: f.away, reason: "walkover" });
+    expect((await fixtureRow(f.id)).status, `${m.key} ${kind}: premise: the walkover decided the fixture`).toBe("forfeited");
+  }
+  return s;
+}
+
+/** A header's result columns: from its first (P) through L, the last result column in every layout. */
+function resultSlice(columns: readonly string[], from = 0): string[] {
+  const lost = columns.indexOf(t(EN, "table.abbr.lost"), from);
+  if (lost < 0 || columns[from] !== t(EN, "table.abbr.played")) throw new Error(`premise: the header runs P … L (${columns.join(" · ")})`);
+  return columns.slice(from, lost + 1);
+}
+
+describe.skipIf(!HAS_DB)("export review I2 — the export prints D exactly as the public table decides, every sport and table kind", () => {
+  it("every shipped sport × league, group, Swiss: as played, D only where the stage can draw; with a draw on the table, the public table's columns verbatim (counted)", async () => {
+    const D = t(EN, "table.abbr.drawn");
+    let checked = 0;
+    let dIncluded = 0;
+    let dExcluded = 0;
+    let fixedShapeAhead = 0;
+    for (const m of builtinModules) {
+      for (const kind of SWEEP_KINDS) {
+        const s = await walkoverTable(m, kind);
+        const { stage } = await publicTables(s);
+        // The stage's own declaration, as the public read serves it: the outcomes it can reach.
+        const canDraw = stage.table_rules?.reachable.includes("draw");
+        if (canDraw === undefined) throw new Error(`${m.key} ${kind}: premise: the public read serves the stage's rules`);
+        if (m.key === "badminton") expect(canDraw, `${m.key} ${kind}: a set match always has a winner`).toBe(false);
+        if (m.key === "football") expect(canDraw, `${m.key} ${kind}: a league-format match can end level`).toBe(true);
+
+        for (const state of ["as played", "a draw on the table"] as const) {
+          if (state === "a draw on the table") {
+            // Book the walkover pair drawn in the stored table — the state both readers read once a draw is played (or, on a
+            // stage that cannot draw, the guard: a sheet never hides a booked draw).
+            for (const snap of await snapshotsOf(s.stageId)) {
+              const drawn = snap.rows.map((r) => (r.played > 0 ? { ...r, won: 0, drawn: 1, lost: 0 } : r));
+              await sql`update standings_snapshots set rows = ${sql.json(drawn as never)} where stage_id = ${s.stageId} and pool_id is not distinct from ${snap.pool_id}`;
+            }
+          }
+          const { tables } = await publicTables(s);
+          const doc = await exportOf(s);
+          expect(doc.sections, `${m.key} ${kind}: one section per stored table`).toHaveLength(tables.length);
+          const pools = await poolsOf(s.stageId);
+          for (const [i, section] of doc.sections.entries()) {
+            const pub = kind === "group" ? tables.find((x) => x.pool_id === pools[i]!.id)! : tables[0]!;
+            const seen = resultSlice(publicHeader(renderPublic(stage, pub.rows, s, m.metrics)));
+            const exported = resultSlice(section.table!.columns, 2);
+            const label = `${m.key} ${kind} ${state} (table ${i + 1})`;
+            if (state === "as played" && canDraw) {
+              // The fixed shape: D from the first round, where the public table waits for the first draw.
+              expect(seen, `${label}: premise: the public table waits for a draw`).not.toContain(D);
+              expect(exported, `${label}: the public table's columns, with D before L`).toEqual([...seen.slice(0, -1), D, seen.at(-1)!]);
+              fixedShapeAhead++;
+            } else {
+              expect(exported, `${label}: the public table's result columns`).toEqual(seen);
+            }
+            if (exported.includes(D)) dIncluded++;
+            else dExcluded++;
+            checked++;
+          }
+        }
+      }
+    }
+    // league + Swiss: one table each; group: two — per sport, per state
+    expect(checked, "every sport × kind × state × table").toBe(builtinModules.length * 2 * (1 + 2 + 1));
+    expect(checked).toBeGreaterThan(0);
+    expect(dIncluded, "tables printing D").toBeGreaterThan(0);
+    expect(dExcluded, "tables printing no D (a stage that cannot draw, as played)").toBeGreaterThan(0);
+    expect(fixedShapeAhead, "draw-capable tables printing D before their first draw").toBeGreaterThan(0);
+  }, 240_000);
 });
