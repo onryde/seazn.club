@@ -11,6 +11,7 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
     lines: [
       "POST /fixtures/{id}/events refuses a tennis.set_summary in plain games whose score no set can reach under its tie-break (8–6 or 9–7 with the tie-break at 6-all, 5–3 in a Fast4 set) with 422 SET_SCORE_UNREACHABLE, and nothing is written.",
       "POST /divisions/{id}/events/import rejects such a stream the same way: error.code import.fold_rejected, error.engineCode SET_SCORE_UNREACHABLE, nothing written for its fixture.",
+      "A summary whose score before its last game was already a finished set (7–0, 8–0, 9–3, in any set including an advantage set) was refused INVALID_EVENT and is now refused SET_SCORE_UNREACHABLE.",
       "Send the score that was played; a set that went to the tie-break is 7–6 (or 4–3 in Fast4) with its tb points. Summaries recorded before the change still replay as recorded.",
       "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
     ],
@@ -22,6 +23,7 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
       "After a badminton disqualification (black card) or a tennis default, POST /fixtures/{id}/events refuses every event but core.forfeit and core.abandon with 422 ENDING_SANCTION_PENDING, and nothing is written.",
       "POST /divisions/{id}/events/import rejects such a stream the same way: error.code import.fold_rejected, error.engineCode ENDING_SANCTION_PENDING, nothing written for its fixture.",
       "Send the ending, core.forfeit with by the sanctioned entrant and reason \"disqualified\", or void the sanction. Ledgers recorded before the change still replay as recorded. Every other sanction level and sport is unchanged.",
+      "A device link or an official scorer may now send that ending itself (201, was 403), but only as the event right after the sanction, against the same side; after a volleyball expulsion or disqualification the same holds for core.forfeit with reason \"retired\". Every other forfeit from a scorer is still 403 FORBIDDEN.",
       "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
     ],
   },

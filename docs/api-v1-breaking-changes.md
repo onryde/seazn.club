@@ -19,12 +19,15 @@ reachable from 0–0 without passing a finished set or the tie-break score.
 |---|---|---|
 | `POST /api/v1/fixtures/{id}/events`, a summary whose score no set can reach (`{home: 8, away: 6}` or `9–7` with the tie-break at 6-all; `5–3` or `6–4` in a Fast4 set, tie-break at 3-all) | accepted (only the one game before was checked) | 422, `error.code` `"SET_SCORE_UNREACHABLE"`, nothing written |
 | `POST /api/v1/divisions/{id}/events/import`, a stream with such a summary | imported | that stream's result is `rejected`, `error.engineCode` `"SET_SCORE_UNREACHABLE"`, nothing written for its fixture |
+| Both write paths, a summary whose score before its last game was already a finished set (`7–0`, `8–0`, `9–3`), in any set including an advantage set | refused, `"INVALID_EVENT"` | refused, `"SET_SCORE_UNREACHABLE"`: the same refusal under the new code |
 
 The legal scores are the ITF's (Rules 6 and 7, Appendix VI): with the tie-break
 at 6-all, 6–0 to 6–4 and 7–5 in plain games, and 7–6 only with its tie-break;
 in a Fast4 set, 4–0 to 4–2, and 4–3 only with its tie-break. An advantage set
-(no tie-break) is unchanged. A summary that is not a finished set at all (6–5)
-is refused as before, with `INVALID_EVENT`.
+(no tie-break) takes exactly the scores it took before; the ones it refused it
+still refuses, now with `SET_SCORE_UNREACHABLE` (the last row above). A summary
+that is not a finished set at all (6–5) is refused as before, with
+`INVALID_EVENT`.
 
 **What replaces it.** Send the score that was played. A set that went to the
 tie-break is sent as 7–6 (or 4–3) with its `tb` points.
@@ -32,7 +35,7 @@ tie-break is sent as 7–6 (or 4–3) with its `tb` points.
 **What a consumer sees.**
 
 ```json
-{ "ok": false, "error": { "code": "SET_SCORE_UNREACHABLE", "message": "set score 8–6 cannot happen under this set's tie-break: …" }, "requestId": "…" }
+{ "ok": false, "error": { "code": "SET_SCORE_UNREACHABLE", "message": "set score 8–6 cannot happen in this set: …" }, "requestId": "…" }
 ```
 
 Key on `error.code`, not on the message text.
@@ -62,15 +65,31 @@ match-ending (`badminton.sanction` with `level: "disqualification"`,
 |---|---|---|
 | `POST /api/v1/fixtures/{id}/events`, any event other than `core.forfeit` or `core.abandon` (a rally, a point, another sanction, a note) | accepted | 422, `error.code` `"ENDING_SANCTION_PENDING"`, nothing written |
 | `POST /api/v1/divisions/{id}/events/import`, a stream with such an event after the sanction | imported | that stream's result is `rejected`, `error.engineCode` `"ENDING_SANCTION_PENDING"`, nothing written for its fixture |
+| `POST /api/v1/fixtures/{id}/events`, the ending (`core.forfeit` against the sanctioned side, `reason: "disqualified"`) sent with a device link or an official scorer's session, as the event right after the sanction | 403, `error.code` `"FORBIDDEN"` (a forfeit was organiser-only) | 201 |
 
 Every other sanction level, and every other sport, is unchanged. A volleyball
-disqualification or expulsion does not end the match by itself.
+disqualification or expulsion does not end the match by itself, and nothing is
+refused after one; a scorer may send the incomplete-team ending right after it
+(`core.forfeit` against that team with `reason: "retired"`, 201 where it was
+403).
 
 **What replaces it.** Send the ending: `core.forfeit` with `by` set to the
 sanctioned entrant and `reason: "disqualified"`. Or void the sanction
 (`core.void`), which lifts the refusal. Voiding the forfeit makes the ending
 pending again; voiding the sanction while its forfeit stands leaves the match
 ended.
+
+A scorer credential (a device link, or the session of an official scorer) may
+send the ending itself, but only as the event right after the sanction: the
+fixture's last live event (voided events and voids do not count) must be that
+sanction, against the same side, and the reason must be the one its level calls
+for. It is judged on the ledger up to the request's `expected_seq`. Any other
+`core.forfeit` from a scorer is still 403 `"FORBIDDEN"`: against the other side,
+with another reason, after the sanction was voided, or with another event in
+between. A ledger written before this change with an event after the sanction
+(a rally, a `core.suspend`) therefore takes its ending or an abandon from an
+organiser. Voiding that event (which an official scorer may also do) makes the
+sanction the last live event again.
 
 **What a consumer sees.** A rally sent after a black card with no ending:
 
@@ -89,8 +108,10 @@ progress at the change, with such a sanction and no ending, takes the ending
 **Why in place.** No client outside the web app uses the API yet (owner,
 2026-10-27).
 
-**Background.** W2e (sport fidelity), decision D3 (1), rule X-SE-1. The
-engine's pinning test is `packages/engine/src/core/sanction-ending.test.ts`.
+**Background.** W2e (sport fidelity), decisions D3 (1) and D13, rules X-SE-1
+and X-SE-3. The engine's pinning test is
+`packages/engine/src/core/sanction-ending.test.ts`; the route's is
+`apps/web/src/server/engine-db/__tests__/w2e-ending-sanction.test.ts`.
 
 ## 2026-10-28 — the standings export refuses a table with no results
 

@@ -4,10 +4,10 @@
 (`setbased/kernel.ts`; the kernel's "sets" are badminton's **games**).
 **Variants:** `bwf` (the module default — best of 3 games to 21, win by 2, hard
 cap 30), `bwf-3x15` (W2e, BD-VR-1 — BWF 3×15, in force 2027-01-04: best of 3
-games to 15, win by 2, the 21st point wins at 20-all; the web offers it first
-to a new division, but it is not the module default, so no stored division or
-recorded fixture changes its scoring) and `short` (junior/social — games to 11,
-cap 15).
+games to 15, win by 2, the 21st point wins at 20-all; it is not the module
+default, so no stored division or recorded fixture changes its scoring. The web
+does not yet offer it first to a new division: that picker change is W2e
+Task 29's) and `short` (junior/social — games to 11, cap 15).
 
 **Audited against:** the BWF *Laws of Badminton* (Law 7 "scoring system",
 Law 9 "service", Law 10–11 "singles/doubles play and service court", Law 16
