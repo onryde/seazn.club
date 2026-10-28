@@ -105,7 +105,17 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
   // moves: tablets keep their labels (`md` for four links, `lg` for five), the display name and the org chip are as they were.
   // The new budget fits at 320, 335, 350, 360, 390, 640, 700, 768, 800, 836, 1023, 1024 and 1280 in en/es/fr/nl, for both the
   // org nav and the dual-role nav (the report's table); the tightest cell is 4px of slack at 320.
+  //
+  // B3 (CI e2e, nav-org-chip-overflow "the chip still SHOWS the club name at 768"): the fifth labelled item fitted the row but left the
+  // org chip 37px of text at 768, against the 8 characters (64px) the chip exists to show. The row's only flexible item is that chip,
+  // so what the labelled links cost it is what it loses. Where the labels are on (`md` to `lg`, the 4-link org nav only) the links'
+  // side padding is 4px, not 12, and returns to 12 at `lg`. Measured with the 38-character club name: 8px and 6px each leave fr
+  // at 768 short of 8 characters (40px and 56px visible of 60.7 needed; nl 60px at 8px); 4px clears every cell at 768/800/836/900/1023
+  // in en/es/fr/nl (72px visible at the tightest, fr 768, and 114px in en). Nothing else moves: labels, type, link height, the display
+  // name and Sign out are as they were. The dual-role nav is icon-only until `lg`, has the room, and keeps its 12px - a 4px pad on a
+  // bare 16px icon would be a 24px target.
   const navLabelClass = isPlayer ? "hidden lg:inline" : "hidden md:inline";
+  const navLinkClass = `flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3${isPlayer ? "" : " md:px-1 lg:px-3"}`;
   // Tour targets editor flows (rename org, create competition) — viewers skip it.
   const canTour =
     !!user && !!activeOrg && (EDITOR_ROLES as readonly string[]).includes(activeOrg.role);
@@ -220,7 +230,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               <Link
                 href={activeOrg ? routes.orgHome(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.dashboard")}
-                className="flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                className={navLinkClass}
               >
                 <LayoutDashboard className="h-4 w-4" strokeWidth={1.75} />
                 <span className={navLabelClass}>{t(dict, "nav.dashboard")}</span>
@@ -228,7 +238,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               <Link
                 href="/directory"
                 aria-label={t(dict, "nav.directory")}
-                className="flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                className={navLinkClass}
               >
                 <Users className="h-4 w-4" strokeWidth={1.75} />
                 <span className={navLabelClass}>{t(dict, "nav.directory")}</span>
@@ -238,7 +248,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
                   href={STREAMING_PAGE_HREF}
                   aria-label={t(dict, "nav.streaming")}
                   data-testid="nav-streaming"
-                  className="flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                  className={navLinkClass}
                 >
                   <Radio className="h-4 w-4" strokeWidth={1.75} />
                   <span className={navLabelClass}>{t(dict, "nav.streaming")}</span>
@@ -247,7 +257,7 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
               <Link
                 href={activeOrg ? routes.orgSettings(activeOrg.slug) : "/orgs/new"}
                 aria-label={t(dict, "nav.settings")}
-                className="flex items-center gap-1.5 rounded-md px-1.5 py-1.5 text-sm font-medium text-cream/85 transition-colors hover:bg-cream/10 hover:text-cream sm:px-3"
+                className={navLinkClass}
               >
                 <Settings className="h-4 w-4" strokeWidth={1.75} />
                 <span className={navLabelClass}>{t(dict, "nav.settings")}</span>

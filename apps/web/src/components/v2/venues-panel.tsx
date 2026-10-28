@@ -249,7 +249,7 @@ export function VenuesPanel({
       </label>
 
       {visibleVenues.length === 0 ? (
-        <p className="card p-6 text-center text-sm text-slate-400">{msg("venues.empty")}</p>
+        <p className="card p-6 text-center text-sm text-slate-500">{msg("venues.empty")}</p>
       ) : (
         <div className="space-y-3">
           {visibleVenues.map((venue) => (

@@ -229,6 +229,35 @@ describe("Nav › the width budget", () => {
     expect(checked, "anti-vacuity: nine links looked at").toBe(9);
   });
 
+  it("md..lg: where the labels are ON (the 4-link org nav) the links take 4px of side padding (md:px-1) and get 12px back at lg (lg:px-3), so the org chip keeps room for the club name; the icon-only dual-role links keep their 12px with no md override", async () => {
+    // B3 (CI e2e: the chip showed 37px of a 38-character club name at 768, 8 characters needing 64). Measured in a browser: 8px and 6px
+    // leave fr/nl at 768 short of 8 characters, 4px clears every width x locale cell (the report's table).
+    let checked = 0;
+    for (const claimed of [false, true]) {
+      m.hasClaimedProfile.mockResolvedValue(claimed);
+      const html = await render();
+      const links = linkClasses(html);
+      const labels = labelClasses(html);
+      expect(links.length, `claimed=${claimed}`).toBe(labels.length);
+      for (let i = 0; i < links.length; i++) {
+        const labelsOnAtMd = labels[i]!.includes("md:inline");
+        const l = links[i]!;
+        if (labelsOnAtMd) {
+          expect(l, `link ${i}: labels on at md, so tight padding there`).toContain("md:px-1");
+          expect(l, `link ${i}: 12px returns at lg`).toContain("lg:px-3");
+          // Not the 8px / 6px that measurement showed too wide for fr and nl at 768.
+          expect(l, `link ${i}: not md:px-2`).not.toContain("md:px-2");
+          expect(l, `link ${i}: not md:px-1.5`).not.toContain("md:px-1.5");
+        } else {
+          expect(l.filter((t) => /^md:px-/.test(t)), `link ${i}: icon-only at md, no padding override`).toEqual([]);
+          expect(l, `link ${i}: keeps sm:px-3`).toContain("sm:px-3");
+        }
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: nine links looked at").toBe(9);
+  });
+
   it("tablets KEEP their labels: md..lg shows every label in the org nav (4), and the dual-role nav's five wait for lg (owner: no label dropped)", async () => {
     m.hasClaimedProfile.mockResolvedValue(false);
     const org = labelClasses(await render());
