@@ -112,9 +112,10 @@ export interface QualFixture {
   played: boolean;
 }
 
-/** The division's per-match bounds from its PINNED module and live cfg. Future
- *  matches score under live cfg (V347 freezes only already-scored ones), and
- *  `stage.config.rules` cannot carry points (engine-db/competition.ts). */
+/** The SPORT's per-match bounds under a division cfg (`matchPointsBounds` of the parsed cfg; null when there is no
+ *  module or the cfg does not parse). TEST-ONLY since W2d: no production code reads it — the what-if's bounds are
+ *  `boundsInForce`, the stage's points in force. The qualification tests keep it as their sport-bounds fixture
+ *  (W2d final review m6 / PR A m2: kept and marked rather than deleted, because those tests call it). */
 export function divisionPointsBounds(
   module_: AnySportModule | null | undefined,
   cfg: unknown,

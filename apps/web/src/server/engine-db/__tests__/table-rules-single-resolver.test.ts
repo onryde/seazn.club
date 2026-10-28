@@ -7,7 +7,10 @@
 // Scanned: every non-test source file under apps/web/src (tests legitimately call the engine's defaults to derive their
 // expected values). Matched: a read of the sport's default order (`defaultTiebreakers`), the inherit-the-division
 // fallback (`.tiebreakers ??`), or a call of the engine's resolver itself (`resolveTableRules(`, fix round 1 m11: a
-// second caller would resolve a stage's rules around the pin). The one allowed file is the loader.
+// second caller would resolve a stage's rules around the pin). The one allowed file is the loader. W2d final review m6
+// (PR A m5): the points half too — a call of the sport's own points rule (`tablePointsRule(`), which the loader never
+// makes (the engine's resolver asks it), so for that pattern NO file is allowed and its one exemption is the witness that
+// the scan reaches a hit.
 //
 // A hit that reads no stage's rules is exempted BY NAME (`EXEMPT`: the file, the pattern, the matched line's text, why),
 // never by rewriting the line to slip past the pattern. Each exemption must match exactly one hit, so an exemption whose
@@ -18,7 +21,10 @@ import { describe, expect, it } from "vitest";
 
 const SRC = resolve(import.meta.dirname, "../../..");
 const LOADER = "server/engine-db/table-rules.ts";
-const READS = [/\bdefaultTiebreakers\b/, /\.tiebreakers\s*\?\?/, /\bresolveTableRules\s*\(/];
+const READS = [/\bdefaultTiebreakers\b/, /\.tiebreakers\s*\?\?/, /\bresolveTableRules\s*\(/, /\btablePointsRule\s*\(/];
+/** The patterns the loader itself reads. It never calls `tablePointsRule(` (the engine's `resolveTableRules` does), so
+ *  for that pattern the allowed set is empty. */
+const LOADER_READS: ReadonlySet<RegExp> = new Set([READS[0]!, READS[1]!, READS[2]!]);
 
 /** Named exemptions: `text` is a substring of the line the match starts on. */
 const EXEMPT: readonly { file: string; pattern: RegExp; text: string; reason: string }[] = [
@@ -41,6 +47,13 @@ const EXEMPT: readonly { file: string; pattern: RegExp; text: string; reason: st
     reason:
       "reads the loader's own output (`stageTableRulesDocs` / `PublicStage.table_rules`); `?? []` is a refused or absent stage's empty cascade, never the division's or the module's default",
   },
+  {
+    file: "lib/stage-points-splits.ts",
+    pattern: READS[3]!,
+    text: "rule: module.tablePointsRule(parsed.data, stageKind.data)",
+    reason:
+      "the stage points EDITOR's sport layer (`sportStageRule` -> `stagePointsContext`): what a pending stage with no rule of its own and no pin opens with, for its rows, split labels and preset chips, over the loader's own `liveStageCfg` composition. The editor reads the stage's own rule and its pin first (`draftFromStored`, the section's `playing`), and nothing is ranked or paid from it",
+  },
 ];
 
 function sources(dir: string, out: string[] = []): string[] {
@@ -55,7 +68,7 @@ function sources(dir: string, out: string[] = []): string[] {
 }
 
 describe("W2d T9: one table-rules resolver in the web", () => {
-  it("no file under apps/web/src except server/engine-db/table-rules.ts reads `defaultTiebreakers`, `.tiebreakers ??` or calls `resolveTableRules(` (files scanned > 0; the one allowed hit = 1, per pattern)", () => {
+  it("no file under apps/web/src except server/engine-db/table-rules.ts reads `defaultTiebreakers`, `.tiebreakers ??` or calls `resolveTableRules(`, and none calls `tablePointsRule(` (files scanned > 0; the loader the one allowed hit per pattern it reads)", () => {
     const files = sources(SRC);
     const used = new Map<(typeof EXEMPT)[number], number>(EXEMPT.map((e) => [e, 0]));
     let checked = 0;
@@ -78,7 +91,8 @@ describe("W2d T9: one table-rules resolver in the web", () => {
       }
       const second = hits.filter((f) => f !== LOADER);
       expect(second, `a second reader of the table rules (${re}): ${second.join(", ")}`).toEqual([]);
-      expect(hits, `the loader is the one allowed hit for ${re} (and the scan reaches it)`).toEqual([LOADER]);
+      // Where the loader reads the pattern it is the one allowed hit (and the scan reaches it); where it does not, no file is.
+      expect(hits, `the allowed hits for ${re}`).toEqual(LOADER_READS.has(re) ? [LOADER] : []);
       checked++;
     }
     expect(files.length, "anti-vacuity: source files scanned").toBeGreaterThan(500);
