@@ -50,6 +50,10 @@ const AMENDED_TEXT: Readonly<Record<string, { says: string; by: string }>> = {
     says: "Badminton retirement = points played stand, the current game completed for the winner to its legal end (21, or two clear up to the 30 cap), remaining games 21-0 (until W5's 16.2.5).",
     by: "Task 15 review M-6, owner Q2: the current game runs to its legal end, not a flat 21",
   },
+  "X-RS-3": {
+    says: "Every event that records a forfeit, walkover, retirement or double walkover is organiser-only, through the X-ST-2 predicate, except as X-SE-3 admits.",
+    by: "W2e Task 2 review M2 (2026-10-28): X-SE-3 (W2e D13) admits a scorer's forfeit that ends its own side's match-ending sanction; the row names that exception instead of reading as absolute",
+  },
   "FB-AB-1": {
     says: "Football abandon under abandonPolicy award: leader wins with the real score; level = draw with the real score in draw kinds; in brackets a level abandon stays abandoned for the desk to settle, never needs_decision.",
     by: "Task 14 fix round 1 M-1: spec §5.4 rule 2, a level abandon in a bracket stays abandoned (HK-AB-1 and IH-AB-1 say \"Same as FB-AB-1\", so they take it by reference and keep Appendix A's text)",
