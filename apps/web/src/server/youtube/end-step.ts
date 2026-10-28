@@ -124,7 +124,7 @@ function gated(port: YouTubePort, room: () => boolean): YouTubePort {
   const gate = <A extends unknown[], R>(call: (...a: A) => Promise<R>) =>
     async (...a: A): Promise<R> => {
       if (!room()) throw new BudgetSpent();
-      return call.apply(port, a);
+      return call.call(port, ...a);
     };
   g.accessToken = gate(port.accessToken);
   g.broadcastLife = gate(port.broadcastLife);
