@@ -1222,9 +1222,12 @@ export async function getPublicFixture(
         where v.id = ${fixtureId} and v.division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;
       // T4 — everything below needs only the fixture row and none of it needs
-      // another, so it reads in four lanes at once; the match centre, which
-      // needs all four, follows. Four pooled connections at most, never a tx.
-      const [fixture, names, { rt, variantRow }, { tzRow, stageRow }] = await Promise.all([
+      // another, so it reads in lanes at once; the match centre, which needs
+      // the first four, follows. The fifth lane is the replay parts (YouTube
+      // Connect T16): it needs only the fixture id, so it rides the same
+      // round trip instead of adding a sequential one after the match centre.
+      // Five pooled connections at most, never a tx.
+      const [fixture, names, { rt, variantRow }, { tzRow, stageRow }, parts] = await Promise.all([
         withCourtVenueName(normalizeFixture(fixtureRow)),
         (async () => {
           const rawNames = await sql<{ id: string; kind: string; display_name: string }[]>`
@@ -1288,6 +1291,7 @@ export async function getPublicFixture(
             select name from stages where id = ${fixtureRow.stage_id}`;
           return { tzRow, stageRow };
         })(),
+        replayParts(fixtureId),
       ]);
       const locale = toLocale(shell.org.default_locale);
       const basePath = `/shared/${shell.org.slug}/${shell.competition.slug}/${division.slug}`;
@@ -1330,7 +1334,7 @@ export async function getPublicFixture(
         venueTz: resolveVenueTz(tzRow?.division_tz, tzRow?.org_tz),
         stageName: stageRow?.name ?? null,
         externalPlay: await loadPublicExternalPlay(fixtureId),
-        parts: await replayParts(fixtureId),
+        parts,
         ...(await (async () => {
           if (!(supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess")) {
             return { roundOpened: false, roundOpenedAt: null, pairedWhiteSide: null };

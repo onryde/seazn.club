@@ -740,6 +740,29 @@ describe.skipIf(!HAS_DB)("match-centre loaders read less, and together, inside t
     expect(after.texts.length - shellReads - partsReads).toBeLessThan(before.texts.length);
   });
 
+  it("getPublicFixture: the replay-parts read rides the first round trip - issued with the other lanes, before anything the match centre reads", async () => {
+    const f = sweep.find((x) => x.slug === "cup" && waitingBoth(x))!;
+    const after = await measure(() => getPublicFixture(scene.orgSlug, scene.compSlug, f.slug, f.id));
+    const partsAt = after.texts.findIndex((text) => text.includes("public_fixture_youtube_parts_v"));
+    // The match centre's first statement is the event fold: a lane read AFTER it is a sequential round trip the page waits for.
+    const centreAt = after.texts.findIndex((text) => /\bfrom score_events\b/.test(text));
+    expect(partsAt, "the loader reads the replay parts").toBeGreaterThanOrEqual(0);
+    expect(centreAt, "premise: the match centre's event read is among the statements").toBeGreaterThanOrEqual(0);
+    expect(partsAt, after.texts.join("\n")).toBeLessThan(centreAt);
+    // ...and it is PARALLEL with the lanes, not merely ahead of the match centre: the variant and stage reads each wait for a round trip
+    // inside their own lane, so a parts read issued with the lanes comes before them, and one issued after the lanes finished comes after.
+    const variantAt = after.texts.findIndex((text) => /select name from sport_variants\b/.test(text));
+    const stageAt = after.texts.findIndex((text) => /select name from stages where id/.test(text));
+    expect(variantAt, "premise: the variant read (second statement of its lane) is found").toBeGreaterThanOrEqual(0);
+    expect(stageAt, "premise: the stage-name read (second statement of its lane) is found").toBeGreaterThanOrEqual(0);
+    expect(partsAt, "issued with the lanes, before a lane's own second statement (variant)").toBeLessThan(variantAt);
+    expect(partsAt, "issued with the lanes, before a lane's own second statement (stage)").toBeLessThan(stageAt);
+    // Same lane group as the court and tz reads: after the fixture row, not before it.
+    const fixtureRowAt = after.texts.findIndex((text) => text.includes("from public_fixtures_v v"));
+    expect(fixtureRowAt, "premise: the fixture row read is found").toBeGreaterThanOrEqual(0);
+    expect(partsAt).toBeGreaterThan(fixtureRowAt);
+  });
+
   it("publicFixture: the division and stage rows are read once each, not twice; at most five in flight", async () => {
     const f = sweep.find((x) => x.slug === "cup" && waitingBoth(x))!;
     // Base tables only: `\b` does not match inside public_divisions_v / public_stages_v.
