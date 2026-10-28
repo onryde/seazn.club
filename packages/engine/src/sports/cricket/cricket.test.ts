@@ -698,6 +698,33 @@ describe("cricket golden (c): DLS Standard Edition", () => {
     expect(state.revisedTarget).toBe(200);
     expect(state.targetSource).toBe("manual");
   });
+
+  // W2e Task 28 fix round 1: the premise of `ruleKeys.minOversForResult.detailOf = "dls"`. The floor is read only by the DLS
+  // par, so with DLS off an abandoned chase is a no result at ANY floor, and with DLS on the floor is what separates a par
+  // decision from a no result. The expected outcomes are the rulebook's (spec §2.3), not read back from the declaration.
+  it("minOversForResult changes an abandoned chase only while DLS is on (the detailOf premise, counted)", () => {
+    // 22 of 40 overs faced by the chase (132 balls); the floors straddle that: 0 and 20 are met, 25 is not.
+    const abandoned = stream(
+      ["core.start"],
+      ["cricket.innings.summary", { runs: 120, wickets: 2, legalBalls: 180, partial: true }],
+      ["cricket.revise", { oversPerSide: 40 }],
+      ["cricket.innings.summary", { runs: 190, wickets: 6, legalBalls: 240 }],
+      ["cricket.innings.summary", { runs: 150, wickets: 3, legalBalls: 132, partial: true }],
+      ["core.abandon", { reason: "rain" }],
+    );
+    const outcomeAt = (floor: number, dls: boolean) =>
+      fold(cricket.configSchema.parse({ ballsPerInnings: 300, maxOversPerBowler: 10, minOversForResult: floor, dls: { enabled: dls, edition: "standard" } }), abandoned).outcome;
+    const seen = new Set<string>();
+    for (const floor of [0, 20, 25]) {
+      expect(outcomeAt(floor, false), `DLS off, floor ${floor}: a no result whatever the floor`).toEqual({ kind: "no_result" });
+      seen.add(`off/${floor}`);
+    }
+    expect(outcomeAt(0, true)).toMatchObject({ kind: "win", method: "dls" });
+    expect(outcomeAt(20, true)).toMatchObject({ kind: "win", method: "dls" });
+    expect(outcomeAt(25, true), "DLS on, the floor not met").toEqual({ kind: "no_result" });
+    seen.add("on/0").add("on/20").add("on/25");
+    expect(seen.size, "six cells were driven").toBe(6);
+  });
 });
 
 // ---------------------------------------------------------------------------

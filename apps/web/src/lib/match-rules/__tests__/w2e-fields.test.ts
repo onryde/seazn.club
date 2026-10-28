@@ -114,9 +114,9 @@ describe("R157 the five fields exist and follow the engine's declaration", () =>
     }
     expect(parsed, "builds parsed").toBeGreaterThan(0);
     expect(variantsJudged, "sport x variant cells judged").toBeGreaterThan(R157.length);
-    // The cricket test match plays two innings, so the engine offers it no super over and so no still-tied policy (Task 7):
-    // the one cell the sweep names rather than judges.
-    expect(skipped).toEqual(["cricket/test/superOverStillTied"]);
+    // The cricket test match plays two innings, so the engine offers it no super over and no still-tied policy (Task 7), and
+    // no DLS and so no result floor (fix round 1: only a DLS par reads it): the two cells the sweep names rather than judges.
+    expect(skipped.sort()).toEqual(["cricket/test/minOversForResult", "cricket/test/superOverStillTied"]);
     // The only refusals are the engine's own cross-field ones: the result floor against a short innings.
     for (const [at, message] of Object.entries(tolerated)) {
       expect(at.split("/")[1], `${at}: only minOversForResult meets a cross-field refusal`).toBe("minOversForResult");
@@ -214,11 +214,38 @@ describe("R157 superOverStillTied is a detail of the super over: held while it i
     expect(detailIsInert(cricket, field, on)).toBe(false);
     // The stage preset a new knockout starts with plays the super over, so the field opens free.
     expect(detailIsInert(cricket, field, at(stageDefaultsFor(cricket, "knockout", "t20")))).toBe(false);
-    // The switch itself is never held, and nor is the sibling result floor.
+    // The switch itself is never held.
     expect(detailIsInert(cricket, fieldOf("cricket", "superOver")!, off)).toBe(false);
-    expect(detailIsInert(cricket, fieldOf("cricket", "minOversForResult")!, off)).toBe(false);
     // A cfg the schema refuses holds nothing (the shared rule).
     expect(detailIsInert(cricket, field, null)).toBe(false);
+  });
+
+  // Fix round 1 (PO ruling): the result floor is read only by a DLS par, so it is held while DLS is off, free while it is on.
+  // Driven through the real stage-row model on the resolved cfg, over every variant that offers it (counted); the held / free
+  // answer is the engine's own: DLS off is a no result at any floor (`cricket.test.ts`, the detailOf premise).
+  it("R157 minOversForResult is disabled while DLS is off and enabled while it is on, on every variant that offers it (the real stage-row model)", () => {
+    const floor = fieldOf("cricket", "minOversForResult")!;
+    const dls = fieldOf("cricket", "dls")!;
+    let judged = 0;
+    for (const variant of Object.keys(cricket.variants)) {
+      if (!stageKeysFor(cricket, "knockout", variant).includes("minOversForResult")) continue;
+      const base = cricket.configSchema.parse(cricket.variants[variant as keyof typeof cricket.variants]) as Record<string, unknown>;
+      const at = (rules: Record<string, unknown>) => resolvedStageCfg(cricket, base, "knockout", rules);
+      const off = at({ dls: { enabled: false, edition: "standard" } });
+      const on = at({ dls: { enabled: true, edition: "standard" } });
+      expect(off, `${variant}: the cfg resolves`).not.toBeNull();
+      expect(on, `${variant}: the cfg resolves`).not.toBeNull();
+      expect(detailIsInert(cricket, floor, off), `${variant}: DLS off holds the floor`).toBe(true);
+      expect(detailIsInert(cricket, floor, on), `${variant}: DLS on frees the floor`).toBe(false);
+      // Every variant defaults DLS to off, so a stage that says nothing holds it (the case that shipped a dead control).
+      expect(detailIsInert(cricket, floor, at({})), `${variant}: a stage that says nothing about DLS holds the floor`).toBe(true);
+      // The switch is never a detail of itself, in either state.
+      expect(detailIsInert(cricket, dls, off)).toBe(false);
+      expect(detailIsInert(cricket, dls, on)).toBe(false);
+      judged++;
+    }
+    expect(judged, "variants that offer the floor").toBeGreaterThan(0);
+    expect(judged, "and at least one that does not (the test match)").toBeLessThan(Object.keys(cricket.variants).length);
   });
 
   it("R157 the stage row offers the still-tied policy where the engine does (the deciders section, t20 / odi / hundred) and not on the two-innings test match", () => {
@@ -235,7 +262,14 @@ describe("R157 superOverStillTied is a detail of the super over: held while it i
     }
     expect(offered, "variants that offer it").toBeGreaterThan(0);
     expect(offered, "and at least one that does not").toBeLessThan(Object.keys(cricket.variants).length);
-    // The result floor is a plain format field, offered on every variant.
-    expect(stageSections(cricket, "knockout", "t20").find((s) => s.fields.some((f) => f.key === "minOversForResult"))?.id).toBe("format");
+    // The result floor is a detail of the DLS SWITCH, not of a decider: it is held while DLS is off, but nothing is being decided,
+    // so it sits with the match format beside the switch, and only on the variants that can play DLS.
+    for (const variant of Object.keys(cricket.variants)) {
+      const sectionOfFloor = stageSections(cricket, "knockout", variant).find((s) => s.fields.some((f) => f.key === "minOversForResult"))?.id;
+      const sectionOfSwitch = stageSections(cricket, "knockout", variant).find((s) => s.fields.some((f) => f.key === "dls"))?.id;
+      const offered = stageKeysFor(cricket, "knockout", variant).includes("minOversForResult");
+      expect(sectionOfFloor, `${variant}: the floor's section`).toBe(offered ? "format" : undefined);
+      expect(sectionOfSwitch, `${variant}: the DLS switch's section`).toBe(offered ? "format" : undefined);
+    }
   });
 });

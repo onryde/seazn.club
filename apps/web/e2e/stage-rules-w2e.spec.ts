@@ -5,8 +5,8 @@
 //
 // What a node-env vitest cannot see (AGENTS.md class 2) is what this file is for: that each control is on the screen of a real
 // stage, that a click lands the value the field says and the API stores exactly that, that a reload hydrates it back, that
-// the still-tied policy is held while the super over is off, and that a started stage holds all five read-only while the API
-// still refuses a write.
+// the still-tied policy is held while the super over is off and the result floor while DLS is off, and that a started stage
+// holds all five read-only while the API still refuses a write.
 //
 // WHERE THE EXPECTED VALUES COME FROM (class 19: pin what a control OPENS AT, not only that it is there). The value each
 // control opens at is the engine's own: the variant preset the division is created from (`module.variants`, then
@@ -36,12 +36,28 @@ interface Case {
   set: string;
   /** What the stage then stores for the key. */
   stored: unknown;
+  /** The key's HOST: the stage switch the engine holds it behind (`detailOf`). The field is held while the switch is off and free while it is on. */
+  gate?: {
+    /** The switch's own cfg key, and the key of its field (the same string). */
+    top: string;
+    /** Whether a new stage of this kind opens with the switch off (the field held): DLS is off in every variant; a knockout plays the super over. */
+    heldAtOpen: boolean;
+    /** The stage rules that switch it on, laid through the API where a test needs the field free from the start. */
+    frees: Record<string, unknown>;
+  };
 }
 
 const CASES: readonly Case[] = [
   { sport: "carrom", variant: "icf", kind: "league", key: "pointsPerCoin", set: "2", stored: 2 },
-  { sport: "cricket", variant: "odi", kind: "knockout", key: "minOversForResult", set: "8", stored: 8 },
-  { sport: "cricket", variant: "t20", kind: "knockout", key: "superOverStillTied", set: "shared", stored: "shared" },
+  // Held by DLS (fix round 1: only a DLS par reads the floor): every variant opens with DLS off, so the control opens held.
+  {
+    sport: "cricket", variant: "odi", kind: "knockout", key: "minOversForResult", set: "8", stored: 8,
+    gate: { top: "dls", heldAtOpen: true, frees: { dls: { enabled: true, edition: "standard" } } },
+  },
+  {
+    sport: "cricket", variant: "t20", kind: "knockout", key: "superOverStillTied", set: "shared", stored: "shared",
+    gate: { top: "superOver", heldAtOpen: false, frees: { superOver: true } },
+  },
   // The youth variant plays rolling substitutions, so Off is a change the preset would not make on its own.
   { sport: "football", variant: "youth", kind: "knockout", key: "rollingSubs", set: "off", stored: false },
   { sport: "football", variant: "11-a-side", kind: "knockout", key: "concussionSubs", set: "2", stored: 2 },
@@ -153,19 +169,30 @@ for (const c of CASES) {
       await expect(control.locator("option")).toHaveText([L["rules.default"]!, ...field.options!.map((o) => L[o.labelKey!]!)]);
     }
 
-    // The still-tied policy is held while the super over is off, with the reason beside it, and free while it is on.
-    if (c.key === "superOverStillTied") {
-      const superOver = row.getByTestId("stage-rule-field-superOver").locator("select");
-      const held = row.getByTestId("stage-rule-detail-off-superOverStillTied");
-      const switchLabel = SPORT_RULES.cricket!.find((f) => f.key === "superOver")!.label;
-      await expect(control, "the knockout preset plays the super over, so the policy opens free").toBeEnabled();
-      await expect(held).toHaveCount(0);
-      await superOver.selectOption("off");
-      await expect(control, "no super over, no policy").toBeDisabled();
-      await expect(held).toHaveText(L["stageRules.detail.off"]!.replace("{decider}", switchLabel));
-      await superOver.selectOption("on");
-      await expect(control).toBeEnabled();
-      await expect(held).toHaveCount(0);
+    // A field the engine holds behind a stage switch (`detailOf`): held while the switch is off, with the reason beside it naming the
+    // switch, and free while it is on. The still-tied policy answers to the super over (a knockout opens with it on); the result
+    // floor to DLS (every variant opens with it off, so the floor opens held and the test turns DLS on to set it).
+    if (c.gate !== undefined) {
+      const switchField = SPORT_RULES[c.sport]!.find((f) => f.key === c.gate!.top)!;
+      const gateSelect = row.getByTestId(`stage-rule-field-${c.gate.top}`).locator("select");
+      const held = row.getByTestId(`stage-rule-detail-off-${c.key}`);
+      const caption = L["stageRules.detail.off"]!.replace("{decider}", switchField.label);
+      if (c.gate.heldAtOpen) {
+        await expect(control, `no ${c.gate.top}, no ${c.key}: it opens held`).toBeDisabled();
+        await expect(held).toHaveText(caption);
+        await gateSelect.selectOption("on");
+        await expect(control, `${c.gate.top} on frees ${c.key}`).toBeEnabled();
+        await expect(held).toHaveCount(0);
+      } else {
+        await expect(control, `the knockout preset plays ${c.gate.top}, so ${c.key} opens free`).toBeEnabled();
+        await expect(held).toHaveCount(0);
+        await gateSelect.selectOption("off");
+        await expect(control, `no ${c.gate.top}, no ${c.key}`).toBeDisabled();
+        await expect(held).toHaveText(caption);
+        await gateSelect.selectOption("on");
+        await expect(control).toBeEnabled();
+        await expect(held).toHaveCount(0);
+      }
     }
 
     // SET and SAVE.
@@ -179,7 +206,9 @@ for (const c of CASES) {
     const after = await storedRules(request, stageId);
     expect(after, `${c.key}: the save stored rules`).not.toBeNull();
     expect(after![c.key], `${c.key} stored`).toEqual(c.stored);
-    expect(Object.keys(after!).sort(), "only the edited key was added to what the stage held").toEqual([...Object.keys(before ?? {}), c.key].sort());
+    // (and the switch the test turned on to free it, where the field is held behind one the new stage did not already carry)
+    const switched = c.gate !== undefined && !Object.hasOwn(before ?? {}, c.gate.top) ? [c.gate.top] : [];
+    expect(Object.keys(after!).sort(), "only the edited key (and its freed switch) was added to what the stage held").toEqual([...Object.keys(before ?? {}), c.key, ...switched].sort());
 
     // A reload hydrates the control from the stored rules.
     await page.reload({ waitUntil: "load" });
@@ -203,9 +232,10 @@ for (const c of CASES) {
 for (const c of CASES) {
   test(`${c.sport}.${c.key}: the W2c lock holds it read-only on a started stage and the API refuses a write with STAGE_FORMAT_LOCKED`, async ({ page, request }) => {
     test.setTimeout(150_000);
-    // The still-tied policy is also held by the super over being off; give the stage its super over first so that, in the
-    // started stage, the LOCK is the only thing that can disable it (and the unstarted twin below is free).
-    const rules = c.key === "superOverStillTied" ? { superOver: true } : null;
+    // A field held behind a stage switch (the still-tied policy behind the super over, the result floor behind DLS) is also disabled
+    // by the switch being off; switch it on first so that, in the started stage, the LOCK is the only thing that can disable it
+    // (and the unstarted twin below is free).
+    const rules = c.gate === undefined ? null : c.gate.frees;
 
     // A started stage of this sport: a rostered fixture, the stage rules laid before the first event, then core.start.
     const seeded = await seedRosteredFixture(request, {

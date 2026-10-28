@@ -277,6 +277,7 @@ describe("R157 the five fields are drawn by the real stage row, from the diction
   };
   const plain = (markup: string): string => markup.replaceAll("&#x27;", "'");
   const heldSelect = (block: string): boolean => /<select[^>]*\sdisabled(=""|\s|>)/.test(block);
+  const heldInput = (block: string): boolean => /<input[^>]*\sdisabled(=""|\s|>)/.test(block);
   const cricket = builtinModules.find((m) => m.key === "cricket")!;
   const division = cricket.configSchema.parse(cricket.variants.t20) as Record<string, unknown>;
   const cricketAt = (rules: Record<string, unknown>, dict: Dict = enUi as Dict, locale: "en" | "es" | "fr" | "nl" = "en", values: Record<string, string> = {}): string =>
@@ -289,12 +290,42 @@ describe("R157 the five fields are drawn by the real stage row, from the diction
     expect(off).toContain("Only used when Super over on a tie is on");
     const on = cricketAt({ superOver: true });
     expect(heldSelect(blockOf(on, "superOverStillTied"))).toBe(false);
-    expect(on).not.toContain("stage-rule-detail-off-");
+    expect(on).not.toContain("stage-rule-detail-off-superOverStillTied");
     // A held SELECT reads as held, as a held number does (the shared `.select` has no disabled look of its own).
     expect(blockOf(off, "superOverStillTied")).toContain("[&amp;_select]:bg-slate-100");
     expect(blockOf(on, "superOverStillTied")).not.toContain("[&amp;_select]:bg-slate-100");
-    // The result floor is a plain format field: free with the super over off.
-    expect(/<input[^>]*\sdisabled/.test(blockOf(off, "minOversForResult"))).toBe(false);
+    // The result floor answers to DLS, not to the super over: DLS defaults to off, so it is held here whichever the super over says.
+    expect(heldInput(blockOf(off, "minOversForResult")), "the floor follows DLS, and DLS is off here").toBe(true);
+    expect(heldInput(blockOf(on, "minOversForResult")), "...also with the super over on").toBe(true);
+  });
+
+  // Fix round 1 (PO ruling): the result floor is read only by a DLS par, so the real row holds it while DLS is off - with the
+  // reason beside it, naming the switch - and frees it while DLS is on; and it still sits with the match format, beside the switch.
+  it("R157 minOversForResult is disabled while DLS is off, with the reason naming the DLS switch, and free while DLS is on", () => {
+    const dlsOff = { dls: { enabled: false, edition: "standard" } };
+    const dlsOn = { dls: { enabled: true, edition: "standard" } };
+    const off = cricketAt(dlsOff);
+    expect(heldInput(blockOf(off, "minOversForResult"))).toBe(true);
+    expect(off).toContain('data-testid="stage-rule-detail-off-minOversForResult"');
+    expect(off).toContain("Only used when DLS revised targets is on");
+    // A stage that says nothing about DLS holds it too: every variant defaults DLS to off (the dead control that shipped).
+    expect(heldInput(blockOf(cricketAt({}), "minOversForResult"))).toBe(true);
+    const on = cricketAt(dlsOn);
+    expect(heldInput(blockOf(on, "minOversForResult"))).toBe(false);
+    expect(on).not.toContain("stage-rule-detail-off-minOversForResult");
+    // The held input reads as held (the same wrapper class the shoot-out kicks carry), the free one does not.
+    expect(blockOf(off, "minOversForResult")).toContain("[&amp;_input]:bg-slate-100");
+    expect(blockOf(on, "minOversForResult")).not.toContain("[&amp;_input]:bg-slate-100");
+    // It follows DLS alone: the still-tied policy answers to the super over, whatever DLS says.
+    expect(heldSelect(blockOf(cricketAt({ ...dlsOn, superOver: false }), "superOverStillTied"))).toBe(true);
+    expect(heldInput(blockOf(cricketAt({ ...dlsOn, superOver: false }), "minOversForResult"))).toBe(false);
+    // The two sit in the match format together (the section is the engine's `detailOf` of a decider, which DLS is not).
+    const format = on.slice(on.indexOf('data-testid="stage-rules-section-format"'), on.indexOf('data-testid="stage-rules-section-deciders"'));
+    expect(format).toContain('data-testid="stage-rule-field-minOversForResult"');
+    expect(format).toContain('data-testid="stage-rule-field-dls"');
+    // On the two-innings test match the floor is not offered at all: there is no DLS to hold it behind.
+    const test = cricket.configSchema.parse(cricket.variants.test) as Record<string, unknown>;
+    expect(render("cricket", "league", {}, test, "test", resolvedStageCfg(cricket, test, "league", {}))).not.toContain('data-testid="stage-rule-field-minOversForResult"');
   });
 
   it("R157 the still-tied select offers exactly the engine's three policies, behind Default, and shows the one the stage holds", () => {

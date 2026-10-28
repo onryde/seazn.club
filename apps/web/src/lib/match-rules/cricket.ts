@@ -52,14 +52,16 @@ export const CRICKET_RULES: RuleField[] = [
   },
   // W2e Task 28 (owner D5, ruling 157) - the fewest overs the chasing side must have faced before DLS may decide an
   // abandoned match (CR-13). The number is OVERS, not balls: the engine multiplies by `ballsPerOver` itself, so no scale is
-  // applied here. 0 is a legal value (the test match plays no limited innings). The engine's cross-refine (the floor must
-  // fit the innings) is the contract's `crossField` pin.
+  // applied here. 0 is a legal value. Only a DLS par reads it (`dlsAbandonmentPar`), so the engine holds it behind the DLS
+  // switch (`detailOf: "dls"`, fix round 1): the stage row disables it while DLS is off and offers it only on the variants
+  // that can play DLS (not the test match). The engine's cross-refine (the floor must fit the innings) is the contract's
+  // `crossField` pin.
   {
     key: "minOversForResult",
     edits: ["minOversForResult"],
     label: "Minimum overs for a result",
     labelKey: "rules.field.minOversForResult.label",
-    help: "Fewest overs the chasing side must face before DLS can decide an abandoned match; fewer is a no result. Usual: 5 in T20, 20 in ODI.",
+    help: "Only used while DLS revised targets is on. Fewest overs the chasing side must face before DLS can decide an abandoned match; fewer is a no result. Usual: 5 in T20, 20 in ODI.",
     helpKey: "rules.field.minOversForResult.help",
     kind: "number",
     min: 0,

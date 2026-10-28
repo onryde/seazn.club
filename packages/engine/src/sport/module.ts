@@ -759,13 +759,15 @@ export interface RuleKeyFact {
   readonly whenAbsent?: number;
   /** A DETAIL of a decider, not a decider itself: the key of the decider it only means something under (the kicks of a
    *  shoot-out under `shootout`, the minutes of an overtime under `overtime`: bounded lengths; or a policy, cricket's
-   *  `superOverStillTied` under `superOver`: what a tied super over does). Declared, not inferred from the key's
+   *  `superOverStillTied` under `superOver`: what a tied super over does). The host may also be a SWITCH that is no
+   *  decider: cricket's `dls`, the only reader of the result floor `minOversForResult` (a DLS par decides an abandoned
+   *  chase, never a level match). The editor holds the detail while its host is off either way, but places a detail of a
+   *  decider with the deciders and a detail of a switch with the match format. Declared, not inferred from the key's
    *  spelling: football's `shootoutAttempts` is a flat key beside its decider, the period kernel's are dotted paths
-   *  beneath theirs. The stage editor reads it to hold such a field while its decider is off, and to place it with the
-   *  deciders; a detail must also be OFFERED exactly where its decider is (the same `appliesTo`), or the editor lists a
+   *  beneath theirs. A detail must also be OFFERED exactly where its host is (the same `appliesTo`), or the editor lists a
    *  field that can never be enabled. The sweeps in `rule-keys.test.ts` fail a bounded key that is neither a decider nor a
-   *  detail of one, a `detailOf` that names a key which is not a declared decider, and a detail whose `appliesTo` differs
-   *  from its decider's. */
+   *  detail of one, a `detailOf` that names a key which is neither a declared decider nor a declared switch, and a detail
+   *  whose `appliesTo` differs from its host's. */
   readonly detailOf?: string;
   /** A WHOLE decider: the key that, on, settles a level match (extra time, penalties, overtime, the shoot-out, the
    *  super over, chess tie-break games, carrom's tie board). The knockout preselection reads it through

@@ -3679,6 +3679,12 @@ function cricketForfeitCredit(cfg: CricketCfg, _state: CricketState, reason: Awa
  *  `stageDefaults` read, so a variant added to the list gets the knockout preset with it. */
 const SUPER_OVER_KEY: RuleKeyFact = { scope: "stage", decider: true, appliesTo: { variants: ["t20", "odi", "hundred"] } };
 
+/** DLS revised targets are a stage key of the variants whose schema takes one (`CricketCfg` refuses DLS unless the innings is
+ *  limited, so an unlimited-overs test match has none). Not a decider: a DLS par decides an ABANDONED chase, never a level
+ *  match, so the knockout preselection and the "no decider" notice must not read it. The one declaration both `dls` and the
+ *  result floor that only a DLS par reads (`minOversForResult`, `dlsAbandonmentPar`) take their `appliesTo` from. */
+const DLS_KEY: RuleKeyFact = { scope: "stage", appliesTo: { variants: ["t20", "odi", "hundred"] } };
+
 export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   key: "cricket",
   version: "1.0.0",
@@ -3736,8 +3742,13 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     // super over at all (`SUPER_OVER_KEY.appliesTo`: a two-innings test match has none, so the field would be held for
     // ever), so it is never a control that does nothing.
     superOverStillTied: { scope: "stage", detailOf: "superOver", appliesTo: SUPER_OVER_KEY.appliesTo },
-    dls: { scope: "stage", appliesTo: { variants: ["t20", "odi", "hundred"] } },
-    minOversForResult: { scope: "stage" },
+    dls: DLS_KEY,
+    // CK-DLS / ruling 157 (W2e Task 28, fix round 1) — the fewest overs the chasing side must face before an abandoned
+    // match can be decided is read ONLY by the DLS par (`dlsAbandonmentPar`): with DLS off an abandon is a no result at any
+    // value, so the stage editor holds the field while `dls` is off (`detailOf`) and offers it only where DLS can be on
+    // (`DLS_KEY.appliesTo`: an unlimited-overs test match has no DLS, and its two-innings abandon is a draw whatever the
+    // floor says). Metadata only: the fold is untouched. `dls` is a switch, not a whole decider (see `DLS_KEY`).
+    minOversForResult: { scope: "stage", detailOf: "dls", appliesTo: DLS_KEY.appliesTo },
     playersPerSide: { scope: "stage" },
     points: { scope: "points" },
   },
