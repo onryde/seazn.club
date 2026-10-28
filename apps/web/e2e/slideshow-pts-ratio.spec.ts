@@ -39,8 +39,10 @@ const L = {
   points: enUi["slideshow.col.points"],
   pointRatio: enUi["slideshow.col.pointRatio"],
 };
-/** The header a slide had before the column existed, then the one with it. */
-const HEADER = ["#", L.entrant, L.played, L.won, L.drawn, L.lost, L.points];
+/** The header a slide had before the column existed (the generic division, no result yet), then a badminton board's with
+ *  it. Neither table holds a draw, so neither prints D: the board's D is the public table's, a row holding a draw
+ *  (export review I2, round 2, 2026-10-28). */
+const HEADER = ["#", L.entrant, L.played, L.won, L.lost, L.points];
 const HEADER_WITH_RATIO = [...HEADER, L.pointRatio];
 
 /** One API round trip against a local production build, with headroom. */
@@ -204,7 +206,7 @@ test.describe("organiser slideshow: the standings slide's Pts ratio column", () 
     expect(table.header).toEqual(HEADER_WITH_RATIO);
     expect(Object.keys(table.rows).sort()).toEqual(["Mina", "Rita"]);
     for (const [name, cells] of Object.entries(table.rows)) {
-      expect(cells, `${name}'s cells: rank, entrant, P, W, D, L, Pts, ratio`).toHaveLength(HEADER_WITH_RATIO.length);
+      expect(cells, `${name}'s cells: rank, entrant, P, W, L, Pts, ratio`).toHaveLength(HEADER_WITH_RATIO.length);
       expect(cells.slice(2, 3), `${name} played one`).toEqual(["1"]);
     }
     // Home won both games 21-0, and which of the two entrants is home is the
@@ -222,7 +224,7 @@ test.describe("organiser slideshow: the standings slide's Pts ratio column", () 
     expect(table.header).toEqual(HEADER);
     expect(Object.keys(table.rows).sort()).toEqual(["North", "South"]);
     for (const [name, cells] of Object.entries(table.rows)) {
-      expect(cells, `${name}'s cells: rank, entrant, P, W, D, L, Pts`).toHaveLength(HEADER.length);
+      expect(cells, `${name}'s cells: rank, entrant, P, W, L, Pts`).toHaveLength(HEADER.length);
     }
     expect(table.header).not.toContain(L.pointRatio);
   });

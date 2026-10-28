@@ -722,23 +722,25 @@ describe.skipIf(!HAS_DB)("W2d follow-up (m3, m8) — the organiser export and th
     await hockeyGame(s, e6, e1, "so");
     await hockeyGame(s, e3, e4, "regulation");
     // RBG §3.4, typed from the rulebook: a regulation win 3, an OT or GWS win 2, an OT or GWS loss 1, a regulation loss
-    // 0; "OT and GWS decisions both land in OTW/OTL", so W and L count regulation only. P = W + OTW + OTL + L.
-    //            P  W  OTW OTL D  L  Pts
-    const WANT: Record<string, [number, number, number, number, number, number, number]> = {
-      E1: [5, 1, 2, 2, 0, 0, 9],
-      E2: [1, 0, 0, 0, 0, 1, 0],
-      E3: [2, 1, 0, 1, 0, 0, 4],
-      E4: [2, 0, 0, 1, 0, 1, 1],
-      E5: [1, 0, 1, 0, 0, 0, 2],
-      E6: [1, 0, 1, 0, 0, 0, 2],
+    // 0; "OT and GWS decisions both land in OTW/OTL", so W and L count regulation only. P = W + OTW + OTL + L. Line 343's
+    // table is "GP · W · OTW · OTL · L": no D (export review I2 — #1057 printed a D here that the rulebook has not).
+    //            P  W  OTW OTL L  Pts
+    const WANT: Record<string, [number, number, number, number, number, number]> = {
+      E1: [5, 1, 2, 2, 0, 9],
+      E2: [1, 0, 0, 0, 1, 0],
+      E3: [2, 1, 0, 1, 0, 4],
+      E4: [2, 0, 0, 1, 1, 1],
+      E5: [1, 0, 1, 0, 0, 2],
+      E6: [1, 0, 1, 0, 0, 2],
     };
     const { columns, rows } = await exportedTable(s);
-    expect(columns.slice(0, 8), "the export's header: #, Team, then the public table's result columns").toEqual(["#", "Team", "P", "W", "OTW", "OTL", "D", "L"]);
+    expect(columns.slice(0, 7), "the export's header: #, Team, then the public table's result columns").toEqual(["#", "Team", "P", "W", "OTW", "OTL", "L"]);
+    expect(columns, "an IIHF table cannot draw: no D").not.toContain("D");
     const pts = columns.indexOf("Pts");
     let checked = 0;
     for (const row of rows) {
       const name = String(row[1]);
-      expect([...row.slice(2, 8), row[pts]], `${name}'s export row`).toEqual(WANT[name]);
+      expect([...row.slice(2, 7), row[pts]], `${name}'s export row`).toEqual(WANT[name]);
       checked++;
     }
     expect(checked, "every entrant's row").toBe(6);
@@ -751,12 +753,12 @@ describe.skipIf(!HAS_DB)("W2d follow-up (m3, m8) — the organiser export and th
     // The same table on the organiser board and on the public kiosk: the same split, the same points.
     const boards = await boardSlides(s);
     for (const [who, slide] of Object.entries(boards)) {
-      expect(slide.columns.map((c) => c.key), `${who}: the result columns`).toEqual(["played", "won", "otw", "otl", "drawn", "lost"]);
+      expect(slide.columns.map((c) => c.key), `${who}: the result columns`).toEqual(["played", "won", "otw", "otl", "lost"]);
       const cells = slideCells(slide);
       let rowsChecked = 0;
       for (const [name, want] of Object.entries(WANT)) {
-        const [p, w, otw, otl, d, l, points] = want.map(String);
-        expect(cells[name], `${who}: ${name}`).toEqual({ played: p, won: w, otw, otl, drawn: d, lost: l });
+        const [p, w, otw, otl, l, points] = want.map(String);
+        expect(cells[name], `${who}: ${name}`).toEqual({ played: p, won: w, otw, otl, lost: l });
         expect(slide.rows.find((r) => r.name === name)!.points, `${who}: ${name}'s points`).toBe(points);
         rowsChecked++;
       }
@@ -764,8 +766,9 @@ describe.skipIf(!HAS_DB)("W2d follow-up (m3, m8) — the organiser export and th
     }
   });
 
-  it("football and badminton (a set sport) keep P · W · D · L on the export and both boards, each cell the stored count", async () => {
-    // Two sports outside IIHF, one goal sport with draws and one set sport without: the shape and the counts as before.
+  it("football keeps P · W · D · L on the export and both boards; badminton (a set sport, which cannot draw) prints P · W · L; each cell the stored count", async () => {
+    // Two sports outside IIHF, one goal sport with draws and one set sport without (export review I2: a set match always
+    // has a winner, so the public table never prints its D, and neither do the sheet and the boards now).
     const cases = [
       {
         sport: "football",
@@ -780,8 +783,10 @@ describe.skipIf(!HAS_DB)("W2d follow-up (m3, m8) — the organiser export and th
             if ((await fixtureRow(f.id)).status !== "decided") throw new Error("rig: the football match did not decide");
           }
         },
-        // E1 beat E2; E2 drew E3.
+        // E1 beat E2; E2 drew E3.            P  W  D  L
         want: { E1: [1, 1, 0, 0], E2: [2, 0, 1, 1], E3: [1, 0, 1, 0] },
+        keys: ["played", "won", "drawn", "lost"],
+        header: ["P", "W", "D", "L"],
       },
       {
         sport: "badminton",
@@ -792,8 +797,10 @@ describe.skipIf(!HAS_DB)("W2d follow-up (m3, m8) — the organiser export and th
             await playBadminton(s.auth, f.id, f.home === x);
           }
         },
-        // E1 beat E2; E3 beat E1.
-        want: { E1: [2, 1, 0, 1], E2: [1, 0, 0, 1], E3: [1, 1, 0, 0] },
+        // E1 beat E2; E3 beat E1.            P  W  L
+        want: { E1: [2, 1, 1], E2: [1, 0, 1], E3: [1, 1, 0] },
+        keys: ["played", "won", "lost"],
+        header: ["P", "W", "L"],
       },
     ];
     let checked = 0;
@@ -803,19 +810,20 @@ describe.skipIf(!HAS_DB)("W2d follow-up (m3, m8) — the organiser export and th
       await startDivision(s.auth, s.divisionId);
       await c.play(s, s.entrants);
       const { columns, rows } = await exportedTable(s);
-      expect(columns.slice(0, 6), `${c.sport}: the export's header as it always was`).toEqual(["#", "Team", "P", "W", "D", "L"]);
+      const n = c.header.length;
+      expect(columns.slice(0, 2 + n), `${c.sport}: the export's header`).toEqual(["#", "Team", ...c.header]);
       expect(columns, `${c.sport}: no split columns`).not.toContain("OTW");
       const [stored] = await snapshotsOf(s.stageId);
       const nameOf = new Map(s.entrants.map((id, i) => [id, `E${i + 1}`]));
       for (const r of stored!.rows) {
         const name = nameOf.get(r.entrantId)!;
-        const cells = rows.find((x) => x[1] === name)!.slice(2, 6);
+        const cells = rows.find((x) => x[1] === name)!.slice(2, 2 + n);
         expect(cells, `${c.sport} ${name}: the played counts`).toEqual(c.want[name as keyof typeof c.want]);
-        expect(cells, `${c.sport} ${name}: the stored counts`).toEqual([r.played, r.won, r.drawn, r.lost]);
+        expect(cells, `${c.sport} ${name}: the stored counts`).toEqual(c.keys.map((k) => r[k as "played" | "won" | "drawn" | "lost"]));
         checked++;
       }
       for (const [who, slide] of Object.entries(await boardSlides(s))) {
-        expect(slide.columns.map((k) => k.key), `${c.sport} ${who}: the result columns`).toEqual(["played", "won", "drawn", "lost"]);
+        expect(slide.columns.map((k) => k.key), `${c.sport} ${who}: the result columns`).toEqual(c.keys);
         expect(slide.columns.every((k) => k.compact), `${c.sport} ${who}: nothing folds`).toBe(true);
         for (const [name, want] of Object.entries(c.want)) {
           expect(slide.rows.find((r) => r.name === name)!.results, `${c.sport} ${who} ${name}`).toEqual(want.map(String));
@@ -828,23 +836,25 @@ describe.skipIf(!HAS_DB)("W2d follow-up (m3, m8) — the organiser export and th
 
   it("review m3: every standings header prints in the org's language, through the public table's own dictionary keys (en, es, fr, nl)", async () => {
     // single-sport: IIHF ice hockey carries every kind of standings column at once (#, Team, the split result columns,
-    // keyed metrics, a notation metric, Pts); the header set of every sport is the same lookup (`columnHeader`).
+    // keyed metrics, Pts); the header set of every sport is the same lookup (`columnHeader`), swept per sport in
+    // export-every-pool.test.ts.
     const s = await scene({ sport: "icehockey", variant: "iihf", entrants: 2 });
     const [e1, e2] = s.entrants as [string, string];
     await generateStageFixtures(s.auth, s.stageId);
     await startDivision(s.auth, s.divisionId);
     await hockeyGame(s, e1, e2, "regulation");
     // The public table's keys, typed here (standings-view.ts STRUCTURAL_ABBR_KEYS / METRIC_HEADER_KEYS, standings-table-view's
-    // `table.team`): ice hockey's table ledger is GF, GA, GD and PIM — PIM has no translation, it is the sport's notation
-    // and prints as the module labels it in every locale, as on the public table. `#` is a glyph.
-    const KEYS = ["table.team", "table.abbr.played", "table.abbr.won", "table.abbr.otw", "table.abbr.otl", "table.abbr.drawn",
+    // `table.team`): ice hockey's displayed metrics are GF, GA and GD. PIM is a hidden ledger metric (`display: false`): the
+    // public table never shows it, and since export every pool (2026-10-28) neither does the export. `#` is a glyph.
+    // No `table.abbr.drawn`: an IIHF table cannot draw (RBG §3.4, export review I2).
+    const KEYS = ["table.team", "table.abbr.played", "table.abbr.won", "table.abbr.otw", "table.abbr.otl",
       "table.abbr.lost", "table.abbr.gf", "table.abbr.ga", "table.abbr.gd"] as const;
     const headers: Record<string, string[]> = {};
     for (const locale of ["en", "es", "fr", "nl"] as const) {
       await sql`update organizations set default_locale = ${locale} where id = ${s.auth.orgId}`;
       const { columns } = await exportedTable(s);
       const dict = await getDictionary(locale, "public");
-      expect(columns, `${locale}: the export's header`).toEqual(["#", ...KEYS.map((k) => t(dict, k)), "PIM", t(dict, "table.abbr.points")]);
+      expect(columns, `${locale}: the export's header`).toEqual(["#", ...KEYS.map((k) => t(dict, k)), t(dict, "table.abbr.points")]);
       headers[locale] = columns;
     }
     // The positive pair: the words do change with the locale (a lookup that ignored it would pass the four above only

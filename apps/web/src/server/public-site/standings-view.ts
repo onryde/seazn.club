@@ -42,7 +42,7 @@ import {
   type TieBreakNote,
 } from "@seazn/engine/competition";
 import type { PartialScheduleKey, TiebreakerKey } from "@seazn/engine/sport";
-import { resultColumns, standingsColumns, formatMetric, type MetricSpecLike, type StandingsColumn } from "@/lib/public-site";
+import { standingsColumns, formatMetric, type MetricSpecLike, type StandingsColumn } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { TableViewT } from "./competition-hub-schema";
@@ -435,12 +435,13 @@ export function tableColumns(
   return standingsColumns(metricSpecs, cascade, rows, DERIVED_METRICS, layout.apart.length > 0);
 }
 
-/** W2d follow-up (final review m3, m8) — the result columns of a FIXED-shape table, the organiser export and the kiosk:
- *  the public table's own declaration under the stage's layout (IIHF's P · W · OTW · OTL · L, RBG:343-344), with D on
- *  every table, where the public table prints it only once a draw exists — a printed sheet and a TV board keep one shape
- *  all season, as both always have. Their cells are `cellText`'s, the public table's. */
-export function fixedResultColumns(layout: TableLayout): StandingsColumn[] {
-  return resultColumns(layout.apart.length > 0, true);
+/** W2d follow-up (final review m3, m8; export review I2, round 2, 2026-10-28) — the result columns (P … L) of a table's
+ *  columns as `tableColumns` picked them: its structural columns but Pts, in its order. The organiser export and the kiosk
+ *  print THESE, from the public table's own selection over the same table's rows — no second list and no second rule
+ *  for D (owner-approved: "the export matches the public table"): IIHF's P · W · OTW · OTL · L (RBG:343-344), D exactly
+ *  when a row of the table holds a draw (`tableHasDraw`). Cells are `cellText`'s, the public table's. */
+export function resultColumnsOf(columns: readonly StandingsColumn[]): StandingsColumn[] {
+  return columns.filter((c) => c.kind === "structural" && c.key !== "points");
 }
 
 /** W2d T17 (anti-goal 2, X-TB-8): why a conditional step left a tie unsplit, as the tie popover says it. Spelled out

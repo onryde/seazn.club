@@ -4300,6 +4300,26 @@ the SDD ledger at `a719e11309` (PR B after its rebase); PR B's final whole-branc
 - **The mutation session:** the stryker-sizing legs that drift on W2d's engine files (ruling 154; CI legs dispatched
   for PR B).
 
+**Owed: the organiser standings export against the public table** (export every pool, branch
+`fix/export-every-pool-shown-metrics`, 2026-10-28; its review m4). The export now prints every pool, the public table's
+metric columns and, per table, its result columns (D exactly when a row of that table holds a draw; the kiosk the same).
+It still differs from the public table here:
+- **Derived cascade columns.** The public table prints the cascade's derived columns (cricket's NRR, Swiss Buchholz,
+  the points ratio: `tableColumns` kind `derived`). The export prints none, so a cricket sheet carries T and NR but no
+  NRR.
+- **Absent metric "—" against 0.** The export prints a metric a row does not carry as `0` (`r.metrics[m] ?? 0`); the
+  public table prints "—" (`formatMetric(undefined)`).
+- **`formatMetric` spelling.** The export prints raw metric numbers; the public table prints them through
+  `formatMetric` (a metric's declared decimals).
+- **No e2e downloads the standings export.** The DB suites (`export-every-pool.test.ts`,
+  `generate-level-table.test.ts`) and the real-pdfkit render tests are its only witnesses.
+- **doc-render: a short-name table spreads its spare width over the numeric columns.** Every column's share is
+  `min(max(len, 3), 40)` of the page (`tableGrid` in `doc-render.ts`). A table of short names ("E3") therefore spreads
+  its counts across the page and pushes `#` and Team right. On a mixed-shape sheet (one pool with D, one without: their
+  own grids), the pools do not share a #/Team left edge. This is pre-existing on main (`drawTable`'s weights). A fix,
+  where numeric columns take their floor and the text column the slack, moves EVERY PDF table: timetables, rosters, the
+  officials rota and scoresheets. It needs its own visual pass across the document kinds (export re-review item 4, n2).
+
 **Parked (accepted, or under the owner's scope cuts)**
 - **Concern 2:** an undo of a generate leaves its level table (a later delete drops it); pooled groups still read "No
   standings yet" before a result.

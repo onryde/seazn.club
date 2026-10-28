@@ -138,10 +138,11 @@ describe("slideshow standings slide — the Pts ratio column (public /present)",
   it("a division that names no module and a stage with no order gets no ratio column (the slide as it always was)", async () => {
     const slide = await standingsSlide({});
     expect(slideShowsRatio(slide)).toBe(false);
-    // W2d follow-up m8: the result counts ride as `results` (paired with the slide's P · W · D · L columns); no row
-    // carries a `pointRatio` key at all.
+    // W2d follow-up m8: the result counts ride as `results` (paired with the slide's columns); no row carries a
+    // `pointRatio` key at all. Export review I2, round 2: the columns are the public table's — the ledger holds no draw,
+    // so P · W · L.
     for (const r of slide.rows) expect(Object.keys(r).sort()).toEqual(["name", "points", "rank", "results"]);
-    expect(slide.columns.map((c) => c.key)).toEqual(["played", "won", "drawn", "lost"]);
+    expect(slide.columns.map((c) => c.key)).toEqual(["played", "won", "lost"]);
   });
 
   it("an unknown (retired) module build degrades to no column — it never throws, like the division page", async () => {
@@ -275,7 +276,9 @@ describe("W2d T17 fix 1: the standings slide prints the public table's points an
 // ---- W2d follow-up (final review m8): the slide's result columns are the public table's --------------------------------
 // RBG §3.4 (lines 343-344): "OT and GWS decisions both land in OTW/OTL" — IIHF's W and L are regulation only. The slide
 // used to print P · W · D · L for every table, so a hockey board folded its overtime wins into W. Rows come from the
-// engine's producers (`stored-table-rows`), the expected counts from the rulebook.
+// engine's producers (`stored-table-rows`), the expected counts from the rulebook. Export review I2 (2026-10-28, round 2):
+// the board's D is the public table's — D exactly when a row of the table holds a draw; RBG §3.4 line 343 is
+// "GP · W · OTW · OTL · L", no D.
 describe("W2d follow-up m8: the standings slide prints IIHF's W · OTW · OTL · L, and every other table as before", () => {
   const IDS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
   const NAMES: Record<string, string> = { h1: "Ash", h2: "Birch", h3: "Cedar", h4: "Dogwood", h5: "Elm", h6: "Fir" };
@@ -297,41 +300,62 @@ describe("W2d follow-up m8: the standings slide prints IIHF's W · OTW · OTL ·
 
   it("IIHF: OT and shoot-out wins and losses in OTW/OTL, W and L regulation only (RBG §3.4); a phone keeps P and Pts", async () => {
     const slide = await slideOf(iihfLeague(IDS));
-    expect(slide.columns.map((c) => c.key)).toEqual(["played", "won", "otw", "otl", "drawn", "lost"]);
+    expect(slide.columns.map((c) => c.key), "RBG §3.4: GP · W · OTW · OTL · L, no D").toEqual(["played", "won", "otw", "otl", "lost"]);
     // RBG §3.4: Ash won in regulation, overtime and the shoot-out, and lost in overtime and the shoot-out — 3+2+2+1+1 = 9.
     const cells = byName(slide);
-    expect(cells["Ash"]).toEqual({ played: "5", won: "1", otw: "2", otl: "2", drawn: "0", lost: "0" });
-    expect(cells["Dogwood"], "a shoot-out loss and a regulation loss").toEqual({ played: "2", won: "0", otw: "0", otl: "1", drawn: "0", lost: "1" });
-    expect(cells["Cedar"], "a regulation win and an overtime loss").toEqual({ played: "2", won: "1", otw: "0", otl: "1", drawn: "0", lost: "0" });
+    expect(cells["Ash"]).toEqual({ played: "5", won: "1", otw: "2", otl: "2", lost: "0" });
+    expect(cells["Dogwood"], "a shoot-out loss and a regulation loss").toEqual({ played: "2", won: "0", otw: "0", otl: "1", lost: "1" });
+    expect(cells["Cedar"], "a regulation win and an overtime loss").toEqual({ played: "2", won: "1", otw: "0", otl: "1", lost: "0" });
     expect(slide.rows.find((r) => r.name === "Ash")!.points).toBe("9");
     // The public table's phone set for a split table (P, then Pts): every other count folds below the board's cut-off.
     expect(slide.columns.filter((c) => c.compact).map((c) => c.key)).toEqual(["played"]);
-    // The pair: the same rows with no rules to read (a stage the loader refused) print W and L as folded, never a split.
+    // The pair: the same rows with no rules to read (a stage the loader refused) print W and L as folded, never a split —
+    // and, as the public table, no D on a table that holds no draw.
     const plain = await slideOf(iihfLeague(IDS), { tiebreakers: iihfLeague(IDS).doc.tiebreakers });
-    expect(plain.columns.map((c) => c.key)).toEqual(["played", "won", "drawn", "lost"]);
-    expect(byName(plain)["Ash"], "the folded W counts all three wins").toEqual({ played: "5", won: "3", drawn: "0", lost: "2" });
+    expect(plain.columns.map((c) => c.key)).toEqual(["played", "won", "lost"]);
+    expect(byName(plain)["Ash"], "the folded W counts all three wins").toEqual({ played: "5", won: "3", lost: "2" });
   });
 
-  it("every shipped sport and declared cfg: the slide's columns are P · W · D · L, nothing folds, and each cell is the stored count — except IIHF's split", async () => {
+  it("every shipped sport and declared cfg × {no draw yet, a draw recorded where the stage can reach one}: the slide's columns are the public table's — P · W · L, D exactly when a row holds a draw — nothing folds, each cell the stored count; except IIHF's split", async () => {
     let plain = 0;
     let split = 0;
+    let withD = 0;
+    let withoutD = 0;
+    // The same ledger with one row booked drawn (Ash's three results: two wins and a draw) — the state a stage that can
+    // draw stores once one is played.
+    const withDraw = snapshotRows.map((r, i) => (i === 0 ? { ...r, won: r.won - 1, drawn: 1 } : r));
     for (const m of builtinModules) {
       for (const { name, cfg } of declaredCfgs(m)) {
         const doc = unpinnedRulesDoc({ module: m, divisionConfig: m.key === "generic" ? GENERIC_CONFIG : cfg });
-        const slide = await slideOf({ doc, rows: snapshotRows.map(engineRow) }, doc, { sport_key: m.key, module_version: m.version });
         const label = `${m.key} ${name}`;
+        // Which states the stage can be in is the engine's declaration (`reachableOutcomes`, carried by its rules doc): a
+        // draw is recorded only where it can reach one. What the board PRINTS is the public table's rule.
+        const canDraw = doc.reachable.includes("draw");
+        if (m.key === "badminton") expect(canDraw, `${label}: a set match always has a winner`).toBe(false);
+        if (m.key === "football") expect(canDraw, `${label}: a football league match can end level`).toBe(true);
         if (m.key === "icehockey" && name !== "recreational") {
-          expect(slide.columns.map((c) => c.key), label).toEqual(["played", "won", "otw", "otl", "drawn", "lost"]);
+          expect(canDraw, `${label}: RBG §3.4, IIHF has no draws`).toBe(false);
+          const slide = await slideOf({ doc, rows: snapshotRows.map(engineRow) }, doc, { sport_key: m.key, module_version: m.version });
+          expect(slide.columns.map((c) => c.key), label).toEqual(["played", "won", "otw", "otl", "lost"]);
           split++;
           continue;
         }
-        expect(slide.columns, label).toEqual(["played", "won", "drawn", "lost"].map((key) => ({ key, compact: true })));
-        expect(slide.rows.map((r) => r.results), label).toEqual(snapshotRows.map((r) => [r.played, r.won, r.drawn, r.lost].map(String)));
-        plain++;
+        for (const [state, rows] of [["no draw yet", snapshotRows], ...(canDraw ? [["a draw recorded", withDraw] as const] : [])] as const) {
+          const slide = await slideOf({ doc, rows: rows.map(engineRow) }, doc, { sport_key: m.key, module_version: m.version });
+          const drawOnTable = rows.some((r) => r.drawn > 0);
+          const keys = drawOnTable ? (["played", "won", "drawn", "lost"] as const) : (["played", "won", "lost"] as const);
+          expect(slide.columns, `${label} ${state}`).toEqual(keys.map((key) => ({ key, compact: true })));
+          expect(slide.rows.map((r) => r.results), `${label} ${state}`).toEqual(rows.map((r) => keys.map((k) => String(r[k]))));
+          plain++;
+          if (drawOnTable) withD++;
+          else withoutD++;
+        }
       }
     }
     expect(split, "anti-vacuity: IIHF cfgs").toBeGreaterThan(0);
     expect(plain, "anti-vacuity: every other sport's cfgs").toBeGreaterThan(builtinModules.length - 1);
+    expect(withD, "anti-vacuity: boards holding a draw").toBeGreaterThan(0);
+    expect(withoutD, "anti-vacuity: boards holding none").toBeGreaterThan(0);
   });
 });
 

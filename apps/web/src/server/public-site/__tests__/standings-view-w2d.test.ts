@@ -24,6 +24,7 @@ import {
   type PointsRule,
   type StandingsRow,
   type TableFixture,
+  type TableLayout,
 } from "@seazn/engine/competition";
 import type { AnySportModule, DecidedIn, TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -47,8 +48,8 @@ import {
   ORDER_SOURCE_KEYS,
   TIE_NOTE_KEYS,
   buildTableView,
-  fixedResultColumns,
   stageOrderNote,
+  resultColumnsOf,
   tableColumns,
   tieNoteText,
   type TableViewInput,
@@ -491,44 +492,76 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
   });
 });
 
-// ---- W2d follow-up (final review m3, m8): the fixed-shape tables' result columns -----------------------------------------
-// The organiser export and the kiosk print a FIXED shape (D on every table, as both always have). Their result columns are
-// the public table's own declaration, not a second list: IIHF's OTW and OTL beside W and L (RBG §3.4, lines 343-344: "OT
-// and GWS decisions both land in OTW/OTL"), every other table its historic P · W · D · L.
-describe("W2d follow-up — the export's and the kiosk's result columns are the public table's (m3, m8)", () => {
+// ---- W2d follow-up (final review m3, m8; export review I2, round 2): the result columns every table prints ------------
+// The organiser export and the kiosk print the public table's result columns: its own selection over THAT table's rows
+// (`resultColumnsOf(tableColumns(…))`), no second list and no second rule for D (owner-approved "the export matches the
+// public table"; review round 2, 2026-10-28, ruled the stage-reachable D out). IIHF's OTW and OTL stand beside W and L
+// (RBG §3.4, lines 343-344: "OT and GWS decisions both land in OTW/OTL"), and RBG §3.4 line 343 is
+// "GP · W · OTW · OTL · L · GF · GA · GD · Pts", no D (design B2: IIHF has no draws). D prints exactly when a row of the
+// table holds a draw. #1057 pinned IIHF's sheet as P W OTW OTL D L and cited the rulebook for it; the rulebook has no D.
+describe("W2d follow-up — the export's and the kiosk's result columns are the public table's (m3, m8, export I2)", () => {
   const TABLE_KINDS: readonly TableStageKind[] = ["league", "group", "swiss", "americano"];
-  // The two shapes, typed from the rulebook (RBG §3.4) and from the export and kiosk as they printed before this change.
-  const IIHF = ["P", "W", "OTW", "OTL", "D", "L"];
-  const HISTORIC = ["P", "W", "D", "L"];
+  // Typed from the rulebook (RBG §3.4, line 343), never from the code: IIHF's result columns.
+  const IIHF = ["P", "W", "OTW", "OTL", "L"];
+  const row = (won: number, drawn: number, lost: number): StandingsRow => ({ entrantId: "A", played: 1, won, drawn, lost, points: 0, metrics: {} });
+  const WIN = row(1, 0, 0);
+  const LOSS = row(0, 0, 1);
   /** A row with a draw: the public table prints its D column exactly when one exists. */
-  const drawn: StandingsRow = { entrantId: "A", played: 1, won: 0, drawn: 1, lost: 0, points: 1, metrics: {} };
+  const DRAW = row(0, 1, 0);
+  const labels = (cols: readonly { label: string }[]) => cols.map((c) => c.label);
+  const resultsOf = (rows: readonly StandingsRow[], layout: TableLayout) => resultColumnsOf(tableColumns([], [], rows, layout));
 
-  it("the empty case: a stage with no rules to read (the plain layout) prints the historic P · W · D · L", () => {
-    expect(fixedResultColumns(PLAIN_LAYOUT).map((c) => c.label)).toEqual(HISTORIC);
+  it("the empty case: a table with no rows holds no draw, so it prints P · W · L — as the public table over no rows", () => {
+    expect(labels(resultsOf([], PLAIN_LAYOUT))).toEqual(["P", "W", "L"]);
+    // and the positive pair: one drawn row brings D in, before L
+    expect(labels(resultsOf([DRAW], PLAIN_LAYOUT))).toEqual(["P", "W", "D", "L"]);
   });
 
-  it("every sport, every declared cfg, every table kind: OTW/OTL only for IIHF ice hockey, and always the public table's own columns with a draw on the table", () => {
-    let layouts = 0;
+  it("resultColumnsOf keeps the selection's result columns, in its order, and nothing else: no metric, no Pts, no derived column", () => {
+    const cols = tableColumns([{ key: "gf", label: "GF" }], ["point_ratio"], [{ ...WIN, metrics: { gf: 1 } }, DRAW], PLAIN_LAYOUT);
+    expect(cols.map((c) => c.kind), "premise: the selection carries a metric, Pts and a derived column").toEqual(
+      expect.arrayContaining(["metric", "structural", "derived"]),
+    );
+    expect(labels(cols), "premise: Pts is in it").toContain("Pts");
+    expect(labels(resultColumnsOf(cols))).toEqual(["P", "W", "D", "L"]);
+  });
+
+  it("every sport × cfg × kind × {no draw yet, a draw recorded where the stage can reach one}: P · W · L, D exactly when the table holds a draw, OTW/OTL only for IIHF (counted)", () => {
+    let tables = 0;
     let split = 0;
+    let withD = 0;
+    let withoutD = 0;
     const sports = forEachSport(({ module }) => {
       for (const { name, cfg } of declaredCfgs(module)) {
         for (const kind of TABLE_KINDS) {
-          const layout = tableLayoutOf(module.tablePointsRule(cfg as never, kind), reachableOutcomes(module, cfg, kind));
-          const cols = fixedResultColumns(layout);
+          const reachable = reachableOutcomes(module, cfg, kind);
+          const layout = tableLayoutOf(module.tablePointsRule(cfg as never, kind), reachable);
           const iihf = module.key === "icehockey" && name !== "recreational";
-          expect(cols.map((c) => c.label), `${module.key} ${name} ${kind}`).toEqual(iihf ? IIHF : HISTORIC);
-          // One declaration: the public table's structural result columns for a table that has a draw, verbatim.
-          const pub = tableColumns([], [], [drawn], layout).filter((c) => c.kind === "structural" && c.key !== "points");
-          expect(cols, `${module.key} ${name} ${kind}: the public table's columns`).toEqual(pub);
-          layouts++;
+          // Which states a stage can be in comes from the engine's declaration (`reachableOutcomes`): a draw is recorded
+          // only where the stage can reach one. What the table PRINTS is then the public table's rule, typed here.
+          const canDraw = reachable.has("draw");
+          if (iihf) expect(canDraw, `${module.key} ${name} ${kind}: RBG §3.4, IIHF has no draws`).toBe(false);
+          if (module.key === "badminton") expect(canDraw, `${name} ${kind}: a set match always has a winner`).toBe(false);
+          if (module.key === "football") expect(canDraw, `${name} ${kind}: a football league match can end level`).toBe(true);
+          const states: [string, StandingsRow[], boolean][] = [["no draw yet", [WIN, LOSS], false]];
+          if (canDraw) states.push(["a draw recorded", [WIN, LOSS, DRAW], true]);
+          for (const [state, rows, drawOnTable] of states) {
+            const label = `${module.key} ${name} ${kind} ${state}`;
+            const want = iihf ? IIHF : drawOnTable ? ["P", "W", "D", "L"] : ["P", "W", "L"];
+            expect(labels(resultsOf(rows, layout)), label).toEqual(want);
+            tables++;
+            if (drawOnTable) withD++;
+            else withoutD++;
+          }
           if (iihf) split++;
         }
       }
     });
     expect(sports, "every shipped sport").toBe(builtinModules.length);
-    expect(layouts, "anti-vacuity: layouts checked").toBeGreaterThan(sports);
+    expect(tables, "anti-vacuity: tables checked").toBeGreaterThan(sports);
     expect(split, "anti-vacuity: the IIHF layouts").toBeGreaterThan(0);
-    expect(layouts - split, "anti-vacuity: the plain layouts").toBeGreaterThan(0);
+    expect(withD, "anti-vacuity: tables holding a draw").toBeGreaterThan(0);
+    expect(withoutD, "anti-vacuity: tables holding none").toBeGreaterThan(0);
   });
 
   it("a split table never ranks on point_ratio: every sport, cfg and kind whose OT pays apart refuses it in the cascade (the kiosk has no split-with-ratio grid)", () => {

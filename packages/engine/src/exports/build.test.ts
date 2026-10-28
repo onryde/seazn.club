@@ -913,3 +913,22 @@ describe("buildStandings — the caller's localised headers (W2d follow-up revie
     expect(refused, "both mismatches refused").toBe(2);
   });
 });
+
+// Export every pool (owner-approved 2026-10-28): a group whose own table is level (nothing counted, X-TB-6) prints its
+// rows as the public table does — every place the level dash, no row placed first. The caller hands the `#` cell; a row
+// without one prints its position, as every standings export always has.
+describe("buildStandings — the caller's `#` cell (export every pool)", () => {
+  // Spec §5.7, verbatim: a level row's rank prints an en dash (U+2013). Typed from the spec, not imported.
+  const SPEC_LEVEL_RANK = "–";
+  const row = (name: string) => ({ name, played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} });
+
+  it("a row that carries its `#` prints it; one that carries none prints its position (the empty case)", () => {
+    const level = buildStandings("S", [{ ...row("Ash"), rank: SPEC_LEVEL_RANK }, { ...row("Birch"), rank: SPEC_LEVEL_RANK }], OPTS);
+    expect(level.sections[0]!.table!.rows.map((r) => r[0]), "every place the level dash").toEqual([SPEC_LEVEL_RANK, SPEC_LEVEL_RANK]);
+    const plain = buildStandings("S", [row("Ash"), row("Birch"), row("Cedar")], OPTS);
+    expect(plain.sections[0]!.table!.rows.map((r) => r[0]), "no `#` given: the position, as before").toEqual([1, 2, 3]);
+    // The two at once: a given cell is printed as given, the next row still counts its own position.
+    const mixed = buildStandings("S", [{ ...row("Ash"), rank: 7 }, row("Birch")], OPTS);
+    expect(mixed.sections[0]!.table!.rows.map((r) => r[0])).toEqual([7, 2]);
+  });
+});

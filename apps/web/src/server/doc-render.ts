@@ -219,11 +219,19 @@ function fitColumns(
   return owed > 0.001 ? [...shares] : out;
 }
 
-function drawTable(
-  doc: PDFKit.PDFDocument,
-  table: DocTable,
-  badges?: Map<string, Buffer | null>,
-): void {
+/** A table row's height (drawTable), and the room a section heading takes above its table (13pt line + moveDown 0.2,
+ *  rounded up). drawSection keeps a heading with its table by these. */
+const ROW_H = 18;
+const HEADING_H = 20;
+
+/** A table's grid: each column's width and whether it is set as a number (right-aligned). */
+interface TableGrid {
+  readonly colW: readonly number[];
+  readonly numeric: readonly boolean[];
+}
+
+/** The grid `table`'s own cells give it. `numeric`: the alignment, when the caller already knows it. */
+function tableGrid(doc: PDFKit.PDFDocument, table: DocTable, numeric = table.columns.map((_, i) => isNumericColumn(table, i))): TableGrid {
   const width = doc.page.width - MARGIN * 2;
   // proportional widths: text-heavy columns get more room
   const weights = table.columns.map((_, i) => {
@@ -234,9 +242,51 @@ function drawTable(
     return Math.min(Math.max(maxLen, 3), 40);
   });
   const total = weights.reduce((a, b) => a + b, 0);
-  const numeric = table.columns.map((_, i) => isNumericColumn(table, i));
-  const colW = fitColumns(doc, table, numeric, weights.map((w) => (w / total) * width));
-  const rowHeight = 18;
+  return { colW: fitColumns(doc, table, numeric, weights.map((w) => (w / total) * width)), numeric };
+}
+
+/**
+ * Export review I1/m3 (2026-10-28) — one grid for every table of the document with the same columns (a group stage's
+ * pools, one per section): their widths and alignment are those of one table of all their rows, so a column stands at
+ * the same x in every pool, and the floors (no column narrower than its header, or a count than its widest cell) hold
+ * over every pool's cells — a long name in any pool squeezes all of them alike. Not only back-to-back ones: a pool with no
+ * rows yet prints fewer columns (no metric any row carries), and it must not split the pools around it onto two grids. A
+ * table of no rows has no cells to read its alignment from: a column whose header the document's other tables set as a
+ * number is set as one here too, so its header lines up as theirs do. Keyed by section index.
+ */
+function sharedGrids(doc: PDFKit.PDFDocument, sections: readonly DocSection[]): Map<number, TableGrid> {
+  const shapes = new Map<string, number[]>(); // a column set (and its landscape hint) → the sections that print it
+  sections.forEach((s, i) => {
+    if (s.table === undefined) return;
+    const key = JSON.stringify([s.table.columns, s.table.landscape ?? null]);
+    (shapes.get(key) ?? shapes.set(key, []).get(key)!).push(i);
+  });
+  const runs = [...shapes.values()];
+  const merged = runs.map((run): DocTable => ({ columns: sections[run[0]!]!.table!.columns, rows: run.flatMap((i) => sections[i]!.table!.rows) }));
+  // A header the document sets as a number wherever it has cells (read off the runs that have rows).
+  const numericHeader = new Map<string, boolean>();
+  for (const table of merged) {
+    if (table.rows.length === 0) continue;
+    table.columns.forEach((c, k) => numericHeader.set(c, (numericHeader.get(c) ?? true) && isNumericColumn(table, k)));
+  }
+  const grids = new Map<number, TableGrid>();
+  runs.forEach((run, r) => {
+    const table = merged[r]!;
+    const grid = table.rows.length > 0 ? tableGrid(doc, table) : tableGrid(doc, table, table.columns.map((c) => numericHeader.get(c) ?? false));
+    for (const i of run) grids.set(i, grid);
+  });
+  return grids;
+}
+
+function drawTable(
+  doc: PDFKit.PDFDocument,
+  table: DocTable,
+  badges?: Map<string, Buffer | null>,
+  grid: TableGrid = tableGrid(doc, table),
+): void {
+  const width = doc.page.width - MARGIN * 2;
+  const { colW, numeric } = grid;
+  const rowHeight = ROW_H;
   // PROMPT-60: tables carrying rowBadges indent the name column (index 1) so
   // crested and crestless rows align; the crest draws in the indent.
   const badged = table.rowBadges !== undefined;
@@ -382,12 +432,35 @@ function drawCropTicks(doc: PDFKit.PDFDocument, y: number): void {
   doc.moveTo(doc.page.width - tickLen, y).lineTo(doc.page.width, y).strokeColor("#999999").lineWidth(1).stroke();
 }
 
+/** Where a page's content starts: the title page's below its title block, every other page at its top margin. */
+interface ContentTop {
+  page: PDFKit.PDFPage;
+  y: number;
+}
+
 function drawSection(
   doc: PDFKit.PDFDocument,
   section: DocSection,
   badges?: Map<string, Buffer | null>,
+  grid?: TableGrid,
+  titleTop?: ContentTop,
 ): void {
   if (section.pageBreakBefore === true) doc.addPage();
+  // Keep a heading with its table (export every pool, 2026-10-28): a heading left at a page foot, its table overleaf,
+  // reads as the end of the section above, and a table split 1 + 3 sends its last rows overleaf with no heading. A table
+  // that fits one page keeps WHOLE — its heading, header row and every row — else the section starts a new page; a table
+  // taller than a page breaks as before, its heading kept with the header row and the first body row (an empty table:
+  // its header row). Re-review I-1: moving a section overleaf gains only when something is drawn above it on this page —
+  // a section FIRST on its page (under the title block alone, or at the top of a fresh page) moved whole would leave its
+  // page bare and add one, so it keeps only its heading, header row and first row, as a tall table does.
+  if (section.heading !== undefined && section.table !== undefined) {
+    const rows = section.table.rows.length;
+    const whole = HEADING_H + ROW_H * (rows + 1);
+    const top = titleTop !== undefined && doc.page === titleTop.page ? titleTop.y : doc.page.margins.top;
+    const firstOnPage = doc.y <= top + 0.5;
+    const keep = !firstOnPage && whole <= doc.page.height - 2 * MARGIN ? whole : HEADING_H + ROW_H * (rows > 0 ? 2 : 1);
+    if (doc.y + keep > doc.page.height - MARGIN) doc.addPage();
+  }
   if (section.heading !== undefined) {
     doc.font("Helvetica-Bold").fontSize(13).fillColor("#111111").text(section.heading, MARGIN);
     doc.moveDown(0.2);
@@ -407,7 +480,7 @@ function drawSection(
     doc.y = y + 16;
   }
   doc.fillColor("#111111");
-  if (section.table !== undefined) drawTable(doc, section.table, badges);
+  if (section.table !== undefined) drawTable(doc, section.table, badges, grid);
   for (const line of section.formLines ?? []) {
     doc.font("Helvetica").fontSize(10).text(line, MARGIN);
     doc.moveDown(0.4);
@@ -452,6 +525,7 @@ export async function docModelToPdf(model: DocModel): Promise<Buffer> {
   if (model.branding) drawMasthead(doc, model, logo); // Pro-only night chrome + logo
   else doc.y = MARGIN;
   drawTitleBlock(doc, model); // eyebrow + title + description for ALL
+  const titleTop: ContentTop = { page: doc.page, y: doc.y }; // a section starting here is first on its page (I-1)
 
   // QR pre-pass (Task 12): pdfkit draws synchronously, so every ticket's QR
   // must be resolved to bytes BEFORE the section loop — no awaiting mid-draw.
@@ -476,7 +550,8 @@ export async function docModelToPdf(model: DocModel): Promise<Buffer> {
   // columnsHint 2 (12 Jun "two per A4"): pair sections onto one page by
   // separating with a rule instead of a page break.
   let sinceBreak = 0;
-  for (const section of model.sections) {
+  const grids = sharedGrids(doc, model.sections);
+  for (const [index, section] of model.sections.entries()) {
     const pair = section.columnsHint === 2;
     if (pair && sinceBreak >= 2) {
       doc.addPage();
@@ -484,7 +559,7 @@ export async function docModelToPdf(model: DocModel): Promise<Buffer> {
     }
     if (section.ticket) {
       drawTicket(doc, section.ticket, qrByRef.get(section.ticket.ref) ?? null, model.branding?.orgName);
-    } else drawSection(doc, section, badgeBuffers);
+    } else drawSection(doc, section, badgeBuffers, grids.get(index), titleTop);
     if (pair) {
       sinceBreak += 1;
       if (section.ticket) {
