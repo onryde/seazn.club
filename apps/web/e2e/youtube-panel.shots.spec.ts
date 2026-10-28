@@ -1,0 +1,544 @@
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { randomBytes, randomUUID } from "node:crypto";
+import { test, expect, type Locator, type Page } from "@playwright/test";
+import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate } from "./helpers";
+import { grantRigPackCredits, setRigPlan, signInAs } from "./overlay-kit";
+import { disposeFakePhones, pairedPhone } from "./helpers/fake-capture-phone";
+import { openTargetPicker, selectTarget, targetPicker } from "./helpers/stream-target-picker";
+import { STREAM_KIND_BRAND } from "../src/components/v2/stream-platform-mark";
+import { YOUTUBE_REFUSAL_CODES } from "../src/lib/youtube";
+
+// Screenshot + layout evidence for YouTube Connect T12 (owner's Option B, 2026-10-27; polish and icon rulings 2026-10-28): the fixture
+// stream panel's destination picker, the six YouTube refusals each with its fix, the replay row, and the four polish items on the
+// Streaming page. WRITTEN, NOT RUN by the task that added it (T12 runs no Playwright); it is the evidence the owner reviews and the
+// spec CI can dispatch. Run it with --no-deps like its sibling `youtube-streaming.shots.spec.ts`, whose rig it follows:
+//   YOUTUBE_DRIVER=fake, a real signed-in owner of a Pro org, the real fake-Google round trip for a connected channel.
+//
+// What it adds over the unit tests (which cannot see layout, real tap area, or paint):
+//   * the picker at 1280, 768 and 320: the closed field, the open list with an API-backed channel row AND a pasted-key row, no sideways
+//     page scroll with the list open, every row a 44px-plus tap target, the YouTube icon on both YouTube rows;
+//   * each of the six refusals, driven through the real panel with the wire's own code: the fix that replaces Go live is the one the spec
+//     names (Reconnect -> the Streaming page in a new tab, Try again -> the same Go live asked again, the rest -> only "Use another");
+//   * the replay row after a match: the times in the venue's zone, Watch replay with the icon inside the link, Copy link that copies;
+//   * the four polish items: the channel-row Settings control paints as a button at rest, the empty card's Connect YouTube leaves while
+//     the channel picker is open, the denied banner's text and Dismiss share one centre line at 768 and 1280, and every YouTube row on
+//     the Streaming page wears the one official icon, unaltered, at least 20px tall.
+test.use({ storageState: { cookies: [], origins: [] } });
+
+const SHOTS = process.env.YOUTUBE_SHOTS_DIR ?? resolve(process.cwd(), "../../.superpowers/sdd/shots/youtube-panel");
+const WIDTHS = [1280, 768, 320] as const;
+const BANNER_WAIT_MS = 5_000;
+/** The icon is YouTube's own artwork: red, with a white triangle (developers.google.com/youtube/terms/branding-guidelines, read 2026-10-28). */
+const OFFICIAL_FILLS = ["#FF0000", "#FFFFFF"];
+const MIN_ICON_PX = 20;
+
+// Budget - derived, never a flat literal (AGENTS.md class 20).
+const NAV_MS = 20_000;
+const ACT_MS = 5_000;
+const SEED_MS = 60_000;
+const budget = (c: { navs: number; acts: number }): number => Math.max(60_000, SEED_MS + c.navs * NAV_MS + c.acts * ACT_MS);
+
+const asked = new WeakSet<Page>();
+/** The cookie prompt mounts over the page at hydration and would sit on top of every picture and hit-test: decline it like a visitor would. */
+async function declineCookies(page: Page): Promise<void> {
+  const banner = page.getByTestId("cookie-consent");
+  if (!asked.has(page)) {
+    asked.add(page);
+    await banner.waitFor({ state: "visible", timeout: BANNER_WAIT_MS }).catch(() => {});
+  }
+  if (await banner.isVisible()) {
+    await banner.getByRole("button", { name: "Reject", exact: true }).click();
+    await expect(banner, "the cookie banner is gone after Reject").toHaveCount(0);
+  }
+}
+async function open(page: Page, url: string): Promise<void> {
+  await page.goto(url, { waitUntil: "load" });
+  await declineCookies(page);
+}
+async function shot(page: Page, name: string): Promise<void> {
+  await declineCookies(page);
+  const path = resolve(SHOTS, `${name}.png`);
+  await page.screenshot({ path, fullPage: true });
+  await test.info().attach(name, { path, contentType: "image/png" });
+}
+
+// Copy from the dictionary itself, never typed, so a copy edit moves the expectation with it.
+const dictOf = (file: string, locale = "en"): Record<string, string> =>
+  JSON.parse(readFileSync(fileURLToPath(new URL(`../src/dictionaries/${locale}/${file}.json`, import.meta.url)), "utf8")) as Record<string, string>;
+const EN_UI = dictOf("ui");
+const en = (key: string, vars: Record<string, string | number> = {}): string => {
+  const raw = EN_UI[key];
+  if (raw === undefined) throw new Error(`en/ui.json has no ${key}`);
+  return raw.replace(/\{(\w+)\}/g, (_, v: string) => {
+    if (!(v in vars)) throw new Error(`en(${key}): no value for {${v}}`);
+    return String(vars[v]);
+  });
+};
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Layout probes
+// ---------------------------------------------------------------------------------------------------------------------
+
+/** The page does not scroll sideways: with the html/body clip lifted, nothing is wider than the viewport. Names the offenders. */
+async function expectNoPageScroll(page: Page, where: string): Promise<void> {
+  const seen = await page.evaluate(() => {
+    const html = document.documentElement;
+    const body = document.body;
+    const vw = html.clientWidth;
+    const prev = [html.style.overflowX, body.style.overflowX];
+    html.style.overflowX = "visible";
+    body.style.overflowX = "visible";
+    const overflowPx = Math.max(0, html.scrollWidth - vw);
+    [html.style.overflowX, body.style.overflowX] = prev;
+    const contained = (el: Element) => {
+      for (let n = el.parentElement; n && n !== body; n = n.parentElement) {
+        const ox = getComputedStyle(n).overflowX;
+        if (ox === "auto" || ox === "scroll" || ox === "hidden") return true;
+      }
+      return false;
+    };
+    const offenders = Array.from(body.querySelectorAll("*"))
+      .filter((el) => {
+        const r = el.getBoundingClientRect();
+        return r.width > 0 && r.height > 0 && r.right > vw + 1 && !contained(el);
+      })
+      .slice(0, 8)
+      .map((el) => `${el.tagName.toLowerCase()}[${(el as HTMLElement).dataset.testid ?? ""}] right=${Math.round(el.getBoundingClientRect().right)}`);
+    return { vw, overflowPx, offenders };
+  });
+  expect(seen.offenders, `${where}: boxes reach past the ${seen.vw}px viewport`).toEqual([]);
+  expect(seen.overflowPx, `${where}: ${seen.overflowPx}px of sideways page scroll at ${seen.vw}px`).toBeLessThanOrEqual(1);
+}
+
+/** The control's centre is its own (nothing paints over it), and on a phone it is a 44px target. Hit-tested with elementFromPoint. */
+async function expectTappable(loc: Locator, label: string): Promise<void> {
+  await loc.evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
+  const probe = await loc.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+    return { own: at !== null && (at === el || el.contains(at)), w: r.width, h: r.height, vw: document.documentElement.clientWidth };
+  });
+  expect(probe.own, `${label}: something else is on top of its centre`).toBe(true);
+  if (probe.vw < 768) {
+    expect(probe.h, `${label} at ${probe.vw}: ${Math.round(probe.w)}x${Math.round(probe.h)}px`).toBeGreaterThanOrEqual(43.5);
+  }
+}
+
+/** Every official YouTube icon under `scope`: unaltered colours, at least 20px tall, fully painted (nothing over its centre), not clipped
+ *  by an ancestor narrower than the mark. Returns how many it read - a scope that held none is a failure, not a pass. */
+async function expectOfficialIcons(scope: Locator, where: string): Promise<number> {
+  const seen = await scope.locator("svg[data-youtube-icon]").evaluateAll((svgs) =>
+    svgs.map((svg) => {
+      const r = svg.getBoundingClientRect();
+      const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      let clipped = false;
+      for (let n = svg.parentElement; n; n = n.parentElement) {
+        const cs = getComputedStyle(n);
+        if (cs.overflowX !== "visible" && (n.getBoundingClientRect().width < r.width - 0.5 || n.getBoundingClientRect().height < r.height - 0.5)) clipped = true;
+      }
+      return {
+        fills: Array.from(svg.querySelectorAll("path")).map((p) => (p.getAttribute("fill") ?? "").toUpperCase()),
+        h: r.height,
+        w: r.width,
+        opacity: getComputedStyle(svg).opacity,
+        painted: at !== null && (at === svg || svg.contains(at) || at.contains(svg)),
+        clipped,
+      };
+    }),
+  );
+  expect(seen.length, `${where}: the scope holds at least one official icon`).toBeGreaterThan(0);
+  for (const [i, s] of seen.entries()) {
+    expect(s.fills, `${where} #${i}: the official two colours, unaltered`).toEqual(OFFICIAL_FILLS);
+    expect(s.h, `${where} #${i}: the icon is at least ${MIN_ICON_PX}px tall`).toBeGreaterThanOrEqual(MIN_ICON_PX - 0.5);
+    expect(s.opacity, `${where} #${i}: fully opaque`).toBe("1");
+    expect(s.painted, `${where} #${i}: nothing covers it`).toBe(true);
+    expect(s.clipped, `${where} #${i}: no ancestor clips it`).toBe(false);
+  }
+  return seen.length;
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+// Rig
+// ---------------------------------------------------------------------------------------------------------------------
+async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promise<T> {
+  const dbUrl = process.env.DATABASE_URL;
+  if (!dbUrl) throw new Error("DATABASE_URL required for direct DB setup in e2e");
+  const { default: postgres } = await import("postgres");
+  const sql = postgres(dbUrl, {
+    connection: { search_path: process.env.DB_SCHEMA ?? "seazn_club" },
+    ssl: process.env.DATABASE_SSL === "disable" ? false : /@(localhost|127\.0\.0\.1)[:/]/.test(dbUrl) ? false : "require",
+    prepare: !dbUrl.includes(":6543"),
+    max: 1,
+  });
+  try {
+    return await fn(sql);
+  } finally {
+    await sql.end();
+  }
+}
+
+interface Rig {
+  orgId: string;
+  orgSlug: string;
+  /** The fixture page of the rig's one match; null when no match was asked for. */
+  fixturePath: string | null;
+  fixtureId: string | null;
+}
+
+/** A fresh Pro owner with an org of their own and (optionally) a two-side league with one match - the recipe of
+ *  walkthrough/streaming-destinations.spec.ts's `seedRig`, so the panel under test is the one a real organiser sees. */
+async function rig(page: Page, opts: { match?: boolean } = {}): Promise<Rig> {
+  const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
+  const ownerEmail = `delivered+ytp-${tag}@resend.dev`;
+  const orgSlug = `ytp-org-${tag}`;
+  const orgId = await withDb(async (sql) => {
+    const [{ id: userId }] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${ownerEmail}, ${"YT Panel Owner " + tag}, true) returning id`;
+    const [{ id: newOrgId }] = await sql<{ id: string }[]>`
+      insert into organizations (name, slug, status, created_by) values (${"YT Panel Org " + tag}, ${orgSlug}, 'active', ${userId}) returning id`;
+    await sql`insert into org_members (org_id, user_id, role) values (${newOrgId}, ${userId}, 'owner')`;
+    const [{ id: subId }] = await sql<{ id: string }[]>`
+      insert into subscriptions (owner_user_id, plan_key, status) values (${userId}, 'pro', 'active') returning id`;
+    await sql`update organizations set subscription_id = ${subId} where id = ${newOrgId}`;
+    return newOrgId;
+  });
+  await signInAs(page, ownerEmail);
+  await setRigPlan(orgId, "pro");
+  if (!opts.match) return { orgId, orgSlug, fixturePath: null, fixtureId: null };
+  const label = `YT Panel ${tag}`;
+  const comp = await apiJson<{ id: string; slug: string }>(page.request, "/api/v1/competitions", "POST", { ends_on: "2030-12-31", name: label, visibility: "public" });
+  if (comp.status >= 300 || !comp.data) throw new Error(`rig: POST competition -> ${comp.status} ${JSON.stringify(comp.error)}`);
+  const div = await apiJson<{ id: string; slug: string }>(page.request, `/api/v1/competitions/${comp.data.id}/divisions`, "POST", {
+    name: label.slice(0, 40), sport_key: "generic", variant_key: "score", config: { points: { w: 3, d: 1, l: 0 }, progressScore: false },
+  });
+  if (div.status >= 300 || !div.data) throw new Error(`rig: POST division -> ${div.status} ${JSON.stringify(div.error)}`);
+  const ents = await addEntrantsViaApi(page.request, div.data.id, [`Side A ${tag}`, `Side B ${tag}`]);
+  if (ents.status >= 300 || ents.ids.length !== 2) throw new Error(`rig: entrants -> ${ents.status}`);
+  await createStageAndGenerate(page.request, div.data.id);
+  const [fixture] = await withDb((sql) => sql<{ id: string; no: number }[]>`select id, fixture_no as no from fixtures where division_id = ${div.data!.id} order by fixture_no`);
+  if (!fixture) throw new Error("rig: the league generated no fixture");
+  await grantRigPackCredits(orgId, 3);
+  return { orgId, orgSlug, fixturePath: `/o/${orgSlug}/c/${comp.data.slug}/d/${div.data.slug}/f/${fixture.no}`, fixtureId: fixture.id };
+}
+
+/** A pasted-key destination, made over the API (the same call the Add form makes). */
+async function addKeyDestination(page: Page, orgId: string, label: string, kind: "youtube" | "twitch" = "youtube"): Promise<void> {
+  const res = await apiJson(page.request, `/api/v1/orgs/${orgId}/stream-targets`, "POST", { kind, label, streamKey: `yt9-${randomUUID()}-key` });
+  expect(res.status, "SETUP: a pasted-key destination is added").toBe(201);
+}
+
+/** Channel ids unique to this run: the fake numbers its fresh channels from 1, and the database outlives it. */
+const channel = (title: string) => ({ id: `UC${randomUUID().replace(/-/g, "").slice(0, 22)}`, title });
+
+/** Tell the fake YouTube which channels the NEXT grant has, then take the real consent round trip (the recipe of
+ *  youtube-streaming.shots.spec.ts's `offerChannels` + `connectThroughConsent`, in one: the route is installed per call). */
+async function connectChannel(page: Page, channels: { id: string; title: string }[], trigger: "youtube-connect" | "youtube-connect-empty"): Promise<void> {
+  let fired = 0;
+  await page.route("**/api/youtube/connect", async (route) => {
+    const start = await route.fetch({ maxRedirects: 0 });
+    expect(start.status(), "SETUP: the start answers with the 303 to the authorize hop").toBe(303);
+    const state = new URL(start.headers()["location"] ?? "", "http://localhost").searchParams.get("state");
+    expect(state, "SETUP: the start's Location carries the OAuth state").toBeTruthy();
+    const res = await page.request.post("/api/internal/youtube/fake", { data: { op: "setChannels", channels, state } });
+    expect(res.status(), "SETUP: the fake accepts the channels for this state").toBe(200);
+    fired++;
+    await route.fulfill({ response: start });
+  });
+  await page.getByTestId(trigger).click();
+  const submit = page.getByTestId("youtube-connect-submit");
+  await expect(submit, "Continue is disabled until the box is ticked").toBeDisabled();
+  await page.getByTestId("youtube-consent").check();
+  await Promise.all([page.waitForURL(/\/streaming\?youtube=/), submit.click()]);
+  await declineCookies(page);
+  expect(fired, "the channel offer ran once for this connect").toBe(1);
+}
+
+test.afterEach(async () => {
+  await disposeFakePhones();
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 1. The four polish items on the Streaming page
+// ---------------------------------------------------------------------------------------------------------------------
+test("Streaming page polish - the Settings button at rest, Connect leaves with the picker, the denied banner is centred, one official icon - at 1280, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ navs: 14, acts: 40 }));
+  const { orgId } = await rig(page);
+
+  // (2) The empty card's Connect YouTube is hidden while the channel picker is open - the picker is the thing to act on.
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page, "/streaming");
+  await expect(page.getByTestId("youtube-connect-empty"), "PREMISE: with no channel connected the empty card offers Connect").toBeVisible();
+  const first = channel("Riverside FC");
+  const second = channel("Riverside Juniors");
+  await connectChannel(page, [first, second], "youtube-connect-empty");
+  await expect(page).toHaveURL(/\/streaming\?youtube=pick&pending=[0-9a-f-]{36}$/);
+  await expect(page.getByTestId("youtube-picker")).toBeVisible();
+  await expect(page.getByTestId("youtube-connect-empty"), "the picker is open: the empty card's Connect is gone").toHaveCount(0);
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    await expect(page.getByTestId("youtube-connect-empty"), `at ${w}`).toHaveCount(0);
+    await expectNoPageScroll(page, `picker open at ${w}`);
+    await shot(page, `polish-connect-hidden-${w}`);
+  }
+  await page.getByTestId("youtube-picker-channel").first().check();
+  await page.getByTestId("youtube-picker-connect").click();
+  const row = page.getByTestId("youtube-channel-row");
+  await expect(row).toHaveCount(1, { timeout: NAV_MS });
+
+  // (1) The channel row's Settings reads as a button at rest: a visible border and a fill (not text that only looks like a link),
+  //     at the 44px floor on a phone.
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    const settings = row.getByTestId("youtube-settings");
+    await expect(settings).toBeVisible();
+    const paint = await settings.evaluate((el) => {
+      const cs = getComputedStyle(el);
+      return { border: parseFloat(cs.borderTopWidth), borderColor: cs.borderTopColor, bg: cs.backgroundColor };
+    });
+    expect(paint.border, `Settings at ${w}: a border at rest`).toBeGreaterThanOrEqual(1);
+    expect(paint.borderColor, `Settings at ${w}: the border is painted`).not.toBe("rgba(0, 0, 0, 0)");
+    expect(paint.bg, `Settings at ${w}: a fill at rest, not transparent text`).not.toBe("rgba(0, 0, 0, 0)");
+    await expectTappable(settings, `Settings at ${w}`);
+    await expectNoPageScroll(page, `row at ${w}`);
+    await shot(page, `polish-settings-${w}`);
+  }
+
+  // (4) Every YouTube row on this page wears the one official icon: the channel row and a pasted key's row. (The key is added only now:
+  //     the empty card above is what a page with NO destination shows, and any destination would have replaced it.)
+  await addKeyDestination(page, orgId, "Pasted key");
+  await open(page, "/streaming");
+  await expect(row).toHaveCount(1);
+  let icons = 0;
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    icons += await expectOfficialIcons(row, `channel row at ${w}`);
+    icons += await expectOfficialIcons(page.getByTestId("stream-dest-row").first(), `pasted-key row at ${w}`);
+    await shot(page, `polish-icon-${w}`);
+  }
+  expect(icons, "anti-vacuity: icons were read at every width on both rows").toBeGreaterThanOrEqual(WIDTHS.length * 2);
+
+  // (3) The denied banner: the sentence and Dismiss share one centre line from 768 up; on a phone Dismiss stacks full width below.
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    await open(page, "/streaming?youtube=denied");
+    const banner = page.getByTestId("youtube-landing");
+    await expect(banner).toHaveAttribute("data-code", "denied");
+    await expect(banner).toContainText(en("streaming.youtube.landing.denied"));
+    const dismiss = page.getByTestId("youtube-landing-dismiss");
+    const text = banner.locator("p");
+    const [t, d] = [await text.boundingBox(), await dismiss.boundingBox()];
+    expect(t && d, "both boxes are measurable").toBeTruthy();
+    if (w >= 768) {
+      const delta = Math.abs(t!.y + t!.height / 2 - (d!.y + d!.height / 2));
+      expect(delta, `the sentence and Dismiss are centred on one line at ${w} (off by ${delta.toFixed(1)}px)`).toBeLessThanOrEqual(1.5);
+    } else {
+      expect(d!.y, `Dismiss stacks below the sentence at ${w}`).toBeGreaterThanOrEqual(t!.y + t!.height - 1);
+      await expectTappable(dismiss, `Dismiss at ${w}`);
+    }
+    await expectNoPageScroll(page, `denied banner at ${w}`);
+    await shot(page, `polish-denied-banner-${w}`);
+  }
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 2. The fixture panel: the picker, the six refusals, the replay row
+// ---------------------------------------------------------------------------------------------------------------------
+/** The fixture's Stream panel on its Phone tab (the recipe of walkthrough/streaming-destinations.spec.ts's `openPhoneTab`). */
+async function openPhoneTab(page: Page, r: Rig): Promise<Locator> {
+  await open(page, r.fixturePath!);
+  const control = page.locator('[data-role="fixture-stream"]:visible, [data-role="fixture-stream-phone"]:visible');
+  await expect(control, "the fixture offers exactly one visible Stream control").toHaveCount(1, { timeout: NAV_MS });
+  await control.click();
+  const scope = page.locator('[data-role="fixture-stream-body"]');
+  await expect(scope).toBeAttached({ timeout: NAV_MS });
+  const phoneTab = scope.getByTestId("stream-tab-phone");
+  if (await phoneTab.count()) await phoneTab.click();
+  await expect(scope.locator("[data-phone-body]")).toBeAttached({ timeout: NAV_MS });
+  return scope.locator("[data-phone-body]");
+}
+
+/** Connect a real channel (the Streaming page, the fake Google) and add a pasted key: the two kinds the picker tells apart. */
+async function seedDestinations(page: Page, r: Rig, channelTitle: string, keyLabel: string): Promise<void> {
+  await open(page, "/streaming");
+  await connectChannel(page, [channel(channelTitle)], "youtube-connect-empty");
+  await expect(page.getByTestId("youtube-channel-row")).toHaveCount(1, { timeout: NAV_MS });
+  await addKeyDestination(page, r.orgId, keyLabel);
+}
+
+/** The wire's own refusal, as `prepare.ts` writes it (`youtubeRefusal`): the status per code, and the code as the envelope's `error.code`. */
+const REFUSAL_STATUS: Record<(typeof YOUTUBE_REFUSAL_CODES)[number], number> = {
+  youtube_reconnect_needed: 409,
+  youtube_live_not_enabled: 409,
+  youtube_live_blocked: 409,
+  youtube_limit_reached: 429,
+  youtube_channel_busy: 409,
+  youtube_unavailable: 503,
+};
+/** The fix each refusal replaces Go live with (spec §6.2): the channel's grant is dead -> Reconnect; YouTube did not answer -> Try again. */
+const FIX: Record<(typeof YOUTUBE_REFUSAL_CODES)[number], "reconnect" | "retry" | "none"> = {
+  youtube_reconnect_needed: "reconnect",
+  youtube_live_not_enabled: "none",
+  youtube_live_blocked: "none",
+  youtube_limit_reached: "none",
+  youtube_channel_busy: "none",
+  youtube_unavailable: "retry",
+};
+
+test("Fixture panel - the picker lists a channel and a pasted key with their kind, at 1280, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ navs: 10, acts: 30 }));
+  const r = await rig(page, { match: true });
+  const channelTitle = `Riverside FC ${randomBytes(2).toString("hex")}`;
+  const keyLabel = `Court key ${randomBytes(2).toString("hex")}`;
+  await seedDestinations(page, r, channelTitle, keyLabel);
+  let widthsRead = 0;
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    const body = await openPhoneTab(page, r);
+    const trigger = targetPicker(body);
+    await expect(trigger, "the closed field names the picked destination").toBeVisible();
+    await expectTappable(trigger, `the picker at ${w}`);
+    await shot(page, `picker-closed-${w}`);
+
+    await openTargetPicker(body);
+    const rows = body.getByTestId("stream-target-option");
+    await expect(rows).toHaveCount(2);
+    await expect(body.getByTestId("stream-target-list")).toHaveAttribute("role", "listbox");
+    const names = await rows.evaluateAll((els) => els.map((e) => e.querySelector('[data-testid="stream-target-name"]')?.textContent ?? ""));
+    expect([...names].sort(), "the list offers the channel and the pasted key").toEqual([channelTitle, keyLabel].sort());
+    const kinds = await rows.evaluateAll((els) => els.map((e) => e.querySelector('[data-testid="stream-target-kind"]')?.textContent ?? ""));
+    expect(kinds.some((k) => k.startsWith(en("stream.dest.kind.channel", { platform: STREAM_KIND_BRAND.youtube }))), "the channel row says it is a connected channel").toBe(true);
+    expect(kinds.includes(en("stream.dest.kind.key", { platform: STREAM_KIND_BRAND.youtube })), "the pasted row says it is a stream key").toBe(true);
+    for (const [i, row] of (await rows.all()).entries()) await expectTappable(row, `picker row ${i} at ${w}`);
+    expect(await expectOfficialIcons(body.getByTestId("stream-target-list"), `picker rows at ${w}`), "both YouTube rows wear the icon").toBe(2);
+    await expectNoPageScroll(page, `the open picker at ${w}`);
+    await shot(page, `picker-open-${w}`);
+
+    await selectTarget(body, (await rows.first().getAttribute("data-target-id"))!);
+    await expect(body.getByTestId("stream-target-list")).toHaveCount(0);
+    widthsRead++;
+  }
+  expect(widthsRead, "anti-vacuity: every width was walked").toBe(WIDTHS.length);
+});
+
+test("Fixture panel - each of the six YouTube refusals replaces Go live with its own fix, at 1280, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ navs: 6 + YOUTUBE_REFUSAL_CODES.length, acts: 20 + 8 * YOUTUBE_REFUSAL_CODES.length }));
+  const r = await rig(page, { match: true });
+  await seedDestinations(page, r, `Riverside FC ${randomBytes(2).toString("hex")}`, `Court key ${randomBytes(2).toString("hex")}`);
+  let posts = 0;
+  let nextCode: (typeof YOUTUBE_REFUSAL_CODES)[number] = "youtube_reconnect_needed";
+  await page.route("**/api/v1/fixtures/*/stream-sessions", async (route) => {
+    if (route.request().method() !== "POST") return route.fallback();
+    posts++;
+    await route.fulfill({
+      status: REFUSAL_STATUS[nextCode],
+      contentType: "application/json",
+      body: JSON.stringify({ ok: false, error: { code: nextCode, message: `YouTube refused Go live: ${nextCode}`, extra: { connectionId: randomUUID() } } }),
+    });
+  });
+  let checked = 0;
+  for (const code of YOUTUBE_REFUSAL_CODES) {
+    nextCode = code;
+    // A fresh panel each time (openPhoneTab loads the page): the previous refusal's state is gone.
+    const scope = await openPhoneTab(page, r);
+    await pairedPhone(page); // W5: Go live needs a paired phone
+    // Pick the channel - the destination YouTube refuses.
+    await openTargetPicker(scope);
+    const channelRow = scope.getByTestId("stream-target-option").filter({ hasText: en("stream.dest.kind.channel", { platform: STREAM_KIND_BRAND.youtube }) });
+    await expect(channelRow, "exactly one connected channel is offered").toHaveCount(1);
+    await selectTarget(scope, (await channelRow.getAttribute("data-target-id"))!);
+    await scope.getByTestId("stream-go-live").click();
+    const block = scope.getByTestId("stream-youtube-refusal");
+    await expect(block, `${code}: the refusal block`).toBeVisible({ timeout: ACT_MS * 2 });
+    await expect(block).toHaveAttribute("data-code", code);
+    await expect(scope.getByTestId("stream-create-error")).toHaveText(en(`stream.error.${code}`));
+    await expect(scope.getByTestId("stream-youtube-refusal-note")).toHaveText(en("stream.youtube.refused.nothing"));
+    await expect(scope.getByTestId("stream-go-live"), `${code}: the refusal REPLACES Go live`).toHaveCount(0);
+    await expect(targetPicker(scope), `${code}: the picker field is red`).toHaveAttribute("aria-invalid", "true");
+    const fix = FIX[code];
+    await expect(scope.getByTestId("stream-youtube-reconnect")).toHaveCount(fix === "reconnect" ? 1 : 0);
+    await expect(scope.getByTestId("stream-youtube-retry")).toHaveCount(fix === "retry" ? 1 : 0);
+    await expect(scope.getByTestId("stream-youtube-pick-another"), `${code}: every refusal offers another destination`).toBeVisible();
+    for (const id of ["stream-youtube-reconnect", "stream-youtube-retry", "stream-youtube-pick-another"]) {
+      const el = scope.getByTestId(id);
+      if (await el.count()) await expectTappable(el, `${code}: ${id}`);
+    }
+    for (const w of WIDTHS) {
+      await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+      await expectNoPageScroll(page, `${code} at ${w}`);
+      if (code === "youtube_reconnect_needed" || code === "youtube_unavailable") await shot(page, `refusal-${code}-${w}`);
+    }
+    await page.setViewportSize({ width: 1280, height: 900 });
+
+    if (fix === "reconnect") {
+      const link = scope.getByTestId("stream-youtube-reconnect");
+      await expect(link).toHaveAttribute("href", "/streaming");
+      const [popup] = await Promise.all([page.context().waitForEvent("page"), link.click()]);
+      await popup.waitForLoadState();
+      expect(new URL(popup.url()).pathname, "Reconnect opens the Streaming page, never the old Directory tab").toBe("/streaming");
+      await popup.close();
+    }
+    if (fix === "retry") {
+      const before = posts;
+      await scope.getByTestId("stream-youtube-retry").click();
+      await expect.poll(() => posts, { message: "Try again IS Go live asked again", timeout: ACT_MS }).toBe(before + 1);
+    }
+    // "Use another destination" clears the refusal and opens the picker on the focused field.
+    await scope.getByTestId("stream-youtube-pick-another").click();
+    await expect(scope.getByTestId("stream-youtube-refusal"), `${code}: the refusal is cleared`).toHaveCount(0);
+    await expect(targetPicker(scope)).toHaveAttribute("aria-expanded", "true");
+    await expect(targetPicker(scope), "focus is on the picker").toBeFocused();
+    checked++;
+  }
+  expect(checked, "anti-vacuity: all six refusals were driven").toBe(YOUTUBE_REFUSAL_CODES.length);
+});
+
+test("Fixture panel - after a match: the replay row shows when it ran, Watch replay wears the icon, Copy link copies, at 1280, 768 and 320", async ({ page, context }) => {
+  test.setTimeout(budget({ navs: 8, acts: 20 }));
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]).catch(() => {});
+  const r = await rig(page, { match: true });
+  await seedDestinations(page, r, `Riverside FC ${randomBytes(2).toString("hex")}`, `Court key ${randomBytes(2).toString("hex")}`);
+  const REPLAY = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+  const startedAt = "2026-09-14T11:00:00.000Z";
+  const endedAt = "2026-09-14T11:45:00.000Z";
+  // The ended session as the server reads it (StreamSessionView): the panel's card is a pure function of this view.
+  await page.route("**/api/v1/fixtures/*/stream-sessions/current", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          id: randomUUID(), fixtureId: r.fixtureId, mode: "passthrough", overlay: null, state: "completed", desiredState: "ending",
+          failReason: null, health: null, ingest: null, output: null, balance: 2, startedAt, endedAt, replayUrl: REPLAY,
+          target: { id: randomUUID(), kind: "youtube", label: "Riverside FC" }, fixtureDecided: true, fixtureHeld: false,
+          endReason: "stopped", creditUsed: true, startCause: "organiser", restart: null, countdown: null,
+        },
+      }),
+    }),
+  );
+  let widthsRead = 0;
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    const body = await openPhoneTab(page, r);
+    const row = body.getByTestId("stream-replay-row");
+    await expect(row, "the ended card draws the replay row").toBeVisible({ timeout: NAV_MS });
+    await expect(row.getByTestId("stream-replay-times")).toHaveText(/\d{1,2}:\d{2}.+\d{1,2}:\d{2}/);
+    const watch = row.getByTestId("stream-replay");
+    await expect(watch).toHaveAttribute("href", REPLAY);
+    await expect(watch).toHaveAttribute("target", "_blank");
+    expect(await expectOfficialIcons(watch, `Watch replay at ${w}`), "the icon sits INSIDE the link, so the mark leads to YouTube").toBe(1);
+    await expectTappable(watch, `Watch replay at ${w}`);
+    const copy = row.getByTestId("stream-replay-copy");
+    await expectTappable(copy, `Copy link at ${w}`);
+    await copy.click();
+    await expect(copy, "Copy link confirms").toContainText(en("stream.replay.copied"));
+    const copied = await page.evaluate(() => navigator.clipboard.readText()).catch(() => null);
+    if (copied !== null) expect(copied, "the clipboard holds the replay link").toBe(REPLAY);
+    await expectNoPageScroll(page, `the replay row at ${w}`);
+    await shot(page, `replay-row-${w}`);
+    widthsRead++;
+  }
+  expect(widthsRead, "anti-vacuity: every width was walked").toBe(WIDTHS.length);
+});

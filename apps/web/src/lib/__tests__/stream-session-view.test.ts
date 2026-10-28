@@ -40,7 +40,9 @@ import {
   AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, AUTO_WONT_START_KEY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoOperatorHint, autoRefusalStrip, autoStopLine, autoSwitchNote,
   healthLine, phoneDetails, takeoverLineKey, takeoverNotice, type PhoneLinePart, type TakeoverAct,
   PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRefusal, readClearsW5, type CreateFailureCode, type PresenceWatch,
+  YOUTUBE_REFUSAL_FIX, youtubeRefusalOf,
 } from "../stream-session-view";
+import { YOUTUBE_REFUSAL_CODES } from "../youtube";
 import fc from "fast-check";
 import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
 import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
@@ -216,6 +218,17 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     ["PAYMENT_REQUIRED streaming.relay", new PaymentRequiredError(RELAY_PLAN_GATES.relay), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED streaming.overlay", new PaymentRequiredError(RELAY_PLAN_GATES.overlay), "plan_lacks_relay"],
     ["PAYMENT_REQUIRED, an unrelated feature", new PaymentRequiredError("formats.double_elim"), "unknown"],
+    // YouTube Connect T12 (spec §6.2): the six refusals the prepare step throws, each with the status the route's own documentation
+    // gives it (openapi.ts POST /fixtures/{id}/stream-sessions) and the connection in the extras.
+    ["youtube_reconnect_needed 409", new HttpError(409, "YouTube refused Go live: youtube_reconnect_needed", "youtube_reconnect_needed", { connectionId: "c-1" }), "youtube_reconnect_needed"],
+    ["youtube_live_not_enabled 409", new HttpError(409, "YouTube refused Go live: youtube_live_not_enabled", "youtube_live_not_enabled", { connectionId: "c-1" }), "youtube_live_not_enabled"],
+    ["youtube_live_blocked 409", new HttpError(409, "YouTube refused Go live: youtube_live_blocked", "youtube_live_blocked", { connectionId: "c-1" }), "youtube_live_blocked"],
+    ["youtube_limit_reached 429", new HttpError(429, "YouTube refused Go live: youtube_limit_reached", "youtube_limit_reached", { connectionId: "c-1" }), "youtube_limit_reached"],
+    ["youtube_channel_busy 409", new HttpError(409, "YouTube refused Go live: youtube_channel_busy", "youtube_channel_busy", { connectionId: "c-1" }), "youtube_channel_busy"],
+    ["youtube_unavailable 503", new HttpError(503, "YouTube refused Go live: youtube_unavailable", "youtube_unavailable", { connectionId: "c-1" }), "youtube_unavailable"],
+    // A youtube_* code this build has no copy for is the generic retry line — and its raw code is never shown (see the T12 describe).
+    ["a youtube_* code a newer server adds", new HttpError(409, "YouTube refused Go live: youtube_quota_week", "youtube_quota_week", { connectionId: "c-1" }), "unknown"],
+    ["a code that only STARTS with one of ours", new HttpError(409, "x", "youtube_unavailable_soon", { connectionId: "c-1" }), "unknown"],
     ["NOT_FOUND 404 (target_not_found)", new HttpError(404, "stream target not found"), "unknown"],
     ["FORBIDDEN 403 (no signed-in user)", new HttpError(403, "a signed-in organiser is required"), "unknown"],
     ["a code the union does not name", new HttpError(409, "session is not running", "not_active"), "unknown"],
@@ -1442,7 +1455,13 @@ describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone cle
     // was asked after the refusal.
     const W5 = new Set<string>(["phone_not_paired", "phone_not_responding"]);
     type Ev = { k: "ask" } | { k: "land"; present: boolean } | { k: "refuse"; code: CreateFailureCode };
-    const code = fc.constantFrom<CreateFailureCode>(...CREATE_ERROR_CODES, TARGET_REMOVED);
+    // The two W5 codes are drawn on their own branch as well as among all codes: the property's anti-vacuity counters below
+    // need W5 refusals to be common, and they must stay common as the set of create codes grows (T12 added six YouTube codes,
+    // which thinned a uniform draw until the fixed seed saw no stale answer at all).
+    const code = fc.oneof(
+      fc.constantFrom<CreateFailureCode>(...W5_REFUSAL_CODES),
+      fc.constantFrom<CreateFailureCode>(...CREATE_ERROR_CODES, TARGET_REMOVED),
+    );
     const ev: fc.Arbitrary<Ev> = fc.oneof(
       fc.constant<Ev>({ k: "ask" }),
       fc.boolean().map<Ev>((present) => ({ k: "land", present })),
@@ -1475,5 +1494,90 @@ describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone cle
     expect(steps, "anti-vacuity: steps driven").toBeGreaterThan(0);
     expect(clears, "anti-vacuity: some W5 errors were cleared").toBeGreaterThan(0);
     expect(staleKept, "anti-vacuity: some stale present answers landed over a W5 error").toBeGreaterThan(0);
+  });
+});
+
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe("YouTube Connect T12 — every YouTube Go live refusal reaches the panel with its own copy and its fix", () => {
+  // The rulebook: spec §6.2's table (six codes) and the owner's Option B (T4, 2026-10-27: the fix REPLACES the Go live button).
+  // Typed here from them, never read back from the code under test.
+  const SPEC_CODES = [
+    "youtube_reconnect_needed", "youtube_live_not_enabled", "youtube_live_blocked", "youtube_limit_reached", "youtube_channel_busy", "youtube_unavailable",
+  ] as const;
+  const FIX: Record<(typeof SPEC_CODES)[number], "reconnect" | "retry" | "none"> = {
+    youtube_reconnect_needed: "reconnect",   // §6.2: "Reconnect YouTube" -> the Streaming page
+    youtube_live_not_enabled: "none",        // nothing to do from here: YouTube can take up to 24 hours
+    youtube_live_blocked: "none",            // YouTube's own restriction
+    youtube_limit_reached: "none",           // "Try later or pick another destination"
+    youtube_channel_busy: "none",            // ten streams already live on the channel
+    youtube_unavailable: "retry",            // "YouTube didn't answer. Try again."
+  };
+
+  it("the declaration, the create-error set and the fix table are all the spec's six, each exactly once", () => {
+    expect([...YOUTUBE_REFUSAL_CODES].sort()).toEqual([...SPEC_CODES].sort());
+    let checked = 0;
+    for (const code of SPEC_CODES) {
+      expect((CREATE_ERROR_CODES as readonly string[]).filter((c) => c === code), `${code} in CREATE_ERROR_CODES`).toHaveLength(1);
+      expect(YOUTUBE_REFUSAL_FIX[code], code).toBe(FIX[code]);
+      expect(CREATE_ERROR_KEYS[code], code).toBe(`stream.error.${code}`);
+      checked++;
+    }
+    expect(checked).toBe(6);
+    // Nothing else claims to be a YouTube refusal: the fix table has no extra entry, and no other create code reads as one.
+    expect(Object.keys(YOUTUBE_REFUSAL_FIX).sort()).toEqual([...SPEC_CODES].sort());
+    const others = CREATE_ERROR_CODES.filter((c) => !(SPEC_CODES as readonly string[]).includes(c));
+    expect(others.length, "the other create codes").toBeGreaterThan(5);
+    for (const c of others) expect(youtubeRefusalOf(c), c).toBeNull();
+    expect(youtubeRefusalOf(TARGET_REMOVED)).toBeNull();
+  });
+
+  it("youtubeRefusalOf names the code for each of the six", () => {
+    let checked = 0;
+    for (const code of SPEC_CODES) {
+      expect(youtubeRefusalOf(code), code).toBe(code);
+      checked++;
+    }
+    expect(checked).toBe(6);
+  });
+
+  it("each refusal reads its OWN sentence off the real wire, in all four locales: distinct, no placeholder left, and the raw code is never on screen", async () => {
+    const sentences = new Set<string>();
+    let checked = 0;
+    for (const code of SPEC_CODES) {
+      const status = code === "youtube_limit_reached" ? 429 : code === "youtube_unavailable" ? 503 : 409;
+      const got = createErrorCode(await wire(new HttpError(status, `YouTube refused Go live: ${code}`, code, { connectionId: "c-1" })));
+      expect(got, code).toBe(code);
+      const text = createErrorText({ code: got, holder: null }, msg);
+      expect(text, code).toBe((messages as Record<string, string>)[`stream.error.${code}`]);
+      expect(text, `${code}: not the generic retry line`).not.toBe(msg(CREATE_ERROR_KEYS.unknown));
+      expect(text, code).not.toContain("youtube_");
+      sentences.add(text);
+      for (const l of LOCALES) {
+        const t = dict(l)[`stream.error.${code}`];
+        expect(t, `${l} ${code}`).toBeTypeOf("string");
+        expect(t, `${l} ${code}`).not.toMatch(/[{}]|youtube_/);
+        expect(t!.trim().length, `${l} ${code}`).toBeGreaterThan(10);
+      }
+      checked++;
+    }
+    expect(checked, "all six refusals").toBe(6);
+    expect(sentences.size, "no two refusals share a sentence").toBe(6);
+    // The shared lines the refusal block adds around each sentence exist in all four locales too.
+    const SHARED = ["stream.youtube.refused.title", "stream.youtube.refused.nothing", "stream.youtube.refused.reconnect", "stream.youtube.refused.retry", "stream.youtube.refused.pickAnother"];
+    expect(inEveryLocale(SHARED)).toBe(SHARED.length * LOCALES.length);
+  });
+
+  it("an unknown youtube_* code falls back to the generic error — never its raw code (the empty case of the closed set)", async () => {
+    let checked = 0;
+    for (const raw of ["youtube_quota_week", "youtube_unavailable_soon", "YOUTUBE_UNAVAILABLE", "youtube_", "youtube"]) {
+      const got = createErrorCode(await wire(new HttpError(409, "x", raw, { connectionId: "c-1" })));
+      expect(got, raw).toBe("unknown");
+      const text = createErrorText({ code: got, holder: null }, msg);
+      expect(text, raw).toBe(msg(CREATE_ERROR_KEYS.unknown));
+      expect(text.toLowerCase(), raw).not.toContain(raw.toLowerCase());
+      checked++;
+    }
+    expect(checked).toBe(5);
   });
 });

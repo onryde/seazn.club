@@ -27,6 +27,7 @@ import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
+import { YOUTUBE_REFUSAL_CODES, isYoutubeRefusalCode, type YoutubeRefusalCode } from "@/lib/youtube";
 import type {
   StreamEndReason, StreamFailReason, StreamLostCountdown, StreamPhone, StreamSessionCurrent,
 } from "@/server/api-v1/schemas";
@@ -157,10 +158,12 @@ export const END_REASON_KEYS: Record<StreamEndReason, MessageKey> = {
   max_duration: "stream.phone.ended.reason.max_duration",
 };
 
-/** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. */
+/** Every create refusal the Phone tab tells apart (D1). `unknown` is the one a retry might fix. The YouTube refusals (spec §6.2,
+ *  YouTube Connect T12) are spread from lib/youtube.ts's own list — the ONE declaration the server's prepare step throws from — so a
+ *  seventh YouTube code does not compile here until it has copy (`CREATE_ERROR_KEYS`) and a fix (`YOUTUBE_REFUSAL_FIX`). */
 export const CREATE_ERROR_CODES = [
   "no_credits", "overlay_required", "active_session", "phone_not_paired", "phone_not_responding", "storage_exhausted", "ingest_unavailable",
-  "composed_unavailable", "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", "unknown",
+  "composed_unavailable", "target_in_use", "destination_not_allowed", "target_unreadable", "plan_lacks_relay", ...YOUTUBE_REFUSAL_CODES, "unknown",
 ] as const;
 export type CreateErrorCode = (typeof CREATE_ERROR_CODES)[number];
 
@@ -181,8 +184,35 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
   destination_not_allowed: "stream.error.destination_not_allowed",
   target_unreadable: "stream.error.target_unreadable",
   plan_lacks_relay: "stream.error.plan_lacks_relay",
+  // YouTube Connect T12 (spec §6.2): one sentence per refusal, the reason only — "nothing was started or charged" is the panel's own
+  // line under it (`stream.youtube.refused.nothing`), said once for all six.
+  youtube_reconnect_needed: "stream.error.youtube_reconnect_needed",
+  youtube_live_not_enabled: "stream.error.youtube_live_not_enabled",
+  youtube_live_blocked: "stream.error.youtube_live_blocked",
+  youtube_limit_reached: "stream.error.youtube_limit_reached",
+  youtube_channel_busy: "stream.error.youtube_channel_busy",
+  youtube_unavailable: "stream.error.youtube_unavailable",
   unknown: "stream.error.unknown",
 };
+
+/** What the organiser's panel puts where Go live was, for each YouTube refusal (owner's Option B, 2026-10-27: the fix REPLACES the
+ *  button). `reconnect`: the channel's grant is dead, so a link to the Streaming page, where Reconnect lives. `retry`: nothing is
+ *  wrong with the destination — YouTube did not answer — so the same Go live, asked again. `none`: nothing Seazn or the club can do
+ *  from here (a channel not yet enabled for live, one YouTube restricted, a quota used up, ten streams already live): the way on is
+ *  another destination, which every refusal offers. A Record over the declaration, so a new code does not compile until placed. */
+export const YOUTUBE_REFUSAL_FIX: Record<YoutubeRefusalCode, "reconnect" | "retry" | "none"> = {
+  youtube_reconnect_needed: "reconnect",
+  youtube_live_not_enabled: "none",
+  youtube_live_blocked: "none",
+  youtube_limit_reached: "none",
+  youtube_channel_busy: "none",
+  youtube_unavailable: "retry",
+};
+
+/** The YouTube refusal a create failure is, or null for every other code (the panel draws these differently). */
+export function youtubeRefusalOf(code: CreateFailureCode): YoutubeRefusalCode | null {
+  return isYoutubeRefusalCode(code) ? code : null;
+}
 
 /** `target_in_use` without a match to name (the index race's `{ holder: null }`, or a holder whose fixture was deleted). */
 const TARGET_IN_USE_ELSEWHERE_KEY: MessageKey = "stream.error.target_in_use.unknown";
@@ -216,6 +246,9 @@ export function createErrorCode(err: unknown): CreateErrorCode {
   if (w.code === DESTINATION_NOT_ALLOWED) return "destination_not_allowed";
   if (w.code === TARGET_UNREADABLE) return "target_unreadable";
   if (w.code === "PAYMENT_REQUIRED" && PLAN_GATE_FEATURES.includes(w.extra.feature_key as string)) return "plan_lacks_relay";
+  // A YouTube refusal rides the wire as its own lower-case code (prepare.ts `youtubeRefusal`). Only the six this list names: a
+  // `youtube_*` code a newer server adds reads as `unknown` (the generic retry line) — never as its raw code on screen.
+  if (isYoutubeRefusalCode(w.code)) return w.code;
   return "unknown";
 }
 
