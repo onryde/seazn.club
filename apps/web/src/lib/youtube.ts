@@ -63,6 +63,14 @@ export function isYoutubeUrl(url: string): boolean {
   return host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be";
 }
 
+/** A channel's own page on YouTube. The YouTube logo is only ever drawn as a link back to YouTube (owner, 2026-10-28, from YouTube's
+ *  branding terms: "any logo used within an application must be clickable and link back to YouTube content"), and a connected channel
+ *  row's link is this. `/channel/<id>` is the canonical form that needs only the channel id Google returned at connect (a `@handle` URL
+ *  would need a lookup). The id is one path segment: encoded, so nothing in it can leave the path or change the host. */
+export function youtubeChannelUrl(channelId: string): string {
+  return `https://www.youtube.com/channel/${encodeURIComponent(channelId)}`;
+}
+
 export const isYoutubeRefusalCode = (c: unknown): c is YoutubeRefusalCode => (YOUTUBE_REFUSAL_CODES as readonly unknown[]).includes(c);
 
 /** Who can act on a refused Go live, for the surfaces whose vocabulary is smaller than the organiser's panel: the phone's own

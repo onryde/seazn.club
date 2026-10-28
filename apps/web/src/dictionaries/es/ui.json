@@ -1384,6 +1384,7 @@
   "streaming.desc": "A dónde se emiten tus partidos. Cada partido elige uno de estos.",
   "streaming.keys.heading": "Claves de transmisión",
   "streaming.youtube.connect": "Conectar YouTube",
+  "streaming.youtube.channelLink": "{name} en YouTube",
   "streaming.youtube.channels": "Canales de YouTube",
   "streaming.youtube.consent.title": "Conecta tu canal de YouTube",
   "streaming.youtube.consent.intro": "Seazn emitirá en directo en tu canal en cada partido que transmitas. Eliges el canal después de iniciar sesión en Google.",

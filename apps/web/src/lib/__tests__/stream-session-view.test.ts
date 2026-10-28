@@ -1186,7 +1186,7 @@ describe("PR-2 §7.4 — the automatic start's refusal (served only while it cou
   describe("the reason is the channel's own when the destination is a connected YouTube channel", () => {
     type Y = NonNullable<StreamTarget["youtube"]>;
     const ch = (over: Partial<Y> = {}): Y => ({
-      connectionId: "c-1", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled",
+      connectionId: "c-1", channelId: "UC7xK2mQ9rVbN4tLpA1sZ0wE", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled",
       termsOutdated: false, openBroadcasts: 0, ...over,
     });
     const refused = (refusal: (typeof AUTO_START_REFUSALS)[number], youtube: Y | null | "no-destination") =>

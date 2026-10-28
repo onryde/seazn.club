@@ -7695,6 +7695,7 @@ export type DictionaryKey =
   | "streaming.youtube.action.settings"
   | "streaming.youtube.alreadyConnected"
   | "streaming.youtube.broadcast.descriptionLine"
+  | "streaming.youtube.channelLink"
   | "streaming.youtube.channels"
   | "streaming.youtube.connect"
   | "streaming.youtube.consent.body"

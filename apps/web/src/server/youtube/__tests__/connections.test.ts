@@ -48,7 +48,7 @@ afterEach(() => { consent.version = 1; });
 interface ConnRow {
   id: string; org_id: string; channel_id: string | null; channel_title: string | null; google_sub: string | null; granted_scope: string;
   default_privacy: string; made_for_kids: boolean; consent_by: string; consent_at: Date; consent_version: number; status: string;
-  status_since: Date; last_error_code: string | null; created_by: string; revoked_at: Date | null;
+  status_since: Date; last_error_code: string | null; last_health_at: Date | null; created_by: string; revoked_at: Date | null;
 }
 const connRows = (orgId: string) => sql<ConnRow[]>`select * from org_youtube_connections where org_id = ${orgId} order by created_at, id`;
 const connRow = async (id: string): Promise<ConnRow> => (await sql<ConnRow[]>`select * from org_youtube_connections where id = ${id}`)[0]!;
@@ -554,11 +554,12 @@ describe.skipIf(!HAS_DB)("updateConnectionSettings", () => {
     expect(await connRow(c.connectionId)).toEqual(before);
   });
 
-  it("the reply is the Streaming page's view of the connection: channel title, privacy, kids flag, status, live state, terms, open broadcasts", async () => {
+  it("the reply is the Streaming page's view of the connection: the channel's id and title, privacy, kids flag, status, live state, terms, open broadcasts", async () => {
     const o = await org();
-    const c = await connect(o, { channels: [{ id: channelId(), title: "Rovers TV" }], madeForKids: true });
+    const id = channelId();
+    const c = await connect(o, { channels: [{ id, title: "Rovers TV" }], madeForKids: true });
     expect(await updateConnectionSettings(o.auth, o.orgId, c.connectionId, { privacy: "private" })).toEqual({
-      connectionId: c.connectionId, channelTitle: "Rovers TV", privacy: "private", madeForKids: true, status: "connected",
+      connectionId: c.connectionId, channelId: id, channelTitle: "Rovers TV", privacy: "private", madeForKids: true, status: "connected",
       liveState: "unknown", termsOutdated: false, openBroadcasts: 0,
     });
   });
@@ -720,7 +721,8 @@ describe.skipIf(!HAS_DB)("the Streaming page's view of a connection", () => {
 describe.skipIf(!HAS_DB)("the Streaming page's destination list (listStreamTargets)", () => {
   it("an API row carries the connection's view, keyHint null, inUse null and no watch link; a pasted row beside it carries youtube null", async () => {
     const o = await org();
-    const c = await connect(o, { channels: [{ id: channelId(), title: "Rovers TV" }], privacy: "public" });
+    const id = channelId();
+    const c = await connect(o, { channels: [{ id, title: "Rovers TV" }], privacy: "public" });
     const pasted = await createStreamTarget(o.auth, o.orgId, { kind: "youtube", label: "Court 1", streamKey: `key-${randomBytes(12).toString("hex")}` });
 
     const list = await listStreamTargets(o.auth, o.orgId);
@@ -729,10 +731,14 @@ describe.skipIf(!HAS_DB)("the Streaming page's destination list (listStreamTarge
     expect(api).toMatchObject({
       kind: "youtube", label: "Rovers TV", watchUrl: null, keyHint: null, inUse: null,
       youtube: {
-        connectionId: c.connectionId, channelTitle: "Rovers TV", privacy: "public", madeForKids: false, status: "connected", liveState: "unknown",
+        connectionId: c.connectionId, channelId: id, channelTitle: "Rovers TV", privacy: "public", madeForKids: false, status: "connected", liveState: "unknown",
         termsOutdated: false, openBroadcasts: 0,
       },
     });
+    // The view carries the channel's PUBLIC id for the logo link, and nothing secret: no token, no grant, no Google subject.
+    const keys = Object.keys(api.youtube!).sort();
+    expect(keys).toEqual(["channelId", "channelTitle", "connectionId", "liveState", "madeForKids", "openBroadcasts", "privacy", "status", "termsOutdated"]);
+    expect(JSON.stringify(api)).not.toMatch(/token|google_sub|refresh/i);
     const paste = list.find((t) => t.id === pasted.id)!;
     expect(paste.youtube).toBeNull();
     expect(typeof paste.keyHint).toBe("string");

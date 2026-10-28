@@ -1,6 +1,4 @@
-// The official YouTube icon — the one mark every YouTube row in the product wears (the Streaming page's channel rows and
-// destination rows, the fixture panel's picker and replay row, the Connect YouTube buttons). One component, so no surface can
-// draw its own version.
+// The official YouTube icon — the one piece of YouTube artwork in the product. One component, so no surface can draw its own version.
 //
 // YouTube's branding guidelines (developers.google.com/youtube/terms/branding-guidelines, page last updated 2025-08-20, read
 // 2026-10-28) bind it, and each rule is held below by a test (components/v2/__tests__/youtube-icon.test.tsx):
@@ -11,13 +9,26 @@
 //   * MINIMUM SIZE: the brand site's digital minimum is 20 px tall (brand.youtube / the how-YouTube-works brand page; the
 //     guidelines page defers to it for the number). Both sizes here are at least 20.
 //   * CLEAR SPACE: at least the size of the triangle inside the icon (about 0.43 of its height) on every side. Callers leave 10 px
-//     or more beside it (`gap-2.5`, `gap-3`); the mark itself carries no padding so a row's own rhythm is not fought.
+//     or more beside it (`gap-2.5`, `gap-3`); the mark itself carries no padding so a row's own rhythm is not fought. The link's
+//     44px tap area is a pseudo-element, so it does not move the icon or its clear space.
 //   * "Do not display any YouTube branding image as the most prominent element on your page": the icon is a 20 to 24 px lead-in to a
-//     row, always beside its channel's or destination's NAME in text.
-//   * The YouTube Icon (not the full logo) is the right mark here: the destination lists intermingle several platforms, each row needs
-//     its attribution, and a row has no room for the full logo (the guidelines' own three conditions for the Icon).
+//     row, always beside its channel's NAME in text (or inside a "Watch replay" button).
+//   * The YouTube Icon (not the full logo) is the right mark here: a row has no room for the full logo (the guidelines' own
+//     conditions for the Icon).
 //
-// Decorative for assistive tech: the platform's NAME always sits beside it as text.
+// The logo is ONLY EVER a link (owner ruling 2026-10-28, from YouTube's branding terms: "any logo used within an application must be
+// clickable and link back to YouTube content"). So it has exactly two homes, and a test sweeps the source for any third
+// (__tests__/youtube-icon.test.tsx):
+//   * `YoutubeIconLink` — a connected channel's row on the Streaming page: the logo links to that channel on YouTube;
+//   * the fixture panel's "Watch replay" link — a link to a YouTube replay, drawn inside that link (fixture-stream-panel.tsx).
+// Every other YouTube row (the destination picker, a pasted-key row, the Connect YouTube buttons) wears `PlatformMark`'s neutral tile
+// or nothing: a row or a button is not a link to YouTube, so it may not carry the logo.
+//
+// Decorative for assistive tech WHEN IT IS BESIDE ITS OWN TEXT (the replay link: "Watch replay" names it); the link that carries the
+// logo alone (`YoutubeIconLink`) is named by `label` instead.
+
+import { REFUSAL_FOCUS_RING } from "./refusal-focus";
+import { youtubeChannelUrl } from "@/lib/youtube";
 
 /** The artwork's own coordinate space (the official icon is 28.57 wide by 20 tall). */
 const ART_W = 28.57;
@@ -46,5 +57,25 @@ export function YoutubeIcon({ size }: { size: YoutubeIconSize }) {
       />
       <path d="M11.4253 14.2854L18.8477 10.0004L11.4253 5.71533V14.2854Z" fill="#FFFFFF" />
     </svg>
+  );
+}
+
+/** The logo as a link to a connected channel on YouTube (owner 2026-10-28). The href is built here from the channel id, so the logo can
+ *  only ever lead to YouTube. Named by `label` ("<channel> on YouTube", the caller's translation): the artwork itself stays hidden.
+ *  Keyboard focus is the house violet-600 ring (REFUSAL_FOCUS_RING is that ring for any box that is not already a link or a button).
+ *  The tap area is a 44 x 44 px `::before` centred on the icon, so it is a real target on a phone while the visible icon keeps
+ *  its own size and clear space: the link itself adds no padding. */
+export function YoutubeIconLink({ channelId, label, size }: { channelId: string; label: string; size: YoutubeIconSize }) {
+  return (
+    <a
+      data-testid="youtube-logo-link"
+      href={youtubeChannelUrl(channelId)}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-label={label}
+      className={`relative inline-flex shrink-0 rounded-sm before:absolute before:left-1/2 before:top-1/2 before:h-11 before:w-11 before:-translate-x-1/2 before:-translate-y-1/2 before:content-[''] ${REFUSAL_FOCUS_RING}`}
+    >
+      <YoutubeIcon size={size} />
+    </a>
   );
 }

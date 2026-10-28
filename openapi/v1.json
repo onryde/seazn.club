@@ -71003,6 +71003,9 @@
                                   "connectionId": {
                                     "type": "string"
                                   },
+                                  "channelId": {
+                                    "type": "string"
+                                  },
                                   "channelTitle": {
                                     "type": "string"
                                   },
@@ -71044,6 +71047,7 @@
                                 },
                                 "required": [
                                   "connectionId",
+                                  "channelId",
                                   "channelTitle",
                                   "privacy",
                                   "madeForKids",
@@ -71099,6 +71103,7 @@
                       },
                       "youtube": {
                         "connectionId": "example",
+                        "channelId": "example",
                         "channelTitle": "example",
                         "privacy": "unlisted",
                         "madeForKids": true,
@@ -71463,6 +71468,9 @@
                                 "connectionId": {
                                   "type": "string"
                                 },
+                                "channelId": {
+                                  "type": "string"
+                                },
                                 "channelTitle": {
                                   "type": "string"
                                 },
@@ -71504,6 +71512,7 @@
                               },
                               "required": [
                                 "connectionId",
+                                "channelId",
                                 "channelTitle",
                                 "privacy",
                                 "madeForKids",
@@ -71566,6 +71575,7 @@
                     },
                     "youtube": {
                       "connectionId": "example",
+                      "channelId": "example",
                       "channelTitle": "example",
                       "privacy": "unlisted",
                       "madeForKids": true,
@@ -72061,6 +72071,9 @@
                                 "connectionId": {
                                   "type": "string"
                                 },
+                                "channelId": {
+                                  "type": "string"
+                                },
                                 "channelTitle": {
                                   "type": "string"
                                 },
@@ -72102,6 +72115,7 @@
                               },
                               "required": [
                                 "connectionId",
+                                "channelId",
                                 "channelTitle",
                                 "privacy",
                                 "madeForKids",
@@ -72155,6 +72169,7 @@
                     },
                     "youtube": {
                       "connectionId": "example",
+                      "channelId": "example",
                       "channelTitle": "example",
                       "privacy": "unlisted",
                       "madeForKids": true,
@@ -73667,6 +73682,9 @@
                         "connectionId": {
                           "type": "string"
                         },
+                        "channelId": {
+                          "type": "string"
+                        },
                         "channelTitle": {
                           "type": "string"
                         },
@@ -73708,6 +73726,7 @@
                       },
                       "required": [
                         "connectionId",
+                        "channelId",
                         "channelTitle",
                         "privacy",
                         "madeForKids",
@@ -73728,6 +73747,7 @@
                   "ok": true,
                   "data": {
                     "connectionId": "example",
+                    "channelId": "example",
                     "channelTitle": "example",
                     "privacy": "unlisted",
                     "madeForKids": true,

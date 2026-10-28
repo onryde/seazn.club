@@ -180,7 +180,7 @@ describe.skipIf(!HAS_DB)("the consent form -> POST /api/youtube/connect", () => 
 describe.skipIf(!HAS_DB)("the Reconnect form -> POST /api/youtube/connect", () => {
   const dead = (connectionId: string, over: Partial<NonNullable<StreamTarget["youtube"]>> = {}): StreamTarget => ({
     id: "t-seam", kind: "youtube", label: "Seam FC", watchUrl: null, createdAt: "2026-10-20T10:00:00.000Z", keyHint: null, inUse: null,
-    youtube: { connectionId, channelTitle: "Seam FC", privacy: "public", madeForKids: true, status: "reconnect_needed", liveState: "unknown", termsOutdated: false, openBroadcasts: 0, ...over },
+    youtube: { connectionId, channelId: "UC7xK2mQ9rVbN4tLpA1sZ0wE", channelTitle: "Seam FC", privacy: "public", madeForKids: true, status: "reconnect_needed", liveState: "unknown", termsOutdated: false, openBroadcasts: 0, ...over },
   });
 
   it("a dead connection whose consent is CURRENT: the form as shipped (no consent field) reconnects it — the pending grant is bound to THAT connection (T7-R2)", async () => {

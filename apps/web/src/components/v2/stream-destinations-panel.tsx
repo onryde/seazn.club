@@ -166,8 +166,8 @@ export function StreamDestinationsPanel({
   const channels = targets.filter((t) => t.youtube !== null);
   const keys = targets.filter((t) => t.youtube === null);
   const connectButton = (testid: string) => (
-    <button type="button" data-testid={testid} aria-expanded={connectOpen} onClick={() => (connectOpen ? setConnectOpen(false) : openConnect())} className="btn btn-ghost min-h-11 gap-2.5">
-      <PlatformMark kind="youtube" size="sm" />
+    <button type="button" data-testid={testid} aria-expanded={connectOpen} onClick={() => (connectOpen ? setConnectOpen(false) : openConnect())} className="btn btn-ghost min-h-11">
+      {/* Words only: a button is not a link to YouTube, so it may not carry the YouTube logo (owner 2026-10-28). */}
       {msg("streaming.youtube.connect")}
     </button>
   );

@@ -152,8 +152,9 @@ function isRealRoute(method: string, url: string): boolean {
 
 // ─── builders ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 type View = NonNullable<StreamTarget["youtube"]>;
+const CHANNEL_ID = "UC7xK2mQ9rVbN4tLpA1sZ0wE";
 const view = (over: Partial<View> = {}): View => ({
-  connectionId: "c-1", channelTitle: "Riverside FC", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled",
+  connectionId: "c-1", channelId: CHANNEL_ID, channelTitle: "Riverside FC", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled",
   termsOutdated: false, openBroadcasts: 0, ...over,
 });
 const channel = (y: Partial<View> = {}, over: Partial<StreamTarget> = {}): StreamTarget => ({
@@ -718,8 +719,16 @@ describe("a connected channel's row", () => {
     expect(plain(rowHtml(channel({ privacy: "private", madeForKids: false })))).toContain(`${m("streaming.youtube.privacy.private")} · ${m("streaming.youtube.row.kidsNo")}`);
   });
 
-  it("a YouTube mark sits beside the row and a held channel shows its holder badge", () => {
-    expect(rowHtml(channel())).toContain('data-platform-mark="youtube"');
+  it("the row's YouTube logo is a link to the channel on YouTube (owner 2026-10-28), and a held channel shows its holder badge", () => {
+    const row = rowHtml(channel());
+    const a = /<a\b[^>]*data-testid="youtube-logo-link"[^>]*>/.exec(row)?.[0];
+    expect(a, "the logo is wrapped in an anchor").toBeDefined();
+    expect(a).toContain(`href="https://www.youtube.com/channel/${CHANNEL_ID}"`);
+    expect(a).toContain('target="_blank"');
+    expect(a).toContain('rel="noopener noreferrer"');
+    expect(a, "named '<channel> on YouTube'").toContain(`aria-label="${m("streaming.youtube.channelLink", { name: "Riverside FC" })}"`);
+    expect(m("streaming.youtube.channelLink", { name: "Riverside FC" })).toBe("Riverside FC on YouTube");
+    expect(row, "the neutral platform tile is NOT also drawn: one mark per row").not.toContain('data-platform-mark="youtube"');
     const html = renderToStaticMarkup(
       <DictProvider dict={messages as unknown as Dict} locale="en"><ul><YoutubeChannelRow t={channel()} canEdit orgId="o" badge={<span data-testid="stream-dest-badge">Live on Match 5</span>} /></ul></DictProvider>,
     );
@@ -950,7 +959,8 @@ describe("the panel with YouTube Connect", () => {
     expect(html).toMatch(/data-testid="stream-dest-empty"[\s\S]*data-testid="stream-dest-empty-add"[\s\S]*data-testid="youtube-connect-empty"/);
     expect(plain(html)).toContain(m("streamDest.empty"));
     expect(plain(html)).toContain(m("streaming.youtube.connect"));
-    expect(html.match(/data-platform-mark="youtube"/g)).toHaveLength(1);
+    expect(html.match(/data-platform-mark="youtube"/g), "the Connect button wears no mark").toBeNull();
+    expect(html.match(/data-youtube-icon="/g), "the Connect button draws no logo (a logo must be a link; a button is not one)").toBeNull();
     expect(m("streamDest.empty"), "the empty copy names the connect path too").toMatch(/Connect your YouTube channel/);
   });
 
@@ -1163,14 +1173,53 @@ describe("T12 polish: the Streaming page", () => {
     expect(checked).toBe(11);
   });
 
-  it("4. every YouTube row and button wears the official icon: the channel row, the Connect buttons — and the red Y tile is gone from them", () => {
-    const targets = [channel(), pasted()];
-    const html = panelHtml({ targets });
-    // Row (channel), row (pasted YouTube key), the toolbar's Connect YouTube = three marks.
-    expect(html.match(/data-youtube-icon="/g), "channel row + pasted row + Connect button").toHaveLength(3);
-    expect(panelHtml({ targets: [] }).match(/data-youtube-icon="/g), "the empty card's Connect button").toHaveLength(1);
-    expect(html).not.toMatch(/#ff0033|>Y</i);
-    // Clear space: the Connect button leaves the icon at least 10px (gap-2.5) of room before its words.
-    expect(tokens(panelHtml({ targets: [] }), "youtube-connect-empty")).toContain("gap-2.5");
+  it("4. the logo appears ONLY as the channel row's link: the pasted-key row wears the neutral tile, the Connect buttons wear nothing", () => {
+    const html = panelHtml({ targets: [channel(), pasted()] });
+    // One logo on the page: the channel row's. It is inside an anchor to the channel.
+    expect(html.match(/data-youtube-icon="/g), "the channel row's logo, and no other").toHaveLength(1);
+    expect(html).toMatch(new RegExp(`<a\\b[^>]*href="https://www\\.youtube\\.com/channel/${CHANNEL_ID}"[^>]*><svg[^>]*data-youtube-icon="md"`));
+    // The pasted row keeps its alignment with a neutral tile (one platform mark on the page: the pasted row's).
+    expect(html.match(/data-platform-mark="youtube"/g), "the pasted-key row's neutral tile").toHaveLength(1);
+    const pastedRow = /<li data-testid="stream-dest-row"[\s\S]*?<\/li>/.exec(html)![0];
+    expect(pastedRow).toContain('data-platform-mark="youtube"');
+    expect(pastedRow, "the pasted row draws no logo").not.toContain("data-youtube-icon");
+    // The toolbar's Connect YouTube: words only.
+    const connect = /<button[^>]*data-testid="youtube-connect"[^>]*>[\s\S]*?<\/button>/.exec(html)![0];
+    expect(connect).toContain(m("streaming.youtube.connect"));
+    expect(connect, "no mark in the Connect button").not.toMatch(/data-platform-mark|data-youtube-icon|<svg/);
+    // The empty card's Connect: the same.
+    const empty = panelHtml({ targets: [] });
+    expect(empty.match(/data-youtube-icon="/g)).toBeNull();
+    expect(/<button[^>]*data-testid="youtube-connect-empty"[^>]*>[\s\S]*?<\/button>/.exec(empty)![0]).not.toMatch(/data-platform-mark|data-youtube-icon|<svg/);
+  });
+
+  it("4b. every channel row is its own link, to its own channel (two channels: two links, two ids)", () => {
+    const other = "UCq8Zp3nW2yHcB6vTdR4eXjA";
+    const html = panelHtml({
+      targets: [channel({}, { id: "t-a" }), channel({ connectionId: "c-2", channelId: other, channelTitle: "Riverside Juniors" }, { id: "t-b", label: "Riverside Juniors" })],
+    });
+    const hrefs = [...html.matchAll(/<a\b[^>]*href="(https:\/\/www\.youtube\.com\/[^"]+)"[^>]*><svg/g)].map((x) => x[1]);
+    expect(hrefs, "one logo link per channel row, each to that row's channel").toEqual([
+      `https://www.youtube.com/channel/${CHANNEL_ID}`,
+      `https://www.youtube.com/channel/${other}`,
+    ]);
+    const labels = [...html.matchAll(/<a\b[^>]*aria-label="([^"]+)"[^>]*><svg/g)].map((x) => x[1]);
+    expect(labels).toEqual(["Riverside FC on YouTube", "Riverside Juniors on YouTube"]);
+  });
+
+  it("4c. the link's accessible name is in the viewer's language (es/fr/nl carry the channel's name too)", () => {
+    let checked = 0;
+    for (const l of LOCALES) {
+      const html = renderToStaticMarkup(
+        <DictProvider dict={localeDict(l) as unknown as Dict} locale={l}><ul><YoutubeChannelRow t={channel()} canEdit orgId="o" badge={null} /></ul></DictProvider>,
+      );
+      const label = /<a\b[^>]*aria-label="([^"]+)"[^>]*><svg/.exec(html)?.[1];
+      expect(label, l).toBe(esc(localeDict(l)["streaming.youtube.channelLink"]!.replace("{name}", "Riverside FC")));
+      expect(label, `${l}: names the channel and YouTube`).toMatch(/Riverside FC/);
+      expect(label, `${l}: names YouTube`).toMatch(/YouTube/);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+    expect(LOCALES.length).toBe(4);
   });
 });

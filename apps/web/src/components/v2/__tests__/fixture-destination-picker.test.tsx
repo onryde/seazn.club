@@ -34,7 +34,7 @@ const msgEs = (k: MessageKey, vars: Record<string, string | number> = {}): strin
 type View = NonNullable<StreamTarget["youtube"]>;
 const channel = (id: string, title: string, y: Partial<View> = {}): StreamTarget => ({
   id, kind: "youtube", label: title, watchUrl: null, createdAt: "2026-10-20T10:00:00.000Z", keyHint: null, inUse: null,
-  youtube: { connectionId: `c-${id}`, channelTitle: title, privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0, ...y },
+  youtube: { connectionId: `c-${id}`, channelId: `UC-${id}`, channelTitle: title, privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0, ...y },
 });
 const key = (id: string, label: string, kind: StreamTarget["kind"] = "youtube"): StreamTarget => ({
   id, kind, label, watchUrl: null, createdAt: "2026-09-12T10:00:00.000Z", keyHint: "8hd", inUse: null, youtube: null,
@@ -185,7 +185,11 @@ describe("the picker, driven", () => {
     const tree = p.island.tree();
     expect(textOf(byTestId(tree, "stream-target-name")!)).toBe("Riverside BC Live");
     expect(textOf(byTestId(tree, "stream-target-kind")!)).toBe("YouTube channel · Unlisted");
-    expect(tree.some((el) => attr(el, "data-platform-mark") === "youtube"), "the official icon leads the row").toBe(true);
+    expect(tree.some((el) => attr(el, "data-platform-mark") === "youtube"), "the neutral YouTube tile leads the row (it keeps the row aligned)").toBe(true);
+    // Owner 2026-10-28: "any logo used within an application must be clickable and link back to YouTube" — a picker row is not a link,
+    // so the trigger draws no logo at all.
+    expect(tree.some((el) => attr(el, "data-youtube-icon") !== undefined && attr(el, "data-youtube-icon") !== null), "the trigger draws no YouTube logo").toBe(false);
+    expect(tree.length, "anti-vacuity: the expanded tree was read").toBeGreaterThan(5);
     expect(byTestId(tree, "stream-target-health"), "a ready channel carries no badge").toBeUndefined();
   });
 
@@ -214,7 +218,11 @@ describe("the picker, driven", () => {
       return b ? `${attr(o, "data-target-id")}:${textOf(b)}` : null;
     }).filter(Boolean);
     expect(badged).toEqual(["t-bad:Reconnect needed", "t-warn:Not enabled for live"]);
-    // The official icon on the three API rows AND the pasted YouTube key's row; the Twitch row keeps its own tile.
+    // The neutral YouTube tile on the three API rows AND the pasted YouTube key's row; the Twitch row keeps its own tile. NO row draws the
+    // YouTube logo: a row is not a link to YouTube, and a logo must be (owner 2026-10-28).
+    const logos = opts.flatMap((o) => deep(o)).filter((el) => attr(el, "data-youtube-icon") !== undefined && attr(el, "data-youtube-icon") !== null);
+    expect(logos, "no option draws the YouTube logo").toHaveLength(0);
+    expect(opts.flatMap((o) => deep(o)).length, "anti-vacuity: every option's subtree was searched").toBeGreaterThan(opts.length * 5);
     const marks = opts.map((o) => deep(o).find((el) => attr(el, "data-platform-mark") !== undefined && attr(el, "data-platform-mark") !== null)).map((el) => attr(el!, "data-platform-mark"));
     expect(marks).toEqual(["youtube", "youtube", "youtube", "youtube", "twitch"]);
   });

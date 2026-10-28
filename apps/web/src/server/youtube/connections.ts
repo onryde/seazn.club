@@ -207,7 +207,7 @@ export async function pickYoutubeChannel(
 // The Streaming page's projection
 
 interface ConnectionViewRow {
-  id: string; channel_title: string; default_privacy: YoutubePrivacy; made_for_kids: boolean; status: "connected" | "reconnect_needed";
+  id: string; channel_id: string; channel_title: string; default_privacy: YoutubePrivacy; made_for_kids: boolean; status: "connected" | "reconnect_needed";
   last_health_at: Date | null; last_error_code: string | null; consent_version: number; open_broadcasts: number; status_since: Date;
 }
 
@@ -256,7 +256,7 @@ export function freshLiveRefusal(
 
 function toView(r: ConnectionViewRow): YoutubeConnectionView {
   return {
-    connectionId: r.id, channelTitle: r.channel_title, privacy: r.default_privacy, madeForKids: r.made_for_kids, status: r.status,
+    connectionId: r.id, channelId: r.channel_id, channelTitle: r.channel_title, privacy: r.default_privacy, madeForKids: r.made_for_kids, status: r.status,
     liveState: liveStateOf(r),
     // Read at call time (not captured), so a bump of the consent text is seen by the next read. Less than: a connection consented
     // under a LATER wording than this build's (a rollback) is not "outdated".
@@ -269,7 +269,7 @@ function toView(r: ConnectionViewRow): YoutubeConnectionView {
  *  and have no view. `only` narrows to one connection (a PATCH's reply). */
 export async function connectionViews(orgId: string, only?: string): Promise<Map<string, YoutubeConnectionView>> {
   const rows = await sql<ConnectionViewRow[]>`
-    select c.id, c.channel_title, c.default_privacy, c.made_for_kids, c.status, c.last_health_at, c.last_error_code, c.consent_version, c.status_since,
+    select c.id, c.channel_id, c.channel_title, c.default_privacy, c.made_for_kids, c.status, c.last_health_at, c.last_error_code, c.consent_version, c.status_since,
            (select count(*)::int from youtube_broadcasts b
              where b.connection_id = c.id and b.org_id = c.org_id and b.state in ${sql(OPEN_BROADCAST_STATES)}) as open_broadcasts
       from org_youtube_connections c

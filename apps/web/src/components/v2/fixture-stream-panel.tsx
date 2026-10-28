@@ -30,7 +30,8 @@ import { captureQrV2Text, type CaptureQrV2 } from "@/lib/capture-qr";
 import { apiV1 } from "@/lib/client-v1";
 import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { FixtureDestinationPicker } from "./fixture-destination-picker";
-import { PlatformMark, platformName } from "./stream-platform-mark";
+import { platformName } from "./stream-platform-mark";
+import { YoutubeIcon } from "./youtube-icon";
 import { ReplayCopyButton } from "./stream-replay-copy";
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "./refusal-focus";
 import { channelStatus, youtubeTargetLabel } from "./youtube-connect-panel";
@@ -2578,7 +2579,7 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                   className="btn btn-ghost min-h-11 w-full gap-2.5 md:min-h-10 md:w-auto"
                 >
                   {/* The mark follows the LINK, not the destination: a club's own stream_url is never overwritten with YouTube's. */}
-                  {isYoutubeUrl(p.view.replayUrl) && <PlatformMark kind="youtube" size="sm" />}
+                  {isYoutubeUrl(p.view.replayUrl) && <YoutubeIcon size="sm" />}
                   {msg("stream.phone.replay")}
                 </a>
                 <ReplayCopyButton url={p.view.replayUrl} />

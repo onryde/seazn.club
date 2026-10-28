@@ -19,13 +19,15 @@ import { YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES } from "../src
 //
 // What it adds over the unit tests (which cannot see layout, real tap area, or paint):
 //   * the picker at 1280, 768 and 320: the closed field, the open list with an API-backed channel row AND a pasted-key row, no sideways
-//     page scroll with the list open, every row a 44px-plus tap target, the YouTube icon on both YouTube rows;
+//     page scroll with the list open, every row a 44px-plus tap target, and NO YouTube logo on any picker row (owner 2026-10-28: a logo
+//     must be a link back to YouTube; a picker row is not one, so both YouTube rows wear the neutral tile);
 //   * each of the six refusals, driven through the real panel with the wire's own code: the fix that replaces Go live is the one the spec
 //     names (Reconnect -> the Streaming page in a new tab, Try again -> the same Go live asked again, the rest -> only "Use another");
 //   * the replay row after a match: the times in the venue's zone, Watch replay with the icon inside the link, Copy link that copies;
 //   * the four polish items: the channel-row Settings control paints as a button at rest, the empty card's Connect YouTube leaves while
-//     the channel picker is open, the denied banner's text and Dismiss share one centre line at 768 and 1280, and every YouTube row on
-//     the Streaming page wears the one official icon, unaltered, at least 20px tall.
+//     the channel picker is open, the denied banner's text and Dismiss share one centre line at 768 and 1280, and the YouTube logo on the
+//     Streaming page is ONLY the channel row's, a link to that channel on YouTube (unaltered, at least 20px tall, a 44px tap area, a
+//     violet focus ring) - the pasted-key row and the Connect buttons wear no logo.
 test.use({ storageState: { cookies: [], origins: [] } });
 
 const SHOTS = process.env.YOUTUBE_SHOTS_DIR ?? resolve(process.cwd(), "../../.superpowers/sdd/shots/youtube-panel");
@@ -127,8 +129,13 @@ async function expectTappable(loc: Locator, label: string): Promise<void> {
   }
 }
 
+/** Is this a link to YouTube itself (https, youtube.com or a subdomain, or youtu.be)? The page's own `isYoutubeUrl`, restated for the browser side. */
+const isYoutubeHref = (protocol: string | null, host: string | null): boolean =>
+  protocol === "https:" && host !== null && (host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be");
+
 /** Every official YouTube icon under `scope`: unaltered colours, at least 20px tall, fully painted (nothing over its centre), not clipped
- *  by an ancestor narrower than the mark. Returns how many it read - a scope that held none is a failure, not a pass. */
+ *  by an ancestor narrower than the mark - and INSIDE a link to YouTube (owner 2026-10-28: "any logo used within an application must be
+ *  clickable and link back to YouTube content"). Returns how many it read - a scope that held none is a failure, not a pass. */
 async function expectOfficialIcons(scope: Locator, where: string): Promise<number> {
   const seen = await scope.locator("svg[data-youtube-icon]").evaluateAll((svgs) =>
     svgs.map((svg) => {
@@ -146,6 +153,8 @@ async function expectOfficialIcons(scope: Locator, where: string): Promise<numbe
         opacity: getComputedStyle(svg).opacity,
         painted: at !== null && (at === svg || svg.contains(at) || at.contains(svg)),
         clipped,
+        linkProtocol: svg.closest("a[href]") ? new URL((svg.closest("a[href]") as HTMLAnchorElement).href).protocol : null,
+        linkHost: svg.closest("a[href]") ? new URL((svg.closest("a[href]") as HTMLAnchorElement).href).hostname : null,
       };
     }),
   );
@@ -156,8 +165,55 @@ async function expectOfficialIcons(scope: Locator, where: string): Promise<numbe
     expect(s.opacity, `${where} #${i}: fully opaque`).toBe("1");
     expect(s.painted, `${where} #${i}: nothing covers it`).toBe(true);
     expect(s.clipped, `${where} #${i}: no ancestor clips it`).toBe(false);
+    expect(isYoutubeHref(s.linkProtocol, s.linkHost), `${where} #${i}: the logo sits inside a link to YouTube (${s.linkProtocol}//${s.linkHost})`).toBe(true);
   }
   return seen.length;
+}
+
+/** A scope that must draw NO YouTube logo (a row or a button is not a link to YouTube). The scope itself must exist, or "none inside" is
+ *  vacuous. */
+async function expectNoYoutubeLogo(scope: Locator, where: string): Promise<void> {
+  expect(await scope.count(), `${where}: the scope exists (an absent scope proves nothing)`).toBeGreaterThan(0);
+  await expect(scope.locator("svg[data-youtube-icon]"), `${where}: no YouTube logo`).toHaveCount(0);
+}
+
+/** The channel row's logo link, read off the browser: where it leads, how it is named, that its tap area is 44px (hit-tested at the
+ *  corners of a 44px square centred on the icon, which the icon's own 34x24 box does not reach), that the icon did not grow to make
+ *  room, and that a keyboard user sees the violet-600 ring. */
+async function expectChannelLogoLink(row: Locator, page: Page, channelId: string, channelTitle: string, where: string): Promise<void> {
+  const link = row.getByTestId("youtube-logo-link");
+  await expect(link, `${where}: one logo link on the row`).toHaveCount(1);
+  await expect(link).toHaveAttribute("href", `https://www.youtube.com/channel/${channelId}`);
+  await expect(link).toHaveAttribute("target", "_blank");
+  await expect(link).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(link, `${where}: named '<channel> on YouTube'`).toHaveAttribute("aria-label", en("streaming.youtube.channelLink", { name: channelTitle }));
+  await link.evaluate((el) => el.scrollIntoView({ block: "center", inline: "nearest" }));
+  const hit = await link.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    // 19px, not 22: a hair inside the 44px square so sub-pixel layout cannot flake the corner.
+    const corners = [[-19, -19], [19, -19], [-19, 19], [19, 19]].map(([dx, dy]) => {
+      const at = document.elementFromPoint(cx + dx!, cy + dy!);
+      return at !== null && (at === el || el.contains(at));
+    });
+    const svg = el.querySelector("svg")!.getBoundingClientRect();
+    return { corners, linkW: r.width, linkH: r.height, iconH: svg.height };
+  });
+  expect(hit.corners, `${where}: all four corners of the 44px tap area hit the link`).toEqual([true, true, true, true]);
+  expect(Math.round(hit.iconH), `${where}: the visible icon is its own 24px (the tap area did not enlarge it)`).toBe(24);
+  expect(hit.linkH, `${where}: the link's own box is the icon's (the 44px is a pseudo-element)`).toBeLessThan(30);
+  // Keyboard focus: a key press first, so the browser treats the script focus as keyboard-driven (:focus-visible).
+  await page.keyboard.press("Shift");
+  await link.focus();
+  const ring = await link.evaluate((el) => {
+    const cs = getComputedStyle(el);
+    return { style: cs.outlineStyle, width: parseFloat(cs.outlineWidth), color: cs.outlineColor };
+  });
+  expect(ring.style, `${where}: a focus ring is drawn`).not.toBe("none");
+  expect(ring.width, `${where}: the ring is at least 2px`).toBeGreaterThanOrEqual(2);
+  expect(ring.color, `${where}: the ring is violet-600 (#7c3aed)`).toBe("rgb(124, 58, 237)");
+  await link.blur();
 }
 
 // ---------------------------------------------------------------------------------------------------------------------
@@ -312,8 +368,9 @@ test("Streaming page polish - the Settings button at rest, Connect leaves with t
     await shot(page, `polish-settings-${w}`);
   }
 
-  // (4) Every YouTube row on this page wears the one official icon: the channel row and a pasted key's row. (The key is added only now:
-  //     the empty card above is what a page with NO destination shows, and any destination would have replaced it.)
+  // (4) The YouTube LOGO on this page is only the channel row's, and it is a link to that channel (owner 2026-10-28). The pasted key's
+  //     row wears the neutral tile instead (it keeps the row aligned), and the Connect button wears nothing. (The key is added only
+  //     now: the empty card above is what a page with NO destination shows, and any destination would have replaced it.)
   await addKeyDestination(page, orgId, "Pasted key");
   await open(page, "/streaming");
   await expect(row).toHaveCount(1);
@@ -321,10 +378,15 @@ test("Streaming page polish - the Settings button at rest, Connect leaves with t
   for (const w of WIDTHS) {
     await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
     icons += await expectOfficialIcons(row, `channel row at ${w}`);
-    icons += await expectOfficialIcons(page.getByTestId("stream-dest-row").first(), `pasted-key row at ${w}`);
+    await expectChannelLogoLink(row, page, first.id, first.title, `channel row at ${w}`);
+    const pastedRow = page.getByTestId("stream-dest-row").first();
+    await expectNoYoutubeLogo(pastedRow, `pasted-key row at ${w}`);
+    await expect(pastedRow.locator('[data-platform-mark="youtube"]'), `pasted-key row at ${w}: the neutral tile keeps the row aligned`).toHaveCount(1);
+    await expectNoYoutubeLogo(page.getByTestId("youtube-connect"), `the Connect YouTube button at ${w}`);
+    await expectNoPageScroll(page, `the logo link row at ${w}`);
     await shot(page, `polish-icon-${w}`);
   }
-  expect(icons, "anti-vacuity: icons were read at every width on both rows").toBeGreaterThanOrEqual(WIDTHS.length * 2);
+  expect(icons, "anti-vacuity: the channel row's logo was read at every width, and it is the only one").toBe(WIDTHS.length);
 
   // (3) The denied banner: the sentence and Dismiss share one centre line from 768 up; on a phone Dismiss stacks full width below.
   for (const w of WIDTHS) {
@@ -420,7 +482,8 @@ test("Fixture panel - the picker lists a channel and a pasted key with their kin
     expect(kinds.some((k) => k.startsWith(en("stream.dest.kind.channel", { platform: STREAM_KIND_BRAND.youtube }))), "the channel row says it is a connected channel").toBe(true);
     expect(kinds.includes(en("stream.dest.kind.key", { platform: STREAM_KIND_BRAND.youtube })), "the pasted row says it is a stream key").toBe(true);
     for (const [i, row] of (await rows.all()).entries()) await expectTappable(row, `picker row ${i} at ${w}`);
-    expect(await expectOfficialIcons(body.getByTestId("stream-target-list"), `picker rows at ${w}`), "both YouTube rows wear the icon").toBe(2);
+    await expectNoYoutubeLogo(body.getByTestId("stream-target-list"), `picker rows at ${w}`);
+    await expect(body.getByTestId("stream-target-list").locator('[data-platform-mark="youtube"]'), `picker rows at ${w}: both YouTube rows wear the neutral tile`).toHaveCount(2);
     await expectNoPageScroll(page, `the open picker at ${w}`);
     await shot(page, `picker-open-${w}`);
 

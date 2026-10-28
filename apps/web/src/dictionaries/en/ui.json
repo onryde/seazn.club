@@ -1384,6 +1384,7 @@
   "streaming.desc": "Where your matches stream to. Every match picks one of these.",
   "streaming.keys.heading": "Stream keys",
   "streaming.youtube.connect": "Connect YouTube",
+  "streaming.youtube.channelLink": "{name} on YouTube",
   "streaming.youtube.channels": "YouTube channels",
   "streaming.youtube.consent.title": "Connect your YouTube channel",
   "streaming.youtube.consent.intro": "Seazn will go live on your channel for each match you stream. You pick the channel after you sign in to Google.",

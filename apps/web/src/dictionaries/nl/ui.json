@@ -1384,6 +1384,7 @@
   "streaming.desc": "Waar je wedstrijden naartoe streamen. Elke wedstrijd kiest er een.",
   "streaming.keys.heading": "Streamsleutels",
   "streaming.youtube.connect": "YouTube koppelen",
+  "streaming.youtube.channelLink": "{name} op YouTube",
   "streaming.youtube.channels": "YouTube-kanalen",
   "streaming.youtube.consent.title": "Koppel je YouTube-kanaal",
   "streaming.youtube.consent.intro": "Seazn gaat voor elke wedstrijd die je streamt live op je kanaal. Je kiest het kanaal nadat je bent ingelogd bij Google.",

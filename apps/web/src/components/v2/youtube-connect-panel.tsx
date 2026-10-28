@@ -22,7 +22,7 @@ import {
   type YoutubeLandingCode, type YoutubePrivacy,
 } from "@/lib/youtube";
 import type { StreamTarget, YoutubeConnectionSaved, YoutubePendingChannels } from "@/server/api-v1/schemas";
-import { PlatformMark } from "./stream-platform-mark";
+import { YoutubeIconLink } from "./youtube-icon";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
 
@@ -445,7 +445,8 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge }: { t: StreamTarge
   return (
     <li data-testid="youtube-channel-row" data-connection-id={y.connectionId} data-target-id={t.id} data-tone={status.tone} className="px-4 py-3">
       <div className="flex items-start gap-3">
-        <PlatformMark kind="youtube" size="md" />
+        {/* The row's mark IS the YouTube logo, and the logo is a link: to this channel on YouTube (owner 2026-10-28). */}
+        <YoutubeIconLink channelId={y.channelId} label={msg("streaming.youtube.channelLink", { name: y.channelTitle })} size="md" />
         <div className="min-w-0 flex-1">
           <p data-testid="youtube-channel-title" className="truncate font-semibold text-slate-900">{y.channelTitle}</p>
           <p data-testid="youtube-channel-meta" className="truncate text-xs text-slate-600">{meta}</p>

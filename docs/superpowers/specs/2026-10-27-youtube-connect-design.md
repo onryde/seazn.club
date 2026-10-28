@@ -183,8 +183,12 @@ The builder re-reads developers.google.com/youtube/terms/developer-policies befo
 - **DP III.E.4:** refresh tokens may be kept as needed. Other stored YouTube data (broadcast ids, video ids,
   titles) **max 30 days, then refreshed or deleted**. In-app revoke ⇒ revoke the token at Google immediately and
   delete stored YouTube data **within 7 days**. Revoke on Google's side ⇒ delete within 30 days.
-- **Branding:** YouTube icon where the API has a presence, never the most prominent element; "YouTube" never in a
-  product name; no implied endorsement.
+- **Branding:** the YouTube icon is the official artwork, unaltered, never the most prominent element; "YouTube" never in a
+  product name; no implied endorsement. **Any logo must be clickable and link back to YouTube content** (owner ruling
+  2026-10-28, from YouTube's branding terms): the icon appears only as (a) a connected channel's row on the Streaming page,
+  linking to `https://www.youtube.com/channel/<channelId>`, and (b) inside the "Watch replay" link when the replay URL is a
+  YouTube URL. Everywhere else a YouTube row/button (picker, pasted-key row, Connect YouTube) wears the neutral platform
+  tile or nothing.
 
 ## 4. Shape of the solution
 
@@ -254,7 +258,7 @@ one open broadcast per key**. Index supporting "open broadcasts whose end may be
 
 ### 6.1 Connect (Directory → Streaming)
 
-1. An editor (owner|admin, as today) taps **Connect YouTube** (YouTube icon, not the dominant element).
+1. An editor (owner|admin, as today) taps **Connect YouTube** (words only: a button is not a link to YouTube, so it carries no logo).
 2. A **consent step** inside Seazn, before Google: visibility (Unlisted preselected; Public; Private), made for
    kids (No preselected), and the required checkbox (D7). Draft wording — final legal text is the owner's:
    > ☐ I confirm this organisation will follow YouTube's **Terms of Service** and **Community Guidelines**, has the
@@ -408,7 +412,7 @@ House bar: mobile-first; 1280 / 768 / 320 with no horizontal scroll; house theme
 string in en/es/fr/nl + `npm run i18n:gen-keys`; `frontend-design` skill in every UI task.
 
 - **Directory → Streaming:** Connect YouTube action beside "Add destination"; the consent step; the channel picker;
-  a destination row: YouTube icon · channel · visibility · status badge (Connected / Reconnect needed / Not enabled
+  a destination row: YouTube icon (a link to the channel on YouTube) · channel · visibility · status badge (Connected / Reconnect needed / Not enabled
   for live); actions Reconnect, Settings (visibility, made-for-kids), Disconnect.
 - **Fixture stream panel:** the destination picker shows API-backed YouTube rows like any other; refusal reasons
   (§6.2) inline with their action; after the match, the YouTube replay link.

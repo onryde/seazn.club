@@ -67,10 +67,11 @@ import { StreamLostCountdown, StreamSessionState, StreamTargetKind, type StreamP
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { resolveStreamTarget, type SavedStreamTarget } from "@/lib/stream-destinations";
 import { STREAM_TARGET_TABLE, STREAM_TARGET_TABLE_ROWS, rowName } from "@/lib/__tests__/_stream-target-table";
-import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
+import { platformName } from "@/components/v2/stream-platform-mark";
+import { YoutubeIcon } from "@/components/v2/youtube-icon";
 import { FixtureDestinationPicker, type FixtureDestinationPickerProps } from "@/components/v2/fixture-destination-picker";
 import { ReplayCopyButton } from "@/components/v2/stream-replay-copy";
-import { STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES } from "@/lib/youtube";
+import { STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeUrl } from "@/lib/youtube";
 import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "@/components/v2/refusal-focus";
 import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
 import QRCode from "qrcode";
@@ -2645,7 +2646,7 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
 
   it("B4 fix round 1 (I-2): the automatic start refused against a connected channel reads the channel's OWN reason — the destination is the one the SERVER resolved (phone.destination) found in the list; Ready and credits-only alike; a pasted key, or a healthy channel, keeps the stored word (the seam: the container hands the body the list, the body hands the strip the destination)", () => {
     const ch = (liveState: NonNullable<StreamTarget["youtube"]>["liveState"]): StreamTarget[] => [
-      { ...TARGETS[0]!, youtube: { connectionId: "c-1", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState, termsOutdated: false, openBroadcasts: 0 } },
+      { ...TARGETS[0]!, youtube: { connectionId: "c-1", channelId: "UC7xK2mQ9rVbN4tLpA1sZ0wE", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState, termsOutdated: false, openBroadcasts: 0 } },
       TARGETS[1]!,
     ];
     const refusedAt = (id: string, refusal: Auto["refusal"]) =>
@@ -4838,7 +4839,7 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
   // all survived). Here the refusal arrives as the REAL `ApiV1Error` the transport throws, the way `apiV1` raises one off the wire.
   describe("T12 fix round 1: a YouTube refusal through the container — in off the wire, and every way out of it", () => {
     const ytView = (over: Partial<NonNullable<StreamTarget["youtube"]>> = {}): NonNullable<StreamTarget["youtube"]> => ({
-      connectionId: "c-1", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0, ...over,
+      connectionId: "c-1", channelId: "UC7xK2mQ9rVbN4tLpA1sZ0wE", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0, ...over,
     });
     /** `t1` as an API-backed YouTube destination (the shared TARGETS' `t1` carries no connection), then the twitch `t2`. */
     const channelList = (y: Partial<NonNullable<StreamTarget["youtube"]>> = {}): StreamTarget[] => [{ ...TARGETS[0]!, youtube: ytView(y) }, TARGETS[1]!];
@@ -6005,19 +6006,21 @@ describe("T12: after a match — the replay row, and the destination's name read
     expect(byTestId(none, "stream-again"), "the card still renders").toBeDefined();
   });
 
-  it("a YouTube destination's replay link wears the official icon INSIDE the link (so the mark is clickable); another platform's does not", () => {
+  it("a YouTube destination's replay link wears the official icon INSIDE the link (so the logo is clickable and leads to YouTube); another platform's does not", () => {
     const yt = byTestId(body({ view: session({ ...ENDED, replayUrl: REPLAY, target: { id: "t1", kind: "youtube", label: "Club" } }), balance: 1 }), "stream-replay")!;
-    const marks = walk(propsOf(yt).children as ReactElement[]).filter((el) => el.type === PlatformMark);
-    expect(marks.map((el) => propsOf(el).kind)).toEqual(["youtube"]);
+    expect(yt.type, "the icon's parent IS the replay anchor").toBe("a");
+    expect(isYoutubeUrl(propsOf(yt).href as string), "the anchor leads to YouTube").toBe(true);
+    const icons = walk(propsOf(yt).children as ReactElement[]).filter((el) => el.type === YoutubeIcon);
+    expect(icons.map((el) => propsOf(el).size)).toEqual(["sm"]);
     const tw = byTestId(body({ view: session({ ...ENDED, replayUrl: "https://www.twitch.tv/videos/1", target: { id: "t2", kind: "twitch", label: "Alt" } }), balance: 1 }), "stream-replay")!;
-    expect(walk(propsOf(tw).children as ReactElement[]).filter((el) => el.type === PlatformMark)).toHaveLength(0);
+    expect(walk(propsOf(tw).children as ReactElement[]).filter((el) => el.type === YoutubeIcon)).toHaveLength(0);
   });
 
   it("m3: the mark follows the LINK, not the destination's kind — a YouTube-kind destination whose club-set replay URL is another site's wears no YouTube icon", () => {
     // `stream_url` is the club's own link when it set one, and nothing overwrites it: a YouTube destination can replay anywhere.
     const marks = (replayUrl: string, kind: "youtube" | "twitch" = "youtube") => {
       const link = byTestId(body({ view: session({ ...ENDED, replayUrl, target: { id: "t1", kind, label: "Club" } }), balance: 1 }), "stream-replay")!;
-      return walk(propsOf(link).children as ReactElement[]).filter((el) => el.type === PlatformMark).length;
+      return walk(propsOf(link).children as ReactElement[]).filter((el) => el.type === YoutubeIcon).length;
     };
     expect(marks("https://www.twitch.tv/videos/1"), "youtube kind, twitch link: no icon").toBe(0);
     expect(marks("https://example.com/vod/1"), "youtube kind, own site: no icon").toBe(0);

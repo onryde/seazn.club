@@ -1384,6 +1384,7 @@
   "streaming.desc": "Où vos matchs sont diffusés. Chaque match choisit l’une de ces destinations.",
   "streaming.keys.heading": "Clés de stream",
   "streaming.youtube.connect": "Connecter YouTube",
+  "streaming.youtube.channelLink": "{name} sur YouTube",
   "streaming.youtube.channels": "Chaînes YouTube",
   "streaming.youtube.consent.title": "Connectez votre chaîne YouTube",
   "streaming.youtube.consent.intro": "Seazn lancera un direct sur votre chaîne pour chaque match que vous diffusez. Vous choisissez la chaîne après vous être connecté à Google.",
