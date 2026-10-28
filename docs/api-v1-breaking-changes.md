@@ -7,6 +7,84 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-28 — the standings export refuses a table with no results
+
+The standings export used to print the newest stage's stored table, even one
+with no rows or one where no result had counted yet. That printed the seed
+list as a ranking, with seed 1 shown first. The export now refuses such a
+table with its own error code.
+
+**What changed.** `GET /api/v1/divisions/{id}/exports/standings` (PDF and
+XLSX):
+
+| Case | Before | Now |
+|---|---|---|
+| No stored table | 404, `error.code` `"NOT_FOUND"` | 404, `error.code` `"STANDINGS_NOT_AVAILABLE"` |
+| Every stored table is empty, or no result has counted in it yet (every row level) | 200, a document with no rows, or with the seed order printed as ranks | 404, `error.code` `"STANDINGS_NOT_AVAILABLE"` |
+| The newest stage's table is empty or has no counted result, and an earlier stage's table has results | 200, the newest stage's table | 200, the newest stage table that has results |
+
+The other export kinds are unchanged.
+
+The same date also fixes the standings export for chess and other
+half-point tables. The `Pts` cell now prints what the public table prints
+(`"1½"`), not the stored half-point count (`3`). In the XLSX it is a text
+cell. Whole-point sports keep a numeric `Pts` cell.
+
+**What replaces it.** Key on the 404 status, or on `error.code`
+`"STANDINGS_NOT_AVAILABLE"`. Do not key on `"NOT_FOUND"`.
+
+**What a consumer sees.** A division with no standings to print returns:
+
+```json
+{ "ok": false, "error": { "code": "STANDINGS_NOT_AVAILABLE", "message": "no standings yet" }, "requestId": "…" }
+```
+
+Key on `error.code`, not on the message text.
+
+**No data migration was required.** The export reads the stored tables as
+they are.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2d (tables and tie-breaks), anti-goal 3 (no row is marked
+first on a table with no results) and RB2B-17 (points print in the table's
+unit on every surface). The pinning tests are in
+`apps/web/src/server/usecases/__tests__/generate-level-table.test.ts`.
+
+## 2026-10-28 — an imported hockey goal must record its type
+
+This extends the 2026-10-27 change below to the bulk import route.
+
+**What changed.** `POST /api/v1/divisions/{id}/events/import` judges every
+event in a stream as a new write. A stream that carries a `hockey.goal`
+(FIH hockey, every variant) with no `payload.kind` was imported and is now
+rejected. Ice hockey and every other sport are unchanged.
+
+**What replaces it.** Send each goal's `kind`, as for
+`POST /api/v1/fixtures/{id}/events`. A client that has no way to know the
+goal's type should send `"fg"`.
+
+**What a consumer sees.** The call still returns 200, because each stream's
+outcome is data. The stream's result is rejected and nothing is written for
+that fixture:
+
+```json
+{ "fixture": "…", "status": "rejected", "eventsAppended": 0, "error": { "code": "import.fold_rejected", "engineCode": "GOAL_KIND_REQUIRED" } }
+```
+
+This refusal carries no `eventIndex`. The other streams in the same call are
+judged on their own.
+
+**No data migration was required.** An import only writes to fixtures with no
+events yet.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2d (tables and tie-breaks), rule HK-TB-2. The pinning test is
+`apps/web/src/server/usecases/__tests__/event-import-dryrun.test.ts`.
+
 ## 2026-10-27 — a hockey goal must record its type
 
 FIH ranks level teams on field goals (GTR Appendix 3), so a hockey table can
