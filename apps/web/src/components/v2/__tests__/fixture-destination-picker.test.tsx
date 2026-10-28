@@ -492,6 +492,47 @@ describe("the picker, driven", () => {
     expect(String(attr(fine.trigger(), "className"))).not.toMatch(/border-red/);
   });
 
+  it("the health badge sits on its OWN line in the name's column, in every open row and on the trigger: a badge BESIDE the name takes the width the name needs (\"Alph...\", \"Bravo Riv...\")", () => {
+    // `deep` flattens the tree, so a sibling and a descendant look alike. Structure needs parents: the element whose DIRECT children
+    // hold the name is the text column, and the badge must live in that column, after the name and the kind line - never beside it.
+    const kidsOf = (el: ReactElement): ReactElement[] => {
+      const raw = typeof el.type === "function" ? expandWithHooks(el.type as (p: unknown) => ReactNode, el.props) : (el.props as { children?: ReactNode }).children;
+      const out: ReactElement[] = [];
+      const visit = (n: ReactNode): void => {
+        if (Array.isArray(n)) return void n.forEach(visit);
+        if (isValidElement(n)) out.push(n);
+      };
+      visit(raw);
+      return out;
+    };
+    const columnOf = (root: ReactElement): ReactElement => {
+      const col = deep(root).find((el) => kidsOf(el).some((k) => attr(k, "data-testid") === "stream-target-name"));
+      expect(col, "the name has a text column").toBeDefined();
+      return col!;
+    };
+    const order = (root: ReactElement, ids: string[]) => ids.map((id) => deep(root).findIndex((el) => attr(el, "data-testid") === id));
+    let checked = 0;
+    const p = mount({ selectedId: "t-bad" });
+    (attr(p.trigger(), "onClick") as () => void)();
+    const subjects = [{ who: "trigger", root: p.trigger() }, ...p.options().map((o) => ({ who: String(attr(o, "data-target-id")), root: o }))];
+    for (const { who, root } of subjects) {
+      const badges = allByTestId(deep(root), "stream-target-health");
+      const wants = who === "trigger" || who === "t-bad" || who === "t-warn";
+      expect(badges.length, `${who}: a badge exactly where the health is not ready`).toBe(wants ? 1 : 0);
+      if (!wants) continue;
+      const column = columnOf(root);
+      expect(allByTestId(deep(column), "stream-target-health"), `${who}: the badge is INSIDE the name's column, not a sibling of it`).toHaveLength(1);
+      const [name, kind, badge] = order(column, ["stream-target-name", "stream-target-kind", "stream-target-health"]);
+      expect(name, `${who}: name found`).toBeGreaterThanOrEqual(0);
+      expect(kind, `${who}: the kind line follows the name`).toBeGreaterThan(name!);
+      expect(badge, `${who}: the badge comes after the kind line`).toBeGreaterThan(kind!);
+      // Nothing between the row and its text column can cap the column's width: no capped wrapper holds a badge beside it.
+      expect(deep(root).filter((el) => /max-w-\[/.test(String(attr(el, "className") ?? ""))), `${who}: no percentage-capped badge wrapper`).toEqual([]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the trigger and both badged rows").toBe(3);
+  });
+
   it("every row is a 44px-plus tap target and the chain truncates: min-h-14 rows, min-w-0 down the chain (a 43-character channel name must not widen the page)", () => {
     const long = "Riverside Basketball Club Official Live Channel 2026";
     const p = mount({ targets: [channel("t-long", long), ...TARGETS] , selectedId: "t-long" });

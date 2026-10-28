@@ -3,7 +3,9 @@
 // <select>, because a native option is plain text and the club needs to see — before it taps Go live — what each destination IS
 // (a YouTube channel it connected, or a pasted stream key) and how it is (a channel that needs reconnecting, one not enabled for
 // live yet). Each row: the platform's mark, the destination's name, a second line saying what kind it is, and — for a connected
-// channel whose health is anything but "ready" — a badge. The selected row says so with a check.
+// channel whose health is anything but "ready" — a badge on a line of its own UNDER them, so the name keeps the whole text column
+// (channels of one club share a long prefix: a badge beside the name cut it to "Alph…" and "Bravo Riv…", even at 768). The selected
+// row says so with a check.
 //
 // Layout only is from the mock (`youtube-ui-options.html`, Option B); everything else is the house theme. The open list is drawn IN
 // FLOW under the trigger, never floated: on a 320 px phone a floating list is clipped by whatever `overflow-hidden` card holds the
@@ -12,8 +14,8 @@
 // Semantics: the W3C "select-only combobox" — the trigger is a <button role="combobox"> that keeps focus, the list is a
 // role="listbox" of role="option"s, and the arrow keys move `aria-activedescendant`. Typing the first letters of a destination's name
 // jumps to it (a buffered prefix match, reset after a pause), as a native <select> did. A visible <label htmlFor={id}> names it (a
-// button is a labelable element). One DOM at every width; the rows are 56 px, past the 44 px tap floor.
-import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+// button is a labelable element). One DOM at every width; the rows are at least 56 px, past the 44 px tap floor.
+import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
 import { Check, ChevronRight } from "lucide-react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
@@ -64,15 +66,20 @@ function HealthBadge({ health }: { health: NonNullable<DestinationRow["health"]>
   );
 }
 
-/** The mark, the name and the kind line — the trigger and every row read the same, so a row IS what the trigger will say once picked. */
-function Identity({ t, row, children }: { t: StreamTarget; row: DestinationRow; children?: ReactNode }) {
+/** The mark, the name, the kind line and — when the channel is not plain ready — the badge on its own line under them: the trigger and
+ *  every row read the same, so a row IS what the trigger will say once picked. */
+function Identity({ t, row }: { t: StreamTarget; row: DestinationRow }) {
   return (
     <>
       <PlatformMark kind={t.kind} size="md" />
       <span className="min-w-0 flex-1 text-left">
         <span data-testid="stream-target-name" title={row.name} className="block truncate text-sm font-semibold text-slate-900">{row.name}</span>
         <span data-testid="stream-target-kind" className="block truncate text-xs text-slate-600">{row.kind}</span>
-        {children}
+        {row.health && (
+          <span className="mt-1 flex">
+            <HealthBadge health={row.health} />
+          </span>
+        )}
       </span>
     </>
   );
@@ -220,13 +227,7 @@ export function FixtureDestinationPicker({ id, targets, selectedId, onSelect, in
         }`}
       >
         {selected && selectedRow ? (
-          <Identity t={selected} row={selectedRow}>
-            {selectedRow.health && (
-              <span className="mt-1 flex">
-                <HealthBadge health={selectedRow.health} />
-              </span>
-            )}
-          </Identity>
+          <Identity t={selected} row={selectedRow} />
         ) : (
           // Nothing picked (the choice was removed on the Streaming page): a prompt, never a destination chosen for them.
           <span data-testid="stream-target-placeholder" className="min-w-0 flex-1 truncate text-left text-slate-600">
@@ -262,11 +263,6 @@ export function FixtureDestinationPicker({ id, targets, selectedId, onSelect, in
                 className={`flex min-h-14 min-w-0 cursor-pointer items-center gap-3 px-3 py-2 ${isSelected ? "bg-purple-50" : i === activeIndex ? "bg-slate-50" : "bg-white"}`}
               >
                 <Identity t={t} row={row} />
-                {row.health && (
-                  <span className="flex max-w-[46%] shrink-0 justify-end">
-                    <HealthBadge health={row.health} />
-                  </span>
-                )}
                 {isSelected && <Check aria-hidden className="h-4 w-4 shrink-0 text-purple-700" strokeWidth={2} />}
               </li>
             );

@@ -511,9 +511,9 @@ test("Fixture panel - each of the six YouTube refusals replaces Go live with its
   expect(checked, "anti-vacuity: all six refusals were driven").toBe(YOUTUBE_REFUSAL_CODES.length);
 });
 
-test("Fixture panel - the picker with channels that are not ready: the badge never crowds the name or the row, at 1280, 768 and 320", async ({ page }) => {
+test("Fixture panel - the picker with channels that are not ready: the badge gets its own line and the name keeps the whole column, at 1280, 768 and 320", async ({ page }) => {
   // Five channels, each in a different health, with realistic long names: the healthy rows of the other tests never put a badge beside a
-  // 40-character name, which is where a 320px row breaks (the badge's 46% cap is what keeps the name readable).
+  // 40-character name, which is where a row breaks (a badge beside the name left "Alph..."; its own line is what keeps the name readable).
   test.setTimeout(budget({ navs: 6 + 5 * 3, acts: 40 + 5 * 8 }));
   const r = await rig(page, { match: true });
   const tag = randomBytes(2).toString("hex");
@@ -550,6 +550,7 @@ test("Fixture panel - the picker with channels that are not ready: the badge nev
   });
   let widthsRead = 0;
   let badgesRead = 0;
+  let geometryRead = 0;
   for (const w of WIDTHS) {
     await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
     const body = await openPhoneTab(page, r);
@@ -567,20 +568,32 @@ test("Fixture panel - the picker with channels that are not ready: the badge nev
         await expect(badge).toHaveAttribute("data-tone", c.tone);
         badgesRead++;
       }
-      // The geometry: the row holds its width, the name keeps a readable share, the badge stays within its 46% cap and never over the name.
-      const box = await row.evaluate((el, hasBadge) => {
+      // The geometry. The badge is a line of its own UNDER the name and kind lines, so the name keeps the row's whole text column: a badge
+      // beside it took 46% of the row and left "Alph..." / "Bravo Riv..." at 768 as well as 320 (the channels share their prefix).
+      // Every number is read off the boxes the browser laid out: the text column is the row's inner width less the mark and the check mark.
+      const box = await row.evaluate((el) => {
+        const rect = (sel: string) => el.querySelector(sel)?.getBoundingClientRect() ?? null;
         const li = el.getBoundingClientRect();
-        const name = el.querySelector('[data-testid="stream-target-name"]')!.getBoundingClientRect();
-        const b = el.querySelector('[data-testid="stream-target-health"]')?.getBoundingClientRect() ?? null;
-        return { rowW: li.width, rowRight: li.right, scrolls: el.scrollWidth > el.clientWidth + 1, nameW: name.width, nameRight: name.right, badgeW: b?.width ?? 0, badgeLeft: b?.left ?? null, badgeRight: b?.right ?? 0, hasBadge };
-      }, c.badge !== null);
+        const css = getComputedStyle(el);
+        const name = rect('[data-testid="stream-target-name"]')!;
+        const kind = rect('[data-testid="stream-target-kind"]')!;
+        const mark = rect("[data-platform-mark]")!;
+        const check = rect("svg.lucide-check");
+        const inner = li.width - parseFloat(css.paddingLeft) - parseFloat(css.paddingRight);
+        const b = rect('[data-testid="stream-target-health"]');
+        return {
+          rowRight: li.right, scrolls: el.scrollWidth > el.clientWidth + 1, nameW: name.width, nameBottom: name.bottom, kindBottom: kind.bottom,
+          column: inner - mark.width - (check?.width ?? 0), badgeTop: b?.top ?? null, badgeRight: b?.right ?? 0,
+        };
+      });
       expect(box.scrolls, `${c.title} at ${w}: the row's content fits the row`).toBe(false);
-      expect(box.nameW, `${c.title} at ${w}: the name keeps room (${Math.round(box.nameW)}px)`).toBeGreaterThan(40);
-      if (box.badgeLeft !== null) {
-        expect(box.badgeW, `${c.title} at ${w}: the badge is within 46% of the row (${Math.round(box.badgeW)} of ${Math.round(box.rowW)}px)`).toBeLessThanOrEqual(box.rowW * 0.46 + 1);
-        expect(box.nameRight, `${c.title} at ${w}: the badge never paints over the name`).toBeLessThanOrEqual(box.badgeLeft + 1);
+      expect(box.nameW, `${c.title} at ${w}: the name keeps the text column (${Math.round(box.nameW)} of ${Math.round(box.column)}px)`).toBeGreaterThanOrEqual(box.column * 0.7);
+      if (box.badgeTop !== null) {
+        expect(box.badgeTop, `${c.title} at ${w}: the badge is a line of its own, under the name`).toBeGreaterThanOrEqual(box.nameBottom - 1);
+        expect(box.badgeTop, `${c.title} at ${w}: ... and under the kind line`).toBeGreaterThanOrEqual(box.kindBottom - 1);
         expect(box.badgeRight, `${c.title} at ${w}: the badge stays inside the row`).toBeLessThanOrEqual(box.rowRight + 1);
       }
+      geometryRead++;
       await expectTappable(row, `${c.title} row at ${w}`);
     }
     await expectNoPageScroll(page, `the open picker with unhealthy channels at ${w}`);
@@ -595,6 +608,7 @@ test("Fixture panel - the picker with channels that are not ready: the badge nev
   }
   expect(widthsRead, "anti-vacuity: every width was walked").toBe(WIDTHS.length);
   expect(badgesRead, "anti-vacuity: four badged channels were read at every width").toBe(WIDTHS.length * 4);
+  expect(geometryRead, "anti-vacuity: every row (badged or ready) was measured at every width").toBe(WIDTHS.length * channels.length);
 });
 
 test("Fixture panel - after a match: the replay row shows when it ran, Watch replay wears the icon, Copy link copies, at 1280, 768 and 320", async ({ page, context }) => {
