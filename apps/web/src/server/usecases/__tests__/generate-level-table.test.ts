@@ -828,15 +828,16 @@ describe.skipIf(!HAS_DB)("W2d follow-up (m3, m8) — the organiser export and th
 
   it("review m3: every standings header prints in the org's language, through the public table's own dictionary keys (en, es, fr, nl)", async () => {
     // single-sport: IIHF ice hockey carries every kind of standings column at once (#, Team, the split result columns,
-    // keyed metrics, a notation metric, Pts); the header set of every sport is the same lookup (`columnHeader`).
+    // keyed metrics, Pts); the header set of every sport is the same lookup (`columnHeader`), swept per sport in
+    // export-every-pool.test.ts.
     const s = await scene({ sport: "icehockey", variant: "iihf", entrants: 2 });
     const [e1, e2] = s.entrants as [string, string];
     await generateStageFixtures(s.auth, s.stageId);
     await startDivision(s.auth, s.divisionId);
     await hockeyGame(s, e1, e2, "regulation");
     // The public table's keys, typed here (standings-view.ts STRUCTURAL_ABBR_KEYS / METRIC_HEADER_KEYS, standings-table-view's
-    // `table.team`): ice hockey's table ledger is GF, GA, GD and PIM — PIM has no translation, it is the sport's notation
-    // and prints as the module labels it in every locale, as on the public table. `#` is a glyph.
+    // `table.team`): ice hockey's displayed metrics are GF, GA and GD. PIM is a hidden ledger metric (`display: false`): the
+    // public table never shows it, and since export every pool (2026-10-28) neither does the export. `#` is a glyph.
     const KEYS = ["table.team", "table.abbr.played", "table.abbr.won", "table.abbr.otw", "table.abbr.otl", "table.abbr.drawn",
       "table.abbr.lost", "table.abbr.gf", "table.abbr.ga", "table.abbr.gd"] as const;
     const headers: Record<string, string[]> = {};
@@ -844,7 +845,7 @@ describe.skipIf(!HAS_DB)("W2d follow-up (m3, m8) — the organiser export and th
       await sql`update organizations set default_locale = ${locale} where id = ${s.auth.orgId}`;
       const { columns } = await exportedTable(s);
       const dict = await getDictionary(locale, "public");
-      expect(columns, `${locale}: the export's header`).toEqual(["#", ...KEYS.map((k) => t(dict, k)), "PIM", t(dict, "table.abbr.points")]);
+      expect(columns, `${locale}: the export's header`).toEqual(["#", ...KEYS.map((k) => t(dict, k)), t(dict, "table.abbr.points")]);
       headers[locale] = columns;
     }
     // The positive pair: the words do change with the locale (a lookup that ignored it would pass the four above only
