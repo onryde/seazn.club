@@ -657,6 +657,33 @@ describe("CK-RR-1 net run rate under DLS or revised overs (ICC 16.10.7, RB2A-20,
     const wrong = rankStandings(foldResults(["P", "Q", "R", "S"], asPlayed), { cascade, results: asPlayed }).rows;
     expect(wrong.map((r) => r.entrantId)).toEqual(["P", "R", "S", "Q"]);
   });
+
+  it("CK-RR-1 a revision during Team 1's innings, chase completed (R2 > R1): Team 1 is credited target−1, more than it scored", () => {
+    // ODI, DLS on. H is 120/2 after 30 overs when the match is cut to 40 overs a side, and ends 190/6 off its 40.
+    // R1 = 100 − (res(20 left, 2 down) − res(10 left, 2 down)) = 100 − (52.4 − 30.8) = 78.4; R2 = res(40, 0) = 89.3.
+    // R2 > R1, so the Standard Edition adds G50 (245) for the extra resources: T = ⌊190 + 245 × (89.3 − 78.4)/100⌋ + 1
+    // = ⌊216.705⌋ + 1 = 217. A gets there, 217/4 off 200 balls, and wins by 6 wickets. ICC 16.10.7, DLS applied at an
+    // earlier point: H is credited 217 − 1 = 216 off A's 40 allocated overs (240 balls), 26 more than the 190 it scored.
+    expect(dlsTarget(190, 78.4, 89.3), "the engine's declaration agrees with the table arithmetic").toBe(217);
+    const target = 217;
+    const c: NrrCase = {
+      name: "a revision during Team 1's innings, chase completed",
+      cfg: ODI_DLS,
+      events: [
+        ["core.start"],
+        summary(120, 2, 180, true),
+        ["cricket.revise", { oversPerSide: 40 }],
+        summary(190, 6, 240),
+        summary(217, 4, 200),
+      ],
+      outcome: { kind: "win", winner: "A", method: "dls" },
+      margin: { kind: "wickets", value: 6 },
+      credit: [{ runs: target - 1, balls: 40 * 6 }, { runs: 217, balls: 200 }],
+      played: [{ runs: 190, balls: 240 }, { runs: 217, balls: 200 }],
+    };
+    expect(c.credit[0].runs, "premise: Team 1 is credited more than it scored").toBeGreaterThan(c.played![0].runs);
+    expect(checkCases([c])).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

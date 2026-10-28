@@ -4020,10 +4020,11 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   // spec §2.4/§2.6 — integer NRR ledger; NRR itself is computed at rank time
   // from these integers (never stored as a float).
   standingsDelta(outcome, cfg, _ctx: StageCtx, state): [StandingsDelta, StandingsDelta] {
-    // spec §2.4 — a bowled-out side is charged its full quota; W2e T8 (CK-RR-1) — a DLS or revised-overs match credits
-    // ICC 16.10.7's operands. Both are `nrrCredits`'.
-    const credits = nrrCredits(state);
+    // The played ledger, from `nrrCredits`, which holds both rules: a bowled-out side is charged its full quota (spec §2.4),
+    // and a DLS or revised-overs match credits ICC 16.10.7's operands (W2e T8, CK-RR-1). Built only for a result decided
+    // on the field (a win or a tie); a forfeit, a draw and a no result start from the zeroed ledger below.
     const ledger = (side: Side): Record<string, number> => {
+      const credits = nrrCredits(state);
       let runsFor = 0;
       let ballsFaced = 0;
       let runsAgainst = 0;
