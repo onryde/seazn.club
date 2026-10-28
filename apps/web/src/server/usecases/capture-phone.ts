@@ -13,6 +13,7 @@ import { hasFeature } from "@/lib/entitlements";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { DEVICE_LINK_MINT_LIMIT, rateLimit } from "@/lib/rate-limit";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
+import { isYoutubeRefusalCode, YOUTUBE_REFUSAL_REMEDY } from "@/lib/youtube";
 import { captureError } from "@/lib/sentry";
 import { getDictionary, t, toLocale } from "@/lib/i18n";
 import { OVERLAY_KEY_PARAM } from "@/lib/realtime-purpose";
@@ -683,6 +684,15 @@ const noDestination = (why: string): CaptureRefusalError => new CaptureRefusalEr
 export function phoneStartRefusal(err: unknown): CaptureRefusalError | { alreadyLive: string | null } | null {
   if (err instanceof PaymentRequiredError) return new CaptureRefusalError(403, "not_entitled", `the plan lacks ${err.featureKey}`);
   if (!(err instanceof HttpError)) return null;
+  // YouTube Connect T11 (fix round 1, I-2): an API-backed pre-pick's Go live can be refused by YouTube or by the channel's pool
+  // (prepare.ts) — read from the ONE declaration, before the switch and before any status is looked at: youtube_limit_reached
+  // carries 429, which the route would otherwise answer as Seazn's own rate_limited. The organiser fixes the destination, or the
+  // phone tries again.
+  if (isYoutubeRefusalCode(err.code)) {
+    return YOUTUBE_REFUSAL_REMEDY[err.code] === "fix_destination"
+      ? noDestination(`the picked YouTube destination cannot go live: ${err.code}`)
+      : new CaptureRefusalError(503, "unavailable", `the stream cannot start: ${err.code}`);
+  }
   switch (err.code) {
     case "overlay_required": return new CaptureRefusalError(403, "not_entitled", "phone streaming needs the overlay tier");
     case "active_session": {

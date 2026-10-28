@@ -26,6 +26,23 @@ export const YOUTUBE_REFUSAL_CODES = [
 ] as const;
 export type YoutubeRefusalCode = (typeof YOUTUBE_REFUSAL_CODES)[number];
 
+export const isYoutubeRefusalCode = (c: unknown): c is YoutubeRefusalCode => (YOUTUBE_REFUSAL_CODES as readonly unknown[]).includes(c);
+
+/** Who can act on a refused Go live, for the surfaces whose vocabulary is smaller than the organiser's panel: the phone's own
+ *  start (capture QR v2 §6.7.2) and the automatic start (§7.2). `fix_destination`: the club changes something about its YouTube
+ *  destination (reconnect the channel, enable live streaming, a channel YouTube blocked), so the phone says `no_destination` and the
+ *  column stores `no_destination`. `retry`: nothing the club changes in the destination (YouTube's quota, the channel's ten-stream
+ *  cap, YouTube not answering), so both say `unavailable` and a retry may succeed. A Record over the declaration, so a new code does
+ *  not compile until it is placed. */
+export const YOUTUBE_REFUSAL_REMEDY: Record<YoutubeRefusalCode, "fix_destination" | "retry"> = {
+  youtube_reconnect_needed: "fix_destination",
+  youtube_live_not_enabled: "fix_destination",
+  youtube_live_blocked: "fix_destination",
+  youtube_limit_reached: "retry",
+  youtube_channel_busy: "retry",
+  youtube_unavailable: "retry",
+};
+
 /** The replay link for a broadcast: a YouTube broadcast id is also the id of its video. */
 export const youtubeWatchUrl = (videoId: string): string => `https://www.youtube.com/watch?v=${videoId}`;
 

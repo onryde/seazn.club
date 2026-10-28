@@ -13,9 +13,14 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { randomBytes, randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
+import { YOUTUBE_REFUSAL_CODES, type YoutubeRefusalCode } from "@/lib/youtube";
 import { CaptureRefusalError, captureRefusal } from "@/server/api-v1/capture-http";
 import { CaptureBeat, CaptureRefusal, CaptureStartOk } from "@/server/api-v1/capture-schemas";
 import { spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
+import { connect as connectChannel } from "@/server/youtube/__tests__/_connect-rig";
+import { FakeYouTube } from "@/server/youtube/fake";
+import { youtubeRefusal } from "@/server/youtube/prepare";
+import { markReconnectNeeded } from "@/server/youtube/token-store";
 import { phoneStartRefusal, postBeat, postStart } from "../capture-phone";
 import { reissueStreamCode, saveStreamSettings } from "../stream-codes";
 import { createSession } from "../stream-sessions";
@@ -128,6 +133,32 @@ describe("phoneStartRefusal — §6.7.2's table, every internal refusal (pure)",
     expect(() => phoneStartRefusal(err)).toThrow(/answered composed_unavailable to a phone start/);
     // The positive pair: the ingest's own 503 on the same status IS mapped — the guard is on the code, not the status.
     expect(phoneStartRefusal(new HttpError(503, "x", "ingest_unavailable"))).toMatchObject({ status: 503, code: "unavailable" });
+  });
+
+  it("YouTube Connect T11 fix round 1 (I-2): EVERY refusal an API-backed Go live can meet (YOUTUBE_REFUSAL_CODES) is a mapped phone answer — the organiser fixes the destination (409 no_destination) or the phone tries again (503 unavailable); never null (an unmapped 503 logged to Sentry), never Seazn's own 429 rate_limited; checked === the declaration's length", () => {
+    // §6.7.2's vocabulary has two words that fit. Typed from the spec, and exhaustive over the declaration at compile time.
+    const WANT: Record<YoutubeRefusalCode, { status: number; code: string }> = {
+      youtube_reconnect_needed: { status: 409, code: "no_destination" },   // the club reconnects its channel
+      youtube_live_not_enabled: { status: 409, code: "no_destination" },   // the club enables live streaming on the channel
+      youtube_live_blocked: { status: 409, code: "no_destination" },       // YouTube blocked the channel from streaming
+      youtube_limit_reached: { status: 503, code: "unavailable" },         // YouTube's quota: nothing the club changes
+      youtube_channel_busy: { status: 503, code: "unavailable" },          // the channel's ten live streams are in use
+      youtube_unavailable: { status: 503, code: "unavailable" },           // YouTube is not answering
+    };
+    expect(Object.keys(WANT).sort(), "the table names exactly the declared codes").toEqual([...YOUTUBE_REFUSAL_CODES].sort());
+    let checked = 0;
+    for (const code of YOUTUBE_REFUSAL_CODES) {
+      const got = phoneStartRefusal(youtubeRefusal(code, randomUUID()));   // built by prepare's own producer: youtube_limit_reached carries status 429
+      expect(got, `${code}: mapped, not null`).toBeInstanceOf(CaptureRefusalError);
+      expect({ status: (got as CaptureRefusalError).status, code: (got as CaptureRefusalError).code }, code).toEqual(WANT[code]);
+      expect((got as CaptureRefusalError).extras, code).toBeUndefined();
+      checked++;
+    }
+    expect(checked).toBe(YOUTUBE_REFUSAL_CODES.length);
+    expect(checked, "anti-vacuity").toBeGreaterThan(0);
+    expect(new Set(Object.values(WANT).map((w) => w.code)).size, "the table has both answers, so a constant mapping cannot pass").toBe(2);
+    // The positive pair: a 429 that is NOT a YouTube refusal is still not a phone refusal (the route's own rate_limited answers it).
+    expect(phoneStartRefusal(new HttpError(429, "slow down"))).toBeNull();
   });
 
   it("anything else is NOT a phone refusal (null: the caller rethrows it, a logged 500)", () => {
@@ -312,5 +343,54 @@ describe.skipIf(!HAS_DB)("postStart — the phone's own start (§6.3.4, T12–T1
 
   it("anti-vacuity: this file asserted raw refusal bodies", () => {
     expect(refusalsChecked).toBeGreaterThan(10);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// YouTube Connect T11 fix round 1 (I-2): the phone's own start reaches startBroadcast, so the refusals an API-backed destination
+// can meet (prepare.ts, through the real producer — a FakeYouTube and the real connect save) must come out as the phone's own
+// answers. Before the fix they were unmapped: 503 `unavailable` logged to Sentry, and youtube_limit_reached (status 429)
+// became Seazn's own `rate_limited`.
+describe.skipIf(!HAS_DB)("postStart on an API-backed pre-pick — a YouTube refusal is the phone's own refusal (T11 fix round 1, I-2)", () => {
+  const prevKek = process.env.YOUTUBE_TOKEN_KEK;
+  beforeAll(() => { process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex"); });
+  afterAll(() => { if (prevKek === undefined) delete process.env.YOUTUBE_TOKEN_KEK; else process.env.YOUTUBE_TOKEN_KEK = prevKek; });
+
+  /** A ready rig whose pre-pick is a connected channel's API destination, streaming through its own FakeYouTube. */
+  async function apiReady() {
+    const { r, A } = await ready({ credits: 1 });
+    await spendMonthlyStreamGrant(r.auth.orgId);
+    const yt = await connectChannel({ auth: r.auth, orgId: r.auth.orgId, userId: r.auth.userId! });
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: yt.targetId });
+    const fake = new FakeYouTube({ now: r.now });
+    r.deps.youtube = fake;
+    return { r, A, yt, fake };
+  }
+
+  it("a dead grant (connection reconnect_needed) → 409 no_destination, nothing written, YouTube asked nothing; positive pair: a healthy channel's start is admitted on its broadcast", async () => {
+    const dead = await apiReady();
+    await markReconnectNeeded(sql, dead.r.auth.orgId, dead.yt.connectionId);
+    const out = await refused(start(dead.r, dead.A));
+    expect(out).toEqual({ status: 409, body: { code: "no_destination", message: expect.any(String) } });
+    expect(await sessionsOf(dead.r.fixtureId)).toEqual([]);
+    expect(dead.fake.calls, "YouTube was asked nothing").toEqual([]);
+
+    const ok = await apiReady();
+    const { sid } = await start(ok.r, ok.A);
+    const [s] = await sql<{ api_backed: boolean; youtube_broadcast_id: string | null }[]>`
+      select api_backed, youtube_broadcast_id from fixture_stream_sessions where id = ${sid}`;
+    expect(s!.api_backed).toBe(true);
+    expect(s!.youtube_broadcast_id, "the session names its broadcast").not.toBeNull();
+  });
+
+  it("YouTube's quota (youtube_limit_reached, status 429) → 503 unavailable, NEVER rate_limited; nothing written or left at YouTube; the phone's retry is admitted", async () => {
+    const { r, A, fake } = await apiReady();
+    fake.failNext("bind", "youtube_limit_reached");
+    const out = await refused(start(r, A));
+    expect(out).toEqual({ status: 503, body: { code: "unavailable", message: expect.any(String) } });
+    expect(await sessionsOf(r.fixtureId)).toEqual([]);
+    expect(fake.broadcastsCount(), "the refused attempt left nothing at YouTube").toBe(0);
+    const { sid } = await start(r, A);
+    expect((await sessionsOf(r.fixtureId)).map((s) => s.id)).toEqual([sid]);
   });
 });
