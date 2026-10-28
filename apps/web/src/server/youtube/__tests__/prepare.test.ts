@@ -531,9 +531,12 @@ describe.skipIf(!HAS_DB)("the key pool's reuse guard (post-T3 amendment): a key 
         clear: (sid) => sql`update fixture_stream_sessions set output_released_at = now() where id = ${sid}`,
       },
       {
-        name: "a composed runner not confirmed gone",
-        hold: (sid) => sql`update fixture_stream_sessions set mode = 'composed', runner_state = 'destroyed', runner_gone_confirmed_at = null where id = ${sid}`,
-        clear: (sid) => sql`update fixture_stream_sessions set runner_gone_confirmed_at = now() where id = ${sid}`,
+        // F1 (controller ruling, fix round 1): the runner never holds the YouTube key itself — the Cloudflare output does, and
+        // the case above covers it in both modes. A runner still UP is held as defence in depth; one torn down ('destroyed')
+        // frees the key at once, its gone-confirmation (relay-sweep's daily 04 UTC) NOT awaited.
+        name: "a composed runner still up",
+        hold: (sid) => sql`update fixture_stream_sessions set mode = 'composed', runner_state = 'playing', runner_gone_confirmed_at = null where id = ${sid}`,
+        clear: (sid) => sql`update fixture_stream_sessions set runner_state = 'destroyed', runner_gone_confirmed_at = null where id = ${sid}`,
       },
     ];
     let checked = 0;
@@ -555,6 +558,39 @@ describe.skipIf(!HAS_DB)("the key pool's reuse guard (post-T3 amendment): a key 
     }
     expect(checked).toBe(2);
   });
+
+  it("F1: a composed session's runner holds its key in every runner state but the torn-down two (none, destroyed — gone-confirmation NOT awaited); swept from the schema's own check (checked === every state)", async () => {
+    // The states: V410's check on fixture_stream_sessions.runner_state, read from the database, so a new state joins the sweep.
+    const [{ def }] = await sql<{ def: string }[]>`
+      select pg_get_constraintdef(oid) as def from pg_constraint
+       where conrelid = 'fixture_stream_sessions'::regclass and contype = 'c' and pg_get_constraintdef(oid) like '%runner_state%'`;
+    const states = [...def!.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]!);
+    // The ruling's torn-down set (task-10-fix-1 F1): free. Every other state is a runner not torn down: held.
+    const FREE = new Set(["none", "destroyed"]);
+    expect(states).toEqual(expect.arrayContaining([...FREE]));
+    expect(states.length).toBeGreaterThan(FREE.size);   // both directions are reachable
+    const w = await world(states.length * 2);
+    let checked = 0;
+    let held = 0;
+    for (const [i, state] of states.entries()) {
+      const A = await goLive(w, w.fixtures[2 * i]!);
+      await stop(A.sessionId, minutesAfter(new Date(), -10));
+      await sql`update fixture_stream_sessions set mode = 'composed', runner_state = ${state}, runner_gone_confirmed_at = null where id = ${A.sessionId}`;
+      await complete(A.p.broadcastId);
+      const B = await must(prep(w, w.fixtures[2 * i + 1]!));
+      expect(B.keyId === A.p.keyId, `runner_state ${state}`).toBe(FREE.has(state));
+      if (!FREE.has(state)) held++;
+      // Leave the pool as it was: B's broadcast ends, A's runner is gone, and both are gone at YouTube too (the fake allows a
+      // key three open broadcasts; T14's end step is not built).
+      await complete(B.broadcastId);
+      await sql`update fixture_stream_sessions set runner_state = 'none' where id = ${A.sessionId}`;
+      const at = await w.fake.accessToken(w.token);
+      for (const id of [A.p.broadcastId, B.broadcastId]) await w.fake.deleteBroadcast(at, (await row(id)).yt_broadcast_id!);
+      checked++;
+    }
+    expect(checked).toBe(states.length);
+    expect(held).toBe(states.length - FREE.size);
+  });
 });
 
 describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — refusals (spec §6.2 D6 table, R3)", () => {
@@ -565,6 +601,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — refusals (spec §6.2 D6 ta
     // insertBroadcast case pools a key; insertBroadcast and bind then use that free key.
     const steps = ["accessToken", "insertStream", "insertBroadcast", "bind"] as const;
     let checked = 0;
+    let flipped = 0;
     for (const step of steps) {
       for (const code of YOUTUBE_CODES) {
         const calledBefore = callsOf(w.fake, step);
@@ -586,15 +623,105 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — refusals (spec §6.2 D6 ta
         }
         expect(w.fake.liveBroadcastCount(), label).toBe(0);
         expect(w.fake.broadcastsCount(), label).toBe(0);   // no orphan 'upcoming' left at YouTube
+        // F5 (spec §6.2 D6, plan T14's same rule): a reconnect refusal at ANY step moves the connection to reconnect_needed, so
+        // the Streaming page shows Reconnect; every other refusal leaves it connected. Put back, so the next case reaches its step.
+        const [c] = await sql<{ status: string }[]>`select status from org_youtube_connections where id = ${w.connectionId}`;
+        expect(c!.status, label).toBe(code === "youtube_reconnect_needed" ? "reconnect_needed" : "connected");
+        if (c!.status !== "connected") {
+          flipped++;
+          await sql`update org_youtube_connections set status = 'connected', status_since = now(), last_error_code = null where id = ${w.connectionId}`;
+        }
         checked++;
       }
     }
     expect(checked).toBe(20);
+    expect(flipped).toBe(steps.length);   // one reconnect case per step, each one flipped
     // The bind cases deleted what insertBroadcast made: 5 inserted, 5 deleted.
     expect(callsOf(w.fake, "deleteBroadcast")).toBe(5);
     // Positive pair: with no failure queued the same fixture goes ahead.
     expect((await must(prep(w, f))).reused).toBe(false);
     expect(w.fake.broadcastsCount()).toBe(1);
+  });
+
+  it("F2: a pooled liveStream deleted at YouTube → bind's liveStreamNotFound RETIRES that key (503 this once); the next Go live grows a new key in the freed slot and binds; positive pair: other bind refusals retire nothing", async () => {
+    const w = await world(2);
+    const [f1, f2] = w.fixtures as [string, string];
+    const retiredAt = async (keyId: string) =>
+      (await sql<{ retired_at: Date | null }[]>`select retired_at from youtube_stream_keys where id = ${keyId}`)[0]!.retired_at;
+    // A key in the pool, free again: f1's broadcast made and ended (gone at YouTube too).
+    const A = await must(prep(w, f1));
+    await complete(A.broadcastId);
+    const at = await w.fake.accessToken(w.token);
+    await w.fake.deleteBroadcast(at, (await row(A.broadcastId)).yt_broadcast_id!);
+    const K = await keyOf(A.keyId);
+    // Positive pair first: a bind refusal that does not say the STREAM is gone leaves the key pooled (checked === 2).
+    const others: [YoutubeErrorCode, string][] = [["youtube_unavailable", "backendError"], ["youtube_not_found", "liveBroadcastNotFound"]];
+    let checked = 0;
+    for (const [code, reason] of others) {
+      w.fake.failNext("bind", code, reason);
+      expect((await refusal(prep(w, f2))).code, reason).toBe("youtube_unavailable");
+      expect(await retiredAt(A.keyId), reason).toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
+
+    // The club deletes the stream key in YouTube Studio.
+    await w.fake.deleteStream(at, K.live_stream_id);
+    const grown = callsOf(w.fake, "insertStream");
+    const err = await refusal(prep(w, f2));
+    expect(err).toMatchObject({ status: 503, code: "youtube_unavailable", extra: { connectionId: w.connectionId } });
+    expect(await retiredAt(A.keyId)).not.toBeNull();
+    expect(callsOf(w.fake, "insertStream")).toBe(grown);   // the refused prepare grew nothing
+    expect(await openCount(f2)).toBe(0);
+
+    // The next Go live: no free key (the only one is retired) → a new liveStream, pooled in the retired key's slot, bound.
+    const B = await must(prep(w, f2));
+    expect(B.keyId).not.toBe(A.keyId);
+    expect(callsOf(w.fake, "insertStream")).toBe(grown + 1);
+    const KB = await keyOf(B.keyId);
+    expect(KB.slot).toBe(K.slot);
+    expect(KB.live_stream_id).not.toBe(K.live_stream_id);
+    expect((await row(B.broadcastId)).state).toBe("bound");
+    expect(w.fake.inspectBroadcast((await row(B.broadcastId)).yt_broadcast_id!)?.streamId).toBe(KB.live_stream_id);
+    // The retired key stays out of the pool: one live key on the channel.
+    const [{ n }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from youtube_stream_keys where connection_id = ${w.connectionId} and retired_at is null`;
+    expect(n).toBe(1);
+  });
+
+  it("F5: a DEAD GRANT at Go live (the refresh token refused, invalidGrant) marks the connection reconnect_needed before refusing; the next Go live refuses before any port call; negative pair: a transient refusal leaves it connected", async () => {
+    const w = await world();
+    const f = w.fixtures[0]!;
+    const conn = async () =>
+      (await sql<{ status: string; status_since: Date; last_error_code: string | null }[]>`
+        select status, status_since, last_error_code from org_youtube_connections where id = ${w.connectionId}`)[0]!;
+    // Negative pair first: YouTube's limit and YouTube not answering are not the club's grant (checked === 2).
+    const transient: YoutubeErrorCode[] = ["youtube_limit_reached", "youtube_unavailable"];
+    let checked = 0;
+    for (const code of transient) {
+      w.fake.failNext("accessToken", code);
+      expect((await refusal(prep(w, f))).code, code).toBe(code);
+      expect((await conn()).status, code).toBe("connected");
+      checked++;
+    }
+    expect(checked).toBe(2);
+    await sql`update org_youtube_connections set status_since = now() - interval '2 days' where id = ${w.connectionId}`;
+    const before = await conn();
+
+    // The club revoked Seazn's access at Google: the refresh token is dead (the fake answers invalidGrant, as Google does).
+    w.fake.killToken(w.token);
+    const err = await refusal(prep(w, f));
+    expect(err).toMatchObject({ status: 409, code: "youtube_reconnect_needed", extra: { connectionId: w.connectionId } });
+    const after = await conn();
+    expect(after.status).toBe("reconnect_needed");
+    expect(after.last_error_code).toBe("youtube_reconnect_needed");
+    expect(after.status_since.getTime(), "status_since is now, not two days ago").toBeGreaterThan(before.status_since.getTime() + 24 * 3600 * 1000);
+    expect(await rowsOf(f)).toHaveLength(0);
+
+    // SEQUENCE: the next Go live meets the status, before any port call.
+    const calls = w.fake.calls.length;
+    expect((await refusal(prep(w, f))).code).toBe("youtube_reconnect_needed");
+    expect(w.fake.calls.length).toBe(calls);
   });
 
   it("a connection in reconnect_needed → youtube_reconnect_needed before any port call; positive pair: connected → goes ahead", async () => {

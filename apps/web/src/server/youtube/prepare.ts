@@ -5,7 +5,8 @@ import "server-only";
 // whose admission was refused.
 //
 //   1. The connection, reached from the destination row (`org_stream_targets.youtube_connection_id`). Not `connected` →
-//      youtube_reconnect_needed, before any port call. An access token from the sealed refresh token (in memory only).
+//      youtube_reconnect_needed, before any port call. An access token from the sealed refresh token (in memory only). A
+//      `youtube_reconnect_needed` from ANY port call (a dead grant) moves the connection to reconnect_needed first (F5).
 //   2. A short transaction: the fixture's OPEN broadcast (`created|bound|live|reserved`; `ending` is never selected, so a claimed
 //      row is never reused), locked `for update` (no skip). A reservation not yet lapsed is another Go live mid-admission →
 //      the existing `active_session` 409. Otherwise its end rule decides (end-rule.ts, read through THIS transaction under the
@@ -17,7 +18,8 @@ import "server-only";
 //      retries the pick once (P3). Ten live and none free → youtube_channel_busy, no row written. A 23505 on the fixture's
 //      one-open index (a concurrent admission's row) → step 2 again: reuse it (R3).
 //   4. Outside every transaction: insert the broadcast, write its id, bind it, mark the row `bound`. Any port refusal deletes
-//      at YouTube what was made, fails the row with the code, and refuses with that code.
+//      at YouTube what was made, fails the row with the code, and refuses with that code. A bind answered `liveStreamNotFound`
+//      (the key's liveStream deleted at YouTube) also retires that key, so the next Go live grows a fresh one (F2).
 //
 // LOCKS (global-constraints): no row or advisory lock is held across a port call — each transaction above commits before the
 // next YouTube call (the prepare tests probe every call with `for update nowait`).
@@ -37,7 +39,7 @@ import { insertPooledKey } from "@/server/relay/secret-columns";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts, type EndFacts } from "./end-rule";
 import { YouTubeError, type YouTubePort } from "./port";
 import { broadcastDescription, broadcastTitle } from "./title";
-import { YoutubeTokenUnreadableError, openToken } from "./token-store";
+import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken } from "./token-store";
 
 export type Prepared = { broadcastId: string; reused: boolean; keyId: string };
 
@@ -156,7 +158,21 @@ async function accessTokenFor(orgId: string, connectionId: string, port: YouTube
   try {
     return await viaPort(() => port.accessToken(refresh));
   } catch (err) {
+    await markIfGrantDead(err, orgId, connectionId);
     throw youtubeRefusal(refusalCodeOf(err) ?? "youtube_unavailable", connectionId);
+  }
+}
+
+/** A port call YouTube refused `youtube_reconnect_needed` (the grant is dead or lacks a scope: refresh `invalid_grant`, a 401,
+ *  insufficient permissions) is the club's to fix by reconnecting: the connection moves to reconnect_needed (F5, spec §6.2 D6),
+ *  so the Streaming page shows Reconnect and the next Go live refuses before calling YouTube. Only the port's own error moves
+ *  it — this file's refusals of the same code already read the status. Best effort: the refusal stands either way. */
+async function markIfGrantDead(err: unknown, orgId: string, connectionId: string): Promise<void> {
+  if (!(err instanceof YouTubeError && err.code === "youtube_reconnect_needed")) return;
+  try {
+    await markReconnectNeeded(sql, orgId, connectionId);
+  } catch (e) {
+    captureError(e, { orgId, route: "youtube.prepare.mark_reconnect", extra: { connectionId } });
   }
 }
 
@@ -256,9 +272,11 @@ async function lockConnection(tx: Tx, ctx: Ctx): Promise<void> {
 }
 
 /** The lowest-slot key of this connection that is FREE: not retired, no open broadcast on it (`ending` included), and — the
- *  post-T3 amendment — no session that used it may still be publishing to it: an output recorded and not released, or a
- *  composed runner not confirmed gone (the predicate stream-sessions.ts `tearDownPriorMachines` selects on). Either would make a
- *  reuse put two publishers on one key. */
+ *  post-T3 amendment — no session that used it may still be publishing to it: a Cloudflare output recorded and not released
+ *  (the one publisher to the key, in BOTH modes), or — defence in depth (fix round 1, F1) — a composed runner not yet torn
+ *  down (any state but `none` and `destroyed`). The runner never holds the key itself, so its gone-CONFIRMATION (relay-sweep's
+ *  daily pass) is not awaited: waiting on it held every composed key until the next day, and the channel's 11th composed match
+ *  of the day refused. Either live publisher would make a reuse put two publishers on one key. */
 async function freeKey(tx: Tx, ctx: Ctx): Promise<string | null> {
   const [k] = await tx<{ id: string }[]>`
     select k.id from youtube_stream_keys k
@@ -269,8 +287,7 @@ async function freeKey(tx: Tx, ctx: Ctx): Promise<string | null> {
            join fixture_stream_sessions s on s.youtube_broadcast_id = b.id
           where b.key_id = k.id
             and ((s.output_uid is not null and s.output_released_at is null)
-                 or (s.mode = 'composed' and s.runner_state <> 'none'
-                     and not (s.runner_state = 'destroyed' and s.runner_gone_confirmed_at is not null))))
+                 or (s.mode = 'composed' and s.runner_state not in ('none', 'destroyed'))))
      order by k.slot
      limit 1`;
   return k?.id ?? null;
@@ -324,8 +341,9 @@ async function createNew(ctx: Ctx, reread: boolean): Promise<Prepared> {
 
   const rowId = pick.rowId;
   let ytId: string | null = null;
+  let keyId: string | null = pick.keyId;
   try {
-    const keyId = pick.keyId ?? (await growPool(ctx, rowId));
+    keyId ??= await growPool(ctx, rowId);
     const [key] = await sql<{ live_stream_id: string }[]>`
       select live_stream_id from youtube_stream_keys where id = ${keyId} and org_id = ${ctx.orgId}`;
     if (!key) throw new Error(`youtube stream key ${keyId} not found`);
@@ -343,8 +361,27 @@ async function createNew(ctx: Ctx, reread: boolean): Promise<Prepared> {
   } catch (err) {
     const code = refusalCodeOf(err);
     await failRow(ctx, rowId, ytId, code ?? "youtube_unavailable");
+    if (keyId !== null && isStreamGone(err)) await retireKey(ctx, keyId);
+    await markIfGrantDead(err, ctx.orgId, ctx.connectionId);
     if (code !== null) throw youtubeRefusal(code, ctx.connectionId);
     throw err;
+  }
+}
+
+/** YouTube no longer has the pooled key's liveStream (the club deleted it in Studio): bind's `liveStreamNotFound`. */
+const isStreamGone = (err: unknown): boolean =>
+  err instanceof YouTubeError && err.code === "youtube_not_found" && err.reason === "liveStreamNotFound";
+
+/** A key whose liveStream is gone at YouTube leaves the pool for good (fix round 1, F2): left in, it is the lowest free slot
+ *  for every later pick and each one fails the same way. Retired, its slot is free again (V479's slot index is partial on
+ *  `retired_at is null`) and the next Go live grows a fresh liveStream into it. Best effort, like failRow: the refusal stands. */
+async function retireKey(ctx: Ctx, keyId: string): Promise<void> {
+  try {
+    await sql`
+      update youtube_stream_keys set retired_at = now()
+       where id = ${keyId} and org_id = ${ctx.orgId} and connection_id = ${ctx.connectionId} and retired_at is null`;
+  } catch (err) {
+    captureError(err, { orgId: ctx.orgId, route: "youtube.prepare.retire_key", extra: { connectionId: ctx.connectionId } });
   }
 }
 

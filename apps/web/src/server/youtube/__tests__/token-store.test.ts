@@ -17,8 +17,8 @@ import { sql, statementCount } from "@/lib/db";
 import { fingerprintYoutubeChannel, openWith, seal } from "@/server/relay/crypto";
 import { seedOrg } from "@/server/usecases/__tests__/_rig";
 import {
-  YoutubeTokenUnreadableError, insertConnectionWithToken, openToken, replaceConnectionToken, revokeConnection, sealPendingToken,
-  takePendingToken,
+  YoutubeTokenUnreadableError, insertConnectionWithToken, markReconnectNeeded, openToken, replaceConnectionToken, revokeConnection,
+  sealPendingToken, takePendingToken,
 } from "../token-store";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -451,6 +451,33 @@ describe.skipIf(!HAS_DB)("token-store — the connection's refresh token, sealed
     const third = newToken();
     expect(await replaceConnectionToken(sql, r.orgId, c.connectionId, third)).toBe(true);
     expect(await openToken(sql, r.orgId, c.connectionId), "the latest replace wins").toBe(third);
+  });
+
+  it("markReconnectNeeded (a dead grant, T10 F5): a CONNECTED row → reconnect_needed, status_since now, last_error_code the refusal code, the token kept; a second call is false and the first time stands; another org's, a missing id and a REVOKED row are false and untouched", async () => {
+    const a = await rig();
+    const b = await rig();
+    const c = await a.connect();
+    await sql`update org_youtube_connections set status_since = now() - interval '2 days' where id = ${c.connectionId}`;
+    const before = await rowOf(c.connectionId);
+    expect(await markReconnectNeeded(sql, b.orgId, c.connectionId), "another org").toBe(false);
+    expect(await markReconnectNeeded(sql, a.orgId, randomUUID()), "a missing id").toBe(false);
+    expect(await rowOf(c.connectionId), "the refused calls changed nothing").toEqual(before);
+
+    expect(await markReconnectNeeded(sql, a.orgId, c.connectionId)).toBe(true);
+    const row = await rowOf(c.connectionId);
+    expect({ status: row.status, last_error_code: row.last_error_code, revoked_at: row.revoked_at })
+      .toEqual({ status: "reconnect_needed", last_error_code: "youtube_reconnect_needed", revoked_at: null });
+    expect(row.status_since.getTime(), "status_since is now, not two days ago").toBeGreaterThan(before.status_since.getTime() + 24 * 3600 * 1000);
+    expect(await openToken(sql, a.orgId, c.connectionId), "the (dead) token is kept: only a revoke clears it").toBe(c.input.refreshToken);
+
+    expect(await markReconnectNeeded(sql, a.orgId, c.connectionId), "already reconnect_needed").toBe(false);
+    expect((await rowOf(c.connectionId)).status_since.getTime(), "the first time stands").toBe(row.status_since.getTime());
+
+    const r = await a.connect();
+    expect(await revokeConnection(sql, a.orgId, r.connectionId)).toBe(true);
+    const revoked = await rowOf(r.connectionId);
+    expect(await markReconnectNeeded(sql, a.orgId, r.connectionId), "a revoked row is history").toBe(false);
+    expect(await rowOf(r.connectionId)).toEqual(revoked);
   });
 
   it("replaceConnectionToken on a REVOKED row returns false and writes nothing; another org's and a missing id are the same false; an empty token or a KEK fault writes nothing", async () => {
