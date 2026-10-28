@@ -699,7 +699,7 @@ describe("X-SR-2 checkFixtureOverride", () => {
   const fb = sport("football");
   const tennis = sport("tennis");
   const chess = sport("boardgame");
-  const stage = { periods: { count: 3, minutes: 20 }, overtime: { kind: "sudden_death", minutes: 10, skaters: 3 }, shootout: { attempts: 5, suddenDeath: true } };
+  const stage = { periods: { count: 3, minutes: 20 }, overtime: { kind: "sudden_death", minutes: 10, skaters: 3 }, shootout: { attempts: 5 } };
 
   it("empty override: ok, nothing changed", () => {
     expect(checkFixtureOverride(ice, "knockout", null, stage, {})).toEqual({ ok: true, changed: [] });

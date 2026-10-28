@@ -13,6 +13,7 @@ interface Def {
   readonly innerType?: unknown; // wrappers
   readonly getter?: () => unknown; // lazy
   readonly in?: unknown; // pipe
+  readonly out?: unknown; // pipe
   readonly shape?: Readonly<Record<string, z.ZodType>>; // object
   readonly options?: readonly z.ZodType[]; // union
 }
@@ -22,7 +23,9 @@ const defOf = (schema: unknown): Def | undefined => (schema as { _zod?: { def?: 
 const WRAPPERS: ReadonlySet<string> = new Set(["optional", "nullable", "default", "prefault", "readonly", "nonoptional", "catch"]);
 
 /** Peel wrappers until a structural node. A pipe is read on its INPUT side: a cfg fragment is written against the
- *  shape a transform takes in, not the one it hands out. */
+ *  shape a transform takes in, not the one it hands out. A `z.preprocess` is the exception: its input side is the
+ *  preprocess function, which takes any value, so the shape a fragment must have is its OUTPUT side (W2e, the period
+ *  kernel's `shootout`, which drops the deleted `suddenDeath` before its strict parse). */
 function unwrap(schema: unknown): Def | undefined {
   let node = schema;
   for (let hop = 0; hop < 32; hop++) {
@@ -30,7 +33,7 @@ function unwrap(schema: unknown): Def | undefined {
     if (def === undefined) return undefined;
     if (WRAPPERS.has(def.type)) node = def.innerType;
     else if (def.type === "lazy") node = def.getter?.();
-    else if (def.type === "pipe") node = def.in;
+    else if (def.type === "pipe") node = defOf(def.in)?.type === "transform" ? def.out : def.in;
     else return def;
   }
   throw new Error("schema-paths: more than 32 wrappers — a self-referencing schema?");

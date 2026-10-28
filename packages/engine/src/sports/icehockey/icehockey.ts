@@ -163,7 +163,8 @@ const playerStats: PlayerStatsModel = {
 // constant for the module's default cfg and for the knockout preset below, so the preset's skaters and shoot-out are
 // the engine's own, never a second copy.
 const IIHF_OVERTIME = { kind: "sudden_death", minutes: 5, skaters: 3 } as const;
-const IIHF_SHOOTOUT = { attempts: 5, suddenDeath: true } as const;
+// W2e (D4): no `suddenDeath` key; after the five the tie-break shots go on until a duel is decisive (IH-SO-1).
+const IIHF_SHOOTOUT = { attempts: 5 } as const;
 // IH-KO-1 (RB2B-9, owner Q7) — a knockout game's overtime is 10 minutes, not the preliminary round's 5.
 const KNOCKOUT_OVERTIME_MINUTES = 10;
 
@@ -268,6 +269,9 @@ export const icehockey = makePeriodModule({
   shootoutLabel: "GWS",
   // W2d (X-PT-4) — the GWS decides the game: the table books it as a result (an OT/SO win), never a draw.
   shootoutAs: "result",
+  // W2e (IH-SO-1, RB2B-10) — IIHF 84.4 IX: the side that shot second in the first five opens the tie-break shots, and
+  // every duel after them.
+  shootoutOrder: "iihf-tiebreak",
   // IIHF Rule 87 / NHL Rule 84.4 — the game-winning shot is credited as a goal
   // in the official score (2-2 on the GWS is recorded 3-2). Derived at the
   // score layer; the shoot-out itself scores no player goals. FIH does not do

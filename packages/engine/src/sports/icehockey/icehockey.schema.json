@@ -217,22 +217,14 @@
                 "exclusiveMinimum": 0,
                 "maximum": 9007199254740991,
                 "type": "integer"
-              },
-              "suddenDeath": {
-                "type": "boolean"
               }
             },
             "required": [
-              "attempts",
-              "suddenDeath"
+              "attempts"
             ],
             "type": "object"
           }
-        ],
-        "default": {
-          "attempts": 5,
-          "suddenDeath": true
-        }
+        ]
       },
       "strength": {
         "default": {

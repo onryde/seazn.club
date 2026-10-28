@@ -768,6 +768,7 @@ describe("S8/#417 W6 — shotTracking gates `<key>.shot` per preset", () => {
     officialLabel: { scorer: "Referee" },
     shootoutLabel: "SO",
     shootoutAs: "result",
+    shootoutOrder: "ifab",
   });
 
   it("refuses a shot outright when the preset has not opted in", () => {

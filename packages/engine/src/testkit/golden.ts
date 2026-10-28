@@ -1120,7 +1120,7 @@ const COVERAGE_CONFIG_KNOBS: Record<string, Record<string, unknown>> = {
       goalkeeper: "optional",
       periodSeconds: { P1: 1200, P2: 1200, P3: 1260 },
       points: { win: 3, draw: 1, loss: 0, otWin: 2, otLoss: 1 },
-      shootout: { attempts: 5, suddenDeath: true, clockSeconds: 8 },
+      shootout: { attempts: 5, clockSeconds: 8 },
     },
   },
   // FIH with sudden-death extra time played short-sided, a PIM column on the

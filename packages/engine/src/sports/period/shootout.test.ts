@@ -98,7 +98,7 @@ describe("expectedKicker — the same taken tally as shootoutDecision (placer/ve
       kick("away", true),
       kick("home", false, true), // home's kick voided
     ];
-    expect(expectedKicker(kicks)).toBe("home");
+    expect(expectedKicker(kicks, "ifab", 5)).toBe("home");
   });
 
   it("REGRESSION shape: without the fix this would read \"away\" (taken.home=2, taken.away=1)", () => {
@@ -112,13 +112,13 @@ describe("expectedKicker — the same taken tally as shootoutDecision (placer/ve
     };
     const kicks: ShootoutKick[] = [kick("home", true), kick("away", true), kick("home", false, true)];
     expect(withoutVoidHandling(kicks)).toBe("away"); // the bug's answer
-    expect(expectedKicker(kicks)).toBe("home"); // the fixed answer
+    expect(expectedKicker(kicks, "ifab", 5)).toBe("home"); // the fixed answer
   });
 
   it("normal alternation is unaffected: no void kicks anywhere", () => {
-    expect(expectedKicker([])).toBeNull();
-    expect(expectedKicker([kick("home", true)])).toBe("away");
-    expect(expectedKicker([kick("home", true), kick("away", false)])).toBe("home");
+    expect(expectedKicker([], "ifab", 5)).toBeNull();
+    expect(expectedKicker([kick("home", true)], "ifab", 5)).toBe("away");
+    expect(expectedKicker([kick("home", true), kick("away", false)], "ifab", 5)).toBe("home");
   });
 });
 
