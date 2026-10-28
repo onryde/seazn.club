@@ -85,6 +85,7 @@ export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, strin
   ["CK-WK-1", "Task 14"],
   ["CK-CR-1", "Task 14"],
   ["CK-RO-1", "Task 14"],
+  ["CK-DR-1", "Task 14"],
   ["CK-DV-1", "Task 14"],
   ["CK-DV-2", "Task 14"],
   ["CK-DV-3", "Task 14"],
