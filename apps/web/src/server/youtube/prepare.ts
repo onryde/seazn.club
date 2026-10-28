@@ -166,7 +166,8 @@ async function accessTokenFor(orgId: string, connectionId: string, port: YouTube
 /** A port call YouTube refused `youtube_reconnect_needed` (the grant is dead or lacks a scope: refresh `invalid_grant`, a 401,
  *  insufficient permissions) is the club's to fix by reconnecting: the connection moves to reconnect_needed (F5, spec §6.2 D6),
  *  so the Streaming page shows Reconnect and the next Go live refuses before calling YouTube. Only the port's own error moves
- *  it — this file's refusals of the same code already read the status. Best effort: the refusal stands either way. */
+ *  it: a refresh token this server cannot decrypt is ours to fix, not the club's, so it refuses without moving the status.
+ *  Best effort: the refusal stands either way. */
 async function markIfGrantDead(err: unknown, orgId: string, connectionId: string): Promise<void> {
   if (!(err instanceof YouTubeError && err.code === "youtube_reconnect_needed")) return;
   try {
