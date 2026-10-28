@@ -53,7 +53,7 @@ lack of time.
 | Abandonment / no result | all | entrant | `core.abandon` → `outcome.no_result` | modelled | shared points, no draw counted |
 | League points w / d / l | all | entrant | `Cfg.points.{w,d,l}` | modelled | |
 | For / against / difference ledger | all | entrant | `metrics.{for,against,diff}` | modelled | now also fed by a tally-settled result |
-| v1 stepladder progress-score carry | all | entrant | `Cfg.progressScore` | modelled | stored for the PROMPT-15 cutover; no scoring effect inside the module |
+| v1 stepladder progress-score carry | all | entrant | — | deferred | **deleted, W2e D6.** `Cfg.progressScore` was stored for the PROMPT-15 cutover and no code, in the engine or outside it, ever read it. The key is stripped on parse, so an older client's write and a not-yet-migrated stored row still read; the stored copies are removed by the W2e data migration. If a stepladder carry is ever built it starts from a rule row, not from this key. |
 | Period / half / quarter / segment structure | all | entrant | — | deferred | **boundary.** Segments need open/close semantics, and once you own those you own periods, timers and per-period totals — that is a real module. A scorer can put the segment in a `core.note` |
 | Turn order, possession, serve, innings | all | entrant | — | deferred | **boundary.** The first step towards a rally/innings kernel; `setbased/` and `nested/` exist for exactly this |
 | Match clock, elapsed time, stoppages | all | — | — | deferred | **boundary.** W4a drew the line more precisely than "the engine owns no clock": the engine models **durations** and **elapsed-at-event** (a stamp on something that already happened), and the pad owns the **ticking** — the running clock, the countdown, the stoppages. Generic takes neither half: it has no periods to stamp an elapsed time against  **W4a T6b adds the same boundary for the position axis:** generic declares no `SportModule.position`, because it has no periods, no sets and no cursor of any kind — only a running tally. `matchPositionOf` returns `null` and the caller orders and labels by `seq`. That is the ruling, not a gap: fabricating a position here would be the denormalised second source of truth the axis refuses everywhere else |
@@ -63,7 +63,7 @@ lack of time.
 | Per-person non-scoring stats (saves, rebounds, fouls won) | all | person | — | deferred | **boundary.** Every such metric is sport vocabulary; `points` + `scores` is the sport-neutral maximum |
 | Sport-specific validity rules (a legal score, a maximum, a target) | all | entrant | — | deferred | **boundary.** The fallback cannot know them; the only invariants it enforces are internal consistency and a non-negative tally |
 
-**Row counts:** 9 modelled, 5 extended, 8 deferred (22 rows).
+**Row counts:** 8 modelled, 5 extended, 9 deferred (22 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## The boundary

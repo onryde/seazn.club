@@ -26,10 +26,10 @@ export interface DivisionFormatPatchInput {
 /** The `config` of `PATCH /divisions/{id}`: the saved config with the form's values laid over it. */
 export function divisionFormatPatch(input: DivisionFormatPatchInput): Record<string, unknown> {
   // The server merges preset + override, but presets only carry the
-  // variant-identity keys (resultMode/allowDraws) — schema-required keys
-  // like progressScore live in the division's current config. Base the
-  // override on that valid snapshot; on a variant change, drop the
-  // identity keys so the new preset wins them.
+  // variant-identity keys (resultMode/allowDraws) — the rest of the
+  // schema's keys (a generic division's abandonPolicy, say) live in the
+  // division's current config. Base the override on that valid snapshot;
+  // on a variant change, drop the identity keys so the new preset wins them.
   const override: Record<string, unknown> = { ...input.divisionConfig };
   if (input.variantKey !== input.savedVariantKey) {
     delete override.resultMode;

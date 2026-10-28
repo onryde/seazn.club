@@ -1007,7 +1007,6 @@ const COVERAGE_CONFIGS: Record<string, Record<string, unknown>> = {
       resultMode: "win_loss",
       allowDraws: true,
       points: { w: 3, d: 1, l: 0 },
-      progressScore: false,
     },
   },
   // Hockey's `assists` default is `false` and none of fih-outdoor / fih-shootout

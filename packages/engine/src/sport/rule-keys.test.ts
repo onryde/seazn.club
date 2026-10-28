@@ -102,7 +102,7 @@ const UNSETTABLE: Readonly<Record<string, Readonly<Record<string, string>>>> = {
     tiebreak: "forced on for every bracket stage by bracketDeciders; the organiser's decider is the tiebreakRungs list, whose EMPTY list is \"no tie-break games\" (BG-KO-1, BG-KO-3)",
   },
   carrom: {},
-  generic: { progressScore: "a pad display switch, not a result rule" },
+  generic: {},
 };
 
 /** THE RULEBOOK: spec §4.1 Q5, owner-approved (docs/superpowers/specs/2026-10-13-format-matrix-w2c-design.md:160-166),

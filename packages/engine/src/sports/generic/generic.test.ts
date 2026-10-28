@@ -21,7 +21,6 @@ const winLossCfg: GenericCfg = generic.configSchema.parse({
   resultMode: "win_loss",
   allowDraws: false,
   points: { w: 3, d: 1, l: 0 },
-  progressScore: false,
 });
 const scoreCfg: GenericCfg = { ...winLossCfg, resultMode: "score", allowDraws: true };
 const league: StageCtx = { kind: "league" };
