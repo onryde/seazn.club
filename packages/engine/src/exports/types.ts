@@ -316,5 +316,9 @@ export interface BuildOpts {
      *  block above — a roster is signed by players' captains before play,
      *  a rota is signed by the official at the end of their duty. */
     rosterSignatures?: readonly [string, string];
+    /** W2d follow-up (review m3): the standings header words in the caller's language — the team column, the points
+     *  column, and one header per `metricColumns` entry, in its order (the cells stay keyed by the metric). `#` is a
+     *  glyph and is not translated; the result columns' headers are `resultColumns` itself. */
+    standingsHeaders?: { team: string; points: string; metrics: readonly string[] };
   };
 }

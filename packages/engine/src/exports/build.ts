@@ -130,7 +130,17 @@ export function buildStandings(
   opts: BuildOpts,
 ): DocModel {
   const metricColumns = opts.metricColumns ?? [];
-  const columns = ["#", "Team", ...(opts.resultColumns ?? RESULT_COLUMNS), ...metricColumns, "Pts"];
+  const headers = opts.i18n?.standingsHeaders;
+  if (headers !== undefined && headers.metrics.length !== metricColumns.length) {
+    throw new EngineError("CONFIG_INVALID", `standings: ${headers.metrics.length} metric headers for ${metricColumns.length} metric columns`, {});
+  }
+  const columns = [
+    "#",
+    headers?.team ?? "Team",
+    ...(opts.resultColumns ?? RESULT_COLUMNS),
+    ...(headers?.metrics ?? metricColumns),
+    headers?.points ?? "Pts",
+  ];
   const hasBadges = rows.some((r) => r.badgeUrl != null);
   const table = {
     columns,

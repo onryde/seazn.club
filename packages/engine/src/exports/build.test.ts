@@ -876,3 +876,40 @@ describe("audit ledger (v13 wave Task 16: one table, columns # Time Actor Event 
     expect(ledger(head, true).description).not.toContain(head);
   });
 });
+
+// W2d follow-up review m3: the standings header in the caller's language. The builder has no locale; the web export
+// hands every header pre-resolved through the public table's own dictionary keys (the timetable's and rota's columns
+// already arrive this way, `i18n`). The metric headers pair with `metricColumns` by position; the cells stay keyed.
+describe("buildStandings — the caller's localised headers (W2d follow-up review m3)", () => {
+  const row = { name: "Ash", played: 2, won: 1, drawn: 0, lost: 1, points: 3, metrics: { gf: 4, ga: 2 } };
+
+  it("prints the caller's Team, metric and Pts headers; # stays the glyph and the cells stay the metrics' own", () => {
+    const model = buildStandings("S", [{ ...row, results: [2, 1, 0, 1] }], {
+      ...OPTS,
+      metricColumns: ["gf", "ga"],
+      resultColumns: ["PJ", "G", "E", "P"],
+      i18n: { standingsHeaders: { team: "Equipo", points: "Pts.", metrics: ["GF", "GC"] } },
+    });
+    expect(model.sections[0]!.table!.columns).toEqual(["#", "Equipo", "PJ", "G", "E", "P", "GF", "GC", "Pts."]);
+    expect(model.sections[0]!.table!.rows).toEqual([[1, "Ash", 2, 1, 0, 1, 4, 2, 3]]);
+  });
+
+  it("no headers given: Team, the metric keys and Pts, as before (the empty case)", () => {
+    const model = buildStandings("S", [row], { ...OPTS, metricColumns: ["gf", "ga"] });
+    expect(model.sections[0]!.table!.columns).toEqual(["#", "Team", "P", "W", "D", "L", "gf", "ga", "Pts"]);
+  });
+
+  it("refuses metric headers that do not pair with the metric columns, never prints them shifted", () => {
+    let refused = 0;
+    for (const metrics of [["GF"], ["GF", "GC", "DG"]]) {
+      try {
+        buildStandings("S", [row], { ...OPTS, metricColumns: ["gf", "ga"], i18n: { standingsHeaders: { team: "T", points: "P", metrics } } });
+      } catch (e) {
+        expect(e).toBeInstanceOf(EngineError);
+        expect(e).toMatchObject({ code: "CONFIG_INVALID" });
+        refused++;
+      }
+    }
+    expect(refused, "both mismatches refused").toBe(2);
+  });
+});

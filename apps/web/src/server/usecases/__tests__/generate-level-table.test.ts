@@ -36,6 +36,8 @@ import { completeStage, computeSeedProposal, confirmSeedProposal, generateStageF
 import { deleteEntrant } from "@/server/usecases/entrants";
 import { createPerson } from "@/server/usecases/persons";
 import { buildDivisionDocModel } from "@/server/usecases/exports";
+import { getDictionary } from "@/lib/i18n";
+import { t } from "@/lib/i18n-runtime";
 import { undoDivision } from "@/server/usecases/history";
 import { TABLE_KINDS as SCORING_TABLE_KINDS } from "@/server/usecases/scoring";
 import { StageKind } from "@/server/api-v1/schemas";
@@ -822,5 +824,32 @@ describe.skipIf(!HAS_DB)("W2d follow-up (m3, m8) — the organiser export and th
       }
     }
     expect(checked, "rows checked: 3 export + 6 board rows per sport").toBe(18);
+  });
+
+  it("review m3: every standings header prints in the org's language, through the public table's own dictionary keys (en, es, fr, nl)", async () => {
+    // single-sport: IIHF ice hockey carries every kind of standings column at once (#, Team, the split result columns,
+    // keyed metrics, a notation metric, Pts); the header set of every sport is the same lookup (`columnHeader`).
+    const s = await scene({ sport: "icehockey", variant: "iihf", entrants: 2 });
+    const [e1, e2] = s.entrants as [string, string];
+    await generateStageFixtures(s.auth, s.stageId);
+    await startDivision(s.auth, s.divisionId);
+    await hockeyGame(s, e1, e2, "regulation");
+    // The public table's keys, typed here (standings-view.ts STRUCTURAL_ABBR_KEYS / METRIC_HEADER_KEYS, standings-table-view's
+    // `table.team`): ice hockey's table ledger is GF, GA, GD and PIM — PIM has no translation, it is the sport's notation
+    // and prints as the module labels it in every locale, as on the public table. `#` is a glyph.
+    const KEYS = ["table.team", "table.abbr.played", "table.abbr.won", "table.abbr.otw", "table.abbr.otl", "table.abbr.drawn",
+      "table.abbr.lost", "table.abbr.gf", "table.abbr.ga", "table.abbr.gd"] as const;
+    const headers: Record<string, string[]> = {};
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      await sql`update organizations set default_locale = ${locale} where id = ${s.auth.orgId}`;
+      const { columns } = await exportedTable(s);
+      const dict = await getDictionary(locale, "public");
+      expect(columns, `${locale}: the export's header`).toEqual(["#", ...KEYS.map((k) => t(dict, k)), "PIM", t(dict, "table.abbr.points")]);
+      headers[locale] = columns;
+    }
+    // The positive pair: the words do change with the locale (a lookup that ignored it would pass the four above only
+    // if every dictionary spelled them alike).
+    expect(headers.es, "es is not the English header").not.toEqual(headers.en);
+    expect(headers.en!.slice(0, 2), "en: as it always read").toEqual(["#", "Team"]);
   });
 });
