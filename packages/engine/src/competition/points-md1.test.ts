@@ -44,6 +44,16 @@ const codeOf = (fn: () => void): string | null => {
   }
   return null;
 };
+/** W2d T20 MD-1: the EngineError a call throws (its message and data are what a refusal says), null when it returns. */
+const errorOf = (fn: () => void): EngineError | null => {
+  try {
+    fn();
+  } catch (e) {
+    if (EngineError.is(e)) return e;
+    throw e;
+  }
+  return null;
+};
 
 describe("MD-1 points.ts: a bonus that reads the score fails closed where the sport emits none (Jul3/05 §8)", () => {
   it("premise: every sport declares each score alias (its diff, for and against) all together or not at all, and at most one alias", () => {
@@ -94,6 +104,27 @@ describe("MD-1 points.ts: a bonus that reads the score fails closed where the sp
     expect(codeOf(() => validatePointsRule(rule, metricList("against"))), "against alone").toBe("CONFIG_INVALID");
     expect(codeOf(() => validatePointsRule(rule, metricList("diff"))), "diff alone").toBeNull();
     expect(codeOf(() => validatePointsRule(rule, metricList("for", "against"))), "both sides").toBeNull();
+  });
+
+  it("W2d T20 MD-1 the refusal names the metrics the sport DOES emit (its data), for every sport that declares no score, counted", () => {
+    // What a refusal carries is read off the input: the metric list given, and each sport's own declaration (`m.metrics`),
+    // never off validatePointsRule. A list naming one side alone is refused with exactly that side.
+    expect(errorOf(() => validatePointsRule(ruleOf("win_margin_gte"), metricList("for")))?.data, "for alone").toStrictEqual({ metrics: ["for"] });
+    let refused = 0;
+    let named = 0;
+    const visited = forEachSport(({ module: m }) => {
+      if (declaresScore(m)) return;
+      const err = errorOf(() => validatePointsRule(ruleOf("win_margin_gte"), m.metrics));
+      expect(err?.code, m.key).toBe("CONFIG_INVALID");
+      const metrics = (err?.data as { metrics?: unknown } | undefined)?.metrics;
+      expect(Array.isArray(metrics), `${m.key}: the refusal lists metrics`).toBe(true);
+      expect([...(metrics as string[])].sort(), m.key).toEqual([...declared(m)].sort());
+      refused++;
+      if (declared(m).size > 0) named++;
+    });
+    expect(refused, "sports that declare no score").toBeGreaterThan(0);
+    expect(named, "refusals that name at least one metric (an empty list would pass an emptied payload)").toBeGreaterThan(0);
+    expect(refused, "some sport declares a score (and is not refused)").toBeLessThan(visited);
   });
 });
 
@@ -213,6 +244,29 @@ describe("MD-1 points.ts: carry-over and rank locks", () => {
       ["a rank taken twice", [{ entrantId: "A", rank: 2 }, { entrantId: "B", rank: 2 }]],
     ] as const) {
       expect(codeOf(() => applyRankLocks(ranked(), locks)), what).toBe("CONFIG_INVALID");
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("W2d T20 MD-1 a refused lock names its entrant (data) and the rank it asked for (message), each way a lock is refused", () => {
+    // API v1 puts an EngineError's message and data on the wire. Both are read off the locks given: the entrant is one
+    // whose lock claims the refused rank, and the message carries that rank. Never off applyRankLocks.
+    const n = ranked().length;
+    let checked = 0;
+    for (const [what, locks, rank] of [
+      ["rank 0", [{ entrantId: "A", rank: 0 }], 0],
+      ["rank n + 1", [{ entrantId: "C", rank: n + 1 }], n + 1],
+      ["a rank taken twice", [{ entrantId: "A", rank: 2 }, { entrantId: "B", rank: 2 }], 2],
+    ] as const) {
+      const err = errorOf(() => applyRankLocks(ranked(), locks));
+      expect(err?.code, what).toBe("CONFIG_INVALID");
+      const claimants: string[] = locks.filter((l) => l.rank === rank).map((l) => l.entrantId);
+      expect(claimants.length, `${what}: premise, a lock claims the rank`).toBeGreaterThan(0);
+      const entrantId = (err?.data as { entrantId?: unknown } | undefined)?.entrantId;
+      expect(typeof entrantId, `${what}: the refusal names an entrant`).toBe("string");
+      expect(claimants, what).toContain(entrantId);
+      expect(err?.message, `${what}: the message names rank ${rank}`).toMatch(new RegExp(`(^|\\D)${rank}(\\D|$)`));
       checked++;
     }
     expect(checked).toBe(3);
