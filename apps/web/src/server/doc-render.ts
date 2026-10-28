@@ -219,6 +219,11 @@ function fitColumns(
   return owed > 0.001 ? [...shares] : out;
 }
 
+/** A table row's height (drawTable), and the room a section heading takes above its table (13pt line + moveDown 0.2,
+ *  rounded up). drawSection keeps a heading with its header row and first body row by these. */
+const ROW_H = 18;
+const HEADING_H = 20;
+
 function drawTable(
   doc: PDFKit.PDFDocument,
   table: DocTable,
@@ -236,7 +241,7 @@ function drawTable(
   const total = weights.reduce((a, b) => a + b, 0);
   const numeric = table.columns.map((_, i) => isNumericColumn(table, i));
   const colW = fitColumns(doc, table, numeric, weights.map((w) => (w / total) * width));
-  const rowHeight = 18;
+  const rowHeight = ROW_H;
   // PROMPT-60: tables carrying rowBadges indent the name column (index 1) so
   // crested and crestless rows align; the crest draws in the indent.
   const badged = table.rowBadges !== undefined;
@@ -388,6 +393,13 @@ function drawSection(
   badges?: Map<string, Buffer | null>,
 ): void {
   if (section.pageBreakBefore === true) doc.addPage();
+  // Keep a heading with its table (export every pool, 2026-10-28): a heading left at a page foot, its table overleaf,
+  // reads as the end of the section above. Room for the heading, the header row and the first body row (an empty
+  // table: its header row), else the section starts a new page.
+  if (section.heading !== undefined && section.table !== undefined) {
+    const keep = HEADING_H + ROW_H * (section.table.rows.length > 0 ? 2 : 1);
+    if (doc.y + keep > doc.page.height - MARGIN) doc.addPage();
+  }
   if (section.heading !== undefined) {
     doc.font("Helvetica-Bold").fontSize(13).fillColor("#111111").text(section.heading, MARGIN);
     doc.moveDown(0.2);
