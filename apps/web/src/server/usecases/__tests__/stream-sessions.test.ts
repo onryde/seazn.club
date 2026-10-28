@@ -17,7 +17,7 @@
 // because nothing in stream-sessions.ts reads the sport except the admission SNAPSHOT, which copies `divisions.sport_key`
 // verbatim — and the Db test compares that copy to its source row rather than to a sport literal.
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { randomBytes, randomInt, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomInt, randomUUID } from "node:crypto";
 import fc from "fast-check";
 import { readFileSync } from "node:fs";
 import { resolve } from "node:path";
@@ -34,7 +34,7 @@ import { STREAM_PLATFORM_PRESETS, TARGET_UNREADABLE } from "@/lib/stream-destina
 import { routes } from "@/lib/routes";
 import { admit, holdStateOf, type AdmitInput, type SessionState } from "@/server/relay/domain/session";
 import { apiSessionOnTarget, pairPresentPhone, resealTargetDestination, rigTarget, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
-import { ApiBackedTargetError, KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readFirstInput, readTargetSecret } from "@/server/relay/secret-columns";
+import { ApiBackedTargetError, KEY_HINT_CHARS, KEY_HINT_MIN_LENGTH, archiveStreamTarget, lockStreamTarget, readFirstInput, readPooledKey, readTargetSecret } from "@/server/relay/secret-columns";
 import { mintRelayToken } from "@/server/relay/tokens";
 import {
   CLOUDFLARE_STORED_MICROS_PER_MINUTE, CODE_GRACE_AFTER_FINISH_MINUTES, CREDIT_REUSE_HOURS, ENDING_TIMEOUT_SECONDS, EST_COST_CURRENCY, FLY_BILLING_SECONDS_PER_MONTH, FLY_RELAY_APP_RETIRED_DEFAULT,
@@ -5275,6 +5275,11 @@ describe.skipIf(!HAS_DB)("Go live on an API-BACKED destination (T11: streams int
     expect(row, "the fixture really is API-backed: a connection behind it").toMatchObject({ youtube_connection_id: api.connectionId });
     await expect(sql.begin((tx) => readTargetSecret(tx, r.auth.orgId, api.targetId)), "and no key of its own: the key reader says so by name").rejects.toBeInstanceOf(ApiBackedTargetError);
     const youtube = new FakeYouTube();
+    // What Cloudflare is asked to publish to, as fingerprints (a key never reaches a failure message).
+    const fp = (t: { url: string; streamKey: string }) => createHash("sha256").update(`${t.url}\n${t.streamKey}`).digest("hex").slice(0, 12);
+    const published: string[] = [];
+    const addOutput = r.ingest.addOutput.bind(r.ingest);
+    r.ingest.addOutput = async (inputId, target, meta) => { published.push(fp(target)); return addOutput(inputId, target, meta); };
 
     const err = await createSession(r.auth, r.fixtureId, body(api.targetId, "composed"), { ...r.deps, youtube }).then(() => null, (e: unknown) => e);
     expect((err as { code?: string } | null)?.code, "never the pasted key's replace-the-key refusal").not.toBe(TARGET_UNREADABLE);
@@ -5282,6 +5287,12 @@ describe.skipIf(!HAS_DB)("Go live on an API-BACKED destination (T11: streams int
     expect(youtube.calls.filter((c) => c.method === "insertBroadcast"), "one broadcast made at YouTube").toHaveLength(1);
     await new Promise((res) => setImmediate(res));
     expect(rec.calls.filter((c) => c.operation === "addOutput"), "one Cloudflare output").toHaveLength(1);
+    // ...and it carries THAT broadcast's pooled key — the one its row names, opened by the pool's own reader — not the rig's pasted key.
+    const [b] = await sql<{ key_id: string }[]>`select key_id from youtube_broadcasts where fixture_id = ${r.fixtureId}`;
+    const pooled = fp(await sql.begin((tx) => readPooledKey(tx, r.auth.orgId, b!.key_id)));
+    expect(published, "exactly one output published").toHaveLength(1);
+    expect(published[0], "the output carries the broadcast's pooled key").toBe(pooled);
+    expect(published[0], "and not a pasted key of the rig's").not.toBe(fp({ url: STREAM_PLATFORM_PRESETS.youtube, streamKey: "yt-key" }));
   });
 });
 
