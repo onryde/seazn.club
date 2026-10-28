@@ -591,6 +591,12 @@ describe.skipIf(!HAS_DB)("match-centre loaders — identical to the pre-T4 loade
       select count(*)::int as n from fixture_external_play
        where fixture_id = any(${sweep.map((f) => f.id)}::uuid[])`;
     expect(bridgeRows, "the identity scene seeds no online-play bridge row").toBe(0);
+    // `parts` (YouTube Connect T16) joined it the same way: a fixture's complete YouTube broadcasts. The scene seeds none -
+    // asserted, so the empty list below is the seed's fact, not the loader's.
+    const [{ n: broadcastRows }] = await sql<{ n: number }[]>`
+      select count(*)::int as n from youtube_broadcasts
+       where fixture_id = any(${sweep.map((f) => f.id)}::uuid[])`;
+    expect(broadcastRows, "the identity scene seeds no YouTube broadcast").toBe(0);
     for (const f of sweep) {
       const division = divisionOf(f.slug);
       const body = await getPublicFixtureBodyBefore(shell, division, f.id);
@@ -605,6 +611,7 @@ describe.skipIf(!HAS_DB)("match-centre loaders — identical to the pre-T4 loade
         division,
         ...body!,
         externalPlay: null,
+        parts: [],
         roundOpened: false,
         roundOpenedAt: null,
         pairedWhiteSide: null,
@@ -723,10 +730,14 @@ describe.skipIf(!HAS_DB)("match-centre loaders read less, and together, inside t
     const before = await measure(() => getPublicFixtureBodyBefore(shell, divisionOf(f.slug), f.id));
     const after = await measure(() => getPublicFixture(scene.orgSlug, scene.compSlug, f.slug, f.id));
     const shellReads = 4; // getPublicCompetition (org, competition, divisions, live now) under the passthrough cache
+    // The replay-parts read (YouTube Connect T16) is one statement the frozen pre-T4 body never had, so it is counted out by its
+    // text - exactly one, asserted - and the comparison below stays what it was: T4's own saving, no looser than before.
+    const partsReads = after.texts.filter((text) => text.includes("public_fixture_youtube_parts_v")).length;
+    expect(partsReads, "the loader reads the replay parts once").toBe(1);
     expect(before.peak).toBe(1);
     expect(after.peak).toBeGreaterThan(1);
     expect(after.peak).toBeLessThanOrEqual(5);
-    expect(after.texts.length - shellReads).toBeLessThan(before.texts.length);
+    expect(after.texts.length - shellReads - partsReads).toBeLessThan(before.texts.length);
   });
 
   it("publicFixture: the division and stage rows are read once each, not twice; at most five in flight", async () => {

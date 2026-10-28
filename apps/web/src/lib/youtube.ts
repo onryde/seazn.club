@@ -92,6 +92,62 @@ export const YOUTUBE_REFUSAL_REMEDY: Record<YoutubeRefusalCode, "fix_destination
 /** The replay link for a broadcast: a YouTube broadcast id is also the id of its video. */
 export const youtubeWatchUrl = (videoId: string): string => `https://www.youtube.com/watch?v=${videoId}`;
 
+// --- The public match page's replay player (T16) --------------------------------------------------------------------------------
+// The player is a click-to-play facade: nothing is loaded from Google but the video's thumbnail until the person taps, and then the
+// iframe comes from YouTube's privacy-enhanced host. The CSP (src/proxy.ts) allows exactly these two origins and no other.
+
+/** The privacy-enhanced embed host (`youtube-nocookie.com`): it sets no cookie until the viewer plays. The CSP's `frame-src` names
+ *  this origin, and the page checks a player message's origin against it. */
+export const YOUTUBE_EMBED_ORIGIN = "https://www.youtube-nocookie.com";
+/** Where a video's public thumbnail image lives; the CSP's `img-src` names this origin. */
+export const YOUTUBE_THUMBNAIL_ORIGIN = "https://i.ytimg.com";
+
+/** A YouTube video id: 11 characters from [A-Za-z0-9_-]. The ONE shape an address is built from. */
+const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+/** The paths (under a youtube.com host) whose SECOND segment is the video id. */
+const VIDEO_PATH_KINDS = new Set(["live", "embed", "shorts", "v"]);
+
+/** The video id inside a YouTube video URL, or `null` for anything that is not provably one: the URL must pass `isYoutubeUrl` (https,
+ *  youtube.com or a subdomain, or youtu.be) AND carry an id of the exact shape in one of YouTube's video forms (`/watch?v=`,
+ *  `/live/`, `/embed/`, `/shorts/`, `/v/`, or `youtu.be/<id>`). A channel, a playlist, a handle, a bare host, or an id with an
+ *  extra path segment is `null`. `null` means "show a link, never an iframe". */
+export function youtubeVideoId(url: string): string | null {
+  if (!isYoutubeUrl(url)) return null;
+  const u = new URL(url);
+  const segments = u.pathname.split("/").filter((s) => s !== "");
+  let candidate: string | null = null;
+  if (u.hostname.toLowerCase() === "youtu.be") {
+    if (segments.length === 1) candidate = segments[0]!;
+  } else if (segments.length === 1 && segments[0] === "watch") {
+    candidate = u.searchParams.get("v");
+  } else if (segments.length === 2 && VIDEO_PATH_KINDS.has(segments[0]!)) {
+    candidate = segments[1]!;
+  }
+  return candidate !== null && YOUTUBE_VIDEO_ID.test(candidate) ? candidate : null;
+}
+
+const assertVideoId = (id: string): string => {
+  if (!YOUTUBE_VIDEO_ID.test(id)) throw new Error("not a YouTube video id");
+  return id;
+};
+
+/** The player's address, built only after a tap: privacy-enhanced host, autoplay on (the person just asked to play), no end-of-video
+ *  suggestions from other channels (`rel=0`), inline on iOS, and `enablejsapi` + `origin` so the page can hear the player say
+ *  "embedding is disabled for this video" (error 101 / 150) without loading any script from YouTube. Throws on a malformed id. */
+export function youtubeEmbedUrl(videoId: string, pageOrigin: string): string {
+  const u = new URL(`${YOUTUBE_EMBED_ORIGIN}/embed/${assertVideoId(videoId)}`);
+  u.searchParams.set("autoplay", "1");
+  u.searchParams.set("rel", "0");
+  u.searchParams.set("playsinline", "1");
+  u.searchParams.set("enablejsapi", "1");
+  u.searchParams.set("origin", pageOrigin);
+  return u.toString();
+}
+
+/** A video's public thumbnail (480x360, the 16:9 picture letterboxed: the facade crops the bars with `object-cover`). Throws on a
+ *  malformed id. */
+export const youtubeThumbnailUrl = (videoId: string): string => `${YOUTUBE_THUMBNAIL_ORIGIN}/vi/${assertVideoId(videoId)}/hqdefault.jpg`;
+
 /** Developer Policies III.A.1: a link to YouTube's Terms of Service, shown where the user agrees to be bound by them. */
 export const YOUTUBE_TOS_URL = "https://www.youtube.com/t/terms";
 /** YouTube's Community Guidelines, linked beside the consent text. */

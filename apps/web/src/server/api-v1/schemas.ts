@@ -1887,6 +1887,11 @@ export const StreamSessionCurrent = z
     startedAt: z.string().nullable(),
     endedAt: z.string().nullable(),
     replayUrl: z.string().nullable(),
+    /** YouTube Connect T16: the fixture's replay PARTS - its complete YouTube broadcasts, numbered 1, 2, ... in the order they finished
+     *  (a restart after a Stop is a new broadcast). `[]` when no YouTube broadcast has completed (a pasted-key destination never has
+     *  any). Read for THIS organisation, whatever the competition's visibility; `replayUrl` stays the single link the fixture holds
+     *  (the first part's, unless the club set its own). */
+    replayParts: z.array(z.object({ partNo: z.number().int().min(1), url: z.string() }).strict()),
     target: z.object({ id: z.string(), kind: StreamTargetKind, label: z.string() }),
     fixtureDecided: z.boolean(),
     /** W2a loop R, M2: the fixture is HELD (`needs_decision` — a level bracket result awaiting the organiser's settle).
