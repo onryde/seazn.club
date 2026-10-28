@@ -691,7 +691,7 @@ test("Fixture panel - after a match: the replay row shows when it ran, Watch rep
         ok: true,
         data: {
           id: randomUUID(), fixtureId: r.fixtureId, mode: "passthrough", overlay: null, state: "completed", desiredState: "ending",
-          failReason: null, health: null, ingest: null, output: null, balance: 2, startedAt, endedAt, replayUrl: REPLAY,
+          failReason: null, health: null, ingest: null, output: null, balance: 2, startedAt, endedAt, replayUrl: REPLAY, replayParts: [],
           target: { id: randomUUID(), kind: "youtube", label: "Riverside FC" }, fixtureDecided: true, fixtureHeld: false,
           endReason: "stopped", creditUsed: true, startCause: "organiser", restart: null, countdown: null,
         },
@@ -721,4 +721,78 @@ test("Fixture panel - after a match: the replay row shows when it ran, Watch rep
     widthsRead++;
   }
   expect(widthsRead, "anti-vacuity: every width was walked").toBe(WIDTHS.length);
+});
+
+test("Fixture panel - after a match: the replay parts (one; two; one plus the club's own link) read apart by words, at 1280, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ navs: 14, acts: 20 }));
+  const r = await rig(page, { match: true });
+  await seedDestinations(page, r, `Riverside FC ${randomBytes(2).toString("hex")}`, `Court key ${randomBytes(2).toString("hex")}`);
+  const PART_1 = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
+  const PART_2 = "https://www.youtube.com/watch?v=9bZkp7q19f0";
+  const CLUB = "https://club.example.com/live/final";
+  const startedAt = "2026-09-14T11:00:00.000Z";
+  const endedAt = "2026-09-14T11:45:00.000Z";
+  // The cases are the three shapes the view can take after a match (StreamSessionView.replayParts + replayUrl): the same stubbed
+  // endpoint answers with whichever is current, so each width re-opens the panel on the shape under test.
+  const cases = [
+    { name: "one-part", replayUrl: PART_1, parts: [{ partNo: 1, url: PART_1 }], hrefs: [PART_1], labels: [en("stream.phone.replay")], partLabels: [] as string[], icons: 1, latest: false },
+    {
+      name: "two-parts", replayUrl: PART_1, parts: [{ partNo: 1, url: PART_1 }, { partNo: 2, url: PART_2 }], hrefs: [PART_1, PART_2],
+      labels: [en("stream.phone.replay"), en("stream.phone.replay")], partLabels: [en("streaming.youtube.part", { n: 1 }), en("streaming.youtube.part", { n: 2 })], icons: 2, latest: true,
+    },
+    { name: "one-part-club-link", replayUrl: CLUB, parts: [{ partNo: 1, url: PART_1 }], hrefs: [PART_1, CLUB], labels: [en("stream.phone.replay"), en("stream.url.label")], partLabels: [] as string[], icons: 1, latest: false },
+  ];
+  let current = cases[0];
+  await page.route("**/api/v1/fixtures/*/stream-sessions/current", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        data: {
+          id: randomUUID(), fixtureId: r.fixtureId, mode: "passthrough", overlay: null, state: "completed", desiredState: "ending",
+          failReason: null, health: null, ingest: null, output: null, balance: 2, startedAt, endedAt, replayUrl: current.replayUrl, replayParts: current.parts,
+          target: { id: randomUUID(), kind: "youtube", label: "Riverside FC" }, fixtureDecided: true, fixtureHeld: false,
+          endReason: "stopped", creditUsed: true, startCause: "organiser", restart: null, countdown: null,
+        },
+      }),
+    }),
+  );
+  let rowsRead = 0;
+  let casesWalked = 0;
+  for (const c of cases) {
+    current = c;
+    for (const w of WIDTHS) {
+      await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+      const body = await openPhoneTab(page, r);
+      const area = body.getByTestId("stream-replay-row");
+      await expect(area, `${c.name} at ${w}: the ended card draws the replay area`).toBeVisible({ timeout: NAV_MS });
+      const items = area.getByTestId("stream-replay-item");
+      await expect(items, `${c.name} at ${w}: one item per part, then the club's own link`).toHaveCount(c.hrefs.length);
+      for (const [i, href] of c.hrefs.entries()) {
+        const link = items.nth(i).getByTestId("stream-replay");
+        await expect(link, `${c.name} at ${w} #${i}: where it leads`).toHaveAttribute("href", href);
+        // Told apart by TEXT: the club's own link says "Your stream link", never a second "Watch replay".
+        await expect(link, `${c.name} at ${w} #${i}: what it says`).toHaveText(c.labels[i]);
+        await expectTappable(link, `${c.name} link #${i} at ${w}`);
+        await expectTappable(items.nth(i).getByTestId("stream-replay-copy"), `${c.name} Copy link #${i} at ${w}`);
+        rowsRead++;
+      }
+      // Part labels only beside two or more parts; the times line says it is the latest session's only then.
+      await expect(area.getByTestId("stream-replay-part"), `${c.name} at ${w}: part labels`).toHaveText(c.partLabels);
+      const times = area.getByTestId("stream-replay-times");
+      await expect(times).toHaveText(/\d{1,2}:\d{2}.+\d{1,2}:\d{2}/);
+      const latest = en("stream.replay.latestSession", { times: "" }).trim();
+      if (c.latest) await expect(times, `${c.name} at ${w}: the times line names the latest session`).toContainText(latest);
+      else await expect(times, `${c.name} at ${w}: one replay, so the times line is just when it ran`).not.toContainText(latest);
+      // The mark follows the LINK: a YouTube part wears the official icon (inside the link), the club's own link wears none.
+      expect(await expectOfficialIcons(area, `${c.name} at ${w}`), `${c.name} at ${w}: one icon per YouTube link`).toBe(c.icons);
+      if (c.name === "one-part-club-link") await expectNoYoutubeLogo(items.nth(1), `the club's own link at ${w}`);
+      await expectNoPageScroll(page, `the replay parts (${c.name}) at ${w}`);
+      await shot(page, `panel-replay-${c.name}-${w}`);
+    }
+    casesWalked++;
+  }
+  expect(casesWalked, "anti-vacuity: every shape was walked").toBe(cases.length);
+  expect(rowsRead, "anti-vacuity: every link of every shape was read at every width").toBe(WIDTHS.length * cases.reduce((n, c) => n + c.hrefs.length, 0));
 });
