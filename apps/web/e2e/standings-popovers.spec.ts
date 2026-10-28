@@ -1067,11 +1067,13 @@ test.describe("W2d T17: the lots note, the level table and the head-to-head note
     await ctx?.close().catch(() => {});
   });
 
-  /** The calendar days the stored instant can fall on in any zone, as the page spells them (en, medium). */
+  /** The calendar days the stored instant can fall on in any zone, as the page spells them: English medium dates are
+   *  day-month ("28 Oct 2026"), never the US "Oct 28, 2026" a bare "en" gives Intl (owner ruling 2026-09-16, cited at
+   *  lib/public-date-locale.ts). Typed from the ruling, not imported from that helper: the oracle is not the code under test. */
   const drawnLines = (iso: string) =>
     ["Etc/GMT+12", "UTC", "Etc/GMT-14"].map((timeZone) =>
       dictString("en", "table.tieNote.drawnAt", {
-        date: new Intl.DateTimeFormat("en", { dateStyle: "medium", timeZone }).format(new Date(iso)),
+        date: new Intl.DateTimeFormat("en-GB", { dateStyle: "medium", timeZone }).format(new Date(iso)),
       }),
     );
 
@@ -1104,7 +1106,11 @@ test.describe("W2d T17: the lots note, the level table and the head-to-head note
       await page.goto(pathOf(seeded.level!), { waitUntil: "load" });
       await ready(page);
       const scope = surface === "division page" ? page.locator("#panel-standings") : page.getByTestId("mh-tab-panel-table");
-      const rows = scope.locator("tbody tr");
+      // The standings table's own rows: its named scroll region. The division page also mounts the round-robin results
+      // matrix (`results-matrix.tsx`, no region) in the same panel, whose rows are not standings rows.
+      const table = scope.getByRole("region").filter({ has: page.locator("table") });
+      await expect(table, "one standings table in the panel").toHaveCount(1);
+      const rows = table.locator("tbody tr");
       await expect(rows).toHaveCount(3);
       let checked = 0;
       for (const id of Object.values(seeded.level!.ids)) {

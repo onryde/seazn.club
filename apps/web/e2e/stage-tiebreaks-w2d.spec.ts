@@ -179,7 +179,9 @@ test("football league: the order is inherited, overridden (a move, an added step
 
   // --- the division save's negative: no stage is pinned yet, so nothing is said about one ----------------------------------
   await openFormat(page, request, rig.divisionId);
-  const win = page.getByRole("spinbutton", { name: L["divset.win"]! });
+  // `exact`: the name match is a case-insensitive substring, and football's Format form also carries "Substitution
+  // WINdows allowed" (lib/match-rules/football.ts).
+  const win = page.getByRole("spinbutton", { name: L["divset.win"]!, exact: true });
   const before = Number(await win.inputValue());
   await win.fill(String(before + 1));
   await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
@@ -239,7 +241,7 @@ test("football league: the order is inherited, overridden (a move, an added step
 
   // --- a division points save after the pin lands, and says the pinned stage keeps what it started with (PR B carry I3) -----
   await openFormat(page, request, rig.divisionId);
-  const win2 = page.getByRole("spinbutton", { name: L["divset.win"]! });
+  const win2 = page.getByRole("spinbutton", { name: L["divset.win"]!, exact: true });
   await win2.fill(String(Number(await win2.inputValue()) + 1));
   await page.getByRole("button", { name: L["divset.saveRules"]! }).click();
   await expect(page.getByText(L["divset.notice.rulesSaved"]!)).toBeVisible({ timeout: STEP_MS });
