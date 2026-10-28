@@ -197,7 +197,15 @@ async function retireC3Rows(ids?: string[]): Promise<void> {
  *  returned) tells the two apart in the message: a baseline stable across every attempt is not drift. */
 async function admitAgainstPool(
   r: Awaited<ReturnType<typeof rig>>, pool: { used: number; headroomBeforeOwn: number; ownReserved: number },
-): Promise<{ made: { sessionId: string } | null; refusal: unknown; snapshot: { reserved: number; headroom: number }; attempts: number; retired: string[] }> {
+  /** E1b: a write the test makes between attempt `i`'s baseline read and its admission's read — the drift a concurrent suite
+   *  makes in CI, made on purpose. */
+  perturb?: (attempt: number) => Promise<void>,
+): Promise<{
+  made: { sessionId: string } | null; refusal: unknown; snapshot: { reserved: number; headroom: number }; attempts: number; retired: string[];
+  /** `relay.storage_overcommitted` reports made by the SETTLED attempt alone. A discarded attempt read a pool that moved under
+   *  it, so its report (or silence) is that drifted read's, not the settled admission's (CI run 40688809103: one stray report). */
+  overcommitReports: number;
+}> {
   const at = r.deps.now();
   const tried: { foreign: number; reserved: number; after: number }[] = [];
   const retired: string[] = [];
@@ -208,12 +216,15 @@ async function admitAgainstPool(
       let foreign = -1;
       r.ingest.storageUsage = async () => {
         foreign = await foreignBaseline(r);
+        await perturb?.(i);
         limit = pool.used + foreign + pool.headroomBeforeOwn;
         return { totalStorageMinutes: pool.used, totalStorageMinutesLimit: limit, videoCount: 3 };
       };
       const [{ mark }] = await sql<{ mark: string }[]>`select coalesce(max(id), 0)::text as mark from stream_storage_snapshots`;
+      const callsBefore = sentry.captureError.mock.calls.length;
       const outcome = await createSession(r.auth, r.fixtureId, body(r.target.id), r.deps).then(
         (made) => ({ made, refusal: null as unknown }), (refusal: unknown) => ({ made: null, refusal }));
+      const overcommitReports = sentry.captureError.mock.calls.slice(callsBefore).filter(([, ctx]) => (ctx as { route?: string }).route === "relay.storage_overcommitted").length;
       const snaps = await sql<{ reserved: number; headroom: number }[]>`
         select reserved_minutes as reserved, headroom_minutes as headroom from stream_storage_snapshots
          where id > ${mark}::bigint and source = 'admission' and taken_at = ${at} and used_minutes = ${pool.used} and limit_minutes = ${limit}`;
@@ -222,7 +233,7 @@ async function admitAgainstPool(
       expect(snaps, "one admission, one snapshot").toHaveLength(1);
       const snapshot = snaps[0]!;
       tried.push({ foreign, reserved: snapshot.reserved, after: await foreignBaseline(r) });
-      if (snapshot.reserved === foreign + pool.ownReserved) return { ...outcome, snapshot, attempts: tried.length, retired };
+      if (snapshot.reserved === foreign + pool.ownReserved) return { ...outcome, snapshot, attempts: tried.length, retired, overcommitReports };
       if (outcome.made) {
         retired.push(outcome.made.sessionId);
         await retireC3Rows([outcome.made.sessionId]);
@@ -498,9 +509,54 @@ describe.skipIf(!HAS_DB)("stream sessions — the application layer", () => {
       const admitted = await admitAgainstPool(r, { ...pool, ownReserved: 0 });
       expect(admitted.refusal).toBeNull();
       expect(admitted.snapshot.headroom).toBeGreaterThanOrEqual(0);
-      expect(overcommit(), "a pool with room is silent").toHaveLength(0);
+      // The SETTLED attempt's reports only: an attempt the pool drifted under is discarded, and its read may have been negative.
+      expect(admitted.overcommitReports, "a pool with room is silent").toBe(0);
     } finally {
       await retireC3Rows(others);
+    }
+  });
+
+  // CI run 40688809103: E1's positive pair counted a report made by an attempt `admitAgainstPool` had DISCARDED — a concurrent
+  // suite's rows landed between that attempt's baseline read and its admission's read, which came out negative. The drift is
+  // made here on purpose: three live rows seated after attempt 0's baseline read, retired before attempt 1's admission read.
+  it("E1b: a discarded (drifted) attempt's overcommit report does not count against the settled attempt", async () => {
+    await retireC3Rows();
+    const r = await rig({ credits: 1 });
+    r.tick(C3_CLOCK_JUMP_MS);
+    const rigNow = r.deps.now();
+    const driftRigs = [await rig({ credits: 1 }), await rig({ credits: 1 }), await rig({ credits: 1 })];
+    const drift: string[] = [];
+    const overcommit = () => sentry.captureError.mock.calls.filter(([, ctx]) => (ctx as { route?: string }).route === "relay.storage_overcommitted");
+    // E1's positive pair: room for everything but the drift, which outgrows it by SHORT — so only the drifted read is negative.
+    const SHORT = 10;
+    const driftReserved = driftRigs.length * RECORDINGS_PER_SESSION.passthrough * RESERVATION_BUFFER_MINUTES;
+    const pool = { used: 100, headroomBeforeOwn: driftReserved - SHORT, ownReserved: 0 };
+    try {
+      sentry.captureError.mockClear();
+      const admitted = await admitAgainstPool(r, pool, async (attempt) => {
+        if (attempt === 0) {
+          for (const o of driftRigs) {
+            const [s] = await sql<{ id: string }[]>`
+              insert into fixture_stream_sessions (fixture_id, org_id, mode, state, target_id, created_by, started_at,
+                                                   sport_key, competition_id, division_id, entitlement_via_override)
+              select ${o.fixtureId}, ${o.auth.orgId}, 'passthrough', 'live', ${o.target.id}, ${o.auth.userId}, ${rigNow},
+                     d.sport_key, d.competition_id, f.division_id, true
+                from fixtures f join divisions d on d.id = f.division_id where f.id = ${o.fixtureId}
+              returning id`;
+            drift.push(s!.id);
+          }
+        }
+        if (attempt === 1) await retireC3Rows(drift);
+      });
+      expect(drift, "the drift seated its rows on attempt 0").toHaveLength(driftRigs.length);
+      expect(await reservedBy(drift), "the drift outgrows the pool's room by SHORT").toBe(pool.headroomBeforeOwn + SHORT);
+      expect(admitted.attempts, "the drift forced a retry (else nothing here was discarded)").toBeGreaterThanOrEqual(2);
+      expect(overcommit().length, "the discarded attempt's negative read really reported").toBeGreaterThanOrEqual(1);
+      expect(admitted.overcommitReports, "the settled attempt reported nothing").toBe(0);
+      expect(admitted.refusal).toBeNull();
+      expect(admitted.snapshot.headroom).toBeGreaterThanOrEqual(0);
+    } finally {
+      await retireC3Rows(drift);
     }
   });
 
