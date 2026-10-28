@@ -198,6 +198,27 @@ describe("R157 labels and help come through the dictionary, in all four locales"
     expect(field.help).toMatch(/ball by ball/i);
     expect(field.help).toMatch(/summary/i);
   });
+
+  // M2 (review): the rolling-subs help names the variants that set it. The set is the ENGINE's (the football presets that carry
+  // `rollingSubs: true`), so a variant added to the list owes the copy; every locale names mini-soccer (its word for it).
+  it("R157 the rolling-subs help names every football variant that sets it (youth, small-sided, mini-soccer), in every locale", () => {
+    const football = moduleOf("football");
+    const setting = Object.entries(football.variants as Record<string, Record<string, unknown>>)
+      .filter(([, v]) => v.rollingSubs === true)
+      .map(([name]) => name);
+    expect(setting, "premise: the engine's variants that set it").toEqual(expect.arrayContaining(["youth", "small-sided", "mini-soccer"]));
+    const field = fieldOf("football", "rollingSubs")!;
+    for (const name of setting) expect(field.help, `en help names ${name}`).toContain(name);
+    let judged = 0;
+    for (const locale of ["en", "es", "fr", "nl"]) {
+      expect(LOCALES[locale]![field.helpKey!], `${locale} names mini-soccer`).toMatch(/mini/i);
+      judged++;
+    }
+    expect(judged).toBe(4);
+    // 11-a-side does not set it, and the help still says so (the negative pair).
+    expect(football.variants["11-a-side"]).not.toHaveProperty("rollingSubs");
+    expect(field.help).toContain("11-a-side");
+  });
 });
 
 describe("R157 superOverStillTied is a detail of the super over: held while it is off, free while it is on", () => {

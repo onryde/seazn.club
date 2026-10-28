@@ -2235,7 +2235,7 @@
   "rules.field.superOverStillTied.option.boundary_count": "Meeste boundaries wint",
   "rules.field.superOverStillTied.option.shared": "Laten staan als gelijkspel",
   "rules.field.rollingSubs.label": "Doorlopend wisselen",
-  "rules.field.rollingSubs.help": "Gewisselde spelers mogen weer terugkomen en het aantal wissels is niet beperkt. Aan bij de jeugd- en kleine-veldvarianten; uit bij 11 tegen 11.",
+  "rules.field.rollingSubs.help": "Gewisselde spelers mogen weer terugkomen en het aantal wissels is niet beperkt. Aan bij de jeugd-, kleine-veld- en minivoetbalvarianten; uit bij 11 tegen 11.",
   "rules.field.concussionSubs.label": "Wissels bij hersenschudding",
   "rules.field.concussionSubs.help": "Extra wissels die een ploeg mag gebruiken bij vermoeden van hersenschudding, bovenop de toegestane wissels. Leeg = geen (de proef is niet van kracht).",
   "me.photo.upload": "Foto toevoegen",

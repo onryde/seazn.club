@@ -2235,7 +2235,7 @@
   "rules.field.superOverStillTied.option.boundary_count": "Plus de boundaries gagne",
   "rules.field.superOverStillTied.option.shared": "Laisser l'égalité",
   "rules.field.rollingSubs.label": "Remplacements libres",
-  "rules.field.rollingSubs.help": "Les joueurs remplacés peuvent revenir sur le terrain et le nombre de remplacements n'est pas limité. Activé pour les variantes jeunes et à effectif réduit ; désactivé à 11 contre 11.",
+  "rules.field.rollingSubs.help": "Les joueurs remplacés peuvent revenir sur le terrain et le nombre de remplacements n'est pas limité. Activé pour les variantes jeunes, à effectif réduit et mini-foot ; désactivé à 11 contre 11.",
   "rules.field.concussionSubs.label": "Remplaçants pour commotion cérébrale",
   "rules.field.concussionSubs.help": "Remplaçants supplémentaires qu'une équipe peut utiliser en cas de suspicion de commotion, en plus des remplaçants autorisés. Vide = aucun (l'essai n'est pas en vigueur).",
   "me.photo.upload": "Ajouter une photo",

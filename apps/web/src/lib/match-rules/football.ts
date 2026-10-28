@@ -82,7 +82,7 @@ export const FOOTBALL_RULES: RuleField[] = [
     edits: ["rollingSubs"],
     label: "Rolling substitutions",
     labelKey: "rules.field.rollingSubs.label",
-    help: "Substituted players may come back on and there is no cap on substitutions. On in the youth and small-sided variants; off in 11-a-side.",
+    help: "Substituted players may come back on and there is no cap on substitutions. On in the youth, small-sided and mini-soccer variants; off in 11-a-side.",
     helpKey: "rules.field.rollingSubs.help",
     kind: "bool",
     build: (v) => ({ rollingSubs: v === "on" }),

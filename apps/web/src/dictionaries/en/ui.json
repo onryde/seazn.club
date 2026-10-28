@@ -2235,7 +2235,7 @@
   "rules.field.superOverStillTied.option.boundary_count": "Most boundaries wins",
   "rules.field.superOverStillTied.option.shared": "Leave it as a tie",
   "rules.field.rollingSubs.label": "Rolling substitutions",
-  "rules.field.rollingSubs.help": "Substituted players may come back on and there is no cap on substitutions. On in the youth and small-sided variants; off in 11-a-side.",
+  "rules.field.rollingSubs.help": "Substituted players may come back on and there is no cap on substitutions. On in the youth, small-sided and mini-soccer variants; off in 11-a-side.",
   "rules.field.concussionSubs.label": "Concussion substitutes",
   "rules.field.concussionSubs.help": "Extra substitutes a side may use for a suspected concussion, on top of Substitutes allowed. Blank = none (the trial is not in force).",
   "me.photo.upload": "Add photo",

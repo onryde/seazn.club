@@ -2235,7 +2235,7 @@
   "rules.field.superOverStillTied.option.boundary_count": "Más boundaries gana",
   "rules.field.superOverStillTied.option.shared": "Dejarlo como empate",
   "rules.field.rollingSubs.label": "Sustituciones libres",
-  "rules.field.rollingSubs.help": "Los jugadores sustituidos pueden volver a entrar y no hay límite de sustituciones. Activado en las variantes juvenil y de fútbol reducido; desactivado en fútbol 11.",
+  "rules.field.rollingSubs.help": "Los jugadores sustituidos pueden volver a entrar y no hay límite de sustituciones. Activado en las variantes juvenil, de fútbol reducido y minifútbol; desactivado en fútbol 11.",
   "rules.field.concussionSubs.label": "Sustitutos por conmoción cerebral",
   "rules.field.concussionSubs.help": "Sustitutos adicionales que un equipo puede usar por sospecha de conmoción, además de los sustitutos permitidos. En blanco = ninguno (la prueba no está en vigor).",
   "me.photo.upload": "Añadir foto",
