@@ -12,7 +12,10 @@ import { resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "../../../../../..");
 const CI = readFileSync(resolve(ROOT, ".github/workflows/ci.yml"), "utf8");
-const SMOKE = readFileSync(resolve(ROOT, "scripts/smoke.ts"), "utf8");
+// The smoke script is split (scripts/smoke/): the SMOKE_ONLY registry is in its entry, captureV2's labels and composed step
+// count are in the suite's own file.
+const SMOKE_INDEX = readFileSync(resolve(ROOT, "scripts/smoke/index.ts"), "utf8");
+const SMOKE = readFileSync(resolve(ROOT, "scripts/smoke/suites/captureV2.ts"), "utf8");
 
 const SERVER_STEP = "Start a second server with a compositor image (R2004)";
 const SMOKE_STEP = "Run composed smoke (captureV2 against the compositor-image server)";
@@ -82,7 +85,7 @@ describe("R2004 CI smoke: the composed Go live is witnessed against a second ser
     expect(t.get("SMOKE_BASE"), "the smoke's base").toBe(`http://localhost:${port}`);
     expect(server!, "health is polled on that port").toContain(`http://localhost:${port}/api/health`);
     expect(t.get("SMOKE_ONLY")).toBe("captureV2");
-    expect(SMOKE, "captureV2 is a selectable suite").toMatch(/^\s+captureV2: \(\) => captureV2Suite\(\),$/m);
+    expect(SMOKE_INDEX, "captureV2 is a selectable suite").toMatch(/^\s+captureV2: \(\) => captureV2Suite\(\),$/m);
     let checked = 0;
     for (const [k, v] of f) {
       expect(s.get(k), `the second server carries ${k}`).toBe(v);
