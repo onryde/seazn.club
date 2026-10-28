@@ -446,18 +446,18 @@ describe("relayOutputProfile — RELAY_OUTPUT_PROFILE, the composed output the M
   const FIXTURES = resolve(import.meta.dirname, "../../../../../../docs/contracts/fixtures/relay-job.v1");
   const fixtureOutput = (name: string): unknown => (JSON.parse(readFileSync(resolve(FIXTURES, name), "utf8")) as { output: unknown }).output;
 
-  it("each profile deep-equals its contract fixture's `output`; unset and blank are 720p", () => {
+  it("each profile deep-equals its contract fixture's `output`; unset and blank are 1080p (owner ruling 2026-10-27)", () => {
     const p720 = fixtureOutput("session-composed-720p.json");
     const p1080 = fixtureOutput("session-composed-1080p.json");
     expect(p720, "PREMISE: the fixtures carry two different profiles").not.toEqual(p1080);
     expect(config.relayOutputProfile({ RELAY_OUTPUT_PROFILE: "720p" })).toEqual(p720);
     expect(config.relayOutputProfile({ RELAY_OUTPUT_PROFILE: "1080p" })).toEqual(p1080);
-    expect(config.relayOutputProfile({}), "unset → the default").toEqual(p720);
-    expect(config.relayOutputProfile({ RELAY_OUTPUT_PROFILE: "  " }), "blank → the default").toEqual(p720);
+    expect(config.relayOutputProfile({}), "unset → the default").toEqual(p1080);
+    expect(config.relayOutputProfile({ RELAY_OUTPUT_PROFILE: "  " }), "blank → the default").toEqual(p1080);
     // Two calls never share an object a caller could mutate into the next session's facts.
     const a = config.relayOutputProfile({});
     (a as { width: number }).width = 1;
-    expect(config.relayOutputProfile({})).toEqual(p720);
+    expect(config.relayOutputProfile({})).toEqual(p1080);
   });
 
   it("any other value is refused by name — a typo never silently streams the default", () => {

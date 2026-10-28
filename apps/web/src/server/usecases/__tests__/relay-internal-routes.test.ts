@@ -2125,8 +2125,8 @@ describe.skipIf(!HAS_DB)("R2004: a composed session's facts — Input A to read,
     expect(data.input.streamId, "PLAYBACK, not the phone's ingest stream id").not.toBe(camera.srt.streamId);
     expect(data.target).toEqual({ url: programme.rtmps.url, streamKey: programme.rtmps.streamKey });
     expect(data.target.streamKey, "B's key, not the camera's").not.toBe(camera.rtmps.streamKey);
-    const fixture = contractSession("session-composed-720p");
-    expect(data.output, "the default profile is the contract's 720p session").toEqual(fixture.output);
+    const fixture = contractSession("session-composed-1080p");
+    expect(data.output, "the default profile is the contract's 1080p session (owner ruling 2026-10-27)").toEqual(fixture.output);
     expect(data.heartbeatIntervalMs).toBe(fixture.heartbeatIntervalMs);
     expect(RelayJobSession.parse(data), "a strict contract session").toEqual(data);
   });

@@ -49,7 +49,7 @@ const parses = (twin: Twin, value: unknown): boolean => twin.safeParse(value).su
 
 /** `shasum -a 256 docs/contracts/relay-job.v1.json`. A contract change is a DELIBERATE bump: it moves this constant in
  *  the same commit, and the compositor re-vendors the file (C07's pin moves with it). */
-const SHA256 = "284756740ddb7ecf984d5858b19cacb98b3677100e6a69f34bbea4d0c91f97e3";
+const SHA256 = "90a21541970c566d71a0634503708643c7c1c8de1d36730b6ca907f396d321fe";
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook, typed from the compositor's declarations — never read off the twin.
@@ -121,7 +121,8 @@ const STOPPED_ONLY = {
 const COUNTERS = ["inputKicks", "pipelineRebuilds", "sinkSwaps"];
 /** C06 `HealthReport`: `input_kick_alert: bool`, `score_stale: Option<bool>`. */
 const FLAGS = ["inputKickAlert", "scoreStale"];
-/** Global Constraints "Output" (compositor ADR 0005): 720p30 by default, 1080p30 behind a flag. */
+/** Global Constraints "Output" (compositor ADR 0005): 1080p30 by default (owner ruling 2026-10-27, compositor F-033),
+ *  720p30 when set explicitly. */
 const PROFILES: Record<string, Json> = {
   "720p": { width: 1280, height: 720, fps: 30, videoKbps: 4000 },
   "1080p": { width: 1920, height: 1080, fps: 30, videoKbps: 6000 },

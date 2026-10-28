@@ -10,7 +10,7 @@
 //
 // Everything below the budget is the adapter itself. C7 / design §7.1 D4 +
 // recommendation B: the create body carries the OWNER-ruled guest
-// (performance-4x / 8 GB), auto_destroy: true, restart.policy "on-failure" with
+// (performance-6x / 12 GB, owner ruling 2026-10-27), auto_destroy: true, restart.policy "on-failure" with
 // max_retries RUNNER_INPLACE_RESTARTS (R2003, ADR 0004: a crashed compositor is
 // restarted IN PLACE, the same Machine and the same attempt — never a second
 // Machine, so never two compositors on one stream key), stop_config { SIGTERM,
@@ -171,7 +171,7 @@ const SPEC: RunnerSpec = {
 const NAME = machineNameFor(SPEC.sessionId, SPEC.attempt);
 
 describe("FlyRunner", () => {
-  it("create maps the RunnerSpec 1:1 onto the Machines body: C7 values, the domain's attempt-carrying name, session metadata, RELAY_DEADLINE_AT (B)", async () => {
+  it("create maps the RunnerSpec 1:1 onto the Machines body: the ruled guest (2026-10-27) and C7 values, the domain's attempt-carrying name, session metadata, RELAY_DEADLINE_AT (B)", async () => {
     const s = scripted(() => ({ status: 200, body: { id: "m_123", name: NAME, state: "created" } }));
     const runner = new FlyRunner({ client: s.client, image: "registry.fly.io/seazn-relay:abc" });
     const h = await runner.create(SPEC);
@@ -184,7 +184,7 @@ describe("FlyRunner", () => {
       region: "lhr",
       config: {
         image: "registry.fly.io/seazn-relay:abc",
-        guest: { cpus: 4, memory_mb: 8192, cpu_kind: "performance" },
+        guest: { cpus: 6, memory_mb: 12288, cpu_kind: "performance" },
         auto_destroy: true,
         // R2003 (ADR 0004 / 0007): Fly restarts a crashed compositor in place, at most RUNNER_INPLACE_RESTARTS times
         restart: { policy: "on-failure", max_retries: RUNNER_INPLACE_RESTARTS },
@@ -200,7 +200,7 @@ describe("FlyRunner", () => {
     });
     expect(ENV_METADATA_KEY).not.toBe(SESSION_METADATA_KEY);
     // The defaults themselves are the ruled values — a mutant editing config.ts dies here.
-    expect(RUNNER_DEFAULT_GUEST).toEqual({ cpus: 4, memoryMb: 8192, cpuClass: "dedicated" });
+    expect(RUNNER_DEFAULT_GUEST, "owner ruling 2026-10-27: performance-6x / 12 GB").toEqual({ cpus: 6, memoryMb: 12288, cpuClass: "dedicated" });
     expect(RUNNER_DEFAULT_REGION).toBe("lhr");
     expect(RUNNER_INPLACE_RESTARTS, "ADR 0004: on-failure, max_retries 2").toBe(2);
   });

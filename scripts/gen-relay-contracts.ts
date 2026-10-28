@@ -55,7 +55,7 @@ const SESSION: Shape = {
     "input.url": "srt://host:port and nothing else: no path, no query, no userinfo. The stream id and the passphrase travel as their own fields.",
     "input.streamId": "The SRT stream id. A credential.",
     "input.passphrase": "The SRT passphrase. A credential.",
-    output: "Composed only: the programme encode. 720p30 (1280×720, 30 fps, 4000 kbps) by default, 1080p30 (1920×1080, 30 fps, 6000 kbps) when flagged (compositor ADR 0005). A compositor refuses any other profile.",
+    output: "Composed only: the programme encode. 1080p30 (1920×1080, 30 fps, 6000 kbps) by default (owner ruling 2026-10-27, compositor F-033), 720p30 (1280×720, 30 fps, 4000 kbps) when set explicitly (compositor ADR 0005). A compositor refuses any other profile.",
     "output.width": "Pixels.",
     "output.height": "Pixels.",
     "output.fps": "Frames per second.",
