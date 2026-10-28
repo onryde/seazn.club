@@ -17,7 +17,7 @@ import { afterAll, describe, expect, it } from "vitest";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql, withTenant } from "@/lib/db";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
-import type { AnySportModule } from "@seazn/engine/sport";
+import { BO1_MATCH_TIEBREAK, writeConfigIssues, type AnySportModule } from "@seazn/engine/sport";
 import { writeFixtureRulesOverride } from "../fixture-rules";
 import { refuseInvalidatedOverrides } from "../fixture-override-guards";
 import { clearPoolEntrants, undoDivision } from "../history";
@@ -411,4 +411,60 @@ describe.skipIf(!HAS_DB)("Task 11: a DIVISION save never leaves an unstarted mat
       expect((await divisionConfigOf(b.divisionId) as Record<string, unknown>)[c.key]).toEqual(c.fits);
     });
   }
+});
+
+// W2e Task 13 fix round 1 (review M-3; TN-CF-1, RB2A-13): the re-ask also asks the write doors' own refusals
+// (`configWriteIssueList`), not the schema alone (E15: the schema parses a best of 1 with a match tie-break, and a stored
+// one still plays). Each half is writeable alone - a best of 3 match's own match tie-break, a best of 1 division - and the
+// mix the match would resolve is the refused pair.
+describe.skipIf(!HAS_DB)("W2e TN-CF-1: a division or stage save never leaves an unstarted match's own format one the write doors refuse", () => {
+  const tennis = builtinModules.find((m) => m.key === "tennis")!;
+  const tour = tennis.variants.tour as Record<string, unknown>;
+  const MTB = { matchTiebreakTo: 10 };
+  const seed = async (withOwn: boolean) => {
+    const b = await seedBracket({ sport: "tennis", variant: "tour", stageKind: "league", entrants: 2 });
+    const id = b.fixtureIds[0]!;
+    if (withOwn) await writeFixtureRulesOverride(b.auth, [id], { finalSet: MTB });
+    const [d] = await sql<{ config: Record<string, unknown> }[]>`select config from divisions where id = ${b.divisionId}`;
+    return { b, id, no: await fixtureNo(id), division: d!.config };
+  };
+  const stageRules = async (stageId: string) => (await sql<{ config: { rules?: unknown } }[]>`select config from stages where id = ${stageId}`)[0]!.config.rules ?? null;
+  const refused = (id: string, no: number) => ({
+    status: 422,
+    code: "CONFIG_INVALID",
+    extra: { fixture_id: id, issues: [{ path: [], message: BO1_MATCH_TIEBREAK }] },
+    message: expect.stringContaining(`Match ${no} has its own format, which this change would make invalid — ${BO1_MATCH_TIEBREAK.replace(/\.$/, "")}. Set it back`),
+  });
+
+  it("premise: each half writes alone, the mix is the engine's write refusal, and its schema parses the mix (E15)", () => {
+    expect(writeConfigIssues(tennis, { ...tour, finalSet: MTB }), "the match's own format under its best of 3").toEqual([]);
+    expect(writeConfigIssues(tennis, { ...tour, bestOf: 1 }), "a best of 1 division").toEqual([]);
+    expect(tennis.configSchema.safeParse({ ...tour, bestOf: 1, finalSet: MTB }).success).toBe(true);
+    expect(writeConfigIssues(tennis, { ...tour, bestOf: 1, finalSet: MTB })).toEqual([BO1_MATCH_TIEBREAK]);
+  });
+
+  it("TN-CF-1 a division save to best of 1 is refused 422 naming the match; the division is unchanged", async () => {
+    const { b, id, no, division } = await seed(true);
+    await expect(patchDivision(b.auth, b.divisionId, { config: { ...division, bestOf: 1 } })).rejects.toMatchObject(refused(id, no));
+    const [after] = await sql<{ config: unknown }[]>`select config from divisions where id = ${b.divisionId}`;
+    expect(after!.config).toEqual(division);
+  });
+
+  it("TN-CF-1 a stage save to best of 1 is refused 422 naming the match; the stage's rules are unchanged", async () => {
+    const { b, id, no } = await seed(true);
+    const before = await stageRules(b.stageId);
+    await expect(putStageRules(b.auth, b.stageId, { rules: { bestOf: 1 } })).rejects.toMatchObject(refused(id, no));
+    expect(await stageRules(b.stageId)).toEqual(before);
+  });
+
+  it("positive pair and sequence: with no own format both saves go through; with the match set back the refused save then goes through", async () => {
+    const plain = await seed(false);
+    await expect(patchDivision(plain.b.auth, plain.b.divisionId, { config: { ...plain.division, bestOf: 1 } })).resolves.toBeDefined();
+    const plainStage = await seed(false);
+    await expect(putStageRules(plainStage.b.auth, plainStage.b.stageId, { rules: { bestOf: 1 } })).resolves.toMatchObject({ rules: { bestOf: 1 } });
+    const { b, id, division } = await seed(true);
+    await expect(patchDivision(b.auth, b.divisionId, { config: { ...division, bestOf: 1 } })).rejects.toMatchObject({ code: "CONFIG_INVALID" });
+    await writeFixtureRulesOverride(b.auth, [id], null);
+    await expect(patchDivision(b.auth, b.divisionId, { config: { ...division, bestOf: 1 } })).resolves.toBeDefined();
+  });
 });

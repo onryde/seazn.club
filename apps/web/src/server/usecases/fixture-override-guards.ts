@@ -8,6 +8,7 @@ import { HttpError } from "@/lib/errors";
 import { RULE_ERROR_STATUS, ruleErrorMessage } from "@/lib/rule-errors";
 import { LOCKED_FIXTURE_STATUSES } from "@/server/engine-db/append-event";
 import { liveCfg, resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
+import { configWriteIssueList } from "./stage-rules-merge";
 
 // W2c Task 14 — the two guards that keep a match's own format (`fixtures.rules_override`, written only by
 // `fixture-rules.ts` `writeFixtureRulesOverride`) from being lost or invalidated by a write elsewhere. Their own module,
@@ -68,7 +69,8 @@ export function ownFormatNoLongerFits(hit: { id: string; fixture_no: number | nu
  * batch-1 I-A, one layer up (and Task 14's overnight ruling) — a division or stage save must not leave an UNSTARTED
  * match's own format unable to stand. For every unstarted fixture carrying one (in the whole division, or in `stageId`'s
  * stage alone), under the division config about to stand and the stage rules as they are in the database NOW:
- *  1. `division ⊕ stage.rules ⊕ bracketDeciders ⊕ rules_override` must still parse, or the save is refused (422
+ *  1. `division ⊕ stage.rules ⊕ bracketDeciders ⊕ rules_override` must still parse, and be a config the write doors take
+ *     (`configWriteIssueList`, W2e: tennis's best of 1 beside a match tie-break), or the save is refused (422
  *     `CONFIG_INVALID`) naming the match;
  *  2. the match may still differ from its stage in exactly the ways X-SR-2 allows (`checkFixtureOverride`, the engine's
  *     own check, against the stage's PARSED format): a decider it shortened can no longer be longer than the stage's, and
@@ -107,14 +109,24 @@ export async function refuseInvalidatedOverrides(
     const stage = { kind: r.stage_kind, config: r.stage_config };
     const cfg = resolveFixtureCfg({ config_snapshot: null, rules_override: r.rules_override }, nextDivisionConfig, stage, m);
     const parsed = m.configSchema.safeParse(cfg);
-    if (!parsed.success) {
-      const first = parsed.error.issues[0];
+    // W2e Task 13 fix round 1 (review M-3; TN-CF-1): the write doors' own refusals of the mix too. The schema parses a best
+    // of 1 beside a match tie-break (E15), so a division or stage save to best of 1 would otherwise leave a match's own
+    // match tie-break standing as a config no door writes.
+    const written = parsed.success ? configWriteIssueList(m, parsed.data) : [];
+    if (!parsed.success || written.length > 0) {
+      const first = parsed.success ? written[0] : parsed.error.issues[0];
+      // An engine sentence ends in its own full stop; the refusal's own sentence follows it.
+      const why = (first?.message ?? "the sport's rules refuse it").replace(/\.$/, "");
       throw new HttpError(
         422,
-        `${matchName(r.fixture_no)} has its own format, which this change would make invalid — ${first?.message ?? "the sport's rules refuse it"}. Set it back to its stage's format first.`,
+        `${matchName(r.fixture_no)} has its own format, which this change would make invalid — ${why}. Set it back to its stage's format first.`,
         "CONFIG_INVALID",
         // Batch-3 M2: the one wire shape for CONFIG_INVALID's issues, `{path, message}` (http.ts forwards the engine's so).
-        { fixture_id: r.id, field: typeof first?.path[0] === "string" ? first.path[0] : undefined, issues: configIssuesOf(parsed.error) ?? undefined },
+        {
+          fixture_id: r.id,
+          field: typeof first?.path[0] === "string" ? first.path[0] : undefined,
+          issues: parsed.success ? written : (configIssuesOf(parsed.error) ?? undefined),
+        },
       );
     }
     // (2) The stage's own format, parsed - what X-SR-2 compares the match against (fixture-rules.ts step 4). A stage that
