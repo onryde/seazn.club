@@ -50,11 +50,8 @@ export const CHECKER_FILES: readonly string[] = [
 export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([
   ["X-SU-1", "Task 15"],
   ["X-DV-1", "Task 17"],
-  ["BD-VR-1", "Task 3"],
-  ["BD-SE-1", "Task 3"],
   ["BD-SV-1", "Task 16"],
   ["BD-DV-1", "Task 16"],
-  ["VB-SE-1", "Task 3"],
   ["VB-CF-1", "Task 13"],
   ["VB-RO-1", "Task 16"],
   ["TT-CF-1", "Task 13"],

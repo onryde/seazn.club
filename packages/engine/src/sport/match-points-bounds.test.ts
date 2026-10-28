@@ -270,11 +270,13 @@ describe("matchPointsBounds — winsOnly holds on the bye path too (an award thr
   // Pinned exactly (task-3 review minor): a `>= 3` floor let the sweep lose
   // ten of its thirteen cases and stay green. A module or variant that starts
   // or stops claiming winsOnly must show up here as a deliberate edit.
-  it("the sweep covers exactly the 13 module/variant configs that claim winsOnly", () => {
+  // W2e Task 3: badminton's bwf-3x15 (a flat 2/0 map, like bwf) makes it 14.
+  it("the sweep covers exactly the 14 module/variant configs that claim winsOnly", () => {
     expect(claimed).toEqual([
       "volleyball (beach)",
       "badminton (default)",
       "badminton (bwf)",
+      "badminton (bwf-3x15)",
       "badminton (short)",
       "tabletennis (default)",
       "tabletennis (bo5)",

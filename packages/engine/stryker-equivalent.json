@@ -596,19 +596,19 @@
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; the double-walkover credit lays 0 over every key that ledger carries (and excludes them), so the played values are never observable."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2663:60 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2679:60 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = setBasedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "setBasedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2405:9 ConditionalExpression → true",
+      "mutant": "src/sports/setbased/kernel.ts:2419:9 ConditionalExpression → true",
       "original": "reason !== \"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2405:20 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2419:20 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "if (reason !== \"walkover\") {",
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
@@ -728,7 +728,7 @@
       "reason": "Reached only for a draw_plus_bonus sport (a result sport short-circuits to {} first): with no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined`, and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key; W2d Task 3, re-keyed in fix round 1 M-3)."
     },
     {
-      "mutant": "src/sports/setbased/kernel.ts:2419:27 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/kernel.ts:2433:27 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "let next = reason === \"walkover\" || state.sets.length === 0 ? null : state.sets.length;",
       "reason": "An admitted walkover's state has no sets (rulings 112, 114; set-kernel events refuse outside \"live\"; 6,000 admitted walkovers measured), so `state.sets.length === 0` already makes `next` null for it."
@@ -1628,7 +1628,7 @@
       "reason": "The branch runs only when the delivery closed an over, and finishDelivery sets prevOverBowler = currentBowler in that same step with currentBowler non-null, so overBowler is never null; the left operand is always true. The whole-condition `true` variant shares this key and is killed by the maiden counts in scorecard.mutation.test.ts. Probed: with a throw planted on the null case, the 298 scoped tests (src/sports/cricket/__tests__ plus cricket.test.ts, including non-strict reads that name a bowler who does not own the over, retire-out, all-out, super-over and coarse ledgers) never reached it."
     },
     {
-      "mutant": "src/sports/setbased/badminton.ts:54:21 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/badminton.ts:61:21 StringLiteral → \"\"",
       "original": "\"Game\"",
       "line": "unitLabel: { one: \"Game\", many: \"Games\" },",
       "reason": "`unitLabel.one` has no reader: kernel.ts only ever reads `unitLabel.many` (makeMetrics and the folded sets_won/sets_lost labels), the built module does not carry `unitLabel` forward, and nothing else in the package imports it, so the singular label is unobservable."
@@ -1652,7 +1652,7 @@
       "reason": "`serve.setStart` is read in one place, kernel.ts openNextSet, as `rotation.setStart === \"set-winner\"`; the type is the two-value union \"set-winner\" | \"alternate\", so `\"\"` takes the same fall-through branch as \"alternate\" (the next set opens with the opponent of the previous opener) and no stream can tell them apart."
     },
     {
-      "mutant": "src/sports/setbased/volleyball.ts:143:15 StringLiteral → \"\"",
+      "mutant": "src/sports/setbased/volleyball.ts:148:15 StringLiteral → \"\"",
       "original": "\"alternate\"",
       "line": "setStart: \"alternate\",",
       "reason": "`serve.setStart` is read in one place, kernel.ts openNextSet, as `rotation.setStart === \"set-winner\"`; the type is the two-value union \"set-winner\" | \"alternate\", so `\"\"` takes the same fall-through branch as \"alternate\" (the next set opens with the opponent of the previous opener) and no stream can tell them apart."

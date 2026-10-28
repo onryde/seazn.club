@@ -117,6 +117,11 @@ export const volleyball = makeSetBasedModule({
   // S7/#427 — the FIVB ladder verbatim; the kernel enum IS volleyball's own
   // vocabulary (DOMAIN.volleyball.md:38), so all four steps are on the pad.
   sanctionLevels: ["warning", "penalty", "expulsion", "disqualification"],
+  // W2e (spec 2026-10-28 §5.2; D12, D13; VB-SE-1) — an expulsion or a disqualification never ends a volleyball match by
+  // itself (FIVB: the team plays on while it can field six). Right after one, the pad asks whether the team can still
+  // field six; "no" is the incomplete-team ending (VB-RT-1, FIVB 6.4.3), core.forfeit{retired}, which a scorer may send
+  // there and nowhere else (D13). No end level, so the write path refuses nothing after one.
+  sanctionEnding: { eventType: "volleyball.sanction", endLevels: [], promptLevels: ["expulsion", "disqualification"] },
   // R5-1 — FIVB service.
   //  * 12.2.2: the team winning a rally serves the next one (side-out).
   //  * 7.1: sets 2-4 alternate the first service, and THE DECIDING SET IS

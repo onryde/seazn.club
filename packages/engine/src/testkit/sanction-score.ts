@@ -20,8 +20,10 @@ export const SANCTION_SWEEP_EVENTS = 400;
 /**
  * A walk of the module's own generator that is PLAY to the end: a draw of a kernel event other than the start (a forfeit,
  * an abandon) is drawn again rather than taken, because it ends the walk at a state no sanction can follow, and most
- * seeds draw one within the first few events (a badminton walk then never reaches a rally). Every event taken is the
- * generator's own legal draw for the state it was drawn in. `states[i]` is the state after `events[i]`.
+ * seeds draw one within the first few events (a badminton walk then never reaches a rally). So is a sanction at a level
+ * the module declares as match-ending (W2e X-SE-1): the generator's next draw is its ending, a forfeit, so taking it would
+ * end the walk there too. Every event taken is the generator's own legal draw for the state it was drawn in. `states[i]`
+ * is the state after `events[i]`.
  */
 function playWalk(module: AnySportModule, cfg: unknown, lineups: LineupPair, seed: number): { events: EventEnvelope[]; states: unknown[] } {
   if (module.arbitraryEvent === undefined) throw new Error(`${module.key} has no arbitraryEvent to walk`);
@@ -33,6 +35,7 @@ function playWalk(module: AnySportModule, cfg: unknown, lineups: LineupPair, see
     const next = module.arbitraryEvent(state, rng);
     if (next === null) break;
     if (next.type !== "core.start" && isCoreEventType(next.type)) continue;
+    if (endsTheMatch(module, next)) continue;
     const envelope = makeEnvelope(events.length, next);
     state = module.apply(state, envelope);
     events.push(envelope);
@@ -40,6 +43,13 @@ function playWalk(module: AnySportModule, cfg: unknown, lineups: LineupPair, see
     if (module.outcome(state) !== null) break;
   }
   return { events, states };
+}
+
+/** Whether `event` is a sanction at a level the module declares as match-ending (`sanctionEnding.endLevels`). */
+function endsTheMatch(module: AnySportModule, event: { type: string; payload: unknown }): boolean {
+  const decl = module.sanctionEnding;
+  if (decl === undefined || event.type !== decl.eventType) return false;
+  return decl.endLevels.includes((event.payload as { level?: unknown }).level as string);
 }
 
 /** The module's sanction event type, `<key>.sanction`, when its payload registry declares one; else null. */

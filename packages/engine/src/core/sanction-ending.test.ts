@@ -23,9 +23,11 @@ import {
   type SanctionLedgerRow,
 } from "./sanction-ending.ts";
 import { FORFEIT_REASONS, type ForfeitReason, type LineupPair, type MatchOutcome } from "./types.ts";
+import { resolvePositions } from "../sport/catalog.ts";
+import { declaredCfgs } from "../testkit/declared-cfgs.ts";
 import { forEachSport } from "../testkit/for-each-sport.ts";
-import { makeEnvelope } from "../testkit/helpers.ts";
-import { expectSanctionMovesNoScore, sanctionLevelsOf } from "../testkit/sanction-score.ts";
+import { buildStream, defaultLineupPair, makeEnvelope } from "../testkit/helpers.ts";
+import { expectSanctionMovesNoScore, sanctionEventTypeOf, sanctionLevelsOf } from "../testkit/sanction-score.ts";
 
 // ---------------------------------------------------------------------------
 // The stub sport. First side to TARGET points wins. `stub.sanction` is a record only (it moves no score, like every
@@ -536,5 +538,84 @@ describe("X-SE-2 a sanction alone moves no score (anti-goal 4)", () => {
     // Anti-vacuity: zero (module, level) pairs, or zero live states, is a failure.
     expect(swept.length).toBeGreaterThan(0);
     expect(states).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// X-SE-1 on the shipped modules (preflight F1, moved to Task 3): every module that declares an ending.
+// ---------------------------------------------------------------------------
+
+/** Spec 2026-10-28 §5.2's table, with D12: the levels that end a match and the levels after which the pad asks whether
+ *  the team can still field six. A sport named `null` declares nothing; a sport not named here must declare nothing
+ *  either (tennis's `default` row is added by Task 4, which declares it). */
+const SPEC_5_2: Readonly<Record<string, { endLevels: string[]; promptLevels: string[] } | null>> = {
+  badminton: { endLevels: ["disqualification"], promptLevels: [] },
+  volleyball: { endLevels: [], promptLevels: ["expulsion", "disqualification"] },
+  tabletennis: null,
+};
+
+/** Seeds of each declared cfg's generator walk (plan: 200 per declaring module), and the longest walk. */
+const ENDING_SWEEP_SEEDS = 200;
+const ENDING_SWEEP_EVENTS = 400;
+
+describe("X-SE-1 the shipped modules' ending declarations (preflight F1)", () => {
+  it("X-SE-1 every declaring module's declaration holds, names its own sanction event and levels, and is spec §5.2's row", () => {
+    const declaring: string[] = [];
+    const visited = forEachSport(({ key, module }) => {
+      const decl = module.sanctionEnding;
+      const row = Object.hasOwn(SPEC_5_2, key) ? SPEC_5_2[key]! : null;
+      if (decl === undefined) {
+        expect(row, `${key} declares no ending, but spec §5.2 gives it one`).toBeNull();
+        return;
+      }
+      expect(sanctionEndingIssues(decl), key).toEqual([]);
+      expect(decl.eventType, key).toBe(sanctionEventTypeOf(module));
+      const recorded = sanctionLevelsOf(module);
+      for (const level of [...decl.endLevels, ...decl.promptLevels]) expect(recorded, `${key} ${level}`).toContain(level);
+      expect({ endLevels: [...decl.endLevels], promptLevels: [...decl.promptLevels] }, key).toEqual(row);
+      declaring.push(key);
+    });
+    expect(visited).toBeGreaterThan(0);
+    // Both directions: every row of the table is declared by its module, and nothing else declares.
+    expect(declaring.length, "anti-vacuity: no module declares an ending").toBeGreaterThan(0);
+    expect(declaring.sort()).toEqual(Object.keys(SPEC_5_2).filter((k) => SPEC_5_2[k] !== null).sort());
+  });
+
+  it("X-SE-1 seeded arbitrary streams of every declaring module never build a ledger the write path refuses (counted)", () => {
+    const streams: Record<string, number> = {};
+    const endings: Record<string, number> = {};
+    const prompts: Record<string, number> = {};
+    forEachSport(({ key, module }) => {
+      const decl = module.sanctionEnding;
+      if (decl === undefined) return;
+      streams[key] = endings[key] = prompts[key] = 0;
+      for (const { name, cfg } of declaredCfgs(module)) {
+        const lineups = defaultLineupPair(resolvePositions(module, cfg));
+        for (let seed = 1; seed <= ENDING_SWEEP_SEEDS; seed++) {
+          const events = buildStream(module, cfg, lineups, seed, ENDING_SWEEP_EVENTS);
+          const where = `${key} cfg ${name} seed ${seed}`;
+          // The whole walk is new: the strict write path takes every event of it.
+          expect(() => foldMatchWithStoppage(module, cfg, lineups, events, { strictFromSeq: 0 }), where).not.toThrow();
+          streams[key]++;
+          for (const [i, e] of events.entries()) {
+            if (e.type !== decl.eventType) continue;
+            const { by, level } = e.payload as { by: string; level: string };
+            if (decl.promptLevels.includes(level)) prompts[key]++;
+            if (!decl.endLevels.includes(level)) continue;
+            // The generator follows an end-level sanction with its ending at once (spec §5.2).
+            expect(events[i + 1], `${where}: event ${i} (${level} against ${by}) is not followed by its ending`).toMatchObject({
+              type: "core.forfeit",
+              payload: { by, reason: "disqualified" },
+            });
+            endings[key]++;
+          }
+        }
+      }
+      // Anti-vacuity, per module: the walks exist, and they reach each kind of level the module declares.
+      expect(streams[key], key).toBeGreaterThan(0);
+      if (decl.endLevels.length > 0) expect(endings[key], `${key}: no walk drew an end-level sanction`).toBeGreaterThan(0);
+      if (decl.promptLevels.length > 0) expect(prompts[key], `${key}: no walk drew a prompt-level sanction`).toBeGreaterThan(0);
+    });
+    expect(Object.keys(streams).length, "anti-vacuity: no declaring module was swept").toBeGreaterThan(0);
   });
 });
