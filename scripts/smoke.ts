@@ -5,10 +5,11 @@
 // run's own test users + their orgs are purged afterwards (see cleanup). The DB
 // must be the same one the target server uses.
 import { createHmac, randomBytes } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import postgres from "postgres";
 import { selectSmokeSuites, type SmokeSelection } from "./smoke-select.ts";
+import { createManifestRecorder } from "./smoke-manifest.ts";
 import {
   startAiFixtureServer,
   FIXTURE_COMPILE_BRIEF,
@@ -148,6 +149,15 @@ const check = (label: string, cond: boolean) => {
   console.log(`${cond ? "PASS" : "FAIL"}  ${label}`);
   if (cond) pass++;
   else fail++;
+};
+// Per-suite check counts (scripts/smoke-manifest.ts): main() runs each suite as `suite("name", () => nameSuite(...))`, and a
+// run with SMOKE_MANIFEST=<path> writes the counts there when it ends, so a refactor of this file can be diffed against a
+// baseline (scripts/smoke-manifest-diff.ts). A suite's name is its function's name without a trailing `Suite`.
+const manifest = createManifestRecorder(() => pass + fail);
+const suite = manifest.run;
+const writeManifest = () => {
+  const path = process.env.SMOKE_MANIFEST;
+  if (path) writeFileSync(path, JSON.stringify(manifest.entries(), null, 2));
 };
 async function expectFail(label: string, fn: () => Promise<unknown>) {
   try {
@@ -748,7 +758,7 @@ async function main() {
   await insertEntitlementOverride(admin, org2.id, "dashboard.public.max", 100);
 
   // --- Platform API /api/v1 (PROMPT-11) — the full engine v2 lifecycle ---
-  await v1Suite(admin, org2.id, renamed.slug);
+  await suite("v1", () => v1Suite(admin, org2.id, renamed.slug));
 
   // --- Jul3 feature wave (PROMPT-21..28) over real HTTP ---
   // The advanced features are entitlement-gated — org2 must be Pro (and it
@@ -759,30 +769,30 @@ async function main() {
   // second source of truth for it. If it ever starts mattering again, the
   // billing-group checks above have regressed first.
   await setPlan(org2.id, "pro", admin);
-  await jul3Suite(admin, org2.id, renamed.slug);
+  await suite("jul3", () => jul3Suite(admin, org2.id, renamed.slug));
 
   // --- Division delete/archive lifecycle (PROMPT-38, v3/09 §4): delete on a
   // free org lifts the divisions quota; archive/restore on the Pro org.
-  await divisionLifecycleSuite(admin, org2.id);
+  await suite("divisionLifecycle", () => divisionLifecycleSuite(admin, org2.id));
 
   // --- v3 UI system (PROMPT-32): card grid render + visibility flip on both
   // plans — pro on org2, free on a fresh community owner.
-  await uiSystemSuite(admin, renamed.slug);
+  await suite("uiSystem", () => uiSystemSuite(admin, renamed.slug));
 
   // --- v3 scheduling board + registration v2 (PROMPT-33/34): board render,
   // seq-tokened reschedule + stale 409, SZ refs + /r/[ref] on pro AND free.
-  await schedRegV3Suite(admin, renamed.slug, org2.id);
+  await suite("schedRegV3", () => schedRegV3Suite(admin, renamed.slug, org2.id));
 
   // --- Board redesign (2026-08-10): legend duplicated below the grid, and
   // blackout windows highlighted on the grid (own tiny rig, see the suite
   // function below).
-  await boardRedesignSuite(admin, renamed.slug);
+  await suite("boardRedesign", () => boardRedesignSuite(admin, renamed.slug));
 
   // --- #452 scheduling CONSTRAINT surface: a durable `constraints.hard` rule
   // on a real bracket and a pool-targeted `restByGroup` on a `group` stage,
   // asserted on auto / apply / board report / drag. Keyless (no model), own Pro
   // org, so it runs on every smoke invocation.
-  await schedulingConstraintsSuite();
+  await suite("schedulingConstraints", () => schedulingConstraintsSuite());
 
   // --- T14 auto-schedule: all three solver modes (build / re-flow / polish)
   // against a real division, asserting the returned telemetry. The load-bearing
@@ -790,20 +800,20 @@ async function main() {
   // run from the greedy fallback the server takes when the placement service
   // is unreachable, and no unit test can see that difference.
   // Keyless, own Pro org, so it runs on every smoke invocation.
-  await autoScheduleSuite();
+  await suite("autoSchedule", () => autoScheduleSuite());
 
   // --- P9 pass 5: a full schedule round on an org with TWO VENUES, not one
   // venue with two courts (the shape every other court-seeding suite in this
   // file, autoScheduleSuite included, already uses). Asserts the build
   // actually resolved courts across both venues, not just placed on two
   // courts that happened to share one. Keyless, own Pro org.
-  await twoVenueScheduleSuite();
+  await suite("twoVenueSchedule", () => twoVenueScheduleSuite());
 
   // --- Task 11 placement cutover: a board sized so beating greedy is not
   // just possible but REQUIRED — the scenario the four-value engine
   // allow-list above cannot be. Self-gates on PLACEMENT_SERVICE_HOST and
   // skips loudly when the service is unreachable (see its own docblock).
-  await placementOptimizedSuite();
+  await suite("placementOptimized", () => placementOptimizedSuite());
 
   // --- Task C2: the per-court-grid capability gap. Before C2 a court-scoped
   // blackout left the configured courts offering different start-time
@@ -811,15 +821,15 @@ async function main() {
   // (`not_searched`/`per_court_grid`) rather than send to placement — the
   // optimiser was switched off for the division, permanently, for as long
   // as the blackout stood. Same self-gate as the suite above.
-  await placementPerCourtBlackoutSuite();
+  await suite("placementPerCourtBlackout", () => placementPerCourtBlackoutSuite());
 
   // --- v10 sponsor CRM: tiers + placement + tracked clicks + Connect rail
   // on the pro org; flat free strip + 402 gates on a fresh community owner.
-  await sponsorsSuite(admin, org2.id, renamed.slug);
+  await suite("sponsors", () => sponsorsSuite(admin, org2.id, renamed.slug));
 
   // --- D5/P8 venues & courts: CRUD + calendar PUT on the pro org, plus the
   // VENUE_NOT_EMPTY and (DB-gated) COURT_IN_USE 409s.
-  await venuesSuite(admin, org2.id);
+  await suite("venues", () => venuesSuite(admin, org2.id));
 
   // --- P9.5 (D5b.5): court_hours/court_exceptions actually GOVERN
   // scheduling now, through the one function every side reads through
@@ -829,16 +839,16 @@ async function main() {
   // here is about the shared usableWindows gate itself, which the GREEDY
   // fallback already exercises (unlike the placement-cutover suites above,
   // which exist specifically to prove the optimizer beats greedy).
-  await courtHoursSuite();
+  await suite("courtHours", () => courtHoursSuite());
 
   // Own fresh org, and it CHANGES PLAN mid-suite — hence its own, rather than
   // riding boardRedesignSuite's import checks, which must stay on Pro.
-  await importCapAtCommitSuite();
+  await suite("importCapAtCommit", () => importCapAtCommitSuite());
 
   // --- v13 real-competition fidelity: badge + inline members, ad-hoc match,
   // knockout draw guard, bracket poster, signed audit (pro 200 / free 402),
   // public presentation mode.
-  await v13Suite(admin, org2.id, renamed.slug);
+  await suite("v13", () => v13Suite(admin, org2.id, renamed.slug));
 
   // --- v4 AI Schedule Architect (Task 18): two-phase happy path on a fresh Pro
   // Plus org (schedule ai-plan → apply+ledger → ai-last → officials draft) plus
@@ -846,13 +856,13 @@ async function main() {
   // (v17 Phase 2, V320+ — replaced the old graded per-division run cap).
   // The T17 fixture server stands in for the model (needs the server booted with
   // SCHEDULING_AI_BASE_URL); the wallet 402 is keyless-safe and always runs.
-  await v4AiSuite(admin, org2.id, renamed.slug);
+  await suite("v4Ai", () => v4AiSuite(admin, org2.id, renamed.slug));
 
   // --- C1 gap B: the AI planning path's round-order blind spot, over real
   // HTTP (own fresh paid session — not an entitlement gate). Needs the
   // same T17 fixture server as v4AiSuite; skips the same way when
   // SCHEDULING_AI_BASE_URL is unset.
-  await scheduleAiRoundOrderSuite();
+  await suite("scheduleAiRoundOrder", () => scheduleAiRoundOrderSuite());
 
   // --- #350 multi-division JOINT AI scheduling: the batch-discount price
   // (rungs 2+3 → 4 credits, budget sized from the undiscounted 5) and the
@@ -860,21 +870,21 @@ async function main() {
   // happen before any model call — a one-division request (400) and a wallet
   // that cannot cover the quote (402). The refusals are keyless-safe; the
   // priced run needs the T17 fixture server.
-  await jointAiSuite();
+  await suite("jointAi", () => jointAiSuite());
 
-  await pagePlayoffSuite(admin);
-  await qualifyFromAnyStageSuite(admin);
+  await suite("pagePlayoff", () => pagePlayoffSuite(admin));
+  await suite("qualifyFromAnyStage", () => qualifyFromAnyStageSuite(admin));
 
   // --- v16 SPEC-1 discipline: 5-yellow auto ban → confirm → public strip on
   // the Pro org; 402 + PlusReveal on a fresh community owner.
-  await disciplineSuite(admin, org2.id, renamed.slug);
+  await suite("discipline", () => disciplineSuite(admin, org2.id, renamed.slug));
 
   // --- S8/#417 W6: per-sport player stats over real HTTP — an explicit
   // scorer (football.goal) and the v1-era entrant-only fallback
   // (badminton.rally's wonBy alone), each asserted on real numbers out of
   // /api/v1/divisions/{id}/stats/players. Own fresh competitions on org2
   // (already Pro); keyless-safe.
-  await playerStatsSuite(admin, org2.id);
+  await suite("playerStats", () => playerStatsSuite(admin, org2.id));
 
   // --- S13/W11: the v2 ScorePad's append path (transport.ts/
   // use-pad-pipeline.ts) had ZERO real-HTTP smoke coverage — closes the
@@ -885,87 +895,87 @@ async function main() {
   // one-event smoke cannot see. Own fresh competitions on org2 (already
   // Pro); the free half mints its own community org — keyless-safe, no
   // entitlement grant.
-  await scorePadV2AppendSuite(admin, org2.id);
+  await suite("scorePadV2Append", () => scorePadV2AppendSuite(admin, org2.id));
 
   // --- R8 sweep task G, inverted by W1 (entitlements v18): a football.shot
   // band-3 action reachable on org2 (Pro) and EQUALLY reachable on a fresh
   // community org — recording detail is not a plan boundary any more — with a
   // band-0 control proving the free org isn't just blanket-accepted. ---
-  await footballFidelityGateSuite(admin, org2.id);
+  await suite("footballFidelityGate", () => footballFidelityGateSuite(admin, org2.id));
 
   // --- R8 sweep, task G: cricket's ball-by-ball and over-by-over lanes,
   // driven with the v3 pad's own payload shapes, on two fixtures (the lanes
   // lock per innings on whichever event opens it) — plus the cross-lane
   // refusal in both directions, proving the exclusion rather than just
   // asserting each lane in isolation. ---
-  await cricketBothLanesSuite(admin, org2.id);
+  await suite("cricketBothLanes", () => cricketBothLanesSuite(admin, org2.id));
 
   // --- v16 SPEC-3 marks & reports: rate an accepted, decided official (Pro
   // 204 + summary avg) and file/submit a report (free) on org2; mark PUT 402
   // on a fresh community org while the report still files. Runs while org2 is
   // still Pro (the destructive downgrade is gapSuite, last).
-  await marksReportsSuite(admin, org2.id, renamed.slug);
+  await suite("marksReports", () => marksReportsSuite(admin, org2.id, renamed.slug));
 
   // --- v16 SPEC-2 news: opt-in division auto-drafts a result on the decided
   // seam → publish → public feed/post/story.png on the Pro org; manual post
   // publishes free on a fresh community org, whose auto toggle is gated 402.
-  await newsSuite(admin, org2.id, renamed.slug);
+  await suite("news", () => newsSuite(admin, org2.id, renamed.slug));
 
   // --- v3 content + API wave (PROMPT-35/37/39): markdown editor render,
   // /help + /developers, scoped keys, OG/poster/embed/sponsors — pro + free.
-  await v3ContentApiSuite(admin, org2.id, renamed.slug);
+  await suite("v3ContentApi", () => v3ContentApiSuite(admin, org2.id, renamed.slug));
 
   // --- streaming T1: the routes the visual gate photographs still answer
   // with the markup its manifest awaits (`[data-testid=mc-score-0]` and
   // `table`; the suite's own JSDoc says why a heading probe is unsafe — the
   // branded 404 renders an `<h1>` in the same `<main>`). Same pro org — the
   // embed widget 404s below Pro.
-  await visualSeedRoutesSuite(admin, renamed.slug);
+  await suite("visualSeedRoutes", () => visualSeedRoutesSuite(admin, renamed.slug));
 
   // --- stream overlay W1 (Task 8): the overlay route over real HTTP, and the
   // manifest's own `stream-overlay` group's counterpart. Its own fresh orgs —
   // since V426 every plan grants `streaming.overlay`, so the gate's negative is
   // an org-WIDE override-false row, and writing it on the shared Pro org would
   // take the OBS panel off every fixtures tab this file asserts on.
-  await streamOverlaySuite();
+  await suite("streamOverlay", () => streamOverlaySuite());
 
   // --- fixture-page stream T2b: streaming destinations over real HTTP — add, rename, replace key, remove (an archive),
   // remove again (404), re-add the same key (restored: the same id). On the shared Pro org; archives all it creates.
-  await streamTargetsSuite(admin, org2.id);
+  await suite("streamTargets", () => streamTargetsSuite(admin, org2.id));
   // --- capture QR v2 (spec 2026-10-01 §11.1.6): the phone routes end to end — mint, claim, Go live, go-live, the
   //     descriptor's cred (and none for a second phone), the fake connect, live, Stop, over; every answer private.
-  await captureV2Suite();
+  await suite("captureV2", () => captureV2Suite());
   // --- capture record upload (spec 2026-10-12 §13.2, case `capture-record`): a phone's Send record over the real route —
   //     another code's line and a bad line dropped (owner ruling RL), the body-level refusals, every answer private.
-  await captureRecordSuite();
+  await suite("captureRecord", () => captureRecordSuite());
 
   // --- the above-Pro rung (Task 11): community's save-point window and its
   // ungated officials, api.write re-armed above Pro, and the rung above Pro
   // lifting the window and minting the key — own fresh org, restores its own
   // plan before returning (shared-DB poison trap).
-  await aboveProRungSuite();
+  await suite("aboveProRung", () => aboveProRungSuite());
 
   // --- PROMPT-36 pricing v3: free caps, Event Pass lift + scope isolation,
   // pro interplay, pass survival after downgrade — and the /start funnel
   // end-to-end (draft → claim link → inside the created competition).
-  await pricingV3Suite();
-  await funnelSuite();
+  await suite("pricingV3", () => pricingV3Suite());
+  await suite("funnel", () => funnelSuite());
   // Email outbox, phase 3 wave 5 (Task 8): a day-old unclaimed draft gets ONE
   // queued funnel_reminder from the real cron route, and a second run none.
   // No session; needs CRON_SECRET and skips cleanly without it.
-  await funnelReminderSuite();
+  await suite("funnelReminder", () => funnelReminderSuite());
 
   // --- PROMPT-40 marketing redesign (design/v3/12).
-  await marketingSuite();
+  await suite("marketing", () => marketingSuite());
 
   // --- v5 i18n: marketing [lang] routing + translated copy.
-  await i18nSuite();
+  await suite("i18n", () => i18nSuite());
 
   // --- Growth-wave gaps (device links, official scoring, discovery, registration,
   // ownership transfer, downgrade freeze) — pro paths on org2, free paths on a
   // fresh community owner. Destructive downgrade runs last.
   // --- v8: division settings — format lock + logo upload URL.
-  await divisionSettingsSuite(admin);
+  await suite("divisionSettings", () => divisionSettingsSuite(admin));
 
   // --- F5 test debt Task 4 (F1's owed check, 2026-08-17 design §5): the
   // bracket round-role columns (lane/is_final/third_place, V368) and the bye
@@ -984,134 +994,134 @@ async function main() {
 
   // --- Date/time UX programme, Prompt 09: the court-removal guard added in
   // P08 (own fresh free session — not an entitlement gate).
-  await scheduleCourtRemovalGuardSuite();
+  await suite("scheduleCourtRemovalGuard", () => scheduleCourtRemovalGuardSuite());
 
   // --- Date/time UX programme, Prompt 09 follow-up: the minimum-rest floor
   // (`restFloor`, #459) — perEntrantMinRest vs constraints.restMin
   // disagreeing resolves to the MAX over a real PUT/GET round trip, both
   // directions (own fresh free session — not an entitlement gate).
-  await scheduleRestFloorSuite();
+  await suite("scheduleRestFloor", () => scheduleRestFloorSuite());
 
   // --- P1/D2: capacity pre-check — server is the authority, not just the
   // UI's client-side recompute (own fresh free session — not an entitlement
   // gate).
-  await capacityPrecheckSuite();
+  await suite("capacityPrecheck", () => capacityPrecheckSuite());
 
   // --- P4/D1a: format templates — instantiate one through the real route,
   // confirm normal flow continues on it, and the entitlement gate holds
   // through the route (own fresh free session — not an entitlement gate).
-  await templateInstantiationSuite();
+  await suite("templateInstantiation", () => templateInstantiationSuite());
 
   // --- P2/D3: schedule health — the real route, refusal before apply,
   // homeAwayAlternation actually present for a table-shaped stage (own
   // fresh free session — not an entitlement gate).
-  await scheduleHealthSuite();
+  await suite("scheduleHealth", () => scheduleHealthSuite());
 
   // --- D4a/P5: stage progression — seed -> complete -> propose -> confirm ->
   // next stage playable (own fresh free session — not an entitlement gate).
-  await stageProgressionSuite();
+  await suite("stageProgression", () => stageProgressionSuite());
 
   // --- Swiss Knockout: a COMMUNITY org builds the composite through the real
   // route (the live plan matrix, not the gate function), and a Top 3 lands as
   // a one-bye bracket of four.
-  await swissKnockoutSuite();
+  await suite("swissKnockout", () => swissKnockoutSuite());
 
   // --- F3 Task 5: roster-drift rebuild — withdraw pre-start, rebuild drops
   // the stale name and picks up a late registration; a separate division
   // proves the 409 refusal once a fixture already has a result (own fresh
   // free session — not an entitlement gate).
-  await stageRosterDriftSuite();
+  await suite("stageRosterDrift", () => stageRosterDriftSuite());
 
   // --- F10 (Swiss withdrawal walkthrough, 2026-09-21): the PUBLIC standings
   // table names a withdrawn entrant rather than printing her raw entrant id.
   // V412 widened `public_entrants_v` to publish departed entrants; this is the
   // view, the page and the table's `?? row.entrantId` fall-through proved
   // together over real HTTP (own fresh free session — not an entitlement gate).
-  await publicWithdrawnStandingsSuite();
+  await suite("publicWithdrawnStandings", () => publicWithdrawnStandingsSuite());
 
   // --- 2026-09-22 standings qualification status: the public division page
   // marks each row's status, draws the cut line after place N and keys the
   // markers in a legend; a league with no next stage draws none of it (V414's
   // meta read, the snapshot, the builder and the table's prop, over real HTTP;
   // own fresh free session — not an entitlement gate).
-  await publicQualificationStandingsSuite();
+  await suite("publicQualificationStandings", () => publicQualificationStandingsSuite());
 
   // --- 2026-09-22 (production: "Sankar & Ritwik" outlived Ritwik): a roster
   // swap renames a pair whose name its people derived, never a custom one, and
   // the public division page shows the rename on the very next load — the
   // entrant PATCH now expires the division's public tag (own fresh free
   // session — not an entitlement gate).
-  await entrantRenameSuite();
+  await suite("entrantRename", () => entrantRenameSuite());
 
   // --- C1 fix-loop (G2/3rd instance): the drag path's round-robin delta-gate
   // blind spot, over real HTTP — a round-order violation against an
   // untouched sibling 409s, writes nothing, and an identically-shaped legal
   // move still succeeds (own fresh free session — not an entitlement gate).
-  await scheduleRoundOrderDeltaGateSuite();
+  await suite("scheduleRoundOrderDeltaGate", () => scheduleRoundOrderDeltaGateSuite());
 
   // --- C1 gap A: the JOINT multi-division apply's own round-order wiring,
   // over real HTTP (own fresh pro session, for scheduling.multi_division).
-  await competitionScheduleApplyRoundOrderSuite();
+  await suite("competitionScheduleApplyRoundOrder", () => competitionScheduleApplyRoundOrderSuite());
 
   // --- design/v6 PROMPT-48..50: tennis rally set (nested kernel), icehockey
   // OT points in standings, PP goal + release with the public strength chip.
   // Before gapSuite — needs the org's pro entitlements for tier-3 scoring.
-  await v6SportsSuite(admin);
+  await suite("v6Sports", () => v6SportsSuite(admin));
 
   // --- W4a (#425): the core time model over HTTP — icehockey penalty expiry
   // and the cross-period carry, football sin bins + Law 3 sub windows, ITTF
   // expedite, tennis Rule 30 interruptions, and the Pro gate on all four.
   // After v6SportsSuite (it seeds tennis/icehockey), before gapSuite (its
   // downgrade ends the org's pro entitlements, which Tier-2 scoring needs).
-  await w4aTimeModelSuite(admin);
+  await suite("w4aTimeModel", () => w4aTimeModelSuite(admin));
 
   // --- #451: DLS converts a division's own overs/wickets onto the published
   // table's fixed 6-ball/10-wicket scales. Its own Pro org (smoke's shared org
   // is community, and a DLS target needs `cricket.dls`), so placement is free.
-  await cricketDlsSuite();
+  await suite("cricketDls", () => cricketDlsSuite());
 
   // --- W4a follow-up (V347): the cfg a fixture is scored under is frozen on
   // its first event, so a later division-config edit can neither lock the
   // scorer out nor rewrite a published result — plus /admin's audited escape
   // hatch. Right after w4aTimeModelSuite (same class of defect), before
   // gapSuite's destructive downgrade.
-  await configSnapshotSuite(admin, `delivered+admin_${tag}@resend.dev`);
+  await suite("configSnapshot", () => configSnapshotSuite(admin, `delivered+admin_${tag}@resend.dev`));
 
   // --- design/v7 PROMPT-52: waitlist queue position + public count. RS001
   // deleted the public submit endpoint this used to drive; what remains
   // checks registration-settings PUT and the register page's closed state.
   // Before gapSuite — its destructive downgrade ends the org's pro quota.
-  await regQueueSuite(admin);
+  await suite("regQueue", () => regQueueSuite(admin));
 
   // --- PROMPT-53: player accounts — claim → RSVP → grid → QR check-in.
   // BEFORE gapSuite: its downgrade eats org2's competition headroom.
-  await playerAccountsSuite(admin, org2.id);
-  await officialOnboardingSuite(admin, org2.id, renamed.slug);
+  await suite("playerAccounts", () => playerAccountsSuite(admin, org2.id));
+  await suite("officialOnboarding", () => officialOnboardingSuite(admin, org2.id, renamed.slug));
 
   // --- PLG growth loops (design/plg): attribution CTA + fan ShareBar on
   // free AND pro public pages, /me player→organiser nudge, /discover /start.
-  await plgGrowthSuite(admin, org2.id, renamed.slug);
+  await suite("plgGrowth", () => plgGrowthSuite(admin, org2.id, renamed.slug));
 
   // --- sitemap.xml lists a published public competition (fix 2026-09-27:
   // the route was prerendered at a DB-less build). Own fresh org; keyless.
-  await sitemapSuite();
+  await suite("sitemap", () => sitemapSuite());
 
   // --- design/v9 PROMPT-55: dispute-loss recovery surfaces.
-  await disputeSurfacesSuite();
+  await suite("disputeSurfaces", () => disputeSurfacesSuite());
 
   // --- #403: the data-protection disclosures that must be LIVE, not merely
   // written. Keyless-safe, no org, no AI spend.
-  await dataProtectionCopySuite();
+  await suite("dataProtectionCopy", () => dataProtectionCopySuite());
 
   // --- #404: the duplicate review queue and the reversible, ban-preserving
   // merge behind it. Its own fresh Pro org; keyless-safe, no AI spend.
-  await personMergeSuite();
+  await suite("personMerge", () => personMergeSuite());
 
   // --- payments-hardening (PROMPT-72..75): the three delete-money 409 guards,
   // the DELETE-competition NEVER_KEY 403, community card division
   // payments_unavailable vs an Event-Pass comp staying open, and the
   // stuck-webhook sweep cron. Own fresh orgs; keyless-safe.
-  await p72Suite();
+  await suite("p72", () => p72Suite());
 
   // --- payments-hardening (Task 16): the 4-plan user matrix — one fresh owner
   // per plan (community/pro/enterprise/event_pass) asserting the entitlements that
@@ -1121,20 +1131,20 @@ async function main() {
 
   // --- T20: a create at `dashboard.public.max` is NEVER refused, and never
   // silent either. Own fresh community org; keyless-safe.
-  await publicQuotaDegradeSuite();
+  await suite("publicQuotaDegrade", () => publicQuotaDegradeSuite());
 
   // --- Hub Knockout tab (plan 2026-09-13, Task 3): a public knockout
   // competition's hub document offers `knockout`, its rounds name only
   // fixtures the document lists, and the champion lands when the final is
   // decided. Own fresh community org; keyless-safe.
-  await hubKnockoutSuite();
+  await suite("hubKnockout", () => hubKnockoutSuite());
 
   // --- Format matrix W2a (Task 17): a knockout always finishes. A level
   // football semi is held and settled by lot, a drawn chess game is decided by
   // its Armageddon tie-break, a level generic result is refused, and a device
   // link may not settle. Own fresh org (repriced to Pro for the device link);
   // keyless-safe.
-  await bracketFinishSuite();
+  await suite("bracketFinish", () => bracketFinishSuite());
 
   // --- Format matrix W2b (Task 18): a walkover credits what the sport declares,
   // a double walkover advances nobody, and a withdrawal walks a held line over.
@@ -1144,61 +1154,61 @@ async function main() {
   // tie-break is walked over by a withdrawal; a division whose only fixture is a
   // double walkover refunds its quota slot on archive. Own fresh community org;
   // keyless-safe.
-  await walkoverCreditSuite();
+  await suite("walkoverCredit", () => walkoverCreditSuite());
 
   // --- Schedule-board knockout round codes (2026-09-23): a knockout card on
   // the division board renders its round-role chip (SF, F) and the legend
   // names it — not the generic R{n}; then a page playoff's Q1/E/Q2/F. Own
   // fresh org (repriced to Pro for the page playoff); keyless-safe.
-  await boardRoundCodesSuite();
+  await suite("boardRoundCodes", () => boardRoundCodesSuite());
 
   // --- Task 23: every grant an Event Pass actually delivers, asserted as a
   // passed-vs-sibling PAIR inside one fresh community org — allowed here,
   // refused there — so no assertion can be satisfied by a passless org. Own
   // fresh org; keyless-safe and spends no AI tokens.
-  await passGrantsSuite();
+  await suite("passGrants", () => passGrantsSuite());
 
   // --- v17 #294: the L rung. Proves the LADDER rather than the grants — a paid
   // purchase (driven through the real signed webhook) is filed as the rung that
   // was bought, that rung's ceilings are the ones enforced, the flat +25 credit
   // grant is not keyed by rung, and a pass stays inert on a paid plan. Own
   // fresh orgs; the purchase leg skips cleanly without Stripe secrets.
-  await passRungLSuite();
+  await suite("passRungL", () => passRungLSuite());
 
-  await gapSuite(admin, org.id, org2.id);
+  await suite("gap", () => gapSuite(admin, org.id, org2.id));
 
   // --- design/v7 PROMPT-51: staff-console platform revenue report.
-  await platformRevenueSuite(admin, `delivered+admin_${tag}@resend.dev`);
+  await suite("platformRevenue", () => platformRevenueSuite(admin, `delivered+admin_${tag}@resend.dev`));
 
   // --- Streaming R1 Task 7A: the staff "Match credits" panel's route and its mount.
-  await streamCreditsAdminSuite(admin, `delivered+admin_${tag}@resend.dev`, org.id);
+  await suite("streamCreditsAdmin", () => streamCreditsAdminSuite(admin, `delivered+admin_${tag}@resend.dev`, org.id));
 
   // --- One trial per organisation, ever (V277): both staff stamping rails on
   // the pro path, the comp rail + the upgrade CTA on the free path. Own fresh
   // orgs; keyless-safe.
-  await oneTrialSuite();
+  await suite("oneTrial", () => oneTrialSuite());
 
   // --- Task 11: staff-only default-card removal + the customer-facing
   // refusal it deliberately does not loosen. Needs a real Stripe test-mode
   // card; keyless-safe (see the suite's own doc comment).
-  await paymentMethodSuite();
+  await suite("paymentMethod", () => paymentMethodSuite());
 
   // --- clubs-w1 (W1): parent clubs group teams — the hub lifecycle (create →
   // profile → contact → standalone team → move under the club → squad with a
   // quick-created person) on Pro, and the tunable clubs.max=2 community cap.
   // Own fresh orgs so it's independent of the destructive downgrades above.
-  await clubsSuite();
+  await suite("clubs", () => clubsSuite());
 
   // --- #267 (SPEC-5 §2): referral attribution + the referred org's welcome
   // grant, over the real `ref`-cookie flow. Own fresh orgs; keyless-safe.
-  await referralSuite();
+  await suite("referral", () => referralSuite());
 
   // --- v17 gap #293: the extra-organisation recurring add-on. A Pro
   // payer at the 5-org cap gets a 402 CARRYING a purchase offer, buying the
   // rider lifts the cap by one and the same create then succeeds; a community
   // owner and a NON-PAYER inside that same group are refused the same way and
   // offered nothing. Own fresh group; keyless-safe.
-  await extraOrgAddonSuite();
+  await suite("extraOrgAddon", () => extraOrgAddonSuite());
 
   // --- v17 gap W10: the Event Pass lock's `past_ends_on` arm, which the
   // resolver honoured and the ENFORCEMENT sites did not. A pass one day past
@@ -1206,26 +1216,26 @@ async function main() {
   // (#347), and the checkout route refuses to sell a pass for a competition
   // that is already over (#353) — each paired with the same competition ON the
   // boundary, which must still be honoured. Own fresh orgs; keyless-safe.
-  await passLockEnforcementSuite();
+  await suite("passLockEnforcement", () => passLockEnforcementSuite());
 
   // --- v17 gap W10: purchased add-on capacity dies with the money that rented
   // it. A churned subscription (#330) and a lost dispute (#331) each cancel the
   // extra-org rider AND the seat block while sparing an admin-granted comp,
   // driven through the real signed-webhook route. Own fresh groups; needs
   // STRIPE_WEBHOOK_SECRET and skips cleanly without it.
-  await addonChurnWebhookSuite();
+  await suite("addonChurnWebhook", () => addonChurnWebhookSuite());
 
   // Email outbox, phase 3 wave 2 (Task 11): a signed trial_will_end queues ONE
   // trial_ending row for the worker, and a redelivery of the same event id
   // queues none. Own fresh org; needs STRIPE_WEBHOOK_SECRET and skips cleanly
   // without it.
-  await outboxTrialWarningSuite();
+  await suite("outboxTrialWarning", () => outboxTrialWarningSuite());
 
   // F5 remainder: build.ts's per-value i18n fallbacks (see BuildOpts.i18n's
   // resultVs/courtUnassigned/rosterSignatures/rotaSignatures fields). Own
   // fresh org — never flip the shared org's default_locale, which would
   // leak French copy into every other check in this run.
-  await f5RemainderExportLocaleSuite();
+  await suite("f5RemainderExportLocale", () => f5RemainderExportLocaleSuite());
 
   // P11 (D6) batch score-event import (design doc
   // docs/superpowers/specs/2026-08-25-p11-batch-event-import-design.md,
@@ -1233,12 +1243,12 @@ async function main() {
   // the division-wide player-stats fold, and the decided-write news
   // auto-draft are seams the unit/regression suites can't reach from
   // outside the process. Own fresh Pro org; keyless-safe.
-  await eventImportSuite();
+  await suite("eventImport", () => eventImportSuite());
 
   // RS006: a real destination-charge checkout for a registration entry fee —
   // the paid path scripts/stripe-connect-fixture.ts exists to make testable
   // at all. Own fresh Pro org; skips cleanly without STRIPE_CONNECT_TEST_ACCOUNT.
-  await registrationPaidLoopSuite();
+  await suite("registrationPaidLoop", () => registrationPaidLoopSuite());
 
   // RS006 money-hardening: the two registration paths that move real money
   // and were previously proven only against a stubbed Stripe — a duplicate
@@ -1246,71 +1256,71 @@ async function main() {
   // reverse_transfer/refund_application_fee pairing (stripeRefund). Each
   // owns a fresh Pro org; both skip cleanly without STRIPE_SECRET_KEY or
   // STRIPE_CONNECT_TEST_ACCOUNT, same convention as registrationPaidLoopSuite.
-  await registrationDuplicatePaymentSuite();
-  await registrationRefundReversalSuite();
+  await suite("registrationDuplicatePayment", () => registrationDuplicatePaymentSuite());
+  await suite("registrationRefundReversal", () => registrationRefundReversalSuite());
 
   // RS012: the solo sign-up pool — capacity no longer double-counts a solo
   // sign-up as a team slot, and both the registrant (status page) and the
   // organiser (Registrants tab banner) can see someone waiting. Not
   // plan-gated (no new entitlement), so one org, no Stripe key required.
-  await poolSummarySuite();
+  await suite("poolSummary", () => poolSummarySuite());
 
   // RS011: organiser-side eligibility gates — a division's age/gender rule
   // now blocks an organiser roster-add too, not just the public registration
   // path. Own fresh Pro AND fresh community org (the gate is not plan-gated
   // — no entitlement to skip, so both must behave identically).
-  await eligibilityGateSuite();
+  await suite("eligibilityGate", () => eligibilityGateSuite());
 
   // RS010: registration-core-flow smoke, rebuilt fresh against the CURRENT
   // group-cart endpoints — see the block comment above these four functions'
   // definitions for what RS001 dropped and why regQueueSuite/gapSuite are
   // NOT where this coverage lives any more. Each owns a fresh org; keyless.
-  await registrationOpenFlowSuite();
-  await registrationWaitlistPromoteSuite();
-  await registrationTeamOpsSuite();
-  await registrationSelfLinkAndConsentSuite();
+  await suite("registrationOpenFlow", () => registrationOpenFlowSuite());
+  await suite("registrationWaitlistPromote", () => registrationWaitlistPromoteSuite());
+  await suite("registrationTeamOps", () => registrationTeamOpsSuite());
+  await suite("registrationSelfLinkAndConsent", () => registrationSelfLinkAndConsentSuite());
 
   // Chess Lichess external-play (2026-09-15 Task 9): cron auth + OTB
   // onlinePlay-off regression. Own fresh org; keyless-safe.
-  await externalPlayOtBSmoke();
+  await suite("externalPlayOtBSmoke", () => externalPlayOtBSmoke());
 
   // Email outbox, phase 1 (Task 4): the retry worker's cron route refuses a wrong secret and, with the right one, answers
   // a tick report. Keyless-safe (nothing is sent without a RESEND_API_KEY on the server); no org of its own.
-  await emailOutboxCronSmoke();
+  await suite("emailOutboxCronSmoke", () => emailOutboxCronSmoke());
 
   // Email outbox, phase 1 (Task 5): the Resend webhook fails closed. The smoke server is a production build, so an event with
   // no valid signature is refused whether or not RESEND_WEBHOOK_SECRET is set. Keyless; touches no org.
-  await resendWebhookSmoke();
+  await suite("resendWebhookSmoke", () => resendWebhookSmoke());
 
   // Chess in-page board T14: the match room's neutral card and its API's
   // refusals. Keyless; one signed-in stranger.
-  await matchRoomSuite();
+  await suite("matchRoom", () => matchRoomSuite());
 
   // Chess in-page board T15: the arbiter panel's page and routes refuse
   // everyone but an organiser of an online board. Keyless; own fresh org.
-  await arbiterSuite();
+  await suite("arbiter", () => arbiterSuite());
 
   // Chess in-page board T16: the spectators' board route and the organiser's
   // two decision routes, against a live server. Keyless; own fresh org.
-  await onlineChessDeskSuite();
+  await suite("onlineChessDesk", () => onlineChessDeskSuite());
 
   // Task 15 (spectator W1): the public match-centre page and its
   // `match_centre` API field, against a live server. Own fresh org;
   // keyless-safe.
-  await matchCentreSmoke();
+  await suite("matchCentreSmoke", () => matchCentreSmoke());
 
   // Per-stage match rules (brief 2026-09-24): a stage whose rules override
   // its division's is described by those rules on the public match API, the
   // hub document and the division page. Own fresh org; keyless-safe.
-  await stageRulesFormatSmoke();
+  await suite("stageRulesFormatSmoke", () => stageRulesFormatSmoke());
 
   // Format matrix W2c (stage-level rules, match overrides, their locks): every W2c task's named smoke check lives in
   // this one suite (plan Global Constraints). Own fresh org; keyless-safe.
-  await w2cStageRulesSuite();
+  await suite("w2cStageRules", () => w2cStageRulesSuite());
 
   // Format matrix W2d PR A (tables and tie-breaks): a stage is pinned at generate, and a stored lots draw gives the same
   // order on two reloads. Own fresh owner; needs DATABASE_URL (the pin read).
-  await w2dTablesSuite();
+  await suite("w2dTables", () => w2dTablesSuite());
 }
 
 /** F5 remainder — build.ts's per-value i18n fallbacks (the "vs" result
@@ -24173,12 +24183,14 @@ try {
   .then(async () => {
     await cleanup(tag);
     console.log(`${pass} passed, ${fail} failed`);
+    writeManifest();
     process.exit(fail === 0 ? 0 : 1);
   })
   .catch(async (e) => {
     console.error("ERROR:", e instanceof Error ? e.message : String(e));
     await cleanup(tag);
     console.log(`${pass} passed, ${fail} failed`);
+    writeManifest();
     process.exit(1);
   });
 
