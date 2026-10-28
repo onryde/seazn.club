@@ -23,7 +23,7 @@ import uiNl from "@/dictionaries/nl/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
 import type { ReplayPart } from "@/lib/youtube";
 import {
-  ReplayEmbed, ReplayStage, REPLAY_UNPLAYABLE_CODES, initialReplayState, playerReportsUnplayable, replayReducer,
+  ReplayEmbed, ReplayStage, REPLAY_UNPLAYABLE_CODES, focusTarget, initialReplayState, playerReportsUnplayable, replayReducer,
   type ReplayMode, type ReplayState,
 } from "../replay-embed";
 
@@ -103,6 +103,30 @@ describe("replayReducer: the player's states", () => {
   it("choosing a part that does not exist changes nothing (a stale tab index cannot point past the list)", () => {
     const s = two();
     for (const index of [-1, 2, 99, 1.5, Number.NaN]) expect(replayReducer(s, { type: "select", index }), String(index)).toEqual(s);
+  });
+});
+
+// ─── where focus goes when the stage changes ──────────────────────────────────────────────────────────────────────────────
+describe("focusTarget: a button that had focus is replaced by something that must take it (the wiring itself is browser-only)", () => {
+  const MODES: ReplayMode[] = ["facade", "playing", "unavailable"];
+
+  it("sweeps every (before, after) pair of modes: focus moves exactly when the facade becomes the player (to the player) and when the player gives up (to the link) - and nowhere else", () => {
+    // The two real transitions, from the written rule: the tap unmounts the focused facade button, and the player's error unmounts
+    // the focused iframe. Everything else (a tab choice, a reload to the same mode) leaves focus where the person put it.
+    const expected: Record<string, "player" | "open-link" | null> = {
+      "facade>facade": null, "facade>playing": "player", "facade>unavailable": null,
+      "playing>facade": null, "playing>playing": null, "playing>unavailable": "open-link",
+      "unavailable>facade": null, "unavailable>playing": null, "unavailable>unavailable": null,
+    };
+    let checked = 0;
+    for (const before of MODES) {
+      for (const after of MODES) {
+        expect(focusTarget(before, after), `${before}>${after}`).toBe(expected[`${before}>${after}`]);
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: all nine pairs were asked").toBe(9);
+    expect(Object.values(expected).filter((v) => v !== null), "and exactly two of them move focus").toHaveLength(2);
   });
 });
 

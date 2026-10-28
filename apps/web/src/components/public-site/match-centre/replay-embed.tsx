@@ -45,6 +45,16 @@ export function initialReplayState(parts: readonly ReplayPart[]): ReplayState {
   return { active: 0, modes: parts.map((p): ReplayMode => (youtubeVideoId(p.url) === null ? "unavailable" : "facade")) };
 }
 
+/** Where focus must go when the stage's mode changes, or null to leave it where the person put it. Two transitions unmount the element
+ *  that holds focus, and focus would drop to <body>: the tap turns the focused facade button into the player (focus goes to the
+ *  player), and the player's error turns the focused player into the fallback (focus goes to the "Open on YouTube" link - the one
+ *  thing the person can do next; the note beside it is a status, announced as it appears). A tab choice or anything else moves nothing. */
+export function focusTarget(before: ReplayMode, after: ReplayMode): "player" | "open-link" | null {
+  if (before === "facade" && after === "playing") return "player";
+  if (before === "playing" && after === "unavailable") return "open-link";
+  return null;
+}
+
 const withMode = (modes: ReplayMode[], at: number, mode: ReplayMode): ReplayMode[] => modes.map((m, i) => (i === at ? mode : m));
 
 export function replayReducer(state: ReplayState, action: ReplayAction): ReplayState {
@@ -88,10 +98,11 @@ export function playerReportsUnplayable(origin: string, source: unknown, frameWi
 }
 
 /** The line a stage ends with, in every mode: a plain text link to the part's own YouTube page. */
-function OpenLink({ href }: { href: string }) {
+function OpenLink({ href, linkRef }: { href: string; linkRef?: RefObject<HTMLAnchorElement | null> }) {
   const t = useMsg();
   return (
     <a
+      ref={linkRef}
       data-testid="replay-open"
       href={href}
       target="_blank"
@@ -113,10 +124,12 @@ export interface ReplayStageProps {
   onPlay: () => void;
   iframeRef: RefObject<HTMLIFrameElement | null>;
   onFrameLoad: () => void;
+  /** The "Open on YouTube" link, so focus can be handed to it when the player gives up (`focusTarget`). */
+  openRef?: RefObject<HTMLAnchorElement | null>;
 }
 
 /** Everything under the tab rail for one part: the 16:9 box (a facade, or the player) or the fallback note, then the link. */
-export function ReplayStage({ part, mode, multi, pageOrigin, onPlay, iframeRef, onFrameLoad }: ReplayStageProps) {
+export function ReplayStage({ part, mode, multi, pageOrigin, onPlay, iframeRef, onFrameLoad, openRef }: ReplayStageProps) {
   const t = useMsg();
   const videoId = youtubeVideoId(part.url);
   // A part with no provable video id is never an iframe, whatever mode it was told it is in.
@@ -174,7 +187,7 @@ export function ReplayStage({ part, mode, multi, pageOrigin, onPlay, iframeRef, 
           )}
         </div>
       )}
-      <OpenLink href={part.url} />
+      <OpenLink href={part.url} {...(openRef ? { linkRef: openRef } : {})} />
     </div>
   );
 }
@@ -185,6 +198,7 @@ function ReplayPlayer({ parts }: { parts: readonly ReplayPart[] }) {
   const [state, dispatch] = useReducer(replayReducer, parts, initialReplayState);
   const [pageOrigin, setPageOrigin] = useState("");
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
+  const openRef = useRef<HTMLAnchorElement | null>(null);
   const multi = parts.length > 1;
   const part = parts[state.active]!;
   const mode = state.modes[state.active]!;
@@ -199,10 +213,15 @@ function ReplayPlayer({ parts }: { parts: readonly ReplayPart[] }) {
     return () => window.removeEventListener("message", onMessage);
   }, [mode]);
 
-  // The tap that started the player unmounted the button that had focus. Hand focus to the player the moment it mounts - not only once
-  // its document has loaded, or focus sits on <body> for the whole load and a keyboard user is dropped to the top of the page.
+  // Focus follows the stage. The tap that started the player unmounted the button that had focus: hand focus to the player the moment
+  // it mounts - not only once its document has loaded, or focus sits on <body> for the whole load and a keyboard user is dropped to
+  // the top of the page. The player's error unmounts the player the same way: focus goes to the "Open on YouTube" link.
+  const lastMode = useRef<ReplayMode>(mode);
   useEffect(() => {
-    if (mode === "playing") iframeRef.current?.focus();
+    const target = focusTarget(lastMode.current, mode);
+    lastMode.current = mode;
+    if (target === "player") iframeRef.current?.focus();
+    else if (target === "open-link") openRef.current?.focus();
   }, [mode]);
 
   const onPlay = () => {
@@ -239,7 +258,7 @@ function ReplayPlayer({ parts }: { parts: readonly ReplayPart[] }) {
   };
 
   const stage = (
-    <ReplayStage part={part} mode={mode} multi={multi} pageOrigin={pageOrigin} onPlay={onPlay} iframeRef={iframeRef} onFrameLoad={onFrameLoad} />
+    <ReplayStage part={part} mode={mode} multi={multi} pageOrigin={pageOrigin} onPlay={onPlay} iframeRef={iframeRef} onFrameLoad={onFrameLoad} openRef={openRef} />
   );
 
   return (

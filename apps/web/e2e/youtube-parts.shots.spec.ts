@@ -30,7 +30,8 @@ import { YOUTUBE_EMBED_ORIGIN, youtubeWatchUrl } from "../src/lib/youtube";
 //   * TWO parts, in the state the end step really leaves (stream_url = Part 1's address): the tab rail above the player (44px tabs,
 //     arrow keys), NO second "Replay" pill, a tab shows that part's facade (never autoplay), and the part that was playing stops;
 //   * TWO parts and a club's own, different link: the pill renders beside the tabbed player (a named capture, not the default);
-//   * the fallback: an error from the player puts the "Open on YouTube" link in place of the player;
+//   * the fallback: an error from the player puts the "Open on YouTube" link in place of the player, and focus goes to that link (the
+//     player that held it is gone);
 //   * NO YouTube logo anywhere in the player (the logo only ever sits inside a link to YouTube content).
 test.use({ storageState: { cookies: [], origins: [] } });
 
@@ -496,6 +497,9 @@ test("Match page - a video that cannot be embedded: the player's error puts 'Ope
   await expect(player.getByTestId("replay-box"), "no empty player box is left behind").toHaveCount(0);
   const open = player.getByTestId("replay-open");
   await expect(open, "the link is the way out").toHaveAttribute("href", youtubeWatchUrl(r.ids[0]!));
+  // Focus: the player was focused and is gone, so focus must not drop to <body> - it goes to the link, the one thing to do next.
+  await expect(open, "focus moved to 'Open on YouTube' when the player gave up").toBeFocused();
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "and it is the link, not <body>").toBe("replay-open");
 
   for (const w of WIDTHS) {
     await page.setViewportSize({ width: w, height: 900 });
