@@ -6,6 +6,11 @@
 // Every fold is PAD-SHAPED (`strictFromSeq: 0`): the write path, where the cfg-derived refusals (the substitution cap) are live.
 //
 // FB-RO-1 is a deviation row (record-only): its test shows each record is accepted and moves no score.
+//
+// Two more rows are deviations and say where the engine does NOT follow the article: FB-SB-1 (IFAB: a sin bin's period begins when play
+// restarts; the engine counts from the stamp on football.sinbin.start) and FB-SU-1 (IFAB protocol: one concussion substitute per team;
+// the engine honours the competition's concussionSubs). The tests marked "limit" pin that behaviour AS IT IS, so an engine fix flips them
+// knowingly; they are not a ruling that the article is wrong.
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../../core/errors.ts";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
@@ -212,6 +217,55 @@ describe("FB-SB-1 a sin bin takes a player off for sinBinMinutes of game time an
     expect(home(swept).sinBin).toEqual([]);
   });
 
+  it("FB-SB-1 the full-time whistle ends a timed bin still running, and leaves an untimed one to the end", () => {
+    // A 10-minute bin at 2500 s of the second half runs past the half's 2700 s. Without extra time its expiry stays in H2 (3100 s) and the
+    // phase sweep at the whistle releases it; with extra time enabled it is carried into ET_H1 (400 s), a phase a match decided in
+    // regulation never plays, and only the end-of-match sweep can release it. Either way a bin with an expiry is over once the match is
+    // decided; before the whistle it is still running (the contrast). A bin with no length at all has no expiry and outlives the whistle.
+    const lead: Spec[] = [["core.start"], goal("A"), ["football.period", { phase: "HT" }], sinBin("H-p5", 2500, {}, "H2")];
+    const level: Spec[] = [["core.start"], ["football.period", { phase: "HT" }], sinBin("H-p5", 2500, {}, "H2")];
+    const full: Spec = ["football.period", { phase: "FT" }];
+    let checked = 0;
+    for (const [label, cfg] of [
+      ["no extra time", base],
+      ["extra time enabled", cfgOf({ sinBinMinutes: 10, extraTime: { enabled: true, halfMinutes: 15 } })],
+    ] as const) {
+      const running = fold(cfg, ...lead);
+      expect(home(running).onPitch, `${label}: before the whistle`).not.toContain("H-p5");
+      expect(home(running).sinBin?.length, `${label}: before the whistle`).toBe(1);
+      const won = fold(cfg, ...lead, full);
+      expect(won.outcome, `${label}: decided`).toEqual({ kind: "win", winner: "A", loser: "H", method: "regulation" });
+      expect(home(won).onPitch, `${label}: win`).toContain("H-p5");
+      expect(home(won).sinBin, `${label}: win`).toEqual([]);
+      if (cfg.extraTime.enabled) continue; // a level score under extra time plays on, so the bin is not over
+      const drawn = fold(cfg, ...level, full);
+      expect(drawn.outcome, `${label}: level`).toEqual({ kind: "draw" });
+      expect(home(drawn).onPitch, `${label}: draw`).toContain("H-p5");
+      expect(home(drawn).sinBin, `${label}: draw`).toEqual([]);
+      checked++;
+    }
+    expect(checked).toBe(1);
+    // The untimed contrast: no sinBinMinutes and no awarded minutes means no expiry, so the player is still out in the final state.
+    const untimed = fold(cfgOf({}), ["core.start"], goal("A"), ["football.period", { phase: "HT" }], sinBin("H-p5", 2500, {}, "H2"), full);
+    expect(untimed.outcome).toEqual({ kind: "win", winner: "A", loser: "H", method: "regulation" });
+    expect(home(untimed).onPitch).not.toContain("H-p5");
+    expect(home(untimed).sinBin?.length).toBe(1);
+  });
+
+  it("FB-SB-1 limit: the clock runs from the stamp on football.sinbin.start, not from the restart of play, so a bin shown at 600 s is over at 1200 s although play restarted at 660 s", () => {
+    // IFAB guidelines: the temporary dismissal period begins when play restarts. The engine has no restart event for it to wait for: it
+    // takes the start event's own stamp. The sin bin is shown at 600 s, play is stopped for it and restarts at 660 s; the Law would keep
+    // the player off until 1260 s, the engine releases him at the first stamped event at or after 1200 s.
+    const shown: Spec[] = [["core.start"], sinBin("H-p5", 600), ["core.suspend", { reason: "sin bin", at: at("H1", 600) }], ["core.resume", { at: at("H1", 660) }]];
+    const stillOff = fold(base, ...shown, goal("A", { at: at("H1", 1199) }));
+    expect(home(stillOff).onPitch).not.toContain("H-p5");
+    const released = fold(base, ...shown, goal("A", { at: at("H1", 1200) }));
+    expect(home(released).onPitch).toContain("H-p5");
+    expect(home(released).sinBin).toEqual([]);
+    // The expiry itself never moved off the start stamp.
+    expect(home(fold(base, ...shown)).sinBin?.[0]?.expiresAt).toEqual(at("H1", 1200));
+  });
+
   it("FB-SB-1 a player cannot be put in the bin twice, and voiding the sin bin brings him back", () => {
     expect(refusal(() => fold(base, ["core.start"], sinBin("H-p5", 600), sinBin("H-p5", 700)))).toEqual({ code: "INVALID_EVENT" });
     const state = fold(base, ["core.start"], sinBin("H-p5", 600), ["core.void", {}, "e-1"]);
@@ -299,8 +353,16 @@ describe("FB-SU-1 substitutions follow Law 3: maxSubs caps them per side except 
       expect(refusal(() => fold(cfgOf({ maxSubs: 1 }), ...atCap, concussion("H-p3", "H-b2")))).toMatchObject({ code: "LINEUP_INVALID", reason: "exemption-not-declared" });
       const cfg = cfgOf({ maxSubs: 1, concussionSubs: 1 });
       expect(refusal(() => fold(cfg, ...atCap, concussion("H-p3", "H-b2"), concussion("H-p4", "H-b3")))).toMatchObject({ code: "LINEUP_INVALID", reason: "exemption-cap-reached" });
-      // The allowance is the competition's number, not the protocol's one-per-team: two are honoured when it says two.
-      expect(refusal(() => fold(cfgOf({ maxSubs: 1, concussionSubs: 2 }), ...atCap, concussion("H-p3", "H-b2"), concussion("H-p4", "H-b3")))).toBeNull();
+    });
+
+    it("FB-SU-1 limit: the allowance is the competition's number, so two are honoured where it says two although the IFAB protocol allows one per team", () => {
+      // IFAB concussion protocol: "each team is permitted to use a maximum of one concussion substitute in a match". The engine reads
+      // concussionSubs and nothing else; a competition that declares two gets two, and a third is still refused.
+      const two = cfgOf({ maxSubs: 1, concussionSubs: 2 });
+      expect(refusal(() => fold(two, ...atCap, concussion("H-p3", "H-b2"), concussion("H-p4", "H-b3")))).toBeNull();
+      expect(refusal(() => fold(two, ...atCap, concussion("H-p3", "H-b2"), concussion("H-p4", "H-b3"), concussion("H-p5", "H-b4")))).toMatchObject({
+        reason: "exemption-cap-reached",
+      });
     });
   });
 
