@@ -107,7 +107,7 @@ async function reconnect(
        and state in ${tx(OPEN_BROADCAST_STATES)}`;
   const targetId = await ensureDestination(tx, p.org_id, connectionId, channel.id, channel.title);
   await tx`delete from youtube_connect_pending where id = ${p.id}`;
-  return { connectionId, targetId };
+  return { connectionId, targetId, existing: true };
 }
 
 /** Save the channel a grant was made for: the connection, its destination row (kind youtube, labelled with the channel's title,
@@ -119,11 +119,12 @@ async function reconnect(
  *   - 422 YOUTUBE_CHANNEL_NOT_OFFERED: the channel is not one the grant listed (a pick for a channel the account does not have);
  *   - 422 YOUTUBE_DIFFERENT_CHANNEL: a reconnect for a channel other than its connection's;
  *   - 409 YOUTUBE_OTHER_ORG: the channel is live in another organisation. The new token is NOT revoked (see the header).
- *  The same org connecting the same channel again is the existing connection, its token replaced (a reconnect). */
+ *  The same org connecting the same channel again is the existing connection, its token replaced (a reconnect); the answer says
+ *  so (`existing: true`) because the grant's own privacy and made-for-kids choices are NOT applied to it. */
 export async function saveConnectionFromGrant(
   a: { pendingId: string; channelId: string; userId: string; orgId?: string },
   port: YouTubePort,
-): Promise<{ connectionId: string; targetId: string }> {
+): Promise<YoutubeConnectionSaved> {
   // The callback hands over the port it holds; nothing in a save calls Google (see the header), so it is not used.
   void port;
   return sql.begin(async (tx) => {
@@ -173,7 +174,7 @@ export async function saveConnectionFromGrant(
     }
     const targetId = await ensureDestination(tx, p.org_id, created.connectionId, channel.id, channel.title);
     await tx`delete from youtube_connect_pending where id = ${p.id}`;
-    return { connectionId: created.connectionId, targetId };
+    return { connectionId: created.connectionId, targetId, existing: false };
   });
 }
 

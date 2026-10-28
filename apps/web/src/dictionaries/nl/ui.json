@@ -1445,6 +1445,7 @@
   "streaming.youtube.landing.not_configured": "YouTube koppelen is op deze server nu niet beschikbaar. Probeer het later opnieuw.",
   "streaming.youtube.landing.forbidden": "Alleen een eigenaar of beheerder kan een YouTube-kanaal koppelen.",
   "streaming.youtube.landing.unavailable": "YouTube reageerde niet. Probeer het over een minuut opnieuw.",
+  "streaming.youtube.alreadyConnected": "Dit kanaal was al gekoppeld. De zichtbaarheid en doelgroepinstellingen zijn niet gewijzigd; wijzig ze onder Instellingen.",
   "streaming.youtube.error.notOffered": "Dat kanaal hoort niet bij dit Google-account. Kies opnieuw of begin opnieuw.",
   "streaming.youtube.error.gone": "Dit kanaal is niet meer gekoppeld. Laad de pagina opnieuw.",
   "streamDest.add": "Bestemming toevoegen",

@@ -58,18 +58,29 @@ beforeEach(() => {
 afterEach(() => setRelayDriversForTest(null));
 
 describe("Streaming page + real panel — the connect round trip's landing reaches the screen", () => {
-  it("EVERY banner code in the URL shows ITS sentence (ten checked), and only that one", async () => {
+  it("EVERY banner code in the URL shows ITS sentence (eleven checked), and only that one", async () => {
     const banners = YOUTUBE_LANDING_CODES.filter((c) => c !== "pick");
+    // The one banner whose sentence is not under `streaming.youtube.landing.` is the key the review ruling named.
+    const keyOf = (code: string): MessageKey => (code === "already_connected" ? "streaming.youtube.alreadyConnected" : (`streaming.youtube.landing.${code}` as MessageKey));
     let checked = 0;
     for (const code of banners) {
       const html = await render({ youtube: code });
       expect(html, code).toContain(`data-code="${code}"`);
-      expect(html, code).toContain(sentence(`streaming.youtube.landing.${code}` as MessageKey));
+      expect(html, code).toContain(sentence(keyOf(code)));
       expect(html.match(/data-testid="youtube-landing"/g), `${code}: exactly one banner`).toHaveLength(1);
       expect(html, `${code}: no picker`).not.toContain('data-testid="youtube-picker"');
       checked++;
     }
-    expect(checked).toBe(10);
+    expect(checked).toBe(11);
+  });
+
+  it("the picker's already-connected landing says the settings were kept — and not the plain 'connected' sentence (the pair)", async () => {
+    const already = await render({ youtube: "already_connected" });
+    expect(already).toContain(sentence("streaming.youtube.alreadyConnected"));
+    expect(already).not.toContain(sentence("streaming.youtube.landing.connected"));
+    const plain = await render({ youtube: "connected" });
+    expect(plain).toContain(sentence("streaming.youtube.landing.connected"));
+    expect(plain).not.toContain(sentence("streaming.youtube.alreadyConnected"));
   });
 
   it("a pick with a pending grant opens the channel picker, for the owner", async () => {

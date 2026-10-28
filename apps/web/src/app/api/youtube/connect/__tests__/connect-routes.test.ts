@@ -130,7 +130,7 @@ async function grantFeature(orgId: string, key: string, value: boolean): Promise
   await invalidateOrgEntitlements(orgId);
 }
 /** An org with `userId` a member of it under `role`. It carries the plan's own streaming entitlements (V426: the stream panel and
- *  the relay are on for every plan), which is what the Directory's Streaming tab — the page that posts the start — requires. */
+ *  the relay are on for every plan), which is what the Streaming page — the page that posts the start — requires. */
 async function rig(role: "owner" | "admin" | "viewer" = "owner"): Promise<Rig> {
   const { auth } = await seedOrg();
   const userId = await newUser();
@@ -356,7 +356,7 @@ describe.skipIf(!HAS_DB)("POST /api/youtube/connect — the start", () => {
     expect((await pendingRows(r.orgId))[0]!.connection_id).toBe(mine.connectionId);
   });
 
-  it("the start is for an org the Directory's Streaming tab is offered to: the relay switched off, the stream panel switched off (the relay alone is not enough), both off, or a deployment that cannot stream -> a landing, no pending row, no cookie, nobody sent to Google; otherwise it goes ahead", async () => {
+  it("the start is for an org the Streaming page is offered to: the relay switched off, the stream panel switched off (the relay alone is not enough), both off, or a deployment that cannot stream -> a landing, no pending row, no cookie, nobody sent to Google; otherwise it goes ahead", async () => {
     const refusals: [string, (r: Rig) => Promise<void>, string][] = [
       ["the relay switched off for the org", async (r) => { await grantFeature(r.orgId, "streaming.relay", false); }, "forbidden"],
       ["the stream panel switched off, the relay left on", async (r) => { await grantFeature(r.orgId, "streaming.overlay", false); }, "forbidden"],
@@ -1115,19 +1115,19 @@ describe.skipIf(!HAS_DB)("GET /api/youtube/connect/fake-authorize — the hop CI
 // =====================================================================================================================================
 // INERT-SEAM GUARD (T8). The cases above run the real save too (the spy passes through), but each is about the callback's landing. These
 // four are about what the save LEAVES: route -> real usecase -> database -> fake port, end to end, asserting the rows — the rows the
-// Directory then lists and Go live (T10+) will read. A save that landed `connected` and wrote nothing would pass every landing check.
+// Streaming page then lists and Go live (T10+) will read. A save that landed `connected` and wrote nothing would pass every landing check.
 describe.skipIf(!HAS_DB)("the callback's save is the REAL one: what a landing leaves in the database", () => {
   /** The refresh token the nth exchange minted (one spy is shared: spying again on a spied method returns the same spy). */
   const mintedAt = async (spy: ReturnType<typeof vi.spyOn>, n: number): Promise<string> =>
     ((spy.mock.results[n]!.value as Promise<{ refreshToken: string }>).then((g) => g.refreshToken));
-  const savedOf = async (n: number): Promise<{ connectionId: string; targetId: string }> => save.fn.mock.results[n]!.value as Promise<{ connectionId: string; targetId: string }>;
+  const savedOf = async (n: number): Promise<{ connectionId: string; targetId: string; existing: boolean }> => save.fn.mock.results[n]!.value as Promise<{ connectionId: string; targetId: string; existing: boolean }>;
   const connRow = async (id: string) => (await sql<Record<string, unknown>[]>`select * from org_youtube_connections where id = ${id}`)[0]!;
   const targetRows = (orgId: string) =>
     sql<{ id: string; kind: string; label: string; youtube_connection_id: string; dest_fingerprint: string; watch_url: string | null; archived_at: Date | null }[]>`
       select id, kind, label, youtube_connection_id, dest_fingerprint, watch_url, archived_at from org_stream_targets where org_id = ${orgId} order by created_at, id`;
   const ownerCtx = (r: Rig) => ({ orgId: r.orgId, via: "session" as const, userId: r.userId, role: "owner" as const, keyId: null });
 
-  it("(a) connected: the connection holds the start's choices and consent and the grant's token; its destination row is kind youtube, labelled with the channel's title, fingerprinted by the channel, with NO key of its own and NO watch link; the grant is not revoked; the Directory lists it", async () => {
+  it("(a) connected: the connection holds the start's choices and consent and the grant's token; its destination row is kind youtube, labelled with the channel's title, fingerprinted by the channel, with NO key of its own and NO watch link; the grant is not revoked; the Streaming page lists it", async () => {
     const r = await rig();
     const f = await begin(r, { privacy: "private", madeForKids: "1" });
     const ch = { id: channelId(), title: "Solo United" };
@@ -1202,7 +1202,7 @@ describe.skipIf(!HAS_DB)("the callback's save is the REAL one: what a landing le
     expect(landed((await finish(f2)).res)).toEqual(LANDS("connected"));
     const newToken = await mintedAt(exchange, 1);
     expect(newToken).not.toBe(oldToken);
-    expect(await savedOf(1)).toEqual(first);
+    expect(await savedOf(1), "the same ids, flagged existing").toEqual({ connectionId: first.connectionId, targetId: first.targetId, existing: true });
     expect(await openToken(sql, r.orgId, first.connectionId), "the token is the NEW grant's").toBe(newToken);
     const after = await connRow(first.connectionId);
     expect(after).toMatchObject({ status: "connected", last_error_code: null });
@@ -1229,7 +1229,7 @@ describe.skipIf(!HAS_DB)("the callback's save is the REAL one: what a landing le
     expect(landed((await finish(f2)).res)).toEqual(LANDS("connected"));
     const newToken = await mintedAt(exchange, 1);
     expect(newToken).not.toBe(oldToken);
-    expect(await savedOf(1), "the existing ids, not new ones").toEqual(first);
+    expect(await savedOf(1), "the existing ids, not new ones").toEqual({ connectionId: first.connectionId, targetId: first.targetId, existing: true });
     expect(await connectionCount(r.orgId)).toBe(1);
     expect(await targetRows(r.orgId)).toHaveLength(1);
     expect(await openToken(sql, r.orgId, first.connectionId)).toBe(newToken);

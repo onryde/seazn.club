@@ -240,7 +240,7 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
   expect(at("/streaming")).toBeLessThan(at(`/o/${orgSlug}/settings`));
   await shot(page, "nav-1280");
 
-  // The current page's nav item reads as current, and the page is the Streaming one.
+  // The page the item leads to is the Streaming one (the nav marks no current item, so the heading is the proof).
   await expect(page.getByRole("heading", { level: 1, name: en("streaming.title") })).toBeVisible();
 
   // The gantry fits at the budget widths in the dashboard's labels, and then with each locale's (longer) words on the Streaming page.
@@ -336,7 +336,8 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
 
   // --- one channel: ticked, Continue, fake Google, landed connected ----------------------------------------------------
   await page.setViewportSize({ width: 1280, height: 900 });
-  await offerChannels(page, [channel(LONG)]);
+  const firstChannel = channel(LONG);
+  await offerChannels(page, [firstChannel]);
   await connectThroughConsent(page);
   await expect(page).toHaveURL(/\/streaming\?youtube=connected$/);
   const banner = page.getByTestId("youtube-landing");
@@ -370,7 +371,10 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
 
   // --- several channels: the picker ------------------------------------------------------------------------------------------
   const second = channel("Riverside Juniors");
-  await offerChannels(page, [channel("Riverside Seniors"), second]);
+  // The FIRST option carries the long title: a <fieldset>'s UA min-inline-size is min-content, so a long unbreakable title used to push
+  // the picker past the card at 320 (clipped, no ellipsis). The loop below asserts no page scroll with it; the 320 block after it
+  // asserts the title is cut INSIDE the card.
+  await offerChannels(page, [channel(LONG), second]);
   await open(page, "/streaming");
   await page.getByTestId("youtube-connect").click();
   await connectThroughConsent(page);
@@ -385,12 +389,38 @@ test("Connect YouTube: the consent step gates Continue, one channel connects, se
     await expectNoPageScroll(page, `channel picker at ${w}`);
     await shot(page, `picker-${w}`);
   }
+  // I1 at 320: the long title's box ends inside the picker card, and it is cut with an ellipsis rather than pushed out.
+  await page.setViewportSize({ width: 320, height: 700 });
+  const pickerTitle = labelOf(page.getByTestId("youtube-picker-channel").first()).locator("span.truncate");
+  await expect(pickerTitle).toHaveText(LONG);
+  const cardBox = await picker.boundingBox();
+  const titleBox = await pickerTitle.boundingBox();
+  expect(cardBox, "the picker card is painted").not.toBeNull();
+  expect(titleBox, "the title is painted").not.toBeNull();
+  expect(titleBox!.x + titleBox!.width, "the title's right edge is inside the card's").toBeLessThanOrEqual(cardBox!.x + cardBox!.width + 0.5);
+  expect(await pickerTitle.evaluate((el) => el.scrollWidth > el.clientWidth), "the 45-character title is truncated, not pushed out").toBe(true);
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.getByTestId("youtube-picker-channel").nth(1).check();
   await page.getByTestId("youtube-picker-connect").click();
   await expect(page).toHaveURL(/\/streaming\?youtube=connected$/);
   await expect(page.getByTestId("youtube-channel-row")).toHaveCount(2);
   await expect(page.getByTestId("youtube-channel-title").filter({ hasText: "Riverside Juniors" })).toHaveCount(1);
+
+  // --- M5: a pick of a channel the org ALREADY has says so, and adds nothing --------------------------------------------------
+  await offerChannels(page, [firstChannel, channel("Riverside Veterans")]);
+  await open(page, "/streaming");
+  await page.getByTestId("youtube-connect").click();
+  await connectThroughConsent(page);
+  await expect(page).toHaveURL(/\/streaming\?youtube=pick&pending=[0-9a-f-]{36}$/);
+  await page.getByTestId("youtube-picker-channel").first().check();
+  await page.getByTestId("youtube-picker-connect").click();
+  await expect(page).toHaveURL(/\/streaming\?youtube=already_connected$/);
+  const already = page.getByTestId("youtube-landing");
+  await expect(already).toHaveAttribute("data-code", "already_connected");
+  await expect(already).toContainText(en("streaming.youtube.alreadyConnected"));
+  await expect(already, "not the plain 'connected' sentence").not.toContainText(en("streaming.youtube.landing.connected"));
+  await expect(page.getByTestId("youtube-channel-row"), "no second connection was made").toHaveCount(2);
+  await expectNoPageScroll(page, "the already-connected banner");
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

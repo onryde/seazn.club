@@ -126,11 +126,16 @@ export function ConsentBox({ checked, onChange, withName }: { checked: boolean; 
   );
 }
 
+/** A <fieldset> defaults to `min-inline-size: min-content`, so a long unbreakable channel title inside one pushes it (and the card
+ *  around it) wider than a 320px screen and the title is clipped with no ellipsis. `min-w-0` alone does not reset that property;
+ *  the arbitrary one does (the same pair division-settings.tsx puts on its kinds fieldset). */
+const FIELDSET = "min-w-0 [min-inline-size:0]";
+
 /** The visibility choice, three radios with what each means. `name` ties them to the form field the route reads. */
 export function PrivacyChoice({ value, onChange }: { value: YoutubePrivacy; onChange: (v: YoutubePrivacy) => void }) {
   const msg = useMsg();
   return (
-    <fieldset>
+    <fieldset className={FIELDSET}>
       <legend className="text-sm font-medium text-slate-800">{msg("streaming.youtube.privacy.legend")}</legend>
       <div className="mt-1.5 grid gap-2 md:grid-cols-3">
         {YOUTUBE_PRIVACIES.map((p) => (
@@ -154,7 +159,7 @@ export function PrivacyChoice({ value, onChange }: { value: YoutubePrivacy; onCh
 export function KidsChoice({ value, onChange }: { value: "0" | "1"; onChange: (v: "0" | "1") => void }) {
   const msg = useMsg();
   return (
-    <fieldset>
+    <fieldset className={FIELDSET}>
       <legend className="text-sm font-medium text-slate-800">{msg("streaming.youtube.madeForKids.label")}</legend>
       <div className="mt-1.5 flex gap-2">
         {(["0", "1"] as const).map((v) => (
@@ -226,6 +231,8 @@ export function YoutubeConnectCard({ orgId, onCancel }: { orgId: string; onCance
 /** Every landing the banner has a sentence for: all but `pick`, which opens the picker instead. */
 const LANDING_KEY = {
   connected: "streaming.youtube.landing.connected",
+  // The picker's own outcome (M5 ruling): the channel was already connected, so the choices made before Google were not applied.
+  already_connected: "streaming.youtube.alreadyConnected",
   no_channel: "streaming.youtube.landing.no_channel",
   scope_missing: "streaming.youtube.landing.scope_missing",
   other_org: "streaming.youtube.landing.other_org",
@@ -241,7 +248,7 @@ export type BannerCode = keyof typeof LANDING_KEY;
 export function YoutubeLandingNotice({ code }: { code: BannerCode }) {
   const msg = useMsg();
   const router = useRouter();
-  const ok = code === "connected";
+  const ok = code === "connected" || code === "already_connected";
   return (
     <div
       data-testid="youtube-landing"
@@ -258,6 +265,12 @@ export function YoutubeLandingNotice({ code }: { code: BannerCode }) {
 }
 
 // ─── the channel picker ─────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** A refusal of the picker's lookup or pick. A request that is not found (404) is a grant that expired or was used: the same
+ *  sentence the landing gives for it, rather than the connection calls' "channel is no longer there". */
+function pickerRefusalText(msg: Msg, err: unknown): string {
+  return wireOf(err)?.status === 404 ? msg("streaming.youtube.landing.expired") : youtubeErrorText(msg, err);
+}
 
 export function YoutubeChannelPicker({ orgId, pendingId }: { orgId: string; pendingId: string }) {
   const msg = useMsg();
@@ -276,10 +289,7 @@ export function YoutubeChannelPicker({ orgId, pendingId }: { orgId: string; pend
         if (live) setChannels(r.channels);
       })
       .catch((err: unknown) => {
-        if (!live) return;
-        // A request that is not found is one that expired or was used: the same sentence the landing gives for it.
-        const w = wireOf(err);
-        setError(w?.status === 404 ? msg("streaming.youtube.landing.expired") : youtubeErrorText(msg, err));
+        if (live) setError(pickerRefusalText(msg, err));
       });
     return () => {
       live = false;
@@ -293,10 +303,16 @@ export function YoutubeChannelPicker({ orgId, pendingId }: { orgId: string; pend
     setBusy(true);
     setError(null);
     try {
-      await apiV1<YoutubeConnectionSaved>(`/api/v1/orgs/${orgId}/youtube-connections`, { method: "POST", json: { pendingId, channelId: choice } });
-      router.replace(youtubeLanding("connected"));
+      const saved = await apiV1<YoutubeConnectionSaved>(`/api/v1/orgs/${orgId}/youtube-connections`, { method: "POST", json: { pendingId, channelId: choice } });
+      // A channel the organisation already had keeps the visibility and audience it was connected with (the choices made before
+      // Google went unused), and the person is told so. Only an explicit `true` says it: an answer without the flag is plain.
+      router.replace(youtubeLanding(saved.existing === true ? "already_connected" : "connected"));
     } catch (err) {
-      setError(youtubeErrorText(msg, err));
+      const gone = wireOf(err)?.status;
+      // The grant is gone (used, expired, not this person's): nothing here can connect any more, so the list and Connect leave and
+      // Cancel is the way on - the state the lookup's own refusal leaves. Any other refusal leaves the grant alive, and the list too.
+      if (gone === 404 || gone === 410) setChannels(null);
+      setError(pickerRefusalText(msg, err));
     } finally {
       saving.current = false;
       setBusy(false);
@@ -314,7 +330,7 @@ export function YoutubeChannelPicker({ orgId, pendingId }: { orgId: string; pend
       {channels === null && error === null && <p data-testid="youtube-picker-loading" className="text-sm text-slate-600">{msg("streaming.youtube.picker.loading")}</p>}
       {channels !== null && channels.length === 0 && errorLine(msg("streaming.youtube.landing.no_channel"))}
       {channels !== null && channels.length > 0 && (
-        <fieldset>
+        <fieldset className={FIELDSET}>
           <legend className="sr-only">{msg("streaming.youtube.picker.title")}</legend>
           <div className="grid gap-2">
             {channels.map((c) => (

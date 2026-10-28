@@ -1445,6 +1445,7 @@
   "streaming.youtube.landing.not_configured": "La connexion à YouTube n’est pas disponible sur ce serveur pour le moment. Réessayez plus tard.",
   "streaming.youtube.landing.forbidden": "Seul un propriétaire ou un administrateur peut connecter une chaîne YouTube.",
   "streaming.youtube.landing.unavailable": "YouTube n’a pas répondu. Réessayez dans une minute.",
+  "streaming.youtube.alreadyConnected": "Cette chaîne était déjà connectée. Sa visibilité et ses paramètres d’audience n’ont pas changé ; modifiez-les sous Paramètres.",
   "streaming.youtube.error.notOffered": "Cette chaîne ne fait pas partie de celles que ce compte Google propose. Choisissez à nouveau ou recommencez.",
   "streaming.youtube.error.gone": "Cette chaîne n’est plus connectée. Rechargez la page.",
   "streamDest.add": "Ajouter une destination",

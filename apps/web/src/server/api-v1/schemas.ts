@@ -2160,8 +2160,10 @@ export const PickYoutubeChannel = z
   .object({ pendingId: z.string().uuid(), channelId: z.string().min(1).max(200) })
   .strict();
 export type PickYoutubeChannel = z.infer<typeof PickYoutubeChannel>;
-/** The connection a pick (or a connect) saved, and its destination row. */
-export const YoutubeConnectionSaved = z.object({ connectionId: z.string(), targetId: z.string() });
+/** The connection a pick (or a connect) saved, and its destination row. `existing` is true when the organisation ALREADY had a
+ *  live connection to the channel: it was a reconnect (the token replaced), and the connection's own visibility and made-for-kids
+ *  settings stand - the pick's choices did not overwrite them. False for a channel the organisation did not have. */
+export const YoutubeConnectionSaved = z.object({ connectionId: z.string(), targetId: z.string(), existing: z.boolean() });
 export type YoutubeConnectionSaved = z.infer<typeof YoutubeConnectionSaved>;
 /** GET /orgs/{id}/youtube-connections/pending/{pendingId} — the channels a grant offers, for the picker. */
 export const YoutubePendingChannels = z.object({ channels: z.array(z.object({ id: z.string(), title: z.string() })) });

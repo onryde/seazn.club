@@ -72798,7 +72798,7 @@
     },
     "/api/v1/orgs/{id}/youtube-connections": {
       "post": {
-        "summary": "Save the channel picked from a multi-channel Google grant ({pendingId, channelId}): the connection and its destination row. The same channel connected again in this organisation is the existing connection, its token replaced. 422 YOUTUBE_CHANNEL_NOT_OFFERED when the channel is not one the grant listed; 409 YOUTUBE_OTHER_ORG when the channel is connected to another organisation on Seazn (the grant is not revoked: it is the one that connection uses); 410 YOUTUBE_PENDING_EXPIRED once the 10-minute grant expired; 404 for a grant that is not yours, not this organisation's, or already used",
+        "summary": "Save the channel picked from a multi-channel Google grant ({pendingId, channelId}): the connection and its destination row. The same channel connected again in this organisation is the existing connection, its token replaced (the response says `existing: true` and the connection keeps its own visibility and made-for-kids settings; `existing: false` is a new connection). 422 YOUTUBE_CHANNEL_NOT_OFFERED when the channel is not one the grant listed; 409 YOUTUBE_OTHER_ORG when the channel is connected to another organisation on Seazn (the grant is not revoked: it is the one that connection uses); 410 YOUTUBE_PENDING_EXPIRED once the 10-minute grant expired; 404 for a grant that is not yours, not this organisation's, or already used",
         "tags": [
           "fixtures"
         ],
@@ -72869,11 +72869,15 @@
                         },
                         "targetId": {
                           "type": "string"
+                        },
+                        "existing": {
+                          "type": "boolean"
                         }
                       },
                       "required": [
                         "connectionId",
-                        "targetId"
+                        "targetId",
+                        "existing"
                       ],
                       "additionalProperties": false
                     },
@@ -72887,7 +72891,8 @@
                   "ok": true,
                   "data": {
                     "connectionId": "example",
-                    "targetId": "example"
+                    "targetId": "example",
+                    "existing": true
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
                 }

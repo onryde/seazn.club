@@ -61,7 +61,7 @@ vi.mock("@/server/overlay/page-facts", () => ({
   relayOverlayPageFacts: (fixtureId: string) => pageFacts.relayOverlayPageFacts(fixtureId),
 }));
 
-import { CAPTURE_FLAG_TTL_MS, forgetCaptureFlagCache, loadStreamPanelContext } from "../stream-panel-context";
+import { CAPTURE_FLAG_TTL_MS, forgetCaptureFlagCache, loadStreamPanelContext, streamingPageOffer, streamingPageOffered } from "../stream-panel-context";
 import { getDictionary } from "@/lib/i18n";
 import { hasFeature } from "@/lib/entitlements";
 import { disabledRelayDrivers, relayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
@@ -606,5 +606,45 @@ describe("I3 (PR #987 review): the preview's sides are the overlay page's own â€
     const got = await load();
     expect(pageFacts.relayOverlayPageFacts).not.toHaveBeenCalled();
     expect(got!.overlaySides).toEqual({});
+  });
+});
+
+// T9 review (Minor 4): the Streaming page, its nav item and the connect start used to ask two different questions (the start read
+// `relayOffer` fields itself). One function now answers all three; the start needs the REASON (a landing code per refusal), the page
+// and nav only the yes/no, so the yes/no is DERIVED from the reason.
+describe("streamingPageOffer â€” the ONE decision behind the Streaming page, its nav item and the connect start", () => {
+  const offerCases: [string, () => void, "offered" | "not_entitled" | "not_configured"][] = [
+    ["entitled to the panel and the relay, on a deployment that can stream", () => {}, "offered"],
+    ["the relay switched off, the panel left on", () => { vi.mocked(hasFeature).mockImplementation(async (_o, key) => key !== "streaming.relay"); }, "not_entitled"],
+    ["the panel switched off (the relay alone is not enough)", () => { vi.mocked(hasFeature).mockImplementation(async (_o, key) => key !== "streaming.overlay"); }, "not_entitled"],
+    ["both switched off", () => { vi.mocked(hasFeature).mockImplementation(async () => false); }, "not_entitled"],
+    ["entitled, on a deployment with no relay", () => { setRelayDriversForTest(disabledRelayDrivers()); }, "not_configured"],
+  ];
+
+  it("names WHY it is not offered, and the yes/no every other asker reads is true for exactly the 'offered' reason (five cases, both answers present)", async () => {
+    let checked = 0;
+    const seen = new Set<string>();
+    for (const [why, setUp, expected] of offerCases) {
+      try {
+        setUp();
+        expect(await streamingPageOffer("org-1"), why).toBe(expected);
+        expect(await streamingPageOffered("org-1"), `${why}: the yes/no follows the reason`).toBe(expected === "offered");
+        seen.add(expected);
+        checked++;
+      } finally {
+        setRelayDriversForTest(null);
+        vi.mocked(hasFeature).mockReset().mockImplementation(async () => true);
+      }
+    }
+    expect(checked, "anti-vacuity: every case ran").toBe(offerCases.length);
+    expect([...seen].sort(), "all three reasons are reached").toEqual(["not_configured", "not_entitled", "offered"]);
+  });
+
+  it("asks for the org (no competition) and reads the entitlement at most twice - the cost the page already paid", async () => {
+    await streamingPageOffer("org-9");
+    expect(vi.mocked(hasFeature).mock.calls.map((c) => [c[0], c[1], c[2]])).toEqual([
+      ["org-9", "streaming.overlay", undefined],
+      ["org-9", "streaming.relay", undefined],
+    ]);
   });
 });

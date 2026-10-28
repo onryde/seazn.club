@@ -90,8 +90,9 @@ describe.skipIf(!HAS_DB)("the pick: GET pending -> POST youtube-connections -> t
 
     const picked = await post(o.orgId, { pendingId: p.id, channelId: chs[1]!.id });
     expect(picked.status).toBe(201);
-    const { connectionId, targetId } = (await json(picked)).data as { connectionId: string; targetId: string };
+    const { connectionId, targetId, existing } = (await json(picked)).data as { connectionId: string; targetId: string; existing: boolean };
     expect(connectionId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(existing, "the first pick of a channel is a NEW connection").toBe(false);
 
     const listed = (await json(await list(o.orgId))).data as unknown as Record<string, unknown>[];
     expect(listed).toHaveLength(1);
@@ -105,6 +106,27 @@ describe.skipIf(!HAS_DB)("the pick: GET pending -> POST youtube-connections -> t
     expect((await post(o.orgId, { pendingId: p.id, channelId: chs[1]!.id })).status).toBe(404);
     expect((await pending(o.orgId, p.id)).status).toBe(404);
     expect(await connectionCount(o.orgId)).toBe(1);
+  });
+
+  it("picking a channel the org ALREADY has is 201 with existing true (same ids, the old settings kept); a channel it does not have is existing false - both off the wire, in one grant", async () => {
+    setYoutubeDriverForTest(fake);
+    const o = await org();
+    signedInAs(o.userId);
+    const first = await connect(o, { privacy: "public", madeForKids: true });
+    const fresh = { id: channelId(), title: "Fresh FC" };
+    const p = await grant(o, { channels: [first.channel, fresh], privacy: "private", madeForKids: false });
+
+    const again = await post(o.orgId, { pendingId: p.id, channelId: first.channel.id });
+    expect(again.status).toBe(201);
+    expect((await json(again)).data).toEqual({ connectionId: first.connectionId, targetId: first.targetId, existing: true });
+    expect(await connectionRow(first.connectionId), "the pick's private/not-for-kids choices did NOT overwrite the connection's").toMatchObject({ default_privacy: "public", made_for_kids: true });
+    expect(await connectionCount(o.orgId)).toBe(1);
+
+    const p2 = await grant(o, { channels: [fresh] });
+    const created = await post(o.orgId, { pendingId: p2.id, channelId: fresh.id });
+    expect(created.status).toBe(201);
+    expect(((await json(created)).data as { existing: boolean }).existing).toBe(false);
+    expect(await connectionCount(o.orgId)).toBe(2);
   });
 
   it("the refusals, each with its status and machine code: not offered 422, expired 410, another org 409 YOUTUBE_OTHER_ORG with the spec's sentence — and the grant survives the refused picks", async () => {

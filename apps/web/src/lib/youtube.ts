@@ -5,7 +5,7 @@
  *  `youtube` is not a restricted scope. Every grant is checked against it by the connect callback. */
 export const YOUTUBE_SCOPE = "https://www.googleapis.com/auth/youtube";
 
-/** The version of the consent text a user ticked (D7). Bump it when the wording changes; the Directory then shows
+/** The version of the consent text a user ticked (D7). Bump it when the wording changes; the Streaming page then shows
  *  "Review updated terms" without blocking Go live. */
 export const YOUTUBE_CONSENT_VERSION = 1;
 
@@ -47,7 +47,9 @@ export const STREAMING_PAGE_HREF = "/streaming";
 
 // Every exit of the OAuth callback (and the start's own refusals that are not a bad request) is a 303 to the Streaming page
 // carrying one outcome, as `?youtube=<code>`. The page maps a code to a sentence; a value that is not one of these shows
-// nothing. `pick` also carries the pending grant's id, `&pending=<id>`.
+// nothing. `pick` also carries the pending grant's id, `&pending=<id>`. `already_connected` is not an exit of the callback: the
+// channel PICKER lands it, after a pick of a channel the organisation already had (its saved visibility and made-for-kids settings
+// stand, and the page says so).
 
 /** The page the connect flow always lands on. */
 export const YOUTUBE_LANDING_PATH = STREAMING_PAGE_HREF;
@@ -68,6 +70,7 @@ export const YOUTUBE_LANDING_CODES = [
   "not_configured",
   "forbidden",
   "unavailable",
+  "already_connected",
 ] as const;
 export type YoutubeLandingCode = (typeof YOUTUBE_LANDING_CODES)[number];
 

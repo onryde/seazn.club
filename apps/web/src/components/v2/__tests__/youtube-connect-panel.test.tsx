@@ -29,7 +29,7 @@ import { messages, type MessageKey } from "@/lib/messages";
 import { YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_LANDING_CODES, YOUTUBE_PRIVACIES } from "@/lib/youtube";
 import { ROUTES } from "@/server/api-v1/openapi";
 import { v1 } from "@/server/api-v1/http";
-import { PickYoutubeChannel, StreamTargetKind, YoutubeConnectionSettings, type StreamTarget } from "@/server/api-v1/schemas";
+import { PickYoutubeChannel, StreamTargetKind, YoutubeConnectionSaved, YoutubeConnectionSettings, type StreamTarget } from "@/server/api-v1/schemas";
 import {
   ConsentBox, KidsChoice, PrivacyChoice, YoutubeChannelPicker, YoutubeChannelRow, YoutubeConnectCard, YoutubeLandingNotice,
   channelStatus, youtubeErrorText, youtubeTargetLabel,
@@ -319,44 +319,59 @@ describe("the consent step", () => {
 describe("the landing banner — the connect round trip's outcome as this page's sentence", () => {
   // Derived from the exported source (the override: "derive the test's list from that exported source, not a typed table").
   const BANNER_CODES = YOUTUBE_LANDING_CODES.filter((c) => c !== "pick");
+  /** The dictionary key a banner reads: `streaming.youtube.landing.<code>`, except the one T9's review added, which the brief named. */
+  const KEY_OF = (code: string): string => (code === "already_connected" ? "streaming.youtube.alreadyConnected" : `streaming.youtube.landing.${code}`);
+  /** The two success outcomes (a status, not an alert); every other code is a failure the person must act on. */
+  const SUCCESS = ["connected", "already_connected"];
 
-  it("the source has the codes the brief names: eleven, ten of them banners (T7 added `unavailable`); `pick` is the picker's", () => {
-    expect(YOUTUBE_LANDING_CODES).toHaveLength(11);
-    expect(BANNER_CODES).toHaveLength(10);
+  it("the source has the codes the brief names: twelve, eleven of them banners (T7 added `unavailable`, T9 review added `already_connected`, which only the picker lands); `pick` is the picker's", () => {
+    expect(YOUTUBE_LANDING_CODES).toHaveLength(12);
+    expect(BANNER_CODES).toHaveLength(11);
     expect(YOUTUBE_LANDING_CODES).toContain("unavailable");
+    expect(YOUTUBE_LANDING_CODES).toContain("already_connected");
     expect(BANNER_CODES).not.toContain("pick");
   });
 
-  it("EVERY banner code renders its own sentence — TEN checked, ten distinct — success as a status, every failure as an alert", () => {
+  it("EVERY banner code renders its own sentence — ELEVEN checked, eleven distinct — success as a status, every failure as an alert", () => {
     const seen = new Set<string>();
     let checked = 0;
     for (const code of BANNER_CODES) {
       const html = renderToStaticMarkup(<YoutubeLandingNotice code={code} />);
-      const sentence = (messages as Record<string, string>)[`streaming.youtube.landing.${code}`];
+      const sentence = (messages as Record<string, string>)[KEY_OF(code)];
       expect(sentence, `${code}: the dictionary has it`).toBeTypeOf("string");
       expect(html, code).toContain(esc(sentence!));
       expect(html, code).toContain(`data-code="${code}"`);
-      expect(html, `${code}: role`).toContain(code === "connected" ? 'role="status"' : 'role="alert"');
+      expect(html, `${code}: role`).toContain(SUCCESS.includes(code) ? 'role="status"' : 'role="alert"');
       seen.add(sentence!);
       checked++;
     }
-    expect(checked, "all ten banner codes").toBe(10);
-    expect(seen.size, "no two codes share a sentence").toBe(10);
+    expect(checked, "all eleven banner codes").toBe(11);
+    expect(seen.size, "no two codes share a sentence").toBe(11);
   });
 
-  it("every banner sentence is translated: es, fr and nl each have all ten, none of them the English", () => {
+  it("already_connected reads, word for word, as the controller's ruling (M5): the channel was already connected, its visibility and audience settings are unchanged, change them in Settings", () => {
+    // The copy is the ruling's own sentence typed here, not read back from the dictionary under test.
+    expect(messages["streaming.youtube.alreadyConnected" as MessageKey]).toBe(
+      "This channel was already connected. Its visibility and audience settings are unchanged — change them in Settings.",
+    );
+    const html = renderToStaticMarkup(<YoutubeLandingNotice code="already_connected" />);
+    expect(plain(html)).toContain("This channel was already connected.");
+    expect(plain(html)).not.toContain(m("streaming.youtube.landing.connected"));
+  });
+
+  it("every banner sentence is translated: es, fr and nl each have all eleven, none of them the English", () => {
     let checked = 0;
     for (const l of ["es", "fr", "nl"]) {
       const dict = localeDict(l);
       for (const code of BANNER_CODES) {
-        const key = `streaming.youtube.landing.${code}`;
+        const key = KEY_OF(code);
         expect(dict[key], `${l} ${key}`).toBeTypeOf("string");
         expect(dict[key], `${l} ${key} is not the English`).not.toBe((messages as Record<string, string>)[key]);
         expect(inLocale(l, <YoutubeLandingNotice code={code} />), `${l} ${code}`).toContain(esc(dict[key]!));
         checked++;
       }
     }
-    expect(checked).toBe(30);
+    expect(checked).toBe(33);
   });
 
   it("Dismiss clears the query: the page is replaced with /streaming (no outcome left to re-show on a reload)", async () => {
@@ -370,7 +385,10 @@ describe("the landing banner — the connect round trip's outcome as this page's
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe("the channel picker", () => {
   const CHANNELS = [{ id: "UC-one", title: "Riverside FC" }, { id: "UC-two", title: "Riverside Juniors" }];
-  const answerPicker = () => answerWith((_url, method) => (method === "POST" ? { connectionId: "c-9", targetId: "t-9" } : { channels: CHANNELS }));
+  // The POST answer is parsed by the route's own response schema, so the field the picker reads is the field the wire carries
+  // (youtube-connections-routes.test.ts pins the real route's body to the same shape): a rename on one side fails here.
+  const answerPicker = (existing = false) =>
+    answerWith((_url, method) => (method === "POST" ? YoutubeConnectionSaved.parse({ connectionId: "c-9", targetId: "t-9", existing }) : { channels: CHANNELS }));
   const mount = async () => {
     const picker = renderIsland(YoutubeChannelPicker, { orgId: "org-1", pendingId: PENDING });
     await settle();
@@ -441,7 +459,7 @@ describe("the channel picker", () => {
       if (method === "GET") return { channels: CHANNELS };
       attempt += 1;
       if (attempt === 1) throw await wire(new HttpError(409, "This channel is connected to another organisation on Seazn", "YOUTUBE_OTHER_ORG"));
-      return { connectionId: "c", targetId: "t" };
+      return { connectionId: "c", targetId: "t", existing: false };
     });
     const picker = await mount();
     (attr(allByTestId(picker.tree(), "youtube-picker-channel")[0]!, "onChange") as () => void)();
@@ -468,6 +486,60 @@ describe("the channel picker", () => {
     expect(checked).toBe(2);
   });
 
+  it("M5: picking a channel the org ALREADY had lands on the already-connected banner (its settings were kept); a new channel lands on plain connected — the positive pair, and an answer without the flag (older server) reads as plain connected", async () => {
+    const pickFirst = async () => {
+      const picker = await mount();
+      (attr(allByTestId(picker.tree(), "youtube-picker-channel")[0]!, "onChange") as () => void)();
+      await click(byTestId(picker.tree(), "youtube-picker-connect"));
+    };
+    answerPicker(true);
+    await pickFirst();
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(nav.replace).toHaveBeenLastCalledWith("/streaming?youtube=already_connected");
+
+    nav.replace.mockReset();
+    answerPicker(false);
+    await pickFirst();
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(nav.replace).toHaveBeenLastCalledWith("/streaming?youtube=connected");
+
+    nav.replace.mockReset();
+    answerWith((_url, method) => (method === "POST" ? { connectionId: "c-9", targetId: "t-9" } : { channels: CHANNELS }));
+    await pickFirst();
+    expect(nav.replace, "no flag is not 'already connected'").toHaveBeenLastCalledWith("/streaming?youtube=connected");
+  });
+
+  it("a pick whose grant is gone (404 / 410 on the POST) mirrors the lookup: the expired sentence, the channel list and Connect gone, Cancel the only way on — and a refusal that leaves the grant alive does NOT clear it", async () => {
+    let checked = 0;
+    for (const err of [new HttpError(404, "Not found"), new HttpError(410, "This connect request has expired", "YOUTUBE_PENDING_EXPIRED")]) {
+      answerWith(async (_url, method) => {
+        if (method === "GET") return { channels: CHANNELS };
+        throw await wire(err);
+      });
+      const picker = await mount();
+      (attr(allByTestId(picker.tree(), "youtube-picker-channel")[0]!, "onChange") as () => void)();
+      await click(byTestId(picker.tree(), "youtube-picker-connect"));
+      expect(textAt(picker.tree(), "youtube-error"), String(err.status)).toBe(m("streaming.youtube.landing.expired"));
+      expect(byTestId(picker.tree(), "youtube-picker-connect"), `${err.status}: no Connect with nothing to connect`).toBeUndefined();
+      expect(allByTestId(picker.tree(), "youtube-picker-channel"), `${err.status}: the list is gone`).toHaveLength(0);
+      expect(byTestId(picker.tree(), "youtube-picker-cancel"), `${err.status}: Cancel stays`).toBeDefined();
+      expect(nav.replace, `${err.status}: not connected`).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(2);
+
+    // The other side: a refusal that leaves the grant usable (another org's channel, 409) keeps the list and Connect.
+    answerWith(async (_url, method) => {
+      if (method === "GET") return { channels: CHANNELS };
+      throw await wire(new HttpError(409, "This channel is connected to another organisation on Seazn", "YOUTUBE_OTHER_ORG"));
+    });
+    const picker = await mount();
+    (attr(allByTestId(picker.tree(), "youtube-picker-channel")[0]!, "onChange") as () => void)();
+    await click(byTestId(picker.tree(), "youtube-picker-connect"));
+    expect(allByTestId(picker.tree(), "youtube-picker-channel")).toHaveLength(2);
+    expect(byTestId(picker.tree(), "youtube-picker-connect")).toBeDefined();
+  });
+
   it("a grant that lists no channels says so (no_channel) and offers no Connect", async () => {
     answerWith(() => ({ channels: [] }));
     const picker = await mount();
@@ -481,6 +553,48 @@ describe("the channel picker", () => {
     await click(byTestId(picker.tree(), "youtube-picker-cancel"));
     expect(nav.replace).toHaveBeenCalledWith("/streaming");
     expect(apiCalls.filter((c) => c.method === "POST")).toEqual([]);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe("I1 — a long channel title cannot push a form past its card (a <fieldset>'s UA min-inline-size is min-content)", () => {
+  /** The class TOKENS of every <fieldset> in some markup — tokens, so `max-md:min-w-0` cannot satisfy a `min-w-0` check. */
+  const fieldsetTokens = (html: string): string[][] =>
+    [...html.matchAll(/<fieldset\b([^>]*)>/g)].map(([, a = ""]) => (/\bclass="([^"]*)"/.exec(a)?.[1] ?? "").split(/\s+/).filter(Boolean));
+  const html = (node: ReactNode): string => renderToStaticMarkup(<DictProvider dict={messages as unknown as Dict} locale="en">{node}</DictProvider>);
+
+  it("every fieldset this feature renders carries min-w-0 AND min-inline-size:0 — the choices, the connect card, and the picker (five checked)", async () => {
+    answerWith(() => ({ channels: [{ id: "UC-long", title: "Riverside Community Football Club Juniors U12 Girls" }] }));
+    const picker = renderIsland(YoutubeChannelPicker, { orgId: "org-1", pendingId: PENDING });
+    await settle();
+    const pickerFieldsets = picker.tree().filter((el) => el.type === "fieldset");
+    const surfaces: [string, string[][]][] = [
+      ["PrivacyChoice", fieldsetTokens(html(<PrivacyChoice value="unlisted" onChange={() => {}} />))],
+      ["KidsChoice", fieldsetTokens(html(<KidsChoice value="0" onChange={() => {}} />))],
+      ["YoutubeConnectCard", fieldsetTokens(html(<YoutubeConnectCard orgId="o" onCancel={() => {}} />))],
+      ["YoutubeChannelPicker", pickerFieldsets.map((el) => String(attr(el, "className") ?? "").split(/\s+/).filter(Boolean))],
+    ];
+    expect(surfaces.map(([, f]) => f.length), "one, one, two (privacy + kids), one").toEqual([1, 1, 2, 1]);
+    let checked = 0;
+    for (const [name, sets] of surfaces) {
+      for (const tokens of sets) {
+        expect(tokens, `${name}: min-w-0 as a class token`).toContain("min-w-0");
+        expect(tokens, `${name}: min-inline-size reset`).toContain("[min-inline-size:0]");
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: five fieldsets looked at").toBe(5);
+  });
+
+  it("the picker's title is the part that gives way: it truncates inside a min-w-0 label (the whole chain, not just the span)", async () => {
+    answerWith(() => ({ channels: [{ id: "UC-long", title: "Riverside Community Football Club Juniors U12 Girls" }] }));
+    const picker = renderIsland(YoutubeChannelPicker, { orgId: "org-1", pendingId: PENDING });
+    await settle();
+    const tokens = (el: ReactElement) => String(attr(el, "className") ?? "").split(/\s+/);
+    const label = picker.tree().find((el) => el.type === "label")!;
+    const title = picker.tree().find((el) => el.type === "span" && textOf(el).includes("Riverside Community"))!;
+    expect(tokens(label)).toContain("min-w-0");
+    expect(tokens(title)).toEqual(expect.arrayContaining(["min-w-0", "truncate"]));
   });
 });
 
@@ -924,7 +1038,7 @@ describe("the panel with YouTube Connect", () => {
           checked++;
         }
       }
-      expect(checked).toBe(20);
+      expect(checked, "eleven banner codes x editor and viewer").toBe(22);
     });
 
     it("a pick opens the picker for THIS pending grant — for an editor only; a viewer gets neither picker nor banner", () => {

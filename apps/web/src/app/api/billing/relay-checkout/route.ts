@@ -77,7 +77,7 @@ export async function POST(req: Request) {
 
     // Where the buyer lands afterwards, and which competition's entitlements the gates below read. A fixture purchase
     // is scoped to its competition (an Event Pass grants for the competition it was bought for); a Settings purchase has
-    // none, so it resolves for the org — the way the Directory's Streaming tab does.
+    // none, so it resolves for the org — the way the Streaming page does.
     let competitionId: string | undefined;
     let fixtureId: string | undefined;
     let landing: string;

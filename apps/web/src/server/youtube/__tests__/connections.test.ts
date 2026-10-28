@@ -93,6 +93,7 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a new connection", () => {
     const p = await grant(o, { privacy: "public", madeForKids: true, consentVersion: 1, consentAt, sub: "sub-solo" });
     const ch = p.channels[0]!;
     const saved = await saveConnectionFromGrant({ pendingId: p.id, channelId: ch.id, userId: o.userId }, fake);
+    expect(saved.existing, "a channel the org did not have is NEW (the picker says plain 'connected')").toBe(false);
 
     const [conn] = await connRows(o.orgId);
     expect(conn).toMatchObject({
@@ -201,7 +202,7 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a new connection", () => {
     const p = await grant(o, { channels: [first.channel], privacy: "private", madeForKids: false });
     const again = await saveConnectionFromGrant({ pendingId: p.id, channelId: first.channel.id, userId: o.userId }, fake);
 
-    expect(again).toEqual({ connectionId: first.connectionId, targetId: first.targetId });
+    expect(again, "the existing ids, flagged existing - the pick keeps the old settings and the screen must say so").toEqual({ connectionId: first.connectionId, targetId: first.targetId, existing: true });
     expect(await connRows(o.orgId)).toHaveLength(1);
     expect(await targetRows(o.orgId)).toHaveLength(1);
     expect(await openToken(sql, o.orgId, first.connectionId), "the token is the NEW grant's").toBe(p.token);
@@ -244,7 +245,8 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a new connection", () => {
     await holder;
     const [won, lost] = await Promise.all([a, b]);
 
-    expect(lost, "the loser's answer is the winner's ids").toEqual(won);
+    expect(won.existing, "the winner created it").toBe(false);
+    expect(lost, "the loser's answer is the winner's ids, flagged existing (it reconnected the winner's connection)").toEqual({ connectionId: won.connectionId, targetId: won.targetId, existing: true });
     expect(await connRows(o.orgId), "the raced channel's connection plus the other channel's").toHaveLength(2);
     expect((await targetRows(o.orgId)).filter((t) => t.youtube_connection_id === won.connectionId), "one destination for the raced channel").toHaveLength(1);
     expect(await targetRows(o.orgId), "plus the other channel's own").toHaveLength(2);
@@ -260,6 +262,7 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a new connection", () => {
     const second = await saveConnectionFromGrant({ pendingId: p.id, channelId: first.channel.id, userId: o.userId }, fake);
 
     expect(second.connectionId).not.toBe(first.connectionId);
+    expect(second.existing, "after a disconnect the channel is NEW again").toBe(false);
     expect(second.targetId).not.toBe(first.targetId);
     const targets = await targetRows(o.orgId);
     expect(targets.map((t) => [t.id, t.archived_at !== null]).sort()).toEqual([[first.targetId, true], [second.targetId, false]].sort());
@@ -277,6 +280,7 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a new connection", () => {
     const p = await grant(o, { channels: [first.channel] });
     const second = await saveConnectionFromGrant({ pendingId: p.id, channelId: first.channel.id, userId: o.userId }, fake);
     expect(second.connectionId).not.toBe(first.connectionId);
+    expect(second.existing, "after a disconnect the channel is NEW again").toBe(false);
     expect((await connRow(second.connectionId)).status).toBe("connected");
     expect((await connRow(first.connectionId)).status, "the revoked one is never revived").toBe("revoked");
   });
@@ -433,7 +437,7 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a reconnect", () => {
     const p = await grant(o, { channels: [first.channel], connectionId: first.connectionId, sub: "sub-new" });
 
     const saved = await saveConnectionFromGrant({ pendingId: p.id, channelId: first.channel.id, userId: o.userId }, fake);
-    expect(saved).toEqual({ connectionId: first.connectionId, targetId: first.targetId });
+    expect(saved, "a reconnect through the connection's own id is existing too").toEqual({ connectionId: first.connectionId, targetId: first.targetId, existing: true });
     expect(await openToken(sql, o.orgId, first.connectionId)).toBe(p.token);
     const after = await connRow(first.connectionId);
     expect(after).toMatchObject({ status: "connected", last_error_code: null, google_sub: "sub-new", granted_scope: SCOPE });

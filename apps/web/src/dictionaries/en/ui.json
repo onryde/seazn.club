@@ -1445,6 +1445,7 @@
   "streaming.youtube.landing.not_configured": "Connecting YouTube isn't available on this server right now. Try again later.",
   "streaming.youtube.landing.forbidden": "Only an owner or admin can connect a YouTube channel.",
   "streaming.youtube.landing.unavailable": "YouTube didn't answer. Try again in a minute.",
+  "streaming.youtube.alreadyConnected": "This channel was already connected. Its visibility and audience settings are unchanged — change them in Settings.",
   "streaming.youtube.error.notOffered": "That channel isn't one this Google account offered. Pick again, or start over.",
   "streaming.youtube.error.gone": "This channel is no longer connected. Reload the page.",
   "streamDest.add": "Add destination",

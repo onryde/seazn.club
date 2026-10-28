@@ -10,7 +10,7 @@ import { EDITOR_ROLES } from "@/lib/types";
 import { YOUTUBE_CONSENT_VERSION, YOUTUBE_PRIVACIES, youtubeLanding } from "@/lib/youtube";
 import { pkceChallenge, pkceVerifier } from "@/server/external-play/pkce";
 import { log } from "@/server/logger";
-import { relayOffer } from "@/server/stream-panel-context";
+import { streamingPageOffer } from "@/server/stream-panel-context";
 import { PENDING_LIFETIME_SECONDS, insertPending, reconnectTarget, unusableConnectKeys } from "@/server/youtube/connect-flow";
 import { youtubeDriver } from "@/server/youtube/driver";
 import { YouTubeError } from "@/server/youtube/port";
@@ -45,9 +45,9 @@ function originIsOurs(req: Request): boolean {
   return origin === new URL(youtubeRedirectUri(req)).origin;
 }
 
-/** Start connecting a YouTube channel (a form POST from the Directory's consent step): record the consent, then send the
+/** Start connecting a YouTube channel (a form POST from the Streaming page's consent step): record the consent, then send the
  *  browser to Google (or, in CI, to the fake authorize hop). Every browser-facing refusal that is not a bad request lands on
- *  the Directory with `?youtube=<code>`; a bad request (no consent, a viewer, a foreign org) is the plain status. */
+ *  the Streaming page with `?youtube=<code>`; a bad request (no consent, a viewer, a foreign org) is the plain status. */
 export async function POST(req: Request) {
   return handler(async () => {
     if (!originIsOurs(req)) throw new HttpError(403, "Cross-origin request refused");
@@ -64,11 +64,11 @@ export async function POST(req: Request) {
     if (!role) throw new HttpError(404, "Not found");
     if (!(EDITOR_ROLES as readonly string[]).includes(role)) throw new HttpError(403, "Only an owner or admin can connect YouTube");
 
-    // The Streaming page is offered only to an org entitled to the relay, on a deployment that can start a stream
-    // (streaming/page.tsx, via `streamingPageOffered`); this asks the same question, so a hand-made POST gets what the page would not offer.
-    const offer = await relayOffer(body.orgId);
-    if (!offer.relayEntitled) return redirectLocal(youtubeLanding("forbidden"), 303);
-    if (offer.relayDisabled) return redirectLocal(youtubeLanding("not_configured"), 303);
+    // The Streaming page is offered only to an org entitled to the relay, on a deployment that can start a stream. The page and the
+    // nav ask `streamingPageOffered`, which is derived from this very function, so a hand-made POST gets what the page would not offer.
+    const offer = await streamingPageOffer(body.orgId);
+    if (offer === "not_entitled") return redirectLocal(youtubeLanding("forbidden"), 303);
+    if (offer === "not_configured") return redirectLocal(youtubeLanding("not_configured"), 303);
 
     // D7: ONE consent per connection. A reconnect of a connection whose consent is on the CURRENT text needs no new tick (its
     // own record is carried forward); a first connect, or a connection consented to older wording, must tick the box.

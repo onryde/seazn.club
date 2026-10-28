@@ -155,6 +155,7 @@ describe("Streaming page — offered exactly when the fixture panel offers Go li
       ["no query", {}, "none", "none"],
       ["a banner code", { youtube: "denied" }, "denied", "none"],
       ["connected", { youtube: "connected" }, "connected", "none"],
+      ["the picker's already-connected landing", { youtube: "already_connected" }, "already_connected", "none"],
       ["a pick carries its pending grant", { youtube: "pick", pending: PENDING }, "pick", PENDING],
       ["a pick with no pending id cannot open a picker: it reads as expired", { youtube: "pick" }, "expired", "none"],
       ["a pick with a junk pending id reads as expired too", { youtube: "pick", pending: "not-a-uuid" }, "expired", "none"],
