@@ -35,8 +35,9 @@ export const FOLD_EPOCH = Object.freeze({
   // re-recorded as field goals (kind "fg"). As with the lineup refusal, it is the write path that refuses: replay is lenient,
   // and a recorded untyped goal still folds as a field goal.
   // W2e T6 (CK-CH-1, RB2A-22) raised cricket to 2: the write path refuses a coarse chase total past target - 1 + 7 (CHASE_OVERSHOOT), and golden streams 24 and 29 recorded one, so both were re-recorded in place.
+  // W2e T9 (HK-SO-1/2, IH-SO-1/2, RB2B-10) raised hockey to 5 and icehockey to 3: the write path refuses a shoot-out attempt out of the federation's order (FIH series / IIHF tie-break) and `summary.shootoutNext` names that side, `shootout.suddenDeath` is gone from the cfg (a phone that still sends it has it stripped), and hockey streams 17, 21 and icehockey 3, 4, 12 were re-recorded in place.
   football: 3, cricket: 2, boardgame: 3, carrom: 3, generic: 3, volleyball: 1,
-  badminton: 1, tabletennis: 1, tennis: 1, icehockey: 2, hockey: 4,
+  badminton: 1, tabletennis: 1, tennis: 1, icehockey: 3, hockey: 5,
 } as const satisfies Readonly<Record<string, number>>);
 export type FoldEpochSport = keyof typeof FOLD_EPOCH;
 // The same sports as FOLD_EPOCH: `satisfies` over its keys makes a sport missing here, or one only here, a type error.
