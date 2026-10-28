@@ -614,25 +614,25 @@
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
     },
     {
-      "mutant": "src/core/events.ts:1081:7 LogicalOperator → decided || event.type === \"core.forfeit\"",
+      "mutant": "src/core/events.ts:1085:7 LogicalOperator → decided || event.type === \"core.forfeit\"",
       "original": "decided &&",
       "line": "decided &&",
       "reason": "Undecided, a withdrawal is over a level result only if outcomeOf reads level, and an undecided fold's outcomeOf is null or a settle's win (CoreSettle requires a winner), never level — so `decided ||` admits nothing that `decided &&` does not."
     },
     {
-      "mutant": "src/core/events.ts:1082:7 ConditionalExpression → true",
+      "mutant": "src/core/events.ts:1086:7 ConditionalExpression → true",
       "original": "event.type === \"core.forfeit\"",
       "line": "event.type === \"core.forfeit\" &&",
       "reason": "forfeitReasonOf parses the payload as CoreForfeit, a strict {by, reason} object; no other kernel or sport event declares exactly that shape (set sanctions need `level`, period suspensions `class`, carrom adjustments `entrantId` and `delta`, nested game awards `winner`), so only a core.forfeit reads \"withdrew\"."
     },
     {
-      "mutant": "src/core/events.ts:1107:11 ConditionalExpression → true",
+      "mutant": "src/core/events.ts:1111:11 ConditionalExpression → true",
       "original": "phase !== \"over\"",
       "line": "if (phase !== \"over\") {",
       "reason": "In phase \"over\" a forfeit reaches the guard only as a withdrawal over a held level result: guarantee 4 (ALREADY_DECIDED) and X-AB-4 (ABANDONED_SETTLE_OR_VOID) answer every other one first (measured: every sport, every reason, after an abandon settled or not), modules refuse to finalize an undecided state, and \"withdrew\" is admitted in every phase (R5) — so judging it there changes nothing."
     },
     {
-      "mutant": "src/core/events.ts:1107:21 StringLiteral → \"\"",
+      "mutant": "src/core/events.ts:1111:21 StringLiteral → \"\"",
       "original": "\"over\"",
       "line": "if (phase !== \"over\") {",
       "reason": "In phase \"over\" a forfeit reaches the guard only as a withdrawal over a held level result: guarantee 4 (ALREADY_DECIDED) and X-AB-4 (ABANDONED_SETTLE_OR_VOID) answer every other one first (measured: every sport, every reason, after an abandon settled or not), modules refuse to finalize an undecided state, and \"withdrew\" is admitted in every phase (R5) — so judging it there changes nothing."

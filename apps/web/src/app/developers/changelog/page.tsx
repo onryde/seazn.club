@@ -9,7 +9,7 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
     date: "2026-10-28",
     title: "Breaking: a match-ending sanction must be followed by its ending",
     lines: [
-      "After a badminton disqualification (black card) or a tennis default, POST /fixtures/{id}/events refuses every event but core.forfeit and core.abandon with 422 ENDING_SANCTION_PENDING, and nothing is written. error.data names the sanctioned entrant (by) and the level.",
+      "After a badminton disqualification (black card) or a tennis default, POST /fixtures/{id}/events refuses every event but core.forfeit and core.abandon with 422 ENDING_SANCTION_PENDING, and nothing is written.",
       "POST /divisions/{id}/events/import rejects such a stream the same way: error.code import.fold_rejected, error.engineCode ENDING_SANCTION_PENDING, nothing written for its fixture.",
       "Send the ending, core.forfeit with by the sanctioned entrant and reason \"disqualified\", or void the sanction. Ledgers recorded before the change still replay as recorded. Every other sanction level and sport is unchanged.",
       "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",

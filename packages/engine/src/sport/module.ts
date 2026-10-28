@@ -888,7 +888,9 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
    * this is the interface a sport author reads. Which levels of the sport's sanction event END the match (`endLevels`:
    * badminton's black card, tennis's default), and after which the pad asks whether a team can still field six
    * (`promptLevels`: volleyball, D12). The ending is the recorded `core.forfeit` that follows the sanction; until it is
-   * written the write path refuses scoring (`ENDING_SANCTION_PENDING`). Absent ⇒ no sanction ends a match.
+   * written, and while the match is neither decided nor abandoned, the write path refuses scoring
+   * (`ENDING_SANCTION_PENDING`). A declaration owes `sanctionEndingIssues(decl)` to be []. Absent ⇒ no sanction ends a
+   * match.
    */
   readonly sanctionEnding?: SanctionEndingDecl;
   variants: Record<string, Partial<Cfg>>; // named presets: t20, odi, beach, blitz…

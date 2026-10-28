@@ -15,7 +15,8 @@ two strict write paths take no other scoring event until it is there.
 
 **What changed.** After a live sanction at a level the sport declares as
 match-ending (`badminton.sanction` with `level: "disqualification"`,
-`tennis.sanction` with `level: "default"`), with no `core.forfeit` after it:
+`tennis.sanction` with `level: "default"`), with no `core.forfeit` or
+`core.abandon` after it:
 
 | Write path | Before | Now |
 |---|---|---|
@@ -37,7 +38,6 @@ ended.
 { "ok": false, "error": { "code": "ENDING_SANCTION_PENDING", "message": "event \"badminton.rally\" rejected: a disqualification sanction against … ends the match — record the ending (core.forfeit) or void the sanction first" }, "requestId": "…" }
 ```
 
-`error.data` carries `{ "by": "<entrant id>", "level": "<the sanction level>" }`.
 Key on `error.code`, not on the message text.
 
 **No data migration was required.** Only a NEW write is judged. A ledger
