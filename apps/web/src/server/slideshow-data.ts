@@ -33,21 +33,34 @@ import {
   type StandingsRow,
   type TableLayout,
 } from "@seazn/engine/competition";
-import { tableLayoutFor } from "@/server/public-site/standings-view";
+import { cellText, compactKeysOf, fixedResultColumns, tableLayoutFor } from "@/server/public-site/standings-view";
 import { standingsColumns, type MetricSpecLike } from "@/lib/public-site";
 import { resolveModule } from "@/server/engine-db/registry";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
+/** The result columns a standings slide prints between the entrant and Pts (W2d follow-up, final review m8): the public
+ *  table's own declaration for a fixed-shape table (`fixedResultColumns`) — P · W · D · L, and IIHF's P · W · OTW · OTL ·
+ *  D · L (RBG:343-344). */
+export type StandingsSlideColumnKey = "played" | "won" | "otw" | "otl" | "drawn" | "lost";
+
+export interface StandingsSlideColumn {
+  key: StandingsSlideColumnKey;
+  /** Still shown below `lg`, where a phone sees the board only when it asks for it (kiosk-phone-card.tsx). A table that
+   *  splits its results keeps the public table's phone set (`compactKeysOf`: P, then Pts) and folds the rest, as the
+   *  public table does: its six counts do not fit a 768px board (the slideshow-tv-rows budget). A table that does not
+   *  split folds nothing — its P · W · D · L fit from 768, and its board stays as it always was. */
+  compact: boolean;
+}
+
 export interface StandingsSlideRow {
   /** The rank as the public table prints it (`rankText`): the place, or "–" on a level table (X-TB-6). */
   rank: string;
   name: string;
-  played: number;
-  won: number;
-  drawn: number;
-  lost: number;
+  /** The result cells, paired by index with the slide's `columns`: the public table's own cell text (`cellText`), so
+   *  IIHF's W and L leave out the overtime and shoot-out decisions that OTW and OTL hold. */
+  results: string[];
   /** The points as the public table prints them (`pointsText` under the stage's unit): chess's half-points read
    *  "1½", never the stored 3 (RB2B-17: "on every surface"). */
   points: string;
@@ -135,25 +148,28 @@ function standingsSlideRows(
   snapRows: readonly StandingsSlideSnapshotRow[],
   shape: StandingsShape,
   names: Record<string, string>,
-): { rows: StandingsSlideRow[]; level: boolean } {
+): { columns: StandingsSlideColumn[]; rows: StandingsSlideRow[]; level: boolean } {
   const engineRows: StandingsRow[] = snapRows.map((r) => ({ ...r, metrics: r.metrics ?? {} }));
   const showsPointRatio = standingsColumns(shape.metricSpecs, shape.cascade, engineRows, DERIVED_METRICS).some(
     (c) => c.kind === "derived" && c.key === "point_ratio",
   );
+  // W2d follow-up (final review m8; RBG §3.4): the result columns are the public table's own declaration under the
+  // stage's layout, and each cell its own text — no second column list and no second W.
+  const results = fixedResultColumns(shape.layout);
+  const folds = shape.layout.apart.length > 0;
+  const compact = compactKeysOf(shape.layout);
+  const columns = results.map((c) => ({ key: c.key as StandingsSlideColumnKey, compact: !folds || compact.has(c.key) }));
   // W2d T17 (X-TB-6, RB2B-17): the public table's own helpers — a level table has no places and no leader, and the
   // points print in the stage's unit.
   const level = isLevelTable(engineRows);
   const rows = engineRows.map((r, i) => ({
     rank: rankText({ ...r, rank: r.rank ?? i + 1 }, level),
     name: names[r.entrantId] ?? "—",
-    played: r.played,
-    won: r.won,
-    drawn: r.drawn,
-    lost: r.lost,
+    results: results.map((c) => cellText(r, c, shape.layout)),
     points: pointsText(r.points, shape.layout.unit),
     ...(showsPointRatio ? { pointRatio: derivedMetricText(r, "point_ratio") ?? "—" } : {}),
   }));
-  return { rows, level };
+  return { columns, rows, level };
 }
 
 export interface FixtureSlideItem {
@@ -212,6 +228,8 @@ export type Slide =
       kind: "standings";
       division: string;
       caption: string;
+      /** The result columns, in order (W2d follow-up m8); each row's `results` holds their cells. */
+      columns: StandingsSlideColumn[];
       rows: StandingsSlideRow[];
       /** W2d T17 (X-TB-6, anti-goal 3): no counted fixture yet — no row is drawn as first. */
       level: boolean;
@@ -372,9 +390,9 @@ export async function buildDivisionSlides(
           )
         : [{ caption: stage.name, snap: await getStandings(auth, stage.id) }];
     for (const { caption, snap } of tables) {
-      const { rows, level } = standingsSlideRows(snap.rows as StandingsSlideSnapshotRow[], stageShape(metricSpecs, tableRules[stage.id]), names);
+      const { columns, rows, level } = standingsSlideRows(snap.rows as StandingsSlideSnapshotRow[], stageShape(metricSpecs, tableRules[stage.id]), names);
       if (rows.length > 0) {
-        slides.push({ kind: "standings", division: divisionName, caption, rows, level });
+        slides.push({ kind: "standings", division: divisionName, caption, columns, rows, level });
       }
     }
   }
@@ -645,13 +663,14 @@ export async function buildPublicDivisionSlides(data: PublicSlideInput): Promise
     const stage = stageById.get(snap.stage_id);
     if (!stage || snap.rows.length === 0) continue;
     const pool = snap.pool_id !== null ? poolById.get(snap.pool_id) : undefined;
-    const { rows, level } = standingsSlideRows(snap.rows, stageShape(metricSpecs, stage.table_rules), names);
+    const { columns, rows, level } = standingsSlideRows(snap.rows, stageShape(metricSpecs, stage.table_rules), names);
     slides.push({
       kind: "standings",
       division: data.division.name,
       // From the pool's KEY in the org's locale, never its stored English
       // name (`lib/pool-label.ts`).
       caption: pool !== undefined ? `${stage.name} — ${poolLabel(publicDict, pool.key)}` : stage.name,
+      columns,
       rows,
       level,
     });

@@ -6036,6 +6036,8 @@
   "slideshow.col.won": "G",
   "slideshow.col.drawn": "E",
   "slideshow.col.lost": "P",
+  "slideshow.col.otw": "GPr",
+  "slideshow.col.otl": "PPr",
   "slideshow.col.points": "Pts",
   "slideshow.col.pointRatio": "Ratio pts",
   "slideshow.round": "R{round}",

@@ -25,7 +25,7 @@ import {
   type ExportTicket,
   type PageBreaks,
 } from "@seazn/engine/exports";
-import { isLevelTable, pointsText, roundRole, type StandingsRow } from "@seazn/engine/competition";
+import { isLevelTable, pointsText, resultColumnText, roundRole, type ResultColumnKey, type StandingsRow } from "@seazn/engine/competition";
 import { roundRoleLabel } from "@/lib/round-role-label";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -36,7 +36,7 @@ import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
-import { tableLayoutFor } from "@/server/public-site/standings-view";
+import { fixedResultColumns, tableLayoutFor } from "@/server/public-site/standings-view";
 import { anyOptedOutByRegistration } from "./registrations";
 import { participantRows } from "./clubs";
 import { resolveSponsors } from "./sponsors";
@@ -493,7 +493,13 @@ export async function buildDivisionDocModel(
         // does — chess stores half-points (2/1/0 is FIDE's 1/½/0), so a raw cell printed every score doubled. The unit is
         // the public table's own (`tableLayoutFor` over the one loader's rules) and the text is `pointsText`. Whole points
         // stay a NUMBER cell, as before, so a spreadsheet's Pts column stays numeric for every other sport.
-        const { unit } = tableLayoutFor((await stageTableRulesDocs(tx, [snapshot.stage_id]))[snapshot.stage_id]);
+        const layout = tableLayoutFor((await stageTableRulesDocs(tx, [snapshot.stage_id]))[snapshot.stage_id]);
+        const { unit } = layout;
+        // W2d follow-up (final review m3; RBG §3.4): the result columns are the public table's own declaration under the
+        // stage's layout (`fixedResultColumns`: IIHF's P · W · OTW · OTL · D · L, every other table P · W · D · L), and each
+        // cell is the public table's (`resultColumnText`: W and L leave out the decisions counted apart) — so a hockey
+        // club's PDF no longer folds its overtime wins into W. A count stays a NUMBER cell, as before.
+        const results = fixedResultColumns(layout);
         const rows = [...snapshot.rows]
           .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
           .map((r) => ({
@@ -502,6 +508,7 @@ export async function buildDivisionDocModel(
             won: r.won,
             drawn: r.drawn,
             lost: r.lost,
+            results: results.map((c) => Number(resultColumnText(r, c.key as ResultColumnKey, layout))),
             points: unit === "whole" ? r.points : pointsText(r.points, unit),
             metrics: r.metrics,
             ...(badgeById.get(r.entrantId) ? { badgeUrl: badgeById.get(r.entrantId) } : {}),
@@ -509,6 +516,7 @@ export async function buildDivisionDocModel(
         return buildStandings(title, rows, {
           ...common,
           metricColumns,
+          resultColumns: results.map((c) => c.label),
           ...(liveUrl !== undefined ? { liveUrl } : {}),
         });
       }

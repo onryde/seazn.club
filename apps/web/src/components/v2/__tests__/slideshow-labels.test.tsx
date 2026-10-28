@@ -63,6 +63,10 @@ const PLAIN_KEYS = [
   // Shown only on a standings slide whose division ranks on point_ratio (the
   // EVERY_BRANCH standings row below carries one, so the es board renders it).
   "slideshow.col.pointRatio",
+  // W2d follow-up (m8): shown only on a standings slide whose table splits its results (IIHF's OTW/OTL; the second
+  // EVERY_BRANCH standings slide below).
+  "slideshow.col.otw",
+  "slideshow.col.otl",
   "schedule.vs",
   "bracket.tbd",
   "sponsors.title",
@@ -369,7 +373,17 @@ const EVERY_BRANCH: Slide[] = [
     kind: "standings",
     division: "Open",
     caption: "Groups — Pool A",
-    rows: [{ rank: "1", name: "Mexico", played: 3, won: 3, drawn: 0, lost: 0, points: "9", pointRatio: "1.50" }],
+    columns: (["played", "won", "drawn", "lost"] as const).map((key) => ({ key, compact: true })),
+    rows: [{ rank: "1", name: "Mexico", results: ["3", "3", "0", "0"], points: "9", pointRatio: "1.50" }],
+    level: false,
+  },
+  {
+    // An IIHF table: its split columns, as the builder marks them (P stays below lg; slideshow-point-ratio.test.ts).
+    kind: "standings",
+    division: "Open",
+    caption: "League",
+    columns: (["played", "won", "otw", "otl", "drawn", "lost"] as const).map((key) => ({ key, compact: key === "played" })),
+    rows: [{ rank: "1", name: "Canada", results: ["5", "1", "2", "2", "0", "0"], points: "9" }],
     level: false,
   },
   {
@@ -395,6 +409,22 @@ const EVERY_BRANCH: Slide[] = [
   ]),
   bracket("page_playoff", [bf("q1", 0, 1), bf("el", 0, 2), bf("q2", 1, 1), bf("fin", 2, 1)]),
 ];
+
+describe("W2d follow-up m8: the board's OTW/OTL letters are the public table's", () => {
+  it("in every locale, slideshow.col.otw/otl spell what the public table heads the same columns with (table.abbr.otw/otl)", async () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      const pub = await getDictionary(locale, "public");
+      const labels = slideshowLabels(locale);
+      expect([labels.otw, labels.otl], locale).toEqual([t(pub, "table.abbr.otw"), t(pub, "table.abbr.otl")]);
+      expect(labels.otw.startsWith("slideshow."), `${locale} resolves the key`).toBe(false);
+      checked++;
+    }
+    expect(checked, "every locale").toBe(LOCALES.length);
+    // Positive pair: a locale that spells them differently from English, so the comparison can see a wrong catalog.
+    expect(slideshowLabels("es").otw).not.toBe(slideshowLabels("en").otw);
+  });
+});
 
 describe("<Slideshow> renders every string from its labels (R10e u1)", () => {
   it("es: every branch shows the es dictionary value and no English", async () => {

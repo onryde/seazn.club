@@ -44,7 +44,8 @@ vi.mock("next/navigation", () => ({
 }));
 
 import { Slideshow } from "@/components/v2/slideshow";
-import type { FixtureSlideItem, Slide } from "@/server/slideshow-data";
+import { buildPublicDivisionSlides, type FixtureSlideItem, type Slide, type StandingsSlideColumn } from "@/server/slideshow-data";
+import { iihfLeague } from "@/server/engine-db/__tests__/helpers/stored-table-rows";
 import { slideshowLabels } from "@/server/slideshow-labels";
 import { ratioText } from "@seazn/engine/competition";
 import { getDictionary } from "@/lib/i18n";
@@ -379,14 +380,19 @@ describe("K-2: the kiosk's Coming up row gives its free space to the names", () 
   });
 });
 
+/** A plain table's result columns as the builder hands them (P · W · D · L, nothing folds: `slideshow-point-ratio.test.ts`
+ *  sweeps every sport's builder output to this). Renderer input, not an expected value. */
+const PLAIN_COLUMNS: StandingsSlideColumn[] = (["played", "won", "drawn", "lost"] as const).map((key) => ({ key, compact: true }));
+
 describe("K-2: the standings slide already gives its free space to the team name", () => {
   const standings: Slide = {
     kind: "standings",
     division: "Cup",
     caption: "Table",
+    columns: PLAIN_COLUMNS,
     rows: [
-      { rank: "1", name: "North Harbour Rovers", played: 3, won: 3, drawn: 0, lost: 0, points: "9" },
-      { rank: "2", name: "West", played: 3, won: 1, drawn: 0, lost: 2, points: "3" },
+      { rank: "1", name: "North Harbour Rovers", results: ["3", "3", "0", "0"], points: "9" },
+      { rank: "2", name: "West", results: ["3", "1", "0", "2"], points: "3" },
     ],
     level: false,
   };
@@ -424,11 +430,12 @@ describe("the standings slide's Pts ratio column (layout half)", () => {
   /** The template the slide had before the column existed. The "exactly as
    *  before" claim is this literal, so it is typed on purpose. */
   const TEMPLATE_BEFORE = "4rem_minmax(0,1fr)_repeat(4,4rem)_7rem";
-  const played = { played: 3, won: 3, drawn: 0, lost: 0, points: "9" };
+  const played = { results: ["3", "3", "0", "0"], points: "9" };
   const slide = (ratios: (string | undefined)[]): Slide => ({
     kind: "standings",
     division: "Cup",
     caption: "Table",
+    columns: PLAIN_COLUMNS,
     level: false,
     rows: ratios.map((pointRatio, i) => ({
       rank: `${i + 1}`,
@@ -587,6 +594,7 @@ describe("the standings slide's Pts ratio column (layout half)", () => {
     kind: "standings",
     division: "Cup",
     caption: "Table",
+    columns: PLAIN_COLUMNS,
     rows: [{ rank: "1", name, ...played, ...(pointRatio !== undefined ? { pointRatio } : {}) }],
     level: false,
   });
@@ -613,5 +621,160 @@ describe("the standings slide's Pts ratio column (layout half)", () => {
     // ...and the number is the ratio slide's own, not the old slide's: the
     // extra track really does come out of the entrant's.
     expect(track).toBeLessThan(nameTrackPx(board(oneName(LONG43)), 1920));
+  });
+});
+
+// ---- W2d follow-up (final review m8): IIHF's split on the board --------------------------------------------------------
+//
+// RBG §3.4 (lines 343-344): "OT and GWS decisions both land in OTW/OTL". The slide is the BUILDER's own output for an
+// IIHF league (`buildPublicDivisionSlides` over the engine-produced rows of `iihfLeague`), so the board renders exactly
+// what production hands it. Two more count tracks cost the entrant 2 × (4rem + the gap): this suite prices that from the
+// rendered classes at the widths a board is seen at, and shows why the split folds below `lg` (where a phone sees the
+// board only when it asks for it) to the public table's phone set — P, then Pts.
+describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds them below lg as the public table does", () => {
+  const IDS = ["h1", "h2", "h3", "h4", "h5", "h6"] as const;
+  const NAMES: Record<string, string> = { h1: "Ash", h2: "Birch", h3: "Cedar", h4: "Dogwood", h5: "Elm", h6: "Fir" };
+  async function iihfSlide(rename: Record<string, string> = {}): Promise<Slide> {
+    const table = iihfLeague(IDS);
+    const slides = await buildPublicDivisionSlides({
+      division: { id: "d1", name: "Open" },
+      stages: [{ id: "sl", kind: "league", name: "League", table_rules: table.doc }],
+      pools: [],
+      fixtures: [],
+      standings: [{ stage_id: "sl", pool_id: null, rows: table.rows }],
+      entrants: table.rows.map((r) => ({ id: r.entrantId, display_name: rename[r.entrantId] ?? NAMES[r.entrantId]! })),
+    });
+    const slide = slides.find((s) => s.kind === "standings");
+    if (slide === undefined) throw new Error("premise: the builder made a standings slide");
+    return slide;
+  }
+  const plainSlide: Slide = {
+    kind: "standings",
+    division: "Cup",
+    caption: "Table",
+    columns: PLAIN_COLUMNS,
+    rows: [{ rank: "1", name: "North Harbour Rovers", results: ["3", "3", "0", "0"], points: "9" }],
+    level: false,
+  };
+
+  it("a column shape no grid template declares is refused by name, not drawn on a template with the wrong track count", async () => {
+    // The two shapes the builder makes (every sport: 4 shown / IIHF: 6 with only P compact) each have a template; any
+    // other — here the split with nothing folding, 6/6 — has none, and a board of mismatched tracks would misalign every
+    // count under the wrong header. The refusal is the guard; render it through the board itself.
+    const iihf = await iihfSlide();
+    if (iihf.kind !== "standings") throw new Error("premise");
+    const unfolded: Slide = { ...iihf, columns: iihf.columns.map((c) => ({ ...c, compact: true })) };
+    const draw = (slide: Slide) =>
+      renderToStaticMarkup(createElement(Slideshow, { title: "Cup", slides: [slide], backHref: "/", liveHref: "/x", labels: slideshowLabels("en") }));
+    expect(() => draw(unfolded)).toThrow("standings slide: no grid template for 6/6 result columns");
+    // The positive pair: the builder's own shapes draw.
+    expect(draw(iihf)).toContain("OTW");
+    expect(draw(plainSlide)).toContain("North Harbour Rovers");
+  });
+
+  /** Every standings grid on the board (header first), as class tokens and its cells' text, hidden-from-AT ones dropped. */
+  const gridsOf = (html: string) =>
+    [...html.matchAll(/<div class="((?:relative )?grid [^"]*grid-cols-\[[^"]*)"[^>]*>(.*?)<\/div>(?=<div|<\/div>)/g)].map((m) => ({
+      tokens: m[1]!.split(/\s+/).filter(Boolean),
+      cells: [...m[2]!.matchAll(/<span(?![^>]*aria-hidden)([^>]*)>([^<]*)<\/span>/g)].map((x) => ({ cls: /class="([^"]*)"/.exec(x[1]!)?.[1] ?? "", text: x[2]! })),
+    }));
+  /** The `lg:` template as tracks (the board from 1024 up). */
+  function lgTracksOf(tokens: string[]): Track[] {
+    const template = one(tokens, /^lg:grid-cols-\[(.+)\]$/, "lg:grid-cols-[…]")[1]!;
+    return template.split("_").flatMap((raw): Track[] => {
+      const rep = /^repeat\((\d+),(.+)\)$/.exec(raw);
+      return rep ? Array.from({ length: Number(rep[1]) }, () => trackOf(rep[2]!)) : [trackOf(raw)];
+    });
+  }
+  /** The entrant's track at a viewport under `tracks`: the slide, less the row's padding, the fixed tracks and the gaps. */
+  function nameTrack(html: string, tokens: string[], tracks: Track[], vw: number): number {
+    expect(tracks.flatMap((tr, i) => (grows(tr) ? [i] : [])), "the entrant is the only growing track").toEqual([1]);
+    const pad = spacingPx(one(tokens, /^px-(\d+(?:\.\d+)?)$/, "row px")[1]!);
+    const gap = spacingPx(one(tokens, /^gap-x-(\d+)$/, "row gap-x")[1]!);
+    const fixed = tracks.reduce((sum, tr) => sum + (tr.kind === "fixed" ? tr.px : 0), 0);
+    return slideWidth(html, vw) - 2 * pad - fixed - (tracks.length - 1) * gap;
+  }
+  const rowTokens = (html: string) => gridsOf(html).find((g) => g.tokens.includes("relative"))!.tokens;
+
+  it("heads #, the entrant, P · W · OTW · OTL · D · L and Pts in the board's own words, and each row prints the builder's cells in that order", async () => {
+    const slide = await iihfSlide();
+    const labels = slideshowLabels("en");
+    const [header, ...rows] = gridsOf(board(slide));
+    expect(header!.cells.map((c) => c.text)).toEqual(["#", labels.entrant, labels.played, labels.won, labels.otw, labels.otl, labels.drawn, labels.lost, labels.points]);
+    expect(rows).toHaveLength(6);
+    // RBG §3.4: Ash 5 played, 1 regulation win, 2 OT/GWS wins, 2 OT/GWS losses, no regulation loss — 9 points.
+    const ash = rows.find((r) => r.cells[1]?.text === "Ash")!;
+    expect(ash.cells.map((c) => c.text)).toEqual(["1", "Ash", "5", "1", "2", "2", "0", "0", "9"]);
+    if (slide.kind !== "standings") throw new Error("premise");
+    for (const row of rows) {
+      const r = slide.rows.find((x) => x.name === row.cells[1]!.text)!;
+      expect(row.cells.slice(2).map((c) => c.text), r.name).toEqual([...r.results, r.points]);
+    }
+  });
+
+  it("below lg the board keeps only #, the entrant, P and Pts (the public table's split phone set); from lg every count — and a plain slide folds nothing", async () => {
+    const html = board(await iihfSlide());
+    const labels = slideshowLabels("en");
+    const [header, ...rows] = gridsOf(html);
+    const folded = (cells: { cls: string; text: string }[]) => cells.filter((c) => /(^|\s)max-lg:hidden(\s|$)/.test(c.cls)).map((c) => c.text);
+    expect(folded(header!.cells)).toEqual([labels.won, labels.otw, labels.otl, labels.drawn, labels.lost]);
+    for (const row of rows) expect(folded(row.cells), row.cells[1]!.text).toHaveLength(5);
+    // Below lg the template has a track for each cell still shown; from lg, one for every cell.
+    for (const g of [header!, ...rows]) {
+      expect(tracksOf(g.tokens), "below lg: #, entrant, P, Pts").toHaveLength(header!.cells.length - 5);
+      expect(lgTracksOf(g.tokens), "from lg: every cell").toHaveLength(header!.cells.length);
+    }
+    // The plain board is as it always was: no fold, no second template.
+    const plain = board(plainSlide);
+    expect(gridsOf(plain).length, "premise: the plain board's header and row").toBe(2);
+    expect(gridsOf(plain).every((g) => !g.tokens.some((t) => t.startsWith("lg:grid-cols-")))).toBe(true);
+    expect(gridsOf(plain).every((g) => folded(g.cells).length === 0)).toBe(true);
+  });
+
+  it("the width budget, priced from the rendered classes: at 768 the six counts would leave the entrant less than nothing, the folded board leaves it room, and a plain board fits unfolded", async () => {
+    const html = board(await iihfSlide());
+    const tokens = rowTokens(html);
+    const md = themePx("breakpoint-md");
+    expect(nameTrack(html, tokens, lgTracksOf(tokens), md), "unfolded at 768: the reason it folds").toBeLessThan(0);
+    expect(nameTrack(html, tokens, tracksOf(tokens), md), "folded at 768").toBeGreaterThan(0);
+    const plain = board(plainSlide);
+    expect(nameTrack(plain, rowTokens(plain), tracksOf(rowTokens(plain)), md), "a plain board at 768, unfolded").toBeGreaterThan(0);
+  });
+
+  it("from lg every count fits with the entrant keeping a track; at 1920 the 43-character name fits on one line", async () => {
+    const html = board(await iihfSlide({ h1: LONG43 }));
+    const tokens = rowTokens(html);
+    for (const vw of [themePx("breakpoint-lg"), 1280]) {
+      expect(nameTrack(html, tokens, lgTracksOf(tokens), vw), `the entrant's track at ${vw}`).toBeGreaterThan(0);
+    }
+    const cell = classesAround(html, LONG43);
+    expect(cell, "the entrant is cut, not wrapped").toContain("truncate");
+    const need = textWidth(DISPLAY[weightOf(cell)]!, LONG43, themePx(`text-${one(cell, /^text-(\d?xl|lg|base|sm)$/, "name size")[1]}`));
+    const at1920 = nameTrack(html, tokens, lgTracksOf(tokens), 1920);
+    expect(at1920, `${LONG43} needs ${need.toFixed(0)}px`).toBeGreaterThanOrEqual(need);
+    // The probe can see a cut: the same name twice does not fit the same track.
+    expect(textWidth(DISPLAY[weightOf(cell)]!, `${LONG43} ${LONG43}`, themePx(`text-${one(cell, /^text-(\d?xl|lg|base|sm)$/, "name size")[1]}`))).toBeGreaterThan(at1920);
+  });
+
+  it("the OTW and OTL header letters fit their count track on one line in every locale", async () => {
+    const html = board(await iihfSlide());
+    const header = gridsOf(html)[0]!.tokens;
+    expect(header, "the header is set in capitals").toContain("uppercase");
+    const size = themePx(`text-${one(header, /^text-(\d?xl|lg|base|sm)$/, "header size")[1]}`);
+    const tracking = Number(one(header, /^tracking-\[([0-9.]+)em\]$/, "header tracking")[1]);
+    const track = lgTracksOf(header)[4]!;
+    if (track.kind !== "fixed") throw new Error("the OTW track is no longer fixed: re-derive this model");
+    const wider: string[] = [];
+    let checked = 0;
+    for (const locale of ["en", "es", "fr", "nl"] as const) {
+      const labels = slideshowLabels(locale);
+      for (const label of [labels.otw, labels.otl]) {
+        const width = textWidth(DISPLAY[weightOf(header)]!, label.toUpperCase(), size, tracking);
+        if (width > track.px) wider.push(`${locale} "${label}" is ${width.toFixed(1)}px in a ${track.px}px track`);
+        checked++;
+      }
+    }
+    expect(checked, "8 labels").toBe(8);
+    expect(wider).toEqual([]);
   });
 });

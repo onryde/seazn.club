@@ -6831,6 +6831,8 @@ export type DictionaryKey =
   | "slideshow.col.drawn"
   | "slideshow.col.entrant"
   | "slideshow.col.lost"
+  | "slideshow.col.otl"
+  | "slideshow.col.otw"
   | "slideshow.col.played"
   | "slideshow.col.pointRatio"
   | "slideshow.col.points"

@@ -42,7 +42,7 @@ import {
   type TieBreakNote,
 } from "@seazn/engine/competition";
 import type { PartialScheduleKey, TiebreakerKey } from "@seazn/engine/sport";
-import { standingsColumns, formatMetric, type MetricSpecLike, type StandingsColumn } from "@/lib/public-site";
+import { resultColumns, standingsColumns, formatMetric, type MetricSpecLike, type StandingsColumn } from "@/lib/public-site";
 import type { TKey } from "@/lib/i18n-runtime";
 import type { DictionaryKey } from "@/lib/i18n-keys";
 import type { TableViewT } from "./competition-hub-schema";
@@ -433,6 +433,14 @@ export function tableColumns(
   layout: TableLayout,
 ): StandingsColumn[] {
   return standingsColumns(metricSpecs, cascade, rows, DERIVED_METRICS, layout.apart.length > 0);
+}
+
+/** W2d follow-up (final review m3, m8) — the result columns of a FIXED-shape table, the organiser export and the kiosk:
+ *  the public table's own declaration under the stage's layout (IIHF's P · W · OTW · OTL · L, RBG:343-344), with D on
+ *  every table, where the public table prints it only once a draw exists — a printed sheet and a TV board keep one shape
+ *  all season, as both always have. Their cells are `cellText`'s, the public table's. */
+export function fixedResultColumns(layout: TableLayout): StandingsColumn[] {
+  return resultColumns(layout.apart.length > 0, true);
 }
 
 /** W2d T17 (anti-goal 2, X-TB-8): why a conditional step left a tie unsplit, as the tie popover says it. Spelled out

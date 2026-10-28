@@ -14,16 +14,19 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MatchOutcome, type StandingsDelta } from "@seazn/engine/core";
 import {
   DERIVED_METRICS,
+  PLAIN_LAYOUT,
   completeTableStage,
   payout,
+  reachableOutcomes,
+  tableLayoutOf,
   type FixtureResult,
   type PointsRule,
   type StandingsRow,
   type TableFixture,
 } from "@seazn/engine/competition";
-import type { AnySportModule, DecidedIn, TiebreakerKey } from "@seazn/engine/sport";
+import type { AnySportModule, DecidedIn, TableStageKind, TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { tableRulesOf } from "@seazn/engine/testkit";
+import { declaredCfgs, forEachSport, tableRulesOf } from "@seazn/engine/testkit";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
 import fr from "@/dictionaries/fr/public.json";
@@ -43,7 +46,9 @@ import {
   ORDER_SOURCE_KEYS,
   TIE_NOTE_KEYS,
   buildTableView,
+  fixedResultColumns,
   stageOrderNote,
+  tableColumns,
   tieNoteText,
   type TableViewInput,
 } from "../standings-view";
@@ -482,6 +487,47 @@ describe("W2d T17 — the public table (SPEC §5.7, §9)", () => {
       checked++;
     }
     expect(checked).toBe(4);
+  });
+});
+
+// ---- W2d follow-up (final review m3, m8): the fixed-shape tables' result columns -----------------------------------------
+// The organiser export and the kiosk print a FIXED shape (D on every table, as both always have). Their result columns are
+// the public table's own declaration, not a second list: IIHF's OTW and OTL beside W and L (RBG §3.4, lines 343-344: "OT
+// and GWS decisions both land in OTW/OTL"), every other table its historic P · W · D · L.
+describe("W2d follow-up — the export's and the kiosk's result columns are the public table's (m3, m8)", () => {
+  const TABLE_KINDS: readonly TableStageKind[] = ["league", "group", "swiss", "americano"];
+  // The two shapes, typed from the rulebook (RBG §3.4) and from the export and kiosk as they printed before this change.
+  const IIHF = ["P", "W", "OTW", "OTL", "D", "L"];
+  const HISTORIC = ["P", "W", "D", "L"];
+  /** A row with a draw: the public table prints its D column exactly when one exists. */
+  const drawn: StandingsRow = { entrantId: "A", played: 1, won: 0, drawn: 1, lost: 0, points: 1, metrics: {} };
+
+  it("the empty case: a stage with no rules to read (the plain layout) prints the historic P · W · D · L", () => {
+    expect(fixedResultColumns(PLAIN_LAYOUT).map((c) => c.label)).toEqual(HISTORIC);
+  });
+
+  it("every sport, every declared cfg, every table kind: OTW/OTL only for IIHF ice hockey, and always the public table's own columns with a draw on the table", () => {
+    let layouts = 0;
+    let split = 0;
+    const sports = forEachSport(({ module }) => {
+      for (const { name, cfg } of declaredCfgs(module)) {
+        for (const kind of TABLE_KINDS) {
+          const layout = tableLayoutOf(module.tablePointsRule(cfg as never, kind), reachableOutcomes(module, cfg, kind));
+          const cols = fixedResultColumns(layout);
+          const iihf = module.key === "icehockey" && name !== "recreational";
+          expect(cols.map((c) => c.label), `${module.key} ${name} ${kind}`).toEqual(iihf ? IIHF : HISTORIC);
+          // One declaration: the public table's structural result columns for a table that has a draw, verbatim.
+          const pub = tableColumns([], [], [drawn], layout).filter((c) => c.kind === "structural" && c.key !== "points");
+          expect(cols, `${module.key} ${name} ${kind}: the public table's columns`).toEqual(pub);
+          layouts++;
+          if (iihf) split++;
+        }
+      }
+    });
+    expect(sports, "every shipped sport").toBe(builtinModules.length);
+    expect(layouts, "anti-vacuity: layouts checked").toBeGreaterThan(sports);
+    expect(split, "anti-vacuity: the IIHF layouts").toBeGreaterThan(0);
+    expect(layouts - split, "anti-vacuity: the plain layouts").toBeGreaterThan(0);
   });
 });
 
