@@ -68,6 +68,7 @@ import {
   createErrorIsNotFound,
   createErrorText,
   d3Warning,
+  autoDestinationOf,
   autoRefusalStrip,
   AUTO_WONT_START_KEY,
   autoSwitchNote,
@@ -744,7 +745,7 @@ export function PhoneStopProbe({ fixtureId, label }: { fixtureId: string; label?
  *  check has run since the token changed (server/youtube/connections.ts `liveStateOf`), so waiting for `enabled` would keep the block
  *  over a channel the organiser had just reconnected. The other two (not enabled for live, restricted) are about the channel's live
  *  state, which only a clean check (`enabled`, tone `ok`) can mend. */
-function youtubeRefusalIsStale(refusal: YoutubeRefusalCode, y: NonNullable<StreamTarget["youtube"]>): boolean {
+export function youtubeRefusalIsStale(refusal: YoutubeRefusalCode, y: NonNullable<StreamTarget["youtube"]>): boolean {
   return refusal === "youtube_reconnect_needed" ? y.status === "connected" : channelStatus(y).tone === "ok";
 }
 
@@ -1884,7 +1885,10 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   // Option B rev 2: the phone's one message, in a strip under the chain (caret on the Phone node). Go live names it.
   // PR-2 (§7.4): credits only (B3) still says why an automatic start did not begin — the refusal alone; the tiles are its
   // remedy, so the strip offers no second Buy credits.
-  const strip = matchOver ? null : creditsOnly ? autoRefusalStrip(p.phone) : phoneStrip(p.phone, p.view);
+  // B4 fix round 1 (I-2): the automatic start's refusal is stored as one of the column's few words; read against the destination the
+  // server resolved for it (a connected channel, with its own live state) it says the real reason.
+  const autoDest = autoDestinationOf(p.phone, targetList);
+  const strip = matchOver ? null : creditsOnly ? autoRefusalStrip(p.phone, autoDest) : phoneStrip(p.phone, p.view, autoDest);
   const stripBuy = buyCard ? undefined : p.onShowBuy;
   // PR-2 T12 (§7.5): the takeover notice — the server's 30 minutes, this viewer's dismissal, the button to press first
   // (Stop live, Cancel while waiting). Only where Revoke & reissue is in reach (the fold or the code card): not credits

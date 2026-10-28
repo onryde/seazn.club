@@ -29,7 +29,7 @@ import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destina
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
 import { YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeRefusalCode, type YoutubeRefusalCode } from "@/lib/youtube";
 import type {
-  StreamEndReason, StreamFailReason, StreamLostCountdown, StreamPhone, StreamSessionCurrent,
+  StreamEndReason, StreamFailReason, StreamLostCountdown, StreamPhone, StreamSessionCurrent, StreamTarget,
 } from "@/server/api-v1/schemas";
 
 /** Prompt watch 4 closed: `live-score.tsx` exports no POLL_MS after W1's lift;
@@ -549,6 +549,35 @@ export const AUTO_REFUSAL_KEYS: Record<AutoRefusal, MessageKey> = {
   unavailable: "stream.auto.refusal.unavailable",
 };
 
+/** B4 fix round 1, I-2: the destination an automatic start tried, as far as the strip needs it — whether it is a connected YouTube
+ *  channel and, if so, the channel's own state. `youtube: null` is a pasted key. */
+export type AutoDestination = { youtube: Pick<NonNullable<StreamTarget["youtube"]>, "status" | "liveState"> | null } | null;
+
+/** The destination the SERVER resolved for this fixture (`phone.destination`, the one `fixtureStreamTarget` hands the automatic start),
+ *  found in the panel's own list of destinations. Null when no destination resolved, or the list does not hold it (archived since,
+ *  or not read yet): the strip then says what the stored word says. */
+export function autoDestinationOf(phone: StreamPhone | null, targets: readonly StreamTarget[]): AutoDestination {
+  const id = phone?.destination?.id ?? null;
+  const t = id === null ? undefined : targets.find((x) => x.id === id);
+  return t ? { youtube: t.youtube } : null;
+}
+
+/** The stored refusal words are the column's closed set (V431), so a YouTube destination's refusals share two of them: `no_destination`
+ *  (the club must fix the destination) and `unavailable` (retry). Against a connected channel the strip says the real reason — not "no
+ *  destination" beside a destination that is right there, and not "the streaming service" for a limit that is YouTube's. The channel
+ *  reasons are read from the channel's OWN state (the Streaming page's `liveState`), which prepare records when YouTube refuses. Anything
+ *  that does not say more than the stored word — a healthy or unchecked channel, a dead grant (the page says Reconnect), a pasted key —
+ *  keeps it. */
+function autoReasonKey(refusal: AutoRefusal, destination: AutoDestination | undefined): MessageKey {
+  const y = destination?.youtube ?? null;
+  if (y !== null && refusal === "unavailable") return "stream.auto.refusal.youtube_retry";
+  if (y !== null && refusal === "no_destination" && y.status === "connected") {
+    if (y.liveState === "not_enabled") return "stream.auto.refusal.youtube_live_not_enabled";
+    if (y.liveState === "blocked") return "stream.auto.refusal.youtube_live_blocked";
+  }
+  return AUTO_REFUSAL_KEYS[refusal];
+}
+
 /** §7.4: "the same remedies as the manual refusals (Buy credits, Manage destinations)" — the two that have one. */
 export const AUTO_REFUSAL_REMEDY: Record<AutoRefusal, AutoRefusalRemedy | undefined> = {
   no_credit: "buy",
@@ -579,12 +608,12 @@ const waitingLine = (f: PhoneFacts): PhoneLinePart[] => [...modePart(f), ...mode
 
 /** The automatic start's refusal as a strip — null with no read model, no settings row, or no refusal served. The server
  *  serves a refusal only while the automatic start could still fire, so its presence alone is the verdict. */
-export function autoRefusalStrip(phone: StreamPhone | null): PhoneStrip | null {
+export function autoRefusalStrip(phone: StreamPhone | null, destination?: AutoDestination): PhoneStrip | null {
   const refusal = phone?.auto?.refusal ?? null;
   if (refusal === null) return null;
   const remedy = AUTO_REFUSAL_REMEDY[refusal];
   return {
-    tone: "amber", icon: "alert", lead: "stream.auto.refused", leadVars: { reason: AUTO_REFUSAL_KEYS[refusal] }, body: null,
+    tone: "amber", icon: "alert", lead: "stream.auto.refused", leadVars: { reason: autoReasonKey(refusal, destination) }, body: null,
     ...(remedy ? { remedy } : {}),
   };
 }
@@ -697,7 +726,7 @@ export function phoneDetails(phone: StreamPhone | null): ({ kind: "dataUsed"; mb
  * `session.countdown` is the ONLY source of a countdown: an input that is down is not one (mutant: render it whenever
  * the input is down → the O5 case reds).
  */
-export function phoneStrip(phone: StreamPhone | null, session: StreamSessionCurrent | null): PhoneStrip | null {
+export function phoneStrip(phone: StreamPhone | null, session: StreamSessionCurrent | null, destination?: AutoDestination): PhoneStrip | null {
   if (phone?.legacy) return null;
   const state = readyStateOf(phone, session);
   const facts = phone?.phone ?? null;
@@ -732,7 +761,7 @@ export function phoneStrip(phone: StreamPhone | null, session: StreamSessionCurr
     case "paired": {
       // PR-2: an automatic start the server refused (and could still retry) takes the strip; else the phone's identity
       // (§7.5 model, §7.4 mode) — none when the phone named neither, as before.
-      const refused = autoRefusalStrip(phone);
+      const refused = autoRefusalStrip(phone, destination);
       if (refused) return refused;
       const line = facts ? identityLine(facts) : [];
       return line.length > 0 ? { tone: "slate", icon: "phone", lead: null, body: null, line } : null;

@@ -2643,6 +2643,36 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
     expect(stripOf(body({ view: null, balance: 0, targets: TARGETS, selectedTargetId: "t1" }))).toBeUndefined();
   });
 
+  it("B4 fix round 1 (I-2): the automatic start refused against a connected channel reads the channel's OWN reason — the destination is the one the SERVER resolved (phone.destination) found in the list; Ready and credits-only alike; a pasted key, or a healthy channel, keeps the stored word (the seam: the container hands the body the list, the body hands the strip the destination)", () => {
+    const ch = (liveState: NonNullable<StreamTarget["youtube"]>["liveState"]): StreamTarget[] => [
+      { ...TARGETS[0]!, youtube: { connectionId: "c-1", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState, termsOutdated: false, openBroadcasts: 0 } },
+      TARGETS[1]!,
+    ];
+    const refusedAt = (id: string, refusal: Auto["refusal"]) =>
+      readModel({ auto: auto({ refusal }), destination: { id, label: "Club", source: "saved" } });
+    const reason = (tree: ReactElement[]) => (stripOf(tree)?.strip.leadVars as { reason: string } | undefined)?.reason;
+    let checked = 0;
+    for (const [state, key] of [
+      ["not_enabled", "stream.auto.refusal.youtube_live_not_enabled"], ["blocked", "stream.auto.refusal.youtube_live_blocked"],
+      ["enabled", "stream.auto.refusal.no_destination"], ["unknown", "stream.auto.refusal.no_destination"],
+    ] as const) {
+      expect(reason(body({ ...READY, targets: ch(state), phone: refusedAt("t1", "no_destination") })), `Ready / ${state}`).toBe(key);
+      // Credits only (B3) draws the strip through the other call site: the same destination must reach it.
+      expect(reason(body({ view: null, balance: 0, targets: ch(state), selectedTargetId: "t1", phone: refusedAt("t1", "no_destination") })), `credits only / ${state}`).toBe(key);
+      checked += 2;
+    }
+    // The retry class names YouTube for a channel; the pasted key (t2) is still "the streaming service".
+    expect(reason(body({ ...READY, targets: ch("enabled"), phone: refusedAt("t1", "unavailable") }))).toBe("stream.auto.refusal.youtube_retry");
+    expect(reason(body({ ...READY, targets: ch("enabled"), phone: refusedAt("t2", "unavailable") })), "a pasted key").toBe("stream.auto.refusal.unavailable");
+    // The server's destination is the one that counts, not the picker's: the picked row (t1) is a not-enabled channel, but the automatic
+    // start tried t2 (a pasted key) — its stored word stands.
+    expect(reason(body({ ...READY, targets: ch("not_enabled"), phone: refusedAt("t2", "no_destination") })), "the resolved destination, not the picked one").toBe("stream.auto.refusal.no_destination");
+    // No list yet: the stored word, never a guess.
+    expect(reason(body({ ...READY, targets: { status: "loading" }, phone: refusedAt("t1", "no_destination") })), "targets still loading").toBe("stream.auto.refusal.no_destination");
+    checked += 4;
+    expect(checked, "anti-vacuity").toBe(12);
+  });
+
   it("T11 (FP22, owner ruling Q-D): Details carries data used and the app version AFTER the runner's chips, each omitted when null", () => {
     const withData = (dataUsedMB: number | null, appVersion: string | null) =>
       readModel({ phone: facts({ state: "publishing", appVersion, beat: { battery: null, bitrateKbps: null, delivery: null, thermal: null, dataUsedMB } }) });

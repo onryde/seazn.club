@@ -27,7 +27,7 @@ import { messages } from "@/lib/messages";
 import { v1 } from "@/server/api-v1/http";
 import { CaptureNotReady, CapturePhoneState } from "@/server/api-v1/capture-schemas";
 import {
-  StreamEndReason, StreamFailReason, StreamIngest, StreamLostCountdown, StreamOutput, StreamSessionState, type StreamPhone,
+  StreamEndReason, StreamFailReason, StreamIngest, StreamLostCountdown, StreamOutput, StreamSessionState, type StreamPhone, type StreamTarget,
 } from "@/server/api-v1/schemas";
 import { DestinationNotAllowedError, TargetUnreadableError } from "@/server/usecases/stream-targets";
 import {
@@ -40,7 +40,7 @@ import {
   AUTO_REFUSAL_KEYS, AUTO_REFUSAL_REMEDY, AUTO_WONT_START_KEY, HEALTH_KEYS, NOT_READY_KEYS, TAKEOVER_NOTICE_MS, autoOperatorHint, autoRefusalStrip, autoStopLine, autoSwitchNote,
   healthLine, phoneDetails, takeoverLineKey, takeoverNotice, type PhoneLinePart, type TakeoverAct,
   PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRefusal, readClearsW5, type CreateFailureCode, type PresenceWatch,
-  YOUTUBE_REFUSAL_FIX, youtubeRefusalOf,
+  YOUTUBE_REFUSAL_FIX, youtubeRefusalOf, autoDestinationOf,
 } from "../stream-session-view";
 import { YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, YOUTUBE_REFUSAL_REMEDY } from "../youtube";
 import fc from "fast-check";
@@ -1179,6 +1179,125 @@ describe("PR-2 §7.4 — the automatic start's refusal (served only while it cou
     ]);
   });
 
+  // B4 fix round 1, I-2: the stored word for "the club must fix its YouTube destination" is `no_destination` (the column's closed
+  // vocabulary), and for "retry" is `unavailable`. Read against a destination that is a connected channel, they would say "no
+  // destination" / "the streaming service" beside a destination that is right there — so the strip reads the reason from the channel's
+  // OWN state, which the panel already holds.
+  describe("the reason is the channel's own when the destination is a connected YouTube channel", () => {
+    type Y = NonNullable<StreamTarget["youtube"]>;
+    const ch = (over: Partial<Y> = {}): Y => ({
+      connectionId: "c-1", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled",
+      termsOutdated: false, openBroadcasts: 0, ...over,
+    });
+    const refused = (refusal: (typeof AUTO_START_REFUSALS)[number], youtube: Y | null | "no-destination") =>
+      autoRefusalStrip(
+        readModel({ auto: { enabled: true, refusal, wontStart: null, stopApplies: null } }),
+        youtube === "no-destination" ? null : { youtube },
+      )!;
+    const reasonKey = (refusal: (typeof AUTO_START_REFUSALS)[number], youtube: Y | null | "no-destination") =>
+      (refused(refusal, youtube).leadVars as { reason: string }).reason;
+    const sentence = (k: string) => msg("stream.auto.refused", { reason: msg(k) });
+
+    it("not enabled for live / restricted → the channel's own sentence, still with the Manage destinations remedy; the strip a customer reads (English) is typed here from the copy, not derived", () => {
+      expect(reasonKey("no_destination", ch({ liveState: "not_enabled" }))).toBe("stream.auto.refusal.youtube_live_not_enabled");
+      expect(reasonKey("no_destination", ch({ liveState: "blocked" }))).toBe("stream.auto.refusal.youtube_live_blocked");
+      expect(sentence(reasonKey("no_destination", ch({ liveState: "not_enabled" })))).toBe(
+        "Automatic start couldn't begin: This channel isn't enabled for live yet. YouTube can take up to 24 hours.",
+      );
+      expect(sentence(reasonKey("no_destination", ch({ liveState: "blocked" })))).toBe(
+        "Automatic start couldn't begin: YouTube has restricted live streaming on this channel.",
+      );
+      expect(refused("no_destination", ch({ liveState: "not_enabled" })).remedy, "the fix is still on the Streaming page").toBe("manage");
+    });
+
+    it("a retry-class refusal against a connected channel names YouTube, not 'the streaming service'; the same refusal against a pasted key keeps the generic words", () => {
+      for (const liveState of ["enabled", "unknown", "not_enabled", "blocked"] as const) {
+        expect(reasonKey("unavailable", ch({ liveState })), liveState).toBe("stream.auto.refusal.youtube_retry");
+      }
+      expect(sentence("stream.auto.refusal.youtube_retry")).toBe(
+        "Automatic start couldn't begin: YouTube can't start another stream on this channel right now. Try again in a minute.",
+      );
+      expect(reasonKey("unavailable", null), "a pasted key").toBe("stream.auto.refusal.unavailable");
+      expect(reasonKey("unavailable", "no-destination"), "no destination read").toBe("stream.auto.refusal.unavailable");
+    });
+
+    it("everything else is the generic reason: a healthy / unchecked / reconnect-needed channel under no_destination, a pasted key, no destination read, and every other refusal even over a not-enabled channel (the pairs of the rows above; 14 checked)", () => {
+      let checked = 0;
+      const generic = (k: (typeof AUTO_START_REFUSALS)[number]) => AUTO_REFUSAL_KEYS[k];
+      for (const [label, y] of [
+        ["enabled", ch({ liveState: "enabled" })],
+        ["unknown", ch({ liveState: "unknown" })],
+        ["reconnect_needed + not_enabled (a dead grant reads Reconnect, not this)", ch({ status: "reconnect_needed", liveState: "not_enabled" })],
+        ["a pasted key", null],
+        ["no destination read", "no-destination" as const],
+      ] as const) {
+        expect(reasonKey("no_destination", y), label).toBe(generic("no_destination"));
+        checked++;
+      }
+      for (const r of ["no_credit", "not_entitled", "destination_in_use"] as const) {
+        for (const liveState of ["not_enabled", "blocked"] as const) {
+          expect(reasonKey(r, ch({ liveState })), `${r} / ${liveState}`).toBe(generic(r));
+          checked++;
+        }
+      }
+      expect(checked).toBe(11);
+      // …and a liveState this build does not know (the wire may grow one) fails to the generic words, never to a channel claim.
+      expect(reasonKey("no_destination", ch({ liveState: "tomorrow" as Y["liveState"] }))).toBe(generic("no_destination"));
+      expect(reasonKey("unavailable", ch({ liveState: "tomorrow" as Y["liveState"] })), "…but a retry still names YouTube: it IS a channel").toBe("stream.auto.refusal.youtube_retry");
+      expect(refused("no_destination", ch({ liveState: "enabled" })).remedy).toBe("manage");
+      expect(refused("unavailable", ch()).remedy).toBeUndefined();
+      checked += 4;
+      expect(checked).toBe(15);
+    });
+
+    it("the paired Ready strip takes the destination too (phoneStrip's third argument), and a strip without it is the old one", () => {
+      const auto = { enabled: true, refusal: "no_destination" as const, wontStart: null, stopApplies: null };
+      const withDest = phoneStrip(readModel({ auto }), null, { youtube: ch({ liveState: "blocked" }) });
+      expect(withDest?.leadVars).toEqual({ reason: "stream.auto.refusal.youtube_live_blocked" });
+      expect(phoneStrip(readModel({ auto }), null)?.leadVars).toEqual({ reason: "stream.auto.refusal.no_destination" });
+    });
+
+    it("autoDestinationOf finds the destination the SERVER resolved (phone.destination) in the panel's list — and nothing when there is none, or the list does not hold it (5 rows)", () => {
+      const list: StreamTarget[] = [
+        { id: "t-ch", kind: "youtube", label: "Club", watchUrl: null, createdAt: "2026-09-01T10:00:00.000Z", keyHint: null, inUse: null, youtube: ch({ liveState: "not_enabled" }) },
+        { id: "t-key", kind: "twitch", label: "Alt", watchUrl: null, createdAt: "2026-09-02T10:00:00.000Z", keyHint: "abc", inUse: null, youtube: null },
+      ];
+      const at = (id: string) => readModel({ destination: { id, label: "x", source: "saved" } });
+      expect(autoDestinationOf(at("t-ch"), list)?.youtube?.liveState).toBe("not_enabled");
+      expect(autoDestinationOf(at("t-key"), list), "a pasted key: a destination with no channel").toEqual({ youtube: null });
+      expect(autoDestinationOf(at("t-gone"), list), "archived since").toBeNull();
+      expect(autoDestinationOf(readModel({ destination: null }), list), "no destination resolved").toBeNull();
+      expect(autoDestinationOf(null, list), "no read model").toBeNull();
+    });
+
+    it("the three new reasons exist in all four locales; English opens capitalised (its own sentence), the clause reasons are the MANUAL refusal's sentence verbatim in English and lower-cased mid-sentence elsewhere (a brand opening it stays as written)", () => {
+      const NEW = ["stream.auto.refusal.youtube_live_not_enabled", "stream.auto.refusal.youtube_live_blocked", "stream.auto.refusal.youtube_retry"];
+      expect(inEveryLocale(NEW)).toBe(3 * LOCALES.length);
+      const MANUAL: Record<string, string> = {
+        "stream.auto.refusal.youtube_live_not_enabled": "stream.error.youtube_live_not_enabled",
+        "stream.auto.refusal.youtube_live_blocked": "stream.error.youtube_live_blocked",
+      };
+      let checked = 0;
+      for (const l of LOCALES) {
+        const d = dict(l);
+        for (const [auto, manual] of Object.entries(MANUAL)) {
+          const want = l === "en" || d[manual]!.startsWith("YouTube") ? d[manual]! : d[manual]!.charAt(0).toLocaleLowerCase() + d[manual]!.slice(1);
+          expect(d[auto], `${l} ${auto}`).toBe(want);
+          checked++;
+        }
+        for (const k of NEW) {
+          const text = d[k]!;
+          const first = text.charAt(0);
+          // A sentence opening with the brand keeps its capital everywhere; any other opens capitalised in English and lower case elsewhere.
+          const capital = text.startsWith("YouTube") || l === "en";
+          expect(first === first.toLocaleUpperCase() && first !== first.toLocaleLowerCase(), `${l} ${k}: "${text}"`).toBe(capital);
+          checked++;
+        }
+      }
+      expect(checked).toBe(LOCALES.length * (2 + 3));
+    });
+  });
+
   it("the EMPTY cases: no read model, no settings row (`auto: null`), and a row with no refusal → no strip", () => {
     expect(autoRefusalStrip(null)).toBeNull();
     expect(autoRefusalStrip(readModel({ auto: null }))).toBeNull();
@@ -1576,6 +1695,21 @@ describe("YouTube Connect T12 — every YouTube Go live refusal reaches the pane
     // The shared lines the refusal block adds around each sentence exist in all four locales too.
     const SHARED = ["stream.youtube.refused.title", "stream.youtube.refused.nothing", "stream.youtube.refused.reconnect", "stream.youtube.refused.retry", "stream.youtube.refused.pickAnother"];
     expect(inEveryLocale(SHARED)).toBe(SHARED.length * LOCALES.length);
+  });
+
+  it("B4 fix round 1 (m4): the busy sentence says the ten are IN USE, not 'live' — a key held by a grace, an ending or an unreleased output is not a stream anyone can see — and still carries the cap; English typed from the copy", () => {
+    // The pool counts every key a broadcast or a still-publishing output holds (prepare.ts), so "streams live" over-claimed.
+    expect(msg("stream.error.youtube_channel_busy", { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL })).toBe("This channel already has 10 streams in use.");
+    expect(YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, "the cap the sentence names").toBe(10);
+    let checked = 0;
+    for (const l of LOCALES) {
+      const t = dict(l)["stream.error.youtube_channel_busy"]!;
+      expect(t, l).toContain("{max}");
+      // The word that over-claimed, per locale: live / en directo / en cours / live (the old sentences' own words).
+      expect(t, `${l}: no 'live' claim`).not.toMatch(/\blive\b|en directo|en cours/i);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
   });
 
   it("an unknown youtube_* code falls back to the generic error — never its raw code (the empty case of the closed set)", async () => {

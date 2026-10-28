@@ -32,7 +32,9 @@ import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { youtubeRefusalIsStale } from "@/components/v2/fixture-stream-panel";
 import { insertStreamTarget } from "@/server/relay/secret-columns";
+import { listStreamTargets } from "@/server/usecases/stream-targets";
 import { divisionRig } from "@/server/usecases/__tests__/_rig";
 import { connectionViews, updateConnectionSettings } from "@/server/youtube/connections";
 import { EndRuleInvariantError, readEndFacts } from "@/server/youtube/end-rule";
@@ -903,6 +905,31 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — the channel's live state (
     const beforeOther = calls();
     await must(prep(w, f));
     expect(calls(), "an unrecognised code is not believed").toBeGreaterThan(beforeOther);
+  });
+
+  it("SEAM, producer to consumer: the code prepare just wrote reaches the panel's destination list as the channel's live state, and the panel's stale-refusal rule KEEPS the refusal on it; a later clean bind (enabled) is what clears it (2 codes)", async () => {
+    // The panel's re-read of its list is `listStreamTargets`; whether a refusal outlives that read is `youtubeRefusalIsStale`. Both real.
+    const channelOf = async (w: World) => (await listStreamTargets(w.o.auth, w.orgId)).find((t) => t.id === w.targetId)!.youtube!;
+    let checked = 0;
+    for (const code of Object.keys(LIVE_STATE_OF)) {
+      const w = await world();
+      const f = w.fixtures[0]!;
+      w.fake.failNext("bind", code as YoutubeErrorCode);
+      await refusal(prep(w, f));
+      const y = await channelOf(w);
+      expect(y.liveState, `${code}: the list carries what prepare wrote`).toBe(LIVE_STATE_OF[code]);
+      expect(youtubeRefusalIsStale(code as "youtube_live_not_enabled", y), `${code}: the refusal is still true — kept`).toBe(false);
+      // The other channel-state refusal is not mended by this one either (not_enabled does not excuse blocked, and back).
+      const other = Object.keys(LIVE_STATE_OF).find((c) => c !== code)!;
+      expect(youtubeRefusalIsStale(other as "youtube_live_not_enabled", y), `${code} vs a ${other} refusal`).toBe(false);
+      // YouTube then says yes: the list carries `enabled`, and only now is the old refusal stale.
+      await must(prep(w, f, { now: await afterRecorded(w, LIVE_STATE_FRESH_MINUTES + 1) }));
+      const ok = await channelOf(w);
+      expect(ok.liveState, code).toBe("enabled");
+      expect(youtubeRefusalIsStale(code as "youtube_live_not_enabled", ok), `${code}: a clean check clears it`).toBe(true);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: both codes").toBe(2);
   });
 
   it("the record is written only to a CONNECTED row: a grant that died while the bind was in flight keeps its own code and gets no live-state stamp", async () => {

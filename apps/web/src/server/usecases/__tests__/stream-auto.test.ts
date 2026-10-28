@@ -16,17 +16,20 @@ import { resolve } from "node:path";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError, PaymentRequiredError } from "@/lib/errors";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
-import { YOUTUBE_REFUSAL_CODES, type YoutubeRefusalCode } from "@/lib/youtube";
+import { autoDestinationOf, autoRefusalStrip } from "@/lib/stream-session-view";
+import { YOUTUBE_LIVE_STATE_FRESH_MINUTES, YOUTUBE_REFUSAL_CODES, type YoutubeRefusalCode } from "@/lib/youtube";
 import { CaptureBeat, CaptureBeatAnswer } from "@/server/api-v1/capture-schemas";
 import { rigUser, sessionOnTarget, spendMonthlyStreamGrant, pairPresentPhone } from "@/server/relay/__tests__/_session-rig";
 import { AUTO_START_RETRY_SECONDS, WARMING_TIMEOUT_MINUTES } from "@/server/relay/config";
 import { connect as connectChannel } from "@/server/youtube/__tests__/_connect-rig";
 import { FakeYouTube } from "@/server/youtube/fake";
+import { connectionViews } from "@/server/youtube/connections";
 import { youtubeRefusal } from "@/server/youtube/prepare";
 import { markReconnectNeeded } from "@/server/youtube/token-store";
 import { AUTO_START_CONJUNCTS, AUTO_START_REFUSALS, type AutoStartRefusal } from "@/server/relay/domain/auto-stream";
 import { postBeat, postStart } from "../capture-phone";
 import { fixtureStreamTarget, reissueStreamCode, saveStreamSettings } from "../stream-codes";
+import { listStreamTargets } from "../stream-targets";
 import { streamPhone } from "../stream-phone";
 import { grantCredits } from "../stream-credits";
 import { autoStartRefusalOf, maybeAutoStart } from "../stream-auto";
@@ -60,6 +63,12 @@ afterAll(async () => {
 
 type Beat = ReturnType<typeof CaptureBeat.parse>;
 const SEC = 1000;
+/** The sentence a PhoneStrip's lead + reason reads in English (the dictionary's, by key). */
+const messageOf = (strip: { lead: string | null; leadVars?: Record<string, unknown> }): string => {
+  const en = JSON.parse(readFileSync(resolve(__dirname, "../../../dictionaries/en/ui.json"), "utf8")) as Record<string, string>;
+  const reason = en[(strip.leadVars as { reason: string }).reason]!;
+  return en[strip.lead!]!.replace("{reason}", reason);
+};
 /** The fake's connect delay for a rig that must never reach live on its own. */
 const NEVER = 3_600_000;
 
@@ -578,6 +587,93 @@ describe.skipIf(!HAS_DB)("automatic start — a YouTube refusal on an API-backed
       select api_backed, youtube_broadcast_id from fixture_stream_sessions where id = ${session!.id}`;
     expect(row).toMatchObject({ api_backed: true });
     expect(row!.youtube_broadcast_id).not.toBeNull();
+  });
+});
+
+describe.skipIf(!HAS_DB)("automatic start — a channel refused for its live state is said so, and not asked again every minute (B4 fix round 1, I-2)", () => {
+  const prevKek = process.env.YOUTUBE_TOKEN_KEK;
+  beforeAll(() => { process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex"); });
+  afterAll(() => { if (prevKek === undefined) delete process.env.YOUTUBE_TOKEN_KEK; else process.env.YOUTUBE_TOKEN_KEK = prevKek; });
+
+  async function apiAutoRig() {
+    const { r, phone } = await autoRig({ credits: 3 });
+    await spendMonthlyStreamGrant(r.auth.orgId);
+    const yt = await connectChannel({ auth: r.auth, orgId: r.auth.orgId, userId: r.auth.userId! });
+    await saveStreamSettings(r.auth, r.fixtureId, { targetId: yt.targetId });
+    const fake = new FakeYouTube({ now: r.now });
+    r.deps.youtube = fake;
+    return { r, phone, yt, fake };
+  }
+  /** What the organiser's panel reads: the REAL phone read model and the REAL destination list, through the panel's own pure reading. */
+  async function stripNow(r: CaptureRig) {
+    const phone = await streamPhone(r.auth, r.fixtureId, { now: r.now });
+    const targets = await listStreamTargets(r.auth, r.auth.orgId);
+    const strip = autoRefusalStrip(phone, autoDestinationOf(phone, targets));
+    return { phone, targets, strip, reason: strip === null ? null : (strip.leadVars as { reason: string }).reason };
+  }
+  const calls = (f: FakeYouTube) => f.calls.length;
+
+  it("not enabled for live at the bind → stored no_destination (the column's word), the channel READS not_enabled, and the strip the organiser reads says why in the channel's own words — not 'no destination' (English typed from the copy)", async () => {
+    const { r, phone, yt, fake } = await apiAutoRig();
+    fake.failNext("bind", "youtube_live_not_enabled");
+    await beat(r, phone);
+    expect(await settingsOf(r.fixtureId)).toMatchObject({ auto_start_refusal: "no_destination", auto_started_at: null });
+    expect((await connectionViews(r.auth.orgId)).get(yt.connectionId)!.liveState, "the page and the panel's list now read it").toBe("not_enabled");
+
+    const read = await stripNow(r);
+    expect(read.phone.auto?.refusal, "premise: the read model serves the stored word").toBe("no_destination");
+    expect(read.reason).toBe("stream.auto.refusal.youtube_live_not_enabled");
+    expect(messageOf(read.strip!)).toBe("Automatic start couldn't begin: This channel isn't enabled for live yet. YouTube can take up to 24 hours.");
+    expect(read.strip!.remedy, "the way on is the Streaming page").toBe("manage");
+  });
+
+  it("restricted → the restricted sentence; PAIR: YouTube not answering leaves the channel unknown and the strip says YouTube can't start a stream — not 'the streaming service'", async () => {
+    const blocked = await apiAutoRig();
+    blocked.fake.failNext("bind", "youtube_live_blocked");
+    await beat(blocked.r, blocked.phone);
+    const b = await stripNow(blocked.r);
+    expect(messageOf(b.strip!)).toBe("Automatic start couldn't begin: YouTube has restricted live streaming on this channel.");
+
+    const silent = await apiAutoRig();
+    silent.fake.failNext("bind", "youtube_unavailable");
+    await beat(silent.r, silent.phone);
+    expect(await settingsOf(silent.r.fixtureId)).toMatchObject({ auto_start_refusal: "unavailable" });
+    expect((await connectionViews(silent.r.auth.orgId)).get(silent.yt.connectionId)!.liveState, "nothing was learnt about live state").toBe("unknown");
+    const s = await stripNow(silent.r);
+    expect(messageOf(s.strip!)).toBe("Automatic start couldn't begin: YouTube can't start another stream on this channel right now. Try again in a minute.");
+  });
+
+  it("SEQUENCE: the retry 60 s later, and every one inside the ten minutes, asks YouTube NOTHING and creates no row; after the window YouTube is asked again and, now enabled, the match starts and the channel reads enabled", async () => {
+    const { r, phone, yt, fake } = await apiAutoRig();
+    fake.failNext("bind", "youtube_live_not_enabled");
+    await beat(r, phone);
+    const afterFirst = calls(fake);
+    const rowsAfterFirst = (await sql<{ n: number }[]>`select count(*)::int as n from youtube_broadcasts where fixture_id = ${r.fixtureId}`)[0]!.n;
+    expect(rowsAfterFirst, "PREMISE: the first attempt left its one failed row").toBe(1);
+
+    // Every retry the spacing allows inside the window: 60 s apart for nine minutes (9 attempts, none reaches YouTube).
+    let attempts = 0;
+    for (let t = AUTO_START_RETRY_SECONDS; t < (YOUTUBE_LIVE_STATE_FRESH_MINUTES - 1) * 60; t += AUTO_START_RETRY_SECONDS) {
+      r.tick(AUTO_START_RETRY_SECONDS * SEC);
+      const before = (await settingsOf(r.fixtureId))!.auto_start_attempted_at!.getTime();
+      await beat(r, phone);
+      expect((await settingsOf(r.fixtureId))!.auto_start_attempted_at!.getTime(), `t+${t}s: the attempt was made (claimed)`).toBeGreaterThan(before);
+      expect(await settingsOf(r.fixtureId), `t+${t}s`).toMatchObject({ auto_start_refusal: "no_destination", auto_started_at: null });
+      attempts++;
+    }
+    expect(attempts, "anti-vacuity: the retries ran").toBe(YOUTUBE_LIVE_STATE_FRESH_MINUTES - 2);
+    expect(calls(fake), "YouTube was asked nothing by any of them").toBe(afterFirst);
+    expect((await sql<{ n: number }[]>`select count(*)::int as n from youtube_broadcasts where fixture_id = ${r.fixtureId}`)[0]!.n, "…and wrote no failed row").toBe(rowsAfterFirst);
+    expect(await sessionsOf(r.fixtureId)).toHaveLength(0);
+
+    // Past the window (YouTube now enables the channel): asked again; it starts.
+    r.tick((YOUTUBE_LIVE_STATE_FRESH_MINUTES + 1) * 60 * SEC);
+    await beat(r, phone);
+    expect(calls(fake), "YouTube was asked").toBeGreaterThan(afterFirst);
+    const done = (await settingsOf(r.fixtureId))!;
+    expect(done.auto_start_refusal).toBeNull();
+    expect(done.auto_started_at).not.toBeNull();
+    expect((await connectionViews(r.auth.orgId)).get(yt.connectionId)!.liveState, "a started stream is a clean check").toBe("enabled");
   });
 });
 

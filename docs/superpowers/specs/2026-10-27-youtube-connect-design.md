@@ -308,7 +308,7 @@ API-backed destination, **after** those pass and **before** the session insert, 
 | `youtube_live_not_enabled` | `liveStreamingNotEnabled` | "This channel isn't enabled for live yet. YouTube can take up to 24 hours." |
 | `youtube_live_blocked` | `livePermissionBlocked` | "YouTube has restricted live streaming on this channel." |
 | `youtube_limit_reached` | `limitExceeded`, `userBroadcastsExceedLimit`, `rateLimitExceeded` | "YouTube's limit for new streams was reached. Try later or pick another destination." |
-| `youtube_channel_busy` | 10 keys busy | "This channel already has 10 streams live." |
+| `youtube_channel_busy` | 10 keys busy | "This channel already has 10 streams in use." (the ten include a grace, an ending and an unreleased hold, not only live ones) |
 | `youtube_unavailable` | 5xx / timeout | "YouTube didn't answer. Try again." |
 
 A broadcast created in step 4 whose session is then refused later in admission is **deleted**, never left
