@@ -4711,6 +4711,12 @@ function escapeForPattern(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/** Third-party PROPER NOUNS that merely begin with a live plan word — another company's own name for a document, never a tier
+ *  of ours. Layer A reads "Community" + "Guidelines" as an extension, so each is named here EXACTLY (whole phrase, case as
+ *  written): "Community Guidelines" is YouTube's policy, quoted in the YouTube Connect consent text (spec 2026-10-27 D7), which
+ *  must name it as YouTube does. A list, not a pattern, so "Community Premium" still reds. */
+export const NOT_A_PLAN_PHRASES: readonly string[] = ["Community Guidelines"];
+
 /** True when `name` is a live plan name plus one capitalised qualifier — the
  *  shape layer A already reports, so layer B must not report it twice. */
 function extendsALivePlan(name: string, live: readonly string[]): boolean {
@@ -4744,7 +4750,7 @@ export function retiredPlanNameHits(
   for (const { locale, key, value } of values) {
     for (const match of value.matchAll(extended)) {
       const phrase = match[0]!;
-      if (liveSet.has(phrase)) continue;
+      if (liveSet.has(phrase) || NOT_A_PLAN_PHRASES.includes(phrase)) continue;
       hits.push({ locale, key, name: phrase });
     }
     for (const { name, pattern } of registry) {

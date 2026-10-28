@@ -320,6 +320,20 @@ describe("no shipped string names a plan nobody can buy", () => {
   // to zero — and "zero" is exactly what a scan that has gone inert also
   // reports. The floor therefore moves onto a synthetic positive, and the live
   // corpus is asserted CLEAN rather than merely quiet.
+  // A third-party proper noun that BEGINS with a live plan word is not a tier: "Community Guidelines" is YouTube's, quoted in the
+  // YouTube Connect consent text. The exemption is a named phrase, so the extension rule keeps catching an invented tier beside it.
+  it("does not read YouTube's Community Guidelines as a plan, and still reds an invented Community tier next to it", () => {
+    const hits = retiredPlanNameHits(
+      [
+        { locale: "en", key: "g", value: "follow YouTube's Terms of Service and Community Guidelines" },
+        { locale: "en", key: "p", value: "Community Premium and Community Guidelines" },
+      ],
+      LIVE_PLAN_NAMES,
+      RETIRED_PLAN_NAMES,
+    );
+    expect(hits.map((h) => `${h.key}:${h.name}`)).toEqual(["p:Community Premium"]);
+  });
+
   it("still finds an offence when one is put in front of it, and finds none live", () => {
     const planted = retiredPlanNameHits(
       [DEFERRED, ...CORPUS],
