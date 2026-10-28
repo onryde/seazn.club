@@ -172,12 +172,14 @@ async function setStatus(fixtureId: string, status: string): Promise<void> {
 const finishedAtOf = async (fixtureId: string): Promise<Date | null> =>
   (await sql<{ f: Date | null }[]>`select finished_at as f from fixtures where id = ${fixtureId}`)[0]!.f;
 
-async function broadcast(w: World, fixtureId: string, o: { state?: string; reservedUntil?: Date | null } = {}): Promise<string> {
+async function broadcast(
+  w: World, fixtureId: string, o: { state?: string; reservedUntil?: Date | null; completedAt?: Date | null } = {},
+): Promise<string> {
   const state = o.state ?? "live";
   const [row] = await sql<{ id: string }[]>`
-    insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, reserved_until)
+    insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at)
     values (${w.orgId}, ${w.connectionId}, ${fixtureId}, ${`yt-${randomUUID().slice(0, 8)}`}, 'Match', 'unlisted', ${state},
-            ${o.reservedUntil ?? null})
+            ${o.reservedUntil ?? null}, ${o.completedAt ?? null})
     returning id`;
   return row!.id;
 }
@@ -323,6 +325,26 @@ describe.skipIf(!HAS_DB)("readEndFacts — the facts, read with plain selects (s
     const live = [...row!.def.matchAll(/'([a-z_]+)'::text/g)].map((x) => x[1]!);
     expect(live.length).toBeGreaterThan(0);
     expect([...live].sort()).toEqual([...ALL_FIXTURE_STATUSES].sort());
+  });
+
+  it("two API broadcasts on ONE fixture: Part 2 reads only its own sessions, never Part 1's Stop", async () => {
+    const w = await world();
+    const fixture = w.fixtures[0]!;
+    // Part 1: completed at YouTube; its API session stopped at m(-1).
+    const part1 = await broadcast(w, fixture, { state: "complete", completedAt: m(0) });
+    await session(w, { fixture, target: w.apiTargetId, broadcast: part1, state: "completed", endedAt: m(-1) });
+    // Part 2: a restart after the grace, bound on the same fixture, no session on it yet.
+    const part2 = await broadcast(w, fixture, { state: "bound" });
+    const fresh = await readEndFacts(sql, part2);
+    expect(fresh.latestEndedAt).toBeNull();
+    expect(fresh.activeSessionOnBroadcast).toBe(false);
+    // Not due: with Part 1's Stop as S it would be due at m(4), before Part 2 ever went live.
+    expect(broadcastEndDueAt(fresh, m(1))).toBeNull();
+    // Positive pair: Part 2's own session stops at m(0) → Stop + 5.
+    await session(w, { fixture, target: w.apiTargetId, broadcast: part2, state: "completed", endedAt: m(0) });
+    const stopped = await readEndFacts(sql, part2);
+    expect(stopped.latestEndedAt).toEqual(m(0));
+    expect(broadcastEndDueAt(stopped, m(1))).toEqual(m(5));
   });
 
   it("an unknown broadcast id throws EndRuleInvariantError, never an all-empty set of facts", async () => {
