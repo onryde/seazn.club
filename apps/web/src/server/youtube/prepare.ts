@@ -5,8 +5,10 @@ import "server-only";
 // whose admission was refused.
 //
 //   1. The connection, reached from the destination row (`org_stream_targets.youtube_connection_id`). Not `connected` →
-//      youtube_reconnect_needed, before any port call. An access token from the sealed refresh token (in memory only). A
-//      `youtube_reconnect_needed` from ANY port call (a dead grant) moves the connection to reconnect_needed first (F5).
+//      youtube_reconnect_needed, before any port call. A channel whose not-enabled / restricted refusal is on record and still fresh
+//      (YOUTUBE_LIVE_STATE_FRESH_MINUTES) → that same refusal, before any port call (B4 fix round 1, I-2: an automatic start retries
+//      every minute, and each retry would cost a YouTube call and a failed row). An access token from the sealed refresh token (in
+//      memory only). A `youtube_reconnect_needed` from ANY port call (a dead grant) moves the connection to reconnect_needed first (F5).
 //   2. A short transaction: the fixture's OPEN broadcast (`created|bound|live|reserved`; `ending` is never selected, so a claimed
 //      row is never reused), locked `for update` (no skip). A reservation not yet lapsed is another Go live mid-admission →
 //      the existing `active_session` 409. Otherwise its end rule decides (end-rule.ts, read through THIS transaction under the
@@ -19,7 +21,9 @@ import "server-only";
 //      one-open index (a concurrent admission's row) → step 2 again: reuse it (R3).
 //   4. Outside every transaction: insert the broadcast, write its id, bind it, mark the row `bound`. Any port refusal deletes
 //      at YouTube what was made, fails the row with the code, and refuses with that code. A bind answered `liveStreamNotFound`
-//      (the key's liveStream deleted at YouTube) also retires that key, so the next Go live grows a fresh one (F2).
+//      (the key's liveStream deleted at YouTube) also retires that key, so the next Go live grows a fresh one (F2). A refusal that
+//      is a fact about the CHANNEL (not enabled for live, restricted) is recorded on the connection, and a bind that succeeds clears
+//      it (connections.ts `recordLiveState`), so the Streaming page, the panel and step 1 all read it.
 //
 // LOCKS (global-constraints): no row or advisory lock is held across a port call — each transaction above commits before the
 // next YouTube call (the prepare tests probe every call with `for update nowait`).
@@ -34,8 +38,11 @@ import { msgFor } from "@/lib/messages-i18n";
 import { routes } from "@/lib/routes";
 import { captureError } from "@/lib/sentry";
 import { siteOrigin } from "@/lib/site-origin";
-import { YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, isYoutubeRefusalCode, type YoutubePrivacy, type YoutubeRefusalCode } from "@/lib/youtube";
+import {
+  YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, isYoutubeLiveStateRefusal, isYoutubeRefusalCode, type YoutubePrivacy, type YoutubeRefusalCode,
+} from "@/lib/youtube";
 import { insertPooledKey } from "@/server/relay/secret-columns";
+import { freshLiveRefusal, recordLiveState } from "./connections";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts, type EndFacts } from "./end-rule";
 import { YouTubeError, type YouTubePort } from "./port";
 import { broadcastDescription, broadcastTitle } from "./title";
@@ -121,8 +128,12 @@ interface Ctx {
 export async function prepareYoutubeBroadcast(
   a: { orgId: string; fixtureId: string; targetId: string; now: Date }, portOf: PortSource,
 ): Promise<Prepared | null> {
-  const [target] = await sql<{ connection_id: string | null; status: string | null; privacy: YoutubePrivacy | null; made_for_kids: boolean | null }[]>`
-    select t.youtube_connection_id as connection_id, c.status, c.default_privacy as privacy, c.made_for_kids
+  const [target] = await sql<{
+    connection_id: string | null; status: string | null; privacy: YoutubePrivacy | null; made_for_kids: boolean | null;
+    last_health_at: Date | null; last_error_code: string | null; status_since: Date | null;
+  }[]>`
+    select t.youtube_connection_id as connection_id, c.status, c.default_privacy as privacy, c.made_for_kids,
+           c.last_health_at, c.last_error_code, c.status_since
       from org_stream_targets t
       left join org_youtube_connections c on c.id = t.youtube_connection_id and c.org_id = t.org_id
      where t.id = ${a.targetId} and t.org_id = ${a.orgId} and t.archived_at is null`;
@@ -138,6 +149,10 @@ export async function prepareYoutubeBroadcast(
   if (target.status !== "connected" || target.privacy === null || target.made_for_kids === null) {
     throw youtubeRefusal("youtube_reconnect_needed", connectionId);
   }
+  // B4 fix round 1, I-2: the channel was refused for its live state a moment ago — say so again without asking YouTube. Writes nothing:
+  // a refusal that renewed its own stamp would never let the window lapse.
+  const recorded = freshLiveRefusal(target, a.now);
+  if (recorded !== null) throw youtubeRefusal(recorded, connectionId);
 
   const port = typeof portOf === "function" ? portOf() : portOf;
   const at = await accessTokenFor(a.orgId, connectionId, port);
@@ -361,14 +376,28 @@ async function createNew(ctx: Ctx, reread: boolean): Promise<Prepared> {
     await viaPort(() => ctx.port.bind(ctx.at, inserted.broadcastId, key.live_stream_id));
     // A row another admission reserved meanwhile (R3) stays reserved: it is bound at YouTube either way.
     await sql`update youtube_broadcasts set state = 'bound' where id = ${rowId} and state = 'created'`;
+    await noteLiveState(ctx, null);
     return { broadcastId: rowId, reused: false, keyId };
   } catch (err) {
     const code = refusalCodeOf(err);
     await failRow(ctx, rowId, ytId, code ?? "youtube_unavailable");
     if (keyId !== null && isStreamGone(err)) await retireKey(ctx, keyId);
     await markIfGrantDead(err, ctx.orgId, ctx.connectionId);
+    if (isYoutubeLiveStateRefusal(code)) await noteLiveState(ctx, code);
     if (code !== null) throw youtubeRefusal(code, ctx.connectionId);
     throw err;
+  }
+}
+
+/** What this Go live learned about the CHANNEL's ability to stream, written where the Streaming page reads it (connections.ts
+ *  `recordLiveState`): the code when YouTube refused for the channel's live state (not enabled, restricted), `null` when a bind
+ *  succeeded. Best effort, like `markIfGrantDead`: the outcome stands either way, and an unwritten record only means the page reads
+ *  `unknown` and the next Go live asks YouTube. */
+async function noteLiveState(ctx: Ctx, code: Parameters<typeof recordLiveState>[3]): Promise<void> {
+  try {
+    await recordLiveState(sql, ctx.orgId, ctx.connectionId, code);
+  } catch (err) {
+    captureError(err, { orgId: ctx.orgId, route: "youtube.prepare.live_state", extra: { connectionId: ctx.connectionId } });
   }
 }
 

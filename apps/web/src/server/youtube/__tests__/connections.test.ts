@@ -26,7 +26,7 @@ import { startedDivisionWithFixture } from "@/server/usecases/__tests__/_rig";
 import { createStreamTarget, listStreamTargets } from "@/server/usecases/stream-targets";
 import { insertPending } from "@/server/youtube/connect-flow";
 import {
-  connectionViews, pendingChannels, pickYoutubeChannel, saveConnectionFromGrant, updateConnectionSettings,
+  connectionViews, pendingChannels, pickYoutubeChannel, recordLiveState, saveConnectionFromGrant, updateConnectionSettings,
 } from "@/server/youtube/connections";
 import { openToken, revokeConnection } from "@/server/youtube/token-store";
 import { SCOPE, channelId, colleague, connect, fake, grant, org, type Org } from "./_connect-rig";
@@ -646,6 +646,43 @@ describe.skipIf(!HAS_DB)("the Streaming page's view of a connection", () => {
       checked++;
     }
     expect(checked, "anti-vacuity: rows checked").toBe(10);
+  });
+
+  it("recordLiveState (B4 fix round 1, I-2): a code and a stamp on a CONNECTED row of THIS org read back as the page's own liveState; null clears the code (and is itself a check); a foreign org's id, and a dead grant, are written nothing (5 rows checked)", async () => {
+    const o = await org();
+    const other = await org();
+    const c = await connect(o);
+    const state = async () => (await connectionViews(o.orgId)).get(c.connectionId)!.liveState;
+    const stamp = async () => (await connRow(c.connectionId)).last_health_at;
+    expect(await state(), "empty case: never checked").toBe("unknown");
+    expect(await stamp()).toBeNull();
+    let checked = 0;
+
+    // [code, the page's word] — typed from spec §6.9, not read from the writer.
+    for (const [code, word] of [["youtube_live_not_enabled", "not_enabled"], ["youtube_live_blocked", "blocked"]] as const) {
+      expect(await recordLiveState(sql, o.orgId, c.connectionId, code), code).toBe(true);
+      expect(await state(), code).toBe(word);
+      expect((await connRow(c.connectionId)).last_error_code, code).toBe(code);
+      checked++;
+    }
+    const blockedAt = (await stamp())!;
+    expect(await recordLiveState(sql, o.orgId, c.connectionId, null)).toBe(true);
+    expect(await state(), "a clean bind clears it").toBe("enabled");
+    expect((await connRow(c.connectionId)).last_error_code).toBeNull();
+    expect((await stamp())!.getTime(), "…and is a check of its own").toBeGreaterThanOrEqual(blockedAt.getTime());
+    checked++;
+
+    // Negative pairs: another org's call, and a dead grant, write nothing.
+    const before = await connRow(c.connectionId);
+    expect(await recordLiveState(sql, other.orgId, c.connectionId, "youtube_live_blocked")).toBe(false);
+    expect(await connRow(c.connectionId), "a foreign org changed nothing").toEqual(before);
+    checked++;
+    await sql`update org_youtube_connections set status = 'reconnect_needed', status_since = now() where id = ${c.connectionId}`;
+    const dead = await connRow(c.connectionId);
+    expect(await recordLiveState(sql, o.orgId, c.connectionId, "youtube_live_blocked")).toBe(false);
+    expect(await connRow(c.connectionId), "a dead grant says nothing about live state").toEqual(dead);
+    checked++;
+    expect(checked, "anti-vacuity").toBe(5);
   });
 
   it("openBroadcasts counts the connection's broadcasts that are neither complete nor failed ('ending' included), and no other connection's", async () => {

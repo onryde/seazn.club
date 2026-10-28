@@ -34,11 +34,12 @@ import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { insertStreamTarget } from "@/server/relay/secret-columns";
 import { divisionRig } from "@/server/usecases/__tests__/_rig";
-import { updateConnectionSettings } from "@/server/youtube/connections";
+import { connectionViews, updateConnectionSettings } from "@/server/youtube/connections";
 import { EndRuleInvariantError, readEndFacts } from "@/server/youtube/end-rule";
 import { FAKE_YOUTUBE_METHODS, FakeYouTube } from "@/server/youtube/fake";
 import type { YoutubeErrorCode, YouTubePort } from "@/server/youtube/port";
 import { abandonPrepared, attachPrepared, prepareYoutubeBroadcast, type Prepared } from "@/server/youtube/prepare";
+import { markReconnectNeeded, replaceConnectionToken } from "@/server/youtube/token-store";
 import { connect, org, type Org } from "./_connect-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -56,6 +57,10 @@ const YOUTUBE_CODES: YoutubeErrorCode[] = [
   "youtube_reconnect_needed", "youtube_live_not_enabled", "youtube_live_blocked", "youtube_limit_reached", "youtube_unavailable",
 ];
 const OPEN = ["created", "bound", "reserved", "live"];
+/** The Streaming page's own words for the two channel-state refusals (spec §6.9, the T8 dictionary: "Not enabled for live" / "Live blocked"). */
+const LIVE_STATE_OF: Record<string, string> = { youtube_live_not_enabled: "not_enabled", youtube_live_blocked: "blocked" };
+/** Controller ruling (B4 fix round 1, I-2): a recorded not-enabled / blocked reading is believed for 10 minutes. */
+const LIVE_STATE_FRESH_MINUTES = 10;
 
 const MIN = 60_000;
 const minutesAfter = (d: Date, n: number) => new Date(d.getTime() + n * MIN);
@@ -602,6 +607,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — refusals (spec §6.2 D6 ta
     const steps = ["accessToken", "insertStream", "insertBroadcast", "bind"] as const;
     let checked = 0;
     let flipped = 0;
+    let liveRecorded = 0;
     for (const step of steps) {
       for (const code of YOUTUBE_CODES) {
         const calledBefore = callsOf(w.fake, step);
@@ -625,8 +631,17 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — refusals (spec §6.2 D6 ta
         expect(w.fake.broadcastsCount(), label).toBe(0);   // no orphan 'upcoming' left at YouTube
         // F5 (spec §6.2 D6, plan T14's same rule): a reconnect refusal at ANY step moves the connection to reconnect_needed, so
         // the Streaming page shows Reconnect; every other refusal leaves it connected. Put back, so the next case reaches its step.
-        const [c] = await sql<{ status: string }[]>`select status from org_youtube_connections where id = ${w.connectionId}`;
+        const [c] = await sql<{ status: string; last_health_at: Date | null }[]>`select status, last_health_at from org_youtube_connections where id = ${w.connectionId}`;
         expect(c!.status, label).toBe(code === "youtube_reconnect_needed" ? "reconnect_needed" : "connected");
+        // I-2: a channel-state refusal from the broadcast calls is RECORDED on the connection (and short-circuits the next Go live, so it
+        // is put back below like the status); the access-token exchange is not where YouTube speaks of the channel's live state, and
+        // every other code says nothing about it.
+        const recorded = step !== "accessToken" && code in LIVE_STATE_OF;
+        expect(c!.last_health_at !== null, label).toBe(recorded);
+        if (recorded) {
+          liveRecorded++;
+          await sql`update org_youtube_connections set last_error_code = null, last_health_at = null where id = ${w.connectionId}`;
+        }
         if (c!.status !== "connected") {
           flipped++;
           await sql`update org_youtube_connections set status = 'connected', status_since = now(), last_error_code = null where id = ${w.connectionId}`;
@@ -636,6 +651,7 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — refusals (spec §6.2 D6 ta
     }
     expect(checked).toBe(20);
     expect(flipped).toBe(steps.length);   // one reconnect case per step, each one flipped
+    expect(liveRecorded, "two channel-state codes at the three broadcast-call steps").toBe(6);
     // The bind cases deleted what insertBroadcast made: 5 inserted, 5 deleted.
     expect(callsOf(w.fake, "deleteBroadcast")).toBe(5);
     // Positive pair: with no failure queued the same fixture goes ahead.
@@ -755,6 +771,159 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — refusals (spec §6.2 D6 ta
     expect(A.fake.calls).toHaveLength(0);
     // Positive pair: A's own fixture on A's own destination goes ahead.
     expect((await must(prep(A, A.fixtures[0]!))).reused).toBe(false);
+  });
+});
+
+// =====================================================================================================================================
+// B4 fix round 1, I-2: what Go live learns about the CHANNEL is written where the Streaming page reads it (`liveStateOf`), so the page,
+// the panel's stale-refusal rule and an automatic start's retries all see it — instead of `unknown` for ever and a YouTube call (and a
+// failed row) every 60 s for the whole match.
+describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — the channel's live state (B4 fix round 1, I-2)", () => {
+  interface ConnFacts { status: string; last_error_code: string | null; last_health_at: Date | null }
+  const facts = async (w: World): Promise<ConnFacts> =>
+    (await sql<ConnFacts[]>`select status, last_error_code, last_health_at from org_youtube_connections where id = ${w.connectionId}`)[0]!;
+  /** What the Streaming page / the panel's list reads for the channel — through the page's own projection. */
+  const liveOf = async (w: World) => (await connectionViews(w.orgId)).get(w.connectionId)!.liveState;
+  /** A clock `minutes` after the moment the refusal was recorded (the database's stamp, read back — never this process's clock). */
+  const afterRecorded = async (w: World, minutes: number) => minutesAfter((await facts(w)).last_health_at!, minutes);
+  const STEPS = ["insertStream", "insertBroadcast", "bind"] as const;
+
+  it("EMPTY CASE FIRST: a never-checked channel reads unknown and has no recorded time; a first SUCCESSFUL Go live reads enabled (the page's \"Not checked yet\" does not last for ever)", async () => {
+    const w = await world();
+    expect(await liveOf(w)).toBe("unknown");
+    expect((await facts(w)).last_health_at).toBeNull();
+    await must(prep(w, w.fixtures[0]!));
+    expect(await liveOf(w)).toBe("enabled");
+    expect(await facts(w)).toMatchObject({ status: "connected", last_error_code: null });
+  });
+
+  it("not enabled for live / restricted, answered by YouTube at the stream, the broadcast or the bind → the connection READS not_enabled / blocked (6 rows); the retry-class codes and a dead grant at the same steps leave it unknown and unstamped (9 rows)", async () => {
+    let recorded = 0;
+    for (const code of Object.keys(LIVE_STATE_OF)) {
+      for (const step of STEPS) {
+        const w = await world();
+        w.fake.failNext(step, code as YoutubeErrorCode);
+        expect((await refusal(prep(w, w.fixtures[0]!))).code, `${code} @ ${step}`).toBe(code);
+        expect(await liveOf(w), `${code} @ ${step}`).toBe(LIVE_STATE_OF[code]);
+        expect(await facts(w), `${code} @ ${step}`).toMatchObject({ status: "connected", last_error_code: code });
+        expect((await facts(w)).last_health_at, `${code} @ ${step}: stamped`).not.toBeNull();
+        recorded++;
+      }
+    }
+    expect(recorded, "two codes x three steps").toBe(6);
+
+    let silent = 0;
+    for (const code of ["youtube_unavailable", "youtube_limit_reached", "youtube_reconnect_needed"] as const) {
+      for (const step of STEPS) {
+        const w = await world();
+        w.fake.failNext(step, code);
+        expect((await refusal(prep(w, w.fixtures[0]!))).code, `${code} @ ${step}`).toBe(code);
+        expect(await liveOf(w), `${code} @ ${step}: nothing was learnt about the channel's live state`).toBe("unknown");
+        expect((await facts(w)).last_health_at, `${code} @ ${step}: no check is claimed`).toBeNull();
+        silent++;
+      }
+    }
+    expect(silent, "three codes x three steps").toBe(9);
+  });
+
+  it("SEQUENCE: refused (not enabled) → the next Go live inside the window is refused with the SAME code and ZERO port calls and writes nothing (not even a refreshed stamp) → after the window YouTube is asked again → a clean bind reads enabled", async () => {
+    let swept = 0;
+    for (const code of Object.keys(LIVE_STATE_OF)) {
+      const w = await world(1);
+      const f = w.fixtures[0]!;
+      w.fake.failNext("bind", code as YoutubeErrorCode);
+      await refusal(prep(w, f));
+      const first = await facts(w);
+      const rows = (await rowsOf(f)).length;
+      const calls = w.fake.calls.length;
+
+      // Inside the window: 9 minutes (not 5, not 15: the ruling's ten).
+      const inside = await refusal(prep(w, f, { now: await afterRecorded(w, LIVE_STATE_FRESH_MINUTES - 1) }));
+      expect(inside, code).toMatchObject({ status: 409, code, extra: { connectionId: w.connectionId } });
+      expect(w.fake.calls.length, `${code}: YouTube was asked nothing`).toBe(calls);
+      expect((await rowsOf(f)).length, `${code}: no failed row either`).toBe(rows);
+      expect((await facts(w)).last_health_at?.getTime(), `${code}: the refusal does not renew its own window`).toBe(first.last_health_at!.getTime());
+      // The very edge: ten minutes is no longer "fresher than ten minutes".
+      const justInside = await refusal(prep(w, f, { now: minutesAfter(first.last_health_at!, LIVE_STATE_FRESH_MINUTES - 1 / 60) }));
+      expect(justInside.code, `${code}: 9 min 59 s is still inside`).toBe(code);
+      expect(w.fake.calls.length).toBe(calls);
+
+      // The window has lapsed: YouTube is asked (the call count moves), and its answer stands — here the same refusal, renewing the stamp.
+      w.fake.failNext("bind", code as YoutubeErrorCode);
+      const edge = await refusal(prep(w, f, { now: await afterRecorded(w, LIVE_STATE_FRESH_MINUTES) }));
+      expect(edge.code, `${code}: asked again at exactly ten minutes`).toBe(code);
+      expect(w.fake.calls.length, `${code}: the port was called`).toBeGreaterThan(calls);
+      const second = await facts(w);
+      expect(second.last_health_at!.getTime(), `${code}: a fresh refusal renews the window`).toBeGreaterThan(first.last_health_at!.getTime());
+
+      // And when YouTube then says yes, the channel is `enabled` and the recorded code is gone.
+      const ok = await must(prep(w, f, { now: await afterRecorded(w, LIVE_STATE_FRESH_MINUTES + 1) }));
+      expect(ok.reused, code).toBe(false);
+      expect(await liveOf(w), `${code}: a clean bind clears the live-state code`).toBe("enabled");
+      expect(await facts(w), code).toMatchObject({ status: "connected", last_error_code: null });
+      expect((await facts(w)).last_health_at!.getTime(), `${code}: …and is itself a check`).toBeGreaterThan(second.last_health_at!.getTime());
+      swept++;
+    }
+    expect(swept, "anti-vacuity: both codes").toBe(2);
+  });
+
+  it("the recorded reading is believed only while the page would read it as that state: a check older than the token, a reconnect since, or another code → YouTube is asked (positive pair: the same row, a check since the token, refuses with no call)", async () => {
+    const w = await world();
+    const f = w.fixtures[0]!;
+    const calls = () => w.fake.calls.length;
+    await sql`update org_youtube_connections set status_since = now() - interval '1 hour' where id = ${w.connectionId}`;
+
+    // Positive pair first: a fresh `blocked` since the token → refused, no call.
+    await sql`update org_youtube_connections set last_error_code = 'youtube_live_blocked', last_health_at = now() where id = ${w.connectionId}`;
+    expect((await refusal(prep(w, f))).code).toBe("youtube_live_blocked");
+    expect(calls()).toBe(0);
+
+    // The reading predates the token (the token was replaced after it, without the code being cleared): liveStateOf says unknown, so
+    // Go live does not believe it.
+    await sql`update org_youtube_connections set status_since = now() + interval '1 minute' where id = ${w.connectionId}`;
+    expect(await liveOf(w), "premise: the page reads unknown").toBe("unknown");
+    const before = calls();
+    const ok = await must(prep(w, f));
+    expect(calls(), "YouTube was asked").toBeGreaterThan(before);
+    expect(ok.reused).toBe(false);
+    await sql`update youtube_broadcasts set state = 'failed' where id = ${ok.broadcastId}`;
+
+    // A reconnect (the real writer) clears the code: the next Go live asks YouTube although the reading was minutes old.
+    await sql`update org_youtube_connections set last_error_code = 'youtube_live_not_enabled', last_health_at = now(), status_since = now() - interval '1 hour' where id = ${w.connectionId}`;
+    expect((await refusal(prep(w, f))).code, "premise: believed again").toBe("youtube_live_not_enabled");
+    // The grant the fake knows (a reconnect re-seals the token Google issued; an invented one would not exchange).
+    expect(await replaceConnectionToken(sql, w.orgId, w.connectionId, w.token)).toBe(true);
+    const beforeReconnect = calls();
+    await must(prep(w, f));
+    expect(calls(), "after a reconnect YouTube is asked").toBeGreaterThan(beforeReconnect);
+
+    // Any other recorded code is not a live state.
+    await sql`update youtube_broadcasts set state = 'failed' where fixture_id = ${f}`;
+    await sql`update org_youtube_connections set last_error_code = 'youtube_unavailable', last_health_at = now(), status_since = now() - interval '1 hour' where id = ${w.connectionId}`;
+    const beforeOther = calls();
+    await must(prep(w, f));
+    expect(calls(), "an unrecognised code is not believed").toBeGreaterThan(beforeOther);
+  });
+
+  it("the record is written only to a CONNECTED row: a grant that died while the bind was in flight keeps its own code and gets no live-state stamp", async () => {
+    const w = await world();
+    // The fake, with its bind killing the grant first (the club revoked access between the token and the bind) and then refusing live.
+    const port = new Proxy(w.fake, {
+      get(t, p) {
+        const v = Reflect.get(t, p, t) as unknown;
+        if (p === "bind") {
+          return async (at: string, broadcastId: string, streamId: string) => {
+            await markReconnectNeeded(sql, w.orgId, w.connectionId);
+            t.failNext("bind", "youtube_live_not_enabled");
+            return t.bind(at, broadcastId, streamId);
+          };
+        }
+        return typeof v === "function" ? (v as (...x: unknown[]) => unknown).bind(t) : v;
+      },
+    }) as YouTubePort;
+    const err = await refusal(prep(w, w.fixtures[0]!, { port }));
+    expect(err.code, "the refusal itself is the YouTube answer").toBe("youtube_live_not_enabled");
+    expect(await facts(w)).toMatchObject({ status: "reconnect_needed", last_error_code: "youtube_reconnect_needed", last_health_at: null });
   });
 });
 
