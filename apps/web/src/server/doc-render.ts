@@ -182,10 +182,12 @@ function drawBracket(doc: PDFKit.PDFDocument, model: DocModel): void {
   doc.fillColor(PALETTE.ink);
 }
 
+// A column is set as numbers (right-aligned) when every cell is a count, a time or a score. "½" is a digit here: a chess
+// table spells its points in half-points ("1½", FIDE 1 / ½ / 0), the engine's own `pointsText`, and they align like 2.
 function isNumericColumn(table: DocTable, i: number): boolean {
   return table.rows.length > 0 &&
     table.rows.every((r) => r[i] === "" || typeof r[i] === "number" ||
-      /^[\d.,:%+\-–—\s]*$/.test(String(r[i] ?? "")));
+      /^[\d½.,:%+\-–—\s]*$/.test(String(r[i] ?? "")));
 }
 
 function drawTable(
