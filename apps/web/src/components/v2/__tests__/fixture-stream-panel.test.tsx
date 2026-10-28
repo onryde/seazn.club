@@ -71,7 +71,7 @@ import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark
 import { FixtureDestinationPicker, type FixtureDestinationPickerProps } from "@/components/v2/fixture-destination-picker";
 import { ReplayCopyButton } from "@/components/v2/stream-replay-copy";
 import { STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES } from "@/lib/youtube";
-import { FocusFirstAction } from "@/components/v2/refusal-focus";
+import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "@/components/v2/refusal-focus";
 import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
 import QRCode from "qrcode";
 import { SeaznQrImage, SeaznQrPlaceholder } from "@/components/v2/seazn-qr-image";
@@ -5839,25 +5839,42 @@ describe("T12: a YouTube refusal replaces Go live with the fix that fits its cau
     }
   });
 
-  it("the block is wrapped to take focus when it appears: keyed by its code, and the first action is the refusal's fix — Reconnect, Try again, or Use another destination", () => {
+  it("the BLOCK takes focus when it appears — ref, tabIndex -1, role=alert, keyed by its code, the house ring — whichever action is enabled; one Tab then reaches the first ENABLED action", () => {
+    // The re-review's regression: the refusal commits while the start is in flight (busy), when Try again is disabled. A focus target
+    // that is "the first enabled button" lands on Use another destination for the retry class. The block is the same target in both.
     let checked = 0;
+    const FIRST_ACTION_OF = { reconnect: "stream-youtube-reconnect", retry: "stream-youtube-retry", none: "stream-youtube-pick-another" } as const;
     for (const code of YOUTUBE_REFUSAL_CODES) {
-      const wrapper = refused(code).find((el) => el.type === FocusFirstAction);
-      expect(wrapper, `${code}: wrapped`).toBeDefined();
-      // A new code is a new key, so a second refusal (or the same one after Try again unmounted the block) focuses again.
-      expect(wrapper!.key, `${code}: keyed by the code`).toBe(code);
-      const actions = walk(propsOf(wrapper!).children as ReactElement[]).filter((el) => el.type === "a" || el.type === "button");
-      const first = String(attr(actions[0]!, "data-testid"));
-      const expected = { reconnect: "stream-youtube-reconnect", retry: "stream-youtube-retry", none: "stream-youtube-pick-another" }[FIX_OF[code]];
-      expect(first, `${code}: the first action in focus order`).toBe(expected);
-      // The block (title, reason) is INSIDE the wrapper, so focus lands within the region the alert announced.
-      expect(walk(propsOf(wrapper!).children as ReactElement[]).some((el) => attr(el, "data-testid") === "stream-youtube-refusal"), code).toBe(true);
-      checked++;
+      for (const busy of [false, true]) {
+        const where = `${code}${busy ? " (start still in flight)" : ""}`;
+        const tree = refused(code, { busy });
+        const block = byTestId(tree, "stream-youtube-refusal")!;
+        expect(block, `${where}: the block`).toBeDefined();
+        expect(attr(block, "ref"), `${where}: focuses itself as it attaches`).toBe(focusRefusalBlock);
+        expect(attr(block, "tabIndex"), `${where}: focusable by script, not a tab stop of its own`).toBe(-1);
+        expect(attr(block, "role"), where).toBe("alert");
+        // A new code is a new key, so a second refusal (or the same one after Try again unmounted the block) focuses again.
+        expect(block.key, `${where}: keyed by the code`).toBe(code);
+        const classes = String(attr(block, "className")).split(/\s+/);
+        for (const token of REFUSAL_FOCUS_RING.split(/\s+/)) expect(classes, `${where}: the keyboard ring ${token}`).toContain(token);
+        expect(tree.some((el) => attr(el, "ref") === focusRefusalBlock && el !== block), `${where}: no second focus target`).toBe(false);
+        // One Tab from the block reaches the first ENABLED action in DOM order: the fix, unless its button is disabled by the start in flight.
+        const actions = walk(propsOf(block).children as ReactElement[]).filter((el) => el.type === "a" || el.type === "button");
+        const firstEnabled = String(attr(actions.find((el) => !propsOf(el).disabled)!, "data-testid"));
+        const expected = busy && FIX_OF[code] === "retry" ? "stream-youtube-pick-another" : FIRST_ACTION_OF[FIX_OF[code]];
+        expect(firstEnabled, `${where}: the first enabled action in Tab order`).toBe(expected);
+        checked++;
+      }
     }
-    expect(checked, "anti-vacuity: all six").toBe(YOUTUBE_REFUSAL_CODES.length);
-    // No refusal, no wrapper — focus is never taken by a block that is not there.
-    expect(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" }).some((el) => el.type === FocusFirstAction)).toBe(false);
-    expect(refused("unknown").some((el) => el.type === FocusFirstAction), "a non-YouTube refusal draws no block").toBe(false);
+    expect(checked, "anti-vacuity: six codes x in flight or not").toBe(YOUTUBE_REFUSAL_CODES.length * 2);
+    // The positive pair of the regression: the retry class really does have a DISABLED first action while in flight.
+    expect(RETRY_CODES.length).toBeGreaterThan(0);
+    expect(propsOf(byTestId(refused(RETRY_CODES[0]!, { busy: true }), "stream-youtube-retry")!).disabled).toBe(true);
+    // No refusal, no block — nothing takes focus on a plain Ready card (nor on a generic refusal).
+    const takers = (tree: ReactElement[]) => tree.filter((el) => attr(el, "ref") === focusRefusalBlock).length;
+    expect(takers(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" }))).toBe(0);
+    expect(takers(refused("unknown")), "a non-YouTube refusal draws no block").toBe(0);
+    expect(takers(refused("youtube_unavailable")), "the positive pair: one taker for a YouTube refusal").toBe(1);
   });
 
   it("'Use another destination' is the panel's own handler, on every refusal", () => {
@@ -5899,7 +5916,7 @@ describe("T12: a YouTube refusal replaces Go live with the fix that fits its cau
         const tree = body({ view, balance: 1, createError: { code, holder: null } });
         expect(byTestId(tree, "stream-youtube-refusal"), `${name}/${code}: no block over a card that is not Ready`).toBeUndefined();
         expect(byTestId(tree, "stream-youtube-retry"), `${name}/${code}`).toBeUndefined();
-        expect(tree.some((el) => el.type === FocusFirstAction), `${name}/${code}: nothing takes focus`).toBe(false);
+        expect(tree.some((el) => attr(el, "ref") === focusRefusalBlock), `${name}/${code}: nothing takes focus`).toBe(false);
         // The suppression is of the BLOCK only — the refusal is still said, in the dictionary's words, exactly once.
         const lines = allTestIds(tree, "stream-create-error");
         expect(lines, `${name}/${code}: the generic line is drawn once`).toHaveLength(1);

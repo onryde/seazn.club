@@ -1,62 +1,57 @@
-// The refusal block's focus (YouTube Connect T12 fix round 1, m4): when a YouTube refusal replaces the Go live button the organiser had
-// just pressed, focus moves to the block's first action instead of falling to the top of the page.
+// The refusal block's focus (YouTube Connect T12 fix rounds 1-2, m4 and N1): when a YouTube refusal replaces the Go live button the
+// organiser had just pressed, focus moves to the BLOCK — the role=alert box, tabIndex -1 — not to one of its buttons. The refusal commits
+// while the start is still in flight, when Try again is disabled, so "the first enabled button" landed on Use another destination for
+// the three retry-class codes (found by the re-review). The block is a deterministic target whichever action is enabled.
 //
-// `apps/web` vitest is `environment: "node"` — no DOM — so the wrapper's callback ref is driven directly with a fake box that records
-// what it was asked and which element it focused. What a real browser does with that focus (the ring, the scroll) is the shots spec's.
+// `apps/web` vitest is `environment: "node"` — no DOM — so the callback ref is driven directly with a fake box that records what it was
+// asked to do. What a real browser does with that focus (the ring, the Tab that follows) is the shots spec's.
 import { describe, expect, it } from "vitest";
-import type { ReactElement } from "react";
-import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
-import { FIRST_ACTION, FocusFirstAction, focusFirstAction } from "../refusal-focus";
+import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "../refusal-focus";
 
-function fakeBox(actions: string[]) {
-  const asked: string[] = [];
+function fakeBlock() {
   const focused: string[] = [];
-  const box = {
+  const looked: string[] = [];
+  const block = {
+    focus: () => focused.push("block"),
+    // A block that goes looking for a button to focus (the round-1 behaviour) would call this: it must never be asked.
     querySelector: (selector: string) => {
-      asked.push(selector);
-      const first = actions[0];
-      return first === undefined ? null : { focus: () => focused.push(first) };
+      looked.push(selector);
+      return { focus: () => focused.push("button") };
     },
   } as unknown as HTMLElement;
-  return { box, asked, focused };
+  return { block, focused, looked };
 }
 
-describe("focusFirstAction", () => {
-  it("focuses the first action the box holds — asked for as a link or an ENABLED button, so a disabled Try again is skipped", () => {
-    const f = fakeBox(["reconnect"]);
-    focusFirstAction(f.box);
-    expect(f.focused).toEqual(["reconnect"]);
-    expect(f.asked).toEqual([FIRST_ACTION]);
-    expect(FIRST_ACTION).toContain("a[href]");
-    expect(FIRST_ACTION, "a disabled button cannot take focus").toContain(":not([disabled])");
+describe("focusRefusalBlock", () => {
+  it("focuses the block ITSELF — and never goes looking for a button inside it (a disabled Try again would be skipped)", () => {
+    const f = fakeBlock();
+    focusRefusalBlock(f.block);
+    expect(f.focused).toEqual(["block"]);
+    expect(f.looked, "no search for an action: which one is enabled is not its business").toEqual([]);
   });
 
-  it("a box with no action, or no box at all (the ref's detach), focuses nothing and throws nothing", () => {
-    const f = fakeBox([]);
-    focusFirstAction(f.box);
+  it("the ref's detach (null) focuses nothing and throws nothing", () => {
+    const f = fakeBlock();
+    expect(() => focusRefusalBlock(null)).not.toThrow();
     expect(f.focused).toEqual([]);
-    expect(f.asked, "it did look").toHaveLength(1);
-    expect(() => focusFirstAction(null)).not.toThrow();
+  });
+
+  it("each attach focuses once: the same call twice is two focuses, so the identity (not a flag) is what stops a re-render stealing focus", () => {
+    const f = fakeBlock();
+    focusRefusalBlock(f.block);
+    focusRefusalBlock(f.block);
+    expect(f.focused).toEqual(["block", "block"]);
   });
 });
 
-describe("FocusFirstAction", () => {
-  it("is a box with no layout of its own whose ref is the module-level callback — one identity across renders, so a re-render never re-focuses", () => {
-    const island = renderIsland(FocusFirstAction, { children: <button type="button">Use another destination</button> });
-    const root = island.tree().find((el: ReactElement) => el.type === "div")!;
-    expect(root, "a wrapper box").toBeDefined();
-    expect(propsOf(root).ref).toBe(focusFirstAction);
-    expect(String(propsOf(root).className).split(/\s+/)).toContain("contents");
-    island.rerender({ children: <button type="button">Use another destination</button> });
-    const again = island.tree().find((el: ReactElement) => el.type === "div")!;
-    expect(propsOf(again).ref, "the same callback after a re-render").toBe(focusFirstAction);
-  });
-
-  it("attaching the box focuses the block's first action (the ref is what React calls at attach)", () => {
-    const island = renderIsland(FocusFirstAction, { children: <button type="button">x</button> });
-    const root = island.tree().find((el: ReactElement) => el.type === "div")!;
-    const f = fakeBox(["first"]);
-    (propsOf(root).ref as (b: HTMLElement | null) => void)(f.box);
-    expect(f.focused).toEqual(["first"]);
+describe("REFUSAL_FOCUS_RING", () => {
+  it("is the house keyboard ring on :focus-visible only — a 2px accent outline offset 2px (globals.css) — and never on plain :focus", () => {
+    const tokens = REFUSAL_FOCUS_RING.split(/\s+/);
+    expect(tokens.length, "anti-vacuity: the ring has tokens").toBeGreaterThan(2);
+    for (const t of tokens) expect(t, "every token is behind focus-visible").toMatch(/^focus-visible:/);
+    expect(tokens).toContain("focus-visible:outline");
+    expect(tokens).toContain("focus-visible:outline-2");
+    expect(tokens).toContain("focus-visible:outline-offset-2");
+    expect(tokens.some((t) => /^focus-visible:outline-(violet|purple)-\d+$/.test(t)), "a house colour").toBe(true);
   });
 });

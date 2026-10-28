@@ -454,9 +454,14 @@ test("Fixture panel - each of the six YouTube refusals replaces Go live with its
     const block = scope.getByTestId("stream-youtube-refusal");
     await expect(block, `${code}: the refusal block`).toBeVisible({ timeout: ACT_MS * 2 });
     await expect(block).toHaveAttribute("data-code", code);
-    // The block replaced the Go live the organiser had just pressed: focus lands on its first action, not on the top of the page.
-    const firstAction = { reconnect: "stream-youtube-reconnect", retry: "stream-youtube-retry", none: "stream-youtube-pick-another" }[FIX[code]];
-    await expect(scope.getByTestId(firstAction), `${code}: focus moved to the block's first action`).toBeFocused();
+    // The block replaced the Go live the organiser had just pressed: focus lands on the BLOCK (tabindex -1, role=alert), not on the top of
+    // the page and not on one of its buttons - the refusal commits while the start is in flight, when Try again is still disabled.
+    await expect(block, `${code}: focus moved to the refusal block`).toBeFocused();
+    // Wait for the start to end (Try again enables; the other fixes were never disabled), THEN one Tab reaches the first enabled action.
+    const firstAction = scope.getByTestId({ reconnect: "stream-youtube-reconnect", retry: "stream-youtube-retry", none: "stream-youtube-pick-another" }[FIX[code]]);
+    await expect(firstAction, `${code}: the first action is enabled once the start has ended`).toBeEnabled({ timeout: ACT_MS * 2 });
+    await page.keyboard.press("Tab");
+    await expect(firstAction, `${code}: one Tab from the block reaches the first enabled action`).toBeFocused();
     await expect(scope.getByTestId("stream-create-error")).toHaveText(en(`stream.error.${code}`, { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL }));
     await expect(scope.getByTestId("stream-youtube-refusal-note")).toHaveText(en("stream.youtube.refused.nothing"));
     await expect(scope.getByTestId("stream-go-live"), `${code}: the refusal REPLACES Go live`).toHaveCount(0);

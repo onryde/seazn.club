@@ -1,27 +1,22 @@
-"use client";
 // A YouTube refusal REPLACES Go live (YouTube Connect T12). The organiser's focus was on Go live (they just pressed it), so when the
 // refusal block takes its place the focused element is removed and focus falls back to the page: a keyboard or screen-reader user is
-// dropped at the top of the document. This wrapper puts focus on the block's first action (Reconnect, Try again or Use another
-// destination) when the block appears.
+// dropped at the top of the document. The block takes focus itself when it appears.
 //
-// A callback ref, not an effect: it runs once when the box attaches, and the callback is module-level so its identity never changes —
-// a re-render of the panel (every poll) does not re-run it and steal focus back. The panel keys the wrapper by the refusal's code, so a
-// second refusal (a different code, or the same one after Try again unmounted the block) attaches a new box and focuses again.
+// The BLOCK, not one of its buttons (T12 fix round 2): the refusal commits while the start is still in flight (`onGoLive` records the
+// refusal, then awaits the session read, and only then ends `busy`), so Try again is still disabled at the moment the block attaches and
+// a "first enabled action" lands on Use another destination instead. The block is `tabIndex={-1}` and carries role=alert, so focusing it
+// is deterministic whichever action is enabled, announces the refusal, and one Tab then reaches the first ENABLED action in DOM order.
 //
-// `display: contents`: the wrapper adds no box, so the block's spacing in the Ready column is exactly what it was.
-import type { ReactNode } from "react";
+// A callback ref, not an effect: it runs once when the block attaches, and the callback is module-level so its identity never changes —
+// a re-render of the panel (every poll) does not re-run it and steal focus back, and a panel that mounts with no refusal focuses nothing.
+// The panel keys the block by its code, so a second refusal (a different code, or the same one after Try again unmounted the block)
+// attaches a new element and focuses again.
 
-/** The first enabled link or button in the box — the block's title and reason are paragraphs, so this is its first action. */
-export const FIRST_ACTION = "a[href], button:not([disabled])";
-
-export function focusFirstAction(box: HTMLElement | null): void {
-  box?.querySelector<HTMLElement>(FIRST_ACTION)?.focus();
+/** Focus the refusal block as it attaches (a callback ref: `null` is the detach and does nothing). */
+export function focusRefusalBlock(block: HTMLElement | null): void {
+  block?.focus();
 }
 
-export function FocusFirstAction({ children }: { children: ReactNode }) {
-  return (
-    <div ref={focusFirstAction} className="contents">
-      {children}
-    </div>
-  );
-}
+/** The house keyboard ring (globals.css's `:where(a, button, …):focus-visible` is 2px, offset 2px, the accent), for a box that is not a
+ *  link or a button: shown to a keyboard user, not painted for a pointer user whose press the focus follows. */
+export const REFUSAL_FOCUS_RING = "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-violet-400";

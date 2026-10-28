@@ -32,7 +32,7 @@ import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { FixtureDestinationPicker } from "./fixture-destination-picker";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 import { ReplayCopyButton } from "./stream-replay-copy";
-import { FocusFirstAction } from "./refusal-focus";
+import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "./refusal-focus";
 import { channelStatus, youtubeTargetLabel } from "./youtube-connect-panel";
 import { D3Warning, PhoneStripView, SignalChain } from "./stream-signal-chain";
 import { SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
@@ -1904,7 +1904,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const inUseId = `stream-in-use-${p.fixtureId}`;
   const refusalId = `stream-youtube-refusal-${p.fixtureId}`;
   // Mockup state 5: a target_in_use refusal at Ready is drawn on the picker — the red field, the box under it, and Go
-  // live held until the organiser picks again (or the destination is freed).
+  // live held. The hold lifts when the destination is freed (a fresh list read), when the organiser picks a DIFFERENT
+  // destination, or on a reload; re-picking the held one is a no-op (the picker saves nothing for the selected row).
   const inUseBox = state === "idle" && !buyCard && p.createError?.code === "target_in_use";
   // YouTube Connect T12 (spec §6.2, owner's Option B): a Go live that YouTube (or the channel's own state) refused is drawn at
   // Ready where Go live was — the reason, "nothing was started or charged", and the fix that fits the cause — with the picker's
@@ -2151,58 +2152,60 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const refusalFix = ytRefusal ? YOUTUBE_REFUSAL_FIX[ytRefusal] : null;
   const refusalBlock =
     ytRefusal && p.createError ? (
-      // Focus goes to the block's first action when it appears (it replaced the Go live the organiser had just pressed); the key makes
-      // each refusal — another code, or the same one after Try again — focus again.
-      <FocusFirstAction key={ytRefusal}>
-        <div
-          id={refusalId}
-          data-testid="stream-youtube-refusal"
-          data-code={ytRefusal}
-          data-fix={refusalFix ?? undefined}
-          role="alert"
-          className="min-w-0 rounded-lg border border-red-200 bg-red-50 p-3.5 text-sm text-red-800"
-        >
-          {selected && (
-            <p className="flex gap-2 font-semibold">
-              <CircleAlert aria-hidden className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.8} />
-              <span data-testid="stream-youtube-refusal-title" className="min-w-0 [overflow-wrap:anywhere]">
-                {msg("stream.youtube.refused.title", { label: youtubeTargetLabel(msg, selected.label) })}
-              </span>
-            </p>
-          )}
-          <p data-testid="stream-create-error" className="mt-1">
-            {createErrorText(p.createError, msg)}
+      // Focus goes to the BLOCK when it appears (it replaced the Go live the organiser had just pressed): the block commits while the
+      // start is still in flight, so Try again is disabled then — focusing a button would land on a different one. One Tab reaches the first
+      // enabled action. The key makes each refusal — another code, or the same one after Try again — focus again (refusal-focus.tsx).
+      <div
+        key={ytRefusal}
+        ref={focusRefusalBlock}
+        tabIndex={-1}
+        id={refusalId}
+        data-testid="stream-youtube-refusal"
+        data-code={ytRefusal}
+        data-fix={refusalFix ?? undefined}
+        role="alert"
+        className={`min-w-0 rounded-lg border border-red-200 bg-red-50 p-3.5 text-sm text-red-800 ${REFUSAL_FOCUS_RING}`}
+      >
+        {selected && (
+          <p className="flex gap-2 font-semibold">
+            <CircleAlert aria-hidden className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.8} />
+            <span data-testid="stream-youtube-refusal-title" className="min-w-0 [overflow-wrap:anywhere]">
+              {msg("stream.youtube.refused.title", { label: youtubeTargetLabel(msg, selected.label) })}
+            </span>
           </p>
-          <p data-testid="stream-youtube-refusal-note" className="mt-1">
-            {msg("stream.youtube.refused.nothing")}
-          </p>
-          {refusalFix === "reconnect" && (
-            <a
-              data-testid="stream-youtube-reconnect"
-              href={STREAMING_PAGE_HREF}
-              target="_blank"
-              rel="noopener"
-              className="btn btn-primary mt-3 min-h-12 w-full text-base"
-            >
-              {msg("stream.youtube.refused.reconnect")}
-              <ExternalLink aria-hidden className="h-4 w-4" strokeWidth={1.8} />
-            </a>
-          )}
-          {refusalFix === "retry" && (
-            <button type="button" data-testid="stream-youtube-retry" disabled={goLiveDisabled} onClick={p.onGoLive} className="btn btn-primary mt-3 min-h-12 w-full text-base">
-              {msg("stream.youtube.refused.retry")}
-            </button>
-          )}
-          <button
-            type="button"
-            data-testid="stream-youtube-pick-another"
-            onClick={p.onPickAnother}
-            className="mt-1.5 inline-flex min-h-11 w-full items-center justify-center text-sm font-medium text-red-800 underline decoration-red-300 underline-offset-2 hover:decoration-red-700"
+        )}
+        <p data-testid="stream-create-error" className="mt-1">
+          {createErrorText(p.createError, msg)}
+        </p>
+        <p data-testid="stream-youtube-refusal-note" className="mt-1">
+          {msg("stream.youtube.refused.nothing")}
+        </p>
+        {refusalFix === "reconnect" && (
+          <a
+            data-testid="stream-youtube-reconnect"
+            href={STREAMING_PAGE_HREF}
+            target="_blank"
+            rel="noopener"
+            className="btn btn-primary mt-3 min-h-12 w-full text-base"
           >
-            {msg("stream.youtube.refused.pickAnother")}
+            {msg("stream.youtube.refused.reconnect")}
+            <ExternalLink aria-hidden className="h-4 w-4" strokeWidth={1.8} />
+          </a>
+        )}
+        {refusalFix === "retry" && (
+          <button type="button" data-testid="stream-youtube-retry" disabled={goLiveDisabled} onClick={p.onGoLive} className="btn btn-primary mt-3 min-h-12 w-full text-base">
+            {msg("stream.youtube.refused.retry")}
           </button>
-        </div>
-      </FocusFirstAction>
+        )}
+        <button
+          type="button"
+          data-testid="stream-youtube-pick-another"
+          onClick={p.onPickAnother}
+          className="mt-1.5 inline-flex min-h-11 w-full items-center justify-center text-sm font-medium text-red-800 underline decoration-red-300 underline-offset-2 hover:decoration-red-700"
+        >
+          {msg("stream.youtube.refused.pickAnother")}
+        </button>
+      </div>
     ) : null;
 
   return (
