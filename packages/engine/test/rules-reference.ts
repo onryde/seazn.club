@@ -47,51 +47,7 @@ export const CHECKER_FILES: readonly string[] = [
  *  W2d Task 21 (the fold) emptied it: all 43 W2d rows now name their proving tests and are signed by ruling 197. */
 /** W2e's rows (spec 2026-10-28 section 8, signed 2026-10-28 as `W2e-D<n>`): the value names the task of the W2e plan that proves the row. The proving
  *  commit deletes the entry and fills `proved by`; every W2e entry is to be gone before PR A merges. */
-export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([
-  ["X-SU-1", "Task 15"],
-  ["X-DV-1", "Task 17"],
-  ["BD-SV-1", "Task 16"],
-  ["BD-DV-1", "Task 16"],
-  ["VB-RO-1", "Task 16"],
-  ["TT-SE-1", "Task 16"],
-  ["TT-TO-1", "Task 16"],
-  ["TN-SE-2", "Task 16"],
-  ["TN-RO-1", "Task 16"],
-  ["CK-IV-1", "Task 14"],
-  ["CK-FO-1", "Task 14"],
-  ["CK-IF-1", "Task 14"],
-  ["CK-RR-2", "Task 14"],
-  ["CK-PR-1", "Task 14"],
-  ["CK-MO-1", "Task 14"],
-  ["CK-SO-2", "Task 14"],
-  ["CK-RT-2", "Task 14"],
-  ["CK-AB-3", "Task 14"],
-  ["CK-RH-1", "Task 14"],
-  ["CK-BO-1", "Task 14"],
-  ["CK-FH-1", "Task 14"],
-  ["CK-WK-1", "Task 14"],
-  ["CK-CR-1", "Task 14"],
-  ["CK-RO-1", "Task 14"],
-  ["CK-DV-1", "Task 14"],
-  ["CK-DV-2", "Task 14"],
-  ["CK-DV-3", "Task 14"],
-  ["FB-OG-1", "Task 15"],
-  ["FB-YT-1", "Task 15"],
-  ["FB-SB-1", "Task 15"],
-  ["FB-SU-1", "Task 15"],
-  ["FB-RO-1", "Task 15"],
-  ["HK-YT-1", "Task 15"],
-  ["HK-SU-1", "Task 15"],
-  ["HK-GK-1", "Task 15"],
-  ["HK-ST-1", "Task 15"],
-  ["IH-SU-1", "Task 15"],
-  ["IH-ST-1", "Task 15"],
-  ["BG-AB-3", "Task 17"],
-  ["CA-VR-1", "Task 17"],
-  ["CA-DG-1", "Task 17"],
-  ["CA-RO-1", "Task 17"],
-  ["GN-DV-1", "Task 17"],
-]);
+export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([]);
 
 /** Rule rows write every engine path as `packages/engine/...`, in the monorepo and in the engine's own repo alike: the prefix is
  *  part of the row's text, not of the checkout. Rows whose path starts with it are the ENGINE's to check (test/rules-reference.test.ts);
