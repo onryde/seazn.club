@@ -205,6 +205,29 @@ function reachesShootoutSuddenDeath(r: Recorded): string | null {
   return null;
 }
 
+/** Whether a closed set in `state` was won on its tie-break's deciding point: the target to one below it (5–4 to five). */
+function closedOnDecidingPoint(state: Record<string, unknown>, to: number): boolean {
+  const sets = Array.isArray(state.sets) ? (state.sets as unknown[]) : [];
+  return sets.some((s) => {
+    const tb = obj(obj(s).tb);
+    const [h, a] = [Number(tb.home), Number(tb.away)];
+    return Math.max(h, a) === to && Math.min(h, a) === to - 1;
+  });
+}
+
+/** tennis `set.tiebreakWinBy` (W2e RB2A-12, TN-SS-2; ITF App VI §2, RBS:347): a short-set tie-break closed on its deciding
+ *  point at four all, 5–4. Only a margin of one closes a tie-break one point clear of its target's runner-up, so the close
+ *  is itself the differential: under the margin every set tie-break played before W2e (the match's two) the same ledger
+ *  plays on from 5–4 or is refused there. A stream that only names the key (short sets with no tie-break) does not reach it. */
+function reachesShortSetDecidingPoint(r: Recorded): string | null {
+  if (obj(obj(r.raw).set).tiebreakWinBy !== 1) return "its config's set tie-break is not won by one point";
+  const played = replay(r, r.raw);
+  if (typeof played === "string") return played;
+  const to = Number(obj(obj(played.cfg).set).tiebreakTo);
+  if (!closedOnDecidingPoint(played.state, to)) return `no set closes on its tie-break's deciding point (${to}–${to - 1})`;
+  return null;
+}
+
 // ----------------------------------------------------------------------------------------------------------- builders
 
 interface BuildCtx {
@@ -416,6 +439,20 @@ export const BRANCH_STORIES: readonly BranchStory[] = [
         return null;
       }
     }, SUDDEN_DEATH_SEED_BUDGET),
+  },
+  {
+    // W2e Task 13 (Task 5 review m2): the opt-in key Task 5 added. GOLDEN-POLICY.md: "A NEW opt-in key owes a story".
+    id: "tennis.short_set_deciding_point",
+    sport: "tennis",
+    key: "set",
+    seed: BRANCH_SEED_BASE + 11,
+    config: { name: "short-sets", raw: { set: { gamesTo: 4, winBy: 2, tiebreakAt: 4, tiebreakTo: 5, tiebreakWinBy: 1 } } },
+    what: "short sets (App VI §1-2) whose tie-break at four games all is won 5–4 on the deciding point (`set.tiebreakWinBy` 1)",
+    reached: reachesShortSetDecidingPoint,
+    build: (c) => {
+      const to = Number(obj(obj(c.cfg).set).tiebreakTo);
+      return shortest(c, reachesShortSetDecidingPoint, (seed) => playUntil(c, seed, (state) => closedOnDecidingPoint(state, to)));
+    },
   },
 ];
 

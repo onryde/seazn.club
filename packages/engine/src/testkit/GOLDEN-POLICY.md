@@ -799,12 +799,16 @@ Branch streams carry `seed` in `[BRANCH_SEED_BASE, FLOOR_SEED_STRIDE)` (90001
 and up): above every generator seed, below the floor's stride, so the floor's
 reproduction and keep-rule never count them. They are appended streams, so they
 owe no version bump. They add configs, appended at the end of `configs`; no
-existing stream or config changes. The ten stories today: football
+existing stream or config changes. The eleven stories today: football
 `shootoutAttempts` (and its sudden-death arm), hockey `q4_stands`, carrom and
 generic `share`, the `award` abandon with a withdrawal's expunge for football,
-hockey and ice hockey, football's level (draw) arm, and ice hockey's level
+hockey and ice hockey, football's level (draw) arm, ice hockey's level
 abandon under the IIHF default, which is flagged for a replay because no draw
-can stand there (R16-3). Five verdicts (the two award expunge arms, the
+can stand there (R16-3), and tennis's `set.tiebreakWinBy` (W2e TN-SS-2): short
+sets whose tie-break closes 5–4 on its deciding point (`short-sets#90011`,
+recorded under the config Task 5's `short-sets#1` already names). Its verdict
+needs no refold: a tie-break closed one point clear of the runner-up is a
+margin of one by itself, and the match's two refuses the same summary. Five verdicts (the two award expunge arms, the
 4th quarter, the flagged level award `reachesLevelAwardFlagged` and the football
 level draw `reachesAwardLevelDraw`) carry no replay differential: an abandon is
 applied only to a match still in play, so a ledger that ends on one and holds a

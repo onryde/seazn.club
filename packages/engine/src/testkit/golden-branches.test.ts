@@ -15,6 +15,7 @@ import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
 import { SHOOTOUT_ATTEMPTS_DEFAULT } from "../sports/football/football.ts";
+import { tennis } from "../sports/tennis/tennis.ts";
 import { BRANCH_SEED_BASE, BRANCH_STORIES, branchHoles, extendBranches, replaysOnAbandon, type BranchStory, type Recorded } from "./golden-branches.ts";
 import { FLOOR_SEED_STRIDE } from "./golden-floor-streams.ts";
 import { forEachSport } from "./for-each-sport.ts";
@@ -67,7 +68,7 @@ const storyById = (id: string): BranchStory => {
 const byId = (id: string): Case => caseOf(storyById(id));
 
 describe("the branch table", () => {
-  it("names exactly the four opt-in branches W2c raised a major for by hand, then the six arms 16c recorded beside them (the award abandon's expunge and level arms, and the shoot-out's sudden death), once each, in this order", () => {
+  it("names exactly the four opt-in branches W2c raised a major for by hand, then the six arms 16c recorded beside them (the award abandon's expunge and level arms, and the shoot-out's sudden death), then W2e's tennis set tie-break margin, once each, in this order", () => {
     expect(BRANCH_STORIES.map((s) => s.id)).toEqual([
       "football.shootoutAttempts",
       "hockey.q4_stands",
@@ -79,6 +80,7 @@ describe("the branch table", () => {
       "icehockey.award_level_flagged",
       "football.award_draw",
       "football.shootout_sudden_death",
+      "tennis.short_set_deciding_point",
     ]);
   });
 
@@ -96,7 +98,7 @@ describe("the branch table", () => {
       sports.add(story.sport);
     }
     expect(seen.size).toBe(BRANCH_STORIES.length);
-    expect(sports.size, "the five sports W2c raised").toBe(5);
+    expect(sports.size, "the five sports W2c raised, and tennis (W2e)").toBe(6);
     // BRANCH_SEED_BASE sits above every seed a generator walk can take (the coverage scan stops at 3000) - read from the corpora.
     let walks = 0;
     forEachSport(({ key }) => {
@@ -178,6 +180,8 @@ describe("the committed corpora reach every branch", () => {
     ["carrom.share", "sharedAbandon#1", /does not end in a draw/],
     ["generic.share", "sharedAbandon#1", /does not end in a draw/],
     ["football.shootoutAttempts", "youthKnockout#1", /does not end in a shoot-out win/],
+    // Task 5 recorded short sets with no tie-break in it: the key is named, its margin of one never decides anything.
+    ["tennis.short_set_deciding_point", "short-sets#1", /no set closes on its tie-break's deciding point/],
   ] as const)("%s is not already reached by %s, a stream recorded under the key's own config", (id, streamId, why) => {
     const story = storyById(id);
     const module = moduleOf(story.sport);
@@ -341,6 +345,31 @@ describe("each branch stream takes the branch it is named for (the engine's own 
     expect(replayed.replayFlagged).toBe(true);
   });
 
+  it("tennis.short_set_deciding_point: the shipped short sets, a tie-break closed 5–4 on its deciding point; under the match's margin of two the same summary is refused", () => {
+    const c = byId("tennis.short_set_deciding_point");
+    // the story records the variant the product ships, as the corpus already names it (Task 5's short-sets#1)
+    expect(c.raw).toEqual(tennis.variants["short-sets"]);
+    const set = fold(c.module, c.raw, []).cfg.set as { tiebreakTo: number; tiebreakWinBy: number };
+    // App VI §2 (RBS:347): first to five with a deciding point at four all
+    expect(set.tiebreakWinBy).toBe(1);
+    const last = c.stream.events[c.stream.events.length - 1]!;
+    expect(last.type).toBe("tennis.set_summary");
+    const tb = (last.payload as { tb: { home: number; away: number } }).tb;
+    expect([Math.max(tb.home, tb.away), Math.min(tb.home, tb.away)]).toEqual([set.tiebreakTo, set.tiebreakTo - 1]);
+    const played = fold(c.module, c.raw, c.stream.events).state;
+    expect((played.sets as unknown[]).length, "the tie-break closed the set").toBe(1);
+    expect(played.outcome).toBeNull();
+    // the differential: the margin every set tie-break played before W2e (the match's two) refuses the same final score
+    let refused: unknown;
+    try {
+      fold(c.module, { ...c.raw, set: { ...(c.raw.set as object), tiebreakWinBy: 2 } }, c.stream.events);
+    } catch (e) {
+      refused = e;
+    }
+    expect(refused).toBeInstanceOf(EngineError);
+    expect((refused as EngineError).code).toBe("INVALID_EVENT");
+  });
+
   it("football.shootout_sudden_death: level after the configured kicks, decided in sudden death, and still running under the default of five", () => {
     const c = byId("football.shootout_sudden_death");
     const events = c.stream.events;
@@ -434,6 +463,7 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
     "icehockey.award_level_flagged": /does not award an abandoned match/,
     "football.award_draw": /does not award an abandoned match/,
     "football.shootout_sudden_death": /sets no shootoutAttempts/,
+    "tennis.short_set_deciding_point": /set tie-break is not won by one point/,
   };
   const DECIDER_GONE: Record<string, RegExp> = {
     "football.shootoutAttempts": /does not end in a shoot-out win/,
@@ -446,6 +476,7 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
     "icehockey.award_level_flagged": /does not end on an abandon/,
     "football.award_draw": /does not end on an abandon/,
     "football.shootout_sudden_death": /does not end in a shoot-out win/,
+    "tennis.short_set_deciding_point": /no set closes on its tie-break's deciding point/,
   };
   /** Counterfactuals every story has: the key gone, and the deciding event (the last one in every story) dropped. */
   const common = (c: Case): Counterfactual[] => [
@@ -526,6 +557,23 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
           // a tied run to a sixth pair is sudden death under the default of five as well, so the key proves nothing
           ["a long tied shoot-out the default count decides too", { ...c.recorded, events: longTiedShootout(events, 6) }, /decide the same ledger/],
         ];
+      case "tennis.short_set_deciding_point": {
+        const set = c.raw.set as Record<string, unknown>;
+        /** The same set summary with the loser's tie-break one point lower (5–3 for 5–4). */
+        const clearer = (e: GoldenEvent): GoldenEvent => {
+          const p = e.payload as { home: number; away: number; tb: { home: number; away: number } };
+          const tb = p.tb.home > p.tb.away ? { home: p.tb.home, away: p.tb.away - 1 } : { home: p.tb.home - 1, away: p.tb.away };
+          return { ...e, payload: { ...p, tb } };
+        };
+        return [
+          // the margin the match plays (two) stated outright: the story is the margin of one
+          ["the set margin of two", { ...c.recorded, raw: { ...c.raw, set: { ...set, tiebreakWinBy: 2 } } }, /set tie-break is not won by one point/],
+          // Fast4 as recorded before W2e (no margin of its own): it names `set` and a tie-break to five, not the key
+          ["the pre-W2e Fast4 set", { ...c.recorded, raw: { set: { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5 } } }, /set tie-break is not won by one point/],
+          // a tie-break closed one point short of the deciding point: the margin of one was never what closed it
+          ["a tie-break won one point clearer", { ...c.recorded, events: [...events.slice(0, -1), clearer(last)] }, /no set closes on its tie-break's deciding point/],
+        ];
+      }
       default:
         throw new Error(`${c.story.id}: no counterfactuals declared for this story`);
     }
