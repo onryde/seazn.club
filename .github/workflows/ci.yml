@@ -1835,7 +1835,21 @@ jobs:
           fi
 
       - name: Run smoke test
+        env:
+          # Per-suite check counts (scripts/smoke-manifest.ts), relative to the repo root this step runs in.
+          SMOKE_MANIFEST: smoke-manifest.json
         run: npm run test:smoke
+
+      # The manifest is written on the pass and the failure path alike. An `always()` upload under a fixed name: a
+      # "re-run failed jobs" would otherwise 409 on the artifact the first attempt already wrote.
+      - name: Upload smoke manifest
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: smoke-manifest
+          path: smoke-manifest.json
+          if-no-files-found: warn
+          overwrite: true
 
       # R3.5/Task N: `scripts/smoke-sports.ts` had NO caller in any workflow —
       # only `scripts/smoke.ts` ran, so the per-sport drivers rotted unnoticed
