@@ -289,7 +289,7 @@ describe("(d) judge regression against the REAL committed baseline", () => {
     return { now: join(dir, "now.json"), expect: join(dir, "expect.json") };
   };
   const judge = (files: { now: string; expect: string }, jsonOut?: string, over?: { catalogue?: string }, baselineFile: string = baselineL3Path()): number =>
-    judgeMain(["regression", "--baseline", baselineFile, "--now", files.now, "--expect", files.expect, ...(jsonOut === undefined ? [] : ["--json-out", jsonOut])], over);
+    judgeMain(["regression", "--baseline", baselineFile, "--now", files.now, "--expect", files.expect, "--sample", ...(jsonOut === undefined ? [] : ["--json-out", jsonOut])], over);
   const reset = (): void => { out = []; err = []; };
   const allRed = Object.fromEntries(RULING_70.map((id) => [id, "red" as const]));
   /** The six held swiss_knockout R4 cells outside the ruling, by the sports HARNESS-GREEN.md names, each checked held in the committed baseline. */

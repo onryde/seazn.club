@@ -5,9 +5,13 @@
 //       when no run holds a harness fault and every case has the same state in every run.
 //   faults <run.json> [--planned-not-run allow|refuse]
 //       one merged run's harness faults (D6) — the merge job runs it on every run.
-//   regression --baseline <file> --now <file> --expect <ids.json> [--rerun <file>]
+//   regression --baseline <file> --now <file> --expect <ids.json> [--rerun <file>] [--expected-skips <ids.json> | --sample]
 //       a sample against the committed baseline, restricted to EXACTLY the ids the sample planned
 //       (--expect, written by run-sample.ts); with --rerun, only a regression the re-run reproduces counts.
+//       D16 (E20): the baseline cases --expect does not name are SKIPPED, and the verdict counts them (skipped, skippedIds). A skip
+//       fails the run (unexpected_skip, exit 1) unless --expected-skips, a committed JSON list of case ids, names it: a case renamed out
+//       of --expect (3x15 renames badminton's) is judged by no one, and used to be dropped without a word. --sample says --expect is a
+//       DELIBERATE subset of the baseline (the PR sample): its other cases are counted, never refused. It excludes --expected-skips.
 //       The baseline is read as catalogue/baseline.json's ruling70 block says (owner ruling 70): the ids it lists
 //       are red whatever the baseline run recorded, so a later works on them is an improvement and a later red no change.
 //       The block qualifies only the run it was written for (its workflowRun): any other --baseline is judged as it shows,
@@ -18,11 +22,12 @@
 //   0  done — a verdict was reached and it is clean: no harness fault and identical states across runs
 //      (across, faults); no reproduced regression (regression);
 //   1  a negative signal, the verdict written: a harness fault, a case whose state differs between runs,
-//      or a regression the re-run reproduced — each named on stdout;
+//      a regression the re-run reproduced, or a skip --expected-skips does not list — each named on stdout;
 //   2  refused, nothing written: usage; unreadable input (a missing or unreadable file, bad JSON, results the
 //      schema refuses, a v2 run); fewer than 2 runs, one run given twice, runs that differ in layer, driver,
 //      plan, scope or harness commit (three runs of two products are not a flakiness measure, D21); a run whose
-//      case ids are not its recorded plan's, or whose scope is not its plan's; runs of one plan that do not hold
+//      case ids are not its recorded plan's, or whose scope is not its plan's; an --expected-skips that is not a JSON list of
+//      distinct case ids; runs of one plan that do not hold
 //      the same case ids (they differ in width or variant, which a plan's ids drop): none shared is NoneCompared,
 //      some shared is CaseIdsDiffer; a catalogue/baseline.json that cannot be used (BaselineUnreadable: regression);
 //      zero cases compared (across, regression); an expected
@@ -46,7 +51,7 @@ import { parseResults, type AnyRunResults, type RunResults } from "./lib/results
 const USAGE = [
   "usage: judge.ts across <run.json> <run.json> [<run.json>...] [--planned-not-run allow|refuse] [--json-out <path>]",
   "       judge.ts faults <run.json> [--planned-not-run allow|refuse] [--json-out <path>]",
-  "       judge.ts regression --baseline <file> --now <file> --expect <ids.json> [--rerun <file>] [--json-out <path>]",
+  "       judge.ts regression --baseline <file> --now <file> --expect <ids.json> [--rerun <file>] [--expected-skips <ids.json> | --sample] [--json-out <path>]",
 ].join("\n");
 
 /** The most list lines a mode prints (the rest are counted; --json-out has them all). */
@@ -63,6 +68,8 @@ interface Cli {
   now: string | undefined;
   expect: string | undefined;
   rerun: string | undefined;
+  expectedSkips: string | undefined;
+  sample: boolean;
 }
 
 function parseCli(argv: readonly string[]): Cli | { usage: string } {
@@ -71,16 +78,18 @@ function parseCli(argv: readonly string[]): Cli | { usage: string } {
     const { positionals, values } = parseArgs({
       args: argv.filter((a) => a !== "--"),
       allowPositionals: true,
-      options: { "planned-not-run": { type: "string" }, "json-out": { type: "string" }, baseline: { type: "string" }, now: { type: "string" }, expect: { type: "string" }, rerun: { type: "string" } },
+      options: { "planned-not-run": { type: "string" }, "json-out": { type: "string" }, baseline: { type: "string" }, now: { type: "string" }, expect: { type: "string" }, rerun: { type: "string" }, "expected-skips": { type: "string" }, sample: { type: "boolean" } },
     });
     const [mode, ...files] = positionals;
     if (mode !== "across" && mode !== "faults" && mode !== "regression") return { usage: USAGE };
     const pnr = values["planned-not-run"];
     if (pnr !== undefined && pnr !== "allow" && pnr !== "refuse") return { usage: `--planned-not-run takes allow or refuse, got ${JSON.stringify(pnr)}\n${USAGE}` };
-    const cli: Cli = { mode, files, plannedNotRun: pnr ?? "allow", jsonOut: values["json-out"], baseline: values.baseline, now: values.now, expect: values.expect, rerun: values.rerun };
-    const regressionOnly = [cli.baseline, cli.now, cli.expect, cli.rerun].some((v) => v !== undefined);
+    const cli: Cli = { mode, files, plannedNotRun: pnr ?? "allow", jsonOut: values["json-out"], baseline: values.baseline, now: values.now, expect: values.expect, rerun: values.rerun, expectedSkips: values["expected-skips"], sample: values.sample === true };
+    const regressionOnly = cli.sample || [cli.baseline, cli.now, cli.expect, cli.rerun, cli.expectedSkips].some((v) => v !== undefined);
     if (mode === "regression") {
       if (files.length > 0 || pnr !== undefined || cli.baseline === undefined || cli.now === undefined || cli.expect === undefined) return { usage: USAGE };
+      // A sample names no skip it expects, and a run with a list of expected skips is not a sample: the two answers contradict.
+      if (cli.sample && cli.expectedSkips !== undefined) return { usage: `--sample and --expected-skips exclude each other: a sample's other baseline cases are skipped by design, a skip list names the few that are\n${USAGE}` };
     } else if (regressionOnly) {
       return { usage: USAGE };
     }
@@ -139,6 +148,20 @@ function readExpect(path: string): string[] {
   return list.data;
 }
 
+/** The `--expected-skips` file: a JSON list of distinct case ids the run may skip. Empty is allowed: nothing is expected to be skipped. */
+function readExpectedSkips(path: string): string[] {
+  let json: unknown;
+  try {
+    json = JSON.parse(readFileSync(path, "utf8"));
+  } catch (e) {
+    throw new JudgeRefused("ExpectedSkipsUnreadable", `${path}: ${e instanceof Error ? e.message : String(e)}`);
+  }
+  const list = z.array(z.string().min(1)).safeParse(json);
+  if (!list.success) throw new JudgeRefused("ExpectedSkipsUnreadable", `${path}: not a JSON list of case ids — ${issuesOf(list.error)}`);
+  if (new Set(list.data).size !== list.data.length) throw new JudgeRefused("ExpectedSkipsUnreadable", `${path}: a case id is listed twice`);
+  return list.data;
+}
+
 // --- the modes ---------------------------------------------------------------------------------------------------
 
 /** What a mode answers: the verdict (JudgeOut) and the lines that explain it. */
@@ -156,7 +179,7 @@ function faultsMode(cli: Cli): Verdict {
   const run = readV3(cli.files[0]);
   const { compared } = matchPlanIds(run);
   const faults = faultsOf(run, cli.plannedNotRun);
-  const out: JudgeOut = { version: 1, mode: "faults", exit: faults.length > 0 ? 1 : 0, layer: run.layer, runs: [run.runId], plannedNotRun: cli.plannedNotRun, compared, faults, differing: [], missing: [], regressed: [], absent: [] };
+  const out: JudgeOut = { version: 1, mode: "faults", exit: faults.length > 0 ? 1 : 0, layer: run.layer, runs: [run.runId], plannedNotRun: cli.plannedNotRun, compared, faults, differing: [], missing: [], regressed: [], absent: [], skipped: 0, skippedIds: [], unexpectedSkips: [] };
   return { out, lines: [`${run.layer} ${run.runId} (${run.plan}): compared ${compared} cases; ${faults.length} faults`, ...capped(faults.map((f) => faultLine(f, false)))] };
 }
 
@@ -193,7 +216,7 @@ function acrossMode(cli: Cli): Verdict {
   // After the two refusals, `missing` is empty by construction, so it is not a term of the verdict and the file's `missing` is [].
   const faults = runs.flatMap((r) => faultsOf(r, cli.plannedNotRun));
   const bad = sa.differing.length + faults.length;
-  const out: JudgeOut = { version: 1, mode: "across", exit: bad > 0 ? 1 : 0, layer: first.layer, runs: runs.map((r) => r.runId), plannedNotRun: cli.plannedNotRun, compared: sa.compared, faults, differing: sa.differing, missing: [], regressed: [], absent: [] };
+  const out: JudgeOut = { version: 1, mode: "across", exit: bad > 0 ? 1 : 0, layer: first.layer, runs: runs.map((r) => r.runId), plannedNotRun: cli.plannedNotRun, compared: sa.compared, faults, differing: sa.differing, missing: [], regressed: [], absent: [], skipped: 0, skippedIds: [], unexpectedSkips: [] };
   return {
     out,
     lines: [
@@ -226,6 +249,7 @@ function regressionMode(cli: Cli, over: JudgeOver): Verdict {
   const read = readRun(cli.baseline as string);
   const now = readRun(cli.now as string);
   const expect = readExpect(cli.expect as string);
+  const expectedSkips = cli.expectedSkips === undefined ? [] : readExpectedSkips(cli.expectedSkips);
   holdsExactly("--now", now, now.runId, expect, true);
   // Owner ruling 70: the baseline's override list is applied HERE, in the one reader of a baseline, so matrix:sample and any other
   // caller judge the same baseline. An unreadable list is a refusal, never a judgement made without it.
@@ -256,14 +280,26 @@ function regressionMode(cli: Cli, over: JudgeOver): Verdict {
       return HELD.has(state) ? [] : [{ ...x, rerun: state }];
     });
   }
-  const out: JudgeOut = { version: 1, mode: "regression", exit: regressed.length > 0 ? 1 : 0, layer: now.schemaVersion === 3 ? now.layer : null, runs: [now.runId], plannedNotRun: null, compared: r.compared, faults: [], differing: [], missing: [], regressed, absent: r.absent };
+  // D16: a baseline case --expect does not name is a skip, and a skip nobody listed is a verdict of its own. A re-run clears a flaky
+  // regression, never a skip: the re-run is the same plan. --sample says the skips are the point (the sample is a subset), so none is refused.
+  const listed = new Set(expectedSkips);
+  const unexpected = cli.sample ? [] : r.skippedIds.filter((id) => !listed.has(id));
+  const out: JudgeOut = {
+    version: 1, mode: "regression", exit: regressed.length > 0 || unexpected.length > 0 ? 1 : 0, layer: now.schemaVersion === 3 ? now.layer : null, runs: [now.runId], plannedNotRun: null,
+    compared: r.compared, faults: [], differing: [], missing: [], regressed, absent: r.absent, skipped: r.skippedIds.length, skippedIds: r.skippedIds, unexpectedSkips: unexpected,
+  };
+  const skippedLine = cli.sample
+    ? `skipped ${r.skippedIds.length} cases (--sample: the baseline's other cases are not this sample's to judge)`
+    : `skipped ${r.skippedIds.length} cases (${r.skippedIds.length - unexpected.length} expected, ${unexpected.length} unexpected)`;
   return {
     out,
     lines: [
       `${now.runId} against the baseline ${baseline.runId}: compared ${r.compared} cases; ${regressed.length} regressions${cli.rerun === undefined ? "" : " reproduced by the re-run"}`,
+      skippedLine,
       ...(overrides === null || heldInSample.length === 0 ? [] : [`baseline overrides: ${heldInSample.length} case(s) held red (cause ${overrides.cause}, ${overrides.gap}, ${overrides.wave}) — owner ruling 70`]),
       ...(overrides === null || applies || ruledInSample.length === 0 ? [] : [`baseline overrides: not applied — the baseline is ${read.runId} and owner ruling 70's list was written for workflow run ${overrides.workflowRun} (tag ${overrides.tag}); ${ruledInSample.length} of its case(s) are in this sample and are judged as that baseline shows them`]),
       ...capped(regressed.map((x) => `  ${x.caseId}: ${x.was} → ${x.now} — ${clip(x.reason)}${x.rerun === undefined ? "" : ` (re-run: ${x.rerun})`}`)),
+      ...capped(unexpected.map((id) => `  [unexpected_skip] ${id} — in the baseline, not named by --expect, not listed in --expected-skips`)),
     ],
   };
 }

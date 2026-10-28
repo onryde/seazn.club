@@ -69,7 +69,7 @@ describe("runSample: one run, and a regression is re-run once before it fails (D
     const deps = fakeSampleDeps({ judgeExits: [0] });
     await runSample(deps);
     expect(deps.runArgs[0]).toEqual([...ARGS, "--run-id", "ci-5-1-l3-sample", "--report-dir", "out"]);
-    expect(deps.judgeArgs[0]).toEqual(["regression", "--baseline", "/repo/baseline/results.json", "--now", "out/ci-5-1-l3-sample/results.json", "--expect", "out/ci-5-1-l3-sample.expect.json"]);
+    expect(deps.judgeArgs[0]).toEqual(["regression", "--baseline", "/repo/baseline/results.json", "--now", "out/ci-5-1-l3-sample/results.json", "--expect", "out/ci-5-1-l3-sample.expect.json", "--sample"]);
   });
 
   it("a regression that does not reproduce: two runs, the second judged with --rerun, exit 0", async () => {
