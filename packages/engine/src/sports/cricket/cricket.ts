@@ -1163,6 +1163,34 @@ const CRICKET_FORFEIT_PHASE: Record<CricketState["phase"], ForfeitPhase> = {
   final: "over",
 };
 
+// The DLS par of the open chase when play ends (spec §2.3), or null when the chase cannot be decided by DLS: no open
+// chase, DLS off, no quota, or fewer than the minimum overs faced. The ONE authority for both readers: `applyAbandon`
+// decides the result by it, and the NRR credit (CK-RR-1, ICC 16.10.7, `nrrCredits`) credits Team 1 with it. The abandon
+// changes none of its inputs, so the decided state answers as the state it was decided from.
+function dlsAbandonmentPar(state: CricketState): { chase: InningsState; par: number } | null {
+  const open = openInnings(state);
+  const chase = open !== null && isChaseIndex(state, open.index) ? open.innings : null;
+  const minBalls = state.cfg.minOversForResult * state.cfg.ballsPerOver;
+  if (
+    chase === null ||
+    !state.cfg.dls.enabled ||
+    state.quota === null ||
+    chase.legalBalls < minBalls ||
+    state.r1 === null ||
+    state.r2 === null ||
+    chase.ballsLimit === null
+  ) {
+    return null;
+  }
+  const s1 = (state.innings[0] as InningsState).runs;
+  const remaining = resourcesFromBalls(
+    chase.ballsLimit - chase.legalBalls,
+    chase.wickets,
+    allOutWickets(state, chase.battingSide),
+  );
+  return { chase, par: dlsPar(s1, state.r1, state.r2, state.r2 - remaining) };
+}
+
 // core.abandon — spec §2.3: no_result below the minimum, DLS par decision
 // beyond it (method 'dls'); 2-innings matches are drawn.
 function applyAbandon(state: CricketState): CricketState {
@@ -1174,25 +1202,9 @@ function applyAbandon(state: CricketState): CricketState {
     // Main match already tied; the abandoned decider leaves the tie standing.
     return { ...state, phase: "done", outcome: { kind: "tie" }, margin: null };
   }
-  const open = openInnings(state);
-  const chase = open !== null && isChaseIndex(state, open.index) ? open.innings : null;
-  const minBalls = state.cfg.minOversForResult * state.cfg.ballsPerOver;
-  if (
-    chase !== null &&
-    state.cfg.dls.enabled &&
-    state.quota !== null &&
-    chase.legalBalls >= minBalls &&
-    state.r1 !== null &&
-    state.r2 !== null &&
-    chase.ballsLimit !== null
-  ) {
-    const s1 = (state.innings[0] as InningsState).runs;
-    const remaining = resourcesFromBalls(
-      chase.ballsLimit - chase.legalBalls,
-      chase.wickets,
-      allOutWickets(state, chase.battingSide),
-    );
-    const par = dlsPar(s1, state.r1, state.r2, state.r2 - remaining);
+  const decided = dlsAbandonmentPar(state);
+  if (decided !== null) {
+    const { chase, par } = decided;
     if (chase.runs > par) {
       const runs = chase.runs - par;
       return decideWin(state, chase.battingSide, "dls", { kind: "runs", value: runs });
@@ -3561,6 +3573,56 @@ export function padSpec(cfg: CricketCfg): PadSpec {
   );
 }
 
+/** One innings' NRR credit: the runs its batting side is credited with, off the balls it is credited with facing. */
+interface NrrCredit {
+  battingSide: Side;
+  runs: number;
+  balls: number;
+}
+
+/**
+ * W2e T8 (CK-RR-1; RB2A-20, SC-C5; D18) — the NRR credit of each innings, per ICC Men's T20 World Cup 2026 Playing
+ * Conditions 16.10.7, for every cricket match (no config key, no freeze: D18 reverses D14). A side's runs for / balls faced
+ * are its own innings' credit, its runs against / balls bowled the opponent's (`standingsDelta` sums them).
+ * - As played: the runs, off the balls faced, except that an all-out innings counts its full allocated quota (its
+ *   `ballsLimit` at close, so a revised one). A timeless innings (no quota) counts the balls faced (CK-RR-2).
+ * - "abandoned but a result is achieved under DLS": Team 1 is credited with Team 2's par score on abandonment
+ *   (`dlsAbandonmentPar`, the par the result was decided by) off the overs Team 2 faced; Team 2's innings as played.
+ * - "concluded with DLS having been applied at an earlier point" — a revised target (`targetSource`: DLS-computed or the
+ *   umpire's) or a revised chase allocation (the rule row reads "decided by DLS or with revised overs" as one): Team 1 is
+ *   credited with one run less than Team 2's final target, off the total overs allocated to Team 2; Team 2 as played.
+ * Only a one-innings match has a "Team 2 to reach the target" (a two-innings match cannot be revised, and is drawn on
+ * abandonment). A chase still open has a result only from an abandonment; one the par did not decide (unreachable from the
+ * fold) is credited as played. The super over is never here: it is not in `state.innings`.
+ */
+function nrrCredits(state: CricketState): NrrCredit[] {
+  const credited = (innings: InningsState): number =>
+    innings.ballsLimit !== null && innings.wickets >= allOutWickets(state, innings.battingSide)
+      ? innings.ballsLimit
+      : innings.legalBalls;
+  const played = state.innings.map((innings) => ({
+    battingSide: innings.battingSide,
+    runs: innings.runs,
+    balls: credited(innings),
+  }));
+  const [team1, chase] = state.innings;
+  if (state.cfg.inningsPerSide !== 1 || team1 === undefined || chase === undefined) return played;
+  if (!chase.closed) {
+    const decided = dlsAbandonmentPar(state);
+    if (decided === null) return played;
+    return [
+      { battingSide: team1.battingSide, runs: decided.par, balls: chase.legalBalls },
+      { battingSide: chase.battingSide, runs: chase.runs, balls: chase.legalBalls },
+    ];
+  }
+  const revised = state.targetSource !== null || chase.ballsLimit !== state.cfg.ballsPerInnings;
+  if (!revised || chase.ballsLimit === null) return played;
+  return [
+    { battingSide: team1.battingSide, runs: chaseTarget(state) - 1, balls: chase.ballsLimit },
+    { battingSide: chase.battingSide, runs: chase.runs, balls: credited(chase) },
+  ];
+}
+
 /** Cricket's ledger keys (`cricket.metrics`); the first five are the NRR operands and the run difference. */
 const CRICKET_LEDGER_KEYS = ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff", "run_diff", "ties", "no_results"] as const;
 const CRICKET_NRR_KEYS = ["runs_for", "balls_faced_eff", "runs_against", "balls_bowled_eff", "run_diff"] as const;
@@ -3940,27 +4002,21 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
   // spec §2.4/§2.6 — integer NRR ledger; NRR itself is computed at rank time
   // from these integers (never stored as a float).
   standingsDelta(outcome, cfg, _ctx: StageCtx, state): [StandingsDelta, StandingsDelta] {
-    const allOutFor = (side: Side) => allOutWickets(state, side);
-    // spec §2.4 — a bowled-out side is charged its full quota; DLS-revised
-    // matches use the revised quota (the innings' ballsLimit at close).
-    const effectiveBalls = (innings: InningsState): number => {
-      if (innings.ballsLimit !== null && innings.wickets >= allOutFor(innings.battingSide)) {
-        return innings.ballsLimit;
-      }
-      return innings.legalBalls;
-    };
+    // spec §2.4 — a bowled-out side is charged its full quota; W2e T8 (CK-RR-1) — a DLS or revised-overs match credits
+    // ICC 16.10.7's operands. Both are `nrrCredits`'.
+    const credits = nrrCredits(state);
     const ledger = (side: Side): Record<string, number> => {
       let runsFor = 0;
       let ballsFaced = 0;
       let runsAgainst = 0;
       let ballsBowled = 0;
-      for (const innings of state.innings) {
-        if (innings.battingSide === side) {
-          runsFor += innings.runs;
-          ballsFaced += effectiveBalls(innings);
+      for (const credit of credits) {
+        if (credit.battingSide === side) {
+          runsFor += credit.runs;
+          ballsFaced += credit.balls;
         } else {
-          runsAgainst += innings.runs;
-          ballsBowled += effectiveBalls(innings);
+          runsAgainst += credit.runs;
+          ballsBowled += credit.balls;
         }
       }
       return {

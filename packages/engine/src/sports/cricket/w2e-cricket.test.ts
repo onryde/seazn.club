@@ -7,14 +7,21 @@
 // aggregate lead; a DLS target is the engine's own Standard Edition declaration (`state.revisedTarget`, not under test).
 //
 // single-sport: a chase and its target exist only in cricket's innings model; no other sport records a coarse total to bound.
+//
+// W2e Task 8 (A1c-3, SC-C5 / RB2A-20, D18) — CK-RR-1: net run rate for a DLS or revised-overs match follows ICC 16.10.7,
+// for every cricket match (the last describe below).
 import { describe, expect, it } from "vitest";
+import { derivedMetricText } from "../../competition/display.ts";
+import { foldResults } from "../../competition/standings.ts";
+import { rankStandings } from "../../competition/tiebreakers.ts";
 import { EngineError } from "../../core/errors.ts";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
-import type { LineupPair } from "../../core/types.ts";
+import type { LineupPair, StandingsDelta } from "../../core/types.ts";
 import { resolvePositions } from "../../sport/catalog.ts";
 import { declaredCfgs } from "../../testkit/declared-cfgs.ts";
-import { buildWalk, defaultLineupPair, makeEnvelope } from "../../testkit/helpers.ts";
+import { buildWalk, defaultLineupPair, lineupFromCatalog, makeEnvelope } from "../../testkit/helpers.ts";
 import { cricket, type CricketCfg, type CricketState } from "./cricket.ts";
+import { dlsPar, dlsTarget } from "./dls.ts";
 
 /** RBS:433 — a no-ball (1) plus a six (6) off the last needed run. */
 const LAST_BALL_MAX = 1 + 6;
@@ -245,5 +252,401 @@ describe("CK-CH-1 chase overshoot (RB2A-22, SC-C4)", () => {
     expect(checked, "coarse chase summaries checked").toBeGreaterThan(0);
     expect(reachedTarget, "coarse chases that reached the target (the bound's edge)").toBeGreaterThan(0);
     expect(dlsTargets, "coarse chases against a DLS target").toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2e Task 8 (A1c-3; RB2A-20, SC-C5; D18) — CK-RR-1: NRR for a DLS or revised-overs match follows ICC 16.10.7.
+//
+// ICC Men's T20 World Cup 2026 Playing Conditions 16.10.7 (a0-findings A0.3, verbatim): "Where a match is abandoned but a
+// result is achieved under Duckworth/Lewis/Stern, for net run rate purposes Team 1 will be credited with Team 2's Par Score
+// on abandonment off the same number of overs faced by Team 2. Where a match is concluded with Duckworth/Lewis/Stern having
+// been applied at an earlier point in the match, Team 1 will be credited with 1 run less than the final Target Score for
+// Team 2 off the total number of overs allocated to Team 2 to reach the target." And of every innings: "In the event of a
+// team being all out in less than its full quota of overs, the calculation of its net run rate shall be based on the full
+// quota of overs to which it would have been entitled". A0.3's table reads "DLS or revised overs applied earlier" as one case.
+//
+// The four operands (A0.3), per side: runs for and balls faced are the side's own credit; runs against and balls bowled are
+// the opponent's. Every expected credit below is typed from that text with its arithmetic beside it. Targets and pars come
+// from the published D/L Standard Edition resource table (dls.ts; cricket.test.ts "reads the published resource table
+// exactly" pins the reads used here), cross-checked against the engine's own declarations `dlsTarget` / `dlsPar`. Nothing is
+// read back from `standingsDelta`.
+//
+// single-sport: net run rate, DLS and revised overs exist only in cricket.
+// ---------------------------------------------------------------------------
+
+const T20 = parse(cricket.variants.t20);
+const T20_DLS = parse({ ...cricket.variants.t20, dls: { enabled: true, edition: "standard" } });
+const ODI_DLS = parse({ ...cricket.variants.odi, dls: { enabled: true, edition: "standard" } });
+const LEAGUE = { kind: "league" } as const;
+
+/** One side's NRR credit for the match: the runs it is credited with, and the balls it is credited off. */
+interface Credit {
+  readonly runs: number;
+  readonly balls: number;
+}
+/** A0.3: a side's runs for / balls faced are its own credit; its runs against / balls bowled are the opponent's. */
+function operands(home: Credit, away: Credit): [Record<string, number>, Record<string, number>] {
+  return [
+    { runs_for: home.runs, balls_faced_eff: home.balls, runs_against: away.runs, balls_bowled_eff: away.balls, run_diff: home.runs - away.runs },
+    { runs_for: away.runs, balls_faced_eff: away.balls, runs_against: home.runs, balls_bowled_eff: home.balls, run_diff: away.runs - home.runs },
+  ];
+}
+
+interface NrrCase {
+  readonly name: string;
+  readonly cfg: CricketCfg;
+  readonly events: readonly Spec[];
+  /** Premise: what the fold decided, so the case is the scenario its comment describes. */
+  readonly outcome: { readonly kind: string; readonly winner?: string; readonly method?: string };
+  readonly margin?: { readonly kind: string; readonly value: number } | null;
+  /** ICC 16.10.7's credit, [home, away]. */
+  readonly credit: readonly [Credit, Credit];
+  /** The innings as played (the pre-W2e ledger), typed: a case whose ICC credit equals it witnesses nothing. */
+  readonly played?: readonly [Credit, Credit];
+}
+
+/** Folds the case on the write path and returns its outcome and the module's own delta pair (the real producer). */
+function foldCase(c: Pick<NrrCase, "cfg" | "events">): { state: CricketState; pair: readonly [StandingsDelta, StandingsDelta] } {
+  const state = foldMatch(cricket, c.cfg, lineupsFor(c.cfg), ledger(c.events), STRICT_ALL);
+  const outcome = cricket.outcome(state);
+  if (outcome === null) throw new Error("the case decided nothing");
+  return { state, pair: cricket.standingsDelta(outcome, c.cfg, LEAGUE, state) };
+}
+
+function checkCases(cases: readonly NrrCase[]): number {
+  let checked = 0;
+  for (const c of cases) {
+    const { state, pair } = foldCase(c);
+    expect(cricket.outcome(state), `${c.name}: premise, the result`).toMatchObject(c.outcome);
+    if (c.margin !== undefined) expect(state.margin, `${c.name}: premise, the margin`).toEqual(c.margin);
+    const [home, away] = operands(...c.credit);
+    expect(pair[0].metrics, `${c.name}: home`).toMatchObject(home);
+    expect(pair[1].metrics, `${c.name}: away`).toMatchObject(away);
+    if (c.played !== undefined) {
+      expect(operands(...c.played), `${c.name}: premise, ICC's credit is not the innings as played`).not.toEqual(operands(...c.credit));
+    }
+    checked++;
+  }
+  return checked;
+}
+
+/** ODI, DLS on: Team 1 (whoever bats first) 250/5 off its 50 overs. R1 = res(50 overs, 0 down) = 100. */
+const ODI_250: Spec[] = [["core.start"], summary(250, 5, 300)];
+/** Between the innings the chase is cut to 25 overs: R2 = res(25, 0) = 66.5, T = ⌊250 × 66.5/100⌋ + 1 = ⌊166.25⌋ + 1 = 167. */
+const CUT_TO_25: Spec = ["cricket.revise", { oversPerSide: 25 }];
+const TARGET_25 = 167;
+/** T20, DLS on, no revision: Team 1 160/7 off its 20 overs. R1 = R2 = res(20, 0) = 56.6. */
+const T20_160: Spec[] = [["core.start"], summary(160, 7, 120)];
+const R20 = 56.6;
+const ABANDON: Spec = ["core.abandon", { reason: "rain" }];
+const AWAY_BATS: Spec = ["cricket.toss", { wonBy: "A", elected: "bat" }];
+
+describe("CK-RR-1 net run rate under DLS or revised overs (ICC 16.10.7, RB2A-20, SC-C5)", () => {
+  it("CK-RR-1 DLS applied earlier: Team 1 is credited target−1 off Team 2's allocated overs", () => {
+    // The engine's declaration agrees with the table arithmetic for every target typed below.
+    expect(dlsTarget(250, 100, 66.5)).toBe(TARGET_25);
+    expect(dlsTarget(250, 100, 89.3), "the first revision of the second-revision case").toBe(224);
+    expect(dlsTarget(250, 100, 67.7), "its final target").toBe(170);
+    const cases: NrrCase[] = [
+      {
+        // A chases 167 in 25 overs and gets there off 140 balls. H is credited 167 − 1 = 166 off 25 overs (150 balls).
+        name: "chase cut to 25 overs, target reached",
+        cfg: ODI_DLS,
+        events: [...ODI_250, CUT_TO_25, summary(167, 3, 140)],
+        outcome: { kind: "win", winner: "A", method: "dls" },
+        margin: { kind: "wickets", value: 7 },
+        credit: [{ runs: TARGET_25 - 1, balls: 25 * 6 }, { runs: 167, balls: 140 }],
+        played: [{ runs: 250, balls: 300 }, { runs: 167, balls: 140 }],
+      },
+      {
+        // A is all out for 120 off 130 balls: it is charged its full ALLOCATED quota, the revised 25 overs (150 balls).
+        // H wins by 167 − 1 − 120 = 46 runs.
+        name: "the chase all out short of a revised target",
+        cfg: ODI_DLS,
+        events: [...ODI_250, CUT_TO_25, summary(120, 10, 130)],
+        outcome: { kind: "win", winner: "H", method: "dls" },
+        margin: { kind: "runs", value: 46 },
+        credit: [{ runs: TARGET_25 - 1, balls: 150 }, { runs: 120, balls: 150 }],
+        played: [{ runs: 250, balls: 300 }, { runs: 120, balls: 150 }],
+      },
+      {
+        // A ends its 25 overs on 166 = target − 1: a tie, which is a result. Both credited 166 off 150.
+        name: "a tie on a revised target",
+        cfg: ODI_DLS,
+        events: [...ODI_250, CUT_TO_25, summary(166, 5, 150)],
+        outcome: { kind: "tie" },
+        credit: [{ runs: TARGET_25 - 1, balls: 150 }, { runs: 166, balls: 150 }],
+        played: [{ runs: 250, balls: 300 }, { runs: 166, balls: 150 }],
+      },
+      {
+        // A second revision, mid-chase. First: chase cut to 40 overs, R2 = res(40, 0) = 89.3, T = ⌊250 × 0.893⌋ + 1 = 224.
+        // At 100/2 after 20 overs it is cut to 30: R2 loses res(20 left, 2 down) − res(10 left, 2 down) = 52.4 − 30.8 = 21.6,
+        // so R2 = 67.7 and T = ⌊250 × 0.677⌋ + 1 = ⌊169.25⌋ + 1 = 170. The FINAL target and allocation count: H is credited
+        // 169 off 30 overs (180 balls), not the first revision's 223 off 240.
+        name: "a second DLS revision mid-chase",
+        cfg: ODI_DLS,
+        events: [
+          ...ODI_250,
+          ["cricket.revise", { oversPerSide: 40 }],
+          summary(100, 2, 120, true),
+          ["cricket.revise", { oversPerSide: 30 }],
+          summary(170, 4, 170),
+        ],
+        outcome: { kind: "win", winner: "A", method: "dls" },
+        margin: { kind: "wickets", value: 6 },
+        credit: [{ runs: 170 - 1, balls: 30 * 6 }, { runs: 170, balls: 170 }],
+        played: [{ runs: 250, balls: 300 }, { runs: 170, balls: 170 }],
+      },
+      {
+        // The other chase side: A wins the toss and bats, so A is Team 1 and H chases the same 167 in 25 overs.
+        name: "home chases (away bats first)",
+        cfg: ODI_DLS,
+        events: [AWAY_BATS, ...ODI_250, CUT_TO_25, summary(167, 3, 140)],
+        outcome: { kind: "win", winner: "H", method: "dls" },
+        margin: { kind: "wickets", value: 7 },
+        credit: [{ runs: 167, balls: 140 }, { runs: TARGET_25 - 1, balls: 150 }],
+        played: [{ runs: 167, balls: 140 }, { runs: 250, balls: 300 }],
+      },
+      {
+        // The umpire's number is the final target (`revise.target`, method "dls"): T = 180 in 25 overs. H: 179 off 150.
+        name: "an umpire's manual target",
+        cfg: ODI_DLS,
+        events: [...ODI_250, ["cricket.revise", { oversPerSide: 25, target: 180 }], summary(181, 4, 140)],
+        outcome: { kind: "win", winner: "A", method: "dls" },
+        margin: { kind: "wickets", value: 6 },
+        credit: [{ runs: 180 - 1, balls: 150 }, { runs: 181, balls: 140 }],
+        played: [{ runs: 250, balls: 300 }, { runs: 181, balls: 140 }],
+      },
+      {
+        // The umpire revises the target alone (240), A's 50 overs untouched: H is credited 239 off A's 300 allocated balls.
+        // The one case here whose allocation is NOT revised, so only the revised target says DLS was applied.
+        name: "an umpire's target, overs unchanged",
+        cfg: ODI_DLS,
+        events: [...ODI_250, ["cricket.revise", { target: 240 }], summary(240, 5, 280)],
+        outcome: { kind: "win", winner: "A", method: "dls" },
+        margin: { kind: "wickets", value: 5 },
+        credit: [{ runs: 240 - 1, balls: 50 * 6 }, { runs: 240, balls: 280 }],
+        played: [{ runs: 250, balls: 300 }, { runs: 240, balls: 280 }],
+      },
+      {
+        // Revised overs with DLS off (A0.3: "DLS or revised overs applied earlier"): the target stays 160 + 1, and A's
+        // allocation is the revised 15 overs (90 balls). A is all out for 150 off 80: charged its 90. H wins by 10 runs and
+        // is credited 161 − 1 = 160 off A's 90 balls, not its own 120.
+        name: "revised overs with DLS off",
+        cfg: T20,
+        events: [["core.start"], summary(160, 6, 120), ["cricket.revise", { oversPerSide: 15 }], summary(150, 10, 80)],
+        outcome: { kind: "win", winner: "H", method: "regulation" },
+        margin: { kind: "runs", value: 10 },
+        credit: [{ runs: 161 - 1, balls: 15 * 6 }, { runs: 150, balls: 90 }],
+        played: [{ runs: 160, balls: 120 }, { runs: 150, balls: 90 }],
+      },
+    ];
+    const checked = checkCases(cases);
+    // eslint-disable-next-line no-console -- TEST-STRATEGY anti-vacuity: the sweep reports what it checked
+    console.info(`CK-RR-1 DLS applied earlier: ${checked} matches checked`);
+    expect(checked).toBe(cases.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("CK-RR-1 DLS at abandonment: Team 1 is credited Team 2's par off Team 2's overs faced", () => {
+    // Pars, from the table: at 10 overs (60 balls) faced with 2 down res(10 left, 2) = 30.8 remains, so 56.6 − 30.8 = 25.8 is
+    // used and par = ⌊160 × 25.8/56.6⌋ = ⌊72.93⌋ = 72; with 3 down res(10, 3) = 29.8 remains, 26.8 used, par = ⌊75.76⌋ = 75.
+    // ODI (the R2 > R1 case of cricket.test.ts): R1 = 100 − (res(20, 2) − res(10, 2)) = 78.4, R2 = res(40, 0) = 89.3; at 22 overs
+    // with 3 down res(18, 3) = 45.9 remains, 43.4 used, par = ⌊(217 − 1) × 43.4/89.3⌋ = ⌊104.98⌋ = 104.
+    expect(dlsPar(160, R20, R20, R20 - 30.8)).toBe(72);
+    expect(dlsPar(160, R20, R20, R20 - 29.8)).toBe(75);
+    expect(dlsPar(190, 78.4, 89.3, 89.3 - 45.9)).toBe(104);
+    const cases: NrrCase[] = [
+      {
+        // A 80/2 off 60 balls when play ends, par 72: A wins by 8 runs. H is credited 72 off the 60 balls A faced.
+        name: "chase ahead of par",
+        cfg: T20_DLS,
+        events: [...T20_160, summary(80, 2, 60, true), ABANDON],
+        outcome: { kind: "win", winner: "A", method: "dls" },
+        margin: { kind: "runs", value: 80 - 72 },
+        credit: [{ runs: 72, balls: 60 }, { runs: 80, balls: 60 }],
+        played: [{ runs: 160, balls: 120 }, { runs: 80, balls: 60 }],
+      },
+      {
+        // The other chase side, and Team 1 winning: A bats first; H is 60/3 off 60 balls against a par of 75, so A wins by 15.
+        name: "home chase behind par (away bats first)",
+        cfg: T20_DLS,
+        events: [AWAY_BATS, ...T20_160, summary(60, 3, 60, true), ABANDON],
+        outcome: { kind: "win", winner: "A", method: "dls" },
+        margin: { kind: "runs", value: 75 - 60 },
+        credit: [{ runs: 60, balls: 60 }, { runs: 75, balls: 60 }],
+        played: [{ runs: 60, balls: 60 }, { runs: 160, balls: 120 }],
+      },
+      {
+        // Level with par (72/2 off 60): a tie is a result, so it counts, both credited 72 off 60.
+        name: "level with par",
+        cfg: T20_DLS,
+        events: [...T20_160, summary(72, 2, 60, true), ABANDON],
+        outcome: { kind: "tie" },
+        credit: [{ runs: 72, balls: 60 }, { runs: 72, balls: 60 }],
+        played: [{ runs: 160, balls: 120 }, { runs: 72, balls: 60 }],
+      },
+      {
+        // DLS applied earlier AND abandoned: the abandonment clause governs. A 150/3 off 132 balls against par 104 wins by 46;
+        // H is credited 104 off 132, not the earlier-application credit of 217 − 1 = 216 off A's 40 overs (240 balls).
+        name: "abandoned after an earlier revision",
+        cfg: ODI_DLS,
+        events: [
+          ["core.start"],
+          summary(120, 2, 180, true),
+          ["cricket.revise", { oversPerSide: 40 }],
+          summary(190, 6, 240),
+          summary(150, 3, 132, true),
+          ABANDON,
+        ],
+        outcome: { kind: "win", winner: "A", method: "dls" },
+        margin: { kind: "runs", value: 150 - 104 },
+        credit: [{ runs: 104, balls: 132 }, { runs: 150, balls: 132 }],
+        played: [{ runs: 190, balls: 240 }, { runs: 150, balls: 132 }],
+      },
+    ];
+    const checked = checkCases(cases);
+    // The earlier-application credit is not what the abandoned match gets (the case above would pass it otherwise).
+    expect(operands({ runs: 216, balls: 240 }, { runs: 150, balls: 132 })).not.toEqual(operands(...cases[3]!.credit));
+    // eslint-disable-next-line no-console -- TEST-STRATEGY anti-vacuity: the sweep reports what it checked
+    console.info(`CK-RR-1 DLS at abandonment: ${checked} matches checked`);
+    expect(checked).toBe(cases.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("CK-RR-1 a non-DLS match's ledger is unchanged", () => {
+    // The positive pair: no DLS result and no revision in force, so every innings counts as played (an all-out side charged
+    // its full quota). Includes a revision and an abandonment that were VOIDED, and the empty case (no result: nothing).
+    const cases: NrrCase[] = [
+      {
+        // 180/4 off 20 overs beats 150 all out off 100 balls (charged its 120): cricket.test.ts golden (b).
+        name: "uninterrupted, DLS off",
+        cfg: T20,
+        events: [["core.start"], summary(180, 4, 120), summary(150, 10, 100)],
+        outcome: { kind: "win", winner: "H", method: "regulation" },
+        margin: { kind: "runs", value: 30 },
+        credit: [{ runs: 180, balls: 120 }, { runs: 150, balls: 120 }],
+      },
+      {
+        name: "uninterrupted, DLS on but never applied",
+        cfg: T20_DLS,
+        events: [["core.start"], summary(180, 4, 120), summary(150, 10, 100)],
+        outcome: { kind: "win", winner: "H", method: "regulation" },
+        margin: { kind: "runs", value: 30 },
+        credit: [{ runs: 180, balls: 120 }, { runs: 150, balls: 120 }],
+      },
+      {
+        // The cut to 25 overs is voided: the target is 251 in 50 overs again, A all out for 200 off 280 (charged 300).
+        name: "the revision voided",
+        cfg: ODI_DLS,
+        events: [...ODI_250, CUT_TO_25, ["core.void", {}, "e-2"], summary(200, 10, 280)],
+        outcome: { kind: "win", winner: "H", method: "regulation" },
+        margin: { kind: "runs", value: 50 },
+        credit: [{ runs: 250, balls: 300 }, { runs: 200, balls: 300 }],
+      },
+      {
+        // The abandonment is voided and play resumes: A finishes 150/8 off its 20 overs, H wins by 10.
+        name: "the abandonment voided",
+        cfg: T20_DLS,
+        events: [...T20_160, summary(80, 2, 60, true), ABANDON, ["core.void", {}, "e-3"], summary(150, 8, 120)],
+        outcome: { kind: "win", winner: "H", method: "regulation" },
+        margin: { kind: "runs", value: 10 },
+        credit: [{ runs: 160, balls: 120 }, { runs: 150, balls: 120 }],
+      },
+      {
+        // Two innings a side, no over limit (CK-RR-2's timeless innings): balls as faced. H 141 & 65, A 86 & 100.
+        name: "two innings a side",
+        cfg: TWO_INNINGS,
+        events: [["core.start"], summary(141, 10, 364), summary(86, 10, 53), summary(65, 10, 428), summary(100, 10, 135)],
+        outcome: { kind: "win", winner: "H", method: "regulation" },
+        credit: [{ runs: 141 + 65, balls: 364 + 428 }, { runs: 86 + 100, balls: 53 + 135 }],
+      },
+    ];
+    const checked = checkCases(cases);
+    // The empty case: abandoned below the 5-over minimum is no result, which counts for nothing (16.10.7: "Only those
+    // matches where results are achieved will count").
+    const washout = foldCase({ cfg: T20_DLS, events: [...T20_160, summary(20, 1, 24, true), ABANDON] });
+    expect(cricket.outcome(washout.state)).toEqual({ kind: "no_result" });
+    for (const side of washout.pair) expect(side.metrics).toMatchObject({ ...operands({ runs: 0, balls: 0 }, { runs: 0, balls: 0 })[0], no_results: 1 });
+    // eslint-disable-next-line no-console -- TEST-STRATEGY anti-vacuity: the sweep reports what it checked
+    console.info(`CK-RR-1 non-DLS: ${checked} matches checked, plus the no-result`);
+    expect(checked).toBe(cases.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("CK-RR-1 an open chase the DLS par did not decide is credited as played", () => {
+    // The abandonment credit needs a par: DLS on, a quota, and the minimum overs faced (the same premises the fold decides
+    // by). A chase still open with none of that was not decided by DLS, so its innings count as played. The fold never hands
+    // such a state a result; the delta is asked directly, with a tie, to reach the branch.
+    const states: { name: string; cfg: CricketCfg; events: Spec[]; credit: [Credit, Credit] }[] = [
+      { name: "DLS off", cfg: T20, events: [...T20_160, summary(80, 2, 60, true)], credit: [{ runs: 160, balls: 120 }, { runs: 80, balls: 60 }] },
+      {
+        name: "below the minimum overs",
+        cfg: T20_DLS,
+        events: [...T20_160, summary(20, 1, 24, true)],
+        credit: [{ runs: 160, balls: 120 }, { runs: 20, balls: 24 }],
+      },
+    ];
+    let checked = 0;
+    for (const { name, cfg, events, credit } of states) {
+      const state = foldMatch(cricket, cfg, lineupsFor(cfg), ledger(events), STRICT_ALL);
+      expect(state.innings[1]?.closed, `${name}: premise, the chase is open`).toBe(false);
+      const [home, away] = cricket.standingsDelta({ kind: "tie" }, cfg, LEAGUE, state);
+      const [wantHome, wantAway] = operands(...credit);
+      expect(home.metrics, `${name}: home`).toMatchObject(wantHome);
+      expect(away.metrics, `${name}: away`).toMatchObject(wantAway);
+      checked++;
+    }
+    expect(checked).toBe(states.length);
+  });
+
+  it("CK-RR-1 a table with a DLS match orders by the ICC NRR", () => {
+    // ODI, DLS on. Q (home) 250/5 v P: the chase is cut to 25 overs (target 167) and P gets there, 167/3 off 140 balls.
+    // R (home) 200/7 off 50 overs v S, all out for 150 off 280 balls (charged 300): R by 50 runs.
+    // ICC NRR per over (runs × 6 / balls):
+    //   P: 167×6/140 − 166×6/150 = 7.157 − 6.640 = +0.517     R: 200×6/300 − 150×6/300 = +1.000
+    //   Q: 166×6/150 − 167×6/140 = −0.517                      S: −1.000
+    // Points (2 a win) and wins put P level with R and Q level with S, so NRR orders R, P, Q, S.
+    // Credited as played (Q 250 off 300): P 7.157 − 5.000 = +2.157 passes R, and S passes Q — P, R, S, Q, the wrong table.
+    const positions = resolvePositions(cricket, ODI_DLS);
+    const fixture = (home: string, away: string, events: readonly Spec[]): readonly [StandingsDelta, StandingsDelta] => {
+      const lineups: LineupPair = { home: lineupFromCatalog(positions, home), away: lineupFromCatalog(positions, away) };
+      const state = foldMatch(cricket, ODI_DLS, lineups, ledger(events), STRICT_ALL);
+      const outcome = cricket.outcome(state);
+      if (outcome === null) throw new Error(`${home} v ${away} decided nothing`);
+      return cricket.standingsDelta(outcome, ODI_DLS, LEAGUE, state);
+    };
+    const results = [
+      fixture("Q", "P", [...ODI_250, CUT_TO_25, summary(167, 3, 140)]),
+      fixture("R", "S", [["core.start"], summary(200, 7, 300), summary(150, 10, 280)]),
+    ];
+    const cascade = cricket.defaultTiebreakers("league", ODI_DLS);
+    expect(cascade.slice(0, 3), "premise: cricket's league order reaches NRR third").toEqual(["points", "wins", "nrr"]);
+    const ranked = rankStandings(foldResults(["P", "Q", "R", "S"], results), { cascade, results }).rows;
+    expect(ranked.map((row) => [row.entrantId, row.points, row.won, row.tieBreak?.key])).toEqual([
+      ["R", 2, 1, "nrr"],
+      ["P", 2, 1, "nrr"],
+      ["Q", 0, 0, "nrr"],
+      ["S", 0, 0, "nrr"],
+    ]);
+    // What the table prints (display.ts, per six-ball over).
+    expect(ranked.map((row) => derivedMetricText(row, "nrr"))).toEqual(["+1.000", "+0.517", "-0.517", "-1.000"]);
+    // The wrong one's constant: the same two matches with Q credited its innings as played rank P, R, S, Q.
+    const row = (id: string, won: number, credit: [Credit, Credit]): StandingsDelta => ({
+      entrantId: id,
+      played: 1,
+      won,
+      drawn: 0,
+      lost: 1 - won,
+      points: 2 * won,
+      metrics: operands(...credit)[0],
+    });
+    const asPlayed = [
+      [row("Q", 0, [{ runs: 250, balls: 300 }, { runs: 167, balls: 140 }]), row("P", 1, [{ runs: 167, balls: 140 }, { runs: 250, balls: 300 }])],
+      [row("R", 1, [{ runs: 200, balls: 300 }, { runs: 150, balls: 300 }]), row("S", 0, [{ runs: 150, balls: 300 }, { runs: 200, balls: 300 }])],
+    ] as const;
+    const wrong = rankStandings(foldResults(["P", "Q", "R", "S"], asPlayed), { cascade, results: asPlayed }).rows;
+    expect(wrong.map((r) => r.entrantId)).toEqual(["P", "R", "S", "Q"]);
   });
 });
