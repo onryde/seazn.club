@@ -227,7 +227,9 @@ describe("walkToDecision — a match-ending sanction is redrawn like the forfeit
     expect([...declaring].sort()).toEqual(["badminton", "tennis"]);
   });
 
-  it.each(["badminton", "tennis"])(
+  // The sports come from `declaring` (the modules' own declarations); the premise above pins it non-empty, so the sweep
+  // below cannot silently run over no sport.
+  it.each(declaring)(
     "%s: every seeded walk decides by play with no ending card in it, and some walk was OFFERED one (anti-vacuity)",
     (sportKey) => {
       const real = resolveLatestModule(sportKey);
@@ -257,7 +259,6 @@ describe("walkToDecision — a match-ending sanction is redrawn like the forfeit
         expect(played.filter(isEnding), `${sportKey} seed ${seed}: an ending card was applied`).toEqual([]);
         expect(played.filter((e) => e.type.startsWith("core.") && e.type !== "core.start"), `${sportKey} seed ${seed}`).toEqual([]);
       }
-      console.log(`${sportKey}: ${walks} walks, ${walksOffered} offered an ending card, ${offered} cards redrawn`);
       expect(walks).toBe(SEEDS.length);
       expect(walksOffered, `${sportKey}: no seed drew a ${decl.endLevels.join("/")} card — the sweep proved nothing`).toBeGreaterThan(0);
     },
