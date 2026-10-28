@@ -29,7 +29,9 @@ alter table youtube_broadcasts
 -- made when Go live admits the start; a restart makes a later row), ties broken by id so the numbering is stable.
 --
 -- A broadcast that is PRIVATE on YouTube is not a part the public can see (owner ruling 2026-10-28, option A): its facade would be a
--- dead tap and its link "This video is private". The filter is the BROADCAST ROW's own `privacy` (stored when Go live made it), never
+-- dead tap and its link "This video is private". The filter is an ALLOW-LIST (`privacy in ('unlisted', 'public')`), not an exclusion
+-- of 'private': a privacy value added later (the check constraint would have to widen first) stays hidden from the public until
+-- someone lists it here - the filter fails closed. It reads the BROADCAST ROW's own `privacy` (stored when Go live made it), never
 -- the channel's current default, so a channel switched to private later does not hide an unlisted match and one switched to unlisted
 -- does not publish a private one. The numbering runs over the rows that remain (the filter is in the WHERE, ahead of the window), so
 -- the public numbers what it shows: Part 1 unlisted + Part 2 private is ONE part, number 1, and the match page labels none. The
@@ -50,6 +52,13 @@ create or replace view public_fixture_youtube_parts_v as
   join divisions d    on d.id = f.division_id
   join competitions c on c.id = d.competition_id
   where b.state = 'complete'
-    and b.privacy <> 'private'
+    and b.privacy in ('unlisted', 'public')
     and d.status <> 'setup'
     and c.visibility in ('public', 'unlisted');
+
+-- The index V479 made for the parts list is described there as "a fixture's complete broadcasts in completion order". That was the
+-- ordering until this delta: parts are now numbered by START (created_at, id), on this view and on the organiser's read. V479 is
+-- merged, so its comment cannot be edited; the database's own description of the index is corrected here. The index itself is left:
+-- it still narrows the scan to one fixture's complete rows, and the per-fixture sort over a handful of rows needs no index.
+comment on index youtube_broadcasts_parts_idx is
+  'A fixture''s complete broadcasts (the parts list): narrows to one fixture''s complete rows; the order of the parts is created_at, id (V480), not completed_at.';

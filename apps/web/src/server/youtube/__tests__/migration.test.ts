@@ -700,6 +700,20 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
     expect(cols.map((x) => x.column_name)).toEqual(["fixture_id", "video_id", "part_no", "completed_at"]);
   });
 
+  it("the parts view's privacy filter is an ALLOW-LIST: it admits exactly the privacies the check constraint declares except 'private' - so a privacy added later is hidden until someone lists it", async () => {
+    // Both sides are read from the database's own declarations (the constraint and the view definition), never typed here.
+    const [con] = await sql<{ def: string }[]>`select pg_get_constraintdef(oid) as def from pg_constraint where conname = 'youtube_broadcasts_privacy_check'`;
+    const declared = [...con!.def.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]!);
+    expect(declared, "premise: the constraint declares the three values, private among them").toContain("private");
+    expect(declared.length).toBeGreaterThanOrEqual(3);
+    const [view] = await sql<{ def: string }[]>`select pg_get_viewdef('public_fixture_youtube_parts_v'::regclass) as def`;
+    const list = /\bprivacy\s*=\s*ANY\s*\(\s*\(?ARRAY\[([^\]]*)\]/.exec(view!.def);
+    expect(list, `the view lists the privacies it admits (an allow-list, not an exclusion):\n${view!.def}`).not.toBeNull();
+    const admitted = [...list![1]!.matchAll(/'([a-z_]+)'::text/g)].map((m) => m[1]!);
+    expect([...admitted].sort()).toEqual(declared.filter((v) => v !== "private").sort());
+    expect(view!.def, "and it never names the one it hides as an exclusion").not.toMatch(/privacy\s*(<>|!=)/);
+  });
+
   // ---- sealed, not granted ------------------------------------------------------------------------------------------------------
   it("every new table is RLS enabled AND forced with no policy; neither the tables nor the parts view are granted to app_user", async () => {
     const rows = await sql<{ relname: string; rls: boolean; forced: boolean; policies: number }[]>`
