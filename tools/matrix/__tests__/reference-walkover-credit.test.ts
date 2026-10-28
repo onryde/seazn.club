@@ -471,10 +471,10 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
       expect(code, `${i.label}: the engine`).toBe("FORFEIT_REASON_WRONG_PHASE");
       bothRefused++;
     }
-    expect(bothRefused).toBe(40 * 2); // 44 cfg entries less chess's 4, × 2 seats
+    expect(bothRefused).toBe(41 * 2); // 45 cfg entries less chess's 4, × 2 seats
     const s = sweep(items.filter((x) => !refusedHere(x)));
     // The counts first, so a red sweep still says how much it compared.
-    expect(s.compared).toBe(44 * 2 * 2 + 4 * 2); // 44 cfg entries (41 declared + 3 named extras) × 2 reasons × 2 seats, and chess's 4 retirements × 2 seats
+    expect(s.compared).toBe(45 * 2 * 2 + 4 * 2); // 45 cfg entries (43 declared + 2 named extras) × 2 reasons × 2 seats, and chess's 4 retirements × 2 seats
     expect(s.sports.size).toBe(11);
     expectAgreement(s, "the empty scoresheet");
     // Ruling 115 (X-PS-1): nothing played, so neither side counts a match in players' stats — the disqualification as
@@ -488,14 +488,14 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
       expect(typeof eng === "string" ? eng : eng.statsMatch, `${i.label}: the engine`).toBe(want);
       counts[want ? "chessGame" : "notAMatch"]++;
     }
-    expect(counts).toEqual({ notAMatch: (44 - 4) * 2 * 2, chessGame: 4 * 3 * 2 }); // chess: retired, disqualified, withdrew × 2 seats
+    expect(counts).toEqual({ notAMatch: (45 - 4) * 2 * 2, chessGame: 4 * 3 * 2 }); // chess: retired, disqualified, withdrew × 2 seats
   });
 
-  it("X-WO-1, X-RT-1, X-WD-1, X-DW-1, X-DW-4, X-PS-1, X-PS-2 and every sport's WO/RT row: all 212 enumerated cases agree with the engine — the credited metrics, the excluded keys, the table points and players' stats; a case with no scoresheet both seats", () => {
-    // the family's own count (walkover-credit.test.ts): 55 base + 158 variants, less the one retirement ruling 113
+  it("X-WO-1, X-RT-1, X-WD-1, X-DW-1, X-DW-4, X-PS-1, X-PS-2 and every sport's WO/RT row: all 215 enumerated cases agree with the engine — the credited metrics, the excluded keys, the table points and players' stats; a case with no scoresheet both seats", () => {
+    // the family's own count (walkover-credit.test.ts): 55 base + 161 variants, less the one retirement ruling 113
     // refuses (generic's untouched win/loss tally; chess's empty sheet is its Start, which is play — ruling 118). R112
     // fix round 2 (m3): generic's win/loss tally scenario (GN-RT-1 keeps it) adds three cases with a scoresheet.
-    expect(CASES.length).toBe(212);
+    expect(CASES.length).toBe(215);
     const { items, unbuildable } = itemsOrUnbuildable(CASES);
     expect(unbuildable, "a scoresheet the cross-check could not rebuild as events is a failing item").toEqual([]);
     const s = sweep(items);
@@ -503,7 +503,7 @@ describe("walkover-credit ↔ the engine (W2b Task 15 Step 3, PF-12): every enum
     // forfeit has no scoresheet (both seats): counted from the enumeration.
     const owed = CASES.reduce((n, c) => n + (c.played === undefined && c.reason !== "double_walkover" ? 2 : 1), 0);
     expect(s.compared).toBe(owed);
-    expect(owed).toBe(300); // 88 sheetless single forfeits × 2 + 44 double walkovers + 80 with a scoresheet
+    expect(owed).toBe(305); // 90 sheetless single forfeits × 2 + 45 double walkovers + 80 with a scoresheet
     expect(s.sports.size).toBe(11);
     // Every reason is reached where X-RS-1 records it: a walkover and a double walkover before the start, retired and
     // disqualified after it, withdrew either side of it (PF-7).

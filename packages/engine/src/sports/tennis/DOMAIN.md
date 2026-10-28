@@ -18,9 +18,12 @@ points → games → sets, the only kernel in the engine with a game layer).
   games;
 - `grand-slam` — best of 5, the deciding set plays normally but its tie-break at
   6–6 runs to 10;
-- `fast4` — sets to 4 games, tie-break at 3–3 to 5, no-ad games;
+- `fast4` — sets to 4 games, tie-break at 3–3 to 5 with a deciding point at
+  4–4 (margin 1, W2e), no-ad games;
 - `doubles-noad-mtb10` — no-ad games and a 10-point **match tie-break** that
-  replaces the deciding set (the ITF doubles norm).
+  replaces the deciding set (the ITF doubles norm);
+- `short-sets` (W2e) — ITF App VI short sets: to 4 games by 2, tie-break at
+  4–4 to 5 with a deciding point at 4–4, advantage games.
 
 **Audited against:** the ITF *Rules of Tennis* (Rule 5 "score in a game",
 Rule 6 "score in a set", Rule 7 "score in a match", Rule 21 "the let",
@@ -41,8 +44,9 @@ ticks and the signature line.
 | Receiver's choice of side at the deciding point | fast4, doubles-noad-mtb10 | entrant | `Ev.Point.meta.receiverSide` | modelled | recorded for the record; ITF App VI. |
 | Games won inside a set | all | entrant | `State.games` | modelled | |
 | Set won at 6 games, by two | tour, grand-slam | entrant | `Cfg.set.gamesTo`, `Cfg.set.winBy` | modelled | |
-| Short sets to 4 | fast4 | entrant | `Cfg.set` (variant `fast4`) | modelled | ITF App VI. |
-| Tie-break game at 6–6 to 7, win by 2 | tour, grand-slam, fast4 | entrant | `Cfg.set.tiebreakAt`, `.tiebreakTo`, `Cfg.tiebreak.winBy` | modelled | `fast4` enters at 3–3 and plays to 5. |
+| Short sets to 4 | fast4, short-sets | entrant | `Cfg.set` (variants `fast4`, `short-sets`) | modelled | ITF App VI §1: `short-sets` plays the tie-break at 4–4 (5–3 is a set), `fast4` at 3–3 (§1's alternative; 5–3 cannot happen). |
+| Tie-break game at 6–6 to 7, win by 2 | tour, grand-slam, fast4, short-sets | entrant | `Cfg.set.tiebreakAt`, `.tiebreakTo`, `Cfg.set.tiebreakWinBy`, `Cfg.tiebreak.winBy` | modelled | `fast4` enters at 3–3 and `short-sets` at 4–4, both playing to 5. |
+| A set tie-break's own margin: App VI §2's short-set tie-break, first to 5 with a deciding point at 4–4 | fast4, short-sets | entrant | `Cfg.set.tiebreakWinBy` (optional, no default; absent reads `Cfg.tiebreak.winBy`) | modelled | W2e Task 5, rule TN-SS-2 (RB2A-12). The set tie-break closes at 5–4; the match tie-break keeps `tiebreak.winBy` (10–9 plays on). A summary's tie-break block must be a score the tie-break reaches from 0–0, so 6–5 is refused at a margin of 1 (it needs 5–5, which 5–4 or 4–5 ended); write path only. A Fast4 config stored before W2e has no key; Task 13b's migration writes it an explicit 2 (D18). |
 | Deciding-set tie-break to 10 at 6–6 | grand-slam | entrant | `Cfg.finalSet.tiebreakTo` | modelled | the real slam rule, not an approximation. |
 | Match tie-break replacing the deciding set | doubles-noad-mtb10 | entrant | `Cfg.finalSet.matchTiebreakTo` | modelled | banked as `ClosedSet.mtb`, printed `[10–7]`. |
 | Advantage (open-ended) final set | configurable | entrant | `Cfg.set.tiebreakAt = null` | modelled | no shipped variant uses it; the kernel supports it. |
@@ -81,7 +85,7 @@ ticks and the signature line.
 
 | Where in the match an event happened (the position axis) | all | — | `SportModule.position(state)` -> `set` + `game` + `points` segments, e.g. `Set 2 . Game 4 . 30-15` | extended | W4a T6b. A **read-side projection**, never a payload: a `MatchPosition` on every stamped event was considered this wave and rejected, because position is derivable from state the fold already computes and recording it would create a recorded value and a derived value of the same type that can silently disagree — the `DisciplineCard.entrantSide` shape. A wrong recorded value is in the hash-chained ledger forever; a wrong projection is one deploy away from fixed. Ordered segments rather than a display string, so W8 can drop a segment for a 375px scorebug, localise each `key` and order two positions in one match; `formatPosition` is the plain-text path. Nothing is materialised into state, so every frozen golden is byte-identical. The tie-break needs no special case: `State.games` is held at 6-6 through it, so it falls out as game 13 of the set. A MATCH tie-break replaces the final set and has no games, so the game segment is omitted rather than reported as a phantom `Game 1`. The point score deliberately carries NO ordinal — points played is not derivable from `GamePoints` past deuce, so `comparePosition` is told to stop at the game rather than handed an invented rank it would sort by. Once a set banks the kernel resets `games` and `points`, so a decided match reads its games off the set that was actually played and drops the points segment. |
 
-**Row counts:** 26 modelled, 12 extended, 7 deferred (45 rows).
+**Row counts:** 27 modelled, 12 extended, 7 deferred (46 rows).
 Asserted against the table itself by `src/testkit/dossiers.test.ts`.
 
 ## Downstream owed

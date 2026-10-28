@@ -152,6 +152,7 @@ export const WALKOVER_CREDIT_DATA: Readonly<Record<string, SportCreditData>> = {
       { name: "grand-slam", cfg: { bestOf: 5 }, source: "TN-WO-1: ITF Rule 7 best of five; ATP 4.01 C.4" },
       { name: "fast4", cfg: { bestOf: 3 }, source: "TN-WO-1: ITF App VI short sets, best of three" },
       { name: "doubles-noad-mtb10", cfg: { bestOf: 3 }, source: "TN-WO-1: ATP 4.02, a match tie-break counts as one set" },
+      { name: "short-sets", cfg: { bestOf: 3 }, source: "TN-WO-1: ITF App VI short sets (tie-break at four all), best of three" },
     ],
     played: [
       { name: "the side at fault leads 6-3 4-2 and retires (TN-RT-1: straight sets, games excluded)", cfg: "tour", home: [3, 2], away: [6, 4] },

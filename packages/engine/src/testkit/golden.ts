@@ -95,7 +95,7 @@ const SEED_SCAN = 500;
  *  lands in the corpus. */
 const SHORT_FALLBACK_SEEDS = 24;
 /** Cap on configs per module (default + named variants + EXTRA_CONFIGS). */
-const MAX_CONFIGS = 4;
+const MAX_CONFIGS = 5;
 
 /** Stage contexts standingsDelta is recorded under. */
 const STAGE_CTXS: StageCtx[] = [{ kind: "league" }, { kind: "knockout" }];

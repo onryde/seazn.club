@@ -1,5 +1,6 @@
 // W2e Task 4 (spec 2026-10-28 §5.2, §5.5; D3 (1), D8, D13): a tennis `default` ends the match, and a set summary must be a
-// score a set can reach (rows TN-SE-1, TN-SS-1; X-SE-1 on the nested kernel).
+// score a set can reach (rows TN-SE-1, TN-SS-1; X-SE-1 on the nested kernel). W2e Task 5 (§5.5 RB2A-12, D8, D18): short sets
+// and a set tie-break with its own margin (row TN-SS-2).
 //
 // Expected values come from the rulebook and the rule rows, never from the code under test:
 //  - RBS = docs/superpowers/specs/2026-09-27-format-matrix-prompts/rulebook-W2-sets-cricket.md, §6.2's table of legal final
@@ -13,9 +14,18 @@
 //    match's games excluded from game %";
 //  - the spec's §5.2 table and D13: tennis's `default` ends the match, no tennis level only prompts; the scorer may send
 //    `core.forfeit{disqualified}` right after a default against the same player.
+//  - TN-SS-2 (Task 5): ITF Rules of Tennis 2026, App VI, as quoted verbatim in the W2e A0 findings (A0.2): "§1 SHORT SETS
+//    The first player/team to win four games wins the set, provided there is a margin of two games over the opponent(s).
+//    If the score reaches four games all, a tie-break game shall be played. Alternatively (...) if the score reaches three
+//    games all (...)"; "§2 SHORT SET TIE-BREAK (5 POINTS) (...) The first player/team to win five points wins the "Game"
+//    and "Set", with a deciding point if the score reaches four all." No-Ad is a separate alternative, so the four-all
+//    form plays ad games. RBS:345 "Short set, TB at 4-all | 4–0 … 4–2; 5–3; **5–4** with TB"; RBS:347 "Short-set TB |
+//    first to 5 with a deciding point at 4-all: 5–0 … **5–4**"; RBS:339 "Tie-break game to 7 with a two-point lead (5b)";
+//    RBS:348 "Match tie-break (…) to 10: 10–0 … 10–8, n–(n−2) n ≥ 11".
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../../core/errors.ts";
 import { foldMatchWithStoppage, type EventEnvelope } from "../../core/events.ts";
+import { mulberry32 } from "../../core/rng.ts";
 import { lastLiveEvent, matchEndFacts, pendingEndingSanction, scorerMayForfeit } from "../../core/sanction-ending.ts";
 import type { ForfeitReason, LineupPair } from "../../core/types.ts";
 import type { PadSpec } from "../../sport/module.ts";
@@ -28,8 +38,11 @@ const H = lineups.home.entrantId;
 const A = lineups.away.entrantId;
 const other = (entrant: string): string => (entrant === H ? A : H);
 
-const cfgFor = (variant?: string, extra?: Record<string, unknown>): NestedCfg =>
-  tennis.configSchema.parse({ ...(variant === undefined ? {} : tennis.variants[variant]), ...(extra ?? {}) });
+const cfgFor = (variant?: string, extra?: Record<string, unknown>): NestedCfg => {
+  // A name the module does not declare would spread `undefined` and quietly test the tour default instead.
+  if (variant !== undefined && !Object.hasOwn(tennis.variants, variant)) throw new Error(`premise: tennis declares no "${variant}" variant`);
+  return tennis.configSchema.parse({ ...(variant === undefined ? {} : tennis.variants[variant]), ...(extra ?? {}) });
+};
 
 /** A ledger built one append at a time through the WRITE path: each new event folds strictly over the history before it
  *  (append-event.ts's shape), so an append the write path refuses throws here. */
@@ -119,7 +132,7 @@ const RBS_PLAIN_FINALS = [
   { row: "RBS:346 short set, TB at 3-all (Fast4)", cfg: () => cfgFor("fast4"), plainTo: [4, 2], deuce: [0, -1] },
 ] as const;
 
-function rbsPlainLegal(row: (typeof RBS_PLAIN_FINALS)[number]): Set<string> {
+function rbsPlainLegal(row: { readonly plainTo: readonly [number, number]; readonly deuce: readonly [number, number] }): Set<string> {
   const legal = new Set<string>();
   const add = (w: number, l: number) => legal.add(`${w}-${l}`).add(`${l}-${w}`);
   for (let lo = 0; lo <= row.plainTo[1]; lo++) add(row.plainTo[0], lo);
@@ -412,5 +425,280 @@ describe("TN-SE-1 a tennis default ends the match", () => {
       }
     }
     expect(checked).toBe(POSITIONS.length * 2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// TN-SS-2 — short sets, and a set tie-break with its own margin (RB2A-12; ITF App VI §1-2).
+// ---------------------------------------------------------------------------
+
+/** Awards games alternately, home first, until the set stands at `home`–`away`, each on the write path. */
+function gamesAt(l: Ledger, home: number, away: number): Ledger {
+  for (let g = 0; g < Math.max(home, away); g++) {
+    if (g < home) l.append("tennis.game.award", { winner: H });
+    if (g < away) l.append("tennis.game.award", { winner: A });
+  }
+  return l;
+}
+
+/** Tie-break points alternately, home first, up to `n`–`n`. */
+function tbPointsAt(l: Ledger, n: number): Ledger {
+  for (let p = 0; p < n; p++) l.points(H, A);
+  return l;
+}
+
+/** The write path's answer to a first-set summary `home`–`away` carrying the tie-break block `tb`. */
+function tbSetAnswer(cfg: NestedCfg, home: number, away: number, tb: { home: number; away: number }): string {
+  const ledger = started(cfg);
+  try {
+    ledger.write(ledger.next("tennis.set_summary", { home, away, tb }));
+    return "taken";
+  } catch (e) {
+    if (e instanceof EngineError) return e.code;
+    throw e;
+  }
+}
+
+/** App VI §2 (A0.2; RBS:347): the short-set tie-break is the first to five, with a deciding point at four all. */
+const SHORT_TB_TO = 5;
+
+describe("TN-SS-2 short sets and the set tie-break's own margin (RB2A-12; ITF App VI §1-2; RBS:345-347)", () => {
+  it("TN-SS-2 short-sets: 4–2 and 5–3 accepted, 5–4 needs a tie-break, 6–4 refused", () => {
+    const cfg = cfgFor("short-sets");
+    // Premise, from App VI §1-2 (A0.2): four games two clear, the tie-break at four all to five with a deciding point at
+    // four all (margin one), ad games (No-Ad is a separate alternative).
+    expect(cfg.set).toEqual({ gamesTo: 4, winBy: 2, tiebreakAt: 4, tiebreakTo: SHORT_TB_TO, tiebreakWinBy: 1 });
+    expect(cfg.game.noAd).toBe(false);
+    let checked = 0;
+    for (const [home, away] of [[4, 2], [2, 4], [5, 3], [3, 5]] as const) {
+      expect(started(cfg).summary(home, away).state.sets, `${home}-${away}`).toEqual([{ home, away }]);
+      checked++;
+    }
+    for (const [home, away] of [[5, 4], [4, 5]] as const) {
+      const e = refusal(() => started(cfg).summary(home, away));
+      expect(e.code, `${home}-${away}`).toBe("INVALID_EVENT");
+      expect(e.message, `${home}-${away}`).toMatch(/tie-break/);
+      checked++;
+    }
+    for (const [home, away] of [[6, 4], [4, 6]] as const) {
+      expect(refusal(() => started(cfg).summary(home, away)).code, `${home}-${away}`).toBe("SET_SCORE_UNREACHABLE");
+      checked++;
+    }
+    expect(checked).toBe(8);
+    // Played game by game: 3-all is no tie-break here, 4–3 plays on and 5–3 closes; 4-all opens the tie-break.
+    const at33 = gamesAt(started(cfg), 3, 3);
+    expect(at33.state.points.kind).toBe("standard");
+    const at43 = at33.append("tennis.game.award", { winner: H });
+    expect(at43.state.sets).toEqual([]);
+    expect(at43.append("tennis.game.award", { winner: H }).state.sets).toEqual([{ home: 5, away: 3 }]);
+    expect(gamesAt(started(cfg), 4, 4).state.points.kind).toBe("tiebreak");
+  });
+
+  it("TN-SS-2 every plain final the write path takes under short sets is exactly RBS:345's list (counted)", () => {
+    // RBS:345: "4–0 … 4–2; 5–3; 5–4 with TB" — the plain finals are 4–0 … 4–2 and 5–3, either way round.
+    const row = { row: "RBS:345 short set, TB at 4-all", cfg: () => cfgFor("short-sets"), plainTo: [4, 2], deuce: [5, 5] } as const;
+    const cfg = row.cfg();
+    const legal = rbsPlainLegal(row);
+    const taken = new Set<string>();
+    let checked = 0;
+    let unreachable = 0;
+    for (let home = 0; home <= EDGE; home++) {
+      for (let away = 0; away <= EDGE; away++) {
+        if (home === away) continue;
+        const answer = firstSetAnswer(cfg, home, away);
+        expect(["taken", "INVALID_EVENT", "SET_SCORE_UNREACHABLE"], `${home}-${away}`).toContain(answer);
+        if (answer === "taken") taken.add(`${home}-${away}`);
+        if (answer === "SET_SCORE_UNREACHABLE") unreachable++;
+        checked++;
+      }
+    }
+    expect([...taken].sort()).toEqual([...legal].sort());
+    expect(legal.size).toBe(8);
+    expect(checked).toBe((EDGE + 1) * EDGE);
+    expect(unreachable, "the enumeration reached TN-SS-1's refusal over the new variant").toBeGreaterThan(0);
+  });
+
+  it("TN-SS-2 the short-set tie-break closes at 5–4 (deciding point at 4–4, App VI §2)", () => {
+    const cfg = cfgFor("short-sets");
+    // Point by point: at four all in the tie-break the next point is the deciding point.
+    const at44 = tbPointsAt(gamesAt(started(cfg), 4, 4), 4);
+    expect(at44.state.points).toMatchObject({ kind: "tiebreak", home: 4, away: 4 });
+    expect(at44.state.sets).toEqual([]);
+    const first = at44.points(A);
+    expect(first.state.sets).toEqual([{ home: 4, away: 5, tb: { home: 4, away: 5 } }]);
+    expect(first.state.setsWon).toEqual({ home: 0, away: 1 });
+    // The sequence: the second set's tie-break is the same, the other way round.
+    const second = tbPointsAt(gamesAt(first, 4, 4), 4).points(H);
+    expect(second.state.sets[1]).toEqual({ home: 5, away: 4, tb: { home: 5, away: 4 } });
+    // After a void of the deciding point the tie-break is at four all again, and the other side's point closes it.
+    const reopened = tbPointsAt(gamesAt(started(cfg), 4, 4), 4).points(A);
+    reopened.voids(reopened.events.length - 1);
+    expect(reopened.state.sets).toEqual([]);
+    expect(reopened.state.points).toMatchObject({ kind: "tiebreak", home: 4, away: 4 });
+    expect(reopened.points(H).state.sets).toEqual([{ home: 5, away: 4, tb: { home: 5, away: 4 } }]);
+  });
+
+  it("TN-SS-2 a short-set tie-break summary takes exactly RBS:347's scores, 5–0 … 5–4 (counted)", () => {
+    // RBS:347: "first to 5 with a deciding point at 4-all: 5–0 … 5–4". 6–5, the margin-two form's deuce score, cannot happen.
+    const cfg = cfgFor("short-sets");
+    let checked = 0;
+    for (const [home, away, winner] of [[5, 4, "home"], [4, 5, "away"]] as const) {
+      const taken = new Set<string>();
+      for (let h = 0; h <= EDGE; h++) {
+        for (let a = 0; a <= EDGE; a++) {
+          const answer = tbSetAnswer(cfg, home, away, { home: h, away: a });
+          expect(["taken", "INVALID_EVENT"], `${home}-${away} tb ${h}-${a}`).toContain(answer);
+          if (answer === "taken") taken.add(winner === "home" ? `${h}-${a}` : `${a}-${h}`);
+          checked++;
+        }
+      }
+      expect([...taken].sort(), `${home}-${away}`).toEqual(["5-0", "5-1", "5-2", "5-3", "5-4"]);
+    }
+    expect(checked).toBe(2 * (EDGE + 1) * (EDGE + 1));
+    expect(tbSetAnswer(cfg, 5, 4, { home: 6, away: 5 })).toBe("INVALID_EVENT");
+  });
+
+  it("TN-SS-2 fast4: 5–3 refused, a 5–4 tie-break closes", () => {
+    const cfg = cfgFor("fast4");
+    // RBS:346: 5–3 is impossible (three all goes to the tie-break).
+    expect(refusal(() => started(cfg).summary(5, 3)).code).toBe("SET_SCORE_UNREACHABLE");
+    expect(refusal(() => started(cfg).summary(3, 5)).code).toBe("SET_SCORE_UNREACHABLE");
+    // App VI §2: the tie-break at three all is the short-set tie-break, so four all in it is the deciding point.
+    const at44 = tbPointsAt(gamesAt(started(cfg), 3, 3), 4);
+    expect(at44.state.points).toMatchObject({ kind: "tiebreak", home: 4, away: 4 });
+    expect(at44.points(H).state.sets).toEqual([{ home: 4, away: 3, tb: { home: 5, away: 4 } }]);
+    expect(tbSetAnswer(cfg, 4, 3, { home: 5, away: 4 })).toBe("taken");
+    expect(tbSetAnswer(cfg, 3, 4, { home: 4, away: 5 })).toBe("taken");
+    expect(tbSetAnswer(cfg, 4, 3, { home: 6, away: 4 })).toBe("INVALID_EVENT");
+    expect(tbSetAnswer(cfg, 4, 3, { home: 6, away: 5 })).toBe("INVALID_EVENT");
+  });
+
+  it("TN-SS-2 the match tie-break keeps its own margin: a 10–9 MTB plays on", () => {
+    // Preflight F13: short sets with a match tie-break to 10 in place of the deciding set, so both tie-breaks are in one match.
+    const cfg = cfgFor("short-sets", { finalSet: { matchTiebreakTo: 10 } });
+    expect(cfg.tiebreak.winBy, "premise: the match tie-break's margin is the rulebook's two (RBS:348)").toBe(2);
+    // Set 1: the short-set tie-break closes at 5–4.
+    const ledger = tbPointsAt(gamesAt(started(cfg), 4, 4), 4).points(H);
+    expect(ledger.state.sets).toEqual([{ home: 5, away: 4, tb: { home: 5, away: 4 } }]);
+    // Set 2 to A, so the match tie-break replaces the deciding set.
+    ledger.summary(2, 4);
+    expect(ledger.state.points.kind).toBe("matchTiebreak");
+    // 9–9, then 10–9: not over (RBS:348 "to 10: … n–(n−2) n ≥ 11").
+    tbPointsAt(ledger, 9).points(H);
+    expect(ledger.state.points).toMatchObject({ kind: "matchTiebreak", home: 10, away: 9 });
+    expect(ledger.state.sets).toHaveLength(2);
+    expect(tennis.outcome(ledger.state)).toBeNull();
+    ledger.points(H);
+    expect(ledger.state.sets[2]).toEqual({ home: 11, away: 9, mtb: true });
+    expect(tennis.outcome(ledger.state)).toMatchObject({ kind: "win", winner: H });
+    // The summary path agrees: a 10–9 match tie-break is no final score, 11–9 is.
+    const viaSummary = started(cfg).summary(5, 4, { home: 5, away: 4 }).summary(2, 4);
+    expect(refusal(() => viaSummary.write(viaSummary.next("tennis.set_summary", { home: 10, away: 9 }))).code).toBe("INVALID_EVENT");
+    expect(tennis.outcome(viaSummary.summary(11, 9).state)).toMatchObject({ kind: "win", winner: H });
+  });
+
+  it("TN-SS-2 a fast4 division created now plays margin 1", () => {
+    // A division created from the variant stores it and reads it back through `configSchema` (sync:sports writes the raw
+    // variant; the division keeps the parsed config). The key must survive both parses, or the set falls back to margin two.
+    const stored = JSON.parse(JSON.stringify(tennis.configSchema.parse(JSON.parse(JSON.stringify(tennis.variants.fast4)))));
+    const cfg = tennis.configSchema.parse(stored);
+    expect(cfg.set.tiebreakWinBy).toBe(1);
+    const at44 = tbPointsAt(gamesAt(new Ledger(cfg).append("core.start"), 3, 3), 4);
+    expect(at44.points(A).state.sets).toEqual([{ home: 3, away: 4, tb: { home: 4, away: 5 } }]);
+    // The differential: a Fast4 set stored without the key (before Task 13b's migration gives it an explicit two) plays
+    // the tie-break to the match's `tiebreak.winBy` — 5–4 plays on, 6–4 closes.
+    const { tiebreakWinBy: _dropped, ...legacySet } = cfg.set;
+    const legacy = tennis.configSchema.parse({ ...stored, set: legacySet });
+    expect(legacy.set.tiebreakWinBy).toBeUndefined();
+    const legacy54 = tbPointsAt(gamesAt(new Ledger(legacy).append("core.start"), 3, 3), 4).points(A);
+    expect(legacy54.state.sets).toEqual([]);
+    expect(legacy54.state.points).toMatchObject({ kind: "tiebreak", home: 4, away: 5 });
+    expect(legacy54.points(A).state.sets).toEqual([{ home: 3, away: 4, tb: { home: 4, away: 6 } }]);
+  });
+
+  it("TN-SS-2 a set with no tie-break margin of its own keeps the match's: tour's 7–6 and the slam decider's 10–9 play on", () => {
+    // RBS:339 "Tie-break game to 7 with a two-point lead (5b)"; RBS:349 the final-set tie-break to 10 "n–(n−2), n ≥ 11".
+    const tour = tbPointsAt(gamesAt(started(cfgFor("tour")), 6, 6), 6).points(H);
+    expect(tour.state.points).toMatchObject({ kind: "tiebreak", home: 7, away: 6 });
+    expect(tour.points(H).state.sets).toEqual([{ home: 7, away: 6, tb: { home: 8, away: 6 } }]);
+    const slam = started(cfgFor("grand-slam")).summary(6, 4).summary(4, 6).summary(6, 4).summary(4, 6);
+    tbPointsAt(gamesAt(slam, 6, 6), 9).points(H);
+    expect(slam.state.points).toMatchObject({ kind: "tiebreak", home: 10, away: 9 });
+    expect(tennis.outcome(slam.state)).toBeNull();
+    slam.points(H);
+    expect(slam.state.sets[4]).toEqual({ home: 7, away: 6, tb: { home: 11, away: 9 } });
+  });
+
+  it("TN-SS-2 a sudden-death tie-break takes no score past its target: 8–7 to seven is refused on the write path, and replays leniently", () => {
+    // A tie-break with a margin of one ends the moment one side reaches the target, so the most it can stand at is
+    // target–(target−1): 7–6 to seven, 10–9 for a match tie-break to ten. 8–7 would need 7–7, which 7–6 or 6–7 ended.
+    const sudden = cfgFor("tour", { tiebreak: { winBy: 1 } });
+    expect(tbSetAnswer(sudden, 7, 6, { home: 7, away: 6 })).toBe("taken");
+    expect(tbSetAnswer(sudden, 7, 6, { home: 8, away: 7 })).toBe("INVALID_EVENT");
+    const mtb = cfgFor("doubles-noad-mtb10", { tiebreak: { winBy: 1 } });
+    const decider = () => started(mtb).summary(6, 4).summary(4, 6);
+    expect(refusal(() => decider().summary(11, 10)).code).toBe("INVALID_EVENT");
+    expect(tennis.outcome(decider().summary(10, 9).state)).toMatchObject({ kind: "win", winner: H });
+    // A summary recorded before W2e (the one-step check took 8–7) still folds to its recorded result on a read.
+    const legacy = [
+      makeEnvelope(0, { type: "core.start", payload: {} }),
+      makeEnvelope(1, { type: "tennis.set_summary", payload: { home: 7, away: 6, tb: { home: 8, away: 7 } } }),
+      makeEnvelope(2, { type: "tennis.set_summary", payload: { home: 6, away: 4 } }),
+    ];
+    const replayed = foldMatchWithStoppage(tennis, sudden, lineups, legacy).state;
+    expect(replayed.sets).toEqual([{ home: 7, away: 6, tb: { home: 8, away: 7 } }, { home: 6, away: 4 }]);
+    expect(tennis.outcome(replayed)).toMatchObject({ kind: "win", winner: H });
+    expect(refusal(() => foldMatchWithStoppage(tennis, sudden, lineups, legacy, { strictFromSeq: 0 })).code).toBe("INVALID_EVENT");
+  });
+
+  it("TN-SS-2 the pad's set-score fields admit every RBS:345-347 final, under short sets and Fast4", () => {
+    let checked = 0;
+    for (const [variant, games, tb] of [["short-sets", [5, 4], { home: 5, away: 4 }], ["fast4", [4, 3], { home: 5, away: 4 }]] as const) {
+      const cfg = cfgFor(variant);
+      const spec: PadSpec = tennis.padSpec!(cfg);
+      // Every action that writes a set summary (the plain one and the one with the tie-break block).
+      const fields = spec.panels.flatMap((p) => p.actions).filter((a) => a.type === "tennis.set_summary").flatMap((a) => a.fields);
+      const max = (path: string): number => {
+        const f = fields.find((x) => x.path === path);
+        if (f?.kind !== "number" || f.max === undefined) throw new Error(`premise: ${variant} ${path} declares a maximum`);
+        return f.max;
+      };
+      expect(max("home"), variant).toBeGreaterThanOrEqual(games[0]);
+      expect(max("tb.home"), variant).toBeGreaterThanOrEqual(SHORT_TB_TO);
+      expect(tbSetAnswer(cfg, games[0], games[1], tb), variant).toBe("taken");
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
+  it("TN-SS-2 the generator's short-set tie-breaks are all ones the write path takes, and it reaches the deciding point (counted)", () => {
+    const cfg = cfgFor("short-sets");
+    let tbSummaries = 0;
+    let decidingPoint = 0;
+    for (let seed = 1; seed <= 60; seed++) {
+      const rng = mulberry32(seed);
+      const ledger = started(cfg);
+      for (let n = 0; n < 80 && tennis.outcome(ledger.state) === null && ledger.state.phase === "live"; n++) {
+        const ev = tennis.arbitraryEvent!(ledger.state, rng);
+        if (ev === null) break;
+        if (ev.type !== "tennis.set_summary") {
+          // A rally, a sanction, an interruption, an ending: kept only if the write path takes it.
+          try {
+            ledger.append(ev.type, ev.payload);
+          } catch (e) {
+            if (!(e instanceof EngineError)) throw e;
+          }
+          continue;
+        }
+        const tb = (ev.payload as { tb?: { home: number; away: number } }).tb;
+        ledger.append(ev.type, ev.payload); // throws if the write path refuses the generator's own summary
+        if (tb !== undefined) {
+          tbSummaries++;
+          if (Math.min(tb.home, tb.away) === SHORT_TB_TO - 1) decidingPoint++;
+        }
+      }
+    }
+    expect(tbSummaries, "the walks drew short-set tie-breaks").toBeGreaterThan(0);
+    expect(decidingPoint, "a 5–4 tie-break (the deciding point) was drawn").toBeGreaterThan(0);
   });
 });

@@ -8372,6 +8372,7 @@ export type DictionaryKey =
   | "variant.tennis.doublesNoAdMatchTiebreak"
   | "variant.tennis.fast4"
   | "variant.tennis.grandSlam"
+  | "variant.tennis.shortSets"
   | "variant.tennis.tour"
   | "variant.volleyball.beach"
   | "variant.volleyball.indoor"

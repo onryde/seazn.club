@@ -188,7 +188,7 @@ interface TennisStateShape {
 type TennisFinalSet = "same" | { matchTiebreakTo: number } | { tiebreakTo: number };
 interface TennisCfgShape {
   bestOf?: number;
-  set?: { gamesTo?: number; winBy?: number; tiebreakAt?: number | null; tiebreakTo?: number };
+  set?: { gamesTo?: number; winBy?: number; tiebreakAt?: number | null; tiebreakTo?: number; tiebreakWinBy?: number };
   finalSet?: TennisFinalSet;
   tiebreak?: { winBy?: number };
 }
@@ -832,11 +832,14 @@ function gamesFieldBound(cfg: TennisCfgShape): number {
  *  above: no export to consume, and the kernel's own version reads `cfg`
  *  directly rather than through `rulesFor`. */
 function tbFieldBound(cfg: TennisCfgShape): number {
-  const ordinary = (cfg.set?.tiebreakTo ?? 7) + (cfg.tiebreak?.winBy ?? 2) + 2;
+  // W2e TN-SS-2: a set tie-break's margin is the set's own `tiebreakWinBy` (the kernel's `setTiebreakWinBy`), else the
+  // match's `tiebreak.winBy`.
+  const margin = cfg.set?.tiebreakWinBy ?? cfg.tiebreak?.winBy ?? 2;
+  const ordinary = (cfg.set?.tiebreakTo ?? 7) + margin + 2;
   const finalSet = cfg.finalSet;
   const decider =
     finalSet && typeof finalSet === "object" && "tiebreakTo" in finalSet
-      ? finalSet.tiebreakTo + (cfg.tiebreak?.winBy ?? 2) + 2
+      ? finalSet.tiebreakTo + margin + 2
       : 0;
   return Math.max(ordinary, decider);
 }

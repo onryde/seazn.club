@@ -7,6 +7,40 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-28 — a short-set tie-break ends at 5–4 (Fast4 and the new short-sets format)
+
+ITF Appendix VI §2's short-set tie-break is the first to five points "with a
+deciding point if the score reaches four all", so its margin is one. The set's
+config carries that margin as a new optional key, `set.tiebreakWinBy`; absent,
+a set tie-break plays to the match's `tiebreak.winBy` as before. The match
+tie-break always plays to `tiebreak.winBy`.
+
+**What changed.**
+
+| Write path | Before | Now |
+|---|---|---|
+| `POST /api/v1/fixtures/{id}/events`, `tennis.point` at 4–4 in the tie-break of a Fast4 set (the `fast4` format, or any set with `tiebreakWinBy: 1`) | the tie-break played on to a two-point lead | the point ends the tie-break and the set (5–4) |
+| Same path, a Fast4 `tennis.set_summary` of 4–3 with `tb` 5–4 | 422 `INVALID_EVENT` | accepted |
+| Same path, a Fast4 `tb` block of 6–4 or 6–5 | 6–4 accepted | 422 `INVALID_EVENT`, nothing written |
+| Both write paths, any tie-break or match tie-break played to a margin of one (`set.tiebreakWinBy: 1`, or `tiebreak.winBy: 1`), a `tb` block or match tie-break summary past its target (8–7 in a tie-break to 7; 11–10 in a match tie-break to 10) | accepted (only the point before was checked) | refused, `"INVALID_EVENT"` ("not a reachable final score"); `events/import` rejects the stream with `error.engineCode` `"INVALID_EVENT"` |
+
+A Fast4 division that existed before this release keeps a two-point margin:
+the release's migration writes `set.tiebreakWinBy: 2` into its stored config
+explicitly. A division created from the `fast4` format afterwards plays the
+deciding point. A new format, `short-sets` (tie-break at 4-all, advantage
+games), plays it too.
+
+**What replaces it.** Send the score that was played: a short-set tie-break
+ends 5–0 to 5–4.
+
+**What a consumer sees.**
+
+```json
+{ "ok": false, "error": { "code": "INVALID_EVENT", "message": "tie-break summary is not a reachable final score" }, "requestId": "…" }
+```
+
+Summaries recorded before the change still replay as recorded.
+
 ## 2026-10-28 — a tennis set score no set can reach is refused
 
 A tennis set summary in plain games (no `tb` block) is now refused when no set

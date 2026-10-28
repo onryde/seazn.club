@@ -42,6 +42,16 @@ describe("defaultMatchMinutes", () => {
     expect(threeBy15).toBeLessThan(bwf);
   });
 
+  // W2e Task 5 (TN-SS-2): short sets with the tie-break at four all play advantage games and can run to 5–3, so a match
+  // outlasts Fast4 (three-all tie-break, no-ad games) and is still well short of tour's six-game sets (author's call).
+  it("orders tennis's slots by set length: fast4 < short-sets < tour", () => {
+    const fast4 = defaultMatchMinutes("tennis", "fast4");
+    const shortSets = defaultMatchMinutes("tennis", "short-sets");
+    const tour = defaultMatchMinutes("tennis", "tour");
+    expect(fast4).toBeLessThan(shortSets);
+    expect(shortSets).toBeLessThan(tour);
+  });
+
   it("is case-insensitive on both sport and variant", () => {
     expect(defaultMatchMinutes("Cricket", "T20")).toBe(180);
   });

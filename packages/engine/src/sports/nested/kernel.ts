@@ -80,6 +80,14 @@ export interface NestedSetCfg {
   winBy: number;
   tiebreakAt: number | null; // null = advantage set (win by 2, open-ended)
   tiebreakTo: number;
+  /**
+   * W2e RB2A-12 (TN-SS-2) — the margin of THIS set's tie-break game, its own and never the match tie-break's: ITF App VI
+   * §2's short-set tie-break is first to five "with a deciding point if the score reaches four all", a margin of one.
+   * OPTIONAL WITH NO DEFAULT, as `NestedParams.interruptions` (cfg is serialised into the frozen golden state strings).
+   * Absent means `tiebreak.winBy`, the margin every set tie-break played before W2e; read it through
+   * `setTiebreakWinBy`. The match tie-break always plays to `tiebreak.winBy`.
+   */
+  tiebreakWinBy?: number;
 }
 
 // The deciding set (reached at ⌈bestOf/2⌉−1 sets all):
@@ -180,6 +188,8 @@ export function makeNestedConfigSchema(defaults: NestedParams) {
           winBy: z.number().int().positive(),
           tiebreakAt: z.number().int().positive().nullable(),
           tiebreakTo: z.number().int().positive(),
+          // No `.default()` — see NestedSetCfg.tiebreakWinBy.
+          tiebreakWinBy: z.number().int().positive().optional(),
         })
         .default(defaults.set),
       finalSet: z
@@ -885,7 +895,31 @@ function reachableTbScore(h: number, a: number, to: number, winBy: number): bool
   const prevH = winner === "home" ? h - 1 : h;
   const prevA = winner === "away" ? a - 1 : a;
   if (prevH < 0 || prevA < 0) return false;
-  return tbWinner(prevH, prevA, to, winBy) === null;
+  return reachableLiveTbScore(prevH, prevA, to, winBy);
+}
+
+/**
+ * W2e RB2A-12 (TN-SS-2) — whether `h`–`a` is a LIVE tie-break score some rally from 0–0 reaches through live scores only.
+ * The one-step "the score before the last point was live" check was enough while every tie-break was won by two (every
+ * live score is then reachable), and not at a margin of one: with a deciding point at four all, 5–5 is "live" (nobody
+ * leads) yet nothing reaches it, since 5–4 or 4–5 ended the tie-break first, so 6–5 is no final score (RBS:347).
+ *
+ * Closed form, so a client's huge number costs nothing: climb level (0–0, 1–0, 1–1, …, lo–lo), then run the leader up to
+ * `h`–`a`. A score is decided iff its leader is at `to` or more and its lead is `winBy` or more, which only grows along
+ * each leg, so this path is live iff its last level step (lo, lo−1) and `h`–`a` itself are. If (lo, lo−1) is decided,
+ * a one-point lead decides (`winBy` is 1) and lo ≥ `to`: then every path's first point to `to` was decisive, because the
+ * other side stood below `to`, so no path reaches `h`–`a`.
+ */
+function reachableLiveTbScore(h: number, a: number, to: number, winBy: number): boolean {
+  if (tbWinner(h, a, to, winBy) !== null) return false;
+  const lo = Math.min(h, a);
+  return lo === 0 || tbWinner(lo, lo - 1, to, winBy) === null;
+}
+
+/** W2e RB2A-12 (TN-SS-2) — the margin a SET's tie-break game is won by: the set's own `tiebreakWinBy`, else the match's
+ *  `tiebreak.winBy` (`NestedSetCfg.tiebreakWinBy`). The match tie-break never reads this. */
+function setTiebreakWinBy(cfg: NestedCfg): number {
+  return cfg.set.tiebreakWinBy ?? cfg.tiebreak.winBy;
 }
 
 // Winner of a set at a games score, or null while live. A tie-break set can
@@ -1067,7 +1101,9 @@ function applyTbPoint(state: NestedState, side: Side, mtb: boolean): NestedState
     pointsWon: tally,
   };
 
-  const winner = tbWinner(h, a, to, state.cfg.tiebreak.winBy);
+  // W2e RB2A-12 (TN-SS-2): a set tie-break plays to the set's own margin (App VI §2's deciding point), the match
+  // tie-break to the match's.
+  const winner = tbWinner(h, a, to, mtb ? state.cfg.tiebreak.winBy : setTiebreakWinBy(state.cfg));
   if (winner === null) return next;
 
   if (mtb) {
@@ -1316,8 +1352,8 @@ function setInProgress(state: NestedState): boolean {
 
 // `strict` is the §3.3 seam. EVERY refusal below whose condition reads
 // `rulesFor(state)` or `state.cfg` is gated on it: the set predicate is built
-// from `bestOf`, `set.tiebreakAt`, `set.tiebreakTo`, `finalSet` and
-// `tiebreak.winBy`, all of which an organiser edits, and cfg is read live on
+// from `bestOf`, `set.tiebreakAt`, `set.tiebreakTo`, `set.tiebreakWinBy`,
+// `finalSet` and `tiebreak.winBy`, all of which an organiser edits, and cfg is read live on
 // every read. A 7–6 set with a 7–5 tie-break was real when it was played; a
 // competition later moving `tiebreakAt` to 3 must not make it unreadable, and
 // there is no event to void. The refusals that read only the PAYLOAD (a tb
@@ -1374,7 +1410,7 @@ function applySetSummary(
     const winner: Side = home > away ? "home" : "away";
     const tbh = payload.tb.home;
     const tba = payload.tb.away;
-    if (strict && !reachableTbScore(tbh, tba, rules.tiebreakTo, state.cfg.tiebreak.winBy)) {
+    if (strict && !reachableTbScore(tbh, tba, rules.tiebreakTo, setTiebreakWinBy(state.cfg))) {
       invalid("tie-break summary is not a reachable final score", {
         tb: payload.tb,
         to: rules.tiebreakTo,
@@ -1617,12 +1653,12 @@ function gamesFieldBound(cfg: NestedCfg): number {
 
 /** Bound for `NestedSetSummary.tb.{home,away}` — the ordinary tie-break
  *  target, or the decider's own `finalSet.tiebreakTo` (the slam rule) if
- *  larger. */
+ *  larger, each with the set tie-break's own margin (`setTiebreakWinBy`). */
 function tbFieldBound(cfg: NestedCfg): number {
-  const ordinary = cfg.set.tiebreakTo + cfg.tiebreak.winBy + 2;
+  const ordinary = cfg.set.tiebreakTo + setTiebreakWinBy(cfg) + 2;
   const decider =
     cfg.finalSet !== "same" && "tiebreakTo" in cfg.finalSet
-      ? cfg.finalSet.tiebreakTo + cfg.tiebreak.winBy + 2
+      ? cfg.finalSet.tiebreakTo + setTiebreakWinBy(cfg) + 2
       : 0;
   return Math.max(ordinary, decider);
 }
@@ -2555,7 +2591,7 @@ export function makeNestedModule(
       // ~30% tie-break sets when the set can have one.
       if (rules.tiebreakAt !== null && rng() < 0.3) {
         const tbLo = Math.floor(
-          rng() * Math.max(1, rules.tiebreakTo - state.cfg.tiebreak.winBy + 1),
+          rng() * Math.max(1, rules.tiebreakTo - setTiebreakWinBy(state.cfg) + 1),
         );
         const tb = homeWins
           ? { home: rules.tiebreakTo, away: tbLo }

@@ -30,9 +30,12 @@ const nestedTennis = makeNestedModule({
     // to 10 at 6–6 (finalSet.tiebreakTo — the games-level form, matching the
     // real rule rather than an App VI match tie-break replacing the set).
     "grand-slam": { bestOf: 5, finalSet: { tiebreakTo: 10 } },
-    // ITF App VI short sets: to 4 games, TB at 3–3 to 5, no-ad games.
+    // ITF App VI short sets: to 4 games, TB at 3–3 (§1's alternative) to 5
+    // with a deciding point at 4–4 (§2's short-set tie-break, margin 1; W2e
+    // RB2A-12, TN-SS-2), no-ad games. A Fast4 config stored before W2e carries
+    // no `tiebreakWinBy`; Task 13b's migration writes it an explicit 2 (D18).
     fast4: {
-      set: { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5 },
+      set: { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5, tiebreakWinBy: 1 },
       game: { noAd: true },
     },
     // The ITF doubles norm: no-ad games + a 10-point match tie-break as the
@@ -40,6 +43,13 @@ const nestedTennis = makeNestedModule({
     "doubles-noad-mtb10": {
       game: { noAd: true },
       finalSet: { matchTiebreakTo: 10 },
+    },
+    // W2e RB2A-12 (TN-SS-2): ITF App VI §1 short sets in their main form —
+    // first to 4 games by 2, a tie-break at 4–4 — with §2's short-set
+    // tie-break, first to 5 with a deciding point at 4–4 (margin 1). Ad games:
+    // No-Ad is App VI's separate "score in a game" alternative (A0.2).
+    "short-sets": {
+      set: { gamesTo: 4, winBy: 2, tiebreakAt: 4, tiebreakTo: 5, tiebreakWinBy: 1 },
     },
   },
   positions,

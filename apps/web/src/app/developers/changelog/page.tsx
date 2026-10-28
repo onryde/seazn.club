@@ -7,6 +7,16 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-10-28",
+    title: "Breaking: a short-set tie-break ends at 5–4 (Fast4 and short-sets)",
+    lines: [
+      "A tennis set may carry its own tie-break margin, set.tiebreakWinBy (optional). Absent, a set tie-break plays to tiebreak.winBy as before; the match tie-break always does.",
+      "A Fast4 division created from this release on, and the new short-sets format (tie-break at 4-all), play ITF Appendix VI's short-set tie-break: first to 5 with a deciding point at 4–4. A tennis.point at 4–4 ends the set; a summary of 4–3 with tb 5–4 is accepted; a tb block of 6–4 or 6–5 is refused 422 INVALID_EVENT.",
+      "Any tie-break played to a margin of one (set.tiebreakWinBy 1 or tiebreak.winBy 1) refuses a tb block or match tie-break summary past its target (8–7 to seven) with INVALID_EVENT, on POST /fixtures/{id}/events and events/import alike.",
+      "Fast4 divisions created before this release keep a two-point margin: the release's migration writes set.tiebreakWinBy 2 into them. Summaries recorded before the change still replay as recorded. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
     title: "Breaking: a tennis set score no set can reach is refused",
     lines: [
       "POST /fixtures/{id}/events refuses a tennis.set_summary in plain games whose score no set can reach under its tie-break (8–6 or 9–7 with the tie-break at 6-all, 5–3 in a Fast4 set) with 422 SET_SCORE_UNREACHABLE, and nothing is written.",
