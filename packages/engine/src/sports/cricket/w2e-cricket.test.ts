@@ -20,7 +20,7 @@ import type { LineupPair, StandingsDelta } from "../../core/types.ts";
 import { resolvePositions } from "../../sport/catalog.ts";
 import { declaredCfgs } from "../../testkit/declared-cfgs.ts";
 import { buildWalk, defaultLineupPair, lineupFromCatalog, makeEnvelope } from "../../testkit/helpers.ts";
-import { cricket, type CricketCfg, type CricketState } from "./cricket.ts";
+import { cricket, CricketWicket, type CricketCfg, type CricketState } from "./cricket.ts";
 import { dlsPar, dlsTarget } from "./dls.ts";
 
 /** RBS:433 — a no-ball (1) plus a six (6) off the last needed run. */
@@ -648,5 +648,237 @@ describe("CK-RR-1 net run rate under DLS or revised overs (ICC 16.10.7, RB2A-20,
     ] as const;
     const wrong = rankStandings(foldResults(["P", "Q", "R", "S"], asPlayed), { cascade, results: asPlayed }).rows;
     expect(wrong.map((r) => r.entrantId)).toEqual(["P", "R", "S", "Q"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2e Task 8b (A1c-3b; D8) — CK-NB-1: on a no ball only three modes of dismissal stand.
+//
+// ICC Men's T20 World Cup 2026 Playing Conditions 21.18 (verbatim, the PC PDF of a0-findings #18): "When No ball has been
+// called, neither batter shall be out under any of the Playing Conditions except clause 34 (Hit the ball twice), clause 37
+// (Obstructing the field) or clause 38 (Run out)." MCC Law 21.18 reads the same with "Laws" for "Playing Conditions".
+// 21.19.2, the free hit that follows: "the striker can be dismissed only under the circumstances that apply for a No ball,
+// even if the delivery for the free hit is called Wide." 22.9, a wide: "neither batter shall be out under any of the
+// Playing Conditions except clause 35 (Hit wicket), clause 37 (Obstructing the field), clause 38 (Run out) or clause 39
+// (Stumped)."
+//
+// The refusal is the write path's only (a new rule over a ledger that may already hold such a ball): a stored one keeps
+// folding to what it recorded. Every expected set below is typed from those clauses; the modes swept are the schema's own.
+//
+// single-sport: a no ball, a free hit and a wide are cricket's deliveries; no other sport restricts a dismissal by delivery.
+// ---------------------------------------------------------------------------
+
+type WicketKind = (typeof CricketWicket.shape.kind.options)[number];
+/** ICC PC 21.18: clauses 34 (hit the ball twice), 37 (obstructing the field), 38 (run out). */
+const ICC_21_18: readonly WicketKind[] = ["hitballtwice", "obstructed", "runout"];
+/** ICC PC 22.9: clauses 35 (hit wicket), 37 (obstructing the field), 38 (run out), 39 (stumped). */
+const ICC_22_9: readonly WicketKind[] = ["hitwicket", "obstructed", "runout", "stumped"];
+/** CK-FH-1 as the engine holds it: run out and obstructing only. ICC 21.19.2 adds hit the ball twice; the engine refuses it
+ *  on a free hit, the row's recorded deviation (W2e ruling I-2, owner 10-26 "skip rare cases"). */
+const FREE_HIT_ENGINE: readonly WicketKind[] = ["obstructed", "runout"];
+/** MCC Laws 32, 33, 35, 36, 39: the bowler is credited with bowled, caught, hit wicket, lbw and stumped, and nothing else. */
+const BOWLER_CREDITED: readonly WicketKind[] = ["bowled", "caught", "hitwicket", "lbw", "stumped"];
+const MODES: readonly WicketKind[] = CricketWicket.shape.kind.options;
+
+const NO_BALL = { kind: "noball", runs: 1 } as const;
+const WIDE = { kind: "wide", runs: 1 } as const;
+interface Crease {
+  readonly striker: string;
+  readonly nonStriker: string;
+  readonly bowler: string;
+}
+const OPENERS: Crease = { striker: "H-p1", nonStriker: "H-p2", bowler: "A-p11" };
+const wicketOf = (kind: WicketKind, out: string) => ({ kind, out, bowlerCredited: BOWLER_CREDITED.includes(kind) });
+
+/** One delivery of the open innings, no bat runs. */
+function delivery(
+  over: number,
+  ballInOver: number,
+  opts: { extras?: typeof NO_BALL | typeof WIDE; wicket?: ReturnType<typeof wicketOf>; crease?: Crease; type?: string } = {},
+): Spec {
+  return [
+    opts.type ?? "cricket.ball",
+    {
+      over,
+      ballInOver,
+      ...(opts.crease ?? OPENERS),
+      runs: { bat: 0, ...(opts.extras === undefined ? {} : { extras: opts.extras }) },
+      ...(opts.wicket === undefined ? {} : { wicket: opts.wicket }),
+    },
+  ];
+}
+
+function refusalOf(fn: () => unknown): { code: string; message: string } | null {
+  try {
+    fn();
+    return null;
+  } catch (err) {
+    if (err instanceof EngineError) return { code: err.code, message: err.message };
+    throw err;
+  }
+}
+
+describe("CK-NB-1 dismissals off a no ball (ICC 21.18, D8)", () => {
+  const lineups = lineupsFor(T20);
+  const strict = (specs: readonly Spec[]) => foldMatch(cricket, T20, lineups, ledger(specs), STRICT_ALL);
+  const openInnings = (state: CricketState) => {
+    const innings = state.innings.at(-1);
+    if (innings?.fine == null) throw new Error("premise: a ball-by-ball innings is open");
+    return { ...innings, fine: innings.fine };
+  };
+
+  it("CK-NB-1 on a no ball only hit the ball twice, obstructing the field and run out stand; every other mode is refused on the write path", () => {
+    for (const kind of [...ICC_21_18, ...ICC_22_9, ...FREE_HIT_ENGINE, ...BOWLER_CREDITED]) {
+      expect(MODES, `${kind} is a declared mode of dismissal`).toContain(kind);
+    }
+    let stood = 0;
+    let refused = 0;
+    let legalPair = 0;
+    for (const kind of MODES) {
+      const onNoBall: Spec[] = [["core.start"], delivery(0, 1, { extras: NO_BALL, wicket: wicketOf(kind, "H-p1") })];
+      if (ICC_21_18.includes(kind)) {
+        const innings = openInnings(strict(onNoBall));
+        expect(innings.wickets, `${kind} stands on a no ball`).toBe(1);
+        expect(innings.fine.dismissed, `${kind}: the striker is out`).toEqual(["H-p1"]);
+        stood++;
+      } else {
+        expect(refusalOf(() => strict(onNoBall)), `${kind} on a no ball`).toEqual({
+          code: "INVALID_EVENT",
+          message: `"${kind}" cannot dismiss on a no ball`,
+        });
+        refused++;
+      }
+      // The positive pair: the same mode on a legal ball is recorded.
+      const legal = openInnings(strict([["core.start"], delivery(0, 1, { wicket: wicketOf(kind, "H-p1") })]));
+      expect(legal.wickets, `${kind} on a legal ball`).toBe(1);
+      legalPair++;
+    }
+    // The non-striker can be out off a no ball too, by run out or obstructing the field (21.18's clauses 37 and 38).
+    for (const kind of ["obstructed", "runout"] as const) {
+      const innings = openInnings(strict([["core.start"], delivery(0, 1, { extras: NO_BALL, wicket: wicketOf(kind, "H-p2") })]));
+      expect(innings.fine.dismissed, `${kind} of the non-striker on a no ball`).toEqual(["H-p2"]);
+      stood++;
+    }
+    // eslint-disable-next-line no-console -- TEST-STRATEGY anti-vacuity: the sweep reports what it checked
+    console.info(`CK-NB-1 no ball: ${MODES.length} modes swept, ${stood} dismissals stood, ${refused} refused, ${legalPair} legal-ball pairs`);
+    expect(stood).toBe(ICC_21_18.length + 2);
+    expect(refused).toBe(MODES.length - ICC_21_18.length);
+    expect(refused).toBeGreaterThan(0);
+    expect(legalPair).toBe(MODES.length);
+  });
+
+  it("CK-NB-1 a stored bowled off a no ball (a pre-W2e ledger) still folds on the read path", () => {
+    // H-p1 bowled off a no ball, then H-p3 (next in the order) faces the free hit for a dot ball.
+    const stored: Spec[] = [
+      ["core.start"],
+      delivery(0, 1, { extras: NO_BALL, wicket: wicketOf("bowled", "H-p1") }),
+      delivery(0, 1, { crease: { striker: "H-p3", nonStriker: "H-p2", bowler: "A-p11" } }),
+    ];
+    const read = openInnings(foldMatch(cricket, T20, lineups, ledger(stored)));
+    expect(read.wickets).toBe(1);
+    expect(read.runs, "the no ball's one run").toBe(1);
+    expect(read.fine.dismissed).toEqual(["H-p1"]);
+    expect(read.legalBalls).toBe(1);
+    // The same ball as a NEW write is refused; a write after it folds with it in the ledger.
+    expect(refusalOf(() => foldMatch(cricket, T20, lineups, ledger(stored), { strictFromSeq: 1 }))?.code).toBe("INVALID_EVENT");
+    expect(openInnings(foldMatch(cricket, T20, lineups, ledger(stored), { strictFromSeq: 2 })).wickets).toBe(1);
+  });
+
+  it("CK-NB-1 then CK-FH-1: the no ball's own rule binds it, then the free hit's binds the next legal ball", () => {
+    // A no ball with the non-striker run out (21.18 lets it stand); H-p3 comes in at that end, and the free hit is armed.
+    const noBallRunOut = delivery(0, 1, { extras: NO_BALL, wicket: wicketOf("runout", "H-p2") });
+    const armed: Spec[] = [["core.start"], noBallRunOut];
+    const after = openInnings(strict(armed));
+    expect(after.wickets).toBe(1);
+    expect(after.fine.freeHitPending, "21.19.1: the next delivery is a free hit").toBe(true);
+    const freeHitCrease: Crease = { striker: "H-p1", nonStriker: "H-p3", bowler: "A-p11" };
+    // The free hit (a legal ball): the engine's free-hit rule, every mode swept.
+    let stood = 0;
+    let refused = 0;
+    for (const kind of MODES) {
+      const onFreeHit = [...armed, delivery(0, 1, { crease: freeHitCrease, wicket: wicketOf(kind, "H-p1") })];
+      if (FREE_HIT_ENGINE.includes(kind)) {
+        expect(openInnings(strict(onFreeHit)).wickets, `${kind} on the free hit`).toBe(2);
+        stood++;
+      } else {
+        expect(refusalOf(() => strict(onFreeHit)), `${kind} on the free hit`).toEqual({
+          code: "INVALID_EVENT",
+          message: `"${kind}" cannot dismiss on a free hit`,
+        });
+        refused++;
+      }
+    }
+    // Hit the ball twice stands on the no ball (21.18) and is refused on the free hit after it: CK-FH-1's deviation.
+    expect(ICC_21_18).toContain("hitballtwice");
+    expect(FREE_HIT_ENGINE).not.toContain("hitballtwice");
+    // A dot ball uses the free hit up; the next legal ball takes any mode again.
+    const used: Spec[] = [...armed, delivery(0, 1, { crease: freeHitCrease })];
+    expect(openInnings(strict(used)).fine.freeHitPending).toBe(false);
+    expect(openInnings(strict([...used, delivery(0, 2, { crease: freeHitCrease, wicket: wicketOf("bowled", "H-p1") })])).wickets).toBe(2);
+    // eslint-disable-next-line no-console -- TEST-STRATEGY anti-vacuity: the sweep reports what it checked
+    console.info(`CK-NB-1 then CK-FH-1: ${MODES.length} modes on the free hit, ${stood} stood, ${refused} refused`);
+    expect(stood).toBe(FREE_HIT_ENGINE.length);
+    expect(refused).toBe(MODES.length - FREE_HIT_ENGINE.length);
+    expect(refused).toBeGreaterThan(0);
+  });
+
+  it("CK-NB-1 a void of the no ball takes its dismissal and its free hit with it; the rule still binds the next no ball", () => {
+    // A dot ball opens the innings, then the no ball (the non-striker run out) at the second ball, then its void.
+    const noBallRunOut = delivery(0, 2, { extras: NO_BALL, wicket: wicketOf("runout", "H-p2") });
+    const played: Spec[] = [["core.start"], delivery(0, 1), noBallRunOut];
+    const voided: Spec[] = [...played, ["core.void", {}, "e-2"]];
+    const before = openInnings(strict(played));
+    expect([before.wickets, before.runs, before.fine.freeHitPending], "premise: the no ball stood and armed the free hit").toEqual([1, 1, true]);
+    const after = openInnings(strict(voided));
+    expect([after.wickets, after.runs, after.legalBalls, after.fine.freeHitPending]).toEqual([0, 0, 1, false]);
+    expect(after.fine.dismissed).toEqual([]);
+    // No free hit any more: a bowled on the next legal ball stands. Its pair: with the no ball in place, the free hit refuses it.
+    const bowled = (crease: Crease) => delivery(0, 2, { crease, wicket: wicketOf("bowled", "H-p1") });
+    expect(openInnings(strict([...voided, bowled(OPENERS)])).wickets).toBe(1);
+    expect(refusalOf(() => strict([...played, bowled({ ...OPENERS, nonStriker: "H-p3" })]))?.message).toBe(
+      '"bowled" cannot dismiss on a free hit',
+    );
+    // The second call: a no ball written after the void is bound like the first.
+    expect(refusalOf(() => strict([...voided, delivery(0, 2, { extras: NO_BALL, wicket: wicketOf("bowled", "H-p1") })]))).toEqual({
+      code: "INVALID_EVENT",
+      message: '"bowled" cannot dismiss on a no ball',
+    });
+  });
+
+  it("CK-NB-1 the super over's no ball is bound the same", () => {
+    // A tied T20 goes to a super over; A batted second, so A bats first in it (ICC Appendix F).
+    const cfg = parse({ ...cricket.variants.t20, superOver: true });
+    const soLineups = lineupsFor(cfg);
+    const tied: Spec[] = [["core.start"], summary(150, 5, 120), summary(150, 7, 120)];
+    const soCrease: Crease = { striker: "A-p1", nonStriker: "A-p2", bowler: "H-p11" };
+    const soBall = (kind: WicketKind) =>
+      delivery(0, 1, { type: "cricket.superover.ball", crease: soCrease, extras: NO_BALL, wicket: wicketOf(kind, "A-p1") });
+    const write = (specs: readonly Spec[]) => foldMatch(cricket, cfg, soLineups, ledger(specs), STRICT_ALL);
+    expect(write(tied).phase, "premise: the tie opens the super over").toBe("super_over");
+    expect(refusalOf(() => write([...tied, soBall("bowled")]))).toEqual({ code: "INVALID_EVENT", message: '"bowled" cannot dismiss on a no ball' });
+    expect(refusalOf(() => write([...tied, soBall("runout")]))).toBeNull();
+    // And a stored one replays.
+    expect(refusalOf(() => foldMatch(cricket, cfg, soLineups, ledger([...tied, soBall("bowled")])))).toBeNull();
+  });
+
+  it("CK-NB-1 engine fact: a wide restricts no mode of dismissal, though ICC 22.9 allows only hit wicket, obstructing, run out and stumped", () => {
+    // The no-ball rule does not reach a wide: stumped (22.9 allows it, 21.18 does not) stands. The engine also lets the six
+    // modes 22.9 refuses stand on a wide — a departure recorded here, not changed (the brief keeps wide handling as it is).
+    let stood = 0;
+    let departures = 0;
+    for (const kind of MODES) {
+      const innings = openInnings(strict([["core.start"], delivery(0, 1, { extras: WIDE, wicket: wicketOf(kind, "H-p1") })]));
+      expect(innings.wickets, `${kind} on a wide`).toBe(1);
+      expect(innings.legalBalls, `${kind}: a wide is not a ball of the over`).toBe(0);
+      stood++;
+      if (!ICC_22_9.includes(kind)) departures++;
+    }
+    expect(ICC_21_18, "premise: stumped is the differential").not.toContain("stumped");
+    expect(ICC_22_9).toContain("stumped");
+    // eslint-disable-next-line no-console -- TEST-STRATEGY anti-vacuity: the sweep reports what it checked
+    console.info(`CK-NB-1 wide (engine fact): ${stood} modes stood on a wide, ${departures} of them outside ICC 22.9`);
+    expect(stood).toBe(MODES.length);
+    expect(departures).toBe(MODES.length - ICC_22_9.length);
+    expect(departures).toBeGreaterThan(0);
   });
 });

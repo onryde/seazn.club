@@ -1224,6 +1224,19 @@ function applyAbandon(state: CricketState): CricketState {
 
 const BOWLER_CREDITED_KINDS = new Set(["bowled", "caught", "lbw", "stumped", "hitwicket"]);
 
+type WicketKind = z.infer<typeof CricketWicket>["kind"];
+
+/** W2e T8b (CK-NB-1, D8) — the modes of dismissal that stand off a no ball. ICC Men's T20 World Cup 2026 Playing
+ *  Conditions 21.18 (MCC Law 21.18 alike): "When No ball has been called, neither batter shall be out under any of the
+ *  Playing Conditions except clause 34 (Hit the ball twice), clause 37 (Obstructing the field) or clause 38 (Run out)." */
+const NO_BALL_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["hitballtwice", "obstructed", "runout"]);
+
+/** The free hit's (spec §2.2, CK-FH-1). ICC 21.19.2 gives it the no ball's three ("only under the circumstances that apply
+ *  for a No ball"); the engine leaves hit the ball twice out, CK-FH-1's recorded deviation (W2e ruling I-2). */
+const FREE_HIT_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(
+  [...NO_BALL_DISMISSAL_KINDS].filter((kind) => kind !== "hitballtwice"),
+);
+
 // W4 — which dismissals put a fielder in the scorebook, and under which column.
 const FIELDER_CREDIT_COLUMN: Record<string, keyof FieldingCredit> = {
   caught: "catches",
@@ -1514,8 +1527,13 @@ function applyDelivery(
   }
   if (payload.wicket !== undefined) {
     const wicket = payload.wicket;
-    if (fine.freeHitPending && wicket.kind !== "runout" && wicket.kind !== "obstructed") {
+    if (fine.freeHitPending && !FREE_HIT_DISMISSAL_KINDS.has(wicket.kind)) {
       invalid(`"${wicket.kind}" cannot dismiss on a free hit`);
+    }
+    // W2e T8b (CK-NB-1, ICC 21.18): off the no ball itself only three modes stand. STRICT ONLY: a new rule over ledgers
+    // that may already hold such a ball, so a stored one keeps folding to the result it recorded (the CK-CH-1 seam).
+    if (ctx.strictFold && extras?.kind === "noball" && !NO_BALL_DISMISSAL_KINDS.has(wicket.kind)) {
+      invalid(`"${wicket.kind}" cannot dismiss on a no ball`);
     }
     if (wicket.out !== striker && wicket.out !== nonStriker) {
       invalid(`"${wicket.out}" is not at the crease`);
