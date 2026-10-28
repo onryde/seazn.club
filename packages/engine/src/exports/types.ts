@@ -213,7 +213,8 @@ export interface ExportStandingsRow {
   won: number;
   drawn: number;
   lost: number;
-  points: number;
+  /** Whole points as a number; a half-point table's total as the table prints it (`pointsText`: "1½"), W2d RB2B-17. */
+  points: number | string;
   metrics: Record<string, number>;
   /** PROMPT-60: entrant crest URL (already resolved) — reaches the PDF. */
   badgeUrl?: string | null;

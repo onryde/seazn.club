@@ -583,3 +583,80 @@ describe.skipIf(!HAS_DB)("W2d concern 2 fix round 1 — the stored table follows
     expect([...REAL_TABLE_KINDS].sort()).toEqual([...SCORING_TABLE_KINDS].sort());
   });
 });
+
+/** The organiser standings export's whole table — its columns and every row's cells (engine `buildStandings`). */
+async function exportedTable(s: Scene): Promise<{ columns: string[]; rows: (string | number)[][] }> {
+  const doc = await buildDivisionDocModel(s.auth, s.divisionId, "standings", { printedAt: "2026-10-28T09:00:00.000Z" });
+  const table = doc.sections[0]?.table;
+  if (table === undefined) throw new Error("the standings export has no table");
+  return { columns: table.columns, rows: table.rows };
+}
+
+/** The export's `#` and `Pts` cells by entrant name, and the public table's place per name (the snapshot's `rank`). */
+async function exportedPlacesAndPoints(s: Scene) {
+  const { columns, rows } = await exportedTable(s);
+  const pts = columns.indexOf("Pts");
+  expect([columns[0], pts > 0], "premise: the export's first column is # and it has a Pts column").toEqual(["#", true]);
+  const [publicTable] = (await publicTablesOf(s)).tables;
+  if (publicTable === undefined) throw new Error("premise: the public read serves the stage's table");
+  const nameOf = new Map(s.entrants.map((id, i) => [id, `E${i + 1}`]));
+  return {
+    points: Object.fromEntries(rows.map((r) => [r[1], r[pts]])),
+    places: Object.fromEntries(rows.map((r) => [r[1], r[0]])),
+    publicPlaces: Object.fromEntries(publicTable.rows.map((r) => [nameOf.get(r.entrantId), r.rank])),
+    rows: rows.length,
+  };
+}
+
+describe.skipIf(!HAS_DB)("W2d final review I3 — the organiser standings export prints points as the public table does (RB2B-17: every surface)", () => {
+  // The expected cells come from FIDE's scoring (Laws of Chess, FIDE Handbook C.04: a win scores 1, a draw ½, a loss 0),
+  // never from the code that prints them. Chess stores half-points (2/1/0), so a raw cell prints every score doubled.
+  it("chess: a public 1½ exports as 1½ — after a win, then after two draws, every Pts cell in half-points; # is the public place", async () => {
+    // single-sport: chess is the one sport whose table counts in half-points (`unit: "half"`); the whole-point case is below.
+    const s = await scene({ sport: "boardgame", variant: "classical", entrants: 3 });
+    const [e1, e2, e3] = s.entrants as [string, string, string];
+    await generateStageFixtures(s.auth, s.stageId);
+    await startDivision(s.auth, s.divisionId);
+    const game = async (x: string, y: string, winner: string | null) => {
+      const f = await between(s.stageId, x, y);
+      await post(s.auth, f.id, "core.start");
+      await post(s.auth, f.id, "boardgame.result", winner === null ? { winner: null, method: "agreement" } : { winner, method: "resign" });
+      if ((await fixtureRow(f.id)).status !== "decided") throw new Error("rig: the game did not decide");
+    };
+    // E1 beats E2: E1 1, E2 0, E3 0 (not played yet). Stored 2/0/0, so a doubled cell prints "2".
+    await game(e1, e2, e1);
+    const first = await exportedPlacesAndPoints(s);
+    expect(first.points, "after one win").toEqual({ E1: "1", E2: "0", E3: "0" });
+    expect(first.places, "# is the public table's place, row for row").toEqual(first.publicPlaces);
+    // E1 draws E3 and E2 draws E3: E1 1 + ½ = 1½, E3 ½ + ½ = 1, E2 0 + ½ = ½.
+    await game(e1, e3, null);
+    await game(e2, e3, null);
+    const after = await exportedPlacesAndPoints(s);
+    expect(after.points, "after the two draws").toEqual({ E1: "1½", E3: "1", E2: "½" });
+    expect(after.places, "# is the public table's place, row for row").toEqual(after.publicPlaces);
+    expect(after.places, "E1 first, E3 second, E2 third").toEqual({ E1: 1, E3: 2, E2: 3 });
+    // The public page a visitor reads prints the same half-points.
+    const html = (await publicTablesOf(s)).html[0]!;
+    for (const text of ["1½", "½"]) expect(html, `the public table prints ${text}`).toContain(`>${text}<`);
+  });
+
+  it("a whole-point table keeps its stored points as NUMBER cells (generic: the spreadsheet column stays numeric, as before)", async () => {
+    // single-sport: the whole-point half of the chess case above; generic is the rig's plain whole-point sport.
+    const s = await scene({ entrants: 3 });
+    await generateStageFixtures(s.auth, s.stageId);
+    await startDivision(s.auth, s.divisionId);
+    await genericResult(s.auth, s.stageId, s.entrants[0]!, s.entrants[1]!, 1, 0);
+    const [stored] = await snapshotsOf(s.stageId);
+    if (stored === undefined) throw new Error("premise: the result stored a table");
+    const nameOf = new Map(s.entrants.map((id, i) => [id, `E${i + 1}`]));
+    const got = await exportedPlacesAndPoints(s);
+    let checked = 0;
+    for (const r of stored.rows) {
+      expect(got.points[nameOf.get(r.entrantId)!], `${nameOf.get(r.entrantId)}: the stored points, as a number`).toBe(r.points);
+      checked++;
+    }
+    expect(checked, "rows checked").toBe(3);
+    expect(got.points.E1, "premise: the winner scored").toBeGreaterThan(0);
+    expect(got.places).toEqual(got.publicPlaces);
+  });
+});
