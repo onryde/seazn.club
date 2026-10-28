@@ -6066,7 +6066,7 @@
   "stream.auto.refusal.unavailable": "de streamdienst is niet beschikbaar. Probeer het over een minuut.",
   "stream.auto.refusal.youtube_live_not_enabled": "livestreamen is voor dit kanaal nog niet ingeschakeld. YouTube kan tot 24 uur nodig hebben.",
   "stream.auto.refusal.youtube_live_blocked": "YouTube heeft livestreamen op dit kanaal beperkt.",
-  "stream.auto.refusal.youtube_retry": "YouTube kan op dit moment geen nieuwe stream starten op dit kanaal. Probeer het over een minuut.",
+  "stream.auto.refusal.retry": "de stream kon nu niet starten. Probeer het over een minuut.",
   "stream.auto.buyCredits": "Tegoed kopen",
   "stream.phone.mode.automatic": "Automatisch",
   "stream.phone.mode.operator": "Operator",

@@ -627,7 +627,7 @@ describe.skipIf(!HAS_DB)("automatic start — a channel refused for its live sta
     expect(read.strip!.remedy, "the way on is the Streaming page").toBe("manage");
   });
 
-  it("restricted → the restricted sentence; PAIR: YouTube not answering leaves the channel unknown and the strip says YouTube can't start a stream — not 'the streaming service'", async () => {
+  it("restricted → the restricted sentence; PAIR: YouTube not answering leaves the channel unknown and the strip says the stream couldn't start — naming no one (B4 fix round 2, F1: the stored word cannot say whose refusal it was)", async () => {
     const blocked = await apiAutoRig();
     blocked.fake.failNext("bind", "youtube_live_blocked");
     await beat(blocked.r, blocked.phone);
@@ -640,7 +640,32 @@ describe.skipIf(!HAS_DB)("automatic start — a channel refused for its live sta
     expect(await settingsOf(silent.r.fixtureId)).toMatchObject({ auto_start_refusal: "unavailable" });
     expect((await connectionViews(silent.r.auth.orgId)).get(silent.yt.connectionId)!.liveState, "nothing was learnt about live state").toBe("unknown");
     const s = await stripNow(silent.r);
-    expect(messageOf(s.strip!)).toBe("Automatic start couldn't begin: YouTube can't start another stream on this channel right now. Try again in a minute.");
+    expect(messageOf(s.strip!)).toBe("Automatic start couldn't begin: The stream couldn't start right now. Try again in a minute.");
+  });
+
+  // F1 (B4 fix round 2), through the REAL producer: Seazn's own refusal, met AFTER a clean prepare, is stored as the very same word as
+  // YouTube's retry-class refusals (autoStartRefusalOf) — so the strip over a YouTube channel must not blame YouTube for it.
+  it("F1 — Seazn's OWN storage_exhausted after a clean prepare over a YouTube channel: stored unavailable, the broadcast abandoned, the channel reads enabled, and the strip names no cause — never YouTube; it is the SAME strip as YouTube not answering", async () => {
+    const full = await apiAutoRig();
+    full.r.ingest.storage = { totalStorageMinutes: 1000, totalStorageMinutesLimit: 1000, videoCount: 0 };   // the pool is full: admit refuses storage_exhausted
+    await beat(full.r, full.phone);
+    expect(await settingsOf(full.r.fixtureId), "premise: the start was refused by storage, stored as the retry word").toMatchObject({
+      auto_start_refusal: "unavailable", auto_started_at: null,
+    });
+    expect(full.fake.calls.filter((c) => c.method === "bind"), "premise: prepare ran clean — YouTube was asked and said yes").toHaveLength(1);
+    expect(await sessionsOf(full.r.fixtureId)).toHaveLength(0);
+    expect((await connectionViews(full.r.auth.orgId)).get(full.yt.connectionId)!.liveState, "YouTube is not at fault").toBe("enabled");
+
+    const read = await stripNow(full.r);
+    expect(read.phone.auto?.refusal).toBe("unavailable");
+    expect(read.reason).toBe("stream.auto.refusal.retry");
+    expect(messageOf(read.strip!)).toBe("Automatic start couldn't begin: The stream couldn't start right now. Try again in a minute.");
+    expect(messageOf(read.strip!)).not.toMatch(/youtube/i);
+
+    const silent = await apiAutoRig();
+    silent.fake.failNext("bind", "youtube_unavailable");
+    await beat(silent.r, silent.phone);
+    expect((await stripNow(silent.r)).strip, "the stored word cannot tell them apart, so the strip does not").toEqual(read.strip);
   });
 
   it("SEQUENCE: the retry 60 s later, and every one inside the ten minutes, asks YouTube NOTHING and creates no row; after the window YouTube is asked again and, now enabled, the match starts and the channel reads enabled", async () => {

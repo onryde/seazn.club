@@ -6066,7 +6066,7 @@
   "stream.auto.refusal.unavailable": "el servicio de emisión no está disponible. Inténtalo en un minuto.",
   "stream.auto.refusal.youtube_live_not_enabled": "este canal aún no tiene activadas las emisiones en directo. YouTube puede tardar hasta 24 horas.",
   "stream.auto.refusal.youtube_live_blocked": "YouTube ha restringido las emisiones en directo en este canal.",
-  "stream.auto.refusal.youtube_retry": "YouTube no puede iniciar otra emisión en este canal ahora mismo. Inténtalo en un minuto.",
+  "stream.auto.refusal.retry": "la emisión no pudo iniciarse ahora mismo. Inténtalo en un minuto.",
   "stream.auto.buyCredits": "Comprar créditos",
   "stream.phone.mode.automatic": "Automático",
   "stream.phone.mode.operator": "Operador",

@@ -563,14 +563,19 @@ export function autoDestinationOf(phone: StreamPhone | null, targets: readonly S
 }
 
 /** The stored refusal words are the column's closed set (V431), so a YouTube destination's refusals share two of them: `no_destination`
- *  (the club must fix the destination) and `unavailable` (retry). Against a connected channel the strip says the real reason — not "no
- *  destination" beside a destination that is right there, and not "the streaming service" for a limit that is YouTube's. The channel
- *  reasons are read from the channel's OWN state (the Streaming page's `liveState`), which prepare records when YouTube refuses. Anything
- *  that does not say more than the stored word — a healthy or unchecked channel, a dead grant (the page says Reconnect), a pasted key —
- *  keeps it. */
+ *  (the club must fix the destination) and `unavailable` (retry). Against a connected channel the strip says the real reason when it can
+ *  be KNOWN: a not-enabled / restricted channel is read from the channel's OWN state (the Streaming page's `liveState`), which prepare
+ *  records when YouTube refuses, so "no destination" is not said beside a destination that is right there.
+ *
+ *  `unavailable` cannot be attributed. It is the one word stored for YouTube's quota, the channel's ten-streams cap and YouTube not
+ *  answering — AND for Seazn's own storage_exhausted / ingest_unavailable, which a start meets AFTER a clean prepare (stream-auto.ts
+ *  `autoStartRefusalOf`). Naming YouTube for it blamed YouTube for Seazn's refusals (B4 fix round 2, F1), so over a connected channel it
+ *  reads a line that names no cause (`stream.auto.refusal.retry`), and over a pasted key — where only Seazn's own refusals can store it —
+ *  the generic "streaming service" line. Anything else that does not say more than the stored word — a healthy or unchecked channel, a
+ *  dead grant (the page says Reconnect), a pasted key — keeps it. */
 function autoReasonKey(refusal: AutoRefusal, destination: AutoDestination | undefined): MessageKey {
   const y = destination?.youtube ?? null;
-  if (y !== null && refusal === "unavailable") return "stream.auto.refusal.youtube_retry";
+  if (y !== null && refusal === "unavailable") return "stream.auto.refusal.retry";
   if (y !== null && refusal === "no_destination" && y.status === "connected") {
     if (y.liveState === "not_enabled") return "stream.auto.refusal.youtube_live_not_enabled";
     if (y.liveState === "blocked") return "stream.auto.refusal.youtube_live_blocked";

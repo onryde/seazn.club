@@ -6066,7 +6066,7 @@
   "stream.auto.refusal.unavailable": "The streaming service is unavailable. Try again in a minute.",
   "stream.auto.refusal.youtube_live_not_enabled": "This channel isn't enabled for live yet. YouTube can take up to 24 hours.",
   "stream.auto.refusal.youtube_live_blocked": "YouTube has restricted live streaming on this channel.",
-  "stream.auto.refusal.youtube_retry": "YouTube can't start another stream on this channel right now. Try again in a minute.",
+  "stream.auto.refusal.retry": "The stream couldn't start right now. Try again in a minute.",
   "stream.auto.buyCredits": "Buy credits",
   "stream.phone.mode.automatic": "Automatic",
   "stream.phone.mode.operator": "Operator",

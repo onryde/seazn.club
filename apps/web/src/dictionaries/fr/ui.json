@@ -6066,7 +6066,7 @@
   "stream.auto.refusal.unavailable": "le service de diffusion est indisponible. Réessayez dans une minute.",
   "stream.auto.refusal.youtube_live_not_enabled": "les directs ne sont pas encore activés sur cette chaîne. YouTube peut mettre jusqu’à 24 heures.",
   "stream.auto.refusal.youtube_live_blocked": "YouTube a restreint les directs sur cette chaîne.",
-  "stream.auto.refusal.youtube_retry": "YouTube ne peut pas démarrer un autre direct sur cette chaîne pour le moment. Réessayez dans une minute.",
+  "stream.auto.refusal.retry": "la diffusion n'a pas pu démarrer pour le moment. Réessayez dans une minute.",
   "stream.auto.buyCredits": "Acheter des crédits",
   "stream.phone.mode.automatic": "Automatique",
   "stream.phone.mode.operator": "Opérateur",

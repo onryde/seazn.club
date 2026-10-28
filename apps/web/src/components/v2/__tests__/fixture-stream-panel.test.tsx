@@ -2662,8 +2662,9 @@ describe("PhoneTabBody — PR-2: the switch, the phone's line, the refusal, the 
       expect(reason(body({ view: null, balance: 0, targets: ch(state), selectedTargetId: "t1", phone: refusedAt("t1", "no_destination") })), `credits only / ${state}`).toBe(key);
       checked += 2;
     }
-    // The retry class names YouTube for a channel; the pasted key (t2) is still "the streaming service".
-    expect(reason(body({ ...READY, targets: ch("enabled"), phone: refusedAt("t1", "unavailable") }))).toBe("stream.auto.refusal.youtube_retry");
+    // The retry class over a channel reads the line that names no cause (F1: Seazn's own storage / ingest refusals store the same
+    // word); the pasted key (t2) is still "the streaming service".
+    expect(reason(body({ ...READY, targets: ch("enabled"), phone: refusedAt("t1", "unavailable") }))).toBe("stream.auto.refusal.retry");
     expect(reason(body({ ...READY, targets: ch("enabled"), phone: refusedAt("t2", "unavailable") })), "a pasted key").toBe("stream.auto.refusal.unavailable");
     // The server's destination is the one that counts, not the picker's: the picked row (t1) is a not-enabled channel, but the automatic
     // start tried t2 (a pasted key) — its stored word stands.
