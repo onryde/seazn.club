@@ -107,12 +107,14 @@ describe("replayReducer: the player's states", () => {
 });
 
 // ─── where focus goes when the stage changes ──────────────────────────────────────────────────────────────────────────────
-describe("focusTarget: a button that had focus is replaced by something that must take it (the wiring itself is browser-only)", () => {
+describe("focusTarget: a button that had focus is replaced by something that must take it - and a TAB CHOICE never takes focus (the wiring itself is browser-only)", () => {
   const MODES: ReplayMode[] = ["facade", "playing", "unavailable"];
+  /** A state with one part per mode listed, `active` showing. */
+  const st = (active: number, ...modes: ReplayMode[]): ReplayState => ({ active, modes });
 
-  it("sweeps every (before, after) pair of modes: focus moves exactly when the facade becomes the player (to the player) and when the player gives up (to the link) - and nowhere else", () => {
+  it("sweeps every (before, after) pair of modes OF THE SAME ACTIVE PART: focus moves exactly when the facade becomes the player (to the player) and when the player gives up (to the link) - and nowhere else", () => {
     // The two real transitions, from the written rule: the tap unmounts the focused facade button, and the player's error unmounts
-    // the focused iframe. Everything else (a tab choice, a reload to the same mode) leaves focus where the person put it.
+    // the focused iframe. Everything else (a reload to the same mode) leaves focus where the person put it.
     const expected: Record<string, "player" | "open-link" | null> = {
       "facade>facade": null, "facade>playing": "player", "facade>unavailable": null,
       "playing>facade": null, "playing>playing": null, "playing>unavailable": "open-link",
@@ -121,12 +123,55 @@ describe("focusTarget: a button that had focus is replaced by something that mus
     let checked = 0;
     for (const before of MODES) {
       for (const after of MODES) {
-        expect(focusTarget(before, after), `${before}>${after}`).toBe(expected[`${before}>${after}`]);
+        expect(focusTarget(st(0, before), st(0, after)), `${before}>${after}`).toBe(expected[`${before}>${after}`]);
         checked++;
       }
     }
     expect(checked, "anti-vacuity: all nine pairs were asked").toBe(9);
     expect(Object.values(expected).filter((v) => v !== null), "and exactly two of them move focus").toHaveLength(2);
+  });
+
+  it("a CHANGE OF ACTIVE PART never moves focus, whatever the two modes are: every (before, after) pair of modes, with the tab moved between them", () => {
+    // The tab choice is what has focus (the person is on the tablist); the effect must not pull it away - least of all when the mode
+    // reads "playing > unavailable" only because the part chosen had already failed (the focus steal this guards).
+    let checked = 0;
+    for (const before of MODES) {
+      for (const after of MODES) {
+        expect(focusTarget(st(0, before, after), st(1, before, after)), `tab 0 > tab 1 with modes ${before}/${after}`).toBeNull();
+        expect(focusTarget(st(1, after, before), st(0, after, before)), `tab 1 > tab 0 with modes ${after}/${before}`).toBeNull();
+        checked += 2;
+      }
+    }
+    expect(checked, "anti-vacuity: 2 x nine pairs").toBe(18);
+  });
+
+  it("through the REAL reducer: the player's own error on the active part moves focus to the link; choosing a tab whose part had already failed moves nothing - and the two states are the ones the reducer made", () => {
+    // [P1 playable, channel link: never a player]. Part 2 is `unavailable` from the start.
+    const parts: ReplayPart[] = [P1, { ...CHANNEL_ONLY, partNo: 2 }];
+    const start = initialReplayState(parts);
+    expect(start.modes, "premise: Part 2 is already the link").toEqual(["facade", "unavailable"]);
+
+    const playing = replayReducer(start, { type: "play" });
+    expect(playing.modes[0], "premise: Part 1 is playing").toBe("playing");
+    expect(focusTarget(start, playing), "the tap").toBe("player");
+
+    // Direction 1: the player's error, active part unchanged.
+    const failed = replayReducer(playing, { type: "unavailable" });
+    expect(failed.active, "premise: still Part 1").toBe(0);
+    expect(failed.modes[0], "premise: it gave up").toBe("unavailable");
+    expect(focusTarget(playing, failed), "the player's own error: focus goes to the link").toBe("open-link");
+
+    // Direction 2: the person chooses Part 2's tab while Part 1 plays. The ACTIVE mode reads playing > unavailable, but nothing failed.
+    const chosen = replayReducer(playing, { type: "select", index: 1 });
+    expect(chosen.active, "premise: the tab moved").toBe(1);
+    expect(chosen.modes[chosen.active], "premise: the part chosen is the link already").toBe("unavailable");
+    expect(playing.modes[playing.active], "premise: the part left was playing").toBe("playing");
+    expect(focusTarget(playing, chosen), "a tab choice: focus stays on the tablist").toBeNull();
+
+    // And back to the failed Part 1 from Part 2, and the facade case: also nothing.
+    expect(focusTarget(chosen, replayReducer(chosen, { type: "select", index: 0 })), "back to a part that had failed").toBeNull();
+    const aside = replayReducer(start, { type: "select", index: 1 });
+    expect(focusTarget(start, aside), "facade > the link by tab").toBeNull();
   });
 });
 

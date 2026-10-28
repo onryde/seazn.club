@@ -245,7 +245,7 @@ interface Net { thumbRequests: string[]; embedRequests: string[]; /** player doc
 /** i.ytimg.com answers a generated picture (the ids are not real videos); youtube-nocookie.com answers a stub that speaks the player's
  *  postMessage protocol. `embeddingDisabled` makes it answer the page's `listening` with error 150, as a video whose owner switched
  *  embedding off does. Returns the requests seen, so "no request before the tap" is a count, not a hope. */
-async function stubNetwork(page: Page, opts: { embeddingDisabled: boolean; holdEmbed?: boolean }): Promise<Net> {
+async function stubNetwork(page: Page, opts: { embeddingDisabled: boolean; holdEmbed?: boolean; /** video ids that answer error 150 while the rest play */ failIds?: readonly string[] }): Promise<Net> {
   const net: Net = { thumbRequests: [], embedRequests: [], answered: 0, release: () => {} };
   // `holdEmbed`: the player's document is not answered until `net.release()`, so its load event provably has not fired.
   const held = new Promise<void>((resolveHeld) => { net.release = resolveHeld; });
@@ -261,6 +261,7 @@ async function stubNetwork(page: Page, opts: { embeddingDisabled: boolean; holdE
     net.embedRequests.push(route.request().url());
     if (opts.holdEmbed) await held;
     net.answered++;
+    const embeddingDisabled = opts.embeddingDisabled || (opts.failIds ?? []).some((id) => route.request().url().includes(`/embed/${id}`));
     await route.fulfill({
       contentType: "text/html",
       body: `<!doctype html><meta charset="utf-8"><title>stub player</title>
@@ -270,7 +271,7 @@ window.__got = [];
 window.addEventListener("message", function (e) {
   window.__got.push({ origin: e.origin, data: String(e.data) });
   var d; try { d = JSON.parse(e.data); } catch (x) { return; }
-  if (d && d.event === "listening" && ${opts.embeddingDisabled}) {
+  if (d && d.event === "listening" && ${embeddingDisabled}) {
     parent.postMessage(JSON.stringify({ event: "onError", info: 150, id: 1, channel: "widget" }), "*");
   }
 });
@@ -517,6 +518,46 @@ test("Match page - a video that cannot be embedded: the player's error puts 'Ope
   await page.reload({ waitUntil: "load" });
   await declineCookies(page);
   await expect(player.getByTestId("replay-facade"), "a reload starts over at the facade").toBeVisible();
+});
+
+test("Match page - choosing a tab whose part already failed does NOT pull focus off the tablist (only the player's own error moves focus, to the link)", async ({ page }) => {
+  test.setTimeout(budget({ navs: 2, acts: 14 }));
+  const r = await rig(page, 2, null);
+  // Part 2's video cannot be embedded; Part 1's plays.
+  await stubNetwork(page, { embeddingDisabled: false, failIds: [r.ids[1]!] });
+  await visit(page, r.publicPath);
+  const player = page.getByTestId("replay-embed");
+  const tabs = player.getByRole("tab");
+  await expect(tabs).toHaveCount(2);
+
+  // Part 2 fails on its own error: THAT is the focus move (to the link) - the positive twin of the steal below.
+  await tabs.nth(1).click();
+  await player.getByTestId("replay-facade").click();
+  await expect(player.getByTestId("replay-unavailable"), "Part 2 gave up").toBeVisible({ timeout: NAV_MS });
+  await expect(player.getByTestId("replay-open"), "the player's own error: focus goes to the link").toBeFocused();
+
+  // Part 1 plays (its iframe is up), Part 2 stays failed.
+  await tabs.nth(0).click();
+  await player.getByTestId("replay-facade").click();
+  await expect(player.locator("iframe"), "Part 1 is playing").toHaveCount(1);
+  await expect(player.locator("iframe")).toBeFocused();
+
+  // The person chooses Part 2's tab by click, then by arrow key, while Part 1 plays: the stage's mode reads playing > unavailable, but
+  // nothing failed just now, so focus stays on the tab they chose.
+  await tabs.nth(1).click();
+  await expect(player.getByTestId("replay-unavailable"), "Part 2 shows as failed").toBeVisible();
+  await expect(player.locator("iframe"), "Part 1 stopped").toHaveCount(0);
+  await expect(tabs.nth(1), "focus stays on the tab that was chosen").toBeFocused();
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("role")), "and it is the tab, not the link").toBe("tab");
+
+  await tabs.nth(0).click();
+  await player.getByTestId("replay-facade").click();
+  await expect(player.locator("iframe")).toHaveCount(1);
+  await tabs.nth(0).focus();   // the tap handed focus to the player: put it back on the tablist, as a keyboard user would
+  await page.keyboard.press("ArrowRight");
+  await expect(player.getByTestId("replay-unavailable")).toBeVisible();
+  await expect(tabs.nth(1), "arrow key: focus is on Part 2's tab").toBeFocused();
+  expect(await page.evaluate(() => document.activeElement?.getAttribute("data-testid")), "and not on the link").not.toBe("replay-open");
 });
 
 // ---------------------------------------------------------------------------------------------------------------------

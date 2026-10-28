@@ -45,13 +45,18 @@ export function initialReplayState(parts: readonly ReplayPart[]): ReplayState {
   return { active: 0, modes: parts.map((p): ReplayMode => (youtubeVideoId(p.url) === null ? "unavailable" : "facade")) };
 }
 
-/** Where focus must go when the stage's mode changes, or null to leave it where the person put it. Two transitions unmount the element
- *  that holds focus, and focus would drop to <body>: the tap turns the focused facade button into the player (focus goes to the
- *  player), and the player's error turns the focused player into the fallback (focus goes to the "Open on YouTube" link - the one
- *  thing the person can do next; the note beside it is a status, announced as it appears). A tab choice or anything else moves nothing. */
-export function focusTarget(before: ReplayMode, after: ReplayMode): "player" | "open-link" | null {
-  if (before === "facade" && after === "playing") return "player";
-  if (before === "playing" && after === "unavailable") return "open-link";
+/** Where focus must go when the state changes, or null to leave it where the person put it. Two transitions of the ACTIVE part unmount
+ *  the element that holds focus, and focus would drop to <body>: the tap turns the focused facade button into the player (focus goes
+ *  to the player), and the player's own error turns the focused player into the fallback (focus goes to the "Open on YouTube" link -
+ *  the one thing the person can do next; the note beside it is a status, announced as it appears). A CHANGE OF ACTIVE PART is neither:
+ *  it is a tab choice, focus is on the tablist and stays there - even when the part chosen had already failed, so the stage's mode
+ *  reads "playing > unavailable" without anything having failed just now. Anything else moves nothing. */
+export function focusTarget(before: ReplayState, after: ReplayState): "player" | "open-link" | null {
+  if (before.active !== after.active) return null;
+  const was = before.modes[before.active];
+  const now = after.modes[after.active];
+  if (was === "facade" && now === "playing") return "player";
+  if (was === "playing" && now === "unavailable") return "open-link";
   return null;
 }
 
@@ -215,14 +220,15 @@ function ReplayPlayer({ parts }: { parts: readonly ReplayPart[] }) {
 
   // Focus follows the stage. The tap that started the player unmounted the button that had focus: hand focus to the player the moment
   // it mounts - not only once its document has loaded, or focus sits on <body> for the whole load and a keyboard user is dropped to
-  // the top of the page. The player's error unmounts the player the same way: focus goes to the "Open on YouTube" link.
-  const lastMode = useRef<ReplayMode>(mode);
+  // the top of the page. The player's error unmounts the player the same way: focus goes to the "Open on YouTube" link. A tab choice moves
+  // nothing (`focusTarget` looks at the ACTIVE part across the change, not at the mode on screen).
+  const lastState = useRef<ReplayState>(state);
   useEffect(() => {
-    const target = focusTarget(lastMode.current, mode);
-    lastMode.current = mode;
+    const target = focusTarget(lastState.current, state);
+    lastState.current = state;
     if (target === "player") iframeRef.current?.focus();
     else if (target === "open-link") openRef.current?.focus();
-  }, [mode]);
+  }, [state]);
 
   const onPlay = () => {
     setPageOrigin(window.location.origin);
