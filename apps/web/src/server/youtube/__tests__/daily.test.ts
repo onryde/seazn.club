@@ -196,11 +196,13 @@ interface BRow {
   last_error_code: string | null; attempts: number; next_attempt_at: Date | null; claimed_at: Date | null; completed_at: Date | null;
   refreshed_at: Date;
 }
-const bCols = sql`id, fixture_id, connection_id, state, key_id, yt_broadcast_id, last_error_code, attempts, next_attempt_at, claimed_at,
+/** The column list, built when a query is built (never at module scope: a `sql` fragment opens the pooled client, and without a database
+ *  that throws while the file is COLLECTED, before `describe.skipIf(!HAS_DB)` can skip it - the no-DB unit job). */
+const bCols = () => sql`id, fixture_id, connection_id, state, key_id, yt_broadcast_id, last_error_code, attempts, next_attempt_at, claimed_at,
                   completed_at, refreshed_at`;
-const broadcastRow = async (id: string): Promise<BRow> => (await sql<BRow[]>`select ${bCols} from youtube_broadcasts where id = ${id}`)[0]!;
+const broadcastRow = async (id: string): Promise<BRow> => (await sql<BRow[]>`select ${bCols()} from youtube_broadcasts where id = ${id}`)[0]!;
 const broadcastsOfConnection = (connectionId: string) =>
-  sql<BRow[]>`select ${bCols} from youtube_broadcasts where connection_id = ${connectionId} order by created_at, id`;
+  sql<BRow[]>`select ${bCols()} from youtube_broadcasts where connection_id = ${connectionId} order by created_at, id`;
 const keysOf = async (connectionId: string): Promise<number> =>
   (await sql<{ n: number }[]>`select count(*)::int as n from youtube_stream_keys where connection_id = ${connectionId}`)[0]!.n;
 const streamUrlOf = async (fixtureId: string) =>
