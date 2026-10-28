@@ -132,7 +132,7 @@ export interface StandingsWire {
   readonly stage_id: string;
   readonly pool_id: string | null;
   readonly rows: readonly StandingsRowWire[];
-  readonly computed_through_seq: number;
+  readonly computed_through_seq: string | 0; // the snapshot's int8 watermark as a decimal string; 0 for a table folded on the read (StandingsOut)
   readonly updated_at: string | null;
 }
 
