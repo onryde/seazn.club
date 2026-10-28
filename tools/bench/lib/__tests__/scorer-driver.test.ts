@@ -1254,7 +1254,13 @@ describe("organiserStepsFor — what the scorer pad cannot author, on the fixtur
     expect(dialogSrc).toContain("data-testid={`" + FORFEIT_WHO_TESTID_PREFIX + "${w}`}");
     expect(dialogSrc).toContain("data-testid={`" + FORFEIT_WHY_TESTID_PREFIX + "${r}`}");
     expect(dialogSrc).toContain(`data-testid="${FORFEIT_CONFIRM_TESTID}"`);
-    expect(web("scorepad/v3/detail-dock.tsx")).toContain("data-testid={`" + DOCK_CHIP_TESTID_PREFIX + "${chip.id}`}");
+    // W2d T18 moved the chip's attributes into ONE helper (`dockChipAttrs`) spread into both docks' buttons, so the
+    // testid is an object-literal key now, not a JSX attribute. Pin both halves: the helper carries the prefix, and
+    // the helper is actually spread onto a button (a helper nothing spreads would leave every chip id-less).
+    const dockSrc = web("scorepad/v3/detail-dock.tsx");
+    expect(dockSrc).toMatch(new RegExp('"data-testid":\\s*`' + DOCK_CHIP_TESTID_PREFIX + "\\$\\{chip\\.id\\}`"));
+    const spreads = dockSrc.match(/\{\.\.\.dockChipAttrs\(chip,/g) ?? [];
+    expect(spreads.length, `dockChipAttrs spreads: ${spreads.length}`).toBeGreaterThan(0);
   });
 
   it("selectorForTapStep: dock chips (tapped or offered) and releaseHold resolve to Task 8-style testids; text to its own", () => {
