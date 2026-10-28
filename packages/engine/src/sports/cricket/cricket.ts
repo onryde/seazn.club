@@ -1701,11 +1701,14 @@ function applySummary(
       got: { runs: payload.runs, wickets: payload.wickets, legalBalls: payload.legalBalls },
     });
   }
-  // THREE STRICT-ONLY CHECKS (§3.3 seam), all three cfg-derived: `allOut`
-  // follows `playersPerSide`, `ballsLimit` follows `ballsPerInnings`, and the
-  // declaration rule follows `inningsPerSide`. Lowering any of them refuses a
-  // summary the ledger already holds, on every read, with nothing to void — a
-  // T20 division re-cut to 10 overs would take every recorded innings dark.
+  // FOUR STRICT-ONLY CHECKS (§3.3 seam). The first three are cfg-derived:
+  // `allOut` follows `playersPerSide`, `ballsLimit` follows `ballsPerInnings`,
+  // and the declaration rule follows `inningsPerSide`. Lowering any of them
+  // refuses a summary the ledger already holds, on every read, with nothing to
+  // void — a T20 division re-cut to 10 overs would take every recorded innings
+  // dark. The fourth, the chase bound (CK-CH-1, below), is STATE-derived: it
+  // moves with `revisedTarget`, so a revise that lowers the target does the same
+  // to a total recorded under the old one.
   const allOut = allOutWickets(next, innings.battingSide);
   if (strict && payload.wickets > allOut) {
     invalid(`wickets exceed all-out (${allOut})`, { wickets: payload.wickets });
