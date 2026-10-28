@@ -70,6 +70,8 @@ const COL = {
   ties: dictString("en", "table.col.ties"),
   noResults: dictString("en", "table.col.noResults"),
   fieldGoals: dictString("en", "table.col.fieldGoals"),
+  setRatio: dictString("en", "table.col.ratio"),
+  gameRatio: dictString("en", "table.col.gameRatio"),
   for: dictString("en", "table.col.for"),
   // A notation column prints the engine's own label in every locale (`NOTATION_HEADERS`).
   sberger: derived("sberger").label,
@@ -688,6 +690,11 @@ test.describe("goals: football, hockey, ice hockey, best third", () => {
     const B2_ABSENT_BONUS = 1;
     const sport = sportRule(HK, merged, "league");
     const preset = presetRule(HK, "league", "pro_league");
+    // FIH Pro League Regulations S7 Reg 4.2 b–c (RBG:207; spec §5.10, HK-PT-2): a regulation win 3, a loss 0, a drawn
+    // match 1 each and its shoot-out winner +1. Pinned to the rulebook, so a wrong preset declaration cannot carry the
+    // expected table with it.
+    expect({ win: preset.win.regulation, draw: preset.draw, loss: preset.loss.regulation, soBonus: preset.soBonus }, "premise: the Pro League chip declares FIH Pro League Reg 4.2 b–c").toEqual({ win: 3, draw: 1, loss: 0, soBonus: 1 });
+    expect(sport.soBonus, "premise: FIH's default rule declares no shoot-out bonus (B2 pays an absent one 1)").toBeUndefined();
     const OWN_BONUS = 2;
     expect([sport.shootoutAs, preset.shootoutAs], "premise: FIH books a shoot-out as a draw plus a bonus").toEqual(["draw_plus_bonus", "draw_plus_bonus"]);
     const sportWinner = sport.draw! + (sport.soBonus ?? B2_ABSENT_BONUS);
@@ -697,9 +704,13 @@ test.describe("goals: football, hockey, ice hockey, best third", () => {
     const want: Partial<RuleLike> = { win: { regulation: preset.win.regulation }, loss: { regulation: preset.loss.regulation }, draw: preset.draw!, soBonus: OWN_BONUS, shootoutAs: "draw_plus_bonus" };
     await savePoints(page, request, r, stageId, async (section) => {
       const chip = section.getByTestId("stage-points-preset-pro_league");
+      const bonus = section.getByTestId("stage-points-so-bonus");
+      // Before the click the boxes hold the sport's rule (no bonus declared), so the chip is not pressed and the bonus
+      // box is empty: the click is what moves both.
+      await expect(chip, "before the click the Pro League chip is not pressed").toHaveAttribute("aria-pressed", "false");
+      await expect(bonus, "before the click the bonus box holds the sport's rule: none").toHaveValue("");
       await chip.click();
       await expect(chip, "the Pro League chip fills the boxes").toHaveAttribute("aria-pressed", "true");
-      const bonus = section.getByTestId("stage-points-so-bonus");
       await expect(bonus, "the chip's shoot-out bonus, as the preset declares it").toHaveValue(String(preset.soBonus));
       await bonus.fill(String(OWN_BONUS));
       await expect(chip, "a bonus typed over the chip is the stage's own rule, no longer the preset").toHaveAttribute("aria-pressed", "false");
@@ -964,7 +975,7 @@ test.describe("sets: volleyball, badminton, table tennis", () => {
 // ── tennis ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 test.describe("tennis", () => {
-  test("tennis: on two wins each, more matches played ranks above head-to-head and set ratio (ATP 4.01 C.3-2); a point tapped", async ({ page, request, browser }) => {
+  test("tennis: on two wins each, more matches played ranks above head-to-head and set ratio (ATP 4.01 C.3-2), its set and game ratio columns print won over lost; a point tapped", async ({ page, request, browser }) => {
     test.setTimeout(budget({ taps: 1, api: 90, publicReads: 1 }));
     const TN = mod("tennis");
     // One-game sets, so a set is four points (the order under test never reads the set length).
@@ -1003,12 +1014,17 @@ test.describe("tennis", () => {
     await match(Z, W);
     // Y v W is never played. X and Y two wins each: X played 3 (a 2-1 record), Y 2 (2-0) → X, though Y beat X and Y's set
     // ratio (4/1) is above X's (5/2). W2/L0.
+    // The edit dropped `seed`, so set_ratio and game_ratio stay in the order and each earns its column (ST-G29). A ratio
+    // cell is won over lost (`RATIO_LEDGERS`) at the engine's declared decimals. One-game sets: games = sets here.
+    expect(own, "premise: both ratios are still in the order").toEqual(expect.arrayContaining(["set_ratio", "game_ratio"]));
+    const ratio = (key: "set_ratio" | "game_ratio", won: number, lost: number): string => (won / lost).toFixed(derived(key).decimals);
+    const ratios = (won: number, lost: number): Record<string, string> => ({ [COL.setRatio]: ratio("set_ratio", won, lost), [COL.gameRatio]: ratio("game_ratio", won, lost) });
     const visitor = await spectator(browser, { width: 1280, height: 900 });
     await expectPublicTable(visitor, r.path, [
-      { name: X.name, cells: pwlp(3, 2, 1, "4") },
-      { name: Y.name, cells: pwlp(2, 2, 0, "4") },
-      { name: Z.name, cells: pwlp(3, 1, 2, "2") },
-      { name: W.name, cells: pwlp(2, 0, 2, "0") },
+      { name: X.name, cells: { ...pwlp(3, 2, 1, "4"), ...ratios(1 + 2 + 2, 2) } },
+      { name: Y.name, cells: { ...pwlp(2, 2, 0, "4"), ...ratios(2 + 2, 1) } },
+      { name: Z.name, cells: { ...pwlp(3, 1, 2, "2"), ...ratios(2, 2 + 2) } },
+      { name: W.name, cells: { ...pwlp(2, 0, 2, "0"), ...ratios(0, 2 + 2) } },
     ], "tennis matches played");
   });
 });
@@ -1124,6 +1140,9 @@ test.describe("boards: chess, carrom", () => {
     const cfg = CH.configSchema.parse(r.cfg);
     const sport = sportRule(CH, cfg, "league");
     const three = presetRule(CH, "league", "three_one_zero");
+    // RBG:456 (RB2B-18; spec §5.10, BG-PT-1): a round-robin stage may choose 3/1/0 "football scoring", a win 3, a draw
+    // 1, a loss 0. Pinned to the rulebook, so a wrong preset declaration cannot carry the expected table with it.
+    expect({ win: three.win.regulation, draw: three.draw, loss: three.loss.regulation }, "premise: the 3/1/0 chip declares football scoring").toEqual({ win: 3, draw: 1, loss: 0 });
     // The sport's rule is FIDE's, stored in half-points (a win 2 = one point shown); the chip's is whole 3/1/0.
     const shown = (rule: RuleLike, n: number) => (rule.unit === "half" ? n / 2 : n);
     expect([shown(sport, sport.win.regulation), shown(three, three.win.regulation)], "premise: the chip's win differs from the sport's").toEqual([1, 3]);
