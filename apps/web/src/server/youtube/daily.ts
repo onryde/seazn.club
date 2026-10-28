@@ -1,0 +1,476 @@
+import "server-only";
+// server/youtube/daily.ts — YouTube Connect T17: the DAILY YouTube pass on the relay-sweep cron (spec §6.6 "Daily", §6.8; plan T17 with the
+// post-T2 amendment; controller overrides O2 carries a-h, O3, O4). The minute-by-minute work (ending broadcasts) is end-step.ts's; this is
+// the once-a-day work that keeps stored YouTube data honest (Google API Services User Data Policy, DP III.E.4) and settles what the end
+// step can never settle. Legs, in this order, each in its own try so a fault in one never skips the rest:
+//   1. PENDING GRANTS  — an expired `youtube_connect_pending` row (a sealed token, the picker's channel titles; a cancelled pick leaves
+//      one behind) is deleted (T8 ruling, carry e).
+//   2. PER CONNECTED CHANNEL, one access token for both halves:
+//      HEALTH  — `listMyChannels` (rename → the connection's channel_title AND its destination row's label; the channel gone from the
+//      grant → reconnect_needed) and `liveEnabled` (→ last_error_code youtube_live_not_enabled / youtube_live_blocked, or null), stamped
+//      with the DATABASE's clock (carry f: `liveStateOf` compares last_health_at with status_since, which the database wrote).
+//      A dead grant (`invalid_grant`, or any reconnect refusal) → reconnect_needed, status_since now: the 30-day purge clock starts.
+//      REFRESH — the `complete` rows whose video was last confirmed more than 25 days ago, in batches of 50 (Google's per-call id cap):
+//      still there → refreshed_at = the pass's now; gone → the row is deleted and fixtures.stream_url is cleared WHEN IT POINTS AT THAT
+//      VIDEO (a club's own link is never touched).
+//   3. STUCK BROADCASTS (carries a, b) — see `settleStuck`.
+//   4. DEAD GRANTS — reconnect_needed for 30 days → revokeConnection (token-store's ONE statement, R1/B1-R1) + `purgeConnectionData`.
+//      No call is made to Google: the grant is already dead, and a revoke of it would answer nothing.
+//   5. STRANDED ROWS (carry c) — a revoked connection that still holds rows, keys, a sub, an archived watch link or a pending grant (the
+//      end step skips revoked connections, so an open broadcast on one never settles; a disconnect whose purge transaction failed leaves
+//      the same) is purged.
+//   6. FAILED ROWS (carry d) — a `failed` broadcast row is deleted 30 days after it failed. The plan names no retention for a failed row;
+//      it holds a title and (usually) a video id, i.e. YouTube data, so DP III.E.4's 30 days applies.
+//
+// DECISIONS the brief left open (also in the T17 report):
+//  - g (insufficientLivePermissions). YouTube's "the request is not authorized to <live>" is a fact about the CHANNEL's live permission,
+//    which a reconnect of the same account may not cure. The health check treats it like live_blocked: the connection STAYS `connected`,
+//    last_error_code = youtube_live_blocked, and no purge clock starts. Any other reconnect refusal on the same call flips as before.
+//  - a/b (stuck rows). A row is STUCK when it has failed for a full day AT the backoff cap (31 failures, derived below from end-step's own
+//    constants), or sits `ending` longer than that schedule takes to run (a claim deferred on every firing never counts an attempt). It is
+//    reported (captureError, codes and ids only) and counted `failed` (the Worker's degraded line), and finalized `failed` / `end_stuck`
+//    so its key frees, UNLESS a session on it is active (a key is never freed under a stream). A row on a `reconnect_needed` connection is
+//    not stuck: it waits for the club (a reconnect clears the backoff and the end succeeds) and for the 30-day purge.
+//  - c (stranded). A revoked connection's rows are PURGED, not finalized: the connection is gone, and DP III.E.4 asks for the data to go.
+//
+// purgeConnectionData is SHARED with T18's disconnect: it takes a transaction, refuses a connection that is not revoked, is idempotent, and
+// returns counts (plus the divisions whose public pages must be expired once the transaction commits — it cannot do that itself).
+//
+// SECRETS. A token, a stream key and a Google body never reach a log line, a report or a row: a port refusal is a CODE (port.ts), the sealed
+// token is opened in memory for one pass, and what is reported carries ids and codes only. The file names no sealed column.
+import { sql, type Tx } from "@/lib/db";
+import { captureError } from "@/lib/sentry";
+import { YOUTUBE_LIVE_STATE_OF_REFUSAL, youtubeVideoId, type YoutubeLiveStateRefusal } from "@/lib/youtube";
+import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
+import { ACTIVE_STATES } from "@/server/relay/domain/session";
+import { recordLiveState } from "./connections";
+import { OPEN_STATES, YOUTUBE_END_BACKOFF_CAP_MINUTES, endBackoffMinutes } from "./end-step";
+import { YouTubeError, type YouTubePort } from "./port";
+import { markReconnectNeeded, openToken, revokeConnection } from "./token-store";
+
+/** `checked` connections health-checked; `reconnectNeeded` connections this pass found dead; `refreshed` / `removed` broadcast rows
+ *  confirmed / deleted (removed: a video gone from YouTube, or a failed row past its retention); `purged` connections whose data was
+ *  purged; `failed` what did not work and is retried tomorrow, plus every stuck broadcast (the Worker alerts on this one). */
+export type YoutubeDailyResult = { checked: number; reconnectNeeded: number; refreshed: number; removed: number; purged: number; failed: number };
+
+/** A stored video link is re-confirmed after this long (spec §6.6 "~25 days"; DP III.E.4 allows 30, so a failed day has slack). */
+export const YOUTUBE_REFRESH_AFTER_DAYS = 25;
+/** A grant that has been dead this long has its YouTube data purged (DP III.E.4, spec §6.8). */
+export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = 30;
+/** A `failed` broadcast row is deleted this long after it failed (DP III.E.4; the plan names no other figure). */
+export const YOUTUBE_FAILED_ROW_RETENTION_DAYS = 30;
+
+/** videos.list takes at most 50 ids per call (Google). */
+const VIDEOS_PER_CALL = 50;
+/** Our code on a row the daily pass finalized because it could never settle. Matches V479's `[a-z_:]{1,64}`. */
+const CODE_STUCK = "end_stuck";
+/** Google's reason for "the request is not authorized to <live>" (liveBroadcasts / liveStreams pages); see decision g. */
+const LIVE_PERMISSIONS_REASON = "insufficientLivePermissions";
+
+const MINUTE_MS = 60_000;
+const DAY_MS = 86_400_000;
+const daysBefore = (at: Date, days: number): Date => new Date(at.getTime() - days * DAY_MS);
+
+// ─── the stuck-row bound, DERIVED from the end step's backoff (carry a) ──────────────────────────────────────────────────────────────
+/** A row that fails every time waits 1, 2, 4 … minutes and then sits at the cap. It is stuck once it has failed for this many full days AT
+ *  the cap: long enough that no outage YouTube has is the cause, short enough that a key does not stay held for a week. */
+const STUCK_DAYS_AT_CAP = 1;
+const failuresToReachCap = (): number => {
+  let n = 1;
+  while (endBackoffMinutes(n) < YOUTUBE_END_BACKOFF_CAP_MINUTES) n++;
+  return n;
+};
+/** The failure count at which a row is stuck: the failures to reach the cap, plus a day of them at it (31 with P6's 1, 2 … 60). */
+export const YOUTUBE_END_STUCK_AFTER_ATTEMPTS =
+  failuresToReachCap() + Math.ceil((STUCK_DAYS_AT_CAP * 24 * 60) / YOUTUBE_END_BACKOFF_CAP_MINUTES);
+/** How long a row that fails every time it is tried takes to get there: the waits between its first failure and the last. An `ending` row
+ *  claimed longer ago than this is stuck by age (1503 minutes with P6). */
+export const YOUTUBE_END_STUCK_AFTER_MINUTES = (() => {
+  let total = 0;
+  for (let k = 1; k < YOUTUBE_END_STUCK_AFTER_ATTEMPTS; k++) total += endBackoffMinutes(k);
+  return total;
+})();
+
+/** Which refusal each non-enabled live state is recorded as: the INVERSE of the shared table connections.ts `liveStateOf` reads, so the
+ *  writer here and the reader cannot disagree. */
+const REFUSAL_OF_LIVE_STATE = Object.fromEntries(
+  Object.entries(YOUTUBE_LIVE_STATE_OF_REFUSAL).map(([code, state]) => [state, code]),
+) as Record<"not_enabled" | "blocked", YoutubeLiveStateRefusal>;
+
+const zero = (): YoutubeDailyResult => ({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, purged: 0, failed: 0 });
+
+type Division = { divisionId: string; competitionId: string };
+export type PurgeResult = { broadcasts: number; streamUrlsCleared: number; divisions: Division[] };
+
+/** The public match pages of these divisions list the parts and the replay link: expire them (once the data has COMMITTED). */
+const expirePages = (divisions: readonly Division[]): void => {
+  for (const d of divisions) fireDivisionRevalidate(d.divisionId, d.competitionId);
+};
+
+interface StoredBroadcast { id: string; fixture_id: string; yt_broadcast_id: string | null }
+
+/** The divisions of these fixtures, for the pages to expire. */
+async function divisionsOf(tx: Tx, orgId: string, fixtureIds: readonly string[]): Promise<Division[]> {
+  if (fixtureIds.length === 0) return [];
+  const rows = await tx<{ division_id: string; competition_id: string }[]>`
+    select distinct f.division_id, d.competition_id
+      from fixtures f join divisions d on d.id = f.division_id
+     where f.id = any(${[...fixtureIds]}::uuid[]) and f.org_id = ${orgId}`;
+  return rows.map((r) => ({ divisionId: r.division_id, competitionId: r.competition_id }));
+}
+
+/** Clear `fixtures.stream_url` on the fixtures of these broadcasts WHEN IT POINTS AT ONE OF THEIR VIDEOS (compared by video, so `youtu.be/<id>`
+ *  and `watch?v=<id>` are one video, as lib/youtube's `linkIsOneOfParts` compares). A club's own link to anything else is not touched, and the
+ *  clear is conditional on the value just read, so a link saved meanwhile is not lost. Returns how many links it cleared. */
+async function clearStreamUrlsPointingAt(tx: Tx, orgId: string, rows: readonly StoredBroadcast[]): Promise<number> {
+  const videos = new Set(rows.flatMap((r) => (r.yt_broadcast_id === null ? [] : [r.yt_broadcast_id])));
+  const fixtureIds = [...new Set(rows.map((r) => r.fixture_id))];
+  if (videos.size === 0 || fixtureIds.length === 0) return 0;
+  const linked = await tx<{ id: string; stream_url: string }[]>`
+    select id, stream_url from fixtures where id = any(${fixtureIds}::uuid[]) and org_id = ${orgId} and stream_url is not null`;
+  let cleared = 0;
+  for (const f of linked) {
+    const video = youtubeVideoId(f.stream_url);
+    if (video === null || !videos.has(video)) continue;   // a club's own link
+    const done = await tx<{ id: string }[]>`update fixtures set stream_url = null where id = ${f.id} and stream_url = ${f.stream_url} returning id`;
+    cleared += done.length;
+  }
+  return cleared;
+}
+
+/** Delete these broadcast rows and clear the links that pointed at their videos, in the caller's transaction. */
+async function deleteBroadcasts(tx: Tx, orgId: string, rows: readonly StoredBroadcast[]): Promise<{ deleted: number; cleared: number; divisions: Division[] }> {
+  if (rows.length === 0) return { deleted: 0, cleared: 0, divisions: [] };
+  const cleared = await clearStreamUrlsPointingAt(tx, orgId, rows);
+  const gone = await tx<{ fixture_id: string }[]>`
+    delete from youtube_broadcasts where id = any(${rows.map((r) => r.id)}::uuid[]) and org_id = ${orgId} returning fixture_id`;
+  return { deleted: gone.length, cleared, divisions: await divisionsOf(tx, orgId, [...new Set(gone.map((g) => g.fixture_id))]) };
+}
+
+// ─── the shared purge ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Purge everything Seazn stored FROM YouTube for a REVOKED connection (DP III.E.4), inside the caller's transaction: its broadcast rows
+ *  (titles, video ids), the `fixtures.stream_url` values that pointed at its videos (a club's own link is kept), its pooled stream keys (the
+ *  sealed ingest keys are YouTube API data), the watch link on its archived destination, the connection's Google account id, and any
+ *  pending reconnect grant for it. Shared by the dead-grant purge here and T18's disconnect.
+ *
+ *  - The connection must be REVOKED (token-store's `revokeConnection`, which the caller runs first): purging a live connection's data would
+ *    break it, so a connection in any other status throws and nothing changes. A connection that does not exist is a no-op (nothing of it
+ *    can remain: every table cascades from the org).
+ *  - IDEMPOTENT: a second call finds nothing and returns zeros.
+ *  - It locks the connection and then its broadcast rows (the order T8's reconnect uses) and writes nothing outside the transaction. It
+ *    cannot expire the public pages itself (a revalidation inside an open transaction would race the commit): the caller expires
+ *    `result.divisions` after the commit. */
+export async function purgeConnectionData(tx: Tx, connectionId: string): Promise<PurgeResult> {
+  const [c] = await tx<{ org_id: string; status: string }[]>`
+    select org_id, status from org_youtube_connections where id = ${connectionId} for update`;
+  if (!c) return { broadcasts: 0, streamUrlsCleared: 0, divisions: [] };
+  if (c.status !== "revoked") throw new Error(`purgeConnectionData: connection ${connectionId} is not revoked - revoke it first`);
+  const orgId = c.org_id;
+  const rows = await tx<StoredBroadcast[]>`
+    select id, fixture_id, yt_broadcast_id from youtube_broadcasts where connection_id = ${connectionId} and org_id = ${orgId} for update`;
+  const gone = await deleteBroadcasts(tx, orgId, rows);   // before the keys: a broadcast row references its key
+  await tx`delete from youtube_stream_keys where connection_id = ${connectionId} and org_id = ${orgId}`;
+  await tx`update org_stream_targets set watch_url = null where youtube_connection_id = ${connectionId} and org_id = ${orgId} and watch_url is not null`;
+  await tx`update org_youtube_connections set google_sub = null where id = ${connectionId} and org_id = ${orgId} and google_sub is not null`;
+  await tx`delete from youtube_connect_pending where connection_id = ${connectionId} and org_id = ${orgId}`;
+  return { broadcasts: gone.deleted, streamUrlsCleared: gone.cleared, divisions: gone.divisions };
+}
+
+// ─── port calls ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+interface Conn { id: string; org_id: string; channel_id: string; channel_title: string }
+interface Pass { port: YouTubePort; now: Date; orgIds: string[] | undefined; out: YoutubeDailyResult }
+
+const isReconnectRefusal = (e: unknown): e is YouTubeError => e instanceof YouTubeError && e.code === "youtube_reconnect_needed";
+
+/** A port call. Whatever it throws becomes a YouTubeError: a driver maps Google's answers already, and anything else is YouTube not
+ *  answering. The original is dropped, never wrapped (it may hold what must not be kept) - and REPORTED, as a fresh error that names only
+ *  its class, the connection and the step: a driver bug that fails every day must not be silent. */
+async function viaPort<T>(call: () => Promise<T>, c: Pick<Conn, "id" | "org_id">, step: string): Promise<T> {
+  try {
+    return await call();
+  } catch (err) {
+    if (err instanceof YouTubeError) throw err;
+    const kind = (err instanceof Error ? err.name : typeof err).replace(/[^A-Za-z]/g, "").slice(0, 64);
+    captureError(new Error(`youtube daily: a port call raised a non-port error (${kind})`), {
+      orgId: c.org_id, route: "youtube.daily.port", extra: { connectionId: c.id, step },
+    });
+    throw new YouTubeError("youtube_unavailable");
+  }
+}
+
+/** The connection's grant is dead: reconnect_needed, status_since now (token-store's writer; false when it already was). */
+async function flip(c: Conn, out: YoutubeDailyResult): Promise<void> {
+  if (await markReconnectNeeded(sql, c.org_id, c.id)) out.reconnectNeeded++;
+}
+
+/** A step failed with something that is not a dead grant: it is retried tomorrow. A port refusal is an expected state (counted, not
+ *  reported); anything else is ours to look at (reported, ids only). */
+function failedStep(err: unknown, c: Conn, out: YoutubeDailyResult, step: string): void {
+  out.failed++;
+  if (!(err instanceof YouTubeError)) captureError(err, { orgId: c.org_id, route: `youtube.daily.${step}`, extra: { connectionId: c.id } });
+}
+
+// ─── leg 2: health and refresh, per connected channel ─────────────────────────────────────────────────────────────────────────────────
+
+/** The channel's title changed at YouTube: the connection's channel_title AND its (active) destination row's label follow, in one
+ *  transaction so the two cannot disagree. An API destination is never renamed by a person (P9), so the label simply tracks the title.
+ *  An empty title from Google is not a title: the old one stays. */
+async function followTitle(c: Conn, title: string): Promise<void> {
+  if (title.trim() === "" || title === c.channel_title) return;
+  await sql.begin(async (tx) => {
+    const moved = await tx<{ id: string }[]>`
+      update org_youtube_connections set channel_title = ${title}
+       where id = ${c.id} and org_id = ${c.org_id} and status = 'connected' returning id`;
+    if (moved.length === 1) {
+      await tx`update org_stream_targets set label = ${title}
+                where youtube_connection_id = ${c.id} and org_id = ${c.org_id} and archived_at is null`;
+    }
+  });
+}
+
+/** Health: the channel is still the grant's, its title follows, and live streaming is (not) enabled. Returns false when the connection
+ *  was found dead (it is `reconnect_needed` now and has nothing more to do this pass). */
+async function checkHealth(p: Pass, at: string, c: Conn): Promise<boolean> {
+  try {
+    const channels = await viaPort(() => p.port.listMyChannels(at), c, "channels");
+    const mine = channels.find((ch) => ch.id === c.channel_id);
+    if (!mine) {
+      await flip(c, p.out);   // the channel is no longer among the grant's: there is nothing to stream to, and a reconnect re-asks
+      return false;
+    }
+    await followTitle(c, mine.title);
+    let code: YoutubeLiveStateRefusal | null;
+    try {
+      const live = await viaPort(() => p.port.liveEnabled(at), c, "live");
+      code = live === "enabled" ? null : REFUSAL_OF_LIVE_STATE[live];
+    } catch (err) {
+      // Decision g: "not authorized to <live>" is the channel's live permission, not a dead grant - blocked, no purge clock.
+      if (isReconnectRefusal(err) && err.reason === LIVE_PERMISSIONS_REASON) code = "youtube_live_blocked";
+      else throw err;
+    }
+    await recordLiveState(sql, c.org_id, c.id, code);   // last_health_at = the database's now(), the clock status_since is on (carry f)
+    return true;
+  } catch (err) {
+    if (isReconnectRefusal(err)) {
+      await flip(c, p.out);
+      return false;
+    }
+    failedStep(err, c, p.out, "health");
+    return true;
+  }
+}
+
+/** Refresh (DP III.E.4): every `complete` row of this connection whose video was last confirmed over 25 days ago is asked about, 50 ids to a
+ *  call UNDER THIS CONNECTION'S TOKEN (a video of another channel is "absent" to the wrong token). Present → refreshed_at = the pass's now;
+ *  gone → the row is deleted and a link that pointed at it cleared. A batch YouTube cannot answer keeps its rows stale for tomorrow. */
+async function refreshVideos(p: Pass, at: string, c: Conn): Promise<void> {
+  let stale: (StoredBroadcast & { yt_broadcast_id: string })[];
+  try {
+    stale = await sql<(StoredBroadcast & { yt_broadcast_id: string })[]>`
+      select id, fixture_id, yt_broadcast_id from youtube_broadcasts
+       where connection_id = ${c.id} and org_id = ${c.org_id} and state = 'complete' and yt_broadcast_id is not null
+         and refreshed_at < ${daysBefore(p.now, YOUTUBE_REFRESH_AFTER_DAYS)}
+       order by refreshed_at, id`;
+  } catch (err) {
+    failedStep(err, c, p.out, "refresh");
+    return;
+  }
+  for (let i = 0; i < stale.length; i += VIDEOS_PER_CALL) {
+    const batch = stale.slice(i, i + VIDEOS_PER_CALL);
+    try {
+      const present = await viaPort(() => p.port.existingVideos(at, batch.map((r) => r.yt_broadcast_id)), c, "videos");
+      const here = batch.filter((r) => present.has(r.yt_broadcast_id));
+      const gone = batch.filter((r) => !present.has(r.yt_broadcast_id));
+      const removed = await sql.begin(async (tx) => {
+        if (here.length > 0) {
+          await tx`update youtube_broadcasts set refreshed_at = ${p.now} where id = any(${here.map((r) => r.id)}::uuid[]) and org_id = ${c.org_id}`;
+        }
+        return deleteBroadcasts(tx, c.org_id, gone);
+      });
+      p.out.refreshed += here.length;
+      p.out.removed += removed.deleted;
+      expirePages(removed.divisions);
+    } catch (err) {
+      if (isReconnectRefusal(err)) {
+        await flip(c, p.out);   // the token died between the health check and this call
+        return;
+      }
+      failedStep(err, c, p.out, "refresh");
+    }
+  }
+}
+
+async function checkConnection(p: Pass, c: Conn): Promise<void> {
+  let refresh: string | null;
+  try {
+    refresh = await openToken(sql, c.org_id, c.id);
+  } catch (err) {
+    failedStep(err, c, p.out, "token");   // a damaged token, or a deployment without its key: reported with the connection id only
+    return;
+  }
+  if (refresh === null) return;   // revoked since the list was read
+  p.out.checked++;
+  let at: string;
+  try {
+    at = await viaPort(() => p.port.accessToken(refresh), c, "token");
+  } catch (err) {
+    if (isReconnectRefusal(err)) await flip(c, p.out);   // invalid_grant: the grant is dead
+    else failedStep(err, c, p.out, "token");
+    return;
+  }
+  if (await checkHealth(p, at, c)) await refreshVideos(p, at, c);
+}
+
+// ─── leg 3: stuck broadcasts ─────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Carries a and b. A broadcast the end step can never settle holds its pooled key (and the fixture's one open slot) for good, and nothing
+ *  would tell anyone: a port refusal is not reported by the step. Stuck = `YOUTUBE_END_STUCK_AFTER_ATTEMPTS` failures, or `ending` for longer
+ *  than `YOUTUBE_END_STUCK_AFTER_MINUTES` (a claim deferred on every firing counts no attempt), on a CONNECTED connection (see the header).
+ *  Each is reported (ids and codes only), counted `failed`, and finalized `failed` / `end_stuck` so its key frees - unless a session on it
+ *  is active, when the key is in use and the row is only reported. Its `stream_url` rules are unchanged: a failed row writes no link. */
+async function settleStuck(p: Pass): Promise<void> {
+  const byAge = new Date(p.now.getTime() - YOUTUBE_END_STUCK_AFTER_MINUTES * MINUTE_MS);
+  const stuck = await sql<{ id: string; org_id: string; connection_id: string; state: string; attempts: number; last_error_code: string | null }[]>`
+    select b.id, b.org_id, b.connection_id, b.state, b.attempts, b.last_error_code
+      from youtube_broadcasts b
+      join org_youtube_connections c on c.id = b.connection_id and c.org_id = b.org_id
+     where b.state in ${sql([...OPEN_STATES])} and c.status = 'connected'
+       and (b.attempts >= ${YOUTUBE_END_STUCK_AFTER_ATTEMPTS} or (b.state = 'ending' and b.claimed_at < ${byAge}))
+       ${p.orgIds ? sql`and b.org_id in ${sql(p.orgIds)}` : sql``}
+     order by b.created_at, b.id`;
+  for (const b of stuck) {
+    p.out.failed++;
+    captureError(new Error("youtube daily: a broadcast cannot be ended"), {
+      orgId: b.org_id, route: "youtube.daily.stuck_broadcast",
+      extra: { broadcastId: b.id, connectionId: b.connection_id, state: b.state, attempts: b.attempts, lastErrorCode: b.last_error_code },
+    });
+    try {
+      await sql`
+        update youtube_broadcasts b
+           set state = 'failed', last_error_code = ${CODE_STUCK}, completed_at = ${p.now}, reserved_until = null, next_attempt_at = null
+         where b.id = ${b.id} and b.org_id = ${b.org_id} and b.state in ${sql([...OPEN_STATES])}
+           and not exists (select 1 from fixture_stream_sessions s
+                            where s.youtube_broadcast_id = b.id and s.state in ${sql([...ACTIVE_STATES])})`;
+    } catch (err) {
+      captureError(err, { orgId: b.org_id, route: "youtube.daily.stuck_finalize", extra: { broadcastId: b.id } });
+    }
+  }
+}
+
+// ─── legs 4 and 5: purge ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** One dead connection, in ONE transaction: re-check it under its lock (a reconnect since the list was read moves status_since and wins),
+ *  revoke it through token-store (token cleared, status revoked, channel scrubbed, destination archived - one statement), then purge. */
+async function purgeDeadGrant(p: Pass, c: { id: string; org_id: string }): Promise<void> {
+  const cutoff = daysBefore(p.now, YOUTUBE_DEAD_GRANT_PURGE_DAYS);
+  const purged = await sql.begin(async (tx) => {
+    const [row] = await tx<{ status: string; status_since: Date }[]>`
+      select status, status_since from org_youtube_connections where id = ${c.id} and org_id = ${c.org_id} for update`;
+    if (!row || row.status !== "reconnect_needed" || row.status_since.getTime() >= cutoff.getTime()) return null;
+    if (!(await revokeConnection(tx, c.org_id, c.id))) return null;
+    return purgeConnectionData(tx, c.id);
+  });
+  if (purged === null) return;
+  p.out.purged++;
+  expirePages(purged.divisions);
+}
+
+/** A revoked connection that still holds anything the purge removes, purged now (carry c). Idempotent: a clean one is never listed. */
+async function purgeStranded(p: Pass, c: { id: string; org_id: string }): Promise<void> {
+  const purged = await sql.begin((tx) => purgeConnectionData(tx, c.id));
+  p.out.purged++;
+  expirePages(purged.divisions);
+}
+
+/** Run one leg: a fault in it is counted and reported (ours: ids only), and never skips the legs after it. */
+async function leg(p: Pass, name: string, run: () => Promise<void>): Promise<void> {
+  try {
+    await run();
+  } catch (err) {
+    p.out.failed++;
+    captureError(err, { route: `youtube.daily.${name}` });
+  }
+}
+
+/** Run `each` for every row of `rows`, a fault on one counted and reported without stopping the others. */
+async function eachOf<T extends { id: string; org_id: string }>(p: Pass, name: string, rows: readonly T[], each: (r: T) => Promise<void>): Promise<void> {
+  for (const r of rows) {
+    try {
+      await each(r);
+    } catch (err) {
+      p.out.failed++;
+      captureError(err, { orgId: r.org_id, route: `youtube.daily.${name}`, extra: { connectionId: r.id } });
+    }
+  }
+}
+
+/** Test-only seam (end-step.ts's `EndStepHooks` precedent). `afterDeadGrantsListed` runs between the dead-grant leg's list and its first
+ *  purge: the window in which a reconnect can land, which only a hook can make deterministic. Production passes none. */
+export type DailyHooks = { afterDeadGrantsListed?: () => Promise<void> };
+
+/** The daily YouTube pass. `orgIds` (test-only) scopes every leg to those organisations; an empty list is refused - `org_id in ()` read as
+ *  "no filter" would health-check, refresh and PURGE every organisation. Never throws for a fault in one connection or one leg. */
+export async function youtubeDaily(
+  port: YouTubePort, now: Date, o: { orgIds?: readonly string[]; hooks?: DailyHooks } = {},
+): Promise<YoutubeDailyResult> {
+  const orgIds = o.orgIds === undefined ? undefined : [...o.orgIds];
+  if (orgIds !== undefined && orgIds.length === 0) {
+    throw new Error("youtube daily: orgIds is empty - omit it to cover every organisation, or name at least one");
+  }
+  const p: Pass = { port, now, orgIds, out: zero() };
+  const inOrgs = (column: string) => (orgIds ? sql`and ${sql(column)} in ${sql(orgIds)}` : sql``);
+
+  // 1. Expired pending grants: the sealed token and the picker's channel titles go with them.
+  await leg(p, "pending", async () => {
+    await sql`delete from youtube_connect_pending where expires_at < ${now} ${inOrgs("org_id")}`;
+  });
+
+  // 2. Health and refresh, per connected channel (the least-recently checked first, so a pass cut short reaches the rest tomorrow).
+  await leg(p, "connections", async () => {
+    const connected = await sql<Conn[]>`
+      select id, org_id, channel_id, channel_title from org_youtube_connections
+       where status = 'connected' ${inOrgs("org_id")}
+       order by last_health_at nulls first, id`;
+    await eachOf(p, "connection", connected, (c) => checkConnection(p, c));
+  });
+
+  // 3. Stuck broadcasts.
+  await leg(p, "stuck", () => settleStuck(p));
+
+  // 4. Dead grants, 30 days.
+  await leg(p, "dead_grants", async () => {
+    const dead = await sql<{ id: string; org_id: string }[]>`
+      select id, org_id from org_youtube_connections
+       where status = 'reconnect_needed' and status_since < ${daysBefore(now, YOUTUBE_DEAD_GRANT_PURGE_DAYS)} ${inOrgs("org_id")}
+       order by status_since, id`;
+    await o.hooks?.afterDeadGrantsListed?.();
+    await eachOf(p, "purge", dead, (c) => purgeDeadGrant(p, c));
+  });
+
+  // 5. Revoked connections that still hold something.
+  await leg(p, "stranded", async () => {
+    const left = await sql<{ id: string; org_id: string }[]>`
+      select c.id, c.org_id from org_youtube_connections c
+       where c.status = 'revoked' ${inOrgs("c.org_id")}
+         and (exists (select 1 from youtube_broadcasts b where b.connection_id = c.id)
+           or exists (select 1 from youtube_stream_keys k where k.connection_id = c.id)
+           or c.google_sub is not null
+           or exists (select 1 from org_stream_targets t where t.youtube_connection_id = c.id and t.watch_url is not null)
+           or exists (select 1 from youtube_connect_pending g where g.connection_id = c.id))
+       order by c.id`;
+    await eachOf(p, "stranded_purge", left, (c) => purgeStranded(p, c));
+  });
+
+  // 6. Failed broadcast rows past their retention.
+  await leg(p, "failed_rows", async () => {
+    const old = await sql<{ id: string }[]>`
+      delete from youtube_broadcasts
+       where state = 'failed' and coalesce(completed_at, created_at) < ${daysBefore(now, YOUTUBE_FAILED_ROW_RETENTION_DAYS)} ${inOrgs("org_id")}
+      returning id`;
+    p.out.removed += old.length;
+  });
+
+  return p.out;
+}
