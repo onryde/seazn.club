@@ -1521,8 +1521,15 @@ describe("tennisSkinV3 — factory assembly", () => {
 
 describe("set-score sheet bounds equal the engine padSpec's, for every declared tennis cfg (W2e TN-SS-2)", () => {
   it("home/away and the tie-break fields carry the engine's declared maximum (counted)", () => {
-    const declared: [string, Record<string, unknown>][] = [["(schema default)", {}], ...Object.entries(tennis.variants as Record<string, Record<string, unknown>>)];
-    expect(declared.map(([n]) => n), "premise: the short-sets variant is declared").toContain("short-sets");
+    const variants = tennis.variants as Record<string, Record<string, unknown>>;
+    expect(Object.keys(variants), "premise: the short-sets variant is declared").toContain("short-sets");
+    const declared: [string, Record<string, unknown>][] = [
+      ["(schema default)", {}],
+      ...Object.entries(variants),
+      // W2e TN-SS-2 (RBS:349): a final-set tie-break plays to the MATCH's margin, never the short set's own one, so the
+      // decider's bound differs from the ordinary set's only when both tie-breaks are in one match.
+      ["short-sets + a final-set tie-break to 10", { ...variants["short-sets"], finalSet: { tiebreakTo: 10 } }],
+    ];
     let checked = 0;
     for (const [name, raw] of declared) {
       const parsed = tennis.configSchema.parse(raw);
@@ -1543,6 +1550,6 @@ describe("set-score sheet bounds equal the engine padSpec's, for every declared 
       expect(sheetMax("tbAway"), `${name} tbAway`).toBe(engineMax("tb.away"));
       checked++;
     }
-    expect(checked).toBe(Object.keys(tennis.variants).length + 1);
+    expect(checked).toBe(Object.keys(variants).length + 2);
   });
 });

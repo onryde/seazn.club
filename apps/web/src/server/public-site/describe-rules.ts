@@ -187,13 +187,15 @@ function describeNested(c: Record<string, unknown>, bestOf: number): RulesLineT 
   // The tie-break margin only means something when a tie-break is played: in
   // tie-break sets, or the match tie-break. A set tie-break plays to the set's
   // own `tiebreakWinBy`, else the match's `tiebreak.winBy` (engine
-  // `setTiebreakWinBy`, W2e TN-SS-2); the match tie-break always plays to
+  // `setTiebreakWinBy`, W2e TN-SS-2); the match tie-break and a final-set
+  // tie-break (App VI §5, engine `rulesFor`; RBS:349) always play to
   // `tiebreak.winBy`. Sudden death is said only when EVERY tie-break the match
   // can play is decided by one point.
   const matchMargin = positive(record(c.tiebreak)?.winBy) ?? 2;
   const margins = [
     ...(advantage ? [] : [positive(set?.tiebreakWinBy) ?? matchMargin]),
     ...(matchTiebreak !== undefined ? [matchMargin] : []),
+    ...(finalTiebreak !== undefined && !advantage ? [matchMargin] : []),
   ];
   if (margins.length > 0 && margins.every((m) => m === 1)) {
     out.push({ key: "format.rules.tennis.suddenDeathTiebreaks" });

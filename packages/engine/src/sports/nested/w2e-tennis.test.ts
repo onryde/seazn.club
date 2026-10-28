@@ -189,9 +189,9 @@ describe("TN-SS-1 a set summary must be a score the set can reach (SC-S1; RBS:34
     const custom = cfgFor("tour", { set: { gamesTo: 6, winBy: 2, tiebreakAt: 3, tiebreakTo: 7 } });
     expect(started(custom).summary(8, 6).state.sets).toEqual([{ home: 8, away: 6 }]);
     expect(started(custom).summary(6, 8).state.sets).toEqual([{ home: 6, away: 8 }]);
-    expect(reachableLiveGames(7, 6, { ...custom.set, mtbTo: null })).toBe(true);
+    expect(reachableLiveGames(7, 6, custom.set)).toBe(true);
     expect(refusal(() => started(cfgFor("tour")).summary(8, 6)).code).toBe("SET_SCORE_UNREACHABLE");
-    expect(reachableLiveGames(7, 6, { ...cfgFor("tour").set, mtbTo: null })).toBe(false);
+    expect(reachableLiveGames(7, 6, cfgFor("tour").set)).toBe(false);
   });
 
   it("TN-SS-1 every plain final the write path takes is exactly RBS §6.2's legal list, for the tie-break set, the advantage set and Fast4 (counted)", () => {
@@ -597,6 +597,42 @@ describe("TN-SS-2 short sets and the set tie-break's own margin (RB2A-12; ITF Ap
     expect(tennis.outcome(viaSummary.summary(11, 9).state)).toMatchObject({ kind: "win", winner: H });
   });
 
+  it("TN-SS-2 a final-set tie-break keeps the match's margin under short sets: the decider's 10–9 plays on, 11–9 closes (RBS:349)", () => {
+    // RBS:349 "Final-set TB to 10 at 6-all (App VI §5) | set 7–6 with TB 10–0 … 10–8 or n–(n−2), n ≥ 11": App VI §5's
+    // tie-break is not §2's short-set one, so a set's own margin of one never reaches it. Short sets with that decider
+    // put both tie-breaks in one match: the ordinary sets' closes at 5–4, the decider's does not close at 10–9.
+    const cfg = cfgFor("short-sets", { finalSet: { tiebreakTo: 10 } });
+    expect(cfg.set.tiebreakWinBy, "premise: the short set's own margin is one").toBe(1);
+    expect(cfg.tiebreak.winBy, "premise: the match's margin is the rulebook's two").toBe(2);
+    const ledger = tbPointsAt(gamesAt(started(cfg), 4, 4), 4).points(H);
+    expect(ledger.state.sets).toEqual([{ home: 5, away: 4, tb: { home: 5, away: 4 } }]);
+    ledger.summary(2, 4);
+    // The deciding set: a short set whose tie-break at four all is played to ten.
+    tbPointsAt(gamesAt(ledger, 4, 4), 9).points(H);
+    expect(ledger.state.points).toMatchObject({ kind: "tiebreak", home: 10, away: 9 });
+    expect(ledger.state.sets).toHaveLength(2);
+    expect(tennis.outcome(ledger.state)).toBeNull();
+    ledger.points(H);
+    expect(ledger.state.sets[2]).toEqual({ home: 5, away: 4, tb: { home: 11, away: 9 } });
+    expect(tennis.outcome(ledger.state)).toMatchObject({ kind: "win", winner: H });
+    // The summary path agrees: a 10–9 decider tie-break is no final score, 11–9 and 10–8 are; the ordinary set's 5–4 still is.
+    const decider = () => started(cfg).summary(5, 4, { home: 5, away: 4 }).summary(2, 4);
+    const at = decider();
+    expect(refusal(() => at.write(at.next("tennis.set_summary", { home: 5, away: 4, tb: { home: 10, away: 9 } }))).code).toBe("INVALID_EVENT");
+    expect(tennis.outcome(decider().summary(5, 4, { home: 11, away: 9 }).state)).toMatchObject({ kind: "win", winner: H });
+    expect(tennis.outcome(decider().summary(5, 4, { home: 10, away: 8 }).state)).toMatchObject({ kind: "win", winner: H });
+    // The pad's tie-break field is bounded by the decider at the match's margin: the same bound as the tour sets' slam
+    // decider to ten, whose set margin IS the match's (relational, so no number is restated from the kernel).
+    const tbMax = (c: NestedCfg): number => {
+      const fields = tennis.padSpec!(c).panels.flatMap((p) => p.actions).filter((a) => a.type === "tennis.set_summary").flatMap((a) => a.fields);
+      const f = fields.find((x) => x.path === "tb.home");
+      if (f?.kind !== "number" || f.max === undefined) throw new Error("premise: tb.home declares a maximum");
+      return f.max;
+    };
+    expect(tbMax(cfg)).toBe(tbMax(cfgFor("tour", { finalSet: { tiebreakTo: 10 } })));
+    expect(tbMax(cfg), "the decider's 11–9 fits the field").toBeGreaterThanOrEqual(11);
+  });
+
   it("TN-SS-2 a fast4 division created now plays margin 1", () => {
     // A division created from the variant stores it and reads it back through `configSchema` (sync:sports writes the raw
     // variant; the division keeps the parsed config). The key must survive both parses, or the set falls back to margin two.
@@ -700,5 +736,40 @@ describe("TN-SS-2 short sets and the set tie-break's own margin (RB2A-12; ITF Ap
     }
     expect(tbSummaries, "the walks drew short-set tie-breaks").toBeGreaterThan(0);
     expect(decidingPoint, "a 5–4 tie-break (the deciding point) was drawn").toBeGreaterThan(0);
+  });
+
+  it("TN-SS-2 the generator's final-set tie-breaks under short sets are ones the write path takes, at the match's margin (RBS:349, counted)", () => {
+    // Short sets with a final-set tie-break to 10: the decider's tie-break is won by the match's two, so the closest final
+    // the generator may draw is 10–8. Every summary it draws is appended on the write path, which refuses 10–9.
+    const cfg = cfgFor("short-sets", { finalSet: { tiebreakTo: 10 } });
+    const to = 10;
+    let deciderTbs = 0;
+    let closest = 0;
+    for (let seed = 1; seed <= 400; seed++) {
+      const rng = mulberry32(seed);
+      const ledger = started(cfg);
+      for (let n = 0; n < 80 && tennis.outcome(ledger.state) === null && ledger.state.phase === "live"; n++) {
+        const ev = tennis.arbitraryEvent!(ledger.state, rng);
+        if (ev === null) break;
+        if (ev.type !== "tennis.set_summary") {
+          try {
+            ledger.append(ev.type, ev.payload);
+          } catch (e) {
+            if (!(e instanceof EngineError)) throw e;
+          }
+          continue;
+        }
+        const decider = ledger.state.setsWon.home === 1 && ledger.state.setsWon.away === 1;
+        const tb = (ev.payload as { tb?: { home: number; away: number } }).tb;
+        ledger.append(ev.type, ev.payload); // throws if the write path refuses the generator's own summary
+        if (decider && tb !== undefined) {
+          deciderTbs++;
+          expect(Math.max(tb.home, tb.away), `seed ${seed}`).toBe(to);
+          if (Math.min(tb.home, tb.away) === to - cfg.tiebreak.winBy) closest++;
+        }
+      }
+    }
+    expect(deciderTbs, "the walks drew final-set tie-breaks").toBeGreaterThan(0);
+    expect(closest, "a 10–8 final-set tie-break (the closest the match's margin allows) was drawn").toBeGreaterThan(0);
   });
 });

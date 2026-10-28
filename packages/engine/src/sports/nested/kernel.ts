@@ -863,8 +863,14 @@ export interface SetRules {
   winBy: number;
   tiebreakAt: number | null;
   tiebreakTo: number;
+  /** The margin THIS set's tie-break game is won by: an ordinary set's own (`setTiebreakWinBy`), the match's
+   *  `tiebreak.winBy` for a final-set tie-break (W2e TN-SS-2; RBS:349, App VI §5 — not §2's short-set tie-break). */
+  tiebreakWinBy: number;
   mtbTo: number | null; // non-null = the set IS a match tie-break
 }
+
+/** What the games path of a set reads (`setGamesWinner`, `reachableLiveGames`): never a tie-break's target or margin. */
+type SetGamesRules = Pick<SetRules, "gamesTo" | "winBy" | "tiebreakAt">;
 
 function isDecidingSet(state: NestedState): boolean {
   const need = majority(state.cfg.bestOf) - 1;
@@ -873,10 +879,10 @@ function isDecidingSet(state: NestedState): boolean {
 
 function rulesFor(state: NestedState): SetRules {
   const { set, finalSet } = state.cfg;
-  const base: SetRules = { ...set, mtbTo: null };
+  const base: SetRules = { ...set, tiebreakWinBy: setTiebreakWinBy(state.cfg), mtbTo: null };
   if (!isDecidingSet(state) || finalSet === "same") return base;
   if ("matchTiebreakTo" in finalSet) return { ...base, mtbTo: finalSet.matchTiebreakTo };
-  return { ...base, tiebreakTo: finalSet.tiebreakTo };
+  return { ...base, tiebreakTo: finalSet.tiebreakTo, tiebreakWinBy: state.cfg.tiebreak.winBy };
 }
 
 // Terminal predicate for a TB/MTB score (first to `to`, win by `winBy`,
@@ -925,7 +931,7 @@ function setTiebreakWinBy(cfg: NestedCfg): number {
 // Winner of a set at a games score, or null while live. A tie-break set can
 // only be won at tiebreakAt+1 via the TB (handled by the TB fold), so this
 // predicate covers the games path: reach gamesTo with a winBy lead.
-function setGamesWinner(h: number, a: number, rules: SetRules): Side | null {
+function setGamesWinner(h: number, a: number, rules: SetGamesRules): Side | null {
   const winner: Side | null = h > a ? "home" : a > h ? "away" : null;
   if (winner === null) return null;
   const hi = Math.max(h, a);
@@ -955,7 +961,7 @@ function setGamesBound(set: { gamesTo: number; winBy: number; tiebreakAt: number
  * (`setGamesBound`): a live score at the bound has no final the pad can enter, so the table never exceeds bound² cells
  * whatever a client sends.
  */
-export function reachableLiveGames(h: number, a: number, rules: SetRules): boolean {
+export function reachableLiveGames(h: number, a: number, rules: SetGamesRules): boolean {
   const bound = setGamesBound(rules);
   if (!Number.isInteger(h) || !Number.isInteger(a) || h < 0 || a < 0 || h >= bound || a >= bound) return false;
   const live = (x: number, y: number): boolean =>
@@ -1103,7 +1109,7 @@ function applyTbPoint(state: NestedState, side: Side, mtb: boolean): NestedState
 
   // W2e RB2A-12 (TN-SS-2): a set tie-break plays to the set's own margin (App VI §2's deciding point), the match
   // tie-break to the match's.
-  const winner = tbWinner(h, a, to, mtb ? state.cfg.tiebreak.winBy : setTiebreakWinBy(state.cfg));
+  const winner = tbWinner(h, a, to, mtb ? state.cfg.tiebreak.winBy : rules.tiebreakWinBy);
   if (winner === null) return next;
 
   if (mtb) {
@@ -1410,7 +1416,7 @@ function applySetSummary(
     const winner: Side = home > away ? "home" : "away";
     const tbh = payload.tb.home;
     const tba = payload.tb.away;
-    if (strict && !reachableTbScore(tbh, tba, rules.tiebreakTo, setTiebreakWinBy(state.cfg))) {
+    if (strict && !reachableTbScore(tbh, tba, rules.tiebreakTo, rules.tiebreakWinBy)) {
       invalid("tie-break summary is not a reachable final score", {
         tb: payload.tb,
         to: rules.tiebreakTo,
@@ -1652,13 +1658,14 @@ function gamesFieldBound(cfg: NestedCfg): number {
 }
 
 /** Bound for `NestedSetSummary.tb.{home,away}` — the ordinary tie-break
- *  target, or the decider's own `finalSet.tiebreakTo` (the slam rule) if
- *  larger, each with the set tie-break's own margin (`setTiebreakWinBy`). */
+ *  target with the set tie-break's own margin (`setTiebreakWinBy`), or the
+ *  decider's own `finalSet.tiebreakTo` (the slam rule) if larger, with the
+ *  match's `tiebreak.winBy` (`rulesFor`; RBS:349). */
 function tbFieldBound(cfg: NestedCfg): number {
   const ordinary = cfg.set.tiebreakTo + setTiebreakWinBy(cfg) + 2;
   const decider =
     cfg.finalSet !== "same" && "tiebreakTo" in cfg.finalSet
-      ? cfg.finalSet.tiebreakTo + setTiebreakWinBy(cfg) + 2
+      ? cfg.finalSet.tiebreakTo + cfg.tiebreak.winBy + 2
       : 0;
   return Math.max(ordinary, decider);
 }
@@ -2591,7 +2598,7 @@ export function makeNestedModule(
       // ~30% tie-break sets when the set can have one.
       if (rules.tiebreakAt !== null && rng() < 0.3) {
         const tbLo = Math.floor(
-          rng() * Math.max(1, rules.tiebreakTo - setTiebreakWinBy(state.cfg) + 1),
+          rng() * Math.max(1, rules.tiebreakTo - rules.tiebreakWinBy + 1),
         );
         const tb = homeWins
           ? { home: rules.tiebreakTo, away: tbLo }

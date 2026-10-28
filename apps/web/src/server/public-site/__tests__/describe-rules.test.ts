@@ -266,13 +266,17 @@ describe("describeMatchRules — tennis says its set shape, deciding set, no-ad 
       // Advantage sets play no set tie-break: their own margin says nothing.
       ["advantage sets with a set margin of 1", { set: { ...advantageSet, tiebreakWinBy: 1 } }, false],
       ["advantage sets with a set margin of 1 + an MTB at 2", { set: { ...advantageSet, tiebreakWinBy: 1 }, finalSet: { matchTiebreakTo: 10 } }, false],
+      // A final-set tie-break (App VI §5) plays to the MATCH's margin, never the short set's own one (RBS:349) …
+      ["short sets + a final-set tie-break at the match's margin 2", { ...short, finalSet: { tiebreakTo: 10 } }, false],
+      // … and at a match margin of one, every tie-break is sudden death.
+      ["short sets + a final-set tie-break at margin 1", { ...short, finalSet: { tiebreakTo: 10 }, tiebreak: { winBy: 1 } }, true],
     ];
     let checked = 0;
     for (const [name, raw, expected] of cases) {
       expect(says(raw), name).toBe(expected);
       checked++;
     }
-    expect(checked).toBe(6);
+    expect(checked).toBe(8);
   });
 
   it("Doubles: a deciding MATCH tie-break, with its points, and no-ad", () => {

@@ -578,7 +578,7 @@
       "reason": "A bye is reached only through the competition's bye writers (ruling 104: the only reason-less awards are theirs; awardByeDelta passes an init state) — a fixture nobody played, so the recorded score the walkover arm would keep and the played ledger are both 0-0."
     },
     {
-      "mutant": "src/sports/nested/kernel.ts:2389:58 StringLiteral → \"\"",
+      "mutant": "src/sports/nested/kernel.ts:2396:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = nestedForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "nestedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
