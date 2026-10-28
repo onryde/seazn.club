@@ -4300,6 +4300,21 @@ the SDD ledger at `a719e11309` (PR B after its rebase); PR B's final whole-branc
 - **The mutation session:** the stryker-sizing legs that drift on W2d's engine files (ruling 154; CI legs dispatched
   for PR B).
 
+**Owed: the organiser standings export against the public table** (export every pool, branch
+`fix/export-every-pool-shown-metrics`, 2026-10-28; its review m4). The export now prints every pool, the public table's
+metric columns and its D rule. It still differs from the public table here:
+- **Derived cascade columns.** The public table prints the cascade's derived columns (cricket's NRR, Swiss Buchholz,
+  the points ratio: `tableColumns` kind `derived`). The export prints none, so a cricket sheet carries T and NR but no
+  NRR.
+- **Absent metric "—" against 0.** The export prints a metric a row does not carry as `0` (`r.metrics[m] ?? 0`); the
+  public table prints "—" (`formatMetric(undefined)`).
+- **`formatMetric` spelling.** The export prints raw metric numbers; the public table prints them through
+  `formatMetric` (a metric's declared decimals).
+- **No e2e downloads the standings export.** The DB suites (`export-every-pool.test.ts`,
+  `generate-level-table.test.ts`) and the real-pdfkit render tests are its only witnesses.
+- **Accepted, recorded (controller ruling I2):** a stage that can draw prints D on the sheet and the kiosk from the
+  first round, while the public table waits for the first draw (the fixed shape, `fixedResultColumns`).
+
 **Parked (accepted, or under the owner's scope cuts)**
 - **Concern 2:** an undo of a generate leaves its level table (a later delete drops it); pooled groups still read "No
   standings yet" before a result.
