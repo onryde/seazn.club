@@ -44,9 +44,10 @@ export type YoutubeLiveStateRefusal = keyof typeof YOUTUBE_LIVE_STATE_OF_REFUSAL
 export const isYoutubeLiveStateRefusal = (c: unknown): c is YoutubeLiveStateRefusal =>
   typeof c === "string" && Object.hasOwn(YOUTUBE_LIVE_STATE_OF_REFUSAL, c);
 
-/** How long a recorded not-enabled / blocked reading of a channel is believed by Go live (controller ruling, B4 fix round 1, I-2):
- *  inside it a Go live (and an automatic start's every retry) is refused with the same code and NO call to YouTube; after it the next
- *  Go live asks YouTube again. Judged on the time the refusal was recorded (`last_health_at`). */
+/** How long a recorded not-enabled / blocked reading of a channel is believed by an AUTOMATIC start (controller ruling, B4 fix round 1,
+ *  I-2; narrowed to the automatic start in fix round 2, F2): inside it each of that start's retries is refused with the same code and NO
+ *  call to YouTube; after it the next retry asks YouTube again. A person's tap — the organiser's Go live, the phone operator's Start —
+ *  never consults the record and always asks YouTube. Judged on the time the refusal was recorded (`last_health_at`). */
 export const YOUTUBE_LIVE_STATE_FRESH_MINUTES = 10;
 
 /** Is this a link to YouTube itself? A replay URL is the club's own `stream_url` when it set one (nothing overwrites it), so the
