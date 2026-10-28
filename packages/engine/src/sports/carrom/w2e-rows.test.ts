@@ -4,7 +4,8 @@
 //
 // Expected values come from the rows' own text and the ICF Laws they cite, written into each test as literals - never from the code under
 // test. CA-VR-1: game to 29, queen worth 5, no queen bonus once the winner's pre-board score has reached 24 (mastersofgames.com
-// "Rules of Carrom": "if the winner's score has reached 24 or more points, then 5 bonus points are NOT added for covering the Queen").
+// "Rules of Carrom", quoted as published: "if the winner's score has reached has [sic] 24 or more points, then 5 bonus points are NOT
+// added for covering the Queen").
 // CA-DG-1: the default plays on with extra boards (ICF Law 56b); the tieBoard "draw" house rule closes a level game as a drawn game.
 //
 // CA-DG-1 and CA-RO-1 are `deviation` rows: CA-DG-1 because the house rule departs from ICF Law 56b; CA-RO-1 because the toss and the
@@ -208,6 +209,35 @@ describe("CA-DG-1 under the tieBoard draw house rule a game level after its last
     expect(checked).toBe(cases.length);
   });
 
+  it("CA-DG-1 a side that wins a majority of the bestOf games decides the match the moment it gets there, with or without drawn games between", () => {
+    // bestOf 5 needs three game wins. [the games in order, the winner, the games the match took]
+    type Game = "draw" | "H" | "A";
+    const cases: Array<[Game[], string, number]> = [
+      [["draw", "H", "H", "H"], H, 4],
+      [["H", "H", "H"], H, 3],
+      [["A", "A", "A"], A, 3],
+      [["draw", "A", "draw", "A", "A"], A, 5],
+    ];
+    let checked = 0;
+    for (const [games, winner, played] of cases) {
+      const specs: Spec[] = games.flatMap((g) => (g === "draw" ? level() : won(g === "H" ? H : A)));
+      const state = fold(drawCfg({ bestOf: 5 }), start, ...specs);
+      const label = games.join(",");
+      expect(carrom.outcome(state), label).toMatchObject({ kind: "win", winner, method: "regulation" });
+      expect(state.games.length, `${label}: games played`).toBe(played);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
+    // The negative pair: two wins out of five games are not a majority, so the match goes on.
+    const twoWins = fold(drawCfg({ bestOf: 5 }), start, ...level(), ...won(H), ...won(H));
+    expect(twoWins.outcome).toBeNull();
+    expect(twoWins.games.length).toBe(4);
+    // And the same majority decides the default (extra) tie-board match: best of three needs two.
+    const plain = fold(icf, start, ...won(A), ...won(A));
+    expect(carrom.outcome(plain)).toMatchObject({ kind: "win", winner: A });
+    expect(plain.games.length).toBe(2);
+  });
+
   it("CA-DG-1 a drawn game uses up one of the bestOf games and does not decide the match early", () => {
     // After a drawn game and a home win the match is NOT decided (two game wins are needed, or all three games played).
     const afterTwo = fold(drawCfg(), start, ...level(), ...won(H));
@@ -267,6 +297,11 @@ describe("CA-RO-1 record-only: the toss and the first break are recorded and mov
     expect(away.firstBreak).toBe("away");
     expect(home.games[0]?.boards.map((b) => b.breaker)).toEqual(["home", "away", "home"]);
     expect(away.games[0]?.boards.map((b) => b.breaker)).toEqual(["away", "home", "away"]);
+    // ICF Law 49(a): each game's first break alternates between the players - game 2 to the other player, game 3 back to the toss winner.
+    expect(home.games[1]?.boards.map((b) => b.breaker)).toEqual(["away", "home", "away"]);
+    expect(away.games[1]?.boards.map((b) => b.breaker)).toEqual(["home", "away", "home"]);
+    expect(home.games[2]?.boards.map((b) => b.breaker)).toEqual(["home", "away", "home"]);
+    expect(away.games[2]?.boards.map((b) => b.breaker)).toEqual(["away", "home", "away"]);
     // The breaker person a scorer names rides on the board as a record.
     expect(home.games[0]?.boards[0]?.breakerPerson).toBe("H-p1");
     expect(home.games[0]?.boards[1]?.breakerPerson).toBe("H-p2");
