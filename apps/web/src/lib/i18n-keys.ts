@@ -8343,6 +8343,7 @@ export type DictionaryKey =
   | "useCases.schools.subhead"
   | "useCases.startFree"
   | "variant.badminton.bwf"
+  | "variant.badminton.bwf3x15"
   | "variant.badminton.short"
   | "variant.boardgame.blitz"
   | "variant.boardgame.classical"

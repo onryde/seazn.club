@@ -303,6 +303,8 @@ describe("rule-scope — buildMatchFragment (X-SR-2: a match overrides only matc
     "volleyball/indoor/cap/15": "cap must be ≥ the set target",
     "volleyball/beach/cap/15": "cap must be ≥ the set target",
     "badminton/bwf/cap/15": "cap must be ≥ the set target",
+    "badminton/bwf-3x15/setTo/30": "cap must be ≥ the set target",
+    "badminton/bwf-3x15/finalSetTo/30": "cap must be ≥ the set target",
     "badminton/short/setTo/30": "cap must be ≥ the set target",
     "badminton/short/finalSetTo/30": "cap must be ≥ the set target",
   };

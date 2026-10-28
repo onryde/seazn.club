@@ -32,6 +32,16 @@ describe("defaultMatchMinutes", () => {
     expect(defaultMatchMinutes(null, null)).toBe(30);
   });
 
+  // W2e Task 3: 3×15 is the shorter BWF game, so its slot sits strictly between the 11-point `short` and 3×21 `bwf`
+  // (author's call, plan Task 3). Its value equals badminton's sport default today; the entry keeps it there if that moves.
+  it("orders badminton's slots by game length: short < bwf-3x15 < bwf", () => {
+    const short = defaultMatchMinutes("badminton", "short");
+    const threeBy15 = defaultMatchMinutes("badminton", "bwf-3x15");
+    const bwf = defaultMatchMinutes("badminton", "bwf");
+    expect(short).toBeLessThan(threeBy15);
+    expect(threeBy15).toBeLessThan(bwf);
+  });
+
   it("is case-insensitive on both sport and variant", () => {
     expect(defaultMatchMinutes("Cricket", "T20")).toBe(180);
   });
