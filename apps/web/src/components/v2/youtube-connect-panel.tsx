@@ -87,7 +87,7 @@ function withSlots(text: string, slots: Record<string, ReactNode>): ReactNode[] 
   });
 }
 
-const PRIVACY_KEY = {
+export const PRIVACY_KEY = {
   unlisted: "streaming.youtube.privacy.unlisted",
   public: "streaming.youtube.privacy.public",
   private: "streaming.youtube.privacy.private",
@@ -254,7 +254,7 @@ export function YoutubeLandingNotice({ code }: { code: BannerCode }) {
       data-testid="youtube-landing"
       data-code={code}
       role={ok ? "status" : "alert"}
-      className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col ${ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}
+      className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col md:items-center ${ok ? "border-emerald-200 bg-emerald-50 text-emerald-900" : "border-amber-200 bg-amber-50 text-amber-900"}`}
     >
       <p className="min-w-0 flex-1">{msg(LANDING_KEY[code])}</p>
       <button type="button" data-testid="youtube-landing-dismiss" onClick={() => router.replace(STREAMING_PAGE_HREF)} className="btn btn-ghost min-h-11 shrink-0 px-3 max-md:w-full">
@@ -362,7 +362,7 @@ export function YoutubeChannelPicker({ orgId, pendingId }: { orgId: string; pend
 
 // ─── a connected channel's row ──────────────────────────────────────────────────────────────────────────────────────────
 
-type Tone = "ok" | "warn" | "bad" | "neutral";
+export type Tone = "ok" | "warn" | "bad" | "neutral";
 export type ChannelStatus = { tone: Tone; pill: MessageKey; line: MessageKey; hint: MessageKey | null };
 
 /** What a connection says about itself, in words. A channel is called connected-and-ready ONLY for `connected` + `enabled`; a
@@ -384,7 +384,9 @@ export function channelStatus(y: Pick<NonNullable<StreamTarget["youtube"]>, "sta
   }
 }
 
-const TONE: Record<Tone, { pill: string; dot: string }> = {
+/** A channel status tone's badge and dot colours — shared with the fixture panel's destination picker, so a channel's health reads the
+ *  same colour on both surfaces. */
+export const TONE: Record<Tone, { pill: string; dot: string }> = {
   ok: { pill: "bg-emerald-50 text-emerald-700 ring-emerald-200", dot: "bg-emerald-500" },
   warn: { pill: "bg-amber-50 text-amber-800 ring-amber-200", dot: "bg-amber-500" },
   bad: { pill: "bg-red-50 text-red-700 ring-red-200", dot: "bg-red-500" },
@@ -485,11 +487,11 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge }: { t: StreamTarge
             </form>
           )}
           {y.termsOutdated && (
-            <button type="button" data-testid="youtube-review-terms" aria-expanded={mode === "terms"} onClick={() => open("terms")} className={`${ACTION} ${reviewFirst ? "btn-primary" : "text-slate-700 hover:bg-purple-50"}`}>
+            <button type="button" data-testid="youtube-review-terms" aria-expanded={mode === "terms"} onClick={() => open("terms")} className={`${ACTION} ${reviewFirst ? "btn-primary" : "btn-ghost"}`}>
               {msg("streaming.youtube.action.reviewTerms")}
             </button>
           )}
-          <button type="button" data-testid="youtube-settings" aria-expanded={mode === "settings"} onClick={() => open("settings")} className={`${ACTION} text-slate-700 hover:bg-purple-50`}>
+          <button type="button" data-testid="youtube-settings" aria-expanded={mode === "settings"} onClick={() => open("settings")} className={`${ACTION} btn-ghost`}>
             {msg("streaming.youtube.action.settings")}
           </button>
         </div>

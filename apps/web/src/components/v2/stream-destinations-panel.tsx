@@ -161,10 +161,12 @@ export function StreamDestinationsPanel({
   };
 
   // The connected channels and the pasted-key destinations are told apart by what the row CARRIES, not by its kind.
+  // The channel picker is the way in while it is open (`?youtube=pick`): the empty card's Connect YouTube would be a second one.
+  const pickPending = canEdit && landing?.code === "pick" ? landing.pendingId : null;
   const channels = targets.filter((t) => t.youtube !== null);
   const keys = targets.filter((t) => t.youtube === null);
   const connectButton = (testid: string) => (
-    <button type="button" data-testid={testid} aria-expanded={connectOpen} onClick={() => (connectOpen ? setConnectOpen(false) : openConnect())} className="btn btn-ghost min-h-11">
+    <button type="button" data-testid={testid} aria-expanded={connectOpen} onClick={() => (connectOpen ? setConnectOpen(false) : openConnect())} className="btn btn-ghost min-h-11 gap-2.5">
       <PlatformMark kind="youtube" size="sm" />
       {msg("streaming.youtube.connect")}
     </button>
@@ -173,7 +175,7 @@ export function StreamDestinationsPanel({
   return (
     <div data-testid="stream-destinations" className="space-y-4">
       {landing && landing.code !== "pick" && <YoutubeLandingNotice code={landing.code} />}
-      {canEdit && landing?.code === "pick" && landing.pendingId !== null && <YoutubeChannelPicker orgId={orgId} pendingId={landing.pendingId} />}
+      {pickPending !== null && <YoutubeChannelPicker orgId={orgId} pendingId={pickPending} />}
       {canEdit && targets.length > 0 && (
         <div className="flex flex-wrap gap-2 max-md:flex-col">
           <button
@@ -231,7 +233,7 @@ export function StreamDestinationsPanel({
                   {msg("streamDest.add")}
                 </button>
               )}
-              {!connectOpen && connectButton("youtube-connect-empty")}
+              {!connectOpen && pickPending === null && connectButton("youtube-connect-empty")}
             </div>
           )}
         </div>

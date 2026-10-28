@@ -1101,3 +1101,76 @@ describe("the copy", () => {
     expect(sentences, "hardcoded English in JSX").toEqual([]);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// T12 polish (owner-approved 2026-10-28, from the B3 sign-off): four things the owner saw on the Streaming page.
+describe("T12 polish: the Streaming page", () => {
+  const tokens = (html: string, testid: string): string[] => {
+    const tag = new RegExp(`<[a-z]+\\b[^>]*data-testid="${testid}"[^>]*>`).exec(html)?.[0] ?? "";
+    return (/\bclass="([^"]*)"/.exec(tag)?.[1] ?? "").split(/\s+/).filter(Boolean);
+  };
+
+  it("1. every secondary action on a channel row reads as a BUTTON at rest (house `btn-ghost`: border and fill), never bare text — across every state", () => {
+    // The rows that carry a secondary action: Settings always; Review terms when the terms moved on (primary only when it must be first).
+    const states: [string, Partial<View>][] = [
+      ["connected", {}],
+      ["reconnect needed", { status: "reconnect_needed" }],
+      ["terms moved on", { termsOutdated: true }],
+      ["dead grant AND terms moved on", { status: "reconnect_needed", termsOutdated: true }],
+    ];
+    let checked = 0;
+    for (const [name, y] of states) {
+      const html = rowHtml(channel(y));
+      for (const id of ["youtube-settings", "youtube-review-terms", "youtube-reconnect"]) {
+        if (!html.includes(`data-testid="${id}"`)) continue;
+        const t = tokens(html, id);
+        // Primary or ghost — either way a filled or bordered control. A bare `btn` is the plain text the owner rejected.
+        expect(t.includes("btn-ghost") || t.includes("btn-primary"), `${name}: ${id} is a button at rest (${t.join(" ")})`).toBe(true);
+        checked++;
+      }
+      expect(tokens(html, "youtube-settings"), `${name}: Settings is the quiet one, not the loud one`).not.toContain("btn-primary");
+    }
+    expect(checked, "anti-vacuity: the actions that exist across the four states (Settings; Reconnect + Settings; Review + Settings; Review + Settings)").toBe(1 + 2 + 2 + 2);
+    // Review terms is the loud one ONLY while the dead grant needs it first.
+    expect(tokens(rowHtml(channel({ termsOutdated: true })), "youtube-review-terms")).toContain("btn-ghost");
+    expect(tokens(rowHtml(channel({ status: "reconnect_needed", termsOutdated: true })), "youtube-review-terms")).toContain("btn-primary");
+  });
+
+  it("2. the empty card hides its Connect YouTube while the channel picker is open (one way in), and shows it everywhere else", () => {
+    const picking = panelHtml({ targets: [], landing: { code: "pick", pendingId: PENDING } });
+    expect(picking, "the picker is the way in").toContain('data-testid="youtube-picker"');
+    expect(picking, "no second Connect YouTube beside it").not.toContain('data-testid="youtube-connect-empty"');
+    expect(picking, "Add destination is untouched").toContain('data-testid="stream-dest-empty-add"');
+    // The positive pairs: no landing, and a landing that is not a pick, both still offer it.
+    expect(panelHtml({ targets: [] })).toContain('data-testid="youtube-connect-empty"');
+    expect(panelHtml({ targets: [], landing: { code: "connected", pendingId: null } })).toContain('data-testid="youtube-connect-empty"');
+    // A viewer cannot pick, so nothing opens and nothing is hidden.
+    expect(panelHtml({ targets: [], canEdit: false, landing: { code: "pick", pendingId: PENDING } })).not.toContain('data-testid="youtube-picker"');
+  });
+
+  it("3. the landing banner centres its sentence against Dismiss from 768 up (md:items-center) and stays a stacked column on a phone, for EVERY code", () => {
+    // Every landing the banner has a sentence for: all but `pick`, which opens the picker instead.
+    const bannerCodes = YOUTUBE_LANDING_CODES.filter((c) => c !== "pick");
+    let checked = 0;
+    for (const code of bannerCodes) {
+      const t = tokens(renderToStaticMarkup(<YoutubeLandingNotice code={code} />), "youtube-landing");
+      expect(t, `${code}: centred beside the button from md`).toContain("md:items-center");
+      expect(t, `${code}: phone stacks`).toContain("max-md:flex-col");
+      expect(t, `${code}: the phone's alignment is untouched`).toContain("items-start");
+      checked++;
+    }
+    expect(checked, "every banner code").toBe(bannerCodes.length);
+    expect(checked).toBe(11);
+  });
+
+  it("4. every YouTube row and button wears the official icon: the channel row, the Connect buttons — and the red Y tile is gone from them", () => {
+    const targets = [channel(), pasted()];
+    const html = panelHtml({ targets });
+    // Row (channel), row (pasted YouTube key), the toolbar's Connect YouTube = three marks.
+    expect(html.match(/data-youtube-icon="/g), "channel row + pasted row + Connect button").toHaveLength(3);
+    expect(panelHtml({ targets: [] }).match(/data-youtube-icon="/g), "the empty card's Connect button").toHaveLength(1);
+    expect(html).not.toMatch(/#ff0033|>Y</i);
+    // Clear space: the Connect button leaves the icon at least 10px (gap-2.5) of room before its words.
+    expect(tokens(panelHtml({ targets: [] }), "youtube-connect-empty")).toContain("gap-2.5");
+  });
+});
