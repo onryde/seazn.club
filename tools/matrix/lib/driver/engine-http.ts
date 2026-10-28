@@ -46,6 +46,8 @@ export const ENGINE_HTTP_STATUS: Readonly<Record<EngineErrorCode, number>> = Obj
   GOAL_KIND_REQUIRED: 422,
   // W2e X-SE-1 — scoring after a match-ending sanction before its ending: the client records the ending or voids the sanction.
   ENDING_SANCTION_PENDING: 422,
+  // W2e SC-S1 (TN-SS-1) — a tennis set summary no set can reach under its tie-break: the client sends the score played.
+  SET_SCORE_UNREACHABLE: 422,
 });
 
 /** The `?? 422` of http.ts:158 — what the product answers an EngineError whose

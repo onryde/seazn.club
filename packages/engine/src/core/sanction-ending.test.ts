@@ -547,10 +547,11 @@ describe("X-SE-2 a sanction alone moves no score (anti-goal 4)", () => {
 
 /** Spec 2026-10-28 §5.2's table, with D12: the levels that end a match and the levels after which the pad asks whether
  *  the team can still field six. A sport named `null` declares nothing; a sport not named here must declare nothing
- *  either (tennis's `default` row is added by Task 4, which declares it). */
+ *  either. */
 const SPEC_5_2: Readonly<Record<string, { endLevels: string[]; promptLevels: string[] } | null>> = {
   badminton: { endLevels: ["disqualification"], promptLevels: [] },
   volleyball: { endLevels: [], promptLevels: ["expulsion", "disqualification"] },
+  tennis: { endLevels: ["default"], promptLevels: [] },
   tabletennis: null,
 };
 

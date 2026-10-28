@@ -4202,6 +4202,7 @@
   "engineError.TIEBREAK_COLOUR_REQUIRED": "Record who had Black.",
   "engineError.GOAL_KIND_REQUIRED": "Record the goal type: field goal, penalty corner or penalty stroke.",
   "engineError.ENDING_SANCTION_PENDING": "This sanction ends the match. Record the ending, or void the sanction, before scoring again.",
+  "engineError.SET_SCORE_UNREACHABLE": "That set score cannot happen under this set's tie-break.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named": "That reason can't be recorded {phase}. Allowed here: {allowed}.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak": "A double walkover can't be recorded in the tie-break: the game was played. Allowed here, for one side: {allowed}.",
   "forfeit.phase.pre": "before the match starts",

@@ -2267,6 +2267,7 @@ export type DictionaryKey =
   | "engineError.SEEDING_RULES_MISSING"
   | "engineError.SEQ_CONFLICT"
   | "engineError.SETTLE_NOT_APPLICABLE"
+  | "engineError.SET_SCORE_UNREACHABLE"
   | "engineError.STAGE_NOT_READY"
   | "engineError.STAGE_SEAT_DEPARTED"
   | "engineError.SUB_WINDOW_EXCEEDED"

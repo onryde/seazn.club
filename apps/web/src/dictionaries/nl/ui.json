@@ -4202,6 +4202,7 @@
   "engineError.TIEBREAK_COLOUR_REQUIRED": "Geef aan wie zwart had.",
   "engineError.GOAL_KIND_REQUIRED": "Geef het soort doelpunt aan: veldgoal, strafcorner of strafbal.",
   "engineError.ENDING_SANCTION_PENDING": "Deze sanctie beëindigt de wedstrijd. Leg het einde vast, of maak de sanctie ongedaan, voordat je verder scoort.",
+  "engineError.SET_SCORE_UNREACHABLE": "Die setstand kan niet voorkomen met de tiebreak van deze set.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named": "Die reden kan niet worden vastgelegd {phase}. Hier toegestaan: {allowed}.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak": "Een dubbele walk-over kan niet worden vastgelegd in de tiebreak: de partij is gespeeld. Hier toegestaan, voor één kant: {allowed}.",
   "forfeit.phase.pre": "voor de start van de wedstrijd",

@@ -7,6 +7,46 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-28 — a tennis set score no set can reach is refused
+
+A tennis set summary in plain games (no `tb` block) is now refused when no set
+can reach it under its tie-break: the score before its last game must itself be
+reachable from 0–0 without passing a finished set or the tie-break score.
+
+**What changed.** For `tennis.set_summary` with plain games:
+
+| Write path | Before | Now |
+|---|---|---|
+| `POST /api/v1/fixtures/{id}/events`, a summary whose score no set can reach (`{home: 8, away: 6}` or `9–7` with the tie-break at 6-all; `5–3` or `6–4` in a Fast4 set, tie-break at 3-all) | accepted (only the one game before was checked) | 422, `error.code` `"SET_SCORE_UNREACHABLE"`, nothing written |
+| `POST /api/v1/divisions/{id}/events/import`, a stream with such a summary | imported | that stream's result is `rejected`, `error.engineCode` `"SET_SCORE_UNREACHABLE"`, nothing written for its fixture |
+
+The legal scores are the ITF's (Rules 6 and 7, Appendix VI): with the tie-break
+at 6-all, 6–0 to 6–4 and 7–5 in plain games, and 7–6 only with its tie-break;
+in a Fast4 set, 4–0 to 4–2, and 4–3 only with its tie-break. An advantage set
+(no tie-break) is unchanged. A summary that is not a finished set at all (6–5)
+is refused as before, with `INVALID_EVENT`.
+
+**What replaces it.** Send the score that was played. A set that went to the
+tie-break is sent as 7–6 (or 4–3) with its `tb` points.
+
+**What a consumer sees.**
+
+```json
+{ "ok": false, "error": { "code": "SET_SCORE_UNREACHABLE", "message": "set score 8–6 cannot happen under this set's tie-break: …" }, "requestId": "…" }
+```
+
+Key on `error.code`, not on the message text.
+
+**No data migration was required.** Only a NEW write is judged. A summary
+recorded before this change still replays exactly as recorded, so a finished
+match keeps its result.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e (sport fidelity), decision D8, rule TN-SS-1 (SC-S1). The
+engine's pinning test is `packages/engine/src/sports/nested/w2e-tennis.test.ts`.
+
 ## 2026-10-28 — a match-ending sanction must be followed by its ending
 
 A badminton disqualification (black card) and a tennis default now end the

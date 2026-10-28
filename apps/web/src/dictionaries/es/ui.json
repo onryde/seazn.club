@@ -4202,6 +4202,7 @@
   "engineError.TIEBREAK_COLOUR_REQUIRED": "Indica quién llevaba las negras.",
   "engineError.GOAL_KIND_REQUIRED": "Indica el tipo de gol: gol de campo, córner corto o penalti.",
   "engineError.ENDING_SANCTION_PENDING": "Esta sanción termina el partido. Registra el final o anula la sanción antes de seguir puntuando.",
+  "engineError.SET_SCORE_UNREACHABLE": "Ese resultado del set no puede darse con el tie-break de este set.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named": "Ese motivo no se puede registrar {phase}. Aquí se admite: {allowed}.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak": "No se puede registrar una doble incomparecencia en el desempate: la partida se jugó. Aquí se admite, para un solo lado: {allowed}.",
   "forfeit.phase.pre": "antes de que empiece el partido",

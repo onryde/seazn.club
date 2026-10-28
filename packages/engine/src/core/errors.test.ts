@@ -86,6 +86,8 @@ describe("EngineError", () => {
       "GOAL_KIND_REQUIRED",
       // W2e X-SE-1 — appended last, existing order frozen. Scoring after a match-ending sanction before its ending.
       "ENDING_SANCTION_PENDING",
+      // W2e SC-S1 (TN-SS-1) — appended last, existing order frozen. A tennis set summary no set can reach.
+      "SET_SCORE_UNREACHABLE",
     ]);
   });
 });

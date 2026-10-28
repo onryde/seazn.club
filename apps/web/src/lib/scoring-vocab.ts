@@ -655,6 +655,8 @@ export const ENGINE_ERROR_KEY: Record<EngineErrorCode, MessageKey> = {
   GOAL_KIND_REQUIRED: "engineError.GOAL_KIND_REQUIRED",
   // W2e X-SE-1 — pad-visible: it names the two ways on (record the ending, or void the sanction).
   ENDING_SANCTION_PENDING: "engineError.ENDING_SANCTION_PENDING",
+  // W2e SC-S1 (TN-SS-1) — pad-visible: the scorer typed a set score the set's tie-break makes impossible (8–6 at 6-all).
+  SET_SCORE_UNREACHABLE: "engineError.SET_SCORE_UNREACHABLE",
 };
 
 /**

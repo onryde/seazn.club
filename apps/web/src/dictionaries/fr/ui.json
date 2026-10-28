@@ -4202,6 +4202,7 @@
   "engineError.TIEBREAK_COLOUR_REQUIRED": "Indiquez qui avait les noirs.",
   "engineError.GOAL_KIND_REQUIRED": "Indiquez le type de but : but de champ, corner de pénalité ou stroke.",
   "engineError.ENDING_SANCTION_PENDING": "Cette sanction met fin au match. Enregistrez la fin du match, ou annulez la sanction, avant de reprendre le score.",
+  "engineError.SET_SCORE_UNREACHABLE": "Ce score de set est impossible avec le tie-break de ce set.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.named": "Ce motif ne peut pas être enregistré {phase}. Autorisé ici : {allowed}.",
   "engineErrorReason.FORFEIT_REASON_WRONG_PHASE.bothTiebreak": "Un double forfait ne peut pas être enregistré pendant le départage : la partie a été jouée. Autorisé ici, pour un seul camp : {allowed}.",
   "forfeit.phase.pre": "avant le début du match",
