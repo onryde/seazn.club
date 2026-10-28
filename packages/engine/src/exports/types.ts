@@ -220,6 +220,9 @@ export interface ExportStandingsRow {
    *  declaration (IIHF's P · W · OTW · OTL · D · L, with W and L regulation only, RBG:343-344). Absent: no result
    *  columns were declared, and the row prints its own played, won, drawn and lost. */
   results?: readonly (string | number)[];
+  /** The `#` cell as the caller's table prints it: a level table's dash (`LEVEL_RANK`, X-TB-6 — no row is placed first),
+   *  export every pool 2026-10-28. Absent: the row's position in `rows`, as before. */
+  rank?: number | string;
   /** PROMPT-60: entrant crest URL (already resolved) — reaches the PDF. */
   badgeUrl?: string | null;
 }

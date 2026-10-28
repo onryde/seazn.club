@@ -145,7 +145,7 @@ export function buildStandings(
   const table = {
     columns,
     rows: rows.map((r, i) => [
-      i + 1,
+      r.rank ?? i + 1,
       r.name,
       ...resultCells(r, opts.resultColumns),
       ...metricColumns.map((m) => r.metrics[m] ?? 0),
