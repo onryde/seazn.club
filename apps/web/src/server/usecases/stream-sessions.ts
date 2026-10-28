@@ -48,7 +48,7 @@ import { elapsedMinutesSince, endedReservationMinutes, headroomAfterReservations
 import { composedUnavailable, relayDrivers, type RelayDrivers } from "@/server/relay/drivers";
 import { createFailureOf, createRefusedBeforeCall, type IngestProtocol, type IngestState, type OutputState, type RunnerSpec, type StorageUsage } from "@/server/relay/ports";
 import {
-  TargetSecretUnreadableError, lockStreamTarget, readCameraPlayback, readFirstInput, readTargetSecret, storeInputCredentials, storePlaybackCredentials, wipeStreamCodeTok,
+  ApiBackedTargetError, TargetSecretUnreadableError, lockStreamTarget, readCameraPlayback, readFirstInput, readTargetSecret, storeInputCredentials, storePlaybackCredentials, wipeStreamCodeTok,
 } from "@/server/relay/secret-columns";
 import { scrubBeatText } from "@/server/relay/sanitise";
 import { CAMERA_LIVE_PHASE, PROGRAMME_PHASE_EVENT, latestLiveRung, recordEvent, recordSample, recordStorageSnapshot, type EventSource } from "@/server/relay/telemetry";
@@ -1442,6 +1442,13 @@ function refuse(refusal: Exclude<ReturnType<typeof admit>, { ok: true }>, headro
  *  remedy, logged with the fixture, target and kind only. Any other error (a missing RELAY_KEK is one: secret-columns
  *  rethrows it, M3) is returned unchanged for the caller to throw. */
 function unreadableRefusal(err: unknown, fixtureId: string, targetId: string): unknown {
+  // YouTube Connect: an API-backed destination has no key of its own to open, so a Go live on it would be ApiBackedTargetError's
+  // 500. It is the existing unreadable-destination refusal until T11 replaces this read with `prepare` (one pooled key per broadcast).
+  // The row's kind is `youtube` by construction (connections.ts ensureDestination), which is a platform: the "replace the key" remedy.
+  if (err instanceof ApiBackedTargetError) {
+    log.warn({ fixtureId, targetId, kind: "youtube" }, "stream session: the destination is API-backed and has no key to read — start refused until the broadcast path ships");
+    return TargetUnreadableError.forKind("youtube");
+  }
   if (!(err instanceof TargetSecretUnreadableError)) return err;
   log.warn({ fixtureId, targetId, kind: err.kind }, "stream session: the saved destination will not open — start refused; the organiser replaces the key");
   return TargetUnreadableError.forKind(err.kind);

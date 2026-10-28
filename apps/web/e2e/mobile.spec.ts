@@ -697,6 +697,9 @@ test("console routes: no horizontal scroll", async ({ page, request }) => {
     // "venues" capture (320/768/1280) shows the calendar editor OPEN, which
     // this route-level pass cannot — see that harness for the layout check.
     { path: "/directory?tab=venues" },
+    // The Streaming page (owner, 2026-10-27: its own top-nav page, formerly the Directory's fifth tab) — and with it the gantry's
+    // FIFTH nav item, which is the width budget this sweep exists to hold at every phone and tablet project.
+    { path: "/streaming" },
     { path: "/import" },
     { path: "/me" },
     // P4/D1a wizard step 0 — the template gallery. A 6-card grid, which is the
@@ -1319,15 +1322,18 @@ test("decider consoles: no horizontal scroll, score pad renders (not just a 2xx)
 // Hence a geometry assertion against the scroller's own visible box. This is
 // the only instrument in the repo that can fail for the real reason.
 //
-// 2026-09-30 (fixture-page stream T7): a FIFTH tab, Streaming, now ends the
-// strip, so the test drives the LAST tab — the one furthest past the edge.
-// With Venues it went vacuous at 430, where Venues now fits unscrolled while
-// the strip still overflows (its own control below caught that).
+// 2026-09-30 (fixture-page stream T7) a FIFTH tab, Streaming, ended the strip
+// and the test drove IT (with Venues it went vacuous at 430, where Venues fit
+// unscrolled while the strip still overflowed — its own control below caught
+// that). 2026-10-27 (owner): Streaming left the Directory for a top-nav page of
+// its own, so the strip is FOUR tabs again and Venues is its last — the one
+// furthest past the edge. `/directory?tab=streaming` is now an unknown tab and
+// would open Players, so the test names the tab it drives.
 test("Directory: the active tab is scrolled into view at this width", async ({ page }) => {
-  await page.goto("/directory?tab=streaming", { waitUntil: "load" });
+  await page.goto("/directory?tab=venues", { waitUntil: "load" });
 
   const active = page.locator('nav [aria-current="page"]');
-  await expect(active).toHaveText(/streaming/i);
+  await expect(active).toHaveText(/venues/i);
   expect(
     await active.evaluate((el) => el === el.closest("nav")!.querySelector("a:last-of-type")),
     "the driven tab is the strip's LAST one",
@@ -1659,9 +1665,10 @@ test("axe: no serious/critical violations on key surfaces (v3/11 gap 11)", async
     `/o/${orgSlug}/c/${compSlug}/registration?tab=settings`,
     `/o/${orgSlug}/c/${compSlug}/registration?tab=registrants`,
     statusPath,
-    // B4 re-review n3: Directory → Streaming (spec 2026-09-30 §4) — its scrolling tab strip's axe ruling (class 23's
-    // scrollable-region-focusable) was resting on a read of the rule, not a run.
-    "/directory?tab=streaming",
+    // B4 re-review n3: the Streaming page (spec 2026-09-30 §4; its own top-nav page since 2026-10-27) had its axe ruling resting
+    // on a read of the rule, not a run — and the Directory's scrolling tab strip (class 23's scrollable-region-focusable) with it.
+    "/streaming",
+    "/directory?tab=venues",
   ];
   for (const path of routes) {
     const response = await page.goto(path, { waitUntil: "load" });

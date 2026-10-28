@@ -25,7 +25,7 @@ import { PublicPlayerMatches } from "../public-site/player-matches-schema.ts";
 // Streaming R1, A18 — the destination refusal rules, for the 422 envelope below.
 // Zero imports in that file (it is client-safe), so the generator stays clean.
 import {
-  DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_KEY_EMPTY, TARGET_UNREADABLE,
+  DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, DESTINATION_REFUSALS, STREAM_KEY_EMPTY, TARGET_UNREADABLE, YOUTUBE_USE_DISCONNECT,
 } from "../../lib/stream-destinations.ts";
 // The stream-link validator's own host list (zod only, client-safe, already reached through schemas.ts): a published example
 // link is built from it, so it is a link `isStreamUrl` accepts by construction.
@@ -268,10 +268,14 @@ export const ROUTES: RouteSpec[] = [
   // Streaming R1 — destinations (design §6.1), beside the other /orgs/{id}/… rows. Tagged
   // "fixtures" with the relay sessions they feed: there is no "organizations" tag (lane C A11).
   // Never key-reachable (key-scopes.ts).
-  { path: "/orgs/{id}/stream-targets", method: "get", summary: "The organisation's streaming destinations (never the stream key)", tag: "fixtures", response: z.array(S.StreamTarget) },
+  { path: "/orgs/{id}/stream-targets", method: "get", summary: "The organisation's streaming destinations (never the stream key). A destination that is a connected YouTube channel carries `youtube` (its connection: channel title, default visibility, made-for-kids, status, live state, whether the consent wording moved on, open broadcasts) and has no `keyHint` or `inUse`; a pasted-key destination has `youtube: null`", tag: "fixtures", response: z.array(S.StreamTarget) },
   { path: "/orgs/{id}/stream-targets", method: "post", summary: "Add a streaming destination (YouTube or Twitch). The ingest URL is filled per platform; the key is sealed at rest (AES-256-GCM). The same key again returns the existing destination UNCHANGED (`outcome: existing` — its name and watch link stand), or restores a removed one under the submitted name and watch link (`outcome: restored`); a new destination is `outcome: inserted`. The preset still passes the destination allowlist, else 422 DESTINATION_NOT_ALLOWED with the refusing `rule`. 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed. 409 when a concurrent save of the same destination won: try again", tag: "fixtures", request: S.CreateStreamTarget, response: S.StreamTargetSaved, status: 201, errors: [403, 409, 422] },
-  { path: "/orgs/{id}/stream-targets/{targetId}", method: "patch", summary: "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key). A key that can no longer be read is recovered in place for YouTube and Twitch; a legacy destination is 422 TARGET_UNREADABLE (remove it; only YouTube and Twitch can be added). 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed, 422 DESTINATION_NOT_ALLOWED when the preset leaves the allowlist", tag: "fixtures", request: S.PatchStreamTarget, response: S.StreamTarget, errors: [404, 409, 422] },
-  { path: "/orgs/{id}/stream-targets/{targetId}", method: "delete", summary: "Remove a streaming destination — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed", tag: "fixtures", response: S.StreamTargetRemoved, errors: [404, 409] },
+  { path: "/orgs/{id}/stream-targets/{targetId}", method: "patch", summary: "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key). A key that can no longer be read is recovered in place for YouTube and Twitch; a legacy destination is 422 TARGET_UNREADABLE (remove it; only YouTube and Twitch can be added). 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed, 422 DESTINATION_NOT_ALLOWED when the preset leaves the allowlist, 422 YOUTUBE_USE_DISCONNECT for a destination that is a connected YouTube channel (it has no key and no name of its own: disconnect the channel instead)", tag: "fixtures", request: S.PatchStreamTarget, response: S.StreamTarget, errors: [404, 409, 422] },
+  { path: "/orgs/{id}/stream-targets/{targetId}", method: "delete", summary: "Remove a streaming destination — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed; 422 YOUTUBE_USE_DISCONNECT for a destination that is a connected YouTube channel (disconnect the channel instead)", tag: "fixtures", response: S.StreamTargetRemoved, errors: [404, 409, 422] },
+  // YouTube Connect (T8). Never key-reachable (key-scopes.ts NEVER_KEY_ROUTES).
+  { path: "/orgs/{id}/youtube-connections", method: "post", summary: "Save the channel picked from a multi-channel Google grant ({pendingId, channelId}): the connection and its destination row. The same channel connected again in this organisation is the existing connection, its token replaced (the response says `existing: true` and the connection keeps its own visibility and made-for-kids settings; `existing: false` is a new connection). 422 YOUTUBE_CHANNEL_NOT_OFFERED when the channel is not one the grant listed; 409 YOUTUBE_OTHER_ORG when the channel is connected to another organisation on Seazn (the grant is not revoked: it is the one that connection uses); 410 YOUTUBE_PENDING_EXPIRED once the 10-minute grant expired; 404 for a grant that is not yours, not this organisation's, or already used", tag: "fixtures", request: S.PickYoutubeChannel, response: S.YoutubeConnectionSaved, status: 201, errors: [403, 409, 410, 422] },
+  { path: "/orgs/{id}/youtube-connections/pending/{pendingId}", method: "get", summary: "The channels a pending Google grant offers, for the picker ({channels: [{id, title}]}). Only the person who made the grant, in the organisation it was made for; 404 otherwise, 410 YOUTUBE_PENDING_EXPIRED once it expired", tag: "fixtures", response: S.YoutubePendingChannels, errors: [403, 410] },
+  { path: "/orgs/{id}/youtube-connections/{connectionId}", method: "patch", summary: "Change a YouTube connection's default visibility ({privacy}), made-for-kids ({madeForKids}) and/or give the consent on the current wording ({consent: true}, 'Review updated terms'; it records the caller and the time, and a second press does not replace who consented). At least one field; 404 for a connection that is missing, disconnected or another organisation's", tag: "fixtures", request: S.YoutubeConnectionSettings, response: S.YoutubeConnectionView, errors: [403] },
   // Public (no auth, cacheable, consent-filtered)
   { path: "/public/orgs/{orgSlug}/live", method: "get", summary: "Public org live status: every competition the org home lists, with its status and how many of its public fixtures are in play — what the org home's status chips poll", tag: "public", public: true, response: S.PublicOrgLive },
   { path: "/public/orgs/{orgSlug}/competitions/{slug}", method: "get", summary: "Public competition: description + divisions", tag: "public", public: true },
@@ -618,7 +622,7 @@ const TEMPLATE_INSTANTIATION_FAILED_ENVELOPE = {
 // stream-targets, POST stream-sessions): the allowlist's refusal carries `rule`, which check refused, as a real
 // HttpError `extra` (usecases/stream-targets.ts DestinationNotAllowedError). The enum IS lib/stream-destinations.ts's
 // list, imported, not retyped. Each route's variant names its own 422 codes on `code` (N1/N2, B2).
-function destinationRefusal422(codes: Record<string, string>) {
+function destinationRefusal422(codes: Record<string, string>, withRule = true) {
   return {
     type: "object",
     required: ["ok", "error", "requestId"],
@@ -631,11 +635,16 @@ function destinationRefusal422(codes: Record<string, string>) {
           ...BASE_ERROR_PROPERTIES,
           // N1/N2 (B2): the route's stable 422 codes (lib/stream-destinations.ts), named — the wire's `code` stays a string.
           code: { type: "string", description: `This route's 422 codes — ${Object.entries(codes).map(([c, why]) => `${c}: ${why}`).join("; ")}` },
-          rule: {
-            type: "string",
-            enum: [...DESTINATION_REFUSALS],
-            description: "On DESTINATION_NOT_ALLOWED (422): which destination rule refused the ingest URL — never the URL itself",
-          },
+          // Only the routes that can refuse an ingest URL carry `rule` (DELETE's 422 is YOUTUBE_USE_DISCONNECT alone).
+          ...(withRule
+            ? {
+                rule: {
+                  type: "string",
+                  enum: [...DESTINATION_REFUSALS],
+                  description: "On DESTINATION_NOT_ALLOWED (422): which destination rule refused the ingest URL — never the URL itself",
+                },
+              }
+            : {}),
         },
         additionalProperties: true,
       },
@@ -648,10 +657,13 @@ const WHY_422 = {
   [STREAM_KEY_EMPTY]: "the stream key is blank once trimmed",
   [DESTINATION_LABEL_EMPTY]: "the destination name is blank once trimmed",
   [TARGET_UNREADABLE]: "the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added)",
+  [YOUTUBE_USE_DISCONNECT]: "the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead)",
 } as const;
 const pick422 = (...codes: (keyof typeof WHY_422)[]) => destinationRefusal422(Object.fromEntries(codes.map((c) => [c, WHY_422[c]])));
 const STREAM_TARGET_CREATE_422 = pick422(DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY);
-const STREAM_TARGET_PATCH_422 = pick422(DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY, TARGET_UNREADABLE);
+const STREAM_TARGET_PATCH_422 = pick422(DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, DESTINATION_LABEL_EMPTY, TARGET_UNREADABLE, YOUTUBE_USE_DISCONNECT);
+// Remove refuses nothing about an ingest URL: its one 422 is the connected-channel row, so no `rule`.
+const STREAM_TARGET_DELETE_422 = destinationRefusal422({ [YOUTUBE_USE_DISCONNECT]: WHY_422[YOUTUBE_USE_DISCONNECT] }, false);
 const STREAM_SESSION_CREATE_422 = pick422(DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE);
 
 // SCOPED to POST /fixtures/{id}/stream-sessions (Streaming R1, lane C A21): the
@@ -718,7 +730,7 @@ const STREAM_SESSION_CREATE_ERRORS = {
   }),
   409: scopedErrorEnvelope({
     sessionId: { type: ["string", "null"], format: "uuid", description: "On active_session (409): the fixture's running session — resume it rather than start another" },
-    // T3 (spec §5.5): the Directory's holder shape (stream-target-holders.ts wireHolder), nullable here alone.
+    // T3 (spec §5.5): the Streaming page's holder shape (stream-target-holders.ts wireHolder), nullable here alone.
     holder: {
       ...STREAM_TARGET_HOLDER_PROPERTIES,
       type: ["object", "null"],
@@ -800,7 +812,7 @@ const ERROR_SCHEMA_OVERRIDES: Record<string, Partial<Record<number, unknown>>> =
   "POST /orgs/{id}/stream-targets": { 422: STREAM_TARGET_CREATE_422 },
   "POST /fixtures/{id}/stream-sessions": STREAM_SESSION_CREATE_ERRORS,
   "PATCH /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_PATCH_409, 422: STREAM_TARGET_PATCH_422 },
-  "DELETE /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_DELETE_409 },
+  "DELETE /orgs/{id}/stream-targets/{targetId}": { 409: STREAM_TARGET_DELETE_409, 422: STREAM_TARGET_DELETE_422 },
 };
 
 function pathParams(path: string): object[] {
@@ -973,7 +985,7 @@ function operation(route: RouteSpec): Record<string, unknown> {
   const overrides = ERROR_SCHEMA_OVERRIDES[`${route.method.toUpperCase()} ${route.path}`];
   for (const status of route.errors ?? []) {
     responses[String(status)] = {
-      description: { 400: "Validation error", 402: "Plan upgrade required", 409: "Conflict", 422: "Rejected by the engine", 426: "Client engine out of date", 429: "Rate limited" }[status] ?? "Error",
+      description: { 400: "Validation error", 402: "Plan upgrade required", 409: "Conflict", 410: "Gone", 422: "Rejected by the engine", 426: "Client engine out of date", 429: "Rate limited" }[status] ?? "Error",
       content: { "application/json": { schema: overrides?.[status] ?? errorBody } },
     };
   }

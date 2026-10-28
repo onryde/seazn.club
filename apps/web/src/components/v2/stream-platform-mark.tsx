@@ -1,5 +1,5 @@
 // A streaming destination's platform: its name and its mark (spec 2026-09-30 §4; mockup `directory.html` — brand-
-// coloured rounded squares with an initial). Shared by the Directory's Streaming tab and the fixture panel's picker.
+// coloured rounded squares with an initial). Shared by the Streaming page and the fixture panel's picker.
 // Every STORED kind lists (spec §5.4: legacy rows keep listing until removed), so every kind has a name and a mark here —
 // even though only STREAM_PLATFORMS can be created (D6).
 import type { StreamTargetKind } from "@/server/api-v1/schemas";
@@ -26,7 +26,7 @@ const MARK: Record<StreamTargetKind, { bg: string; fg: string; letter: string }>
   custom_rtmp: { bg: "#e2e8f0", fg: "#334155", letter: "•" },
 };
 
-/** Every kind with a mark — held equal to `StreamTargetKind.options` by the Directory panel's test. */
+/** Every kind with a mark — held equal to `StreamTargetKind.options` by the destinations panel's test. */
 export const STREAM_MARK_KINDS = Object.keys(MARK) as StreamTargetKind[];
 
 /** Decorative: the platform's NAME always sits beside it in text, so the mark is hidden from assistive tech. */

@@ -70802,7 +70802,7 @@
     },
     "/api/v1/orgs/{id}/stream-targets": {
       "get": {
-        "summary": "The organisation's streaming destinations (never the stream key)",
+        "summary": "The organisation's streaming destinations (never the stream key). A destination that is a connected YouTube channel carries `youtube` (its connection: channel title, default visibility, made-for-kids, status, live state, whether the consent wording moved on, open broadcasts) and has no `keyHint` or `inUse`; a pasted-key destination has `youtube: null`",
         "tags": [
           "fixtures"
         ],
@@ -70950,6 +70950,70 @@
                                 "type": "null"
                               }
                             ]
+                          },
+                          "youtube": {
+                            "anyOf": [
+                              {
+                                "type": "object",
+                                "properties": {
+                                  "connectionId": {
+                                    "type": "string"
+                                  },
+                                  "channelTitle": {
+                                    "type": "string"
+                                  },
+                                  "privacy": {
+                                    "type": "string",
+                                    "enum": [
+                                      "unlisted",
+                                      "public",
+                                      "private"
+                                    ]
+                                  },
+                                  "madeForKids": {
+                                    "type": "boolean"
+                                  },
+                                  "status": {
+                                    "type": "string",
+                                    "enum": [
+                                      "connected",
+                                      "reconnect_needed"
+                                    ]
+                                  },
+                                  "liveState": {
+                                    "type": "string",
+                                    "enum": [
+                                      "enabled",
+                                      "not_enabled",
+                                      "blocked",
+                                      "unknown"
+                                    ]
+                                  },
+                                  "termsOutdated": {
+                                    "type": "boolean"
+                                  },
+                                  "openBroadcasts": {
+                                    "type": "integer",
+                                    "minimum": -9007199254740991,
+                                    "maximum": 9007199254740991
+                                  }
+                                },
+                                "required": [
+                                  "connectionId",
+                                  "channelTitle",
+                                  "privacy",
+                                  "madeForKids",
+                                  "status",
+                                  "liveState",
+                                  "termsOutdated",
+                                  "openBroadcasts"
+                                ],
+                                "additionalProperties": false
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
                           }
                         },
                         "required": [
@@ -70959,7 +71023,8 @@
                           "watchUrl",
                           "createdAt",
                           "keyHint",
-                          "inUse"
+                          "inUse",
+                          "youtube"
                         ],
                         "additionalProperties": false
                       }
@@ -70987,6 +71052,16 @@
                         "matchNo": -9007199254740991,
                         "courtName": "example",
                         "state": "live"
+                      },
+                      "youtube": {
+                        "connectionId": "example",
+                        "channelTitle": "example",
+                        "privacy": "unlisted",
+                        "madeForKids": true,
+                        "status": "connected",
+                        "liveState": "enabled",
+                        "termsOutdated": true,
+                        "openBroadcasts": -9007199254740991
                       }
                     }
                   ],
@@ -71336,6 +71411,70 @@
                             }
                           ]
                         },
+                        "youtube": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "connectionId": {
+                                  "type": "string"
+                                },
+                                "channelTitle": {
+                                  "type": "string"
+                                },
+                                "privacy": {
+                                  "type": "string",
+                                  "enum": [
+                                    "unlisted",
+                                    "public",
+                                    "private"
+                                  ]
+                                },
+                                "madeForKids": {
+                                  "type": "boolean"
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "connected",
+                                    "reconnect_needed"
+                                  ]
+                                },
+                                "liveState": {
+                                  "type": "string",
+                                  "enum": [
+                                    "enabled",
+                                    "not_enabled",
+                                    "blocked",
+                                    "unknown"
+                                  ]
+                                },
+                                "termsOutdated": {
+                                  "type": "boolean"
+                                },
+                                "openBroadcasts": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "connectionId",
+                                "channelTitle",
+                                "privacy",
+                                "madeForKids",
+                                "status",
+                                "liveState",
+                                "termsOutdated",
+                                "openBroadcasts"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
                         "outcome": {
                           "type": "string",
                           "enum": [
@@ -71353,6 +71492,7 @@
                         "createdAt",
                         "keyHint",
                         "inUse",
+                        "youtube",
                         "outcome"
                       ],
                       "additionalProperties": false
@@ -71379,6 +71519,16 @@
                       "matchNo": -9007199254740991,
                       "courtName": "example",
                       "state": "live"
+                    },
+                    "youtube": {
+                      "connectionId": "example",
+                      "channelTitle": "example",
+                      "privacy": "unlisted",
+                      "madeForKids": true,
+                      "status": "connected",
+                      "liveState": "enabled",
+                      "termsOutdated": true,
+                      "openBroadcasts": -9007199254740991
                     },
                     "outcome": "existing"
                   },
@@ -71677,7 +71827,7 @@
     },
     "/api/v1/orgs/{id}/stream-targets/{targetId}": {
       "patch": {
-        "summary": "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key). A key that can no longer be read is recovered in place for YouTube and Twitch; a legacy destination is 422 TARGET_UNREADABLE (remove it; only YouTube and Twitch can be added). 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed, 422 DESTINATION_NOT_ALLOWED when the preset leaves the allowlist",
+        "summary": "Rename a streaming destination ({label}, allowed while in use) or replace its stream key ({streamKey}; 409 TARGET_IN_USE while a match is live or waiting on it, 409 DESTINATION_DUPLICATE when another destination already holds that key). A key that can no longer be read is recovered in place for YouTube and Twitch; a legacy destination is 422 TARGET_UNREADABLE (remove it; only YouTube and Twitch can be added). 422 STREAM_KEY_EMPTY / DESTINATION_LABEL_EMPTY when the key or name is blank once trimmed, 422 DESTINATION_NOT_ALLOWED when the preset leaves the allowlist, 422 YOUTUBE_USE_DISCONNECT for a destination that is a connected YouTube channel (it has no key and no name of its own: disconnect the channel instead)",
         "tags": [
           "fixtures"
         ],
@@ -71858,6 +72008,70 @@
                               "type": "null"
                             }
                           ]
+                        },
+                        "youtube": {
+                          "anyOf": [
+                            {
+                              "type": "object",
+                              "properties": {
+                                "connectionId": {
+                                  "type": "string"
+                                },
+                                "channelTitle": {
+                                  "type": "string"
+                                },
+                                "privacy": {
+                                  "type": "string",
+                                  "enum": [
+                                    "unlisted",
+                                    "public",
+                                    "private"
+                                  ]
+                                },
+                                "madeForKids": {
+                                  "type": "boolean"
+                                },
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "connected",
+                                    "reconnect_needed"
+                                  ]
+                                },
+                                "liveState": {
+                                  "type": "string",
+                                  "enum": [
+                                    "enabled",
+                                    "not_enabled",
+                                    "blocked",
+                                    "unknown"
+                                  ]
+                                },
+                                "termsOutdated": {
+                                  "type": "boolean"
+                                },
+                                "openBroadcasts": {
+                                  "type": "integer",
+                                  "minimum": -9007199254740991,
+                                  "maximum": 9007199254740991
+                                }
+                              },
+                              "required": [
+                                "connectionId",
+                                "channelTitle",
+                                "privacy",
+                                "madeForKids",
+                                "status",
+                                "liveState",
+                                "termsOutdated",
+                                "openBroadcasts"
+                              ],
+                              "additionalProperties": false
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
                         }
                       },
                       "required": [
@@ -71867,7 +72081,8 @@
                         "watchUrl",
                         "createdAt",
                         "keyHint",
-                        "inUse"
+                        "inUse",
+                        "youtube"
                       ],
                       "additionalProperties": false
                     },
@@ -71893,6 +72108,16 @@
                       "matchNo": -9007199254740991,
                       "courtName": "example",
                       "state": "live"
+                    },
+                    "youtube": {
+                      "connectionId": "example",
+                      "channelTitle": "example",
+                      "privacy": "unlisted",
+                      "madeForKids": true,
+                      "status": "connected",
+                      "liveState": "enabled",
+                      "termsOutdated": true,
+                      "openBroadcasts": -9007199254740991
                     }
                   },
                   "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
@@ -72171,7 +72396,7 @@
                       "properties": {
                         "code": {
                           "type": "string",
-                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); STREAM_KEY_EMPTY: the stream key is blank once trimmed; DESTINATION_LABEL_EMPTY: the destination name is blank once trimmed; TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added)"
+                          "description": "This route's 422 codes — DESTINATION_NOT_ALLOWED: the destination is not on the allowlist (see `rule`); STREAM_KEY_EMPTY: the stream key is blank once trimmed; DESTINATION_LABEL_EMPTY: the destination name is blank once trimmed; TARGET_UNREADABLE: the saved stream key can no longer be read (replace the key; a legacy destination: remove it, since only YouTube and Twitch can be added); YOUTUBE_USE_DISCONNECT: the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead)"
                         },
                         "message": {
                           "type": "string"
@@ -72215,7 +72440,7 @@
         ]
       },
       "delete": {
-        "summary": "Remove a streaming destination — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed",
+        "summary": "Remove a streaming destination — an archive: hidden from every list, history keeps its name, and adding the same key again restores it. 409 TARGET_IN_USE while a match is live or waiting on it; 404 once removed; 422 YOUTUBE_USE_DISCONNECT for a destination that is a connected YouTube channel (disconnect the channel instead)",
         "tags": [
           "fixtures"
         ],
@@ -72502,6 +72727,1139 @@
                               "description": "live = a phone is sending (live or ending), or — on Go live only — an ENDED session whose Machine or destination output is still up and could not be released; waiting = requested, provisioning or warming"
                             }
                           }
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string",
+                          "description": "This route's 422 codes — YOUTUBE_USE_DISCONNECT: the destination is a connected YouTube channel, which has no key or name of its own (disconnect the channel instead)"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/orgs/{id}/youtube-connections": {
+      "post": {
+        "summary": "Save the channel picked from a multi-channel Google grant ({pendingId, channelId}): the connection and its destination row. The same channel connected again in this organisation is the existing connection, its token replaced (the response says `existing: true` and the connection keeps its own visibility and made-for-kids settings; `existing: false` is a new connection). 422 YOUTUBE_CHANNEL_NOT_OFFERED when the channel is not one the grant listed; 409 YOUTUBE_OTHER_ORG when the channel is connected to another organisation on Seazn (the grant is not revoked: it is the one that connection uses); 410 YOUTUBE_PENDING_EXPIRED once the 10-minute grant expired; 404 for a grant that is not yours, not this organisation's, or already used",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "pendingId": {
+                    "type": "string",
+                    "format": "uuid",
+                    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$"
+                  },
+                  "channelId": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                },
+                "required": [
+                  "pendingId",
+                  "channelId"
+                ],
+                "additionalProperties": false
+              },
+              "example": {
+                "pendingId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b",
+                "channelId": "example"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "connectionId": {
+                          "type": "string"
+                        },
+                        "targetId": {
+                          "type": "string"
+                        },
+                        "existing": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": [
+                        "connectionId",
+                        "targetId",
+                        "existing"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "connectionId": "example",
+                    "targetId": "example",
+                    "existing": true
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Gone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Rejected by the engine",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/orgs/{id}/youtube-connections/pending/{pendingId}": {
+      "get": {
+        "summary": "The channels a pending Google grant offers, for the picker ({channels: [{id, title}]}). Only the person who made the grant, in the organisation it was made for; 404 otherwise, 410 YOUTUBE_PENDING_EXPIRED once it expired",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "pendingId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "channels": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "id": {
+                                "type": "string"
+                              },
+                              "title": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "id",
+                              "title"
+                            ],
+                            "additionalProperties": false
+                          }
+                        }
+                      },
+                      "required": [
+                        "channels"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "channels": [
+                      {
+                        "id": "example",
+                        "title": "example"
+                      }
+                    ]
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "410": {
+            "description": "Gone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "sessionCookie": []
+          },
+          {
+            "apiKey": []
+          }
+        ]
+      }
+    },
+    "/api/v1/orgs/{id}/youtube-connections/{connectionId}": {
+      "patch": {
+        "summary": "Change a YouTube connection's default visibility ({privacy}), made-for-kids ({madeForKids}) and/or give the consent on the current wording ({consent: true}, 'Review updated terms'; it records the caller and the time, and a second press does not replace who consented). At least one field; 404 for a connection that is missing, disconnected or another organisation's",
+        "tags": [
+          "fixtures"
+        ],
+        "x-required-scope": "none",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "connectionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "privacy": {
+                    "type": "string",
+                    "enum": [
+                      "unlisted",
+                      "public",
+                      "private"
+                    ]
+                  },
+                  "madeForKids": {
+                    "type": "boolean"
+                  },
+                  "consent": {
+                    "type": "boolean",
+                    "const": true
+                  }
+                },
+                "additionalProperties": false
+              },
+              "example": {
+                "privacy": "unlisted",
+                "madeForKids": true,
+                "consent": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "data",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": true
+                    },
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "connectionId": {
+                          "type": "string"
+                        },
+                        "channelTitle": {
+                          "type": "string"
+                        },
+                        "privacy": {
+                          "type": "string",
+                          "enum": [
+                            "unlisted",
+                            "public",
+                            "private"
+                          ]
+                        },
+                        "madeForKids": {
+                          "type": "boolean"
+                        },
+                        "status": {
+                          "type": "string",
+                          "enum": [
+                            "connected",
+                            "reconnect_needed"
+                          ]
+                        },
+                        "liveState": {
+                          "type": "string",
+                          "enum": [
+                            "enabled",
+                            "not_enabled",
+                            "blocked",
+                            "unknown"
+                          ]
+                        },
+                        "termsOutdated": {
+                          "type": "boolean"
+                        },
+                        "openBroadcasts": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
+                        }
+                      },
+                      "required": [
+                        "connectionId",
+                        "channelTitle",
+                        "privacy",
+                        "madeForKids",
+                        "status",
+                        "liveState",
+                        "termsOutdated",
+                        "openBroadcasts"
+                      ],
+                      "additionalProperties": false
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                },
+                "example": {
+                  "ok": true,
+                  "data": {
+                    "connectionId": "example",
+                    "channelTitle": "example",
+                    "privacy": "unlisted",
+                    "madeForKids": true,
+                    "status": "connected",
+                    "liveState": "enabled",
+                    "termsOutdated": true,
+                    "openBroadcasts": -9007199254740991
+                  },
+                  "requestId": "3f1a2b04-8c1d-4e5f-9a6b-7c8d9e0f1a2b"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Not authenticated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
+                        }
+                      },
+                      "additionalProperties": true
+                    },
+                    "requestId": {
+                      "type": "string",
+                      "format": "uuid"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "ok",
+                    "error",
+                    "requestId"
+                  ],
+                  "properties": {
+                    "ok": {
+                      "const": false
+                    },
+                    "error": {
+                      "type": "object",
+                      "required": [
+                        "code",
+                        "message"
+                      ],
+                      "properties": {
+                        "code": {
+                          "type": "string"
+                        },
+                        "message": {
+                          "type": "string"
+                        },
+                        "current_seq": {
+                          "type": "integer",
+                          "description": "On SEQ_CONFLICT (409): the ledger tip to resync from"
                         }
                       },
                       "additionalProperties": true

@@ -18,6 +18,7 @@ import type { CreateStreamTarget, PatchStreamTarget, StreamTarget, StreamTargetS
 import {
   archiveStreamTarget, insertStreamTarget, lockStreamTarget, readKeyHints, replaceTargetKey, type StoredStreamTarget,
 } from "@/server/relay/secret-columns";
+import { connectionViews } from "@/server/youtube/connections";
 import { holderRows, listHolder, wireHolder, type TargetHolder } from "./stream-target-holders";
 
 // English API sentences, one per rule. Never the URL: its path can carry the stream key.
@@ -62,23 +63,31 @@ const streamKeyEmpty = () => new HttpError(422, "The stream key is empty", STREA
 
 export async function listStreamTargets(auth: AuthCtx, orgId: string): Promise<StreamTarget[]> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
-  const [rows, hints, holders] = await Promise.all([
-    sql<{ id: string; kind: StreamTarget["kind"]; label: string; watch_url: string | null; created_at: string }[]>`
-      select id, kind, label, watch_url, created_at from org_stream_targets
+  const [rows, hints, holders, connections] = await Promise.all([
+    sql<{ id: string; kind: StreamTarget["kind"]; label: string; watch_url: string | null; created_at: string; youtube_connection_id: string | null }[]>`
+      select id, kind, label, watch_url, created_at, youtube_connection_id from org_stream_targets
        where org_id = ${orgId} and archived_at is null order by created_at asc, id asc`,
     sql.begin((tx) => readKeyHints(tx, orgId)) as Promise<Map<string, string | null>>,
     holderRows(sql, { orgId }),
+    connectionViews(orgId),
   ]);
   // holderRows is oldest-first, so the FIRST holder seen for a target is the one the list names.
   const heldBy = new Map<string, TargetHolder>();
   for (const h of holders) if (!heldBy.has(h.targetId)) heldBy.set(h.targetId, h);
-  return rows.map((r) => {
+  const listed: StreamTarget[] = [];
+  for (const r of rows) {
+    // YouTube Connect (T8): an API-backed row is shown with its connection. An ACTIVE one whose connection is not live (revoked, or
+    // missing) is not shown at all: the revoke statement archives the destination in the same statement, so it should not exist,
+    // and rendered as a pasted row it would offer Rename / Replace key / Remove on a destination with no key.
+    const youtube = r.youtube_connection_id === null ? null : (connections.get(r.youtube_connection_id) ?? undefined);
+    if (youtube === undefined) continue;
     const h = heldBy.get(r.id);
-    return {
+    listed.push({
       id: r.id, kind: r.kind, label: r.label, watchUrl: r.watch_url, createdAt: new Date(r.created_at).toISOString(),
-      keyHint: hints.get(r.id) ?? null, inUse: h ? listHolder(h) : null,
-    };
-  });
+      keyHint: hints.get(r.id) ?? null, inUse: h ? listHolder(h) : null, youtube,
+    });
+  }
+  return listed;
 }
 
 export async function createStreamTarget(auth: AuthCtx, orgId: string, body: CreateStreamTarget): Promise<StreamTargetSaved> {
@@ -100,7 +109,7 @@ export async function createStreamTarget(auth: AuthCtx, orgId: string, body: Cre
   const watchUrl = watch ? watch.data : null;
   // A19 + D2: the same destination again is the EXISTING target (unchanged — owner decision (a)), or its most recently
   // archived row restored under this body's label and watch link (insertStreamTarget), so the reply is the STORED row —
-  // never this body echoed onto an id it did not write — plus the `outcome`, the only way the Directory can tell
+  // never this body echoed onto an id it did not write — plus the `outcome`, the only way the Streaming page can tell
   // "already saved as {label}" from a save.
   const stored = (await sql.begin((tx) =>
     insertStreamTarget(tx, { orgId, kind: body.kind, label, watchUrl, rtmp: { url: destination.url, streamKey } }),
@@ -113,7 +122,7 @@ export async function createStreamTarget(auth: AuthCtx, orgId: string, body: Cre
 }
 
 /** Spec §5.2 — 409 TARGET_IN_USE, naming the match that holds the destination. Uppercase: the spec's code for the
- *  Directory's refusals (Go live's own refusal keeps its lowercase `target_in_use`). */
+ *  Streaming page's refusals (Go live's own refusal keeps its lowercase `target_in_use`). */
 export function targetHeld(h: TargetHolder): HttpError {
   return new HttpError(
     409,
@@ -139,7 +148,7 @@ async function isApiBacked(exec: Tx | typeof sql, orgId: string, targetId: strin
   return row?.api === true;
 }
 
-/** M5 (B1 review): a label is trimmed exactly as the key is — the schema's min(1) admits "   ", which the Directory
+/** M5 (B1 review): a label is trimmed exactly as the key is — the schema's min(1) admits "   ", which the Streaming page
  *  would render as a blank name — and nothing left is a 422. */
 function labelOf(raw: string): string {
   const label = raw.trim();

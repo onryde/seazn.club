@@ -85,6 +85,7 @@ import {
 } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { fmtNumber, fmtTime } from "@/lib/format";
+import { STREAMING_PAGE_HREF } from "@/lib/youtube";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamMode, StreamPhone, StreamSessionCurrent, StreamTarget } from "@/server/api-v1/schemas";
 
@@ -621,7 +622,7 @@ export function FixtureStreamPanel({
 // ─── The Phone tab (Streaming R1, lane D) ─────────────────────────────────────────────────────────────────────────────
 // §8a option A ("Stepper") and §8b option A ("Three tiles"), values from `_THEMES.md`. Three pieces, each tested where
 // it CAN be in a node harness: `PhoneTab` (the container — fetch, poll and every action), `PhoneTabBody` (pure: every
-// state is a function of its props). Destinations are managed in Directory → Streaming (T8, D1): the tab only PICKS one
+// state is a function of its props). Destinations are managed on the Streaming page (T8, D1): the tab only PICKS one
 // (and saves it as the fixture's pre-pick, capture QR v2 §6.7.3), and links there.
 
 /** §8a's `QR size` cap (amended 2026-10-01, B6 fix round 1 ruling I-2): 363 CSS px. Capture QR v2 (§6.12, Option B rev
@@ -641,8 +642,8 @@ export type CodeCard =
  *  "none" told an organiser with five saved destinations to go and add one. */
 export type TargetsState = { status: "loading" } | { status: "error" } | { status: "ok"; list: StreamTarget[] };
 
-/** Where destinations are managed (D1) — the Directory's Streaming tab. */
-const MANAGE_DESTINATIONS_HREF = "/directory?tab=streaming";
+/** Where destinations are managed (D1) — the org's Streaming page (lib/youtube.ts, the one href). */
+const MANAGE_DESTINATIONS_HREF = STREAMING_PAGE_HREF;
 const LINK = "font-medium text-purple-700 underline decoration-purple-300 underline-offset-2 hover:decoration-purple-700";
 
 type CreateError = { code: CreateFailureCode; holder: CreateErrorHolder | null };

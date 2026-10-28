@@ -232,7 +232,7 @@ export function ClubsTeamsList({
           <tbody>
             {visClubs.length === 0 && standalone.length === 0 && (
               <tr>
-                <td colSpan={3} className="px-4 py-8 text-center text-sm text-slate-400">
+                <td colSpan={3} className="px-4 py-8 text-center text-sm text-slate-500">
                   {q ? msg("clubs.list.noMatch") : msg("clubs.list.invite")}
                 </td>
               </tr>

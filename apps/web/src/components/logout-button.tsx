@@ -4,9 +4,14 @@ import { LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { signOutClient } from "@/lib/sign-out-client";
 
+/** Where the visible "Sign out" words appear; below it the button is the icon alone and `aria-label` (plus `title`) is its name.
+ *  Written out in full: Tailwind only emits classes it can read as whole strings. The gantry asks for `lg` (its width budget, see
+ *  nav.tsx); the player home's own header keeps the default `sm`. */
+const LABEL_FROM = { sm: "hidden sm:inline", lg: "hidden lg:inline" } as const;
+
 /** `label` is the localized "Sign out" copy, resolved by the server parent and
  *  passed in (client islands can't import the server-only t()). */
-export function LogoutButton({ label }: { label: string }) {
+export function LogoutButton({ label, labelFrom = "sm" }: { label: string; labelFrom?: keyof typeof LABEL_FROM }) {
   const router = useRouter();
   return (
     <button
@@ -26,9 +31,12 @@ export function LogoutButton({ label }: { label: string }) {
       // lines the same way the name used to overflow.
       className="flex shrink-0 items-center gap-1.5 rounded-md px-2.5 py-1.5 text-sm font-medium text-cream/70 transition-colors hover:bg-cream/10 hover:text-cream"
       title={label}
+      // The accessible name when the label is not painted (below `labelFrom`): the same translated words, so it also satisfies
+      // "label in name" where the words ARE painted.
+      aria-label={label}
     >
       <LogOut className="h-4 w-4" strokeWidth={1.75} />
-      <span className="hidden sm:inline">{label}</span>
+      <span className={LABEL_FROM[labelFrom]}>{label}</span>
     </button>
   );
 }

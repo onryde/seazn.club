@@ -533,11 +533,11 @@ for (const width of WIDTHS) {
     expect((await ledger(rig.orgId)).monthly, "the page's read granted exactly the plan's rate").toBe(rate);
     const goLive = body.getByTestId("stream-go-live");
     await expect(goLive, "no destination yet: Go live is offered but cannot start").toBeDisabled();
-    // T8 (D1): no inline add — the empty state, and the way to Directory.
+    // T8 (D1): no inline add — the empty state, and the way to the Streaming page.
     await expect(body.getByTestId("stream-dest-empty")).toHaveText(en("stream.dest.empty"));
     await expect(body.getByTestId("stream-target"), "no select over nothing").toHaveCount(0);
     await expect(body.getByTestId("stream-target-add"), "D1: no inline add").toHaveCount(0);
-    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/directory?tab=streaming");
+    await expect(body.getByTestId("stream-manage-destinations")).toHaveAttribute("href", "/streaming");
     await expect(body.getByTestId("stream-chain"), "§3.2: no destination, no path to draw").toHaveCount(0);
     // §3.1 (T9b): Phone is the default tab, and the disabled "With scorebug — Coming soon" control is gone.
     await expect(row.getByTestId("stream-tab-phone")).toHaveAttribute("aria-selected", "true");
@@ -550,9 +550,9 @@ for (const width of WIDTHS) {
     if (width === 320) expect(await expectTapTargets(body), "idle controls hit-tested").toBeGreaterThanOrEqual(3);
     await shot(panel, `A1-${width}-1-idle.png`);
 
-    // ADD A DESTINATION — in Directory → Streaming (D1: the one place destinations are managed), tapped through its form.
+    // ADD A DESTINATION — on the Streaming page (D1: the one place destinations are managed), tapped through its form.
     const label = `YT ${width} ${randomBytes(2).toString("hex")}`;
-    await page.goto("/directory?tab=streaming");
+    await page.goto("/streaming");
     await page.getByTestId("stream-dest-empty-add").click();
     const form = page.getByTestId("stream-dest-form");
     await form.getByTestId("stream-dest-platform-youtube").click();
@@ -1193,7 +1193,7 @@ for (const width of [320, 1280] as const) {
     await shotAround(page, control, `D3-${width}-button-2-amber.png`);
     await expect(chain, "the phone half never moves for the destination").toHaveAttribute("data-phone", "connected");
     const open = warning.getByTestId("stream-output-open-directory");
-    await expect(open).toHaveAttribute("href", "/directory?tab=streaming");
+    await expect(open).toHaveAttribute("href", "/streaming");
     await expect(open).toHaveAttribute("target", "_blank");
     await expect(open).toHaveText(en("stream.output.openDirectory"));
     // D3: a warning, never an ending — the session is live on the server, and Stop is right there.
@@ -1560,7 +1560,7 @@ for (const width of [320, 1280] as const) {
 }
 
 // ===========================================================================
-// A8 moved (T8): the platform list and the one-POST-per-save half now live in directory-stream-destinations.spec.ts
+// A8 moved (T8): the platform list and the one-POST-per-save half now live in streaming-destinations.spec.ts
 // (case 1 and the S sequence) — the form is Directory's (D1).
 // ===========================================================================
 

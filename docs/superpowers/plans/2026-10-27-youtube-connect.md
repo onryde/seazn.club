@@ -655,7 +655,7 @@ smoke `youtube: connect without consent is refused` (T21).
 export async function saveConnectionFromGrant(a: { pendingId: string; channelId: string; userId: string }, port: YouTubePort): Promise<{ connectionId: string; targetId: string }>;
 // one transaction: insertConnectionWithToken (token-store.ts, R1) + insert org_stream_targets (kind youtube, label = channel title,
 // youtube_connection_id, dest_fingerprint = fingerprintYoutubeChannel(channelId), rtmp_enc null); delete the pending row.
-// 23505 org_youtube_connections_one_live_channel → HttpError(409, "This channel is connected to another organisation on Seazn", "YOUTUBE_OTHER_ORG"), then — outside the rolled-back tx — port.revoke(the new token)
+// 23505 org_youtube_connections_one_live_channel → HttpError(409, "This channel is connected to another organisation on Seazn", "YOUTUBE_OTHER_ORG"); do NOT revoke the new token (one_live_channel is global, so it is the same Google grant the other org's live connection uses — ruling T6-R2 amended, B2 review). Check the pending row's expiry inside the take transaction.
 // (same org, same channel, live → returns the existing ids, token replaced). Reconnect (pending.connection_id set): replaceConnectionToken (token-store.ts, R1:
 // token + connected + status_since + last_error_code null, one statement); every 'ending' or due broadcast of it gets next_attempt_at = null.
 export async function updateConnectionSettings(auth: AuthCtx, orgId: string, connectionId: string, b: { privacy?: YoutubePrivacy; madeForKids?: boolean; consent?: true }): Promise<YoutubeConnectionView>;

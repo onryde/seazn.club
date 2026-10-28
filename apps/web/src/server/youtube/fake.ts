@@ -267,6 +267,13 @@ export class FakeYouTube implements YouTubePort {
     this.pendingOf(state).sub = sub;
   }
 
+  /** The redirect URI `authorizeUrl` recorded for OAuth `state` — where the fake authorize hop (T7) sends the browser back, the way
+   *  Google sends it to the `redirect_uri` the authorize request carried and to no other. A read: it is no port call, and it spends
+   *  nothing. Unknown state (never authorized, or gone with a `reset`): `youtube_not_found` / `unknownState`. */
+  redirectUriOf(state: string): string {
+    return this.pendingOf(state).redirectUri;
+  }
+
   /** The fake authorize hop's job: Google redirecting back with a code. A single-use code bound to the challenge and redirect
    *  URI the state's `authorizeUrl` recorded. Unknown state -> `youtube_not_found`. `o.scope` beats `setGrantedScope`. The
    *  channels and scope a test bound to the state ride this code and are SPENT: a second code for the state carries none. */
