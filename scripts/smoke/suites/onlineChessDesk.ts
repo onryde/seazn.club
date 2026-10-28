@@ -140,7 +140,7 @@ export async function onlineChessDeskSuite(): Promise<void> {
  */
 async function onlineChessDivisionPages(owner: Session, stranger: Session): Promise<void> {
   // Every expected word is read from the en dictionary on disk (this runner cannot import the JSON-backed `@/lib/messages`).
-  const ui = JSON.parse(readFileSync(new URL("../apps/web/src/dictionaries/en/ui.json", import.meta.url), "utf8")) as Record<string, string>;
+  const ui = JSON.parse(readFileSync(new URL("../../../apps/web/src/dictionaries/en/ui.json", import.meta.url), "utf8")) as Record<string, string>;
   const word = (key: string, vars: Record<string, number> = {}): string => {
     const raw = ui[key];
     if (raw === undefined) throw new Error(`en/ui.json has no ${key}`);

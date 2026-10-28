@@ -163,7 +163,7 @@ async function w2cStagePointsWalkoverChecks(owner: Session): Promise<void> {
  */
 async function w2cPublicStageFormatChecks(owner: Session, orgId: string): Promise<void> {
   const pub = JSON.parse(
-    readFileSync(new URL("../apps/web/src/dictionaries/en/public.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../apps/web/src/dictionaries/en/public.json", import.meta.url), "utf8"),
   ) as Record<string, string>;
   const fill = (template: string | undefined, params: Record<string, number>): string =>
     (template ?? "<missing key>").replace(/\{(\w+)\}/g, (_, k: string) => String(params[k]));

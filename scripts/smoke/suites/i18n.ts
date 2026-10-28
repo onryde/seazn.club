@@ -35,7 +35,7 @@ export async function i18nSuite(): Promise<void> {
   // it. The gate is the chip's own link (`/discover/boardgame"`), not the word — "Chess" appears in other copy.
   const sportWord = (lang: "en" | "fr"): string => {
     const dict = JSON.parse(
-      readFileSync(new URL(`../apps/web/src/dictionaries/${lang}/ui.json`, import.meta.url), "utf8"),
+      readFileSync(new URL(`../../../apps/web/src/dictionaries/${lang}/ui.json`, import.meta.url), "utf8"),
     ) as Record<string, string>;
     const word = dict["sport.boardgame"];
     if (word === undefined) throw new Error(`${lang}/ui.json has no sport.boardgame`);

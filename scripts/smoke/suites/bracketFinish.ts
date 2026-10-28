@@ -30,7 +30,7 @@ import { newSession, call, check, signIn, tag, html, v1, v1data, setPlan } from 
  */
 export async function bracketFinishSuite(): Promise<void> {
   const pub = JSON.parse(
-    readFileSync(new URL("../apps/web/src/dictionaries/en/public.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../apps/web/src/dictionaries/en/public.json", import.meta.url), "utf8"),
   ) as Record<string, string>;
   const owner = newSession();
   const who = await signIn(owner, `delivered+bracketfinish_${tag}@resend.dev`);

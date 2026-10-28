@@ -38,7 +38,7 @@ import { newSession, call, check, signIn, tag, html, v1, v1data, setPlan } from 
  *  copy change moves the check with it. */
 export async function boardRoundCodesSuite(): Promise<void> {
   const en = JSON.parse(
-    readFileSync(new URL("../apps/web/src/dictionaries/en/ui.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../apps/web/src/dictionaries/en/ui.json", import.meta.url), "utf8"),
   ) as Record<string, string>;
   const owner = newSession();
   const who = await signIn(owner, `delivered+brcodes_${tag}@resend.dev`);

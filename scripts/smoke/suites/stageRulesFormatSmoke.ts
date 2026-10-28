@@ -17,7 +17,7 @@ import { newSession, call, check, signIn, tag, html, v1, v1data } from "../harne
 export async function stageRulesFormatSmoke(): Promise<void> {
   const readDict = (ns: string) =>
     JSON.parse(
-      readFileSync(new URL(`../apps/web/src/dictionaries/en/${ns}.json`, import.meta.url), "utf8"),
+      readFileSync(new URL(`../../../apps/web/src/dictionaries/en/${ns}.json`, import.meta.url), "utf8"),
     ) as Record<string, string>;
   const pub = readDict("public");
   const ui = readDict("ui");

@@ -175,7 +175,7 @@ export async function publicQualificationStandingsSuite(): Promise<void> {
   // never typed. Own fresh org set to es (a community org publishes one public
   // competition); anonymous reads.
   const esPublic = JSON.parse(
-    readFileSync(new URL("../apps/web/src/dictionaries/es/public.json", import.meta.url), "utf8"),
+    readFileSync(new URL("../../../apps/web/src/dictionaries/es/public.json", import.meta.url), "utf8"),
   ) as Record<string, string | undefined>;
   const poolWord = esPublic["table.poolLabel"] ?? "";
   check(
