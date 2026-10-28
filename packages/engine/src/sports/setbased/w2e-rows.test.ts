@@ -3,10 +3,13 @@
 // token (packages/engine/test/rules-reference.ts reads them).
 //
 // Expected values come from the rulebook and the rule rows, never from the code under test:
-//  - BWF Laws of Badminton 10.3 (the side that wins a rally serves the next one): the "who serves" expectation is written
+//  - the serve rule the engine's reader cites as BWF Laws of Badminton 10.3 (the side that wins a rally serves the next one), as
+//    badminton.ts cites it (R5-1) and NOT re-read from the Laws text in W2e: the "who serves" expectation is the product rule, written
 //    from the winners of the rallies played, not recomputed with the kernel's arithmetic;
-//  - ITTF Laws of Table Tennis: a penalty point is ONE point for the opponent, so a game reaching 11 with two clear closes
-//    on it; the umpire has two cards (yellow warning, red penalty, DOMAIN.tabletennis.md:75-77);
+//  - ITTF Laws of Table Tennis, from the repo's DOMAIN.tabletennis.md:75-77 (yellow card = warning, red card = penalty) and not
+//    re-read from the official text, which was not retrievable in W2e; secondary sources differ on how a penalty is scored. What the
+//    tests pin is the ENGINE's behaviour: the sanction moves no score on its own, and the point the umpire awards is entered as ONE
+//    rally, so a game reaching 11 with two clear closes on it;
 //  - the rows' own text (rules/badminton.md, tabletennis.md, volleyball.md): what is recorded, and that nothing recorded moves
 //    a score;
 //  - RB2A-32 (rulebook-W2-sets-cricket.md:702): badminton team ties are not built ("run each rubber as its own division").
@@ -85,7 +88,7 @@ describe("BD-SV-1 badminton records who serves, and the record moves no score", 
   const cfg = cfgOf(badminton);
   const lineups = lineupsOf(badminton, cfg);
 
-  it("BD-SV-1 the rally winner serves next (BWF 10.3), a named server is tallied, and the same rallies score the same without any of it", () => {
+  it("BD-SV-1 the rally winner serves next (the product rule, cited as BWF 10.3), a named server is tallied, and the same rallies score the same without any of it", () => {
     // Winners of the rallies, in order. The server of rally n+1 is the winner of rally n (the law); rally 1's server is the anchor.
     const winners = ["H", "H", "A", "A", "H", "A", "H"];
     const servers = ["H", ...winners.slice(0, -1)];
