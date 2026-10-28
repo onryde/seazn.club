@@ -138,13 +138,16 @@ export class VariantGenerationStuck extends Error {
   }
 }
 
-/** Validations the rescue search may spend per sport. Today's registry spends
- *  well under a tenth of it (the busiest sport, carrom, makes ~8.1k validate
- *  calls in its whole generation, at ~40 µs each); football's non-row product
- *  is ~590k, so one product change that refused a football level everywhere
- *  would otherwise search for minutes. Past the budget the generation stops
- *  by name instead. */
-export const RESCUE_BUDGET = 50_000;
+/** Validations the rescue search may spend per sport. Measured on the registry
+ *  (W2e Task 28, after the ruling-157 editor fields): the busiest sport, carrom,
+ *  spends ~106k rescue validations (it was ~27k before pointsPerCoin added a
+ *  factor: every uncoverable pair is searched exhaustively, so one more factor
+ *  multiplies that search), cricket ~15k, football none. Football's non-row
+ *  product is ~5.3M, so one product change that refused a football level
+ *  everywhere would otherwise search for minutes. Past the budget the
+ *  generation stops by name instead. The budget keeps ~5x headroom over carrom
+ *  and stays under football's product, which the bounded-search test needs. */
+export const RESCUE_BUDGET = 500_000;
 
 export class VariantRescueBudgetExceeded extends Error {
   readonly sport: string;
