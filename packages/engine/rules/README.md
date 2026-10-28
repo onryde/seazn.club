@@ -10,7 +10,8 @@ A rule row is a line of the table whose header is exactly:
 - **id**: stable, `<SPORT>-<AREA>-<n>`. X = cross-sport. Never reused, never renumbered.
 - **rule**: one sentence a scorer or organiser could check.
 - **citation**: a federation article, or "product rule" with the ruling that made it.
-- **status**: `signed <ruling> <date>`, `deviation <ruling> <date>` or `⬜ open`.
+- **status**: `signed <ruling> <date>`, `deviation <ruling> <date>` or `⬜ open`. `<ruling>` is the ruling's number; W2e's
+  rows read `W2e-D<n>` (its design's D-number) until the fold gives each a ruling number and rewrites the status.
 - **enforced at**: backticked repo paths, separated by `<br>`, or `—`.
 - **proved by**: backticked repo-relative test paths, separated by `<br>`, or `—` while open. A signed or deviation
   row needs at least one, and EVERY path listed must be a test file (`*.test.ts`, `*.test.tsx` or `*.spec.ts`) outside
