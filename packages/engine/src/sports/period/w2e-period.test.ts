@@ -24,7 +24,7 @@ import type { LineupPair } from "../../core/types.ts";
 import type { AnySportModule, ModuleEvent } from "../../sport/module.ts";
 import { declaredCfgs } from "../../testkit/declared-cfgs.ts";
 import { defaultLineupPair, lineupFromCatalog, makeEnvelope } from "../../testkit/helpers.ts";
-import { football, type FootballCfg } from "../football/football.ts";
+import { football, footballNextKicker, type FootballCfg } from "../football/football.ts";
 import { hockey } from "../hockey/hockey.ts";
 import { icehockey } from "../icehockey/icehockey.ts";
 import { builtinModules } from "../index.ts";
@@ -220,6 +220,25 @@ describe("football keeps IFAB order (the positive pair)", () => {
       }
     }
     expect(checked).toBe(30);
+  });
+
+  it("the pad's football kicker (footballNextKicker) names the side the fold asks for at every kick, past five pairs", () => {
+    // The pad reads the folded state alone (no cfg), so its cue comes from football's own export; it must agree with
+    // the fold's refusal at every step, or the pad would offer the kick the server refuses.
+    let checked = 0;
+    for (const first of ["home", "away"] as const) {
+      const ledger = [...toShootout];
+      expect(footballNextKicker([]), "no kick yet: either side may start").toBeNull();
+      for (let k = 0; k < 24; k++) {
+        const kicks = (foldFb(ledger) as unknown as { shootout: { kicks: ShootoutKick[] } }).shootout.kicks;
+        const next = k === 0 ? first : footballNextKicker(kicks);
+        expect(next, `kick ${k + 1}`).toBe(k % 2 === 0 ? first : other(first));
+        if (k > 0) expect(refusalOf(() => foldFb([...ledger, kick(other(next!), false)]))?.code, `kick ${k + 1}`).toBe("INVALID_EVENT");
+        ledger.push(kick(next!, false));
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(48);
   });
 });
 
