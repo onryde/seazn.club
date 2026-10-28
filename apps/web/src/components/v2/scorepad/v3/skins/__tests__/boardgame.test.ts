@@ -25,10 +25,10 @@
 // sweep takes for `resultMode`.
 import { describe, expect, it } from "vitest";
 import type { EventEnvelope, Lineup, LineupPair } from "@seazn/engine/core";
-import { initSquads } from "@seazn/engine/core";
+import { EngineError, initSquads } from "@seazn/engine/core";
 import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
-import { boardgame } from "@seazn/engine/sports/boardgame";
+import { boardgame, BoardgameMethod } from "@seazn/engine/sports/boardgame";
 import uiEn from "@/dictionaries/en/ui.json";
 import { PAD_LABEL_KEYS } from "@/lib/scoring-vocab";
 import { foldClient } from "../../../module-client";
@@ -530,8 +530,10 @@ describe("buildSheets — the pairing card", () => {
 // ---------------------------------------------------------------------------
 
 describe("every payload this pad can produce folds through the real engine", () => {
+  // Folded STRICTLY (`strictFromSeq: 0`, the write path): a lenient fold accepts what the server now refuses, so a chip that
+  // built a method contradicting its winner (BG-RS-1) would fold green here and be refused at the door.
   function foldOne(cfg: typeof DEFAULT_CFG, events: EventEnvelope[], type: string, payload: unknown): unknown {
-    return foldClient(boardgame, cfg, SOLO, [...events, ev(events.length, type, payload)]);
+    return foldClient(boardgame, cfg, SOLO, [...events, ev(events.length, type, payload)], { strictFromSeq: 0 });
   }
 
   it("the pairing sheet's payload, with and without colours", () => {
@@ -545,6 +547,7 @@ describe("every payload this pad can produce folds through the real engine", () 
 
   it("a half tap's own payload, across every DECISIVE method a dock chip can mutate onto it", () => {
     const base = stream(start());
+    let checked = 0;
     for (const method of DECISIVE_METHODS) {
       const v = view({ events: base });
       const tapped = buildScorebug(v, t).halves[0]!.tapEvent!.payload;
@@ -553,7 +556,10 @@ describe("every payload this pad can produce folds through the real engine", () 
       const payload = chip.mutate(tapped);
       const folded = foldOne(DEFAULT_CFG, base, RESULT_TYPE, payload) as { outcome?: { kind?: string } };
       expect(folded.outcome?.kind, method).toBe("win");
+      checked++;
     }
+    expect(checked, `decisive methods folded: ${checked}`).toBe(DECISIVE_METHODS.length);
+    expect(checked).toBeGreaterThan(0);
   });
 
   it("the draw tile's own payload, across every DRAWN method a dock chip can mutate onto it", () => {
@@ -765,15 +771,36 @@ describe("the engine surface this skin restates", () => {
     expect(EVENT_BAND).toEqual(realPadSpec(NO_COLORS_CFG).fidelity);
   });
 
-  it("DECISIVE_METHODS/DRAWN_METHODS are the engine's own field values, not hand-copied", () => {
-    const spec = realPadSpec(DEFAULT_CFG);
-    const resultActions = spec.panels.flatMap((panel) => panel.actions).filter((a) => a.type === RESULT_TYPE);
-    const decisive = resultActions.find((a) => a.attribution.length > 0);
-    const drawn = resultActions.find((a) => a.attribution.length === 0);
-    const methodValues = (action: (typeof resultActions)[number] | undefined): readonly string[] =>
-      (action?.fields.find((f) => f.path === "method") as { values?: readonly string[] } | undefined)?.values ?? [];
-    expect([...DECISIVE_METHODS]).toEqual([...methodValues(decisive)]);
-    expect([...DRAWN_METHODS]).toEqual([...methodValues(drawn)]);
+  // The skin takes both lists FROM the engine's exports (`skins/boardgame.tsx`), and the pad spec's `method` field values are
+  // those same constants, so comparing the skin to the spec is an identity. What can still drift is the pairing between the
+  // lists and the engine's strict write path (BG-RS-1): so each method is put to the real strict fold beside a winner and
+  // beside none, and the pad must offer exactly the methods the engine accepts in each shape.
+  it("DECISIVE_METHODS/DRAWN_METHODS are exactly the methods the strict engine accepts beside a winner / beside none", () => {
+    // W2b D15 retired `forfeit` and `double_forfeit` on write (a walkover is core.forfeit); the fold still reads them, so they
+    // are left out of a comparison about the methods of play the pad can offer.
+    const retired = ["forfeit", "double_forfeit"];
+    const methods = BoardgameMethod.options.filter((m) => !retired.includes(m)) as string[];
+    const acceptedBeside = (winner: string | null): string[] =>
+      methods
+        .filter((method) => {
+          try {
+            foldClient(boardgame, DEFAULT_CFG, SOLO, stream(start(), result({ winner, method })), { strictFromSeq: 0 });
+            return true;
+          } catch (err) {
+            if (EngineError.is(err, "RESULT_METHOD_CONTRADICTS_WINNER") || EngineError.is(err, "INVALID_EVENT")) return false;
+            throw err;
+          }
+        })
+        .sort();
+    const withWinner = acceptedBeside("H");
+    const withNone = acceptedBeside(null);
+    expect([...DECISIVE_METHODS].sort()).toEqual(withWinner);
+    expect([...DRAWN_METHODS].sort()).toEqual(withNone);
+    // Anti-vacuity: all 11 methods of play were put to the fold, and the two shapes are the engine's 5 and 7 with one shared.
+    expect(methods.length).toBe(BoardgameMethod.options.length - retired.length);
+    expect(methods.length).toBe(11);
+    expect([withWinner.length, withNone.length]).toEqual([5, 7]);
+    expect(withWinner.filter((m) => withNone.includes(m))).toEqual(["adjudication"]);
   });
 
   // MOVES_MAX no longer lives in boardgame.tsx: `moves` was a guided-sheet
