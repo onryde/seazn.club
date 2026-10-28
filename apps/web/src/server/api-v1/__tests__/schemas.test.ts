@@ -388,6 +388,20 @@ describe("AppendEventRequest passes an event payload through untouched (#427)", 
     expect(AppendEventRequest.safeParse({ expected_seq: 3, payload: {} }).success).toBe(false);
     expect(AppendEventRequest.safeParse({ ...base, payload: {}, expected_seq: -1 }).success).toBe(false);
   });
+
+  // W2e Task 2 review (M1): `expected_seq` is compared with `score_events.seq`, an int4 column (V216), in SQL
+  // (usecases/scoring.ts `isOwnSanctionEnding`). A value past int4's top made Postgres raise "out of range" — a 500. The
+  // door bounds it to int4, so such a request is a 400 VALIDATION before any query; the top itself still passes.
+  it("expected_seq is an int4: 2^31 - 1 passes the door, 2^31 and beyond are refused (W2e M1)", () => {
+    const INT4_MAX = 2 ** 31 - 1;
+    expect(AppendEventRequest.safeParse({ ...base, payload: {}, expected_seq: INT4_MAX }).success).toBe(true);
+    let refused = 0;
+    for (const huge of [INT4_MAX + 1, 2 ** 40, Number.MAX_SAFE_INTEGER]) {
+      expect(AppendEventRequest.safeParse({ ...base, payload: {}, expected_seq: huge }).success, String(huge)).toBe(false);
+      refused++;
+    }
+    expect(refused).toBe(3);
+  });
 });
 
 // Engine-split D26/D31 (batch 1f): the request's `engine_epoch`. Optional (the web pad never sends it and the server cannot
