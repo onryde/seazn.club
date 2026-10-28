@@ -22,7 +22,6 @@ import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import { toLocale } from "@/lib/i18n-constants";
 import { msgFor } from "@/lib/messages-i18n";
 import {
-  DERIVED_METRICS,
   PLAIN_LAYOUT,
   derivedMetricText,
   isLevelTable,
@@ -33,16 +32,16 @@ import {
   type StandingsRow,
   type TableLayout,
 } from "@seazn/engine/competition";
-import { cellText, compactKeysOf, fixedResultColumns, tableLayoutFor } from "@/server/public-site/standings-view";
-import { standingsColumns, type MetricSpecLike } from "@/lib/public-site";
+import { cellText, compactKeysOf, resultColumnsOf, tableColumns, tableLayoutFor } from "@/server/public-site/standings-view";
+import type { MetricSpecLike } from "@/lib/public-site";
 import { resolveModule } from "@/server/engine-db/registry";
 import { stageTableRulesDocs } from "@/server/engine-db/table-rules";
 
 const TABLE_KINDS = new Set(["league", "group", "swiss"]);
 
-/** The result columns a standings slide prints between the entrant and Pts (W2d follow-up, final review m8): the public
- *  table's own declaration for a fixed-shape table (`fixedResultColumns`) — P · W · D · L, D only where the stage can
- *  reach a draw (P · W · L for a set sport), and IIHF's P · W · OTW · OTL · L (RBG:343-344). */
+/** The result columns a standings slide prints between the entrant and Pts (W2d follow-up, final review m8; export review
+ *  I2, round 2): the public table's own (`resultColumnsOf(tableColumns(…))` over the slide's rows) — P · W · L, D when a
+ *  row holds a draw, and IIHF's P · W · OTW · OTL · L (RBG:343-344). */
 export type StandingsSlideColumnKey = "played" | "won" | "otw" | "otl" | "drawn" | "lost";
 
 export interface StandingsSlideColumn {
@@ -82,9 +81,6 @@ interface StandingsShape {
   cascade: readonly string[];
   /** W2d T17: the stage's table layout (`tableLayoutFor`, the public table's own) — its points unit. */
   layout: TableLayout;
-  /** The outcomes the stage can reach (export review I2): whether its board prints D (`fixedResultColumns`). Absent: a
-   *  hand-built input or a stage the loader refused — D, as before. */
-  reachable?: readonly OutcomeKey[];
 }
 
 /** A stage's loaded rules as these builders receive them: the organiser's from `stageTableRulesDocs`, the public one's
@@ -122,7 +118,6 @@ const stageShape = (metricSpecs: readonly MetricSpecLike[], rules: StageRulesInp
   metricSpecs,
   cascade: rules?.tiebreakers ?? [],
   layout: rules?.points === undefined || rules.reachable === undefined ? PLAIN_LAYOUT : tableLayoutFor({ points: rules.points, reachable: rules.reachable }),
-  ...(rules?.reachable === undefined ? {} : { reachable: rules.reachable }),
 });
 
 /** A snapshot row as `standings_snapshots` persists it. `metrics` is optional
@@ -141,10 +136,10 @@ interface StandingsSlideSnapshotRow {
 }
 
 /**
- * One standings slide's rows, for BOTH builders. Whether a row carries the
- * "Pts ratio" is asked of `standingsColumns` itself — the function the normal
- * table picks its columns with — over the same module metrics, cascade and rows,
- * so the two tables cannot disagree about which columns a division has; and its
+ * One standings slide's rows, for BOTH builders. Its result columns and whether a
+ * row carries the "Pts ratio" are asked of `tableColumns` itself — the function the
+ * normal table picks its columns with — over the same module metrics, cascade, rows
+ * and layout, so the two tables cannot disagree about which columns a table has; and its
  * text is `derivedMetricText`, the engine's, which is what the table's cell
  * prints. This file computes no ratio of its own.
  */
@@ -154,13 +149,13 @@ function standingsSlideRows(
   names: Record<string, string>,
 ): { columns: StandingsSlideColumn[]; rows: StandingsSlideRow[]; level: boolean } {
   const engineRows: StandingsRow[] = snapRows.map((r) => ({ ...r, metrics: r.metrics ?? {} }));
-  const showsPointRatio = standingsColumns(shape.metricSpecs, shape.cascade, engineRows, DERIVED_METRICS).some(
-    (c) => c.kind === "derived" && c.key === "point_ratio",
-  );
-  // W2d follow-up (final review m8; RBG §3.4): the result columns are the public table's own declaration under the
-  // stage's layout, and each cell its own text — no second column list and no second W. D where the stage can reach a
-  // draw, or this table holds one (export review I2): an IIHF or set-sport board prints none, as the public table.
-  const results = fixedResultColumns(shape.layout, shape.reachable, engineRows);
+  // The public table's own selection over the same rows, under the stage's layout (`tableColumns`).
+  const shown = tableColumns(shape.metricSpecs, shape.cascade, engineRows, shape.layout);
+  const showsPointRatio = shown.some((c) => c.kind === "derived" && c.key === "point_ratio");
+  // W2d follow-up (final review m8; RBG §3.4; export review I2, round 2): the result columns are the public table's, and
+  // each cell its own text — no second column list, no second W and no second rule for D: D exactly when a row of this
+  // table holds a draw, as the public table.
+  const results = resultColumnsOf(shown);
   const folds = shape.layout.apart.length > 0;
   const compact = compactKeysOf(shape.layout);
   const columns = results.map((c) => ({ key: c.key as StandingsSlideColumnKey, compact: !folds || compact.has(c.key) }));

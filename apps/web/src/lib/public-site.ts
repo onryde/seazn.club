@@ -226,8 +226,8 @@ export interface StandingsColumn {
 /**
  * A table's result columns, in print order: P, W, the decisions counted apart when `apart` (IIHF's OTW and OTL, W2d spec
  * §5.7, RBG §3.4), D when `draws`, L. Points is not one of them: it prints after the sport's metrics. THE declaration —
- * `standingsColumns` asks it with `draws` = "a row has a draw" (`tableHasDraw`); the fixed-shape tables (the organiser
- * export, the kiosk: `fixedResultColumns`) ask it with `draws` = "the stage can reach a draw, or a row has one".
+ * `standingsColumns` asks it with `draws` = "a row of the table has a draw" (`tableHasDraw`), and every other table (the
+ * organiser export, the kiosk) prints `standingsColumns`' own result columns (`resultColumnsOf`), never a second rule.
  */
 export function resultColumns(apart: boolean, draws: boolean): StandingsColumn[] {
   return [
@@ -245,7 +245,7 @@ export function resultColumns(apart: boolean, draws: boolean): StandingsColumn[]
 }
 
 /** THE public table's D test (`standingsColumns`): a row of the table holds a draw. */
-export function tableHasDraw(rows: readonly Pick<StandingsRowLike, "drawn">[]): boolean {
+function tableHasDraw(rows: readonly Pick<StandingsRowLike, "drawn">[]): boolean {
   return rows.some((r) => r.drawn > 0);
 }
 

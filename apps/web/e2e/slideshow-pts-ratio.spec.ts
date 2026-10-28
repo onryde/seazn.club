@@ -39,11 +39,11 @@ const L = {
   points: enUi["slideshow.col.points"],
   pointRatio: enUi["slideshow.col.pointRatio"],
 };
-/** The header a slide had before the column existed (a stage that can draw: the generic division, `score` variant),
- *  then a badminton board's with it: no D, since a set match always has a winner and the public table never prints a D
- *  for a stage that cannot draw (export review I2, 2026-10-28). */
-const HEADER = ["#", L.entrant, L.played, L.won, L.drawn, L.lost, L.points];
-const HEADER_WITH_RATIO = ["#", L.entrant, L.played, L.won, L.lost, L.points, L.pointRatio];
+/** The header a slide had before the column existed (the generic division, no result yet), then a badminton board's with
+ *  it. Neither table holds a draw, so neither prints D: the board's D is the public table's, a row holding a draw
+ *  (export review I2, round 2, 2026-10-28). */
+const HEADER = ["#", L.entrant, L.played, L.won, L.lost, L.points];
+const HEADER_WITH_RATIO = [...HEADER, L.pointRatio];
 
 /** One API round trip against a local production build, with headroom. */
 const API_CALL_MS = 1_500;
@@ -224,7 +224,7 @@ test.describe("organiser slideshow: the standings slide's Pts ratio column", () 
     expect(table.header).toEqual(HEADER);
     expect(Object.keys(table.rows).sort()).toEqual(["North", "South"]);
     for (const [name, cells] of Object.entries(table.rows)) {
-      expect(cells, `${name}'s cells: rank, entrant, P, W, D, L, Pts`).toHaveLength(HEADER.length);
+      expect(cells, `${name}'s cells: rank, entrant, P, W, L, Pts`).toHaveLength(HEADER.length);
     }
     expect(table.header).not.toContain(L.pointRatio);
   });

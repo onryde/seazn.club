@@ -36,7 +36,7 @@ import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
 import { stageTableRulesDocs, tableOrderOf } from "@/server/engine-db/table-rules";
-import { columnHeader, fixedResultColumns, tableColumns, tableLayoutFor } from "@/server/public-site/standings-view";
+import { columnHeader, resultColumnsOf, tableColumns, tableLayoutFor } from "@/server/public-site/standings-view";
 import { byPoolOrder } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
 import { getDictionary } from "@/lib/i18n";
@@ -515,21 +515,20 @@ export async function buildDivisionDocModel(
         const rules = (await stageTableRulesDocs(tx, [snapshot.stage_id]))[snapshot.stage_id];
         const layout = tableLayoutFor(rules);
         const { unit } = layout;
-        // W2d follow-up (final review m3; RBG §3.4): the result columns are the public table's own declaration under the
-        // stage's layout (`fixedResultColumns`: IIHF's P · W · OTW · OTL · L), and each cell is the public table's
-        // (`resultColumnText`: W and L leave out the decisions counted apart) — so a hockey club's PDF no longer folds its
-        // overtime wins into W. A count stays a NUMBER cell, as before. D prints where the stage can reach a draw (its
-        // reachable outcomes, export review I2) or a row holds one — asked over the WHOLE stage, so every pool prints one
-        // shape and the sheet one column grid.
-        const results = fixedResultColumns(layout, rules?.reachable, stageTables.flatMap((x) => x.rows));
         const cascade = tableOrderOf(rules);
         const tables = stageTables.map((table) => {
           const level = isLevelTable(table.rows);
-          // Export every pool (owner, 2026-10-28): the sport metrics THIS table prints are the public table's own —
-          // `tableColumns`, which both public tables call: the module's displayed metrics a row carries, in the module's
-          // order, with no cap. The module's first four printed hidden ledger metrics ("Games as White", "Points won")
-          // that the public table never shows and no dictionary key names, so they printed English in every locale.
-          const metrics = tableColumns(sportModule.metrics, cascade, table.rows, layout).filter((c) => c.kind === "metric");
+          // Export every pool (owner, 2026-10-28): THIS table prints the public table's own columns — `tableColumns`,
+          // which both public tables call, over this table's rows. Its sport metrics: the module's displayed metrics a row
+          // carries, in the module's order, with no cap (the module's first four printed hidden ledger metrics, "Games as
+          // White", "Points won", that the public table never shows and no dictionary key names, so they printed English
+          // in every locale). Its result columns (W2d follow-up m3, RBG §3.4; export review I2, round 2): the stage's
+          // layout's (IIHF's P · W · OTW · OTL · L), and D exactly when a row of THIS table holds a draw — so two pools of
+          // one stage may differ, as on the public page. Each cell is the public table's (`resultColumnText`: W and L
+          // leave out the decisions counted apart); a count stays a NUMBER cell, as before.
+          const shown = tableColumns(sportModule.metrics, cascade, table.rows, layout);
+          const results = resultColumnsOf(shown);
+          const metrics = shown.filter((c) => c.kind === "metric");
           const rows = [...table.rows]
             .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
             .map((r) => ({

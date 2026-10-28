@@ -69,16 +69,17 @@ const STANDINGS_COLS_WITH_RATIO = "grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_
 // no room (slideshow-tv-rows.test.tsx prices it). The builder marks which
 // columns stay (`compact`); these are the tracks that leaves.
 const SPLIT_COLS = "grid-cols-[4rem_minmax(0,1fr)_4rem_7rem] lg:grid-cols-[4rem_minmax(0,1fr)_repeat(6,4rem)_7rem]";
-// Export review I2 (2026-10-28): a stage that can never draw prints no D, as the
-// public table never does — every set sport's P W L (with its "Pts ratio" when it
-// ranks on one), and IIHF's split P W OTW OTL L. Same tracks, one count fewer.
+// Export review I2 (2026-10-28, round 2): the board's D is the public table's — a
+// table with no draw on it prints P W L (with its "Pts ratio" when it ranks on one),
+// and IIHF's split P W OTW OTL L. Same tracks, one count fewer.
 const NO_DRAW_COLS = "grid-cols-[4rem_minmax(0,1fr)_repeat(3,4rem)_7rem]";
 const NO_DRAW_COLS_WITH_RATIO = "grid-cols-[4rem_minmax(0,1fr)_repeat(3,4rem)_7rem_6rem]";
 const SPLIT_NO_DRAW_COLS = "grid-cols-[4rem_minmax(0,1fr)_4rem_7rem] lg:grid-cols-[4rem_minmax(0,1fr)_repeat(5,4rem)_7rem]";
 
 /** The slide's grid template, keyed by its result columns and the columns still shown below `lg`. A shape with no
  *  template is refused rather than drawn misaligned: the builder's columns are the public table's declaration, which
- *  makes exactly these four — with D and without, split and not (swept for every sport in slideshow-point-ratio.test.ts). The split has no ratio template:
+ *  makes exactly these four — with a draw on the table and without, split and not (swept for every sport in
+ *  slideshow-point-ratio.test.ts). The split has no ratio template:
  *  a table splits only when OT pays apart (IIHF ice hockey), and the cascade refuses `point_ratio` for every such sport
  *  — none records points won and lost (standings-view-w2d.test.ts proves it for every sport and declared cfg). So a
  *  split slide with a ratio is refused by name, not drawn. */

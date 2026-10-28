@@ -660,8 +660,8 @@ describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds
   };
 
   it("a column shape no grid template declares is refused by name, not drawn on a template with the wrong track count", async () => {
-    // The shapes the builder makes (a table that can draw: 4 shown; one that cannot: 3; IIHF: 5, or 6 with a booked draw,
-    // with only P compact — export review I2) each have a template; any other — here the split with nothing folding, 5/5 —
+    // The shapes the builder makes (a table holding a draw: 4 shown; one holding none: 3; IIHF: 5, or 6 with a booked
+    // draw, with only P compact — export review I2: D is the public table's, a row holding a draw) each have a template; any other — here the split with nothing folding, 5/5 —
     // has none, and a board of mismatched tracks would misalign every count under the wrong header. The refusal is the
     // guard; render it through the board itself.
     const iihf = await iihfSlide();
@@ -798,16 +798,23 @@ describe("W2d follow-up m8: an IIHF slide prints W · OTW · OTL · L, and folds
   });
 });
 
-// ---- Export review I2 (2026-10-28): the board prints D exactly where the stage can draw ---------------------------------
+// ---- Export review I2 (2026-10-28, round 2): the board prints D exactly as the public table decides --------------------
 //
-// A stage that can never draw (every set sport: a set match always has a winner; IIHF: RBG §3.4 line 343,
-// "GP · W · OTW · OTL · L") prints no D, as the public table never does; football's league can end level and keeps it from
-// the first round. Each slide is the BUILDER's own (`buildPublicDivisionSlides` over the stage's real rules doc), drawn
-// by the board itself, so a shape with no grid template would throw here.
-describe("export review I2: the kiosk board prints D only where the stage can draw — without for IIHF and set sports, with for football", () => {
+// D exactly when a row of the table holds a draw — the public table's rule (`tableHasDraw`), no second one. A stage that
+// can never draw (every set sport: a set match always has a winner; IIHF: RBG §3.4 line 343, "GP · W · OTW · OTL · L")
+// therefore never prints it, and football's board prints it once a draw is on the table — not before, as the public table.
+// Each slide is the BUILDER's own (`buildPublicDivisionSlides` over the stage's real rules doc), drawn by the board itself,
+// so a shape with no grid template would throw here.
+describe("export review I2: the kiosk board prints D exactly as the public table — never for IIHF and set sports, for football once a draw is on the table", () => {
   const NAMES = ["Ash", "Birch", "Cedar"];
   const decided = NAMES.map((n, i) => ({ entrantId: n, played: 2, won: 2 - i, drawn: 0, lost: i, points: 6 - 3 * i, rank: i + 1, metrics: {} }));
-  async function slideFor(sport: string, variant: string): Promise<Slide> {
+  /** Birch drew Cedar: the state a football league stores once a match ends level. */
+  const withDraw = [
+    { entrantId: "Ash", played: 2, won: 2, drawn: 0, lost: 0, points: 6, rank: 1, metrics: {} },
+    { entrantId: "Birch", played: 2, won: 0, drawn: 1, lost: 1, points: 1, rank: 2, metrics: {} },
+    { entrantId: "Cedar", played: 2, won: 0, drawn: 1, lost: 1, points: 1, rank: 3, metrics: {} },
+  ];
+  async function slideFor(sport: string, variant: string, rows: readonly (typeof decided)[number][] = decided): Promise<Slide> {
     const m = builtinModules.find((x) => x.key === sport);
     if (m === undefined) throw new Error(`premise: ${sport} ships`);
     const doc = unpinnedRulesDoc({ module: m, divisionConfig: m.variants[variant] });
@@ -816,7 +823,7 @@ describe("export review I2: the kiosk board prints D only where the stage can dr
       stages: [{ id: "sl", kind: "league", name: "League", table_rules: doc }],
       pools: [],
       fixtures: [],
-      standings: [{ stage_id: "sl", pool_id: null, rows: decided }],
+      standings: [{ stage_id: "sl", pool_id: null, rows: [...rows] }],
       entrants: NAMES.map((n) => ({ id: n, display_name: n })),
     });
     const slide = slides.find((x) => x.kind === "standings");
@@ -833,17 +840,18 @@ describe("export review I2: the kiosk board prints D only where the stage can dr
     return { header: grids[0]!.cells, rows: grids.slice(1) };
   };
 
-  it("badminton and volleyball (set sports), IIHF ice hockey: no D on the board; football: D; every row a cell under every header, one track each (volleyball's Pts ratio too)", async () => {
+  it("badminton and volleyball (set sports), IIHF ice hockey, football before a draw: no D on the board; football with a draw on the table: D; every row a cell under every header, one track each (volleyball's Pts ratio too)", async () => {
     const labels = slideshowLabels("en");
     const cases = [
-      { sport: "badminton", variant: "bwf", want: [labels.played, labels.won, labels.lost] },
-      { sport: "volleyball", variant: Object.keys(builtinModules.find((m) => m.key === "volleyball")!.variants)[0]!, want: [labels.played, labels.won, labels.lost] },
-      { sport: "icehockey", variant: "iihf", want: [labels.played, labels.won, labels.otw, labels.otl, labels.lost] },
-      { sport: "football", variant: "11-a-side", want: [labels.played, labels.won, labels.drawn, labels.lost] },
+      { sport: "badminton", variant: "bwf", rows: decided, want: [labels.played, labels.won, labels.lost] },
+      { sport: "volleyball", variant: Object.keys(builtinModules.find((m) => m.key === "volleyball")!.variants)[0]!, rows: decided, want: [labels.played, labels.won, labels.lost] },
+      { sport: "icehockey", variant: "iihf", rows: decided, want: [labels.played, labels.won, labels.otw, labels.otl, labels.lost] },
+      { sport: "football", variant: "11-a-side", rows: decided, want: [labels.played, labels.won, labels.lost] },
+      { sport: "football", variant: "11-a-side", rows: withDraw, want: [labels.played, labels.won, labels.drawn, labels.lost] },
     ];
     let checked = 0;
     for (const c of cases) {
-      const slide = await slideFor(c.sport, c.variant);
+      const slide = await slideFor(c.sport, c.variant, c.rows);
       const html = board(slide);
       const { header, rows } = drawn(html);
       // A division whose order ranks on point_ratio (FIVB's volleyball) carries the ratio track after Pts: the no-draw
@@ -860,9 +868,9 @@ describe("export review I2: the kiosk board prints D only where the stage can dr
           .reduce((n, raw) => n + (/^repeat\((\d+),/.exec(raw) ? Number(/^repeat\((\d+),/.exec(raw)![1]) : 1), 0);
         expect(tracks, `${c.sport}: one track per cell`).toBe(header.length);
       }
-      expect(header.includes(labels.drawn), `${c.sport}: D on the board`).toBe(c.sport === "football");
+      expect(header.includes(labels.drawn), `${c.sport}: D on the board exactly when a row holds a draw`).toBe(c.rows.some((r) => r.drawn > 0));
       checked++;
     }
-    expect(checked).toBe(4);
+    expect(checked).toBe(5);
   });
 });
