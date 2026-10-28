@@ -197,6 +197,16 @@ describe("X-DV-1 no sport can end a ladder, double-elimination, stepladder or pa
     ...(m.key === "carrom" ? [{ name: "tieBoard draw", cfg: m.configSchema.parse({ tieBoard: "draw" }) as unknown }] : []),
   ];
 
+  /** The (sport, config) pairs whose TABLE stage supports a draw, read from the engine's own declarations: the one list the
+   *  anti-vacuity test and the level-fold test both sweep. */
+  const drawCapablePairs = (): Array<{ key: string; name: string; cfg: unknown }> => {
+    const pairs: Array<{ key: string; name: string; cfg: unknown }> = [];
+    forEachSport(({ module: m }) => {
+      for (const { name, cfg } of cfgsOf(m)) if (m.supportsDraws(cfg as never, "league")) pairs.push({ key: m.key, name, cfg });
+    });
+    return pairs;
+  };
+
   it("X-DV-1 the four stage kinds are real StageKind values, and the kernel forbids a level result in each", () => {
     for (const kind of NO_DRAW_KINDS) {
       expect(StageKind.options, kind).toContain(kind);
@@ -230,10 +240,7 @@ describe("X-DV-1 no sport can end a ladder, double-elimination, stepladder or pa
   it("X-DV-1 the sweep is not vacuous: wherever a table CAN draw, the four kinds still cannot", () => {
     // Anti-vacuity: a sweep over sports that never draw anywhere would pass on `return false` everywhere. These are the (sport, config) pairs
     // whose table stage supports a draw, read from the engine's own declarations.
-    const drawCapable: Array<{ key: string; name: string; cfg: unknown }> = [];
-    forEachSport(({ module: m }) => {
-      for (const { name, cfg } of cfgsOf(m)) if (m.supportsDraws(cfg as never, "league")) drawCapable.push({ key: m.key, name, cfg });
-    });
+    const drawCapable = drawCapablePairs();
     expect(drawCapable.length).toBeGreaterThan(0);
     // The sports with a draw-capable config include the goal sports, the board game, generic, carrom (its house rule) and a cricket Test.
     const sports = new Set(drawCapable.map((d) => d.key));
@@ -255,33 +262,56 @@ describe("X-DV-1 no sport can end a ladder, double-elimination, stepladder or pa
   it("X-DV-1 a level score is still folded as a draw on each of the four kinds, and the stage holds it for the organiser's settle where a table keeps it", () => {
     // The fold does not know the stage: a level score is a draw whichever kind it is played in. What differs is the kernel's answer to "is this
     // match owed the organiser's settle?" (`settleOffered`): yes on a bracket kind (held, X-BR-2), no in a table (the draw is a result).
-    // One level fold per sport that can reach a draw (the set sports cannot: test above). Generic's draw is refused at the web door
-    // (GN-KO-1) but its fold is the same.
-    interface Level { key: string; cfg: unknown; lineups: LineupPair; specs: Spec[] }
-    const level = (key: string, cfg: unknown, specs: Spec[]): Level => {
+    // One level fold per sport that can reach a draw (the set sports cannot: test above), and the list is not typed here twice: it is
+    // checked against the draw-capable set the previous test sweeps. Generic's draw is refused at the web door (GN-KO-1) but its
+    // fold is the same. A cricket draw is a Test's (two innings a side) and comes from the organiser's abandon (CK-AB-3), so its
+    // fold says `abandoned`; the settle offer reads the same either way, because a draw is a level outcome.
+    interface Level { key: string; cfg: unknown; lineups: LineupPair; specs: Spec[]; abandoned: boolean }
+    const level = (key: string, cfg: unknown, specs: Spec[], abandoned = false): Level => {
       const module = moduleOf(key);
-      return { key, cfg: module.configSchema.parse(cfg), lineups: defaultLineupPair(module.positions), specs };
+      return { key, cfg: module.configSchema.parse(cfg), lineups: defaultLineupPair(module.positions), specs, abandoned };
     };
+    // The goal sports play their level score out under a config the engine declares draw-capable (ice hockey's default plays on to a
+    // winner; its `recreational` variant stands a draw).
+    const drawCapableCfg = (key: string): unknown => {
+      const found = drawCapablePairs().find((d) => d.key === key);
+      if (found === undefined) throw new Error(`${key} declares no draw-capable config`);
+      return found.cfg;
+    };
+    const goalLevel = (sport: GoalSport): Level => ({
+      key: sport.key,
+      cfg: drawCapableCfg(sport.key),
+      lineups: sport.lineups,
+      specs: [START, sport.goal("H"), sport.goal("A"), ...sport.toFullTime],
+      abandoned: false,
+    });
     const levels: Level[] = [
       level("football", {}, [START, ["football.goal", { by: "H" }], ["football.period", { phase: "HT" }], ["football.goal", { by: "A" }], ["football.period", { phase: "FT" }]]),
+      ...GOAL_SPORTS.filter((s) => s.key !== "football").map(goalLevel),
       level("boardgame", {}, [START, ["boardgame.result", { winner: null, method: "agreement" }]]),
       level("carrom", { gameTo: 100, maxBoards: 1, bestOf: 1, tieBoard: "draw" }, [START, ["carrom.board.summary", { winner: "H", opponentCoinsLeft: 0, queenTo: null }]]),
       level("generic", declaredCfgs<unknown>(moduleOf("generic") as never).find((c) => c.name === "score")?.cfg ?? {}, [START, ["generic.result", { isDraw: true, p1Score: 1, p2Score: 1 }]]),
+      level("cricket", moduleOf("cricket").variants.test, [START, ["core.abandon", { reason: "rain" }]], true),
     ];
+    // Anti-vacuity: every sport the engine declares draw-capable has a level fold here, and nothing else does.
+    const drawCapableKeys = [...new Set(drawCapablePairs().map((d) => d.key))].sort();
+    expect(drawCapableKeys.length).toBeGreaterThan(1);
+    expect(levels.map((l) => l.key).sort()).toEqual(drawCapableKeys);
     let held = 0;
     let kept = 0;
-    for (const { key, cfg, lineups, specs } of levels) {
+    for (const { key, cfg, lineups, specs, abandoned } of levels) {
       const module = moduleOf(key);
       const folded = foldMatchWithStoppage(module, cfg, lineups, stream(specs), STRICT);
       const outcome = outcomeOf(module, folded);
       expect(outcome, `${key} folds the level score to a draw`).toEqual({ kind: "draw" });
       expect(isLevelOutcome(outcome), key).toBe(true);
-      const facts = { outcome, abandoned: false, state: folded.state };
+      const facts = { outcome, abandoned, state: folded.state };
       for (const kind of NO_DRAW_KINDS) {
         expect(settleOffered(module, kind, facts), `${key} ${kind}: held for the organiser's settle`).toBe(true);
         held++;
       }
-      // The negative pair: a table kind keeps the same draw as its result.
+      // The negative pair: a table kind keeps the same draw as its result. (An abandoned match that decided nobody would be owed
+      // the settle in a table; a cricket Test draw has an outcome, so it is not.)
       for (const kind of DRAW_KINDS) {
         expect(settleOffered(module, kind, facts), `${key} ${kind}: the draw is a result`).toBe(false);
         kept++;
@@ -289,6 +319,6 @@ describe("X-DV-1 no sport can end a ladder, double-elimination, stepladder or pa
     }
     expect(held).toBe(levels.length * NO_DRAW_KINDS.length);
     expect(kept).toBe(levels.length * DRAW_KINDS.size);
-    expect(levels.length).toBeGreaterThan(1);
+    expect(levels.length).toBe(drawCapableKeys.length);
   });
 });
