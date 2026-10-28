@@ -63,6 +63,10 @@ const RULEBOOK_GAME_TO: Readonly<Record<string, number>> = { "(schema default)":
 
 const declared = declaredCfgs<CarromCfg>(carrom);
 
+/** The refusal's message as docs/api-v1-breaking-changes.md quotes it (the ADJUST_OUT_OF_RANGE "What a consumer sees" example). A
+ *  literal here, not a read of the docs file: the engine's tests run in a sandbox that holds packages/engine alone. */
+const REFUSAL_MESSAGE = "an adjustment moves a score by at most the points needed to win the game";
+
 describe("CA-AD-1 where the bound comes from", () => {
   it("CA-AD-1 the declared variants' game targets are the rulebook's (25, 25, 29), and every sweep below walks all of them", () => {
     expect(declared.map((d) => d.name).sort()).toEqual(Object.keys(RULEBOOK_GAME_TO).sort());
@@ -90,6 +94,8 @@ describe("CA-AD-1 carrom.game.adjust is bounded by gameTo on the write path (SC-
         expect(err, `${label} +${g + 1}`).not.toBeNull();
         expect(err!.code, `${label} +${g + 1}`).toBe("ADJUST_OUT_OF_RANGE");
         expect(err!.data, `${label} +${g + 1}`).toEqual({ delta: g + 1, gameTo: g });
+        // The sentence a consumer reads: exactly the one docs/api-v1-breaking-changes.md quotes in its example response.
+        expect(err!.message, `${label} +${g + 1}`).toBe(REFUSAL_MESSAGE);
         // The smallest credit is accepted.
         expect(firstGame(strictFold([START, adjust(side, 1)], c)).score[seat], `${label} +1`).toBe(1);
         checked += 3;
@@ -167,12 +173,12 @@ describe("CA-AD-1 carrom.game.adjust is bounded by gameTo on the write path (SC-
 });
 
 describe("CA-AD-1 the sequence: a second call, a closed game, a void", () => {
-  it("CA-AD-1 refused every time, the refused write leaves the ledger as it was, and the next game is judged by the same bound", () => {
+  it("CA-AD-1 two folds of the same out-of-range ledger refuse alike (pure, a deterministic re-call); an in-range ledger folds on its own; the next game is judged by the same bound", () => {
     const bad = adjust("H", 26);
     for (let call = 0; call < 2; call++) {
       expect(refusalOf(() => strictFold([START, bad]))?.code, `call ${call + 1}`).toBe("ADJUST_OUT_OF_RANGE");
     }
-    // A refused write leaves nothing behind: the in-range adjust after it folds to what it would have alone.
+    // A fold is pure, so there is no stored write to leave anything behind: the in-range ledger folds to its own result.
     const alone = strictFold([START, adjust("H", 5)]);
     expect(firstGame(alone).score).toEqual({ home: 5, away: 0 });
     // A closed game does not relax the bound for the next one: game 1 closes at +25, game 2 still refuses +26 and takes +25.
