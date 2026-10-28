@@ -263,12 +263,14 @@ interface BRow {
   claimed_at: Date | null; completed_at: Date | null; actual_start_at: Date | null; actual_end_at: Date | null;
   reserved_until: Date | null; created_at: Date;
 }
-const bCols = sql`id, fixture_id, connection_id, state, key_id, yt_broadcast_id, last_session_id, last_error_code, attempts,
+// A function, not a value: a `sql` fragment built at module scope opens the client, and without DATABASE_URL that throws at
+// COLLECTION (the no-DB unit job), before `describe.skipIf(!HAS_DB)` can skip the file.
+const bCols = () => sql`id, fixture_id, connection_id, state, key_id, yt_broadcast_id, last_session_id, last_error_code, attempts,
                   next_attempt_at, claimed_at, completed_at, actual_start_at, actual_end_at, reserved_until, created_at`;
 const broadcastRow = async (id: string): Promise<BRow> =>
-  (await sql<BRow[]>`select ${bCols} from youtube_broadcasts where id = ${id}`)[0]!;
+  (await sql<BRow[]>`select ${bCols()} from youtube_broadcasts where id = ${id}`)[0]!;
 const broadcastsOf = (fixtureId: string) =>
-  sql<BRow[]>`select ${bCols} from youtube_broadcasts where fixture_id = ${fixtureId} order by created_at, id`;
+  sql<BRow[]>`select ${bCols()} from youtube_broadcasts where fixture_id = ${fixtureId} order by created_at, id`;
 const callsOf = (f: FakeYouTube, method: string) => f.calls.filter((c) => c.method === method).length;
 const setStatus = (fixtureId: string, status: string) => sql`update fixtures set status = ${status} where id = ${fixtureId}`;
 const finishedAtOf = async (fixtureId: string) =>
