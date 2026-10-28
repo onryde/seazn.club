@@ -148,6 +148,42 @@ describe("HK-SO-1 FIH shoot-out series order (RB2B-10)", () => {
     expect(checked, "pair starts checked, both sides starting, three series each").toBe(30);
   });
 
+  it("HK-SO-1 the cfg's attempts reach the fold: at attempts 3 the second series opens at pair 4 with the other side (FIH App 12 §20c/21b)", () => {
+    // single-sport: FIH's series order is hockey's own. The unit tests above call `expectedKicker` with attempts handed in
+    // by the test; this one drives the real producer and consumers (the cfg parsed through the module's schema, the
+    // strict fold's alternation refusal, and the summary's `shootoutNext`) so a kernel that passes a constant instead of
+    // `state.cfg.shootout.attempts` reds. A series is `attempts` pairs: 3 here, so pair 4 is the first of series 2 and
+    // pair 7 the first of series 3, the cfg's own number and not the rulebook's five.
+    const base = hockey.variants["fih-shootout"] as { shootout: Record<string, unknown> };
+    const three: ShootoutSport = {
+      ...FIH,
+      name: "hockey fih-shootout, attempts 3",
+      cfg: hockey.configSchema.parse({ ...base, shootout: { ...base.shootout, attempts: 3 } }),
+      attempts: 3,
+    };
+    expect((fold(three, three.toShootout).cfg.shootout as { attempts: number }).attempts, "the cfg the fold reads").toBe(3);
+    let walkedPairs = 0;
+    let pair4Checks = 0;
+    for (const first of ["home", "away"] as const) {
+      // F = the side that took the first attempt of the shoot-out; blocks of three pairs are series.
+      const walked = walkOrder(three, leaders("FFF xxx FFF xxx", first));
+      walkedPairs += walked.checked;
+      // Three missed pairs, then pair 4 (the first of series 2) is the other side's to open: 20c. The same three pairs under
+      // the preset's own five-attempt series leave the first side on, which is what separates the cfg from a constant.
+      const threePairs: ModuleEvent[] = [...three.toShootout];
+      for (let pair = 0; pair < 3; pair++) threePairs.push(attempt(three, first, false), attempt(three, other(first), false));
+      expect(nextTaker(three, fold(three, threePairs)), `${first} started, attempts 3: pair 4`).toBe(other(first));
+      expect(nextTaker(FIH, fold(FIH, threePairs)), `${first} started, attempts 5: still series 1`).toBe(first);
+      expect(refusalOf(() => fold(three, [...threePairs, attempt(three, first, false)]))?.code, "the first side opening pair 4 is refused").toBe(
+        "INVALID_EVENT",
+      );
+      expect(fold(three, [...threePairs, attempt(three, other(first), false)]).shootout!.kicks).toHaveLength(7);
+      pair4Checks += 1;
+    }
+    expect(walkedPairs, "pair starts checked, both sides starting, four series of three").toBe(24);
+    expect(pair4Checks, "pair 4 checked from both starting sides").toBe(2);
+  });
+
   it("HK-SO-1 the early finish holds inside the second series, after equal numbers, before all five (FIH App 12 §20d)", () => {
     // single-sport: FIH App 12 §20d.
     const firstFive: ModuleEvent[] = [];
