@@ -43,7 +43,8 @@ export type FoldEpochSport = keyof typeof FOLD_EPOCH;
 export const FOLD_MINOR = Object.freeze({
   // W2d T11 (TN-TB-2, RB2A-11) raised tennis one MINOR: the nested kernel's table `gamesOf` credits a won match tie-break as one game
   // to its winner, so a stream ending in one moves its standings deltas (games_won/games_lost) and no state, outcome or summary.
-  football: 0, cricket: 0, boardgame: 0, carrom: 0, generic: 0, volleyball: 0,
+  // W2e T8 (CK-RR-1, ICC 16.10.7) raised cricket one MINOR: a DLS or revised-overs result credits Team 1 the par or the final target - 1 off Team 2's overs, so golden stream 25 (default#844) moves its NRR deltas and no state, outcome or summary.
+  football: 0, cricket: 1, boardgame: 0, carrom: 0, generic: 0, volleyball: 0,
   badminton: 0, tabletennis: 0, tennis: 1, icehockey: 0, hockey: 0,
 } as const satisfies Readonly<Record<FoldEpochSport, number>>);
 
