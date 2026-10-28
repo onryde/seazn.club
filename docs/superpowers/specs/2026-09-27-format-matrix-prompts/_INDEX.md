@@ -4313,6 +4313,12 @@ It still differs from the public table here:
   `formatMetric` (a metric's declared decimals).
 - **No e2e downloads the standings export.** The DB suites (`export-every-pool.test.ts`,
   `generate-level-table.test.ts`) and the real-pdfkit render tests are its only witnesses.
+- **doc-render: a short-name table spreads its spare width over the numeric columns.** Every column's share is
+  `min(max(len, 3), 40)` of the page (`tableGrid` in `doc-render.ts`). A table of short names ("E3") therefore spreads
+  its counts across the page and pushes `#` and Team right. On a mixed-shape sheet (one pool with D, one without: their
+  own grids), the pools do not share a #/Team left edge. This is pre-existing on main (`drawTable`'s weights). A fix,
+  where numeric columns take their floor and the text column the slack, moves EVERY PDF table: timetables, rosters, the
+  officials rota and scoresheets. It needs its own visual pass across the document kinds (export re-review item 4, n2).
 
 **Parked (accepted, or under the owner's scope cuts)**
 - **Concern 2:** an undo of a generate leaves its level table (a later delete drops it); pooled groups still read "No

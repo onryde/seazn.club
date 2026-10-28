@@ -214,10 +214,14 @@ describe.skipIf(!HAS_DB)("export every pool — a group stage's standings export
       // then asked, and if its plan reads in some other order the other table is made the newer instead. The table it
       // returns first, and newer, is then relabelled B (the two pools swap key and name — `pools`, not the tables, so the
       // read's order stands). Only the stage's own pool order (`byPoolOrder`: the key) then prints A first.
+      // The export's read verbatim (`exports.ts` case "standings": the same select list, join, filter and order), so its
+      // plan — and so its order — is the export's by construction.
       const unsorted = async () =>
-        (await sql<{ pool_id: string }[]>`
-          select ss.pool_id from standings_snapshots ss join stages s on s.id = ss.stage_id
-           where s.division_id = ${s.divisionId} order by s.seq desc`).map((x) => x.pool_id);
+        (await sql<{ stage_id: string; stage_name: string; pool_id: string | null; rows: StandingsSnapshotRow[] }[]>`
+          select ss.stage_id, s.name as stage_name, ss.pool_id, ss.rows from standings_snapshots ss
+          join stages s on s.id = ss.stage_id
+          where s.division_id = ${s.divisionId}
+          order by s.seq desc`).map((x) => x.pool_id);
       let newer: string | undefined;
       for (const [hours, [x, y]] of [[1, [s.pools[0]!, s.pools[1]!]], [2, [s.pools[1]!, s.pools[0]!]]] as const) {
         await sql`update standings_snapshots set updated_at = now() + make_interval(hours => ${hours}) where stage_id = ${s.stageId} and pool_id = ${x.id}`;

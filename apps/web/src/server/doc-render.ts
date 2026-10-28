@@ -432,22 +432,33 @@ function drawCropTicks(doc: PDFKit.PDFDocument, y: number): void {
   doc.moveTo(doc.page.width - tickLen, y).lineTo(doc.page.width, y).strokeColor("#999999").lineWidth(1).stroke();
 }
 
+/** Where a page's content starts: the title page's below its title block, every other page at its top margin. */
+interface ContentTop {
+  page: PDFKit.PDFPage;
+  y: number;
+}
+
 function drawSection(
   doc: PDFKit.PDFDocument,
   section: DocSection,
   badges?: Map<string, Buffer | null>,
   grid?: TableGrid,
+  titleTop?: ContentTop,
 ): void {
   if (section.pageBreakBefore === true) doc.addPage();
   // Keep a heading with its table (export every pool, 2026-10-28): a heading left at a page foot, its table overleaf,
   // reads as the end of the section above, and a table split 1 + 3 sends its last rows overleaf with no heading. A table
   // that fits one page keeps WHOLE — its heading, header row and every row — else the section starts a new page; a table
   // taller than a page breaks as before, its heading kept with the header row and the first body row (an empty table:
-  // its header row).
+  // its header row). Re-review I-1: moving a section overleaf gains only when something is drawn above it on this page —
+  // a section FIRST on its page (under the title block alone, or at the top of a fresh page) moved whole would leave its
+  // page bare and add one, so it keeps only its heading, header row and first row, as a tall table does.
   if (section.heading !== undefined && section.table !== undefined) {
     const rows = section.table.rows.length;
     const whole = HEADING_H + ROW_H * (rows + 1);
-    const keep = whole <= doc.page.height - 2 * MARGIN ? whole : HEADING_H + ROW_H * (rows > 0 ? 2 : 1);
+    const top = titleTop !== undefined && doc.page === titleTop.page ? titleTop.y : doc.page.margins.top;
+    const firstOnPage = doc.y <= top + 0.5;
+    const keep = !firstOnPage && whole <= doc.page.height - 2 * MARGIN ? whole : HEADING_H + ROW_H * (rows > 0 ? 2 : 1);
     if (doc.y + keep > doc.page.height - MARGIN) doc.addPage();
   }
   if (section.heading !== undefined) {
@@ -514,6 +525,7 @@ export async function docModelToPdf(model: DocModel): Promise<Buffer> {
   if (model.branding) drawMasthead(doc, model, logo); // Pro-only night chrome + logo
   else doc.y = MARGIN;
   drawTitleBlock(doc, model); // eyebrow + title + description for ALL
+  const titleTop: ContentTop = { page: doc.page, y: doc.y }; // a section starting here is first on its page (I-1)
 
   // QR pre-pass (Task 12): pdfkit draws synchronously, so every ticket's QR
   // must be resolved to bytes BEFORE the section loop — no awaiting mid-draw.
@@ -547,7 +559,7 @@ export async function docModelToPdf(model: DocModel): Promise<Buffer> {
     }
     if (section.ticket) {
       drawTicket(doc, section.ticket, qrByRef.get(section.ticket.ref) ?? null, model.branding?.orgName);
-    } else drawSection(doc, section, badgeBuffers, grids.get(index));
+    } else drawSection(doc, section, badgeBuffers, grids.get(index), titleTop);
     if (pair) {
       sinceBreak += 1;
       if (section.ticket) {
