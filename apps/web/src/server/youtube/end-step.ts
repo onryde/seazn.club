@@ -71,8 +71,20 @@ const CLAIM_LEASE_MINUTES = 2;
 /** The 5th failure of a row: a failed `complete` re-reads the life (see the header). */
 const COMPLETE_FAILURES_BEFORE_REREAD = 5;
 
-/** Open states: a broadcast the step may still have to end. `complete` and `failed` are finished. */
-const OPEN_STATES = ["created", "bound", "reserved", "live", "ending"] as const;
+/** Open states: a broadcast the step may still have to end. `complete` and `failed` are finished. Exported for the daily pass (daily.ts),
+ *  which settles the rows this step can never finish. */
+export const OPEN_STATES = ["created", "bound", "reserved", "live", "ending"] as const;
+
+/** P6: the retry backoff caps here, in minutes. Exported with `endBackoffMinutes` so daily.ts derives its stuck-row bound from the
+ *  backoff the step really applies, not from a number of its own. */
+export const YOUTUBE_END_BACKOFF_CAP_MINUTES = 60;
+/** The exponent is clamped so the power cannot grow without bound (2^10 is far past the cap). */
+const BACKOFF_EXPONENT_LIMIT = 10;
+/** Minutes to the next try after a row's `failures`-th failure (1-based): 1, 2, 4, … up to the cap. `recordFailure`'s SQL takes the same
+ *  two constants, so this function and the stored `next_attempt_at` cannot disagree (daily.test.ts reads the stored one back). */
+export function endBackoffMinutes(failures: number): number {
+  return Math.min(2 ** Math.min(failures - 1, BACKOFF_EXPONENT_LIMIT), YOUTUBE_END_BACKOFF_CAP_MINUTES);
+}
 
 const MINUTE_MS = 60_000;
 const plusMinutes = (at: Date, n: number): Date => new Date(at.getTime() + n * MINUTE_MS);
@@ -351,7 +363,8 @@ async function recordFailure(orgId: string, id: string, code: string, now: Date)
   await sql`
     update youtube_broadcasts
        set attempts = attempts + 1,
-           next_attempt_at = ${now}::timestamptz + (least(power(2, least(attempts, 10)), 60)::int * interval '1 minute'),
+           next_attempt_at = ${now}::timestamptz
+             + (least(power(2, least(attempts, ${BACKOFF_EXPONENT_LIMIT}::int)), ${YOUTUBE_END_BACKOFF_CAP_MINUTES}::int)::int * interval '1 minute'),
            last_error_code = ${code}
      where id = ${id} and org_id = ${orgId} and state in ${sql([...OPEN_STATES])}`;
 }
