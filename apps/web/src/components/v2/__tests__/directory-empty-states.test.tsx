@@ -56,3 +56,34 @@ describe("the Directory's empty states clear AA contrast on their white card", (
     expect(checked, "anti-vacuity: four empty states").toBe(4);
   });
 });
+
+// CI e2e, second pass (B3): once the scan met a POPULATED venues list it reddened on the venue's Delete link (`text-red-500` on white,
+// ~3.8:1). The panel's other sub-AA tokens went with it: `text-slate-400` text and the archived badge's `text-slate-500` on
+// `bg-slate-200` (~3.7:1). Rendered through the REAL panel with a venue, an active court (with hours) and an archived court, so the
+// Delete/Archive links, the courts list and a badge are all in the markup — anti-vacuity counts each before the token check.
+describe("a populated venues list clears AA contrast", () => {
+  it("no element carries a sub-AA text token, and the controls that carried them are present", () => {
+    const venue = {
+      id: "v1", name: "Riverside Sports Hall", address: null, sort: 0, archived_at: null, created_at: "2026-01-01T00:00:00Z",
+      courts: [
+        { id: "c1", venue_id: "v1", name: "Court 1", sort: 0, tags: [], archived_at: null, created_at: "2026-01-01T00:00:00Z",
+          hours: [{ weekday: 1, open_min: 540, close_min: 1260 }], exceptions: [] },
+        { id: "c2", venue_id: "v1", name: "Court 2", sort: 1, tags: [], archived_at: "2026-02-01T00:00:00Z", created_at: "2026-01-01T00:00:00Z",
+          hours: [], exceptions: [] },
+      ],
+    };
+    const markup = html(<VenuesPanel venues={[venue]} orgId="00000000-0000-4000-8000-000000000000" canEdit />);
+    const classLists = [...markup.matchAll(/\sclass="([^"]*)"/g)].map((m) => m[1]!.split(/\s+/).filter(Boolean));
+    expect(classLists.length, "anti-vacuity: the panel rendered elements").toBeGreaterThan(10);
+    const deletes = classLists.filter((c) => c.includes("underline") && c.some((t) => t.startsWith("text-red-")));
+    expect(deletes.length, "anti-vacuity: at least one Delete link rendered").toBeGreaterThan(0);
+    let checked = 0;
+    for (const tokens of classLists) {
+      expect(tokens, "text-red-500 on white is ~3.8:1").not.toContain("text-red-500");
+      expect(tokens, "text-slate-400 on white is ~2.6:1").not.toContain("text-slate-400");
+      if (tokens.includes("bg-slate-200")) expect(tokens, "slate-500 on slate-200 is ~3.7:1").not.toContain("text-slate-500");
+      checked++;
+    }
+    expect(checked).toBe(classLists.length);
+  });
+});
