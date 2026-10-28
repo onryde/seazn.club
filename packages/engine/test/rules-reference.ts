@@ -74,8 +74,6 @@ export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, strin
   ["HK-SO-2", "Task 9"],
   ["IH-SO-1", "Task 9"],
   ["IH-SO-2", "Task 9"],
-  ["IH-SU-1", "Task 15"],
-  ["IH-ST-1", "Task 15"],
   ["BG-RS-1", "Task 10"],
   ["BG-AB-3", "Task 17"],
   ["CA-AD-1", "Task 11"],
