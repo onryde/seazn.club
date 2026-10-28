@@ -75,10 +75,12 @@ function parseJson(text: string): unknown {
 }
 
 /** Does this `message` event say the player we mounted cannot play its video here? The origin must be the embed host and the sender
- *  the iframe's own window - any other page can post to ours. The payload is the string the player posts (`{"event":"onError",
- *  "info":150}`) or an already-parsed object; anything else is not an answer. */
-export function playerReportsUnplayable(origin: string, fromOurFrame: boolean, data: unknown): boolean {
-  if (origin !== YOUTUBE_EMBED_ORIGIN || !fromOurFrame) return false;
+ *  (`source`, the event's own) must BE the iframe's window (`frameWindow`) - any other page can post to ours. A frame with no window
+ *  (not mounted) has no sender, so two unknowns are never "the same window". The payload is the string the player posts
+ *  (`{"event":"onError","info":150}`) or an already-parsed object; anything else is not an answer. */
+export function playerReportsUnplayable(origin: string, source: unknown, frameWindow: unknown, data: unknown): boolean {
+  if (origin !== YOUTUBE_EMBED_ORIGIN) return false;
+  if (frameWindow === null || frameWindow === undefined || source !== frameWindow) return false;
   const msg = typeof data === "string" ? parseJson(data) : data;
   if (typeof msg !== "object" || msg === null || Array.isArray(msg)) return false;
   const { event, info } = msg as { event?: unknown; info?: unknown };
@@ -157,6 +159,7 @@ export function ReplayStage({ part, mode, multi, pageOrigin, onPlay, iframeRef, 
                 alt=""
                 loading="lazy"
                 decoding="async"
+                referrerPolicy="no-referrer"
                 className="absolute inset-0 h-full w-full object-cover"
               />
               <span className="relative flex flex-col items-center gap-2">
@@ -190,11 +193,16 @@ function ReplayPlayer({ parts }: { parts: readonly ReplayPart[] }) {
   useEffect(() => {
     if (mode !== "playing") return;
     const onMessage = (e: MessageEvent) => {
-      const win = iframeRef.current?.contentWindow;
-      if (playerReportsUnplayable(e.origin, win != null && e.source === win, e.data)) dispatch({ type: "unavailable" });
+      if (playerReportsUnplayable(e.origin, e.source, iframeRef.current?.contentWindow, e.data)) dispatch({ type: "unavailable" });
     };
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
+  }, [mode]);
+
+  // The tap that started the player unmounted the button that had focus. Hand focus to the player the moment it mounts - not only once
+  // its document has loaded, or focus sits on <body> for the whole load and a keyboard user is dropped to the top of the page.
+  useEffect(() => {
+    if (mode === "playing") iframeRef.current?.focus();
   }, [mode]);
 
   const onPlay = () => {
@@ -210,7 +218,7 @@ function ReplayPlayer({ parts }: { parts: readonly ReplayPart[] }) {
     if (!frame || !win) return;
     win.postMessage(JSON.stringify({ event: "listening", id: 1, channel: "widget" }), YOUTUBE_EMBED_ORIGIN);
     win.postMessage(JSON.stringify({ event: "command", func: "addEventListener", args: ["onError"], id: 1, channel: "widget" }), YOUTUBE_EMBED_ORIGIN);
-    // The tap that started the player unmounted the button that had focus; hand focus to the player so a keyboard user is not dropped.
+    // And again once its document has loaded, in case the load reset what the mount set (the mount effect is the one that matters).
     frame.focus();
   };
 

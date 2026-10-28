@@ -110,12 +110,15 @@ describe("replayReducer: the player's states", () => {
 describe("playerReportsUnplayable: when the embedded player says it cannot play this video here", () => {
   const FROM = "https://www.youtube-nocookie.com";
   const err = (info: unknown) => JSON.stringify({ event: "onError", info, id: 1, channel: "widget" });
+  /** The iframe's own window, and some other window: distinct objects, compared by identity like a real MessageEvent.source. */
+  const WIN = { name: "our-iframe" } as unknown as Window;
+  const OTHER = { name: "another-frame" } as unknown as Window;
 
   it("is true for exactly the documented 'cannot play here' codes, swept over every code 0-200", () => {
     let checked = 0;
     const flagged: number[] = [];
     for (let code = 0; code <= 200; code++) {
-      if (playerReportsUnplayable(FROM, true, err(code))) flagged.push(code);
+      if (playerReportsUnplayable(FROM, WIN, WIN, err(code))) flagged.push(code);
       checked++;
     }
     expect(checked, "anti-vacuity: every code was asked").toBe(201);
@@ -124,8 +127,8 @@ describe("playerReportsUnplayable: when the embedded player says it cannot play 
   });
 
   it("accepts the message as the string YouTube posts and as an already-parsed object", () => {
-    expect(playerReportsUnplayable(FROM, true, err(150))).toBe(true);
-    expect(playerReportsUnplayable(FROM, true, { event: "onError", info: 101 })).toBe(true);
+    expect(playerReportsUnplayable(FROM, WIN, WIN, err(150))).toBe(true);
+    expect(playerReportsUnplayable(FROM, WIN, WIN, { event: "onError", info: 101 })).toBe(true);
   });
 
   it("is false for the transient errors, other events, and anything that is not a well-formed error", () => {
@@ -138,17 +141,31 @@ describe("playerReportsUnplayable: when the embedded player says it cannot play 
       JSON.stringify({ event: "onError", info: null }),
       "not json", "", "{", "null", "150", JSON.stringify([150]), null, undefined, 150, true,
     ]) {
-      expect(playerReportsUnplayable(FROM, true, data), JSON.stringify(data)).toBe(false);
+      expect(playerReportsUnplayable(FROM, WIN, WIN, data), JSON.stringify(data)).toBe(false);
     }
   });
 
-  it("is false unless the message comes from the player we mounted: wrong origin, another window", () => {
+  it("is false unless the message comes from the embed host: every wrong or look-alike origin, with the sender and payload otherwise right", () => {
     const good = err(150);
-    expect(playerReportsUnplayable(FROM, true, good), "positive pair").toBe(true);
+    expect(playerReportsUnplayable(FROM, WIN, WIN, good), "positive pair").toBe(true);
     for (const origin of ["https://www.youtube.com", "https://youtube-nocookie.com", "https://evil.example", "https://www.youtube-nocookie.com.evil.example", "http://www.youtube-nocookie.com", "", "null"]) {
-      expect(playerReportsUnplayable(origin, true, good), origin).toBe(false);
+      expect(playerReportsUnplayable(origin, WIN, WIN, good), origin).toBe(false);
     }
-    expect(playerReportsUnplayable(FROM, false, good), "right origin, but not our iframe's window").toBe(false);
+  });
+
+  it("is false unless the sender IS the iframe's window (identity), and false when either side is unknown - the comparison lives in the verdict, not in the listener", () => {
+    const good = err(150);
+    expect(playerReportsUnplayable(FROM, WIN, WIN, good), "positive pair: same window").toBe(true);
+    expect(playerReportsUnplayable(FROM, OTHER, WIN, good), "right origin, but another window posted it").toBe(false);
+    expect(playerReportsUnplayable(FROM, WIN, OTHER, good), "and the other way round").toBe(false);
+    // An unmounted frame has no window: nothing can be 'from' it - not even a null source, which would compare equal to a null window.
+    expect(playerReportsUnplayable(FROM, null, null, good), "no source and no frame window").toBe(false);
+    expect(playerReportsUnplayable(FROM, WIN, null, good), "the frame has no window yet").toBe(false);
+    expect(playerReportsUnplayable(FROM, WIN, undefined, good)).toBe(false);
+    expect(playerReportsUnplayable(FROM, null, WIN, good), "a message with no source").toBe(false);
+    expect(playerReportsUnplayable(FROM, undefined, undefined, good), "undefined === undefined is not a sender").toBe(false);
+    // Another page's window that merely looks the same is not the same window.
+    expect(playerReportsUnplayable(FROM, { ...WIN }, WIN, good), "an equal-looking copy is a different window").toBe(false);
   });
 });
 
@@ -315,6 +332,16 @@ describe("ReplayStage: each state of the player box", () => {
     expect(html, "nothing overlays the player or its controls").not.toContain('data-testid="replay-facade"');
     expect(html).not.toContain("replay-scrim");
     expect(html).not.toContain("<img");
+  });
+
+  it("the thumbnail is fetched with no Referer (it is a page-view signal to Google before any tap), while the player itself keeps strict-origin-when-cross-origin - the embed refuses to play without one", () => {
+    const img = /<img [^>]*>/.exec(stage("facade"))?.[0] ?? "";
+    expect(img, "premise: the thumbnail renders").toContain("i.ytimg.com");
+    expect(img).toMatch(/referrerpolicy="no-referrer"/i);
+    const iframe = /<iframe [^>]*>/.exec(stage("playing"))?.[0] ?? "";
+    expect(iframe, "premise: the player renders").toContain("youtube-nocookie.com");
+    expect(iframe).toMatch(/referrerpolicy="strict-origin-when-cross-origin"/i);
+    expect(iframe).not.toMatch(/referrerpolicy="no-referrer"/i);
   });
 
   it("playing a part of several is titled with its number; a single part's title has none", () => {
