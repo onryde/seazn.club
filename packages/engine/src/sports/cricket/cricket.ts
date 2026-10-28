@@ -3642,8 +3642,10 @@ export const cricket: SportModule<CricketCfg, CricketEv, CricketState> = {
     maxOversPerBowler: { scope: "match" },
     superOver: SUPER_OVER_KEY,
     // CK-SO-1 / ruling 157 (W2e Task 7) — what a TIED super over does is only asked while the super over is on: the stage
-    // editor holds the field while `superOver` is off (`detailOf`), so it is never a control that does nothing.
-    superOverStillTied: { scope: "stage", detailOf: "superOver" },
+    // editor holds the field while `superOver` is off (`detailOf`), and it is offered only on the variants that can play a
+    // super over at all (`SUPER_OVER_KEY.appliesTo`: a two-innings test match has none, so the field would be held for
+    // ever), so it is never a control that does nothing.
+    superOverStillTied: { scope: "stage", detailOf: "superOver", appliesTo: SUPER_OVER_KEY.appliesTo },
     dls: { scope: "stage", appliesTo: { variants: ["t20", "odi", "hundred"] } },
     minOversForResult: { scope: "stage" },
     playersPerSide: { scope: "stage" },
