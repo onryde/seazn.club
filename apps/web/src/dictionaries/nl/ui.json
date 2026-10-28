@@ -1448,6 +1448,7 @@
   "streaming.youtube.alreadyConnected": "Dit kanaal was al gekoppeld. De zichtbaarheid en doelgroepinstellingen zijn niet gewijzigd; wijzig ze onder Instellingen.",
   "streaming.youtube.error.notOffered": "Dat kanaal hoort niet bij dit Google-account. Kies opnieuw of begin opnieuw.",
   "streaming.youtube.error.gone": "Dit kanaal is niet meer gekoppeld. Laad de pagina opnieuw.",
+  "streaming.youtube.broadcast.descriptionLine": "Live score en uitslagen:",
   "streamDest.add": "Bestemming toevoegen",
   "streamDest.listLabel": "Streambestemmingen",
   "streamDest.platform": "Platform",

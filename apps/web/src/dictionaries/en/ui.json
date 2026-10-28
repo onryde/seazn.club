@@ -1448,6 +1448,7 @@
   "streaming.youtube.alreadyConnected": "This channel was already connected. Its visibility and audience settings are unchanged — change them in Settings.",
   "streaming.youtube.error.notOffered": "That channel isn't one this Google account offered. Pick again, or start over.",
   "streaming.youtube.error.gone": "This channel is no longer connected. Reload the page.",
+  "streaming.youtube.broadcast.descriptionLine": "Live score and results:",
   "streamDest.add": "Add destination",
   "streamDest.listLabel": "Stream destinations",
   "streamDest.platform": "Platform",

@@ -7673,6 +7673,7 @@ export type DictionaryKey =
   | "streaming.youtube.action.reviewTerms"
   | "streaming.youtube.action.settings"
   | "streaming.youtube.alreadyConnected"
+  | "streaming.youtube.broadcast.descriptionLine"
   | "streaming.youtube.channels"
   | "streaming.youtube.connect"
   | "streaming.youtube.consent.body"

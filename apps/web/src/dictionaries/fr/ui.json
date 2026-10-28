@@ -1448,6 +1448,7 @@
   "streaming.youtube.alreadyConnected": "Cette chaîne était déjà connectée. Sa visibilité et ses paramètres d’audience n’ont pas changé ; modifiez-les sous Paramètres.",
   "streaming.youtube.error.notOffered": "Cette chaîne ne fait pas partie de celles que ce compte Google propose. Choisissez à nouveau ou recommencez.",
   "streaming.youtube.error.gone": "Cette chaîne n’est plus connectée. Rechargez la page.",
+  "streaming.youtube.broadcast.descriptionLine": "Score en direct et résultats :",
   "streamDest.add": "Ajouter une destination",
   "streamDest.listLabel": "Destinations de diffusion",
   "streamDest.platform": "Plateforme",
