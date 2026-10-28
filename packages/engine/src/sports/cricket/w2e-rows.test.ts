@@ -169,7 +169,10 @@ describe("CK-FO-1 follow-on: two innings a side, only at the configured lead, an
   it("CK-FO-1 the event is refused where the match does not enable it", () => {
     const disabled = parse({ ...cricket.variants.test, followOn: { enabled: false, lead: 150 } });
     expect(codeOf(() => fold(disabled, [...firstTwo(250), ["cricket.followon"]]))).toBe("INVALID_EVENT");
-    expect(codeOf(() => fold(t20, [["core.start"], summary(150, 5, 120), summary(100, 10, 100), ["cricket.followon"]]))).not.toBeNull();
+    // A one-innings match, innings break reached (still live, so the refusal is the follow-on's own and not a finished match's).
+    const breakState = fold(t20, [["core.start"], summary(150, 5, 120)]);
+    expect(breakState.phase).toBe("live");
+    expect(codeOf(() => fold(t20, [["core.start"], summary(150, 5, 120), ["cricket.followon"]]))).toBe("INVALID_EVENT");
   });
 
   it("CK-FO-1 a lead one run short of followOn.lead is refused and a lead that meets it is accepted, whichever side bats first", () => {
@@ -584,6 +587,20 @@ describe("CK-BO-1 no bowler bowls more than maxOversPerBowler overs in an inning
   });
 });
 
+/** The Laws: the bowler is credited with bowled, caught, lbw, stumped and hit wicket - and with no other mode. */
+const MODES: Record<string, boolean> = {
+  bowled: true,
+  caught: true,
+  lbw: true,
+  runout: false,
+  stumped: true,
+  hitwicket: true,
+  retired: false,
+  obstructed: false,
+  timedout: false,
+  hitballtwice: false,
+};
+
 // ---------------------------------------------------------------------------------------------------------------------
 // CK-FH-1 (M8, free hit only) - a deviation row: ICC 21.18 lets hit-the-ball-twice stand on a free hit, and the engine refuses it.
 // ---------------------------------------------------------------------------------------------------------------------
@@ -593,17 +610,31 @@ describe("CK-FH-1 the delivery after a no ball is a free hit: the striker can be
   const freeHit = (wicket: Record<string, unknown>): Spec =>
     ball(0, "H-1", "H-2", "A-11", { wicket, freeHit: true });
 
-  it("CK-FH-1 bowled, caught, lbw, stumped and hit wicket are refused on the free hit; run out and obstructing the field stand", () => {
-    const refused = ["bowled", "caught", "lbw", "stumped", "hitwicket"];
-    for (const kind of refused) {
-      expect(codeOf(() => fold(t20, [["core.start"], noBall, freeHit({ kind, out: "H-1", bowlerCredited: true })])), kind).toBe("INVALID_EVENT");
-    }
+  it("CK-FH-1 every mode but run out and obstructing the field is refused on the free hit, and each is recorded on a normal ball", () => {
+    // The exemptions are the row's; the refused set is every OTHER mode the engine declares, so a mode added to (or renamed in)
+    // the schema is swept without this test being edited.
     const stands: Array<[string, string]> = [["runout", "H-2"], ["obstructed", "H-1"]];
+    const exempt = new Set(stands.map(([kind]) => kind));
+    const options: readonly string[] = CricketWicket.shape.kind.options;
+    for (const kind of exempt) expect(options, `${kind} is a declared mode`).toContain(kind);
+    let refused = 0;
+    for (const kind of options.filter((k) => !exempt.has(k))) {
+      const credited = MODES[kind] as boolean;
+      expect(codeOf(() => fold(t20, [["core.start"], noBall, freeHit({ kind, out: "H-1", bowlerCredited: credited })])), `${kind} on a free hit`).toBe("INVALID_EVENT");
+      // The pair: the same wicket on an ordinary delivery is recorded, so the refusal is the free hit's.
+      const plain = fold(t20, [["core.start"], ball(0, "H-1", "H-2", "A-11", { wicket: { kind, out: "H-1", bowlerCredited: credited } })]);
+      expect(plain.innings[0]!.wickets, `${kind} on a normal ball`).toBe(1);
+      refused++;
+    }
+    expect(refused).toBe(options.length - exempt.size);
+    expect(refused).toBeGreaterThan(0);
+    let stood = 0;
     for (const [kind, out] of stands) {
       const state = fold(t20, [["core.start"], noBall, freeHit({ kind, out, bowlerCredited: false })]);
       expect(state.innings[0]!.wickets, kind).toBe(1);
+      stood++;
     }
-    expect(refused.length + stands.length).toBe(7);
+    expect(stood).toBe(2);
   });
 
   it("CK-FH-1 the deviation: hit the ball twice, which ICC 21.18 lets stand on a free hit, is refused, so it cannot be recorded", () => {
@@ -625,11 +656,26 @@ describe("CK-FH-1 the delivery after a no ball is a free hit: the striker can be
     expect(state.innings[0]!.wickets).toBe(1);
   });
 
-  it("CK-FH-1 a wide on the free hit does not use it up, and a free-hit flag with no no ball before it is refused", () => {
+  it("CK-FH-1 a wide on the free hit does not use it up: the next ball is still a free hit, a run out stands and a bowled is refused", () => {
     const wide: Spec = ball(0, "H-1", "H-2", "A-11", { runs: { bat: 0, extras: { kind: "wide", runs: 1 } }, freeHit: true });
-    expect(
-      codeOf(() => fold(t20, [["core.start"], noBall, wide, freeHit({ kind: "bowled", out: "H-1", bowlerCredited: true })])),
-    ).toBe("INVALID_EVENT");
+    // Still pending: a FLAGGED free-hit run out folds (a consumed free hit would refuse the flag: "no free hit is pending")...
+    const stillPending = fold(t20, [["core.start"], noBall, wide, freeHit({ kind: "runout", out: "H-2", bowlerCredited: false })]);
+    expect(stillPending.innings[0]!.wickets).toBe(1);
+    // ...and an UNFLAGGED bowled is refused by the free-hit rule itself (a consumed free hit would let it stand).
+    const bowled = ball(0, "H-1", "H-2", "A-11", { wicket: { kind: "bowled", out: "H-1", bowlerCredited: true } });
+    expect(codeOf(() => fold(t20, [["core.start"], noBall, wide, bowled]))).toBe("INVALID_EVENT");
+    // The pair: the first legal ball after the wide uses the free hit up, so then the same bowled stands.
+    const used = fold(t20, [
+      ["core.start"],
+      noBall,
+      wide,
+      ball(0, "H-1", "H-2", "A-11", { freeHit: true }),
+      ball(1, "H-1", "H-2", "A-11", { wicket: { kind: "bowled", out: "H-1", bowlerCredited: true } }),
+    ]);
+    expect(used.innings[0]!.wickets).toBe(1);
+  });
+
+  it("CK-FH-1 a free-hit flag with no no ball before it is refused", () => {
     expect(codeOf(() => fold(t20, [["core.start"], ball(0, "H-1", "H-2", "A-11", { freeHit: true })]))).toBe("INVALID_EVENT");
   });
 });
@@ -639,20 +685,6 @@ describe("CK-FH-1 the delivery after a no ball is a free hit: the striker can be
 // ---------------------------------------------------------------------------------------------------------------------
 
 describe("CK-WK-1 a wicket is one of ten modes; the event says whether the bowler is credited and the fielder is credited with the dismissal", () => {
-  // The Laws: the bowler is credited with bowled, caught, lbw, stumped and hit wicket - and with no other mode.
-  const MODES: Record<string, boolean> = {
-    bowled: true,
-    caught: true,
-    lbw: true,
-    runout: false,
-    stumped: true,
-    hitwicket: true,
-    retired: false,
-    obstructed: false,
-    timedout: false,
-    hitballtwice: false,
-  };
-
   it("CK-WK-1 the engine knows exactly these ten modes", () => {
     expect([...CricketWicket.shape.kind.options].sort()).toEqual(Object.keys(MODES).sort());
     expect(Object.keys(MODES)).toHaveLength(10);
@@ -687,7 +719,7 @@ describe("CK-WK-1 a wicket is one of ten modes; the event says whether the bowle
 // CK-CR-1 (M10) - concussion replacements
 // ---------------------------------------------------------------------------------------------------------------------
 
-describe("CK-CR-1 concussion replacement: up to lineupChanges.concussionReplacements per side (1 in t20), who may bat and bowl; an ordinary substitute may not", () => {
+describe("CK-CR-1 concussion replacement: up to lineupChanges.concussionReplacements per side (1 in t20), who may bat, bowl and be credited as a fielder; an ordinary substitute is not offered and a bench name may do none of them", () => {
   const replace = (side: "H" | "A", off: string, on: string, orderNo: number): Spec => [
     "core.lineup.replacement",
     { side, off, on: { personId: on, slot: "bench", orderNo }, exemption: "concussion" },
@@ -732,6 +764,19 @@ describe("CK-CR-1 concussion replacement: up to lineupChanges.concussionReplacem
         fold(t20, [["core.start"], ["core.lineup.substitution", { side: "H", off: "H-3", on: { personId: "H-b1", slot: "bench", orderNo: 12 } }]], benched),
       ),
     ).toBe("sub-cap-reached");
+  });
+
+  it("CK-CR-1 a replacement is credited as a fielder and a bench name that is not a replacement is refused as one", () => {
+    const caught = (fielder: string): Spec =>
+      ball(0, "H-1", "H-2", "A-11", { wicket: { kind: "caught", out: "H-1", bowlerCredited: true, fielder } });
+    const credit = (specs: Spec[], pair: LineupPair = lineups) => fold(t20, specs, pair).innings[0]!.fine?.fielding;
+    // The replacement A-12 (for the concussed A-3) takes the catch...
+    expect(credit([["core.start"], replace("A", "A-3", "A-12", 3), caught("A-12")])).toEqual({ "A-12": { catches: 1, runOuts: 0, stumpings: 0 } });
+    // ...and without the replacement event the same name is not in the fielding side, nor is a bench name on a sheet that has one.
+    expect(codeOf(() => credit([["core.start"], caught("A-12")]))).toBe("INVALID_EVENT");
+    expect(codeOf(() => credit([["core.start"], caught("A-b1")], benched))).toBe("INVALID_EVENT");
+    // The pair: a named starter on the same sheet is credited.
+    expect(credit([["core.start"], caught("A-5")], benched)).toEqual({ "A-5": { catches: 1, runOuts: 0, stumpings: 0 } });
   });
 });
 
@@ -927,14 +972,22 @@ describe("CK-DV-3 a player who leaves for good does not lower the all-out count:
     return specs;
   };
 
-  it("CK-DV-3 with the last batter retired from the squad, nine wickets leave the innings open and the tenth closes it", () => {
-    const retired: Spec = ["core.lineup.retirement", { side: "H", personId: "H-11" }];
-    const nine = fold(t20, [["core.start"], retired, ...wicketsFor(9)]).innings[0]!;
+  it("CK-DV-3 with the unbeaten partner retired from the squad, nine wickets leave the innings open and the tenth closes it", () => {
+    // In wicketsFor the ten dismissed are H-1 to H-7 and H-9 to H-11; H-8 walks in at the sixth wicket and is the unbeaten
+    // partner to the end. He leaves the squad for good once at the crease (after the sixth wicket), so the ten that fall are
+    // every player who is left, and 10 wickets is the whole of them: the count has to stay at players - 1 for that to close.
+    const retired: Spec = ["core.lineup.retirement", { side: "H", personId: "H-8" }];
+    const withRetirement = (count: number): Spec[] => {
+      const wickets = wicketsFor(count);
+      return [["core.start"], ...wickets.slice(0, 6), retired, ...wickets.slice(6)];
+    };
+    const nine = fold(t20, withRetirement(9)).innings[0]!;
     expect(nine.wickets).toBe(9);
     expect(nine.closed).toBe(false);
-    const ten = fold(t20, [["core.start"], retired, ...wicketsFor(10)]).innings[0]!;
+    const ten = fold(t20, withRetirement(10)).innings[0]!;
     expect(ten.wickets).toBe(10);
     expect(ten.closed).toBe(true);
+    expect(ten.fine?.dismissed).not.toContain("H-8");
   });
 
   it("CK-DV-3 a team sheet that NAMES ten players is the other case: all out at nine (the contrast the retirement differs from)", () => {
