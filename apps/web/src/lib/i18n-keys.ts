@@ -2245,6 +2245,7 @@ export type DictionaryKey =
   | "engineError.DOUBLE_WALKOVER_NO_NEXT_MATCH"
   | "engineError.DRAW_NOT_ALLOWED"
   | "engineError.ELIGIBILITY"
+  | "engineError.ENDING_SANCTION_PENDING"
   | "engineError.EXPEDITE_WRONG_WINNER"
   | "engineError.FORFEIT_REASON_WRONG_PHASE"
   | "engineError.GAME_AWARD_DURING_TIEBREAK"

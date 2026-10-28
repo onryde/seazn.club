@@ -1,0 +1,337 @@
+// W2e X-SE-1 and X-SE-2 (spec 2026-10-28 §5.2, §5.3; D3 (1), D12, D13): the ending-sanction declaration, the write path's
+// pending-ending refusal (ENDING_SANCTION_PENDING), the scorer's narrow forfeit exception, and anti-goal 4 (a sanction alone
+// moves no score).
+//
+// X-SE-1 is proved here against a STUB sport (preflight F1): no shipped module declares an ending until Tasks 3 (badminton,
+// volleyball) and 4 (tennis), and those tasks add the real-module sweep with its own count. X-SE-2 sweeps every shipped
+// module that records a sanction, at every level its payload schema accepts.
+//
+// Every expected value comes from the stub's declaration (`DECL`), from the stub's own rule (first to `TARGET` points), or
+// from the rule rows' text (X-SE-1: forfeit and abandon stay admitted; voiding the ending re-opens the refusal, voiding the
+// sanction lifts it; D13: `disqualified` follows an end level, `retired` a prompt level, against the same side). Never from
+// the code under test.
+import { describe, expect, it } from "vitest";
+import { EngineError } from "./errors.ts";
+import { foldMatchWithStoppage, forfeitOf, outcomeOf, type EventEnvelope, type FoldableModule } from "./events.ts";
+import { pendingEndingSanction, scorerMayForfeit, type SanctionEndingDecl } from "./sanction-ending.ts";
+import { FORFEIT_REASONS, type ForfeitReason, type LineupPair, type MatchOutcome } from "./types.ts";
+import { forEachSport } from "../testkit/for-each-sport.ts";
+import { makeEnvelope } from "../testkit/helpers.ts";
+import { expectSanctionMovesNoScore, sanctionLevelsOf } from "../testkit/sanction-score.ts";
+
+// ---------------------------------------------------------------------------
+// The stub sport. First side to TARGET points wins. `stub.sanction` is a record only (it moves no score, like every
+// shipped sanction); its ladder is LEVELS, of which the declaration names one end level and one prompt level, and
+// leaves "warn" as neither.
+// ---------------------------------------------------------------------------
+
+const H = "H";
+const A = "A";
+const TARGET = 3;
+const LEVELS = ["warn", "exp", "dq"] as const;
+const DECL: SanctionEndingDecl = { eventType: "stub.sanction", endLevels: ["dq"], promptLevels: ["exp"] };
+
+interface StubState {
+  phase: "pre" | "live" | "done";
+  score: { home: number; away: number };
+  outcome: MatchOutcome | null;
+  sanctions: number;
+}
+
+const lineups: LineupPair = {
+  home: { entrantId: H, slots: [{ personId: "h1", slot: "starting", orderNo: 1 }] },
+  away: { entrantId: A, slots: [{ personId: "a1", slot: "starting", orderNo: 1 }] },
+};
+
+const wrongPhase = (what: string): never => {
+  throw new EngineError("WRONG_PHASE", what);
+};
+
+function stubSport(sanctionEnding?: SanctionEndingDecl): FoldableModule<null, StubState> {
+  return {
+    ...(sanctionEnding === undefined ? {} : { sanctionEnding }),
+    init: () => ({ phase: "pre", score: { home: 0, away: 0 }, outcome: null, sanctions: 0 }),
+    apply(state, event) {
+      switch (event.type) {
+        case "core.start":
+          return state.phase === "pre" ? { ...state, phase: "live" } : wrongPhase("already started");
+        case "stub.point": {
+          if (state.phase !== "live") return wrongPhase("not live");
+          const to = (event.payload as { to: "home" | "away" }).to;
+          const score = { ...state.score, [to]: state.score[to] + 1 };
+          if (score[to] < TARGET) return { ...state, score };
+          const winner = to === "home" ? H : A;
+          return { ...state, score, phase: "done", outcome: { kind: "win", winner, loser: winner === H ? A : H, method: "regulation" } };
+        }
+        case "stub.sanction": {
+          if (state.phase !== "live") return wrongPhase("not live");
+          const p = event.payload as { by: string; level: string };
+          if ((p.by !== H && p.by !== A) || !(LEVELS as readonly string[]).includes(p.level)) {
+            throw new EngineError("INVALID_EVENT", "bad sanction");
+          }
+          return { ...state, sanctions: state.sanctions + 1 };
+        }
+        case "core.forfeit": {
+          if (state.phase === "done") return wrongPhase("over");
+          const { by, reason } = forfeitOf(event.payload);
+          const winner = by === H ? A : H;
+          return { ...state, phase: "done", outcome: { kind: "award", winner, loser: by, reason } };
+        }
+        case "core.abandon":
+          return state.phase === "live" ? { ...state, phase: "done", outcome: { kind: "no_result" } } : wrongPhase("not live");
+        case "core.note":
+        case "core.award":
+          return state;
+        case "core.finalize":
+          return state.phase === "done" ? state : wrongPhase("not decided");
+        default:
+          throw new EngineError("INVALID_EVENT", `unknown ${event.type}`);
+      }
+    },
+    outcome: (state) => state.outcome,
+  };
+}
+
+const DECLARING = stubSport(DECL);
+const UNDECLARED = stubSport();
+
+const ev = (seq: number, type: string, payload: unknown = {}, voids?: string): EventEnvelope =>
+  makeEnvelope(seq, { type, payload }, voids);
+const point = (seq: number, to: "home" | "away") => ev(seq, "stub.point", { to });
+const sanction = (seq: number, by: string, level: string) => ev(seq, "stub.sanction", { by, level });
+
+/** The write path: `history` is the ledger, `candidate` the one event not yet in it (append-event.ts's shape). */
+const write = (m: FoldableModule<null, StubState>, history: readonly EventEnvelope[], candidate: EventEnvelope) =>
+  foldMatchWithStoppage(m, null, lineups, [...history, candidate], { strictFromSeq: candidate.seq });
+/** A read path: the whole ledger is history (no `strictFromSeq`). */
+const replay = (m: FoldableModule<null, StubState>, events: readonly EventEnvelope[]) => foldMatchWithStoppage(m, null, lineups, events);
+
+function refusal(fn: () => unknown): EngineError {
+  try {
+    fn();
+  } catch (e) {
+    if (e instanceof EngineError) return e;
+    throw e;
+  }
+  throw new Error("expected the fold to refuse the event; it admitted it");
+}
+
+/** start, a point, then a sanction at `level` against `by` (seq 0..2). */
+const sanctioned = (by: string, level: string): EventEnvelope[] => [ev(0, "core.start"), point(1, "home"), sanction(2, by, level)];
+
+/** Every event the stub can be offered next that is neither the ending nor an abandon, with a schema-valid payload. */
+const NOT_AN_ENDING = (seq: number, other: string): EventEnvelope[] => [
+  point(seq, "home"),
+  point(seq, "away"),
+  sanction(seq, other, "warn"),
+  ev(seq, "core.note", { text: "umpire's note" }),
+  ev(seq, "core.award", { person: "h1", key: "mvp" }),
+  ev(seq, "core.suspend", { reason: "rain" }),
+];
+
+describe("X-SE-1 the pending-ending refusal (stub sport, preflight F1)", () => {
+  it("X-SE-1 a strict scoring event after an end-level sanction is refused ENDING_SANCTION_PENDING", () => {
+    let refused = 0;
+    for (const level of DECL.endLevels) {
+      for (const [by, other] of [[H, A], [A, H]] as const) {
+        const history = sanctioned(by, level);
+        for (const candidate of NOT_AN_ENDING(3, other)) {
+          const error = refusal(() => write(DECLARING, history, candidate));
+          expect(error.code, candidate.type).toBe("ENDING_SANCTION_PENDING");
+          expect(error.data, candidate.type).toEqual({ by, level });
+          // The differential: the same append on a sport that declares nothing is admitted, so the refusal is the
+          // declaration's and not the stub's own phase rules.
+          expect(() => write(UNDECLARED, history, candidate), candidate.type).not.toThrow();
+          refused++;
+        }
+      }
+    }
+    expect(refused).toBe(DECL.endLevels.length * 2 * NOT_AN_ENDING(3, A).length);
+    expect(refused).toBeGreaterThan(0);
+  });
+
+  it("X-SE-1 core.forfeit and core.abandon are still admitted while an ending is pending", () => {
+    const history = sanctioned(H, "dq");
+    // The ending itself: the sanctioned side loses, disqualified (X-RT-1's credit).
+    const ended = write(DECLARING, history, ev(3, "core.forfeit", { by: H, reason: "disqualified" }));
+    expect(outcomeOf(DECLARING, ended)).toEqual({ kind: "award", winner: A, loser: H, reason: "disqualified" });
+    // Any other forfeit is still the fold's to admit (who may SEND it is the route's question, D13).
+    const other = write(DECLARING, history, ev(3, "core.forfeit", { by: A, reason: "retired" }));
+    expect(outcomeOf(DECLARING, other)).toEqual({ kind: "award", winner: H, loser: A, reason: "retired" });
+    const abandoned = write(DECLARING, history, ev(3, "core.abandon", { reason: "floodlights" }));
+    expect(outcomeOf(DECLARING, abandoned)).toEqual({ kind: "no_result" });
+    // After the ending nothing is pending any more.
+    expect(pendingEndingSanction(DECLARING, [...history, ev(3, "core.forfeit", { by: H, reason: "disqualified" })])).toBeNull();
+  });
+
+  it("X-SE-1 replay (no strictFromSeq) folds a pre-W2e ledger with rallies after a black card to its recorded outcome", () => {
+    // Recorded before W2e: a disqualification, and play carried on to a result. The stub's rule (first to TARGET = 3)
+    // gave this ledger to A, and so it still must.
+    const recorded: EventEnvelope[] = [
+      ev(0, "core.start"),
+      point(1, "home"),
+      sanction(2, H, "dq"),
+      point(3, "away"),
+      point(4, "away"),
+      point(5, "away"),
+    ];
+    const folded = replay(DECLARING, recorded);
+    expect(outcomeOf(DECLARING, folded)).toEqual({ kind: "win", winner: A, loser: H, method: "regulation" });
+    expect(folded.state.score).toEqual({ home: 1, away: 3 });
+
+    // The same match caught in progress at deploy (Review Focus 1): its history still folds, the pad can read the
+    // pending ending from it, and its next rally is refused.
+    const inProgress = recorded.slice(0, 4);
+    expect(replay(DECLARING, inProgress).state.score).toEqual({ home: 1, away: 1 });
+    expect(pendingEndingSanction(DECLARING, inProgress)).toEqual({ by: H, level: "dq" });
+    expect(refusal(() => write(DECLARING, inProgress, point(4, "away"))).code).toBe("ENDING_SANCTION_PENDING");
+  });
+
+  it("X-SE-1 a decided match whose ledger holds an unended end-level sanction still takes its post-decision events", () => {
+    // A finished pre-W2e match: the refusal is about scoring a LIVE match, so a note or a finalize after the result is
+    // admitted, and a further point answers ALREADY_DECIDED (guarantee 4), never ENDING_SANCTION_PENDING.
+    const finished = [ev(0, "core.start"), point(1, "home"), sanction(2, H, "dq"), point(3, "away"), point(4, "away"), point(5, "away")];
+    expect(pendingEndingSanction(DECLARING, finished)).toEqual({ by: H, level: "dq" });
+    expect(() => write(DECLARING, finished, ev(6, "core.note", { text: "signed" }))).not.toThrow();
+    expect(() => write(DECLARING, finished, ev(6, "core.finalize"))).not.toThrow();
+    expect(refusal(() => write(DECLARING, finished, point(6, "home"))).code).toBe("ALREADY_DECIDED");
+  });
+
+  describe("X-SE-1 void sequences", () => {
+    const base = sanctioned(H, "dq"); // e-2 is the sanction
+    const ending = ev(3, "core.forfeit", { by: H, reason: "disqualified" }); // e-3 is its ending
+
+    it("X-SE-1 void sequences: void the forfeit and the ending is pending again; the next rally is refused", () => {
+      const history = [...base, ending];
+      const voidEnding = ev(4, "core.void", {}, "e-3");
+      expect(() => write(DECLARING, history, voidEnding)).not.toThrow();
+      const after = [...history, voidEnding];
+      expect(pendingEndingSanction(DECLARING, after)).toEqual({ by: H, level: "dq" });
+      expect(outcomeOf(DECLARING, replay(DECLARING, after))).toBeNull();
+      expect(refusal(() => write(DECLARING, after, point(5, "away"))).code).toBe("ENDING_SANCTION_PENDING");
+    });
+
+    it("X-SE-1 void sequences: void the sanction while its forfeit stands and the match stays ended", () => {
+      const history = [...base, ending];
+      const voidSanction = ev(4, "core.void", {}, "e-2");
+      const folded = write(DECLARING, history, voidSanction);
+      expect(folded.state.phase).toBe("done");
+      expect(outcomeOf(DECLARING, folded)).toEqual({ kind: "award", winner: A, loser: H, reason: "disqualified" });
+      const after = [...history, voidSanction];
+      expect(pendingEndingSanction(DECLARING, after)).toBeNull();
+      expect(refusal(() => write(DECLARING, after, point(5, "away"))).code).toBe("ALREADY_DECIDED");
+    });
+
+    it("X-SE-1 void sequences: void the forfeit, then the sanction, and the rally is admitted", () => {
+      const after = [...base, ending, ev(4, "core.void", {}, "e-3"), ev(5, "core.void", {}, "e-2")];
+      expect(() => replay(DECLARING, after)).not.toThrow();
+      expect(pendingEndingSanction(DECLARING, after)).toBeNull();
+      const played = write(DECLARING, after, point(6, "away"));
+      expect(outcomeOf(DECLARING, played)).toBeNull();
+      expect(played.state.score).toEqual({ home: 1, away: 1 });
+    });
+  });
+
+  it("X-SE-1 a prompt-level sanction never makes an ending pending", () => {
+    // D12: a prompt level asks a question and never ends the match by itself; a level the declaration names in neither
+    // list is an ordinary record.
+    const notEnding = LEVELS.filter((l) => !DECL.endLevels.includes(l));
+    expect(notEnding).toEqual(expect.arrayContaining([...DECL.promptLevels]));
+    let checked = 0;
+    for (const level of notEnding) {
+      const history = sanctioned(H, level);
+      expect(pendingEndingSanction(DECLARING, history), level).toBeNull();
+      expect(write(DECLARING, history, point(3, "away")).state.score, level).toEqual({ home: 1, away: 1 });
+      checked++;
+    }
+    expect(checked).toBe(notEnding.length);
+    expect(checked).toBeGreaterThan(0);
+  });
+});
+
+describe("pendingEndingSanction", () => {
+  it("is null for a sport that declares no ending, whatever its ledger holds", () => {
+    expect(pendingEndingSanction(UNDECLARED, sanctioned(H, "dq"))).toBeNull();
+  });
+
+  it("names the LATEST live end-level sanction", () => {
+    const ledger = [...sanctioned(H, "dq"), sanction(3, A, "dq")];
+    expect(pendingEndingSanction(DECLARING, ledger)).toEqual({ by: A, level: "dq" });
+    // Void the later one and the earlier one is pending again.
+    expect(pendingEndingSanction(DECLARING, [...ledger, ev(4, "core.void", {}, "e-3")])).toEqual({ by: H, level: "dq" });
+  });
+
+  it("reads a stored ledger row, whose `voids` is null when it voids nothing", () => {
+    const rows = sanctioned(H, "dq").map((e) => ({ id: e.id, type: e.type, payload: e.payload, voids: null }));
+    expect(pendingEndingSanction(DECLARING, rows)).toEqual({ by: H, level: "dq" });
+    expect(pendingEndingSanction(DECLARING, [...rows, { id: "e-3", type: "core.void", payload: {}, voids: "e-2" }])).toBeNull();
+  });
+
+  it("refuses a declaration whose event carries no string `by` and `level` (a module bug, not a scorer's mistake)", () => {
+    const misdeclared = stubSport({ eventType: "stub.point", endLevels: ["dq"], promptLevels: [] });
+    expect(() => pendingEndingSanction(misdeclared, [ev(0, "core.start"), point(1, "home")])).toThrow(/carries no string `by` and `level`/);
+    expect(() => replay(misdeclared, [ev(0, "core.start"), point(1, "home")])).toThrow(/carries no string `by` and `level`/);
+    // The same refusal for a payload that is not an object at all.
+    expect(() => scorerMayForfeit(DECLARING, { type: DECL.eventType, payload: null }, { by: H, reason: "disqualified" })).toThrow(
+      /carries no string `by` and `level`/,
+    );
+  });
+});
+
+describe("scorerMayForfeit (D13)", () => {
+  it("scorerMayForfeit truth table", () => {
+    // D13, verbatim: a scorer may send forfeit{disqualified} only as the event right after an ending-level sanction against
+    // the same side, and forfeit{retired} only right after a prompt-level one against the same side. Every other row is
+    // false. The level of each row comes from the declaration.
+    const levelsByKind = { end: DECL.endLevels[0]!, prompt: DECL.promptLevels[0]!, other: LEVELS.find((l) => !DECL.endLevels.includes(l) && !DECL.promptLevels.includes(l))! };
+    const allowed = new Set(["sanction|same|end|disqualified", "sanction|same|prompt|retired"]);
+    let rows = 0;
+    let trues = 0;
+    for (const last of ["sanction", "not-sanction"] as const) {
+      for (const side of ["same", "other"] as const) {
+        for (const kind of ["end", "prompt", "other"] as const) {
+          for (const reason of ["disqualified", "retired", "walkover"] as const satisfies readonly ForfeitReason[]) {
+            const level = levelsByKind[kind];
+            const by = side === "same" ? H : A;
+            // "not the sanction": the stub's other event carrying the same fields, so only the TYPE differs.
+            const lastLive = { type: last === "sanction" ? DECL.eventType : "stub.point", payload: { by: H, level } };
+            const expected = allowed.has(`${last}|${side}|${kind}|${reason}`);
+            expect(scorerMayForfeit(DECLARING, lastLive, { by, reason }), `${last} ${side} ${kind} ${reason}`).toBe(expected);
+            rows++;
+            if (expected) trues++;
+          }
+        }
+      }
+    }
+    expect(rows).toBe(2 * 2 * 3 * 3);
+    expect(trues).toBe(allowed.size);
+  });
+
+  it("is false with no live event before it, for a sport that declares no ending, and for withdrew", () => {
+    expect(scorerMayForfeit(DECLARING, null, { by: H, reason: "disqualified" })).toBe(false);
+    const lastLive = { type: DECL.eventType, payload: { by: H, level: "dq" } };
+    expect(scorerMayForfeit(UNDECLARED, lastLive, { by: H, reason: "disqualified" })).toBe(false);
+    const others = FORFEIT_REASONS.filter((r) => r !== "disqualified" && r !== "retired");
+    expect(others.length).toBeGreaterThan(0);
+    for (const reason of others) expect(scorerMayForfeit(DECLARING, lastLive, { by: H, reason }), reason).toBe(false);
+  });
+});
+
+describe("X-SE-2 a sanction alone moves no score (anti-goal 4)", () => {
+  it("X-SE-2 a sanction at every declared level of every module moves no score", () => {
+    const swept: string[] = [];
+    let states = 0;
+    const visited = forEachSport(({ module }) => {
+      for (const level of sanctionLevelsOf(module)) {
+        const checked = expectSanctionMovesNoScore(module, level);
+        expect(checked, `${module.key} ${level}`).toBeGreaterThan(0);
+        states += checked;
+        swept.push(`${module.key}:${level}`);
+      }
+    });
+    expect(visited).toBeGreaterThan(0);
+    // Anti-vacuity: zero (module, level) pairs, or zero live states, is a failure.
+    expect(swept.length).toBeGreaterThan(0);
+    expect(states).toBeGreaterThan(0);
+  });
+});

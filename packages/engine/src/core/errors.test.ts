@@ -84,6 +84,8 @@ describe("EngineError", () => {
       "TIEBREAK_COLOUR_REQUIRED",
       // W2d T18 (HK-TB-2, PS-7d) — appended last, existing order frozen. A hockey goal written without its type.
       "GOAL_KIND_REQUIRED",
+      // W2e X-SE-1 — appended last, existing order frozen. Scoring after a match-ending sanction before its ending.
+      "ENDING_SANCTION_PENDING",
     ]);
   });
 });

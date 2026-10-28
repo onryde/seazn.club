@@ -7,6 +7,51 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-28 — a match-ending sanction must be followed by its ending
+
+A badminton disqualification (black card) and a tennis default now end the
+match. The ending is its own event, recorded right after the sanction, and the
+two strict write paths take no other scoring event until it is there.
+
+**What changed.** After a live sanction at a level the sport declares as
+match-ending (`badminton.sanction` with `level: "disqualification"`,
+`tennis.sanction` with `level: "default"`), with no `core.forfeit` after it:
+
+| Write path | Before | Now |
+|---|---|---|
+| `POST /api/v1/fixtures/{id}/events`, any event other than `core.forfeit` or `core.abandon` (a rally, a point, another sanction, a note) | accepted | 422, `error.code` `"ENDING_SANCTION_PENDING"`, nothing written |
+| `POST /api/v1/divisions/{id}/events/import`, a stream with such an event after the sanction | imported | that stream's result is `rejected`, `error.engineCode` `"ENDING_SANCTION_PENDING"`, nothing written for its fixture |
+
+Every other sanction level, and every other sport, is unchanged. A volleyball
+disqualification or expulsion does not end the match by itself.
+
+**What replaces it.** Send the ending: `core.forfeit` with `by` set to the
+sanctioned entrant and `reason: "disqualified"`. Or void the sanction
+(`core.void`), which lifts the refusal. Voiding the forfeit makes the ending
+pending again; voiding the sanction while its forfeit stands leaves the match
+ended.
+
+**What a consumer sees.** A rally sent after a black card with no ending:
+
+```json
+{ "ok": false, "error": { "code": "ENDING_SANCTION_PENDING", "message": "event \"badminton.rally\" rejected: a disqualification sanction against … ends the match — record the ending (core.forfeit) or void the sanction first" }, "requestId": "…" }
+```
+
+`error.data` carries `{ "by": "<entrant id>", "level": "<the sanction level>" }`.
+Key on `error.code`, not on the message text.
+
+**No data migration was required.** Only a NEW write is judged. A ledger
+written before this change with play after a black card or a default still
+replays exactly as recorded, so a finished match keeps its result. A match in
+progress at the change, with such a sanction and no ending, takes the ending
+(or a void of the sanction) next; its next rally is refused.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e (sport fidelity), decision D3 (1), rule X-SE-1. The
+engine's pinning test is `packages/engine/src/core/sanction-ending.test.ts`.
+
 ## 2026-10-28 — the standings export refuses a table with no results
 
 The standings export used to print the newest stage's stored table, even one

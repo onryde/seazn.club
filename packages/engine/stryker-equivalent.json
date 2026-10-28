@@ -212,7 +212,7 @@
       "reason": "The `.some(appearance)` gate only decides whether `unplayed` is computed; the metric loop re-tests `metric.appearance === true` before skipping, so a model with no appearance metric credits exactly the same rows whether `unplayed` is computed or not. Computing it cannot throw or write: `playedInStats` re-resolves voids over `active`, which holds no `core.void` (resolveVoids throws only on one), and what it reaches (the model's own `unplayed` — boardgameUnplayed → statsUnplayed — forfeitStatsRole, playRecorded) is pure and reads forfeits through safeParse. Re-judged after ruling 120 moved the reading into playedInStats."
     },
     {
-      "mutant": "src/core/events.ts:398:57 ConditionalExpression → true",
+      "mutant": "src/core/events.ts:399:57 ConditionalExpression → true",
       "original": "typeof e.voids === \"string\"",
       "line": "for (const e of ledger) if (e.type === \"core.void\" && typeof e.voids === \"string\") voided.add(e.voids);",
       "reason": "Without the typeof check a core.void with no string `voids` adds undefined or null to `voided`; the only read is `voided.has(e.id)`, and every ledger entry's `id` is a string, so no entry is ever skipped that the original would fold."
@@ -464,7 +464,7 @@
       "reason": "The branch is reached only for an adjust that parsed through CarromGameAdjust, whose delta refine rejects 0, so delta is never 0 here and `< 0` and `<= 0` agree."
     },
     {
-      "mutant": "src/core/events.ts:441:20 StringLiteral → \"\"",
+      "mutant": "src/core/events.ts:442:20 StringLiteral → \"\"",
       "original": "\"over\"",
       "line": "return decided ? \"over\" : started ? \"play\" : \"pre\";",
       "reason": "Only a hook-less fake reaches this fallback, and only a DECIDED fold reads the decided arm: there guarantee 4 (ALREADY_DECIDED) answers every forfeit before the phase guard except a withdrawal over a held level result, and \"withdrew\" is admitted in every phase (R5), so the phase name is never read into a refusal."
@@ -614,25 +614,25 @@
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and every set-kernel event refuses outside phase \"live\", so an admitted walkover's state has no sets and setsWon 0-0 (6,000 admitted walkovers measured): reading them adds nothing."
     },
     {
-      "mutant": "src/core/events.ts:1050:7 LogicalOperator → decided || event.type === \"core.forfeit\"",
+      "mutant": "src/core/events.ts:1081:7 LogicalOperator → decided || event.type === \"core.forfeit\"",
       "original": "decided &&",
       "line": "decided &&",
       "reason": "Undecided, a withdrawal is over a level result only if outcomeOf reads level, and an undecided fold's outcomeOf is null or a settle's win (CoreSettle requires a winner), never level — so `decided ||` admits nothing that `decided &&` does not."
     },
     {
-      "mutant": "src/core/events.ts:1051:7 ConditionalExpression → true",
+      "mutant": "src/core/events.ts:1082:7 ConditionalExpression → true",
       "original": "event.type === \"core.forfeit\"",
       "line": "event.type === \"core.forfeit\" &&",
       "reason": "forfeitReasonOf parses the payload as CoreForfeit, a strict {by, reason} object; no other kernel or sport event declares exactly that shape (set sanctions need `level`, period suspensions `class`, carrom adjustments `entrantId` and `delta`, nested game awards `winner`), so only a core.forfeit reads \"withdrew\"."
     },
     {
-      "mutant": "src/core/events.ts:1076:11 ConditionalExpression → true",
+      "mutant": "src/core/events.ts:1107:11 ConditionalExpression → true",
       "original": "phase !== \"over\"",
       "line": "if (phase !== \"over\") {",
       "reason": "In phase \"over\" a forfeit reaches the guard only as a withdrawal over a held level result: guarantee 4 (ALREADY_DECIDED) and X-AB-4 (ABANDONED_SETTLE_OR_VOID) answer every other one first (measured: every sport, every reason, after an abandon settled or not), modules refuse to finalize an undecided state, and \"withdrew\" is admitted in every phase (R5) — so judging it there changes nothing."
     },
     {
-      "mutant": "src/core/events.ts:1076:21 StringLiteral → \"\"",
+      "mutant": "src/core/events.ts:1107:21 StringLiteral → \"\"",
       "original": "\"over\"",
       "line": "if (phase !== \"over\") {",
       "reason": "In phase \"over\" a forfeit reaches the guard only as a withdrawal over a held level result: guarantee 4 (ALREADY_DECIDED) and X-AB-4 (ABANDONED_SETTLE_OR_VOID) answer every other one first (measured: every sport, every reason, after an abandon settled or not), modules refuse to finalize an undecided state, and \"withdrew\" is admitted in every phase (R5) — so judging it there changes nothing."
@@ -740,25 +740,25 @@
       "reason": "The guard exists for TypeScript narrowing only: past the award arm the remaining MatchOutcome kinds (draw, tie, no_result, double_walkover; core/types.ts:169-197) declare no `method`, so the method test is already false for every one of them and the mutant answers the same (W2c Task 9)."
     },
     {
-      "mutant": "src/sport/module.ts:551:73 MethodExpression → unioned.options.some(o => typeof o === \"object\" && o !== null)",
+      "mutant": "src/sport/module.ts:554:73 MethodExpression → unioned.options.some(o => typeof o === \"object\" && o !== null)",
       "original": "unioned.options.every((o) => typeof o === \"object\" && o !== null)",
       "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
       "reason": "`some` differs from `every` only on a MIXED options array; a zod `.options` is all schemas (union, discriminatedUnion) or all enum values (strings, or numbers for a numeric enum), never schemas and values together, and the empty array never reaches it (`length > 0` first, killed by module.test.ts 'the empty case'), so the two agree on every schema the walk can meet."
     },
     {
-      "mutant": "src/sport/module.ts:551:102 LogicalOperator → typeof o === \"object\" || o !== null",
+      "mutant": "src/sport/module.ts:554:102 LogicalOperator → typeof o === \"object\" || o !== null",
       "original": "typeof o === \"object\" && o !== null",
       "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
       "reason": "`||` differs from `&&` only for a non-null non-object option, i.e. an enum's strings: the mutant then reads the enum as a union of string branches, each a leaf, so fieldsNamed throws the same `is not an object schema` message (same prefix, same path) the enum itself would (module.test.ts 'an enum is still a leaf' passes under it)."
     },
     {
-      "mutant": "src/sport/module.ts:551:102 ConditionalExpression → true",
+      "mutant": "src/sport/module.ts:554:102 ConditionalExpression → true",
       "original": "typeof o === \"object\" && o !== null",
       "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
       "reason": "Names two mutants, the whole test and its `typeof o === \"object\"` operand, each made `true`; with options never null (union options are schemas, enum values strings or numbers) both are true for every element exactly as the LogicalOperator `||` mutant beside this entry is, so they read an enum as a union of leaf branches and fieldsNamed throws the same `is not an object schema` message at the same path (module.test.ts 'an enum is still a leaf' passes under both: the 4,478-test related run, W2c Task 22)."
     },
     {
-      "mutant": "src/sport/module.ts:551:127 ConditionalExpression → true",
+      "mutant": "src/sport/module.ts:554:127 ConditionalExpression → true",
       "original": "o !== null",
       "line": "if (Array.isArray(unioned.options) && unioned.options.length > 0 && unioned.options.every((o) => typeof o === \"object\" && o !== null)) {",
       "reason": "Differs from `o !== null` only for a null option, and zod `.options` never holds null: a union's are schemas, an enum's are its string or number values (`typeof null === \"object\"` is the only case the operand exists for)."
