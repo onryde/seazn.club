@@ -62,7 +62,7 @@ export function YoutubeIcon({ size }: { size: YoutubeIconSize }) {
 
 /** The logo as a link to a connected channel on YouTube (owner 2026-10-28). The href is built here from the channel id, so the logo can
  *  only ever lead to YouTube. Named by `label` ("<channel> on YouTube", the caller's translation): the artwork itself stays hidden.
- *  Keyboard focus is the house violet-600 ring (REFUSAL_FOCUS_RING is that ring for any box that is not already a link or a button).
+ *  Keyboard focus is the house accent ring (REFUSAL_FOCUS_RING is that ring for any box that is not already a link or a button).
  *  The tap area is a 44 x 44 px `::before` centred on the icon, so it is a real target on a phone while the visible icon keeps
  *  its own size and clear space: the link itself adds no padding. */
 export function YoutubeIconLink({ channelId, label, size }: { channelId: string; label: string; size: YoutubeIconSize }) {

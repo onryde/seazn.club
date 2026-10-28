@@ -22,6 +22,7 @@ import { messages, type MessageKey } from "@/lib/messages";
 import { YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_PRIVACIES } from "@/lib/youtube";
 import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
 import { FixtureDestinationPicker, TYPEAHEAD_RESET_MS, destinationRow, type FixtureDestinationPickerProps } from "../fixture-destination-picker";
+import { compileClasses } from "./_compiled-css";
 
 const m = (k: MessageKey, vars: Record<string, string | number> = {}): string =>
   Object.entries(vars).reduce((s, [n, v]) => s.replaceAll(`{${n}}`, String(v)), messages[k] as string);
@@ -361,12 +362,12 @@ describe("the picker, driven", () => {
   // 1.04:1 against white, so neither could be told from a plain row. The indicator is an inset ring in the house accent, on the active row
   // only and whether or not it is also the selected one.
   describe("the keyboard-active row is visibly marked (I-3)", () => {
-    /** The house accent (`--ps-accent`, globals.css) — the colour the keyboard ring is drawn in everywhere else; Tailwind's violet-600. */
+    /** The house accent (`--ps-accent`, globals.css) — the colour the keyboard ring is drawn in everywhere else. */
     const ACCENT = /--ps-accent:\s*(#[0-9a-f]{6})/i.exec(readFileSync(join(__dirname, "..", "..", "..", "app", "globals.css"), "utf8"))![1]!;
     const channelOf = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16) / 255).map((c) => (c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4));
     const luminance = (hex: string) => { const [r, g, b] = channelOf(hex) as [number, number, number]; return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
     const contrast = (a: string, b: string) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number]; return (hi + 0.05) / (lo + 0.05); };
-    const RING = ["ring-2", "ring-inset", "ring-violet-600"];
+    const RING = ["ring-2", "ring-inset", "ring-accent"];
     const classesOf = (el: ReactElement) => String(attr(el, "className")).split(/\s+/);
     const ringed = (p: ReturnType<typeof mount>) => p.options().filter((o) => RING.every((t) => classesOf(o).includes(t))).map((o) => attr(o, "data-target-id"));
 
@@ -399,6 +400,19 @@ describe("the picker, driven", () => {
       }
       expect(checked, "anti-vacuity").toBe(7);
     });
+
+    // B4 fix round 2, F3: a class NAME cannot show which colour a utility paints (Tailwind's own violet-600 is rgb 127 34 254, not
+    // --ps-accent). The ACTIVE ROW's real classes, as the component renders them, are compiled and the ring colour read off the rule.
+    it("the active row's ring classes, as rendered, compile to the accent variable itself — and every one of them compiles to something", async () => {
+      const p = mount({ selectedId: "t-ok" });
+      p.key("Enter");
+      const active = p.options().find((o) => attr(o, "data-target-id") === p.activeTarget())!;
+      const ringClasses = classesOf(active).filter((c) => /^ring(-|$)/.test(c));
+      expect(ringClasses.sort(), "premise: the rendered ring is exactly the three").toEqual([...RING].sort());
+      const compiled = await compileClasses(ringClasses);
+      for (const c of ringClasses) expect(Object.keys(compiled.get(c)!).length, `${c}: an unknown utility compiles to nothing`).toBeGreaterThan(0);
+      expect(compiled.get("ring-accent")!["--tw-ring-color"], "the ring paints the accent variable, not a palette swatch").toBe("var(--ps-accent)");
+    }, 30_000);
 
     it("the ring follows a pointer too (a hover makes a row active), and a list with a different selection rings the right row", () => {
       const p = mount({ selectedId: "t-warn" });

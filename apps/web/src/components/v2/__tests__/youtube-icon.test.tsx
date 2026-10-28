@@ -169,9 +169,9 @@ describe("YoutubeIconLink: the logo, clickable, leading to YouTube (owner 2026-1
     expect(html, "the label is not a title tooltip on the artwork").not.toContain("<title");
   });
 
-  it("keyboard focus is the house violet-600 ring, drawn on the link", () => {
+  it("keyboard focus is the house accent ring, drawn on the link", () => {
     const t = tokensOf(anchorTag(link()));
-    for (const token of ["focus-visible:outline", "focus-visible:outline-2", "focus-visible:outline-offset-2", "focus-visible:outline-violet-600"]) {
+    for (const token of ["focus-visible:outline", "focus-visible:outline-2", "focus-visible:outline-offset-2", "focus-visible:outline-accent"]) {
       expect(t, token).toContain(token);
     }
   });
