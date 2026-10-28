@@ -7,6 +7,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MatchRuleFields, buildRuleOverride, rulesFor } from "./match-rules";
+import { ruleContextFor } from "@/lib/match-rules";
 import {
   STAGE_TEMPLATES,
   applyStandingsCarry,
@@ -51,7 +52,9 @@ import {
 export interface SportOption {
   key: string;
   name: string;
-  variants: { key: string; name: string; system: boolean }[];
+  /** `config` is the variant's preset (`sport_variants.config`): what the rule fields convert by where they scale a value
+   *  (cricket's overs, in the variant's over length). Absent on a variant whose row stores none. */
+  variants: { key: string; name: string; system: boolean; config?: Record<string, unknown> }[];
 }
 
 // The most common variant to preselect per sport (else the first listed).
@@ -421,8 +424,10 @@ export function DivisionBuilder({
     }
 
     // Only rules the user actually set become overrides; the rest stay on
-    // the variant's defaults.
-    const overrides = buildRuleOverride(sportKey, ruleValues);
+    // the variant's defaults. The variant's preset hands a scaled field its scale (`ruleContextFor`: cricket's overs
+    // count in the variant's over length, five on The Hundred) - and only that: no best-of or "Default" reads it.
+    const variant = sport?.variants.find((v) => v.key === variantKey);
+    const overrides = buildRuleOverride(sportKey, ruleValues, ruleContextFor(sportKey, variant?.config));
 
     setBusy(true);
     // Declared here, outside try{}, purely so the catch block below can

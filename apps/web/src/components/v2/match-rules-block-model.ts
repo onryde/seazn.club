@@ -200,7 +200,7 @@ export function hydrateMatchValues(
 ): Record<string, string> {
   const values: Record<string, string> = {};
   for (const a of allAdapted(ctx, stageResolved, labels)) {
-    const v = a.field.read?.(cfg);
+    const v = a.field.read?.(cfg, stageResolved);
     if (v !== undefined) values[a.field.key] = v;
   }
   return values;
