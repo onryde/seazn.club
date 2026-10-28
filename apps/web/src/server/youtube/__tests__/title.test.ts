@@ -70,10 +70,18 @@ describe("broadcastTitle (spec §6.5, plan P11)", () => {
     const away = pair("Benedict");
     const division = "Under-19 Mixed Doubles Elite Group";
     const t = broadcastTitle({ home, away, division, competition: "Some Cup", ...words });
-    expect(len(t)).toBeLessThanOrEqual(TITLE_MAX);
-    expect(t.startsWith(`${home} v ${away}`)).toBe(true);
+    const head = `${home} v ${away}${SEP}`;
+    expect(len(head)).toBe(92);   // 43 + " v " + 43 + " · ": eight characters left for the division
     expect(t).not.toContain("Some Cup");
     expect(t).not.toContain(division);
+    // CUT, not dropped: filled to exactly 100 (the cut lands on "Under-1", no space to drop), ending in the ellipsis, and what
+    // is kept is the division's own beginning. A dropped division would read as the 89-character match alone.
+    expect(len(t)).toBe(TITLE_MAX);
+    expect(t.startsWith(head)).toBe(true);
+    expect(t.endsWith("…")).toBe(true);
+    const kept = t.slice(head.length, -1);
+    expect(len(kept)).toBe(TITLE_MAX - len(head) - 1);
+    expect(division.startsWith(kept)).toBe(true);
   });
 
   it("a match name longer than 100 on its own is cut to 100 (the last resort)", () => {
