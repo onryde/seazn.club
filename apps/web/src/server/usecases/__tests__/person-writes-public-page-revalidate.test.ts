@@ -808,7 +808,7 @@ describe.skipIf(!HAS_DB)("a person write drops the public Redis documents naming
     const named = [
       `pub:v1:hub:${s.competition.id}`,
       `pub:v1:div:${s.division.id}:entrants-v2`,
-      `pub:v1:div:${s.division.id}:standings`,
+      `pub:v1:div:${s.division.id}:standings-v2`,
       `pub:v1:div:${s.division.id}:schedule`,
       `pub:v1:fixture:v3:${s.fixture.id}`,
       `pub:v1:fixture:v3:${lineupFixture.id}`,

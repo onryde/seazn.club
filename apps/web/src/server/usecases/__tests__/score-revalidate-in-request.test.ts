@@ -406,7 +406,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
           `pub:v1:hub:${competitionId}`,
           `pub:v1:player-matches-gen:${competitionId}`,
           `pub:v1:div:${divisionId}:schedule`,
-          `pub:v1:div:${divisionId}:standings`,
+          `pub:v1:div:${divisionId}:standings-v2`,
           `pub:v1:div:${divisionId}:entrants-v2`,
         ]),
       );
@@ -448,7 +448,7 @@ describe.skipIf(!HAS_DB)("a score lands its public-cache tags inside the request
     // Review r2-m4: the division's documents by name, where a SCAN used to be.
     const divisionKeys = [
       `pub:v1:div:${divisionId}:schedule`,
-      `pub:v1:div:${divisionId}:standings`,
+      `pub:v1:div:${divisionId}:standings-v2`,
       `pub:v1:div:${divisionId}:entrants-v2`,
     ];
     const unhandled: unknown[] = [];

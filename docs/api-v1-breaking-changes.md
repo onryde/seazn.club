@@ -43,6 +43,75 @@ export fixes of 2026-10-28. The pinning tests are
 `apps/web/src/server/usecases/__tests__/exports-standings-parity.test.ts` (a
 counted sweep of every sport against the public table, plus a read-back of the
 real XLSX cell types) and `packages/engine/src/exports/build.test.ts`.
+## 2026-10-29 — a cricket Test match's stage refuses `minOversForResult`
+
+W2e ruling 157 (Task 28). `minOversForResult` is the fewest overs the chasing
+side must have faced before a DLS par may decide an abandoned match, so only a
+DLS par reads it, and a Test match (unlimited overs, two innings) has no DLS: an
+abandoned Test is a draw at any floor. It is now settable only on the variants
+that can play DLS (`t20`, `odi`, `hundred`), the scoping `dls`, `superOver` and
+`superOverStillTied` carry in the engine's `ruleKeys`. Measured from the last
+release, v1.0.7-beta, the refusal is new for this key and for
+`superOverStillTied` alike (see the entry below): `ruleKeys`, and
+`RULE_NOT_SETTABLE` with them, came after that release, which accepted both
+keys on a Test stage. No fold changed.
+
+**What changed.**
+
+| Write path | Before | Now |
+|---|---|---|
+| `PUT /api/v1/stages/{id}/rules`, and the `rules` of a stage written with `POST` or `PUT /api/v1/divisions/{id}/stages`, on a cricket division whose variant is `test`: a body naming `minOversForResult` | 200, the key stored and never read, in the last release (v1.0.7-beta) too | 400, `error.code` `"RULE_NOT_SETTABLE"`, `error.field` `"minOversForResult"`, nothing written |
+
+The same body on a `t20`, `odi` or `hundred` division is unchanged. A value
+already stored on a Test stage is left alone and plays as before.
+
+**What replaces it.** Do not send the key for a Test match. To set the floor,
+use a limited-overs variant.
+
+**What a consumer sees.**
+
+```json
+{ "ok": false, "error": { "code": "RULE_NOT_SETTABLE", "message": "minOversForResult can't be set here — not for this stage's format.", "field": "minOversForResult" }, "requestId": "…" }
+```
+
+## 2026-10-29 — a football lineup change is judged against who is on the pitch after `football.sub`
+
+W2e M12b ("player injured, no replacement"). Football has two substitution
+vocabularies: the legacy `football.sub` and the kernel's `core.lineup.*`. A
+`core.lineup.*` event used to be judged against the team sheet plus earlier
+`core.lineup.*` events only, so a `football.sub`, a sending-off or a sin bin
+did not count. It is now judged against football's own pitch, the one the
+scoring pad shows.
+
+| Write path | Before | Now |
+|---|---|---|
+| `POST /api/v1/fixtures/{id}/events`, a football `core.lineup.retirement` naming the substitute a `football.sub` brought on (or any `core.lineup.*` event naming him as the player leaving or changing position) | 422, `error.code` `"LINEUP_INVALID"` (not on the field) | 201: he leaves the pitch |
+| The same path, naming the player a `football.sub` took off, or a player sent off or serving a sin bin | 201, and football's pitch did not move | 422, `error.code` `"LINEUP_INVALID"`, nothing written |
+| `POST /api/v1/divisions/{id}/events/import`, a stream with either event | imported / rejected, as above | the reverse: the first is imported, the second is `rejected` with `error.engineCode` `"LINEUP_INVALID"`, nothing written for its fixture |
+
+Every other sport is unchanged: their pads already substitute with
+`core.lineup.*`. Only a new write is judged this way. A replay of a ledger
+recorded before the change is not held to the new rule: a stored
+`core.lineup.*` event that the new rule would refuse is judged on replay on the
+squads the kernel had at write time (the team sheet plus the earlier
+`core.lineup.*` events), which is how it was accepted. That keeps the usual
+case readable, such as a substitute brought on for a player since sent off,
+whose later goals and cards still count. It does not make every mixed ledger
+replay as it was recorded. One order is known not to: a `football.sub`, then a
+`core.lineup.*` event that is accepted, then a `core.lineup.substitution` naming
+the player that `football.sub` took off, then a goal by the incoming player.
+Only the API can record that order (the scoring pad never does), and on replay
+the goal is refused (`INVALID_EVENT`, "not on the pitch"). A write after a
+stored event is accepted or refused on its own merits.
+
+**What replaces it.** Name a player who is on the pitch now, after every
+substitution, sending-off and sin bin recorded so far.
+
+**What a consumer sees.** A retirement of the starter a `football.sub` took off:
+
+```json
+{ "ok": false, "error": { "code": "LINEUP_INVALID", "message": "\"H-p2\" is not on the field" }, "requestId": "…" }
+```
 
 ## 2026-10-29 — a cricket test-variant stage no longer accepts `superOverStillTied`
 
@@ -56,7 +125,7 @@ is now offered only where a super over can be played: `t20`, `odi` and
 
 | Path | Before | Now |
 |---|---|---|
-| `PUT /api/v1/stages/{id}/rules`, a cricket stage of the `test` variant, `rules` carrying `superOverStillTied` | accepted and stored (nothing ever read it on a test match) | 400, `error.code` `"RULE_NOT_SETTABLE"`, `error.field` `"superOverStillTied"`, nothing written |
+| `PUT /api/v1/stages/{id}/rules`, a cricket stage of the `test` variant, `rules` carrying `superOverStillTied` | accepted and stored in the last release, v1.0.7-beta (nothing ever read it on a test match) | 400, `error.code` `"RULE_NOT_SETTABLE"`, `error.field` `"superOverStillTied"`, nothing written |
 | The same key on a `t20`, `odi` or `hundred` stage | accepted | accepted, unchanged |
 
 **What replaces it.** Nothing: a test match has no tied super over to decide.
@@ -734,6 +803,58 @@ void of it is accepted.
 
 **Background.** W2e, rule CK-CH-1 (rulebook RB2A-22, SC-C4). The pinning
 test is `packages/engine/src/sports/cricket/w2e-cricket.test.ts`.
+
+## 2026-10-28 — a standings table with no results serves `rank: null`
+
+A table in which no result has counted yet is a level table: every row has
+`level: true`, and nobody leads. Its rows used to carry the positional places
+1..n, which read as a ranking the table does not have yet. They now carry
+`rank: null`.
+
+**What changed.** Both standings routes:
+
+- `GET /api/v1/stages/{id}/standings`
+- `GET /api/v1/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/standings`
+
+Each table is judged on its own rows (a stage's, or one pool's):
+
+| Table | Before | Now |
+|---|---|---|
+| No result has counted (every row `level: true`) | `rank` 1..n on each row | `rank: null` on each row; the key is present |
+| At least one result has counted | `rank` 1..n | unchanged |
+| No rows | `rows: []` | unchanged |
+
+`rank` in the OpenAPI schema (`openapi/v1.json`, `openapi/v1.public.json`) is
+now `number | null`, and still optional.
+
+**What replaces it.** Nothing replaces the place: a level table has none. Read
+`level: true` (unchanged) or `rank: null` as "no places yet". A client that
+sorts by `rank`, or prints it, must handle `null`.
+
+**What a consumer sees.** One row of a level table:
+
+```json
+{ "entrantId": "…", "played": 0, "won": 0, "drawn": 0, "lost": 0, "points": 0, "metrics": {}, "rank": null, "level": true }
+```
+
+**Window after deploy.** The public route is sent with
+`Cache-Control: public, s-maxage=30, stale-while-revalidate=300`. A CDN or a
+browser may therefore keep serving the previous document, a level table with
+places, for up to about 330 seconds after the deploy. The server itself does not
+serve the old shape: the route nulls the rank on every read, and the Redis entry
+moved to the key `…:standings-v2`.
+
+**No data migration was required.** Only the two routes null the rank. The
+stored table keeps the places, so the web app's own pages, slideshow, share card,
+digest and PDF export, which print a dash from `level`, are unchanged.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2d (tables and tie-breaks), anti-goal 3 (no row is marked
+first on a table with no results); W2e decision D11 (b). The pinning tests are
+the `D11b` cases in `apps/web/src/server/api-v1/__tests__/w2d-api.test.ts` and
+`apps/web/src/server/engine-db/__tests__/tables-producer-consumer.test.ts`.
 
 ## 2026-10-28 — the standings export refuses a table with no results
 

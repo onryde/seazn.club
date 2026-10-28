@@ -139,7 +139,7 @@ const HUB_KEY = `pub:v1:hub:${COMPETITION}`;
  *  r2-m4), spelled out so a drift in the production spelling reds. */
 const DIVISION_KEYS = [
   `pub:v1:div:${DIVISION}:schedule`,
-  `pub:v1:div:${DIVISION}:standings`,
+  `pub:v1:div:${DIVISION}:standings-v2`,
   `pub:v1:div:${DIVISION}:entrants-v2`,
 ];
 /** Task 14 — the player page's match lines are keyed per PERSON under a

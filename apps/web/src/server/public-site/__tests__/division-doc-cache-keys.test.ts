@@ -61,7 +61,7 @@ describe("the public division documents' Redis keys", () => {
     expect([...keys.publicDivisionCacheKeys("div-1")].sort()).toEqual([
       "pub:v1:div:div-1:entrants-v2",
       "pub:v1:div:div-1:schedule",
-      "pub:v1:div:div-1:standings",
+      "pub:v1:div:div-1:standings-v2",
     ]);
   });
 

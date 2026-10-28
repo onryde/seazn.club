@@ -1450,7 +1450,7 @@ export const TieBreakNoteS = z.enum(["h2h_two_not_applicable", "h2h_incomplete"]
 /** One ranked row of a stage's table (engine `StandingsRow`). `metrics` is the sport's ledger; `won_ot`/`won_so`/
  *  `lost_ot`/`lost_so` (1, only when 1 for a match) count the wins and losses decided beyond regulation (spec §5.7).
  *  `tieBreak` names the step that split the row from the rows it was tied with (`drawnAt`: the date a stored lots draw
- *  was made, §5.8); `level` is true on every row of a table with no counted fixture. */
+ *  was made, §5.8); `level` is true on every row of a table with no counted fixture, and `rank` is then null (D11 b). */
 export const StandingsRow = z.object({
   entrantId: z.string(),
   played: z.number(),
@@ -1466,7 +1466,9 @@ export const StandingsRow = z.object({
       lost_so: z.number().optional(),
     })
     .catchall(z.number()),
-  rank: z.number().optional(),
+  /** The place, 1..n. `null` on every row of a table with no counted fixture (`level`): a level table has no leader, so the
+   *  routes serve no place (W2e D11 b, 2026-10-28). Absent when the ranking pass left none. */
+  rank: z.number().nullable().optional(),
   rankLocked: z.boolean().optional(),
   tieUnbroken: z.boolean().optional(),
   tieBreak: z

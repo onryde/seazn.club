@@ -65,7 +65,7 @@ const fixtureKey = (fixtureId: string) => `pub:v1:fixture:v3:${fixtureId}`;
  *  Spelled out, so a drift in the production spelling reds. */
 const divisionKeys = (divisionId: string) => [
   `pub:v1:div:${divisionId}:schedule`,
-  `pub:v1:div:${divisionId}:standings`,
+  `pub:v1:div:${divisionId}:standings-v2`,
   `pub:v1:div:${divisionId}:entrants-v2`,
 ];
 

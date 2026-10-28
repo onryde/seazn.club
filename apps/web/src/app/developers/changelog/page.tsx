@@ -169,6 +169,16 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   },
   {
     date: "2026-10-28",
+    title: "Breaking: a standings table with no results serves rank null",
+    lines: [
+      "GET /stages/{id}/standings and GET /public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/standings now serve rank: null on every row of a table in which no result has counted yet (level: true on every row). Before, those rows carried the positions 1..n.",
+      "Each table (a stage's, or one pool's) is judged on its own rows. A table with a counted result keeps rank 1..n, and an empty table is still an empty list. The schema's rank is now number or null, and still optional.",
+      "A client that sorts by rank or prints it must handle null. A CDN or a browser may keep the previous public document for about 330 seconds after the deploy (s-maxage 30 plus stale-while-revalidate 300).",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
     title: "Breaking: the standings export refuses a table with no results",
     lines: [
       "GET /divisions/{id}/exports/standings with no stored table now answers 404 STANDINGS_NOT_AVAILABLE (\"no standings yet\"), not 404 NOT_FOUND.",

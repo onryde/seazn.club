@@ -207,7 +207,7 @@ describe.skipIf(!HAS_DB)("admin fixture config snapshot — the public caches th
         `pub:v1:hub:${s.competitionId}`,
         `pub:v1:fixture:v3:${s.fixtureId}`,
         `pub:v1:div:${s.divisionId}:schedule`,
-        `pub:v1:div:${s.divisionId}:standings`,
+        `pub:v1:div:${s.divisionId}:standings-v2`,
         `pub:v1:div:${s.divisionId}:entrants-v2`,
       ]),
     );

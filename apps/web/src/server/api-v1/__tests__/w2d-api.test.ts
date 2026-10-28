@@ -9,7 +9,10 @@
 //                                                      POINTS_OUTCOME_UNCOVERED, POINTS_SPLIT_FLATTENED);
 //   GET /stages/{id}/standings and the public one    → rows with `won_ot`/`won_so`/`lost_ot`/`lost_so`, `tieBreak.drawnAt`,
 //                                                      `level`, validated against the documented schema;
-//   PATCH /divisions/{id}                            → `stagesKeptPinned` after activation.
+//   PATCH /divisions/{id}                            → `stagesKeptPinned` after activation;
+//   both standings endpoints (W2e Task 27, D11 b)     → `rank: null` on every row of a LEVEL table, at the route only: the
+//                                                      stored snapshot and `getStandings` keep the places 1..n (E24), the
+//                                                      public route's Redis entry is `standings-v2`.
 //
 // Carried from PR A (orchestrator rulings): N2 (a flat rule over a split sport is refused naming the split; fix round 1 I1:
 // its premise — that some flat rule pays a split sport as the sport does — is false, a retirement after play always pays
@@ -41,16 +44,51 @@ vi.mock("next/headers", () => ({
   cookies: async () => ({ get: () => undefined, set: () => {}, delete: () => {} }),
   headers: async () => new Headers(),
 }));
+// The public Redis documents, in memory (as the real client holds them: JSON text), so the public standings route is read
+// THROUGH its cache. Only `pub:v1:` keys are held; a literal DEL and a `prefix*` sweep apply the moment they are called, as
+// the score writes' invalidation does in production. `gets`/`hits` count every ask and every found entry per key.
+const redis = vi.hoisted(() => ({ docs: new Map<string, string>(), gets: new Map<string, number>(), hits: new Map<string, number>(), sets: [] as string[] }));
+vi.mock("@/lib/cache", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/cache")>();
+  const held = (key: string) => key.startsWith("pub:v1:");
+  return {
+    ...actual,
+    cacheGet: async (key: string) => {
+      if (!held(key)) return actual.cacheGet(key);
+      redis.gets.set(key, (redis.gets.get(key) ?? 0) + 1);
+      const raw = redis.docs.get(key);
+      if (raw === undefined) return null;
+      redis.hits.set(key, (redis.hits.get(key) ?? 0) + 1);
+      return JSON.parse(raw);
+    },
+    cacheSet: async (key: string, value: unknown, ttlSeconds: number) => {
+      if (!held(key)) return actual.cacheSet(key, value, ttlSeconds);
+      redis.sets.push(key);
+      redis.docs.set(key, JSON.stringify(value));
+    },
+    cacheDel: async (...keys: string[]) => {
+      const rest = keys.filter((k) => !held(k));
+      for (const key of keys) if (held(key)) redis.docs.delete(key);
+      if (rest.length > 0) await actual.cacheDel(...rest);
+    },
+    cacheDelPattern: async (pattern: string) => {
+      if (!held(pattern)) return actual.cacheDelPattern(pattern);
+      const prefix = pattern.slice(0, -1);
+      for (const key of [...redis.docs.keys()]) if (pattern.endsWith("*") && key.startsWith(prefix)) redis.docs.delete(key);
+    },
+  };
+});
 
-import { PointsRule, coverage, defaultCrossGroup, membersKeyOf, reachableOutcomes, validateCascade } from "@seazn/engine/competition";
+import { PointsRule, coverage, defaultCrossGroup, isLevelTable, membersKeyOf, rankText, reachableOutcomes, validateCascade, type StandingsRow } from "@seazn/engine/competition";
 import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql } from "@/lib/db";
 import * as S from "@/server/api-v1/schemas";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
-import { generateStageFixtures } from "@/server/usecases/stages";
+import { generateStageFixtures, getStandings } from "@/server/usecases/stages";
+import { serialiseLevelRanks } from "@/server/api-v1/level-rank";
 import { startDivision } from "@/server/usecases/schedule";
-import { between, genericResult, tableScene } from "@/server/engine-db/__tests__/helpers/w2d-table-rig";
+import { between, genericResult, seatedFixtures, tableScene } from "@/server/engine-db/__tests__/helpers/w2d-table-rig";
 import { fixtureRow, post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
 import { GENERIC_CONFIG } from "@/server/usecases/__tests__/_seed";
 import { GET as getStageRoute } from "@/app/api/v1/stages/[id]/route";
@@ -124,6 +162,64 @@ const stageConfig = async (stageId: string): Promise<Record<string, unknown>> =>
 const divisionCfg = async (divisionId: string): Promise<Record<string, unknown>> =>
   (await sql<{ config: Record<string, unknown> }[]>`select config from divisions where id = ${divisionId}`)[0]!.config;
 const sorted = (xs: readonly string[]) => [...xs].sort();
+
+// ── W2e Task 27 (spec §6.3 D11 b): rank null while a table is level, at the two route handlers only ─────────────────────
+
+/** A standings row as the wire carries it, read UNPARSED: the documented schema takes a null and an omitted rank alike. */
+interface WireRow {
+  entrantId: string;
+  rank?: number | null;
+  level?: boolean;
+}
+interface WireTable {
+  stage_id: string;
+  pool_id: string | null;
+  rows: WireRow[];
+}
+/** GET /stages/{id}/standings (a pool's table with `poolId`): the rows as served, the document checked against the schema. */
+async function stageTable(stageId: string, poolId?: string): Promise<WireRow[]> {
+  const q = poolId === undefined ? "" : `?pool_id=${poolId}`;
+  const r = await call(standingsRoute, { id: stageId }, "GET", `/stages/${stageId}/standings${q}`);
+  expect(r.status, JSON.stringify(r.error)).toBe(200);
+  S.StandingsSnapshot.parse(r.data);
+  return (r.data as { rows: WireRow[] }).rows;
+}
+/** The division's competition made public; the three slugs the public read is addressed by. */
+async function publish(divisionId: string): Promise<[string, string, string]> {
+  await sql`update competitions set visibility = 'public' where id = (select competition_id from divisions where id = ${divisionId})`;
+  const [slugs] = await sql<{ org: string; comp: string; div: string }[]>`
+    select o.slug as org, c.slug as comp, d.slug as div
+      from divisions d join competitions c on c.id = d.competition_id join organizations o on o.id = d.org_id where d.id = ${divisionId}`;
+  return [slugs!.org, slugs!.comp, slugs!.div];
+}
+/** GET …/divisions/{divisionSlug}/standings: every published table as served, the document checked against the schema. */
+async function publicTables([orgSlug, slug, divisionSlug]: readonly [string, string, string]): Promise<WireTable[]> {
+  const r = await call(publicStandingsRoute, { orgSlug, slug, divisionSlug }, "GET", `/public/orgs/${orgSlug}/competitions/${slug}/divisions/${divisionSlug}/standings`);
+  expect(r.status, JSON.stringify(r.error)).toBe(200);
+  S.PublicDivisionStandings.parse(r.data);
+  return (r.data as { standings: WireTable[] }).standings;
+}
+/** `rank` is PRESENT and null on every row (an omitted key would read the same through the schema), and the row is still
+ *  level; returns the rows checked (anti-vacuity: the caller states how many it expects). */
+function expectRankNull(rows: readonly WireRow[], expected: number, what: string): number {
+  expect(rows.length, `${what}: one row per entrant`).toBe(expected);
+  for (const r of rows) {
+    expect(Object.hasOwn(r, "rank"), `${what}: ${r.entrantId} carries the rank key`).toBe(true);
+    expect(r.rank, `${what}: ${r.entrantId}`).toBeNull();
+    expect(r.level, `${what}: ${r.entrantId} is still level`).toBe(true);
+  }
+  return rows.length;
+}
+/** The places 1..n and no level row (the ranker's positional rank, a tie included). Returns the rows checked. */
+function expectPlaces(rows: readonly WireRow[], expected: number, what: string): number {
+  expect(rows.length, `${what}: one row per entrant`).toBe(expected);
+  for (const r of rows) {
+    expect(typeof r.rank, `${what}: ${r.entrantId} keeps its place`).toBe("number");
+    expect(r.level, `${what}: ${r.entrantId} is not level`).not.toBe(true);
+  }
+  expect(rows.map((r) => r.rank as number).sort((a, b) => a - b), `${what}: the places`).toEqual(Array.from({ length: expected }, (_, i) => i + 1));
+  return rows.length;
+}
 
 // single-sport: generic is the rig's sport for the sport-blind rules below; a test whose rule belongs to one sport names that sport (and says why).
 const generic = mod("generic");
@@ -399,6 +495,185 @@ describe.skipIf(!HAS_DB)("W2d T13 the table rules over API v1 (route handlers, l
     expect([metric(X, "won_so"), metric(Z, "won_ot")], "only on the side and the way the match was decided").toEqual([undefined, undefined]);
   });
 
+  it("D11b both endpoints serve rank null on a level table: rank is present and null on every row, and the row is still level", async () => {
+    // single-sport: generic is the rig's sport; the registry sweep below covers every sport.
+    const s = as(await tableScene({ entrants: 4 }));
+    const stageId = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, stageId);
+    const own = await stageTable(stageId);
+    const pub = (await publicTables(await publish(s.divisionId))).filter((t) => t.stage_id === stageId);
+    expect(pub.map((t) => t.pool_id), "premise: one public table, the stage's own").toEqual([null]);
+    const checked = expectRankNull(own, 4, "GET /stages/{id}/standings") + expectRankNull(pub[0]!.rows, 4, "the public read");
+    expect(checked, "both endpoints, every entrant").toBe(8);
+    expect(new Set(pub[0]!.rows.map((r) => r.entrantId)), "the same rows on both").toEqual(new Set(own.map((r) => r.entrantId)));
+  });
+
+  it("D11b a decided table keeps rank 1..n on both endpoints, and the table goes level -> decided -> level again with the results entered and voided", async () => {
+    const s = as(await tableScene({ entrants: 4 }));
+    const stageId = s.stageIds[0]!;
+    const [A, B, C, D] = s.entrants as [string, string, string, string];
+    await generateStageFixtures(s.auth, stageId);
+    await startDivision(s.auth, s.divisionId);
+    const slugs = await publish(s.divisionId);
+    const both = async () => ({ own: await stageTable(stageId), pub: (await publicTables(slugs)).filter((t) => t.stage_id === stageId) });
+    let checked = 0;
+
+    // The empty case first: nothing counted, so level.
+    const empty = await both();
+    checked += expectRankNull(empty.own, 4, "before a result: own") + expectRankNull(empty.pub[0]!.rows, 4, "before a result: public");
+
+    // A result counts: the places 1..n, no row null, on both (the cached public document dropped by the score write).
+    await genericResult(s.auth, stageId, A, C, 1, 0);
+    const one = await both();
+    checked += expectPlaces(one.own, 4, "one result: own") + expectPlaces(one.pub[0]!.rows, 4, "one result: public");
+    await genericResult(s.auth, stageId, B, D, 1, 0);
+    const two = await both();
+    checked += expectPlaces(two.own, 4, "two results: own") + expectPlaces(two.pub[0]!.rows, 4, "two results: public");
+
+    // Take both results back: nothing counts again, so the table is level again and the wire says so again.
+    for (const [x, y] of [[A, C], [B, D]] as const) {
+      const f = await between(stageId, x, y);
+      const [ev] = await sql<{ id: string }[]>`select id from score_events where fixture_id = ${f.id} and type = 'generic.result'`;
+      await post(s.auth, f.id, "core.void", { event_id: ev!.id });
+    }
+    const again = await both();
+    checked += expectRankNull(again.own, 4, "both results voided: own") + expectRankNull(again.pub[0]!.rows, 4, "both results voided: public");
+    expect(checked, "four reads of each endpoint, every entrant").toBe(32);
+  });
+
+  it("D11b each table is judged on its own rows: a stage with a counted result keeps its places while the stage beside it, still level, serves null", async () => {
+    // single-sport: which tables are level is sport-blind; generic is the rig's sport.
+    const s = as(
+      await tableScene({
+        entrants: 4,
+        stages: [
+          { seq: 1, kind: "league", name: "Pool A", config: {}, progression: null },
+          { seq: 2, kind: "league", name: "Pool B", config: {}, progression: null },
+        ],
+      }),
+    );
+    const [a, b] = s.stageIds as [string, string];
+    await generateStageFixtures(s.auth, a);
+    await generateStageFixtures(s.auth, b);
+    await startDivision(s.auth, s.divisionId);
+    await genericResult(s.auth, a, s.entrants[0]!, s.entrants[2]!, 1, 0);
+    const pub = await publicTables(await publish(s.divisionId));
+    expect(pub.map((t) => t.stage_id).sort(), "premise: both stages publish a table").toEqual([a, b].sort());
+    const of = (stageId: string) => pub.find((t) => t.stage_id === stageId)!.rows;
+    const checked =
+      expectPlaces(await stageTable(a), 4, "the stage with a result: own") +
+      expectPlaces(of(a), 4, "the stage with a result: public") +
+      expectRankNull(await stageTable(b), 4, "the level stage: own") +
+      expectRankNull(of(b), 4, "the level stage: public");
+    expect(checked, "two stages of four on both endpoints").toBe(16);
+  });
+
+  it("D11b an empty pool table stays an empty list (no rows is no table, never a level one) beside a played pool that keeps its places", async () => {
+    // single-sport: pools are a group-stage seam, sport-blind; generic is the rig's sport.
+    const s = as(await tableScene({ entrants: 4, stages: { seq: 1, kind: "group", name: "Groups", config: { pools: { count: 2 } } } }));
+    const stageId = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, stageId);
+    await startDivision(s.auth, s.divisionId);
+    const fixtures = await seatedFixtures(stageId);
+    expect(fixtures, "rig: two pools of two, one match each").toHaveLength(2);
+    const played = fixtures[0]!;
+    await genericResult(s.auth, stageId, played.home, played.away, 3, 1);
+    const stored = await sql<{ pool_id: string; rows: { entrantId: string }[] }[]>`
+      select pool_id, rows from standings_snapshots where stage_id = ${stageId} and pool_id is not null`;
+    expect(stored, "premise: one stored table per pool").toHaveLength(2);
+    const playedPool = stored.find((t) => t.rows.some((r) => r.entrantId === played.home))!;
+    const idlePool = stored.find((t) => t !== playedPool)!;
+    expect(idlePool.rows, "premise: the pool with no counted fixture stores no rows at all").toEqual([]);
+
+    const pub = (await publicTables(await publish(s.divisionId))).filter((t) => t.stage_id === stageId);
+    const poolTable = (poolId: string) => pub.filter((t) => t.pool_id === poolId);
+    expect([poolTable(playedPool.pool_id).length, poolTable(idlePool.pool_id).length], "one public table per pool").toEqual([1, 1]);
+    expect(expectPlaces(await stageTable(stageId, playedPool.pool_id), 2, "the played pool: own") + expectPlaces(poolTable(playedPool.pool_id)[0]!.rows, 2, "the played pool: public")).toBe(4);
+    expect(await stageTable(stageId, idlePool.pool_id), "the idle pool: own").toEqual([]);
+    expect(poolTable(idlePool.pool_id)[0]!.rows, "the idle pool: public").toEqual([]);
+  });
+
+  it("D11b every sport's level table serves rank null on both endpoints (registry sweep, a generated stage per sport)", async () => {
+    let sports = 0;
+    let rows = 0;
+    for (const m of builtinModules) {
+      const variant = Object.keys(m.variants)[0]!;
+      const s = as(await tableScene({ sport: m.key, variant, entrants: 3 }));
+      const stageId = s.stageIds[0]!;
+      await generateStageFixtures(s.auth, stageId);
+      rows += expectRankNull(await stageTable(stageId), 3, `${m.key}: own`);
+      const pub = (await publicTables(await publish(s.divisionId))).filter((t) => t.stage_id === stageId);
+      expect(pub, `${m.key}: one public table`).toHaveLength(1);
+      rows += expectRankNull(pub[0]!.rows, 3, `${m.key}: public`);
+      sports++;
+    }
+    expect(sports, "every registered sport swept").toBe(builtinModules.length);
+    expect(sports, "premise: the registry is not one sport").toBeGreaterThan(1);
+    expect(rows, "three entrants on two endpoints per sport").toBe(sports * 6);
+  }, 300_000);
+
+  it("D11b the public route serves the new shape through the cache: read twice, held under standings-v2, the old key never asked, a storage-shaped entry served null", async () => {
+    const s = as(await tableScene({ entrants: 3 }));
+    const stageId = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, stageId);
+    const slugs = await publish(s.divisionId);
+    const OLD = `pub:v1:div:${s.divisionId}:standings`;
+    const NEW = `pub:v1:div:${s.divisionId}:standings-v2`;
+    // The previous build's entry, left under the key this build used to read: it must never be served.
+    redis.docs.set(OLD, JSON.stringify({ division_id: s.divisionId, standings: [{ stage_id: stageId, pool_id: null, rows: [], updated_at: "previous-build" }] }));
+    redis.docs.delete(NEW);
+    const setsBefore = redis.sets.filter((k) => k === NEW).length;
+
+    const first = await publicTables(slugs);
+    expect(redis.sets.filter((k) => k === NEW).length - setsBefore, "the first read missed and filled the new key, once").toBe(1);
+    expect(redis.hits.get(NEW) ?? 0, "premise: the first read was a miss").toBe(0);
+    const cached = JSON.parse(redis.docs.get(NEW)!) as { standings: { rows: { rank?: number | null }[] }[] };
+    expect(cached.standings.flatMap((t) => t.rows).every((r) => typeof r.rank === "number"), "premise: the held entry is the stored shape (E24: only the routes null)").toBe(true);
+
+    const second = await publicTables(slugs);
+    expect(redis.hits.get(NEW), "the second read was a hit on the new key").toBe(1);
+    expect(redis.sets.filter((k) => k === NEW).length - setsBefore, "and filled nothing more").toBe(1);
+    expect(second, "a hit serves what the miss did").toEqual(first);
+    const mine = (t: WireTable[]) => t.filter((x) => x.stage_id === stageId);
+    expect(expectRankNull(mine(first)[0]!.rows, 3, "the miss") + expectRankNull(mine(second)[0]!.rows, 3, "the hit")).toBe(6);
+    expect(redis.gets.get(OLD), "the old key is never asked for").toBeUndefined();
+    expect(first.map((t) => t.stage_id), "the real table, not the old key's entry").toEqual([stageId]);
+
+    // The write that drops the entry (a score) drops the new key, and the next read is level -> decided: the places.
+    await startDivision(s.auth, s.divisionId);
+    const [A, B] = s.entrants as [string, string, string];
+    await genericResult(s.auth, stageId, A, B, 1, 0);
+    expect(redis.docs.has(NEW), "a score write dropped the new key by name").toBe(false);
+    expectPlaces(mine(await publicTables(slugs))[0]!.rows, 3, "after a result");
+  });
+
+  it("D11b getStandings still returns rank 1..n for a level table, and the stored snapshot keeps them: the dash comes from level, never from a null rank", async () => {
+    const s = as(await tableScene({ entrants: 4 }));
+    const stageId = s.stageIds[0]!;
+    await generateStageFixtures(s.auth, stageId);
+    const rows = (await getStandings(s.auth, stageId)).rows as StandingsRow[];
+    expect(rows.length, "one row per entrant").toBe(4);
+    expect(rows.map((r) => r.rank).sort(), "the usecase keeps the places 1..n").toEqual([1, 2, 3, 4]);
+    expect(rows.every((r) => r.level === true), "premise: the table is level").toBe(true);
+    // rankText consumers (PDF export, slideshow, OG card, digest) print the dash from `level`, with the rank still a number.
+    // The dash is the spec's en dash (§5.7), typed here.
+    expect(isLevelTable(rows), "the engine reads the usecase's rows as level").toBe(true);
+    expect(rows.map((r) => rankText(r, isLevelTable(rows)))).toEqual(["–", "–", "–", "–"]);
+    // The stored snapshot, and the public view over it, are untouched: only the two route handlers null.
+    const [stored] = await sql<{ rows: { rank?: number | null }[] }[]>`select rows from standings_snapshots where stage_id = ${stageId} and pool_id is null`;
+    expect(stored!.rows.map((r) => r.rank).sort(), "the stored snapshot").toEqual([1, 2, 3, 4]);
+    await publish(s.divisionId);
+    const [view] = await sql<{ rows: { rank?: number | null }[] }[]>`select rows from public_standings_v where stage_id = ${stageId} and pool_id is null`;
+    expect(view!.rows.map((r) => r.rank).sort(), "public_standings_v").toEqual([1, 2, 3, 4]);
+    // Once a result counts the same consumers print the place.
+    await startDivision(s.auth, s.divisionId);
+    const [A, B] = s.entrants as [string, string, string, string];
+    await genericResult(s.auth, stageId, A, B, 1, 0);
+    const decided = (await getStandings(s.auth, stageId)).rows as StandingsRow[];
+    expect(isLevelTable(decided)).toBe(false);
+    expect(decided.map((r) => rankText(r, isLevelTable(decided))).sort()).toEqual(["1", "2", "3", "4"]);
+  });
+
   it("PATCH division tiebreakers after activation → 200 with stagesKeptPinned naming the stage", async () => {
     const s = as(
       await tableScene({
@@ -621,5 +896,82 @@ describe("W2d T13 the documented standings row and the retired code", () => {
     // The scan is not blind: the code it looks for is found where it is still documented as retired.
     const seen = execFileSync("git", ["grep", "-a", "-l", "-F", code, "--", "docs/superpowers/specs/2026-10-20-format-matrix-w2d-design.md"], { cwd: REPO, encoding: "utf8" });
     expect(seen.trim()).toBe("docs/superpowers/specs/2026-10-20-format-matrix-w2d-design.md");
+  });
+});
+
+// ── The serialiser itself (pure) ────────────────────────────────────────────────────────────────────────────────────────
+
+describe("D11b serialiseLevelRanks (W2e Task 27)", () => {
+  type Row = { entrantId: string; rank?: number; level?: boolean; points?: number };
+  const row = (entrantId: string, o: Partial<Row> = {}): Row => ({ entrantId, points: 0, ...o });
+
+  it("D11b nulls every rank of a level table, keeps every other field, and leaves its input alone", () => {
+    const input = Object.freeze([row("a", { rank: 1, level: true }), row("b", { rank: 2, level: true }), row("c", { level: true })]);
+    const out = serialiseLevelRanks(input);
+    expect(out, "every row, in order, rank present and null").toEqual([
+      { entrantId: "a", points: 0, rank: null, level: true },
+      { entrantId: "b", points: 0, rank: null, level: true },
+      { entrantId: "c", points: 0, rank: null, level: true },
+    ]);
+    for (const r of out) expect(Object.hasOwn(r, "rank"), "a row with no stored rank gets the key too").toBe(true);
+    expect(input.map((r) => r.rank), "the input is not mutated").toEqual([1, 2, undefined]);
+  });
+
+  it("D11b leaves a table with any counted row alone, byte for byte: mixed, none level, and no level field at all", () => {
+    const tables: [string, Row[]][] = [
+      ["one row not level", [row("a", { rank: 1, level: true }), row("b", { rank: 2 })]],
+      ["level false on a row", [row("a", { rank: 1, level: true }), row("b", { rank: 2, level: false })]],
+      ["no level field", [row("a", { rank: 1 }), row("b", { rank: 2 })]],
+    ];
+    let checked = 0;
+    for (const [what, rows] of tables) {
+      const before = JSON.stringify(rows);
+      const out = serialiseLevelRanks(rows);
+      expect(JSON.stringify(out), what).toBe(before);
+      expect(out.map((r) => r.rank).every((r) => typeof r === "number"), `${what}: the places stay`).toBe(true);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("D11b the documented row takes rank null, a number or none, and nothing else, in the schema and in both generated JSONs", () => {
+    const row = { entrantId: "a", played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, level: true };
+    expect(S.StandingsRow.safeParse({ ...row, rank: null }).success, "null").toBe(true);
+    expect(S.StandingsRow.safeParse({ ...row, rank: 3 }).success, "a place").toBe(true);
+    expect(S.StandingsRow.safeParse(row).success, "none").toBe(true);
+    expect(S.StandingsRow.safeParse({ ...row, rank: "1" }).success, "a string").toBe(false);
+    // Both generated documents say so for both operations: every `rank` property under the 200 response admits null.
+    const nullable = (schema: unknown): boolean => JSON.stringify(schema).includes('"type":"null"');
+    const ranks = (node: unknown): unknown[] => {
+      if (node === null || typeof node !== "object") return [];
+      const found: unknown[] = [];
+      for (const [k, v] of Object.entries(node)) {
+        if (k === "properties" && v !== null && typeof v === "object" && "rank" in v) found.push((v as { rank: unknown }).rank);
+        found.push(...ranks(v));
+      }
+      return found;
+    };
+    let checked = 0;
+    for (const file of ["v1.json", "v1.public.json"]) {
+      const doc = JSON.parse(readFileSync(join(REPO, "openapi", file), "utf8")) as { paths: Record<string, { get?: { responses: Record<string, unknown> } }> };
+      for (const path of ["/api/v1/stages/{id}/standings", "/api/v1/public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/standings"]) {
+        const found = ranks(doc.paths[path]?.get?.responses["200"]);
+        expect(found.length, `${file} ${path}: the 200 response documents rank`).toBeGreaterThan(0);
+        for (const schema of found) {
+          expect(nullable(schema), `${file} ${path}: rank admits null (${JSON.stringify(schema)})`).toBe(true);
+          checked++;
+        }
+      }
+    }
+    expect(checked, "four documented ranks (two operations in two documents)").toBeGreaterThanOrEqual(4);
+  });
+
+  it("D11b no rows is no table: an empty list stays empty (never a level one)", () => {
+    expect(serialiseLevelRanks([])).toEqual([]);
+  });
+
+  it("D11b a second call changes nothing more (null stays null)", () => {
+    const once = serialiseLevelRanks([row("a", { rank: 1, level: true }), row("b", { rank: 2, level: true })]);
+    expect(serialiseLevelRanks(once as never)).toEqual(once);
   });
 });

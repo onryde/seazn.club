@@ -195,7 +195,7 @@ describe.skipIf(!HAS_DB)("patchDivision — a name-policy change expires the org
     const named = [
       `pub:v1:hub:${competitionId}`,
       `pub:v1:div:${adult.id}:entrants-v2`,
-      `pub:v1:div:${adult.id}:standings`,
+      `pub:v1:div:${adult.id}:standings-v2`,
       ...fixtures.map((f) => `pub:v1:fixture:v3:${f.id}`),
     ];
     const unrelated = [`pub:v1:div:${other.id}:entrants-v2`, `pub:v1:fixture:v3:00000000-0000-4000-8000-000000000000`];
@@ -217,7 +217,7 @@ describe.skipIf(!HAS_DB)("patchDivision — a name-policy change expires the org
     const named = [
       `pub:v1:hub:${competitionId}`,
       `pub:v1:div:${adult.id}:entrants-v2`,
-      `pub:v1:div:${adult.id}:standings`,
+      `pub:v1:div:${adult.id}:standings-v2`,
       `pub:v1:div:${adult.id}:schedule`,
     ];
     redis.clear();
@@ -277,7 +277,7 @@ describe.skipIf(!HAS_DB)("patchDivision — a show_seeds change expires the divi
   const tagsOf = (calls: FlushCall[]) => calls.flatMap((c) => c.tags).sort();
   const docsOf = (divisionId: string) => [
     `pub:v1:div:${divisionId}:entrants-v2`,
-    `pub:v1:div:${divisionId}:standings`,
+    `pub:v1:div:${divisionId}:standings-v2`,
     `pub:v1:div:${divisionId}:schedule`,
   ];
 
