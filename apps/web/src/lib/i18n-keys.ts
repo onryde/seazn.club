@@ -7593,6 +7593,7 @@ export type DictionaryKey =
   | "stream.phoneLine.phone"
   | "stream.replay.copied"
   | "stream.replay.copy"
+  | "stream.replay.latestSession"
   | "stream.replay.times"
   | "stream.replay.timesOpen"
   | "stream.restart.used"

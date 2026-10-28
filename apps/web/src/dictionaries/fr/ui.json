@@ -6001,6 +6001,7 @@
   "stream.phone.replay": "Voir le replay",
   "stream.replay.times": "{start} à {end}",
   "stream.replay.timesOpen": "Commencé à {start}",
+  "stream.replay.latestSession": "Dernière session : {times}",
   "stream.replay.copy": "Copier le lien",
   "stream.replay.copied": "Lien copié",
   "stream.phone.again": "En lancer une autre",

@@ -2571,9 +2571,14 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
               <div data-testid="stream-replay-row" className="min-w-0 space-y-2 rounded-lg border border-slate-200 p-3">
                 {p.view.startedAt !== null && (
                   <p data-testid="stream-replay-times" className="text-sm text-slate-700">
-                    {p.view.endedAt
-                      ? msg("stream.replay.times", { start: fmtTime(p.tz, p.view.startedAt), end: fmtTime(p.tz, p.view.endedAt) })
-                      : msg("stream.replay.timesOpen", { start: fmtTime(p.tz, p.view.startedAt) })}
+                    {(() => {
+                      const when = p.view.endedAt
+                        ? msg("stream.replay.times", { start: fmtTime(p.tz, p.view.startedAt), end: fmtTime(p.tz, p.view.endedAt) })
+                        : msg("stream.replay.timesOpen", { start: fmtTime(p.tz, p.view.startedAt) });
+                      // These are the LATEST session's times (the view is the last session's). Beside one replay that is just when the
+                      // match ran; beside several parts it would read as the whole match's, so it says what it is.
+                      return parts.length > 1 ? msg("stream.replay.latestSession", { times: when }) : when;
+                    })()}
                   </p>
                 )}
                 {rows.map((row) => (
@@ -2594,7 +2599,9 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                       >
                         {/* The mark follows the LINK, not the destination: a club's own stream_url is never overwritten with YouTube's. */}
                         {isYoutubeUrl(row.url) && <YoutubeIcon size="sm" />}
-                        {msg("stream.phone.replay")}
+                        {/* Told apart by words as well as by the mark: beside the match's replay parts, the club's own link says what it is
+                            (its existing "Your stream link" copy) instead of a second "Watch replay". With no parts it is the row it always was. */}
+                        {row.partNo === null && parts.length > 0 ? msg("stream.url.label") : msg("stream.phone.replay")}
                       </a>
                       <ReplayCopyButton url={row.url} />
                     </div>

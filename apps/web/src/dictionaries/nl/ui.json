@@ -6001,6 +6001,7 @@
   "stream.phone.replay": "Herhaling bekijken",
   "stream.replay.times": "{start} tot {end}",
   "stream.replay.timesOpen": "Begonnen om {start}",
+  "stream.replay.latestSession": "Laatste sessie: {times}",
   "stream.replay.copy": "Link kopiëren",
   "stream.replay.copied": "Link gekopieerd",
   "stream.phone.again": "Nog een starten",
