@@ -675,7 +675,7 @@ test.describe("goals: football, hockey, ice hockey, best third", () => {
     ], "hockey FIH shoot-out");
   });
 
-  test("hockey, FIH default with a stage shoot-out: the Pro League chip, then a shoot-out bonus of 2, saved as the stage's own points pay the shoot-out winner 3 and its loser 1 (the sport's rule pays 2/1)", async ({ page, request, browser }) => {
+  test("hockey, FIH default with a stage shoot-out: no Pro League chip (it pays what the sport's rule pays); a shoot-out bonus of 2 saved as the stage's own points offers the chip and pays the shoot-out winner 3 and its loser 1 (the sport's rule pays 2/1)", async ({ page, request, browser }) => {
     test.setTimeout(budget({ taps: 0, api: 30, publicReads: 1 }));
     const HK = mod("hockey");
     // The stage's own match rules turn the shoot-out on (the format the `fih-shootout` variant declares, read through the
@@ -701,20 +701,24 @@ test.describe("goals: football, hockey, ice hockey, best third", () => {
     const ownWinner = preset.draw! + OWN_BONUS;
     expect(ownWinner, "premise: the stage's own rule pays the shoot-out winner other than the sport's rule").not.toBe(sportWinner);
     expect(preset.draw! + (preset.soBonus ?? B2_ABSENT_BONUS), "the Pro League chip ALONE pays what the sport's rule pays (no differential), so the bonus is typed over it").toBe(sportWinner);
+    // The boxes open on the sport's rule, so the own rule is the sport's 3/1/0 with the bonus typed over it.
+    expect({ win: sport.win.regulation, draw: sport.draw, loss: sport.loss.regulation }, "premise: FIH's default pays Pro League's 3/1/0").toEqual({ win: preset.win.regulation, draw: preset.draw, loss: preset.loss.regulation });
     const want: Partial<RuleLike> = { win: { regulation: preset.win.regulation }, loss: { regulation: preset.loss.regulation }, draw: preset.draw!, soBonus: OWN_BONUS, shootoutAs: "draw_plus_bonus" };
     await savePoints(page, request, r, stageId, async (section) => {
-      const chip = section.getByTestId("stage-points-preset-pro_league");
       const bonus = section.getByTestId("stage-points-so-bonus");
-      // Before the click the boxes hold the sport's rule (no bonus declared), so the chip is not pressed and the bonus
-      // box is empty: the click is what moves both.
-      await expect(chip, "before the click the Pro League chip is not pressed").toHaveAttribute("aria-pressed", "false");
-      await expect(bonus, "before the click the bonus box holds the sport's rule: none").toHaveValue("");
-      await chip.click();
-      await expect(chip, "the Pro League chip fills the boxes").toHaveAttribute("aria-pressed", "true");
-      await expect(bonus, "the chip's shoot-out bonus, as the preset declares it").toHaveValue(String(preset.soBonus));
+      // W2d final review m5: the chip pays what the stage plays on every outcome it reaches (the premise above), so a
+      // click would change nothing and it is not offered. The bonus box holds the sport's rule: none declared.
+      await expect(bonus, "the editor is open: the bonus box holds the sport's rule, none").toHaveValue("");
+      await expect(section.getByTestId("stage-points-preset-pro_league"), "the Pro League chip changes nothing here, so it is not offered").toHaveCount(0);
       await bonus.fill(String(OWN_BONUS));
-      await expect(chip, "a bonus typed over the chip is the stage's own rule, no longer the preset").toHaveAttribute("aria-pressed", "false");
+      await expect(section.getByTestId("stage-points-preset-pro_league"), "the chip is weighed against what the stage plays, not the boxes being typed").toHaveCount(0);
     }, want);
+    // Saved, the stage plays its own bonus of 2. The chip would now pay the shoot-out winner 2 rather than 3, so it is
+    // offered, not pressed.
+    await page.reload({ waitUntil: "load" });
+    const saved = page.getByTestId(`stage-points-${stageId}`);
+    await expect(saved, "the pending stage's editor").toHaveAttribute("data-stage-points-state", "editor", { timeout: STEP_MS });
+    await expect(saved.getByTestId("stage-points-preset-pro_league"), "the own bonus differs from the chip's: it is offered, not pressed").toHaveAttribute("aria-pressed", "false", { timeout: STEP_MS });
     const fixtures = await generateAndStart(request, r, stageId, HK.defaultTiebreakers("league", merged as never), "sport");
     await expectOwnPointsPinned(request, stageId, want);
     const [A, B, C] = r.field as [Who, Who, Who];

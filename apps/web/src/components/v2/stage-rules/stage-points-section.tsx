@@ -47,6 +47,7 @@ import {
   pointsPresets,
   pointsRows,
   presetActive,
+  presetOffered,
   previewClauses,
   ruleFromDraft,
   stagePointsContext,
@@ -340,7 +341,8 @@ export function StagePointsSection({
   const dirty = draftIsDirty(module, draft, inForce);
   const previewText = preview(draft);
   const reaches = offersWalkoverScore(module);
-  const presets = pointsPresets(module, kind);
+  // m5: a chip that pays what the stage plays on every outcome it can reach changes nothing, so it is not offered.
+  const presets = pointsPresets(module, kind).filter((p) => presetOffered(module, ctx, playing, draft, p.rule));
   // The rows' shape (which are shown) is the draft's rule where it is one, else what the stage plays: the draft never
   // changes a rule's shape except through a preset, which is always a rule.
   const editRows = pointsRows(ctx.reachable, built.ok && built.rule !== null ? built.rule : playing);
