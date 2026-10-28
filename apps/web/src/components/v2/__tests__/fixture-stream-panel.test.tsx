@@ -70,7 +70,8 @@ import { STREAM_TARGET_TABLE, STREAM_TARGET_TABLE_ROWS, rowName } from "@/lib/__
 import { PlatformMark, platformName } from "@/components/v2/stream-platform-mark";
 import { FixtureDestinationPicker, type FixtureDestinationPickerProps } from "@/components/v2/fixture-destination-picker";
 import { ReplayCopyButton } from "@/components/v2/stream-replay-copy";
-import { STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_REFUSAL_CODES } from "@/lib/youtube";
+import { STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES } from "@/lib/youtube";
+import { FocusFirstAction } from "@/components/v2/refusal-focus";
 import { D3Warning, PhoneStripView, SignalChain } from "@/components/v2/stream-signal-chain";
 import QRCode from "qrcode";
 import { SeaznQrImage, SeaznQrPlaceholder } from "@/components/v2/seazn-qr-image";
@@ -4800,6 +4801,222 @@ describe("PhoneTab — fetch, poll, reveal and every action, through the real v1
       expect(lazySheet(island.tree())).toBeUndefined();
     });
   });
+
+  // ─── YouTube Connect T12 fix round 1 (I1, I2): a YouTube refusal THROUGH THE CONTAINER ─────────────────────────────────────────────
+  // The static-body tests above hand the body a `createError`; none of them can see the wiring that SETS it, CLEARS it, or re-opens the
+  // picker — those are `PhoneTab`'s closures, and a green body suite is blind to a dropped clause in them (the reviewer's M1/M2/M3/M7
+  // all survived). Here the refusal arrives as the REAL `ApiV1Error` the transport throws, the way `apiV1` raises one off the wire.
+  describe("T12 fix round 1: a YouTube refusal through the container — in off the wire, and every way out of it", () => {
+    const ytView = (over: Partial<NonNullable<StreamTarget["youtube"]>> = {}): NonNullable<StreamTarget["youtube"]> => ({
+      connectionId: "c-1", channelTitle: "Club", privacy: "unlisted", madeForKids: false, status: "connected", liveState: "enabled", termsOutdated: false, openBroadcasts: 0, ...over,
+    });
+    /** `t1` as an API-backed YouTube destination (the shared TARGETS' `t1` carries no connection), then the twitch `t2`. */
+    const channelList = (y: Partial<NonNullable<StreamTarget["youtube"]>> = {}): StreamTarget[] => [{ ...TARGETS[0]!, youtube: ytView(y) }, TARGETS[1]!];
+    /** Go live refused as the server's `youtubeRefusal` / the route's error mapper put it on the wire (the real status per code). */
+    const WIRE_STATUS: Record<(typeof YOUTUBE_REFUSAL_CODES)[number], number> = {
+      youtube_reconnect_needed: 409, youtube_live_not_enabled: 409, youtube_live_blocked: 409, youtube_limit_reached: 429, youtube_channel_busy: 409, youtube_unavailable: 503,
+    };
+    const refuse = (code: string, status = 409) => () => { throw new ApiV1Error(`YouTube refused Go live: ${code}`, status, code, { connectionId: "c-1" }); };
+    const treeOf = (island: { tree: () => ReactElement[] }) => walk(expandWithHooks(PhoneTabBody, bodyOf(island)));
+    /** Select `t1`, ask Go live, let the refusal land. */
+    const refusedAt = async (s: Server, island: { tree: () => ReactElement[] }, code: string, status?: number) => {
+      bodyOf(island).onSelectTarget("t1");
+      s.create = refuse(code, status);
+      bodyOf(island).onGoLive();
+      await settle();
+    };
+    const ONE_LIVE = () => session({ state: "live", startedAt: "2026-09-14T11:50:00.000Z" });
+
+    it("(a) each of the six refusals off the real wire draws the block with ITS code, replaces Go live, and leaves the picker red — never the raw code", async () => {
+      let checked = 0;
+      for (const code of YOUTUBE_REFUSAL_CODES) {
+        const s = serve({ current: null, targets: channelList() });
+        const island = await mount(s);
+        await refusedAt(s, island, code, WIRE_STATUS[code]);
+        expect(bodyOf(island).createError, `${code}: the container recorded the wire code and no holder`).toEqual({ code, holder: null });
+        const t = treeOf(island);
+        expect(attr(byTestId(t, "stream-youtube-refusal")!, "data-code"), `${code}: the block`).toBe(code);
+        expect(byTestId(t, "stream-go-live"), `${code}: Go live is replaced`).toBeUndefined();
+        expect(textAt(t, "stream-create-error"), `${code}: its sentence`).toBe(m(`stream.error.${code}` as MessageKey, { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL }));
+        expect(JSON.stringify(t.map((el) => textOf(el))), `${code}: the raw code is never on screen`).not.toContain("youtube_");
+        expect(propsOf(t.find((el) => el.type === FixtureDestinationPicker)!).invalid, `${code}: the field is red`).toBe(true);
+        island.unmount();
+        checked++;
+      }
+      expect(checked, "anti-vacuity: all six").toBe(YOUTUBE_REFUSAL_CODES.length);
+    });
+
+    it("(a) the positive pair: a youtube_* code the six do not declare reads as the generic line — no block, Go live still there", async () => {
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "youtube_made_up", 409);
+      expect(bodyOf(island).createError).toEqual({ code: "unknown", holder: null });
+      const t = treeOf(island);
+      expect(byTestId(t, "stream-youtube-refusal")).toBeUndefined();
+      expect(byTestId(t, "stream-go-live"), "Go live stays").toBeDefined();
+      expect(textAt(t, "stream-create-error")).toBe(m("stream.error.unknown"));
+    });
+
+    it("(b) 'Use another destination' clears the refusal AND asks the picker to open — once per tap (the signal 0 -> 1 -> 2), so a second refusal opens it again", async () => {
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      expect(bodyOf(island).pickerOpenSignal, "premise: nothing has asked it to open").toBe(0);
+      await refusedAt(s, island, "youtube_live_blocked");
+      expect(bodyOf(island).createError?.code).toBe("youtube_live_blocked");
+      bodyOf(island).onPickAnother();
+      await settle();
+      expect(bodyOf(island).createError, "the refusal went with the tap").toBeNull();
+      expect(bodyOf(island).pickerOpenSignal, "the first tap").toBe(1);
+      expect(byTestId(treeOf(island), "stream-youtube-refusal"), "the block is gone").toBeUndefined();
+      expect(byTestId(treeOf(island), "stream-go-live"), "…and Go live is back").toBeDefined();
+      // A second refusal, a second tap: the signal MOVES AGAIN (a flag that stayed true would open the picker once and never again).
+      bodyOf(island).onGoLive();
+      await settle();
+      expect(bodyOf(island).createError?.code, "refused again").toBe("youtube_live_blocked");
+      bodyOf(island).onPickAnother();
+      await settle();
+      expect(bodyOf(island).createError).toBeNull();
+      expect(bodyOf(island).pickerOpenSignal, "the second tap").toBe(2);
+      expect(bodyOf(island).selectedTargetId, "opening the picker picks nothing — the choice stays until the organiser changes it").toBe("t1");
+    });
+
+    it("(c) picking a destination clears a YouTube refusal (all six) — but a refusal about something else (storage) is NOT the pick's to clear", async () => {
+      let checked = 0;
+      for (const code of YOUTUBE_REFUSAL_CODES) {
+        const s = serve({ current: null, targets: channelList() });
+        const island = await mount(s);
+        await refusedAt(s, island, code, WIRE_STATUS[code]);
+        expect(bodyOf(island).createError?.code, `${code}: premise — refused`).toBe(code);
+        bodyOf(island).onSelectTarget("t2");
+        await settle();
+        expect(bodyOf(island).createError, `${code}: the pick answers it`).toBeNull();
+        expect(bodyOf(island).selectedTargetId).toBe("t2");
+        island.unmount();
+        checked++;
+      }
+      expect(checked, "anti-vacuity: all six").toBe(YOUTUBE_REFUSAL_CODES.length);
+      // The negative pair: a storage refusal outlives a pick (it is about the venue's storage, not the destination).
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "storage_exhausted", 503);
+      expect(bodyOf(island).createError?.code, "premise: a non-YouTube refusal").toBe("storage_exhausted");
+      bodyOf(island).onSelectTarget("t2");
+      await settle();
+      expect(bodyOf(island).createError?.code, "kept: the pick said nothing about storage").toBe("storage_exhausted");
+    });
+
+    it("(c) a pick that clears a refusal is also ONE save — the PUT carries the chosen id; the refusal does not make the pick forget to write", async () => {
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "youtube_unavailable", 503);
+      const puts = () => apiV1.mock.calls.filter(([url, o]) => `${o?.method ?? "GET"} ${url}` === SETTINGS);
+      expect(puts(), "premise: the first pick (t1) saved once").toHaveLength(1);
+      expect(puts()[0]![1]?.json).toEqual({ targetId: "t1" });
+      expect(bodyOf(island).createError?.code).toBe("youtube_unavailable");
+      bodyOf(island).onSelectTarget("t2");
+      await settle();
+      expect(puts(), "the second pick saved once more").toHaveLength(2);
+      expect(puts()[1]![1]?.json).toEqual({ targetId: "t2" });
+      expect(bodyOf(island).createError).toBeNull();
+    });
+
+    it("(d) a refusal that is still held when a session is up (the phone's own start won the race) keeps its generic line on the live card — no block, and the sentence is still said", async () => {
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "youtube_unavailable", 503);
+      expect(byTestId(treeOf(island), "stream-youtube-refusal"), "premise: the block is up at Ready").toBeDefined();
+      s.current = ONE_LIVE();
+      await vi.advanceTimersByTimeAsync(STREAM_POLL_MS);
+      await settle();
+      expect(bodyOf(island).view?.state, "premise: the card is live now").toBe("live");
+      expect(bodyOf(island).createError?.code, "the refusal is still held").toBe("youtube_unavailable");
+      const t = treeOf(island);
+      expect(byTestId(t, "stream-youtube-refusal"), "no block over a live card").toBeUndefined();
+      expect(byTestId(t, "stream-youtube-retry")).toBeUndefined();
+      expect(allTestIds(t, "stream-create-error"), "the sentence is said once, at the foot").toHaveLength(1);
+      expect(textAt(t, "stream-create-error")).toBe(m("stream.error.youtube_unavailable"));
+    });
+
+    // ─── I2: the refusal outlives its cause unless a fresh read clears it ─────────────────────────────────────────────────────────────
+    // The organiser's real round trip: Go live is refused ("reconnect YouTube"), they open the Streaming page in a NEW tab (the link has
+    // target=_blank), reconnect, and come back. The panel never remounts, so ONLY the tab-return re-read can tell the block it is stale.
+    it("I2: a dead-grant refusal is cleared by the tab return that finds the channel CONNECTED (Go live is back) and kept while it still reads reconnect_needed", async () => {
+      const { doc, win } = stubPage();
+      // The server's own order: the refusal MARKS the connection reconnect_needed, so the list the next read serves says so.
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "youtube_reconnect_needed");
+      s.targets = channelList({ status: "reconnect_needed", liveState: "unknown" });
+      doc.dispatchEvent(new Event("visibilitychange"));
+      win.dispatchEvent(new Event("focus"));
+      await settle();
+      expect(bodyOf(island).createError?.code, "still reconnect_needed: the refusal is still TRUE, so it stays").toBe("youtube_reconnect_needed");
+      expect(byTestId(treeOf(island), "stream-youtube-refusal")).toBeDefined();
+      expect(byTestId(treeOf(island), "stream-go-live"), "Go live stays replaced").toBeUndefined();
+      // Reconnected on the Streaming page. A reconnect leaves liveState `unknown` until a health check runs (connections.ts liveStateOf)
+      // — the organiser must not have to wait for one to get Go live back.
+      s.targets = channelList({ status: "connected", liveState: "unknown" });
+      win.dispatchEvent(new Event("focus"));
+      await settle();
+      expect(bodyOf(island).createError, "the grant is alive: the refusal is stale and gone").toBeNull();
+      expect(byTestId(treeOf(island), "stream-youtube-refusal")).toBeUndefined();
+      expect(byTestId(treeOf(island), "stream-go-live"), "Go live is back").toBeDefined();
+      expect(bodyOf(island).selectedTargetId, "the choice was kept throughout").toBe("t1");
+    });
+
+    it("I2: a not-enabled / restricted refusal clears only when the read finds the channel's live state `enabled`; not_enabled, blocked and unknown keep it", async () => {
+      const { win } = stubPage();
+      let checked = 0;
+      for (const code of ["youtube_live_not_enabled", "youtube_live_blocked"] as const) {
+        const s = serve({ current: null, targets: channelList() });
+        const island = await mount(s);
+        await refusedAt(s, island, code);
+        for (const [liveState, cleared] of [["not_enabled", false], ["blocked", false], ["unknown", false], ["enabled", true]] as const) {
+          s.targets = channelList({ liveState });
+          win.dispatchEvent(new Event("focus"));
+          await settle();
+          if (!cleared) {
+            expect(bodyOf(island).createError?.code, `${code} vs ${liveState}: not proven mended — kept`).toBe(code);
+          } else {
+            expect(bodyOf(island).createError, `${code} vs ${liveState}: a clean check — cleared`).toBeNull();
+          }
+          checked++;
+        }
+        island.unmount();
+      }
+      expect(checked, "anti-vacuity: two codes x four states").toBe(8);
+    });
+
+    it("I2: the retry-class refusals are NEVER cleared by a re-read — they carry their own Try again (a healthy channel says nothing about quota, ten live, or YouTube's silence)", async () => {
+      const { win } = stubPage();
+      let checked = 0;
+      for (const code of ["youtube_limit_reached", "youtube_channel_busy", "youtube_unavailable"] as const) {
+        const s = serve({ current: null, targets: channelList() });
+        const island = await mount(s);
+        await refusedAt(s, island, code, WIRE_STATUS[code]);
+        s.targets = channelList({ status: "connected", liveState: "enabled" });
+        win.dispatchEvent(new Event("focus"));
+        await settle();
+        expect(bodyOf(island).createError?.code, `${code}: a healthy channel does not answer it`).toBe(code);
+        expect(byTestId(treeOf(island), "stream-youtube-retry"), `${code}: Try again is still there`).toBeDefined();
+        island.unmount();
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
+
+    it("I2: the destination is GONE from the re-read (archived in Directory) — a channel refusal about it is cleared with the selection, never left over a picker with nothing picked", async () => {
+      const { win } = stubPage();
+      const s = serve({ current: null, targets: channelList() });
+      const island = track(await mount(s));
+      await refusedAt(s, island, "youtube_reconnect_needed");
+      s.targets = [TARGETS[1]!];
+      win.dispatchEvent(new Event("focus"));
+      await settle();
+      expect(bodyOf(island).selectedTargetId, "the removed choice is cleared").toBeNull();
+      expect(bodyOf(island).createError, "…and so is the refusal that was about it").toBeNull();
+    });
+  });
 });
 
 // ─── R2006 (owner ruling 2026-10-19, "Option C"): the score on the Phone tab ───────────────────────────────────────────
@@ -5532,17 +5749,21 @@ describe("PR #989 review m1: useProvidedPhoneSession — the provider's session 
 
 // ─── YouTube Connect T12 (owner's Option B, 2026-10-27): the six YouTube refusals, the fix that replaces Go live, the replay row ──
 // Expected values are the SPEC's (§6.2 / §6.9, owner's Option B), typed here from it and never read back from the panel's own table:
-// the channel's grant is dead -> a link to the Streaming page; YouTube did not answer -> the same Go live asked again; every other
-// refusal has nothing to fix from here, so only "Use another destination". The copy is read from the dictionary by its key.
+// the channel's grant is dead -> a link to the Streaming page; a refusal a retry on the same destination may clear (YouTube did not
+// answer, its quota for new streams is spent, the channel's ten streams are all live — the controller's ruling of fix round 1) -> the
+// same Go live asked again; the two with nothing to fix from here (not enabled for live, restricted) -> only "Use another destination".
+// The copy is read from the dictionary by its key.
 describe("T12: a YouTube refusal replaces Go live with the fix that fits its cause", () => {
   const FIX_OF: Record<(typeof YOUTUBE_REFUSAL_CODES)[number], "reconnect" | "retry" | "none"> = {
     youtube_reconnect_needed: "reconnect",
     youtube_live_not_enabled: "none",
     youtube_live_blocked: "none",
-    youtube_limit_reached: "none",
-    youtube_channel_busy: "none",
+    youtube_limit_reached: "retry",
+    youtube_channel_busy: "retry",
     youtube_unavailable: "retry",
   };
+  /** The refusals a retry on the same destination may clear — derived from the table above, so a code moved between classes moves with it. */
+  const RETRY_CODES = YOUTUBE_REFUSAL_CODES.filter((c) => FIX_OF[c] === "retry");
   const refused = (code: string, over: Record<string, unknown> = {}) =>
     body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1", createError: { code: code as never, holder: null }, ...over });
 
@@ -5551,6 +5772,8 @@ describe("T12: a YouTube refusal replaces Go live with the fix that fits its cau
     expect(YOUTUBE_REFUSAL_CODES.length).toBeGreaterThan(0);
     // The sweep below must be able to tell the three fixes apart, or one wrong swap hides behind another.
     expect(new Set(Object.values(FIX_OF)).size).toBe(3);
+    // …and the retry class is the three the controller named (a class with one member could not tell "retry" from "unavailable").
+    expect(RETRY_CODES).toEqual(["youtube_limit_reached", "youtube_channel_busy", "youtube_unavailable"]);
   });
 
   it("every one of the six: its own reason, 'nothing was started or charged', no Go live, its fix, the picker red and described by it", () => {
@@ -5561,7 +5784,9 @@ describe("T12: a YouTube refusal replaces Go live with the fix that fits its cau
       expect(box, `${code}: the refusal block`).toBeDefined();
       expect(attr(box!, "data-code"), code).toBe(code);
       expect(attr(box!, "role"), code).toBe("alert");
-      expect(textAt(tree, "stream-create-error"), `${code}: its own sentence`).toBe(m(`stream.error.${code}` as MessageKey));
+      // `{max}` is the busy sentence's cap, filled at render from the one constant (lib/youtube.ts).
+      expect(textAt(tree, "stream-create-error"), `${code}: its own sentence`).toBe(m(`stream.error.${code}` as MessageKey, { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL }));
+      expect(textAt(tree, "stream-create-error"), `${code}: no placeholder on screen`).not.toMatch(/[{}]/);
       expect(textAt(tree, "stream-youtube-refusal-title"), code).toBe(m("stream.youtube.refused.title", { label: "Club" }));
       expect(textAt(tree, "stream-youtube-refusal-note"), code).toBe(m("stream.youtube.refused.nothing"));
       expect(allTestIds(tree, "stream-create-error"), `${code}: said once, not again at the foot`).toHaveLength(1);
@@ -5591,16 +5816,48 @@ describe("T12: a YouTube refusal replaces Go live with the fix that fits its cau
     expect(String(attr(link, "rel"))).toContain("noopener");
   });
 
-  it("Try again IS Go live asked again: it calls the panel's own start, and waits while one is in flight or the phone is not ready", () => {
-    const onGoLive = vi.fn();
-    const tree = refused("youtube_unavailable", { onGoLive });
-    click(byTestId(tree, "stream-youtube-retry"));
-    expect(onGoLive).toHaveBeenCalledTimes(1);
-    expect(textOf(byTestId(tree, "stream-youtube-retry")!).trim()).toBe(m("stream.youtube.refused.retry"));
-    expect(propsOf(byTestId(tree, "stream-youtube-retry")!).disabled, "idle, selected, ready: tappable").toBeFalsy();
-    // The positive pair: the same predicate that holds Go live holds Try again.
-    expect(propsOf(byTestId(refused("youtube_unavailable", { busy: true }), "stream-youtube-retry")!).disabled, "a start in flight").toBe(true);
-    expect(propsOf(byTestId(refused("youtube_unavailable", { selectedTargetId: null }), "stream-youtube-retry")!).disabled, "nothing selected").toBe(true);
+  it("Try again IS Go live asked again, for every refusal a retry may clear: it calls the panel's own start, and waits while one is in flight or the phone is not ready", () => {
+    let checked = 0;
+    for (const code of RETRY_CODES) {
+      const onGoLive = vi.fn();
+      const tree = refused(code, { onGoLive });
+      click(byTestId(tree, "stream-youtube-retry"));
+      expect(onGoLive, code).toHaveBeenCalledTimes(1);
+      expect(textOf(byTestId(tree, "stream-youtube-retry")!).trim(), code).toBe(m("stream.youtube.refused.retry"));
+      expect(propsOf(byTestId(tree, "stream-youtube-retry")!).disabled, `${code}: idle, selected, ready: tappable`).toBeFalsy();
+      // The positive pair: the same predicate that holds Go live holds Try again.
+      expect(propsOf(byTestId(refused(code, { busy: true }), "stream-youtube-retry")!).disabled, `${code}: a start in flight`).toBe(true);
+      expect(propsOf(byTestId(refused(code, { selectedTargetId: null }), "stream-youtube-retry")!).disabled, `${code}: nothing selected`).toBe(true);
+      // "Use another destination" stays beside it — the retry never replaces the way out.
+      expect(byTestId(tree, "stream-youtube-pick-another"), `${code}: still offered`).toBeDefined();
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the whole retry class was driven").toBe(3);
+    // The other two classes have NO Try again: a retry on a dead grant or a restricted channel cannot succeed.
+    for (const code of YOUTUBE_REFUSAL_CODES.filter((c) => FIX_OF[c] !== "retry")) {
+      expect(byTestId(refused(code), "stream-youtube-retry"), `${code}: no Try again`).toBeUndefined();
+    }
+  });
+
+  it("the block is wrapped to take focus when it appears: keyed by its code, and the first action is the refusal's fix — Reconnect, Try again, or Use another destination", () => {
+    let checked = 0;
+    for (const code of YOUTUBE_REFUSAL_CODES) {
+      const wrapper = refused(code).find((el) => el.type === FocusFirstAction);
+      expect(wrapper, `${code}: wrapped`).toBeDefined();
+      // A new code is a new key, so a second refusal (or the same one after Try again unmounted the block) focuses again.
+      expect(wrapper!.key, `${code}: keyed by the code`).toBe(code);
+      const actions = walk(propsOf(wrapper!).children as ReactElement[]).filter((el) => el.type === "a" || el.type === "button");
+      const first = String(attr(actions[0]!, "data-testid"));
+      const expected = { reconnect: "stream-youtube-reconnect", retry: "stream-youtube-retry", none: "stream-youtube-pick-another" }[FIX_OF[code]];
+      expect(first, `${code}: the first action in focus order`).toBe(expected);
+      // The block (title, reason) is INSIDE the wrapper, so focus lands within the region the alert announced.
+      expect(walk(propsOf(wrapper!).children as ReactElement[]).some((el) => attr(el, "data-testid") === "stream-youtube-refusal"), code).toBe(true);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all six").toBe(YOUTUBE_REFUSAL_CODES.length);
+    // No refusal, no wrapper — focus is never taken by a block that is not there.
+    expect(body({ view: null, balance: 2, targets: TARGETS, selectedTargetId: "t1" }).some((el) => el.type === FocusFirstAction)).toBe(false);
+    expect(refused("unknown").some((el) => el.type === FocusFirstAction), "a non-YouTube refusal draws no block").toBe(false);
   });
 
   it("'Use another destination' is the panel's own handler, on every refusal", () => {
@@ -5629,10 +5886,28 @@ describe("T12: a YouTube refusal replaces Go live with the fix that fits its cau
     expect(byTestId(exhausted, "stream-go-live")).toBeDefined();
   });
 
-  it("a refusal only ever replaces Go live where Go live was drawn: a live or ended card keeps the generic line", () => {
-    const live = body({ view: session({ state: "live", startedAt: "2026-09-14T11:50:00Z" }), balance: 1, createError: { code: "youtube_unavailable", holder: null } });
-    expect(byTestId(live, "stream-youtube-refusal"), "no refusal block over a live stream").toBeUndefined();
-    expect(byTestId(live, "stream-youtube-retry")).toBeUndefined();
+  it("a refusal only ever replaces Go live where Go live was drawn: a live, warming, ended or failed card keeps the GENERIC line — the sentence is still said, once, and the picker is not red", () => {
+    const CARDS = [
+      ["live", session({ state: "live", startedAt: "2026-09-14T11:50:00Z" })],
+      ["warming", session({ state: "warming" })],
+      ["ended", session({ state: "completed", startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" })],
+      ["failed", session({ state: "failed", failReason: "target_rejected" })],
+    ] as const;
+    let checked = 0;
+    for (const [name, view] of CARDS) {
+      for (const code of YOUTUBE_REFUSAL_CODES) {
+        const tree = body({ view, balance: 1, createError: { code, holder: null } });
+        expect(byTestId(tree, "stream-youtube-refusal"), `${name}/${code}: no block over a card that is not Ready`).toBeUndefined();
+        expect(byTestId(tree, "stream-youtube-retry"), `${name}/${code}`).toBeUndefined();
+        expect(tree.some((el) => el.type === FocusFirstAction), `${name}/${code}: nothing takes focus`).toBe(false);
+        // The suppression is of the BLOCK only — the refusal is still said, in the dictionary's words, exactly once.
+        const lines = allTestIds(tree, "stream-create-error");
+        expect(lines, `${name}/${code}: the generic line is drawn once`).toHaveLength(1);
+        expect(textOf(lines[0]!).replace(/\s+/g, " ").trim(), `${name}/${code}`).toBe(m(`stream.error.${code}` as MessageKey, { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL }));
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: four cards x six codes").toBe(CARDS.length * YOUTUBE_REFUSAL_CODES.length);
   });
 
   it("the destination's name in the title is the DICTIONARY's when it is the archived literal (read in es, where it differs from the stored English)", () => {
@@ -5689,6 +5964,22 @@ describe("T12: after a match — the replay row, and the destination's name read
     expect(marks.map((el) => propsOf(el).kind)).toEqual(["youtube"]);
     const tw = byTestId(body({ view: session({ ...ENDED, replayUrl: "https://www.twitch.tv/videos/1", target: { id: "t2", kind: "twitch", label: "Alt" } }), balance: 1 }), "stream-replay")!;
     expect(walk(propsOf(tw).children as ReactElement[]).filter((el) => el.type === PlatformMark)).toHaveLength(0);
+  });
+
+  it("m3: the mark follows the LINK, not the destination's kind — a YouTube-kind destination whose club-set replay URL is another site's wears no YouTube icon", () => {
+    // `stream_url` is the club's own link when it set one, and nothing overwrites it: a YouTube destination can replay anywhere.
+    const marks = (replayUrl: string, kind: "youtube" | "twitch" = "youtube") => {
+      const link = byTestId(body({ view: session({ ...ENDED, replayUrl, target: { id: "t1", kind, label: "Club" } }), balance: 1 }), "stream-replay")!;
+      return walk(propsOf(link).children as ReactElement[]).filter((el) => el.type === PlatformMark).length;
+    };
+    expect(marks("https://www.twitch.tv/videos/1"), "youtube kind, twitch link: no icon").toBe(0);
+    expect(marks("https://example.com/vod/1"), "youtube kind, own site: no icon").toBe(0);
+    expect(marks("https://youtube.com.evil.example/watch?v=1"), "a look-alike host: no icon").toBe(0);
+    // The positive pair: both YouTube hosts, so the gate is not simply off.
+    expect(marks("https://www.youtube.com/watch?v=abc"), "youtube.com").toBe(1);
+    expect(marks("https://youtu.be/abc"), "youtu.be").toBe(1);
+    // And the icon follows the link even where the destination's kind is not YouTube.
+    expect(marks("https://youtu.be/abc", "twitch"), "twitch kind, YouTube link: the link is YouTube's").toBe(1);
   });
 
   it("EVERY place that prints the 'ending' destination passes it through youtubeTargetLabel — the card AND the stop probe (the probe needs a live provider, so its call site is swept)", () => {

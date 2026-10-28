@@ -39,7 +39,7 @@ import {
 } from "../helpers";
 import { grantRigPackCredits, setRigPlan, signInAs } from "../overlay-kit";
 import { storeCameraOnly } from "../helpers/stream-mode";
-import { expectSelectedTargetName, selectTarget, targetPicker } from "../helpers/stream-target-picker";
+import { expectSelectedTarget, selectTarget, targetPicker } from "../helpers/stream-target-picker";
 import {
   closeQrEnlarged,
   expectQrDecodesAsPainted,
@@ -563,7 +563,7 @@ for (const width of WIDTHS) {
     expect(saved.map((t) => t.label), "the destination row is the one the form saved").toEqual([label]);
     // …and back on the match, the picker offers it, selected.
     await openPhoneTab(page, rig, f);
-    await expectSelectedTargetName(body, label);
+    await expectSelectedTarget(body, label, "youtube");
     const chain = body.getByTestId("stream-chain");
     await expect(chain).toHaveAttribute("data-phone", "notConnected");
     await expect(chain).toHaveAttribute("data-dest", "notLive");
@@ -699,7 +699,7 @@ test("A2: monthly + 2 bought → Go live draws the MONTHLY credit (monthly − 1
   await expect(body.getByTestId("stream-balance")).toHaveText(creditsChip(rate + bought));
   // The positive half of the post-go-live split check below: both buckets held → the split is shown.
   await expect(body.getByTestId("stream-credits-split")).toHaveText(en("stream.credits.split", { m: rate, p: bought }));
-  await expectSelectedTargetName(body, target.label);
+  await expectSelectedTarget(body, target.label, "youtube");
 
   await pairedPhone(page); // W5: Go live needs a paired phone
   await streamSlot(); // this test's share of the deployment's stream capacity
@@ -766,7 +766,7 @@ for (const v of A3_BALANCES) {
     };
     await expectChip(start, "before the first run");
     await expect(body.getByTestId("stream-restart"), "nothing consumed yet → no reuse window, no restart line").toHaveCount(0);
-    await expectSelectedTargetName(body, target.label);
+    await expectSelectedTarget(body, target.label, "youtube");
 
     // First run: go live (one credit), stop. W5: one phone, paired once — it stays paired across both runs.
     await pairedPhone(page);
@@ -961,7 +961,7 @@ test("A5: a SECOND TAB taps Go live — on the same match it is refused active_s
   // destination, so without one the refusal would be phone_not_paired).
   const row3 = await openPhoneTab(tab2, rig, f2);
   const body3 = row3.locator("[data-phone-body]");
-  await expectSelectedTargetName(body3, target.label);
+  await expectSelectedTarget(body3, target.label, "youtube");
   await pairedPhone(tab2);
   await body3.getByTestId("stream-go-live").click();
   // T3 (spec §3.3, §5.5): the refusal names the MATCH and its court — f1's own number through the locale's
@@ -1013,7 +1013,7 @@ test("A6: a destination that refuses the stream key → FAILED with the target_r
   const row = await openPhoneTab(page, rig, f);
   const body = row.locator("[data-phone-body]");
   await expect(body.getByTestId("stream-balance")).toHaveText(creditsChip(rig.monthlyRate));
-  await expectSelectedTargetName(body, target.label);
+  await expectSelectedTarget(body, target.label, "youtube");
 
   await pairedPhone(page); // W5: Go live needs a paired phone — and Try again finds it still paired
   await streamSlot(); // this test's share of the deployment's stream capacity
@@ -1095,7 +1095,7 @@ for (const width of [320, 1280] as const) {
     const panel = scope.getByTestId("stream-panel");
     const chain = body.getByTestId("stream-chain");
     const warning = body.getByTestId("stream-output-warning");
-    await expectSelectedTargetName(body, target.label);
+    await expectSelectedTarget(body, target.label, "youtube");
     // READY: the chain is drawn to the picked destination — all slate (§3.2's idle row).
     await expect(chain).toHaveAttribute("data-phone", "notConnected");
     await expect(chain).toHaveAttribute("data-dest", "notLive");
@@ -1596,7 +1596,7 @@ for (const width of [320, 1280] as const) {
 
     await page.unroute(LIST);
     await body.getByTestId("stream-dest-retry").click();
-    await expectSelectedTargetName(body, target.label, { timeout: POLL_WAIT_MS });
+    await expectSelectedTarget(body, target.label, "youtube", { timeout: POLL_WAIT_MS });
     await expect(loadError).toHaveCount(0);
     await expect(body.getByTestId("stream-go-live")).toBeEnabled();
   });
@@ -2171,7 +2171,7 @@ for (const width of WIDTHS) {
     scope = await openPhoneTab(page, rig, fReady);
     body = scope.locator("[data-phone-body]");
     const picker = targetPicker(body);
-    await expectSelectedTargetName(body, LONG_DEST);
+    await expectSelectedTarget(body, LONG_DEST, "youtube");
     await pairedPhone(page); // W5: Ready with a paired phone is the state that offers Go live
     await expect(body.getByTestId("stream-go-live")).toBeEnabled();
     await expect(body.getByTestId("stream-chain")).toHaveAttribute("data-dest", "notLive");
@@ -2193,7 +2193,7 @@ for (const width of WIDTHS) {
     const holder = await goLiveApi(page, fHold.id, long.id, `${rig.divPath}/f/${fHold.no}`);
     scope = await openPhoneTab(page, rig, fReady);
     body = scope.locator("[data-phone-body]");
-    await expectSelectedTargetName(body, LONG_DEST);
+    await expectSelectedTarget(body, LONG_DEST, "youtube");
     await body.getByTestId("stream-go-live").click();
     await expect(body.getByTestId("stream-in-use-open")).toBeVisible({ timeout: POLL_WAIT_MS });
     await expect(body.getByTestId("stream-target")).toHaveAttribute("aria-invalid", "true");
@@ -2304,7 +2304,7 @@ for (const width of WIDTHS) {
     // 11. LIVE OK.
     scope = await openPhoneTab(page, rig, fOk);
     body = scope.locator("[data-phone-body]");
-    await expectSelectedTargetName(body, LONG_DEST);
+    await expectSelectedTarget(body, LONG_DEST, "youtube");
     await pairedPhone(page);
     await body.getByTestId("stream-go-live").click();
     await expect(body.getByTestId("stream-chain")).toHaveAttribute("data-dest", "live", { timeout: LIVE_WAIT_MS });

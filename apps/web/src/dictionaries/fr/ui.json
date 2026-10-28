@@ -5952,7 +5952,7 @@
   "stream.error.youtube_live_not_enabled": "Les directs ne sont pas encore activés sur cette chaîne. YouTube peut mettre jusqu’à 24 heures.",
   "stream.error.youtube_live_blocked": "YouTube a restreint les directs sur cette chaîne.",
   "stream.error.youtube_limit_reached": "La limite de YouTube pour les nouveaux directs est atteinte. Réessayez plus tard ou choisissez une autre destination.",
-  "stream.error.youtube_channel_busy": "Cette chaîne a déjà 10 directs en cours.",
+  "stream.error.youtube_channel_busy": "Cette chaîne a déjà {max} directs en cours.",
   "stream.error.youtube_unavailable": "YouTube n’a pas répondu. Réessayez.",
   "stream.youtube.refused.title": "{label} ne peut pas passer en direct",
   "stream.youtube.refused.nothing": "Rien n’a été démarré ni facturé.",

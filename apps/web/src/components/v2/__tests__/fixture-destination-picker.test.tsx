@@ -21,7 +21,7 @@ import { propsOf, renderIsland, textOf, expandWithHooks } from "@/components/__t
 import { messages, type MessageKey } from "@/lib/messages";
 import { YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_PRIVACIES } from "@/lib/youtube";
 import { StreamTargetKind, type StreamTarget } from "@/server/api-v1/schemas";
-import { FixtureDestinationPicker, destinationRow, type FixtureDestinationPickerProps } from "../fixture-destination-picker";
+import { FixtureDestinationPicker, TYPEAHEAD_RESET_MS, destinationRow, type FixtureDestinationPickerProps } from "../fixture-destination-picker";
 
 const m = (k: MessageKey, vars: Record<string, string | number> = {}): string =>
   Object.entries(vars).reduce((s, [n, v]) => s.replaceAll(`{${n}}`, String(v)), messages[k] as string);
@@ -141,9 +141,9 @@ function mount(over: Partial<FixtureDestinationPickerProps> = {}) {
   const props: FixtureDestinationPickerProps = { id: "stream-target-f1", targets: TARGETS, selectedId: "t-ok", onSelect: (id) => picked.push(id), ...over };
   const island = renderIsland(FixtureDestinationPicker, props, deep);
   const trigger = () => byTestId(island.tree(), "stream-target")!;
-  const key = (k: string) => {
+  const key = (k: string, mods: { ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean } = {}) => {
     let prevented = false;
-    (attr(trigger(), "onKeyDown") as (e: { key: string; preventDefault: () => void }) => void)({ key: k, preventDefault: () => { prevented = true; } });
+    (attr(trigger(), "onKeyDown") as (e: { key: string; ctrlKey?: boolean; metaKey?: boolean; altKey?: boolean; preventDefault: () => void }) => void)({ key: k, ...mods, preventDefault: () => { prevented = true; } });
     return prevented;
   };
   const open = () => island.tree().some((el) => attr(el, "data-testid") === "stream-target-list");
@@ -325,6 +325,125 @@ describe("the picker, driven", () => {
     p.island.rerender({ ...p.props, openSignal: 2 });
     expect(p.open(), "the next increase opens it again").toBe(true);
     expect(p.activeTarget(), "on the picked row").toBe("t-ok");
+  });
+
+  it("pressing the row that is already picked closes the list and saves nothing — a re-pick would PUT the same choice again", () => {
+    const p = mount({ selectedId: "t-ok" });
+    (attr(p.trigger(), "onClick") as () => void)();
+    const picked = p.options().find((o) => attr(o, "data-target-id") === "t-ok")!;
+    expect(attr(picked, "aria-selected"), "premise: it is the selected row").toBe(true);
+    (attr(picked, "onClick") as () => void)();
+    expect(p.picked, "a tap on the picked row selects nothing new").toEqual([]);
+    expect(p.open(), "…and still closes the list").toBe(false);
+    // The keyboard path is the same: Enter opens on the picked row, Enter again picks it — nothing is handed over.
+    p.key("Enter");
+    expect(p.open()).toBe(true);
+    p.key("Enter");
+    expect(p.picked).toEqual([]);
+    expect(p.open()).toBe(false);
+    // The positive pair: a DIFFERENT row still hands its id over.
+    p.key("Enter");
+    p.key("ArrowDown");
+    p.key("Enter");
+    expect(p.picked).toEqual(["t-bad"]);
+  });
+
+  it("a list that shrinks while it is open never leaves the active descendant on a row that is gone", () => {
+    const p = mount({ selectedId: "t-ok" });
+    p.key("Enter");
+    p.key("End");
+    expect(p.activeTarget(), "premise: active is the last of five").toBe("t-tw");
+    p.island.rerender({ ...p.props, targets: TARGETS.slice(0, 2) });
+    expect(p.options()).toHaveLength(2);
+    expect(p.active(), "aria-activedescendant names a row that exists").toBeDefined();
+    expect(p.activeTarget(), "clamped to the last row left").toBe("t-bad");
+    expect(p.options().filter((o) => attr(o, "data-active") === "true"), "exactly one row is active").toHaveLength(1);
+    p.key("Enter");
+    expect(p.picked, "Enter picks the clamped row, not a ghost").toEqual(["t-bad"]);
+  });
+
+  describe("typeahead: the first letters of a destination's name jump to it", () => {
+    const NAMES = ["Harbour Padel", "Hoops Arena", "Hockey Hall", "Westside Court 1", "Westside Court 2", "Riverside"];
+    const LIST = NAMES.map((n, i) => key(`t${i}`, n));
+    afterEach(() => vi.useRealTimers());
+
+    it("buffered prefix: 'h' lands on the first H, 'ho' on Hoops (a one-letter match would stay put), 'hoc' on Hockey; a miss moves nothing", () => {
+      vi.useFakeTimers();
+      const p = mount({ targets: LIST, selectedId: "t5" });
+      expect(p.open()).toBe(false);
+      expect(p.key("h"), "a handled letter is not left to the browser").toBe(true);
+      expect(p.open(), "typing on a closed list opens it").toBe(true);
+      expect(p.activeTarget()).toBe("t0");
+      p.key("o");
+      expect(p.activeTarget(), "'ho' is a LONGER prefix: Hoops Arena, not Harbour Padel").toBe("t1");
+      p.key("c");
+      expect(p.activeTarget()).toBe("t2");
+      expect(p.key("z"), "no name starts 'hocz': nothing handled").toBe(false);
+      expect(p.activeTarget(), "a miss moves nothing").toBe("t2");
+      expect(p.key("Shift"), "a modifier is not a letter").toBe(false);
+      expect(p.activeTarget()).toBe("t2");
+      expect(p.picked, "typing alone picks nothing").toEqual([]);
+    });
+
+    it("a pause starts it over; a space mid-word belongs to the buffer; Enter then picks the typed row; a lone space after a pause still picks", () => {
+      vi.useFakeTimers();
+      const p = mount({ targets: LIST, selectedId: "t5" });
+      p.key("h");
+      p.key("o");
+      p.key("c");
+      vi.advanceTimersByTime(TYPEAHEAD_RESET_MS + 1);
+      p.key("w");
+      expect(p.activeTarget(), "after a pause 'w' is a fresh buffer — Westside, not 'hocw'").toBe("t3");
+      // Within the window the buffer keeps growing, spaces and digits included: 'westside court 2' is the SECOND court.
+      for (const ch of "estside court 2") p.key(ch);
+      expect(p.activeTarget()).toBe("t4");
+      vi.advanceTimersByTime(TYPEAHEAD_RESET_MS + 1);
+      p.key(" ");
+      expect(p.picked, "a space after a pause is the picker's own Space: it picks the active row").toEqual(["t4"]);
+      expect(p.open()).toBe(false);
+    });
+
+    it("a PREFIX, never a substring: 'a' goes to the name that STARTS with it, past an earlier name that merely contains it", () => {
+      vi.useFakeTimers();
+      const list = [key("a", "Court Alpha"), key("b", "Alpha Hall"), key("c", "Zulu")];
+      const p = mount({ targets: list, selectedId: "c" });
+      p.key("a");
+      expect(p.activeTarget(), "'Court Alpha' contains an 'a' but does not start with one").toBe("b");
+      p.key("l");
+      expect(p.activeTarget(), "'al' is still Alpha Hall").toBe("b");
+      expect(p.key("q"), "'alq': no name starts with it").toBe(false);
+      expect(p.activeTarget(), "a miss moves nothing").toBe("b");
+    });
+
+    it("a chord is not typing: Ctrl, Cmd or Alt with a letter is the browser's shortcut — never handled, never opens the list, never moves", () => {
+      vi.useFakeTimers();
+      let checked = 0;
+      for (const mod of ["ctrlKey", "metaKey", "altKey"] as const) {
+        const p = mount({ targets: LIST, selectedId: "t5" });
+        expect(p.key("h", { [mod]: true }), `${mod}+h is left to the browser (no preventDefault)`).toBe(false);
+        expect(p.open(), `${mod}+h opens nothing`).toBe(false);
+        // The positive pair, on the same mount: the plain letter IS typeahead, so the chord test above can fail.
+        expect(p.key("h"), `${mod}: plain h is handled`).toBe(true);
+        expect(p.activeTarget()).toBe("t0");
+        checked++;
+      }
+      expect(checked, "anti-vacuity: all three modifiers").toBe(3);
+    });
+
+    it("it matches the NAME a customer reads, case-insensitively — never the kind line under it", () => {
+      vi.useFakeTimers();
+      const list = [key("a", "Zebra"), channel("b", YOUTUBE_DISCONNECTED_LABEL), key("c", "Quarry")];
+      const p = mount({ targets: list, selectedId: "a" });
+      p.key("Q");
+      expect(p.activeTarget(), "uppercase finds a name regardless of case").toBe("c");
+      vi.advanceTimersByTime(TYPEAHEAD_RESET_MS + 1);
+      p.key("y");
+      expect(p.activeTarget(), "'y': the archived channel's DISPLAYED name starts 'YouTube channel (disconnected)'").toBe("b");
+      vi.advanceTimersByTime(TYPEAHEAD_RESET_MS + 1);
+      // "Zebra"'s kind line is "YouTube stream key", which also starts with Y — it must not be a match.
+      p.key("s");
+      expect(p.activeTarget(), "no NAME starts with 's' — the kind lines 'stream key' are not searched").toBe("b");
+    });
   });
 
   it("…and puts focus on the trigger when it opens that way — never on a mount, never on the same value again", () => {

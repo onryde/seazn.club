@@ -34,7 +34,7 @@ import { msgFor } from "@/lib/messages-i18n";
 import { routes } from "@/lib/routes";
 import { captureError } from "@/lib/sentry";
 import { siteOrigin } from "@/lib/site-origin";
-import { isYoutubeRefusalCode, type YoutubePrivacy, type YoutubeRefusalCode } from "@/lib/youtube";
+import { YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, isYoutubeRefusalCode, type YoutubePrivacy, type YoutubeRefusalCode } from "@/lib/youtube";
 import { insertPooledKey } from "@/server/relay/secret-columns";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts, type EndFacts } from "./end-rule";
 import { YouTubeError, type YouTubePort } from "./port";
@@ -49,9 +49,9 @@ export type PortSource = YouTubePort | (() => YouTubePort);
 
 /** Spec §6.2 "~2 min" (plan P6): how long a reused broadcast is held for the admission that reserved it. */
 export const YOUTUBE_RESERVATION_MINUTES = 2;
-/** "10 active streams allowed per channel" (support.google.com/youtube/answer/2474026, spec §3.1). V479's slot check (1..10)
- *  is the database's floor under the same number. */
-const MAX_LIVE_KEYS_PER_CHANNEL = 10;
+/** "10 active streams allowed per channel" (support.google.com/youtube/answer/2474026, spec §3.1): lib/youtube.ts owns the number
+ *  (the panel's refusal copy names it too); V479's slot check (1..10) is the database's floor under the same number. */
+const MAX_LIVE_KEYS_PER_CHANNEL = YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL;
 /** A pooled liveStream's title: liveStreams snippet.title is 1–128 characters. Not shown to viewers. */
 const STREAM_TITLE = "Seazn stream key";
 

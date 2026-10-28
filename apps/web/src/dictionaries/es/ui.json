@@ -5952,7 +5952,7 @@
   "stream.error.youtube_live_not_enabled": "Este canal aún no tiene activadas las emisiones en directo. YouTube puede tardar hasta 24 horas.",
   "stream.error.youtube_live_blocked": "YouTube ha restringido las emisiones en directo en este canal.",
   "stream.error.youtube_limit_reached": "Se alcanzó el límite de YouTube para nuevas emisiones. Inténtalo más tarde o elige otro destino.",
-  "stream.error.youtube_channel_busy": "Este canal ya tiene 10 emisiones en directo.",
+  "stream.error.youtube_channel_busy": "Este canal ya tiene {max} emisiones en directo.",
   "stream.error.youtube_unavailable": "YouTube no ha respondido. Inténtalo de nuevo.",
   "stream.youtube.refused.title": "{label} no puede salir en directo",
   "stream.youtube.refused.nothing": "No se ha iniciado ni cobrado nada.",

@@ -26,6 +26,26 @@ export const YOUTUBE_REFUSAL_CODES = [
 ] as const;
 export type YoutubeRefusalCode = (typeof YOUTUBE_REFUSAL_CODES)[number];
 
+/** "10 active streams allowed per channel" (support.google.com/youtube/answer/2474026, spec §3.1) — the ONE authority for the number.
+ *  The server's pool (server/youtube/prepare.ts) refuses the 11th concurrent stream with `youtube_channel_busy`, and the panel's copy
+ *  for that refusal names this number (`stream.error.youtube_channel_busy` carries `{max}`), so they cannot disagree. The database's
+ *  floor under it is V479's `youtube_stream_keys_slot_range` (slot between 1 and 10), held equal by lib/__tests__/youtube-cap.test.ts. */
+export const YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL = 10;
+
+/** Is this a link to YouTube itself? A replay URL is the club's own `stream_url` when it set one (nothing overwrites it), so the
+ *  YouTube mark may sit on a link only if the link really goes to YouTube: https on youtube.com (any subdomain) or youtu.be. */
+export function isYoutubeUrl(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:") return false;
+  const host = u.hostname.toLowerCase();
+  return host === "youtube.com" || host.endsWith(".youtube.com") || host === "youtu.be";
+}
+
 export const isYoutubeRefusalCode = (c: unknown): c is YoutubeRefusalCode => (YOUTUBE_REFUSAL_CODES as readonly unknown[]).includes(c);
 
 /** Who can act on a refused Go live, for the surfaces whose vocabulary is smaller than the organiser's panel: the phone's own

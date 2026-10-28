@@ -42,7 +42,7 @@ import {
   PRESENCE_WATCH_START, W5_REFUSAL_CODES, isW5Refusal, presenceAfterRefusal, readClearsW5, type CreateFailureCode, type PresenceWatch,
   YOUTUBE_REFUSAL_FIX, youtubeRefusalOf,
 } from "../stream-session-view";
-import { YOUTUBE_REFUSAL_CODES } from "../youtube";
+import { YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, YOUTUBE_REFUSAL_REMEDY } from "../youtube";
 import fc from "fast-check";
 import { AUTO_START_REFUSALS } from "@/server/relay/domain/auto-stream";
 import { HEALTH_REASONS } from "@/server/relay/domain/health-reasons";
@@ -294,7 +294,8 @@ describe("stream-session-view — create refusals off the real wire (D1)", () =>
     let checked = 0;
     for (const code of CREATE_ERROR_CODES) {
       if (code === "target_in_use") continue;
-      expect(createErrorText({ code, holder: null }, msg), code).toBe(msg(CREATE_ERROR_KEYS[code]));
+      // The busy sentence's `{max}` is the cap (lib/youtube.ts) — the one variable `createErrorText` fills; every other entry has none.
+      expect(createErrorText({ code, holder: null }, msg), code).toBe(msg(CREATE_ERROR_KEYS[code], { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL }));
       checked++;
     }
     expect(checked).toBe(CREATE_ERROR_CODES.length - 1);
@@ -1500,8 +1501,9 @@ describe("owner ruling 2026-10-09 (A): a Go live refused for want of a phone cle
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe("YouTube Connect T12 — every YouTube Go live refusal reaches the panel with its own copy and its fix", () => {
-  // The rulebook: spec §6.2's table (six codes) and the owner's Option B (T4, 2026-10-27: the fix REPLACES the Go live button).
-  // Typed here from them, never read back from the code under test.
+  // The rulebook: spec §6.2's table (six codes), the owner's Option B (T4, 2026-10-27: the fix REPLACES the Go live button) and the
+  // controller's ruling of T12 fix round 1: a refusal a retry on the same destination may clear (YouTube's quota, the channel's ten
+  // live streams, YouTube not answering) offers "Try again". Typed here from them, never read back from the code under test.
   const SPEC_CODES = [
     "youtube_reconnect_needed", "youtube_live_not_enabled", "youtube_live_blocked", "youtube_limit_reached", "youtube_channel_busy", "youtube_unavailable",
   ] as const;
@@ -1509,8 +1511,8 @@ describe("YouTube Connect T12 — every YouTube Go live refusal reaches the pane
     youtube_reconnect_needed: "reconnect",   // §6.2: "Reconnect YouTube" -> the Streaming page
     youtube_live_not_enabled: "none",        // nothing to do from here: YouTube can take up to 24 hours
     youtube_live_blocked: "none",            // YouTube's own restriction
-    youtube_limit_reached: "none",           // "Try later or pick another destination"
-    youtube_channel_busy: "none",            // ten streams already live on the channel
+    youtube_limit_reached: "retry",          // "Try later or pick another destination" — a later Go live may clear it
+    youtube_channel_busy: "retry",           // ten streams already live on the channel — one may have ended
     youtube_unavailable: "retry",            // "YouTube didn't answer. Try again."
   };
 
@@ -1521,9 +1523,13 @@ describe("YouTube Connect T12 — every YouTube Go live refusal reaches the pane
       expect((CREATE_ERROR_CODES as readonly string[]).filter((c) => c === code), `${code} in CREATE_ERROR_CODES`).toHaveLength(1);
       expect(YOUTUBE_REFUSAL_FIX[code], code).toBe(FIX[code]);
       expect(CREATE_ERROR_KEYS[code], code).toBe(`stream.error.${code}`);
+      // The panel's "Try again" and the phone's `unavailable` are one split, declared twice: a refusal a retry may clear is `retry`
+      // in BOTH tables (YOUTUBE_REFUSAL_REMEDY is the phone/auto-start's), so the surfaces cannot disagree about which refusals clear.
+      expect(YOUTUBE_REFUSAL_FIX[code] === "retry", `${code}: panel retry <=> remedy retry`).toBe(YOUTUBE_REFUSAL_REMEDY[code] === "retry");
       checked++;
     }
     expect(checked).toBe(6);
+    expect(SPEC_CODES.filter((c) => FIX[c] === "retry"), "the retry class is exactly the three the controller named").toEqual(["youtube_limit_reached", "youtube_channel_busy", "youtube_unavailable"]);
     // Nothing else claims to be a YouTube refusal: the fix table has no extra entry, and no other create code reads as one.
     expect(Object.keys(YOUTUBE_REFUSAL_FIX).sort()).toEqual([...SPEC_CODES].sort());
     const others = CREATE_ERROR_CODES.filter((c) => !(SPEC_CODES as readonly string[]).includes(c));
@@ -1549,14 +1555,18 @@ describe("YouTube Connect T12 — every YouTube Go live refusal reaches the pane
       const got = createErrorCode(await wire(new HttpError(status, `YouTube refused Go live: ${code}`, code, { connectionId: "c-1" })));
       expect(got, code).toBe(code);
       const text = createErrorText({ code: got, holder: null }, msg);
-      expect(text, code).toBe((messages as Record<string, string>)[`stream.error.${code}`]);
+      // `{max}` is the busy sentence's only placeholder (the cap, lib/youtube.ts) — filled at render, so the rule is "no {…} left".
+      expect(text, code).toBe((messages as Record<string, string>)[`stream.error.${code}`]!.replaceAll("{max}", String(YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL)));
+      expect(text, `${code}: nothing unfilled`).not.toMatch(/[{}]/);
       expect(text, `${code}: not the generic retry line`).not.toBe(msg(CREATE_ERROR_KEYS.unknown));
       expect(text, code).not.toContain("youtube_");
       sentences.add(text);
       for (const l of LOCALES) {
         const t = dict(l)[`stream.error.${code}`];
         expect(t, `${l} ${code}`).toBeTypeOf("string");
-        expect(t, `${l} ${code}`).not.toMatch(/[{}]|youtube_/);
+        // The cap's placeholder is the ONE brace a refusal's dictionary entry may carry, and only the busy one carries it.
+        expect(t!.replaceAll("{max}", ""), `${l} ${code}`).not.toMatch(/[{}]|youtube_/);
+        expect(t!.includes("{max}"), `${l} ${code}: {max} on the busy sentence alone`).toBe(code === "youtube_channel_busy");
         expect(t!.trim().length, `${l} ${code}`).toBeGreaterThan(10);
       }
       checked++;

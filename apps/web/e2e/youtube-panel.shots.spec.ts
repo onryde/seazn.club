@@ -8,7 +8,7 @@ import { grantRigPackCredits, setRigPlan, signInAs } from "./overlay-kit";
 import { disposeFakePhones, pairedPhone } from "./helpers/fake-capture-phone";
 import { openTargetPicker, selectTarget, targetPicker } from "./helpers/stream-target-picker";
 import { STREAM_KIND_BRAND } from "../src/components/v2/stream-platform-mark";
-import { YOUTUBE_REFUSAL_CODES } from "../src/lib/youtube";
+import { YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES } from "../src/lib/youtube";
 
 // Screenshot + layout evidence for YouTube Connect T12 (owner's Option B, 2026-10-27; polish and icon rulings 2026-10-28): the fixture
 // stream panel's destination picker, the six YouTube refusals each with its fix, the replay row, and the four polish items on the
@@ -376,13 +376,15 @@ const REFUSAL_STATUS: Record<(typeof YOUTUBE_REFUSAL_CODES)[number], number> = {
   youtube_channel_busy: 409,
   youtube_unavailable: 503,
 };
-/** The fix each refusal replaces Go live with (spec §6.2): the channel's grant is dead -> Reconnect; YouTube did not answer -> Try again. */
+/** The fix each refusal replaces Go live with (spec §6.2 and the controller's ruling of T12 fix round 1): the channel's grant is dead ->
+ *  Reconnect; a refusal a retry may clear (YouTube did not answer, its quota for new streams is spent, the channel's ten streams are all
+ *  live) -> Try again; not enabled for live and restricted -> only "Use another destination". */
 const FIX: Record<(typeof YOUTUBE_REFUSAL_CODES)[number], "reconnect" | "retry" | "none"> = {
   youtube_reconnect_needed: "reconnect",
   youtube_live_not_enabled: "none",
   youtube_live_blocked: "none",
-  youtube_limit_reached: "none",
-  youtube_channel_busy: "none",
+  youtube_limit_reached: "retry",
+  youtube_channel_busy: "retry",
   youtube_unavailable: "retry",
 };
 
@@ -434,7 +436,7 @@ test("Fixture panel - each of the six YouTube refusals replaces Go live with its
     await route.fulfill({
       status: REFUSAL_STATUS[nextCode],
       contentType: "application/json",
-      body: JSON.stringify({ ok: false, error: { code: nextCode, message: `YouTube refused Go live: ${nextCode}`, extra: { connectionId: randomUUID() } } }),
+      body: JSON.stringify({ ok: false, error: { code: nextCode, message: `YouTube refused Go live: ${nextCode}`, connectionId: randomUUID() } }),
     });
   });
   let checked = 0;
@@ -452,7 +454,10 @@ test("Fixture panel - each of the six YouTube refusals replaces Go live with its
     const block = scope.getByTestId("stream-youtube-refusal");
     await expect(block, `${code}: the refusal block`).toBeVisible({ timeout: ACT_MS * 2 });
     await expect(block).toHaveAttribute("data-code", code);
-    await expect(scope.getByTestId("stream-create-error")).toHaveText(en(`stream.error.${code}`));
+    // The block replaced the Go live the organiser had just pressed: focus lands on its first action, not on the top of the page.
+    const firstAction = { reconnect: "stream-youtube-reconnect", retry: "stream-youtube-retry", none: "stream-youtube-pick-another" }[FIX[code]];
+    await expect(scope.getByTestId(firstAction), `${code}: focus moved to the block's first action`).toBeFocused();
+    await expect(scope.getByTestId("stream-create-error")).toHaveText(en(`stream.error.${code}`, { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL }));
     await expect(scope.getByTestId("stream-youtube-refusal-note")).toHaveText(en("stream.youtube.refused.nothing"));
     await expect(scope.getByTestId("stream-go-live"), `${code}: the refusal REPLACES Go live`).toHaveCount(0);
     await expect(targetPicker(scope), `${code}: the picker field is red`).toHaveAttribute("aria-invalid", "true");
@@ -492,6 +497,92 @@ test("Fixture panel - each of the six YouTube refusals replaces Go live with its
     checked++;
   }
   expect(checked, "anti-vacuity: all six refusals were driven").toBe(YOUTUBE_REFUSAL_CODES.length);
+});
+
+test("Fixture panel - the picker with channels that are not ready: the badge never crowds the name or the row, at 1280, 768 and 320", async ({ page }) => {
+  // Five channels, each in a different health, with realistic long names: the healthy rows of the other tests never put a badge beside a
+  // 40-character name, which is where a 320px row breaks (the badge's 46% cap is what keeps the name readable).
+  test.setTimeout(budget({ navs: 6 + 5 * 3, acts: 40 + 5 * 8 }));
+  const r = await rig(page, { match: true });
+  const tag = randomBytes(2).toString("hex");
+  const channels = [
+    { title: `Alpha Riverside Basketball Club ${tag}`, badge: en("streaming.youtube.status.reconnectNeeded"), tone: "bad" },
+    { title: `Bravo Riverside Basketball Club ${tag}`, badge: en("streaming.youtube.status.notEnabled"), tone: "warn" },
+    { title: `Charlie Riverside Basketball Club ${tag}`, badge: en("streaming.youtube.status.blocked"), tone: "bad" },
+    { title: `Delta Riverside Basketball Club ${tag}`, badge: en("streaming.youtube.status.unknown"), tone: "neutral" },
+    { title: `Echo Riverside Basketball Club ${tag}`, badge: null, tone: null },
+  ] as const;
+  await open(page, "/streaming");
+  for (const [i, c] of channels.entries()) {
+    await connectChannel(page, [channel(c.title)], i === 0 ? "youtube-connect-empty" : "youtube-connect");
+    await expect(page.getByTestId("youtube-channel-row"), `SETUP: channel ${i + 1} is connected`).toHaveCount(i + 1, { timeout: NAV_MS });
+  }
+  // The server's own states, written the way its health check and a revoked grant leave them (connections.ts `liveStateOf`): a dead grant is
+  // `reconnect_needed`; a check made AFTER the token last changed says enabled (no code), not enabled, or blocked; no check says unknown.
+  await withDb(async (sql) => {
+    const set = async (title: string, patch: { status?: string; code?: string | null; checked?: boolean }) => {
+      const rows = await sql`
+        update org_youtube_connections
+           set status = ${patch.status ?? "connected"},
+               last_health_at = ${patch.checked ? sql`status_since + interval '1 minute'` : null},
+               last_error_code = ${patch.code ?? null}
+         where org_id = ${r.orgId} and channel_title = ${title}
+        returning id`;
+      expect(rows.length, `SETUP: ${title} was found once`).toBe(1);
+    };
+    await set(channels[0].title, { status: "reconnect_needed" });
+    await set(channels[1].title, { checked: true, code: "youtube_live_not_enabled" });
+    await set(channels[2].title, { checked: true, code: "youtube_live_blocked" });
+    await set(channels[3].title, {});
+    await set(channels[4].title, { checked: true });
+  });
+  let widthsRead = 0;
+  let badgesRead = 0;
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    const body = await openPhoneTab(page, r);
+    await openTargetPicker(body);
+    const rows = body.getByTestId("stream-target-option");
+    await expect(rows, "the list offers all five channels").toHaveCount(channels.length);
+    for (const c of channels) {
+      const row = rows.filter({ has: page.getByTestId("stream-target-name").filter({ hasText: c.title }) });
+      await expect(row, `${c.title}: one row`).toHaveCount(1);
+      const badge = row.getByTestId("stream-target-health");
+      if (c.badge === null) {
+        await expect(badge, `${c.title}: a ready channel claims no badge`).toHaveCount(0);
+      } else {
+        await expect(badge, `${c.title} at ${w}: the badge`).toHaveText(c.badge);
+        await expect(badge).toHaveAttribute("data-tone", c.tone);
+        badgesRead++;
+      }
+      // The geometry: the row holds its width, the name keeps a readable share, the badge stays within its 46% cap and never over the name.
+      const box = await row.evaluate((el, hasBadge) => {
+        const li = el.getBoundingClientRect();
+        const name = el.querySelector('[data-testid="stream-target-name"]')!.getBoundingClientRect();
+        const b = el.querySelector('[data-testid="stream-target-health"]')?.getBoundingClientRect() ?? null;
+        return { rowW: li.width, rowRight: li.right, scrolls: el.scrollWidth > el.clientWidth + 1, nameW: name.width, nameRight: name.right, badgeW: b?.width ?? 0, badgeLeft: b?.left ?? null, badgeRight: b?.right ?? 0, hasBadge };
+      }, c.badge !== null);
+      expect(box.scrolls, `${c.title} at ${w}: the row's content fits the row`).toBe(false);
+      expect(box.nameW, `${c.title} at ${w}: the name keeps room (${Math.round(box.nameW)}px)`).toBeGreaterThan(40);
+      if (box.badgeLeft !== null) {
+        expect(box.badgeW, `${c.title} at ${w}: the badge is within 46% of the row (${Math.round(box.badgeW)} of ${Math.round(box.rowW)}px)`).toBeLessThanOrEqual(box.rowW * 0.46 + 1);
+        expect(box.nameRight, `${c.title} at ${w}: the badge never paints over the name`).toBeLessThanOrEqual(box.badgeLeft + 1);
+        expect(box.badgeRight, `${c.title} at ${w}: the badge stays inside the row`).toBeLessThanOrEqual(box.rowRight + 1);
+      }
+      await expectTappable(row, `${c.title} row at ${w}`);
+    }
+    await expectNoPageScroll(page, `the open picker with unhealthy channels at ${w}`);
+    await shot(page, `picker-unhealthy-open-${w}`);
+    // Picked, the trigger carries the same badge (it reads like the row it came from) without widening the page.
+    const pick = rows.filter({ has: page.getByTestId("stream-target-name").filter({ hasText: channels[0].title }) });
+    await selectTarget(body, (await pick.getAttribute("data-target-id"))!);
+    await expect(targetPicker(body).getByTestId("stream-target-health"), `the trigger wears the picked channel's badge at ${w}`).toHaveText(channels[0].badge);
+    await expectNoPageScroll(page, `the closed picker on an unhealthy channel at ${w}`);
+    await shot(page, `picker-unhealthy-picked-${w}`);
+    widthsRead++;
+  }
+  expect(widthsRead, "anti-vacuity: every width was walked").toBe(WIDTHS.length);
+  expect(badgesRead, "anti-vacuity: four badged channels were read at every width").toBe(WIDTHS.length * 4);
 });
 
 test("Fixture panel - after a match: the replay row shows when it ran, Watch replay wears the icon, Copy link copies, at 1280, 768 and 320", async ({ page, context }) => {

@@ -27,7 +27,7 @@ import { fmtNumber } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import { DESTINATION_NOT_ALLOWED, TARGET_UNREADABLE } from "@/lib/stream-destinations";
 import { RELAY_PLAN_GATES } from "@/lib/stream-plan-gates";
-import { YOUTUBE_REFUSAL_CODES, isYoutubeRefusalCode, type YoutubeRefusalCode } from "@/lib/youtube";
+import { YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL, YOUTUBE_REFUSAL_CODES, isYoutubeRefusalCode, type YoutubeRefusalCode } from "@/lib/youtube";
 import type {
   StreamEndReason, StreamFailReason, StreamLostCountdown, StreamPhone, StreamSessionCurrent,
 } from "@/server/api-v1/schemas";
@@ -196,16 +196,18 @@ export const CREATE_ERROR_KEYS: Record<CreateErrorCode, MessageKey> = {
 };
 
 /** What the organiser's panel puts where Go live was, for each YouTube refusal (owner's Option B, 2026-10-27: the fix REPLACES the
- *  button). `reconnect`: the channel's grant is dead, so a link to the Streaming page, where Reconnect lives. `retry`: nothing is
- *  wrong with the destination — YouTube did not answer — so the same Go live, asked again. `none`: nothing Seazn or the club can do
- *  from here (a channel not yet enabled for live, one YouTube restricted, a quota used up, ten streams already live): the way on is
- *  another destination, which every refusal offers. A Record over the declaration, so a new code does not compile until placed. */
+ *  button). `reconnect`: the channel's grant is dead, so a link to the Streaming page, where Reconnect lives. `retry`: the refusal
+ *  is one a retry on the same destination may clear (YouTube did not answer, its quota for new streams is spent for now, the
+ *  channel's ten streams are all live) — so the same Go live, asked again (controller ruling, T12 fix round 1; it is the same split
+ *  `YOUTUBE_REFUSAL_REMEDY` makes for the phone's start). `none`: nothing Seazn or the club can do from here (a channel not yet
+ *  enabled for live, one YouTube restricted): the way on is another destination, which every refusal offers. A Record over the
+ *  declaration, so a new code does not compile until placed. */
 export const YOUTUBE_REFUSAL_FIX: Record<YoutubeRefusalCode, "reconnect" | "retry" | "none"> = {
   youtube_reconnect_needed: "reconnect",
   youtube_live_not_enabled: "none",
   youtube_live_blocked: "none",
-  youtube_limit_reached: "none",
-  youtube_channel_busy: "none",
+  youtube_limit_reached: "retry",
+  youtube_channel_busy: "retry",
   youtube_unavailable: "retry",
 };
 
@@ -303,7 +305,8 @@ export function inUseText(msg: Msg, h: CreateErrorHolder): string {
 export function createErrorText(error: { code: CreateFailureCode; holder: CreateErrorHolder | null }, msg: Msg): string {
   if (error.code === "target_in_use") return error.holder ? inUseText(msg, error.holder) : msg(TARGET_IN_USE_ELSEWHERE_KEY);
   if (error.code === TARGET_REMOVED) return msg("stream.error.target_removed");
-  return msg(CREATE_ERROR_KEYS[error.code]);
+  // `{max}` belongs to youtube_channel_busy alone (the pool's ten-streams cap, lib/youtube.ts); a key without the placeholder ignores it.
+  return msg(CREATE_ERROR_KEYS[error.code], { max: YOUTUBE_MAX_LIVE_KEYS_PER_CHANNEL });
 }
 
 export const INGEST_STATE_KEYS: Record<"connected" | "disconnected" | "unknown", MessageKey> = {

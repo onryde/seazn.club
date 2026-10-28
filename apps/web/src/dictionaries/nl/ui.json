@@ -5952,7 +5952,7 @@
   "stream.error.youtube_live_not_enabled": "Livestreamen is voor dit kanaal nog niet ingeschakeld. YouTube kan tot 24 uur nodig hebben.",
   "stream.error.youtube_live_blocked": "YouTube heeft livestreamen op dit kanaal beperkt.",
   "stream.error.youtube_limit_reached": "De limiet van YouTube voor nieuwe streams is bereikt. Probeer het later opnieuw of kies een andere bestemming.",
-  "stream.error.youtube_channel_busy": "Dit kanaal heeft al 10 streams live.",
+  "stream.error.youtube_channel_busy": "Dit kanaal heeft al {max} streams live.",
   "stream.error.youtube_unavailable": "YouTube antwoordde niet. Probeer het opnieuw.",
   "stream.youtube.refused.title": "{label} kan niet live gaan",
   "stream.youtube.refused.nothing": "Er is niets gestart of in rekening gebracht.",

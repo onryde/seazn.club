@@ -24,7 +24,7 @@ import { fileURLToPath } from "node:url";
 import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizontalScroll } from "../helpers";
 import { setRigPlan, signInAs } from "../overlay-kit";
 import { storeCameraOnly } from "../helpers/stream-mode";
-import { expectSelectedTargetName, offeredTargetIds, offeredTargetNames, selectTarget, targetPicker } from "../helpers/stream-target-picker";
+import { expectSelectedTarget, offeredTargetIds, offeredTargetNames, selectTarget, targetPicker } from "../helpers/stream-target-picker";
 import { STREAM_PLATFORMS, type StreamPlatform } from "../../src/lib/stream-destinations";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import {
@@ -352,7 +352,7 @@ for (const width of [320, 1280] as const) {
     // 3. PICK it on a match and GO LIVE.
     let body = await openPhoneTab(page, rig, f.no);
     await selectTarget(body, id);
-    await expectSelectedTargetName(body, label);
+    await expectSelectedTarget(body, label, "youtube");
     await streamSlot();
     await pairedPhone(page); // W5: Go live needs a paired phone
     await body.getByTestId("stream-go-live").click();
@@ -1003,7 +1003,7 @@ for (const width of [320, 1280] as const) {
     await selectTarget(body, keep.id);
     await expect(body.getByTestId("stream-create-error"), "the pick answers it").toHaveCount(0);
     await expect(picker(body).getByTestId("stream-target-placeholder"), "and the placeholder goes").toHaveCount(0);
-    await expectSelectedTargetName(body, `Keep ${rig.tag}`);
+    await expectSelectedTarget(body, `Keep ${rig.tag}`, "youtube");
     await expect(goLive(body)).toBeEnabled();
     expect(await sessionsOf(rig.orgId), "still nothing started").toEqual([]);
     await dir.close();

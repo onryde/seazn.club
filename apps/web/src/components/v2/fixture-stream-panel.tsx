@@ -32,7 +32,8 @@ import { loadCheckoutSheet } from "./stream-checkout-sheet-loader";
 import { FixtureDestinationPicker } from "./fixture-destination-picker";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 import { ReplayCopyButton } from "./stream-replay-copy";
-import { youtubeTargetLabel } from "./youtube-connect-panel";
+import { FocusFirstAction } from "./refusal-focus";
+import { channelStatus, youtubeTargetLabel } from "./youtube-connect-panel";
 import { D3Warning, PhoneStripView, SignalChain } from "./stream-signal-chain";
 import { SeaznQrImage, SeaznQrPlaceholder } from "./seazn-qr-image";
 import { useProvidedPhoneSession, useSharedPhoneSession } from "./stream-session-provider";
@@ -90,7 +91,7 @@ import {
 } from "@/lib/stream-session-view";
 import { streamUrlSchema } from "@/lib/stream-url";
 import { fmtNumber, fmtTime } from "@/lib/format";
-import { STREAMING_PAGE_HREF } from "@/lib/youtube";
+import { STREAMING_PAGE_HREF, YOUTUBE_REFUSAL_REMEDY, isYoutubeUrl, type YoutubeRefusalCode } from "@/lib/youtube";
 // TYPES only: `@/server/**` is server code, and a runtime import from a client island breaks the build.
 import type { StreamMode, StreamPhone, StreamSessionCurrent, StreamTarget } from "@/server/api-v1/schemas";
 
@@ -738,6 +739,15 @@ export function PhoneStopProbe({ fixtureId, label }: { fixtureId: string; label?
   );
 }
 
+/** Has the fact a `fix_destination` YouTube refusal reported been put right, as this fresh list reads it? A dead grant (`reconnect_needed`)
+ *  is mended the moment the connection reads `connected` — whatever its `liveState`: a reconnect resets that to `unknown` until a health
+ *  check has run since the token changed (server/youtube/connections.ts `liveStateOf`), so waiting for `enabled` would keep the block
+ *  over a channel the organiser had just reconnected. The other two (not enabled for live, restricted) are about the channel's live
+ *  state, which only a clean check (`enabled`, tone `ok`) can mend. */
+function youtubeRefusalIsStale(refusal: YoutubeRefusalCode, y: NonNullable<StreamTarget["youtube"]>): boolean {
+  return refusal === "youtube_reconnect_needed" ? y.status === "connected" : channelStatus(y).tone === "ok";
+}
+
 /**
  * The Phone tab's container: fetch + poll + actions. Everything visible is `PhoneTabBody`, so the node harness renders
  * every state without a network. The session itself — its reads, its poll and its stop — is `usePhoneSession`.
@@ -869,6 +879,16 @@ export function PhoneTab({
         // and only here, where the list's `inUse` is fresh.
         const shownTarget = next === null ? undefined : list.find((t) => t.id === next);
         setCreateError((e) => (e?.code === "target_in_use" && !shownTarget?.inUse ? null : e));
+        // YouTube Connect T12 (fix round 1, I2): a refusal that was about the CHANNEL's own state (a dead grant, not yet enabled for
+        // live, restricted — `fix_destination`) goes stale once the fix is made elsewhere: the organiser reconnected on the Streaming
+        // page and came back, and this read finds the channel healthy (or the destination gone). Judged on the SHOWN selection, here
+        // where the list is fresh. A refusal that is still true (the channel still reads unhealthy) stays, and so does every
+        // retry-class one (quota, ten live, YouTube silent): those carry their own Try again.
+        setCreateError((e) => {
+          const refusal = e === null ? null : youtubeRefusalOf(e.code);
+          if (refusal === null || YOUTUBE_REFUSAL_REMEDY[refusal] !== "fix_destination") return e;
+          return shownTarget?.youtube && !youtubeRefusalIsStale(refusal, shownTarget.youtube) ? e : null;
+        });
         // B5 review m-2: an EMPTY list has nothing to "pick another" from — the empty state (No destinations yet + Manage)
         // says what to do, and a "removed" line kept past it would later sit beside an enabled Go live.
         if (list.length === 0) setCreateError((e) => (e?.code === TARGET_REMOVED ? null : e));
@@ -2131,54 +2151,58 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
   const refusalFix = ytRefusal ? YOUTUBE_REFUSAL_FIX[ytRefusal] : null;
   const refusalBlock =
     ytRefusal && p.createError ? (
-      <div
-        id={refusalId}
-        data-testid="stream-youtube-refusal"
-        data-code={ytRefusal}
-        data-fix={refusalFix ?? undefined}
-        role="alert"
-        className="min-w-0 rounded-lg border border-red-200 bg-red-50 p-3.5 text-sm text-red-800"
-      >
-        {selected && (
-          <p className="flex gap-2 font-semibold">
-            <CircleAlert aria-hidden className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.8} />
-            <span data-testid="stream-youtube-refusal-title" className="min-w-0 [overflow-wrap:anywhere]">
-              {msg("stream.youtube.refused.title", { label: youtubeTargetLabel(msg, selected.label) })}
-            </span>
-          </p>
-        )}
-        <p data-testid="stream-create-error" className="mt-1">
-          {createErrorText(p.createError, msg)}
-        </p>
-        <p data-testid="stream-youtube-refusal-note" className="mt-1">
-          {msg("stream.youtube.refused.nothing")}
-        </p>
-        {refusalFix === "reconnect" && (
-          <a
-            data-testid="stream-youtube-reconnect"
-            href={STREAMING_PAGE_HREF}
-            target="_blank"
-            rel="noopener"
-            className="btn btn-primary mt-3 min-h-12 w-full text-base"
-          >
-            {msg("stream.youtube.refused.reconnect")}
-            <ExternalLink aria-hidden className="h-4 w-4" strokeWidth={1.8} />
-          </a>
-        )}
-        {refusalFix === "retry" && (
-          <button type="button" data-testid="stream-youtube-retry" disabled={goLiveDisabled} onClick={p.onGoLive} className="btn btn-primary mt-3 min-h-12 w-full text-base">
-            {msg("stream.youtube.refused.retry")}
-          </button>
-        )}
-        <button
-          type="button"
-          data-testid="stream-youtube-pick-another"
-          onClick={p.onPickAnother}
-          className="mt-1.5 inline-flex min-h-11 w-full items-center justify-center text-sm font-medium text-red-800 underline decoration-red-300 underline-offset-2 hover:decoration-red-700"
+      // Focus goes to the block's first action when it appears (it replaced the Go live the organiser had just pressed); the key makes
+      // each refusal — another code, or the same one after Try again — focus again.
+      <FocusFirstAction key={ytRefusal}>
+        <div
+          id={refusalId}
+          data-testid="stream-youtube-refusal"
+          data-code={ytRefusal}
+          data-fix={refusalFix ?? undefined}
+          role="alert"
+          className="min-w-0 rounded-lg border border-red-200 bg-red-50 p-3.5 text-sm text-red-800"
         >
-          {msg("stream.youtube.refused.pickAnother")}
-        </button>
-      </div>
+          {selected && (
+            <p className="flex gap-2 font-semibold">
+              <CircleAlert aria-hidden className="mt-0.5 h-5 w-5 shrink-0" strokeWidth={1.8} />
+              <span data-testid="stream-youtube-refusal-title" className="min-w-0 [overflow-wrap:anywhere]">
+                {msg("stream.youtube.refused.title", { label: youtubeTargetLabel(msg, selected.label) })}
+              </span>
+            </p>
+          )}
+          <p data-testid="stream-create-error" className="mt-1">
+            {createErrorText(p.createError, msg)}
+          </p>
+          <p data-testid="stream-youtube-refusal-note" className="mt-1">
+            {msg("stream.youtube.refused.nothing")}
+          </p>
+          {refusalFix === "reconnect" && (
+            <a
+              data-testid="stream-youtube-reconnect"
+              href={STREAMING_PAGE_HREF}
+              target="_blank"
+              rel="noopener"
+              className="btn btn-primary mt-3 min-h-12 w-full text-base"
+            >
+              {msg("stream.youtube.refused.reconnect")}
+              <ExternalLink aria-hidden className="h-4 w-4" strokeWidth={1.8} />
+            </a>
+          )}
+          {refusalFix === "retry" && (
+            <button type="button" data-testid="stream-youtube-retry" disabled={goLiveDisabled} onClick={p.onGoLive} className="btn btn-primary mt-3 min-h-12 w-full text-base">
+              {msg("stream.youtube.refused.retry")}
+            </button>
+          )}
+          <button
+            type="button"
+            data-testid="stream-youtube-pick-another"
+            onClick={p.onPickAnother}
+            className="mt-1.5 inline-flex min-h-11 w-full items-center justify-center text-sm font-medium text-red-800 underline decoration-red-300 underline-offset-2 hover:decoration-red-700"
+          >
+            {msg("stream.youtube.refused.pickAnother")}
+          </button>
+        </div>
+      </FocusFirstAction>
     ) : null;
 
   return (
@@ -2546,7 +2570,8 @@ export function PhoneTabBody(p: PhoneTabBodyProps) {
                   rel="noopener noreferrer"
                   className="btn btn-ghost min-h-11 w-full gap-2.5 md:min-h-10 md:w-auto"
                 >
-                  {p.view.target.kind === "youtube" && <PlatformMark kind="youtube" size="sm" />}
+                  {/* The mark follows the LINK, not the destination: a club's own stream_url is never overwritten with YouTube's. */}
+                  {isYoutubeUrl(p.view.replayUrl) && <PlatformMark kind="youtube" size="sm" />}
                   {msg("stream.phone.replay")}
                 </a>
                 <ReplayCopyButton url={p.view.replayUrl} />

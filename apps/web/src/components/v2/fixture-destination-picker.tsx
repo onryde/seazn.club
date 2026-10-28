@@ -10,7 +10,8 @@
 // panel, and an in-flow list simply moves the controls below it down while it is open.
 //
 // Semantics: the W3C "select-only combobox" — the trigger is a <button role="combobox"> that keeps focus, the list is a
-// role="listbox" of role="option"s, and the arrow keys move `aria-activedescendant`. A visible <label htmlFor={id}> names it (a
+// role="listbox" of role="option"s, and the arrow keys move `aria-activedescendant`. Typing the first letters of a destination's name
+// jumps to it (a buffered prefix match, reset after a pause), as a native <select> did. A visible <label htmlFor={id}> names it (a
 // button is a labelable element). One DOM at every width; the rows are 56 px, past the 44 px tap floor.
 import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Check, ChevronRight } from "lucide-react";
@@ -21,6 +22,9 @@ import { PlatformMark, STREAM_KIND_BRAND, platformName } from "./stream-platform
 import { PRIVACY_KEY, TONE, channelStatus, youtubeTargetLabel, type Tone } from "./youtube-connect-panel";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
+
+/** A pause this long in typing starts the typeahead over (a native <select>'s own is about the same). */
+export const TYPEAHEAD_RESET_MS = 500;
 
 /** What one destination reads as in the list. Pure, so the node harness can prove every kind and every health without a DOM. */
 export interface DestinationRow {
@@ -97,6 +101,8 @@ export function FixtureDestinationPicker({ id, targets, selectedId, onSelect, in
   const [open, setOpen] = useState(false);
   const selectedIndex = targets.findIndex((t) => t.id === selectedId);
   const [active, setActive] = useState(0);
+  // Typeahead: the letters typed so far and when the last one landed. A ref, not state: it never draws anything.
+  const typed = useRef({ text: "", at: 0 });
   // The panel's "Use another destination" bumps `openSignal`: open the list on that change (state adjusted while rendering, the
   // sanctioned pattern for a prop that changed), and focus the trigger once it has committed.
   const [seenSignal, setSeenSignal] = useState(openSignal);
@@ -112,6 +118,9 @@ export function FixtureDestinationPicker({ id, targets, selectedId, onSelect, in
     if (openSignal > baseline.current) trigger.current?.focus();
   }, [openSignal]);
   const rows = targets.map((t) => destinationRow(msg, t));
+  // The list may shrink while it is open (a poll drops a destination): `active` is read clamped, so aria-activedescendant never names
+  // a row that is gone.
+  const activeIndex = Math.min(active, Math.max(0, targets.length - 1));
   const selected = selectedIndex >= 0 ? targets[selectedIndex]! : null;
   const selectedRow = selectedIndex >= 0 ? rows[selectedIndex]! : null;
   const optionId = (i: number) => `${listId}-o${i}`;
@@ -132,8 +141,24 @@ export function FixtureDestinationPicker({ id, targets, selectedId, onSelect, in
   };
   const pick = (i: number) => {
     const t = targets[i];
-    if (t) onSelect(t.id);
+    // The row already picked closes the list and saves nothing: a re-pick would PUT the same choice again, mark it "picked here"
+    // and clear a hold the organiser has not resolved.
+    if (t && t.id !== selectedId) onSelect(t.id);
     setOpen(false);
+  };
+  // A printable key: extend the buffer (or start it over after a pause) and move to the first row whose NAME starts with it, opening
+  // the list if it was closed. A key that matches nothing moves nothing. (A space reaches here only mid-word; see the Enter/Space case.)
+  const typeahead = (key: string): boolean => {
+    const now = Date.now();
+    const cur = typed.current;
+    const fresh = now - cur.at > TYPEAHEAD_RESET_MS;
+    const text = (fresh ? "" : cur.text) + key.toLocaleLowerCase();
+    typed.current = { text, at: now };
+    const hit = rows.findIndex((r) => r.name.toLocaleLowerCase().startsWith(text));
+    if (hit < 0) return false;
+    setActive(hit);
+    setOpen(true);
+    return true;
   };
   const last = targets.length - 1;
   const onKeyDown = (e: KeyboardEvent<HTMLButtonElement>) => {
@@ -153,7 +178,12 @@ export function FixtureDestinationPicker({ id, targets, selectedId, onSelect, in
       case "Enter":
       case " ":
         e.preventDefault();
-        return open ? pick(active) : show();
+        // Mid-word, a space belongs to the typeahead ("Court 1"): it extends the buffer and never picks or opens.
+        if (e.key === " " && typed.current.text !== "" && Date.now() - typed.current.at <= TYPEAHEAD_RESET_MS) {
+          typeahead(" ");
+          return;
+        }
+        return open ? pick(activeIndex) : show();
       case "Escape":
         if (open) {
           e.preventDefault();
@@ -163,6 +193,8 @@ export function FixtureDestinationPicker({ id, targets, selectedId, onSelect, in
       case "Tab":
         // Leaving the control closes the list; nothing is picked by walking past it.
         return setOpen(false);
+      default:
+        if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey && typeahead(e.key)) e.preventDefault();
     }
   };
 
@@ -178,7 +210,7 @@ export function FixtureDestinationPicker({ id, targets, selectedId, onSelect, in
         aria-haspopup="listbox"
         aria-expanded={open}
         aria-controls={listId}
-        aria-activedescendant={open ? optionId(active) : undefined}
+        aria-activedescendant={open ? optionId(activeIndex) : undefined}
         aria-invalid={invalid || undefined}
         aria-describedby={describedBy}
         onClick={() => (open ? setOpen(false) : show())}
@@ -224,10 +256,10 @@ export function FixtureDestinationPicker({ id, targets, selectedId, onSelect, in
                 aria-selected={isSelected}
                 data-testid="stream-target-option"
                 data-target-id={t.id}
-                data-active={i === active ? "true" : undefined}
+                data-active={i === activeIndex ? "true" : undefined}
                 onClick={() => pick(i)}
                 onMouseEnter={() => setActive(i)}
-                className={`flex min-h-14 min-w-0 cursor-pointer items-center gap-3 px-3 py-2 ${isSelected ? "bg-purple-50" : i === active ? "bg-slate-50" : "bg-white"}`}
+                className={`flex min-h-14 min-w-0 cursor-pointer items-center gap-3 px-3 py-2 ${isSelected ? "bg-purple-50" : i === activeIndex ? "bg-slate-50" : "bg-white"}`}
               >
                 <Identity t={t} row={row} />
                 {row.health && (
