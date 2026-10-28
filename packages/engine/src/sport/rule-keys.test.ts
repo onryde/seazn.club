@@ -272,6 +272,9 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     football: { shootoutAttempts: "shootout" },
     hockey: { "shootout.attempts": "shootout" },
     icehockey: { "overtime.minutes": "overtime", "shootout.attempts": "shootout" },
+    // W2e Task 7 (A1c-2, ruling 157): what a TIED super over does (repeat / boundary count / shared) is only asked while
+    // the super over is on (cricket DOMAIN.md, "Super over"; `canEndLevel` reads it under `cfg.superOver` alone).
+    cricket: { superOverStillTied: "superOver" },
   };
 
   it("every bounded key is a whole decider or the detail of one: `detailOf` names a declared decider of the same sport, and the pairs are the rulebook's (counted)", () => {
@@ -295,6 +298,28 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(bounded).toBe(deciderCount());
     expect(details).toBe(Object.values(DETAILS).reduce((n, d) => n + Object.keys(d).length, 0));
     expect(details).toBeGreaterThan(0);
+  });
+
+  // Single-sport on purpose: `superOverStillTied` is cricket's key and no other sport declares one; the all-sport population
+  // (every `detailOf` in the registry is the rulebook's pair, counted) is the sweep above.
+  it("cricket superOverStillTied is a detail of superOver", () => {
+    const cricket = sport("cricket");
+    const facts = cricket.ruleKeys!;
+    expect(facts.superOverStillTied, "premise: the key is declared").toBeDefined();
+    expect(facts.superOverStillTied!.detailOf, "held by the super over").toBe("superOver");
+    expect(facts.superOver?.decider, "the super over is a declared whole decider").toBe(true);
+    // Still a stage key (the field is per stage, never per match) and still no decider of its own: the knockout
+    // preselection and the "no decider" notice read `decider: true`, and a policy is not what settles a level match.
+    expect(facts.superOverStillTied!.scope).toBe("stage");
+    expect(facts.superOverStillTied!.decider).toBeUndefined();
+    // Positive pair, on the stage a knockout creates: the pairing moved nothing about which keys the stage carries.
+    expect(stageKeysFor(cricket, "knockout", "t20")).toContain("superOverStillTied");
+    expect(deciderKeysFor(cricket, "knockout", "t20")).toContain("superOver");
+    expect(deciderKeysFor(cricket, "knockout", "t20")).not.toContain("superOverStillTied");
+    // The negative pair: cricket's other stage keys are not details (a pairing declared too widely would hold them too).
+    const details = Object.entries(facts).filter(([, f]) => f.detailOf !== undefined).map(([k]) => k);
+    expect(details).toEqual(["superOverStillTied"]);
+    expect(Object.keys(facts).length, "the other cricket keys were walked").toBeGreaterThan(details.length);
   });
 
   it("Q5 (rulebook): each sport's match, stage and points keys are exactly Q5's lists plus the plan's, restricted to its schema", () => {
