@@ -1,6 +1,7 @@
 // W2e Task 15 (A2) - the proving tests for icehockey.md's W2e rows: IH-SU-1 and IH-ST-1. Every describe/it title carries its row id as a
 // whole token (packages/engine/test/rules-reference.ts reads them). Expected values come from the rulebook (IIHF Official Rule Book
-// 2026/27: Rules 16.1, 16.2, 17.1, 17.2, 20.2, 26.1 and 84.3) written into each test as literals - never from the code under test.
+// 2026/27: Rules 16.1, 16.2, 17.1, 17.2, 18.2, 19, 20.2 and 26.1; 84.3 is the overtime rule and is not claimed) written into each test as literals -
+// never from the code under test. Both rows are `deviation` rows because of the limits below.
 //
 // Several tests are marked "limit": they pin where the engine does NOT follow the IIHF article (a penalty-shot goal, coincidental minors
 // and a double minor under Rule 16.2/18.2; the delayed clock of a third penalty under Rule 26.1). They are the engine's behaviour as it is,
@@ -192,7 +193,7 @@ describe("IH-SU-1 a goal ends the conceding side's running minor or bench minor 
     expect(coincidental.suspensions.map((s) => s.side)).toEqual(["home"]);
   });
 
-  it("IH-SU-1 limit: a double minor is never released by a goal (IIHF 18.2 washes one of its two minutes out)", () => {
+  it("IH-SU-1 limit: a double minor is never released by a goal (IIHF 18.2 washes one of its two minors out for a goal scored during the delay)", () => {
     const state = fold(cfgOf(), start, card("double_minor", A, { at: at("P1", 100) }), goal(H, { at: at("P1", 200) }));
     expect(state.suspensions.map((s) => s.classKey)).toEqual(["double_minor"]);
     // A plain minor beside it is the one the goal reaches.
