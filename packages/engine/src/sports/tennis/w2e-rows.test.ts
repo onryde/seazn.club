@@ -5,7 +5,10 @@
 // Expected values come from the rulebook and the rule rows, never from the code under test:
 //  - ITF Rules of Tennis, Rule 5 (scoring in a game: the fourth point, two clear, wins the game) and Rule 6 (a set is first to six
 //    games, a tie-break at 6-all): what one more point or one more game does to a score is read off those;
-//  - ITF Code of Conduct: a point penalty concedes ONE point, a game penalty concedes ONE game;
+//  - ITF Code of Conduct: a point penalty concedes ONE point, a game penalty concedes ONE game; during a set tie-break a game
+//    penalty costs the set and during a match tie-break the match, as the USTA's Friend at Court code-violation table has it (read
+//    through the USTA Mississippi page that reproduces it, mstennis.com/node/229: a SECONDARY source - the ITF Code's own wording
+//    was not retrieved);
 //  - the rows' own text (rules/tennis.md): the sanction event alone moves no score; interruptions are recorded and flagged.
 //
 // Every fold is PAD-SHAPED (`strictFromSeq: 0`) unless a test names a narrower strict point: the write path.
@@ -15,7 +18,7 @@ import { foldMatch, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair } from "../../core/types.ts";
 import { expectSanctionMovesNoScore, sanctionEventTypeOf, sanctionLevelsOf } from "../../testkit/sanction-score.ts";
 import { defaultLineupPair, makeEnvelope } from "../../testkit/helpers.ts";
-import type { NestedCfg, NestedState } from "../nested/kernel.ts";
+import { NestedInterruptionKind, type NestedCfg, type NestedState } from "../nested/kernel.ts";
 import { tennis } from "./tennis.ts";
 
 const lineups: LineupPair = defaultLineupPair(tennis.positions);
@@ -105,7 +108,7 @@ describe("TN-SE-2 a tennis point penalty or game penalty stays entered as a poin
     expect(awarded.serving).toBe("home");
   });
 
-  it("TN-SE-2 a game award is refused while a tie-break is played, and taken in the same match one game earlier", () => {
+  it("TN-SE-2 limit: a game award is refused while a tie-break is played, and taken in the same match one game earlier", () => {
     // Alternate games to 6-all: the next game is the tie-break (Rule 6). The award is refused there, on the write path only.
     const toSixAll: Spec[] = [START, ...[0, 1, 2, 3, 4, 5].flatMap(() => [...game(H), ...game(A)])];
     const inTieBreak = fold(cfg, toSixAll);
@@ -117,6 +120,52 @@ describe("TN-SE-2 a tennis point penalty or game penalty stays entered as a poin
     const fiveAll = toSixAll.slice(0, toSixAll.length - game(A).length);
     expect(fold(cfg, fiveAll).games).toEqual({ home: 6, away: 5 });
     expect(codeOf(() => fold(cfg, [...fiveAll, award], fiveAll.length))).toBeNull();
+  });
+
+  it("TN-SE-2 limit: a game penalty in a set tie-break is entered as the breaker's points - the set goes to the opponent, with a tie-break score that was never played", () => {
+    // The rulebook (USTA Friend at Court, secondary): a game penalty during a set tie-break costs the set. The engine has no game award there, so the
+    // chair enters the points that give the opponent the breaker. 6-all, tie-break 2-3 to A; H is penalised a game.
+    const toSixAll: Spec[] = [START, ...[0, 1, 2, 3, 4, 5].flatMap(() => [...game(H), ...game(A)])];
+    const played = [...toSixAll, ...points(H, H, A, A, A)];
+    const midBreaker = fold(cfg, played);
+    expect(midBreaker.points).toMatchObject({ kind: "tiebreak", home: 2, away: 3 });
+    const penalised = [...played, sanction(H, "game_penalty")];
+    expect(scoreView(fold(cfg, penalised)), "the sanction alone").toEqual(scoreView(midBreaker));
+    // Four more points to A take the breaker 7-2 (7 to win, two clear): the set is A's, as the rulebook has it.
+    const entered = fold(cfg, [...penalised, ...points(A, A, A, A)]);
+    expect(entered.sets).toEqual([{ home: 6, away: 7, tb: { home: 2, away: 7 } }]);
+    expect(entered.games).toEqual({ home: 0, away: 0 });
+    // The limit: the shown tie-break score (2-7) is not one that was played - at the penalty it stood 2-3.
+    expect(entered.sets[0]!.tb).not.toEqual({ home: midBreaker.points.home, away: midBreaker.points.away });
+  });
+
+  it("TN-SE-2 limit: a game penalty in a match tie-break is entered as the breaker's points - the match goes to the opponent, and the award is refused there too", () => {
+    // doubles-noad-mtb10: one set all, the deciding set is a 10-point match tie-break (ITF Appendix VI). USTA (secondary): the match is lost.
+    const mtb = cfgOf(tennis.variants["doubles-noad-mtb10"] as Record<string, unknown>);
+    const oneSetAll: Spec[] = [START, ...Array.from({ length: 6 }, () => game(H)).flat(), ...Array.from({ length: 6 }, () => game(A)).flat()];
+    const inBreaker = fold(mtb, oneSetAll);
+    expect(inBreaker.sets).toHaveLength(2);
+    expect(inBreaker.points.kind).toBe("matchTiebreak");
+    const award: Spec = ["tennis.game.award", { winner: A }];
+    expect(codeOf(() => fold(mtb, [...oneSetAll, award], oneSetAll.length))).toBe("GAME_AWARD_DURING_TIEBREAK");
+    const penalised = [...oneSetAll, sanction(H, "game_penalty")];
+    expect(tennis.outcome(fold(mtb, penalised)), "the sanction alone").toBeNull();
+    // Ten points to A close the breaker 10-0: the match is A's.
+    const entered = fold(mtb, [...penalised, ...points(...Array.from({ length: 10 }, () => A))]);
+    expect(tennis.outcome(entered)).toMatchObject({ kind: "win", winner: A });
+  });
+
+  it("TN-SE-2 under no-ad scoring the point a penalty concedes at deuce closes the game, where ad scoring would give only the advantage", () => {
+    // Penalty-point behaviour is the config's scoring: 40-all, then one point conceded to A. The default (ad) config leaves a game on, the no-ad config ends it.
+    const toDeuce: Spec[] = [START, ...points(H, A, H, A, H, A)];
+    const noAd = cfgOf(tennis.variants["doubles-noad-mtb10"] as Record<string, unknown>);
+    const ad = cfg;
+    expect(scoreView(fold(noAd, [...toDeuce, sanction(H, "point_penalty")])), "no-ad: the sanction alone").toEqual(scoreView(fold(noAd, toDeuce)));
+    expect(scoreView(fold(ad, [...toDeuce, sanction(H, "point_penalty")])), "ad: the sanction alone").toEqual(scoreView(fold(ad, toDeuce)));
+    expect(fold(noAd, [...toDeuce, sanction(H, "point_penalty"), ...points(A)]).games).toEqual({ home: 0, away: 1 });
+    const adAfter = fold(ad, [...toDeuce, sanction(H, "point_penalty"), ...points(A)]);
+    expect(adAfter.games).toEqual({ home: 0, away: 0 });
+    expect(adAfter.points).toMatchObject({ advantage: "away" });
   });
 
   it("TN-SE-2 a sanction at every level the payload takes moves no score, over every declared config and walk", () => {
@@ -139,7 +188,8 @@ describe("TN-SE-2 a tennis point penalty or game penalty stays entered as a poin
 
 describe("TN-RO-1 tennis records interruptions - medical, toilet, heat and other breaks - flags those beyond the allowance, and none moves a score", () => {
   const interruption = (payload: Record<string, unknown>): Spec => ["tennis.interruption", payload];
-  const KINDS = ["medical", "toilet", "heat", "other"] as const;
+  // The kinds the module declares, not a list typed here; the row names these four, so a kind dropped from the declaration reds below.
+  const KINDS = NestedInterruptionKind.options;
   const play = [START, ...points(H, H, A)];
 
   it("TN-RO-1 every kind is recorded with its side and the set it fell in, and the score is exactly what the same points give without it", () => {
@@ -159,6 +209,7 @@ describe("TN-RO-1 tennis records interruptions - medical, toilet, heat and other
       }
     }
     expect(checked).toBe(KINDS.length * 2);
+    expect([...KINDS].sort(), "the four kinds the row names").toEqual(["heat", "medical", "other", "toilet"]);
   });
 
   it("TN-RO-1 an interruption is recorded in live play only: refused before the first serve and once the match is decided", () => {
