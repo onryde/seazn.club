@@ -237,7 +237,7 @@ describe("W2d T11 — every sport's signed default order (spec §5.10, §13.4)",
 });
 
 describe("W2d T11 — the stage presets (spec §5.10; tablePresets)", () => {
-  it("FB-TB-2 HK-PT-2 BG-PT-1 every sport × table kind: the presets are exactly SPEC §5.10's, every preset order passes validateCascade under every declared cfg, and every preset points rule is a PointsRule that covers reachableOutcomes (counted)", () => {
+  it("FB-TB-2 HK-PT-2 BG-PT-1 every sport × table kind: the presets are exactly SPEC §5.10's, every preset order passes validateCascade under every declared cfg, and every preset points rule is a PointsRule that covers reachableOutcomes (counted); FB-TB-3: so no football preset offers UEFA Art. 20.02", () => {
     let orders = 0;
     let rules = 0;
     let declaring = 0;

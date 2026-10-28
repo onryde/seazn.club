@@ -352,11 +352,27 @@ describe("each quotation a carry makes is in the document it quotes", () => {
     const rulebook = flat(read(`${SPECS}/rulebook-W2-goals-boards.md`));
     expect(rulebook).toContain("turning shoot-outs on for a hockey table stage opens SO points fields seeded 2/1");
     expect(rulebook).toContain("**None is a ruling.**");
-    // The plan's false premise 20 is this contradiction, and no entry of this file names RB2B-7 outside the section. (W2a's
-    // owner rulings 72-74, 2026-10-08, cite OTHER rulebook rows - RB2B-14, -16, -23, -28 - as their source; the carry's claim is
-    // about the one row, RB2B-7, that no ruling signs.)
+    // The plan's false premise 20 is this contradiction. At W1d no owner ruling signed RB2B-7 (W2a's rulings 72-74, 2026-10-08, cite
+    // OTHER rulebook rows - RB2B-14, -16, -23, -28); W2d's fold (Task 21, 2026-10-28) records the two rulings that settle it, and
+    // the carry now names them. So the pin holds the carry's NEW claim: each ruling it names is an entry of "Owner rulings" that
+    // says what the carry says it says, and the carry no longer claims the absence.
     expect(flat(outside)).toContain("**W2 prompt trap 2** (\"declared 3/0 loses to the FIH 2/1 the rulebook adopts\", SC-P4)");
-    expect(RB2B_7.test(outside), "an RB2B-7 entry in this file would be a ruling the carry says is absent").toBe(false);
+    const carry = flat(SECTION);
+    expect(carry).toContain("ruling 186 (W2d D10(f), 2026-10-20) makes the FIH default 3/1/0 with draws the SC-P4 oracle");
+    expect(carry).toContain("ruling 189 (W2d B2) signs RB2B-7");
+    expect(carry).not.toContain("no entry of this file's \"Owner rulings\" signs it");
+    const rulings = outside.slice(outside.indexOf("\n## Owner rulings\n"), outside.indexOf("\n## Recommendations (mine"));
+    expect(rulings.length, "the Owner rulings section is read").toBeGreaterThan(0);
+    const entry = (n: number): string => {
+      const at = rulings.search(new RegExp(`^${n}\\. `, "m"));
+      expect(at, `ruling ${n} is an entry of "Owner rulings"`).toBeGreaterThan(0);
+      const next = rulings.slice(at).search(new RegExp(`^${n + 1}\\. `, "m"));
+      return flat(next < 0 ? rulings.slice(at) : rulings.slice(at, at + next));
+    };
+    expect(RB2B_7.test(entry(189)), "ruling 189 names RB2B-7").toBe(true);
+    expect(entry(189)).toContain("B2; signs the goals-and-boards rulebook's RB2B-7");
+    expect(entry(186)).toContain("(f) The SC-P4 oracle: FIH default 3/1/0 with draws");
+    expect(RB2B_7.test(entry(188)), "the entry before 189 does not run into it").toBe(false);
     // The pin sees RB2B-7 and leaves the other rows W2a's rulings cite alone (RB2B-70 would not be it either).
     expect(RB2B_7.test("signed: RB2B-7")).toBe(true);
     expect(RB2B_7.test("RB2B-14, RB2B-16 and RB2B-70")).toBe(false);

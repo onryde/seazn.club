@@ -394,7 +394,7 @@ describe("W2b rows (spec §6, Appendix A; plan PF-6, PF-7, PF-13; rulings 108, 1
     const edit = (id: string, patch: Partial<RuleRow>) => rows.map((r) => (r.id === id ? { ...r, ...patch } : r));
     expect(w2bProblems(rows.filter((r) => r.id !== "HK-WO-1"))).toEqual(["HK-WO-1: missing (owed in hockey.md)"]);
     expect(w2bProblems(edit("CK-AB-2", { file: "cross-sport.md" }))).toEqual(["CK-AB-2: in cross-sport.md, not cricket.md"]);
-    expect(w2bProblems(edit("X-WO-1", { status: signed(86) }))).toEqual([`X-WO-1: status "${signed(86)}", not "${signed(108, "2026-10-11")}"`]);
+    expect(w2bProblems(edit("X-WO-1", { status: signed(86) }))).toEqual([`X-WO-1: status "${signed(86)}", not "${signed(182, "2026-10-20")}"`]);
     const br = rows.find((r) => r.id === "X-BR-1");
     expect(br).toBeDefined();
     const old = (br?.rule ?? "").replace(X_BR_1.says, "decided only by a win");

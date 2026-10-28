@@ -33,9 +33,15 @@ group_playoffs. Routed gaps, copied from design §8:
 
 #879 (all parts; part 3's hidden wipe is fixed by W3's #840),
 #850, FX-G1 (round-robin side of the reconcile), FX-G5,
-ST-G3/G4/G5/G6/G13/G14/G15/G20/G23/G24, the repeated `completeStage`
+ST-G3/G5/G6/G14/G15/G20/G23/G24, the repeated `completeStage`
 seed-proposal finding (bench), triple_rr possibly created as a single round robin
 from the builder (hypothesis, `format-templates.ts:341`).
+
+**Amended by W2d (ruling 183, D7; W2d spec §12.3):** ST-G4 (cross-group
+best-Nth comparison), ST-G12 (IIHF partial-schedule order) and ST-G13 (residual
+seed then UUID) moved to W2d and were built there. Design §8's W5 row and the
+backlog section of `_INDEX.md` still list them under W5, because both are the
+W1d baseline's routing (false premise 21 of W2d); a red on one of them is W2d's.
 
 #840 and FX-G13 (Rebuild) are fixed in W3 — verify them on the round-robin rows; do not re-fix.
 
@@ -76,8 +82,10 @@ second call is a tested case (R27).
    W5 work — record it against W3.
 3. **ST-G5 pool membership = entrants with a result**: an unplayed pool member
    is missing from the table. The empty-pool case is the first case (R13).
-4. **Residual ties fall to seed then UUID** (ST-G13): the shuffled-entry
-   metamorphic check holds only with explicit seeds and no `lots` (§7.3).
+4. **Residual ties: fixed in W2d (stored lots)** (ST-G13, ruling 183). They
+   used to fall to seed then UUID, so the shuffled-entry metamorphic check held
+   only with explicit seeds and no `lots` (§7.3). Every non-Swiss order now ends
+   in a lots draw stored on the stage (X-TB-3, X-TB-4); a red here is W2d's.
 5. **`org-posts.ts` is shared with the W10 lane**: ST-G6 (`:1070`, `:1256`)
    sits beside ST-G22 (`:1077`, `:1263`). Check W10's file list before editing;
    overlap → sequence (R2).

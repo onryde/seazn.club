@@ -7,7 +7,9 @@
   method. A builder check of the first draft raised further questions, and the owner answered them the same day
   ("All ok"); they are recorded as B1–B5 (§3). Items marked **orchestrator's call** are the f-w2d orchestrator's, not
   the owner's (`_RULES.md` R4, AGENTS.md class 17), and are to be put to the owner. Items marked **author's call** are
-  this spec's own choices where the decisions are silent. §17 lists them.
+  this spec's own choices where the decisions are silent. §17 lists them. **Approved by the owner 2026-10-20 at
+  `8168a0b92a`** (plan header). At the fold (W2d Task 21, 2026-10-28) D1–D11 became programme rulings 177–187, B1–B5
+  rulings 188–192, OC1–OC3 rulings 193–195 and the approval ruling 196, in `_INDEX.md`'s "Owner rulings".
 - **Worktree / branch:** spec on `/Users/ashokhein/github/seazn.club-worktrees/format-matrix-w2d`, branch
   `docs/format-matrix-w2d`, from `origin/main` `dec7b95d90`. The build branch is a fresh `feat/format-matrix-w2d` off
   main **after W2c (`feat/format-matrix-w2c`) merges** (D1).
@@ -590,7 +592,7 @@ survivors stay W2e's.
 | W7 | `server/public-site/standings-view.ts:370,391`, `division-qualification.ts:53`, `qualification-view.ts:152,317` | cascade + module bounds | effective rules; bounds from `pointsRuleBounds` |
 | W8 | `components/public-site/standings-table.tsx:161-164`, `lib/tiebreak-label.ts:21` | popover with old keys | new key labels, "Drawn by lots on…", "head-to-head not complete", "level" |
 | W9 | `api/v1/stages/[id]/standings` (+`/override`), public `…/divisions/[divisionSlug]/standings` | rows | rows + `won_ot/won_so/lost_ot/lost_so`, `tieBreak.drawnAt`, `level` |
-| W10 | recompute triggers `usecases/scoring.ts:972`, `stages.ts:2287,2876,4972,5030`, `admin-fixture-config.ts:381` | unchanged | unchanged (they all go through W1) |
+| W10 | recompute triggers `usecases/scoring.ts:972`, `stages.ts:2287,2876,4972,5030`, `admin-fixture-config.ts:381` | unchanged | unchanged (they all go through W1). **Amended 2026-10-27 (Concern 2, programme ruling 217):** the triggers gain the generate and a seed confirm (`REAL_TABLE_KINDS`, `emptyFold: "skip"`), and a roster delete and Unpair (`"drop"`); the export skips level and empty tables. Programme decision log, W2d entry |
 | W11 | Swiss `buildSwissTable` (`tiebreakers.ts:723`) | reads post-rule `delta.points` | unchanged values for the defaults (parity sweep); 3/1/0 never offered on Swiss. Round-robin SB/direct read game points, not table points (B5) |
 | W13 | stage activation, `usecases/stages.ts:2813,3644` | `status = 'active'` | writes the pin in the same statement's transaction (§5.4, OC2) |
 | W14 | hockey pad goal action (`period/kernel.ts:1986`) | goal type optional | goal type required for hockey (FIH) (B3) |
