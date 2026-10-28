@@ -8,6 +8,10 @@
 // hand-built view. Rows are built by SQL only where no producer can make the shape (a crash is the producer there, and the
 // test says so).
 //
+// A direct `prepareYoutubeBroadcast` call stands in for the organiser's Go live, so it names `startCause: "organiser"` (B4 fix round 2,
+// F2: only an AUTOMATIC start consults the channel's recorded live-state refusal). No test here records such a refusal, so none depends
+// on that short-circuit; "organiser" and "automatic" would behave identically on these rigs.
+//
 // Expected values are the spec's and Google's literals, typed here and never imported from the code under test:
 //   - grace is 5 minutes after Stop (D4), a finished match's broadcast ends 2 minutes after Stop (D5);
 //   - an orphan is a broadcast no session references that is older than 10 minutes (spec §6.2, P4);
@@ -507,7 +511,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
   it("orphan: a bound broadcast no session ever used — 9 min old untouched (0 YouTube calls), 11 min old deleted at YouTube and failed 'orphan' (a prepare is the producer)", async () => {
     const w = await world();
     const f = w.fixtures[0]!;
-    const p = (await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now() }, w.fake))!;
+    const p = (await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now(), startCause: "organiser" }, w.fake))!;
     const row0 = await broadcastRow(p.broadcastId);
     expect(row0.state, "premise: prepare left it bound with no session").toBe("bound");
     const bornAt = row0.created_at.getTime();
@@ -532,7 +536,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     const f = w.fixtures[0]!;
     // The process dies inside liveBroadcasts.insert: the call never answers, so prepare never reaches failRow.
     w.fake.insertBroadcast = () => new Promise<never>(() => { /* never answers */ });
-    void prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now() }, w.fake).catch(() => undefined);
+    void prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now(), startCause: "organiser" }, w.fake).catch(() => undefined);
     let row: BRow | undefined;
     for (let i = 0; i < 100 && !(row?.key_id); i++) {
       row = (await broadcastsOf(f))[0];
@@ -552,7 +556,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     // The key it held is free again: a fresh prepare takes it (0 new streams).
     const streams = w.issued.length;
     w.fake.insertBroadcast = FakeYouTube.prototype.insertBroadcast.bind(w.fake);
-    const again = await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: new Date(w.now()) }, w.fake);
+    const again = await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: new Date(w.now()), startCause: "organiser" }, w.fake);
     expect(again!.keyId).toBe(row!.key_id);
     expect(w.issued.length).toBe(streams);
   });
@@ -560,7 +564,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
   it("orphan shape: a reused bound row whose ONLY session failed provisioning (live, last_session_id null, no session left) → failed 'orphan' once 10+ minutes old (the real Go live is the producer)", async () => {
     const w = await world();
     const f = w.fixtures[0]!;
-    const p = (await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now() }, w.fake))!;   // a bound row two Go lives would share
+    const p = (await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now(), startCause: "organiser" }, w.fake))!;   // a bound row two Go lives would share
     w.ingest.createLiveInput = async () => { throw new Error("cloudflare is down"); };
     await refusalOf(goLive(w, f));
     const row0 = await broadcastRow(p.broadcastId);
@@ -579,8 +583,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     const w = await world();
     const f = w.fixtures[0]!;
     const two = await connectChannel({ auth: w.auth, orgId: w.orgId, userId: w.userId });
-    const first = (await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now() }, w.fake))!;
-    const second = (await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: two.targetId, now: w.deps.now() }, w.fake))!;
+    const first = (await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now(), startCause: "organiser" }, w.fake))!;
+    const second = (await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: two.targetId, now: w.deps.now(), startCause: "organiser" }, w.fake))!;
     expect(second.broadcastId).not.toBe(first.broadcastId);
     const r1 = await broadcastRow(first.broadcastId);
     expect(r1.state, "premise: the cross-channel claim left it ending").toBe("ending");
@@ -596,10 +600,10 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
   it("orphan shape: a lapsed reservation with no session (an admission died after reserving) → orphan; an UNLAPSED reservation, however old the row, is left to its admission", async () => {
     const w = await world();
     const f = w.fixtures[0]!;
-    const p = (await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now() }, w.fake))!;
+    const p = (await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now(), startCause: "organiser" }, w.fake))!;
     const born = (await broadcastRow(p.broadcastId)).created_at.getTime();
     w.setNow(born + 11 * MIN);
-    await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now() }, w.fake);   // reuse → reserved for 2 min
+    await prepareYoutubeBroadcast({ orgId: w.orgId, fixtureId: f, targetId: w.targetId, now: w.deps.now(), startCause: "organiser" }, w.fake);   // reuse → reserved for 2 min
     const reserved = await broadcastRow(p.broadcastId);
     expect(reserved.state, "premise: reserved").toBe("reserved");
     expect(reserved.reserved_until!.getTime(), "premise: the reservation is still held").toBeGreaterThan(w.now());
