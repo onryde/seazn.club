@@ -18,7 +18,7 @@ import Link from "@/components/ui/console-link";
 import { ArrowLeft } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { KioskPhoneGate } from "@/components/public-site/kiosk-phone-card";
-import type { BracketSlideFixture, Slide } from "@/server/slideshow-data";
+import type { BracketSlideFixture, Slide, StandingsSlideColumn } from "@/server/slideshow-data";
 import { slideAt, stepFor } from "@/components/v2/slideshow-rotation";
 // Type-only: every string on the board arrives resolved in ONE locale as the
 // `labels` prop (R10e u1). The page builds it on the server
@@ -62,6 +62,34 @@ const fill = (template: string, name: string, value: number): string =>
 // space. Whole class strings, so Tailwind's scanner sees them.
 const STANDINGS_COLS = "grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem]";
 const STANDINGS_COLS_WITH_RATIO = "grid-cols-[4rem_minmax(0,1fr)_repeat(4,4rem)_7rem_6rem]";
+// W2d follow-up (final review m8): a table that splits its results (IIHF's
+// P W OTW OTL D L, RBG:343-344) has six count tracks from `lg`; below it — a
+// phone that asked for the board — only P and Pts stay, the public table's
+// phone set for a split table, since six counts leave a 768px board's entrant
+// no room (slideshow-tv-rows.test.tsx prices it). The builder marks which
+// columns stay (`compact`); these are the tracks that leaves.
+const SPLIT_COLS = "grid-cols-[4rem_minmax(0,1fr)_4rem_7rem] lg:grid-cols-[4rem_minmax(0,1fr)_repeat(6,4rem)_7rem]";
+
+/** The slide's grid template, keyed by its result columns and the columns still shown below `lg`. A shape with no
+ *  template is refused rather than drawn misaligned: the builder's columns are the public table's declaration, which
+ *  makes exactly these two (swept for every sport in slideshow-point-ratio.test.ts). The split has no ratio template:
+ *  a table splits only when OT pays apart (IIHF ice hockey), and the cascade refuses `point_ratio` for every such sport
+ *  — none records points won and lost (standings-view-w2d.test.ts proves it for every sport and declared cfg). So a
+ *  split slide with a ratio is refused by name, not drawn. */
+const STANDINGS_TEMPLATES: Readonly<Record<string, { plain: string; ratio?: string }>> = {
+  "4/4": { plain: STANDINGS_COLS, ratio: STANDINGS_COLS_WITH_RATIO },
+  "6/1": { plain: SPLIT_COLS },
+};
+export function standingsTemplate(columns: readonly StandingsSlideColumn[], ratio: boolean): string {
+  const shape = `${columns.length}/${columns.filter((c) => c.compact).length}`;
+  const template = STANDINGS_TEMPLATES[shape];
+  if (template === undefined) throw new Error(`standings slide: no grid template for ${shape} result columns`);
+  if (!ratio) return template.plain;
+  if (template.ratio === undefined) throw new Error(`standings slide: no grid template for ${shape} result columns with a ratio column`);
+  return template.ratio;
+}
+/** A cell the board folds below `lg` (the builder's `compact: false`). */
+const foldBelowLg = (shown: boolean) => (shown ? "" : " max-lg:hidden");
 
 export function Slideshow({
   title,
@@ -201,7 +229,7 @@ export function Slideshow({
   // The builder sets `pointRatio` on every row of a slide whose division ranks
   // on it, and on none otherwise; the column follows the rows.
   const ratioColumn = slide?.kind === "standings" && slide.rows.some((r) => r.pointRatio !== undefined);
-  const standingsCols = ratioColumn ? STANDINGS_COLS_WITH_RATIO : STANDINGS_COLS;
+  const standingsCols = slide?.kind === "standings" ? standingsTemplate(slide.columns, ratioColumn) : STANDINGS_COLS;
   const liveCount = slides.reduce(
     (n, s) =>
       s.kind === "fixtures" ? n + s.items.filter((i) => i.status === "in_play").length : n,
@@ -294,10 +322,11 @@ export function Slideshow({
                 <div className={`grid ${standingsCols} gap-x-5 px-6 pb-2 font-display text-base font-semibold uppercase tracking-[0.2em] text-court-muted`}>
                   <span>#</span>
                   <span>{labels.entrant}</span>
-                  <span className="text-right">{labels.played}</span>
-                  <span className="text-right">{labels.won}</span>
-                  <span className="text-right">{labels.drawn}</span>
-                  <span className="text-right">{labels.lost}</span>
+                  {slide.columns.map((c) => (
+                    <span key={c.key} className={`text-right${foldBelowLg(c.compact)}`}>
+                      {labels[c.key]}
+                    </span>
+                  ))}
                   <span className="text-right">{labels.points}</span>
                   {ratioColumn && <span className="text-right">{labels.pointRatio}</span>}
                 </div>
@@ -328,18 +357,14 @@ export function Slideshow({
                       <span className="min-w-0 truncate font-display text-3xl font-semibold">
                         {r.name}
                       </span>
-                      <span className="text-right font-display text-2xl tabular-nums text-court-muted">
-                        {r.played}
-                      </span>
-                      <span className="text-right font-display text-2xl tabular-nums text-court-muted">
-                        {r.won}
-                      </span>
-                      <span className="text-right font-display text-2xl tabular-nums text-court-muted">
-                        {r.drawn}
-                      </span>
-                      <span className="text-right font-display text-2xl tabular-nums text-court-muted">
-                        {r.lost}
-                      </span>
+                      {slide.columns.map((c, j) => (
+                        <span
+                          key={c.key}
+                          className={`text-right font-display text-2xl tabular-nums text-court-muted${foldBelowLg(c.compact)}`}
+                        >
+                          {r.results[j]}
+                        </span>
+                      ))}
                       <span className="text-right font-display text-4xl font-bold tabular-nums text-accent-line">
                         {r.points}
                       </span>

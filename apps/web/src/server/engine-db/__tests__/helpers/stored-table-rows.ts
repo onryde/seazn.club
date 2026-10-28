@@ -4,7 +4,7 @@
 // pure mapping (`unpinnedRulesDoc`), so a surface test reads exactly the rows and the rules production hands it.
 import { MatchOutcome, type StandingsDelta } from "@seazn/engine/core";
 import { completeTableStage, payout, type FixtureResult, type StandingsRow, type TableFixture } from "@seazn/engine/competition";
-import type { AnySportModule } from "@seazn/engine/sport";
+import type { AnySportModule, DecidedIn } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { tableRulesOf } from "@seazn/engine/testkit";
 import type { StageTableRulesDoc } from "@/server/engine-db/table-rules";
@@ -20,15 +20,16 @@ const side = (entrantId: string, won: number, drawn: number, lost: number): Stan
   entrantId, played: 1, won, drawn, lost, points: 0, metrics: { gf: won, ga: lost, gd: won - lost },
 });
 
-/** `home` beat `away`, or drew (`winner` null), paid by the stage's own rule. */
-function result(id: string, home: string, away: string, winner: string | null, doc: StageTableRulesDoc): TableFixture {
+/** `home` beat `away`, or drew (`winner` null), paid by the stage's own rule; a win decided `decidedIn` (regulation unless
+ *  given: IIHF's overtime and shoot-out wins are paid, and counted, apart). */
+function result(id: string, home: string, away: string, winner: string | null, doc: StageTableRulesDoc, decidedIn: DecidedIn = "regulation"): TableFixture {
   const pair: FixtureResult = winner === null
     ? [side(home, 0, 1, 0), side(away, 0, 1, 0)]
     : [side(home, winner === home ? 1 : 0, 0, winner === home ? 0 : 1), side(away, winner === away ? 1 : 0, 0, winner === away ? 0 : 1)];
   const outcome = winner === null
     ? MatchOutcome.parse({ kind: "draw" })
     : MatchOutcome.parse({ kind: "win", winner, loser: winner === home ? away : home });
-  return { id, status: "decided", result: payout(outcome, winner === null ? null : "regulation", pair, true, doc.points, undefined, undefined) };
+  return { id, status: "decided", result: payout(outcome, winner === null ? null : decidedIn, pair, true, doc.points, undefined, undefined) };
 }
 
 export interface StoredTable {
@@ -48,6 +49,26 @@ export function chessRoundRobin(ids: readonly [string, string, string, string]):
   const doc = unpinnedRulesDoc({ module: sportOf("boardgame"), divisionConfig: {} });
   const [a, b, c, d] = ids;
   return { doc, rows: tableOf(doc, ids, [result("g1", a, b, a, doc), result("g2", a, c, null, doc), result("g3", d, a, d, doc)]) };
+}
+
+/** An IIHF ice hockey league (RBG §3.4: 3 / 2 / 1 / 0, OT and GWS decisions in OTW/OTL): ids[0] beats ids[1] in regulation,
+ *  ids[2] in overtime and ids[3] in the shoot-out, then loses to ids[4] in overtime and to ids[5] in the shoot-out; ids[2]
+ *  beats ids[3] in regulation. ids[0] P5 W1 OTW2 OTL2 L0, 9 points; ids[3] P2 OTL1 L1, 1 point. */
+export function iihfLeague(ids: readonly [string, string, string, string, string, string]): StoredTable {
+  const ih = sportOf("icehockey");
+  const doc = unpinnedRulesDoc({ module: ih, divisionConfig: ih.variants["iihf"] });
+  const [a, b, c, d, e, f] = ids;
+  return {
+    doc,
+    rows: tableOf(doc, ids, [
+      result("g1", a, b, a, doc),
+      result("g2", a, c, a, doc, "ot"),
+      result("g3", a, d, a, doc, "so"),
+      result("g4", e, a, e, doc, "ot"),
+      result("g5", f, a, f, doc, "so"),
+      result("g6", c, d, c, doc),
+    ]),
+  };
 }
 
 /** A started football league with nothing counted yet: every row level (X-TB-6). */

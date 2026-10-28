@@ -224,6 +224,27 @@ export interface StandingsColumn {
 }
 
 /**
+ * A table's result columns, in print order: P, W, the decisions counted apart when `apart` (IIHF's OTW and OTL, W2d spec
+ * §5.7, RBG §3.4), D when `draws`, L. Points is not one of them: it prints after the sport's metrics. THE declaration —
+ * `standingsColumns` asks it with `draws` = "a row has a draw"; the fixed-shape tables (the organiser export, the kiosk:
+ * `fixedResultColumns`) ask it with `draws` on, the shape they always printed.
+ */
+export function resultColumns(apart: boolean, draws: boolean): StandingsColumn[] {
+  return [
+    { key: "played", label: "P", kind: "structural" },
+    { key: "won", label: "W", kind: "structural" },
+    ...(apart
+      ? [
+          { key: "otw", label: "OTW", kind: "structural" as const },
+          { key: "otl", label: "OTL", kind: "structural" as const },
+        ]
+      : []),
+    ...(draws ? [{ key: "drawn", label: "D", kind: "structural" as const }] : []),
+    { key: "lost", label: "L", kind: "structural" },
+  ];
+}
+
+/**
  * `apart` (W2d spec §5.7; RBG §3.4): the table counts its decisions beyond regulation in their own columns — IIHF's
  * GP · W · OTW · OTL · L — from the engine's `tableLayoutOf` (`apart.length > 0`); W and L then leave them out
  * (`resultColumnText`). False for every other table.
@@ -235,19 +256,7 @@ export function standingsColumns(
   derivedSpecs: readonly { key: string; label: string; decimals: number }[],
   apart = false,
 ): StandingsColumn[] {
-  const hasDraws = rows.some((r) => r.drawn > 0);
-  const columns: StandingsColumn[] = [
-    { key: "played", label: "P", kind: "structural" },
-    { key: "won", label: "W", kind: "structural" },
-    ...(apart
-      ? [
-          { key: "otw", label: "OTW", kind: "structural" as const },
-          { key: "otl", label: "OTL", kind: "structural" as const },
-        ]
-      : []),
-    ...(hasDraws ? [{ key: "drawn", label: "D", kind: "structural" as const }] : []),
-    { key: "lost", label: "L", kind: "structural" },
-  ];
+  const columns = resultColumns(apart, rows.some((r) => r.drawn > 0));
   for (const spec of metricSpecs) {
     if (spec.display === false) continue;
     if (!rows.some((r) => spec.key in r.metrics)) continue;

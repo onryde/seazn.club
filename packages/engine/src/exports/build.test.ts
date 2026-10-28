@@ -439,6 +439,49 @@ describe("buildStandings — row badges (PROMPT-60)", () => {
   });
 });
 
+// W2d follow-up (final review m3): the result columns are the CALLER's table declaration — the web export hands the
+// public table's own (IIHF's P · W · OTW · OTL · D · L, RBG:343-344), the cells beside them — and the builder places them
+// between Team and the sport's metrics. It invents none: no `resultColumns` keeps its historic P · W · D · L.
+describe("buildStandings — the caller's result columns (W2d follow-up m3)", () => {
+  const SPLIT = ["P", "W", "OTW", "OTL", "D", "L"] as const;
+  // Every count differs from every other on the row, so a cell in the wrong column cannot match by luck.
+  const ash = { name: "Ash", played: 6, won: 5, drawn: 0, lost: 1, points: 13, metrics: { gf: 14 }, results: [6, 1, 2, 3, 0, 4] };
+
+  it("prints the caller's headers and each row's cells in that order, between Team and the metrics; # and Pts as before", () => {
+    const model = buildStandings("Open — Standings", [ash], { ...OPTS, metricColumns: ["gf"], resultColumns: [...SPLIT] });
+    expect(model.sections[0]!.table).toEqual({
+      columns: ["#", "Team", ...SPLIT, "gf", "Pts"],
+      rows: [[1, "Ash", 6, 1, 2, 3, 0, 4, 14, 13]],
+    });
+  });
+
+  it("no result columns: the historic P · W · D · L from the row's own counts (the empty case)", () => {
+    const { results: _results, ...plain } = ash;
+    const model = buildStandings("S", [plain], { ...OPTS, metricColumns: [] });
+    expect(model.sections[0]!.table!.columns).toEqual(["#", "Team", "P", "W", "D", "L", "Pts"]);
+    expect(model.sections[0]!.table!.rows).toEqual([[1, "Ash", 6, 5, 0, 1, 13]]);
+  });
+
+  it("refuses a row whose cells do not pair with the headers: a short row, a missing one, and cells with no headers", () => {
+    let refused = 0;
+    const cases: [string, () => unknown][] = [
+      ["one cell short", () => buildStandings("S", [{ ...ash, results: ash.results.slice(1) }], { ...OPTS, resultColumns: [...SPLIT] })],
+      ["no cells on a row", () => buildStandings("S", [ash, { ...ash, name: "Birch", results: undefined }], { ...OPTS, resultColumns: [...SPLIT] })],
+      ["cells but no headers", () => buildStandings("S", [ash], OPTS)],
+    ];
+    for (const [label, build] of cases) {
+      expect(build, label).toThrow(EngineError);
+      try {
+        build();
+      } catch (e) {
+        expect(e, label).toMatchObject({ code: "CONFIG_INVALID" });
+        refused++;
+      }
+    }
+    expect(refused, "every case refused").toBe(cases.length);
+  });
+});
+
 describe("buildBracket (PROMPT-62 §4)", () => {
   const fx = (
     id: string, round: number, seq: number,
@@ -831,5 +874,42 @@ describe("audit ledger (v13 wave Task 16: one table, columns # Time Actor Event 
     }
     // the head is abbreviated on the stamp, never printed whole (the existing golden pins its 16-character prefix)
     expect(ledger(head, true).description).not.toContain(head);
+  });
+});
+
+// W2d follow-up review m3: the standings header in the caller's language. The builder has no locale; the web export
+// hands every header pre-resolved through the public table's own dictionary keys (the timetable's and rota's columns
+// already arrive this way, `i18n`). The metric headers pair with `metricColumns` by position; the cells stay keyed.
+describe("buildStandings — the caller's localised headers (W2d follow-up review m3)", () => {
+  const row = { name: "Ash", played: 2, won: 1, drawn: 0, lost: 1, points: 3, metrics: { gf: 4, ga: 2 } };
+
+  it("prints the caller's Team, metric and Pts headers; # stays the glyph and the cells stay the metrics' own", () => {
+    const model = buildStandings("S", [{ ...row, results: [2, 1, 0, 1] }], {
+      ...OPTS,
+      metricColumns: ["gf", "ga"],
+      resultColumns: ["PJ", "G", "E", "P"],
+      i18n: { standingsHeaders: { team: "Equipo", points: "Pts.", metrics: ["GF", "GC"] } },
+    });
+    expect(model.sections[0]!.table!.columns).toEqual(["#", "Equipo", "PJ", "G", "E", "P", "GF", "GC", "Pts."]);
+    expect(model.sections[0]!.table!.rows).toEqual([[1, "Ash", 2, 1, 0, 1, 4, 2, 3]]);
+  });
+
+  it("no headers given: Team, the metric keys and Pts, as before (the empty case)", () => {
+    const model = buildStandings("S", [row], { ...OPTS, metricColumns: ["gf", "ga"] });
+    expect(model.sections[0]!.table!.columns).toEqual(["#", "Team", "P", "W", "D", "L", "gf", "ga", "Pts"]);
+  });
+
+  it("refuses metric headers that do not pair with the metric columns, never prints them shifted", () => {
+    let refused = 0;
+    for (const metrics of [["GF"], ["GF", "GC", "DG"]]) {
+      try {
+        buildStandings("S", [row], { ...OPTS, metricColumns: ["gf", "ga"], i18n: { standingsHeaders: { team: "T", points: "P", metrics } } });
+      } catch (e) {
+        expect(e).toBeInstanceOf(EngineError);
+        expect(e).toMatchObject({ code: "CONFIG_INVALID" });
+        refused++;
+      }
+    }
+    expect(refused, "both mismatches refused").toBe(2);
   });
 });

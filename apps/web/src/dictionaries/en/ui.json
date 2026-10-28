@@ -6103,6 +6103,8 @@
   "slideshow.col.won": "W",
   "slideshow.col.drawn": "D",
   "slideshow.col.lost": "L",
+  "slideshow.col.otw": "OTW",
+  "slideshow.col.otl": "OTL",
   "slideshow.col.points": "Pts",
   "slideshow.col.pointRatio": "Pts ratio",
   "slideshow.round": "R{round}",
