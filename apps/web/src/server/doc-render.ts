@@ -246,26 +246,22 @@ function tableGrid(doc: PDFKit.PDFDocument, table: DocTable, numeric = table.col
 }
 
 /**
- * Export review I1/m3 (2026-10-28) — one grid per RUN of back-to-back table sections with the same columns (a group
- * stage's pools, one per section): the run's widths and alignment are those of one table of all its rows, so a column
- * stands at the same x in every pool, and the floors (no column narrower than its header, or a count than its widest
- * cell) hold over every pool's cells — a long name in any pool squeezes all of them alike. A table of no rows (a pool not
- * played yet) has no cells to read its alignment from: a column whose header the document's other tables set as a
+ * Export review I1/m3 (2026-10-28) — one grid for every table of the document with the same columns (a group stage's
+ * pools, one per section): their widths and alignment are those of one table of all their rows, so a column stands at
+ * the same x in every pool, and the floors (no column narrower than its header, or a count than its widest cell) hold
+ * over every pool's cells — a long name in any pool squeezes all of them alike. Not only back-to-back ones: a pool with no
+ * rows yet prints fewer columns (no metric any row carries), and it must not split the pools around it onto two grids. A
+ * table of no rows has no cells to read its alignment from: a column whose header the document's other tables set as a
  * number is set as one here too, so its header lines up as theirs do. Keyed by section index.
  */
 function sharedGrids(doc: PDFKit.PDFDocument, sections: readonly DocSection[]): Map<number, TableGrid> {
-  const runs: number[][] = [];
+  const shapes = new Map<string, number[]>(); // a column set (and its landscape hint) → the sections that print it
   sections.forEach((s, i) => {
-    const prev = runs.at(-1);
-    const head = prev === undefined ? undefined : sections[prev.at(-1)!]!;
-    const same =
-      prev !== undefined && prev.at(-1) === i - 1 && head?.table !== undefined && s.table !== undefined &&
-      head.table.columns.length === s.table.columns.length && head.table.columns.every((c, k) => c === s.table!.columns[k]) &&
-      head.table.landscape === s.table.landscape;
     if (s.table === undefined) return;
-    if (same) prev.push(i);
-    else runs.push([i]);
+    const key = JSON.stringify([s.table.columns, s.table.landscape ?? null]);
+    (shapes.get(key) ?? shapes.set(key, []).get(key)!).push(i);
   });
+  const runs = [...shapes.values()];
   const merged = runs.map((run): DocTable => ({ columns: sections[run[0]!]!.table!.columns, rows: run.flatMap((i) => sections[i]!.table!.rows) }));
   // A header the document sets as a number wherever it has cells (read off the runs that have rows).
   const numericHeader = new Map<string, boolean>();

@@ -1,7 +1,8 @@
 // Export review I1 (2026-10-28): a group stage's standings print one table per pool, and each table sized its columns
 // from its own cells — so one pool's 44-character name squeezed P … Pts into the right third of the page while the next
-// pool's columns spread across it, and the same column jumped from pool to pool. Back-to-back tables with the same
-// columns now share ONE grid: the widths and alignment of one table of all their rows. #1057's floor (review m2: no column
+// pool's columns spread across it, and the same column jumped from pool to pool. The document's tables with the same
+// columns now share ONE grid — back-to-back or not, since an empty pool between two played ones prints fewer columns —
+// the widths and alignment of one table of all their rows. #1057's floor (review m2: no column
 // narrower than its header, nor a count than its widest cell) holds over every pool's cells. Review m3: a pool with no
 // rows yet had no cells to read its alignment from, so its count headers printed left-aligned; a header the document's
 // other tables set as a number is set as one there too.
@@ -59,7 +60,7 @@ async function headerRows(model: DocModel): Promise<PdfTextRun[][]> {
 /** Every body run of the document (the footer is 7pt). */
 const bodyRuns = async (model: DocModel) => pdfTextRuns(await docModelToPdf(model)).filter((r) => r.size === BODY_SIZE);
 
-describe("doc-render: back-to-back tables with the same columns share one grid (export review I1)", () => {
+describe("doc-render: tables with the same columns share one grid (export review I1)", () => {
   it("two pools, a 46-character name in either one: every header starts at the same x in both, and every count header and cell prints whole inside the page", async () => {
     let checked = 0;
     for (const [a, b] of [[[LONG, "Lynx"], ["Otters", "Bears"]], [["Otters", "Bears"], [LONG, "Lynx"]]] as const) {
@@ -84,6 +85,22 @@ describe("doc-render: back-to-back tables with the same columns share one grid (
       expect(counts, "every count cell printed whole").toEqual(want);
     }
     expect(checked, "columns compared across the two pools, both orders").toBe(2 * 12);
+  });
+
+  it("an empty pool between two played ones (fewer columns: no metric any row carries) does not split them onto two grids", async () => {
+    // The v4 render (8 groups, C not played yet): A and B sat on one grid, D … H on another, because C broke the run.
+    const a = pool("Groups — Group A", [LONG, "Lynx"]);
+    const c = pool("Groups — Group C", [], { metrics: [] });
+    const d = pool("Groups — Group D", ["Otters", "Bears"]);
+    expect(c.table!.columns, "premise: C prints other columns").not.toEqual(a.table!.columns);
+    const [ha, hc, hd] = (await headerRows(doc(a, c, d))) as [PdfTextRun[], PdfTextRun[], PdfTextRun[]];
+    expect(hc.map((r) => r.text), "premise: C's header row drew").toEqual(c.table!.columns);
+    let checked = 0;
+    for (const [k, r] of ha.entries()) {
+      expect(hd[k]!.x, `${r.text}: the same x in A and D`).toBeCloseTo(r.x, 1);
+      checked++;
+    }
+    expect(checked).toBe(a.table!.columns.length);
   });
 
   it("the positive pair: back-to-back tables with DIFFERENT columns each keep the grid they have alone", async () => {
