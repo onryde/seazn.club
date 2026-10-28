@@ -101,7 +101,9 @@ export const EngineErrorCode = z.enum([
   // W2e T6 (CK-CH-1, RB2A-22, SC-C4): a coarse cricket chase total past the winning run (above target − 1 + 7: a no-ball
   // hit for six off the last needed run). The WRITE path's refusal only (`sports/cricket/cricket.ts` applySummary): a ledger
   // that already holds one still folds to its recorded result. Named, because the scorer sees it. data.target and data.max
-  // give the target and the largest total it allows. Appended last, existing order frozen.
+  // give the target and the largest total it allows; they are ENGINE-SIDE only, on the thrown error:
+  // api-v1 forwards just the code and the message for this code (`v1()` in server/api-v1/http.ts builds no `extra` for
+  // it). Appended last, existing order frozen.
   "CHASE_OVERSHOOT",
 ]);
 export type EngineErrorCode = z.infer<typeof EngineErrorCode>;
