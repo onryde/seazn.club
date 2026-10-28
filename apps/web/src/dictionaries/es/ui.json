@@ -2447,7 +2447,7 @@
   "divset.failed": "Error",
   "rules.err.shareNeedsDraws": "Compartir los puntos requiere que se permitan los empates: activa primero 'Allow draws'.",
   "rules.err.shareNeedsDrawnGame": "Compartir los puntos requiere que sea posible un juego empatado: primero cambia 'Game tied at max boards' a 'Drawn game'.",
-  "rules.err.setTargetBelowFloor": "Un set debe jugarse a un mínimo de 5 puntos.",
+  "rules.err.setTargetBelowFloor": "Un set debe jugarse a un mínimo de {min} puntos.",
   "rules.err.bo1MatchTiebreak": "Un super tie-break sustituye al set decisivo; un partido a un solo set no tiene ninguno.",
   "rules.err.stageFormatLocked": "{stage} ya ha empezado: sus reglas están bloqueadas.",
   "rules.err.divisionTableRulesLocked": "{stage} ya ha empezado: las reglas de la clasificación están bloqueadas.",

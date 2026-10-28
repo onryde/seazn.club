@@ -10,7 +10,7 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it } from "vitest";
 import { foldMatchWithStoppage } from "@seazn/engine/core";
-import { BO1_MATCH_TIEBREAK, SET_TARGET_BELOW_FLOOR } from "@seazn/engine/sport";
+import { BO1_MATCH_TIEBREAK, setTargetBelowFloor } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql, withTenant } from "@/lib/db";
 import { v1 } from "@/server/api-v1/http";
@@ -37,6 +37,8 @@ afterAll(async () => {
 
 /** Ruling 31: a volleyball or table tennis set is played to at least this many points. */
 const FLOOR = 5;
+/** The engine's refusal for that floor: the sentence the doors must carry. */
+const FLOOR_SENTENCE = setTargetBelowFloor(FLOOR);
 
 const mod = (key: string) => {
   const m = builtinModules.find((x) => x.key === key);
@@ -81,7 +83,7 @@ describe.skipIf(!HAS_DB)("W2e write doors refuse a config below ruling 31's floo
     for (const key of ["setTo", "finalSetTo"] as const) {
       await expectRefused(
         () => createDivision(b.auth, b.competitionId, { name: "Low", slug: slug(), sport_key: "volleyball", variant_key: "indoor", config: { [key]: FLOOR - 1 } }),
-        SET_TARGET_BELOW_FLOOR,
+        FLOOR_SENTENCE,
         `create ${key} ${FLOOR - 1}`,
       );
     }
@@ -95,7 +97,7 @@ describe.skipIf(!HAS_DB)("W2e write doors refuse a config below ruling 31's floo
     const b = await volleyballLeague();
     await expectRefused(
       () => createDivision(b.auth, b.competitionId, { name: "TT", slug: slug(), sport_key: "tabletennis", variant_key: "bo5", config: { setTo: 3, finalSetTo: 3 } }),
-      SET_TARGET_BELOW_FLOOR,
+      FLOOR_SENTENCE,
       "table tennis create",
     );
     const bd = await createDivision(b.auth, b.competitionId, { name: "BD", slug: slug(), sport_key: "badminton", variant_key: "short", config: { setTo: 3, finalSetTo: 3, cap: 5 } });
@@ -105,10 +107,10 @@ describe.skipIf(!HAS_DB)("W2e write doors refuse a config below ruling 31's floo
   it("VB-CF-1 division save (PATCH): a format below the floor is refused with the sentence and the stored config is untouched; a variant switch too; at 5 it lands", async () => {
     const b = await volleyballLeague();
     const stored = await divisionConfig(b.divisionId);
-    await expectRefused(() => patchDivision(b.auth, b.divisionId, { config: { ...stored, setTo: FLOOR - 1 } }), SET_TARGET_BELOW_FLOOR, "patch setTo");
+    await expectRefused(() => patchDivision(b.auth, b.divisionId, { config: { ...stored, setTo: FLOOR - 1 } }), FLOOR_SENTENCE, "patch setTo");
     await expectRefused(
       () => patchDivision(b.auth, b.divisionId, { variant_key: "beach", config: { ...(mod("volleyball").variants.beach as Record<string, unknown>), finalSetTo: 2 } }),
-      SET_TARGET_BELOW_FLOOR,
+      FLOOR_SENTENCE,
       "variant switch with finalSetTo 2",
     );
     expect(await divisionConfig(b.divisionId), "refused saves wrote nothing").toEqual(stored);
@@ -119,11 +121,11 @@ describe.skipIf(!HAS_DB)("W2e write doors refuse a config below ruling 31's floo
   it("VB-CF-1 stage rules: the PUT and a new stage's own rules are refused below the floor; the PUT at 15 lands", async () => {
     const b = await volleyballLeague();
     const before = await stageRules(b.stageId);
-    await expectRefused(() => putStageRules(b.auth, b.stageId, { rules: { setTo: FLOOR - 1 } }), SET_TARGET_BELOW_FLOOR, "stage PUT");
+    await expectRefused(() => putStageRules(b.auth, b.stageId, { rules: { setTo: FLOOR - 1 } }), FLOOR_SENTENCE, "stage PUT");
     expect(await stageRules(b.stageId), "nothing written").toEqual(before);
     await expectRefused(
       () => createStages(b.auth, b.divisionId, { seq: 2, kind: "league", name: "S2", config: { rules: { finalSetTo: FLOOR - 1 } }, progression: null }),
-      SET_TARGET_BELOW_FLOOR,
+      FLOOR_SENTENCE,
       "stage create",
     );
     expect((await sql`select 1 from stages where division_id = ${b.divisionId}`).length, "no second stage").toBe(1);
@@ -134,7 +136,7 @@ describe.skipIf(!HAS_DB)("W2e write doors refuse a config below ruling 31's floo
   it("VB-CF-1 a match's own format: an override below the floor is refused with the sentence; 15 is stored", async () => {
     const b = await volleyballLeague();
     const id = b.fixtureIds[0]!;
-    const error = await expectRefused(() => writeFixtureRulesOverride(b.auth, [id], { setTo: FLOOR - 1 }), SET_TARGET_BELOW_FLOOR, "fixture override");
+    const error = await expectRefused(() => writeFixtureRulesOverride(b.auth, [id], { setTo: FLOOR - 1 }), FLOOR_SENTENCE, "fixture override");
     expect(error).toMatchObject({ field: "setTo" });
     expect(await overrideOf(id), "nothing written").toBeNull();
     await writeFixtureRulesOverride(b.auth, [id], { setTo: 15 });
@@ -173,7 +175,7 @@ describe.skipIf(!HAS_DB)("W2e write doors refuse a config below ruling 31's floo
       const { status, error } = await wire(() => instantiateTemplate(b.auth, t, { name: `T ${randomUUID().slice(0, 6)}`, ends_on: "2030-12-31" }));
       expect({ status, code: error.code }, label).toEqual({ status: 422, code: TEMPLATE_INSTANTIATION_FAILED_CODE });
       expect(error, label).toMatchObject(at);
-      if (sentence) expect(String(error.cause), label).toContain(SET_TARGET_BELOW_FLOOR);
+      if (sentence) expect(String(error.cause), label).toContain(FLOOR_SENTENCE);
       checked++;
     }
     expect(checked).toBe(2);

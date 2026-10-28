@@ -2,9 +2,9 @@
 // (server/api-v1/http.ts); this is the reader that turns them into the sentence the organiser sees, localized where this
 // app owns the sentence. Expected values come from the engine's own constants and the dictionaries, never retyped.
 import { describe, expect, it } from "vitest";
-import { BO1_MATCH_TIEBREAK, SET_TARGET_BELOW_FLOOR, SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS } from "@seazn/engine/sport";
+import { BO1_MATCH_TIEBREAK, SET_TARGET_BELOW_FLOOR, SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS, setTargetBelowFloor } from "@seazn/engine/sport";
 import { ApiV1Error } from "@/lib/client-v1";
-import { msg } from "@/lib/messages";
+import { msg, type MessageKey } from "@/lib/messages";
 import en from "@/dictionaries/en/ui.json";
 import es from "@/dictionaries/es/ui.json";
 import fr from "@/dictionaries/fr/ui.json";
@@ -63,20 +63,45 @@ describe("the config refusals this app owns are localized in all four locales (n
     expect(en["rules.err.shareNeedsDraws"]).toContain("'Allow draws'");
   });
 
-  it("VB-CF-1 TT-CF-1 TN-CF-1 the English write-door copy IS the engine's sentence, and the floor stays 5 in every locale", () => {
+  it("VB-CF-1 TT-CF-1 TN-CF-1 the English write-door copy IS the engine's sentence, and every locale takes the floor from it", () => {
     expect(en["rules.err.setTargetBelowFloor"]).toBe(SET_TARGET_BELOW_FLOOR);
     expect(en["rules.err.bo1MatchTiebreak"]).toBe(BO1_MATCH_TIEBREAK);
     let checked = 0;
     for (const [loc, dict] of [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as const) {
-      // Ruling 31's number is not translated away.
-      expect((dict as Record<string, string>)["rules.err.setTargetBelowFloor"], loc).toContain("5");
+      // Fix round 1 (review M-2): the floor is a slot, never a number a translation could retype or drop.
+      const copy = (dict as Record<string, string>)["rules.err.setTargetBelowFloor"]!;
+      expect(copy, loc).toContain("{min}");
+      expect(copy, loc).not.toMatch(/\d/);
       checked++;
     }
     expect(checked).toBe(4);
-    // What a refused division save reads, through the wire's own envelope.
-    const refused = new ApiV1Error("invalid volleyball config", 422, "CONFIG_INVALID", { issues: [{ path: [], message: SET_TARGET_BELOW_FLOOR }] });
-    expect(settingsSaveErrorText(refused, msg, "fallback")).toBe(msg("rules.err.setTargetBelowFloor"));
+    // What a refused division save reads, through the wire's own envelope: ruling 31's sentence, as the engine says it.
+    const refused = new ApiV1Error("invalid volleyball config", 422, "CONFIG_INVALID", { issues: [{ path: [], message: setTargetBelowFloor(5) }] });
+    expect(settingsSaveErrorText(refused, msg, "fallback")).toBe(setTargetBelowFloor(5));
     expect(configIssueText({ path: [], message: BO1_MATCH_TIEBREAK }, msg)).toBe(msg("rules.err.bo1MatchTiebreak"));
+  });
+
+  it("the floor's number is READ from the engine's sentence, in every locale: a floor of 7 reads 7 (fix round 1, review M-2)", () => {
+    const localOf = (dict: unknown) => (key: MessageKey, vars?: Record<string, string | number>) =>
+      (dict as Record<string, string>)[key]!.replace(/\{(\w+)\}/g, (m, name: string) => (vars && name in vars ? String(vars[name]) : m));
+    let checked = 0;
+    for (const [loc, dict] of [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as const) {
+      const local = localOf(dict);
+      for (const floor of [5, 7]) {
+        const text = configIssueText({ path: [], message: setTargetBelowFloor(floor) }, local);
+        expect(text, `${loc} ${floor}`).toContain(String(floor));
+        expect(text, `${loc} ${floor}: the slot is filled`).not.toContain("{min}");
+        if (loc !== "en") expect(text, `${loc} ${floor} is translated`).not.toBe(setTargetBelowFloor(floor));
+        checked++;
+      }
+    }
+    expect(checked).toBe(8);
+    // The template matches only a number in its slot; anything else is not this app's sentence and reads as the engine said
+    // (read through a TRANSLATED locale: the English copy is the template, so a wrong match would read the same in en).
+    const odd = SET_TARGET_BELOW_FLOOR.replace("{min}", "five");
+    expect(configIssueText({ path: [], message: odd }, localOf(es))).toBe(odd);
+    const longer = `${setTargetBelowFloor(5)} And more.`;
+    expect(configIssueText({ path: [], message: longer }, localOf(es))).toBe(longer);
   });
 
   it("settingsSaveErrorText: a known issue reads its localized sentence; an unknown one reads the engine's own message", () => {

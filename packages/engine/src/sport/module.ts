@@ -895,7 +895,7 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   readonly sanctionEnding?: SanctionEndingDecl;
   /**
    * W2e (spec 2026-10-28 §5.5, E15; ruling 31, RB2A-13; VB-CF-1, TT-CF-1, TN-CF-1) — what a WRITE door refuses in a config
-   * `configSchema` accepts: one engine sentence per problem (`SET_TARGET_BELOW_FLOOR`, `BO1_MATCH_TIEBREAK`), [] when
+   * `configSchema` accepts: one engine sentence per problem (`setTargetBelowFloor`, `BO1_MATCH_TIEBREAK`), [] when
    * none. Asked through `writeConfigIssues` by every door that persists a config (division create and save, template,
    * stage rules, a match's own format), which answer CONFIG_INVALID `{issues}`. Never a `configSchema` refine (E15): a
    * stored config that breaks it still loads, folds and scores. Absent = the sport refuses nothing beyond its schema.
@@ -1138,9 +1138,15 @@ export interface TablePresets {
   readonly tiebreakers: readonly { readonly id: string; readonly keys: readonly TiebreakerKey[] }[];
 }
 
-/** W2e ruling 31 (VB-CF-1, TT-CF-1) — the write-door refusal of a volleyball or table tennis set target (`setTo`,
- *  `finalSetTo`) below 5. A client maps it to its own localized copy (apps/web `LOCALIZED_CONFIG_ISSUES`). */
-export const SET_TARGET_BELOW_FLOOR = "A set must be played to at least 5 points.";
+/** W2e ruling 31 (VB-CF-1, TT-CF-1) — the write-door refusal of a set target (`setTo`, `finalSetTo`) below the floor its
+ *  preset declares (`SetBasedPreset.minSetTo`: 5 for volleyball and table tennis). A TEMPLATE: `{min}` is the floor, filled
+ *  by `setTargetBelowFloor`. A client matches it slot and all and maps it to its own localized copy, passing the number on
+ *  (apps/web `LOCALIZED_CONFIG_ISSUES`). */
+export const SET_TARGET_BELOW_FLOOR = "A set must be played to at least {min} points.";
+/** `SET_TARGET_BELOW_FLOOR` for the floor `min`: the sentence a write door refuses with. */
+export function setTargetBelowFloor(min: number): string {
+  return SET_TARGET_BELOW_FLOOR.replace("{min}", String(min));
+}
 /** W2e RB2A-13 (TN-CF-1) — the write-door refusal of a tennis best of 1 whose final set is a match tie-break: ITF App VI's
  *  match tie-break REPLACES a deciding set, and a best of 1 has no set to replace. */
 export const BO1_MATCH_TIEBREAK = "A match tie-break replaces a deciding set; best of 1 has none.";

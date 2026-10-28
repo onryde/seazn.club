@@ -46,7 +46,7 @@ export const tabletennis = makeSetBasedModule({
   },
   ruleKeys: Object.fromEntries(Object.entries(SET_RULE_KEYS).filter(([k]) => k !== "cap")), // W2c M-3 — the set kernel's keys bar `cap`: ITTF has none (the preset's cap is null), so no match is offered one
   // W2e ruling 31 (row TT-CF-1; spec 2026-10-28 §5.5, E15): however short an organiser makes the format, a set is played
-  // to at least 5 points. A write door refuses a lower `setTo` or `finalSetTo` (`SET_TARGET_BELOW_FLOOR`); a stored config
+  // to at least 5 points. A write door refuses a lower `setTo` or `finalSetTo` (`setTargetBelowFloor`); a stored config
   // below it still loads and plays.
   minSetTo: 5,
   positions,

@@ -2500,7 +2500,7 @@
   "divset.failed": "Échec",
   "rules.err.shareNeedsDraws": "Partager les points nécessite d'autoriser les matchs nuls : activez d'abord « Allow draws ».",
   "rules.err.shareNeedsDrawnGame": "Partager les points nécessite qu'une partie nulle soit possible : réglez d'abord « Game tied at max boards » sur « Drawn game ».",
-  "rules.err.setTargetBelowFloor": "Un set doit se jouer en au moins 5 points.",
+  "rules.err.setTargetBelowFloor": "Un set doit se jouer en au moins {min} points.",
   "rules.err.bo1MatchTiebreak": "Un super tie-break remplace le set décisif ; un match en un seul set n'en a pas.",
   "rules.err.stageFormatLocked": "{stage} a commencé : ses règles sont verrouillées.",
   "rules.err.divisionTableRulesLocked": "{stage} a commencé : les règles du classement sont verrouillées.",

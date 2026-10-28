@@ -2447,7 +2447,7 @@
   "divset.failed": "Mislukt",
   "rules.err.shareNeedsDraws": "Punten delen vereist dat gelijkspel is toegestaan: zet eerst 'Allow draws' aan.",
   "rules.err.shareNeedsDrawnGame": "Punten delen vereist dat een gelijkspel mogelijk is: zet eerst 'Game tied at max boards' op 'Drawn game'.",
-  "rules.err.setTargetBelowFloor": "Een set moet tot minstens 5 punten gespeeld worden.",
+  "rules.err.setTargetBelowFloor": "Een set moet tot minstens {min} punten gespeeld worden.",
   "rules.err.bo1MatchTiebreak": "Een match-tiebreak vervangt een beslissende set; een wedstrijd over één set heeft er geen.",
   "rules.err.stageFormatLocked": "{stage} is begonnen — de regels liggen vast.",
   "rules.err.divisionTableRulesLocked": "{stage} is begonnen — de regels van de stand liggen vast.",
