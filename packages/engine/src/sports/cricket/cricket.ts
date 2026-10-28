@@ -1231,6 +1231,11 @@ type WicketKind = z.infer<typeof CricketWicket>["kind"];
  *  Playing Conditions except clause 34 (Hit the ball twice), clause 37 (Obstructing the field) or clause 38 (Run out)." */
 const NO_BALL_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["hitballtwice", "obstructed", "runout"]);
 
+/** W2e T8b (CK-WD-1, D8) — the modes of dismissal that stand off a wide. ICC Men's T20 World Cup 2026 Playing Conditions
+ *  22.9: "When Wide ball has been called, neither batter shall be out under any of the Playing Conditions except clause 35
+ *  (Hit wicket), clause 37 (Obstructing the field), clause 38 (Run out) or clause 39 (Stumped)." */
+const WIDE_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["hitwicket", "obstructed", "runout", "stumped"]);
+
 /** The free hit's (spec §2.2, CK-FH-1). ICC 21.19.2 gives it the no ball's three ("only under the circumstances that apply
  *  for a No ball"); the engine leaves hit the ball twice out, CK-FH-1's recorded deviation (W2e ruling I-2). */
 const FREE_HIT_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(
@@ -1530,10 +1535,15 @@ function applyDelivery(
     if (fine.freeHitPending && !FREE_HIT_DISMISSAL_KINDS.has(wicket.kind)) {
       invalid(`"${wicket.kind}" cannot dismiss on a free hit`);
     }
-    // W2e T8b (CK-NB-1, ICC 21.18): off the no ball itself only three modes stand. STRICT ONLY: a new rule over ledgers
-    // that may already hold such a ball, so a stored one keeps folding to the result it recorded (the CK-CH-1 seam).
+    // W2e T8b (CK-NB-1, ICC 21.18; CK-WD-1, ICC 22.9): off a no ball or a wide only the modes its clause names stand.
+    // STRICT ONLY: new rules over ledgers that may already hold such a ball, so a stored one keeps folding to the result
+    // it recorded (the CK-CH-1 seam). On a free hit the free-hit check above has already run (21.19.2 binds it even when
+    // the delivery is called wide).
     if (ctx.strictFold && extras?.kind === "noball" && !NO_BALL_DISMISSAL_KINDS.has(wicket.kind)) {
       invalid(`"${wicket.kind}" cannot dismiss on a no ball`);
+    }
+    if (ctx.strictFold && extras?.kind === "wide" && !WIDE_DISMISSAL_KINDS.has(wicket.kind)) {
+      invalid(`"${wicket.kind}" cannot dismiss on a wide`);
     }
     if (wicket.out !== striker && wicket.out !== nonStriker) {
       invalid(`"${wicket.out}" is not at the crease`);
