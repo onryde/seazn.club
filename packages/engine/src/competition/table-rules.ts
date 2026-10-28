@@ -119,7 +119,9 @@ function orderOf(input: TableRulesInput): { readonly tiebreakers: readonly Tiebr
 
 /** X-TB-1: a stage ranks by its pin, else its own order, else its division's default, else its sport's default for its
  *  stage kind — and pays its pin, else its own rule, else its sport's rule under its merged cfg. Throws CONFIG_INVALID
- *  when a sport layer must answer and cannot read the merged cfg, or when an order holds a key outside the vocabulary. */
+ *  when a sport layer must answer and cannot read the merged cfg. It does NOT check an order's keys (nor does the web
+ *  loader's stored-pin schema, `z.string()`): a key outside the vocabulary is refused when the table is ranked —
+ *  `rankStandings` → `parseCascade`, CONFIG_INVALID "has no comparator". */
 export function resolveTableRules(input: TableRulesInput): TableRulesPin {
   if (input.pinned != null) return input.pinned;
   const points = pointsOf(input);

@@ -86,6 +86,45 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
     expect(clean.results[0]!.status, "the control stream is imported").not.toBe("rejected");
   });
 
+  // W2d T18 (HK-TB-2). The import folds every event under the write path, so an untyped `hockey.goal` is refused by name —
+  // the breaking change `docs/api-v1-breaking-changes.md` (2026-10-28) documents for this route — and the same stream with
+  // the goal typed imports.
+  it("rejects an untyped FIH hockey goal: import.fold_rejected, GOAL_KIND_REQUIRED, at that event, and writes NOTHING; typed, it imports", async () => {
+    // single-sport: FIH hockey is the one sport whose goal must record its type (`PeriodPreset.goalKindRequired`).
+    const s = await seedBracket({ sport: "hockey", variant: "fih-outdoor", stageKind: "league", entrants: 2 });
+    const fixtureId = s.fixtureIds[0]!;
+    const [fx] = await sql<{ home: string }[]>`select home_entrant_id as home from fixtures where id = ${fixtureId}`;
+    const stream = (goal: Record<string, unknown>) => [
+      { type: "core.start", payload: {} },
+      { type: "hockey.goal", payload: goal }, // ← index 1
+      { type: "hockey.period.advance", payload: { to: "Q2" } },
+      { type: "hockey.period.advance", payload: { to: "Q3" } },
+      { type: "hockey.period.advance", payload: { to: "Q4" } },
+      { type: "hockey.period.advance", payload: { to: "FT" } },
+    ];
+    const report = await importEvents(s.auth, s.divisionId, {
+      import_id: "imp-untyped-hockey-goal",
+      streams: [{ fixture: { id: fixtureId }, events: stream({ by: fx!.home }) }],
+    });
+    // No `eventIndex` is asserted: the kernel's GOAL_KIND_REQUIRED names no event (unlike LINEUP_NOT_SUPPORTED above), so
+    // the report carries none today. Final-review fix report routes that; this test does not freeze its absence.
+    expect(report.results[0]).toMatchObject({
+      status: "rejected",
+      eventsAppended: 0,
+      error: { code: "import.fold_rejected", engineCode: "GOAL_KIND_REQUIRED" },
+    });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
+    expect(n, "nothing written").toBe(0);
+
+    // The control: the same stream with the goal typed as a field goal imports.
+    const typed = await importEvents(s.auth, s.divisionId, {
+      import_id: "imp-typed-hockey-goal",
+      streams: [{ fixture: { id: fixtureId }, events: stream({ by: fx!.home, kind: "fg" }) }],
+    });
+    expect(typed.results[0]!.error, "the typed stream is not refused").toBeUndefined();
+    expect(typed.results[0]!.status, "the typed stream is imported").not.toBe("rejected");
+  });
+
   it("rejects a fixture that already has events", async () => {
     const { auth } = await seedOrg();
     const { divisionId, fixtureId } = await startedDivisionWithFixture(auth);

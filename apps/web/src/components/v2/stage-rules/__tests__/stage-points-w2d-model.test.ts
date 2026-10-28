@@ -20,6 +20,7 @@ import {
   pointsPresets,
   pointsRows,
   presetActive,
+  presetOffered,
   ruleFromDraft,
   stagePointsContext,
   type PointsDraft,
@@ -291,5 +292,71 @@ describe("the retired notice stays retired", () => {
       scanned++;
     }
     expect(scanned, "files scanned").toBeGreaterThan(3);
+  });
+});
+
+describe("W2d final review m5: a preset chip is offered only where it would change what the stage pays", () => {
+  // FIH Pro League Regulations S7 Reg 4.2 b–c (spec §5.10, HK-PT-2): a win 3, a loss 0, a drawn match 1 each and its
+  // shoot-out winner +1. FIH outdoor (the default) pays 3/1/0 with draws standing and declares no shoot-out bonus; B2 pays
+  // an ABSENT bonus 1. So the chip pays what the default pays on every outcome a stage can reach, with or without a stage
+  // shoot-out — the reviewer's "2/1 versus 1/1" read an absent bonus as 0 (false premise, measured here).
+  const B2_ABSENT_BONUS = 1;
+  const outdoor = cfg(hockey, "fih-outdoor");
+  const shootout = (hockey.configSchema.parse(cfg(hockey, "fih-shootout")) as { shootout: unknown }).shootout;
+  const withShootout = { rules: { shootout } };
+  const proLeague = pointsPresets(hockey, "league").find((p) => p.id === "pro_league")!.rule;
+  const OWN_BONUS = 2;
+  const ownBonus2: PointsRule = { ...proLeague, soBonus: OWN_BONUS };
+  const offered = (m: AnySportModule, division: unknown, config: Record<string, unknown>, playing: PointsRule | null, preset: PointsRule, kind = "league") => {
+    const stage = { kind, config };
+    const ctx = stagePointsContext(m, division, stage)!;
+    expect(ctx, "premise: the stage has a table").not.toBeNull();
+    const draft = draftFromStored(m, division, playing, null, stage);
+    return presetOffered(m, ctx, playing ?? ctx.rule, draft, preset);
+  };
+
+  it("premises, from the rulebook: the chip is FIH Pro League; the default declares no bonus; only a stage shoot-out reaches win.so", () => {
+    expect({ win: proLeague.win.regulation, draw: proLeague.draw, loss: proLeague.loss.regulation, soBonus: proLeague.soBonus }).toEqual({ win: 3, draw: 1, loss: 0, soBonus: 1 });
+    const sport = sportRule(hockey, outdoor);
+    expect({ win: sport.win.regulation, draw: sport.draw, loss: sport.loss.regulation, soBonus: sport.soBonus }).toEqual({ win: 3, draw: 1, loss: 0, soBonus: undefined });
+    expect(sport.draw! + B2_ABSENT_BONUS, "B2: the default's shoot-out winner is paid what the chip pays").toBe(proLeague.draw! + proLeague.soBonus!);
+    expect(reach(hockey, outdoor).includes("win.so"), "the default stage never reaches a shoot-out").toBe(false);
+    expect(reach(hockey, outdoor, "league", withShootout).includes("win.so"), "a stage shoot-out reaches one").toBe(true);
+  });
+
+  it("hockey default (FIH outdoor, the sport's points): the Pro League chip is hidden — and with a stage shoot-out too", () => {
+    expect(offered(hockey, outdoor, {}, null, proLeague), "FIH outdoor, no shoot-out").toBe(false);
+    expect(offered(hockey, outdoor, withShootout, null, proLeague), "FIH outdoor + a stage shoot-out: an absent bonus pays 1 (B2)").toBe(false);
+  });
+
+  it("an own shoot-out bonus of 2: the chip is shown where the stage reaches a shoot-out, hidden where it does not (reachability alone moves it)", () => {
+    expect(offered(hockey, outdoor, withShootout, ownBonus2, proLeague), "the chip would pay the shoot-out winner 2, not 3").toBe(true);
+    expect(offered(hockey, outdoor, {}, ownBonus2, proLeague), "no shoot-out reachable: the bonus pays nothing, the chip changes nothing").toBe(false);
+  });
+
+  it("a chip the stage already plays shows PRESSED, never hidden (FIH shoot-out's default is Pro League)", () => {
+    const fihSo = cfg(hockey, "fih-shootout");
+    const stage = { kind: "league", config: {} };
+    expect(presetActive(hockey, draftFromStored(hockey, fihSo, proLeague, null, stage), proLeague), "premise: its chip is pressed").toBe(true);
+    expect(offered(hockey, fihSo, {}, proLeague, proLeague)).toBe(true);
+    expect(offered(hockey, fihSo, {}, null, proLeague), "inherited, no own rule: the sport's rule is the chip's").toBe(true);
+  });
+
+  it("every other sport's presets are unaffected: on every division × table kind, each chip is still offered", () => {
+    let checked = 0;
+    for (const { m, cfg: division, variant } of DIVISIONS) {
+      if (m.key === "hockey") continue;
+      for (const kind of TABLE_KINDS) {
+        const presets = pointsPresets(m, kind);
+        if (presets.length === 0) continue;
+        if (stagePointsContext(m, division, { kind, config: {} }) === null) continue;
+        for (const p of presets) {
+          expect(offered(m, division, {}, null, p.rule, kind), `${m.key}/${variant} ${kind} ${p.id}`).toBe(true);
+          checked++;
+        }
+      }
+    }
+    // chess: 3 variants × (league 2 + swiss 1 + any other table kind it has) — never zero.
+    expect(checked, `presets checked: ${checked}`).toBeGreaterThanOrEqual(9);
   });
 });

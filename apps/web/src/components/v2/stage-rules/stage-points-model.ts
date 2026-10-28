@@ -36,7 +36,7 @@ import type { AnySportModule, TableStageKind } from "@seazn/engine/sport";
 import { pointsLine, type PointsClause } from "@/lib/points-line";
 import type { SplitReason } from "@/lib/rule-errors";
 import { liveStageCfg } from "@/lib/stage-decider-off";
-import { flattenedSplits, sportStageRule } from "@/lib/stage-points-splits";
+import { flattenedSplits, sportStageRule, splitsLost } from "@/lib/stage-points-splits";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
 
@@ -613,6 +613,19 @@ export function draftIsDirty(module: AnySportModule, draft: PointsDraft, stored:
 export function presetActive(module: AnySportModule, draft: PointsDraft, preset: PointsRule): boolean {
   const next = ruleFromDraft(module, { ...draft, useDivision: false });
   return next.ok && next.rule !== null && canonical(next.rule) === canonical(PointsRule.parse(preset));
+}
+
+/**
+ * W2d final review m5 (controller ruling, 2026-10-28) - is a preset chip worth offering? Not when it pays what the stage
+ * PLAYS (`playing`: its own rule, its pin's, else the sport's) on every outcome the stage can reach: `splitsLost`, the
+ * engine's `payout` over its `reachableOutcomes` for the stage's merged cfg (the server's own comparison), so a click
+ * would change nothing. Hockey's Pro League on an FIH outdoor stage is that chip, with or without a stage shoot-out (B2
+ * pays FIH outdoor's absent bonus 1, the chip's declared 1). A chip the draft already IS stays, pressed: it says the
+ * state. Compared against what the stage plays rather than the draft, so a chip never appears or vanishes above the
+ * boxes while they are typed.
+ */
+export function presetOffered(module: AnySportModule, ctx: StagePointsContext, playing: PointsRule, draft: PointsDraft, preset: PointsRule): boolean {
+  return presetActive(module, draft, preset) || splitsLost(module, { cfg: ctx.cfg, kind: ctx.kind, rule: playing }, preset).differs;
 }
 
 /** `rule` in points rather than its stored unit (a half-points rule's numbers halved), for words that print numbers. */

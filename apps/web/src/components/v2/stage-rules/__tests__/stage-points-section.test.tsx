@@ -491,3 +491,23 @@ describe("W2d final review I1: a pinned stage's card says the pin's points and t
     }
   });
 });
+
+describe("W2d final review m5: the section offers a preset chip only where it changes what the stage pays (the model's answer, REACHED)", () => {
+  const hockey = sport("hockey");
+  const proLeague = PointsRule.parse(hockey.tablePresets!("league").points.find((p) => p.id === "pro_league")!.rule);
+  const outdoorRule = PointsRule.parse(hockey.tablePointsRule(hockey.configSchema.parse(hockey.variants["fih-outdoor"]), "league"));
+  const shootout = (hockey.configSchema.parse(hockey.variants["fih-shootout"]) as { shootout: unknown }).shootout;
+
+  it("hockey FIH outdoor playing its own copy of the sport's points: no Pro League chip, no presets row; an own bonus of 2 with a stage shoot-out: the chip, not pressed; FIH shoot-out: the chip, pressed", () => {
+    // FIH Pro League Reg 4.2 b–c: 3/1/0, a drawn match 1 each, the shoot-out winner +1 (spec §5.10, HK-PT-2).
+    expect({ win: proLeague.win.regulation, draw: proLeague.draw, loss: proLeague.loss.regulation, soBonus: proLeague.soBonus }).toEqual({ win: 3, draw: 1, loss: 0, soBonus: 1 });
+    const plain = render(hockey, "fih-outdoor", outdoorRule);
+    expect(plain, "premise: the editor is open (an own rule, so the chips' place renders)").toContain('data-testid="stage-points-rows"');
+    expect(has(plain, "stage-points-preset-pro_league"), "FIH outdoor: the chip pays what the stage plays").toBe(false);
+    expect(has(plain, "stage-points-presets"), "no chip left: no presets row").toBe(false);
+    const own2 = render(hockey, "fih-outdoor", { ...proLeague, soBonus: 2 }, { stageConfig: { rules: { shootout } } });
+    expect(tagOf(own2, "stage-points-preset-pro_league"), "a stage shoot-out and an own bonus of 2: the chip pays its winner 2, not 3").toContain('aria-pressed="false"');
+    const fihSo = render(hockey, "fih-shootout", proLeague);
+    expect(tagOf(fihSo, "stage-points-preset-pro_league"), "FIH shoot-out plays Pro League: the chip shows pressed").toContain('aria-pressed="true"');
+  });
+});
