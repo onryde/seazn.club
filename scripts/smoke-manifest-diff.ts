@@ -31,11 +31,15 @@ export function diffSmokeManifests(before: readonly SmokeManifestEntry[], after:
 
 export function parseSmokeManifest(raw: string): SmokeManifestEntry[] {
   const v: unknown = JSON.parse(raw);
-  const ok = Array.isArray(v) && v.every((e) => e && typeof e.suite === "string" && Number.isInteger(e.checks) && e.checks >= 0);
+  const isEntry = (e: unknown): e is SmokeManifestEntry => {
+    const r = e as Partial<Record<keyof SmokeManifestEntry, unknown>> | null;
+    return !!r && typeof r.suite === "string" && typeof r.checks === "number" && Number.isInteger(r.checks) && r.checks >= 0;
+  };
+  const ok = Array.isArray(v) && v.every(isEntry);
   if (!ok) throw new SmokeManifestError("manifest must be an array of { suite: string, checks: non-negative integer }");
-  const names = (v as SmokeManifestEntry[]).map((e) => e.suite);
+  const names = v.map((e) => e.suite);
   if (new Set(names).size !== names.length) throw new SmokeManifestError("manifest repeats a suite name");
-  return v as SmokeManifestEntry[];
+  return v;
 }
 
 if (process.argv[1]?.endsWith("smoke-manifest-diff.ts")) {
