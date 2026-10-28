@@ -4,6 +4,7 @@
 // the league conventions. Singles vs doubles is the entrant kind (like
 // badminton) — the module never inspects it.
 import type { PositionCatalog } from "../../sport/catalog.ts";
+import { BO1_MATCH_TIEBREAK } from "../../sport/module.ts";
 import { makeNestedModule } from "../nested/kernel.ts";
 
 // No positions; one nominated unit (player or pair) per side.
@@ -143,4 +144,9 @@ export const tennis: typeof nestedTennis = {
     "tiebreak.winBy": { scope: "match" },
     points: { scope: "points" },
   },
+  // W2e RB2A-13 (row TN-CF-1; spec 2026-10-28 §5.5, E15): ITF App VI's match tie-break REPLACES the deciding set, and a
+  // best of 1 is its own deciding set, so a write door refuses the pair (`BO1_MATCH_TIEBREAK`). A best of 1 with a final
+  // set tie-break (`finalSet.tiebreakTo`, still a set) is not refused, and a stored config that breaks it still loads.
+  configWriteIssues: (cfg) =>
+    cfg.bestOf === 1 && cfg.finalSet !== "same" && "matchTiebreakTo" in cfg.finalSet ? [BO1_MATCH_TIEBREAK] : [],
 };

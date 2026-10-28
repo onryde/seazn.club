@@ -893,6 +893,14 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
    * match.
    */
   readonly sanctionEnding?: SanctionEndingDecl;
+  /**
+   * W2e (spec 2026-10-28 §5.5, E15; ruling 31, RB2A-13; VB-CF-1, TT-CF-1, TN-CF-1) — what a WRITE door refuses in a config
+   * `configSchema` accepts: one engine sentence per problem (`SET_TARGET_BELOW_FLOOR`, `BO1_MATCH_TIEBREAK`), [] when
+   * none. Asked through `writeConfigIssues` by every door that persists a config (division create and save, template,
+   * stage rules, a match's own format), which answer CONFIG_INVALID `{issues}`. Never a `configSchema` refine (E15): a
+   * stored config that breaks it still loads, folds and scores. Absent = the sport refuses nothing beyond its schema.
+   */
+  configWriteIssues?(cfg: Cfg): readonly string[];
   variants: Record<string, Partial<Cfg>>; // named presets: t20, odi, beach, blitz…
   /**
    * W2c (spec §4.1 as amended) — the game rule of who may set which cfg key, at which scope, for which stage kinds and
@@ -1128,6 +1136,25 @@ export type AnySportModule = SportModule<any, any, any>;
 export interface TablePresets {
   readonly points: readonly { readonly id: string; readonly rule: PointsRule }[];
   readonly tiebreakers: readonly { readonly id: string; readonly keys: readonly TiebreakerKey[] }[];
+}
+
+/** W2e ruling 31 (VB-CF-1, TT-CF-1) — the write-door refusal of a volleyball or table tennis set target (`setTo`,
+ *  `finalSetTo`) below 5. A client maps it to its own localized copy (apps/web `LOCALIZED_CONFIG_ISSUES`). */
+export const SET_TARGET_BELOW_FLOOR = "A set must be played to at least 5 points.";
+/** W2e RB2A-13 (TN-CF-1) — the write-door refusal of a tennis best of 1 whose final set is a match tie-break: ITF App VI's
+ *  match tie-break REPLACES a deciding set, and a best of 1 has no set to replace. */
+export const BO1_MATCH_TIEBREAK = "A match tie-break replaces a deciding set; best of 1 has none.";
+
+/**
+ * W2e (spec 2026-10-28 §5.5, E15) — the sentences a write door refuses `cfg` with (`SportModule.configWriteIssues`), over
+ * the cfg as the sport's schema parses it (so a stored partial reads its defaults). Empty when the module declares none,
+ * and when the schema itself refuses `cfg`: that refusal is the door's first answer (CONFIG_INVALID with the schema's own
+ * issues), asked before this one.
+ */
+export function writeConfigIssues(module: Pick<AnySportModule, "configSchema" | "configWriteIssues">, cfg: unknown): readonly string[] {
+  if (module.configWriteIssues === undefined) return [];
+  const parsed = module.configSchema.safeParse(cfg);
+  return parsed.success ? module.configWriteIssues(parsed.data) : [];
 }
 
 /**

@@ -41,7 +41,7 @@ import {
 import type { PointsRule } from "../../competition/points.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
 import type { EntrantModel } from "../../sport/entrant-model.ts";
-import { SET_SCORE_KEY, boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
+import { SET_SCORE_KEY, SET_TARGET_BELOW_FLOOR, boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import {
   personsForEntrant,
@@ -1563,6 +1563,13 @@ export interface SetBasedPreset {
    */
   sanctionEnding?: SanctionEndingDecl;
   /**
+   * W2e (spec 2026-10-28 §5.5, E15; ruling 31; VB-CF-1, TT-CF-1) — the lowest set target (`setTo` and `finalSetTo` alike) a
+   * config may be WRITTEN with: below it the module's `configWriteIssues` answers `SET_TARGET_BELOW_FLOOR`, whose sentence
+   * names 5. Read by nothing else, `configSchema` included, so a stored config below it still loads and plays. Omitted =
+   * no floor (badminton: its rules state none, and its editor's own minimum is 11).
+   */
+  minSetTo?: number;
+  /**
    * R5-1 — the service rules THIS federation plays (`SetBasedServeRotation`).
    *
    * REQUIRED, for the same reason `sanctionLevels` above is: the three sports
@@ -2219,6 +2226,12 @@ export function samePointsMap(a: Readonly<Record<string, PointsPair>>, b: Readon
   );
 }
 
+/** W2e ruling 31 (VB-CF-1, TT-CF-1) — the write-door refusal of a set target below `floor`: one sentence, however many of
+ *  `setTo` and `finalSetTo` are below it. */
+function setTargetFloorIssues(floor: number): (cfg: SetBasedCfg) => readonly string[] {
+  return (cfg) => (cfg.setTo < floor || cfg.finalSetTo < floor ? [SET_TARGET_BELOW_FLOOR] : []);
+}
+
 export function makeSetBasedModule(
   preset: SetBasedPreset,
   /** The module this call returns, as the caller's own binding (`makeSetBasedModule({...}, () => volleyball)`, as tennis
@@ -2477,6 +2490,8 @@ export function makeSetBasedModule(
     ...(preset.entrantModel === undefined ? {} : { entrantModel: preset.entrantModel }),
     // W2e X-SE-1 — the sanction levels that end a match or prompt (see `SetBasedPreset.sanctionEnding`).
     ...(preset.sanctionEnding === undefined ? {} : { sanctionEnding: preset.sanctionEnding }),
+    // W2e ruling 31 (VB-CF-1, TT-CF-1) — the write doors' set-target floor (see `SetBasedPreset.minSetTo`).
+    ...(preset.minSetTo === undefined ? {} : { configWriteIssues: setTargetFloorIssues(preset.minSetTo) }),
     // S8/#417 — always populated: the kernel default (`points_won` +
     // matches/sets_won/sets_lost) merges with whatever this preset declares,
     // never merely spread when present. See `mergePlayerStats`.

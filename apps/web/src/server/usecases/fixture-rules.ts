@@ -22,6 +22,7 @@ import { schedulePlayerStatsRefresh } from "./player-stats-refresh";
 import { invalidatePublicCache } from "./scoring";
 import { tableRulesRowsOf } from "@/server/engine-db/table-rules";
 import { refuseOverrideUncovered } from "./table-rule-guards";
+import { configWriteIssueList } from "./stage-rules-merge";
 
 /**
  * W2c Task 14 — THE ONE WRITER of `fixtures.rules_override` (V469): one match's own format (X-SR-2), and the live
@@ -161,6 +162,9 @@ function overrideFor(
   // (5) the corrected format: the resolver's own merge, parsed.
   const parsedCorrected = m.configSchema.safeParse(mergeRulesOverride(stageResolved, frag));
   if (!parsedCorrected.success) throw configInvalid(row, parsedCorrected.error.issues, keys);
+  // W2e (spec §5.5, E15; VB-CF-1, TT-CF-1, TN-CF-1): and the engine's write-door refusals of the corrected format.
+  const written = configWriteIssueList(m, parsedCorrected.data);
+  if (written.length > 0) throw configInvalid(row, written, keys);
   const stageCfg = parsedStage.data as Record<string, unknown>;
   const corrected = parsedCorrected.data as Record<string, unknown>;
   const sentWhole: Record<string, unknown> = {};

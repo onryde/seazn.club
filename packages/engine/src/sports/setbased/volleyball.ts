@@ -71,6 +71,10 @@ export const volleyball = makeSetBasedModule({
     },
   },
   ruleKeys: { ...SET_RULE_KEYS }, // W2c (spec §4.1 Q5) — the set kernel's keys as they are
+  // W2e ruling 31 (row VB-CF-1; spec 2026-10-28 §5.5, E15): however short an organiser makes the format, a set is played
+  // to at least 5 points. A write door refuses a lower `setTo` or `finalSetTo` (`SET_TARGET_BELOW_FLOOR`); a stored config
+  // below it still loads and plays.
+  minSetTo: 5,
   positions,
   // S3/W4b (#426) ruling 2 — FIVB 15.6, the two conditions on a re-entry, and
   // 19.3, the libero replacement that is not a substitution.

@@ -2500,6 +2500,8 @@
   "divset.failed": "Failed",
   "rules.err.shareNeedsDraws": "Sharing the points needs draws to be allowed — set 'Allow draws' to on first.",
   "rules.err.shareNeedsDrawnGame": "Sharing the points needs a drawn game to be possible — set 'Game tied at max boards' to 'Drawn game' first.",
+  "rules.err.setTargetBelowFloor": "A set must be played to at least 5 points.",
+  "rules.err.bo1MatchTiebreak": "A match tie-break replaces a deciding set; best of 1 has none.",
   "rules.err.stageFormatLocked": "{stage} has started — its rules are locked.",
   "rules.err.divisionTableRulesLocked": "{stage} has started — table rules are locked.",
   "rules.err.divisionFormatLocked": "{stage} has started; its match format is locked. Change individual unstarted matches instead.",
