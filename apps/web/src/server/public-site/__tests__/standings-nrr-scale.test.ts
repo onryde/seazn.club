@@ -16,7 +16,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { StandingsDelta } from "@seazn/engine/core";
+import { EngineError, type StandingsDelta } from "@seazn/engine/core";
 import { DEFAULT_BALLS_PER_OVER, PLAIN_LAYOUT, foldResults, rankStandings, type StandingsRow } from "@seazn/engine/competition";
 import type { AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
@@ -26,6 +26,7 @@ import type { Dict } from "@/lib/i18n-constants";
 import { t } from "@/lib/i18n-runtime";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
+import { stageTableRulesDocOf } from "@/server/engine-db/table-rules";
 import { buildTableView, cellText, tableColumns, tableLayoutFor, type TableViewInput } from "../standings-view";
 
 const EN = en as unknown as Dict;
@@ -41,6 +42,19 @@ const overLength = (variant: string): number => (cricket.configSchema.parse(cric
 const FIVE = overLength("hundred");
 const SIX = overLength("t20");
 const docOf = (variant: string) => unpinnedRulesDoc({ module: cricket, divisionConfig: cricket.variants[variant] });
+/** An ACTIVE stage pinned to the rules a readable Hundred config resolves to, over `divisionConfig`: a pinned stage's
+ *  resolver never asks the sport, so the loader serves its doc whatever the stored config is. */
+const pinnedRulesDoc = (divisionConfig: unknown) => {
+  const { points, tiebreakers, crossGroup, sources } = docOf("hundred");
+  return stageTableRulesDocOf(
+    {
+      stageId: "pinned-stage", kind: "league", status: "active", stageConfig: null,
+      pin: { points, tiebreakers, crossGroup, sources }, pinnedAt: "2026-10-28T00:00:00.000Z",
+      divisionConfig, divisionTiebreakers: null,
+    },
+    cricket,
+  );
+};
 
 /** One tied match per pair, so points are level and NRR (the module's third step) decides all four places. A beats B 150-120
  *  by runs per ball, C beats D 130-120; balls are 100 a side. Per-ball margins: A +0.3, C +0.1, D -0.1, B -0.3. */
@@ -123,15 +137,30 @@ describe("CK-BO-2 the loader carries the division's over length", () => {
     const stored = { ...(cricket.variants.hundred as Record<string, unknown>), ballsPerInnings: 60 };
     const doc = unpinnedRulesDoc({ module: cricket, divisionConfig: stored, stageConfig: { rules: { ballsPerInnings: 40 } } });
     expect(doc.ballsPerOver).toBe(FIVE);
-    // A config the sport cannot read carries none (the layout then prints the default), never a guess.
-    const unreadable = (() => {
+    // A config the sport cannot read is never guessed at. On an unpinned stage the resolver must ask the sport, so the
+    // doc is refused, typed; on a pinned one the doc is served and carries no over length (the layout prints the default).
+    const junk = { ballsPerOver: -3 };
+    const refusal = (() => {
       try {
-        return unpinnedRulesDoc({ module: cricket, divisionConfig: { ballsPerOver: -3 } }).ballsPerOver;
-      } catch {
-        return "refused" as const;
+        return unpinnedRulesDoc({ module: cricket, divisionConfig: junk });
+      } catch (err) {
+        return err;
       }
     })();
-    expect(unreadable === undefined || unreadable === "refused", `a junk over length is no over length (${String(unreadable)})`).toBe(true);
+    expect(refusal).toBeInstanceOf(EngineError);
+    expect((refusal as EngineError).code).toBe("CONFIG_INVALID");
+    expect((refusal as EngineError).message).toMatch(/cricket settings do not parse/);
+    expect(Object.hasOwn(pinnedRulesDoc(junk), "ballsPerOver"), "a junk over length is no over length").toBe(false);
+  });
+
+  it("CK-BO-2 a pinned stage whose stored config the sport cannot read for another reason still prints its own over length", () => {
+    // The resolver's tolerance (`askedOrElse`: the cfg as its schema parses it, else as given): one bad value elsewhere
+    // must not drop a Hundred's five back to the default six on the table.
+    const otherwiseBad = { ...(cricket.variants.hundred as Record<string, unknown>), ballsPerInnings: -1 };
+    expect(cricket.configSchema.safeParse(otherwiseBad).success, "premise: the sport cannot read it").toBe(false);
+    expect(pinnedRulesDoc(otherwiseBad).ballsPerOver).toBe(FIVE);
+    // The pair: the same config whose own length is junk too carries none.
+    expect(Object.hasOwn(pinnedRulesDoc({ ...otherwiseBad, ballsPerOver: 2.5 }), "ballsPerOver")).toBe(false);
   });
 
   it("CK-BO-2 tableLayoutFor hands the layout the doc's length, or the default when the doc names none", () => {

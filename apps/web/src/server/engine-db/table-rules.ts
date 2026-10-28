@@ -156,13 +156,15 @@ function askedOrElse<T>(module: AnySportModule, mergedCfg: unknown, ask: (cfg: u
   }
 }
 
-/** The over length a merged cfg plays, as the sport parses it: a positive whole `ballsPerOver`, else none. The table only
- *  PRINTS by it (net run rate), so a cfg the sport cannot read answers none and the display's default stands, as for
- *  `sportDefault`; nothing ranked or paid depends on it. A sport without the key answers none. */
+/** The over length a merged cfg plays: a positive whole `ballsPerOver`, else none. Read with `askedOrElse`'s tolerance:
+ *  the cfg as the sport parses it, else as given (W2e T8c review M2: one bad value elsewhere in a pinned stage's stored
+ *  config must not drop a Hundred's five back to the default six). The table only PRINTS by it (net run rate), so a
+ *  length that is not a positive whole number answers none and the display's default stands; nothing ranked or paid
+ *  depends on it. A sport without the key answers none. */
 function ballsPerOverOf(module: AnySportModule, mergedCfg: unknown): number | undefined {
   const parsed = module.configSchema.safeParse(mergedCfg);
-  if (!parsed.success) return undefined;
-  const n = (parsed.data as Record<string, unknown>).ballsPerOver;
+  const cfg = parsed.success ? parsed.data : mergedCfg;
+  const n = cfg !== null && typeof cfg === "object" ? (cfg as Record<string, unknown>).ballsPerOver : undefined;
   return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
