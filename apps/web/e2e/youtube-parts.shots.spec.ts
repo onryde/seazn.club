@@ -32,7 +32,9 @@ import { YOUTUBE_EMBED_ORIGIN, youtubeWatchUrl } from "../src/lib/youtube";
 //   * TWO parts and a club's own, different link: the pill renders beside the tabbed player (a named capture, not the default);
 //   * the fallback: an error from the player puts the "Open on YouTube" link in place of the player, and focus goes to that link (the
 //     player that held it is gone);
-//   * NO YouTube logo anywhere in the player (the logo only ever sits inside a link to YouTube content).
+//   * NO YouTube logo anywhere in the player (the logo only ever sits inside a link to YouTube content);
+//   * a PRIVATE channel's broadcast (owner ruling 2026-10-28, option A) is not on the public page at all: private only shows neither a
+//     player nor a pill; Part 1 unlisted + Part 2 private shows the one visible replay as THE replay - no tab rail, no "Part" word.
 test.use({ storageState: { cookies: [], origins: [] } });
 
 const SHOTS = process.env.YOUTUBE_SHOTS_DIR ?? resolve(process.cwd(), "../../.superpowers/sdd/shots/youtube-parts");
@@ -181,7 +183,8 @@ interface Rig {
 /** The ids YouTube would give: 11 characters of [A-Za-z0-9_-]. Unique per run - the database outlives it. */
 const videoId = (): string => `t16${randomUUID().replace(/-/g, "").slice(0, 8)}`;
 
-async function rig(page: Page, parts: number, streamUrl: "first-part" | "club" | null): Promise<Rig & { ids: string[] }> {
+type Privacy = "unlisted" | "public" | "private";
+async function rig(page: Page, parts: number, streamUrl: "first-part" | "club" | null, privacies: readonly Privacy[] = []): Promise<Rig & { ids: string[] }> {
   const tag = `${TAG}-${randomBytes(4).toString("hex")}`;
   const ownerEmail = `delivered+ytparts-${tag}@resend.dev`;
   const orgSlug = `ytparts-org-${tag}`;
@@ -224,7 +227,7 @@ async function rig(page: Page, parts: number, streamUrl: "first-part" | "club" |
       for (const [i, yt] of ids.entries()) {
         await sql`
           insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at)
-          values (${orgId}, ${connectionId}, ${id}, ${yt}, ${`Part ${i + 1}`}, 'unlisted', 'complete', ${new Date(Date.UTC(2030, 5, 1, 10 + i, 0, 0))})`;
+          values (${orgId}, ${connectionId}, ${id}, ${yt}, ${`Part ${i + 1}`}, ${privacies[i] ?? "unlisted"}, 'complete', ${new Date(Date.UTC(2030, 5, 1, 10 + i, 0, 0))})`;
       }
     }
     return id;
@@ -515,3 +518,51 @@ test("Match page - a video that cannot be embedded: the player's error puts 'Ope
   await declineCookies(page);
   await expect(player.getByTestId("replay-facade"), "a reload starts over at the facade").toBeVisible();
 });
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 3. Private on YouTube (owner ruling A, 2026-10-28)
+// ---------------------------------------------------------------------------------------------------------------------
+test("Match page - a private channel's replay is not on the page: no player, no pill, no sideways scroll, at 1280, 768 and 320 - and Part 1 unlisted + Part 2 private shows ONE replay, unlabelled", async ({ page }) => {
+  test.setTimeout(budget({ navs: 4, acts: 2 + WIDTHS.length * 6 }));
+  const net = await stubNetwork(page, { embeddingDisabled: false });
+
+  // Private only (the end step writes no link for it, so the fixture holds none).
+  const hidden = await rig(page, 1, null, ["private"]);
+  await page.goto(hidden.publicPath, { waitUntil: "load" });
+  await declineCookies(page);
+  await expect(page.locator("h1").first(), "premise: the match page itself rendered").toBeVisible({ timeout: NAV_MS });
+  await expect(page.getByText(hidden.sides[0]).first(), "premise: it is this match").toBeVisible();
+  let widthsRead = 0;
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: 900 });
+    await expect(page.getByTestId("replay-embed"), `private only at ${w}: no player`).toHaveCount(0);
+    await expect(page.getByTestId("replay-facade")).toHaveCount(0);
+    await expect(page.getByTestId("public-stream-link"), `private only at ${w}: no pill`).toHaveCount(0);
+    expect(await page.content(), `private only at ${w}: the video id is nowhere in the document`).not.toContain(hidden.ids[0]);
+    await expectNoPageScroll(page, `private only at ${w}`);
+    await shot(page, `private-only-${w}`);
+    widthsRead++;
+  }
+  expect(widthsRead, "anti-vacuity: every width was walked").toBe(WIDTHS.length);
+  expect(net.thumbRequests.filter((u) => u.includes(hidden.ids[0])), "no thumbnail was ever requested for it").toEqual([]);
+
+  // Positive pair, same rig shape: Part 1 unlisted + Part 2 private. The page shows exactly one player (Part 1's) as THE replay.
+  const mixed = await rig(page, 2, "first-part", ["unlisted", "private"]);
+  await visit(page, mixed.publicPath);
+  const player = page.getByTestId("replay-embed");
+  await expect(player, "one player").toHaveCount(1);
+  await expect(player.getByRole("tab"), "no tab rail: there is one replay").toHaveCount(0);
+  await expect(page.getByTestId("public-stream-link"), "the link is Part 1's, shown once").toHaveCount(0);
+  await expect(page.getByText(/\bPart [0-9]/), "no 'Part' word on the page").toHaveCount(0);
+  await expect(player.getByTestId("replay-open")).toHaveAttribute("href", youtubeWatchUrl(mixed.ids[0]));
+  expect(await page.content(), "the private part's video id is nowhere in the document").not.toContain(mixed.ids[1]);
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: 900 });
+    const where = `mixed privacy at ${w}`;
+    await expectPlayerBox(page, where);
+    await expectNoLogo(page, where);
+    await expectNoPageScroll(page, where);
+    await shot(page, `private-mixed-${w}`);
+  }
+});
+

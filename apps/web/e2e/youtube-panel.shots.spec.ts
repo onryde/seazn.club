@@ -723,8 +723,8 @@ test("Fixture panel - after a match: the replay row shows when it ran, Watch rep
   expect(widthsRead, "anti-vacuity: every width was walked").toBe(WIDTHS.length);
 });
 
-test("Fixture panel - after a match: the replay parts (one; two; one plus the club's own link) read apart by words, at 1280, 768 and 320", async ({ page }) => {
-  test.setTimeout(budget({ navs: 14, acts: 20 }));
+test("Fixture panel - after a match: the replay parts (one; two; one plus the club's own link; private; private beside a public one) read apart by words and a note, at 1280, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ navs: 20, acts: 30 }));
   const r = await rig(page, { match: true });
   await seedDestinations(page, r, `Riverside FC ${randomBytes(2).toString("hex")}`, `Court key ${randomBytes(2).toString("hex")}`);
   const PART_1 = "https://www.youtube.com/watch?v=dQw4w9WgXcQ";
@@ -735,12 +735,26 @@ test("Fixture panel - after a match: the replay parts (one; two; one plus the cl
   // The cases are the three shapes the view can take after a match (StreamSessionView.replayParts + replayUrl): the same stubbed
   // endpoint answers with whichever is current, so each width re-opens the panel on the shape under test.
   const cases = [
-    { name: "one-part", replayUrl: PART_1, parts: [{ partNo: 1, url: PART_1 }], hrefs: [PART_1], labels: [en("stream.phone.replay")], partLabels: [] as string[], icons: 1, latest: false },
+    { name: "one-part", replayUrl: PART_1, parts: [{ partNo: 1, url: PART_1, private: false }], hrefs: [PART_1], labels: [en("stream.phone.replay")], partLabels: [] as string[], icons: 1, latest: false, notes: [false] },
     {
-      name: "two-parts", replayUrl: PART_1, parts: [{ partNo: 1, url: PART_1 }, { partNo: 2, url: PART_2 }], hrefs: [PART_1, PART_2],
-      labels: [en("stream.phone.replay"), en("stream.phone.replay")], partLabels: [en("streaming.youtube.part", { n: 1 }), en("streaming.youtube.part", { n: 2 })], icons: 2, latest: true,
+      name: "two-parts", replayUrl: PART_1, parts: [{ partNo: 1, url: PART_1, private: false }, { partNo: 2, url: PART_2, private: false }], hrefs: [PART_1, PART_2],
+      labels: [en("stream.phone.replay"), en("stream.phone.replay")], partLabels: [en("streaming.youtube.part", { n: 1 }), en("streaming.youtube.part", { n: 2 })], icons: 2, latest: true, notes: [false, false],
     },
-    { name: "one-part-club-link", replayUrl: CLUB, parts: [{ partNo: 1, url: PART_1 }], hrefs: [PART_1, CLUB], labels: [en("stream.phone.replay"), en("stream.url.label")], partLabels: [] as string[], icons: 1, latest: false },
+    {
+      name: "one-part-club-link", replayUrl: CLUB, parts: [{ partNo: 1, url: PART_1, private: false }], hrefs: [PART_1, CLUB], labels: [en("stream.phone.replay"), en("stream.url.label")],
+      partLabels: [] as string[], icons: 1, latest: false, notes: [false, false],
+    },
+    // Owner ruling A (2026-10-28): the organiser keeps a private channel's replay, with a note that the public page does not show it.
+    // The end step writes no link for it, so the fixture's own link is empty.
+    {
+      name: "private", replayUrl: null as string | null, parts: [{ partNo: 1, url: PART_1, private: true }], hrefs: [PART_1], labels: [en("stream.phone.replay")],
+      partLabels: [] as string[], icons: 1, latest: false, notes: [true],
+    },
+    {
+      name: "private-mixed", replayUrl: PART_1, parts: [{ partNo: 1, url: PART_1, private: false }, { partNo: 2, url: PART_2, private: true }], hrefs: [PART_1, PART_2],
+      labels: [en("stream.phone.replay"), en("stream.phone.replay")], partLabels: [en("streaming.youtube.part", { n: 1 }), en("streaming.youtube.part", { n: 2 })], icons: 2, latest: true,
+      notes: [false, true],
+    },
   ];
   let current = cases[0];
   await page.route("**/api/v1/fixtures/*/stream-sessions/current", (route) =>
@@ -776,6 +790,10 @@ test("Fixture panel - after a match: the replay parts (one; two; one plus the cl
         await expect(link, `${c.name} at ${w} #${i}: what it says`).toHaveText(c.labels[i]);
         await expectTappable(link, `${c.name} link #${i} at ${w}`);
         await expectTappable(items.nth(i).getByTestId("stream-replay-copy"), `${c.name} Copy link #${i} at ${w}`);
+        // A private part says so; a public part and the club's own link carry no note. Asserted per item, in both directions.
+        const note = items.nth(i).getByTestId("stream-replay-private");
+        if (c.notes[i]) await expect(note, `${c.name} at ${w} #${i}: the private note`).toHaveText(en("streaming.youtube.replay.private"));
+        else await expect(note, `${c.name} at ${w} #${i}: no note`).toHaveCount(0);
         rowsRead++;
       }
       // Part labels only beside two or more parts; the times line says it is the latest session's only then.
