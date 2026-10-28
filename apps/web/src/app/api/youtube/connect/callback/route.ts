@@ -153,8 +153,9 @@ async function callback(req: Request): Promise<Response> {
     });
     if (channelId === null) return land("pick", pending.id);
 
+    let saved: Awaited<ReturnType<typeof saveConnectionFromGrant>>;
     try {
-      await saveConnectionFromGrant({ pendingId: pending.id, channelId, userId: user.id }, port);
+      saved = await saveConnectionFromGrant({ pendingId: pending.id, channelId, userId: user.id }, port);
     } catch (err) {
       // The channel is live in another org (V479 one-live-channel is global). The new grant is the same Google grant that
       // connection uses: NOT revoked. Our pending grant, with the token sealed on it, is simply dropped.
@@ -164,7 +165,11 @@ async function callback(req: Request): Promise<Response> {
       }
       throw err;
     }
-    return land("connected");
+    // A FRESH connect of a channel the organisation already had is a reconnect underneath: the connection kept its own visibility and
+    // made-for-kids settings and the choices just made went unused, so the page says that (`already_connected`). A Reconnect the
+    // person asked for (`pending.connectionId`) is plain `connected`: its settings were never in question, the save is `existing`
+    // too, and only the intent tells the two apart.
+    return land(saved.existing && !pending.connectionId ? "already_connected" : "connected");
   } catch (err) {
     log.error({ orgId: pending.orgId, ...failureOf(err) }, "youtube connect callback: failed after the grant was made; nothing was connected");
     return await refuse("expired");

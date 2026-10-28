@@ -26,10 +26,11 @@ vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => m.locale.val
 vi.mock("@/server/usecases/me", () => ({ hasClaimedProfile: m.hasClaimedProfile }));
 vi.mock("@/lib/activation", () => ({ needsTourAfterOnboarding: async () => false }));
 vi.mock("@/server/usecases/competitions", () => ({ hasAnyCompetitions: async () => false }));
-// Client islands → nothing (they are not what this file is about).
+// Client islands → nothing (they are not what this file is about) — except the REAL Sign-out button, which the gantry-budget tests
+// below read in the nav's own markup (its router hook is the only thing it needs).
 vi.mock("@/components/help-menu", () => ({ HelpMenu: () => null }));
-vi.mock("@/components/logout-button", () => ({ LogoutButton: () => null }));
 vi.mock("@/components/product-tour", () => ({ ProductTour: () => null }));
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }), usePathname: () => "/streaming" }));
 
 import { Nav } from "../nav";
 import { LOCALES } from "@/lib/i18n-constants";
@@ -147,5 +148,95 @@ describe("Nav › Streaming item", () => {
       checked++;
     }
     expect(checked).toBe(LOCALES.length);
+  });
+});
+
+// The gantry's width budget (T9 fix round 2, owner chose "tighten", 2026-10-28). Five items did not fit: Sign-out was pushed past the
+// viewport at 320-335 (every locale), at fr 768-836 and nl 768, and with a claimed player at 350-389. What a unit test CAN pin is the
+// markup that makes the measured budget true; that the budget really fits is measured in a browser at every width x locale x both
+// navs (the report's table) and by the shots spec's gantry-fit test.
+describe("Nav › the width budget", () => {
+  const tokens = (cls: string | undefined): string[] => (cls ?? "").split(/\s+/).filter(Boolean);
+  /** The class TOKENS of every nav link's own class attribute, in order (the <a>s inside <nav>). */
+  const linkClasses = (html: string): string[][] => {
+    const nav = html.match(/<nav class="[^"]*">([\s\S]*?)<\/nav>/)?.[1] ?? "";
+    return [...nav.matchAll(/<a\b[^>]*\bclass="([^"]*)"/g)].map((x) => tokens(x[1]));
+  };
+  const labelClasses = (html: string): string[][] => {
+    const nav = html.match(/<nav class="[^"]*">([\s\S]*?)<\/nav>/)?.[1] ?? "";
+    return [...nav.matchAll(/<a\b[^>]*>[\s\S]*?<span class="([^"]*)">/g)].map((x) => tokens(x[1]));
+  };
+  /** The Sign-out button as the NAV renders it: its attributes and its label span's classes. */
+  const signOut = (html: string) => {
+    const b = html.match(/<button\b([^>]*)>([\s\S]*?)<\/button>/);
+    return {
+      aria: b?.[1]?.match(/\baria-label="([^"]*)"/)?.[1],
+      title: b?.[1]?.match(/\btitle="([^"]*)"/)?.[1],
+      labelClass: tokens(b?.[2]?.match(/<span class="([^"]*)">/)?.[1]),
+      labelText: b?.[2]?.match(/<span class="[^"]*">([^<]*)<\/span>/)?.[1],
+    };
+  };
+  const dicts = { en: dictEn, es: dictEs, fr: dictFr, nl: dictNl } as Record<string, Record<string, string>>;
+
+  it("Sign-out shows its ICON only below lg: the label span is `hidden` and appears at `lg:` — and the accessible name is the translated Sign out in all four locales", async () => {
+    let checked = 0;
+    for (const locale of LOCALES) {
+      m.locale.value = locale;
+      const expected = dicts[locale]!["nav.signOut"];
+      expect(typeof expected, locale).toBe("string");
+      const so = signOut(await render());
+      expect(so.labelClass, `${locale}: hidden until lg`).toContain("hidden");
+      expect(so.labelClass, `${locale}: the label returns at lg`).toContain("lg:inline");
+      // Token checks: `sm:inline` would show the label from 640, `max-lg:`/`md:` variants would be a different rule altogether.
+      expect(so.labelClass, `${locale}: not from sm (that is the 640-1023 band that overflowed)`).not.toContain("sm:inline");
+      expect(so.labelClass, `${locale}: exactly the two tokens`).toEqual(["hidden", "lg:inline"]);
+      expect(so.aria, `${locale}: the icon-only button is still named`).toBe(expected);
+      expect(so.title, `${locale}: and still has its tooltip`).toBe(expected);
+      expect(so.labelText, `${locale}: the visible label is the same words`).toBe(expected);
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("the ACCESSIBLE NAME of Sign-out is a translation, not English: es/fr/nl differ from en", async () => {
+    const names = new Set<string>();
+    for (const locale of LOCALES) {
+      m.locale.value = locale;
+      names.add(signOut(await render()).aria ?? "");
+    }
+    expect(names.size, "four distinct names").toBe(4);
+    expect(names.has(""), "none missing").toBe(false);
+  });
+
+  it("phones: every nav link takes 6px of side padding (px-1.5) until sm, and the links touch (gap-0) until sm — the 4-link org nav and the 5-link dual-role nav (nine links checked)", async () => {
+    let checked = 0;
+    for (const claimed of [false, true]) {
+      m.hasClaimedProfile.mockResolvedValue(claimed);
+      const html = await render();
+      const links = linkClasses(html);
+      expect(links.length, `claimed=${claimed}: 4 links, or 5 with Player home`).toBe(claimed ? 5 : 4);
+      for (const l of links) {
+        expect(l, "tightened on phones").toContain("px-1.5");
+        expect(l, "not the old 8px").not.toContain("px-2");
+        expect(l, "sm and up is untouched").toContain("sm:px-3");
+        checked++;
+      }
+      const navTokens = tokens(html.match(/<nav class="([^"]*)">/)?.[1]);
+      expect(navTokens, "no gap on phones").toContain("gap-0");
+      expect(navTokens, "the old 2px gap returns at sm").toContain("sm:gap-0.5");
+      expect(navTokens, "the bare old gap is gone").not.toContain("gap-0.5");
+    }
+    expect(checked, "anti-vacuity: nine links looked at").toBe(9);
+  });
+
+  it("tablets KEEP their labels: md..lg shows every label in the org nav (4), and the dual-role nav's five wait for lg (owner: no label dropped)", async () => {
+    m.hasClaimedProfile.mockResolvedValue(false);
+    const org = labelClasses(await render());
+    expect(org.length).toBe(4);
+    for (const l of org) expect(l).toEqual(["hidden", "md:inline"]);
+    m.hasClaimedProfile.mockResolvedValue(true);
+    const dual = labelClasses(await render());
+    expect(dual.length).toBe(5);
+    for (const l of dual) expect(l).toEqual(["hidden", "lg:inline"]);
   });
 });

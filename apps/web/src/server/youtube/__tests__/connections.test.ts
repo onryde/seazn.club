@@ -1,4 +1,4 @@
-// YouTube Connect T8: the connections usecase over real Postgres — the connect flow's save, a connection's settings, the Directory's
+// YouTube Connect T8: the connections usecase over real Postgres — the connect flow's save, a connection's settings, the Streaming page's
 // projection. What is real: the database, the token store (a real sealed token is opened back), the pending-grant producers the OAuth
 // callback uses (insertPending / storeGrant / sealPendingToken), the destination fingerprint. What is stood in: nothing but the signed-in
 // person (an AuthCtx) and the YouTube port, a FakeYouTube that the save is handed and must never call.
@@ -554,7 +554,7 @@ describe.skipIf(!HAS_DB)("updateConnectionSettings", () => {
     expect(await connRow(c.connectionId)).toEqual(before);
   });
 
-  it("the reply is the Directory's view of the connection: channel title, privacy, kids flag, status, live state, terms, open broadcasts", async () => {
+  it("the reply is the Streaming page's view of the connection: channel title, privacy, kids flag, status, live state, terms, open broadcasts", async () => {
     const o = await org();
     const c = await connect(o, { channels: [{ id: channelId(), title: "Rovers TV" }], madeForKids: true });
     expect(await updateConnectionSettings(o.auth, o.orgId, c.connectionId, { privacy: "private" })).toEqual({
@@ -617,7 +617,7 @@ describe.skipIf(!HAS_DB)("updateConnectionSettings", () => {
 });
 
 // =====================================================================================================================================
-describe.skipIf(!HAS_DB)("the Directory's view of a connection", () => {
+describe.skipIf(!HAS_DB)("the Streaming page's view of a connection", () => {
   it("liveState is 'enabled' ONLY for a clean health check made since the token last changed; an unrecognised code, a check older than the last reconnect, no check, and a dead grant are all 'unknown' (10 rows checked)", async () => {
     const o = await org();
     // [status, when the check ran relative to status_since, last_error_code, expected] — the refusal codes are the port's own
@@ -680,7 +680,7 @@ describe.skipIf(!HAS_DB)("the Directory's view of a connection", () => {
 });
 
 // =====================================================================================================================================
-describe.skipIf(!HAS_DB)("the Directory's destination list (listStreamTargets)", () => {
+describe.skipIf(!HAS_DB)("the Streaming page's destination list (listStreamTargets)", () => {
   it("an API row carries the connection's view, keyHint null, inUse null and no watch link; a pasted row beside it carries youtube null", async () => {
     const o = await org();
     const c = await connect(o, { channels: [{ id: channelId(), title: "Rovers TV" }], privacy: "public" });

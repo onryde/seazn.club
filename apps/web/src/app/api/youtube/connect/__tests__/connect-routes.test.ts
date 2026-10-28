@@ -1226,7 +1226,7 @@ describe.skipIf(!HAS_DB)("the callback's save is the REAL one: what a landing le
 
     const f2 = await begin(r, { privacy: "private" });   // a fresh connect (no connectionId), a different choice
     fake.setChannels([ch], f2.state);
-    expect(landed((await finish(f2)).res)).toEqual(LANDS("connected"));
+    expect(landed((await finish(f2)).res), "the choices just made went unused: the page is told").toEqual(LANDS("already_connected"));
     const newToken = await mintedAt(exchange, 1);
     expect(newToken).not.toBe(oldToken);
     expect(await savedOf(1), "the existing ids, not new ones").toEqual({ connectionId: first.connectionId, targetId: first.targetId, existing: true });
@@ -1236,5 +1236,31 @@ describe.skipIf(!HAS_DB)("the callback's save is the REAL one: what a landing le
     expect((await connRow(first.connectionId)).default_privacy, "the first choice stands; a connect does not silently change settings").toBe("public");
     expect(callsOf("revoke")).toBe(0);
     expect(await pendingRows(r.orgId)).toEqual([]);
+  });
+
+  it("(e) the landing says what the save DID, for a one-channel grant: new -> connected; the same channel connected fresh again -> already_connected; a Reconnect of it -> connected (the save is `existing` in both of the last two - only the intent tells them apart)", async () => {
+    const r = await rig();
+    const ch = { id: channelId(), title: "Landing FC" };
+    const land = async (opts: Parameters<typeof begin>[1]) => {
+      const f = await begin(r, opts);
+      fake.setChannels([ch], f.state);
+      return landed((await finish(f)).res);
+    };
+
+    expect(await land({ privacy: "public" }), "fresh + new").toEqual(LANDS("connected"));
+    const first = await savedOf(0);
+    expect(first.existing).toBe(false);
+
+    expect(await land({ privacy: "private" }), "fresh + existing").toEqual(LANDS("already_connected"));
+    expect((await savedOf(1)).existing).toBe(true);
+
+    await sql`update org_youtube_connections set status = 'reconnect_needed', status_since = now() - interval '2 days', last_error_code = 'youtube_reconnect_needed' where id = ${first.connectionId}`;
+    expect(await land({ connectionId: first.connectionId }), "reconnect + existing").toEqual(LANDS("connected"));
+    const reconnected = await savedOf(2);
+    expect(reconnected, "the SAME connection, saved as existing - and still plain connected").toEqual({ connectionId: first.connectionId, targetId: first.targetId, existing: true });
+
+    expect(save.fn, "three saves, through the real function").toHaveBeenCalledTimes(3);
+    expect(await connectionCount(r.orgId)).toBe(1);
+    expect((await connRow(first.connectionId)).default_privacy, "none of it changed the saved settings").toBe("public");
   });
 });

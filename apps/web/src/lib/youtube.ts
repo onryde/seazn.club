@@ -47,9 +47,10 @@ export const STREAMING_PAGE_HREF = "/streaming";
 
 // Every exit of the OAuth callback (and the start's own refusals that are not a bad request) is a 303 to the Streaming page
 // carrying one outcome, as `?youtube=<code>`. The page maps a code to a sentence; a value that is not one of these shows
-// nothing. `pick` also carries the pending grant's id, `&pending=<id>`. `already_connected` is not an exit of the callback: the
-// channel PICKER lands it, after a pick of a channel the organisation already had (its saved visibility and made-for-kids settings
-// stand, and the page says so).
+// nothing. `pick` also carries the pending grant's id, `&pending=<id>`. `already_connected` is a SUCCESS that did not apply the
+// choices made before Google: a fresh connect of a channel the organisation already had (its saved visibility and made-for-kids
+// settings stand, and the page says so). The callback lands it for a one-channel grant (never for a Reconnect, which is plain
+// `connected`) and the channel PICKER lands it after a pick of such a channel.
 
 /** The page the connect flow always lands on. */
 export const YOUTUBE_LANDING_PATH = STREAMING_PAGE_HREF;

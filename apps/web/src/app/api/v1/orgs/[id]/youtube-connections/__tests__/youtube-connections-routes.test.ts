@@ -76,7 +76,7 @@ const connectionCount = async (orgId: string): Promise<number> =>
   (await sql<{ n: number }[]>`select count(*)::int as n from org_youtube_connections where org_id = ${orgId}`)[0]!.n;
 
 // =====================================================================================================================================
-describe.skipIf(!HAS_DB)("the pick: GET pending -> POST youtube-connections -> the Directory list", () => {
+describe.skipIf(!HAS_DB)("the pick: GET pending -> POST youtube-connections -> the Streaming page list", () => {
   it("a multi-channel grant: the picker's list is 200, the pick is 201 with the ids, and the stream-targets list then carries the channel's youtube block (no key hint, nothing holding it)", async () => {
     setYoutubeDriverForTest(fake);
     const o = await org();

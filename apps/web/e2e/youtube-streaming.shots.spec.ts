@@ -3,7 +3,7 @@ import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { activeOrg, apiJson, loginUi } from "./helpers";
+import { activeOrg, apiJson, claimProfileBySql, loginUi } from "./helpers";
 
 // Screenshot + layout evidence for the top-nav Streaming page and YouTube Connect on it (T9; owner 2026-10-27, spec D3: Streaming is
 // its own page, between Directory and Settings in the nav; the Directory keeps four tabs).
@@ -22,8 +22,9 @@ test.use({ storageState: { cookies: [], origins: [] } });
 
 const SHOTS = process.env.YOUTUBE_SHOTS_DIR ?? resolve(process.cwd(), "../../.superpowers/sdd/shots/youtube-streaming");
 const WIDTHS = [1280, 768, 320] as const;
-/** The nav budget is measured here: the phone floor, a small tablet, the widths around `md`/`lg` where the labels appear, and desktop. */
-const NAV_WIDTHS = [320, 360, 640, 700, 768, 1023, 1024, 1280] as const;
+/** The nav budget is measured here: the phone floor and the width just above it (335 was 3px over), the dual-role link's own threshold (350),
+ *  the widths around `md`/`lg` where the labels appear (768-836 is where fr/nl Sign-out was pushed out), and desktop. Every one must FIT. */
+const NAV_WIDTHS = [320, 335, 350, 360, 390, 640, 700, 768, 800, 836, 1023, 1024, 1280] as const;
 
 const BANNER_WAIT_MS = 5_000;
 const asked = new WeakSet<Page>();
@@ -120,7 +121,8 @@ async function expectTappable(loc: Locator, label: string): Promise<void> {
   }
 }
 
-/** The top gantry fits: every link in its <nav> shares one row (no wrap) and ends inside the viewport (nothing clipped or pushed). */
+/** The top gantry fits: every link in its <nav> shares one row (no wrap) and ends inside the viewport (nothing clipped or pushed), the
+ *  Sign-out button (the control that used to be pushed out) ends inside it too, and each link's centre hit-tests to the link itself. */
 async function expectGantryFits(page: Page, where: string): Promise<void> {
   const seen = await page.evaluate(() => {
     const links = Array.from(document.querySelectorAll("header.app-gantry nav a")).filter((a) => {
@@ -130,8 +132,16 @@ async function expectGantryFits(page: Page, where: string): Promise<void> {
     const rects = links.map((a) => a.getBoundingClientRect());
     const tops = rects.map((r) => Math.round(r.top));
     const header = document.querySelector("header.app-gantry")!.getBoundingClientRect();
+    const signOut = document.querySelector("header.app-gantry button[title]")!.getBoundingClientRect();
+    const covered = links.filter((a) => {
+      const r = a.getBoundingClientRect();
+      const at = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return !(at !== null && (at === a || a.contains(at)));
+    }).length;
     return {
       vw: document.documentElement.clientWidth,
+      signOutRight: signOut.right,
+      covered,
       n: links.length,
       tops,
       maxRight: Math.max(...rects.map((r) => r.right)),
@@ -145,6 +155,8 @@ async function expectGantryFits(page: Page, where: string): Promise<void> {
   expect(new Set(seen.tops).size, `${where}: the nav links wrap onto ${new Set(seen.tops).size} rows (tops ${seen.tops.join(",")})`).toBe(1);
   expect(seen.maxRight, `${where}: the last nav link ends at ${Math.round(seen.maxRight)}px of ${seen.vw}px`).toBeLessThanOrEqual(seen.vw + 1);
   expect(seen.headerScrollW, `${where}: the gantry scrolls sideways (${seen.headerScrollW} > ${seen.vw})`).toBeLessThanOrEqual(seen.vw + 1);
+  expect(seen.signOutRight, `${where}: Sign out ends at ${Math.round(seen.signOutRight)}px of ${seen.vw}px`).toBeLessThanOrEqual(seen.vw);
+  expect(seen.covered, `${where}: ${seen.covered} nav link(s) have something else painted over their centre`).toBe(0);
 }
 
 async function expectNoSeriousAxe(page: Page, where: string): Promise<void> {
@@ -175,12 +187,13 @@ async function withDb<T>(fn: (sql: import("postgres").Sql) => Promise<T>): Promi
 }
 
 /** A fresh signed-in owner with a fresh org of its own (the org gets the plan's streaming entitlements). */
-async function rig(page: Page, tag: string): Promise<{ orgId: string; orgSlug: string }> {
-  await loginUi(page, `delivered+yt-${tag}-${Date.now()}@resend.dev`, "/");
+async function rig(page: Page, tag: string): Promise<{ orgId: string; orgSlug: string; email: string }> {
+  const email = `delivered+yt-${tag}-${Date.now()}@resend.dev`;
+  await loginUi(page, email, "/");
   const created = await apiJson<{ id: string }>(page.request, "/api/orgs", "POST", { name: `YT Streaming ${tag} ${Date.now()}` });
   await apiJson(page.request, "/api/orgs/active", "POST", { org_id: created.data!.id });
   const org = await activeOrg(page);
-  return { orgId: org.id, orgSlug: org.slug };
+  return { orgId: org.id, orgSlug: org.slug, email };
 }
 
 /** A pasted-key destination, made over the API (the same call the Add form makes). */
@@ -253,10 +266,31 @@ test("Streaming nav item: present between Directory and Settings, and the gantry
     await page.context().addCookies([{ name: "seazn_locale", value: locale, url: new URL(page.url()).origin }]);
     await open(page, "/streaming");
     await expect(page.getByTestId("nav-streaming")).toHaveAttribute("aria-label", dictOf("console", locale)["nav.streaming"] ?? "");
+    // Below lg Sign out is its icon alone: it is still NAMED, in this locale's words (by role + name, not by its painted text).
+    await expect(page.locator("header.app-gantry").getByRole("button", { name: dictOf("console", locale)["nav.signOut"] ?? "" })).toBeVisible();
     for (const w of NAV_WIDTHS) {
       await page.setViewportSize({ width: w, height: 800 });
       await page.waitForTimeout(150);
       await expectGantryFits(page, `${locale} at ${w}`);
+    }
+  }
+});
+
+test("Streaming nav item, dual-role: an organiser who is ALSO a claimed player (five links, labels from lg) fits at every width in all four locales", async ({ page }) => {
+  test.setTimeout(budget({ navs: 4 + 2, acts: 12 }));
+  const { email } = await rig(page, "navdual");
+  // The dual-role seam (nav.tsx isPlayer): a claimed player profile adds the Player home link. Own throwaway account, never a shared identity.
+  await claimProfileBySql(email);
+  for (const locale of ["en", "es", "fr", "nl"] as const) {
+    await page.context().addCookies([{ name: "seazn_locale", value: locale, url: new URL(page.url()).origin }]);
+    await page.setViewportSize({ width: 1280, height: 900 });
+    await open(page, "/streaming");
+    const links = await page.locator("header.app-gantry nav a").count();
+    expect(links, `${locale}: Dashboard, Directory, Streaming, Settings and Player home`).toBe(5);
+    for (const w of NAV_WIDTHS) {
+      await page.setViewportSize({ width: w, height: 800 });
+      await page.waitForTimeout(150);
+      await expectGantryFits(page, `dual-role ${locale} at ${w}`);
     }
   }
 });

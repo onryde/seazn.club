@@ -1,6 +1,6 @@
 import "server-only";
 // server/youtube/connections.ts — a connected YouTube channel as the product sees it (plan T8): the connect flow's SAVE, the
-// Directory's projection of a connection, and its settings. Every statement that touches the refresh token goes through
+// Streaming page's projection of a connection, and its settings. Every statement that touches the refresh token goes through
 // token-store.ts (controller ruling R1; enc-boundary.test.ts) — this file never names the sealed column.
 //
 // ONE transaction does a save: lock the pending grant, check it, take its token, write the connection and its destination row,
@@ -201,14 +201,14 @@ export async function pickYoutubeChannel(
 }
 
 // ---------------------------------------------------------------------------------------------------------------------------
-// The Directory's projection
+// The Streaming page's projection
 
 interface ConnectionViewRow {
   id: string; channel_title: string; default_privacy: YoutubePrivacy; made_for_kids: boolean; status: "connected" | "reconnect_needed";
   last_health_at: Date | null; last_error_code: string | null; consent_version: number; open_broadcasts: number; status_since: Date;
 }
 
-/** What the health check last learned about the channel's ability to stream, as the Directory says it. It fails CLOSED: `enabled`
+/** What the health check last learned about the channel's ability to stream, as the Streaming page says it. It fails CLOSED: `enabled`
  *  needs a check that came back clean (no code) and was made SINCE the token last changed (`status_since`; a reconnect clears the
  *  code, so a clean-looking row older than its token says nothing). `unknown` while no check has run, while the check predates the
  *  token, while the grant is dead (YouTube cannot be asked), and for any code this build does not map to a state. */
@@ -234,7 +234,7 @@ function toView(r: ConnectionViewRow): YoutubeConnectionView {
   };
 }
 
-/** The org's live connections as the Directory shows them, by connection id. Org-scoped in SQL. Revoked connections are history
+/** The org's live connections as the Streaming page shows them, by connection id. Org-scoped in SQL. Revoked connections are history
  *  and have no view. `only` narrows to one connection (a PATCH's reply). */
 export async function connectionViews(orgId: string, only?: string): Promise<Map<string, YoutubeConnectionView>> {
   const rows = await sql<ConnectionViewRow[]>`
@@ -248,7 +248,7 @@ export async function connectionViews(orgId: string, only?: string): Promise<Map
 
 /** PATCH a connection's settings: its default visibility, made-for-kids, and the consent on the CURRENT wording ("Review updated
  *  terms"). One statement; a field not sent is not touched, and a consent already at the current wording is not re-stamped (a second
- *  press, or another editor's, does not replace who consented, or when). Answers with the connection as the Directory shows it.
+ *  press, or another editor's, does not replace who consented, or when). Answers with the connection as the Streaming page shows it.
  *  404 for a missing, revoked or another organisation's connection — one answer. */
 export async function updateConnectionSettings(
   auth: AuthCtx, orgId: string, connectionId: string, b: Partial<YoutubeConnectionSettings>,
