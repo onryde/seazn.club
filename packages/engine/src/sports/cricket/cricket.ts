@@ -3621,7 +3621,7 @@ interface NrrCredit {
  *   credited with one run less than Team 2's final target, off the total overs allocated to Team 2; Team 2 as played.
  * Only a one-innings match has a "Team 2 to reach the target" (a two-innings match cannot be revised, and is drawn on
  * abandonment). A chase still open has a result only from an abandonment; one the par did not decide (unreachable from the
- * fold) is credited as played. The super over is never here: it is not in `state.innings`.
+ * fold) is credited as played, and so is an organiser settle over a chase never reached (a one-innings washout settled as a win). The super over is never here: it is not in `state.innings`.
  */
 function nrrCredits(state: CricketState): NrrCredit[] {
   const credited = (innings: InningsState): number =>
