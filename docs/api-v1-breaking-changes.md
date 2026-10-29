@@ -7,6 +7,63 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-29 — a cricket test-variant stage no longer accepts `superOverStillTied`
+
+`superOverStillTied` is what a TIED super over does (CK-SO-1): another super
+over, or the match is a tie. A cricket `test` match is two innings a side and
+has no super over (the stage editor already held the field there), so the key
+is now offered only where a super over can be played: `t20`, `odi` and
+`hundred`.
+
+**What changed.**
+
+| Path | Before | Now |
+|---|---|---|
+| `PUT /api/v1/stages/{id}/rules`, a cricket stage of the `test` variant, `rules` carrying `superOverStillTied` | accepted and stored (nothing ever read it on a test match) | 400, `error.code` `"RULE_NOT_SETTABLE"`, `error.field` `"superOverStillTied"`, nothing written |
+| The same key on a `t20`, `odi` or `hundred` stage | accepted | accepted, unchanged |
+
+**What replaces it.** Nothing: a test match has no tied super over to decide.
+Leave the key out of a test stage's rules. To use it, change the division to a
+variant that plays a super over.
+
+**What a consumer sees.**
+
+```json
+{ "ok": false, "error": { "code": "RULE_NOT_SETTABLE", "message": "superOverStillTied can't be set here — not for this stage's format.", "field": "superOverStillTied" }, "requestId": "…" }
+```
+
+Key on `error.code` and `error.field`, not on `error.message`.
+
+**Data.** Only a new write is judged. A stored `superOverStillTied` on a test
+stage was never read and is left as it is.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, rule CK-SO-1 (Task 7). The pinning test is
+`packages/engine/src/sport/rule-keys.test.ts` (`superOverStillTied` is offered
+exactly on the variants that can play a super over).
+
+## 2026-10-29 — `expected_seq` above 2147483647 is a 400
+
+`POST /api/v1/fixtures/{id}/events` takes the ledger's last `seq` as
+`expected_seq`. `seq` is a 32-bit integer in the database, and the server
+compares the two in SQL, where a larger value made Postgres raise "out of range
+for type integer": the request answered 500. The field is now bounded at
+2147483647, so the request is refused at the door.
+
+| Path | Before | Now |
+|---|---|---|
+| `POST /api/v1/fixtures/{id}/events`, `expected_seq` above 2147483647 | 500 | 400, `error.code` `"VALIDATION"`, `error.issues` naming the path `["expected_seq"]`, nothing written |
+
+**What a consumer sees.** A 400 `VALIDATION` whose `error.issues` name
+`expected_seq`, before any authorisation or database work. Send the `seq` of the last event you read; a
+real ledger never gets near the bound.
+
+**Background.** W2e Task 2 review (M1). The pinning tests are
+`apps/web/src/server/api-v1/__tests__/schemas.test.ts` and
+`apps/web/src/server/api-v1/__tests__/expected-seq-bound.route.test.ts`.
+
 ## 2026-10-28 — a hockey or ice hockey shoot-out config no longer carries `suddenDeath`
 
 The hockey and ice hockey configs (`config.shootout`, for a variant that plays

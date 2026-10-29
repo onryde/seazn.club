@@ -6,6 +6,25 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 // and dated; this page IS the versioning promise (v3/08 §3).
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
+    date: "2026-10-29",
+    title: "Breaking: a cricket test-variant stage no longer accepts superOverStillTied",
+    lines: [
+      "superOverStillTied is what a tied super over does (another super over, or a tied match). A cricket test match is two innings a side and has no super over, so the key is now offered only on the t20, odi and hundred variants.",
+      "PUT /stages/{id}/rules on a cricket test-variant stage whose rules carry superOverStillTied answers 400 RULE_NOT_SETTABLE with error.field superOverStillTied, and nothing is written. The same key on a t20, odi or hundred stage is unchanged.",
+      "Leave the key out of a test stage's rules. A stored superOverStillTied on a test stage was never read and is left as it is.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-29",
+    title: "Breaking: expected_seq above 2147483647 is a 400",
+    lines: [
+      "POST /fixtures/{id}/events compares expected_seq with the ledger's seq, a 32-bit integer in the database. A larger value used to reach that comparison and answer 500; it is now refused at the door.",
+      "The answer is 400 VALIDATION with error.issues naming expected_seq, before any authorisation or database work. Send the seq of the last event you read.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
     date: "2026-10-28",
     title: "Breaking: a hockey or ice hockey shoot-out config no longer carries suddenDeath",
     lines: [
