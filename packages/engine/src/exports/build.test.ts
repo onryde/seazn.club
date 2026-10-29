@@ -932,3 +932,85 @@ describe("buildStandings — the caller's `#` cell (export every pool)", () => {
     expect(mixed.sections[0]!.table!.rows.map((r) => r[0])).toEqual([7, 2]);
   });
 });
+
+// Standings export parity (2026-10-29): the organiser's standings table prints what the public table prints. Three
+// things the builder owed it. (1) A metric the row never recorded is "—", as the public table's `formatMetric(undefined)`
+// prints it — never 0, which says "recorded, and none" (a team that has not played has no metric keys at all, standings.ts
+// zeroRow); a RECORDED 0 stays 0. (2) The metric cells may arrive as the caller printed them (`metricCells`, paired with
+// `metricColumns` like `results` with `resultColumns`): the web hands the public `formatMetric`'s text, so a declared
+// number of decimals can never diverge. (3) The derived columns the stage's cascade earns (NRR, the ratios, Buchholz, SB…)
+// follow Pts, in the public order, as the caller's text.
+describe("buildStandings — the metric ledger prints as the public table prints it (standings export parity)", () => {
+  const row = { name: "Ash", played: 2, won: 1, drawn: 0, lost: 1, points: 3, metrics: { gf: 4, ga: 0 } };
+
+  it("a metric the row never recorded is '—'; one recorded as 0 is 0 (the empty case, and its positive pair)", () => {
+    const model = buildStandings("S", [row, { ...row, name: "Birch", metrics: {} }], { ...OPTS, metricColumns: ["gf", "ga"] });
+    expect(model.sections[0]!.table!.rows).toEqual([
+      [1, "Ash", 2, 1, 0, 1, 4, 0, 3],
+      [2, "Birch", 2, 1, 0, 1, "—", "—", 3],
+    ]);
+  });
+
+  it("metricCells: the caller's cells print as given, in the metric columns' order, and a row whose cells do not pair is refused", () => {
+    const model = buildStandings("S", [{ ...row, metricCells: ["4.0", "—"] }], { ...OPTS, metricColumns: ["gf", "ga"] });
+    // the ledger says gf 4 / ga 0; the caller's text wins, since it is what the public table printed
+    expect(model.sections[0]!.table!.rows).toEqual([[1, "Ash", 2, 1, 0, 1, "4.0", "—", 3]]);
+    let refused = 0;
+    for (const metricCells of [["4.0"], ["4.0", "—", "9"]]) {
+      try {
+        buildStandings("S", [{ ...row, metricCells }], { ...OPTS, metricColumns: ["gf", "ga"] });
+      } catch (e) {
+        expect(e).toBeInstanceOf(EngineError);
+        expect(e).toMatchObject({ code: "CONFIG_INVALID" });
+        refused++;
+      }
+    }
+    expect(refused, "both mismatches refused").toBe(2);
+  });
+});
+
+describe("buildStandings — the derived columns after Pts (standings export parity)", () => {
+  const ash = { name: "Ash", played: 2, won: 1, drawn: 0, lost: 1, points: 3, metrics: { gf: 4 }, derived: ["+0.412", "∞"] };
+  const birch = { name: "Birch", played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {}, derived: ["—", "—"] };
+
+  it("prints the caller's derived headers after Pts and each row's cells under them, in order; the columns before are unchanged", () => {
+    const model = buildStandings("S", [ash, birch], { ...OPTS, metricColumns: ["gf"], derivedColumns: ["NRR", "Ratio"] });
+    expect(model.sections[0]!.table).toEqual({
+      columns: ["#", "Team", "P", "W", "D", "L", "gf", "Pts", "NRR", "Ratio"],
+      rows: [
+        [1, "Ash", 2, 1, 0, 1, 4, 3, "+0.412", "∞"],
+        [2, "Birch", 0, 0, 0, 0, "—", 0, "—", "—"],
+      ],
+    });
+  });
+
+  it("no derived columns declared: nothing after Pts (the empty case), and a row carrying derived cells with no headers is refused", () => {
+    const { derived: _derived, ...plain } = ash;
+    expect(buildStandings("S", [plain], { ...OPTS, metricColumns: ["gf"] }).sections[0]!.table!.columns.at(-1)).toBe("Pts");
+    expect(() => buildStandings("S", [ash], { ...OPTS, metricColumns: ["gf"] })).toThrow(EngineError);
+  });
+
+  it("refuses a row whose derived cells do not pair with the headers: a short row, a missing one, a long one", () => {
+    let refused = 0;
+    const cases: [string, () => unknown][] = [
+      ["one cell short", () => buildStandings("S", [{ ...ash, derived: ["+0.412"] }], { ...OPTS, derivedColumns: ["NRR", "Ratio"] })],
+      ["no cells on a row", () => buildStandings("S", [ash, { ...ash, name: "Birch", derived: undefined }], { ...OPTS, derivedColumns: ["NRR", "Ratio"] })],
+      ["one cell over", () => buildStandings("S", [{ ...ash, derived: ["1", "2", "3"] }], { ...OPTS, derivedColumns: ["NRR", "Ratio"] })],
+    ];
+    for (const [label, build] of cases) {
+      try {
+        build();
+      } catch (e) {
+        expect(e, label).toBeInstanceOf(EngineError);
+        expect(e, label).toMatchObject({ code: "CONFIG_INVALID" });
+        refused++;
+      }
+    }
+    expect(refused, "all three refused").toBe(3);
+  });
+
+  it("a table of no rows still prints the derived headers (a pool not played yet draws the public header)", () => {
+    const model = buildStandings("S", [], { ...OPTS, derivedColumns: ["NRR"] });
+    expect(model.sections[0]!.table!.columns.slice(-2)).toEqual(["Pts", "NRR"]);
+  });
+});

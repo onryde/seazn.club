@@ -22,6 +22,7 @@ vi.mock("next/cache", () => ({
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import type { DocModel } from "@seazn/engine/exports";
+import { DERIVED_METRICS } from "@seazn/engine/competition";
 import { builtinModules } from "@seazn/engine/sports";
 import en from "@/dictionaries/en/public.json";
 import es from "@/dictionaries/es/public.json";
@@ -42,6 +43,7 @@ import { buildDivisionDocModel } from "@/server/usecases/exports";
 import { buildDivisionSlides, buildPublicDivisionSlides, type Slide } from "@/server/slideshow-data";
 import { between, genericResult, tableScene, type TableScene } from "@/server/engine-db/__tests__/helpers/w2d-table-rig";
 import { fixtureRow, playBadminton, post } from "@/server/engine-db/__tests__/helpers/w2b-rig";
+import { readPublicTable } from "./_public-table-markup";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -624,4 +626,81 @@ describe.skipIf(!HAS_DB)("export review I2 — the export prints D exactly as th
     }
     expect(slides, "two groups on two boards").toBe(4);
   }, 60_000);
+});
+
+// ── Standings export parity (2026-10-29): the WHOLE table, derived columns and all ────────────────────────────────────
+// The sweeps above compare slices of the header (the metrics, the result columns). This one drives the real producers —
+// the division is created, its fixtures generated, a result played through `core.forfeit` (the result every sport takes
+// alike), the stage's rules and rows served by the public read — and compares the WHOLE exported table, header and every
+// cell, with what the division page renders: a visitor reads the derived columns the stage's order earns (NRR, a ratio,
+// Buchholz …) after Pts, and a team nobody has played with "—" where the PDF used to print 0. Not slices: the table.
+describe.skipIf(!HAS_DB)("standings export parity — a real division's export is the public table, header and every cell", () => {
+  /** A started table stage of `kind` with ONE result recorded: someone is always left unplayed (a league or Swiss of 4 has
+   *  two who never take the field; a group stage's second pool is an empty table). */
+  async function onePlayed(m: (typeof builtinModules)[number], kind: SweepKind): Promise<Scene> {
+    const variant = Object.keys(m.variants)[0];
+    if (variant === undefined) throw new Error(`premise: ${m.key} declares a variant`);
+    const stages =
+      kind === "league" ? undefined : kind === "group" ? groupStage(2) : { seq: 1, kind: "swiss" as const, name: "Swiss", config: { rounds: 1 } };
+    const s = await scene({ sport: m.key, variant, entrants: 4, ...(stages === undefined ? {} : { stages: stages as CreateStages }) });
+    if (kind === "swiss") {
+      await startDivision(s.auth, s.divisionId);
+      await generateStageFixtures(s.auth, s.stageId);
+    } else {
+      await generateStageFixtures(s.auth, s.stageId);
+      await startDivision(s.auth, s.divisionId);
+    }
+    const [first] = await sql<{ id: string; away: string }[]>`
+      select id, away_entrant_id as away from fixtures
+       where stage_id = ${s.stageId} and home_entrant_id is not null and away_entrant_id is not null
+       order by round_no, seq_in_round limit 1`;
+    if (first === undefined) throw new Error(`rig: ${m.key} ${kind} has no seated fixture`);
+    await post(s.auth, first.id, "core.forfeit", { by: first.away, reason: "walkover" });
+    expect((await fixtureRow(first.id)).status, `${m.key} ${kind}: premise: the walkover decided the fixture`).toBe("forfeited");
+    return s;
+  }
+
+  it("every shipped sport × league, group, Swiss, one result recorded: each exported table's header and cells are the division page's (counted)", async () => {
+    const seen = { tables: 0, headers: 0, cells: 0, derivedColumns: 0, dashCells: 0, emptyTables: 0 };
+    const derived = new Set(DERIVED_METRICS.map((d) => d.key));
+    for (const m of builtinModules) {
+      for (const kind of SWEEP_KINDS) {
+        const s = await onePlayed(m, kind);
+        const { stage, pairs } = await exportBesidePublic(s);
+        for (const [i, { section, pub }] of pairs.entries()) {
+          const label = `${m.key} ${kind} (table ${i + 1})`;
+          const page = readPublicTable(
+            renderToStaticMarkup(
+              createElement(StandingsTable, {
+                rows: pub.rows as never,
+                metricSpecs: m.metrics as never,
+                cascade: tableOrderOf(stage.table_rules),
+                entrantNames: Object.fromEntries(s.entrants.map((id) => [id, s.name(id)])),
+                dict: EN,
+                rules: stage.table_rules,
+                locale: "en",
+                tz: "UTC",
+              }),
+            ),
+          );
+          const table = section.table!;
+          expect(table.columns.slice(0, 2), `${label}: # and Team`).toEqual(["#", t(EN, "table.team")]);
+          expect(table.columns.slice(2), `${label}: the division page's header, derived columns after Pts and all`).toEqual(page.header);
+          expect(table.rows.map((r) => r.slice(1).map(String)), `${label}: every row's name and cell texts`).toEqual(page.rows);
+          seen.tables++;
+          seen.headers += page.header.length;
+          seen.cells += page.rows.flat().length;
+          seen.derivedColumns += tableColumns(m.metrics, tableOrderOf(stage.table_rules), pub.rows as never, tableLayoutFor(stage.table_rules)).filter((c) => derived.has(c.key)).length;
+          seen.dashCells += page.rows.flat().filter((c) => c === "—").length;
+          if (pub.rows.length === 0) seen.emptyTables++;
+        }
+      }
+    }
+    expect(seen.tables, "tables compared").toBeGreaterThanOrEqual(builtinModules.length * 3);
+    expect(seen.cells, "cells compared").toBeGreaterThan(0);
+    expect(seen.derivedColumns, "derived columns compared (sports whose order earns one: cricket, chess, the set sports …)").toBeGreaterThan(0);
+    expect(seen.dashCells, "'—' cells compared (a team nobody has played)").toBeGreaterThan(0);
+    expect(seen.emptyTables, "the second group's empty table, header only").toBeGreaterThan(0);
+    console.log("export-every-pool parity checked:", JSON.stringify(seen));
+  }, 600_000);
 });

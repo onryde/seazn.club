@@ -216,10 +216,20 @@ export interface ExportStandingsRow {
   /** Whole points as a number; a half-point table's total as the table prints it (`pointsText`: "1½"), W2d RB2B-17. */
   points: number | string;
   metrics: Record<string, number>;
+  /** Standings export parity (2026-10-29): the row's metric cells as the caller printed them, paired by index with
+   *  `BuildOpts.metricColumns` (the web hands the public `formatMetric`'s text, so a declared number of decimals cannot
+   *  diverge). A count that prints whole is a NUMBER, so a spreadsheet's column stays numeric; anything else is its text
+   *  ("—" for a metric the row never recorded, "3.0" for a declared decimal). Absent: the builder prints the ledger itself,
+   *  `metrics[key]` or "—". */
+  metricCells?: readonly (string | number)[];
   /** W2d follow-up (m3): the row's result cells, paired by index with `BuildOpts.resultColumns` — the caller's table
    *  declaration (IIHF's P · W · OTW · OTL · D · L, with W and L regulation only, RBG:343-344). Absent: no result
    *  columns were declared, and the row prints its own played, won, drawn and lost. */
   results?: readonly (string | number)[];
+  /** Standings export parity (2026-10-29): the row's derived cells (NRR, the ratios, Buchholz, SB…), as TEXT in the
+   *  caller's own spelling ("+0.412", "∞", "1½", "—"), paired by index with `BuildOpts.derivedColumns` and printed after
+   *  Pts. Absent: the table has no derived column. */
+  derived?: readonly string[];
   /** The `#` cell as the caller's table prints it: a level table's dash (`LEVEL_RANK`, X-TB-6 — no row is placed first),
    *  export every pool 2026-10-28. Absent: the row's position in `rows`, as before. */
   rank?: number | string;
@@ -280,6 +290,10 @@ export interface BuildOpts {
    *  table declaration (the web export hands the public table's own); every row's `results` holds their cells. Absent:
    *  the historic P · W · D · L. */
   resultColumns?: readonly string[];
+  /** Standings export parity (2026-10-29): the headers of the standings' derived columns, in order, AFTER Pts — the
+   *  columns the stage's tie-break order earns (NRR, a ratio, Buchholz, SB…), as the public table draws them; every row's
+   *  `derived` holds their cells. Absent: none. */
+  derivedColumns?: readonly string[];
   /** Pre-resolved (caller's locale) strings for table chrome that build.ts
    *  itself has no locale to render — mirrors how home/away are already
    *  resolved via resolveSlotLabel before reaching this module. Every field

@@ -123,7 +123,33 @@ function resultCells(r: ExportStandingsRow, declared: readonly string[] | undefi
   return r.results;
 }
 
-/** Standings (29 May landscape): base columns + the sport's metric ledger. */
+/** A row's derived cells under `declared` (standings export parity): the caller's, paired with its headers; none where none
+ *  are declared. A row that does not pair is refused, never printed shifted. */
+function derivedCells(r: ExportStandingsRow, declared: readonly string[] | undefined): readonly string[] {
+  if (declared === undefined) {
+    if (r.derived !== undefined) throw new EngineError("CONFIG_INVALID", `standings: ${r.name} carries derived cells but no derived columns are declared`, {});
+    return [];
+  }
+  if (r.derived?.length !== declared.length) {
+    throw new EngineError("CONFIG_INVALID", `standings: ${r.name} has ${r.derived?.length ?? "no"} derived cells for ${declared.length} columns`, {});
+  }
+  return r.derived;
+}
+
+/** What a metric the row never recorded prints as: the public table's dash (`formatMetric(undefined)`). A zero is a
+ *  RECORDED count and prints 0; a team with no counted result has no metric keys at all (standings.ts `zeroRow`). */
+const NO_METRIC = "—";
+
+/** A row's metric cells: the caller's (`metricCells`, paired with `metricColumns`) or, with none, the ledger's own. */
+function metricCellsOf(r: ExportStandingsRow, metricColumns: readonly string[]): readonly (string | number)[] {
+  if (r.metricCells === undefined) return metricColumns.map((m) => r.metrics[m] ?? NO_METRIC);
+  if (r.metricCells.length !== metricColumns.length) {
+    throw new EngineError("CONFIG_INVALID", `standings: ${r.name} has ${r.metricCells.length} metric cells for ${metricColumns.length} columns`, {});
+  }
+  return r.metricCells;
+}
+
+/** Standings (29 May landscape): base columns + the sport's metric ledger + the cascade's derived columns after Pts. */
 export function buildStandings(
   title: string,
   rows: readonly ExportStandingsRow[],
@@ -140,6 +166,7 @@ export function buildStandings(
     ...(opts.resultColumns ?? RESULT_COLUMNS),
     ...(headers?.metrics ?? metricColumns),
     headers?.points ?? "Pts",
+    ...(opts.derivedColumns ?? []),
   ];
   const hasBadges = rows.some((r) => r.badgeUrl != null);
   const table = {
@@ -148,8 +175,9 @@ export function buildStandings(
       r.rank ?? i + 1,
       r.name,
       ...resultCells(r, opts.resultColumns),
-      ...metricColumns.map((m) => r.metrics[m] ?? 0),
+      ...metricCellsOf(r, metricColumns),
       r.points,
+      ...derivedCells(r, opts.derivedColumns),
     ]),
     ...(opts.landscape === true ? { landscape: true } : {}),
     // PROMPT-60: aligned per-row crest URLs; omitted when nobody has one so
