@@ -548,7 +548,7 @@ describe("M12b cricket and generic offer none", () => {
     for (const d of DISPOSITIONS) {
       const row = ruleRow(d.file, d.id);
       expect(row.rule, `${d.id} is about the lineup retirement`).toMatch(/retirement/i);
-      expect(row.status, `${d.id} is a W2e disposition, signed or deviation`).toMatch(/^(deviation|signed) W2e-D3/);
+      expect(row.status, `${d.id} is a W2e disposition, signed or deviation`).toMatch(/^(deviation|signed) 223 /);
     }
     // And what each row says is the reason (cricket: the all-out count stays; generic: no squad), so the absence is a
     // product decision on record, not an omission.

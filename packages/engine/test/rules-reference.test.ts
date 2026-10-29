@@ -98,13 +98,13 @@ describe("rules reference (ruling 75, spec §6)", () => {
     expect(rows.length).toBeGreaterThan(0);
     // The three forms and near-misses of each (synthetic: at Task 2 no real row is a deviation or open).
     let accepted = 0;
-    // W2e signs its rows as `W2e-D<n>` (its design's D-numbers) until the fold gives them ruling numbers (A0 finding: the
-    // plan's literal `signed W2e-D<n>` was refused by the numeric-only form this test used to pin).
-    for (const ok of ["signed 73 2026-10-08", "deviation 5 2026-10-08", "⬜ open", "signed W2e-D3 2026-10-28", "deviation W2e-D7 2026-10-28"]) { expect(ok, ok).toMatch(STATUS); accepted++; }
+    // W2e signed its rows `W2e-D<n>` until the fold (2026-10-29) gave each its ruling number (220 + D); that token is retired, so
+    // both of its forms are refused here: a row that regrows it would be a status no ruling in _INDEX answers.
+    for (const ok of ["signed 73 2026-10-08", "deviation 5 2026-10-08", "⬜ open", "signed 223 2026-10-28", "deviation 227 2026-10-28"]) { expect(ok, ok).toMatch(STATUS); accepted++; }
     expect(accepted).toBe(5);
     let refused = 0;
-    for (const bad of ["signed 73 08-10-2026", "signed 2026-10-08", "deviation 2026-10-08", "signed 73 2026-10-08 extra", "prefix signed 73 2026-10-08", "open", "⬜ open ", "signed W2e-D 2026-10-28", "signed W2e-D3 2026-10-28 extra", "signed W2e-3 2026-10-28", "signed w2e-D3 2026-10-28", "signed W2f-D3 2026-10-28"]) { expect(bad, bad).not.toMatch(STATUS); refused++; }
-    expect(refused).toBe(12);
+    for (const bad of ["signed 73 08-10-2026", "signed 2026-10-08", "deviation 2026-10-08", "signed 73 2026-10-08 extra", "prefix signed 73 2026-10-08", "open", "⬜ open ", "signed W2e-D3 2026-10-28", "deviation W2e-D7 2026-10-28"]) { expect(bad, bad).not.toMatch(STATUS); refused++; }
+    expect(refused).toBe(9);
   });
 
   it("every signed or deviation row names a proving test that exists and contains the id (or awaits proof by name) (engine paths)", (ctx) => {
