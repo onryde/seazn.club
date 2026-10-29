@@ -63,8 +63,8 @@ FAILING = {
     "no-builder-stepladder-only-m1": ["organiser-ui-path"],
     "page-playoff-withdraw-voids": ["I4-nothing-ends-stuck", "life-loop-bounded", "organiser-ui-path"],
     "stepladder-withdraw-wrong-phase": ["organiser-ui-path"],
-    "swiss-round-paired-nobody-swiss-knockout": ["I4-nothing-ends-stuck", "life-loop-bounded"],
-    "swiss-round-paired-nobody-swiss-playoff": ["I4-nothing-ends-stuck", "life-loop-bounded"],
+    "swiss-round-paired-nobody-swiss-knockout": ["I4-nothing-ends-stuck", "life-bracket-decider-exercised", "life-loop-bounded"],
+    "swiss-round-paired-nobody-swiss-playoff": ["I4-nothing-ends-stuck", "life-bracket-decider-exercised", "life-loop-bounded"],
 }
 used = set()
 UI_ALSO_W4 = {"check": "organiser-ui-path", "gap": "NEW-W1d-4", "wave": "W4"}  # an L2 case of a cell no builder control builds (D7)
@@ -108,7 +108,7 @@ rule("page-playoff-withdraw-voids", "FX-G7", "W4", "R4 withdraws seed 3 from a p
 # --- FX-G14 (W4): ko_plate F1 ---------------------------------------------------------------------------------------------------------
 rule("ko-plate-seeding-failed", "FX-G14", "W4", "The run shows the wrapper code only: 409 STAGE_COMPLETED_SEEDING_FAILED after stage 1 committed, stage 2 never seeded (wrapper code seen: apps/web/src/server/usecases/stages.ts:4239-4253 wraps any computeSeedProposal error). The inner cause is derived from the code, not observed: the plate takes roundLosers(round 1, q) (apps/web/src/lib/format-templates.ts:270-283); with 7 entrants round 1 has a bye, so fewer losers than q, and loserAt throws QUALIFICATION_INVALID (packages/engine/src/competition/progression.ts:577-596).", cell="ko_plate|*", scenario="F1", reason="STAGE_COMPLETED_SEEDING_FAILED", was="P2")
 # --- SW-H1 (W3): swiss round paired nobody (the owner's ruling 70 lots cells included) ------------------------------------------------
-SW_NOTE = "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 names (swiss_knockout football, carrom, generic R4) flip red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they are SW-H1 whenever red."
+SW_NOTE = "A swiss round's Generate answers success and pairs nobody (SW-H1: pairRound has no look-ahead and dead-ends, swissGen seats zero boards and raises no error). Intermittent per run: the three cells owner ruling 70 names (swiss_knockout football, carrom, generic R4) flip red/green between dispatches because the product's lots tie-break hashes per-run entrant ids; they are SW-H1 whenever red. Since W2a the run also fails life-bracket-decider-exercised on these cells (the Swiss stage never completes, so the bracket stage after it never posts a decider: 0 settles, 0 tie-breaks): a consequence of this same dead end, so it rides in this rule's closed set (W2e Task 35)."
 for row in ["swiss_knockout", "swiss_playoff"]:
     rule(f"swiss-round-paired-nobody-{row.replace('_', '-')}", "SW-H1", "W3", SW_NOTE, cell=f"{row}|*", scenario="R4", reason="paired nobody (SW-H1)", was="P6")
 # --- FX-G11 (W7): mexicano stalls on a non-decided fixture ----------------------------------------------------------------------------
