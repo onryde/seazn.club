@@ -300,7 +300,9 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     const allCases = v.sports.flatMap((s) => s.cases);
     const scorable = allCases.filter((x) => x.scorable === null).length;
     expect(scorable).toBeGreaterThan(0);
-    expect(scorable).toBeLessThan(allCases.length); // today some are unscorable, so the two totals differ
+    // Since the write door joined resolveSportCfg (W2e Task 24) the generator builds no combination the product refuses, so none of
+    // the committed cases is unscorable: the two totals are EQUAL, and a case that is not scorable is a regression to be named.
+    expect(scorable).toBe(allCases.length);
     expect(c.l3.variantCasesScorable).toBe(scorable);
     expect(c.l3.variantCasesUnscorable).toBe(allCases.length - scorable);
     // Q-B / ruling 29: one denied case per gated row (the product's format gate, text-pinned copy).
@@ -386,11 +388,12 @@ describe("committed catalogue files (R11, Review Focus 1)", () => {
     expect(c.variants.scorable + c.variants.unscorable).toBe(total);
     // The committed per-case field agrees with the independent fold.
     expect(v.sports.flatMap((s) => s.cases.filter((x) => x.scorable === null).map((x) => x.id))).toEqual(got.scorable);
-    // Anti-vacuity: the engine class is live today (set-to-1 at win-by-2
-    // refused by the engine, ruling 31). The generator class is empty since
-    // ruling 44 built cricket's two-innings streams — the independent fold
-    // above still judges every case, so a new gap cannot hide in it.
-    expect(got.engine.length).toBeGreaterThan(0);
+    // Anti-vacuity: both unscorable classes are empty today, and the independent fold above still judges every case, so a new gap
+    // cannot hide in either. The engine class (a cfg the engine refuses: set-to-1 at win-by-2, a set target below the floor, a
+    // tennis best of 1 with a match tie-break) is empty because resolveSportCfg now applies the write door (W2e Task 24, ruling
+    // 31): such a combination is listed uncoverable by the generator, never built as a case. The generator class has been empty
+    // since ruling 44 built cricket's two-innings streams.
+    expect(got.engine).toEqual([]);
     expect(got.generator).toEqual([]);
     expect(got.scorable.length).toBeGreaterThan(0);
     console.info(`committed-catalogue: ${judged} variant cases folded — ${got.scorable.length} scorable, ${got.engine.length} engine-unscorable, ${got.generator.length} generator-unsupported`);
