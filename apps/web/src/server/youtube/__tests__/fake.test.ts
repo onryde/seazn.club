@@ -121,16 +121,29 @@ describe("broadcastLife reports the actual start and end instants", () => {
     return { now: () => new Date(t), set: (ms: number) => { t = START.getTime() + ms; } };
   };
 
+  it("reports status.madeForKids as the broadcast was created: true and false each read back, and a broadcast the fake does not hold says nothing (null, not false)", async () => {
+    let checked = 0;
+    for (const declared of [true, false]) {
+      const f = new FakeYouTube({ now: clock().now });
+      const at = await f.accessToken(`1//rt-kids-${declared}`);
+      const { broadcastId } = await f.insertBroadcast(at, { ...bcast(), madeForKids: declared });
+      expect((await f.broadcastLife(at, broadcastId)).madeForKids, `created with ${declared}`).toBe(declared);
+      expect((await f.broadcastLife(at, "no-such-broadcast")).madeForKids, "absent: YouTube said nothing").toBeNull();
+      checked++;
+    }
+    expect(checked).toBe(2);
+  });
+
   it("nothing before it happens: created, ready and absent report no start and no end", async () => {
     const c = clock();
     const f = new FakeYouTube({ now: c.now });
     const at = await f.accessToken("1//rt-actual-0");
     const { streamId } = await f.insertStream(at, { title: "k" });
     const { broadcastId } = await f.insertBroadcast(at, bcast());
-    expect(await f.broadcastLife(at, broadcastId), "created").toEqual({ life: "created", actualStartAt: null, actualEndAt: null });
+    expect(await f.broadcastLife(at, broadcastId), "created").toEqual({ life: "created", actualStartAt: null, actualEndAt: null, madeForKids: false });
     await f.bind(at, broadcastId, streamId);
-    expect(await f.broadcastLife(at, broadcastId), "ready").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null });
-    expect(await f.broadcastLife(at, "no-such-broadcast"), "absent").toEqual({ life: "absent", actualStartAt: null, actualEndAt: null });
+    expect(await f.broadcastLife(at, broadcastId), "ready").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null, madeForKids: false });
+    expect(await f.broadcastLife(at, "no-such-broadcast"), "absent").toEqual({ life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null });
   });
 
   it("video arriving stamps the start (the clock then, not later reads); complete stamps the end; neither moves afterwards", async () => {
@@ -141,14 +154,14 @@ describe("broadcastLife reports the actual start and end instants", () => {
     c.set(5 * 60_000);   // 12:05 — video arrives
     f.videoOn(streamId);
     c.set(9 * 60_000);   // 12:09 — a read, not an event
-    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "live", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: null });
+    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "live", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: null, madeForKids: false });
     f.videoOff(streamId); c.set(10 * 60_000); f.videoOn(streamId);   // video returns: not a second start
     expect((await f.broadcastLife(at, broadcastId)).actualStartAt, "the first start stands").toEqual(new Date("2026-10-27T12:05:00Z"));
     c.set(50 * 60_000);   // 12:50 — the end step (inside the access token's hour)
     await f.complete(at, broadcastId);
     c.set(55 * 60_000);
     await f.complete(at, broadcastId);   // a second complete resolves (Google: redundantTransition) and moves nothing
-    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "complete", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z") });
+    expect(await f.broadcastLife(at, broadcastId)).toEqual({ life: "complete", actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z"), madeForKids: false });
     expect(f.inspectBroadcast(broadcastId), "the control view shows the same instants").toMatchObject({ actualStartAt: new Date("2026-10-27T12:05:00Z"), actualEndAt: new Date("2026-10-27T12:50:00Z") });
   });
 
@@ -176,7 +189,7 @@ describe("broadcastLife reports the actual start and end instants", () => {
     const err = await rejection(f.complete(at, broadcastId));
     expect(err, "complete needs a live broadcast").toBeInstanceOf(YouTubeError);
     expect((err as YouTubeError).reason).toBe("invalidTransition");
-    expect(await f.broadcastLife(at, broadcastId), "a refused complete stamps nothing").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null });
+    expect(await f.broadcastLife(at, broadcastId), "a refused complete stamps nothing").toEqual({ life: "ready", actualStartAt: null, actualEndAt: null, madeForKids: false });
   });
 
   it("the instants are copies: mutating a returned Date does not move the fake's record", async () => {

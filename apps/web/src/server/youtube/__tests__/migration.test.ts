@@ -118,8 +118,8 @@ async function broadcast(
   const ytId = o.ytId === undefined ? `yt-${uniq()}` : o.ytId;
   const completedAt = o.completedAt === undefined ? (o.state === "complete" ? new Date() : null) : o.completedAt;
   const [row] = await sql<{ id: string }[]>`
-    insert into youtube_broadcasts (id, org_id, connection_id, fixture_id, key_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at, created_at)
-    values (${o.id ?? randomUUID()}, ${w.orgId}, ${o.connection}, ${o.fixture}, ${o.key}, ${ytId}, 'Match', ${o.privacy ?? "unlisted"}, ${o.state},
+    insert into youtube_broadcasts (made_for_kids, id, org_id, connection_id, fixture_id, key_id, yt_broadcast_id, title, privacy, state, reserved_until, completed_at, created_at)
+    values (false, ${o.id ?? randomUUID()}, ${w.orgId}, ${o.connection}, ${o.fixture}, ${o.key}, ${ytId}, 'Match', ${o.privacy ?? "unlisted"}, ${o.state},
             ${reservedUntil ? new Date(Date.now() + 5 * 60_000) : null}, ${completedAt}, ${o.createdAt ?? sql`now()`})
     returning id`;
   return row!.id;
@@ -693,11 +693,11 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
     }
     expect(seen).toBe(3);
 
-    // The view's columns, in order.
+    // The view's columns, in order. V481 appended `made_for_kids` (a replace may only add columns at the end).
     const cols = await sql<{ column_name: string }[]>`
       select column_name from information_schema.columns
        where table_schema = current_schema() and table_name = 'public_fixture_youtube_parts_v' order by ordinal_position`;
-    expect(cols.map((x) => x.column_name)).toEqual(["fixture_id", "video_id", "part_no", "completed_at"]);
+    expect(cols.map((x) => x.column_name)).toEqual(["fixture_id", "video_id", "part_no", "completed_at", "made_for_kids"]);
   });
 
   it("the parts view's privacy filter is an ALLOW-LIST: it admits exactly the privacies the check constraint declares except 'private' - so a privacy added later is hidden until someone lists it", async () => {

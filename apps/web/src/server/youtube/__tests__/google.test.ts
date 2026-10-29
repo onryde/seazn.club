@@ -512,7 +512,7 @@ describe("broadcastLife reports the actual start and end (B2 fix I4)", () => {
     }
     expect(checked, "anti-vacuity: every row read").toBe(rows.length);
     handler = () => res(200, { items: [] });
-    expect(await driver().broadcastLife(AT, "bc1"), "absent: no instants").toEqual({ life: "absent", actualStartAt: null, actualEndAt: null });
+    expect(await driver().broadcastLife(AT, "bc1"), "absent: no instants").toEqual({ life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null });
   });
 
   it("an instant Google sends in a shape it should not (a bad string, a number, null, an empty string) is NULL, and the life is still read — the end step must not stop on it", async () => {
@@ -531,6 +531,28 @@ describe("broadcastLife reports the actual start and end (B2 fix I4)", () => {
     expect([half.actualStartAt?.toISOString(), half.actualEndAt]).toEqual(["2026-10-27T12:05:00.000Z", null]);
   });
 
+  // R2 (made-for-kids follow-up): liveBroadcasts `status.madeForKids` is YouTube's CURRENT made-for-kids status of the broadcast - the same
+  // `part=status` read gives it, so it costs no call. Only a real boolean is an answer; the wire strings are typed from the resource page.
+  it("reads status.madeForKids from the same read: true and false are answers; absent, null, a string, a number and an object are NULL (YouTube did not say), and the life is still read", async () => {
+    const wire = (madeForKids?: unknown) => ({ id: "bc1", status: { lifeCycleStatus: "live", ...(madeForKids === undefined ? {} : { madeForKids }) } });
+    const rows: [string, unknown, boolean | null][] = [
+      ["true", true, true], ["false", false, false],
+      ["absent", undefined, null], ["null", null, null], ["the string true", "true", null], ["1", 1, null], ["0", 0, null], ["an object", { value: true }, null],
+    ];
+    let checked = 0;
+    for (const [name, v, want] of rows) {
+      sent = [];
+      handler = () => res(200, { items: [wire(v)] });
+      const got = await driver().broadcastLife(AT, "bc1");
+      expect([name, got.life, got.madeForKids]).toEqual([name, "live", want]);
+      expect(sent, `${name}: still ONE call, and it already asks for status (no extra part)`).toHaveLength(1);
+      expect(new URL(sent[0]!.url).searchParams.get("part"), name).toBe("status,snippet");
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every wire shape read").toBe(rows.length);
+    expect(new Set(rows.map((r) => r[2])), "true, false and null are all exercised").toEqual(new Set([true, false, null]));
+  });
+
   it("a status Google never documented is still refused even when the snippet carries instants", async () => {
     handler = () => res(200, { items: [item("mystery", { actualStartTime: "2026-10-27T12:05:00Z" })] });
     const err = (await rejection(driver().broadcastLife(AT, "bc1"))) as YouTubeError;
@@ -546,13 +568,12 @@ describe("broadcastLife reports the actual start and end (B2 fix I4)", () => {
     // What YouTube would put on the wire for the fake's own state, written from the docs: the status, and the two instants once they exist.
     const wireOf = (): ReturnType<typeof item> => {
       const v = fake.inspectBroadcast(broadcastId)!;
-      return {
-        ...item(v.life, {
-          ...(v.actualStartAt ? { actualStartTime: v.actualStartAt.toISOString() } : {}),
-          ...(v.actualEndAt ? { actualEndTime: v.actualEndAt.toISOString() } : {}),
-        }),
-        id: broadcastId,
-      };
+      const base = item(v.life, {
+        ...(v.actualStartAt ? { actualStartTime: v.actualStartAt.toISOString() } : {}),
+        ...(v.actualEndAt ? { actualEndTime: v.actualEndAt.toISOString() } : {}),
+      });
+      // `status.madeForKids` is YouTube's status of the broadcast: unless it decides otherwise, what it was created with.
+      return { ...base, id: broadcastId, status: { ...base.status, madeForKids: v.madeForKids } };
     };
     const compare = async (name: string, want: { life: string; start: string | null; end: string | null }) => {
       const viaFake = await fake.broadcastLife(at, broadcastId);
@@ -571,6 +592,27 @@ describe("broadcastLife reports the actual start and end (B2 fix I4)", () => {
     t += 41 * 60_000; await fake.complete(at, broadcastId);
     t += 5 * 60_000;
     await compare("complete", { life: "complete", start: "2026-10-27T12:05:00.000Z", end: "2026-10-27T12:50:00.000Z" });
+  });
+});
+
+describe("broadcastLife's made-for-kids agrees between the fake and the driver (R2)", () => {
+  it("a broadcast created with madeForKids true reads true through both; created with false reads false through both (typed from the argument sent, not read back)", async () => {
+    let checked = 0;
+    for (const declared of [true, false]) {
+      const fake = new FakeYouTube();
+      const at = await fake.accessToken("1//parity-kids");
+      const { broadcastId } = await fake.insertBroadcast(at, { title: "t", description: "", scheduledStart: new Date(), privacy: "unlisted", madeForKids: declared });
+      const viaFake = await fake.broadcastLife(at, broadcastId);
+      const v = fake.inspectBroadcast(broadcastId)!;
+      handler = () => res(200, { items: [{ id: broadcastId, status: { lifeCycleStatus: v.life, madeForKids: declared } }] });
+      const viaGoogle = await driver().broadcastLife(AT, broadcastId);
+      expect([declared, viaFake.madeForKids, viaGoogle.madeForKids]).toEqual([declared, declared, declared]);
+      checked++;
+    }
+    expect(checked).toBe(2);
+    // An id the fake does not hold: YouTube said nothing, so null (not false).
+    const empty = new FakeYouTube();
+    expect((await empty.broadcastLife(await empty.accessToken("1//none"), "nope")).madeForKids).toBeNull();
   });
 });
 

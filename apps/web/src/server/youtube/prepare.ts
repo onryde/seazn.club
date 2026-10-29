@@ -334,12 +334,15 @@ async function pickAndInsert(ctx: Ctx, title: string): Promise<Pick> {
     await lockConnection(tx, ctx);
     const keyId = await freeKey(tx, ctx);
     if (keyId === null && !((await liveKeyCount(tx, ctx)) < MAX_LIVE_KEYS_PER_CHANNEL)) return { kind: "busy" };
+    // The row is stamped with ctx.madeForKids - the very value `createNew` hands insertBroadcast to send YouTube (one source: it was read
+    // once with the connection in prepareYoutubeBroadcast and is passed through, never re-read). A later PATCH of the connection moves
+    // no existing row; the public match page decides link-vs-player from this stamp (V481).
     // A savepoint, so a concurrent admission's row on this fixture (the one-open index) does not abort the transaction.
     const rowId = await tx
       .savepoint(async (sp) => {
         const [r] = await sp<{ id: string }[]>`
-          insert into youtube_broadcasts (org_id, connection_id, fixture_id, key_id, title, privacy, state)
-          values (${ctx.orgId}, ${ctx.connectionId}, ${ctx.fixtureId}, ${keyId}, ${title}, ${ctx.privacy}, 'created')
+          insert into youtube_broadcasts (org_id, connection_id, fixture_id, key_id, title, privacy, made_for_kids, state)
+          values (${ctx.orgId}, ${ctx.connectionId}, ${ctx.fixtureId}, ${keyId}, ${title}, ${ctx.privacy}, ${ctx.madeForKids}, 'created')
           returning id`;
         return r!.id;
       })

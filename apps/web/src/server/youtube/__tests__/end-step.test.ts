@@ -181,7 +181,7 @@ async function override(orgId: string, key: string, value: boolean) {
 
 /** An org with the relay, `fixtures` fixtures each with a present phone, `credits` match credits, and a channel connected through
  *  the real save (its connection and API destination). Its own FakeYouTube, so every count is this test's. */
-async function world(o: { fixtures?: number; credits?: number; connectAfterMs?: number; connectionUser?: string; privacy?: "unlisted" | "public" | "private" } = {}): Promise<World> {
+async function world(o: { fixtures?: number; credits?: number; connectAfterMs?: number; connectionUser?: string; privacy?: "unlisted" | "public" | "private"; madeForKids?: boolean } = {}): Promise<World> {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const n = o.fixtures ?? 1;
@@ -195,7 +195,7 @@ async function world(o: { fixtures?: number; credits?: number; connectAfterMs?: 
   for (const f of fixtures) await pairPresentPhone(f);
   if ((o.credits ?? 1) > 0) await grantCredits({ orgId: auth.orgId, delta: o.credits ?? 1, createdBy: await rigUser(), note: "t14", idempotencyKey: randomUUID() });
   await spendMonthlyStreamGrant(auth.orgId);
-  const c = await connectChannel({ auth, orgId: auth.orgId, userId: o.connectionUser ?? auth.userId }, o.privacy ? { privacy: o.privacy } : {});
+  const c = await connectChannel({ auth, orgId: auth.orgId, userId: o.connectionUser ?? auth.userId }, { ...(o.privacy ? { privacy: o.privacy } : {}), ...(o.madeForKids !== undefined ? { madeForKids: o.madeForKids } : {}) });
 
   let now = Date.now();
   const ingest = new FakeIngest({ clock: () => now, connectAfterMs: o.connectAfterMs ?? 3000 });
@@ -261,12 +261,12 @@ interface BRow {
   id: string; fixture_id: string; connection_id: string; state: string; key_id: string | null; yt_broadcast_id: string | null;
   last_session_id: string | null; last_error_code: string | null; attempts: number; next_attempt_at: Date | null;
   claimed_at: Date | null; completed_at: Date | null; actual_start_at: Date | null; actual_end_at: Date | null;
-  reserved_until: Date | null; created_at: Date;
+  reserved_until: Date | null; created_at: Date; made_for_kids: boolean;
 }
 // A function, not a value: a `sql` fragment built at module scope opens the client, and without DATABASE_URL that throws at
 // COLLECTION (the no-DB unit job), before `describe.skipIf(!HAS_DB)` can skip the file.
 const bCols = () => sql`id, fixture_id, connection_id, state, key_id, yt_broadcast_id, last_session_id, last_error_code, attempts,
-                  next_attempt_at, claimed_at, completed_at, actual_start_at, actual_end_at, reserved_until, created_at`;
+                  next_attempt_at, claimed_at, completed_at, actual_start_at, actual_end_at, reserved_until, created_at, made_for_kids`;
 const broadcastRow = async (id: string): Promise<BRow> =>
   (await sql<BRow[]>`select ${bCols()} from youtube_broadcasts where id = ${id}`)[0]!;
 const broadcastsOf = (fixtureId: string) =>
@@ -654,8 +654,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
     const w = await world();
     const f = w.fixtures[0]!;
     const [row] = await sql<{ id: string }[]>`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, claimed_at)
-      values (${w.orgId}, ${w.connectionId}, ${f}, 't14', 'unlisted', 'ending', ${new Date(w.now())})
+      insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, claimed_at)
+      values (false, ${w.orgId}, ${w.connectionId}, ${f}, 't14', 'unlisted', 'ending', ${new Date(w.now())})
       returning id`;
     expect(await w.step({ at: w.now() + SEC })).toEqual({ ...ZERO, neverLive: 1 });
     expect(w.fake.calls, "no id, nothing to ask").toEqual([]);
@@ -1387,6 +1387,133 @@ describe.skipIf(!HAS_DB)("YouTube Connect T14 — the end step", () => {
       checked++;
     }
     expect(checked).toBe(variants.length);
+  });
+
+  // ═══ made for kids (R2): YouTube's own determination is ORed into the stamp, from a read the step already makes ═══════════════
+  // `broadcastLife` is liveBroadcasts.list(part=status,snippet) - its `status.madeForKids` is YouTube's current made-for-kids status of
+  // the broadcast. No call is added: the flag rides the read the step makes anyway (the call count below pins it). The fake reports the
+  // self-declared value by default (what YouTube does unless it decides otherwise); a test makes it say something else by wrapping the
+  // fake's `broadcastLife`, the way this file already scripts `complete`.
+  describe("made for kids: YouTube's status.madeForKids is ORed into the broadcast's stamp", () => {
+    type Said = boolean | null;
+    /** The fake's broadcastLife, answering `said` as `madeForKids` on EVERY read (null: YouTube did not say). */
+    const youtubeSays = (w: World, said: Said) => {
+      const real = w.fake.broadcastLife.bind(w.fake);
+      w.fake.broadcastLife = async (at, id) => ({ ...(await real(at, id)), madeForKids: said });
+    };
+    /** One match, stamped as the channel declares, ended by the real step with YouTube saying `said` (undefined: the fake's own default). */
+    async function ended(declared: boolean, said: Said | undefined) {
+      const w = await world({ madeForKids: declared });
+      const m = await playAndStop(w, w.fixtures[0]!);
+      expect((await broadcastRow(m.broadcastId)).made_for_kids, "premise: stamped as declared when Go live made it").toBe(declared);
+      if (said !== undefined) youtubeSays(w, said);
+      const asked = callsOf(w.fake, "broadcastLife");
+      expect(await w.step({ at: afterStop(m, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+      return { w, m, row: await broadcastRow(m.broadcastId), life: callsOf(w.fake, "broadcastLife") - asked };
+    }
+
+    it("EMPTY CASE FIRST: with nothing said beyond the declaration (the fake's default) the stamp is what Go live sent, true or false", async () => {
+      let checked = 0;
+      for (const declared of [true, false]) {
+        const { row } = await ended(declared, undefined);
+        expect(row, `declared ${declared}`).toMatchObject({ state: "complete", made_for_kids: declared });
+        checked++;
+      }
+      expect(checked, "anti-vacuity: both declarations were ended").toBe(2);
+    });
+
+    it("YouTube saying it is made for kids turns a false stamp true; saying not, or nothing, leaves it false (the OR, with its twins)", async () => {
+      const cases: { said: Said; expected: boolean }[] = [
+        { said: true, expected: true },
+        { said: false, expected: false },
+        { said: null, expected: false },
+      ];
+      let checked = 0;
+      for (const c of cases) {
+        const { row } = await ended(false, c.said);
+        expect(row, `a false stamp, YouTube says ${String(c.said)}`).toMatchObject({ state: "complete", made_for_kids: c.expected });
+        checked++;
+      }
+      expect(checked, "anti-vacuity: every answer was asserted").toBe(cases.length);
+    });
+
+    it("ONCE TRUE, STAYS TRUE: a true stamp survives YouTube saying not-for-kids or saying nothing", async () => {
+      let checked = 0;
+      for (const said of [false, null, true] as const) {
+        const { row } = await ended(true, said);
+        expect(row, `a true stamp, YouTube says ${String(said)}`).toMatchObject({ state: "complete", made_for_kids: true });
+        checked++;
+      }
+      expect(checked).toBe(3);
+    });
+
+    it("the step reads YouTube's status TWICE and EITHER read saying made-for-kids is enough: swept over every (first, second) answer - the OR is across the two reads, not one of them", async () => {
+      const answers: Said[] = [true, false, null];
+      let checked = 0;
+      let kidsRows = 0;
+      for (const first of answers) {
+        for (const second of answers) {
+          const w = await world({ madeForKids: false });
+          const m = await playAndStop(w, w.fixtures[0]!);
+          const real = w.fake.broadcastLife.bind(w.fake);
+          let read = 0;
+          w.fake.broadcastLife = async (at, id) => ({ ...(await real(at, id)), madeForKids: read++ === 0 ? first : second });
+          expect(await w.step({ at: afterStop(m, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+          expect(read, "premise: both reads happened").toBe(2);
+          const expected = first === true || second === true;
+          expect((await broadcastRow(m.broadcastId)).made_for_kids, `first read ${String(first)}, second read ${String(second)}`).toBe(expected);
+          if (expected) kidsRows++;
+          checked++;
+        }
+      }
+      expect(checked, "anti-vacuity: all nine combinations").toBe(9);
+      expect(kidsRows, "five of the nine have a true in them; four have none").toBe(5);
+    });
+
+    it("it adds no YouTube call: the step reads the life twice (before and after the transition) exactly as it did, and the flag rides those reads", async () => {
+      const { life } = await ended(false, true);
+      expect(life, "broadcastLife twice - the read before complete and the read of the actual times after it").toBe(2);
+    });
+
+    it("a broadcast YouTube already shows as COMPLETE settles with its flag too (the first read's own answer), and a lost second read does not drop a flag the first one gave", async () => {
+      // (a) the first read already says complete: the row finalizes from it, flag included.
+      const w = await world({ madeForKids: false });
+      const m = await playAndStop(w, w.fixtures[0]!);
+      const real = w.fake.broadcastLife.bind(w.fake);
+      w.fake.broadcastLife = async (at, id) => ({
+        ...(await real(at, id)), life: "complete", actualStartAt: new Date(m.startedAtMs), actualEndAt: new Date(afterStop(m, min(6))), madeForKids: true,
+      });
+      expect(await w.step({ at: afterStop(m, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+      expect(await broadcastRow(m.broadcastId), "already complete at YouTube").toMatchObject({ state: "complete", made_for_kids: true });
+
+      // (b) the first read (live) says made-for-kids and the times read after `complete` FAILS: the row completes without its end time
+      // and KEEPS the flag the first read gave.
+      const v = await world({ madeForKids: false });
+      const n = await playAndStop(v, v.fixtures[0]!);
+      const realV = v.fake.broadcastLife.bind(v.fake);
+      let reads = 0;
+      v.fake.broadcastLife = async (at, id) => {
+        reads++;
+        if (reads === 2) throw new YouTubeError("youtube_unavailable");
+        return { ...(await realV(at, id)), madeForKids: true };
+      };
+      expect(await v.step({ at: afterStop(n, min(6)) })).toEqual({ ...ZERO, ended: 1 });
+      expect(reads, "premise: both reads were attempted").toBe(2);
+      expect(await broadcastRow(n.broadcastId), "second read lost").toMatchObject({ state: "complete", actual_end_at: null, made_for_kids: true });
+    });
+
+    it("a broadcast that FAILS (never went live) keeps the stamp it had and takes nothing from YouTube's answer", async () => {
+      const w = await world({ madeForKids: false });
+      const { sessionId } = await goLive(w, w.fixtures[0]!);
+      const s = await sessionRow(sessionId);
+      const row0 = await broadcastRow(s.youtube_broadcast_id!);
+      expect(row0.made_for_kids, "premise: stamped false").toBe(false);
+      youtubeSays(w, true);
+      // An unstarted broadcast is deleted at YouTube and finalizes failed; whatever the read said about kids is not a part's fact.
+      await sql`update youtube_broadcasts set state = 'ending', claimed_at = ${new Date(w.now())} where id = ${row0.id}`;
+      expect(await w.step({ at: w.now() + min(6) })).toMatchObject({ neverLive: 1 });
+      expect(await broadcastRow(row0.id)).toMatchObject({ state: "failed", made_for_kids: false });
+    });
   });
 
   it("the budget: wallClock past 15 s after the first row → the rest are counted deferred, not failed; the next firing reaches them", async () => {

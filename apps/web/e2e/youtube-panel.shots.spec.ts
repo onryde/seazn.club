@@ -869,8 +869,8 @@ test("Disconnect - the confirm dialog, the refusal while a match is using the ch
     // A match is using the channel: SQL puts a `bound` broadcast on the rig's fixture (the shape of Go live mid-admission); the end rule
     // says "not due". Deleted below, once the refusal has been seen.
     await withDb((sql) => sql`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state)
-      values (${r.orgId}, ${connectionId}, ${r.fixtureId!}, ${"disconnect shots " + w}, 'unlisted', 'bound')`);
+      insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state)
+      values (false, ${r.orgId}, ${connectionId}, ${r.fixtureId!}, ${"disconnect shots " + w}, 'unlisted', 'bound')`);
     // Premise (B6 batch review N2): the refusal shot below only means something if a match really holds the channel. Read the row back.
     const held = () => withDb((sql) => sql<{ n: number }[]>`
       select count(*)::int as n from youtube_broadcasts where connection_id = ${connectionId} and state = 'bound'`).then((x) => x[0]!.n);

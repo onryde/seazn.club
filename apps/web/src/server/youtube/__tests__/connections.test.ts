@@ -421,8 +421,8 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a reconnect", () => {
   async function openBroadcast(o: Org, connectionId: string, fixtureId: string, state: string, next: Date | null, attempts = 0) {
     const done = state === "complete";
     const [row] = await sql<{ id: string }[]>`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, next_attempt_at, attempts, completed_at, yt_broadcast_id)
-      values (${o.orgId}, ${connectionId}, ${fixtureId}, 'Match', 'unlisted', ${state}, ${next}, ${attempts}, ${done ? new Date() : null}, ${done ? `vid-${randomUUID().slice(0, 8)}` : null})
+      insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, next_attempt_at, attempts, completed_at, yt_broadcast_id)
+      values (false, ${o.orgId}, ${connectionId}, ${fixtureId}, 'Match', 'unlisted', ${state}, ${next}, ${attempts}, ${done ? new Date() : null}, ${done ? `vid-${randomUUID().slice(0, 8)}` : null})
       returning id`;
     return row!.id;
   }
@@ -730,8 +730,8 @@ describe.skipIf(!HAS_DB)("the Streaming page's view of a connection", () => {
     const c = await connect(o);
     const d = await connect(o);
     const add = (conn: string, state: string) => sql`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, completed_at, yt_broadcast_id)
-      values (${o.orgId}, ${conn}, ${fixtureId}, 'Match', 'unlisted', ${state}, ${state === "complete" ? new Date() : null}, ${state === "complete" ? `vid-${randomUUID().slice(0, 8)}` : null})`;
+      insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, completed_at, yt_broadcast_id)
+      values (false, ${o.orgId}, ${conn}, ${fixtureId}, 'Match', 'unlisted', ${state}, ${state === "complete" ? new Date() : null}, ${state === "complete" ? `vid-${randomUUID().slice(0, 8)}` : null})`;
     expect((await connectionViews(o.orgId)).get(c.connectionId)!.openBroadcasts, "empty case").toBe(0);
     await add(c.connectionId, "live");
     await add(c.connectionId, "ending");

@@ -88,8 +88,8 @@ async function seed(o: { divisionStatus?: "active" | "setup"; locale?: string } 
 async function completeBroadcast(s: Seeded, completedAt: Date, startedAt?: Date, privacy: "unlisted" | "public" | "private" = "unlisted"): Promise<string> {
   const ytId = vid();
   await sql`
-    insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at, created_at)
-    values (${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${ytId}, 'Match', ${privacy}, 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
+    insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at, created_at)
+    values (false, ${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${ytId}, 'Match', ${privacy}, 'complete', ${completedAt}, ${startedAt ?? sql`now()`})`;
   return ytId;
 }
 const setFixture = (s: Seeded, status: string, streamUrl: string | null) =>
@@ -269,8 +269,8 @@ describe.skipIf(!HAS_DB)("the public match page shows the match's YouTube replay
   it("a part still in flight (live, not complete) is not a replay: the page is as it was", async () => {
     const s = await open();
     await setFixture(s, "in_play", null);
-    await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state)
-              values (${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${vid()}, 'Match', 'unlisted', 'live')`;
+    await sql`insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state)
+              values (false, ${s.orgId}, ${s.connectionId}, ${s.fixtureId}, ${vid()}, 'Match', 'unlisted', 'live')`;
     expect(await pageHtml(s)).not.toContain("replay-embed");
   });
 

@@ -300,7 +300,7 @@ const MISSING_THEN_PRESENT: Array<{
     },
   },
   {
-    site: "getPublicFixture (pub-fixture-v9): a fixture asked for under ANOTHER division's URL, then under its own",
+    site: "getPublicFixture (pub-fixture-v10): a fixture asked for under ANOTHER division's URL, then under its own",
     run: async (kind, w) => {
       const missing = await render(kind, () => getPublicFixture(w.orgSlug, w.compSlug, w.otherDivSlug, w.fixtureId));
       const served = (await render(kind, () => getPublicFixture(w.orgSlug, w.compSlug, w.divSlug, w.fixtureId)))?.fixture.id ?? null;
@@ -486,7 +486,7 @@ const SRC = new URL("../../../", import.meta.url).pathname; // apps/web/src/
 const CACHE_SITES: Record<string, { via: "cachedIfFound" | "unstable_cache"; file: string; why: string }> = {
   "pub-org-v2": { via: "cachedIfFound", file: "server/public-site/data.ts", why: "an org slug may not exist" },
   "pub-comp": { via: "cachedIfFound", file: "server/public-site/data.ts", why: "a competition slug may not exist or be private" },
-  "pub-fixture-v9": { via: "cachedIfFound", file: "server/public-site/data.ts", why: "a fixture id may not exist in this division" },
+  "pub-fixture-v10": { via: "cachedIfFound", file: "server/public-site/data.ts", why: "a fixture id may not exist in this division" },
   "pub-hub-v5": { via: "cachedIfFound", file: "server/public-site/competition-hub.ts", why: "the hub refuses when its shell does" },
   "<keyParts>": { via: "unstable_cache", file: "server/public-site/cache-found.ts", why: "the guard itself: throws instead of storing a miss" },
   "pub-div-v5": { via: "unstable_cache", file: "server/public-site/data.ts", why: "the detail of a division already found; never null" },

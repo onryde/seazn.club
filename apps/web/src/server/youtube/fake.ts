@@ -491,7 +491,10 @@ export class FakeYouTube implements YouTubePort {
     this.enter("broadcastLife", this.channelOfAccess(at));
     const who = this.who(at);
     const b = this.ownBroadcast(who.channelId, broadcastId);
-    return b ? { life: b.life, actualStartAt: copyOf(b.actualStart), actualEndAt: copyOf(b.actualEnd) } : { life: "absent", actualStartAt: null, actualEndAt: null };
+    // YouTube's `status.madeForKids` is, unless it decides otherwise, what the broadcast was created with (selfDeclaredMadeForKids).
+    return b
+      ? { life: b.life, actualStartAt: copyOf(b.actualStart), actualEndAt: copyOf(b.actualEnd), madeForKids: b.madeForKids }
+      : { life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null };
   }
 
   async complete(at: string, broadcastId: string): Promise<void> {

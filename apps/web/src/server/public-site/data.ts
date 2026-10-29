@@ -30,7 +30,7 @@ import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { z } from "zod";
 import type { StageKind } from "@/server/api-v1/schemas";
 import { anyOptedOut, isPersonNameMasked, resolvePersonDisplayName } from "@/lib/name-display";
-import { replayParts, type ReplayPart } from "@/server/youtube/parts";
+import { replayParts, type PublicReplayPart } from "@/server/youtube/parts";
 import { cachedIfFound } from "./cache-found";
 import { loadMatchCentre } from "./match-centre-load";
 import { competitionTag, divisionTag, orgTag, personTag } from "./cache-tags";
@@ -1186,7 +1186,7 @@ export async function getPublicFixture(
    *  streamed through a connected channel, a pasted-key match among them). Read from the parts view on the privileged client
    *  (R7), which already leaves out a division still in setup. It says what exists, not what the page may show: a void fixture
    *  (cancelled, abandoned, forfeited) shows no replay, and that rule is the page's (`streamLinkLabelKey`). */
-  parts: ReplayPart[];
+  parts: PublicReplayPart[];
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const found = await findPublicDivision(orgSlug, compSlug, divSlug);
@@ -1382,7 +1382,11 @@ export async function getPublicFixture(
     // carries the declared clock family's word in its header — "Classical" over a 10+5 game.
     //
     // v9 (YouTube Connect T16): `parts`, the fixture's replay parts. A `-v8` entry has none, and the page reads the list.
-    ["pub-fixture-v9", fixtureId],
+    //
+    // v10 (YouTube Connect, made-for-kids follow-up 2026-10-29): each part gained `madeForKids`. A `-v9` entry's parts have none, and the
+    // page reads it to decide link-versus-player: a part without it is shown as a link (the rule fails closed), so a stale entry would
+    // show a not-for-kids replay as a link for a revalidate window. Bumping the key makes the first read after deploy a fresh one.
+    ["pub-fixture-v10", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   );
   if (!detail) return null;

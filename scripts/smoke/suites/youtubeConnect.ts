@@ -495,8 +495,8 @@ export async function youtubeConnectSuite(): Promise<void> {
         [hidden, "private", at(3.5), at(0.2)],
       ] as const) {
         await sql`
-          insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, created_at, completed_at)
-          values (${a.orgId}, ${seed.connectionId}, ${fx.fixtureId}, ${video}, ${`Smoke part ${tag}`}, ${privacy}, 'complete', ${started}, ${finished})`;
+          insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, created_at, completed_at)
+          values (false, ${a.orgId}, ${seed.connectionId}, ${fx.fixtureId}, ${video}, ${`Smoke part ${tag}`}, ${privacy}, 'complete', ${started}, ${finished})`;
       }
     });
     const divSlug = v1data<{ slug: string }>(await v1(a.s, `/api/v1/divisions/${fx.divisionId}`)).slug;

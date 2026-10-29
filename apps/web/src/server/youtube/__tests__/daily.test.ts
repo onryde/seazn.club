@@ -351,8 +351,8 @@ async function seedCompleteRows(w: World, c: Chan, n: number, ageDays: number): 
   for (let i = 0; i < n; i++) {
     const { broadcastId } = await w.fake.insertBroadcast(at, { title: `t17 part ${i}`, description: "", scheduledStart: new Date(), privacy: "unlisted", madeForKids: false });
     const [row] = await sql<{ id: string }[]>`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id, completed_at, refreshed_at)
-      values (${w.orgId}, ${c.connectionId}, ${w.fixtures[0]!}, ${`t17 part ${i}`}, 'unlisted', 'complete', ${broadcastId}, now(),
+      insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id, completed_at, refreshed_at)
+      values (false, ${w.orgId}, ${c.connectionId}, ${w.fixtures[0]!}, ${`t17 part ${i}`}, 'unlisted', 'complete', ${broadcastId}, now(),
               now() - (${ageDays}::float8 * interval '1 day'))
       returning id`;
     out.push({ id: row!.id, ytId: broadcastId });
@@ -1236,8 +1236,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
         },
         "a pending grant": async (c) => { await grant(w.org, { connectionId: c.connectionId, channels: [c.channel] }); },
         "a broadcast row": async (c) => {
-          await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state)
-                    values (${w.orgId}, ${c.connectionId}, ${w.fixtures[0]!}, 't17 stranded', 'unlisted', 'failed')`;
+          await sql`insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state)
+                    values (false, ${w.orgId}, ${c.connectionId}, ${w.fixtures[0]!}, 't17 stranded', 'unlisted', 'failed')`;
         },
       };
       let checked = 0;
@@ -1899,8 +1899,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
         hooks: {
           beforeIdleKeys: async () => {
             const hold = await holdConnection(w.connectionId, (t) => t`
-              insert into youtube_broadcasts (org_id, connection_id, fixture_id, key_id, title, privacy, state)
-              values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, ${k.id}, 't17 pick', 'unlisted', 'created')`);
+              insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, key_id, title, privacy, state)
+              values (false, ${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, ${k.id}, 't17 pick', 'unlisted', 'created')`);
             setTimeout(() => { released++; void hold.release(); }, 500);
           },
         },
@@ -1940,8 +1940,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
     it("B6 round 2 C6: the failed-row retention never WAITS for a row another transaction holds (a disconnect's purge locks the connection's rows in id order, so waiting for one can deadlock with it): the held row is skipped and goes on the next pass, the free one goes now", async () => {
       const w = await world({ fixtures: 1, credits: 1 });
       const mk = async () => (await sql<{ id: string }[]>`
-        insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, last_error_code, created_at)
-        values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't17 refused', 'unlisted', 'failed', 'admission_refused', now() - (31::float8 * interval '1 day'))
+        insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, last_error_code, created_at)
+        values (false, ${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't17 refused', 'unlisted', 'failed', 'admission_refused', now() - (31::float8 * interval '1 day'))
         returning id`)[0]!.id;
       const [held, free] = [await mk(), await mk()];
       let pass!: Promise<YoutubeDailyResult>;
@@ -1962,8 +1962,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
     it("a failed row with NO completed_at (a Go live that prepare refused fails without one) ages from created_at: 29 days kept, 31 days gone", async () => {
       const w = await world({ fixtures: 1, credits: 1 });
       const mk = async (ageDays: number) => (await sql<{ id: string }[]>`
-        insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, last_error_code, created_at)
-        values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't17 refused', 'unlisted', 'failed', 'admission_refused', now() - (${ageDays}::float8 * interval '1 day'))
+        insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, last_error_code, created_at)
+        values (false, ${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't17 refused', 'unlisted', 'failed', 'admission_refused', now() - (${ageDays}::float8 * interval '1 day'))
         returning id`)[0]!.id;
       const young = await mk(29);
       const old = await mk(31);

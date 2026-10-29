@@ -454,11 +454,11 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     // A producer: the real prepare would leave this row; SQL here makes the SHAPE of a created-but-unbound broadcast with a real id.
     const at = await w.fake.accessToken(w.token);
     const { broadcastId } = await w.fake.insertBroadcast(at, { title: "t18 created", description: "", scheduledStart: new Date(), privacy: "unlisted", madeForKids: false });
-    await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id)
-              values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't18 created', 'unlisted', 'created', ${broadcastId})`;
+    await sql`insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state, yt_broadcast_id)
+              values (false, ${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't18 created', 'unlisted', 'created', ${broadcastId})`;
     // ... and a created row that crashed BEFORE YouTube was asked (no video id yet - prepare.ts's header names this shape)
-    await sql`insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state)
-              values (${w.orgId}, ${w.connectionId}, ${w.fixtures[1]!}, 't18 no id', 'unlisted', 'created')`;
+    await sql`insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state)
+              values (false, ${w.orgId}, ${w.connectionId}, ${w.fixtures[1]!}, 't18 no id', 'unlisted', 'created')`;
     expect(w.fake.inspectBroadcast(broadcastId)!.life, "premise: a ready broadcast at YouTube").not.toBe("live");
     const asked = count(w.fake, "broadcastLife");
 
@@ -1041,8 +1041,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
   it("the broadcast rows are locked before the guard reads them: a change committed while the disconnect waits is SEEN - a 'created' row that becomes 'bound' under it makes the call a 409, not a purge of a channel a match just took", async () => {
     const w = await world();
     const [{ id: rowId }] = await sql<{ id: string }[]>`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state)
-      values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't18 lock', 'unlisted', 'created') returning id`;
+      insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, title, privacy, state)
+      values (false, ${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't18 lock', 'unlisted', 'created') returning id`;
     let release!: () => void;
     let taken!: () => void;
     const gate = new Promise<void>((r) => { release = r; });

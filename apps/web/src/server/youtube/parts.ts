@@ -16,27 +16,28 @@ import "server-only";
 //                                        not show anyone. It also lists the broadcasts that are PRIVATE on YouTube, flagged
 //                                        `private: true` (the public view hides them - owner ruling 2026-10-28, option A).
 //
-// A part is `{ partNo, url }`. The url is the video's watch URL: a broadcast id is also its video id. Only `complete` rows count - a
+// A part is `{ partNo, url }` (the public read adds `madeForKids`, V481). The url is the video's watch URL: a broadcast id is also its video id. Only `complete` rows count - a
 // failed, open or ending broadcast is not a replay yet (V479's check: a complete row always has a finish time and a video id).
 import { sql } from "@/lib/db";
-import { youtubeWatchUrl, type OrganiserReplayPart, type ReplayPart } from "@/lib/youtube";
+import { youtubeWatchUrl, type OrganiserReplayPart, type PublicReplayPart, type ReplayPart } from "@/lib/youtube";
 
-export type { OrganiserReplayPart, ReplayPart };
+export type { OrganiserReplayPart, PublicReplayPart, ReplayPart };
 
 interface PartRow {
   part_no: number;
   video_id: string;
 }
-const toParts = (rows: PartRow[]): ReplayPart[] => rows.map((r) => ({ partNo: r.part_no, url: youtubeWatchUrl(r.video_id) }));
 
-/** The parts the PUBLIC may see for this fixture, in order. An unpublished fixture (setup division, private competition) has none. */
-export async function replayParts(fixtureId: string): Promise<ReplayPart[]> {
-  const rows = await sql<PartRow[]>`
-    select part_no, video_id
+/** The parts the PUBLIC may see for this fixture, in order. An unpublished fixture (setup division, private competition) has none.
+ *  Each carries the BROADCAST's own made-for-kids stamp (V481, read from the view): a made-for-kids replay is a link out on the page,
+ *  never a player (DP III.E.4.j) - the page decides, this only says. The organiser's read below carries no such field. */
+export async function replayParts(fixtureId: string): Promise<PublicReplayPart[]> {
+  const rows = await sql<(PartRow & { made_for_kids: boolean })[]>`
+    select part_no, video_id, made_for_kids
       from public_fixture_youtube_parts_v
      where fixture_id = ${fixtureId}
      order by part_no`;
-  return toParts(rows);
+  return rows.map((r) => ({ partNo: r.part_no, url: youtubeWatchUrl(r.video_id), madeForKids: r.made_for_kids }));
 }
 
 /** This ORGANISATION's parts for this fixture, in order - EVERY complete broadcast, the private ones too (owner ruling 2026-10-28:

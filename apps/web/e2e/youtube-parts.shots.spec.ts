@@ -226,8 +226,8 @@ async function rig(page: Page, parts: number, streamUrl: "first-part" | "club" |
         values (${orgId}, 'https://www.googleapis.com/auth/youtube', ${userId}, now(), 1, 'revoked', now(), ${userId}) returning id`;
       for (const [i, yt] of ids.entries()) {
         await sql`
-          insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at)
-          values (${orgId}, ${connectionId}, ${id}, ${yt}, ${`Part ${i + 1}`}, ${privacies[i] ?? "unlisted"}, 'complete', ${new Date(Date.UTC(2030, 5, 1, 10 + i, 0, 0))})`;
+          insert into youtube_broadcasts (made_for_kids, org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, completed_at)
+          values (false, ${orgId}, ${connectionId}, ${id}, ${yt}, ${`Part ${i + 1}`}, ${privacies[i] ?? "unlisted"}, 'complete', ${new Date(Date.UTC(2030, 5, 1, 10 + i, 0, 0))})`;
       }
     }
     return id;

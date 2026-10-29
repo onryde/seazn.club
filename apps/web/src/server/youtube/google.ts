@@ -327,16 +327,23 @@ export class GoogleYouTube implements YouTubePort {
   /** liveBroadcasts.list(part=status,snippet, id): the life cycle from `status.lifeCycleStatus`, and the instants YouTube says it
    *  ACTUALLY started and ended from `snippet.actualStartTime` / `actualEndTime` (ISO 8601; the resource page says they are only
    *  there once the broadcast is live / complete). A time that is absent, or not a date, is `null`: it is informational, and a
-   *  malformed one must never keep the end step from reading the life cycle. */
+   *  malformed one must never keep the end step from reading the life cycle. `status.madeForKids` (YouTube's own made-for-kids status,
+   *  from the same `part=status`) is read the same way: a boolean, or `null` when YouTube did not say. */
   async broadcastLife(at: string, broadcastId: string): Promise<BroadcastLifeInfo> {
     const items = parseBody(await api(at, "GET", "liveBroadcasts", { query: { part: "status,snippet", id: broadcastId } })).items;
     const row = (Array.isArray(items) ? items : []).map(asRecord).find((i) => i?.id === broadcastId);
-    if (!row) return { life: "absent", actualStartAt: null, actualEndAt: null };
-    const life = asRecord(row.status)?.lifeCycleStatus;
+    if (!row) return { life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null };
+    const status = asRecord(row.status);
+    const life = status?.lifeCycleStatus;
     // A value Google never documented is refused, not guessed at: the caller would act on it (delete, complete).
     if (typeof life !== "string" || !Object.hasOwn(LIFE, life)) throw new YouTubeError("youtube_unavailable", "unknownLifeCycleStatus");
     const snippet = asRecord(row.snippet);
-    return { life: LIFE[life]!, actualStartAt: isoDate(snippet?.actualStartTime), actualEndAt: isoDate(snippet?.actualEndTime) };
+    // `status.madeForKids`: YouTube's own current designation. Only a real boolean is an answer; anything else is "did not say".
+    const kids = status?.madeForKids;
+    return {
+      life: LIFE[life]!, actualStartAt: isoDate(snippet?.actualStartTime), actualEndAt: isoDate(snippet?.actualEndTime),
+      madeForKids: typeof kids === "boolean" ? kids : null,
+    };
   }
 
   /** liveBroadcasts.transition(complete). `redundantTransition` (403) is YouTube saying it is already there: that resolves. */
