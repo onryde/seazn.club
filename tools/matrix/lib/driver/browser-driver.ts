@@ -45,14 +45,12 @@ import { judgeTodayDefault, openFixtureUi, type DefaultFilterSeen } from "../bro
 import { completeStageUi, generateUi, judgeFoldBranch, type RailHooks, type StagePosition } from "../browser/pages/stage-rail.ts";
 import { readStandingsUi, type UiTable } from "../browser/pages/standings.ts";
 import { FORFEIT_REASONS, SETTLE_METHODS, type StageKind } from "@seazn/engine/core";
-import type { AnySportModule } from "@seazn/engine/sport";
 // W2b Task 11 (review I-1): the reasons PF-2 reserves for the withdrawal cascade, the PRODUCT's list (the console's
 // dialog and the server's refusal read it too), never a hand copy. It imports only @seazn/engine/core (boundary.test.ts).
 import { CASCADE_ONLY_FORFEIT_REASONS } from "../../../../apps/web/src/lib/forfeit-phase-refusal.ts";
 import { ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../../apps/web/src/lib/organiser-only-events.ts";
-import { storedStageRules } from "../../../../apps/web/src/lib/stage-decider-off.ts";
 import { noPadReason } from "../pad-sports.ts";
-import { sportModule } from "../sport-cfg.ts";
+import { storedRulesFor } from "../sport-cfg.ts";
 import { replayEvents, type ReplayResult } from "../pads/replay.ts";
 import type { MatrixPadAdapter } from "../pads/types.ts";
 import type { CheckResult } from "../results.ts";
@@ -363,7 +361,7 @@ function bySeq(stages: readonly Comparable[], side: string, out: string[]): Map<
 
 /** The sport and variant a division was created under: what the create door stores a stage's preset `rules` from. The
  *  product's own answer for the division the builder made, never the case's request. */
-export interface DoorDivision { readonly module: AnySportModule; readonly variantKey: string | null }
+export interface DoorDivision { readonly sportKey: string; readonly variantKey: string | null }
 
 /** Exclusive bound of the seed the create door gives a stage: a random 31-bit integer (W2d Task 10, `withRngSeed`). */
 export const RNG_SEED_BOUND = 2 ** 31;
@@ -374,7 +372,7 @@ const isDoorSeed = (v: unknown): boolean => typeof v === "number" && Number.isIn
  *  none stored when nothing is left). The door's seed is not here: it is random, judged on the built side. */
 function doorStoredConfig(body: StagePostBody, door: DoorDivision): Record<string, unknown> {
   const { rules: posted, ...rest } = body.config;
-  const stored = storedStageRules(door.module, body.kind as StageKind, door.variantKey, posted ?? null);
+  const stored = storedRulesFor(door.sportKey, body.kind as StageKind, door.variantKey, posted);
   return stored !== null && Object.keys(stored).length > 0 ? { ...rest, rules: stored } : rest;
 }
 
@@ -699,7 +697,7 @@ export class BrowserDriver implements OrganiserDriver {
       { name: input.name, sportKey: input.sportKey, variantKey: input.variantKey, row })));
     this.#register(division.id, compSlug, division.slug);
     this.#know(division.id, stages);
-    this.#built = { divisionId: division.id, stages, door: { module: sportModule(division.sport_key), variantKey: division.variant_key } };
+    this.#built = { divisionId: division.id, stages, door: { sportKey: division.sport_key, variantKey: division.variant_key } };
     if (!this.#uiPathJudged) {
       this.#uiPathJudged = true;
       this.#checks.push(assertion("organiser-ui-path", [{ ok: true, note: `the division builder built ${row}` }]));
