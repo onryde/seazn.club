@@ -193,13 +193,15 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
   let rescueSpent = 0;
   let rescuing = "";
   // The write-door row that refused a completion the SCHEMA accepted, during the current pair's rescue search (null: none did).
-  let doorRefused: string | null = null;
+  // A holder read through `doorRow()`: the closure below assigns it, which flow analysis does not see at a direct read.
+  const door: { row: string | null } = { row: null };
+  const doorRow = (): string | null => door.row;
   const completeWith = (asg: number[], free: readonly number[], from: number, left: number): number[] | null => {
     if (left === 0) {
       if (++rescueSpent > RESCUE_BUDGET) throw new VariantRescueBudgetExceeded(sport, rescuing, RESCUE_BUDGET);
       const built = check(asg);
       if (built.ok) return [...asg];
-      if (built.doorRow !== undefined) doorRefused = built.doorRow;
+      if (built.doorRow !== undefined) door.row = built.doorRow;
       return null;
     }
     for (let x = from; x < free.length; x++) {
@@ -225,7 +227,7 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
     const free: number[] = [];
     for (let k = 1; k < F; k++) if (k !== i && k !== j) free.push(k);
     rescuing = `${label(i, a)} × ${label(j, b)}`;
-    doorRefused = null;
+    door.row = null;
     let found: number[] | null = null;
     for (let depth = 1; depth <= free.length && found === null; depth++) found = completeWith(asg, free, 0, depth);
     if (found !== null) {
@@ -235,7 +237,8 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
     uncovered.delete(pk);
     // The search is exhaustive, so when the schema accepted some completion the write door refused, the DOOR is why the pair has
     // none: name its row (a pair refused by the door itself already carries it in r.reason).
-    const byDoor = doorRefused !== null && !r.reason.includes(doorRefused) ? ` (the schema accepts some, the write door ${doorRefused} refuses every one)` : "";
+    const row = doorRow();
+    const byDoor = row !== null && !r.reason.includes(row) ? ` (the schema accepts some, the write door ${row} refuses every one)` : "";
     uncoverable.push({ sport, a: label(i, a), b: label(j, b), reason: `${r.reason} — and no combination of the other factors' levels makes the pair valid${byDoor}` });
   }
 

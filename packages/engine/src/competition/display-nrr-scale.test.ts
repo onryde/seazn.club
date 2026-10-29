@@ -27,7 +27,7 @@ import { tieKeyValue, tieWhatIf } from "./tie-what-if.ts";
 import { rankStandings } from "./tiebreakers.ts";
 
 type Cfg = { ballsPerInnings: number | null; ballsPerOver: number };
-const parsed = (variant: string): Cfg => cricket.configSchema.parse(cricket.variants[variant]) as Cfg;
+const parsed = (variant: string): Cfg => cricket.configSchema.parse(cricket.variants[variant]);
 const SIX = parsed("t20").ballsPerOver;
 const FIVE = parsed("hundred").ballsPerOver;
 
