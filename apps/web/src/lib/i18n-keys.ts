@@ -6112,6 +6112,8 @@ export type DictionaryKey =
   | "rules.field.superOverStillTied.option.boundary_count"
   | "rules.field.superOverStillTied.option.repeat"
   | "rules.field.superOverStillTied.option.shared"
+  | "rules.field.tiebreakWinBy.help"
+  | "rules.field.tiebreakWinBy.label"
   | "rules.off"
   | "rules.on"
   | "runSheet.formatChanged"

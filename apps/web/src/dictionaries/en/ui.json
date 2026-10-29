@@ -2229,6 +2229,8 @@
   "rules.field.pointsPerCoin.help": "The board winner scores this for each coin the other side still has on the board. ICF: 1.",
   "rules.field.minOversForResult.label": "Minimum overs for a result",
   "rules.field.minOversForResult.help": "Only used while DLS revised targets is on. Fewest overs the chasing side must face before DLS can decide an abandoned match; fewer is a no result. Usual: 5 in T20, 20 in ODI.",
+  "rules.field.tiebreakWinBy.label": "Match tie-break win margin",
+  "rules.field.tiebreakWinBy.help": "Applies to the match tie-break and to a deciding-set tie-break. The set type decides the margin of ordinary set tie-breaks.",
   "rules.field.superOverStillTied.label": "If the super over is tied",
   "rules.field.superOverStillTied.help": "Most boundaries counts only boundaries scored ball by ball; an innings entered as a summary counts none. Only used while the super over is on.",
   "rules.field.superOverStillTied.option.repeat": "Another super over (ICC)",

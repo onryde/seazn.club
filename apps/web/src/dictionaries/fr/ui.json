@@ -2229,6 +2229,8 @@
   "rules.field.pointsPerCoin.help": "Le vainqueur du plateau marque ce nombre de points pour chaque pion que l'adversaire a encore dessus. ICF : 1.",
   "rules.field.minOversForResult.label": "Minimum d'overs pour un résultat",
   "rules.field.minOversForResult.help": "Utilisé seulement lorsque « DLS revised targets » est activé. Nombre minimal d'overs que l'équipe qui bat en second doit avoir joués pour que la DLS puisse trancher un match interrompu ; en dessous, pas de résultat. Usuel : 5 en T20, 20 en ODI.",
+  "rules.field.tiebreakWinBy.label": "Écart pour gagner le tie-break de match",
+  "rules.field.tiebreakWinBy.help": "S'applique au tie-break de match et au tie-break du set décisif. Le type de set fixe l'écart des tie-breaks des sets ordinaires.",
   "rules.field.superOverStillTied.label": "Si le super over est à égalité",
   "rules.field.superOverStillTied.help": "« Départage aux boundaries » ne compte que les boundaries marqués balle par balle ; une manche saisie en résumé n'en compte aucun. Utilisé seulement lorsque le super over est activé.",
   "rules.field.superOverStillTied.option.repeat": "Un autre super over (ICC)",

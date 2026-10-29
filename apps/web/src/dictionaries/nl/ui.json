@@ -2229,6 +2229,8 @@
   "rules.field.pointsPerCoin.help": "De winnaar van het bord scoort dit voor elke steen die de tegenstander nog op het bord heeft. ICF: 1.",
   "rules.field.minOversForResult.label": "Minimum aantal overs voor een resultaat",
   "rules.field.minOversForResult.help": "Alleen in gebruik als ‘DLS revised targets’ aan staat. Het minimum aantal overs dat de achtervolgende ploeg moet spelen voordat DLS een afgebroken wedstrijd kan beslissen; minder is geen resultaat. Gebruikelijk: 5 bij T20, 20 bij ODI.",
+  "rules.field.tiebreakWinBy.label": "Winstmarge van de match-tiebreak",
+  "rules.field.tiebreakWinBy.help": "Geldt voor de match-tiebreak en voor de tiebreak van de beslissende set. Het settype bepaalt de marge van gewone set-tiebreaks.",
   "rules.field.superOverStillTied.label": "Als de super over gelijk eindigt",
   "rules.field.superOverStillTied.help": "‘Meeste boundaries’ telt alleen boundaries die bal voor bal zijn genoteerd; een innings die als samenvatting is ingevoerd telt er geen. Alleen in gebruik als de super over aan staat.",
   "rules.field.superOverStillTied.option.repeat": "Nog een super over (ICC)",

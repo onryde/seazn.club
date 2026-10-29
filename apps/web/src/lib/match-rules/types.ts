@@ -41,6 +41,12 @@ export interface RuleField {
   max?: number;
   options?: RuleFieldOption[];
   /**
+   * Saved values this select SHOWS as themselves but never OFFERS (tennis's Fast4 as it was played before W2e). Their labels
+   * are found by `ruleOptionLabel`, so the open dropdown and the stage card's summary line read the same words; they are not
+   * in `options`, which the picker, the contract harness and the matrix enumerate as the choices an organiser has.
+   */
+  legacyOptions?: readonly RuleFieldOption[];
+  /**
    * A `sequence` field only (W2c Task 17): the raw value that stands for the EMPTY list. A blank raw value means "unset"
    * everywhere in the editor, so a list the organiser has emptied on purpose ("no tie-break games": a drawn game is held
    * for the organiser) needs a token of its own, and the control that edits the list has to be able to write it. Absent

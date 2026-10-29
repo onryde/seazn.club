@@ -282,7 +282,7 @@ export function ruleOptionLabel(
 ): string | undefined {
   const field = rulesFor(sportKey).find((f) => f.key === fieldKey);
   if (field === undefined) return undefined;
-  const own = field.options?.find((o) => o.value === value)?.label;
+  const own = (field.options?.find((o) => o.value === value) ?? field.legacyOptions?.find((o) => o.value === value))?.label;
   if (own !== undefined) return own;
   const peers = Object.keys(SPORT_RULES)
     .filter((k) => k !== sportKey)

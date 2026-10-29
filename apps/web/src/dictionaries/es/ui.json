@@ -2229,6 +2229,8 @@
   "rules.field.pointsPerCoin.help": "Quien gana el tablero suma esto por cada ficha que el rival aún tiene en él. ICF: 1.",
   "rules.field.minOversForResult.label": "Mínimo de overs para un resultado",
   "rules.field.minOversForResult.help": "Solo se usa mientras «DLS revised targets» está activado. Mínimo de overs que debe jugar el equipo que batea en segundo lugar para que el DLS pueda decidir un partido suspendido; con menos, es sin resultado. Habitual: 5 en T20, 20 en ODI.",
+  "rules.field.tiebreakWinBy.label": "Margen de victoria del tie-break de partido",
+  "rules.field.tiebreakWinBy.help": "Se aplica al tie-break de partido y al tie-break del set decisivo. El tipo de set decide el margen de los tie-breaks de los sets normales.",
   "rules.field.superOverStillTied.label": "Si el super over termina empatado",
   "rules.field.superOverStillTied.help": "«Más boundaries» cuenta solo los boundaries anotados bola a bola; una entrada registrada como resumen no cuenta ninguno. Solo se usa mientras el super over está activado.",
   "rules.field.superOverStillTied.option.repeat": "Jugar otro super over (ICC)",
