@@ -188,10 +188,10 @@
       "reason": "No consumer (C): assertLineup has no production caller — grep -a over apps/, packages/ and tools/ finds only its definition and catalog.test.ts, and tools/matrix/__tests__/scenarios.test.ts pins exactly one `assertLineup(` in engine source (the definition). The event-time LINEUP_INVALID (core/events.ts) carries the lineup reducer's own message, so this sentence reaches no API v1 body or UI; the code and data a caller would branch on are pinned by catalog.test.ts."
     },
     {
-      "mutant": "src/sports/period/shootout.ts:84:10 EqualityOperator → taken.home <= taken.away",
+      "mutant": "src/sports/period/shootout.ts:109:41 EqualityOperator → taken.home <= taken.away",
       "original": "taken.home < taken.away",
-      "line": "return taken.home < taken.away ? \"home\" : \"away\";",
-      "reason": "Line 83 returns whenever taken.home === taken.away, so line 84 only compares two different counts, where `<` and `<=` agree."
+      "line": "if (taken.home !== taken.away) return taken.home < taken.away ? \"home\" : \"away\";",
+      "reason": "The same line guards this comparison with `taken.home !== taken.away`, so it only ever compares two different counts, where `<` and `<=` agree (W2e Task 9 moved it here from line 84, where line 83 returned on equal counts)."
     },
     {
       "mutant": "src/competition/stage.ts:429:33 EqualityOperator → fixture.round <= prev",
@@ -470,55 +470,55 @@
       "reason": "Only a hook-less fake reaches this fallback, and only a DECIDED fold reads the decided arm: there guarantee 4 (ALREADY_DECIDED) answers every forfeit before the phase guard except a withdrawal over a held level result, and \"withdrew\" is admitted in every phase (R5), so the phase name is never read into a refusal."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3996:57 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:4106:57 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = cricketForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "cricketForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3998:75 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:4108:75 StringLiteral → \"\"",
       "original": "\"home\"",
       "line": "build(\"home\", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, \"home\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/cricket/cricket.ts:3999:75 StringLiteral → \"\"",
+      "mutant": "src/sports/cricket/cricket.ts:4109:75 StringLiteral → \"\"",
       "original": "\"away\"",
       "line": "build(\"away\", 0, 0, 1, 0, creditedMetrics(zeroLedger(), credit, \"away\")),",
       "reason": "doubleWalkoverCredit returns the SAME zeroed ledger for both sides, so which side's credit creditedMetrics reads (\"\" reads index 1) is unobservable."
     },
     {
-      "mutant": "src/sports/football/football.ts:1780:7 ConditionalExpression → false",
+      "mutant": "src/sports/football/football.ts:1787:7 ConditionalExpression → false",
       "original": "reason === \"bye\"",
       "line": "if (reason === \"bye\") return state.goals;",
       "reason": "For a bye footballForfeitCredit returns the played ledger, whose gf is state.goals[side] (sideMetrics with zero=false), so displayedGoals reads state.goals either way."
     },
     {
-      "mutant": "src/sports/football/football.ts:1780:18 StringLiteral → \"\"",
+      "mutant": "src/sports/football/football.ts:1787:18 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (reason === \"bye\") return state.goals;",
       "reason": "For a bye footballForfeitCredit returns the played ledger, whose gf is state.goals[side] (sideMetrics with zero=false), so displayedGoals reads state.goals either way."
     },
     {
-      "mutant": "src/sports/football/football.ts:2785:58 StringLiteral → \"\"",
+      "mutant": "src/sports/football/football.ts:2800:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = footballForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "footballForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/football/football.ts:2786:133 BooleanLiteral → true",
+      "mutant": "src/sports/football/football.ts:2801:133 BooleanLiteral → true",
       "original": "false",
       "line": "const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side, false), credit, side) });",
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; the double-walkover credit lays 0 over every key that ledger carries (and excludes them), so the played values are never observable."
     },
     {
-      "mutant": "src/sports/football/football.ts:2777:61 BooleanLiteral → true",
+      "mutant": "src/sports/football/football.ts:2792:61 BooleanLiteral → true",
       "original": "false",
       "line": "metrics: creditedMetrics(sideMetrics(state, side, false), credit, side),",
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; every non-bye credit carries gf, ga and gd, and a bye's credit is the played ledger with the real goals (computed with zero=false), so creditedMetrics overwrites those three keys either way."
     },
     {
-      "mutant": "src/sports/football/football.ts:2857:9 ConditionalExpression → false",
+      "mutant": "src/sports/football/football.ts:2872:9 ConditionalExpression → false",
       "original": "cfg.points.soBonus === undefined",
       "line": "...(cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),",
       "reason": "With no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined`, and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key)."
@@ -584,13 +584,13 @@
       "reason": "nestedForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2840:58 StringLiteral → \"\"",
+      "mutant": "src/sports/period/kernel.ts:2872:58 StringLiteral → \"\"",
       "original": "\"walkover\"",
       "line": "const credit = periodForfeitCredit(cfg, state, \"walkover\", \"both\");",
       "reason": "periodForfeitCredit returns doubleWalkoverCredit for by \"both\" before it reads `reason`, so the reason passed for a double walkover is never read."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2841:135 BooleanLiteral → true",
+      "mutant": "src/sports/period/kernel.ts:2873:135 BooleanLiteral → true",
       "original": "false",
       "line": "const at = (side: Side): StandingsDelta => ({ ...build(side, 0, 0, 1, 0), metrics: creditedMetrics(sideMetrics(state, side, false), credit, side) });",
       "reason": "The zero flag only zeroes gf/ga/gd of the played ledger; the double-walkover credit lays 0 over every key that ledger carries (and excludes them), so the played values are never observable."
@@ -686,43 +686,43 @@
       "reason": "A walkover is admitted only while nothing is played (rulings 112, 114: any sport event after Start is play) and carrom's board summary and adjustment refuse outside phase \"live\", so an admitted walkover's state has no games and gamesWon 0-0: reading them adds nothing."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2427:38 ConditionalExpression → true",
+      "mutant": "src/sports/period/kernel.ts:2454:38 ConditionalExpression → true",
       "original": "awardReasonOf(outcome) !== \"bye\"",
       "line": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2427:65 StringLiteral → \"\"",
+      "mutant": "src/sports/period/kernel.ts:2454:65 StringLiteral → \"\"",
       "original": "\"bye\"",
       "line": "if (outcome?.kind === \"award\" && awardReasonOf(outcome) !== \"bye\") {",
       "reason": "officialScore reads the MODULE state's own outcome; the fold writes an award there only from a core.forfeit, whose reasons never include the system-only \"bye\", and ruling 104 (no core.forfeit was ever stored) rules out a legacy reason-less one, so `state.outcome` is never a bye and the conjunct is always true."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2656:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2688:9 ConditionalExpression → false",
       "original": "preset.abandonOptions === undefined",
       "line": "...(preset.abandonOptions === undefined ? {} : { abandonOptions: preset.abandonOptions }),",
       "reason": "Both builtin period presets declare a list (hockey.ts, icehockey.ts; makePeriodModule has no other production caller), so the condition is already false for every builtin; for a hand-built preset with none the mutant gives the module an own `abandonOptions: undefined`, and every reader reads `module.abandonOptions ?? []` (web match-rules/shared.ts, stage-row-model.ts, describe-rules.ts; the engine reads the preset, not the module), so the offer is the same empty list (period.test.ts 'a preset that declares no abandon list' passes under it)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2657:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2689:9 ConditionalExpression → false",
       "original": "preset.stageDefaults === undefined",
       "line": "...(preset.stageDefaults === undefined ? {} : { stageDefaults: preset.stageDefaults }),",
-      "reason": "Both builtin period presets declare stageDefaults (hockey.ts, icehockey.ts; makePeriodModule has no other production caller), so the condition is already false for every builtin; for a hand-built preset with none the mutant gives the module an own `stageDefaults: undefined`, and its only reader, rule-keys.ts `m.stageDefaults?.(kind, variant) ?? {}`, reads that exactly as an absent key (the same shape as kernel.ts:2612:9 above; Survived over the 3,527-test related run, W2c Task 22)."
+      "reason": "Both builtin period presets declare stageDefaults (hockey.ts, icehockey.ts; makePeriodModule has no other production caller), so the condition is already false for every builtin; for a hand-built preset with none the mutant gives the module an own `stageDefaults: undefined`, and its only reader, rule-keys.ts `m.stageDefaults?.(kind, variant) ?? {}`, reads that exactly as an absent key (the same shape as kernel.ts:2688:9 above; Survived over the 3,527-test related run, W2c Task 22)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2900:46 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2932:46 ConditionalExpression → false",
       "original": "cfg.points.otWin === undefined",
       "line": "win: { regulation: cfg.points.win, ...(cfg.points.otWin === undefined ? {} : { ot: cfg.points.otWin }) },",
       "reason": "With no otWin the mutant writes `win.ot: undefined` into the table rule instead of leaving the key out; PointsRule declares `ot` optional and its one reader, points.ts `byChain`'s `side.ot !== undefined`, falls through to `regulation` for undefined exactly as for an absent key (JSON drops it; W2d Task 3)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2901:48 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2933:48 ConditionalExpression → false",
       "original": "cfg.points.otLoss === undefined",
       "line": "loss: { regulation: cfg.points.loss, ...(cfg.points.otLoss === undefined ? {} : { ot: cfg.points.otLoss }) },",
       "reason": "With no otLoss the mutant writes `loss.ot: undefined` into the table rule instead of leaving the key out; PointsRule declares `ot` optional and its one reader, points.ts `byChain`'s `side.ot !== undefined`, falls through to `regulation` for undefined exactly as for an absent key (JSON drops it; W2d Task 3)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2903:54 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2935:54 ConditionalExpression → false",
       "original": "cfg.points.soBonus === undefined",
       "line": "...(preset.shootoutAs !== \"draw_plus_bonus\" || cfg.points.soBonus === undefined ? {} : { soBonus: cfg.points.soBonus }),",
       "reason": "Reached only for a draw_plus_bonus sport (a result sport short-circuits to {} first): with no soBonus the mutant writes `soBonus: undefined` into the table rule instead of leaving the key out; PointsRule declares it optional, its refinement tests `rule.soBonus !== undefined`, and both payers (payout's draw_plus_bonus arm and coverage's so prices) read `rule.soBonus ?? 1`, so undefined pays the same 1 either way (JSON drops the key; W2d Task 3, re-keyed in fix round 1 M-3)."
@@ -788,19 +788,19 @@
       "reason": "`reason === \"\"` is false for every reason that reaches this line, exactly as `reason === \"bye\"` is: a held forfeitAward comes only from a core.forfeit, whose reason is one of the four FORFEIT_REASONS (CoreForfeit refuses `bye`: sports/generic/generic.test.ts, 'a bye is not a forfeit reason'), so neither form ever returns null here."
     },
     {
-      "mutant": "src/competition/points.ts:652:7 ConditionalExpression → false",
+      "mutant": "src/competition/points.ts:653:7 ConditionalExpression → false",
       "original": "locks.length === 0",
       "line": "if (locks.length === 0) return [...ranked];",
       "reason": "With no locks the mutant re-stamps every row `{...row, rank}` from a free list of 1..n in table order, and every ranked row already carries exactly that rank (rankStandings writes `row.rank = index + 1`, tiebreakers.ts), so the rows are equal (competition/points-md1.test.ts, 'the empty case', passes under it); the one production caller, stage.ts:307, calls only with `poolLocks.length > 0`."
     },
     {
-      "mutant": "src/competition/points.ts:661:9 LogicalOperator → rank < 1 && rank > n",
+      "mutant": "src/competition/points.ts:662:9 LogicalOperator → rank < 1 && rank > n",
       "original": "rank < 1 || rank > n",
       "line": "if (rank < 1 || rank > n || out[rank - 1] !== null) {",
       "reason": "The last operand already refuses every rank outside 1..n: `out` holds null at indices 0..n-1 only, so for any other rank (below 1, above n, fractional, NaN) `out[rank - 1]` is undefined and `!== null` throws the same CONFIG_INVALID; the range test is redundant, so weakening it changes nothing."
     },
     {
-      "mutant": "src/competition/points.ts:661:21 ConditionalExpression → false",
+      "mutant": "src/competition/points.ts:662:21 ConditionalExpression → false",
       "original": "rank > n",
       "line": "if (rank < 1 || rank > n || out[rank - 1] !== null) {",
       "reason": "A rank above n reads `out[rank - 1]` past the array's end, which is undefined, so `out[rank - 1] !== null` throws the same CONFIG_INVALID without it (competition/points-md1.test.ts, 'a lock outside 1..n ...', rank n + 1)."
@@ -956,10 +956,10 @@
       "reason": "With the test false the spread always passes `gamePoints: stage.gamePoints`, which is undefined exactly when the original passes no `gamePoints` key. rankStandings reads it in one place, `ctx.gamePoints === undefined ? <table points> : ctx.gamePoints(result)` (tiebreakers.ts gamePointsOf), which takes the table-points branch for an absent key and an undefined value alike. Every ranking is the same. W2d T8."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2862:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2894:9 ConditionalExpression → false",
       "original": "preset.tablePresets === undefined",
       "line": "...(preset.tablePresets === undefined ? {} : { tablePresets: preset.tablePresets }),",
-      "reason": "The twin of :2630:9 and :2631:9 above. Hockey declares `tablePresets` and ice hockey does not (spec §5.10: hockey's Pro League points are the period family's only preset), so the mutant gives the ice hockey module an own `tablePresets: undefined` beside an absent key. Every reader calls it as `module.tablePresets?.(kind)` (defaults-sweep.test.ts, tables-rulebook.test.ts; module.ts types it optional, and no production code reads it before T15's editor), which answers undefined for both, and nothing tests `\"tablePresets\" in` or `hasOwn`. Survived its re-run at load ~40 over 4,529 related tests (W2d T11 review I1); the first run's \"Killed\" was a 30 s test timeout under load ~160."
+      "reason": "The twin of :2688:9 and :2689:9 above. Hockey declares `tablePresets` and ice hockey does not (spec §5.10: hockey's Pro League points are the period family's only preset), so the mutant gives the ice hockey module an own `tablePresets: undefined` beside an absent key. Every reader calls it as `module.tablePresets?.(kind)` (defaults-sweep.test.ts, tables-rulebook.test.ts; module.ts types it optional, and no production code reads it before T15's editor), which answers undefined for both, and nothing tests `\"tablePresets\" in` or `hasOwn`. Survived its re-run at load ~40 over 4,529 related tests (W2d T11 review I1); the first run's \"Killed\" was a 30 s test timeout under load ~160."
     },
     {
       "mutant": "src/competition/progression.ts:623:9 ConditionalExpression → false",
@@ -1028,7 +1028,7 @@
       "reason": "A partial-schedule step's `kind` is never read: partialSchedule iterates `run.partial` using only `step.cmp` and `step.key`, so `kind: \"\"` ranks and traces the same (W2d T12)."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2895:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2927:9 ConditionalExpression → false",
       "original": "preset.partialScheduleOrder === undefined",
       "line": "...(preset.partialScheduleOrder === undefined ? {} : { partialScheduleOrder: preset.partialScheduleOrder }),",
       "reason": "A period sport with no partial-schedule order: the mutant writes `partialScheduleOrder: undefined` onto the module; every reader (toTableStage, completeTableStage, rankStandings, the premise sweep) tests `=== undefined`, the same as an absent key (W2d T12)."
@@ -1154,16 +1154,16 @@
       "reason": "W2d T20 MD-1. NoCoverage: `cards` is given an empty card for every entrant before any result is read, so `cards.get(entrant)` is never undefined and the `?? []` arm never runs."
     },
     {
-      "mutant": "src/competition/points.ts:522:9 ConditionalExpression → true",
+      "mutant": "src/competition/points.ts:523:9 ConditionalExpression → true",
       "original": "key.startsWith(\"win.\")",
       "line": "if (key.startsWith(\"win.\")) decided = true;",
       "reason": "W2d T20 MD-1. `decided` is set inside the loop, so on the empty reachable set it stays false either way. On any other set the only producer, reachableOutcomes (coverage's one production caller, table-rule-guards.ts), adds `win.<d>` beside every `loss.<d>`, and every sport's every stage kind and declared cfg reaches at least one win (the registry sweep in points-w2d.test.ts), so the original also sets it true. Only a hand-built set of level results alone, which no stage has, separates them."
     },
     {
-      "mutant": "src/competition/points.ts:522:24 StringLiteral → \"\"",
+      "mutant": "src/competition/points.ts:523:24 StringLiteral → \"\"",
       "original": "\"win.\"",
       "line": "if (key.startsWith(\"win.\")) decided = true;",
-      "reason": "W2d T20 MD-1. `key.startsWith(\"\")` is always true: the 501:9 `→ true` mutant of the same line. `decided` then turns true on the first reachable key; the original turns true on the first `win.` key, and every reachable set a stage can have holds one (the registry sweep in points-w2d.test.ts), so after the loop both are true; on the empty set the loop never runs and both stay false."
+      "reason": "W2d T20 MD-1. `key.startsWith(\"\")` is always true: the 523:9 `→ true` mutant of the same line. `decided` then turns true on the first reachable key; the original turns true on the first `win.` key, and every reachable set a stage can have holds one (the registry sweep in points-w2d.test.ts), so after the loop both are true; on the empty set the loop never runs and both stay false."
     },
     {
       "mutant": "src/competition/tiebreakers.ts:307:49 ConditionalExpression → false",
@@ -1172,7 +1172,7 @@
       "reason": "W2d T20 MD-1. sgn then answers 0 for every negative. sgn is module-local and feeds only comparators, and every comparator is consumed only by groupBySort (COMPARATORS, FEWEST_PLAYED and the score comparator alike; no other caller). Its sort asks `-sgn(cmp(a, b))`, which is negative exactly when cmp(a, b) > 0 under both versions (a negative cmp reads +1 or -0, neither negative), and V8's TimSort (a port of CPython's listsort) compares an element only against an EARLIER one and moves it only on a negative answer, so the order is the same. The grouping pass then reads `sgn(cmp(prev, row)) !== 0` on neighbours already best-first, where cmp is never negative (each comparator is antisymmetric), so a split happens exactly when cmp > 0 in both. Same probe as compareRatio's 0-for--1 row (20,000 random inputs): 0 groupings differ. In the whole-file run it reported Timeout under load; the low-load re-run reports Survived. Guard (A20 r1): tiebreakers-md1.test.ts \"this runtime's sort asks the comparator only (later, earlier) and reads only whether the answer is negative\" (3,000 inputs, every comparator call checked, with a control) turns red if the runtime's sort contract changes; this row is then re-checked, never kept."
     },
     {
-      "mutant": "src/sports/period/kernel.ts:2894:9 ConditionalExpression → false",
+      "mutant": "src/sports/period/kernel.ts:2926:9 ConditionalExpression → false",
       "original": "preset.winsCount === undefined",
       "line": "...(preset.winsCount === undefined ? {} : { winsCount: preset.winsCount }),",
       "reason": "W2d T20 MD-1. For a preset with no winsCount (every period sport but hockey) the mutant writes `winsCount: undefined` on the module where the original writes no key. Every reader of a module's winsCount asks `=== undefined` before copying it on (stage.ts, progression.ts, web engine-db/competition.ts, testkit/simulation.ts, tools/bench validate-pack.ts) or `=== \"regulation\"` (tiebreakers.ts winsOf, simulation.ts's wins-first refusal), and none enumerates the module's keys (`git grep -n winsCount` over packages/engine/src, apps/web/src, tools: no `in`, `hasOwn` or `Object.keys` read). An undefined own property reads exactly as an absent one at each, so no ranking changes. Static (module build time): Stryker ran every related test and none sees it."
