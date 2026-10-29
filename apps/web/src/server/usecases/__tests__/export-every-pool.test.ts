@@ -662,7 +662,7 @@ describe.skipIf(!HAS_DB)("standings export parity — a real division's export i
 
   it("every shipped sport × league, group, Swiss, one result recorded: each exported table's header and cells are the division page's (counted)", async () => {
     const seen = { tables: 0, headers: 0, cells: 0, derivedColumns: 0, dashCells: 0, emptyTables: 0 };
-    const derived = new Set(DERIVED_METRICS.map((d) => d.key));
+    const derived = new Set<string>(DERIVED_METRICS.map((d) => d.key));
     for (const m of builtinModules) {
       for (const kind of SWEEP_KINDS) {
         const s = await onePlayed(m, kind);
