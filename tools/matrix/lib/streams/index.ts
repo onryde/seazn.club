@@ -14,6 +14,7 @@ import { cricketGenerator } from "./cricket.ts";
 import { footballGenerator } from "./football.ts";
 import { genericGenerator } from "./generic.ts";
 import { periodGenerator } from "./period.ts";
+import { endingReasonOf, sanctionDeclOf, sanctionEndWitness, sanctionToken } from "./sanction.ts";
 import { setbasedGenerator } from "./setbased.ts";
 import { tennisGenerator } from "./tennis.ts";
 import {
@@ -25,6 +26,7 @@ import {
   outcomeLabel,
   type DecidedRequest,
   type ForfeitReason,
+  type RequestedOutcome,
   type SportStreamGenerator,
   type StreamEvent,
   type StreamRequest,
@@ -161,13 +163,40 @@ function levelStream(req: StreamRequest, gen: SportStreamGenerator): StreamEvent
   return events;
 }
 
+/** W2e G12 (Task 24; X-SE-1, D3 (1), D12, D13): a sanction that ENDS the match - START, the sport's partial play, the module's own
+ *  sanction event against `by` at `level`, then the `core.forfeit` that ends it, against the same side, with the reason the
+ *  engine's ending rule gives the level (`disqualified` after an end level, `retired` after a prompt level: sanction.ts). It is
+ *  the sport's forfeit-after-start stream (the ONE composition, forfeitPosting, and its refusals: ruling 113's retirement from
+ *  a match never played) with the sanction put in before the forfeit, so the strict fold sees exactly the ledger the product's
+ *  own write path accepts: the sanction while the match is live, the ending as the only thing that may follow an end-level one
+ *  (ENDING_SANCTION_PENDING). Verified by folding it, as `levelStream` is. Refused BY NAME (OutcomeUnreachable) for a sport
+ *  that declares no ending, and for a level that ends nothing: a non-ending sanction never ends a stream. */
+function sanctionEndStream(req: StreamRequest, o: Extract<RequestedOutcome, { kind: "sanctionEnd" }>): StreamEvent[] {
+  const label = outcomeLabel(o);
+  const decl = sanctionDeclOf(req.sportKey);
+  if (decl === null) throw new OutcomeUnreachable(req.sportKey, label, "the sport's module declares no sanction that ends a match (SportModule.sanctionEnding)");
+  const reason = endingReasonOf(req.sportKey, o.level);
+  if (reason === null) {
+    throw new OutcomeUnreachable(req.sportKey, label, `a '${o.level}' sanction ends nothing here: the module's ending levels are [${decl.endLevels.join(", ")}] and its prompt levels [${decl.promptLevels.join(", ")}], so the match plays on`);
+  }
+  const ended = generateStream({ ...req, outcome: { kind: "forfeit", by: o.by, reason, at: "after_start" } });
+  const forfeit = ended.at(-1)!;
+  const play = ended.slice(0, -1);
+  const events = [...play, sanctionToken(req.sportKey, idOf(req, o.by), o.level), forfeit];
+  const module = sportModule(req.sportKey);
+  const undecided = foldStream(module, req.cfg, req.home, req.away, events.slice(0, -1), req.lineups).outcome;
+  if (undecided !== null) throw new OutcomeUnreachable(req.sportKey, label, `the sanction alone folds to '${undecided.kind}': the ending must be what decides the match`);
+  const outcome = foldStream(module, req.cfg, req.home, req.away, events, req.lineups).outcome;
+  if (outcome?.kind !== "award") throw new OutcomeUnreachable(req.sportKey, label, `the stream folds to ${outcome === null ? "no outcome" : `'${outcome.kind}'`}, not the award its ending records`);
+  return events;
+}
+
 export function generateStream(req: StreamRequest): StreamEvent[] {
   const label = outcomeLabel(req.outcome);
   const gen = STREAM_GENERATORS[req.sportKey];
   if (gen === undefined) throw new GeneratorUnsupported(req.sportKey, label, "no generator registered");
   const o = req.outcome;
-  // W2e G12 is Task 24's: the shape is typed (Task 19) so the vocabulary has one author, and nothing builds it yet.
-  if (o.kind === "sanctionEnd") throw new GeneratorUnsupported(req.sportKey, label, "a sanction ending (W2e G12) is Task 24's, and no generator builds it yet");
+  if (o.kind === "sanctionEnd") return sanctionEndStream(req, o);
   // W2e (F8): a path is built only by a generator that can witness it; any other would build a plain win under its name.
   if (o.kind === "win" && o.path !== undefined && gen.pathWitness === undefined) {
     throw new GeneratorUnsupported(req.sportKey, label, `its generator builds no deciding path (W2e Tasks 19–23 add each sport's), so '${o.path}' is not built as a plain win`);
@@ -223,22 +252,14 @@ export function levelReachable(sportKey: string, cfg: unknown, stageKind: Stream
 
 export type RequestMatch = "match" | "mismatch" | "unasserted";
 
-/** W2e G12 asked of matchesRequest before Task 24 gives it a meaning: an answer would be a guess, so it is refused. */
-export class SanctionEndUnmatched extends Error {
-  constructor(sportKey: string, label: string) {
-    super(`streams: matchesRequest cannot judge ${sportKey} '${label}' — a sanction ending (W2e G12) is Task 24's to build and to match`);
-    this.name = "SanctionEndUnmatched";
-  }
-}
-
 /** Did the folded outcome equal the requested one? Abandon is RECORDED, not
  *  asserted (its per-sport meaning is W2's rulebook, design §8). W2e: a win that
- *  names a deciding `path` is judged on the fold's STATE too (`state`, the
- *  foldStream state of the same stream), by the sport generator's own
- *  `pathWitness`; a path request handed no state is refused by name. */
+ *  names a deciding `path`, and a sanction ending, are judged on the fold's STATE
+ *  too (`state`, the foldStream state of the same stream): a path by the sport
+ *  generator's own `pathWitness`, a sanction ending by `sanctionEndWitness`; a
+ *  request of either kind handed no state is refused by name. */
 export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null, state?: unknown): RequestMatch {
   const o = req.outcome;
-  if (o.kind === "sanctionEnd") throw new SanctionEndUnmatched(req.sportKey, outcomeLabel(o));
   if (o.kind === "abandon") return "unasserted";
   if (outcome === null) return "mismatch";
   switch (o.kind) {
@@ -259,6 +280,12 @@ export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null,
       return gen.pathWitness(o.path, { sportKey: req.sportKey, outcome, cfg: req.cfg, evidence: localEvidence(state) }) ? "match" : "mismatch";
     }
     case "double_walkover": return outcome.kind === "double_walkover" ? "match" : "mismatch";
+    // W2e G12 (Task 24): an award to the OTHER side, for the reason the level's ending calls for, with the sanction on the
+    // state's record. The state is the local strict fold's here; the scenario asks the same witness of the PRODUCT's.
+    case "sanctionEnd": {
+      if (state === undefined) throw new Error(`streams: ${req.sportKey} sanction ending '${outcomeLabel(o)}' is witnessed on the folded state, and matchesRequest was handed none (pass foldStream(...).state)`);
+      return sanctionEndWitness({ sportKey: req.sportKey, outcome, evidence: localEvidence(state) }, { by: o.by, level: o.level, home: req.home, away: req.away }) ? "match" : "mismatch";
+    }
     case "forfeit": {
       // W2b (D2): a forfeit folds to an AWARD to the other side, carrying the reason asked (X-RS-1).
       const beneficiary = idOf(req, o.by === "home" ? "away" : "home");

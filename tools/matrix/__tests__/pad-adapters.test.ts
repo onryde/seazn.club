@@ -66,7 +66,10 @@ function outcomesFor(sport: string, cfg: unknown): RequestedOutcome[] {
 /** W2a: what only the ORGANISER does — a walkover (core.forfeit), an abandon (core.abandon) and a settle
  *  (core.settle, X-ST-2). The pad adapter refuses to emit their events; the console page objects do. Their requests
  *  are marked here once, by request kind, and their events by event type. */
-const ORGANISER_ONLY_OUTCOMES: ReadonlySet<string> = new Set(["forfeit", "abandon", "settle"]);
+// W2e G12 (Task 24): `sanctionEnd` is organiser-only as a whole - its stream ends in the core.forfeit that ends the match, and the
+// harness posts it through the forfeit's own http composition (the sanction rides in the play before the forfeit, the console's
+// FORFEIT_DIALOG_ROUTE), so no scorer pad is ever asked to author it.
+const ORGANISER_ONLY_OUTCOMES: ReadonlySet<string> = new Set(["forfeit", "abandon", "settle", "sanctionEnd"]);
 const ORGANISER_ONLY_EVENTS: ReadonlySet<string> = new Set(["core.forfeit", "core.abandon", "core.settle"]);
 /** The requests a scorer's pad can author. */
 const padOutcomes = (os: readonly RequestedOutcome[]): RequestedOutcome[] => os.filter((o) => !ORGANISER_ONLY_OUTCOMES.has(o.kind));
@@ -2215,5 +2218,37 @@ describe("carrom", () => {
     expect(skin).toMatch(/function boardSheet\(state: CarromStateShape\): GuidedSheetSpec \{\s*return \{\s*event: "carrom\.board\.summary",[\s\S]{0,400}?buildPayload: \(answers\) => \(\{\s*winner: entrantOf\(state, sideAnswer\(answers\.winner\)\),\s*opponentCoinsLeft: Number\(answers\.coins \?\? 0\),\s*\}\),/);
     expect(skin).toContain("`queenTo` is simply never");
     expect(Object.keys(carrom.eventSchemas ?? {})).toContain(CARROM_BOARD);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Task 24 (G12): a sanction ending is the organiser's, whole. The pad adapters emit no sanction event and refuse each by name -
+// the sanction's pad control (the T30 ending prompt) is the browser specs' ground, and this pin makes adding a harness route a
+// decision, not a drift.
+describe("G12: a sanction ending is posted through the forfeit's composition, so no pad adapter authors the sanction", () => {
+  it("every sanction sport's sanctionEnd stream ends in core.forfeit (organiser-only), carries the module's own sanction event before it, and that event is in no adapter's emits and is refused by name by every adapter that has one", () => {
+    const sports = SPORT_KEYS.filter((s) => sportModule(s).sanctionEnding !== undefined);
+    expect(sports.length).toBeGreaterThan(0);
+    expect(ORGANISER_ONLY_OUTCOMES.has("sanctionEnd")).toBe(true);
+    let streams = 0;
+    for (const sport of sports) {
+      const decl = sportModule(sport).sanctionEnding!;
+      const variant = offlineBuilderDefault(sport);
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant);
+      for (const level of [...decl.endLevels, ...decl.promptLevels]) {
+        const r = bracketReq(sport, cfg, { kind: "sanctionEnd", by: "home", level });
+        const evs = generateStream(r);
+        expect(evs.at(-1)!.type, `${sport} ${level}`).toBe("core.forfeit");
+        expect(ORGANISER_ONLY_EVENTS.has(evs.at(-1)!.type)).toBe(true);
+        expect(evs.at(-2)!.type, `${sport} ${level}`).toBe(decl.eventType);
+        const adapter = PAD_ADAPTERS[sport];
+        expect(adapter, `${sport} has a pad adapter`).toBeDefined();
+        expect(adapter!.emits, `${sport}: the sanction is not a pad event`).not.toContain(decl.eventType);
+        expect(() => adapter!.stepsFor(evs.at(-2)!, ctxOf(r)), `${sport} ${level}`).toThrow(/no tap route/);
+        streams++;
+      }
+    }
+    expect(streams).toBeGreaterThan(0);
   });
 });

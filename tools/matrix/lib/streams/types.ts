@@ -61,10 +61,11 @@ export type RequestedOutcome =
    *  `result` picks how the Armageddon ended: "black" (Black won, the default) or "draw"; it means nothing on rapid or
    *  blitz, so naming it there is a refusal. */
   | { readonly kind: "tiebreak"; readonly rung: TiebreakRung; readonly winner: Side; readonly result?: "black" | "draw" }
-  /** W2e G12 (Task 24 builds and matches it; typed here by Task 19 so the vocabulary has one author): `by` is the side
-   *  given a sanction of `level` (the module's own sanction-level name) that ENDS the match, recorded after START and some
-   *  play, then the forfeit that ends it — an award to the other side. Partial play comes from `partialPlay`, so there is
-   *  no "when" field (preflight D-3). Until Task 24, generateStream refuses it by name and matchesRequest throws. */
+  /** W2e G12 (typed by Task 19 so the vocabulary has one author; built and matched by Task 24, streams/sanction.ts): `by` is
+   *  the side given a sanction of `level` (the module's own sanction-level name) that ENDS the match, recorded after START and
+   *  some play, then the forfeit that ends it — an award to the other side. Partial play comes from `partialPlay`, so there is
+   *  no "when" field (preflight D-3). generateStream refuses a sport that declares no sanction ending, or a level that ends
+   *  nothing, by name; matchesRequest judges it on the folded STATE (the sanction on record) as well as the outcome. */
   | { readonly kind: "sanctionEnd"; readonly by: Side; readonly level: string };
 
 export type DecidedOutcome = Extract<RequestedOutcome, { kind: "win" | "draw" }>;

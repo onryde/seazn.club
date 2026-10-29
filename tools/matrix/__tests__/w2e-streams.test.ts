@@ -5,7 +5,7 @@
 // generators. Every sweep counts what it checked, per sport and per variant, and zero is a failure (TEST-STRATEGY
 // anti-vacuity). `ALL_OUTCOMES` stays frozen: the new shapes run here, in their own sweeps (spec §10).
 import { decidedInFor } from "@seazn/engine/competition";
-import { EngineError, StageKind } from "@seazn/engine/core";
+import { EngineError, FORFEIT_REASONS, StageKind, sanctionEndingIssues, scorerMayForfeit } from "@seazn/engine/core";
 import { BO1_MATCH_TIEBREAK, checkFixtureOverride, deciderKeysFor, stageKeysFor, writeConfigIssues } from "@seazn/engine/sport";
 import { CricketBall, CricketCfg, dlsTarget, soBattingSideAt, type CricketState } from "@seazn/engine/sports/cricket";
 import { football, footballNextKicker, type ShootoutKick } from "@seazn/engine/sports/football";
@@ -14,7 +14,9 @@ import { mergeRulesOverride } from "../../../apps/web/src/server/engine-db/fixtu
 import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { foldStream } from "../lib/fold.ts";
 import { resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
-import { STREAM_GENERATORS, generateStream, matchesRequest } from "../lib/streams/index.ts";
+import { STREAM_GENERATORS, generateStream, matchesRequest, partialPlay } from "../lib/streams/index.ts";
+import { endingReasonOf, sanctionDeclOf, sanctionEndWitness, sanctionToken, type SanctionAsk, type SanctionFold } from "../lib/streams/sanction.ts";
+import { levelKindOf } from "../lib/reference-bracket.ts";
 import { SO_PAIRS, superOverStream, type SuperOverPair } from "../lib/streams/cricket.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
 import { setbasedGenerator } from "../lib/streams/setbased.ts";
@@ -87,20 +89,6 @@ describe("W2e request vocabulary (Task 19: the interface Tasks 20–24 build on)
     expect(STREAM_GENERATORS.football!.pathWitness, "Task 19: football builds its paths").toBeDefined();
     expect(witnessed).toBeGreaterThan(0);
     expect(refused).toBeGreaterThan(0);
-  });
-
-  it("G12 is Task 24's: until it lands, generateStream refuses a sanctionEnd by name and matchesRequest throws by name — it never answers", () => {
-    let checked = 0;
-    for (const sportKey of SPORT_KEYS) {
-      const r = req(sportKey, resolveSportCfg(sportKey, offlineBuilderDefault(sportKey)), "league", { kind: "sanctionEnd", by: "home", level: "x" });
-      expect(() => generateStream(r), sportKey).toThrow(GeneratorUnsupported);
-      expect(() => generateStream(r), sportKey).toThrow(/Task 24/);
-      for (const outcome of [null, { kind: "award", winner: ID.away, loser: ID.home, reason: "disqualified" }] as const) {
-        expect(() => matchesRequest(r, outcome as never), `${sportKey} ${JSON.stringify(outcome)}`).toThrow(/Task 24/);
-      }
-      checked++;
-    }
-    expect(checked).toBe(SPORT_KEYS.length);
   });
 
   it("a path is witnessed on the fold's STATE as well as its outcome: matchesRequest refuses a path request handed no state, by name", () => {
@@ -1541,5 +1529,260 @@ describe("G8 tennis: a win down a tie-break set, a win down the short-set tie-br
     expect(ALL_OUTCOMES).toHaveLength(7);
     expect(ALL_OUTCOMES.filter((o) => o.kind === "win" && o.path !== undefined)).toEqual([]);
     expect(KNOWN_UNSUPPORTED).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Task 24 - G12 (a sanction that ends the match; X-SE-1, D3 (1), D12, D13).
+
+/** The sports whose module DECLARES a sanction ending - derived from the declarations, never listed. */
+const SE_SPORTS = SPORT_KEYS.filter((s) => sportModule(s).sanctionEnding !== undefined);
+const seDecl = (sport: string) => sportModule(sport).sanctionEnding!;
+const END_SPORTS = SE_SPORTS.filter((s) => seDecl(s).endLevels.length > 0);
+const PROMPT_SPORTS = SE_SPORTS.filter((s) => seDecl(s).promptLevels.length > 0);
+/** Every ending level of a sport, each with the class of the declaration it comes from. */
+const endingLevels = (sport: string): { level: string; cls: "end" | "prompt" }[] =>
+  [...seDecl(sport).endLevels.map((level) => ({ level, cls: "end" as const })), ...seDecl(sport).promptLevels.map((level) => ({ level, cls: "prompt" as const }))];
+/** The rulebook's answer, typed ONCE (rule 19: pin what a control opens at, so the constant the right answer differs from is
+ *  in the test): BD-SE-1 and TN-SE-1 end by `disqualified`; VB-SE-1 (D12) ends by the incomplete-team `retired` (VB-RT-1). */
+const RULEBOOK_REASON: Readonly<Record<string, "disqualified" | "retired">> = { badminton: "disqualified", tennis: "disqualified", volleyball: "retired" };
+/** Every cell a sanction ending is asked on: each sport x variant x stage kind, under the cfg the stage's fixtures fold under. */
+const SE_CELLS = SE_SPORTS.flatMap((sport) => variantKeys(sport).flatMap((variant) =>
+  StageKind.options.map((kind) => ({ sport, variant, kind, cfg: stageCfg(sport, resolveSportCfg(sport, variant), kind, variant) as unknown }))));
+const seReq = (cell: { sport: string; kind: StageKind; cfg: unknown }, by: Side, level: string): StreamRequest => req(cell.sport, cell.cfg, cell.kind, { kind: "sanctionEnd", by, level });
+const other = (s: Side): Side => (s === "home" ? "away" : "home");
+const foldSE = (sport: string, cfg: unknown, events: readonly StreamEvent[]) => foldStream(sportModule(sport), cfg, ID.home, ID.away, events);
+const ask = (by: Side, level: string): SanctionAsk => ({ by, level, home: ID.home, away: ID.away });
+/** The code the strict fold refuses `events` with, or null when it folds. */
+const refusalCode = (sport: string, cfg: unknown, events: readonly StreamEvent[]): string | null => {
+  try { foldSE(sport, cfg, events); return null; } catch (e) { if (EngineError.is(e)) return e.code; throw e; }
+};
+/** The sanction/card/suspension controls a module's pad declares (padSpec): the engine's own list of the tokens a scorer can
+ *  record - the sanction ladder of the set and nested kernels, football's cards, the period kernel's suspensions - each with the
+ *  enum field that names its level and that field's values. */
+function sanctionControls(sport: string): { type: string; field: string; values: readonly string[] }[] {
+  const spec = sportModule(sport).padSpec?.(resolveSportCfg(sport, offlineBuilderDefault(sport)) as never);
+  const out: { type: string; field: string; values: readonly string[] }[] = [];
+  for (const action of spec?.panels.flatMap((p) => p.actions) ?? []) {
+    if (!/\.(sanction|card|suspension\.start)$/.test(action.type)) continue;
+    const field = action.fields.find((f) => f.kind === "enum" && ["level", "color", "class"].includes(f.path));
+    if (field === undefined || field.kind !== "enum") throw new Error(`${sport}: ${action.type} has no level/color/class enum field`);
+    out.push({ type: action.type, field: field.path, values: field.values });
+  }
+  return out;
+}
+
+describe("G12 a sanction that ends the match (Task 24)", () => {
+  it("empty case first: the sanction-ending sports are the modules' declarations (printed with their count), each declaration is lawful, and a sport that declares none refuses every sanction ending by name", () => {
+    console.info(`G12: ${SE_SPORTS.length} sanction-ending sport(s) from the modules' declarations: ${SE_SPORTS.map((s) => `${s} (end [${seDecl(s).endLevels}], prompt [${seDecl(s).promptLevels}])`).join("; ")}`);
+    expect(SE_SPORTS.length).toBeGreaterThan(0);
+    expect(END_SPORTS.length, "a sport with end levels").toBeGreaterThan(0);
+    expect(PROMPT_SPORTS.length, "a sport with prompt levels only").toBeGreaterThan(0);
+    expect(END_SPORTS.filter((s) => seDecl(s).promptLevels.length > 0), "no sport is both").toEqual([]);
+    for (const sport of SE_SPORTS) {
+      expect(sanctionEndingIssues(seDecl(sport)), sport).toEqual([]);
+      expect(sanctionDeclOf(sport), sport).toBe(seDecl(sport));
+    }
+    let refused = 0;
+    for (const sport of SPORT_KEYS.filter((s) => !SE_SPORTS.includes(s))) {
+      expect(sanctionDeclOf(sport), sport).toBeNull();
+      const cfg = stageCfg(sport, resolveSportCfg(sport, offlineBuilderDefault(sport)), "knockout", offlineBuilderDefault(sport));
+      const ask = () => generateStream({ ...req(sport, cfg, "knockout", { kind: "sanctionEnd", by: "home", level: "default" }), lineups: PROBE_LINEUPS });
+      expect(ask, sport).toThrow(OutcomeUnreachable);
+      expect(ask, sport).toThrow(/declares no sanction that ends a match/);
+      refused++;
+    }
+    expect(refused).toBe(SPORT_KEYS.length - SE_SPORTS.length);
+    expect(refused).toBeGreaterThan(0);
+  });
+
+  it("G12 sweep: every ending level of every sanction sport, on every variant and stage kind, by both sides, is START + the sport's partial play + its own sanction + the forfeit that ends it - strict-folded to an award to the OTHER side for the reason the rulebook gives the level", () => {
+    const perSport = new Map<string, number>();
+    const perVariant = new Map<string, number>();
+    for (const cell of SE_CELLS) {
+      const decl = seDecl(cell.sport);
+      for (const by of SIDES) for (const { level, cls } of endingLevels(cell.sport)) {
+        const r = seReq(cell, by, level);
+        const events = generateStream(r);
+        const at = `${cell.sport}/${cell.variant}/${cell.kind} ${outcomeLabel(r.outcome)}`;
+        // The shape: the sport's own partial play (partialPlay: START + play, undecided), the module's sanction event, the ending.
+        const play = partialPlay(r);
+        expect(events.slice(0, play.length), at).toEqual(play);
+        expect(events.slice(play.length), at).toEqual([
+          { type: decl.eventType, payload: { by: ID[by], level } },
+          { type: "core.forfeit", payload: { by: ID[by], reason: RULEBOOK_REASON[cell.sport] } },
+        ]);
+        // The rulebook's reason is the engine's D13 rule's answer, and no other reason is (the differential: the wrong reason is refused).
+        expect(endingReasonOf(cell.sport, level), at).toBe(RULEBOOK_REASON[cell.sport]);
+        for (const reason of FORFEIT_REASONS) {
+          expect(scorerMayForfeit(sportModule(cell.sport), { type: decl.eventType, payload: { by: ID[by], level } }, { by: ID[by], reason }), `${at} reason ${reason} (${cls})`).toBe(reason === RULEBOOK_REASON[cell.sport]);
+        }
+        // Strict fold: undecided on the sanction alone, an award to the other side with the reason after the ending.
+        expect(foldSE(cell.sport, cell.cfg, events.slice(0, -1)).outcome, at).toBeNull();
+        const folded = foldSE(cell.sport, cell.cfg, events);
+        expect(folded.outcome, at).toEqual({ kind: "award", winner: ID[other(by)], loser: ID[by], reason: RULEBOOK_REASON[cell.sport] });
+        expect(matchesRequest(r, folded.outcome, folded.state), at).toBe("match");
+        perSport.set(cell.sport, (perSport.get(cell.sport) ?? 0) + 1);
+        const vk = `${cell.sport}/${cell.variant}`;
+        perVariant.set(vk, (perVariant.get(vk) ?? 0) + 1);
+      }
+    }
+    console.info(`G12 sweep: ${[...perSport].map(([k, n]) => `${k} ${n}`).join(", ")}`);
+    for (const sport of SE_SPORTS) expect(perSport.get(sport) ?? 0, `${sport} sanction endings`).toBeGreaterThan(0);
+    for (const sport of SE_SPORTS) for (const variant of variantKeys(sport)) expect(perVariant.get(`${sport}/${variant}`) ?? 0, `${sport}/${variant}`).toBeGreaterThan(0);
+    expect(perSport.size).toBe(SE_SPORTS.length);
+  });
+
+  it("the ending is pending (X-SE-1): after an END level nothing but the forfeit or an abandon folds - ENDING_SANCTION_PENDING for a rally, and a prompt level (volleyball) leaves the match open to play on", () => {
+    let ended = 0;
+    let prompted = 0;
+    for (const cell of SE_CELLS.filter((c) => c.kind === "knockout" || c.kind === "league")) {
+      for (const { level, cls } of endingLevels(cell.sport)) {
+        const r = seReq(cell, "home", level);
+        const events = generateStream(r);
+        const play = partialPlay(r);
+        const sanctioned = events.slice(0, -1);
+        const rally = play.at(-1)!; // a scoring event of the sport: the partial's own last
+        const at = `${cell.sport}/${cell.variant}/${cell.kind} ${level}`;
+        if (cls === "end") {
+          expect(refusalCode(cell.sport, cell.cfg, [...sanctioned, rally]), `${at} then a scoring event`).toBe("ENDING_SANCTION_PENDING");
+          expect(refusalCode(cell.sport, cell.cfg, [...sanctioned, { type: "core.abandon", payload: { reason: "x" } }]), `${at} then an abandon`).toBeNull();
+          expect(foldSE(cell.sport, cell.cfg, events).outcome?.kind, at).toBe("award");
+          ended++;
+        } else {
+          // A prompt level: the match plays on, and only the forfeit's retired reason ends it (VB-SE-1: "no" to "can the team still field six?").
+          expect(refusalCode(cell.sport, cell.cfg, [...sanctioned, rally]), `${at} then a scoring event`).toBeNull();
+          expect(foldSE(cell.sport, cell.cfg, sanctioned).outcome, at).toBeNull();
+          prompted++;
+        }
+      }
+    }
+    console.info(`G12 pending: ${ended} end-level and ${prompted} prompt-level stream(s) checked`);
+    expect(ended).toBeGreaterThan(0);
+    expect(prompted).toBeGreaterThan(0);
+  });
+
+  it("a non-ending sanction never ends a stream: every other level of every sanction, card and suspension control the pads declare folds undecided and takes play on, and a sanction ending at it is refused BY NAME", () => {
+    let tokens = 0;
+    let refused = 0;
+    const sports = SPORT_KEYS.filter((s) => sanctionControls(s).length > 0);
+    for (const sport of sports) {
+      const variant = offlineBuilderDefault(sport);
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "league", variant);
+      const gen = STREAM_GENERATORS[sport]!;
+      const play = partialPlay({ sportKey: sport, cfg, stageKind: "league", home: ID.home, away: ID.away, outcome: { kind: "forfeit", by: "home", reason: "retired", at: "after_start" } });
+      const ends = new Set(sportModule(sport).sanctionEnding?.endLevels ?? []);
+      for (const control of sanctionControls(sport)) {
+        for (const value of control.values.filter((v) => !ends.has(v))) {
+          const token: StreamEvent = { type: control.type, payload: { by: ID.home, [control.field]: value } };
+          expect(foldSE(sport, cfg, [...play, token]).outcome, `${sport} ${control.type} ${value}`).toBeNull();
+          // And play goes on: the sport's own partial scoring event after it folds (nothing is pending).
+          expect(refusalCode(sport, cfg, [...play, token, gen.partial({ sportKey: sport, cfg, stageKind: "league", home: ID.home, away: ID.away, outcome: { kind: "abandon" } })[0]!]), `${sport} ${control.type} ${value} then play`).toBeNull();
+          tokens++;
+          if (control.type === sportModule(sport).sanctionEnding?.eventType) {
+            // A level the declaration does not end on (a record, or a prompt level whose ending the question gates): by name.
+            const dueEnding = endingReasonOf(sport, value) !== null;
+            const attempt = () => generateStream({ ...req(sport, cfg, "league", { kind: "sanctionEnd", by: "home", level: value }), lineups: PROBE_LINEUPS });
+            if (dueEnding) { expect(attempt, `${sport} ${value}`).not.toThrow(); } else { expect(attempt, `${sport} ${value}`).toThrow(OutcomeUnreachable); expect(attempt, `${sport} ${value}`).toThrow(/ends nothing here/); refused++; }
+          }
+        }
+      }
+    }
+    console.info(`G12 non-ending: ${tokens} token(s) over ${sports.length} sport(s) [${sports}], ${refused} sanction ending(s) refused by name`);
+    expect(sports.length).toBeGreaterThan(SE_SPORTS.length); // the cards and suspensions of sports with no ending count too
+    expect(tokens).toBeGreaterThan(0);
+    expect(refused).toBeGreaterThan(0);
+    // A level the sport's pad does not declare at all is no sanction: refused by name too.
+    const cfg = stageCfg("badminton", resolveSportCfg("badminton", offlineBuilderDefault("badminton")), "league", offlineBuilderDefault("badminton"));
+    expect(() => generateStream(req("badminton", cfg, "league", { kind: "sanctionEnd", by: "home", level: "no-such-level" }))).toThrow(/ends nothing here/);
+  });
+
+  it("the sanction ending decides the same drive as a forfeit would, as an AWARD: levelKindOf plays no level result for it (the decision for the former silent null), over every sanction sport", () => {
+    let checked = 0;
+    for (const cell of SE_CELLS.filter((c) => c.kind === "knockout")) {
+      for (const { level } of endingLevels(cell.sport)) {
+        const r = seReq(cell, "away", level);
+        const events = generateStream(r);
+        expect(foldSE(cell.sport, cell.cfg, events).outcome?.kind, `${cell.sport}/${cell.variant}`).toBe("award");
+        expect(levelKindOf(cell.sport, cell.cfg, ID.home, ID.away, r.outcome, events), `${cell.sport}/${cell.variant}/${level}`).toBeNull();
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("matchesRequest judges a sanction ending on the outcome AND the state: a plain forfeit, the other side, the other reason, another level, a state that ended another way - each is a mismatch; a request handed no state is refused by name", () => {
+    let rows = 0;
+    for (const cell of SE_CELLS.filter((c) => c.kind === "knockout")) {
+      for (const { level } of endingLevels(cell.sport)) {
+        const by: Side = "home";
+        const r = seReq(cell, by, level);
+        const events = generateStream(r);
+        const good = foldSE(cell.sport, cell.cfg, events);
+        const reason = RULEBOOK_REASON[cell.sport]!;
+        const at = `${cell.sport}/${cell.variant}/${level}`;
+        const row = (name: string, outcome: unknown, state: unknown, want: "match" | "mismatch") => { expect(matchesRequest(r, outcome as never, state), `${at}: ${name}`).toBe(want); rows++; };
+        row("control: the stream's own fold", good.outcome, good.state, "match");
+        row("no outcome yet", null, good.state, "mismatch");
+        row("a win", { kind: "win", winner: ID.away, loser: ID.home, method: "regulation" }, good.state, "mismatch");
+        row("an award to the sanctioned side", { kind: "award", winner: ID.home, loser: ID.away, reason }, good.state, "mismatch");
+        row("an award for another reason", { kind: "award", winner: ID.away, loser: ID.home, reason: reason === "retired" ? "disqualified" : "retired" }, good.state, "mismatch");
+        row("a walkover award", { kind: "award", winner: ID.away, loser: ID.home, reason: "walkover" }, good.state, "mismatch");
+        // Each side of the award is held on its own: a winner nobody seated, and a loser the award does not name.
+        row("an award whose winner is neither entrant (the loser is right)", { kind: "award", winner: "stranger", loser: ID.home, reason }, good.state, "mismatch");
+        row("an award with no loser (a bye's shape)", { kind: "award", winner: ID.away, loser: null, reason }, good.state, "mismatch");
+        // A plain forfeit with the same reason: same outcome, but no sanction on the state's record.
+        const plain = foldSE(cell.sport, cell.cfg, [...partialPlay(r), { type: "core.forfeit", payload: { by: ID.home, reason } }]);
+        row("a plain forfeit with the same reason (no sanction on record)", plain.outcome, plain.state, "mismatch");
+        const st = (edit: (s: { sanctions: { by: string; level: string }[]; phase: string; outcome: { reason: string }; entrants: { home: string; away: string } }) => void): unknown => { const c = clone(good.state) as never; edit(c); return c; };
+        row("a state that seats the entrants the other way round (its `home` is not this match's home)", good.outcome, st((s) => { s.entrants = { home: ID.away, away: ID.home }; }), "mismatch");
+        row("the sanction recorded against the other side", good.outcome, st((s) => { s.sanctions[s.sanctions.length - 1]!.by = "away"; }), "mismatch");
+        row("the sanction at another level", good.outcome, st((s) => { s.sanctions[s.sanctions.length - 1]!.level = "warning"; }), "mismatch");
+        row("no sanction on the state", good.outcome, st((s) => { s.sanctions = []; }), "mismatch");
+        row("a state with no sanctions key", good.outcome, st((s) => { delete (s as { sanctions?: unknown }).sanctions; }), "mismatch");
+        row("a state not done", good.outcome, st((s) => { s.phase = "live"; }), "mismatch");
+        row("a state whose own outcome is another reason", good.outcome, st((s) => { s.outcome.reason = reason === "retired" ? "disqualified" : "retired"; }), "mismatch");
+        row("a state that is no object", good.outcome, "done", "mismatch");
+        expect(() => matchesRequest(r, good.outcome), at).toThrow(/is witnessed on the folded state/);
+      }
+    }
+    console.info(`G12 witness (local): ${rows} row(s)`);
+    expect(rows).toBeGreaterThan(SE_SPORTS.length * 10);
+  });
+
+  it("the witness's two entry points: local evidence and PRODUCT evidence are named, and a product check reads the product's state alone - a clean local fold beside a product that never recorded the sanction fails", () => {
+    let checked = 0;
+    for (const sport of SE_SPORTS) {
+      const variant = offlineBuilderDefault(sport);
+      const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant);
+      for (const { level } of endingLevels(sport)) {
+        const r = req(sport, cfg, "knockout", { kind: "sanctionEnd", by: "away", level });
+        const events = generateStream(r);
+        const good = foldSE(sport, cfg, events);
+        const plain = foldSE(sport, cfg, [...partialPlay(r), { type: "core.forfeit", payload: { by: ID.away, reason: RULEBOOK_REASON[sport] } }]);
+        const productOf = (state: unknown): ProductFold => clone({ summary: sportModule(sport).summary(good.state as never), state }) as ProductFold;
+        const fold = (evidence: SanctionFold["evidence"], outcome: SanctionFold["outcome"] = good.outcome as SanctionFold["outcome"]): SanctionFold => ({ sportKey: sport, outcome, evidence });
+        expect(sanctionEndWitness(fold(localEvidence(good.state)), ask("away", level)), `${sport} ${level} local`).toBe(true);
+        expect(sanctionEndWitness(fold(productEvidence(productOf(good.state))), ask("away", level)), `${sport} ${level} product`).toBe(true);
+        // The product recorded a plain forfeit (no sanction): its outcome is the award, its state is not the sanction's.
+        expect(sanctionEndWitness(fold(productEvidence(productOf(plain.state))), ask("away", level)), `${sport} ${level} product without the sanction`).toBe(false);
+        expect(sanctionEndWitness(fold(productEvidence(productOf(null))), ask("away", level)), `${sport} ${level} product state null`).toBe(false);
+        // The same sanction asked of the other side.
+        expect(sanctionEndWitness(fold(productEvidence(productOf(good.state))), ask("home", level)), `${sport} ${level} other side`).toBe(false);
+        checked++;
+      }
+    }
+    expect(checked).toBeGreaterThan(SE_SPORTS.length - 1);
+  });
+
+  it("G12 vocabulary: ALL_OUTCOMES is still W2b's seven, the label is sanction-<by>-<level>, and nothing is known-unsupported - the new shape runs in its own sweep", () => {
+    expect(ALL_OUTCOMES.map(outcomeLabel)).toEqual(["win-home", "win-away", "draw", "forfeit-away-walkover", "forfeit-home-retired", "abandon", "tie"]);
+    expect(ALL_OUTCOMES).toHaveLength(7);
+    expect(ALL_OUTCOMES.filter((o) => o.kind === "sanctionEnd")).toEqual([]);
+    expect(outcomeLabel({ kind: "sanctionEnd", by: "home", level: "default" })).toBe("sanction-home-default");
+    expect(KNOWN_UNSUPPORTED).toEqual([]);
+    expect(sanctionToken("tennis", "e1", "default")).toEqual({ type: "tennis.sanction", payload: { by: "e1", level: "default" } });
+    expect(() => sanctionToken("football", "e1", "red")).toThrow(/declares no sanction event/);
   });
 });

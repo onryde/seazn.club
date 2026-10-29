@@ -12,11 +12,12 @@ import { Recorder, decideFixture, setUpDivision } from "../lib/scenarios/common.
 import { referenceBracketFinish } from "../lib/scenarios/assertions.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import type { CaseSpec } from "../lib/scenarios/types.ts";
-import { ForfeitPlayUnread, LevelKindUnread, bracketCaseOf, forfeitPlayOf, judgeDrive, levelKindOf, loserSeatOf, nextLineOf, oracleMethod, type BracketDrive } from "../lib/reference-bracket.ts";
-import { decidersOffRulesFor, drawsAllowed, resolveSportCfg, stageCfg } from "../lib/sport-cfg.ts";
+import { ForfeitPlayUnread, LevelKindUnread, SanctionEndUnjudged, bracketCaseOf, forfeitPlayOf, judgeDrive, levelKindOf, loserSeatOf, nextLineOf, oracleMethod, type BracketDrive } from "../lib/reference-bracket.ts";
+import { decidersOffRulesFor, drawsAllowed, resolveSportCfg, sportModule, stageCfg } from "../lib/sport-cfg.ts";
 import { generateStream, levelReachable } from "../lib/streams/index.ts";
 import { RefusedCall, type FixtureRow } from "../lib/driver/types.ts";
 import { generateDoubleElim, generatePagePlayoff, generateSingleElim, generateStepladder } from "@seazn/engine/scheduling";
+import { endingReasonOf } from "../lib/streams/sanction.ts";
 import { GeneratorUnsupported, OutcomeUnreachable, type RequestedOutcome } from "../lib/streams/types.ts";
 import { w2bCells } from "../lib/w2b-cells.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
@@ -30,7 +31,7 @@ const defaultLevel = (a: RequestedOutcome): LevelKind | null =>
 /** The play a hand-built forfeit drive was recorded on when a test does not say: a walkover and a double walkover
  *  bare, before START; a forfeit `after_start` on a match under way (forfeitPlayOf reads it from a real stream). */
 const defaultForfeitPlay = (a: RequestedOutcome): PlayResult | null =>
-  a.kind === "double_walkover" ? { kind: "none" } : a.kind === "forfeit" ? (a.at === "before_start" ? { kind: "none" } : { kind: "in_progress" }) : null;
+  a.kind === "double_walkover" ? { kind: "none" } : a.kind === "forfeit" ? (a.at === "before_start" ? { kind: "none" } : { kind: "in_progress" }) : a.kind === "sanctionEnd" ? { kind: "in_progress" } : null;
 const drive = (over: Partial<BracketDrive> & { asked: RequestedOutcome }): BracketDrive =>
   ({ fixtureId: "f1", stageKind: "knockout", sport: "football", home: "a", away: "b", levelAs: defaultLevel(over.asked), status: "decided", outcome: null, loser: { line: "none" }, next: { line: "next", target: "f-next" }, forfeitPlay: defaultForfeitPlay(over.asked), refusal: null, ...over });
 const award = (winner: string, loser: string, reason: string): ObservedOutcome => ({ kind: "award", winner, loser, reason });
@@ -401,6 +402,51 @@ describe("life-reference-bracket-finish — the counted assertion", () => {
     const bad = referenceBracketFinish(recWith(good, drive({ fixtureId: "f9", asked: { kind: "level" }, status: "decided", outcome: { kind: "draw" } })), run("knockout"));
     expect(bad).toMatchObject({ verdict: "fail", checked: 2 });
     expect(bad.evidence[0]).toMatch(/^f9 \(knockout x football, asked level\): status: oracle needs_decision, product decided/);
+  });
+});
+
+// Task 24 (G12): a sanction that ends the match reaches the oracle as the SAME forfeit action - the sanctioned side the offender, the
+// reason the engine's ending rule gives the level - on a match under way. Expected values: the rulebook's (BD-SE-1 and TN-SE-1
+// disqualified; VB-SE-1 / VB-RT-1 the incomplete-team `retired`), typed once; the ledger's sports are the modules' declarations.
+describe("G12 (Task 24): a sanction ending is the oracle's forfeit action, in the reason the level calls for", () => {
+  const SE = SPORT_KEYS.filter((s) => sportModule(s).sanctionEnding !== undefined);
+  const levels = (sport: string): string[] => [...sportModule(sport).sanctionEnding!.endLevels, ...sportModule(sport).sanctionEnding!.promptLevels];
+  const RULEBOOK: Readonly<Record<string, "disqualified" | "retired">> = { badminton: "disqualified", tennis: "disqualified", volleyball: "retired" };
+  const se = (by: "home" | "away", level: string): RequestedOutcome => ({ kind: "sanctionEnd", by, level });
+
+  it("the case is the forfeit action with the sanctioned side as offender and the level's reason, over every sanction sport, level and side - counted; and the awards agree with the oracle (the credited side advances by the reason)", () => {
+    let checked = 0;
+    for (const sport of SE) {
+      for (const level of levels(sport)) for (const by of ["home", "away"] as const) {
+        const reason = RULEBOOK[sport]!;
+        expect(endingReasonOf(sport, level), `${sport} ${level}`).toBe(reason);
+        const c = bracketCaseOf(drive({ sport, asked: se(by, level) }));
+        expect(c, `${sport} ${level} ${by}`).toMatchObject({ play: { kind: "in_progress" }, actions: [{ kind: "forfeit", offender: by, reason, by: "organiser" }], hasNextMatch: true });
+        const winner = by === "home" ? "b" : "a";
+        const loser = by === "home" ? "a" : "b";
+        expect(judgeDrive(drive({ sport, asked: se(by, level), status: "forfeited", outcome: award(winner, loser, reason) })), `${sport} ${level} ${by} right answer`).toMatchObject({ judged: true, ok: true });
+        // The wrong answers: the award to the sanctioned side, and the other reason (the right one differs from the wrong one's constant).
+        const wrongReason = reason === "retired" ? "disqualified" : "retired";
+        expect(judgeDrive(drive({ sport, asked: se(by, level), status: "forfeited", outcome: award(loser, winner, reason) })), `${sport} ${level} ${by} award to the offender`).toMatchObject({ judged: true, ok: false });
+        expect(judgeDrive(drive({ sport, asked: se(by, level), status: "forfeited", outcome: award(winner, loser, wrongReason) })), `${sport} ${level} ${by} ${wrongReason}`).toMatchObject({ judged: true, ok: false });
+        expect(judgeDrive(drive({ sport, asked: se(by, level), status: "decided", outcome: win(winner) })), `${sport} ${level} ${by} a plain win`).toMatchObject({ judged: true, ok: false });
+        checked++;
+      }
+    }
+    expect(SE.length).toBeGreaterThan(0);
+    expect(checked).toBe(SE.reduce((n, s) => n + levels(s).length * 2, 0));
+    expect(checked).toBeGreaterThan(0);
+  });
+
+  it("refused by name, never judged as some other case: a level that ends nothing, a drive that recorded no play, and a drive whose match was not under way", () => {
+    expect(() => bracketCaseOf(drive({ sport: "badminton", asked: se("home", "warning") }))).toThrow(SanctionEndUnjudged);
+    expect(() => bracketCaseOf(drive({ sport: "badminton", asked: se("home", "warning") }))).toThrow(/ends nothing/);
+    expect(() => bracketCaseOf(drive({ sport: "football", asked: se("home", "red") }))).toThrow(SanctionEndUnjudged);
+    expect(() => bracketCaseOf(drive({ sport: "badminton", asked: se("home", "disqualification"), forfeitPlay: null }))).toThrow(ForfeitPlayUnread);
+    for (const play of [{ kind: "none" }, { kind: "started" }] as const) {
+      expect(() => bracketCaseOf(drive({ sport: "badminton", asked: se("home", "disqualification"), forfeitPlay: play })), play.kind).toThrow(SanctionEndUnjudged);
+      expect(() => bracketCaseOf(drive({ sport: "badminton", asked: se("home", "disqualification"), forfeitPlay: play })), play.kind).toThrow(/not under way/);
+    }
   });
 });
 
