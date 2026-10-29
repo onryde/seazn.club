@@ -877,6 +877,22 @@ describe("W2e T30 — the host wires the pair, the modal and the buttons (source
     expect(cancel).toContain("setDispatchRefusal(null);");
   });
 
+  it("fix round 1 (review M1): the activity row's Amend is a void path too, and it clears the stale banner before it writes", () => {
+    // `handleAmend` writes a void and the corrected event (`runAmend`), so like `handleUndo` it resolves whatever a refused tap
+    // left on screen. It clears only when the amend actually proceeds: a tap the re-derived guard turns away writes nothing
+    // and so resolves nothing.
+    const body = functionOf("handleAmend");
+    const texts = body.statements.map((st) => st.getText());
+    const clear = texts.indexOf("setDispatchRefusal(null);");
+    const marking = texts.indexOf("setAmendingId(eventId);");
+    expect(marking, "handleAmend still marks the row it amends").toBeGreaterThan(0);
+    expect(clear, "handleAmend clears the refusal").toBeGreaterThan(0);
+    expect(clear, "after the guards that write nothing").toBeGreaterThan(texts.findIndex((t) => t.startsWith("if (plan === null)")));
+    expect(clear, "before it writes").toBeLessThan(marking);
+    // And it is the amend the activity row calls (a rename would orphan the clear).
+    expect(src).toMatch(/onAmend=\{\(eventId\) => void handleAmend\(eventId\)\}/);
+  });
+
   it("the board, dock, swap and sheets are not rendered while an ending is pending", () => {
     const tiles = src.indexOf('<div data-role="v3-tiles">');
     expect(tiles).toBeGreaterThan(0);

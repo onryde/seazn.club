@@ -2764,6 +2764,8 @@ export function PadHostV3(props: PadHostV3Props) {
     if (!stillAmendable) return;
     const plan = amendPlan(eventId, events);
     if (plan === null) return;
+    // W2e T32 fix round 1 (review M1): an amend writes a void, so like `handleUndo` it clears the stale refusal banner.
+    setDispatchRefusal(null);
     setAmendingId(eventId);
     try {
       await runAmend(plan, { submitHeld: heldSubmit, submit: pipeline.submit });
