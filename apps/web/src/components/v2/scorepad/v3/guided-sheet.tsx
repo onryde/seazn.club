@@ -347,14 +347,21 @@ export function backStep(spec: GuidedSheetSpec, state: GuidedSheetState): Guided
   return { stepIndex: lastVisibleBefore(spec, state.answers, state.stepIndex), answers: state.answers };
 }
 
-/** Loop R M7(c) — a sheet title with each hyphenated word ("tie-break") held in one nowrap run, so a line never breaks
- *  at its hyphen: under the eyebrow's uppercase tracking, 320 split "TIE-" / "BREAK?". Whitespace between words is kept
- *  as written; a title with no hyphenated word is returned unchanged. */
+/** Loop R M7(c) — a sheet title with each hyphenated word ("tie-break") held in one unbreakable run, so a line never
+ *  breaks at its hyphen: under the eyebrow's uppercase tracking, 320 split "TIE-" / "BREAK?". Whitespace between words is
+ *  kept as written; a title with no hyphenated word is returned unchanged.
+ *
+ *  The run is an atomic `inline-block`, NOT `whitespace-nowrap` (W2e PR B fix): a nowrap run has no way out when the word is
+ *  wider than the box, and a title that names an entrant carries the entrant's hyphens — "Can Home Mobile Field-six
+ *  MVTN9TWZ-MOBILE-320 still field six players?" put a 232px run in a 152px title at 320 and Back painted over the rest.
+ *  The inline-block still moves to the next line whole when it fits there (its shrink-to-fit width is its own max-content
+ *  while that is under the line), and `[overflow-wrap:anywhere]` — which, unlike `break-words`, also lowers its min-content —
+ *  lets it wrap inside itself ONLY once it is wider than the line. */
 export function keepHyphenatedWordsWhole(text: string): ReactNode {
   if (!/\S-\S/.test(text)) return text;
   return text.split(/(\s+)/).map((part, i) =>
     /\S-\S/.test(part) ? (
-      <span key={i} className="whitespace-nowrap">
+      <span key={i} className="inline-block max-w-full [overflow-wrap:anywhere]">
         {part}
       </span>
     ) : (
@@ -762,9 +769,11 @@ export function GuidedSheet({ spec, views, personNames, t, onComplete, onCancel 
       <div className="flex items-center justify-between gap-2 px-4 pt-3">
         {/* `.mk-eyebrow` is an inline-flex (its lime bar is a ::before): the title's words go in ONE span, so the flex
             row is bar + one text item — loose text nodes beside the nowrap run would each become a flex item and
-            stack out of order. The bar keeps its width (`before:shrink-0`) while the words wrap beside Back. */}
+            stack out of order. The bar keeps its width (`before:shrink-0`) while the words wrap beside Back. The span is
+            `min-w-0`: a flex item's automatic minimum is its min-content, so without it one long word (an entrant's
+            name in the field-six question) held the whole title wider than its box and `break-words` never got to act. */}
         <p className="mk-eyebrow min-w-0 flex-1 break-words text-slate-600 before:shrink-0">
-          <span>{keepHyphenatedWordsWhole(step.kind === "choice" && step.titleText !== undefined ? step.titleText : t(step.title))}</span>
+          <span className="min-w-0">{keepHyphenatedWordsWhole(step.kind === "choice" && step.titleText !== undefined ? step.titleText : t(step.title))}</span>
         </p>
         {state.stepIndex > 0 && (
           <button type="button" onClick={handleBack} style={{ minHeight: 44 }} className={backButtonClass}>
