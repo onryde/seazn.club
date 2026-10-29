@@ -246,6 +246,42 @@ function tableGrid(doc: PDFKit.PDFDocument, table: DocTable, numeric = table.col
 }
 
 /**
+ * Standings export parity, item 5 (2026-10-29) — a STANDINGS table's grid: `#` a fixed width, every count / result / metric
+ * / derived column the width its own header and cells measure (plus a little room), and Team — the one column that holds
+ * text — the rest of the page. The proportional share by character count (`tableGrid`) gave a table of short names ("E1"
+ * … "E8") counts as wide as the Team column and let two pools of one stage, one with a D column, start Team at different
+ * x. Here the left of the table is the same whatever the right prints: # and Team begin at the same x in every pool, and
+ * Pts stands against the page edge.
+ *
+ * A cell may claim at most `COUNT_CAP` (a long text is ellipsised, never a count), but a column is never narrower than its
+ * own header (#1057 m2): the header floor beats the cap. A table whose columns cannot all have this width and still leave
+ * Team `TEAM_MIN` falls back to the proportional grid, as before, rather than pushing a column off the page. Returns null
+ * for a table that is not shaped like a standings table (fewer than the `#`, Team and one more column).
+ */
+const RANK_W = 28;
+const COUNT_ROOM = 2; // breathing room a count column keeps beyond its text and the cell's own insets
+const COUNT_MIN = 20; // no count column narrower than a two-digit number: P, W, D, L … are one letter over one digit
+export const COUNT_CAP = 64; // what a cell's text may claim of a count column (a header's own measure always fits)
+const TEAM_MIN = 120;
+
+function standingsGrid(doc: PDFKit.PDFDocument, table: DocTable): TableGrid | null {
+  const n = table.columns.length;
+  if (n < 3) return null;
+  const width = doc.page.width - MARGIN * 2;
+  doc.font(FONT.bodyMed).fontSize(8.5);
+  const headers = table.columns.map((c) => doc.widthOfString(String(c)));
+  doc.font(FONT.body).fontSize(9);
+  const counts = table.columns.map((_, i) => {
+    if (i < 2) return 0;
+    const cells = Math.max(0, ...table.rows.map((r) => doc.widthOfString(String(r[i] ?? ""))));
+    return Math.max(CELL_PAD + headers[i]!, COUNT_MIN, Math.min(CELL_PAD + COUNT_ROOM + Math.max(headers[i]!, cells), COUNT_CAP));
+  });
+  const team = width - RANK_W - counts.reduce((a, b) => a + b, 0);
+  if (team < Math.max(TEAM_MIN, CELL_PAD + headers[1]!)) return null;
+  return { colW: [RANK_W, team, ...counts.slice(2)], numeric: table.columns.map((_, i) => i !== 1) };
+}
+
+/**
  * Export review I1/m3 (2026-10-28) — one grid for every table of the document with the same columns (a group stage's
  * pools, one per section): their widths and alignment are those of one table of all their rows, so a column stands at
  * the same x in every pool, and the floors (no column narrower than its header, or a count than its widest cell) hold
@@ -254,7 +290,7 @@ function tableGrid(doc: PDFKit.PDFDocument, table: DocTable, numeric = table.col
  * table of no rows has no cells to read its alignment from: a column whose header the document's other tables set as a
  * number is set as one here too, so its header lines up as theirs do. Keyed by section index.
  */
-function sharedGrids(doc: PDFKit.PDFDocument, sections: readonly DocSection[]): Map<number, TableGrid> {
+function sharedGrids(doc: PDFKit.PDFDocument, sections: readonly DocSection[], kind: DocModel["kind"]): Map<number, TableGrid> {
   const shapes = new Map<string, number[]>(); // a column set (and its landscape hint) → the sections that print it
   sections.forEach((s, i) => {
     if (s.table === undefined) return;
@@ -272,7 +308,9 @@ function sharedGrids(doc: PDFKit.PDFDocument, sections: readonly DocSection[]): 
   const grids = new Map<number, TableGrid>();
   runs.forEach((run, r) => {
     const table = merged[r]!;
-    const grid = table.rows.length > 0 ? tableGrid(doc, table) : tableGrid(doc, table, table.columns.map((c) => numericHeader.get(c) ?? false));
+    // a standings table has its own grid (item 5); any other document keeps the proportional one, as before
+    const grid = (kind === "standings" ? standingsGrid(doc, table) : null) ??
+      (table.rows.length > 0 ? tableGrid(doc, table) : tableGrid(doc, table, table.columns.map((c) => numericHeader.get(c) ?? false)));
     for (const i of run) grids.set(i, grid);
   });
   return grids;
@@ -550,7 +588,7 @@ export async function docModelToPdf(model: DocModel): Promise<Buffer> {
   // columnsHint 2 (12 Jun "two per A4"): pair sections onto one page by
   // separating with a rule instead of a page break.
   let sinceBreak = 0;
-  const grids = sharedGrids(doc, model.sections);
+  const grids = sharedGrids(doc, model.sections, model.kind);
   for (const [index, section] of model.sections.entries()) {
     const pair = section.columnsHint === 2;
     if (pair && sinceBreak >= 2) {

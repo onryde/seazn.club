@@ -25,7 +25,7 @@ import {
   type ExportTicket,
   type PageBreaks,
 } from "@seazn/engine/exports";
-import { isLevelTable, LEVEL_RANK, pointsText, resultColumnText, roundRole, type ResultColumnKey, type StandingsRow } from "@seazn/engine/competition";
+import { isLevelTable, roundRole, type StandingsRow } from "@seazn/engine/competition";
 import { roundRoleLabel } from "@/lib/round-role-label";
 import { sql, withTenant } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
@@ -36,7 +36,8 @@ import { resolveEntrantBadge } from "@/lib/entrant-badge";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { resolveModule } from "@/server/engine-db";
 import { stageTableRulesDocs, tableOrderOf } from "@/server/engine-db/table-rules";
-import { columnHeader, resultColumnsOf, tableColumns, tableLayoutFor } from "@/server/public-site/standings-view";
+import { tableLayoutFor } from "@/server/public-site/standings-view";
+import { standingsTableSections } from "./exports-standings";
 import { byPoolOrder } from "@/lib/pool-order";
 import { poolLabel } from "@/lib/pool-label";
 import { getDictionary } from "@/lib/i18n";
@@ -507,59 +508,33 @@ export async function buildDivisionDocModel(
         // (`columnHeader` over the public dictionary — the export's `slotLookup` reads ui.json, which has none of them).
         // A metric with no translation prints as the module labels it, as on the public table; `#` is a glyph.
         const publicDict = await getDictionary(toLocale(meta.default_locale), "public");
-        const header = (c: { key: string; label: string }) => columnHeader(c, (k) => t(publicDict, k)).abbr;
         // W2d final review I3 (RB2B-17, "every surface"): the Pts cell prints in the stage's unit, as the public table
         // does — chess stores half-points (2/1/0 is FIDE's 1/½/0), so a raw cell printed every score doubled. The unit is
-        // the public table's own (`tableLayoutFor` over the one loader's rules) and the text is `pointsText`. Whole points
-        // stay a NUMBER cell, as before, so a spreadsheet's Pts column stays numeric for every other sport.
+        // the public table's own (`tableLayoutFor` over the one loader's rules) and the text is its `cellText`. Whole
+        // points stay a NUMBER cell, so a spreadsheet's Pts column stays numeric for every other sport.
         const rules = (await stageTableRulesDocs(tx, [snapshot.stage_id]))[snapshot.stage_id];
         const layout = tableLayoutFor(rules);
-        const { unit } = layout;
         const cascade = tableOrderOf(rules);
         const tables = stageTables.map((table) => {
-          const level = isLevelTable(table.rows);
-          // Export every pool (owner, 2026-10-28): THIS table prints the public table's own columns — `tableColumns`,
-          // which both public tables call, over this table's rows. Its sport metrics: the module's displayed metrics a row
-          // carries, in the module's order, with no cap (the module's first four printed hidden ledger metrics, "Games as
-          // White", "Points won", that the public table never shows and no dictionary key names, so they printed English
-          // in every locale). Its result columns (W2d follow-up m3, RBG §3.4; export review I2, round 2): the stage's
-          // layout's (IIHF's P · W · OTW · OTL · L), and D exactly when a row of THIS table holds a draw — so two pools of
-          // one stage may differ, as on the public page. Each cell is the public table's (`resultColumnText`: W and L
-          // leave out the decisions counted apart); a count stays a NUMBER cell, as before.
-          const shown = tableColumns(sportModule.metrics, cascade, table.rows, layout);
-          const results = resultColumnsOf(shown);
-          const metrics = shown.filter((c) => c.kind === "metric");
-          const rows = [...table.rows]
-            .sort((a, b) => (a.rank ?? 99) - (b.rank ?? 99))
-            .map((r) => ({
-              // a level table places nobody (X-TB-6): every `#` the public table's dash, never the seed order's 1, 2, 3
-              ...(level ? { rank: LEVEL_RANK } : {}),
-              name: nameById.get(r.entrantId) ?? r.entrantId,
-              played: r.played,
-              won: r.won,
-              drawn: r.drawn,
-              lost: r.lost,
-              results: results.map((c) => Number(resultColumnText(r, c.key as ResultColumnKey, layout))),
-              points: unit === "whole" ? r.points : pointsText(r.points, unit),
-              metrics: r.metrics,
-              ...(badgeById.get(r.entrantId) ? { badgeUrl: badgeById.get(r.entrantId) } : {}),
-            }));
-          const model = buildStandings(title, rows, {
-            ...common,
-            i18n: {
-              ...common.i18n,
-              standingsHeaders: {
-                team: t(publicDict, "table.team"),
-                points: header({ key: "points", label: "Pts" }),
-                metrics: metrics.map((m) => header(m)),
-              },
-            },
-            metricColumns: metrics.map((m) => m.key),
-            resultColumns: results.map((c) => header(c)),
+          // Export every pool (owner, 2026-10-28): THIS table prints the public table's own columns and cells — the pure
+          // half is `standingsTableSections` (exports-standings.ts), which the parity sweep calls too: `tableColumns` over
+          // this table's rows (so two pools of one stage may differ: D exactly when a row of THIS table holds a draw, a
+          // metric only when a row carries it), every cell `cellText`'s (a team with no counted result prints the public
+          // "—"), the derived columns the stage's order earns after Pts (standings export parity, 2026-10-29).
+          const sections = standingsTableSections({
+            title,
+            common,
             ...(liveUrl !== undefined ? { liveUrl } : {}),
+            rows: table.rows,
+            metricSpecs: sportModule.metrics,
+            cascade,
+            layout,
+            nameOf: (id) => nameById.get(id) ?? id,
+            badgeOf: (id) => badgeById.get(id),
+            msg: (k) => t(publicDict, k),
           });
           const heading = table.pool_id === null ? undefined : `${table.stage_name} — ${poolLabel(publicDict, poolKey.get(table.pool_id))}`;
-          return model.sections.map((s) => (heading === undefined ? s : { heading, ...s }));
+          return sections.map((s) => (heading === undefined ? s : { heading, ...s }));
         });
         // One document: its chrome (title, description, meta, branding, page breaks) is `common`'s, the same for every
         // table, so it is built once with no rows; its sections are every table's, in pool order.

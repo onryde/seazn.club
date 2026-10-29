@@ -7,6 +7,17 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-10-29",
+    title: "Breaking: the standings export prints what the public standings table prints",
+    lines: [
+      "GET /divisions/{id}/exports/standings (PDF and XLSX) now builds its columns and cells from the same selection as the public table. After Pts it prints the sport's derived columns the stage's tie-break order uses (cricket NRR, set-sport ratios and differences, carrom ratios, chess Buchholz Cut-1, Buchholz and Sonneborn-Berger, hockey field goals, tennis game ratio), in the public order, with the public header and text. Every derived value is a text cell.",
+      "A metric nobody recorded for an entrant is now the text \u2014 where it was the number 0: a team that has not played shows \u2014 for goals for, goals against and goal difference, as the public table does. A recorded 0 and the counts (played, won, drawn, lost, points) stay numbers; a half-point (chess) table's Pts is text (1\u00bd), as it has been since 2026-10-28. A metric the sport declares with decimals prints as the public table does and is a text cell only where that text is not the plain number (3 under one decimal is 3.0, text; 12.5 stays numeric); no built-in sport declares one today.",
+      "# now prints the row's stored place, as the public table does, where it used to print the row's position in the document. The engine's places run 1 to n and are distinct, so a table the engine ranked prints the same numbers; a stored table whose places are not 1 to n prints them as stored. Positions up to and including Pts do not move.",
+      "Read the sheet by header text, treat \u2014 as no value, and do not assume Pts is the last column. The PDF's standings columns are also sized from their own content now.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-29",
     title: "Breaking: a cricket test-variant stage no longer accepts superOverStillTied",
     lines: [
       "superOverStillTied is what a tied super over does (another super over, or a tied match). A cricket test match is two innings a side and has no super over, so the key is now offered only on the t20, odi and hundred variants.",

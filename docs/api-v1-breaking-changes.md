@@ -7,6 +7,43 @@ This file starts at the first breaking change the v1 contract has taken. It
 is not a full changelog: additive fields do not appear here, because a reader
 that ignores an unknown field is unaffected by one.
 
+## 2026-10-29 — the standings export prints what the public standings table prints
+
+`GET /api/v1/divisions/{id}/exports/standings` (PDF and XLSX) used to build its
+own table: only the sport's plain metric columns, a `0` for a metric nobody had
+recorded, and the row position for `#`. It now builds its columns and cells from
+the same selection and the same cell expression as the public standings table
+(`tableColumns` and `cellText`), so the document an organiser prints matches
+what the public sees. Four things a typed consumer of the XLSX can see change:
+
+| Case | Before | Now |
+|---|---|---|
+| A metric nobody recorded for that entrant (a team that has not played: GF, GA, GD, Wins ...) | the number `0` | the text `"—"` (U+2014), as the public table prints it. A RECORDED 0 is still the number `0`; the counts P, W, D, L and Pts are counted facts and stay numbers (except a half-point table's Pts, chess, which is text (`"1½"`) and has been since #1061) |
+| The sport's derived columns the stage's tie-break order uses (cricket NRR; set-sport Ratio, Pts ratio and diff; carrom ratios; chess Buchholz Cut-1, Buchholz, Sonneborn-Berger; hockey field goals; tennis game ratio) | not printed | printed AFTER `Pts`, in the public order, with the public header and text. Every one is a text cell (`"+0.412"`, `"1.25"`, `"∞"`, `"—"`). Positions up to and including `Pts` do not move; a table with no derived column ends at `Pts` as before |
+| A metric the sport declares with a number of decimals | a numeric cell, the raw count | the public `formatMetric` text. It is a text cell only where that text is not the plain number: `3` under one decimal prints `"3.0"` and is text; `12.5` stays a numeric cell, as does a metric with no declared decimals. No built-in sport declares decimals today, so no current document changes |
+| `#` | the row's position in the document (`1, 2, 3, ...`) | the row's stored place, as the public table prints it (`rankText`). The engine's places are distinct and run 1 to n, so a table the engine ranked prints the same numbers as before; a stored table whose places are not 1 to n (a repeated or missing place) prints them as stored. A table with no counted result still prints `"–"` (U+2013) |
+
+The same date also sizes the PDF's standings columns from their own content (the
+Team column takes the remaining width). That is layout, not data.
+
+**What replaces it.** Nothing is removed. Read the sheet by HEADER TEXT, not by
+column position; treat `"—"` as "no value", not as a number or a 0; and do not
+assume `Pts` is the last column, because derived columns may follow it.
+
+**What a consumer sees.** An XLSX whose header row can now be longer than before,
+and whose unrecorded-metric cells are strings.
+
+**No data migration was required.** The export reads the stored tables as they are.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27), and the PDF and the sheet now match the public table.
+
+**Background.** Standings export parity (PR #1072), the follow-up to the W2d
+export fixes of 2026-10-28. The pinning tests are
+`apps/web/src/server/usecases/__tests__/exports-standings-parity.test.ts` (a
+counted sweep of every sport against the public table, plus a read-back of the
+real XLSX cell types) and `packages/engine/src/exports/build.test.ts`.
+
 ## 2026-10-29 — a cricket test-variant stage no longer accepts `superOverStillTied`
 
 `superOverStillTied` is what a TIED super over does (CK-SO-1): another super
