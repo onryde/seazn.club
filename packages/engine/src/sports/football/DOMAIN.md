@@ -161,7 +161,9 @@ Football sets the pattern the other families copy, so this is explicit.
    all survive a later kernel event), and since W2e M12b a kernel event is also
    JUDGED against football's pitch (`squadsForLineup`): retiring the substitute a
    `football.sub` brought on is accepted, retiring the starter he replaced or a
-   player sent off is refused. Two things remain undefined in a mixed
+   player sent off is refused, on a WRITE. On replay a refusal there falls back
+   to the kernel's own squads (`judgeLineupEvent`, core/lineup.ts), so a ledger
+   recorded before the rule still folds as it was accepted. Two things remain undefined in a mixed
    fixture: positions, as above, and the CAP as the kernel counts it —
    `SideSquad.subsUsed` never sees a `football.sub`, so a kernel substitution
    made after legacy ones is judged against a low count. The legacy path does

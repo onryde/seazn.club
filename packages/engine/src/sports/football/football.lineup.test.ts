@@ -561,4 +561,42 @@ describe("M12b a lineup event is judged against football's own pitch: a football
     expect(state.squads.home.onPitch).not.toContain("H-b2");
     expect(state.squads.home.onPitch).toHaveLength(starters.length);
   });
+
+  // Fix round 2 (PO decision: replay must never make an existing fixture unreadable). A ledger recorded BEFORE the pitch
+  // rule: the substitution was judged against the kernel's squads, which never heard of the red card, and accepted; the
+  // substitute then scored. The pitch rule refuses that substitution, but only a strict WRITE may refuse.
+  describe("replay leniency: a lineup event the pitch rule refuses is judged on replay as it was when it was recorded", () => {
+    const recorded = (): EventEnvelope[] =>
+      ledger(
+        ["core.start"],
+        ["football.card", { by: "H", person: "H-p3", color: "red" }],
+        kernelSub("H-p3", "H-b4"),
+        ["football.goal", { by: "H", scorer: "H-b4" }],
+      );
+
+    it("replay folds the recorded ledger: the substitute is on, his goal counts, and the sent-off player stays off", () => {
+      const state = foldMatch(football, cfgOf({}), lineups, recorded());
+      expect(state.goals).toEqual({ home: 1, away: 0 });
+      expect(state.squads.home.onPitch).toContain("H-b4");
+      expect(state.squads.home.onPitch).not.toContain("H-p3");
+      expect(state.squads.home.sentOff).toEqual(["H-p3"]);
+    });
+
+    it("the next write on that fixture folds too: the recorded events replay, only the new one is strict", () => {
+      const events = [...recorded(), makeEnvelope(4, { type: "football.goal", payload: { by: "H", scorer: "H-b4" } })];
+      const run = foldMatchWithStoppage(football, cfgOf({}), lineups, events, { strictFromSeq: 4 });
+      expect(run.state.goals).toEqual({ home: 2, away: 0 });
+    });
+
+    it("a strict write of the same substitution is still refused, and so is the goal that would follow it", () => {
+      const error = refusalOf(() => foldMatchWithStoppage(football, cfgOf({}), lineups, recorded(), STRICT));
+      expect(EngineError.is(error, "LINEUP_INVALID")).toBe(true);
+      expect((error as EngineError).data).toMatchObject({ reason: "not-on-field", seq: 2 });
+      // Write path, one event at a time: with the substitution refused, the goal of a man never brought on is refused too.
+      const withoutSub = recorded().filter((e) => e.type !== "core.lineup.substitution");
+      const scorer = refusalOf(() => foldMatchWithStoppage(football, cfgOf({}), lineups, withoutSub, STRICT));
+      expect(EngineError.is(scorer, "INVALID_EVENT")).toBe(true);
+      expect((scorer as EngineError).message).toMatch(/scorer "H-b4" is not on the pitch/);
+    });
+  });
 });
