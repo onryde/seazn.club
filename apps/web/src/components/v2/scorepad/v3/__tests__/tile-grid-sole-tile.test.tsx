@@ -40,7 +40,7 @@ function spansOf(tiles: readonly TileSpec[]): (number | undefined)[] {
     .map((el) => (el.props as { tile: TileSpec }).tile.span);
 }
 
-describe("TileGrid — phones run six tracks (three tiles across), desktop four", () => {
+describe("TileGrid — phones wrap flex rows that fill the width, desktop keeps its four-column grid", () => {
   // A class scan cannot tell whether a tile stopped wrapping — `apps/web`
   // vitest is `environment: "node"`, so this pins the CONTRACT and the browser
   // pins the result (measured at 320: 60px tiles before, ~82px after).
@@ -53,58 +53,147 @@ describe("TileGrid — phones run six tracks (three tiles across), desktop four"
     return (root?.props as { className: string }).className;
   }
 
-  it("declares four columns at desktop and six tracks below md", () => {
+  it("declares four columns at desktop and a wrapping flex row below md", () => {
     const cls = gridClass([tile("a"), tile("b")]);
     expect(cls).toBe(TILE_GRID_CLASS);
-    expect(cls).toContain("grid-cols-4");
-    expect(cls).toContain("max-md:grid-cols-6");
+    const tokens = cls.split(/\s+/);
+    expect(tokens, "desktop: the grid and its four columns").toEqual(expect.arrayContaining(["grid", "grid-cols-4"]));
+    expect(tokens, "phone: a wrapping flex row").toEqual(expect.arrayContaining(["max-md:flex", "max-md:flex-wrap"]));
+    // a leftover phone column count would be inert (a flex container has no tracks) and read as if the phone still had a grid
+    expect(tokens.filter((c) => c.startsWith("max-md:grid-cols")), "no phone grid columns survive").toEqual([]);
   });
 
-  it("a full-row tile spans the phone grid too — col-span-4 in a 6-track grid would be two thirds of the row, and 6 of 4 would overflow", () => {
-    // `SPAN_CLASS[4]` must carry its own phone variant: `grid-column: span 4`
-    // inside a smaller grid creates implicit tracks rather than clamping, which
-    // is a horizontal overflow at the width that can least afford one.
+  it("a full-row tile spans the phone row too — a span that says only its desktop span would shrink to its content below md", () => {
     const island = renderIsland(TileGrid as never, { tiles: [tile("wicket", { span: 4 })], phase: "live", t } as never);
     const spanned = island.tree().find((el) => (el.props as { tile?: TileSpec })?.tile !== undefined);
     expect((spanned?.props as { tile: TileSpec }).tile.span).toBe(4);
   });
 });
 
-// The owner's 320 tennis screenshot ("why not aligned in the center?"): the phone grid was three tracks and a span-2 tile kept
-// `col-span-2`, so a Home/Away PAIR took two of three tracks, its partner could not sit beside it, and every pair stacked one
-// per row in the left two thirds. The relation that keeps a pair side by side is a ratio between the grid's phone track
-// count and each span's phone span, so it is read OFF the two class constants the renderer uses, never typed here.
-describe("TileGrid — a half-row pair sits side by side on a phone, as it does on desktop", () => {
+// The owner's complaint is DEAD SPACE on a 320 phone, not pairing as such. First the grid was three tracks and a span-2 tile
+// kept two of them, so every Home/Away pair stacked one per row in the left two thirds; then six tracks paired them but left
+// a lone span-2 tile at half the row and a span-1 + span-2 row (cricket's Close innings + End of over) a track short. So a
+// phone row is a wrapping flex row: each tile has a span-weighted BASIS (a third, a half, the whole row, gap included) and
+// GROWS, so whatever a row holds, it fills.
+//
+// Everything below is read OFF the class constants the renderer uses (the track count, the gap, each span's basis), never typed
+// here; the one stated design constant is the three-across of a one-column tile, the word-width cricket's keypad needs.
+describe("TileGrid — every phone row fills the row: a pair at halves, three one-column tiles at thirds, a lone tile whole", () => {
+  const SPANS = [1, 2, 3, 4] as const;
+  type Span = (typeof SPANS)[number];
   const num = (re: RegExp, from: string, what: string): number => {
     const m = re.exec(from);
     if (m === null) throw new Error(`${what}: no match for ${re} in "${from}"`);
     return Number(m[1]);
   };
-  const phoneTracks = num(/max-md:grid-cols-(\d+)/, TILE_GRID_CLASS, "the phone track count");
   const deskTracks = num(/(?:^|\s)grid-cols-(\d+)/, TILE_GRID_CLASS, "the desktop track count");
-  const phoneSpan = (span: 1 | 2 | 3 | 4): number => num(/max-md:col-span-(\d+)/, SPAN_CLASS[span], `span ${span} phone class`);
-  const deskSpan = (span: 1 | 2 | 3 | 4): number => num(/(?:^|\s)col-span-(\d+)/, SPAN_CLASS[span], `span ${span} desktop class`);
-  const SPANS = [1, 2, 3, 4] as const;
+  /** Tailwind's spacing scale: `gap-N` is N quarter-rems. */
+  const gapRem = num(/(?:^|\s)gap-(\d+)/, TILE_GRID_CLASS, "the gap") * 0.25;
+  const deskSpan = (span: Span): number => num(/(?:^|\s)col-span-(\d+)/, SPAN_CLASS[span], `span ${span} desktop class`);
+  /** The phone basis of a span: how many tiles of that span fit across, and the gap the calc subtracts for them. */
+  function basisOf(span: Span): { across: number; gapRem: number } {
+    const cls = SPAN_CLASS[span];
+    if (/(?:^|\s)max-md:basis-full(?:\s|$)/.test(cls)) return { across: 1, gapRem: 0 };
+    const m = /max-md:basis-\[calc\(\(100%_-_([\d.]+)rem\)\/(\d+)\)\]/.exec(cls);
+    if (m === null) throw new Error(`span ${span}: no phone basis in "${cls}"`);
+    return { across: Number(m[2]), gapRem: Number(m[1]) };
+  }
+  /** Flex's own line breaking and growing (flex-wrap, equal flex-grow 1), for a container of `width` px: the width of each tile, by row. */
+  function layoutPhone(spans: readonly Span[], width: number): number[][] {
+    const gap = gapRem * 16;
+    const rows: { bases: number[] }[] = [];
+    for (const span of spans) {
+      const { across, gapRem: calcGap } = basisOf(span);
+      const basis = (width - calcGap * 16) / across;
+      const row = rows[rows.length - 1];
+      const used = row === undefined ? 0 : row.bases.reduce((a, b) => a + b, 0) + gap * row.bases.length;
+      if (row !== undefined && used + basis <= width + 1e-6) row.bases.push(basis);
+      else rows.push({ bases: [basis] });
+    }
+    return rows.map(({ bases }) => {
+      const free = width - bases.reduce((a, b) => a + b, 0) - gap * (bases.length - 1);
+      return bases.map((b) => b + free / bases.length);
+    });
+  }
+  const filled = (row: readonly number[], width: number): number => row.reduce((a, b) => a + b, 0) + gapRem * 16 * (row.length - 1) - width;
+  /** The measured phone widths of the grid (the card inside the page padding at 320 / 360 / 390). */
+  const WIDTHS = [262, 302, 332] as const;
 
-  it("a span-2 tile is half the phone track count, so two of them fill one row", () => {
-    expect(phoneSpan(2) * 2, "two span-2 tiles take the whole phone row").toBe(phoneTracks);
-    // ...which is the same fraction of the row it is on desktop: the pair does not change shape between the grids.
-    expect(phoneSpan(2) / phoneTracks).toBe(deskSpan(2) / deskTracks);
-    expect(phoneTracks % 2, "the phone grid divides into halves").toBe(0);
+  it("every span names its phone basis and grows, so no row can leave dead space", () => {
+    for (const span of SPANS) {
+      expect(SPAN_CLASS[span], `span ${span} grows to fill`).toMatch(/(?:^|\s)max-md:grow(?:\s|$)/);
+      expect(basisOf(span).across, `span ${span} fits at least one tile across`).toBeGreaterThanOrEqual(1);
+    }
   });
 
-  it("a one-column tile keeps its phone share (three across), and spans 3 and 4 take the whole phone row", () => {
-    // Design of record: phones put three one-column tiles across (the ~82px word-width the 320 cricket keypad needs).
-    const PHONE_TILES_ACROSS = 3;
-    expect(phoneTracks / phoneSpan(1), "three one-column tiles fill a phone row").toBe(PHONE_TILES_ACROSS);
-    expect(phoneSpan(3)).toBe(phoneTracks);
-    expect(phoneSpan(4)).toBe(phoneTracks);
-  });
-
-  it("no span exceeds the phone grid (an over-wide span adds implicit tracks and overflows the card), and desktop spans are unchanged", () => {
+  it("a basis is exact: N tiles and their N-1 gaps are exactly the row, so the Nth tile never wraps for a fraction of a pixel", () => {
     let judged = 0;
     for (const span of SPANS) {
-      expect(phoneSpan(span), `span ${span} fits the phone grid`).toBeLessThanOrEqual(phoneTracks);
+      const { across, gapRem: calcGap } = basisOf(span);
+      expect(calcGap, `span ${span}: the calc subtracts exactly the gaps between ${across} tiles`).toBeCloseTo((across - 1) * gapRem, 10);
+      judged++;
+    }
+    expect(judged).toBe(Object.keys(SPAN_CLASS).length);
+  });
+
+  it("a span-2 tile is half the row, the same fraction of it as on desktop, so two of them are a pair at halves", () => {
+    expect(basisOf(2).across, "a pair stays a pair").toBe(deskTracks / deskSpan(2));
+    expect(basisOf(2).across).toBe(2);
+    let rows = 0;
+    for (const width of WIDTHS) {
+      const [row, ...rest] = layoutPhone([2, 2], width);
+      expect(rest, `${width}px: one row`).toEqual([]);
+      expect(row, `${width}px: halves`).toEqual([(width - gapRem * 16) / 2, (width - gapRem * 16) / 2]);
+      rows++;
+    }
+    expect(rows).toBe(WIDTHS.length);
+  });
+
+  it("three one-column tiles are thirds, exactly as before (the word-width the 320 cricket keypad needs)", () => {
+    const PHONE_TILES_ACROSS = 3; // design of record: not derivable from a class
+    expect(basisOf(1).across).toBe(PHONE_TILES_ACROSS);
+    for (const width of WIDTHS) {
+      const rows = layoutPhone([1, 1, 1, 1, 1, 1], width);
+      expect(rows.map((r) => r.length), `${width}px: three across, twice`).toEqual([3, 3]);
+      for (const row of rows) for (const w of row) expect(w).toBeCloseTo((width - gapRem * 16 * 2) / 3, 6);
+    }
+  });
+
+  it("a lone tile of any span, and a one-column + half-row row, fill the whole width (the cases that left dead space)", () => {
+    let rows = 0;
+    for (const width of WIDTHS) {
+      for (const span of SPANS) {
+        const [only] = layoutPhone([span], width);
+        expect(only, `${width}px: a lone span ${span} is the whole row`).toEqual([width]);
+        rows++;
+      }
+      // cricket's Close innings (span 1) + End of over (span 2) were 5 of 6 tracks
+      const [mixed] = layoutPhone([1, 2], width);
+      expect(mixed!.length).toBe(2);
+      expect(filled(mixed!, width), `${width}px: span 1 + span 2 fills`).toBeCloseTo(0, 6);
+      rows++;
+    }
+    expect(rows).toBe(WIDTHS.length * (SPANS.length + 1));
+  });
+
+  it("a mixed sequence of spans leaves no row short: every row's tiles plus gaps are the row width, and spans 3 and 4 own a row", () => {
+    const sequence: Span[] = [1, 1, 1, 2, 2, 1, 2, 4, 1, 1, 3, 2, 1, 1, 1, 1, 4];
+    let rows = 0;
+    for (const width of WIDTHS) {
+      const laid = layoutPhone(sequence, width);
+      for (const row of laid) {
+        expect(filled(row, width), `${width}px: a row of ${row.length}`).toBeCloseTo(0, 6);
+        rows++;
+      }
+      expect(laid.flat().length, `${width}px: every tile was placed`).toBe(sequence.length);
+    }
+    expect(rows).toBeGreaterThan(WIDTHS.length * 5);
+    for (const span of [3, 4] as const) expect(layoutPhone([1, span, 1], 302).map((r) => r.length), `a span ${span} tile owns its row`).toEqual([1, 1, 1]);
+  });
+
+  it("desktop spans are unchanged: each span names its own count in the desktop grid, which they fit", () => {
+    let judged = 0;
+    for (const span of SPANS) {
       expect(deskSpan(span), `span ${span} keeps its desktop span`).toBe(span);
       expect(deskSpan(span), `span ${span} fits the desktop grid`).toBeLessThanOrEqual(deskTracks);
       judged++;

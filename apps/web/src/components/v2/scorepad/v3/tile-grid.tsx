@@ -158,28 +158,31 @@ const KIND_MIN_HEIGHT: Record<TileKind, number> = {
   minor: 44,
 };
 
-/** The tile grid's own class list. Desktop runs four tracks; a phone runs SIX (W2e PR B fix, owner's 320 tennis screenshot).
- *  Six, not three, because the span-2 tiles are half-row PAIRS (Home | Away): on a three-track phone grid a span-2 tile took
- *  two of the three tracks, so its partner could not sit beside it and wrapped alone - the owner's "why not aligned in the
- *  center?", with the right third of every pair row empty. Six tracks let a one-column tile keep its third of the row
- *  (`max-md:col-span-2`, exactly as before) while a pair gets halves (`max-md:col-span-3`). Exported so the test that pins the
- *  relation reads the track count from here, not from a literal. */
-export const TILE_GRID_CLASS = "grid grid-cols-4 max-md:grid-cols-6 gap-2";
+/** The tile grid's own class list. Desktop (>= md) is the four-column grid, byte for byte. A phone is a WRAPPING FLEX ROW, not a
+ *  grid (W2e PR B, the owner's 320 tennis screenshot): the complaint is dead space, and no track count removes it. Three tracks
+ *  left a span-2 pair stacked one per row; six tracks paired them but left a lone span-2 tile at half the row and a span-1 +
+ *  span-2 row (cricket's Close innings + End of over) a track short. A flex row gives each tile a span-weighted BASIS (below)
+ *  and lets it GROW, so whatever a row holds, it fills: a Home/Away pair at halves, three one-column tiles at thirds exactly as
+ *  before, a lone span-2 tile or a span-1 + span-2 row the whole width. The gap is the same `gap-2` in both layouts. Exported so
+ *  the test that pins the relation reads the gap and the track count from here, not from a literal. */
+export const TILE_GRID_CLASS = "grid grid-cols-4 max-md:flex max-md:flex-wrap gap-2";
 
 /** Column span -> literal Tailwind class. A template-interpolated
  *  `col-span-${n}` would never be picked up by Tailwind's static class
  *  scanner (it scans source for literal strings) — this lookup keeps
  *  every class Tailwind needs to see written out in full.
  *
- *  Each entry names BOTH grids: the desktop span of four tracks, then the phone span of six. The phone spans are one third
- *  of the row for a span-1 tile (three across, unchanged), one half for span 2 (a pair side by side, as on desktop), and the
- *  whole row for spans 3 and 4. A span that exceeds the phone grid does not clamp, it creates implicit tracks and the row
- *  overflows the card, so every entry must say its phone span. Exported for the same reason as `TILE_GRID_CLASS`. */
+ *  Each entry names BOTH layouts: the desktop `col-span-N` of the four-column grid, then the phone flex basis and `grow`. The
+ *  phone basis is the share of the row the tile asks for BEFORE growing, with the gaps between its row-mates taken out of it:
+ *  a span-1 tile a third (`(100% - 2 gaps) / 3`, so three fit exactly), a span-2 tile a half (`(100% - 1 gap) / 2`), spans 3
+ *  and 4 the whole row. `grow` shares what a row has left equally, which is what fills a row that holds fewer tiles than its
+ *  basis allows. Written `_-_` inside the calc: Tailwind turns the underscores into the spaces a CSS `calc` needs around `-`.
+ *  Exported for the same reason as `TILE_GRID_CLASS`. */
 export const SPAN_CLASS: Record<NonNullable<TileSpec["span"]>, string> = {
-  1: "col-span-1 max-md:col-span-2",
-  2: "col-span-2 max-md:col-span-3",
-  3: "col-span-3 max-md:col-span-6",
-  4: "col-span-4 max-md:col-span-6",
+  1: "col-span-1 max-md:grow max-md:basis-[calc((100%_-_1rem)/3)]",
+  2: "col-span-2 max-md:grow max-md:basis-[calc((100%_-_0.5rem)/2)]",
+  3: "col-span-3 max-md:grow max-md:basis-full",
+  4: "col-span-4 max-md:grow max-md:basis-full",
 };
 
 /** One hue per signal (see file header): violet fill = primary (this
@@ -247,11 +250,12 @@ export function TileGrid({ tiles, phase, t, onAction, onOpenSheet }: TileGridPro
   // no word: measured in a browser, cricket's keypad broke "No-ball" mid-word
   // and stacked "Clore la manche" and "Pénalité" — in English as well as
   // fr/es/nl, since the cricket terms are not translated. Three tiles across at
-  // the same width give ~82px, which is a word rather than a fragment: the phone
-  // grid is six tracks (`TILE_GRID_CLASS`) so a one-column tile still takes two
-  // of them (a third of the row), and a span-2 pair takes three each (half the
-  // row, side by side). Desktop is untouched at four, so §3.6 of the
-  // phone-composition design ("cricket's keypad keeps four columns") still
+  // the same width give ~82px, which is a word rather than a fragment: below md
+  // the grid is a wrapping flex row (`TILE_GRID_CLASS`) whose one-column tile
+  // asks for a third of the row, so three still fit across, and whose span-2
+  // pair asks for a half; every tile then GROWS into what its row has left, so
+  // no phone row has dead space. Desktop is untouched at four columns, so §3.6 of
+  // the phone-composition design ("cricket's keypad keeps four columns") still
   // describes every width it was measured at; this is the phone half that
   // shipped before the labels were read at 320.
   return (
