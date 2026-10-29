@@ -46,6 +46,8 @@ import { fileURLToPath } from "node:url";
  */
 export const BANNED: Readonly<Record<string, readonly string[]>> = {
   // P1: period sports (period-shared, hockey, icehockey, football)
+  // football.tsx keeps CARD_TONES (presentation) and POST_PHASES (P4); the rest of its inventory is read from footballPadRules.
+  "football.tsx": ["CARD_COLORS", "CARD_REASONS", "PENALTY_OUTCOMES", "PENALTY_OFFENCES", "EVENT_BAND", "PLAY_PHASES"],
   // P2: cricket
   // P3: set-based sports + tennis (badminton, tabletennis, volleyball, tennis)
   // P4: carrom, boardgame, generic, and POST_PHASES in every file that declares it
