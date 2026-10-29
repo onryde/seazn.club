@@ -36,6 +36,10 @@ const declaredDays = (name: string): number => {
 const CEILING = declaredDays("YOUTUBE_DATA_CEILING_DAYS");
 const REFRESH = declaredDays("YOUTUBE_REFRESH_AFTER_DAYS");
 const DEAD = declaredDays("YOUTUBE_DEAD_GRANT_PURGE_DAYS");
+// How long an unfinished connection attempt (the sealed token and the picker's channel names) lives: connect-flow.ts's own declaration.
+const connectFlowSrc = src("../../../server/youtube/connect-flow.ts");
+const PENDING_SECONDS = Number(connectFlowSrc.match(/export const PENDING_LIFETIME_SECONDS = (\d+);/)?.[1] ?? NaN);
+const PENDING_MINUTES = PENDING_SECONDS / 60;
 
 // ─── the page ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const html = renderToStaticMarkup(<PrivacyPage />);
@@ -55,6 +59,8 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
     expect(CEILING, "read from daily.ts").toBeGreaterThan(0);
     expect(REFRESH, "read from daily.ts").toBeGreaterThan(0);
     expect(DEAD, "read from daily.ts").toBeGreaterThan(0);
+    expect(PENDING_MINUTES, "read from connect-flow.ts; a whole number of minutes (the page says minutes)").toBeGreaterThan(0);
+    expect(Number.isInteger(PENDING_MINUTES)).toBe(true);
     // The three numbers are different facts: a page that said one twice could not be told from one that said both.
     expect(new Set([REFRESH, CEILING, DEAD]).size, "three distinct windows").toBe(3);
     expect(REFRESH).toBeLessThan(CEILING);
@@ -82,9 +88,17 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
         ["What we store:", ["channel id and title", "refresh token (encrypted at rest)", "its id, which is also its video id, and its title", "stream keys"]],
         ["How we use it:", ["only to stream", "replay link", "do not sell it"]],
         ["Who it is shared with:", ["Google", "We share it with no one else"]],
+        // M2: every kind of thing the section says is stored has its own real retention, named in this bullet (read from the code: the token,
+        // channel and account id live while connected (revokeConnection / purgeConnectionData clear them); the daily pass owns the 30-day
+        // ceiling; an unfinished attempt expires after PENDING_LIFETIME_SECONDS and the daily pass deletes it; the consent record and the two
+        // choices stay on the revoked row until the organisation goes).
         ["How long we keep it:", [
-          "refresh token", `refreshed or deleted within ${CEILING} days`, `after ${REFRESH} days`,
+          "the refresh token, the channel id and title and the Google account identifier are kept while the channel is connected",
+          `refreshed or deleted within ${CEILING} days`, `after ${REFRESH} days`,
           `has not been confirmed within ${CEILING} days`, `nothing has used for ${CEILING} days`,
+          "The sealed token and channel names of a connection that was started and not finished",
+          `after it expires, ${PENDING_MINUTES} minutes after it was started`,
+          "are not data from YouTube", "after a disconnect too, for as long as your organisation's account exists on Seazn Club",
         ]],
       ];
       const missing: string[] = [];
@@ -98,7 +112,7 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
         }
       }
       expect(checked, "anti-vacuity: every needle was tried").toBe(WANT.reduce((n, [, ns]) => n + ns.length, 0));
-      expect(checked).toBe(16);
+      expect(checked).toBe(20);
       return missing;
     }],
     ["says Disconnect deletes at once what was stored and asks Google to revoke", () => {
@@ -106,6 +120,7 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
       return disconnect === ""
         ? ["the Disconnecting paragraph"]
         : ["Disconnecting deletes at once everything we stored from YouTube", "refresh token", "stream keys", "replay links", "channel id and title", "asks Google to revoke",
+            "any reconnection of the channel that was started and not finished",
             // M1: the revoke is NOT unconditional - it is skipped on purpose for an account another connected channel uses (disconnect.ts
             // `accountIsShared`) and cannot be made without a readable token - so the sentence says so.
             "unless another connected channel uses the same Google account", "cannot be read"]
@@ -136,6 +151,11 @@ describe("privacy — what the YouTube section says about the other halves of th
     expect(ytText).toContain("and, unless another connected channel uses the same Google account or the token cannot be read, ask Google to revoke the grant");
     // The negative pair: the window it replaced (the ceiling's) is not promised there.
     expect(ytText).not.toContain(`not reconnected within ${CEILING} days`);
+  });
+
+  it("M2: the section no longer says 'everything else' is refreshed or deleted within 30 days (the account id, the consent record and a pending grant each have their own retention)", () => {
+    expect(ytText).not.toContain("Everything else we store from YouTube");
+    expect(ytText).not.toContain("the refresh token and the channel details are kept");
   });
 
   it("M3: the second API Service is Google's authorisation (OAuth) service for the YouTube permission - Seazn does not use Google sign-in here", () => {
