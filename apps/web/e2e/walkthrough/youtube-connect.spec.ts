@@ -2,10 +2,10 @@
 // (YOUTUBE_DRIVER=fake) and the fake relay drivers: connect a channel through consent and the picker, put a match on it, Go live,
 // Stop, Go live again, let the end rule run, read the replay on the public page, lose the grant, disconnect.
 //
-// THIS FILE DECLARES 12 TESTS (EXPECTED_TESTS below): connect x2 widths, connect -> Go live, same video after a Stop, new video after
-// a Stop past the grace, the refusal copy, the replay parts, the reconnect-needed badge, Disconnect, Disconnect's three outcomes, two
-// matches on one channel, and the consent links. Every test registers itself through `spec()`, and `beforeEach` fails if the count is
-// not 12 - so a deleted or renamed-away test cannot leave a green run that proved less. Each test also states its own premise before
+// THIS FILE DECLARES 13 TESTS (EXPECTED_TESTS below): connect x2 widths, connect -> Go live, same video after a Stop, new video after
+// a Stop past the grace, the refusal copy, the replay parts, the made-for-kids replay (a link out, decided per broadcast), the
+// reconnect-needed badge, Disconnect, Disconnect's three outcomes, two matches on one channel, and the consent links. Every test
+// registers itself through `spec()`, and `beforeEach` fails if the count is not 13 - so a deleted or renamed-away test cannot leave a green run that proved less. Each test also states its own premise before
 // the action (the row is there BEFORE Disconnect, the sweep has a dead grant to find BEFORE it runs) and reports what it counted:
 // a loop that read nothing is a failure, not a pass.
 //
@@ -61,7 +61,7 @@ import {
 // ===========================================================================
 // The count this file must meet
 // ===========================================================================
-const EXPECTED_TESTS = 12;
+const EXPECTED_TESTS = 13;
 const registered: string[] = [];
 type SpecBody = (args: PlaywrightTestArgs & PlaywrightTestOptions & PlaywrightWorkerArgs & PlaywrightWorkerOptions, info: TestInfo) => Promise<void> | void;
 /** `test()`, remembering the name: the guard in `beforeEach` counts what this file REGISTERED, in every worker. */
@@ -330,7 +330,7 @@ const rowTitled = (page: Page, title: string): Locator => channelRows(page).filt
 
 interface TargetRef { id: string; connectionId: string; title: string }
 /** Connect ONE channel (the grant offers just it, so the callback lands `connected`) and read its destination off the row. */
-async function connectOne(page: Page, c: Chan, trigger: "youtube-connect" | "youtube-connect-empty", opts: { sub?: string } = {}): Promise<TargetRef> {
+async function connectOne(page: Page, c: Chan, trigger: "youtube-connect" | "youtube-connect-empty", opts: { sub?: string; atConsent?: () => Promise<void> } = {}): Promise<TargetRef> {
   await connectChannel(page, [c], trigger, opts);
   const row = rowTitled(page, c.title);
   await expect(row, `the connected channel ${c.title} has its row`).toHaveCount(1, { timeout: NAV_MS });
@@ -732,6 +732,164 @@ spec("replay links: two parts (a Stop past the grace, then a second video) are P
   await expect(player.getByTestId("replay-facade"), "a part is a click-to-play facade, never an autoplaying iframe").toBeVisible();
   await expect(player.locator("iframe"), "no player is mounted until a tap").toHaveCount(0);
   expect(v1, "the two parts are two videos").not.toBe(v2);
+});
+
+// ===========================================================================
+// 7b. a made-for-kids replay is a link out - decided per broadcast, per part (owner 2026-10-29; Google Developer Policies III.E.4.j)
+// ===========================================================================
+spec("made-for-kids replay: a part made while the channel was declared made-for-kids is a link to YouTube on the public page (no player, no thumbnail) at 1280 and 320; after the channel is flipped to not-for-kids the next part embeds and the first STILL links out", async ({ page, context }) => {
+  test.setTimeout(budget({ navs: 12, cycles: 2, slot: true }) + CREDITS_KEY_WAIT_MS);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  const rig = await seedRig(page, { entrants: 2 });
+  const f = rig.fixtures[0]!;
+
+  // The channel is declared MADE FOR KIDS at the consent card - the real producer of the connection's flag, not a row written by hand.
+  await openStreaming(page);
+  const chan = channel(`Riverside Juniors ${randomBytes(2).toString("hex")}`);
+  const metaOf = (title: string, kids: boolean, p: Page): Promise<void> =>
+    expect(rowTitled(p, title).getByTestId("youtube-channel-meta"), `the row says ${kids ? "made" : "not made"} for kids`)
+      .toHaveText(`${en("streaming.youtube.privacy.unlisted")} · ${en(kids ? "streaming.youtube.row.kidsYes" : "streaming.youtube.row.kidsNo")}`, { timeout: SAVE_MS });
+  const t = await connectOne(page, chan, "youtube-connect-empty", {
+    atConsent: async () => {
+      await expect(page.getByTestId("youtube-kids-no"), "PREMISE: the card's default is not made for kids").toBeChecked();
+      await page.getByTestId("youtube-kids-yes").check();
+    },
+  });
+  await metaOf(chan.title, true, page);
+
+  const body = await openPhoneTab(page, rig, f.no);
+  await pickChannel(body, t);
+  await autoVideoOn(page, await handleOf(page, f.id));
+  // The tick below is GLOBAL: the whole pool first, so no other test has a session open (replay links, above).
+  const exclusive = await wholePool();
+  const poolFrom = Date.now();
+  await pairedPhone(page);
+
+  // Part 1 - made while the channel is declared made for kids.
+  await goLive(body);
+  const v1 = (await fakeState(page, f.id)).broadcasts[0]!.videoId;
+  await stopMatch(page, body, rig.orgId, f.id);
+  await agePastGrace(f.id, v1);
+
+  // The organiser flips the channel to NOT made for kids (Settings on the Streaming page, in a second tab so the match's panel stays put).
+  // The connection moves; the broadcast already made keeps what it was made with.
+  const settingsTab = await context.newPage();
+  try {
+    await openStreaming(settingsTab);
+    const settingsRow = rowTitled(settingsTab, chan.title);
+    await settingsRow.getByTestId("youtube-settings").click();
+    await settingsRow.getByTestId("youtube-kids-no").check();
+    await settingsRow.getByTestId("youtube-settings-save").click();
+    await metaOf(chan.title, false, settingsTab);
+  } finally {
+    await settingsTab.close();
+  }
+
+  // Part 2 - a NEW video, made after the flip.
+  await startAnother(body, t);
+  await goLive(body);
+  const both = (await fakeState(page, f.id)).broadcasts;
+  expect(both.length, "PREMISE: two videos on YouTube").toBe(2);
+  expect(both[0]!.videoId, "the first video is still the first").toBe(v1);
+  const v2 = both[1]!.videoId;
+  expect(v2, "the second part is a different video").not.toBe(v1);
+  // The witness is a READ of the rows the producers wrote: each broadcast carries what it was made with.
+  const stamps = await withDb((sql) => sql<{ yt_broadcast_id: string; made_for_kids: boolean }[]>`
+    select yt_broadcast_id, made_for_kids from youtube_broadcasts where fixture_id = ${f.id} order by created_at, id`);
+  expect(stamps.map((r) => [r.yt_broadcast_id, r.made_for_kids]), "part 1 was made for kids, part 2 was not: the flag follows the broadcast, not the connection").toEqual([[v1, true], [v2, false]]);
+  await stopMatch(page, body, rig.orgId, f.id);
+  await agePastGrace(f.id, v2);
+
+  // The END STEP is the cron tick (global; the pool is ours).
+  const credits = await exclusive.credits();
+  try {
+    const others = await withDb((sql) => sql<{ id: string }[]>`
+      select id from fixture_stream_sessions where org_id <> ${rig.orgId} and state not in ('completed', 'failed')`);
+    expect(others, "the global tick can reach no other test's session").toEqual([]);
+    const tick = await page.request.post("/api/cron/stream-tick", { headers: { "x-cron-secret": cronSecret() } });
+    expect(tick.status(), "the cron tick runs").toBe(200);
+  } finally {
+    await credits.release();
+    test.info().annotations.push({
+      type: "made-for-kids pool",
+      description: `waited ${exclusive.waitedMs} ms for the whole pool holding nothing; held it ${Date.now() - poolFrom} ms to the end of the tick (teardown releases it)`,
+    });
+  }
+  await expect
+    .poll(async () => (await broadcastRows(f.id)).map((r) => r.state), { message: "both broadcasts are complete parts", timeout: POLL_WAIT_MS })
+    .toEqual(["complete", "complete"]);
+  // The end step ORs YouTube's own answer in and never clears the flag: the stamps are what they were.
+  const after = await withDb((sql) => sql<{ yt_broadcast_id: string; made_for_kids: boolean }[]>`
+    select yt_broadcast_id, made_for_kids from youtube_broadcasts where fixture_id = ${f.id} order by created_at, id`);
+  expect(after.map((r) => [r.yt_broadcast_id, r.made_for_kids]), "completing the parts moved no flag").toEqual([[v1, true], [v2, false]]);
+
+  // The visitor: a published division, signed out. What the browser FETCHES is recorded (the thumbnail host stays stubbed as in the sibling).
+  await withDb((sql) => sql`update divisions set status = 'active' where id = ${rig.divisionId!}`);
+  await page.context().clearCookies();
+  await page.route("https://i.ytimg.com/vi/**", (route) =>
+    route.fulfill({ contentType: "image/svg+xml", body: '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 360"><rect width="480" height="360" fill="#16342a"/></svg>' }));
+  const googleFetches: string[] = [];
+  page.on("request", (r) => {
+    const host = new URL(r.url()).hostname;
+    if (host === "i.ytimg.com" || host.endsWith("youtube-nocookie.com") || host.endsWith("youtube.com")) googleFetches.push(r.url());
+  });
+
+  let widthsRead = 0;
+  for (const width of [1280, 320] as const) {
+    await page.setViewportSize({ width, height: width < 768 ? 700 : 900 });
+    googleFetches.length = 0;
+    await page.goto(`/shared/${rig.orgSlug}/${rig.compSlug}/${rig.divSlug}/fixtures/${f.id}`, { waitUntil: "load" });
+    const player = page.getByTestId("replay-embed");
+    await expect(player, `@${width}: the public match page carries the replay section`).toBeVisible({ timeout: NAV_MS });
+    const tabs = player.getByRole("tab");
+    await expect(tabs, `@${width}: two parts, two tabs`).toHaveCount(2);
+    await expect(tabs.nth(0), `@${width}: Part 1 is showing`).toHaveAttribute("aria-selected", "true");
+
+    // Part 1 (made for kids): the link-out card and nothing else.
+    const card = player.getByTestId("replay-linkout");
+    await expect(card, `@${width}: Part 1 is the link-out card`).toBeVisible();
+    await expect(player.getByTestId("replay-facade"), `@${width}: no facade play button for a made-for-kids part`).toHaveCount(0);
+    await expect(player.locator("iframe"), `@${width}: no player frame`).toHaveCount(0);
+    await expect(player.locator("img"), `@${width}: no thumbnail`).toHaveCount(0);
+    await expect(card).toContainText(en("streaming.youtube.replay.madeForKids"));
+    const open = card.getByTestId("replay-linkout-open");
+    await expect(open, `@${width}: the one link is to the FIRST video on YouTube`).toHaveAttribute("href", youtubeWatchUrl(v1));
+    await expect(open).toHaveAttribute("target", "_blank");
+    await expect(open).toHaveAttribute("rel", "noopener noreferrer");
+    await expect(open).toContainText(en("streaming.youtube.replay.watch"));
+    await expect(player.getByRole("tabpanel").locator("a"), `@${width}: exactly one link in the part`).toHaveCount(1);
+    expect(googleFetches, `@${width}: the browser fetched nothing from YouTube's hosts for a made-for-kids part`).toEqual([]);
+    // Real tap area and no overflow: the link is at least 44px tall, is what a tap at its centre hits, and the card sits inside the viewport.
+    const box = (await open.boundingBox())!;
+    expect(box.height, `@${width}: the link is a 44px target`).toBeGreaterThanOrEqual(44);
+    const hit = await open.evaluate((el) => {
+      const r = el.getBoundingClientRect();
+      const top = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
+      return top !== null && el.contains(top);
+    });
+    expect(hit, `@${width}: a tap at the link's centre lands on the link`).toBe(true);
+    const cardBox = (await card.boundingBox())!;
+    expect(cardBox.x, `@${width}: the card starts inside the viewport`).toBeGreaterThanOrEqual(0);
+    expect(cardBox.x + cardBox.width, `@${width}: the card ends inside the viewport`).toBeLessThanOrEqual(width);
+    await expectNoHorizontalScroll(page);
+
+    // Part 2 (made after the flip): the player's facade, the thumbnail, no link-out - the same page decides per part.
+    await tabs.nth(1).click();
+    await expect(tabs.nth(1)).toHaveAttribute("aria-selected", "true");
+    await expect(player.getByTestId("replay-facade"), `@${width}: Part 2 is the click-to-play facade`).toBeVisible();
+    await expect(player.getByTestId("replay-linkout"), `@${width}: Part 2 is not a link-out`).toHaveCount(0);
+    await expect(player.getByTestId("replay-open"), `@${width}: Part 2 opens the SECOND video`).toHaveAttribute("href", youtubeWatchUrl(v2));
+    await expect(player.locator("iframe"), `@${width}: no player is mounted until a tap`).toHaveCount(0);
+    // The positive pair of the "fetched nothing" claim above: this probe does see the thumbnail request when a part IS embedded.
+    await expect.poll(() => googleFetches.filter((u) => u.startsWith("https://i.ytimg.com/")).length, { message: `@${width}: the embedded part fetched its thumbnail`, timeout: POLL_WAIT_MS }).toBeGreaterThan(0);
+
+    // And back: the first part STILL links out - the flip moved the connection, not the part.
+    await tabs.nth(0).click();
+    await expect(card, `@${width}: Part 1 still links out`).toBeVisible();
+    await expect(open).toHaveAttribute("href", youtubeWatchUrl(v1));
+    widthsRead++;
+  }
+  expect(widthsRead, "both widths were read").toBe(2);
 });
 
 // ===========================================================================
