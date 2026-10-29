@@ -1836,7 +1836,7 @@
     {
       "scenario": "M4b",
       "kind": "inapplicable",
-      "reason": "this config gives no abandon a result: football/hockey/icehockey need abandonPolicy \"award\" (hockey also \"q4_stands\"), which the editor's \"If a match is abandoned\" field sets; cricket needs DLS on or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS) — no committed variant enables it",
+      "reason": "this config gives no abandon a result: football/hockey/icehockey need abandonPolicy \"award\" (hockey also \"q4_stands\"), which the editor's \"If a match is abandoned\" field sets; cricket needs DLS on with the abandon floor (minOversForResult) below the innings length, or two innings a side; every other sport's abandon replays or records no result (ABANDON_RESULTS) — no committed variant enables it",
       "count": 145,
       "cells": {
         "league": [
