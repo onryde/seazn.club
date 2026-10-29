@@ -14,6 +14,8 @@ import "server-only";
 //      REFRESH — the `complete` rows whose video was last confirmed more than 25 days ago, in batches of 50 (Google's per-call id cap):
 //      still there → refreshed_at = the pass's now; gone → the row is deleted and fixtures.stream_url is cleared WHEN IT POINTS AT THAT
 //      VIDEO (a club's own link is never touched).
+//   2b. LAPSED VIDEOS — a `complete` row of a connection whose grant is dead cannot be refreshed; once it has gone the 30-day ceiling
+//      without a confirmation it is deleted (and the link that pointed at it cleared), without waiting for the grant's own purge (4).
 //   3. STUCK BROADCASTS (carries a, b) — see `settleStuck`.
 //   4. DEAD GRANTS — reconnect_needed for 30 days → revokeConnection (token-store's ONE statement, R1/B1-R1) + `purgeConnectionData`.
 //      No call is made to Google: the grant is already dead, and a revoke of it would answer nothing.
@@ -57,10 +59,13 @@ export type YoutubeDailyResult = { checked: number; reconnectNeeded: number; ref
 
 /** A stored video link is re-confirmed after this long (spec §6.6 "~25 days"; DP III.E.4 allows 30, so a failed day has slack). */
 export const YOUTUBE_REFRESH_AFTER_DAYS = 25;
+/** THE CEILING (Google API Services User Data Policy III.E.4): what Seazn stores from YouTube is refreshed or deleted within this many
+ *  days. Every other 30 here is this one fact, so a change to it moves them together. */
+export const YOUTUBE_DATA_CEILING_DAYS = 30;
 /** A grant that has been dead this long has its YouTube data purged (DP III.E.4, spec §6.8). */
-export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = 30;
+export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = YOUTUBE_DATA_CEILING_DAYS;
 /** A `failed` broadcast row is deleted this long after it failed (DP III.E.4; the plan names no other figure). */
-export const YOUTUBE_FAILED_ROW_RETENTION_DAYS = 30;
+export const YOUTUBE_FAILED_ROW_RETENTION_DAYS = YOUTUBE_DATA_CEILING_DAYS;
 
 /** videos.list takes at most 50 ids per call (Google). */
 const VIDEOS_PER_CALL = 50;
@@ -125,6 +130,8 @@ const zero = (): YoutubeDailyResult => ({ checked: 0, reconnectNeeded: 0, refres
 export type DailyHooks = {
   /** After the connected channels were listed, before the first token is opened. */
   afterConnectionsListed?: () => Promise<void>;
+  /** After the connections holding stale `complete` rows they can no longer refresh were listed, before the first is locked. */
+  afterLapsedListed?: () => Promise<void>;
   /** After the stuck broadcasts were listed, before the first is finalized. */
   afterStuckListed?: () => Promise<void>;
   /** After the dead grants were listed, before the first purge. */
@@ -359,6 +366,30 @@ async function checkConnection(p: Pass, c: Conn): Promise<void> {
   if (await checkHealth(p, at, c)) await refreshVideos(p, at, c);
 }
 
+// ─── leg 2b: videos the pass can no longer refresh ───────────────────────────────────────────────────────────────────────────────────
+
+/** A `complete` row of a connection whose grant is DEAD cannot be refreshed (YouTube cannot be asked), and the dead-grant purge only
+ *  comes `YOUTUBE_DEAD_GRANT_PURGE_DAYS` after the grant died: a row last confirmed on the day the grant died would otherwise sit until
+ *  ~day 55 (25 + 30), with its public replay link (DP III.E.4's ceiling). Such a row is deleted - and the link that pointed at its video
+ *  cleared - once it has gone `YOUTUBE_DATA_CEILING_DAYS` without a confirmation. Under the connection's lock, re-checked: a reconnect that
+ *  lands after the list wins (the refresh leg confirms the row tomorrow), exactly as the dead-grant purge's does. */
+async function deleteLapsedVideos(p: Pass, c: { id: string; org_id: string }): Promise<void> {
+  const cutoff = daysBefore(p.now, YOUTUBE_DATA_CEILING_DAYS);
+  const gone = await sql.begin(async (tx) => {
+    const [row] = await tx<{ status: string }[]>`
+      select status from org_youtube_connections where id = ${c.id} and org_id = ${c.org_id} for update`;
+    if (!row || row.status !== "reconnect_needed") return null;
+    const rows = await tx<StoredBroadcast[]>`
+      select id, fixture_id, yt_broadcast_id from youtube_broadcasts
+       where connection_id = ${c.id} and org_id = ${c.org_id} and state = 'complete' and refreshed_at < ${cutoff}
+       order by id for update`;
+    return deleteBroadcasts(tx, c.org_id, rows, p.hooks);
+  });
+  if (gone === null) return;
+  p.out.removed += gone.deleted;
+  expirePages(gone.divisions);
+}
+
 // ─── leg 3: stuck broadcasts ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Carries a and b. A broadcast the end step can never settle holds its pooled key (and the fixture's one open slot) for good, and nothing
@@ -477,6 +508,17 @@ export async function youtubeDaily(
        order by last_health_at nulls first, id`;
     await hooks.afterConnectionsListed?.();
     await eachOf(p, "connection", connected, (c) => checkConnection(p, c));
+  });
+
+  // 2b. Stale `complete` rows of a dead grant: the refresh above cannot reach them, and the 30-day purge below comes too late for them.
+  await leg(p, "lapsed", async () => {
+    const lapsed = await sql<{ id: string; org_id: string }[]>`
+      select distinct c.id, c.org_id from org_youtube_connections c
+        join youtube_broadcasts b on b.connection_id = c.id and b.org_id = c.org_id
+       where c.status = 'reconnect_needed' and b.state = 'complete' and b.refreshed_at < ${daysBefore(now, YOUTUBE_DATA_CEILING_DAYS)} ${inOrgs("c.org_id")}
+       order by c.id`;
+    await hooks.afterLapsedListed?.();
+    await eachOf(p, "lapsed_videos", lapsed, (c) => deleteLapsedVideos(p, c));
   });
 
   // 3. Stuck broadcasts.

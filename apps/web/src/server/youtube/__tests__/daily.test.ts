@@ -52,7 +52,7 @@ import { createSession as organiserStart, currentSession, stopSession, type Sess
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { connectionViews, saveConnectionFromGrant } from "../connections";
 import {
-  YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES, deriveStuckBounds, purgeConnectionData, youtubeDaily,
+  YOUTUBE_DATA_CEILING_DAYS, YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES, deriveStuckBounds, purgeConnectionData, youtubeDaily,
   type PurgeResult, type YoutubeDailyResult,
 } from "../daily";
 import { CLAIM_LEASE_MINUTES, endBackoffMinutes, endDueBroadcasts, type EndStepHooks, type YoutubeEndResult } from "../end-step";
@@ -1111,6 +1111,99 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
   });
 
   // ═══ retention of failed rows (O2 d) and of expired pending grants (O2 e) ══════════════════════════════════════════════
+  // ═══ the 30-day ceiling for a row the pass can no longer refresh (B6 batch review I1a) ═════════════════════════════════
+  describe("the 30-day ceiling for complete rows of a dead grant (DP III.E.4)", () => {
+    it("the ceiling is the policy's 30 days (typed here: the pairs below are derived from the constant, so this pins the constant itself)", () => {
+      expect(YOUTUBE_DATA_CEILING_DAYS).toBe(30);
+    });
+
+    it("EMPTY CASE FIRST: a dead grant that holds no complete row lapses nothing (counters flip only), a second pass is all zeros; the same channel with a stale row then loses it (the positive pair)", async () => {
+      const w = await world();
+      expect((await broadcastsOfConnection(w.connectionId)).length, "premise: no row").toBe(0);
+      w.fake.killToken(w.token);
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, reconnectNeeded: 1 });
+      expect(await daily(w), "a second pass finds nothing").toEqual(ZERO);
+
+      const v = await world();
+      const m = await completedMatch(v, v.fixtures[0]!);
+      await markReconnectNeeded(sql, v.orgId, v.connectionId);
+      await shiftBroadcasts([m.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);
+      expect(await daily(v), "the positive pair: a dead grant WITH a stale row loses it in the same kind of pass").toEqual({ ...ZERO, removed: 1 });
+    });
+
+    it("29 days kept, 31 days gone - for the complete rows of a dead grant only: an OPEN row beside them and another organisation's dead grant are untouched; the link and the public page follow; the sequence (second pass, reconnect, refresh)", async () => {
+      const w = await world({ fixtures: 3, credits: 3 });
+      const [f1, f2, f3] = w.fixtures as [string, string, string];
+      const young = await completedMatch(w, f1);
+      const old = await completedMatch(w, f2);
+      const open = await goLive(w, f3);
+      const openId = (await sessionRow(open.sessionId)).youtube_broadcast_id!;
+      await shiftBroadcasts([young.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS - 1);
+      await shiftBroadcasts([old.broadcastId, openId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);
+      const rows = await broadcastsOfConnection(w.connectionId);
+      expect(rows.map((r) => r.state).sort(), "anti-vacuity: three rows to judge, two of them complete").toEqual(["complete", "complete", "live"]);
+
+      // Another organisation's dead grant with a 31-day-old row: outside this pass's scope, so it must come through whole.
+      const other = await world();
+      const otherMatch = await completedMatch(other, other.fixtures[0]!);
+      await markReconnectNeeded(sql, other.orgId, other.connectionId);
+      await shiftBroadcasts([otherMatch.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);
+
+      revalidateHook.calls = [];
+      w.fake.killToken(w.token);   // the health check finds the dead grant IN this pass: the row is lapsed in the same pass
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, reconnectNeeded: 1, removed: 1 });
+      const after = await broadcastsOfConnection(w.connectionId);
+      expect(after.map((r) => r.id).sort(), "only the 31-day complete row is gone").toEqual([young.broadcastId, openId].sort());
+      expect(await streamUrlOf(f2), "the link that pointed at the removed video is cleared").toBeNull();
+      expect(await streamUrlOf(f1), "the 29-day row's link stays").toBe(youtubeWatchUrl(young.ytId));
+      expect(revalidateHook.calls.map((c) => c.divisionId), "the public page that listed the part is expired").toContain(w.divisionId);
+      expect((await broadcastRow(otherMatch.broadcastId)).state, "another organisation's row is out of scope").toBe("complete");
+      expect(await streamUrlOf(other.fixtures[0]!)).toBe(youtubeWatchUrl(otherMatch.ytId));
+
+      expect(await daily(w), "a second pass finds nothing more").toEqual(ZERO);
+
+      // The sequence: the club reconnects through the real save; the surviving row, stale again, is now CONFIRMED, never lapsed.
+      const g = await grant(w.org, { connectionId: w.connectionId, channels: [w.channel] });
+      await saveConnectionFromGrant({ pendingId: g.id, channelId: w.channel.id, userId: w.userId }, w.fake);
+      w.fake.seedGrant({ refreshToken: g.token, channelId: w.channel.id, channelTitle: w.channel.title });
+      await shiftBroadcasts([young.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, refreshed: 1 });
+      expect((await broadcastRow(young.broadcastId)).state).toBe("complete");
+    });
+
+    it("a CONNECTED channel's stale row is the refresh leg's, never the lapse leg's: while YouTube cannot answer, a 31-day-old row stays (retried tomorrow), then it is confirmed", async () => {
+      const w = await world();
+      const m = await completedMatch(w, w.fixtures[0]!);
+      await shiftBroadcasts([m.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);
+      w.fake.failNext("existingVideos", "youtube_unavailable", "backendError", { channelId: w.channel.id });
+      expect(await daily(w), "YouTube down: the batch failed, nothing removed").toEqual({ ...ZERO, checked: 1, failed: 1 });
+      expect((await broadcastRow(m.broadcastId)).state, "kept for tomorrow").toBe("complete");
+      expect(await daily(w), "YouTube back: confirmed").toEqual({ ...ZERO, checked: 1, refreshed: 1 });
+    });
+
+    it("RACE: a reconnect that lands AFTER the pass listed the lapsed connection and BEFORE its delete wins - the row is kept (the delete re-checks the status under the lock)", async () => {
+      const w = await world();
+      const m = await completedMatch(w, w.fixtures[0]!);
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);
+      await shiftBroadcasts([m.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);
+      let listed = 0;
+      const out = await youtubeDaily(w.fake, new Date(), {
+        orgIds: [w.orgId],
+        hooks: {
+          afterLapsedListed: async () => {
+            listed++;
+            const g = await grant(w.org, { connectionId: w.connectionId, channels: [w.channel] });
+            await saveConnectionFromGrant({ pendingId: g.id, channelId: w.channel.id, userId: w.userId }, w.fake);
+          },
+        },
+      });
+      expect(listed, "premise: the hook ran, i.e. the lapsed connection WAS listed").toBe(1);
+      expect(out).toMatchObject({ removed: 0, failed: 0 });
+      expect((await connRow(w.connectionId)).status).toBe("connected");
+      expect((await broadcastRow(m.broadcastId)).state, "the reconnect won: the row is kept").toBe("complete");
+    });
+  });
+
   describe("retention", () => {
     it("a FAILED broadcast row is deleted 30 days after it failed (DP III.E.4): 29 days kept, 31 days gone; a COMPLETE row of the same age whose video was refreshed today is kept (the negative pair)", async () => {
       const w = await world({ fixtures: 2, credits: 2 });
