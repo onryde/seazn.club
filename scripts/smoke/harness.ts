@@ -1584,6 +1584,10 @@ export async function cleanup(tag: string): Promise<void> {
     `delivered+w2c_${tag}@resend.dev`,
     // w2dTablesSuite's own org (W2d A-smoke) — its competition, the pinned stage and its stored lots draws cascade with it.
     `delivered+w2d_${tag}@resend.dev`,
+    // youtubeConnectSuite's two orgs (YouTube Connect T21) - the connections, destinations, broadcasts, fixtures and pending grants
+    // all cascade with the org (V479: on delete cascade on org_id).
+    `delivered+ytconnect_${tag}@resend.dev`,
+    `delivered+ytconnect_b_${tag}@resend.dev`,
   ];
   const isLocal = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
   const sql = postgres(url, {
