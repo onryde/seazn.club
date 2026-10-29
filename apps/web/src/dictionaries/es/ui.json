@@ -1443,7 +1443,7 @@
   "streaming.youtube.disconnect.doneShared": "{name} está desconectado. Seazn eliminó lo que guardaba de YouTube para este canal. El acceso de Seazn a la cuenta de Google que conectó este canal se mantiene, porque otro canal de la misma cuenta de Google sigue conectado.",
   "streaming.youtube.disconnect.doneUnconfirmed": "{name} está desconectado. Seazn eliminó lo que guardaba de YouTube para este canal, pero no pudo confirmar que Google haya retirado el acceso de Seazn. Para asegurarte, quita Seazn en {link}.",
   "streaming.youtube.disconnect.googleLink": "los ajustes de acceso de terceros de tu cuenta de Google",
-  "streaming.youtube.error.inUse": "Un partido está en directo en este canal, o la emisión acaba de terminar y el canal sigue reservado unos minutos. Desconéctalo cuando haya pasado ese tiempo.",
+  "streaming.youtube.error.inUse": "Un partido está en directo en este canal o a punto de estarlo, o la emisión acaba de terminar y el canal sigue reservado unos minutos. Desconéctalo cuando el partido haya terminado y haya pasado ese tiempo.",
   "streaming.youtube.error.endUnknown": "Seazn no puede saber si un partido está usando este canal, así que no se desconectó. El problema se ha comunicado. Si persiste, contacta con soporte.",
   "streaming.youtube.disconnectOnly.note": "Los partidos no pueden salir en directo desde esta organización ahora mismo. Aun así, puedes desconectar los canales de YouTube de abajo.",
   "streaming.youtube.disconnectOnly.none": "No hay canales de YouTube conectados.",

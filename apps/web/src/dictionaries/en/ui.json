@@ -1443,7 +1443,7 @@
   "streaming.youtube.disconnect.doneShared": "{name} is disconnected. Seazn deleted what it stored from YouTube for this channel. Seazn's access to the Google account that connected this channel stays, because another channel on the same Google account is still connected.",
   "streaming.youtube.disconnect.doneUnconfirmed": "{name} is disconnected. Seazn deleted what it stored from YouTube for this channel, but it couldn't confirm that Google removed Seazn's access. To be sure, remove Seazn in {link}.",
   "streaming.youtube.disconnect.googleLink": "your Google account's third-party access settings",
-  "streaming.youtube.error.inUse": "A match is live on this channel, or its stream only just stopped and the channel is held for a few minutes. Disconnect it once that time has passed.",
+  "streaming.youtube.error.inUse": "A match is live on this channel or about to be, or its stream only just stopped and the channel is held for a few minutes. Disconnect it once the match has ended and that time has passed.",
   "streaming.youtube.error.endUnknown": "Seazn can't tell whether a match is using this channel, so it wasn't disconnected. The problem has been reported. If it persists, contact support.",
   "streaming.youtube.disconnectOnly.note": "Matches can't go live from this organisation right now. You can still disconnect the YouTube channels below.",
   "streaming.youtube.disconnectOnly.none": "No YouTube channels are connected.",

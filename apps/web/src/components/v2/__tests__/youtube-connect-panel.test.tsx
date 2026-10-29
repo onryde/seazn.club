@@ -1031,7 +1031,7 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     answerWith(async () => { throw await wire(inUse()); });
     const row = mount({}, { onDisconnected });
     await click(disconnectBtn(row));
-    expect(textAt(row.tree(), "youtube-error")).toBe("A match is live on this channel, or its stream only just stopped and the channel is held for a few minutes. Disconnect it once that time has passed.");
+    expect(textAt(row.tree(), "youtube-error")).toBe("A match is live on this channel or about to be, or its stream only just stopped and the channel is held for a few minutes. Disconnect it once the match has ended and that time has passed.");
     expect(textAt(row.tree(), "youtube-error")).toBe(m("streaming.youtube.error.inUse"));
     expect(nav.refresh).not.toHaveBeenCalled();
     expect(onDisconnected).not.toHaveBeenCalled();
@@ -1274,13 +1274,13 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(m("streaming.youtube.disconnect.done", { name: "X" })).not.toMatch(/Google/);
   });
 
-  it("B6 batch review m5 / N5, in every locale: the in-use sentence says the channel is held a few minutes after a stream stops; the shared-account sentence names the account that connected THIS channel, never 'your' account; the end-unknown sentence is a persistent fault - reported, contact support, no 'try again'", () => {
+  it("B6 batch review m5 / N5 + round 2 C5, in every locale: the in-use sentence says the channel is held by a match that is live OR ABOUT TO BE, and a few minutes after a stream stops; the shared-account sentence names the account that connected THIS channel, never 'your' account; the end-unknown sentence is a persistent fault - reported, contact support, no 'try again'", () => {
     // The wording each locale must carry (typed from the ruling), and the wording it must NOT: the old sentences' tell-tales.
-    const want: Record<string, { inUse: RegExp; sharedNot: RegExp; unknownYes: RegExp; unknownNot: RegExp }> = {
-      en: { inUse: /held for a few minutes/, sharedNot: /your Google account/, unknownYes: /has been reported.*contact support/, unknownNot: /try again/i },
-      es: { inUse: /unos minutos/, sharedNot: /tu cuenta de Google/, unknownYes: /comunicado.*soporte/, unknownNot: /Inténtalo/ },
-      fr: { inUse: /quelques minutes/, sharedNot: /votre compte Google/, unknownYes: /signalé.*support/, unknownNot: /Réessayez/ },
-      nl: { inUse: /enkele minuten/, sharedNot: /je Google-account/, unknownYes: /gemeld.*support/, unknownNot: /Probeer het/ },
+    const want: Record<string, { inUse: RegExp; inUseAbout: RegExp; sharedNot: RegExp; unknownYes: RegExp; unknownNot: RegExp }> = {
+      en: { inUse: /held for a few minutes/, inUseAbout: /live on this channel or about to be/, sharedNot: /your Google account/, unknownYes: /has been reported.*contact support/, unknownNot: /try again/i },
+      es: { inUse: /unos minutos/, inUseAbout: /a punto de estarlo/, sharedNot: /tu cuenta de Google/, unknownYes: /comunicado.*soporte/, unknownNot: /Inténtalo/ },
+      fr: { inUse: /quelques minutes/, inUseAbout: /sur le point de l’être/, sharedNot: /votre compte Google/, unknownYes: /signalé.*support/, unknownNot: /Réessayez/ },
+      nl: { inUse: /enkele minuten/, inUseAbout: /op het punt te beginnen/, sharedNot: /je Google-account/, unknownYes: /gemeld.*support/, unknownNot: /Probeer het/ },
     };
     expect(m("streaming.youtube.disconnect.doneShared", { name: "X" })).toMatch(/the Google account that connected this channel/);
     let checked = 0;
@@ -1288,6 +1288,7 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
       const w = want[l]!;
       const d = localeDict(l);
       expect(d["streaming.youtube.error.inUse"], `${l} inUse`).toMatch(w.inUse);
+      expect(d["streaming.youtube.error.inUse"], `${l} inUse covers the match that is about to be live`).toMatch(w.inUseAbout);
       expect(d["streaming.youtube.disconnect.doneShared"], `${l} doneShared`).not.toMatch(w.sharedNot);
       expect(d["streaming.youtube.disconnect.doneShared"], `${l} doneShared keeps its slot`).toContain("{name}");
       expect(d["streaming.youtube.error.endUnknown"], `${l} endUnknown`).toMatch(w.unknownYes);
