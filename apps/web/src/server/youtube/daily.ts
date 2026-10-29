@@ -308,24 +308,25 @@ async function viaPort<T>(call: () => Promise<T>, c: Pick<Conn, "id" | "org_id">
   }
 }
 
-/** The port with every call the connection leg makes gated on the slice: a call starts only while `room()` says there is time, else it
- *  throws `BudgetSpent` without calling (end-step.ts's gate, for the daily pass's calls). `revoke` is NOT gated by the slice: the Google
- *  revoke of a purged grant is the policy's step, and `purgeDeadGrant` bounds it by its own allowance before it commits the purge. Each
- *  call runs on the ORIGINAL port (`this`). */
-function gated(port: YouTubePort, room: () => boolean): YouTubePort {
-  const g = Object.create(port) as YouTubePort;
-  const gate = <A extends unknown[], R>(call: (...a: A) => Promise<R>) =>
-    async (...a: A): Promise<R> => {
-      if (!room()) throw new BudgetSpent();
-      return call.call(port, ...a);
-    };
-  g.accessToken = gate(port.accessToken);
-  g.listMyChannels = gate(port.listMyChannels);
-  g.liveEnabled = gate(port.liveEnabled);
-  g.existingVideos = gate(port.existingVideos);
-  g.deleteStream = gate(port.deleteStream);
-  g.revoke = (refreshToken) => port.revoke(refreshToken);
-  return g;
+/** The port with EVERY call gated on the slice: a call starts only while `room()` says there is time, else it throws `BudgetSpent` without
+ *  calling (end-step.ts's gate, for the daily pass's calls). A Proxy over the port rather than a list of wrapped methods, so a method added
+ *  to `YouTubePort` is gated from the day it exists instead of silently skipping the slice (B6 round 2 C4). The one exception is `revoke`:
+ *  the Google revoke of a purged grant is the policy's step, and `purgeDeadGrant` bounds it by its own allowance before it commits the
+ *  purge. Every call runs on the ORIGINAL port (`this`), a refusal is thrown at the call (callers make it inside `viaPort`, which catches it
+ *  whether it is thrown or rejected), and a member that is not a method (`mode`) passes through. */
+export function gated(port: YouTubePort, room: () => boolean): YouTubePort {
+  return new Proxy(port, {
+    get(target, prop) {
+      const member: unknown = Reflect.get(target, prop, target);
+      if (typeof member !== "function") return member;
+      const call = member as (...a: unknown[]) => unknown;
+      if (prop === "revoke") return (...a: unknown[]) => call.apply(target, a);
+      return (...a: unknown[]) => {
+        if (!room()) throw new BudgetSpent();
+        return call.apply(target, a);
+      };
+    },
+  });
 }
 
 /** The connection's grant is dead: reconnect_needed, status_since now (token-store's writer; false when it already was). */
