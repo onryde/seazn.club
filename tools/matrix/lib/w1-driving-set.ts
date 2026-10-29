@@ -130,7 +130,7 @@ export interface W1DrivingDeps {
 type PlannedScenario = W1DrivingScenario | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey;
 
 interface Selection {
-  readonly cells: readonly { readonly row: RowKey; readonly sport: string; readonly scenario: PlannedScenario; readonly overrides?: Readonly<Record<string, unknown>> }[];
+  readonly cells: readonly { readonly row: RowKey; readonly sport: string; readonly scenario: PlannedScenario; readonly overrides?: Readonly<Record<string, unknown>>; readonly asVariant?: string }[];
   readonly tests: readonly VariantCase[];
 }
 
@@ -153,7 +153,7 @@ function select(filter: W1DrivingFilter, deps: W1DrivingDeps): Selection {
   const scenario = filter.scenario === undefined ? null : scenarioOf(filter.scenario);
   const atoms = atomsOf();
   const drops = (deps.drops ?? readDropIndex)();
-  const cells: { row: RowKey; sport: string; scenario: PlannedScenario; overrides?: Readonly<Record<string, unknown>> }[] = [];
+  const cells: { row: RowKey; sport: string; scenario: PlannedScenario; overrides?: Readonly<Record<string, unknown>>; asVariant?: string }[] = [];
   const reasons: string[] = [];
   // W2a (Task 14): a bracket-finish scenario is planned on ITS cells (w2a-cells.ts), less LIFECYCLE's drops — and only
   // when named. No scenario filter plans the four scripts, so every committed plan is unchanged.
@@ -206,7 +206,10 @@ function toCases(sel: Selection, variantFor: (sport: string) => string): CaseSpe
   const out: CaseSpec[] = [];
   for (const c of sel.cells) {
     const v = variantFor(c.sport);
-    out.push({ caseId: `${c.row}|${c.sport}|${v}|${c.scenario}`, row: c.row, sport: c.sport, variant: v, scenario: c.scenario, canary: false, ...(c.overrides === undefined ? {} : { overrides: c.overrides }) });
+    // A W2e cell that plays the builder default AS another variant (its overrides, w2e-cells.ts) says which in a trailing segment
+    // (`row|sport|variant|scenario[|…]`, the shape parity.ts reads), so the id of what is PLAYED is not the id of the default.
+    const as = c.asVariant === undefined ? "" : `|as-${c.asVariant}`;
+    out.push({ caseId: `${c.row}|${c.sport}|${v}|${c.scenario}${as}`, row: c.row, sport: c.sport, variant: v, scenario: c.scenario, canary: false, ...(c.overrides === undefined ? {} : { overrides: c.overrides }) });
   }
   // probe-set.ts's variant shape exactly.
   for (const vc of sel.tests) {

@@ -1,4 +1,4 @@
-// The W2e deciding-path scenarios (Tasks 19–23; spec §10, D16): LIFECYCLE's loop on a bracket whose every match is
+// The W2e deciding-path scenarios (Tasks 19–24; spec §10, D16): LIFECYCLE's loop on a bracket whose every match is
 // FORCED down one sport-rule deciding path, so a run that turns green cannot have got there by the policy's rotation.
 // OPT-IN: planned only by `--set w1-driving --scenario <key>` (w1-driving-set.ts), never by a committed plan.
 //
@@ -7,6 +7,10 @@
 //           shoot-out, every kick in the order the engine names (G2 football and hockey; G3 ice hockey's GWS — the sport
 //           plays the one name its engine gives the shoot-out, 'shootout' or 'gws')
 //   W2E_OT  every match level through regulation and won by a goal in overtime (G3, ice hockey)
+//   W2E_SUPER_OVER  every match level through its main innings and won in the super over, under the cfg's still-tied policy
+//           (G4: cricket's limited-overs variants; the stream names persons, so it is built against the lineups the case PUT)
+//   W2E_DLS every match won by a chase inside a REVISED target (G5: cricket). The builder default has DLS off, so the revise the
+//           case posts is the umpires' manual target - API-only; the pad's revise (DLS on) is the truth run's to drive (T35).
 //   W2E_DECIDER  every match taken to the deciding set - the sets level, the last played to the cfg's own deciding target
 //           (G6: badminton, volleyball, table tennis)
 //   W2E_CAP every match's sets ended by the score cap, cap : cap-1 (G7: badminton, whose variants declare one - 30-29 under

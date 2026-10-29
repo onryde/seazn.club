@@ -32,7 +32,7 @@ import { PROBE_LINEUPS, type ProductFold, type StreamEvent, type StreamLineups }
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { W1_DRIVING_SCENARIOS, planW1Driving } from "../lib/w1-driving-set.ts";
 import { bracketRootRows } from "../lib/w2a-cells.ts";
-import { w2eApplies, w2eBracketCfgOf, w2eCells, w2eOverridesFor } from "../lib/w2e-cells.ts";
+import { W2eOverridesNameNoVariant, w2eApplies, w2eBracketCfgOf, w2eCells, w2eNameVariant, w2eOverridesFor, w2eOverridesSetsFor } from "../lib/w2e-cells.ts";
 import type { FixtureStateOut } from "../lib/driver/types.ts";
 import { FakeKnockoutDriver } from "./fake-driver.ts";
 import { capBinds, decidingSetReachable, setSportsOf, type SetCfg, type SetFoldState } from "./set-oracles.ts";
@@ -80,6 +80,16 @@ const tbKeyApplies = (k: TbKey, s: string): boolean => {
   if (k === "W2E_TB_SET") return nestedSet(resolveSportCfg(s, variantFor(s)))?.tiebreakAt != null;
   return variantKeys(s).some((v) => { const set = nestedSet(resolveSportCfg(s, v)); return set?.tiebreakAt != null && set.tiebreakWinBy !== undefined; });
 };
+/** Task 23 M1/M7 - the variants a tie-break key is PLAYED under on tennis, from the engine's cfg declarations (not the cells'): every
+ *  variant whose sets end in a tie-break, at the MATCH margin for W2E_TB_SET (tour's set tie-break, the slam's final-set tie-break to
+ *  10, the doubles norm's match tie-break) and at the SET's own margin for W2E_SHORT_SETS (Fast4's 4-3, the short-sets variant's 5-4). */
+const tennisPlayed = (k: TbKey): string[] => variantKeys("tennis").filter((v) => {
+  const set = nestedSet(resolveSportCfg("tennis", v));
+  return set?.tiebreakAt != null && (k === "W2E_TB_SET" ? set.tiebreakWinBy === undefined : set.tiebreakWinBy !== undefined);
+});
+/** How many override sets (cases per row) a key has on a sport that applies: tennis's tie-break keys play every such variant, the
+ *  rest the one. */
+const playedCount = (k: W2eScenarioKey, s: string): number => (isTbKey(k) && s === "tennis" ? tennisPlayed(k).length : 1);
 /** The method a product result carries when the key's path decided it, where the engine's win-method table cannot say so on
  *  its own: a DLS win is decidedIn 'regulation' (a revised target is no extra play), so only its method names it. */
 const METHOD_OF: Readonly<Partial<Record<W2eScenarioKey, string>>> = { W2E_DLS: "dls" };
@@ -132,17 +142,47 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
       expect(new Set(cases.map((c) => c.scenario)), k).toEqual(new Set([k]));
       // A case plays the builder default's variant; where the default builds none of the key's paths (tennis's short-set tie-break) it
       // carries the division-config overrides that turn it into the first variant that does (w2e-cells.ts) - and only then.
-      expect(cases.every((c) => c.caseId === `${c.row}|${c.sport}|${c.variant}|${k}` && !c.canary && c.variant === variantFor(c.sport)), k).toBe(true);
+      // Task 23 M2: a case that plays the default AS another variant (its overrides) says which, in a trailing `as-<variant>` segment
+      // (`row|sport|variant|scenario[|…]`, the shape parity.ts reads); a case that plays the default as it is has none. The variant is
+      // the one declared variant whose resolved cfg IS the default under the overrides (the engine's variants, not the cell's word).
+      const asOf = (c: CaseSpec): string => {
+        if (c.overrides === undefined) return "";
+        const played = JSON.stringify(Object.entries(resolveSportCfg(c.sport, c.variant, { ...c.overrides }) as object).sort());
+        const same = variantKeys(c.sport).filter((v) => JSON.stringify(Object.entries(resolveSportCfg(c.sport, v) as object).sort()) === played);
+        expect(same, `${c.caseId}: exactly one declared variant is what the overrides play`).toHaveLength(1);
+        return `|as-${same[0]!}`;
+      };
+      expect(cases.every((c) => c.caseId === `${c.row}|${c.sport}|${c.variant}|${k}${asOf(c)}` && !c.canary && c.variant === variantFor(c.sport)), k).toBe(true);
       for (const c of cases) {
-        const want = w2eOverridesFor(k, c.sport)!;
-        expect(c.overrides, `${k} ${c.row}|${c.sport}`).toEqual(Object.keys(want).length === 0 ? undefined : want);
+        // Each case's overrides are one of its sport's sets (none for the default as it is) - and every set of every applicable
+        // sport is planned on every bracket-root row, once.
+        expect(w2eOverridesSetsFor(k, c.sport).map((o) => (Object.keys(o).length === 0 ? undefined : o)), `${k} ${c.row}|${c.sport}`).toContainEqual(c.overrides);
         if (c.overrides !== undefined) overridden++;
       }
+      for (const sport of SPORT_KEYS) {
+        const per = cases.filter((c) => c.sport === sport);
+        expect(per.length, `${k}/${sport}`).toBe(w2eApplies(k, sport) ? bracketRootRows().length * playedCount(k, sport) : 0);
+      }
+      expect(new Set(cases.map((c) => c.caseId)).size, `${k}: case ids are unique`).toBe(cases.length);
       planned += cases.length;
     }
     expect(planned).toBeGreaterThan(0);
-    // Exactly the short-set key's cells carry overrides: ten keys, one of them (W2E_SHORT_SETS) on tennis's eight bracket rows.
-    expect(overridden).toBe(bracketRootRows().length);
+    // Exactly tennis's tie-break cells that play a variant other than the default carry overrides: the slam's and the doubles norm's
+    // for W2E_TB_SET, Fast4's and the short-sets variant's for W2E_SHORT_SETS (the engine's declarations: tennisPlayed), on each of the
+    // eight bracket rows - and each of those ids names the variant it plays, where no other id has a fifth segment.
+    const otherVariants = TB_KEYS.flatMap((k) => tennisPlayed(k).filter((v) => v !== variantFor("tennis")));
+    expect(otherVariants, "the engine's non-default tie-break variants").toEqual(["grand-slam", "doubles-noad-mtb10", "fast4", "short-sets"]);
+    expect(overridden).toBe(bracketRootRows().length * otherVariants.length);
+    // The guard is reached: overrides that play no declared variant are refused by name, and the real ones name theirs.
+    expect(() => w2eNameVariant("tennis", { bestOf: 99 })).toThrow(W2eOverridesNameNoVariant);
+    expect(w2eNameVariant("tennis", w2eOverridesFor("W2E_SHORT_SETS", "tennis")!), "the first declared variant with a short-set margin").toBe(variantKeys("tennis").find((v) => v !== variantFor("tennis") && nestedSet(resolveSportCfg("tennis", v))?.tiebreakWinBy !== undefined));
+    const shortIds = planW1Driving(variantFor, { scenario: "W2E_SHORT_SETS" }).map((c) => c.caseId);
+    expect(shortIds.length).toBe(bracketRootRows().length * tennisPlayed("W2E_SHORT_SETS").length);
+    expect(shortIds.every((id) => id.split("|").length === 5 && id.split("|")[4]!.startsWith("as-")), "an overrides case id has its trailing segment").toBe(true);
+    expect(new Set(shortIds.map((id) => id.split("|")[4])), "...and names each short-set variant").toEqual(new Set(tennisPlayed("W2E_SHORT_SETS").map((v) => `as-${v}`)));
+    const tbIds = planW1Driving(variantFor, { scenario: "W2E_TB_SET" }).map((c) => c.caseId);
+    expect(tbIds.filter((id) => id.split("|").length === 4).length, "the default as it is has four segments, on each row").toBe(bracketRootRows().length);
+    expect(new Set(tbIds.filter((id) => id.split("|").length === 5).map((id) => id.split("|")[4])), "the other tie-break variants are named").toEqual(new Set(["as-grand-slam", "as-doubles-noad-mtb10"]));
   });
 
   it("W2E_SHORT_SETS plans tennis's default (tour has no short-set tie-break) as the first variant that has one: the overrides resolve back to that variant's cfg exactly, the variant is not the default, and its sets close at the set's own margin; W2E_TB_SET needs none", () => {
@@ -242,10 +282,10 @@ describe("the cells: bracket-root rows × the sports whose generator builds the 
     let total = 0;
     for (const k of W2E_SCENARIO_KEYS) {
       const cells = w2eCells(k);
-      expect(cells.length, k).toBe(bracketRootRows().length * by(k).length);
+      expect(cells.length, k).toBe(bracketRootRows().length * by(k).reduce((n, s) => n + playedCount(k, s), 0));
       expect(cells.every((c) => forbidsLevelResult(stagesForRow(c.row)[0]!.kind as StageKind)), k).toBe(true);
       const dropped = w2eCells(k, (row, sport) => row === cells[0]!.row && sport === cells[0]!.sport);
-      expect(dropped.length, `${k}: one drop`).toBe(cells.length - 1);
+      expect(dropped.length, `${k}: one drop (a row x sport cell, every variant it is played under)`).toBe(cells.length - playedCount(k, cells[0]!.sport));
       total += cells.length;
     }
     expect(total).toBeGreaterThan(0);
@@ -261,10 +301,9 @@ describe("the cells: bracket-root rows × the sports whose generator builds the 
 });
 
 /** One scenario run on the knockout fake, as the planner builds the case (w1-driving-set.ts), with every check the run reports. */
-async function runScenario(key: W2eScenarioKey, row: RowKey = "knockout", sport = "football") {
+async function runScenario(key: W2eScenarioKey, row: RowKey = "knockout", sport = "football", overrides: Readonly<Record<string, unknown>> | null = w2eOverridesFor(key, sport)) {
   const variant = variantFor(sport);
   // The case as the planner builds it (w1-driving-set.ts): the builder default's variant, under the overrides the cell carries.
-  const overrides = w2eOverridesFor(key, sport);
   const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|${key}`, row, sport, variant, scenario: key, canary: false, ...(overrides === null || Object.keys(overrides).length === 0 ? {} : { overrides }) };
   const out = await SCENARIOS[key].run({ driver: new FakeKnockoutDriver(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant, { ...(spec.overrides ?? {}) }), tag: "t", denied: [] });
   const checks = [...evaluateInvariants(out.observed), ...out.assertions];
@@ -276,9 +315,9 @@ describe("each key, run on the knockout fake for every sport it is for", () => {
   it("works: its own check passes on a counted item per bracket match, the shared bracket checks pass, and every product result was decided down the key's path (decidedIn from the engine) — for every sport the key is for", async () => {
     let ran = 0;
     const perKey = new Map<string, number>();
-    for (const key of PATH_KEYS) for (const sport of engineSports(key)) {
-      const at = `${key}/${sport}`;
-      const { out, checks, state } = await runScenario(key, "knockout", sport);
+    for (const key of PATH_KEYS) for (const sport of engineSports(key)) for (const overrides of w2eOverridesSetsFor(key, sport)) {
+      const at = `${key}/${sport}${Object.keys(overrides).length === 0 ? "" : ` as ${w2eNameVariant(sport, overrides)}`}`;
+      const { out, checks, state } = await runScenario(key, "knockout", sport, overrides);
       expect(checks.filter((c) => c.verdict === "fail").map((c) => `${c.id}: ${c.reason}`).join(" | "), at).toBe("");
       expect(state, at).toBe("works");
       const own = checks.find((c) => c.id === "w2e-every-match-took-the-path")!;
@@ -304,7 +343,7 @@ describe("each key, run on the knockout fake for every sport it is for", () => {
       perKey.set(key, (perKey.get(key) ?? 0) + 1);
     }
     console.info(`w2e-scenarios: ${ran} run(s) on the fake, per key ${JSON.stringify(Object.fromEntries(perKey))}`);
-    expect(ran).toBe(PATH_KEYS.reduce((n, k) => n + engineSports(k).length, 0));
+    expect(ran).toBe(PATH_KEYS.reduce((n, k) => n + engineSports(k).reduce((m, s) => m + playedCount(k, s), 0), 0));
     for (const key of PATH_KEYS) expect(perKey.get(key) ?? 0, `${key}: no sport was run`).toBeGreaterThan(0);
   });
 
@@ -885,10 +924,9 @@ describe("everyMatchTookTheDecidingPath, tennis's tie-break set and short-set ti
 });
 
 describe("Task 23: what the fake knockout product holds for each W2E_TB_SET / W2E_SHORT_SETS match IS the path - read from its /state by the engine's cfg declarations, not by the witness", () => {
-  async function playedStates(key: "W2E_TB_SET" | "W2E_SHORT_SETS") {
+  async function playedStates(key: "W2E_TB_SET" | "W2E_SHORT_SETS", overrides: Readonly<Record<string, unknown>> = w2eOverridesFor(key, "tennis")!) {
     const driver = new FakeKnockoutDriver();
     const variant = variantFor("tennis");
-    const overrides = w2eOverridesFor(key, "tennis")!;
     const spec: CaseSpec = { caseId: `knockout|tennis|${variant}|${key}`, row: "knockout", sport: "tennis", variant, scenario: key, canary: false, ...(Object.keys(overrides).length === 0 ? {} : { overrides }) };
     const cfg = resolveSportCfg("tennis", variant, { ...overrides });
     const out = await SCENARIOS[key].run({ driver, spec, orgSlug: "o", cfg, tag: "t", denied: [] });
@@ -927,24 +965,33 @@ describe("Task 23: what the fake knockout product holds for each W2E_TB_SET / W2
     expect(matches).toBeGreaterThan(2);
   });
 
-  it("the stream a tennis scenario posts is the engine's closest finish: tbIsClosestFinish (accepted, one point short refused, one short of the margin refused) for every recorded stream", async () => {
+  it("the stream a tennis scenario posts is the engine's closest finish: tbIsClosestFinish (accepted, one point short refused, one short of the margin refused) for every recorded stream, under EVERY variant the key is played under (Task 23 M1/M7: tour's set tie-break, the slam's final-set tie-break, the doubles norm's match tie-break; Fast4's and the short-sets variant's short-set tie-break)", async () => {
     let streams = 0;
+    const perVariant = new Map<string, number>();
     for (const key of TB_KEYS) {
-      const driver = new FakeKnockoutDriver();
-      const variant = variantFor("tennis");
-      const overrides = w2eOverridesFor(key, "tennis")!;
-      const spec: CaseSpec = { caseId: `knockout|tennis|${variant}|${key}`, row: "knockout", sport: "tennis", variant, scenario: key, canary: false, ...(Object.keys(overrides).length === 0 ? {} : { overrides }) };
-      const cfg = resolveSportCfg("tennis", variant, { ...overrides });
-      await SCENARIOS[key].run({ driver, spec, orgSlug: "o", cfg, tag: "t", denied: [] });
-      const stageCfgOf = stageCfg("tennis", cfg, "knockout", variant);
-      for (const f of driver.fixtures) {
-        if (f.status !== "decided") continue;
-        expect(f.events.length, `${key} ${f.id}: the fake holds the stream the scenario posted`).toBeGreaterThan(1);
-        expect(tbIsClosestFinish(stageCfgOf, f.events), `${key} ${f.id}`).toEqual({ accepted: true, targetEdge: true, marginEdge: true });
-        streams++;
+      for (const overrides of w2eOverridesSetsFor(key, "tennis")) {
+        const driver = new FakeKnockoutDriver();
+        const variant = variantFor("tennis");
+        const played = Object.keys(overrides).length === 0 ? variant : w2eNameVariant("tennis", overrides);
+        const spec: CaseSpec = { caseId: `knockout|tennis|${variant}|${key}`, row: "knockout", sport: "tennis", variant, scenario: key, canary: false, ...(Object.keys(overrides).length === 0 ? {} : { overrides }) };
+        const cfg = resolveSportCfg("tennis", variant, { ...overrides });
+        const out = await SCENARIOS[key].run({ driver, spec, orgSlug: "o", cfg, tag: "t", denied: [] });
+        expect(out.assertions.find((a) => a.id === "w2e-every-match-took-the-path")!.verdict, `${key} as ${played}`).toBe("pass");
+        const stageCfgOf = stageCfg("tennis", cfg, "knockout", variant);
+        for (const f of driver.fixtures) {
+          if (f.status !== "decided") continue;
+          expect(f.events.length, `${key} as ${played} ${f.id}: the fake holds the stream the scenario posted`).toBeGreaterThan(1);
+          expect(tbIsClosestFinish(stageCfgOf, f.events), `${key} as ${played} ${f.id}`).toEqual({ accepted: true, targetEdge: true, marginEdge: true });
+          streams++;
+          perVariant.set(`${key}/${played}`, (perVariant.get(`${key}/${played}`) ?? 0) + 1);
+        }
       }
     }
     expect(streams, "some recorded stream was checked").toBeGreaterThan(0);
+    console.info(`w2e-scenarios: tennis tie-break streams per key/variant ${JSON.stringify(Object.fromEntries(perVariant))}`);
+    // Every variant of both keys played, each on more than one match.
+    expect([...perVariant.keys()].sort()).toEqual(TB_KEYS.flatMap((k) => tennisPlayed(k).map((v) => `${k}/${v}`)).sort());
+    for (const [k, n] of perVariant) expect(n, k).toBeGreaterThan(1);
   });
 });
 

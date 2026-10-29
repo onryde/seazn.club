@@ -18,7 +18,7 @@ import { W2E_SCENARIO_PATHS, type W2eScenarioKey } from "./scenarios/types.ts";
 import { resolveSportCfg, stageCfg, variantKeys } from "./sport-cfg.ts";
 import { generateStream } from "./streams/index.ts";
 import { endingLevelOf } from "./streams/sanction.ts";
-import { GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, type DecidingPath } from "./streams/types.ts";
+import { GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, canon, type DecidingPath } from "./streams/types.ts";
 import { offlineBuilderDefault } from "./variants.ts";
 import { bracketRootRows } from "./w2a-cells.ts";
 
@@ -60,16 +60,6 @@ export function w2eSanctionBuilds(sport: string, cfg: unknown): boolean {
   }
 }
 
-/** A value as canonical JSON: object keys sorted (a cfg parsed from a preset and one parsed from overrides can differ in key order). */
-function canon(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(canon).join(",")}]`;
-  if (typeof v === "object" && v !== null) {
-    const o = v as Record<string, unknown>;
-    return `{${Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canon(o[k])}`).join(",")}}`;
-  }
-  return JSON.stringify(v) ?? "null";
-}
-
 /** The division-config overrides under which the builder-default case of `sport` builds one of `key`'s paths: `{}` where the
  *  default does already, the overrides that turn it into the first other declared variant that does (the top-level cfg keys that
  *  differ, resolved back to that variant's cfg exactly), or null where no variant of the sport builds one. */
@@ -79,18 +69,51 @@ export function w2eOverridesFor(key: W2eScenarioKey, sport: string): Readonly<Re
   if (key === "W2E_SANCTION_END") return w2eSanctionBuilds(sport, w2eBracketCfgOf(sport)) ? {} : null;
   if (w2ePathUnder(key, sport, w2eBracketCfgOf(sport)) !== null) return {};
   const def = offlineBuilderDefault(sport);
-  const base = resolveSportCfg(sport, def) as Record<string, unknown>;
   for (const variant of variantKeys(sport)) {
     if (variant === def) continue;
-    const target = resolveSportCfg(sport, variant) as Record<string, unknown>;
-    const overrides: Record<string, unknown> = {};
-    for (const k of new Set([...Object.keys(base), ...Object.keys(target)])) if (canon(base[k]) !== canon(target[k])) overrides[k] = target[k];
-    // The overrides must express the variant exactly (a key the target lacks cannot be removed by an override).
-    if (canon(resolveSportCfg(sport, def, { ...overrides })) !== canon(target)) continue;
-    if (w2ePathUnder(key, sport, stageCfg(sport, target, "knockout", variant)) === null) continue;
+    const overrides = overridesToVariant(sport, variant);
+    if (overrides === null || w2ePathUnder(key, sport, stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant)) === null) continue;
     return overrides;
   }
   return null;
+}
+
+/** The division-config overrides that turn the builder default of `sport` into `variant` (the top-level cfg keys that differ,
+ *  resolved back to that variant's cfg exactly), or null when overrides cannot express it (a key the target lacks cannot be
+ *  removed by an override). */
+function overridesToVariant(sport: string, variant: string): Readonly<Record<string, unknown>> | null {
+  const def = offlineBuilderDefault(sport);
+  const base = resolveSportCfg(sport, def) as Record<string, unknown>;
+  const target = resolveSportCfg(sport, variant) as Record<string, unknown>;
+  const overrides: Record<string, unknown> = {};
+  for (const k of new Set([...Object.keys(base), ...Object.keys(target)])) if (canon(base[k]) !== canon(target[k])) overrides[k] = target[k];
+  return canon(resolveSportCfg(sport, def, { ...overrides })) === canon(target) ? overrides : null;
+}
+
+/** Task 23 M1/M7: the keys that play EVERY declared variant that builds one of their paths, not the first. Tennis's variants differ
+ *  in the SHAPE of the tie-break that closes the set - the set tie-break (tour's 7-6), the slam's final-set tie-break to 10, the
+ *  doubles norm's match tie-break, the short-set tie-break at the set's own margin (Fast4's 4-3, the short-sets variant's 5-4) - so
+ *  the default alone would leave three of those shapes unplayed in the product. The other keys' variants differ in numbers (a
+ *  target, a count), not in the shape of the path, and play the first. */
+export const W2E_EVERY_VARIANT: ReadonlySet<W2eScenarioKey> = new Set<W2eScenarioKey>(["W2E_TB_SET", "W2E_SHORT_SETS"]);
+
+/** Every overrides set `key` is played under on `sport`, in the engine's variant order: `[{}]` for the builder default as it is
+ *  (where it builds a path), then the overrides of each other variant that builds one (only for W2E_EVERY_VARIANT keys; the other
+ *  keys have the one `w2eOverridesFor` gives). Empty where the key does not apply. */
+export function w2eOverridesSetsFor(key: W2eScenarioKey, sport: string): Readonly<Record<string, unknown>>[] {
+  const first = w2eOverridesFor(key, sport);
+  if (first === null) return [];
+  if (!W2E_EVERY_VARIANT.has(key)) return [first];
+  const def = offlineBuilderDefault(sport);
+  const out: Readonly<Record<string, unknown>>[] = [];
+  if (w2ePathUnder(key, sport, w2eBracketCfgOf(sport)) !== null) out.push({});
+  for (const variant of variantKeys(sport)) {
+    if (variant === def) continue;
+    const overrides = overridesToVariant(sport, variant);
+    if (overrides === null || w2ePathUnder(key, sport, stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant)) === null) continue;
+    out.push(overrides);
+  }
+  return out;
 }
 
 /** Whether `key` applies to `sport`: its generator builds one of the key's paths under the bracket presets (of the builder default, or of another variant the case's overrides turn it into). */
@@ -98,10 +121,35 @@ export function w2eApplies(key: W2eScenarioKey, sport: string): boolean {
   return w2eOverridesFor(key, sport) !== null;
 }
 
-export interface W2eCell { readonly row: RowKey; readonly sport: string; readonly overrides?: Readonly<Record<string, unknown>> }
+/** `asVariant`: the declared variant a cell's overrides turn the builder default into (set exactly when `overrides` is). */
+export interface W2eCell { readonly row: RowKey; readonly sport: string; readonly overrides?: Readonly<Record<string, unknown>>; readonly asVariant?: string }
+
+/** The declared variant of `sport` that the builder default under `overrides` resolves to EXACTLY, or null when none does. */
+export function w2eVariantOf(sport: string, overrides: Readonly<Record<string, unknown>>): string | null {
+  const want = canon(resolveSportCfg(sport, offlineBuilderDefault(sport), { ...overrides }));
+  return variantKeys(sport).find((v) => canon(resolveSportCfg(sport, v)) === want) ?? null;
+}
+
+/** The variant an overrides cell plays, by name; overrides that resolve to none are a defect of the derivation, refused by name. */
+export function w2eNameVariant(sport: string, overrides: Readonly<Record<string, unknown>>): string {
+  const variant = w2eVariantOf(sport, overrides);
+  if (variant === null) throw new W2eOverridesNameNoVariant(sport, overrides);
+  return variant;
+}
+
+/** An overrides set that resolves to no declared variant (see w2eNameVariant). */
+export class W2eOverridesNameNoVariant extends Error {
+  constructor(sport: string, overrides: Readonly<Record<string, unknown>>) {
+    super(`w2e-cells: ${sport}'s overrides ${JSON.stringify(overrides)} resolve to no declared variant, so the case could not say which it plays`);
+    this.name = "W2eOverridesNameNoVariant";
+  }
+}
 
 /** Every bracket-root row × every applicable sport, less the cells the committed drop list drops from LIFECYCLE. */
 export function w2eCells(key: W2eScenarioKey, isDropped: (row: RowKey, sport: string) => boolean = () => false): W2eCell[] {
-  const sports = SPORT_KEYS.flatMap((sport) => { const overrides = w2eOverridesFor(key, sport); return overrides === null ? [] : [{ sport, overrides }]; });
-  return bracketRootRows().flatMap((row) => sports.filter((c) => !isDropped(row, c.sport)).map((c): W2eCell => (Object.keys(c.overrides).length === 0 ? { row, sport: c.sport } : { row, sport: c.sport, overrides: c.overrides })));
+  const sports = SPORT_KEYS.flatMap((sport) => w2eOverridesSetsFor(key, sport).map((overrides) => ({ sport, overrides })));
+  return bracketRootRows().flatMap((row) => sports.filter((c) => !isDropped(row, c.sport)).map((c): W2eCell => {
+    if (Object.keys(c.overrides).length === 0) return { row, sport: c.sport };
+    return { row, sport: c.sport, overrides: c.overrides, asVariant: w2eNameVariant(c.sport, c.overrides) };
+  }));
 }
