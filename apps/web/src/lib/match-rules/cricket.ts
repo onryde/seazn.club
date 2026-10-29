@@ -63,7 +63,7 @@ export const CRICKET_RULES: RuleField[] = [
     edits: ["minOversForResult"],
     label: "Minimum overs for a result",
     labelKey: "rules.field.minOversForResult.label",
-    help: "Only used while DLS revised targets is on. Fewest overs the chasing side must face before DLS can decide an abandoned match; fewer is a no result. Usual: 5 in T20, 20 in ODI.",
+    help: "Fewest overs the chasing side must face before DLS can decide an abandoned match; fewer is a no result. Usual: 5 in T20, 20 in ODI.",
     helpKey: "rules.field.minOversForResult.help",
     kind: "number",
     min: 0,
@@ -91,7 +91,7 @@ export const CRICKET_RULES: RuleField[] = [
     edits: ["superOverStillTied"],
     label: "If the super over is tied",
     labelKey: "rules.field.superOverStillTied.label",
-    help: "Most boundaries counts only boundaries scored ball by ball; an innings entered as a summary counts none. Only used while the super over is on.",
+    help: "Most boundaries counts only boundaries scored ball by ball; an innings entered as a summary counts none.",
     helpKey: "rules.field.superOverStillTied.help",
     kind: "select",
     options: [

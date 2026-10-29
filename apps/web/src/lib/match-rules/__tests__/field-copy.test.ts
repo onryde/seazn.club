@@ -175,14 +175,21 @@ describe("every rule field of every sport is localized (W2e T33a)", () => {
     expect(judged).toBe(4);
   });
 
-  it("the helps that quote the DLS switch name it as the viewer's language does (cricket's result floor)", () => {
+  // W2e PR B (copy): this pin used to demand the OPPOSITE - that the floor's help quote the DLS switch by its label - and it
+  // did, which is how a stage with DLS off read "Only used while DLS revised targets is on" in the help and "Only used when DLS
+  // revised targets is on" in the held reason beneath it. The reason is now the one sentence that names the switch (built from
+  // the switch's label in the viewer's language: `rule-field-copy-render.test.tsx`, "the reason a detail is held names the switch
+  // in the page's language"); the help says what the field does (`stage-rule-fields.test.tsx`, "a held cricket detail says WHY once").
+  it("the result floor's help does not quote the DLS switch: the held reason is the one place that names it, in every language", () => {
     const cricket = SPORT_RULES.cricket!;
     const dls = cricket.find((f) => f.key === "dls")!;
     const floor = cricket.find((f) => f.key === "minOversForResult")!;
     let judged = 0;
     for (const locale of ["en", ...OTHERS]) {
       const d = DICTS[locale]!;
-      expect(d[floor.helpKey!], `${locale}: the floor's help quotes the DLS switch by its label`).toContain(d[dls.labelKey]!);
+      expect(d[dls.labelKey], `${locale}: the switch has a label to name`).toBeTruthy();
+      expect(d[floor.helpKey!]!.toLowerCase(), `${locale}: the floor's help leaves the switch's name to the held reason`).not.toContain(d[dls.labelKey]!.toLowerCase());
+      expect(d["stageRules.detail.off"], `${locale}: the reason names the switch through {decider}`).toContain("{decider}");
       judged++;
     }
     expect(judged).toBe(4);

@@ -18,7 +18,7 @@ import { configIssueText } from "@/lib/config-issue-copy";
 import { setTargetFloorOf } from "@/lib/match-rules/set-target-floor";
 import { stageFieldsFor } from "@/lib/rule-scope";
 import { stageDefaultsFor } from "@seazn/engine/sport";
-import { resolvedStageCfg } from "../stage-row-model";
+import { deciderOfDetail, resolvedStageCfg } from "../stage-row-model";
 import { ruleFormState } from "../../match-rules-state";
 import { MatchRuleFields } from "../../match-rules";
 import { StageRuleFields } from "../stage-rule-fields";
@@ -329,6 +329,43 @@ describe("R157 the five fields are drawn by the real stage row, from the diction
     // On the two-innings test match the floor is not offered at all: there is no DLS to hold it behind.
     const test = cricket.configSchema.parse(cricket.variants.test) as Record<string, unknown>;
     expect(render("cricket", "league", {}, test, "test", resolvedStageCfg(cricket, test, "league", {}))).not.toContain('data-testid="stage-rule-field-minOversForResult"');
+  });
+
+  // W2e PR B fix (copy): a held field's REASON says why it is held; its HELP says what the field does. The two cricket details
+  // used to carry the dependency in both ("Only used while DLS revised targets is on." in the help, "Only used when DLS revised
+  // targets is on" beneath it), so a stage with DLS off read the same sentence twice. The reason is the one authority: the help
+  // may not open the sentence the reason's own template opens, nor name the switch it is held by. Which fields are held, and by
+  // which switch, is the ENGINE's declaration (`deciderOfDetail` reads `ruleKeys[key].detailOf`), never a list typed here.
+  it("R157 a held cricket detail says WHY once: the reason names the switch, the help only says what the field does - in all four locales", () => {
+    const fields = SPORT_RULES.cricket!;
+    const held = fields.filter((f) => deciderOfDetail(cricket, f) !== null);
+    // Both cricket details exist: an empty sweep would pass for any copy.
+    expect(held.map((f) => f.key).sort(), "the engine declares exactly these two cricket details").toEqual(["minOversForResult", "superOverStillTied"]);
+    const rules = { dls: { enabled: false, edition: "standard" }, superOver: false };
+    let judged = 0;
+    for (const [locale, dict] of [["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as const) {
+      const d = dict as unknown as Record<string, string>;
+      const markup = plain(cricketAt(rules, dict as unknown as Dict, locale));
+      // The reason template's own opening, without its conjunction ("Only used when " -> "Only used"): derived from the dictionary.
+      const template = d["stageRules.detail.off"]!;
+      const opening = template.slice(0, template.indexOf("{decider}")).replace(/[\s«‘“"']+$/u, "").split(/\s+/).slice(0, -1).join(" ");
+      expect(opening.split(" ").length, `${locale}: the template's opening is more than one word`).toBeGreaterThanOrEqual(2);
+      for (const field of held) {
+        const decider = deciderOfDetail(cricket, field)!;
+        const switchField = fields.find((f) => f.edits[0] === decider)!;
+        const switchLabel = d[switchField.labelKey]!;
+        const help = d[field.helpKey!]!;
+        const block = blockOf(markup, field.key);
+        const reason = template.replace("{decider}", switchLabel);
+        expect(block, `${locale} ${field.key}: held, with the reason beside it`).toContain(reason);
+        expect(block, `${locale} ${field.key}: ...and the help is on the screen too`).toContain(help);
+        expect(help.toLowerCase(), `${locale} ${field.key}: the help does not open the reason's sentence ("${opening}")`).not.toContain(opening.toLowerCase());
+        expect(help.toLowerCase(), `${locale} ${field.key}: the help does not name the switch the reason names`).not.toContain(switchLabel.toLowerCase());
+        expect(help.length, `${locale} ${field.key}: the help still says something`).toBeGreaterThan(40);
+        judged++;
+      }
+    }
+    expect(judged).toBe(8);
   });
 
   it("R157 the still-tied select offers exactly the engine's three policies, behind Default, and shows the one the stage holds", () => {
