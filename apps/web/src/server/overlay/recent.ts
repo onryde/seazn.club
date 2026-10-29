@@ -26,7 +26,7 @@ import {
   initSquads,
   isLineupEventType,
   kernelOwnsEvent,
-  reduceLineupEvent,
+  reduceLineupEventFor,
   resolveVoids,
   summaryOf,
   type EventEnvelope,
@@ -466,7 +466,9 @@ export function replayDerived(args: {
       if (kernelOwnsEvent(module, event, { state, settled })) {
         if (event.type === "core.settle") settled = true;
         if (isLineupEventType(event.type)) {
-          const reduced = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
+          // Judged the way the fold judges it (W2e T32 fix round 2): on the module's own squads, a replay refusal there
+          // falling back to these. One authority (`reduceLineupEventFor`), never the reducer restated on these squads.
+          const reduced = reduceLineupEventFor(module, state as never, squads, event, REPLAY_LINEUP_POLICY, false);
           if (reduced.ok) {
             squads = reduced.squads;
             if (module.onLineup !== undefined) state = module.onLineup(state as never, squads);

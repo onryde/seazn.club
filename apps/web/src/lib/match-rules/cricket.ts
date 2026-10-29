@@ -1,7 +1,7 @@
 // Cricket's curated match-rule fields. Client-safe: no "use client", no JSX,
 // no `@/components` or `@/server` import.
 import { cricket } from "@seazn/engine/sports/cricket";
-import { readBool, readNumber, recordAt } from "./shared.ts";
+import { readBool, readNumber, readText, recordAt } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 /** What a config that names no over length counts its overs in: the engine's own default (`ballsPerOver`, six), read off
@@ -29,6 +29,7 @@ export const CRICKET_RULES: RuleField[] = [
     // The scale the count is converted by comes from the config it is built or read against (`ballsPerOverIn`).
     context: ["ballsPerOver"],
     label: "Overs per innings",
+    labelKey: "rules.field.overs.label",
     kind: "number",
     min: 1,
     max: 100,
@@ -44,26 +45,70 @@ export const CRICKET_RULES: RuleField[] = [
     key: "maxOversPerBowler",
     edits: ["maxOversPerBowler"],
     label: "Max overs per bowler",
+    labelKey: "rules.field.maxOversPerBowler.label",
     kind: "number",
     min: 1,
     max: 50,
     build: (v) => ({ maxOversPerBowler: Number(v) }),
     read: readNumber("maxOversPerBowler"),
   },
+  // W2e Task 28 (owner D5, ruling 157) - the fewest overs the chasing side must have faced before DLS may decide an
+  // abandoned match (CR-13). The number is OVERS, not balls: the engine multiplies by `ballsPerOver` itself, so no scale is
+  // applied here. 0 is a legal value. Only a DLS par reads it (`dlsAbandonmentPar`), so the engine holds it behind the DLS
+  // switch (`detailOf: "dls"`, fix round 1): the stage row disables it while DLS is off and offers it only on the variants
+  // that can play DLS (not the test match). The engine's cross-refine (the floor must fit the innings) is the contract's
+  // `crossField` pin.
+  {
+    key: "minOversForResult",
+    edits: ["minOversForResult"],
+    label: "Minimum overs for a result",
+    labelKey: "rules.field.minOversForResult.label",
+    help: "Fewest overs the chasing side must face before DLS can decide an abandoned match; fewer is a no result. Usual: 5 in T20, 20 in ODI.",
+    helpKey: "rules.field.minOversForResult.help",
+    kind: "number",
+    min: 0,
+    max: 100,
+    build: (v) => ({ minOversForResult: Number(v) }),
+    read: readNumber("minOversForResult"),
+  },
   {
     key: "superOver",
     edits: ["superOver"],
     label: "Super over on a tie",
+    labelKey: "rules.field.superOver.label",
     help: "Plays a super over whenever a match ends tied — in any stage where it is On.",
+    helpKey: "rules.field.superOver.help",
     kind: "bool",
     build: (v) => ({ superOver: v === "on" }),
     read: readBool("superOver"),
+  },
+  // W2e Task 28 (owner D5, ruling 157) - what a TIED super over does. The engine holds it behind the super over
+  // (`detailOf: "superOver"`, Task 7), so the stage row disables it while the super over is off, and offers it only on
+  // the variants that can play one. `boundary_count` reads the innings' boundary totals, which only ball-by-ball scoring
+  // produces: a summary innings carries none (the pad never sends the optional `boundaries`), so the help says so.
+  {
+    key: "superOverStillTied",
+    edits: ["superOverStillTied"],
+    label: "If the super over is tied",
+    labelKey: "rules.field.superOverStillTied.label",
+    help: "Most boundaries counts only boundaries scored ball by ball; an innings entered as a summary counts none.",
+    helpKey: "rules.field.superOverStillTied.help",
+    kind: "select",
+    options: [
+      { value: "repeat", label: "Another super over (ICC)", labelKey: "rules.field.superOverStillTied.option.repeat" },
+      { value: "boundary_count", label: "Most boundaries wins", labelKey: "rules.field.superOverStillTied.option.boundary_count" },
+      { value: "shared", label: "Leave it as a tie", labelKey: "rules.field.superOverStillTied.option.shared" },
+    ],
+    build: (v) => ({ superOverStillTied: v }),
+    read: readText("superOverStillTied"),
   },
   {
     key: "dls",
     edits: ["dls"],
     label: "DLS revised targets",
+    labelKey: "rules.field.dls.label",
     help: "A manual umpire target always works too.",
+    helpKey: "rules.field.dls.help",
     kind: "bool",
     build: (v) => ({ dls: { enabled: v === "on", edition: "standard" } }),
     // The standard edition only: another edition is not this field's shape.
@@ -76,6 +121,7 @@ export const CRICKET_RULES: RuleField[] = [
     key: "playersPerSide",
     edits: ["playersPerSide"],
     label: "Players per side",
+    labelKey: "rules.field.playersPerSide.label",
     kind: "number",
     min: 3,
     max: 11,

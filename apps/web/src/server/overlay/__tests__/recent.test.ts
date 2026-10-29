@@ -797,3 +797,42 @@ describe("overlayCricketBundleIds — the events the kernel folds itself", () =>
     });
   });
 });
+
+// ---------------------------------------------------------------------------
+// W2e T32 fix round 2 (item 2) — ONE AUTHORITY for judging a lineup event: the overlay's replay judges a football
+// `core.lineup.*` event on football's own pitch exactly as the fold does (`reduceLineupEventFor`). single-sport: only
+// football declares `squadsForLineup` (w2e-retirement.test.ts pins that from the skins).
+// ---------------------------------------------------------------------------
+
+describe("W2e T32 fix round 2: the overlay replay judges a lineup event the way the fold does", () => {
+  it("[football.sub p2->b2, core.lineup.substitution b2->b3, goal by b3]: the strict fold accepts it, and the derived replay completes with no warning", () => {
+    const warn = vi.spyOn(log, "warn");
+    try {
+      const mod = moduleFor("football");
+      const base = defaultLineupPair(mod.positions);
+      const bench = (side: typeof base.home): typeof base.home => ({
+        ...side,
+        slots: [
+          ...side.slots,
+          ...[1, 2, 3].map((n) => ({ personId: `${side.entrantId}-b${n}`, slot: "bench" as const, orderNo: 20 + n })),
+        ],
+      });
+      const lineups = { home: bench(base.home), away: bench(base.away) };
+      const events: EventEnvelope[] = (
+        [
+          ["core.start", {}],
+          ["football.sub", { by: "H", off: "H-p2", on: "H-b2" }],
+          ["core.lineup.substitution", { side: "H", off: "H-b2", on: { personId: "H-b3", slot: "bench", orderNo: 22 } }],
+          ["football.goal", { by: "H", scorer: "H-b3" }],
+        ] as const
+      ).map(([type, payload], i) => ({ ...makeEnvelope(i + 1, { type, payload } as never), recordedAt: WALL }));
+      // Legal on the WRITE path first, so a red below is the overlay's, never the ledger's.
+      foldMatchWithStoppage(mod as never, cfgFor("football") as never, lineups, events, { strictFromSeq: 0 });
+      const replay = replayDerived({ sportKey: "football", module: mod as never, cfg: cfgFor("football") as never, lineups, active: events });
+      expect(replay.complete, "the derived replay reaches the goal").toBe(true);
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});

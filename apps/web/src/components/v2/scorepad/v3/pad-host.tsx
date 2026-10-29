@@ -38,8 +38,16 @@
 // header). The React shell is covered by e2e in a later task; this file's
 // own suite proves every DECISION, not the DOM.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { EventEnvelope, LineupPair, SquadState } from "@seazn/engine/core";
-import { CORE_EVENT_SCHEMAS, initSquads, isCoreEventType } from "@seazn/engine/core";
+import type { EventEnvelope, LineupPair, PendingEndingSanction, SquadState } from "@seazn/engine/core";
+import {
+  CORE_EVENT_SCHEMAS,
+  initSquads,
+  isCoreEventType,
+  lastLiveEvent,
+  matchEndFacts,
+  pendingEndingSanction,
+  scorerMayForfeit,
+} from "@seazn/engine/core";
 import type { AnySportModule, FidelityBand, PadSpec } from "@seazn/engine/sport";
 import { useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
@@ -69,6 +77,8 @@ import { SwapSheet, refusalMessage, type PolicyVerdict, type SwapSheetSpec } fro
 import { GuidedSheet } from "./guided-sheet";
 import { BANDS, RecordingChip } from "./recording-chip";
 import { RulesChangedBanner } from "./rules-changed-banner";
+import { EndingPrompt } from "./ending-prompt";
+import { sideNameOf } from "./skins/sanction-ending";
 import { buildRibbon, type Ribbon } from "./ribbon";
 import {
   CLOCK_NUDGE_SECONDS,
@@ -1072,6 +1082,8 @@ export function adaptSwapSlot(
       // here is dead on the production path while both ends' unit tests stay
       // green — the defect this comment block was written for.
       candidateMeta: slot.candidateMeta,
+      // W2e Task 32 (M12b): same hand-copy, same reason -- a dropped `offOnly` leaves a retirement asking who comes ON.
+      offOnly: slot.offOnly,
     },
     view: sidePool(slot.side, squads),
     policyVerdict: slot.policyOk
@@ -1594,6 +1606,174 @@ export async function runAmend(plan: AmendPlan, io: AmendSubmitters): Promise<st
 }
 
 // ---------------------------------------------------------------------------
+// W2e Task 30 (D3, D13; rule X-SE-1) — a disqualifying sanction ends the match FROM THE PAD
+// ---------------------------------------------------------------------------
+//
+// A sanction at a level the module declares as ENDING the match (`module.sanctionEnding.endLevels`: badminton's black card,
+// tennis's default) is followed by its ending, `core.forfeit{by, reason:"disqualified"}` against the same side. Until that
+// forfeit is recorded the write path refuses everything but a forfeit, an abandon or a void (`ENDING_SANCTION_PENDING`),
+// so the pad must never leave a scorer holding the sanction alone: it sends the PAIR on the sheet's one Confirm, and it
+// opens on the ending prompt for a ledger that is already pending (a failed second append, a reload, a match that was in
+// progress when the rule shipped).
+//
+// Everything below is pure of React so a node test drives it over a real queue store and the engine's own readers.
+
+/** What a confirmed end-level sanction sends: the sanction itself, and the sanctioned entrant its ending names. */
+export interface EndingPlan {
+  readonly type: string;
+  readonly payload: Record<string, unknown>;
+  /** The sanctioned entrant: the `by` of both the sanction and the forfeit that ends the match. */
+  readonly by: string;
+  /** The ending's reason: `disqualified` after an END level (D3, badminton's black card, tennis's default), `retired` after a
+   *  PROMPT level the scorer answered "no" to (D12, volleyball's incomplete team). The engine's `scorerMayForfeit` admits each
+   *  only after its own class of level. */
+  readonly reason: "disqualified" | "retired";
+}
+
+/**
+ * The plan for `type`/`payload`, or null when it is not an ending: not the module's declared sanction event, no entrant
+ * named, or a level that does not end the match (a warning is one ordinary event). The levels are the ENGINE's declaration,
+ * read here, never a list of this file's own.
+ *
+ * An END level is an ending, `disqualified`. A PROMPT level (volleyball, D12) is an ending only when the scorer answered the
+ * sheet's question "no" (`sideRetires`) and then it is `retired`; asked about a level the declaration does not prompt on, a
+ * stray `sideRetires` is ignored, so an answer that was never asked cannot end a match.
+ */
+export function endingPlanOf(module: AnySportModule, type: string, payload: unknown, sideRetires = false): EndingPlan | null {
+  const decl = module.sanctionEnding;
+  if (decl === undefined || type !== decl.eventType) return null;
+  if (typeof payload !== "object" || payload === null) return null;
+  const fields = payload as Record<string, unknown>;
+  if (typeof fields.by !== "string" || fields.by.length === 0) return null;
+  if (typeof fields.level !== "string") return null;
+  if (decl.endLevels.includes(fields.level)) return { type, payload: fields, by: fields.by, reason: "disqualified" };
+  if (sideRetires && decl.promptLevels.includes(fields.level)) return { type, payload: fields, by: fields.by, reason: "retired" };
+  return null;
+}
+
+/**
+ * The ending's two events, bound so they live or die TOGETHER — `runAmend`'s mechanism for the same reason.
+ *
+ * The sanction goes out HELD (`submitHeld`, the identical path an ordinary tap takes), and the forfeit is written behind it
+ * with `dropWith` naming the held entry. That durable field is the whole binding: a reload finds both entries and resumes
+ * them in order (the sanction drains first, the forfeit behind it), and Take back during the hold (`queue.ts`'s `dropHeld`
+ * cascade) removes BOTH, so the forfeit can never drain alone and end a match the scorer took back. Do not send the forfeit
+ * from the sanction's release closure: a closure does not survive a reload (`runAmend`'s round 2).
+ *
+ * `null` from `submitHeld` is the pipeline's own double-submit refusal: nothing was held, so no forfeit is written.
+ */
+export async function runEnding(plan: EndingPlan, io: AmendSubmitters): Promise<string | null> {
+  const held = await io.submitHeld(plan.type, plan.payload);
+  if (held === null) return null;
+  // One literal per reason, not `reason: plan.reason`: forfeit-vocabulary-scan reads every `core.forfeit` write's reason as a
+  // literal against the engine's closed vocabulary, and a variable would be a named exception there.
+  if (plan.reason === "retired") await io.submit("core.forfeit", { by: plan.by, reason: "retired" }, { dropWith: held.heldId });
+  else await io.submit("core.forfeit", { by: plan.by, reason: "disqualified" }, { dropWith: held.heldId });
+  return held.heldId;
+}
+
+/**
+ * Whether a NEW tap may reach `dispatch` while an ending prompt is open — `admitsTap`'s sibling, the same modal shape. With
+ * an ending pending the write path refuses everything but the ending, so a tap would be sent to be refused; the host refuses
+ * it first, says so, and leaves the prompt in front.
+ */
+export function admitsTapWhileEndingPending(pending: PendingEndingSanction | null): boolean {
+  return pending === null;
+}
+
+/** The ending prompt's model: who was sanctioned, which live row to void, and what THIS viewer may do about it. */
+export interface EndingPromptModel extends PendingEndingSanction {
+  /** The sanctioned side, found from the lineups' entrant ids. */
+  readonly side: "home" | "away";
+  /** The live sanction row the prompt is about — what "Void the sanction" voids. */
+  readonly sanctionId: string;
+  /** The server lets this viewer record the ending: an organiser, or a scorer whose last live event IS the sanction (D13). */
+  readonly canRecord: boolean;
+  /** The pad lets this viewer void that row: the ledger's own rule (`activityRowState`). */
+  readonly canVoid: boolean;
+}
+
+export interface EndingPromptInput {
+  readonly module: AnySportModule;
+  /** The ledger the viewer sees: the server's rows plus this pad's queued writes. */
+  readonly rows: readonly ActivityEvent[];
+  /** The fold of those rows (`pipeline.state`). */
+  readonly state: unknown;
+  readonly canOrganise: boolean;
+  readonly ownEventIds: ReadonlySet<string>;
+  readonly deviceLinkId: string | null;
+  readonly lineups: LineupPair;
+}
+
+/**
+ * The ending prompt for this ledger, or null when no ending is pending. "Pending" is the ENGINE's one definition
+ * (`pendingEndingSanction` over `matchEndFacts`): the same reading the write path refuses scoring on, so the pad is open on
+ * the prompt exactly when the server would refuse a tap with `ENDING_SANCTION_PENDING`.
+ *
+ * `settlement` is read as null, as `summaryOf` does on this surface. A settle is a ledger event (`core.settle`) and the
+ * engine's fold derives a `settlement` from it, but the pad pipeline keeps only the fold's `state` and `levelWithdrawal`
+ * and does not expose it. A match whose ONLY decision is a settle therefore still reads as pending here; the server's own
+ * reading counts the settle as the decision, so it takes the next write, and the organiser resolves the prompt from the
+ * console.
+ *
+ * `canRecord` is asked of the SERVER's predicate (`scorerMayForfeit` over `lastLiveEvent`), so a scorer is offered the
+ * ending only where the same forfeit would be admitted. Where it would not be (a pre-W2e ledger with rallies behind the
+ * card), the prompt says who can resolve it instead of sending a request that returns the server's English 403.
+ */
+export function endingPromptOf(input: EndingPromptInput): EndingPromptModel | null {
+  const { module, rows } = input;
+  // A sport that declares no ending never has one: not an assumption, the declaration's own absence.
+  const decl = module.sanctionEnding;
+  if (decl === undefined) return null;
+  const facts = matchEndFacts(module, { state: input.state as never, settlement: null }, rows);
+  const pending = pendingEndingSanction(module, rows, facts);
+  if (pending === null) return null;
+  // Two assumptions the engine's reading hands us, each a GUARD (W2e T30 fix round 1, M-2 and M-3): a pending ending is
+  // about a live sanction row, and about one of the two lineups' entrants. Either failing means the pad and the engine
+  // disagree about the ledger; the answer is a plain error that pages, never "no prompt" (the board would then offer taps
+  // the write path refuses) and never a guess at the side (the prompt would name the wrong entrant).
+  const sanction = sanctionRowOf(decl.eventType, pending, rows);
+  const side = sideOfEntrant(input.lineups, pending.by);
+  return {
+    by: pending.by,
+    level: pending.level,
+    side,
+    sanctionId: sanction.id,
+    canRecord:
+      input.canOrganise || scorerMayForfeit(module, lastLiveEvent(rows), { by: pending.by, reason: "disqualified" }),
+    canVoid: activityRowState(sanction, rows, input.ownEventIds, input.deviceLinkId, true, input.deviceLinkId === null).canVoid,
+  };
+}
+
+/** Which lineup `entrantId` is: "home" or "away". Neither is a broken invariant, not a default. */
+function sideOfEntrant(lineups: LineupPair, entrantId: string): "home" | "away" {
+  if (lineups.home.entrantId === entrantId) return "home";
+  if (lineups.away.entrantId === entrantId) return "away";
+  throw new Error(
+    `endingPromptOf: the sanctioned entrant "${entrantId}" is neither lineup's entrant ("${lineups.home.entrantId}", "${lineups.away.entrantId}")`,
+  );
+}
+
+/**
+ * The LIVE row of `eventType` the pending ending is about: the latest one carrying the pending side and level. The engine's
+ * `pendingEndingSanction` reads the same rows by the same void rule, so a pending ending always has one; none is a broken
+ * invariant and throws (M-2) instead of reading as "no prompt".
+ */
+export function sanctionRowOf(eventType: string, pending: PendingEndingSanction, rows: readonly ActivityEvent[]): ActivityEvent {
+  const voided = new Set<string>();
+  for (const row of rows) if (row.type === "core.void" && typeof row.voids === "string") voided.add(row.voids);
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const row = rows[i]!;
+    if (row.type !== eventType || voided.has(row.id)) continue;
+    const fields = (row.payload ?? {}) as { by?: unknown; level?: unknown };
+    if (fields.by === pending.by && fields.level === pending.level) return row;
+  }
+  throw new Error(
+    `endingPromptOf: no live ${eventType} row for the pending ending (by ${pending.by}, level ${pending.level}) in ${rows.length} ledger rows`,
+  );
+}
+
+// ---------------------------------------------------------------------------
 // PadHostV3 — the React shell
 // ---------------------------------------------------------------------------
 
@@ -2107,6 +2287,54 @@ export function PadHostV3(props: PadHostV3Props) {
     [padView, heldSubmit, props.skin, view, pipeline],
   );
 
+  // The activity panel reads four fields; `voids` is what makes a row show
+  // as cancelled (activity.tsx derives it by looking for some OTHER event
+  // pointing back at this id, never a flag on the target itself).
+  //
+  // Declared ABOVE the ribbon (R3/F, F1): the ribbon needs the same rows the
+  // panel does, because it now resolves the same per-event detail for the
+  // newest of them.
+  const activityEvents = useMemo<ActivityEvent[]>(
+    () =>
+      pipeline.events.map((e) => ({
+        id: e.id,
+        seq: e.seq,
+        type: e.type,
+        payload: e.payload,
+        voids: e.voids ?? null,
+        // R7/C1 — the panel gained a provenance line. `recordedAt` is the
+        // half this surface can answer; `recordedByLabel` is not, because
+        // `recordedBy` is a USER id and `score_events.device_link_id` never
+        // reaches an `EventEnvelope` at all — the console resolves that one
+        // at its own mount.
+        recordedAt: e.recordedAt,
+      })),
+    [pipeline.events],
+  );
+
+  // W2e Task 30 (D3, D13) — the ending prompt. `endingModel` is the LEDGER's reading (the engine's one definition of
+  // "pending", over the rows this pad shows, queued writes included); `endingPrompt` is what the screen shows. They differ
+  // only while this pad is itself writing the sanction-and-ending pair (`sendEnding`): between the two queue writes the
+  // sanction is in the ledger alone for a few milliseconds, and flashing the prompt, or hiding the board, for that
+  // instant would be a lie about a state that is about to be decided.
+  const [endingBusy, setEndingBusy] = useState(false);
+  /** A write from the PROMPT itself ("Record the ending" / "Void the sanction") is in flight: its buttons wait. */
+  const [endingActing, setEndingActing] = useState(false);
+  const endingModel = useMemo(
+    () =>
+      endingPromptOf({
+        module: props.module,
+        rows: activityEvents,
+        state: pipeline.state,
+        canOrganise: props.canOrganise,
+        ownEventIds: pipeline.ownEventIds,
+        deviceLinkId: props.identity.deviceLinkId,
+        lineups: props.lineups,
+      }),
+    [props.module, activityEvents, pipeline.state, props.canOrganise, pipeline.ownEventIds, props.identity.deviceLinkId, props.lineups],
+  );
+  const endingPrompt = endingBusy ? null : endingModel;
+
   /**
    * THE send. Every dispatch site in this host goes through it.
    *
@@ -2128,8 +2356,31 @@ export function PadHostV3(props: PadHostV3Props) {
    * Cleared on the next send, so one bad tap does not leave a stuck banner.
    */
   const [dispatchRefusal, setDispatchRefusal] = useState<string | null>(null);
+  /** W2e T30 — write the sanction-and-ending pair (`runEnding`). `endingBusy` keeps the prompt down while the two queue
+   *  writes land; a failed write leaves the ledger as it was (or the prompt, if only the sanction got in) and says so. */
+  const sendEnding = useCallback(
+    async (plan: EndingPlan): Promise<void> => {
+      setEndingBusy(true);
+      try {
+        await runEnding(plan, { submitHeld: heldSubmit, submit: pipeline.submit });
+      } catch (err: unknown) {
+        console.error("scorepad v3: ending failed", plan.type, err);
+        setDispatchRefusal(msg("scorepad.rejection.fallback"));
+      } finally {
+        setEndingBusy(false);
+      }
+    },
+    [heldSubmit, pipeline.submit, msg],
+  );
   const send = useCallback(
-    (type: string, payload: unknown): void => {
+    (type: string, payload: unknown, opts?: { endsMatchOnConfirm?: boolean; sideRetires?: boolean }): void => {
+      // W2e T30: an open ending prompt is modal too. The write path refuses everything but the ending (`ENDING_SANCTION_
+      // PENDING`), so this tap is not recorded, the scorer is told why, and the prompt stays in front. The board is not
+      // rendered while it is open; this is the guard for the controls that remain (the scorebug's own taps).
+      if (!admitsTapWhileEndingPending(endingPrompt)) {
+        setDispatchRefusal(msg("pad.ending.blocked"));
+        return;
+      }
       // W2d T18 fix round 1 (m3): an open required question is modal — this tap is not recorded, the scorer is told,
       // and the question is brought back into view (a new key remounts ChoiceDock, whose mount reveals it).
       if (!admitsTap(choosing !== null)) {
@@ -2147,12 +2398,24 @@ export function PadHostV3(props: PadHostV3Props) {
       // `Date.now()` here rather than the render-throttled `nowMs`: the stamp
       // must be the time of the TAP, not of the last tick.
       const stamped = stampFor(props.module, type, payload, clock, Date.now());
+      // W2e T30 (D3): a sheet that was confirmed ("This ends the match: <side> loses") on an end-level sanction sends the
+      // sanction AND its ending, as one bound pair (`runEnding`). W2e T31 (D12): so does volleyball's "No" to "Can <team> still
+      // field six players?" on an expulsion or a disqualification (`sideRetires`), with the retired ending. Only a SHEET completion may become an ending: the
+      // confirm step belongs to the sheet, and any other route that records an end-level sanction simply lands on the
+      // pending prompt. It goes around `dispatch` the way `runAmend`'s re-append does: `core.forfeit` is an organiser-only
+      // core type no skin declares (so `createSkinDispatch` would refuse it), and neither badminton's nor tennis's
+      // sanction has a dock for `dispatch` to soft-commit (pinned in w2e-ending-sanction.test.ts), so nothing is skipped.
+      const plan = opts?.endsMatchOnConfirm === true ? endingPlanOf(props.module, type, stamped, opts.sideRetires === true) : null;
+      if (plan !== null) {
+        void sendEnding(plan);
+        return;
+      }
       void dispatch(type, stamped).catch((err: unknown) => {
         console.error("scorepad v3: dispatch failed", type, err);
         setDispatchRefusal(msg("scorepad.rejection.fallback"));
       });
     },
-    [dispatch, msg, clock, props.module, choosing],
+    [dispatch, msg, clock, props.module, choosing, endingPrompt, sendEnding],
   );
 
   // W2d T18 fix round 1 (m2) — the question's own Cancel and the ribbon's Take back are one action: drop the open
@@ -2286,10 +2549,15 @@ export function PadHostV3(props: PadHostV3Props) {
   );
   const handleOpenSheet = useCallback(
     (sheetKey: string) => {
+      // W2e T30: no sheet opens over an ending prompt — its answers would be refused (see `send`).
+      if (!admitsTapWhileEndingPending(endingPrompt)) {
+        setDispatchRefusal(msg("pad.ending.blocked"));
+        return;
+      }
       const resolution = resolveSheet(sheetKey, sheets);
       if (resolution.kind !== "none") setOpenSheet(resolution);
     },
-    [sheets],
+    [sheets, endingPrompt, msg],
   );
 
   // R3 review round 4 — the held PAYLOAD has to advance with the dock.
@@ -2339,30 +2607,6 @@ export function PadHostV3(props: PadHostV3Props) {
 
   const events = pipeline.events;
 
-  // The activity panel reads four fields; `voids` is what makes a row show
-  // as cancelled (activity.tsx derives it by looking for some OTHER event
-  // pointing back at this id, never a flag on the target itself).
-  //
-  // Declared ABOVE the ribbon (R3/F, F1): the ribbon needs the same rows the
-  // panel does, because it now resolves the same per-event detail for the
-  // newest of them.
-  const activityEvents = useMemo<ActivityEvent[]>(
-    () =>
-      events.map((e) => ({
-        id: e.id,
-        seq: e.seq,
-        type: e.type,
-        payload: e.payload,
-        voids: e.voids ?? null,
-        // R7/C1 — the panel gained a provenance line. `recordedAt` is the
-        // half this surface can answer; `recordedByLabel` is not, because
-        // `recordedBy` is a USER id and `score_events.device_link_id` never
-        // reaches an `EventEnvelope` at all — the console resolves that one
-        // at its own mount.
-        recordedAt: e.recordedAt,
-      })),
-    [events],
-  );
 
   // ONE resolver, built once and handed to BOTH readers — the ribbon and the
   // panel. It used to be an inline closure at the `<ActivityPanel>` call site
@@ -2520,6 +2764,8 @@ export function PadHostV3(props: PadHostV3Props) {
     if (!stillAmendable) return;
     const plan = amendPlan(eventId, events);
     if (plan === null) return;
+    // W2e T32 fix round 1 (review M1): an amend writes a void, so like `handleUndo` it clears the stale refusal banner.
+    setDispatchRefusal(null);
     setAmendingId(eventId);
     try {
       await runAmend(plan, { submitHeld: heldSubmit, submit: pipeline.submit });
@@ -2529,6 +2775,10 @@ export function PadHostV3(props: PadHostV3Props) {
   }
 
   async function handleUndo(eventId: string) {
+    // W2e T31 (T29 carry, M1): the pad's ONE void path, behind the ribbon's Take back, the activity row's Void and the ending
+    // prompt's "Void the sanction". A void resolves whatever "record the ending or void the sanction first" a refused tap left
+    // on screen, so it clears the banner like the prompt's own two answers do (N1).
+    setDispatchRefusal(null);
     const decision = decideUndo(eventId, held?.id ?? null);
     setVoidingId(eventId);
     try {
@@ -2539,6 +2789,37 @@ export function PadHostV3(props: PadHostV3Props) {
       }
     } finally {
       setVoidingId(null);
+    }
+  }
+
+  // W2e Task 30 — the ending prompt's two answers. Record sends the ending the PENDING sanction calls for (a scorer is
+  // offered it only where the server's `scorerMayForfeit` admits it, so a 403 is not the expected path); Void goes through
+  // `handleUndo`, the pad's one void path, for the sanction row the prompt names.
+  async function recordEnding(): Promise<void> {
+    // The answer resolves whatever "record the ending or void the sanction first" a refused tap left on screen (N1).
+    setDispatchRefusal(null);
+    if (endingPrompt === null) return;
+    setEndingActing(true);
+    try {
+      await pipeline.submit("core.forfeit", { by: endingPrompt.by, reason: "disqualified" });
+    } catch (err: unknown) {
+      console.error("scorepad v3: recording the ending failed", err);
+      setDispatchRefusal(msg("scorepad.rejection.fallback"));
+    } finally {
+      setEndingActing(false);
+    }
+  }
+  async function voidSanction(): Promise<void> {
+    setDispatchRefusal(null);
+    if (endingPrompt === null) return;
+    setEndingActing(true);
+    try {
+      await handleUndo(endingPrompt.sanctionId);
+    } catch (err: unknown) {
+      console.error("scorepad v3: voiding the sanction failed", err);
+      setDispatchRefusal(msg("scorepad.rejection.fallback"));
+    } finally {
+      setEndingActing(false);
     }
   }
 
@@ -2640,6 +2921,7 @@ export function PadHostV3(props: PadHostV3Props) {
           t={t}
           onTap={(event: TapEvent) => send(event.type, event.payload)}
           onOpenSheet={handleOpenSheet}
+          inert={endingPrompt !== null}
         />
       </div>
 
@@ -2671,6 +2953,24 @@ export function PadHostV3(props: PadHostV3Props) {
         >
           {rejectionMsg ?? dispatchRefusal}
         </p>
+      )}
+
+      {/* W2e Task 30 (D3, D13): a sanction that ends the match has no ending recorded. In the host's unordered band, right
+       *  under the banner above and so directly under the scorebug on a phone (whose ordered rows are `max-md:order-1..4`):
+       *  it is the one thing this pad can take, so it is the first thing below the score. The board, the dock and the
+       *  sheets are not rendered while it is open (the write path would refuse every tap on them). */}
+      {endingPrompt !== null && (
+        <div data-role="v3-ending">
+          <EndingPrompt
+            sideName={sideNameOf(props.entrantNames, endingPrompt.side, t)}
+            canRecord={endingPrompt.canRecord}
+            canVoid={endingPrompt.canVoid}
+            busy={endingActing}
+            onRecord={() => void recordEnding()}
+            onVoid={() => void voidSanction()}
+            t={t}
+          />
+        </div>
       )}
 
       {/* R6/task A — the clock, between the scorebug and the ribbon: it belongs
@@ -2757,13 +3057,15 @@ export function PadHostV3(props: PadHostV3Props) {
         </div>
       )}
 
-      <div data-role="v3-tiles">
-        <TileGrid tiles={visibleTiles} phase={phase} t={t} onAction={handleTileAction} onOpenSheet={handleOpenSheet} />
-      </div>
+      {endingPrompt === null && (
+        <div data-role="v3-tiles">
+          <TileGrid tiles={visibleTiles} phase={phase} t={t} onAction={handleTileAction} onOpenSheet={handleOpenSheet} />
+        </div>
+      )}
 
       {/* W2d T18 — an open REQUIRED question outranks the held dock: it is the scorer's latest tap, and the held one
        *  (an earlier tap) drains on its own timer whether or not its dock is on screen. */}
-      {choiceSpec !== null && choosing !== null ? (
+      {endingPrompt !== null ? null : choiceSpec !== null && choosing !== null ? (
         <div data-role="v3-dock">
           <ChoiceDock key={choosing.key} spec={choiceSpec} t={t} onChoose={chooseDockChip} onCancel={cancelQuestion} />
         </div>
@@ -2789,7 +3091,7 @@ export function PadHostV3(props: PadHostV3Props) {
        *  half-made off pick from the previous slot. Without the key React
        *  would reuse the instance and carry a home player's id into the away
        *  sheet — a wrong-team swap with no visible tell. */}
-      {openSwapSlot && adaptedSwap && (
+      {endingPrompt === null && openSwapSlot && adaptedSwap && (
         <div data-role="v3-swap" data-swap-slot-id={openSwapSlot.id}>
           <SwapSheet
             key={openSwapSlot.id}
@@ -2817,7 +3119,7 @@ export function PadHostV3(props: PadHostV3Props) {
         </div>
       )}
 
-      {openSheet && (
+      {endingPrompt === null && openSheet && (
         <div data-role="v3-sheet">
           {openSheet.kind === "guided" ? (
             <GuidedSheet
@@ -2827,7 +3129,7 @@ export function PadHostV3(props: PadHostV3Props) {
               t={t}
               onComplete={(event) => {
                 setOpenSheet(null);
-                send(event.type, event.payload);
+                send(event.type, event.payload, { endsMatchOnConfirm: true, sideRetires: event.sideRetires === true });
               }}
               onCancel={() => setOpenSheet(null)}
             />

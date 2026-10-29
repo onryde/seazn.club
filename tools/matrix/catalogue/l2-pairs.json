@@ -104,7 +104,7 @@
       "scenario": "R1",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -388,7 +388,7 @@
       "scenario": "R2",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -672,7 +672,7 @@
       "scenario": "R3",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -956,7 +956,7 @@
       "scenario": "R4a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 375,
       "covers": [
@@ -1240,7 +1240,7 @@
       "scenario": "R4b",
       "row": "group_only",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -1391,7 +1391,7 @@
       "scenario": "R4c",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -1675,7 +1675,7 @@
       "scenario": "R5",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -1959,7 +1959,7 @@
       "scenario": "R6",
       "row": "ko_plate",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -2111,7 +2111,7 @@
       "scenario": "R7",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -2395,7 +2395,7 @@
       "scenario": "R8",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -2665,7 +2665,7 @@
       "scenario": "R9a",
       "row": "group_playoffs",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -3241,7 +3241,7 @@
       "scenario": "R10",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -3525,7 +3525,7 @@
       "scenario": "R11a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -3767,7 +3767,7 @@
       "scenario": "R11b",
       "row": "groups_ko",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 375,
       "covers": [
@@ -4046,7 +4046,7 @@
       "scenario": "R12a",
       "row": "groups_ko",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -4325,7 +4325,7 @@
       "scenario": "R12b",
       "row": "groups_ko",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -4646,7 +4646,7 @@
       "scenario": "R13",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -4930,7 +4930,7 @@
       "scenario": "R14",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -5161,7 +5161,7 @@
       "scenario": "R15",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -5589,7 +5589,7 @@
       "scenario": "M1",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -5873,7 +5873,7 @@
       "scenario": "M2",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -6157,7 +6157,7 @@
       "scenario": "M3",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 768,
       "covers": [
@@ -6441,7 +6441,7 @@
       "scenario": "M4a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -7482,7 +7482,7 @@
       "scenario": "M7a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -7766,7 +7766,7 @@
       "scenario": "M7b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -8050,7 +8050,7 @@
       "scenario": "M8a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 768,
       "covers": [
@@ -8334,7 +8334,7 @@
       "scenario": "M8b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -8618,7 +8618,7 @@
       "scenario": "M9a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -8902,7 +8902,7 @@
       "scenario": "M9b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -9186,7 +9186,7 @@
       "scenario": "M10",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 375,
       "covers": [
@@ -9470,7 +9470,7 @@
       "scenario": "M11",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -10586,7 +10586,7 @@
       "scenario": "F1",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -10857,7 +10857,7 @@
       "scenario": "F2",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -11141,7 +11141,7 @@
       "scenario": "F3",
       "row": "double_elim",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -11290,7 +11290,7 @@
       "scenario": "F4",
       "row": "groups_ko",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -11439,7 +11439,7 @@
       "scenario": "F5a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -11619,7 +11619,7 @@
       "scenario": "F5b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -11799,7 +11799,7 @@
       "scenario": "F6",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -11979,7 +11979,7 @@
       "scenario": "F7",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 768,
       "covers": [
@@ -12159,7 +12159,7 @@
       "scenario": "F8",
       "row": "swiss_knockout",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -12378,7 +12378,7 @@
       "scenario": "D1",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -12662,7 +12662,7 @@
       "scenario": "D2",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -12946,7 +12946,7 @@
       "scenario": "D3",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -13230,7 +13230,7 @@
       "scenario": "D4a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 375,
       "covers": [
@@ -13514,7 +13514,7 @@
       "scenario": "D4b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -13798,7 +13798,7 @@
       "scenario": "D5a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -14082,7 +14082,7 @@
       "scenario": "D5b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 768,
       "covers": [
@@ -14366,7 +14366,7 @@
       "scenario": "D6",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -14650,7 +14650,7 @@
       "scenario": "D7",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -14934,7 +14934,7 @@
       "scenario": "P1",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -15218,7 +15218,7 @@
       "scenario": "P2",
       "row": "group_group_ko",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -15368,7 +15368,7 @@
       "scenario": "P3",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -15652,7 +15652,7 @@
       "scenario": "P4",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -15936,7 +15936,7 @@
       "scenario": "P5a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -16217,7 +16217,7 @@
       "scenario": "P5b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -16296,7 +16296,7 @@
       "scenario": "P6",
       "row": "triple_rr",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -16643,7 +16643,7 @@
       "scenario": "P7",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -16836,7 +16836,7 @@
       "scenario": "Q1a",
       "row": "group_group_ko",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -16986,7 +16986,7 @@
       "scenario": "Q1b",
       "row": "group_group_ko",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -17136,7 +17136,7 @@
       "scenario": "Q2",
       "row": "group_group_ko",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -17281,7 +17281,7 @@
       "scenario": "Q3",
       "row": "knockout_third_place",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 768,
       "covers": [
@@ -17430,7 +17430,7 @@
       "scenario": "Q4a",
       "row": "knockout",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -17623,7 +17623,7 @@
       "scenario": "Q4b",
       "row": "group_group_ko",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 375,
       "covers": [
@@ -17768,7 +17768,7 @@
       "scenario": "Q5a",
       "row": "ko_plate",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -17912,7 +17912,7 @@
       "scenario": "Q5b",
       "row": "ko_plate",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -18061,7 +18061,7 @@
       "scenario": "X1a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 375,
       "covers": [
@@ -18345,7 +18345,7 @@
       "scenario": "X1b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -18629,7 +18629,7 @@
       "scenario": "X2",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -18822,7 +18822,7 @@
       "scenario": "X3",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 768,
       "covers": [
@@ -19106,7 +19106,7 @@
       "scenario": "X4a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -19390,7 +19390,7 @@
       "scenario": "X4b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -19674,7 +19674,7 @@
       "scenario": "X4c",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -19958,7 +19958,7 @@
       "scenario": "C1",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 375,
       "covers": [
@@ -20242,7 +20242,7 @@
       "scenario": "C2",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 390,
       "covers": [
@@ -20526,7 +20526,7 @@
       "scenario": "C3a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -20810,7 +20810,7 @@
       "scenario": "C3b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 768,
       "covers": [
@@ -21094,7 +21094,7 @@
       "scenario": "C4",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -21287,7 +21287,7 @@
       "scenario": "C5",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -21467,7 +21467,7 @@
       "scenario": "C6a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 834,
       "covers": [
@@ -21751,7 +21751,7 @@
       "scenario": "C6b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 320,
       "covers": [
@@ -22035,7 +22035,7 @@
       "scenario": "C7",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 360,
       "covers": [
@@ -22319,7 +22319,7 @@
       "scenario": "E1",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 375,
       "covers": [
@@ -22879,7 +22879,7 @@
       "scenario": "E4a",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 430,
       "covers": [
@@ -23163,7 +23163,7 @@
       "scenario": "E4b",
       "row": "swiss",
       "sport": "badminton",
-      "preset": "bwf",
+      "preset": "bwf-3x15",
       "bound": null,
       "width": 768,
       "covers": [

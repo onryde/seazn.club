@@ -23,7 +23,7 @@
 import { forbidsLevelResult, type StageKind } from "@seazn/engine/core";
 import { effectiveEntrantModel, writeConfigIssues, type AnySportModule } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
-import { decidersOffRules, postedStageCfg } from "../../../apps/web/src/lib/stage-decider-off.ts";
+import { decidersOffRules, postedStageCfg, storedStageRules } from "../../../apps/web/src/lib/stage-decider-off.ts";
 
 export class UnknownSport extends Error {
   readonly sportKey: string;
@@ -143,6 +143,14 @@ export function drawsAllowed(sportKey: string, cfg: unknown, stageKind: StageKin
  *  bracket is returned as it came, untouched. */
 export function stageCfg(sportKey: string, cfg: unknown, stageKind: StageKind, variantKey: string, rules?: Readonly<Record<string, unknown>>): unknown {
   return postedStageCfg(sportModule(sportKey), cfg, stageKind, variantKey, rules);
+}
+
+/** W2e Task 35: the `config.rules` the create door STORES for a stage of `stageKind` in this sport and variant, given the rules the
+ *  harness posted (or none): the sport's preset for the kind and variant with the posted rules merged over it - the product's own
+ *  `storedStageRules`, the first half of what `stageCfg` composes. The browser driver's builder-vs-harness check compares against it:
+ *  the door's stored rules are no difference between the builder's stage and the harness's body. Null when nothing is stored. */
+export function storedRulesFor(sportKey: string, stageKind: StageKind, variantKey: string | null, rules?: unknown): Record<string, unknown> | null {
+  return storedStageRules(sportModule(sportKey), stageKind, variantKey, rules ?? null);
 }
 
 /** The `config.rules` a HOLD-PATH cell posts on a stage of `stageKind` (a cell whose scenario is "a level knockout is

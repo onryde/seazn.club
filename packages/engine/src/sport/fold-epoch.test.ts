@@ -55,6 +55,26 @@ describe("FOLD_EPOCH", () => {
     expect(checked).toBe(Object.keys(W2C_MANUAL_MAJOR).length);
   });
 
+  // The same kind of floor for W2e (PR B final review M-2). Football's 3 -> 4 (M12b, `squadsForLineup`: a core.lineup.* event is judged on football's own pitch) is
+  // a MANUAL major, and PR B now records the stream that watches that fold (golden-branches `football.pitch_retirement`, oneSub#90015) - but the guard compares
+  // each sport's epoch with its BASE's, so lowering this entry back to 3 is invisible to it: against an origin/main that holds 3 the CLI prints "epoch 3 -> 3 ...
+  // 0 violation(s)" (run, exit 0, with the stream present). This floor is what turns that revert red. Stated as a literal for the reason above: MAIN is
+  // football's value on the main this wave branched from (3; `git show origin/main:packages/engine/src/sport/fold-epoch.ts` while the branch is unmerged),
+  // and the floor is that + 1.
+  const W2E_MANUAL_MAJOR = { football: 3 } as const;
+  it("W2e's football manual MAJOR stays raised: football is at least its origin/main value + 1 (the pitch judgement of a core.lineup.* event; the corpus witness cannot ask for it)", () => {
+    const registered = builtinModules.map((m) => m.key);
+    let checked = 0;
+    for (const [sport, main] of Object.entries(W2E_MANUAL_MAJOR)) {
+      expect(registered, `${sport} is a registered sport`).toContain(sport);
+      expect(table[sport], `${sport}: origin/main is at ${main}; M12b's pitch judgement owes ${main + 1}`).toBeGreaterThanOrEqual(main + 1);
+      expect(foldEpochOf(sport), `${sport} through the accessor the server's gate reads`).toBeGreaterThanOrEqual(main + 1);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: the sport was checked").toBe(1);
+    expect(checked).toBe(Object.keys(W2E_MANUAL_MAJOR).length);
+  });
+
   it("answers each registered sport's own entry: a copy of the file with a different number per sport answers each its own", async () => {
     const keys = builtinModules.map((m) => m.key);
     expect(keys.length).toBeGreaterThan(1);

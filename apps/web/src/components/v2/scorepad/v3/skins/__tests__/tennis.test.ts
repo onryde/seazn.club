@@ -191,7 +191,7 @@ function collectLabelKeys(): Set<string> {
       keys.add(tile.label);
       if (tile.sublabel !== undefined) keys.add(tile.sublabel);
     }
-    for (const spec of Object.values(buildSheets(v))) {
+    for (const spec of Object.values(buildSheets(v, t))) {
       for (const step of spec.steps) {
         keys.add(step.title);
         if (step.kind === "choice") for (const option of step.options) keys.add(option.label);
@@ -736,7 +736,7 @@ describe("buildTiles — D-16 (set score withheld while the set is in progress)"
 
     it("MUTATION PROOF: a withheld tile is NOT a dedicated type — which is the hazard this layer covers", () => {
       const v = breaker("tiebreak");
-      const dedicated = dedicatedEventTypes(buildTiles(v), buildSheets(v), [], buildScorebug(v, t));
+      const dedicated = dedicatedEventTypes(buildTiles(v), buildSheets(v, t), [], buildScorebug(v, t));
       // Withholding the tile removes it from `dedicated`, so `moreActions`
       // would re-offer the type if anything still put it in the PadSpec's
       // panels. Today nothing does (the engine gate); this pins the pad's
@@ -754,7 +754,7 @@ describe("buildTiles — D-16 (set score withheld while the set is in progress)"
   // on screen to say so.
   it("the scorebug's own tapEvent is what de-duplicates the point out of the More sheet", () => {
     const v = view();
-    const dedicated = dedicatedEventTypes(buildTiles(v), buildSheets(v), [], buildScorebug(v, t));
+    const dedicated = dedicatedEventTypes(buildTiles(v), buildSheets(v, t), [], buildScorebug(v, t));
     expect([...dedicated]).toContain("tennis.point");
   });
 });
@@ -923,13 +923,13 @@ function driveSheet(spec: GuidedSheetSpec, answers: readonly string[]) {
 
 describe("setScore sheet", () => {
   it("home/away only, when the score is not the tie-break shape", () => {
-    const spec = buildSheets(view()).setScore!;
+    const spec = buildSheets(view(), t).setScore!;
     const event = driveSheet(spec, ["6", "4"]);
     expect(event).toEqual({ type: "tennis.set_summary", payload: { home: 6, away: 4 } });
   });
 
   it("asks tb points ONLY when the score is tiebreakAt+1 : tiebreakAt", () => {
-    const spec = buildSheets(view()).setScore!;
+    const spec = buildSheets(view(), t).setScore!;
     // 7-6 IS the shape (tiebreakAt=6) — tbHome/tbAway must be asked.
     let s = initialSheetState();
     s = (answerStep(spec, s, "7") as { state: typeof s }).state;
@@ -940,7 +940,7 @@ describe("setScore sheet", () => {
   });
 
   it("skips the tb step entirely for a plain, non-tiebreak score", () => {
-    const spec = buildSheets(view()).setScore!;
+    const spec = buildSheets(view(), t).setScore!;
     const s0 = initialSheetState();
     const afterHome = answerStep(spec, s0, "6");
     expect(afterHome.done).toBe(false);
@@ -957,7 +957,7 @@ describe("setScore sheet", () => {
       cfg: cfg({ finalSet: { matchTiebreakTo: 10 } }),
       state: state({ setsWon: { home: 1, away: 1 } }), // deciding set, bestOf 3
     });
-    const spec = buildSheets(v).setScore!;
+    const spec = buildSheets(v, t).setScore!;
     const event = driveSheet(spec, ["10", "8"]);
     expect(event).toEqual({ type: "tennis.set_summary", payload: { home: 10, away: 8 } });
   });
@@ -965,20 +965,20 @@ describe("setScore sheet", () => {
 
 describe("sanction sheets — per side, level tones, person narrowed to that side", () => {
   it("declares one sheet per side, keyed by sanctionSheetKey", () => {
-    const sheets = buildSheets(view());
+    const sheets = buildSheets(view(), t);
     expect(sheets[sanctionSheetKey("home")]).toBeDefined();
     expect(sheets[sanctionSheetKey("away")]).toBeDefined();
   });
 
   it("offers all four SANCTION_LEVELS, in the engine's own ladder order", () => {
-    const step = buildSheets(view())[sanctionSheetKey("home")]!.steps[0]!;
+    const step = buildSheets(view(), t)[sanctionSheetKey("home")]!.steps[0]!;
     expect(step.kind).toBe("choice");
     expect((step as { options: { id: string }[] }).options.map((o) => o.id)).toEqual(SANCTION_LEVELS);
     expect(SANCTION_LEVELS).toEqual(["warning", "point_penalty", "game_penalty", "default"]);
   });
 
   it("R4-4: warning and default carry a tone; point_penalty/game_penalty carry none", () => {
-    const options = buildSheets(view())[sanctionSheetKey("home")]!.steps[0]! as {
+    const options = buildSheets(view(), t)[sanctionSheetKey("home")]!.steps[0]! as {
       options: { id: string; tone?: readonly string[] }[];
     };
     const toneOf = (id: string) => options.options.find((o) => o.id === id)?.tone;
@@ -989,7 +989,7 @@ describe("sanction sheets — per side, level tones, person narrowed to that sid
   });
 
   it("person step is narrowed to the FIXED side's own on-field roster — a doubles pair gives two candidates", () => {
-    const step = buildSheets(view({ squads: doublesSquads(true) }))[sanctionSheetKey("home")]!.steps[1]! as {
+    const step = buildSheets(view({ squads: doublesSquads(true) }), t)[sanctionSheetKey("home")]!.steps[1]! as {
       side: string;
       candidates?: readonly string[];
     };
@@ -998,14 +998,14 @@ describe("sanction sheets — per side, level tones, person narrowed to that sid
   });
 
   it("away sheet never offers a home player as a candidate", () => {
-    const step = buildSheets(view({ squads: doublesSquads(true) }))[sanctionSheetKey("away")]!.steps[1]! as {
+    const step = buildSheets(view({ squads: doublesSquads(true) }), t)[sanctionSheetKey("away")]!.steps[1]! as {
       candidates?: readonly string[];
     };
     expect(step.candidates).toEqual(["A-first", "A-second"]);
   });
 
   it("builds a payload naming the OFFENDER as `by`, never the fold's own opposite convention", () => {
-    const spec = buildSheets(view())[sanctionSheetKey("away")]!;
+    const spec = buildSheets(view(), t)[sanctionSheetKey("away")]!;
     const event = driveSheet(spec, ["point_penalty", "A"]);
     expect(event).toEqual({ type: "tennis.sanction", payload: { by: "A", level: "point_penalty", person: "A" } });
   });
@@ -1028,13 +1028,13 @@ describe("sanction sheets — per side, level tones, person narrowed to that sid
 
 describe("sanction sheet — defect 2 fix: person step skips cleanly with no on-field roster", () => {
   it("MUTATION PROOF (throws — sheet never completes — without the fix): completes after `level` alone, person omitted", () => {
-    const spec = buildSheets(view({ squads: emptySquads() }))[sanctionSheetKey("home")]!;
+    const spec = buildSheets(view({ squads: emptySquads() }), t)[sanctionSheetKey("home")]!;
     const event = driveSheet(spec, ["warning"]);
     expect(event).toEqual({ type: "tennis.sanction", payload: { by: "H", level: "warning", person: undefined } });
   });
 
   it("still asks person when the side DOES have an on-field roster — unchanged", () => {
-    const spec = buildSheets(view({ squads: singlesSquads() }))[sanctionSheetKey("home")]!;
+    const spec = buildSheets(view({ squads: singlesSquads() }), t)[sanctionSheetKey("home")]!;
     let s = initialSheetState();
     s = (answerStep(spec, s, "warning") as { state: typeof s }).state;
     expect(currentStep(spec, s)!.id).toBe("person");
@@ -1043,7 +1043,7 @@ describe("sanction sheet — defect 2 fix: person step skips cleanly with no on-
 
 describe("interruption sheet — R4-2, one generic tile, side is genuinely optional", () => {
   it("kind, then side, then duration when side is none — person is skipped entirely", () => {
-    const spec = buildSheets(view()).interruption!;
+    const spec = buildSheets(view(), t).interruption!;
     let s = initialSheetState();
     s = (answerStep(spec, s, "medical") as { state: typeof s }).state;
     s = (answerStep(spec, s, "none") as { state: typeof s }).state;
@@ -1053,7 +1053,7 @@ describe("interruption sheet — R4-2, one generic tile, side is genuinely optio
   });
 
   it("side=home asks personHome next, narrowed to home's own roster, and sends `by`", () => {
-    const spec = buildSheets(view({ squads: doublesSquads(true) })).interruption!;
+    const spec = buildSheets(view({ squads: doublesSquads(true) }), t).interruption!;
     let s = initialSheetState();
     s = (answerStep(spec, s, "toilet") as { state: typeof s }).state;
     s = (answerStep(spec, s, "home") as { state: typeof s }).state;
@@ -1068,7 +1068,7 @@ describe("interruption sheet — R4-2, one generic tile, side is genuinely optio
   });
 
   it("side=away asks personAway, never personHome, and sends the away entrant as `by`", () => {
-    const spec = buildSheets(view({ squads: doublesSquads(true) })).interruption!;
+    const spec = buildSheets(view({ squads: doublesSquads(true) }), t).interruption!;
     const event = driveSheet(spec, ["heat", "away", "A-second", "90"]);
     expect(event).toEqual({
       type: "tennis.interruption",
@@ -1083,7 +1083,7 @@ describe("interruption sheet — R4-2, one generic tile, side is genuinely optio
 
 describe("interruption sheet — defect 2 fix: person step skips cleanly when the chosen side has no on-field roster", () => {
   it("MUTATION PROOF (throws — sheet never completes — without the fix): side=home with an EMPTY home roster skips personHome, straight to duration", () => {
-    const spec = buildSheets(view({ squads: emptySquads() })).interruption!;
+    const spec = buildSheets(view({ squads: emptySquads() }), t).interruption!;
     let s = initialSheetState();
     s = (answerStep(spec, s, "medical") as { state: typeof s }).state;
     s = (answerStep(spec, s, "home") as { state: typeof s }).state;
@@ -1093,7 +1093,7 @@ describe("interruption sheet — defect 2 fix: person step skips cleanly when th
   });
 
   it("still asks personAway when away's roster IS populated — unchanged", () => {
-    const spec = buildSheets(view({ squads: doublesSquads(true) })).interruption!;
+    const spec = buildSheets(view({ squads: doublesSquads(true) }), t).interruption!;
     let s = initialSheetState();
     s = (answerStep(spec, s, "heat") as { state: typeof s }).state;
     s = (answerStep(spec, s, "away") as { state: typeof s }).state;
@@ -1101,7 +1101,7 @@ describe("interruption sheet — defect 2 fix: person step skips cleanly when th
   });
 
   it("side=none is unaffected — still skips straight to duration regardless of roster", () => {
-    const spec = buildSheets(view({ squads: emptySquads() })).interruption!;
+    const spec = buildSheets(view({ squads: emptySquads() }), t).interruption!;
     const event = driveSheet(spec, ["other", "none", "10"]);
     expect(event).toEqual({ type: "tennis.interruption", payload: { kind: "other", duration: 10 } });
   });
@@ -1500,10 +1500,12 @@ describe("tennisSkinV3 — factory assembly", () => {
 
   it("sheets() closes over the factory's own t — mirrors cricket's R2c proof for the same tsc-invisible trap", () => {
     const marker = tennisSkinV3((k) => `MARK:${k}`);
-    // sheets() itself takes no t in this skin (buildSheets is t-free), so the
-    // proof here is that a step's OWN title key is exactly what the chassis
-    // will resolve — sheets() must still be reachable off the factory result.
+    // A step's title stays a raw key (the chassis resolves it). The one string a sheet resolves ITSELF is the end-of-match
+    // read-back's sentence (W2e T30), which must come out of the factory's own t.
     expect(marker.sheets!(view()).setScore).toBeDefined();
+    const confirm = marker.sheets!(view())[sanctionSheetKey("home")]!.steps.find((s) => s.kind === "confirm");
+    if (confirm?.kind !== "confirm") throw new Error("the tennis sanction sheet has no end-of-match read-back");
+    expect(confirm.summary({ level: "default" }).startsWith("MARK:pad.sanction.endsMatch")).toBe(true);
   });
 
   it("registry flip: resolvePad('tennis', t) resolves to the v3 skin (see registry-totality.test.ts for the mutation proof)", async () => {
@@ -1539,7 +1541,7 @@ describe("set-score sheet bounds equal the engine padSpec's, for every declared 
         if (f?.kind !== "number" || f.max === undefined) throw new Error(`premise: ${name} ${path} declares a maximum`);
         return f.max;
       };
-      const steps = buildSheets(view({ cfg: parsed as unknown as PadHostView["cfg"] })).setScore!.steps;
+      const steps = buildSheets(view({ cfg: parsed as unknown as PadHostView["cfg"] }), t).setScore!.steps;
       const sheetMax = (id: string): unknown => {
         const step = steps.find((s) => s.id === id);
         return step?.kind === "number" ? step.max : `no number step "${id}"`;

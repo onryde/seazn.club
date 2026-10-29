@@ -307,25 +307,33 @@ describe("matchPlanIds (T4-IDS): the run's case ids are exactly the planner's fo
     expect(PLAN_IDS.length).toBeGreaterThan(1);
   });
 
-  it("a `--set` plan, from committed evidence: the w1drv L3 run (plan `--set w1-driving`) matches the ids its planner makes — the count is the planner's, and the evidence's own", () => {
-    const committed = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w1drv-l3", "results.json"), "utf8")));
-    // The evidence predates the follow-up to #1027 (chess is individual-only, owner ruling 2026-10-26): it ran the four
-    // scripts on chess americano/mexicano too, cells today's planner refuses. Those are set aside, counted; the rest is
-    // the evidence the planner is matched against.
-    const onRefused = committed.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`));
-    expect(onRefused.length).toBe(REFUSED_CELLS.length * 4);
-    expect([...new Set(onRefused.map((c) => `${c.row}|${c.sport}`))].sort()).toEqual([...REFUSED_CELLS].sort());
-    const real = { ...committed, cases: committed.cases.filter((c) => !isRefusedCell(`${c.row}|${c.sport}`)) };
+  it("a `--set` plan, from committed evidence: the W2e truth run's CI L3 (plan `--set w1-driving`) matches the ids its planner makes — the count is the planner's, and the evidence's own", () => {
+    // W2e Task 35: moved from the w1drv L3 run (937 cases, before the 25th cricket `test` case, the 3x15 badminton default and
+    // the chess individual-only refusal) to the current evidence, which is the run a planner change is judged against.
+    const real = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w2e-final", "ci", "L3", "results.json"), "utf8")));
+    expect("plan" in real ? real.plan : undefined).toBe("--set w1-driving");
+    // The current evidence holds no case on a cell today's planner refuses (chess americano/mexicano): nothing to set aside.
+    expect(real.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`))).toEqual([]);
     const plan = livePlan("--set w1-driving");
     const asRun = { ...real, plan: "--set w1-driving" } as unknown as RunResults;
     // Two independent sources agree: the planner (derived from the registry) and the committed evidence.
     expect(plan.driven.size + plan.planned.size).toBe(real.cases.length);
     expect(matchPlanIds(asRun).compared).toBe(real.cases.length);
     expect(real.cases.length).toBeGreaterThan(900);
-    // The set-aside cases are exactly what the planner no longer makes: put back, they are refused as extras.
-    expect(() => matchPlanIds({ ...asRun, cases: committed.cases } as unknown as RunResults)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining(`extra ${onRefused.length}`) }));
     // …and it is a real check: one case dropped from the committed run is refused.
     expect(() => matchPlanIds({ ...asRun, cases: asRun.cases.slice(1) })).toThrow(expect.objectContaining({ name: "PlanIdsMismatch" }));
+  });
+
+  it("the OLDER w1drv L3 run is what the planner no longer makes: it ran the four scripts on the refused chess americano/mexicano cells (set aside, counted), and put back into the current evidence they are refused as extras", () => {
+    // The w1drv evidence predates the follow-up to #1027 (chess is individual-only, owner ruling 2026-10-26): it ran the four
+    // scripts on chess americano/mexicano too, cells today's planner refuses.
+    const old = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w1drv-l3", "results.json"), "utf8")));
+    const onRefused = old.cases.filter((c) => isRefusedCell(`${c.row}|${c.sport}`));
+    expect(onRefused.length).toBe(REFUSED_CELLS.length * 4);
+    expect([...new Set(onRefused.map((c) => `${c.row}|${c.sport}`))].sort()).toEqual([...REFUSED_CELLS].sort());
+    const current = parseResults(JSON.parse(readFileSync(join(REPO, TRUTH_RUNS, "w2e-final", "ci", "L3", "results.json"), "utf8")));
+    const asRun = { ...current, plan: "--set w1-driving" } as unknown as RunResults;
+    expect(() => matchPlanIds({ ...asRun, cases: [...current.cases, ...onRefused] } as unknown as RunResults)).toThrow(expect.objectContaining({ name: "PlanIdsMismatch", message: expect.stringContaining(`extra ${onRefused.length}`) }));
   });
 
   it("a case dropped (one id missing) is refused PlanIdsMismatch, naming it and the count", () => {
@@ -751,6 +759,25 @@ describe("judge regression: compared, skipped, and the skips it refuses (D16; E2
     expect(none.code).toBe(0);
     expect(out.join("")).toContain("skipped 0 cases (0 expected, 0 unexpected)");
     expect(none.json).toMatchObject({ compared: 2, skipped: 0, skippedIds: [], unexpectedSkips: [] });
+  });
+
+  it("T18 M1: the verdict file says which MODE judged it — sample: true under --sample, sample: false for the strict release judge (so committed evidence cannot read as the other)", () => {
+    // The strict judge (truth run): no --sample, the skips listed.
+    const strict = verdictOf(["--expected-skips", skips(["old1", "old2"])], BASE(), NOW(), ["a", "b"]);
+    expect(strict.code).toBe(0);
+    expect(strict.json.sample, "strict judge, skips listed").toBe(false);
+    // The same strict judge refusing an unlisted skip still says it was strict (exit 1 is a verdict, so a file is written).
+    const refused = verdictOf([], BASE(), NOW(), ["a", "b"]);
+    expect(refused.code).toBe(1);
+    expect(refused.json.sample, "strict judge, unlisted skips").toBe(false);
+    // The PR sample: the same cases, a deliberate subset.
+    const sampled = verdictOf(["--sample"], BASE(), NOW(), ["a", "b"]);
+    expect(sampled.code).toBe(0);
+    expect(sampled.json.sample, "--sample").toBe(true);
+    // The other two modes judge no baseline, so they carry no sample flag at all (absent, not false).
+    const p = join(dir, `t18m1-${++n}.json`);
+    expect(judgeCli(["faults", f(planRun([], { runId: "t18m1-f" })), "--json-out", p])).toBe(0);
+    expect(JSON.parse(readFileSync(p, "utf8")) as Record<string, unknown>).not.toHaveProperty("sample");
   });
 
   it("a baseline case missing from --expect and not in --expected-skips fails the run, named unexpected_skip — with no flag, with an empty list, and with a list that covers only some", () => {

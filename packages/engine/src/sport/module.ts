@@ -759,13 +759,15 @@ export interface RuleKeyFact {
   readonly whenAbsent?: number;
   /** A DETAIL of a decider, not a decider itself: the key of the decider it only means something under (the kicks of a
    *  shoot-out under `shootout`, the minutes of an overtime under `overtime`: bounded lengths; or a policy, cricket's
-   *  `superOverStillTied` under `superOver`: what a tied super over does). Declared, not inferred from the key's
+   *  `superOverStillTied` under `superOver`: what a tied super over does). The host may also be a SWITCH that is no
+   *  decider: cricket's `dls`, the only reader of the result floor `minOversForResult` (a DLS par decides an abandoned
+   *  chase, never a level match). The editor holds the detail while its host is off either way, but places a detail of a
+   *  decider with the deciders and a detail of a switch with the match format. Declared, not inferred from the key's
    *  spelling: football's `shootoutAttempts` is a flat key beside its decider, the period kernel's are dotted paths
-   *  beneath theirs. The stage editor reads it to hold such a field while its decider is off, and to place it with the
-   *  deciders; a detail must also be OFFERED exactly where its decider is (the same `appliesTo`), or the editor lists a
+   *  beneath theirs. A detail must also be OFFERED exactly where its host is (the same `appliesTo`), or the editor lists a
    *  field that can never be enabled. The sweeps in `rule-keys.test.ts` fail a bounded key that is neither a decider nor a
-   *  detail of one, a `detailOf` that names a key which is not a declared decider, and a detail whose `appliesTo` differs
-   *  from its decider's. */
+   *  detail of one, a `detailOf` that names a key which is neither a declared decider nor a declared switch, and a detail
+   *  whose `appliesTo` differs from its host's. */
   readonly detailOf?: string;
   /** A WHOLE decider: the key that, on, settles a level match (extra time, penalties, overtime, the shoot-out, the
    *  super over, chess tie-break games, carrom's tie board). The knockout preselection reads it through
@@ -886,6 +888,10 @@ export interface SportModule<Cfg, Ev, State> extends FoldableModule<Cfg, State> 
   // `lineupPolicy: () => DEFAULT_LINEUP_POLICY` rather than omitting it.
   lineupPolicy?(cfg: Cfg): LineupPolicy;
   onLineup?(state: State, squads: SquadState): State;
+  // W2e T32 fix (M12b) — a module whose OWN events also move people on and off (football's `football.sub`) hands the kernel
+  // the squads a `core.lineup.*` event is judged against, with who is on the field read from its State. Full reasoning on
+  // FoldableModule (src/core/events.ts). Absent ⇒ the kernel's own squads.
+  squadsForLineup?(state: State, squads: SquadState): SquadState;
   /**
    * W2e (spec 2026-10-28 §5.2; D3 (1), D12, D13; rule X-SE-1) — restated from FoldableModule (src/core/events.ts) because
    * this is the interface a sport author reads. Which levels of the sport's sanction event END the match (`endLevels`:
@@ -1153,6 +1159,12 @@ export function setTargetBelowFloor(min: number): string {
 /** W2e RB2A-13 (TN-CF-1) — the write-door refusal of a tennis best of 1 whose final set is a match tie-break: ITF App VI's
  *  match tie-break REPLACES a deciding set, and a best of 1 has no set to replace. */
 export const BO1_MATCH_TIEBREAK = "A match tie-break replaces a deciding set; best of 1 has none.";
+/** W2e T33a (cricket) — the schema's refusals of an over count longer than the innings: a bowler's cap (`maxOversPerBowler`) and
+ *  the result floor (`minOversForResult`), each against `ballsPerInnings`. They are zod messages on the cfg itself, so they ride
+ *  CONFIG_INVALID's `issues`; a client matches them by whole message and maps them to its own localized copy
+ *  (apps/web `LOCALIZED_CONFIG_ISSUES`), the cricket refinements using these very constants. */
+export const MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS = "maxOversPerBowler exceeds the innings length";
+export const MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS = "minOversForResult exceeds the innings length";
 
 /**
  * W2e (spec 2026-10-28 §5.5, E15) — the sentences a write door refuses `cfg` with (`SportModule.configWriteIssues`), over

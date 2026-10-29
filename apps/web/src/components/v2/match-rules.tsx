@@ -11,10 +11,12 @@
 // ordered list) lives in `stage-rules/rule-field-control.tsx`, shared with the
 // stage format row so the two editors cannot drift; this file keeps the grid.
 import { useMsg } from "@/components/i18n/dict-provider";
+import { configIssueText } from "@/lib/config-issue-copy";
 import { setRuleValue, visibleRuleFields } from "@/lib/match-rules";
 import type { RefusedField } from "@/lib/rule-errors";
 import { RuleFieldControl } from "@/components/v2/stage-rules/rule-field-control";
 import { lockLineFor, lockSentence } from "./division-settings-locks";
+import type { RuleFormState } from "./match-rules-state";
 
 export type { RuleField } from "@/lib/match-rules";
 export {
@@ -35,6 +37,7 @@ export function MatchRuleFields({
   inherited,
   omit,
   lockedFields = [],
+  state,
 }: {
   sportKey: string;
   values: Record<string, string>;
@@ -53,9 +56,13 @@ export function MatchRuleFields({
    *  A locked field renders read-only with its lock line - said before the organiser types, not after Save. Matched by the
    *  field's own key or any engine key it edits (`lockLineFor`). Left out by the division builder, which has no stage yet. */
   lockedFields?: readonly RefusedField[];
+  /** W2e Task 29: what the form knows before Save (`ruleFormState`) - the write doors' sentences beside the fields they are
+   *  about, the fields the variant has no use for (not drawn), and the detail a switch holds (drawn disabled, with why).
+   *  Absent: the grid is exactly what it was. */
+  state?: RuleFormState;
 }) {
   const msg = useMsg();
-  const fields = visibleRuleFields(sportKey, values, inherited).filter((f) => !omit?.includes(f.key));
+  const fields = visibleRuleFields(sportKey, values, inherited).filter((f) => !omit?.includes(f.key) && state?.hidden.has(f.key) !== true);
   if (fields.length === 0) return null;
   const edit = (key: string, raw: string) =>
     onChange(setRuleValue(sportKey, values, key, raw, inherited));
@@ -63,17 +70,30 @@ export function MatchRuleFields({
     <div className="grid gap-4 sm:grid-cols-3">
       {fields.map((field) => {
         const lock = lockLineFor(field.key, lockedFields, field.edits);
+        const heldBy = state?.held.get(field.key);
+        const problems = state?.invalid.get(field.key);
         return (
           // An ordered list needs the row's width; a number or a picker sits in a column.
-          <div key={field.key} className={field.kind === "sequence" ? "sm:col-span-3" : undefined}>
+          <div
+            key={field.key}
+            data-testid={`rule-field-${field.key}`}
+            data-held={heldBy === undefined ? undefined : "true"}
+            className={field.kind === "sequence" ? "sm:col-span-3" : undefined}
+          >
             <RuleFieldControl
               sportKey={sportKey}
               field={field}
               value={values[field.key] ?? ""}
               onEdit={(raw) => edit(field.key, raw)}
-              disabled={disabled || lock !== undefined}
+              disabled={disabled || lock !== undefined || heldBy !== undefined}
               inherited={inherited}
+              problem={problems === undefined ? undefined : { text: problems.map((message) => configIssueText({ path: [], message }, msg)).join(" "), idScope: "division" }}
             />
+            {heldBy !== undefined && (
+              <p className="mt-1 text-[11px] leading-snug text-slate-700" data-testid={`rule-field-off-${field.key}`}>
+                {msg("stageRules.detail.off", { decider: msg(heldBy) })}
+              </p>
+            )}
             {lock !== undefined && (
               <p className="mt-1 text-[11px] leading-snug text-slate-700" data-testid={`division-locked-${field.key}`}>
                 <span aria-hidden="true">🔒 </span>

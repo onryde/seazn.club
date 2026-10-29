@@ -18,7 +18,7 @@ import { templateField } from "../lib/templates.ts";
 import { loadL2Pairs, parseL2Pairs, type L2Run } from "../lib/pairs.ts";
 import { SetTakesNoFilter } from "../lib/probe-set.ts";
 import { decideState } from "../lib/results.ts";
-import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
+import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor } from "../lib/scenario-catalogue.ts";
 import { SLICE_ROWS, SLICE_SPORTS, UnknownFilter } from "../lib/slice.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS, type BrowserWidth } from "../lib/widths.ts";
 
@@ -109,7 +109,7 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
     expect(cases).toHaveLength(SLICE_RUNS.length);
     // The expected split, from the catalogue's own declarations.
     const exec = SLICE_RUNS.filter((r) => Object.hasOwn(HARNESS_SCENARIO, r.scenario));
-    const owning = (r: L2Run) => { const a = ATOM.get(r.scenario)!; return a.knownNoPath ?? a.l2NoPath; };
+    const owning = (r: L2Run) => { const a = ATOM.get(r.scenario)!; return a.knownNoPath ?? l2NoPathFor(a, r.sport); };
     const noPath = SLICE_RUNS.filter((r) => !exec.includes(r) && owning(r) !== null);
     const notRun = SLICE_RUNS.filter((r) => !exec.includes(r) && owning(r) === null);
     // Non-vacuity: every branch has a run to witness it.
@@ -151,7 +151,7 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
   // Review I-1: the slice holds knownNoPath atoms only, so the classifier's
   // `?? atom.l2NoPath` arm and its reason are reached from the cells outside it.
   it("the l2NoPath arm: every committed run whose atom has l2NoPath (and no knownNoPath) is planned 🚫 naming that wave, with the route-exists reason", () => {
-    const isL2Gap = (r: L2Run) => { const a = ATOM.get(r.scenario)!; return a.knownNoPath === null && a.l2NoPath !== null && !Object.hasOwn(HARNESS_SCENARIO, r.scenario); };
+    const isL2Gap = (r: L2Run) => { const a = ATOM.get(r.scenario)!; return a.knownNoPath === null && l2NoPathFor(a, r.sport) !== null && !Object.hasOwn(HARNESS_SCENARIO, r.scenario); };
     const gapRuns = RAW.runs.filter(isL2Gap);
     const cells = new Set(gapRuns.map((r) => cellId(r.row, r.sport)));
     expect(gapRuns.length).toBeGreaterThan(0);
@@ -162,12 +162,40 @@ describe("planL2 — the committed rotation, filtered, never re-planned", () => 
       const c = byN.get(r.n);
       expect(c, `n ${r.n} ${r.scenario} planned`).toBeDefined();
       expect({ spec: c!.spec, notRun: c!.notRun, width: c!.width }, `n ${r.n}`).toEqual({ spec: null, notRun: null, width: r.width });
-      expect(c!.noPath, `n ${r.n} ${r.scenario}`).toEqual({ wave: atom.l2NoPath, reason: `the HTTP route exists and no screen sends it (design §4, ruling 30): ${atom.title}` });
+      expect(c!.noPath, `n ${r.n} ${r.scenario}`).toEqual({ wave: l2NoPathFor(atom, r.sport), reason: `the HTTP route exists and no screen sends it (design §4, ruling 30): ${atom.title}` });
       expect(decideState({ checks: [], deferred: null, error: null, noPath: c!.noPath, notRun: c!.notRun }).state).toBe("no_path");
       checked++;
     }
-    console.info(`layers: l2NoPath arm — ${checked} runs over ${cells.size} cells (waves ${[...new Set(gapRuns.map((r) => ATOM.get(r.scenario)!.l2NoPath))].join(", ")})`);
+    console.info(`layers: l2NoPath arm — ${checked} runs over ${cells.size} cells (waves ${[...new Set(gapRuns.map((r) => l2NoPathFor(ATOM.get(r.scenario)!, r.sport)))].join(", ")})`);
     expect(checked).toBe(gapRuns.length);
+  });
+
+  // W2e Task 32 (B2-3): the committed M12b runs, planned per sport. The four sports whose pad gained the control are no
+  // longer 🚫 ("no screen sends it" is false for them); they are ░ until a scenario script drives the control. Cricket and
+  // generic keep 🚫 W2 (dispositions CK-DV-3, GN-DV-1).
+  it("W2e T32: M12b is ░ in football, volleyball, hockey and ice hockey and still 🚫 W2 in every other sport, run by committed run", () => {
+    const m12b = RAW.runs.filter((r) => r.scenario === "M12b");
+    const cells = new Set(m12b.map((r) => cellId(r.row, r.sport)));
+    const byN = new Map(planL2(committed, cells).map((c) => [c.run!.n, c]));
+    const built = new Set(["football", "volleyball", "hockey", "icehockey"]);
+    const seen = { built: 0, owing: 0 };
+    for (const r of m12b) {
+      const c = byN.get(r.n)!;
+      expect(c, `n ${r.n}`).toBeDefined();
+      if (built.has(r.sport)) {
+        expect(c.noPath, `n ${r.n} ${r.sport}: the screen path exists`).toBeNull();
+        expect(c.notRun, `n ${r.n} ${r.sport}`).toBe("no scenario script yet (atom M12b)");
+        seen.built += 1;
+      } else {
+        expect(c.noPath, `n ${r.n} ${r.sport}: no pad control, by disposition`).toMatchObject({ wave: "W2" });
+        expect(c.notRun).toBeNull();
+        seen.owing += 1;
+      }
+    }
+    // Anti-vacuity: both branches have committed runs (football 16, volleyball/hockey/icehockey 1 each; cricket, generic).
+    expect(seen.built, "built-sport runs checked").toBeGreaterThan(0);
+    expect(seen.owing, "cricket / generic runs checked").toBeGreaterThan(0);
+    expect(seen.built + seen.owing).toBe(m12b.length);
   });
 
   it("🚫 and ░ both set is impossible: planL2 never produces both, and decideState throws if handed both (T3's guard, reached from a real planner output)", () => {

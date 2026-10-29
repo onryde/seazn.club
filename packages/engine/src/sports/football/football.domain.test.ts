@@ -3,7 +3,8 @@
 // DOMAIN.md (which is the audit itself). Every test here must fail without
 // the matching fold change.
 import { describe, expect, it } from "vitest";
-import { foldMatch, type EventEnvelope } from "../../core/events.ts";
+import { foldMatch, foldMatchWithStoppage, type EventEnvelope } from "../../core/events.ts";
+import { personsAtPosition } from "../../core/lineup.ts";
 import type { Lineup, LineupPair } from "../../core/types.ts";
 import { aggregatePlayerStats, playerStatsKeyCollisions } from "../../stats/stats.ts";
 import { lineupFromCatalog, makeEnvelope } from "../../testkit/index.ts";
@@ -1088,5 +1089,94 @@ describe("goalkeeper stats: clean sheets, goals conceded (S8/#417)", () => {
 
   it("playerStatsKeyCollisions is empty for football", () => {
     expect(playerStatsKeyCollisions(model)).toEqual([]);
+  });
+
+  // W2e T32 fix round 2 (item 2) — ONE AUTHORITY: this fold re-folds `core.lineup.*` itself, so it judges each one the
+  // way the match fold does (`judgeLineupEvent`, on the pitch a `football.sub` moved). The keeper subbed off by
+  // football.sub, his substitute then named in goal by the kernel: the fold's own squads say who is in goal, and the
+  // goal conceded after it is charged to him, never to the man who left.
+  it("a keeper changed by football.sub then named in goal by core.lineup.position: goals conceded go to the keeper the fold names", () => {
+    const events = [
+      start,
+      makeEnvelope(1, { type: "football.sub", payload: { by: H, off: homeKeeper, on: homeSub1 } }),
+      makeEnvelope(2, { type: "core.lineup.position", payload: { side: H, personId: homeSub1, positionKey: "GK" } }),
+      goalEv(3, A),
+    ];
+    // The match fold accepts it as a WRITE, and its squads name the keeper.
+    const run = foldMatchWithStoppage(football, cfgOf({}), lineups, events.slice(0, 3), { strictFromSeq: 0 });
+    const inGoal = personsAtPosition(run.squads.home, "GK");
+    expect(inGoal, "the fold names exactly one keeper").toHaveLength(1);
+    expect(inGoal[0]).not.toBe(homeKeeper);
+    const rows = aggregatePlayerStats(events, model, lineups);
+    expect(rows.find((r) => r.personId === inGoal[0])?.stats.goals_conceded).toBe(1);
+    expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded).toBeUndefined();
+    // His spell closed with nothing conceded: a clean sheet, as for any keeper changed at 0-0.
+    expect(rows.find((r) => r.personId === homeKeeper)?.stats.clean_sheets).toBe(1);
+  });
+
+  it("the SECOND mixed change keeps the keeper the first one named: an outfield football.sub then a position change does not unseat him", () => {
+    const events = [
+      start,
+      makeEnvelope(1, { type: "football.sub", payload: { by: H, off: homeKeeper, on: homeSub1 } }),
+      makeEnvelope(2, { type: "core.lineup.position", payload: { side: H, personId: homeSub1, positionKey: "GK" } }),
+      makeEnvelope(3, { type: "football.sub", payload: { by: H, off: "H-p5", on: "H-b4" } }),
+      makeEnvelope(4, { type: "core.lineup.position", payload: { side: H, personId: "H-b4", positionKey: "DF" } }),
+      goalEv(5, A),
+    ];
+    const run = foldMatchWithStoppage(football, cfgOf({}), lineups, events.slice(0, 5), { strictFromSeq: 0 });
+    const inGoal = personsAtPosition(run.squads.home, "GK");
+    expect(inGoal, "the fold still names the first change's keeper").toEqual([homeSub1]);
+    const rows = aggregatePlayerStats(events, model, lineups);
+    expect(rows.find((r) => r.personId === homeSub1)?.stats.goals_conceded).toBe(1);
+  });
+
+  // W2e T33a (T32 fix round 2, M3) - the carried limitation DOMAIN.md states for this fold, witnessed so the text cannot
+  // drift from the behaviour: a sending-off and a sin bin are football-private state (`FootballSquad.sentOff` / `sinBin`),
+  // so the kernel squads this fold reads still have the dismissed keeper on the field at "GK". Naming his replacement
+  // "GK" with a `core.lineup.position` event (a RECORDED position) does not move him, and the goal conceded after it is
+  // charged to the dismissed keeper. Both dismissals, so neither can be dropped from the text.
+  for (const [what, dismissal] of [
+    ["sent off (football.card, red)", { type: "football.card", payload: { by: H, person: homeKeeper, color: "red" } }],
+    ["sin-binned (football.sinbin.start)", { type: "football.sinbin.start", payload: { by: H, person: homeKeeper, minutes: 10 } }],
+  ] as const) {
+    it(`CARRIED LIMITATION: a keeper ${what} whose replacement's position is recorded is still the keeper this fold charges`, () => {
+      const events = [
+        start,
+        makeEnvelope(1, dismissal),
+        makeEnvelope(2, { type: "core.lineup.position", payload: { side: H, personId: "H-p2", positionKey: "GK" } }),
+        goalEv(3, A),
+      ];
+      // Premise: the match fold takes all of it as a WRITE, so this is a ledger the product holds.
+      foldMatchWithStoppage(football, cfgOf({}), lineups, events, { strictFromSeq: 0 });
+      const rows = aggregatePlayerStats(events, model, lineups);
+      expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded, "charged to the dismissed keeper").toBe(1);
+      expect(rows.find((r) => r.personId === "H-p2")?.stats.goals_conceded, "not to the man now in goal").toBeUndefined();
+    });
+  }
+
+  // W2e T33a (T32 fix round 2, M2): this fold is a REPLAY, so a lineup event the pitch refuses falls back to the kernel's own
+  // squads (`judgeLineupEvent(..., strict = false)`) - the ledger was accepted when it was written, before the pitch was
+  // consulted, and it must not lose a recorded change. The strict write path refuses the same event.
+  // SCOPE (T33b): this is the usual order, with NO accepted core.lineup.* event between the football.sub and the substitution.
+  // The hole PO parked (owner 10-26; football/DOMAIN.md "Known, parked") is the same order with one in between: the kernel's
+  // squads are then the judged ones and the substitution is refused on replay. It is not witnessed here, and the title must
+  // not claim it is.
+  it("a replay falls back to the kernel's squads for a change the pitch refuses: the keeper football.sub took off is named off again by core.lineup.substitution with no accepted lineup event between them, and the fold hands the position over", () => {
+    const events = [
+      start,
+      makeEnvelope(1, { type: "football.sub", payload: { by: H, off: homeKeeper, on: homeSub1 } }),
+      subKeeperEv(2, homeKeeper, "H-b2"),
+      goalEv(3, A),
+    ];
+    // Premise 1: as a WRITE the pitch refuses event 2 (he is already off), so only the replay fallback can accept it.
+    expect(() => foldMatchWithStoppage(football, cfgOf({}), lineups, events.slice(0, 3), { strictFromSeq: 0 })).toThrowError(
+      expect.objectContaining({ code: "LINEUP_INVALID" }),
+    );
+    // Premise 2: the same ledger folded as a replay (not strict) keeps the substitution the kernel's squads accepted.
+    const replay = foldMatchWithStoppage(football, cfgOf({}), lineups, events.slice(0, 3));
+    expect(personsAtPosition(replay.squads.home, "GK"), "the replay names the man the substitution put in goal").toEqual(["H-b2"]);
+    const rows = aggregatePlayerStats(events, model, lineups);
+    expect(rows.find((r) => r.personId === "H-b2")?.stats.goals_conceded, "the goal after it is the new keeper's").toBe(1);
+    expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded, "and not the man who left").toBeUndefined();
   });
 });

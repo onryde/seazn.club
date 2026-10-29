@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { EngineError } from "../core/errors.ts";
 import { foldMatchWithStoppage, outcomeOf } from "../core/events.ts";
+import type { LineupPair } from "../core/types.ts";
 import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { builtinModules } from "../sports/index.ts";
@@ -33,10 +34,10 @@ const without = (raw: unknown, key: string): Record<string, unknown> => Object.f
 const note = { type: "core.note", payload: { text: "a control" } } satisfies GoldenEvent;
 
 /** An independent strict fold: the kernel's own, with the state as a plain record (this file's reads, not the verdict's). */
-function fold(module: AnySportModule, raw: unknown, events: readonly GoldenEvent[]) {
+function fold(module: AnySportModule, raw: unknown, events: readonly GoldenEvent[], recordedLineups?: LineupPair, strict = true) {
   const cfg = module.configSchema.parse(raw) as unknown;
-  const lineups = defaultLineupPair(resolvePositions(module, cfg));
-  const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids)), { strictFromSeq: 0 });
+  const lineups = recordedLineups ?? defaultLineupPair(resolvePositions(module, cfg));
+  const folded = foldMatchWithStoppage(module as never, cfg as never, lineups, events.map((e, i) => makeEnvelope(i, e, e.voids)), strict ? { strictFromSeq: 0 } : undefined);
   return { folded, cfg: cfg as Record<string, unknown>, state: folded.state as Record<string, unknown> };
 }
 
@@ -84,6 +85,7 @@ describe("the branch table", () => {
       "tennis.short_set_deciding_point_played",
       "tennis.final_set_tiebreak_match_margin",
       "tennis.fast4_deciding_point_played",
+      "football.pitch_retirement",
     ]);
   });
 
@@ -465,6 +467,55 @@ describe("each branch stream takes the branch it is named for (the engine's own 
     expect(byDefault.phase).toBe("SHOOTOUT");
     expect(byDefault.outcome).toBeNull();
   });
+
+  // PR B final review M-2. The football epoch bump to 4 (M12b) had no corpus witness: `fold-epoch:check` saw "matched 40 changed 0"
+  // because no stored stream held a core.lineup event after a football.sub. This stream is that witness, and the test is the
+  // proof that its fold DIFFERS between the two epochs' judges: the kernel's own squads (epoch 3: the module declares no
+  // `squadsForLineup`) never saw the substitution.
+  it("football.pitch_retirement: the substitute leaves the pitch and the side plays a man down; judged by the kernel's own squads (the epoch-3 judge) the same ledger is refused on a write and leaves him on the pitch on replay", () => {
+    const c = byId("football.pitch_retirement");
+    const events = c.stream.events;
+    expect(events.map((e) => e.type)).toEqual(["core.start", "football.sub", "core.lineup.retirement", "football.goal"]);
+    const lineups = c.stream.lineups;
+    expect(lineups, "recorded with the coverage bench: football cannot substitute without one").toBeDefined();
+    const side = lineups!.home;
+    const starters = side.slots.filter((s) => s.slot === "starting").map((s) => s.personId);
+    const bench = side.slots.filter((s) => s.slot === "bench").map((s) => s.personId);
+    const sub = events[1]!.payload as { by: string; off: string; on: string };
+    expect(starters, "the player taken off is on the team sheet's XI").toContain(sub.off);
+    expect(bench, "the man brought on is on its bench").toContain(sub.on);
+    expect(events[2]!.payload).toEqual({ side: sub.by, personId: sub.on, reason: "injured" });
+
+    // the epoch-4 judge: football's own pitch. He is off it, the side plays a man down, and the goal after it counts.
+    const played = fold(c.module, c.raw, events, lineups);
+    const pitch = (played.state.squads as { home: { onPitch: string[] } }).home.onPitch;
+    expect(pitch).toHaveLength(starters.length - 1);
+    expect(pitch).not.toContain(sub.on);
+    expect(pitch).not.toContain(sub.off);
+    expect(played.state.goals).toEqual({ home: 1, away: 0 });
+    // no substitution was left: the cap is what makes this the injured-with-no-sub flow, and a second substitution is refused
+    const second = [events[0]!, events[1]!, { type: "football.sub", payload: { by: sub.by, off: starters.find((p) => p !== sub.off && p !== (events[3]!.payload as { scorer: string }).scorer)!, on: bench.find((p) => p !== sub.on)! } }];
+    expect(() => fold(c.module, c.raw, second, lineups), "maxSubs 1 is spent by the first substitution").toThrow(EngineError);
+    expect(() => fold(c.module, without(c.raw, "maxSubs"), second, lineups), "and uncapped it would have been allowed").not.toThrow();
+
+    // the epoch-3 judge: the same module without `squadsForLineup`, so the kernel judges against squads that never heard of the substitution
+    expect(typeof (c.module as { squadsForLineup?: unknown }).squadsForLineup, "the real module declares the hook the mutant removes").toBe("function");
+    const epoch3 = Object.assign(Object.create(c.module) as object, { squadsForLineup: undefined }) as AnySportModule;
+    let refused: unknown;
+    try {
+      fold(epoch3, c.raw, events, lineups);
+    } catch (error) {
+      refused = error;
+    }
+    expect(EngineError.is(refused, "LINEUP_INVALID"), "a write is refused").toBe(true);
+    expect((refused as EngineError).data).toMatchObject({ reason: "not-on-field" });
+    // replay never refuses: the retirement is dropped, and he stays on the pitch - so the SAME ledger folds to a different state
+    const replayed = fold(epoch3, c.raw, events, lineups, false);
+    const staysOn = (replayed.state.squads as { home: { onPitch: string[] } }).home.onPitch;
+    expect(staysOn).toContain(sub.on);
+    expect(staysOn).toHaveLength(starters.length);
+    expect(JSON.stringify(replayed.state), "the corpus witnesses a fold the epoch-3 judge does not produce").not.toBe(JSON.stringify(played.state));
+  });
 });
 
 // The five verdicts that carry no replay differential (the two award expunge arms, the 4th quarter, the flagged level award and the football level draw) rest on one premise of the
@@ -538,6 +589,7 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
     "tennis.short_set_deciding_point_played": /set tie-break is not won by one point/,
     "tennis.final_set_tiebreak_match_margin": /plays no final-set tie-break/,
     "tennis.fast4_deciding_point_played": /does not open its tie-break at three games all/,
+    "football.pitch_retirement": /caps no substitutions/,
   };
   const DECIDER_GONE: Record<string, RegExp> = {
     "football.shootoutAttempts": /does not end in a shoot-out win/,
@@ -554,6 +606,7 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
     "tennis.short_set_deciding_point_played": /no set closes on its tie-break's deciding point/,
     "tennis.final_set_tiebreak_match_margin": /no final-set tie-break closes past/,
     "tennis.fast4_deciding_point_played": /no set closes on its tie-break's deciding point/,
+    "football.pitch_retirement": /does not end on a goal/,
   };
   /** Counterfactuals every story has: the key gone, and the deciding event (the last one in every story) dropped. */
   const common = (c: Case): Counterfactual[] => [
@@ -680,6 +733,22 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
           ["the tie-break at four games all", { ...c.recorded, raw: { ...c.raw, set: { ...set, tiebreakAt: 4 } } }, /does not open its tie-break at three games all/],
         ];
       }
+      case "football.pitch_retirement": {
+        const [start, sub, retire, goal] = events as [GoldenEvent, GoldenEvent, GoldenEvent, GoldenEvent];
+        const retiredId = (retire.payload as { personId: string }).personId;
+        const replacedId = (sub.payload as { off: string }).off;
+        const retiring = (personId: string): GoldenEvent => ({ ...retire, payload: { ...(retire.payload as object), personId } });
+        const nobodyBroughtOn = /no core\.lineup\.retirement names a person a football\.sub brought on/;
+        return [
+          ["the substitution dropped", { ...c.recorded, events: events.filter((e) => e.type !== "football.sub") }, nobodyBroughtOn],
+          // his retirement is judged BEFORE he was brought on: not the flow
+          ["the retirement before the substitution", { ...c.recorded, events: [start, retire, sub, goal] }, nobodyBroughtOn],
+          // the starter football.sub took off is not on the pitch either (Law 3.3's other half), and is not who the story retires
+          ["the retirement of the starter he replaced", { ...c.recorded, events: [start, sub, retiring(replacedId), goal] }, nobodyBroughtOn],
+          // the engine's own refusal reaches the verdict: the retired substitute is off the pitch, so he cannot score
+          ["a goal scored by the retired substitute", { ...c.recorded, events: [start, sub, retire, { ...goal, payload: { ...(goal.payload as object), scorer: retiredId } }] }, /is not on the pitch/],
+        ];
+      }
       default:
         throw new Error(`${c.story.id}: no counterfactuals declared for this story`);
     }
@@ -768,12 +837,12 @@ describe("extendBranches - the append path", () => {
     const donor: GoldenStream = { ...shootout.stream, config: "youthKnockout", seed: 4242 };
     const result = extendBranches(football, { ...base, streams: [...base.streams, donor] });
     // the donor reaches the shoot-out count and nothing else: the sudden death, the awards and the draw are still holes
-    expect(result.appended.map((a) => a.split(" ")[0])).toEqual(["football.award_expunge", "football.award_draw", "football.shootout_sudden_death"]);
+    expect(result.appended.map((a) => a.split(" ")[0])).toEqual(["football.award_expunge", "football.award_draw", "football.shootout_sudden_death", "football.pitch_retirement"]);
     expect(result.corpus.streams.filter((s) => s.config === "youthKnockout").map((s) => s.seed)).not.toContain(BRANCH_SEED_BASE + 1);
     // a sudden-death donor reaches BOTH shoot-out stories (the sudden death is a shoot-out win inside the key's count too)
     const sudden = byId("football.shootout_sudden_death");
     const both = extendBranches(football, { ...base, streams: [...base.streams, { ...sudden.stream, config: "youthKnockout", seed: 4243 }] });
-    expect(both.appended.map((a) => a.split(" ")[0])).toEqual(["football.award_expunge", "football.award_draw"]);
+    expect(both.appended.map((a) => a.split(" ")[0])).toEqual(["football.award_expunge", "football.award_draw", "football.pitch_retirement"]);
   });
 
   it("refuses by name an identity another stream holds, and a config name held with a different raw", () => {

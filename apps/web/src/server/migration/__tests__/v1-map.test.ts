@@ -85,10 +85,37 @@ describe("genericConfigFor", () => {
       resultMode: "score",
       allowDraws: true,
       points: { w: 3, d: 1, l: 0 },
-      progressScore: false,
     });
     // The mapped config must satisfy the pinned module's own schema.
     expect(() => generic.configSchema.parse(cfg)).not.toThrow();
+  });
+
+  // W2e D6 (generic MAJOR 4): `progressScore` was a cfg key nothing ever read, and the engine now strips it on parse. The importer
+  // must stop WRITING it - a v1 row that used the stepladder score is the one input where the old code wrote `true`.
+  it("D6 v1 import writes no progressScore", () => {
+    let judged = 0;
+    for (const resultMode of ["win_loss", "score"]) {
+      for (const used of [true, false]) {
+        const row = { ...baseTournament, result_mode: resultMode, use_progress_score: used };
+        const fromTournament = genericConfigFor(row);
+        const fromPreset = variantFromPreset({
+          ...row,
+          sport_key: "Chess",
+          sport_name: "Chess",
+          is_system: false,
+        }).config;
+        for (const cfg of [fromTournament, fromPreset]) {
+          judged++;
+          expect(Object.hasOwn(cfg, "progressScore")).toBe(false);
+          expect(JSON.stringify(cfg)).not.toContain("progressScore");
+          // The mapped config is still a whole, valid generic config, with the points the v1 row carried.
+          const parsed = generic.configSchema.parse(cfg);
+          expect(parsed.points).toEqual({ w: row.points_win, d: row.points_draw, l: row.points_loss });
+        }
+      }
+    }
+    // Anti-vacuity: both v1 result modes x both progress-score values x both producers.
+    expect(judged).toBe(8);
   });
 
   it("picks the matching system variant", () => {

@@ -23,10 +23,12 @@ import {
   REPLAY_LINEUP_POLICY,
   initSquads,
   isLineupEventType,
+  judgeLineupEvent,
   onFieldPersons,
   personsAtPosition,
   playingSquad,
   reduceLineupEvent,
+  type LineupEventInput,
   type LineupPolicy,
   type SideSquad,
   type SquadMember,
@@ -1225,17 +1227,7 @@ function applySub(
   // event to void, because the substitution was legal when it was made.
   const verdict = reduceLineupEvent(
     liftSquads(state),
-    {
-      type: "core.lineup.substitution",
-      payload: {
-        side: payload.by,
-        off: payload.off,
-        // `slot`/`orderNo` are structural filler: the person is already in the
-        // lifted squad, so `bringOn` matches on `personId` and never reads them.
-        // No `positionKey` — a `football.sub` does not state one (see liftSide).
-        on: { personId: payload.on, slot: "bench" as const, orderNo: 1 },
-      },
-    },
+    subAsLineup(payload),
     isStrictFold(ctx) ? lineupPolicy(state.cfg) : REPLAY_LINEUP_POLICY,
   );
   if (!verdict.ok) {
@@ -2078,11 +2070,21 @@ function footballKeeperStatsFold(
   const goalShotsLoggedBySide: Record<Side, number> = { home: 0, away: 0 };
   const keeperSide = new Map<string, Side>();
 
+  // W2e T32 fix round 2 — the squads a lineup event is JUDGED on, the way the match fold judges it (`squadsForLineup`):
+  // `squads` plus every `football.sub` since, through football's own lift. Accepted, the result is the squads, as in the
+  // kernel. A sending-off is not in it, which is the carried limitation above; a replay refusal on it falls back to
+  // `squads` (`judgeLineupEvent`), so it cannot make a recorded change disappear.
+  let pitch = squads;
   for (const event of events) {
+    if (event.type === "football.sub") {
+      const lifted = reduceLineupEvent(pitch, subAsLineup(event.payload as z.infer<typeof FootballSub>), REPLAY_LINEUP_POLICY);
+      if (lifted.ok) pitch = lifted.squads;
+      continue;
+    }
     if (isLineupEventType(event.type)) {
-      const result = reduceLineupEvent(squads, event, REPLAY_LINEUP_POLICY);
+      const result = judgeLineupEvent(pitch, squads, event, REPLAY_LINEUP_POLICY, false);
       if (result.ok) {
-        squads = result.squads;
+        squads = pitch = result.squads;
         refreshSpell("home");
         refreshSpell("away");
       }
@@ -2204,6 +2206,54 @@ function liftSide(state: FootballState, side: Side): SideSquad {
 
 function liftSquads(state: FootballState): KernelSquads {
   return { home: liftSide(state, "home"), away: liftSide(state, "away") };
+}
+
+/**
+ * A `football.sub` as the kernel's reducer reads it. ONE lift, for football's own verdict (`applySub`) and for the keeper
+ * stats fold, which re-folds lineup changes with no State to hand (W2e T32 fix round 2).
+ */
+function subAsLineup(payload: { by: string; off: string; on: string }): LineupEventInput {
+  return {
+    type: "core.lineup.substitution",
+    payload: {
+      side: payload.by,
+      off: payload.off,
+      // `slot`/`orderNo` are structural filler: the person is already in the
+      // lifted squad, so `bringOn` matches on `personId` and never reads them.
+      // No `positionKey` — a `football.sub` does not state one (see liftSide).
+      on: { personId: payload.on, slot: "bench" as const, orderNo: 1 },
+    },
+  };
+}
+
+/**
+ * W2e Task 32 fix (M12b; PO decision I-1, 2026-10-29) — the kernel's side with WHO IS ON THE FIELD read from football's
+ * pitch, for judging a `core.lineup.*` event (`FoldableModule.squadsForLineup`).
+ *
+ * The mirror of `liftSide`. That one lifts football's squad so a `football.sub` meets the kernel's reducer; this one makes a
+ * kernel event meet football's pitch, which the kernel never folds a `football.sub`, a sending-off or a sin bin into. Only
+ * `onField` moves, plus what `takeOff` records beside it for someone who LEFT: `timesOff` (so Law 3.3's no-return still
+ * refuses him through the kernel), and he no longer stands at a position. Roles, numbers and the counts the kernel owns are
+ * kept.
+ * (`timesOn` is not bumped for someone football brought on: only a `reentry: "once"` policy reads it, and football's is
+ * `none` or `unlimited`. A non-player is never on football's pitch, so a starting-slot coach reads as off, which every
+ * kernel reader already filters to — ruling 3.)
+ */
+function pitchSide(side: SideSquad, squad: FootballSquad): SideSquad {
+  const pitch = new Set(squad.onPitch);
+  const members = side.members.map((member): SquadMember => {
+    if (pitch.has(member.personId) === member.onField) return member;
+    if (!member.onField) return { ...member, onField: true };
+    // `positionKey` means "where this person is now" (`takeOff`), so it goes. No `lastPositionKey`: only FIVB's position
+    // lock reads it, and football's `reentryPositionLock` is false.
+    const { positionKey: _left, ...rest } = member;
+    return { ...rest, onField: false, timesOff: member.timesOff + 1 };
+  });
+  return { ...side, members };
+}
+
+function squadsForLineup(state: FootballState, squads: KernelSquads): KernelSquads {
+  return { home: pitchSide(squads.home, state.squads.home), away: pitchSide(squads.away, state.squads.away) };
 }
 
 // The event dispatch, unchanged since W4. It is lifted out of `apply` so that
@@ -2671,6 +2721,9 @@ export const football: SportModule<FootballCfg, FootballEv, FootballState> = {
       },
     };
   },
+
+  // W2e T32 fix (M12b) — a `core.lineup.*` event is judged against football's own pitch, so a `football.sub` counts.
+  squadsForLineup,
 
   // W4a (#425) §7 — the SAME function the fold kernel's monotonic guard reads,
   // handed over directly rather than as a copy of its output. `sweepExpired`

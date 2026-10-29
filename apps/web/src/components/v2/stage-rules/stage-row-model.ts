@@ -20,7 +20,7 @@ import { BEST_OF_ONE_PAIR } from "@/lib/match-rules/best-of-one";
 import type { MessageKey } from "@/lib/messages";
 import { moduleFor, stageFieldsFor } from "@/lib/rule-scope";
 import { liveStageCfg, offByFalse } from "@/lib/stage-decider-off";
-import { deciderIsOn, describeAbandon, describeDeciders, describeMatchRules } from "@/server/public-site/describe-rules";
+import { deciderIsOn, describeAbandon, describeDeciders, describeMatchRules, detailHostIsOn } from "@/server/public-site/describe-rules";
 import type { RulesClause } from "@/lib/rules-line";
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
@@ -46,14 +46,17 @@ export interface StageSection {
  * The shown fields in the row's sections, in the order they appear: Match format, Deciders, If abandoned (Points is the
  * stage points screen's, Task 18). A field is the abandon section's when it edits `abandonPolicy`, a DECIDER's when
  * every key it edits is a decider the engine declares for this stage or a detail of one (`detailOf`: the kicks
- * of a shoot-out, the minutes of an overtime), else the format's. Read from the engine's `ruleKeys`, never a list of
+ * of a shoot-out, the minutes of an overtime; not a detail of a switch that is no decider), else the format's. Read from the engine's `ruleKeys`, never a list of
  * field names. A section no field falls in is absent, not empty.
  */
 export function stageSections(module: AnySportModule, kind: StageKind, variant: string | null): StageSection[] {
   const deciders = new Set(deciderKeysFor(module, kind, variant).map(topOf));
+  // A DETAIL OF A DECIDER sits with the deciders; a detail of a switch that is no decider (cricket's result floor under DLS)
+  // stays with the match format, beside the switch that holds it: nothing there is being decided.
+  const facts = module.ruleKeys ?? {};
   const bounded = new Set(
-    Object.entries(module.ruleKeys ?? {})
-      .filter(([, fact]) => fact.detailOf !== undefined)
+    Object.entries(facts)
+      .filter(([, fact]) => fact.detailOf !== undefined && facts[fact.detailOf]?.decider === true)
       .map(([key]) => topOf(key)),
   );
   const sectionOf = (f: RuleField): StageSectionId => {
@@ -87,12 +90,13 @@ export function deciderOfDetail(module: AnySportModule, field: RuleField): strin
 /**
  * Review M-4: a detail whose decider is OFF in the resolved cfg means nothing there, and for the period sports a save
  * drops it silently (switching the shoot-out off writes `shootout: null`, taking its kicks with it). The row holds such a
- * field instead. Read through `deciderIsOn`, the public line's own table, so the editor and the line agree on "off"; a cfg
- * the schema refuses (null) holds nothing, and a decider no describer knows is never read as off.
+ * field instead. Read through `detailHostIsOn` (a decider through `deciderIsOn`, the public line's own table, so the editor
+ * and the line agree on "off"; a switch such as cricket's DLS, which holds the result floor, through its own table); a cfg
+ * the schema refuses (null) holds nothing, and a host no table knows is never read as off.
  */
 export function detailIsInert(module: AnySportModule, field: RuleField, resolved: Record<string, unknown> | null): boolean {
-  const decider = deciderOfDetail(module, field);
-  return decider !== null && resolved !== null && !deciderIsOn(module, decider, resolved);
+  const host = deciderOfDetail(module, field);
+  return host !== null && resolved !== null && !detailHostIsOn(module, host, resolved);
 }
 
 // ---------------------------------------------------------------------------

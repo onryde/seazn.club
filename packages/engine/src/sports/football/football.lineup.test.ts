@@ -402,3 +402,299 @@ describe("the projection init writes is unchanged", () => {
     expect(state.squads.home.bench).not.toContain("H-b1");
   });
 });
+
+// ---------------------------------------------------------------------------
+// W2e Task 32 fix round 1 (M12b; PO decision I-1, 2026-10-29) — a lineup event
+// is judged against FOOTBALL'S pitch, so a `football.sub` counts.
+//
+// The pad's Sub sends the legacy `football.sub`, which only football folds, and
+// the pad's "Injured (no sub)" offers who is on football's own `onPitch`. The
+// kernel judged `core.lineup.retirement` against its OWN squads, which never saw
+// that substitution: retiring the substitute who had just come on was refused
+// ("not on the field") on the write path and silently dropped on replay — and
+// "sub on, then injured with no subs left" is M12b's own flow. Who is on the
+// field is the team sheet plus what was recorded (Law 3), so every expected
+// value below is read from the lineup this file declares.
+// ---------------------------------------------------------------------------
+
+describe("M12b a lineup event is judged against football's own pitch: a football.sub counts", () => {
+  const starters = lineups.home.slots.filter((s) => s.slot === "starting").map((s) => s.personId);
+  const retire = (personId: string): [string, unknown] => [
+    "core.lineup.retirement",
+    { side: "H", personId, reason: "injured" },
+  ];
+  /** A stream whose envelopes may void an earlier one (`voids` = the target's `e-<seq>`). */
+  function ledger(...specs: Array<[type: string, payload?: unknown, voids?: string]>): EventEnvelope[] {
+    return specs.map(([type, payload, voids], i) => makeEnvelope(i, { type, payload: payload ?? {} }, voids));
+  }
+  const refusalOf = (run: () => unknown): unknown => {
+    try {
+      run();
+    } catch (error) {
+      return error;
+    }
+    return expect.unreachable("the write path must refuse this");
+  };
+
+  it("anti-vacuity: the team sheet declares an XI and a bench, and the substitute is on the bench", () => {
+    expect(starters).toHaveLength(11);
+    expect(starters).toContain("H-p2");
+    expect(lineups.home.slots.find((s) => s.personId === "H-b2")?.slot).toBe("bench");
+  });
+
+  it("the substitute who came on by football.sub retires injured: he leaves the pitch and the side plays ten", () => {
+    const run = foldMatchWithStoppage(
+      football,
+      cfgOf({}),
+      lineups,
+      ledger(["core.start"], legacySub("H-p2", "H-b2"), retire("H-b2")),
+      STRICT,
+    );
+    const pitch = run.state.squads.home.onPitch;
+    expect(pitch).not.toContain("H-b2");
+    expect(pitch).not.toContain("H-p2");
+    expect(pitch).toHaveLength(starters.length - 1);
+    expect([...pitch].sort()).toEqual(starters.filter((p) => p !== "H-p2").sort());
+    // The kernel's squads and football's pitch now say the same thing.
+    expect(run.squads.home.members.filter((m) => m.onField).map((m) => m.personId).sort()).toEqual([...pitch].sort());
+    // The away side is untouched.
+    expect(run.state.squads.away.onPitch).toEqual(lineups.away.slots.filter((s) => s.slot === "starting").map((s) => s.personId));
+  });
+
+  it("a void of that retirement puts the substitute back on the pitch, and a second retirement then takes him off again", () => {
+    const voided = foldMatch(
+      football,
+      cfgOf({}),
+      lineups,
+      ledger(["core.start"], legacySub("H-p2", "H-b2"), retire("H-b2"), ["core.void", {}, "e-2"]),
+      STRICT,
+    );
+    expect(voided.squads.home.onPitch).toContain("H-b2");
+    expect(voided.squads.home.onPitch).toHaveLength(starters.length);
+    const again = foldMatch(
+      football,
+      cfgOf({}),
+      lineups,
+      ledger(["core.start"], legacySub("H-p2", "H-b2"), retire("H-b2"), ["core.void", {}, "e-2"], retire("H-b2")),
+      STRICT,
+    );
+    expect(again.squads.home.onPitch).not.toContain("H-b2");
+    expect(again.squads.home.onPitch).toHaveLength(starters.length - 1);
+  });
+
+  it("the starter that football.sub took off is not on the field: retiring him is refused, and replay leaves the pitch as it was", () => {
+    const events = ledger(["core.start"], legacySub("H-p2", "H-b2"), retire("H-p2"));
+    const error = refusalOf(() => foldMatch(football, cfgOf({}), lineups, events, STRICT));
+    expect(EngineError.is(error, "LINEUP_INVALID")).toBe(true);
+    expect((error as EngineError).data).toMatchObject({ reason: "not-on-field" });
+    // Replay is lenient: the fixture still reads, with the eleven the substitution left.
+    const replayed = foldMatch(football, cfgOf({}), lineups, events);
+    expect(replayed.squads.home.onPitch).toHaveLength(starters.length);
+    expect(replayed.squads.home.onPitch).toContain("H-b2");
+    expect(replayed.squads.home.onPitch).not.toContain("H-p2");
+  });
+
+  it("a player sent off is not on the field either: retiring him is refused", () => {
+    const events = ledger(["core.start"], ["football.card", { by: "H", person: "H-p3", color: "red" }], retire("H-p3"));
+    const error = refusalOf(() => foldMatch(football, cfgOf({}), lineups, events, STRICT));
+    expect(EngineError.is(error, "LINEUP_INVALID")).toBe(true);
+    expect((error as EngineError).data).toMatchObject({ reason: "not-on-field" });
+  });
+
+  it("rolling substitutes: retiring the substitute does not bring back the starter he replaced", () => {
+    const state = foldMatch(
+      football,
+      cfgOf({ rollingSubs: true }),
+      lineups,
+      ledger(["core.start"], legacySub("H-p2", "H-b2"), retire("H-b2")),
+      STRICT,
+    );
+    expect(state.squads.home.onPitch).toHaveLength(starters.length - 1);
+    expect(state.squads.home.onPitch).not.toContain("H-p2");
+    expect(state.squads.home.onPitch).not.toContain("H-b2");
+  });
+
+  it("Law 3.3 through the kernel: the starter football.sub took off may not come back by core.lineup.substitution", () => {
+    const events = ledger(["core.start"], legacySub("H-p2", "H-b2"), kernelSub("H-b2", "H-p2"));
+    const error = refusalOf(() => foldMatch(football, cfgOf({}), lineups, events, STRICT));
+    expect(EngineError.is(error, "LINEUP_INVALID")).toBe(true);
+    expect((error as EngineError).data).toMatchObject({ reason: "reentry-forbidden" });
+    // Rolling substitutes permit the return (the variant, not the sport, decides).
+    const rolling = foldMatch(football, cfgOf({ rollingSubs: true }), lineups, events, STRICT);
+    expect(rolling.squads.home.onPitch).toContain("H-p2");
+    expect(rolling.squads.home.onPitch).not.toContain("H-b2");
+  });
+
+  it("the keeper football.sub took off left the gloves behind: back by a kernel substitution naming no position, he is not in goal", () => {
+    // Rolling, so the return is legal. The kernel's own record of a player who leaves (`takeOff`) drops where he stood, and a
+    // return that states no position puts him nowhere; a football.sub exit is recorded the same way.
+    const keeper = lineups.home.slots.find((s) => s.positionKey === "GK" && s.slot === "starting")!.personId;
+    const run = foldMatchWithStoppage(
+      football,
+      cfgOf({ rollingSubs: true }),
+      lineups,
+      ledger(["core.start"], legacySub(keeper, "H-b2"), kernelSub("H-b2", keeper)),
+      STRICT,
+    );
+    expect(run.state.squads.home.onPitch).toContain(keeper);
+    expect(personsAtPosition(run.squads.home, "GK")).not.toContain(keeper);
+    // The contrast: the same return naming the gloves puts him back in goal.
+    const named = foldMatchWithStoppage(
+      football,
+      cfgOf({ rollingSubs: true }),
+      lineups,
+      ledger(["core.start"], legacySub(keeper, "H-b2"), kernelSub("H-b2", keeper, "GK")),
+      STRICT,
+    );
+    expect(personsAtPosition(named.squads.home, "GK")).toContain(keeper);
+  });
+
+  it("the kernel's own substitution of a football.sub substitute is judged on the same pitch", () => {
+    const state = foldMatch(
+      football,
+      cfgOf({}),
+      lineups,
+      ledger(["core.start"], legacySub("H-p2", "H-b2"), kernelSub("H-b2", "H-b3")),
+      STRICT,
+    );
+    expect(state.squads.home.onPitch).toContain("H-b3");
+    expect(state.squads.home.onPitch).not.toContain("H-b2");
+    expect(state.squads.home.onPitch).toHaveLength(starters.length);
+  });
+
+  // PR B final review I-1: every case above uses side "H", so nothing killed the AWAY half of `squadsForLineup` (swapping in
+  // `away: squads.away` - exactly the behaviour before the fix, for half of all fixtures - passed all 693 related tests). The
+  // cases that go through the kernel's judgement (the retirement, the not-on-field refusal, Law 3.3) are run for BOTH sides
+  // here, each side's people read from that side's own team sheet, and a counter proves both sides were judged.
+  describe("M12b is judged on football's pitch for BOTH sides, not only the home side (review I-1)", () => {
+    const SIDES = [
+      { by: "H", key: "home", other: "away" },
+      { by: "A", key: "away", other: "home" },
+    ] as const;
+    const slotsOf = (key: "home" | "away") => lineups[key].slots;
+    /** The XI of `key`, from its own team sheet. */
+    const xi = (key: "home" | "away"): string[] => slotsOf(key).filter((s) => s.slot === "starting").map((s) => s.personId);
+    /** An outfield starter (not the keeper) to take off, and an outfield bench man to bring on - both read from the sheet. */
+    const starterOff = (key: "home" | "away"): string =>
+      slotsOf(key).find((s) => s.slot === "starting" && s.positionKey !== "GK")!.personId;
+    const benchOn = (key: "home" | "away"): string =>
+      slotsOf(key).find((s) => s.slot === "bench" && s.positionKey === undefined)!.personId;
+    const subBy = (by: string, off: string, on: string): [string, unknown] => ["football.sub", { by, off, on }];
+    const kernelSubBy = (side: string, off: string, on: string): [string, unknown] => [
+      "core.lineup.substitution",
+      { side, off, on: { personId: on, slot: "bench" as const, orderNo: 20 } },
+    ];
+    const retireBy = (side: string, personId: string): [string, unknown] => [
+      "core.lineup.retirement",
+      { side, personId, reason: "injured" },
+    ];
+
+    it("anti-vacuity: the two sides are two different team sheets, each with an XI, an outfield starter and an outfield bench man", () => {
+      expect(SIDES.map((s) => s.by)).toEqual(["H", "A"]);
+      for (const { by, key } of SIDES) {
+        expect(xi(key), `${by}: an XI`).toHaveLength(11);
+        expect(starterOff(key).startsWith(`${by}-`), `${by}: his starter is his own`).toBe(true);
+        expect(benchOn(key).startsWith(`${by}-`), `${by}: his bench man is his own`).toBe(true);
+      }
+      expect(starterOff("home")).not.toBe(starterOff("away"));
+    });
+
+    it("the substitute who came on by football.sub retires injured, on either side: he leaves that side's pitch and it plays ten", () => {
+      let judged = 0;
+      for (const { by, key, other } of SIDES) {
+        const off = starterOff(key);
+        const on = benchOn(key);
+        const run = foldMatchWithStoppage(
+          football,
+          cfgOf({}),
+          lineups,
+          ledger(["core.start"], subBy(by, off, on), retireBy(by, on)),
+          STRICT,
+        );
+        const pitch = run.state.squads[key].onPitch;
+        expect(pitch, `${by}: the substitute left the pitch`).not.toContain(on);
+        expect(pitch, `${by}: the starter he replaced stays off`).not.toContain(off);
+        expect([...pitch].sort(), `${by}: ten of the eleven`).toEqual(xi(key).filter((p) => p !== off).sort());
+        // The kernel's squads and football's pitch say the same thing, on this side.
+        expect(run.squads[key].members.filter((m) => m.onField).map((m) => m.personId).sort(), `${by}: kernel agrees`).toEqual([...pitch].sort());
+        // The other side is untouched.
+        expect(run.state.squads[other].onPitch, `${by}: the other side is untouched`).toEqual(xi(other));
+        judged++;
+      }
+      expect(judged).toBe(SIDES.length);
+    });
+
+    it("the starter football.sub took off is not on the field, on either side: retiring him is refused, and replay leaves the pitch as it was", () => {
+      let judged = 0;
+      for (const { by, key } of SIDES) {
+        const off = starterOff(key);
+        const on = benchOn(key);
+        const events = ledger(["core.start"], subBy(by, off, on), retireBy(by, off));
+        const error = refusalOf(() => foldMatch(football, cfgOf({}), lineups, events, STRICT));
+        expect(EngineError.is(error, "LINEUP_INVALID"), `${by}: refused`).toBe(true);
+        expect((error as EngineError).data, `${by}: as not on the field`).toMatchObject({ reason: "not-on-field" });
+        const replayed = foldMatch(football, cfgOf({}), lineups, events);
+        expect(replayed.squads[key].onPitch, `${by}: replay keeps the substitute`).toContain(on);
+        expect(replayed.squads[key].onPitch, `${by}: replay keeps the starter off`).not.toContain(off);
+        judged++;
+      }
+      expect(judged).toBe(SIDES.length);
+    });
+
+    it("Law 3.3 through the kernel, on either side: the starter football.sub took off may not come back by core.lineup.substitution", () => {
+      let judged = 0;
+      for (const { by, key } of SIDES) {
+        const off = starterOff(key);
+        const on = benchOn(key);
+        const events = ledger(["core.start"], subBy(by, off, on), kernelSubBy(by, on, off));
+        const error = refusalOf(() => foldMatch(football, cfgOf({}), lineups, events, STRICT));
+        expect(EngineError.is(error, "LINEUP_INVALID"), `${by}: refused`).toBe(true);
+        expect((error as EngineError).data, `${by}: as a forbidden re-entry`).toMatchObject({ reason: "reentry-forbidden" });
+        // Rolling substitutes permit the return: the variant, not the sport or the side, decides.
+        const rolling = foldMatch(football, cfgOf({ rollingSubs: true }), lineups, events, STRICT);
+        expect(rolling.squads[key].onPitch, `${by}: rolling lets him back`).toContain(off);
+        expect(rolling.squads[key].onPitch, `${by}: ...in place of the substitute`).not.toContain(on);
+        judged++;
+      }
+      expect(judged).toBe(SIDES.length);
+    });
+  });
+
+  // Fix round 2 (PO decision: replay must never make an existing fixture unreadable). A ledger recorded BEFORE the pitch
+  // rule: the substitution was judged against the kernel's squads, which never heard of the red card, and accepted; the
+  // substitute then scored. The pitch rule refuses that substitution, but only a strict WRITE may refuse.
+  describe("replay leniency: a lineup event the pitch rule refuses is judged on replay as it was when it was recorded", () => {
+    const recorded = (): EventEnvelope[] =>
+      ledger(
+        ["core.start"],
+        ["football.card", { by: "H", person: "H-p3", color: "red" }],
+        kernelSub("H-p3", "H-b4"),
+        ["football.goal", { by: "H", scorer: "H-b4" }],
+      );
+
+    it("replay folds the recorded ledger: the substitute is on, his goal counts, and the sent-off player stays off", () => {
+      const state = foldMatch(football, cfgOf({}), lineups, recorded());
+      expect(state.goals).toEqual({ home: 1, away: 0 });
+      expect(state.squads.home.onPitch).toContain("H-b4");
+      expect(state.squads.home.onPitch).not.toContain("H-p3");
+      expect(state.squads.home.sentOff).toEqual(["H-p3"]);
+    });
+
+    it("the next write on that fixture folds too: the recorded events replay, only the new one is strict", () => {
+      const events = [...recorded(), makeEnvelope(4, { type: "football.goal", payload: { by: "H", scorer: "H-b4" } })];
+      const run = foldMatchWithStoppage(football, cfgOf({}), lineups, events, { strictFromSeq: 4 });
+      expect(run.state.goals).toEqual({ home: 2, away: 0 });
+    });
+
+    it("a strict write of the same substitution is still refused, and so is the goal that would follow it", () => {
+      const error = refusalOf(() => foldMatchWithStoppage(football, cfgOf({}), lineups, recorded(), STRICT));
+      expect(EngineError.is(error, "LINEUP_INVALID")).toBe(true);
+      expect((error as EngineError).data).toMatchObject({ reason: "not-on-field", seq: 2 });
+      // Write path, one event at a time: with the substitution refused, the goal of a man never brought on is refused too.
+      const withoutSub = recorded().filter((e) => e.type !== "core.lineup.substitution");
+      const scorer = refusalOf(() => foldMatchWithStoppage(football, cfgOf({}), lineups, withoutSub, STRICT));
+      expect(EngineError.is(scorer, "INVALID_EVENT")).toBe(true);
+      expect((scorer as EngineError).message).toMatch(/scorer "H-b4" is not on the pitch/);
+    });
+  });
+});

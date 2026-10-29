@@ -745,7 +745,7 @@ describe("buildTiles", () => {
   // The rows themselves, in the order the grid lays them out. The lane test
   // below pins WHICH column a side lands in; this pins WHICH ROW an action
   // gets, so Card cannot drift back below Sub and split the pairs apart.
-  it("emits the board in ROW order — Goal, Card, Sub per side, then Period + Pen, then More", () => {
+  it("emits the board in ROW order — Goal, Card, Sub, Injured (W2e M12b) per side, then Period + Pen, then More", () => {
     expect(buildTiles(view()).map((tile) => tile.id)).toEqual([
       "goal-home",
       "goal-away",
@@ -753,6 +753,8 @@ describe("buildTiles", () => {
       "card-away",
       "sub-home",
       "sub-away",
+      "retire-home",
+      "retire-away",
       "period",
       "penalty",
       "more",
@@ -818,14 +820,21 @@ describe("buildTiles", () => {
 
   it("every {swap} tile names a slot this skin's own swap() declares, and every {sheet} tile a sheet it builds", () => {
     const v = view();
-    const slotIds = new Set(buildSwap(v, t).map((slot) => slot.id));
+    // The skin's own `swap()` -- Sub AND the W2e M12b retirement slots -- not the Sub builder alone: a `{swap}` tile naming a
+    // slot only the factory declares is exactly the pairing this test exists to hold.
+    const slotIds = new Set(footballSkinV3(t).swap!(v).map((slot) => slot.id));
     const sheetKeys = new Set(Object.keys(buildSheets(v, t)));
+    let swapTiles = 0;
     for (const tile of buildTiles(v)) {
-      if ("swap" in tile.action) expect(slotIds.has(tile.action.swap), tile.id).toBe(true);
+      if ("swap" in tile.action) {
+        swapTiles += 1;
+        expect(slotIds.has(tile.action.swap), tile.id).toBe(true);
+      }
       if ("sheet" in tile.action && tile.action.sheet !== "__pad-host/more__") {
         expect(sheetKeys.has(tile.action.sheet), tile.id).toBe(true);
       }
     }
+    expect(swapTiles, "a Sub and an Injured tile per side were checked").toBe(4);
   });
 
   // The host's own band filter runs on ENTITLED bands; the dispatch guard runs
@@ -1684,7 +1693,8 @@ describe("footballSkinV3", () => {
     expect(typeof skin.swap).toBe("function");
     expect(typeof skin.sheets).toBe("function");
     expect(typeof skin.activityDetail).toBe("function");
-    expect(skin.swap!(view())).toHaveLength(2);
+    // Sub per side, and (W2e M12b) the retirement slot per side.
+    expect(skin.swap!(view()).map((slot) => slot.id)).toEqual(["sub-home", "sub-away", "retire-home", "retire-away"]);
     expect(Object.keys(skin.sheets!(view())).length).toBeGreaterThan(0);
   });
 

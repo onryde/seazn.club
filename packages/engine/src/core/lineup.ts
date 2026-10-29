@@ -693,3 +693,39 @@ export function reduceLineupEvent(
     squads: key === "home" ? { home: nextSide, away: squads.away } : { home: squads.home, away: nextSide },
   };
 }
+
+/**
+ * W2e Task 32 fix round 2 — THE ONE WAY a fold judges a `core.lineup.*` event, for the kernel (`core/events.ts`) and every
+ * read-side replay that restates its loop (`apps/web/src/server/overlay/recent.ts`, `.../public-site/timeline.ts`).
+ *
+ * `judged` is who is on the field as the module sees it: `FoldableModule.squadsForLineup`, which only football declares,
+ * because its `football.sub`, sendings-off and sin bins move people the kernel's `squads` never hear of. Every other
+ * module passes `squads` itself.
+ *
+ * REPLAY NEVER REFUSES WHAT WAS ACCEPTED WHEN IT WAS WRITTEN (PO decision, fix round 2). A ledger recorded before a module
+ * declared the hook was judged against `squads` alone, so on a non-strict fold a refusal of `judged` falls back to
+ * `squads`: a substitution for a player since sent off, accepted then, is accepted now, and the goal its substitute
+ * scored still folds. Only a strict write is held to `judged`.
+ */
+export function judgeLineupEvent(
+  judged: SquadState,
+  squads: SquadState,
+  event: LineupEventInput,
+  policy: LineupPolicy,
+  strict: boolean,
+): LineupReduceResult {
+  const verdict = reduceLineupEvent(judged, event, policy);
+  return verdict.ok || strict ? verdict : reduceLineupEvent(squads, event, policy);
+}
+
+/** `judgeLineupEvent` against the squads `module` judges with — `FoldableModule.squadsForLineup`, else its own. */
+export function reduceLineupEventFor<State>(
+  module: { squadsForLineup?(state: State, squads: SquadState): SquadState },
+  state: State,
+  squads: SquadState,
+  event: LineupEventInput,
+  policy: LineupPolicy,
+  strict: boolean,
+): LineupReduceResult {
+  return judgeLineupEvent(module.squadsForLineup?.(state, squads) ?? squads, squads, event, policy, strict);
+}

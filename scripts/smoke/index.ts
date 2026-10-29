@@ -16,6 +16,7 @@ import { walkoverCreditSuite } from "./suites/walkoverCredit.ts";
 import { outboxTrialWarningSuite } from "./suites/outboxTrialWarning.ts";
 import { w2cStageRulesSuite } from "./suites/w2cStageRules.ts";
 import { w2dTablesSuite } from "./suites/w2dTables.ts";
+import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { divisionSettingsSuite } from "./suites/divisionSettings.ts";
 import { funnelReminderSuite } from "./suites/funnelReminder.ts";
 import { v1Suite } from "./suites/v1.ts";
@@ -53,6 +54,7 @@ const SELECTABLE_SUITES: Record<string, (c: SubsetCtx) => Promise<void>> = {
   outboxTrialWarning: () => outboxTrialWarningSuite(),
   w2dTables: () => w2dTablesSuite(),
   funnelReminder: () => funnelReminderSuite(),
+  w2eRefusals: () => w2eRefusalsSuite(),
   youtubeConnect: () => youtubeConnectSuite(),
 };
 

@@ -10,7 +10,7 @@ import { bracketMayEndLevel, deciderKeysFor, stageDefaultsFor, stageKeysFor, typ
 import { effectiveRungs } from "@seazn/engine/sports/boardgame";
 import { declaredCfgs } from "@seazn/engine/testkit";
 import { hydrateRuleValues, setRuleValue, SPORT_RULES } from "@/lib/match-rules";
-import { DECIDER_DESCRIBED_KEYS, deciderIsOn, describeAbandon, describeDeciders, matchRulesLine } from "@/server/public-site/describe-rules";
+import { DECIDER_DESCRIBED_KEYS, SWITCH_DESCRIBED_KEYS, deciderIsOn, describeAbandon, describeDeciders, detailHostIsOn, matchRulesLine } from "@/server/public-site/describe-rules";
 import enPublic from "@/dictionaries/en/public.json";
 import esPublic from "@/dictionaries/es/public.json";
 import frPublic from "@/dictionaries/fr/public.json";
@@ -64,11 +64,12 @@ describe("stage row model (I9 killers for t17)", () => {
     expect(share(carrom, { tieBoard: "draw" })).toEqual({ value: "share", disabled: false, reasonKey: null });
   });
 
-  // The brief's version of this case asserted that EVERY declared stage key is edited by a shown field. That is a false
-  // premise: five stage keys have no curated field at all (below), so the case is split into what is true. First, each
-  // sport's shown fields are exactly the curated fields whose every key the engine declares for the stage - recomputed
-  // here from `ruleKeys` and the field table, not read back from `stageFieldsShown` - and then the keys no field edits are
-  // pinned as a ratchet: the day one gains a field, this list shrinks on purpose.
+  // The brief's version of this case asserted that EVERY declared stage key is edited by a shown field. That was a false
+  // premise until W2e Task 28: five stage keys had no curated field at all (ruling 157), so the case was split into what
+  // was true - each sport's shown fields are exactly the curated fields whose every key the engine declares for the stage,
+  // recomputed here from `ruleKeys` and the field table, not read back from `stageFieldsShown` - and the keys no field
+  // edits were pinned as a ratchet. Task 28 (owner D5) added the five fields, so the ratchet is now EMPTY: a stage key the
+  // engine declares and no field edits fails this, and the day one is declared without a field, the list below names it.
   it("every sport shows its stage fields: exactly the curated fields the engine's stage keys allow (counted)", () => {
     let cells = 0;
     let fields = 0;
@@ -88,7 +89,7 @@ describe("stage row model (I9 killers for t17)", () => {
       expect(["league", ...BRACKET_KINDS].some((k) => stageFieldsShown(m, k as StageKind, null).length > 0), m.key).toBe(true);
   });
 
-  it("the stage keys no curated field edits are exactly the five known gaps (a ratchet: it shrinks when a field is added)", () => {
+  it("no declared stage key lacks a field in the row (the W2e ratchet is empty: ruling 157 closed by D5)", () => {
     const uncurated = new Set<string>();
     let keys = 0;
     for (const m of builtinModules)
@@ -99,9 +100,7 @@ describe("stage row model (I9 killers for t17)", () => {
           if (!stageFieldsShown(m, kind, null).some((f) => f.edits.some((e) => e.split(".")[0] === top))) uncurated.add(`${m.key}:${key}`);
         }
     expect(keys).toBeGreaterThan(300);
-    expect([...uncurated].sort()).toEqual([
-      "carrom:pointsPerCoin", "cricket:minOversForResult", "cricket:superOverStillTied", "football:concussionSubs", "football:rollingSubs",
-    ]);
+    expect([...uncurated].sort()).toEqual([]);
   });
 });
 
@@ -250,6 +249,9 @@ describe("a detail of a decider is held while its decider is off - the pairing i
     football: { shootoutAttempts: "shootout" },
     hockey: { shootoutAttempts: "shootout" },
     icehockey: { overtimeMinutes: "overtime", shootoutAttempts: "shootout" },
+    // W2e Task 28 (ruling 157, Task 7): what a tied super over does only means something while the super over is on. Fix round 1
+    // (PO ruling): the result floor is read only by a DLS par, so it is held while the DLS switch (no decider) is off.
+    cricket: { superOverStillTied: "superOver", minOversForResult: "dls" },
   };
 
   it("exactly the rulebook's fields are details, every other field of every sport is not (counted)", () => {
@@ -272,6 +274,48 @@ describe("a detail of a decider is held while its decider is off - the pairing i
     const at = (rules: Record<string, unknown>) => resolvedStageCfg(football, division, "knockout", rules);
     expect(detailIsInert(football, kicks, at({ shootout: false }))).toBe(true);
     expect(detailIsInert(football, kicks, at({ shootout: true }))).toBe(false);
+  });
+
+  it("cricket: the super over's still-tied policy is held while the super over is off, the result floor while DLS is off; each is free while its own host is on and no other (positive pairs, the real resolved cfg)", () => {
+    const m = sport("cricket");
+    const division = m.configSchema.parse(m.variants.t20) as Record<string, unknown>;
+    const at = (rules: Record<string, unknown>) => resolvedStageCfg(m, division, "knockout", rules);
+    const policy = SPORT_RULES.cricket!.find((f) => f.key === "superOverStillTied")!;
+    const floor = SPORT_RULES.cricket!.find((f) => f.key === "minOversForResult")!;
+    const dls = { enabled: true, edition: "standard" };
+    const noDls = { enabled: false, edition: "standard" };
+    // (super over, DLS) over all four combinations: each field answers only to its OWN host.
+    let cells = 0;
+    for (const superOver of [false, true])
+      for (const dlsOn of [false, true]) {
+        const cfg = at({ superOver, dls: dlsOn ? dls : noDls });
+        expect(cfg, "premise: the cfg resolves").not.toBeNull();
+        expect(detailIsInert(m, policy, cfg), `superOver ${superOver}, DLS ${dlsOn}: the policy follows the super over`).toBe(!superOver);
+        expect(detailIsInert(m, floor, cfg), `superOver ${superOver}, DLS ${dlsOn}: the floor follows DLS`).toBe(!dlsOn);
+        cells++;
+      }
+    expect(cells).toBe(4);
+    // The DLS switch itself is never held, and the hosts differ: the pairing reads the engine's `detailOf`, not one switch.
+    expect(deciderOfDetail(m, policy)).toBe("superOver");
+    expect(deciderOfDetail(m, floor)).toBe("dls");
+    expect(detailIsInert(m, SPORT_RULES.cricket!.find((f) => f.key === "dls")!, at({ dls: noDls }))).toBe(false);
+  });
+
+  it("every host a detail is paired with has an on/off answer: a whole decider through DECIDERS, any other host through SWITCHES, and the two tables never overlap (counted)", () => {
+    // The engine's own declaration: the hosts of every `detailOf` in the registry, and which of them are whole deciders.
+    const hosts = new Map<string, boolean>();
+    for (const m of builtinModules)
+      for (const fact of Object.values(m.ruleKeys ?? {}))
+        if (fact.detailOf !== undefined) hosts.set(`${m.key}.${fact.detailOf}`, m.ruleKeys![fact.detailOf]!.decider === true);
+    const switches = [...hosts].filter(([, decider]) => !decider).map(([k]) => k.split(".")[1]!).sort();
+    const wholes = [...hosts].filter(([, decider]) => decider).map(([k]) => k.split(".")[1]!);
+    expect(hosts.size, "hosts were walked").toBeGreaterThan(0);
+    expect(switches, "the registry has a switch host (cricket's DLS)").toEqual(["dls"]);
+    expect([...SWITCH_DESCRIBED_KEYS].sort(), "SWITCHES names exactly the non-decider hosts").toEqual(switches);
+    for (const key of wholes) expect(DECIDER_DESCRIBED_KEYS, `the whole decider ${key} has a describer`).toContain(key);
+    for (const key of SWITCH_DESCRIBED_KEYS) expect(DECIDER_DESCRIBED_KEYS, `${key} is a switch, never read as how a tie ends`).not.toContain(key);
+    // A host no table knows is never read as off (the guard `deciderIsOn` already carries), for a module that pairs one.
+    expect(detailHostIsOn(football, "someFutureSwitch", {})).toBe(true);
   });
 
   it("the period sports: switching the shoot-out (or the overtime) off holds its length; a switch itself is never held (positive pairs)", () => {
@@ -563,9 +607,15 @@ describe("the stage sections: every shown field is in exactly one section (count
         }
         const decidersTop = new Set(deciderKeysFor(m, kind, null));
         for (const f of sections.find((s) => s.id === "deciders")?.fields ?? []) {
-          // A deciders field edits a decider key, or a bounded detail of one (`matchBound`: the kicks of a shoot-out).
+          // A deciders field edits a decider key, or a detail of a DECIDER (`detailOf`, the engine's own pairing: the kicks of a
+          // shoot-out, a tied super over's policy); a detail of a switch that is no decider (cricket's result floor under DLS)
+          // sits with the match format.
           const tops = f.edits.map((e) => e.split(".")[0]!);
-          expect(tops.every((t) => decidersTop.has(t) || m.ruleKeys?.[t]?.matchBound !== undefined), `${m.key}/${kind}: ${f.key}`).toBe(true);
+          const detailOfDecider = (t: string): boolean => {
+            const host = m.ruleKeys?.[t]?.detailOf;
+            return host !== undefined && m.ruleKeys?.[host]?.decider === true;
+          };
+          expect(tops.every((t) => decidersTop.has(t) || detailOfDecider(t)), `${m.key}/${kind}: ${f.key}`).toBe(true);
           withDeciders++;
         }
         fields += shown.length;

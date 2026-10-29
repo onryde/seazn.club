@@ -300,7 +300,8 @@ describe("FixtureConsole & MatchRuleFields — contrast sweep completion (R3.5/T
     {
       label: "rule-field-control.tsx — shared field help span",
       src: matchRulesCode,
-      regex: /<span className="mt-0\.5 block text-\[11px\] text-slate-(\d+)">\{field\.help\}<\/span>/,
+      // `{help}`: the control resolves the dictionary's text for a field that names a `helpKey` (W2e Task 28) before drawing it.
+      regex: /<span className="mt-0\.5 block text-\[11px\] text-slate-(\d+)">\{help\}<\/span>/,
     },
   ];
 

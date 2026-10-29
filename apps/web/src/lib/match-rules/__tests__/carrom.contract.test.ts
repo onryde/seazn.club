@@ -4,9 +4,6 @@ import { CARROM_RULES } from "../carrom.ts";
 import { runContract } from "./run-contract.ts";
 
 runContract(carrom, CARROM_RULES, {
-  noWebFieldYet: {
-    pointsPerCoin: "declared stage key outside Q5; the carrom form has never offered it (w2-coverage-audit, carrom row 6)",
-  },
   // The schema refines queenCapAt <= gameTo, and queenCapAt's own default (22) is only valid for gameTo >= 22, so lowering
   // gameTo below 22 also lowers queenCapAt (carrom.ts, the gameTo field's `build`). queenCapAt is a STAGE key, gameTo a
   // match key, so gameTo cannot list it in `edits` without ceasing to be a match field.
@@ -26,5 +23,5 @@ runContract(carrom, CARROM_RULES, {
   },
   // The engine's schema gives these no maximum (`.positive().int()` only), so the web's range is its own choice and cannot be
   // checked against the engine; the contract lists them so a bound the engine adds later is noticed.
-  noEngineMax: ["gameTo", "maxBoards", "queenPoints", "queenCapAt"],
+  noEngineMax: ["gameTo", "maxBoards", "queenPoints", "queenCapAt", "pointsPerCoin"],
 });

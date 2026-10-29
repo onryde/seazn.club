@@ -1,6 +1,6 @@
 // Badminton's curated match-rule fields. Client-safe: no "use client", no JSX,
 // no `@/components` or `@/server` import.
-import { readNumber, WIN_BY } from "./shared.ts";
+import { bestOfOptions, readNumber, WIN_BY } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 export const BADMINTON_RULES: RuleField[] = [
@@ -8,6 +8,7 @@ export const BADMINTON_RULES: RuleField[] = [
     key: "bestOf",
     edits: ["bestOf"],
     label: "Best of (sets)",
+    labelKey: "rules.field.bestOf.label",
     kind: "select",
     // 5 added by owner ruling 2026-09-20. `{"bestOf": 5}` was already real
     // stored data (the walkthrough Finals stage), and the organiser read
@@ -15,7 +16,7 @@ export const BADMINTON_RULES: RuleField[] = [
     // The engine runs it: badminton's module parses bestOf 5 without clamping
     // and awards at three games won over five, so widening the picker is the
     // fix rather than correcting the data.
-    options: [1, 3, 5].map((n) => ({ value: String(n), label: `Best of ${n}` })),
+    options: bestOfOptions([1, 3, 5]),
     build: (v) => ({ bestOf: Number(v) }),
     read: readNumber("bestOf"),
   },
@@ -23,6 +24,7 @@ export const BADMINTON_RULES: RuleField[] = [
     key: "setTo",
     edits: ["setTo"],
     label: "Points to win a set",
+    labelKey: "rules.field.setTo.label",
     kind: "number",
     min: 11,
     max: 30,
@@ -33,6 +35,7 @@ export const BADMINTON_RULES: RuleField[] = [
     key: "finalSetTo",
     edits: ["finalSetTo"],
     label: "Points in the deciding set",
+    labelKey: "rules.field.finalSetTo.label",
     kind: "number",
     min: 11,
     max: 30,
@@ -43,7 +46,9 @@ export const BADMINTON_RULES: RuleField[] = [
     key: "cap",
     edits: ["cap"],
     label: "Hard cap (deciding point)",
+    labelKey: "rules.field.cap.label",
     help: "Must be at least the points needed to win a set. Blank inherits the variant default.",
+    helpKey: "rules.field.badminton.cap.help",
     kind: "number",
     min: 15,
     max: 35,

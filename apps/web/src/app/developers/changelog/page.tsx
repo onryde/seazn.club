@@ -18,11 +18,30 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   },
   {
     date: "2026-10-29",
+    title: "Breaking: a cricket Test match's stage refuses minOversForResult",
+    lines: [
+      "minOversForResult (the fewest overs the chasing side must have faced before a DLS par may decide an abandoned match) is read only by a DLS par, and a Test match has no DLS. It is now settable only on the variants that can play DLS: t20, odi and hundred.",
+      "PUT /stages/{id}/rules, and the rules of a stage written with POST or PUT /divisions/{id}/stages, on a cricket division whose variant is test refuse a body naming minOversForResult with 400 RULE_NOT_SETTABLE (error.field minOversForResult), and nothing is written. It was accepted (200) and never read, in the last release, v1.0.7-beta, too.",
+      "The same body on a t20, odi or hundred division is unchanged, and a value already stored on a Test stage is left alone. No fold changed. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-29",
+    title: "Breaking: a football lineup change is judged against who is on the pitch after football.sub",
+    lines: [
+      "POST /fixtures/{id}/events judges a football core.lineup.* event against football's own pitch, the one the scoring pad shows: a football.sub, a sending-off and a sin bin now count.",
+      "A core.lineup.retirement naming the substitute a football.sub brought on is accepted (201, was 422 LINEUP_INVALID) and takes him off the pitch.",
+      "One naming the player a football.sub took off, or a player sent off or serving a sin bin, is refused 422 LINEUP_INVALID (was 201, with no effect on the pitch), and nothing is written. POST /divisions/{id}/events/import judges each stream the same way (error.engineCode LINEUP_INVALID).",
+      "Only a new write is judged this way. A replay of a ledger recorded before the change is not held to the new rule: a stored core.lineup.* event the new rule would refuse is judged on the squads the kernel had at write time (the team sheet plus earlier core.lineup.* events), which is how it was accepted. That keeps the usual case readable, but it does not make every mixed ledger replay as recorded: one API-only order (a football.sub, an accepted core.lineup.* event, a core.lineup.substitution naming the player the football.sub took off, then a goal by the incoming player) is refused on replay. Every other sport is unchanged. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-29",
     title: "Breaking: a cricket test-variant stage no longer accepts superOverStillTied",
     lines: [
       "superOverStillTied is what a tied super over does (another super over, or a tied match). A cricket test match is two innings a side and has no super over, so the key is now offered only on the t20, odi and hundred variants.",
       "PUT /stages/{id}/rules on a cricket test-variant stage whose rules carry superOverStillTied answers 400 RULE_NOT_SETTABLE with error.field superOverStillTied, and nothing is written. The same key on a t20, odi or hundred stage is unchanged.",
-      "Leave the key out of a test stage's rules. A stored superOverStillTied on a test stage was never read and is left as it is.",
+      "Leave the key out of a test stage's rules. The last release, v1.0.7-beta, accepted it there; a stored superOverStillTied on a test stage was never read and is left as it is.",
       "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
     ],
   },
@@ -164,6 +183,16 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
       "A cricket.innings.summary for the chasing innings (the second of a one-innings match, the fourth of a two-innings match) is now refused when payload.runs is above the target minus 1 plus 7: a chase ends at the winning run, and the most the last ball adds from one run short is a no-ball hit for six.",
       "POST /fixtures/{id}/events answers 422 CHASE_OVERSHOOT (\"a chase ends at the winning run — check the total\") and nothing is written. POST /divisions/{id}/events/import still returns 200; that stream is rejected with error.code import.fold_rejected and error.engineCode CHASE_OVERSHOOT.",
       "The target is the other side's total plus 1, or a revised (DLS or confirmed) target. Earlier innings and ball-by-ball scoring are unchanged, and a chase total already recorded still replays and can be voided.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+    ],
+  },
+  {
+    date: "2026-10-28",
+    title: "Breaking: a standings table with no results serves rank null",
+    lines: [
+      "GET /stages/{id}/standings and GET /public/orgs/{orgSlug}/competitions/{slug}/divisions/{divisionSlug}/standings now serve rank: null on every row of a table in which no result has counted yet (level: true on every row). Before, those rows carried the positions 1..n.",
+      "Each table (a stage's, or one pool's) is judged on its own rows. A table with a counted result keeps rank 1..n, and an empty table is still an empty list. The schema's rank is now number or null, and still optional.",
+      "A client that sorts by rank or prints it must handle null. A CDN or a browser may keep the previous public document for about 330 seconds after the deploy (s-maxage 30 plus stale-while-revalidate 300).",
       "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
     ],
   },

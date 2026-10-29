@@ -1322,17 +1322,23 @@ describe("GuidedSheet rendering — R2c SheetChoiceStep.blocked", () => {
 // own ABOVE the options (the header row was `flex-wrap`: a title that fills the width pushes Back down). The header no
 // longer wraps — the title shrinks and wraps beside Back — and a hyphenated word is one unbreakable run.
 describe("loop R M7(c): the step header keeps Back beside its title, and never splits a hyphenated word", () => {
-  it("keepHyphenatedWordsWhole: each hyphenated word becomes one nowrap run; a plain title and the empty title pass through", () => {
+  // The hyphenated-word run's class list: atomic (never breaks AT the hyphen), wraps inside itself only when wider than the line.
+  const RUN = "inline-block max-w-full [overflow-wrap:anywhere]";
+  it("keepHyphenatedWordsWhole: each hyphenated word becomes one atomic run that may wrap only inside itself; a plain title and the empty title pass through", () => {
     const html = (s: string) => renderToStaticMarkup(createElement(Fragment, null, keepHyphenatedWordsWhole(s)));
     const rows: [string, string][] = [
-      ["Who won the tie-break?", 'Who won the <span class="whitespace-nowrap">tie-break?</span>'],
-      ["Sous-titre co-équipier", '<span class="whitespace-nowrap">Sous-titre</span> <span class="whitespace-nowrap">co-équipier</span>'],
+      ["Who won the tie-break?", `Who won the <span class="${RUN}">tie-break?</span>`],
+      ["Sous-titre co-équipier", `<span class="${RUN}">Sous-titre</span> <span class="${RUN}">co-équipier</span>`],
+      // W2e PR B: an entrant's own hyphens (the field-six question names the team) - a token wider than any 320 title box.
+      ["Can Home Field-six MVTN9TWZ-MOBILE-320 still field six players?", `Can Home <span class="${RUN}">Field-six</span> <span class="${RUN}">MVTN9TWZ-MOBILE-320</span> still field six players?`],
       ["No hyphen here", "No hyphen here"],
       ["", ""],
     ];
     let checked = 0;
     for (const [input, want] of rows) {
       expect(html(input), JSON.stringify(input)).toBe(want);
+      // A nowrap run has no way out when the word is wider than the box (232px in 152px at 320): the run must never be one.
+      expect(html(input), `${JSON.stringify(input)} holds no nowrap run`).not.toContain("whitespace-nowrap");
       checked++;
     }
     expect(checked).toBe(rows.length);
@@ -1369,7 +1375,7 @@ describe("loop R M7(c): the step header keeps Back beside its title, and never s
     const back = findByText(buttonsOf(tree), "pad.sheet.back");
     const title = tree.find((el) => el.type === "p" && String(propsOf(el).className ?? "").split(/\s+/).includes("mk-eyebrow"));
     expect(title, "the step title renders").toBeDefined();
-    expect(renderToStaticMarkup(title!)).toContain('Who won the <span class="whitespace-nowrap">tie-break?</span>');
+    expect(renderToStaticMarkup(title!)).toContain(`Who won the <span class="${RUN}">tie-break?</span>`);
     // `.mk-eyebrow` is an inline-flex: every child is its own flex item, so loose words beside the nowrap run stacked
     // out of order at 320 ("WHO" / "WON TIE-BREAK?" / "THE"). The words are ONE child.
     const items = ([] as unknown[]).concat(propsOf(title!).children as unknown).filter((c) => c !== null && c !== false && c !== "");
@@ -1384,8 +1390,13 @@ describe("loop R M7(c): the step header keeps Back beside its title, and never s
     expect(cls(header!), "a wrapping header pushes Back above the options at 320").not.toContain("flex-wrap");
     expect(cls(title!)).toEqual(expect.arrayContaining(["min-w-0", "flex-1"]));
     expect(cls(back)).toContain("shrink-0");
-    const whole = walk(title!).find((el) => el.type === "span" && cls(el).includes("whitespace-nowrap"));
-    expect(whole && textOf(whole), "the hyphenated word is one unbreakable run").toBe("tie-break?");
+    const whole = walk(title!).find((el) => el.type === "span" && cls(el).includes("inline-block"));
+    expect(whole && textOf(whole), "the hyphenated word is one atomic run").toBe("tie-break?");
+    expect(cls(whole!), "...that wraps inside itself once it is wider than the line").toContain("[overflow-wrap:anywhere]");
+    // The one flex item holding the title must be allowed to shrink below its min-content, or a long word holds the title
+    // wider than its box and neither `break-words` nor the run's own wrap ever acts.
+    const [item] = items as (typeof tree)[number][];
+    expect(cls(item!), "the title's flex item shrinks below its longest word").toContain("min-w-0");
   });
 });
 

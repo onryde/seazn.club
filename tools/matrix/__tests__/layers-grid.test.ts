@@ -15,7 +15,7 @@ import { describe, expect, it } from "vitest";
 import { API_ONLY_ROWS, ROW_KEYS, SPORT_KEYS, TEMPLATE_ROW_KEYS, cellId, type ApiOnlyRowKey } from "../lib/catalogue.ts";
 import { API_ONLY_UI_WAVE } from "../lib/api-only-ui.ts";
 import { TEMPLATE_ROW } from "../lib/templates.ts";
-import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
+import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor } from "../lib/scenario-catalogue.ts";
 import { ALL_CELLS, GridTakesNoFilter, L1_WIDTH, LAYER_GRID_PLANNERS, identityOf, layerCaseId, planL1Grid, type LayerCase } from "../lib/layers.ts";
 import { loadL2Pairs, type L2Run } from "../lib/pairs.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
@@ -165,7 +165,7 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
   const planner = LAYER_GRID_PLANNERS.L2({});
   const cases = planner.layered(offlineBuilderDefault);
   const atom = new Map(ATOMIC.map((a) => [a.id, a]));
-  const owningWave = (r: L2Run): string | null => { const a = atom.get(r.scenario)!; return a.knownNoPath ?? a.l2NoPath; };
+  const owningWave = (r: L2Run): string | null => { const a = atom.get(r.scenario)!; return a.knownNoPath ?? l2NoPathFor(a, r.sport); };
   const idOf = (r: L2Run) => `${r.row}|${r.sport}|${r.preset}|${r.scenario}${r.bound === null ? "" : `|${r.bound}`}@${r.width}`;
   const pairs = loadL2Pairs();
 
@@ -203,7 +203,9 @@ describe("the full L2 grid (ruling 64: every run of l2-pairs.json)", () => {
     for (const c of notRun) expect(c.notRun, layerCaseId(c)).toContain(`atom ${c.run!.scenario}`);
     // Ruling 65's figures: only the driven runs can go red; the rest are planned, never driven. W2a (X-DR-1, loop D) moved the
     // pairwise cover: 1731 -> 1729 cases, driven and no_path unchanged (the catalogue was regenerated, a reviewed change, R11).
-    expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, all: cases.length }).toEqual({ driven: 62, noPath: 164, notRun: 1503, all: 1729 });
+    // W2e Task 32 (B2-3): 19 committed M12b runs (football 16, volleyball, hockey, ice hockey 1 each) have a screen path now:
+    // 🚫 164 -> 145, ░ 1,503 -> 1,522 (cricket's and generic's one M12b run each stay 🚫: their dispositions).
+    expect({ driven: d.length, noPath: noPath.length, notRun: notRun.length, all: cases.length }).toEqual({ driven: 62, noPath: 145, notRun: 1522, all: 1729 });
     console.log(`L2 grid: ${d.length} driven, ${noPath.length} no_path, ${notRun.length} not_run of ${cases.length}`);
   });
 

@@ -130,6 +130,7 @@ describe("borrowOptionLabel refuses a peer that labels the FIELD differently", (
     key: "bestOf",
     edits: ["bestOf"],
     label: "Best of (sets)",
+    labelKey: "rules.field.bestOf.label",
     kind: "select",
     options: [{ value: "3", label: "Best of 3" }],
     build: () => ({}),

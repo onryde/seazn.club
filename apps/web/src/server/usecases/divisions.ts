@@ -151,15 +151,25 @@ const COLS = [
   "logo_storage_path", "required_court_tags", "camera_policy",
 ] as const;
 
+/** One variant choice for the Settings tab's format editor. `config` is the preset exactly as the row stores it - only the keys
+ *  the variant declares (scripts/sync-sports.ts), never a parsed config - because a variant switch needs to know WHICH keys
+ *  the old and the new variant own (W2e Task 29); `system` tells a built-in from this org's own preset. */
+export interface VariantOption {
+  key: string;
+  name: string;
+  system: boolean;
+  config: Record<string, unknown>;
+}
+
 /** Variant choices for the Settings tab's format editor (v8) — system
  *  presets plus this org's own, deduped per key (org's wins). */
 export async function listVariantOptions(
   auth: AuthCtx,
   sportKey: string,
-): Promise<{ key: string; name: string }[]> {
+): Promise<VariantOption[]> {
   return withTenant(auth.orgId, (tx) =>
-    tx<{ key: string; name: string }[]>`
-      select distinct on (key) key, name from sport_variants
+    tx<VariantOption[]>`
+      select distinct on (key) key, name, (org_id is null) as system, config from sport_variants
       where sport_key = ${sportKey}
       order by key, org_id nulls last`,
   );

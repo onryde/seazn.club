@@ -274,12 +274,18 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     icehockey: { "overtime.minutes": "overtime", "shootout.attempts": "shootout" },
     // W2e Task 7 (A1c-2, ruling 157): what a TIED super over does (repeat / boundary count / shared) is only asked while
     // the super over is on (cricket DOMAIN.md, "Super over"; `canEndLevel` reads it under `cfg.superOver` alone).
-    cricket: { superOverStillTied: "superOver" },
+    cricket: { superOverStillTied: "superOver", minOversForResult: "dls" },
   };
+  // W2e Task 28 fix round 1: a detail's host is a whole decider, except the SWITCHES listed here. Cricket's `dls` is one: a DLS
+  // par decides an ABANDONED chase (`applyAbandon`), never a level match, and `minOversForResult` is read only by that par
+  // (`dlsAbandonmentPar`), so the result floor is held while DLS is off. Making `dls` a decider would turn off the knockout
+  // preselection and the "no decider" notice wrongly, so it stays a plain stage key.
+  const SWITCH_HOSTS: Readonly<Record<string, readonly string[]>> = { cricket: ["dls"] };
 
-  it("every bounded key is a whole decider or the detail of one: `detailOf` names a declared decider of the same sport, and the pairs are the rulebook's (counted)", () => {
+  it("every bounded key is a whole decider or the detail of one: `detailOf` names a declared decider (or a listed switch) of the same sport, and the pairs are the rulebook's (counted)", () => {
     let bounded = 0;
     let details = 0;
+    let switches = 0;
     for (const m of builtinModules) {
       for (const [key, fact] of deciders(m)) {
         bounded++;
@@ -289,7 +295,13 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
       const declared: Record<string, string> = {};
       for (const [key, fact] of Object.entries(m.ruleKeys ?? {})) {
         if (fact.detailOf === undefined) continue;
-        expect(m.ruleKeys![fact.detailOf]?.decider, `${m.key}.${key} -> ${fact.detailOf} is a declared whole decider`).toBe(true);
+        const host = m.ruleKeys![fact.detailOf];
+        expect(host, `${m.key}.${key} -> ${fact.detailOf} is a declared rule key`).toBeDefined();
+        if (SWITCH_HOSTS[m.key]?.includes(fact.detailOf)) {
+          // A switch is no decider: the knockout preselection and the "no decider" notice read `decider: true`.
+          expect(host!.decider, `${m.key}.${fact.detailOf} is a switch, not a whole decider`).toBeUndefined();
+          switches++;
+        } else expect(host!.decider, `${m.key}.${key} -> ${fact.detailOf} is a declared whole decider`).toBe(true);
         declared[key] = fact.detailOf;
         details++;
       }
@@ -298,6 +310,9 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(bounded).toBe(deciderCount());
     expect(details).toBe(Object.values(DETAILS).reduce((n, d) => n + Object.keys(d).length, 0));
     expect(details).toBeGreaterThan(0);
+    // Every listed switch is used by a detail (a stale entry would excuse a host that is no longer one).
+    expect(switches, "the listed switches are the details whose host is no decider").toBe(Object.values(SWITCH_HOSTS).reduce((n, l) => n + l.length, 0));
+    expect(switches).toBeGreaterThan(0);
   });
 
   // Single-sport on purpose: `superOverStillTied` is cricket's key and no other sport declares one; the all-sport population
@@ -318,8 +333,45 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(deciderKeysFor(cricket, "knockout", "t20")).not.toContain("superOverStillTied");
     // The negative pair: cricket's other stage keys are not details (a pairing declared too widely would hold them too).
     const details = Object.entries(facts).filter(([, f]) => f.detailOf !== undefined).map(([k]) => k);
-    expect(details).toEqual(["superOverStillTied"]);
+    expect(details.sort()).toEqual(["minOversForResult", "superOverStillTied"]);
     expect(Object.keys(facts).length, "the other cricket keys were walked").toBeGreaterThan(details.length);
+  });
+
+  // W2e Task 28 fix round 1 (PO ruling, anti-goal 3): the result floor is read only by a DLS par, so a stage with DLS off held
+  // a live control that did nothing. `dls` is the switch that holds it; it is no decider, and the floor is offered exactly where
+  // DLS can be on (the schema's own refusal is the oracle, as for the super over above).
+  it("cricket minOversForResult is a detail of the dls switch, offered exactly on the variants that can play DLS, in every stage kind (counted)", () => {
+    const cricket = sport("cricket");
+    const facts = cricket.ruleKeys!;
+    expect(facts.minOversForResult, "premise: the key is declared").toBeDefined();
+    expect(facts.minOversForResult!.detailOf, "held by DLS").toBe("dls");
+    expect(facts.dls, "premise: the switch is declared").toBeDefined();
+    // The switch is a plain stage key, never a whole decider: a DLS par decides an abandoned chase, not a level match.
+    expect(facts.dls!.decider).toBeUndefined();
+    expect(facts.minOversForResult!.scope).toBe("stage");
+    expect(facts.minOversForResult!.decider).toBeUndefined();
+    const offered: string[] = [];
+    const refused: string[] = [];
+    let cells = 0;
+    for (const [name, variant] of Object.entries(cricket.variants)) {
+      const canPlay = cricket.configSchema.safeParse({ ...variant, dls: { enabled: true, edition: "standard" } }).success;
+      (canPlay ? offered : refused).push(name);
+      for (const kind of KINDS) {
+        expect(stageKeysFor(cricket, kind, name).includes("minOversForResult"), `${name}/${kind}: the result floor`).toBe(canPlay);
+        expect(stageKeysFor(cricket, kind, name).includes("dls"), `${name}/${kind}: the DLS switch itself`).toBe(canPlay);
+        // Neither is a decider: the preselection and the notice must never read them.
+        expect(deciderKeysFor(cricket, kind, name)).not.toContain("dls");
+        expect(deciderKeysFor(cricket, kind, name)).not.toContain("minOversForResult");
+        cells++;
+      }
+    }
+    expect(cells).toBe(Object.keys(cricket.variants).length * KINDS.length);
+    expect(offered.length).toBeGreaterThan(0);
+    expect(refused.length).toBeGreaterThan(0);
+    expect(refused).toContain("test"); // an unlimited-overs match: no DLS, and its two-innings abandon is a draw at any floor
+    for (const v of ["t20", "odi", "hundred"]) expect(offered, v).toContain(v);
+    // The division level (no variant) is never narrowed.
+    expect(stageKeysFor(cricket, "knockout", null)).toContain("minOversForResult");
   });
 
   // W2e Task 7 (controller ruling, Task 28 anti-goal 3): a detail offered where its decider cannot exist is a control that is
@@ -423,7 +475,7 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
     expect(whole).toBeGreaterThan(0);
   });
 
-  it("appliesTo is carried by exactly carrom tieBoard and the two share-the-points abandon policies (DRAW_KINDS), chess tiebreakRungs (BRACKET_KINDS), and cricket superOver, its still-tied policy and dls (the variants the schema lets switch them on)", () => {
+  it("appliesTo is carried by exactly carrom tieBoard and the two share-the-points abandon policies (DRAW_KINDS), chess tiebreakRungs (BRACKET_KINDS), and cricket superOver, its still-tied policy, dls and its result floor (the variants the schema lets switch them on)", () => {
     const ck = sport("cricket");
     const ckVariants = ck.variants as Record<string, object>;
     const variantsWhere = (on: Record<string, unknown>): string[] =>
@@ -438,9 +490,11 @@ describe("X-SR-1 P1 engine sweep — ruleKeys", () => {
       // W2e Task 7: the still-tied policy is a detail of the super over, so it is offered on the same variants and no others.
       "cricket.superOverStillTied": { variants: variantsWhere({ superOver: true }) },
       "cricket.dls": { variants: variantsWhere({ dls: { enabled: true, edition: "standard" } }) },
+      // W2e Task 28 fix round 1: the result floor is a detail of dls (only a DLS par reads it), so it is offered where DLS is.
+      "cricket.minOversForResult": { variants: variantsWhere({ dls: { enabled: true, edition: "standard" } }) },
     };
     // The variant axis is not degenerate: each cricket list leaves out a variant, and holds one.
-    for (const key of ["cricket.superOver", "cricket.superOverStillTied", "cricket.dls"]) {
+    for (const key of ["cricket.superOver", "cricket.superOverStillTied", "cricket.dls", "cricket.minOversForResult"]) {
       expect(expected[key]!.variants!.length, key).toBeGreaterThan(0);
       expect(expected[key]!.variants!.length, key).toBeLessThan(Object.keys(ckVariants).length);
     }

@@ -51,6 +51,7 @@ describe("configKeysFor", () => {
       key: "probe",
       edits: ["probe"],
       label: "Probe",
+      labelKey: "rules.field.winBy.label",
       kind: "select",
       options: [
         { value: "a", label: "A" },

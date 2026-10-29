@@ -96,7 +96,7 @@ export function refusedLines(fields: readonly RuleField[], refused: readonly Ref
     }
     if (listed.has(named.key)) continue; // two refusals for one control (a field that edits two keys): one line
     listed.add(named.key);
-    lines.push({ id: r.field, label: named.label, lock: r });
+    lines.push({ id: r.field, label: m(named.labelKey), lock: r });
   }
   if (other !== undefined) lines.push(other);
   return lines;

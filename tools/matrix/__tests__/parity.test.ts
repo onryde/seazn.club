@@ -396,12 +396,15 @@ describe("compareRuns", () => {
     expect(renamed.length).toBeGreaterThan(0);
     expect(scriptless.length).toBeGreaterThan(0);
     // The HTTP side: the slice as L3 plans it, at the variants the committed
-    // W1b slice ran (review m-2: never read back from l2-pairs.json, so a
+    // slice ran (review m-2: never read back from l2-pairs.json, so a
     // committed preset that drifts from the builder default reds here).
-    const ranVariant = new Map(readRun(join(TRUTH, "w1b-slice", "results.json")).cases.map((c) => [c.sport, c.variant]));
+    // W2e Task 35: the slice evidence is the W2e truth run's own plain slice (its `badminton` is the 3x15 default, bwf-3x15),
+    // regenerated through `pnpm matrix:l3` (no --set); the W1b slice above predates that default and keeps the badminton
+    // case id `bwf`, which no planner emits now. The v2-shape test above still reads w1b-slice, as the v2 evidence it is.
+    const ranVariant = new Map(readRun(join(TRUTH, "w2e-final", "local", "L3", "w2e-final-slice", "results.json")).cases.map((c) => [c.sport, c.variant]));
     const presetOf = (sport: string): string => {
       const v = ranVariant.get(sport);
-      if (v === undefined) throw new Error(`test: the committed w1b-slice ran no ${sport} case`);
+      if (v === undefined) throw new Error(`test: the committed w2e-final-slice ran no ${sport} case`);
       return v;
     };
     const httpCases = planSliceCases(presetOf).map((s) => httpCase(s.caseId, { scenario: s.scenario }));

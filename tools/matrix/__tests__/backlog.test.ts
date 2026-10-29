@@ -536,6 +536,38 @@ describe("the ruling-70 held set is baseline.json's list, never the dispatch cut
     const loaded = loadBacklogInput({ triage: triageJsonPath(), sha: SHA, catalogue: catalogue("cat-retired", JSON.stringify({ L3: (JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "baseline.json"), "utf8")) as { L3: string }).L3, ...retired })) });
     expect(loaded.ruling70).toEqual([]);
   });
+
+  // W2e Task 35 re-baselined the LIVE catalogue/baseline.json to the W2e truth run's CI L3 (the W1d baseline predates the 3x15 badminton
+  // default). This backlog is the W1d record, counted from the W1d baseline directory, so the live block no longer qualifies the run it
+  // counts. It reads the baseline.json that directory carries (the one W1d was the baseline under), and that file is held to the L3 it
+  // counts exactly as the live one was: stale, and the loader refuses it by name.
+  it("W2e T35: the W1d backlog reads the baseline.json its own baseline directory carries, not the live (re-baselined) one — and holds that file to the L3 it counts", () => {
+    const w1dRun = (JSON.parse(readFileSync(join(DEFAULT_BASELINE, "L3", "results.json"), "utf8")) as { runId: string }).runId;
+    const live = JSON.parse(readFileSync(resolve(CATALOGUE_DIR, "baseline.json"), "utf8")) as { L3: string; ruling70: { workflowRun: number; ids: string[] } };
+    const archived = JSON.parse(readFileSync(join(DEFAULT_BASELINE, "baseline.json"), "utf8")) as { L3: string; ruling70: { workflowRun: number; ids: string[] } };
+    // The premise: the live block is for another run than the one this backlog counts (else this decoupling would be decoration).
+    expect(new RegExp(`^ci-${live.ruling70.workflowRun}-\\d+-l3$`).test(w1dRun), "the live block does not qualify the W1d run").toBe(false);
+    expect(live.L3, "the live baseline moved off the W1d L3").not.toBe(archived.L3);
+    // The record qualifies the W1d run, and it is the run the loader counted.
+    expect(new RegExp(`^ci-${archived.ruling70.workflowRun}-\\d+-l3$`).test(w1dRun), "the archived block qualifies the W1d run").toBe(true);
+    expect(resolve(REPO, archived.L3)).toBe(join(DEFAULT_BASELINE, "L3", "results.json"));
+    expect(real.ruling70).toEqual(archived.ruling70.ids);
+    expect(real.ruling70.length, "the list is not empty").toBeGreaterThan(0);
+    // TEETH: a baseline directory whose carried baseline.json is STALE (its block for another run) is refused, by name, not read as the live one.
+    const dir = join(scratch, "baseline-stale-record");
+    mkdirSync(join(dir, "L3"), { recursive: true });
+    for (const layer of ["L1", "L2", "L3"]) { mkdirSync(join(dir, layer), { recursive: true }); symlinkSync(join(DEFAULT_BASELINE, layer, "results.json"), join(dir, layer, "results.json")); }
+    symlinkSync(join(DEFAULT_BASELINE, "dispatch-cuts.json"), join(dir, "dispatch-cuts.json"));
+    const stale = structuredClone(archived);
+    stale.ruling70.workflowRun += 1;
+    writeFileSync(join(dir, "baseline.json"), JSON.stringify(stale));
+    let seen: BacklogRefused | null = null;
+    try { loadBacklogInput({ triage: triageJsonPath(), sha: SHA, baseline: dir }); } catch (e) { if (e instanceof BacklogRefused) seen = e; else throw e; }
+    expect(seen).toMatchObject({ name: "BaselineUnreadable", message: expect.stringContaining("ruling70 was written for workflow run") });
+    // …and the same directory with its record intact loads, with the record's list: the refusal above is the record's staleness alone.
+    writeFileSync(join(dir, "baseline.json"), JSON.stringify(archived));
+    expect(loadBacklogInput({ triage: triageJsonPath(), sha: SHA, baseline: dir }).ruling70).toEqual(archived.ruling70.ids);
+  });
 });
 
 describe("each wave says how many 🚫 cases route to it by their own reason (T22 review m4): W9 does not read as empty", () => {

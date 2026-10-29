@@ -138,13 +138,16 @@ export class VariantGenerationStuck extends Error {
   }
 }
 
-/** Validations the rescue search may spend per sport. Today's registry spends
- *  well under a tenth of it (the busiest sport, carrom, makes ~8.1k validate
- *  calls in its whole generation, at ~40 µs each); football's non-row product
- *  is ~590k, so one product change that refused a football level everywhere
- *  would otherwise search for minutes. Past the budget the generation stops
- *  by name instead. */
-export const RESCUE_BUDGET = 50_000;
+/** Validations the rescue search may spend per sport. Measured on the registry
+ *  (W2e Task 28, after the ruling-157 editor fields): the busiest sport, carrom,
+ *  spends ~106k rescue validations (it was ~27k before pointsPerCoin added a
+ *  factor: every uncoverable pair is searched exhaustively, so one more factor
+ *  multiplies that search), cricket ~15k, football none. Football's non-row
+ *  product is ~5.3M, so one product change that refused a football level
+ *  everywhere would otherwise search for minutes. Past the budget the
+ *  generation stops by name instead. The budget keeps ~5x headroom over carrom
+ *  and stays under football's product, which the bounded-search test needs. */
+export const RESCUE_BUDGET = 500_000;
 
 export class VariantRescueBudgetExceeded extends Error {
   readonly sport: string;
@@ -155,11 +158,13 @@ export class VariantRescueBudgetExceeded extends Error {
   }
 }
 
-export function buildSportVariants(sport: string, deps: { validate?: typeof buildVariant; score?: typeof scorable } = {}): SportVariants {
+export function buildSportVariants(sport: string, deps: { validate?: typeof buildVariant; scorable?: (vc: VariantCase) => string | null } = {}): SportVariants {
   const validate = deps.validate ?? buildVariant;
-  // `deps.score` exists only so a test can put a reason on a case: no shipped case carries one since the write door joined
-  // resolveSportCfg (sport-cfg.ts), and the seam that records it must be proven wired, not left null.
-  const score = deps.score ?? scorable;
+  // `deps.scorable` exists so a test can witness the seam below with a reason of its own: the corpus no longer carries a natural one.
+  // No shipped case is refused since the write door joined resolveSportCfg (sport-cfg.ts, W2e Task 24), and volleyball's and table
+  // tennis's range ends, once the engine's floor-refused 1, now start at the floor (W2e Task 29). So the seam that records the reason
+  // must be proven wired, not left null.
+  const judge = deps.scorable ?? scorable;
   const fs = factorsFor(sport);
   const F = fs.length;
   const defaultPreset = offlineBuilderDefault(sport);
@@ -272,7 +277,7 @@ export function buildSportVariants(sport: string, deps: { validate?: typeof buil
     const classes: Record<string, string> = {};
     for (let k = 2; k < F; k++) classes[fs[k].name] = lvl(k, asg[k]).cls;
     const partial = { id: `${sport}#${String(cases.length + 1).padStart(3, "0")}`, sport, row: lvl(0, asg[0]).raw as RowKey, preset: presetOf(asg), classes, values: valuesOf(asg), overrides: built.overrides };
-    cases.push({ ...partial, scorable: score({ ...partial, scorable: null }) });
+    cases.push({ ...partial, scorable: judge({ ...partial, scorable: null }) });
   }
   return { sport, defaultPreset, factors: F, pairs, covered: pairs - uncoverable.length, cases, uncoverable };
 }

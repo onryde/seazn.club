@@ -8,7 +8,7 @@
 //    to the slice's cells and never re-planned — each run keeps its own n,
 //    atom, row, sport, preset and width. A run whose atom has a harness script
 //    (HARNESS_SCENARIO) is driven; one whose atom has a known path gap
-//    (knownNoPath, else l2NoPath) is 🚫 naming that wave; every other run is
+//    (knownNoPath, else l2NoPath for that run's sport) is 🚫 naming that wave; every other run is
 //    ░ "no scenario script yet" (D5 — W1c writes no new scenario script).
 //  - `--scope grid` (W1d Task 3, owner ruling 64): the FULL grid of each layer.
 //    L1 (planL1Grid, `--layer L1 --scope grid`) is one LIFECYCLE case per
@@ -48,7 +48,7 @@ import { apiOnlyUiPath } from "./api-only-ui.ts";
 import { onTemplate, templateField, templateRow } from "./templates.ts";
 import { loadL2Pairs, type L2Run } from "./pairs.ts";
 import { SetTakesNoFilter } from "./probe-set.ts";
-import { ATOMIC, HARNESS_SCENARIO, type AtomicScenario } from "./scenario-catalogue.ts";
+import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor, type AtomicScenario } from "./scenario-catalogue.ts";
 import { SLICE_ROWS, SLICE_SPORTS, checkSliceFilter, planSliceCases } from "./slice.ts";
 import { L2_WIDTHS, type BrowserWidth } from "./widths.ts";
 import type { CaseSpec, ScenarioKey } from "./scenarios/types.ts";
@@ -164,7 +164,8 @@ export function planL2(pairs: { readonly runs: readonly L2Run[] }, cells: Readon
       out.push({ ...base, spec: { ...identity, scenario: script, canary: false }, noPath: null, notRun: null });
       continue;
     }
-    const wave = atom.knownNoPath ?? atom.l2NoPath;
+    // W2e Task 32: per sport -- M12b is a screen path in football, volleyball, hockey and ice hockey now.
+    const wave = atom.knownNoPath ?? l2NoPathFor(atom, run.sport);
     out.push(wave !== null
       ? { ...base, spec: null, identity, noPath: { wave, reason: noPathReason(atom) }, notRun: null }
       : { ...base, spec: null, identity, noPath: null, notRun: `no scenario script yet (atom ${run.scenario})` });

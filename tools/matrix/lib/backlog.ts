@@ -11,7 +11,7 @@
 //
 // DB-free, like every tool: this reads files and folds them, nothing else. The writer is pure over `BacklogInput`; `loadBacklogInput`
 // is the only function that reads.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { z } from "zod";
 import { AUDIT_DIR, OUTCOMES, REPO_ROOT, buildLedger, parseVerdicts, readAudit, type Ledger, type LedgerEntry } from "./audit-ledger.ts";
@@ -661,6 +661,15 @@ function ruling70Of(catalogue: string, l3RunId: string): string[] {
 
 export interface LoadOptions { triage: string; sha: string; baseline?: string; design?: string; catalogue?: string }
 
+/** Where this backlog reads the ruling-70 block from. An explicit `catalogue` is the caller's (a test's fake, or a retired block). Else
+ *  the baseline directory it COUNTS, when that directory carries the `baseline.json` it was the baseline under (the W1d baseline does:
+ *  W2e Task 35 re-baselined the live catalogue/baseline.json to the W2e truth run, and this backlog is the W1d record, which the live
+ *  block no longer qualifies); else the live catalogue's. Either way the block must qualify the L3 counted (`ruling70Of`). */
+function ruling70Dir(baseline: string, catalogue: string | undefined): string {
+  if (catalogue !== undefined) return catalogue;
+  return existsSync(join(baseline, "baseline.json")) ? baseline : CATALOGUE_DIR;
+}
+
 /** Reads everything the writer needs, and holds it to the baseline it names: `sha` is the commit every layer's run records, EXACTLY (T22
  *  review m1: a prefix check let a typo past the recorded characters through) and the triage was written from those runs, its run ids and
  *  its per-layer case and red counts the baseline's own. */
@@ -700,5 +709,5 @@ export function loadBacklogInput(opts: LoadOptions): BacklogInput {
     throw new BacklogRefused("DesignUnreadable", `${design}: ${e instanceof Error ? e.message : String(e)}`);
   }
   const cases = runs.flatMap(({ layer, run }) => run.cases.map((c) => ({ layer, caseId: c.caseId, state: c.state, reason: c.reason ?? "" })));
-  return { sha: opts.sha, triage, ledger, newGaps: cat.newGaps, routing: cat.routing, rules: cat.rules, carries, cuts, cases, ruling70: ruling70Of(catalogue, runs.find((r) => r.layer === "L3")!.run.runId), design: designText };
+  return { sha: opts.sha, triage, ledger, newGaps: cat.newGaps, routing: cat.routing, rules: cat.rules, carries, cuts, cases, ruling70: ruling70Of(ruling70Dir(baseline, opts.catalogue), runs.find((r) => r.layer === "L3")!.run.runId), design: designText };
 }

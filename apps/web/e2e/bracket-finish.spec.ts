@@ -69,9 +69,19 @@ async function expectSheetHeadOneRow(page: Page, width: number, opts: { hyphenat
   expect(bb.y + bb.height, `${width}: Back sits above the step's content`).toBeLessThanOrEqual(firstBelow.y);
   // Only the titles that name the "tie-break" carry the unbroken run (W2c Task 21: the Black, Result and Confirm titles do not).
   if (!hasHyphen) return;
-  const hyphenated = title.locator("span.whitespace-nowrap");
+  // The run is an atomic `inline-block` that wraps inside itself only when wider than the line (W2e PR B: a nowrap run clipped an
+  // entrant's long hyphenated name). An inline-block is ONE client rect however many lines it holds, so "on one line" is read
+  // off the text's own line boxes: every rect of its contents shares one top.
+  const hyphenated = title.locator("span.inline-block");
   await expect(hyphenated).toHaveCount(1);
-  expect(await hyphenated.evaluate((el) => el.getClientRects().length), `${width}: "tie-break" on one line`).toBe(1);
+  expect(
+    await hyphenated.evaluate((el) => {
+      const range = document.createRange();
+      range.selectNodeContents(el);
+      return new Set(Array.from(range.getClientRects()).map((r) => Math.round(r.top))).size;
+    }),
+    `${width}: "tie-break" on one line`,
+  ).toBe(1);
 }
 
 type Visibility = "private" | "public";

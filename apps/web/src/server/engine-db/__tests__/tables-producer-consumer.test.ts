@@ -49,7 +49,7 @@ vi.mock("next/headers", () => ({
   headers: async () => new Headers(),
 }));
 
-import { coverage, reachableOutcomes, type PointsRule } from "@seazn/engine/competition";
+import { coverage, isLevelTable, reachableOutcomes, type PointsRule } from "@seazn/engine/competition";
 import type { AnySportModule, TiebreakerKey } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import en from "@/dictionaries/en/public.json";
@@ -139,10 +139,23 @@ interface Door {
 const byRank = (a: StandingsSnapshotRow, b: StandingsSnapshotRow) => (a.rank ?? 0) - (b.rank ?? 0);
 /** Served rows read per door (anti-vacuity for `inRankOrder`). */
 const ranked = new Map<string, number>();
+/** Served rows that carried `rank: null` per door (anti-vacuity: the wire door reached the level branch, the stored reader never). */
+const nulled = new Map<string, number>();
 /** A served table in its rank order. The documented schema makes `rank` optional and says nothing of the rows' ORDER, so
  *  the order a consumer reads is `rank`, never the array's (no order claim on the route): every served row must carry
- *  one, the ranks are the places 1..n (the ranker's positional rank), and each row is counted. */
-function inRankOrder(tag: string, rows: readonly StandingsSnapshotRow[]): StandingsSnapshotRow[] {
+ *  one, the ranks are the places 1..n (the ranker's positional rank), and each row is counted.
+ *
+ *  W2e D11 b: an API route (`wire`) serves `rank: null` on every row of a LEVEL table and only there (`isLevelTable`, the
+ *  engine's own predicate): null exactly when level, a place otherwise. The stored reader (`wire` false: the usecase door's
+ *  `getPublicDivision`) is the snapshot as written, so it keeps the ranker's places on a level table too (E24). A level
+ *  table has no place to order by, so it is returned in the order served. */
+function inRankOrder(tag: string, rows: readonly StandingsSnapshotRow[], wire: boolean): StandingsSnapshotRow[] {
+  if (wire && isLevelTable(rows)) {
+    for (const r of rows) expect((r as { rank?: number | null }).rank, `${tag}a level table serves rank null (${r.entrantId})`).toBeNull();
+    ranked.set(tag, (ranked.get(tag) ?? 0) + rows.length);
+    nulled.set(tag, (nulled.get(tag) ?? 0) + rows.length);
+    return [...rows];
+  }
   for (const r of rows) expect(typeof r.rank, `${tag}a served row carries its rank (${r.entrantId})`).toBe("number");
   const sorted = [...rows].sort(byRank);
   expect(sorted.map((r) => r.rank), `${tag}the ranks are the places 1..n`).toEqual(sorted.map((_, i) => i + 1));
@@ -183,7 +196,7 @@ const USECASE: Door = {
   tables: async (slugs) => {
     const data = await getPublicDivision(...slugs);
     if (data === null) throw new Error("the public read found no division");
-    return data.standings.map((t) => ({ stage_id: t.stage_id, pool_id: t.pool_id, rows: inRankOrder("", t.rows) }));
+    return data.standings.map((t) => ({ stage_id: t.stage_id, pool_id: t.pool_id, rows: inRankOrder("", t.rows, false) }));
   },
 };
 
@@ -255,7 +268,7 @@ const API: Door = {
     return S.PublicDivisionStandings.parse(r.data).standings.map((t) => ({
       stage_id: t.stage_id,
       pool_id: t.pool_id,
-      rows: inRankOrder("API v1: ", t.rows as StandingsSnapshotRow[]),
+      rows: inRankOrder("API v1: ", t.rows as StandingsSnapshotRow[], true),
     }));
   },
 };
@@ -1016,5 +1029,8 @@ describe.skipIf(!HAS_DB)("W2d A14: the table seams of Tasks 0–12, real produce
       Object.fromEntries(Object.keys(handlers).map((k) => [k, true])),
     );
     expect([ranked.get("") ?? 0, ranked.get(API.tag) ?? 0].every((x) => x > 0), "served rows read by both doors").toBe(true);
+    // D11 b: the wire door served level rows with a null rank (the empty case), and the stored reader never did.
+    expect(nulled.get(API.tag) ?? 0, "the wire door read a level table's null ranks").toBeGreaterThan(0);
+    expect(nulled.get("") ?? 0, "the stored reader serves no null rank").toBe(0);
   });
 });

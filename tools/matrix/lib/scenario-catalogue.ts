@@ -153,10 +153,19 @@ const KNOWN_NO_PATH: Readonly<Record<string, Route>> = Object.freeze({
 });
 /** Design §4 "Known UI-only 🚫" (ruling 30), keyed by ATOM: an HTTP route
  *  exists (L3 runs), but no screen sends it (the L2 run records 🚫). M12b's
- *  `core.lineup.retirement` has no pad or console control, and no
- *  minimum-players rule exists; both are owed to W2. */
+ *  `core.lineup.retirement` has a pad control since W2e Task 32 in football,
+ *  volleyball, hockey and ice hockey (`UI_PATH_BUILT`); cricket and generic keep
+ *  this route by disposition (CK-DV-3, GN-DV-1), and no minimum-players rule
+ *  exists. */
 const KNOWN_UI_NO_PATH: Readonly<Record<string, Route>> = Object.freeze({
-  M12b: routeTo("W2", "core.lineup.retirement has no pad or console control (ruling 30)"),
+  M12b: routeTo("W2", "core.lineup.retirement has no pad control in cricket (CK-DV-3: the all-out count stays) or generic (GN-DV-1: LINEUP_NOT_SUPPORTED), by disposition (D3 (3) of the 2026-10-28 design); football, volleyball, hockey and ice hockey have it (UI_PATH_BUILT)"),
+});
+/** W2e Task 32 (B2-3): the sports whose pad GAINED the control a KNOWN_UI_NO_PATH atom lacked, keyed by ATOM. The atom keeps
+ *  its `l2NoPath` (cricket and generic still owe the wave: their dispositions, not a screen), and `l2NoPathFor` answers per
+ *  sport. The list is the owner's (spec 6.2: "only where it changes something"); tests pin it to the skins that wire
+ *  `retirementTilesOf` (scenario-catalogue.test.ts) so a fifth sport is a red here. */
+export const UI_PATH_BUILT: Readonly<Record<string, readonly string[]>> = Object.freeze({
+  M12b: Object.freeze(["football", "volleyball", "hockey", "icehockey"]),
 });
 
 export interface AtomicScenario {
@@ -189,6 +198,12 @@ export const ATOMIC: readonly AtomicScenario[] = Object.freeze(PARENTS.flatMap((
     });
   });
 }));
+
+/** The wave that owes `atom` a screen path in `sport`, or null when that sport's pad has one: the atom's `l2NoPath` unless
+ *  `UI_PATH_BUILT` names the sport. `knownNoPath` (no organiser path at all) is not sport-shaped and is read separately. */
+export function l2NoPathFor(atom: AtomicScenario, sport: string): string | null {
+  return UI_PATH_BUILT[atom.id]?.includes(sport) === true ? null : atom.l2NoPath;
+}
 
 export const LIFECYCLE_ID = "LIFECYCLE";
 export const l3Atomic = (): AtomicScenario[] => ATOMIC.filter((a) => a.layers.includes("L3"));

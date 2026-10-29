@@ -187,7 +187,7 @@ export function matchFormFields(
   return allAdapted(ctx, stageResolved, labels).flatMap((a) => {
     const shown = visible.get(a.field.key);
     // The best-of-1 relabel (`Points to win`) lands on the visible copy; the adaptation is kept.
-    return shown === undefined ? [] : [{ ...a, field: { ...a.field, label: shown.label } }];
+    return shown === undefined ? [] : [{ ...a, field: { ...a.field, label: shown.label, labelKey: shown.labelKey } }];
   });
 }
 

@@ -5,15 +5,21 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BRACKET_KINDS, type StageKind } from "@seazn/engine/core";
-import { deciderKeysFor } from "@seazn/engine/sport";
+import { BO1_MATCH_TIEBREAK, SET_TARGET_BELOW_FLOOR, deciderKeysFor, setTargetBelowFloor, writeConfigIssues } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
-import { SPORT_RULES } from "@/lib/match-rules";
+import { SPORT_RULES, buildRuleOverride } from "@/lib/match-rules";
+import { configIssueText } from "@/lib/config-issue-copy";
+import { setTargetFloorOf } from "@/lib/match-rules/set-target-floor";
 import { stageFieldsFor } from "@/lib/rule-scope";
 import { stageDefaultsFor } from "@seazn/engine/sport";
-import { resolvedStageCfg } from "../stage-row-model";
+import { deciderOfDetail, resolvedStageCfg } from "../stage-row-model";
+import { ruleFormState } from "../../match-rules-state";
 import { MatchRuleFields } from "../../match-rules";
 import { StageRuleFields } from "../stage-rule-fields";
 
@@ -25,10 +31,12 @@ const render = (
   divisionConfig: Record<string, unknown> = {},
   variant: string | null = null,
   resolved: Record<string, unknown> | null = null,
+  dict: Dict = enUi as Dict,
+  locale: "en" | "es" | "fr" | "nl" = "en",
 ): string => {
   const mod = builtinModules.find((m) => m.key === sportKey)!;
   return renderToStaticMarkup(
-    <DictProvider dict={enUi as Dict} locale="en">
+    <DictProvider dict={dict} locale={locale}>
       <StageRuleFields sportKey={sportKey} module={mod} kind={kind} variant={variant} values={values} onChange={() => undefined} disabled={false} divisionConfig={divisionConfig} resolved={resolved} />
     </DictProvider>,
   );
@@ -257,5 +265,284 @@ describe("a decider's detail is held while the decider is off, with the reason b
     const markup = render("badminton", "league", {}, division, null, resolvedStageCfg(mod, division, "league", {}));
     expect(markup).not.toContain("stage-rule-detail-off-");
     expect(held(markup)).toBe(false);
+  });
+});
+
+// W2e Task 28 (owner D5, ruling 157): the five fields are on the screen, in the language of the page, and the still-tied
+// policy is held while the super over is off. Static markup (no DOM): whether the control is there, disabled, and what it
+// says; picking a value and saving it is the e2e's (`stage-rules-w2e.spec.ts`).
+describe("R157 the five fields are drawn by the real stage row, from the dictionary", () => {
+  const blockOf = (markup: string, top: string): string => {
+    const start = markup.indexOf(`data-testid="stage-rule-field-${top}"`);
+    expect(start, `${top} is rendered`).toBeGreaterThan(-1);
+    const next = markup.indexOf('data-testid="stage-rule-field-', start + 10);
+    return markup.slice(start, next === -1 ? undefined : next);
+  };
+  const plain = (markup: string): string => markup.replaceAll("&#x27;", "'");
+  const heldSelect = (block: string): boolean => /<select[^>]*\sdisabled(=""|\s|>)/.test(block);
+  const heldInput = (block: string): boolean => /<input[^>]*\sdisabled(=""|\s|>)/.test(block);
+  const cricket = builtinModules.find((m) => m.key === "cricket")!;
+  const division = cricket.configSchema.parse(cricket.variants.t20) as Record<string, unknown>;
+  const cricketAt = (rules: Record<string, unknown>, dict: Dict = enUi as Dict, locale: "en" | "es" | "fr" | "nl" = "en", values: Record<string, string> = {}): string =>
+    render("cricket", "knockout", values, division, "t20", resolvedStageCfg(cricket, division, "knockout", rules), dict, locale);
+
+  it("R157 superOverStillTied is disabled while the super over is off, with the reason beside it, and free while it is on", () => {
+    const off = cricketAt({ superOver: false });
+    expect(heldSelect(blockOf(off, "superOverStillTied"))).toBe(true);
+    expect(off).toContain('data-testid="stage-rule-detail-off-superOverStillTied"');
+    expect(off).toContain("Only used when Super over on a tie is on");
+    const on = cricketAt({ superOver: true });
+    expect(heldSelect(blockOf(on, "superOverStillTied"))).toBe(false);
+    expect(on).not.toContain("stage-rule-detail-off-superOverStillTied");
+    // A held SELECT reads as held, as a held number does (the shared `.select` has no disabled look of its own).
+    expect(blockOf(off, "superOverStillTied")).toContain("[&amp;_select]:bg-slate-100");
+    expect(blockOf(on, "superOverStillTied")).not.toContain("[&amp;_select]:bg-slate-100");
+    // The result floor answers to DLS, not to the super over: DLS defaults to off, so it is held here whichever the super over says.
+    expect(heldInput(blockOf(off, "minOversForResult")), "the floor follows DLS, and DLS is off here").toBe(true);
+    expect(heldInput(blockOf(on, "minOversForResult")), "...also with the super over on").toBe(true);
+  });
+
+  // Fix round 1 (PO ruling): the result floor is read only by a DLS par, so the real row holds it while DLS is off - with the
+  // reason beside it, naming the switch - and frees it while DLS is on; and it still sits with the match format, beside the switch.
+  it("R157 minOversForResult is disabled while DLS is off, with the reason naming the DLS switch, and free while DLS is on", () => {
+    const dlsOff = { dls: { enabled: false, edition: "standard" } };
+    const dlsOn = { dls: { enabled: true, edition: "standard" } };
+    const off = cricketAt(dlsOff);
+    expect(heldInput(blockOf(off, "minOversForResult"))).toBe(true);
+    expect(off).toContain('data-testid="stage-rule-detail-off-minOversForResult"');
+    expect(off).toContain("Only used when DLS revised targets is on");
+    // A stage that says nothing about DLS holds it too: every variant defaults DLS to off (the dead control that shipped).
+    expect(heldInput(blockOf(cricketAt({}), "minOversForResult"))).toBe(true);
+    const on = cricketAt(dlsOn);
+    expect(heldInput(blockOf(on, "minOversForResult"))).toBe(false);
+    expect(on).not.toContain("stage-rule-detail-off-minOversForResult");
+    // The held input reads as held (the same wrapper class the shoot-out kicks carry), the free one does not.
+    expect(blockOf(off, "minOversForResult")).toContain("[&amp;_input]:bg-slate-100");
+    expect(blockOf(on, "minOversForResult")).not.toContain("[&amp;_input]:bg-slate-100");
+    // It follows DLS alone: the still-tied policy answers to the super over, whatever DLS says.
+    expect(heldSelect(blockOf(cricketAt({ ...dlsOn, superOver: false }), "superOverStillTied"))).toBe(true);
+    expect(heldInput(blockOf(cricketAt({ ...dlsOn, superOver: false }), "minOversForResult"))).toBe(false);
+    // The two sit in the match format together (the section is the engine's `detailOf` of a decider, which DLS is not).
+    const format = on.slice(on.indexOf('data-testid="stage-rules-section-format"'), on.indexOf('data-testid="stage-rules-section-deciders"'));
+    expect(format).toContain('data-testid="stage-rule-field-minOversForResult"');
+    expect(format).toContain('data-testid="stage-rule-field-dls"');
+    // On the two-innings test match the floor is not offered at all: there is no DLS to hold it behind.
+    const test = cricket.configSchema.parse(cricket.variants.test) as Record<string, unknown>;
+    expect(render("cricket", "league", {}, test, "test", resolvedStageCfg(cricket, test, "league", {}))).not.toContain('data-testid="stage-rule-field-minOversForResult"');
+  });
+
+  // W2e PR B fix (copy): a held field's REASON says why it is held; its HELP says what the field does. The two cricket details
+  // used to carry the dependency in both ("Only used while DLS revised targets is on." in the help, "Only used when DLS revised
+  // targets is on" beneath it), so a stage with DLS off read the same sentence twice. The reason is the one authority: the help
+  // may not open the sentence the reason's own template opens, nor name the switch it is held by. Which fields are held, and by
+  // which switch, is the ENGINE's declaration (`deciderOfDetail` reads `ruleKeys[key].detailOf`), never a list typed here.
+  it("R157 a held cricket detail says WHY once: the reason names the switch, the help only says what the field does - in all four locales", () => {
+    const fields = SPORT_RULES.cricket!;
+    const held = fields.filter((f) => deciderOfDetail(cricket, f) !== null);
+    // Both cricket details exist: an empty sweep would pass for any copy.
+    expect(held.map((f) => f.key).sort(), "the engine declares exactly these two cricket details").toEqual(["minOversForResult", "superOverStillTied"]);
+    const rules = { dls: { enabled: false, edition: "standard" }, superOver: false };
+    let judged = 0;
+    for (const [locale, dict] of [["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as const) {
+      const d = dict as unknown as Record<string, string>;
+      const markup = plain(cricketAt(rules, dict as unknown as Dict, locale));
+      // The reason template's own opening, without its conjunction ("Only used when " -> "Only used"): derived from the dictionary.
+      const template = d["stageRules.detail.off"]!;
+      const opening = template.slice(0, template.indexOf("{decider}")).replace(/[\s«‘“"']+$/u, "").split(/\s+/).slice(0, -1).join(" ");
+      expect(opening.split(" ").length, `${locale}: the template's opening is more than one word`).toBeGreaterThanOrEqual(2);
+      for (const field of held) {
+        const decider = deciderOfDetail(cricket, field)!;
+        const switchField = fields.find((f) => f.edits[0] === decider)!;
+        const switchLabel = d[switchField.labelKey]!;
+        const help = d[field.helpKey!]!;
+        const block = blockOf(markup, field.key);
+        const reason = template.replace("{decider}", switchLabel);
+        expect(block, `${locale} ${field.key}: held, with the reason beside it`).toContain(reason);
+        expect(block, `${locale} ${field.key}: ...and the help is on the screen too`).toContain(help);
+        expect(help.toLowerCase(), `${locale} ${field.key}: the help does not open the reason's sentence ("${opening}")`).not.toContain(opening.toLowerCase());
+        expect(help.toLowerCase(), `${locale} ${field.key}: the help does not name the switch the reason names`).not.toContain(switchLabel.toLowerCase());
+        expect(help.length, `${locale} ${field.key}: the help still says something`).toBeGreaterThan(40);
+        judged++;
+      }
+    }
+    expect(judged).toBe(8);
+  });
+
+  // The same rule for EVERY held detail of EVERY sport (round-2 item 9): the cricket pair above was the first two found, the
+  // period sports' shoot-out kicks and overtime minutes and football's shoot-out kicks are the rest. Which fields are held, and by
+  // which switch, is the ENGINE's declaration (`ruleKeys[key].detailOf`, read by `deciderOfDetail`); the sweep also proves every
+  // declared detail key is edited by a curated field, so a field the engine holds cannot hide from it. What counts as a
+  // dependency sentence is a per-language vocabulary the reason template and the old copy shared ("Only applies when ... above is
+  // On"): it is the rulebook of this guard, not read from the copy under test.
+  it("R157 every held detail of every sport says WHY once: the reason names the switch, the help never restates the dependency - four locales plus the English fallback", () => {
+    const DEPENDENCY_OPENERS: Record<string, readonly string[]> = {
+      en: ["only applies", "only used", "only while", "only when"],
+      es: ["solo se aplica", "solo se usa", "solo mientras", "solo cuando"],
+      fr: ["s'applique seulement", "utilisé seulement", "seulement lorsque", "seulement tant que"],
+      nl: ["geldt alleen", "alleen in gebruik", "alleen als", "alleen zolang"],
+    };
+    const dicts = [["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as const;
+    const declared: string[] = [];
+    const held: string[] = [];
+    let judged = 0;
+    for (const m of builtinModules) {
+      const fields = SPORT_RULES[m.key] ?? [];
+      for (const [key, fact] of Object.entries(m.ruleKeys ?? {})) {
+        if (fact.detailOf === undefined) continue;
+        declared.push(`${m.key}.${key}`);
+        expect(
+          fields.some((f) => f.edits.includes(key)),
+          `${m.key}: the engine declares ${key} a detail of ${fact.detailOf}, so a curated field must edit it (or this sweep is blind to it)`,
+        ).toBe(true);
+      }
+      for (const field of fields) {
+        const decider = deciderOfDetail(m, field);
+        if (decider === null) continue;
+        // By the engine key(s) the field edits, the same space `declared` is in (a field key such as `shootoutAttempts` is the table's name).
+        held.push(`${m.key}.${field.edits.join("+")}`);
+        const switchField = fields.find((f) => f.edits[0] === decider);
+        expect(switchField, `${m.key}.${field.key}: held by ${decider}, which a curated field must switch`).toBeDefined();
+        expect(field.helpKey, `${m.key}.${field.key}: carries a help key`).toBeDefined();
+        const judge = (where: string, help: string, switchLabel: string, template: string, openers: readonly string[]): void => {
+          const opening = template.slice(0, template.indexOf("{decider}")).replace(/[\s«‘“"']+$/u, "").split(/\s+/).slice(0, -1).join(" ").toLowerCase();
+          const lower = help.toLowerCase();
+          expect(opening.split(" ").length, `${where}: the template's opening is more than one word`).toBeGreaterThanOrEqual(2);
+          expect(lower, `${where}: the help does not open the reason's sentence ("${opening}")`).not.toContain(opening);
+          for (const opener of openers) expect(lower, `${where}: the help is not a dependency sentence ("${opener}")`).not.toContain(opener);
+          expect(lower, `${where}: the help does not name the switch the reason names`).not.toContain(switchLabel.toLowerCase());
+          expect(help.length, `${where}: the help still says what the field does`).toBeGreaterThan(40);
+          judged++;
+        };
+        for (const [locale, dict] of dicts) {
+          const d = dict as unknown as Record<string, string>;
+          judge(`${locale} ${m.key}.${field.key}`, d[field.helpKey!]!, d[switchField!.labelKey]!, d["stageRules.detail.off"]!, DEPENDENCY_OPENERS[locale]!);
+        }
+        // The English fallback the table carries (what renders when a key is missing) is held to the same rule.
+        judge(`fallback ${m.key}.${field.key}`, field.help!, switchField!.label, (enUi as unknown as Record<string, string>)["stageRules.detail.off"]!, DEPENDENCY_OPENERS.en!);
+      }
+    }
+    expect(declared.length, "the engine declares held details").toBeGreaterThan(0);
+    expect([...held].sort(), "every engine-declared detail key is a held field, one to one").toEqual([...declared].sort());
+    expect(judged, "five judgements (four dictionaries and the fallback) per held field").toBe(held.length * 5);
+  });
+
+  it("R157 the still-tied select offers exactly the engine's three policies, behind Default, and shows the one the stage holds", () => {
+    const markup = cricketAt({ superOver: true }, enUi as Dict, "en", { superOverStillTied: "shared" });
+    const block = blockOf(markup, "superOverStillTied");
+    expect([...block.matchAll(/<option value="([^"]*)"/g)].map((m) => m[1])).toEqual(["", "repeat", "boundary_count", "shared"]);
+    expect(block).toMatch(/<option value="shared" selected=""/);
+    expect(block).toContain("Another super over (ICC)");
+    expect(block).toContain("Most boundaries wins");
+    expect(block).toContain("Leave it as a tie");
+    expect(block).toContain('data-source="stage"');
+  });
+
+  it("R157 the labels, help and options are the page's language: Spanish, French and Dutch show their own words, not the English", () => {
+    let judged = 0;
+    for (const [locale, dict] of [["es", esUi], ["fr", frUi], ["nl", nlUi]] as const) {
+      const markup = plain(cricketAt({ superOver: true }, dict as unknown as Dict, locale));
+      for (const key of ["rules.field.superOverStillTied.label", "rules.field.superOverStillTied.help", "rules.field.superOverStillTied.option.boundary_count", "rules.field.minOversForResult.label", "rules.field.minOversForResult.help"] as const) {
+        const text = (dict as unknown as Record<string, string>)[key]!;
+        const english = (enUi as unknown as Record<string, string>)[key]!;
+        expect(markup, `${locale}: ${key}`).toContain(text);
+        expect(markup, `${locale}: ${key} is not left in English`).not.toContain(english);
+        judged++;
+      }
+    }
+    expect(judged).toBe(15);
+  });
+
+  it("R157 the football and carrom fields are drawn too: the rolling-subs toggle (Default/On/Off), the concussion count, the coin value", () => {
+    const football = plain(render("football", "league"));
+    expect(blockOf(football, "rollingSubs")).toContain("Rolling substitutions");
+    expect([...blockOf(football, "rollingSubs").matchAll(/<option value="([^"]*)"/g)].map((m) => m[1])).toEqual(["", "on", "off"]);
+    expect(blockOf(football, "concussionSubs")).toMatch(/<input[^>]*type="number"[^>]*min="0"/);
+    expect(plain(render("carrom", "league"))).toContain("Points per coin left on the board");
+    expect(blockOf(render("carrom", "league"), "pointsPerCoin")).toMatch(/<input[^>]*type="number"[^>]*min="1"/);
+  });
+
+  it("R157 a number control's placeholder names the division's value (the engine default), so the field opens at what the stage plays", () => {
+    const odi = cricket.configSchema.parse(cricket.variants.odi) as Record<string, unknown>;
+    const markup = render("cricket", "league", {}, odi, "odi", resolvedStageCfg(cricket, odi, "league", {}));
+    expect(blockOf(markup, "minOversForResult")).toContain(`placeholder="Default (${String(odi.minOversForResult)})"`);
+    expect(odi.minOversForResult, "premise: the ODI floor differs from the schema's own default").not.toBe((cricket.configSchema.parse({}) as Record<string, unknown>).minOversForResult);
+    const carrom = builtinModules.find((m) => m.key === "carrom")!;
+    const club = carrom.configSchema.parse(Object.values(carrom.variants)[0]) as Record<string, unknown>;
+    expect(blockOf(render("carrom", "league", {}, club), "pointsPerCoin")).toContain(`placeholder="Default (${String(club.pointsPerCoin)})"`);
+  });
+});
+
+// W2e T33a (carry from the stage-rules PO decision): a write door's refusal is drawn beside the stage's fields before Save, in the
+// reader's language, from the cfg the stage WOULD play with. Where each expected value comes from: whether a pair is refused is the
+// engine's own door (`writeConfigIssues`), the floor is `setTargetBelowFloor`, the words are the dictionaries on disk.
+describe("a stage row says what the write door would refuse, beside the fields it is about (T33a)", () => {
+  const LOCALES = [["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as const;
+  const tennis = builtinModules.find((m) => m.key === "tennis")!;
+  const volleyball = builtinModules.find((m) => m.key === "volleyball")!;
+  const tour = tennis.configSchema.parse((tennis.variants as Record<string, unknown>).tour) as Record<string, unknown>;
+  const indoor = volleyball.configSchema.parse({}) as Record<string, unknown>;
+  const rowFor = (m: typeof tennis, division: Record<string, unknown>, values: Record<string, string>, locale: (typeof LOCALES)[number]) => {
+    const resolved = resolvedStageCfg(m, division, "league", buildRuleOverride(m.key, values, division));
+    return render(m.key, "league", values, division, null, resolved, locale[1] as Dict, locale[0]);
+  };
+  const escaped = (text: string): string =>
+    text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+  const sentenceIds = (markup: string): string[] => [...markup.matchAll(/<span id="([^"]+)" role="alert"/g)].map((m) => m[1]!);
+
+  it("a best of 1 with a match tie-break is drawn beside both fields of the pair, in every locale, and the engine's door agrees it is refused", () => {
+    let judged = 0;
+    for (const locale of LOCALES) {
+      const values = { bestOf: "1", finalSet: "mtb10" };
+      const resolved = resolvedStageCfg(tennis, tour, "league", buildRuleOverride("tennis", values, tour));
+      expect(writeConfigIssues(tennis, resolved!), `${locale[0]}: premise - the door refuses it`).toEqual([BO1_MATCH_TIEBREAK]);
+      const markup = rowFor(tennis, tour, values, locale);
+      const sentence = (locale[1] as Record<string, string>)["rules.err.bo1MatchTiebreak"]!;
+      expect(markup.split(escaped(sentence)).length - 1, `${locale[0]}: once beside each field of the pair`).toBe(2);
+      expect(markup.match(/aria-invalid="true"/g)?.length ?? 0, `${locale[0]}: the two controls are marked`).toBe(2);
+      const ids = sentenceIds(markup);
+      expect(ids.length).toBe(2);
+      for (const id of ids) expect(markup, `${locale[0]}: ${id} is named by a control`).toMatch(new RegExp(`aria-describedby="[^"]*${id.replace(/[:.]/g, "\\$&")}`));
+      judged++;
+    }
+    expect(judged).toBe(4);
+  });
+
+  it("a pair the door accepts, and a stage with no edit at all, draw no sentence (the positive pair)", () => {
+    const accepted = rowFor(tennis, tour, { bestOf: "3", finalSet: "mtb10" }, LOCALES[0]);
+    expect(accepted).not.toContain('role="alert"');
+    expect(accepted).not.toContain("aria-invalid");
+    expect(rowFor(tennis, tour, {}, LOCALES[0])).not.toContain('role="alert"');
+  });
+
+  it("a set target under the engine's floor is drawn beside the field that holds it, with the floor in the sentence", () => {
+    const floor = setTargetFloorOf("volleyball");
+    expect(floor, "premise: volleyball's door refuses a short set").toBeGreaterThan(1);
+    const values = { setTo: String(floor - 1) };
+    const resolved = resolvedStageCfg(volleyball, indoor, "league", buildRuleOverride("volleyball", values, indoor))!;
+    const issues = writeConfigIssues(volleyball, resolved);
+    expect(issues.length, "premise: the door refuses a set under the floor").toBeGreaterThan(0);
+    expect(issues).toContain(setTargetBelowFloor(floor));
+    const markup = rowFor(volleyball, indoor, values, LOCALES[0]);
+    expect(markup).toContain(escaped(configIssueText({ path: [], message: setTargetBelowFloor(floor) }, (k, v) => (enUi as Record<string, string>)[k]!.replace(/\{(\w+)\}/g, (m, n: string) => String(v?.[n] ?? m)))));
+    expect(sentenceIds(markup).length, "beside the field, once").toBeGreaterThanOrEqual(1);
+    expect(SET_TARGET_BELOW_FLOOR, "the sentence is the engine's template").toBeTruthy();
+  });
+
+  it("two stage rows on one page never share a sentence id, and neither shares one with the division grid", () => {
+    const values = { bestOf: "1", finalSet: "mtb10" };
+    const resolved = resolvedStageCfg(tennis, tour, "league", buildRuleOverride("tennis", values, tour));
+    const row = (
+      <StageRuleFields sportKey="tennis" module={tennis} kind="league" variant={null} values={values} onChange={() => undefined} disabled={false} divisionConfig={tour} resolved={resolved} />
+    );
+    const markup = renderToStaticMarkup(
+      <DictProvider dict={enUi as Dict} locale="en">
+        {row}
+        {row}
+        <MatchRuleFields sportKey="tennis" values={values} onChange={() => undefined} state={ruleFormState({ sportKey: "tennis", variantKey: null, values, base: tour })} />
+      </DictProvider>,
+    );
+    const ids = sentenceIds(markup);
+    expect(ids.length, "two sentences per row, two rows, two in the grid").toBe(6);
+    expect(new Set(ids).size, `ids are unique: ${ids.join(" | ")}`).toBe(6);
   });
 });

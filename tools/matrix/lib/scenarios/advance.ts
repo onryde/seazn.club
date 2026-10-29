@@ -61,17 +61,19 @@ export function sourcePoolCount(source: StagePostBody, fieldSize: number, namedP
  *  checked against its fixtures). bestNth adds its count once, never per pool
  *  (engine expandTake). */
 export function declaredTake(body: StagePostBody, sourcePools: number): number {
-  let n = 0;
-  for (const t of takesOf(body)) {
-    switch (t.kind) {
-      case "rankRange": n += Number(t.to) - Number(t.from) + 1; break;
-      case "topNPerGroup": n += Number(t.n) * sourcePools; break;
-      case "bestNth": n += Number(t.count); break;
-      case "roundLosers": n += Number(t.count); break;
-      default: throw new UnknownTakeKind(String(t.kind));
-    }
+  return takesOf(body).reduce((n, t) => n + takeSeats(t, sourcePools), 0);
+}
+
+/** The seats ONE take offers, as the product's own vocabulary counts them (see declaredTake). `declaredTake` is their sum; the
+ *  FP-2 allowance reads them one by one (leftEmptyBound), so a take's empty seats are excused only by that take's own rows. */
+export function takeSeats(t: TakeRule, sourcePools: number): number {
+  switch (t.kind) {
+    case "rankRange": return Number(t.to) - Number(t.from) + 1;
+    case "topNPerGroup": return Number(t.n) * sourcePools;
+    case "bestNth": return Number(t.count);
+    case "roundLosers": return Number(t.count);
+    default: throw new UnknownTakeKind(String(t.kind));
   }
-  return n;
 }
 
 /** FP-2's bound (fix round 1, m-1): the withdrawn entrants the SOURCE stage's
@@ -122,24 +124,27 @@ export interface AdvanceObs {
   readonly seeded: readonly string[];
   readonly declared: number;
   readonly takes: readonly TakeRule[];
+  /** The seats each of `takes` offers, in order (takeSeats); `declared` is their sum. */
+  readonly seats: readonly number[];
   readonly tiePicked: boolean;
 }
 
 /** `body`: the TARGET stage's posted body; `sourcePools`: the source stage's
  *  pool count (sourcePoolCount; declaredTake). */
 export async function confirmAdvance(ctx: ScenarioContext, rec: Recorder, target: StageRef, proposal: SeedProposalRef, body: StagePostBody, sourcePools: number): Promise<AdvanceObs> {
-  const declared = declaredTake(body, sourcePools);
   const takes = takesOf(body);
+  const seats = takes.map((t) => takeSeats(t, sourcePools));
+  const declared = seats.reduce((n, k) => n + k, 0);
   // confirm answers the WHOLE target stage; the seats are read off it.
   const seatedOf = (fx: readonly FixtureRow[]) =>
     [...new Set(fx.filter((f) => f.stage_id === target.id).flatMap((f) => [f.home_entrant_id, f.away_entrant_id]).filter((e): e is string => e !== null))];
   const refused = (e: RefusedCall, proposalId: string, tiePicked: boolean): AdvanceObs => {
     rec.notes.push(`confirm on stage ${target.seq} refused ${e.status} ${e.code ?? "(no code)"}`);
-    return { status: e.status, code: e.code, proposalId, filled: 0, seeded: [], declared, takes, tiePicked };
+    return { status: e.status, code: e.code, proposalId, filled: 0, seeded: [], declared, takes, seats, tiePicked };
   };
   try {
     const c = await ctx.driver.confirmSeedProposal(target.id, { proposalId: proposal.id });
-    return { status: 200, code: null, proposalId: c.proposalId, filled: c.filled, seeded: seatedOf(c.fixtures), declared, takes, tiePicked: false };
+    return { status: 200, code: null, proposalId: c.proposalId, filled: c.filled, seeded: seatedOf(c.fixtures), declared, takes, seats, tiePicked: false };
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
     if (e.code !== SEEDING_TIE_CODE) return refused(e, proposal.id, false);
@@ -163,11 +168,22 @@ export async function confirmAdvance(ctx: ScenarioContext, rec: Recorder, target
   }
   try {
     const c = await ctx.driver.confirmSeedProposal(target.id, tiePicked ? { proposalId: fresh.id, tiePicks } : { proposalId: fresh.id });
-    return { status: 200, code: null, proposalId: c.proposalId, filled: c.filled, seeded: seatedOf(c.fixtures), declared, takes, tiePicked };
+    return { status: 200, code: null, proposalId: c.proposalId, filled: c.filled, seeded: seatedOf(c.fixtures), declared, takes, seats, tiePicked };
   } catch (e) {
     if (!(e instanceof RefusedCall)) throw e;
     return refused(e, fresh.id, tiePicked);
   }
+}
+
+/** FP-2's allowance for ONE advanced stage: how many seats the product may have left empty because their qualifier withdrew.
+ *  Per TAKE: the withdrawn qualifiers inside a take excuse at most that take's own seats (bestNth's bound names every rank-nth
+ *  row of every pool, so it can name more rows than its `count` seats; roundLosers and rankRange can too on a tied table). Capped
+ *  at the TOTAL seats instead, the surplus of one take excused the empty seats of another (T33b). The takes of a posted body
+ *  name disjoint rows (one entrant is seated once), so the per-take bounds add. `seats` runs parallel to `takes`; a mismatch is
+ *  a harness bug, named. */
+export function leftEmptyBound(takes: readonly TakeRule[], seats: readonly number[], source: Pick<ObservedStage, "standings" | "fixtures">, withdrawn: ReadonlySet<string>): number {
+  if (seats.length !== takes.length) throw new Error(`advance: ${takes.length} take(s) but the seats list names ${seats.length} - the allowance is read per take, never guessed`);
+  return takes.reduce((gone, t, i) => gone + Math.min(withdrawnQualifiers([t], source, withdrawn).length, seats[i]), 0);
 }
 
 /** Each later stage the run tried to advance into: the confirm was accepted;
@@ -199,7 +215,7 @@ export function advanceSeededAsDeclared(plays: readonly StagePlay[], observed: P
     const tables = observed.stages.find((s) => s.id === prev.stage.id);
     // snapshot observes every play, so a missing source stage is a harness bug: named, never a silent zero.
     if (tables === undefined) return [{ ok: false, note: `stage ${p.stage.seq}: stage ${prev.stage.seq} was not observed — its tables bound FP-2's empty seats` }];
-    const gone = withdrawnQualifiers(a.takes, tables, withdrawn).length;
+    const gone = leftEmptyBound(a.takes, a.seats, tables, withdrawn);
     const n = a.seeded.length;
     return [
       gone === 0

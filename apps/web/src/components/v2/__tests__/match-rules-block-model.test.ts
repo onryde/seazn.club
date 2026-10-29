@@ -16,7 +16,7 @@ import {
 import { StageKind } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { mergeRulesOverride } from "@/server/engine-db/fixture-cfg";
-import { SINGLE_SET_POINTS_LABEL, setRuleValue } from "@/lib/match-rules";
+import { SINGLE_SET_POINTS_LABEL, SINGLE_SET_POINTS_LABEL_KEY, setRuleValue } from "@/lib/match-rules";
 import { BEST_OF_ONE_PAIR } from "@/lib/match-rules/best-of-one";
 import { matchFieldsFor, moduleFor, type RuleContext } from "@/lib/rule-scope";
 import {
@@ -264,6 +264,8 @@ describe("the fragment is what differs from the stage - and nothing else", () =>
     expect(keysOf(edited), "...and the shown one stays").toContain(BEST_OF_ONE_PAIR.shown);
     const shownField = matchFormFields(ctx, stage, edited, LABELS).find((f) => f.field.key === BEST_OF_ONE_PAIR.shown)!;
     expect(shownField.field.label).toBe(SINGLE_SET_POINTS_LABEL);
+    // W2e T33a: the relabelled copy names its own dictionary key too, or the match form would keep reading the deciding set's label in every language but English.
+    expect(shownField.field.labelKey).toBe(SINGLE_SET_POINTS_LABEL_KEY);
 
     const frag = matchFragment(ctx, edited, open, stage);
     expect(frag, "the hidden key is written too, to the same number").toEqual({ bestOf: 1, [BEST_OF_ONE_PAIR.shown]: 15, [BEST_OF_ONE_PAIR.shadow]: 15 });

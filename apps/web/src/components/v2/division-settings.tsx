@@ -12,7 +12,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import Link from "@/components/ui/console-link";
 import { useRouter } from "next/navigation";
 import { apiV1, ApiV1Error } from "@/lib/client-v1";
-import { settingsSaveErrorText } from "@/lib/config-issue-copy";
+import { configIssueText, settingsSaveErrorText } from "@/lib/config-issue-copy";
 import { divisionAccent, monogram } from "@/lib/division-hue";
 import { SWISS_ROUNDS_REQUIRED_CODE } from "@/lib/swiss-shell";
 import { ONLINE_CHESS_DISABLED_CODE } from "@/lib/online-chess";
@@ -23,8 +23,9 @@ import {
 } from "@/lib/chess-individual-only";
 import { CAMERA_POLICIES, type CameraPolicy } from "@/lib/camera-policy";
 import { MatchRuleFields, hydrateRuleValues, rulesFor } from "./match-rules";
+import { ruleFormState } from "./match-rules-state";
 import { visibleRuleFields } from "@/lib/match-rules";
-import { divisionFormatPatch } from "./division-format-patch";
+import { advancedPlaceholder, configUnderVariant, divisionFormatPatch, ruleValuesAfterVariantSwitch } from "./division-format-patch";
 import {
   LICHESS_CLOCK_FIELD_KEYS,
   selectedTimeControlKey,
@@ -55,7 +56,7 @@ import {
 import { UpgradeGate } from "@/components/upgrade-gate";
 import { useLocaleOrDefault, useMsg, useMsgPlural } from "@/components/i18n/dict-provider";
 import { sportLabel } from "@/lib/scoring-vocab";
-import { variantWord } from "@/lib/variant-label-keys";
+import { variantHint, variantOptionLabel, variantWord } from "@/lib/variant-label-keys";
 import { hasLinkGaps, linkGapSentence, type LinkGapsSummary } from "@/lib/online-link-gaps";
 import { TagChipInput } from "@/components/ui/tag-chip-input";
 import type { MessageKey } from "@/lib/messages";
@@ -422,7 +423,9 @@ export function DivisionSettings({
   /** Org id, for the tag-suggestions fetch only (the division PATCH itself
    *  is not org-scoped in its URL) — see saveRequiredCourtTags below. */
   orgId: string;
-  variants: { key: string; name: string }[];
+  /** `config` is the variant's preset as stored (only the keys it declares) and `system` marks a built-in: a variant switch
+   *  needs the presets of BOTH ends (W2e Task 29), a picker the flag to localise a built-in's name and leave an org's own. */
+  variants: { key: string; name: string; system?: boolean; config?: Record<string, unknown> }[];
   /** Fixtures exist - the stage structure cannot be replaced (`formatAlreadyLocked`, the page). NOT the rules: those lock
    *  per started stage (`lockedFields`), so a division with fixtures and no started stage keeps its rules editable. */
   structureLocked: boolean;
@@ -510,7 +513,6 @@ export function DivisionSettings({
   );
   const cfg = (division.config ?? {}) as {
     points?: Record<string, number>;
-    progressScore?: boolean;
     onlinePlay?: string;
   };
   // R3.5 review F7 — which boxes this editor shows/writes is derived from
@@ -519,13 +521,39 @@ export function DivisionSettings({
   const pointsFieldKeys = editablePointsKeys(division.sport_key, cfg.points);
   // The saved config the rule fields fall back to. ONE value read by the grid (`MatchRuleFields`) and by the "kept" lines
   // (`refusedLines`), so both see the same visible controls (batch-6 T20-1: best of 1 hides one of the points pair).
-  const inheritedCfg = (division.config as Record<string, unknown>) ?? {};
+  // W2e Task 29: under the variant the form HOLDS, not the one saved - choosing 3x15 shows the fields (and converts cricket's
+  // overs) by 3x15's numbers, and the same config is what Save builds from (`divisionFormatPatch` derives the same one).
+  const presetOf = (key: string) => variants.find((v) => v.key === key)?.config;
+  const savedConfig = (division.config as Record<string, unknown>) ?? {};
+  const inheritedCfg = configUnderVariant(savedConfig, presetOf(division.variant_key), presetOf(variantKey), variantKey === division.variant_key);
+  const pickVariantKey = (next: string) => {
+    // The rule fields the organiser has not typed in take the new variant's own values, so the grid reads what Save will send.
+    setRuleValues(
+      ruleValuesAfterVariantSwitch({
+        sportKey: division.sport_key,
+        ruleValues,
+        divisionConfig: savedConfig,
+        savedPreset: presetOf(division.variant_key),
+        fromPreset: presetOf(variantKey),
+        toPreset: presetOf(next),
+        savedKey: division.variant_key,
+        fromKey: variantKey,
+        toKey: next,
+      }),
+    );
+    setVariantKey(next);
+  };
+  const hint = variantHint(division.sport_key, variantKey, locale);
   const [pointsValues, setPointsValues] = useState<Record<string, string>>(() =>
     hydratePointsValues(division.sport_key, cfg.points),
   );
   const [ruleValues, setRuleValues] = useState<Record<string, string>>(() =>
     hydrateRuleValues(division.sport_key, division.config),
   );
+  // W2e Task 29: what the grid knows before Save - the write doors' refusals beside their fields (TN-CF-1, VB-CF-1, TT-CF-1),
+  // the fields this variant has no use for, the detail a switch holds (cricket's result floor while DLS is off). Judged against
+  // the saved config as it reads under the variant the form holds.
+  const ruleState = ruleFormState({ sportKey: division.sport_key, variantKey, values: ruleValues, base: inheritedCfg });
   // R3.5 review F6 — hydratePointsValues/hydrateRuleValues above only ever
   // ran in the useState INITIALIZER, so once this instance is mounted,
   // saving through `run()` (every action in this component funnels through
@@ -803,7 +831,7 @@ export function DivisionSettings({
         </div>
       )}
       {error && (
-        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600">
+        <p role="alert" className="rounded-md bg-red-50 px-3 py-2 text-xs text-red-600" data-testid="division-settings-error">
           {error}
         </p>
       )}
@@ -872,6 +900,10 @@ export function DivisionSettings({
 
   const applyFormat = () =>
     run(async () => {
+      // A format the write door would refuse is stopped here, in the reader's language and beside the field it is about,
+      // instead of travelling to a CONFIG_INVALID.
+      const problem = ruleState.problems[0];
+      if (problem !== undefined) throw new Error(configIssueText({ path: [], message: problem.sentence }, msg));
       let advanced: Record<string, unknown> | null = null;
       if (advancedText.trim() !== "") {
         try {
@@ -885,6 +917,8 @@ export function DivisionSettings({
         divisionConfig: (division.config as Record<string, unknown>) ?? {},
         savedVariantKey: division.variant_key,
         variantKey,
+        savedVariantPreset: presetOf(division.variant_key),
+        variantPreset: presetOf(variantKey),
         ruleValues,
         pointsFieldKeys,
         pointsValues,
@@ -1214,16 +1248,23 @@ export function DivisionSettings({
           <select
             disabled={!canEdit || variantLock !== undefined}
             value={variantKey}
-            onChange={(e) => setVariantKey(e.target.value)}
+            onChange={(e) => pickVariantKey(e.target.value)}
+            aria-describedby={hint === undefined ? undefined : "division-variant-hint"}
+            data-testid="division-settings-variant"
             className="input mt-1 w-full"
           >
             {variants.map((v) => (
               <option key={v.key} value={v.key}>
-                {v.name}
+                {variantOptionLabel(division.sport_key, v, msg)}
               </option>
             ))}
           </select>
         </label>
+        {hint !== undefined && (
+          <p id="division-variant-hint" role="note" data-testid="division-variant-hint" className="min-w-0 rounded-md bg-slate-50 px-3 py-2 text-xs leading-snug text-slate-700">
+            {msg(hint.key, hint.vars)}
+          </p>
+        )}
         {variantLock !== undefined && lockLine(variantLock, "division-locked-variant_key")}
 
         {division.sport_key === "boardgame" && onlineChessOffered && (
@@ -1334,6 +1375,7 @@ export function DivisionSettings({
           inherited={inheritedCfg}
           lockedFields={locks}
           omit={lichessClock ? LICHESS_CLOCK_FIELD_KEYS : undefined}
+          state={ruleState}
         />
 
         {stages.length > 0 && (
@@ -1362,7 +1404,8 @@ export function DivisionSettings({
             onChange={(e) => setAdvancedText(e.target.value)}
             rows={4}
             spellCheck={false}
-            placeholder='e.g. { "progressScore": true }'
+            placeholder={advancedPlaceholder(division.sport_key, savedConfig)}
+            data-testid="division-settings-advanced"
             className="input mt-1 w-full font-mono text-xs"
           />
         </details>

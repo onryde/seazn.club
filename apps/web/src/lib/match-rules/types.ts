@@ -1,12 +1,36 @@
 // The shape of one curated match-rule field. Split out of `lib/match-rules.ts`
 // so every per-sport file can import it without importing the registry
 // (`./index`). Client-safe like the rest of this directory: no "use client", no
-// JSX, no `@/components` or `@/server` import.
+// JSX, no `@/components` or `@/server` import. The one `@/` import is a TYPE (`MessageKey`), which is erased: nothing
+// loads at runtime, so tools/matrix still loads this directory under plain `node --experimental-strip-types`.
+import type { MessageKey } from "@/lib/messages";
+
+/**
+ * One choice of a `select` field. `labelKey` localizes `label` exactly as `RuleField.labelKey` does the field's. Every
+ * option of every curated field names one (W2e Task 33a; `match-rules-labels.test.ts` sweeps the whole table). It is the
+ * one optional key of the two because a CALLER can build an option from text it has already localized (the match form's
+ * "Off" and its half lengths, `match-rules-block-model.ts`); that option has nothing to look up.
+ */
+export interface RuleFieldOption {
+  value: string;
+  label: string;
+  labelKey?: MessageKey;
+}
 
 export interface RuleField {
   key: string;
+  /** The English text. Canonical English like every rule label (design 2026-09-17), and the FALLBACK of `labelKey`. */
   label: string;
+  /**
+   * The dictionary key that localizes `label`, in all four locales (W2e Task 28, owner D5, ruling 157; REQUIRED since
+   * Task 33a, so the compiler lists every field that has not named one and the next field cannot ship English-only). The
+   * English dictionary value and `label` are the same sentence (pinned in `w2e-fields.test.ts` for every field of every
+   * sport), so `label` stays the English fallback and the two cannot drift.
+   */
+  labelKey: MessageKey;
   help?: string;
+  /** `help`'s dictionary key, as `labelKey` is `label`'s. */
+  helpKey?: MessageKey;
   /**
    * W2c X-SR-1 — the engine `ruleKeys` entries this field edits, as declared cfg paths ("overtime.minutes", "set").
    * REQUIRED, so the compiler lists every field that has not named its key. `lib/rule-scope.ts` sorts fields into the
@@ -20,7 +44,13 @@ export interface RuleField {
   kind: "number" | "bool" | "select" | "sequence";
   min?: number;
   max?: number;
-  options?: { value: string; label: string }[];
+  options?: RuleFieldOption[];
+  /**
+   * Saved values this select SHOWS as themselves but never OFFERS (tennis's Fast4 as it was played before W2e). Their labels
+   * are found by `ruleOptionLabel`, so the open dropdown and the stage card's summary line read the same words; they are not
+   * in `options`, which the picker, the contract harness and the matrix enumerate as the choices an organiser has.
+   */
+  legacyOptions?: readonly RuleFieldOption[];
   /**
    * A `sequence` field only (W2c Task 17): the raw value that stands for the EMPTY list. A blank raw value means "unset"
    * everywhere in the editor, so a list the organiser has emptied on purpose ("no tie-break games": a drawn game is held

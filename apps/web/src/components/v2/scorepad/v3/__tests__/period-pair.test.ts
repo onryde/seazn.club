@@ -453,7 +453,8 @@ describe("what the pad emits is what the fold accepts", () => {
         const state = livePhaseState(sport, cfg);
         const view = viewFor(sport, cfg, state);
         const slots = sport.factory(T).swap!(view) as SwapSlot[];
-        expect(slots.map((s) => s.id)).toEqual(["sub-home", "sub-away"]);
+        // Sub per side, then (W2e M12b) the retirement slot per side, which is `__tests__/w2e-retirement.test.ts`'s.
+        expect(slots.map((s) => s.id)).toEqual(["sub-home", "sub-away", "retire-home", "retire-away"]);
         const slot = slots[0]!;
         expect(slot.eventType).toBe(SWAP_TYPE);
         const off = slot.offCandidates![0]!;
@@ -1982,7 +1983,8 @@ describe("the swap slot is offered only where a line change is recordable", () =
         expect(sport.factory(T).tiles(view).map((t2) => t2.id)).not.toContain("sub-home");
       }
       const ok = viewFor(sport, cfg, live, 2);
-      expect(sport.factory(T).swap!(ok)).toHaveLength(2);
+      // Sub and (W2e M12b) retirement, a pair per side, under the one gate.
+      expect(sport.factory(T).swap!(ok)).toHaveLength(4);
       expect(sport.factory(T).tiles(ok).map((t2) => t2.id)).toContain("sub-home");
 
       // Before the first whistle, and after the last, there is no line to change.

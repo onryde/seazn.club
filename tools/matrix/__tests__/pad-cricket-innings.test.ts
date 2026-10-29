@@ -2,12 +2,12 @@
 // W1-driving plan). The committed `test` preset is two innings a side, and its
 // generator streams (ruling 44) hold a declared innings, a follow-on and a
 // time-expiry draw: events the single-innings route refused by name, which left
-// the 24 cricket `test` cases proven over HTTP only.
+// the cricket `test` cases (24 when this was written, 25 now) proven over HTTP only.
 //
 // Expected values come from the engine (the folds, eventSchemas, padSpec, the
 // chase target found by asking the engine when an innings closes), from the
-// skins' source text, and from the committed cricket `test` cases (the w1drv-l3
-// run's case ids, the catalogue's overrides) — never from lib/pads.
+// skins' source text, and from the committed cricket `test` cases (the W2e truth run's
+// CI L3 case ids, the catalogue's overrides) — never from lib/pads.
 //
 // The rule (brief, Step 0): an event the skin offers no control for is a 🚫
 // naming the owning wave, not a route. The skin builds a `declare` tile, so a
@@ -251,13 +251,16 @@ describe("cricket two innings a side — the over route (W1d item 16)", () => {
   });
 });
 
-describe("the 24 committed cricket `test` cases (w1drv-l3): each event type their streams hold is a route or a named 🚫", () => {
+/** The cricket `test` cases the catalogue declares and the committed run drives: 24 when W1d wrote this (w1drv-l3), 25 since a
+ *  25th was added (W2e Task 35 moved the pin to the W2e truth run's CI L3, which holds all 25). Asserted against BOTH below. */
+const TEST_CASES = 25;
+describe("the committed cricket `test` cases (w2e-final CI L3): each event type their streams hold is a route or a named 🚫", () => {
   interface CommittedCase { caseId: string; state: string }
   interface CatalogueCase { id: string; preset: string; overrides: Record<string, unknown> }
   let cases: CommittedCase[] = [];
   let catalogue: Map<string, CatalogueCase> = new Map();
   beforeAll(() => {
-    const run = JSON.parse(readFileSync(join(PROMPTS, "truth-runs/w1drv-l3/results.json"), "utf8")) as { cases: CommittedCase[] };
+    const run = JSON.parse(readFileSync(join(PROMPTS, "truth-runs/w2e-final/ci/L3/results.json"), "utf8")) as { cases: CommittedCase[] };
     cases = run.cases.filter((c) => c.caseId.includes("|cricket|test|"));
     const v = JSON.parse(readFileSync(resolve(REPO, "tools/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: CatalogueCase[] }[] };
     catalogue = new Map(v.sports.find((s) => s.sport === "cricket")!.cases.map((c) => [c.id, c]));
@@ -266,15 +269,15 @@ describe("the 24 committed cricket `test` cases (w1drv-l3): each event type thei
   /** The outcomes a scenario sends a fixture (defaultPolicy: win either way, a draw where the stage allows one) and the tie the generator builds. */
   const outcomesFor = (cfg: unknown): RequestedOutcome[] => [WIN_HOME, WIN_AWAY, ...(drawsAllowed("cricket", cfg, "league") ? [DRAW] : []), TIE];
 
-  it("exactly 24 cases, each one a `test` case of the catalogue with its own overrides (the count is the run's, and the catalogue's)", () => {
-    expect(cases).toHaveLength(24);
+  it("exactly TEST_CASES cases, each one a `test` case of the catalogue with its own overrides (the count is the run's, and the catalogue's)", () => {
+    expect(cases).toHaveLength(TEST_CASES);
     const ids = cases.map((c) => c.caseId.split("|").at(-1)!);
-    expect(new Set(ids).size).toBe(24);
+    expect(new Set(ids).size).toBe(TEST_CASES);
     for (const id of ids) {
       expect(catalogue.has(id), id).toBe(true);
       expect(catalogue.get(id)!.preset, id).toBe("test");
     }
-    expect([...catalogue.values()].filter((c) => c.preset === "test")).toHaveLength(24);
+    expect([...catalogue.values()].filter((c) => c.preset === "test")).toHaveLength(TEST_CASES);
   });
 
   it("every event their streams hold — across win, draw and tie — maps to a route (steps) or a named 🚫 (noControl); a stream holding a 🚫 is never half-tapped; every case has a stream the pad can write whole", () => {
@@ -322,14 +325,14 @@ describe("the 24 committed cricket `test` cases (w1drv-l3): each event type thei
       }
     }
     console.info(`pad-cricket-innings: ${cases.length} cases, ${streams} streams (${skipped} refused by the generator): ${routableStreams} routable whole (${routedEvents} events), ${barredStreams} named 🚫 (${barredEvents} events); event types ${[...types].sort().join(", ")}`);
-    expect(cases).toHaveLength(24);
-    expect(streams).toBeGreaterThanOrEqual(24 * 3);
+    expect(cases).toHaveLength(TEST_CASES);
+    expect(streams).toBeGreaterThanOrEqual(TEST_CASES * 3);
     expect(routedEvents).toBeGreaterThan(0);
     expect(barredEvents).toBeGreaterThan(0);
     // Every event type a case's streams hold is one the adapter knows: emitted by it, as a route or as a 🚫.
     for (const t of types) expect(cricketPad.emits, `an event type the adapter does not declare: ${t}`).toContain(t);
     // The point of the carry: no case is left with nothing the pad can write.
-    expect([...perCase.keys()]).toHaveLength(24);
+    expect([...perCase.keys()]).toHaveLength(TEST_CASES);
     for (const [id, n] of perCase) expect(n, `${id}: no stream the pad can write whole`).toBeGreaterThanOrEqual(1);
   });
 
@@ -356,6 +359,6 @@ describe("the 24 committed cricket `test` cases (w1drv-l3): each event type thei
       }
     }
     console.info(`pad-cricket-innings: ${replayed} streams replayed on the model, ${rows} ledger rows`);
-    expect(replayed).toBeGreaterThanOrEqual(24);
+    expect(replayed).toBeGreaterThanOrEqual(TEST_CASES);
   }, 120_000);
 });

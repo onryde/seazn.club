@@ -81,7 +81,6 @@ export interface GenericConfig {
   resultMode: "win_loss" | "score";
   allowDraws: boolean;
   points: { w: number; d: number; l: number };
-  progressScore: boolean;
 }
 
 /**
@@ -99,13 +98,13 @@ export function genericConfigFor(t: {
   points_win: number;
   points_draw: number;
   points_loss: number;
-  use_progress_score: boolean;
 }): GenericConfig {
+  // W2e D6: v1's `use_progress_score` is read by nothing in v2 - the engine's `progressScore` cfg key was deleted (generic MAJOR 4),
+  // so the importer writes none. The v1 column survives on `V1Tournament` / `V1SportPreset`: that is the shape of the SOURCE row.
   return {
     resultMode: t.result_mode === "score" ? "score" : "win_loss",
     allowDraws: t.allow_draws,
     points: { w: t.points_win, d: t.points_draw, l: t.points_loss },
-    progressScore: t.use_progress_score,
   };
 }
 

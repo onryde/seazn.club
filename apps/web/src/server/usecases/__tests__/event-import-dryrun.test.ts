@@ -131,6 +131,67 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
     expect(typed.results[0]!.status, "the typed stream is imported").not.toBe("rejected");
   });
 
+  // W2e T32 fix round 2 (item 3) — the import half of `docs/api-v1-breaking-changes.md` (2026-10-29): the import folds its
+  // stream under the write path, so a football retirement of the starter a `football.sub` took off is rejected by name and
+  // writes nothing, and the same stream retiring the substitute it brought on imports. single-sport: football is the one
+  // sport with a second substitution vocabulary (`squadsForLineup`).
+  it("W2e M12b: a football retirement is judged on the pitch a football.sub left: the starter it took off is rejected (import.fold_rejected, LINEUP_INVALID), the substitute imports", async () => {
+    const s = await seedBracket({ sport: "football", variant: "11-a-side", stageKind: "league", entrants: 2 });
+    const fixtureId = s.fixtureIds[0]!;
+    const [fx] = await sql<{ home: string; away: string }[]>`
+      select home_entrant_id as home, away_entrant_id as away from fixtures where id = ${fixtureId}`;
+    const person = async (name: string): Promise<string> => {
+      const [{ id }] = await sql<{ id: string }[]>`insert into persons (org_id, full_name) values (${s.auth.orgId}, ${name}) returning id`;
+      return id;
+    };
+    const starter = await person("M12b Starter");
+    const sub = await person("M12b Substitute");
+    const away = await person("M12b Away");
+    for (const [entrantId, personId, slot, orderNo] of [
+      [fx!.home, starter, "starting", 1],
+      [fx!.home, sub, "bench", 2],
+      [fx!.away, away, "starting", 1],
+    ] as const) {
+      await sql`insert into entrant_members (entrant_id, person_id, org_id) values (${entrantId}, ${personId}, ${s.auth.orgId})`;
+      await sql`insert into lineups (fixture_id, entrant_id, person_id, org_id, slot, order_no)
+                values (${fixtureId}, ${entrantId}, ${personId}, ${s.auth.orgId}, ${slot}, ${orderNo})`;
+    }
+    const stream = (retiree: string) => [
+      { type: "core.start", payload: {} },
+      { type: "football.sub", payload: { by: fx!.home, off: starter, on: sub } },
+      { type: "core.lineup.retirement", payload: { side: fx!.home, personId: retiree, reason: "injured" } }, // ← index 2
+      // An import owes a decided match (`import.not_decided` otherwise): play out the 90 minutes, 1-0.
+      { type: "football.goal", payload: { by: fx!.away } },
+      { type: "football.period", payload: { phase: "HT" } },
+      { type: "football.period", payload: { phase: "FT" } },
+    ];
+
+    const refused = await importEvents(s.auth, s.divisionId, {
+      import_id: "imp-m12b-starter",
+      streams: [{ fixture: { id: fixtureId }, events: stream(starter) }],
+    });
+    expect(refused.results[0]).toMatchObject({
+      status: "rejected",
+      eventsAppended: 0,
+      // eventIndex 2 is the retirement itself (core.start 0, football.sub 1): the rejection names WHICH event the pitch refused,
+      // not just the code, so an importer can fix the one line.
+      error: { code: "import.fold_rejected", engineCode: "LINEUP_INVALID", eventIndex: 2 },
+    });
+    const [{ n }] = await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`;
+    expect(n, "nothing written").toBe(0);
+
+    // The control: the same stream retiring the substitute football.sub brought on imports, every event of it.
+    const imported = await importEvents(s.auth, s.divisionId, {
+      import_id: "imp-m12b-substitute",
+      streams: [{ fixture: { id: fixtureId }, events: stream(sub) }],
+    });
+    expect(imported.results[0]!.error, "the substitute's retirement is not refused").toBeUndefined();
+    expect(imported.results[0]).toMatchObject({ eventsAppended: stream(sub).length });
+    const [retired] = await sql<{ payload: { personId: string } }[]>`
+      select payload from score_events where fixture_id = ${fixtureId} and type = 'core.lineup.retirement'`;
+    expect(retired?.payload.personId, "the substitute's retirement is the one written").toBe(sub);
+  });
+
   // W2e Task 2 (spec 2026-10-28 §5.2, E25). The import is the second strict write path: it folds every event under the
   // write path, so play after a match-ending sanction with no ending is refused by name, and the same stream with the
   // ending (core.forfeit{disqualified} against the sanctioned side) imports. Every declared end level, from the engine's

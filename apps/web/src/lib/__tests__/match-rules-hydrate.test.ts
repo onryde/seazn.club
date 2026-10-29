@@ -106,7 +106,9 @@ describe("hydrateRuleValues round-trips every in-scope rule field", () => {
     // fields across four sports, each probed at every value it can take.
     // Adding or removing an option must move this number deliberately.
     // 46 → 47 on 2026-09-20: badminton's `bestOf` gained a third option (5).
-    expect(Object.values(probed).reduce((a, b) => a + b, 0)).toBe(47);
+    // 47 → 48 on 2026-10-29 (W2e Task 29): tennis's `setType` gained `short4` (ITF App VI short sets). The legacy Fast4 is a
+    // `legacyOptions` value, not an offered one, so it is probed in tennis-set-shapes.test.tsx, not here.
+    expect(Object.values(probed).reduce((a, b) => a + b, 0)).toBe(48);
   });
 
   it("hydrates tennis's three renamed fields from their CONFIG keys, not their field keys", () => {

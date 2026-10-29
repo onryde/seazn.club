@@ -713,7 +713,22 @@ export type StepPredicate = (answers: Readonly<Record<string, string>>) => boole
  * so far, like `when`, so Back-and-change rewrites it. Pre-localised, skin-supplied (the sheet interpolates names no dictionary
  * holds). Returning no lines renders no block.
  */
-export interface SheetChoiceStep { id: string; kind: "choice"; title: MessageKey; options: SheetChoiceOption[]; when?: StepPredicate; hintKey?: string; blocked?(answers: Readonly<Record<string, string>>): Blocked; layout?: "rows"; context?(answers: Readonly<Record<string, string>>): readonly SheetContextLine[] }
+export interface SheetChoiceStep {
+  id: string;
+  kind: "choice";
+  title: MessageKey;
+  /** W2e Task 31 (D12) - an already-resolved title that WINS over `title`, the `SheetChoiceOption.labelText` / `TileSpec.labelText`
+   *  convention for a value no dictionary can hold: volleyball's "Can <team> still field six players?" names the team. `title`
+   *  stays the canonical key (a sweep collecting every key still sees one per step). Absent renders `t(title)`, as every step
+   *  shipped before this does. */
+  titleText?: string;
+  options: SheetChoiceOption[];
+  when?: StepPredicate;
+  hintKey?: string;
+  blocked?(answers: Readonly<Record<string, string>>): Blocked;
+  layout?: "rows";
+  context?(answers: Readonly<Record<string, string>>): readonly SheetContextLine[];
+}
 /**
  * A colour disc: the chess piece colour a result or a line is ABOUT. `white` and `black` are the two sides' pieces; `split` is
  * the draw, half of each. Always `aria-hidden` — the text beside it names the colour (a locale's own word), so the disc is the
@@ -898,7 +913,24 @@ export interface SheetConfirmStep {
   context?(answers: Readonly<Record<string, string>>): readonly SheetContextLine[];
 }
 export type GuidedSheetStep = SheetChoiceStep | SheetPersonStep | SheetNumberStep | SheetConfirmStep;
-export interface GuidedSheetSpec { event: string; steps: GuidedSheetStep[]; buildPayload: (answers: Record<string, string>) => Record<string, unknown> }
+export interface GuidedSheetSpec {
+  event: string;
+  steps: GuidedSheetStep[];
+  buildPayload: (answers: Record<string, string>) => Record<string, unknown>;
+  /**
+   * W2e Task 31 (D12, VB-SE-1) - an ending the scorer's ANSWERS call for that the payload does not carry. Volleyball's
+   * sanction sheet asks "Can <team> still field six players?" before the write; the sanction's payload is the same for yes and
+   * no, so the answer travels beside it: `true` makes the completion carry `sideRetires`, and the host appends the sanctioned
+   * side's incomplete-team ending (`core.forfeit{retired}`) behind the sanction as Task 30's bound pair. Absent (every sheet
+   * but volleyball's) means the answers never end a match.
+   */
+  sideRetires?(answers: Readonly<Record<string, string>>): boolean;
+}
+
+/** What a finished sheet hands the host: the event it built, and (D12) whether the scorer's answers retire the sanctioned side. */
+export interface SheetCompletion extends TapEvent {
+  readonly sideRetires?: true;
+}
 
 /**
  * R2/task B — the reserved `{sheet}` key that means "open the chassis's
@@ -1089,11 +1121,21 @@ export interface SwapSlot {
    * `reentry: "none"` will refuse.
    */
   blocked?: Blocked;
+  /**
+   * W2e Task 32 (M12b, "player injured, no replacement: the team plays short") — this slot's sheet ENDS after the OFF
+   * pick. `core.lineup.retirement` takes a person off with nobody on, so there is no ON step to ask: `SwapSheet` completes
+   * the moment an off candidate is tapped, calling `onSwap(off, "")`, and `buildEvent` is handed that empty ON and must
+   * ignore it (`retirement-slot.ts`). Absent keeps every swap slot exactly as it was: off, then on.
+   *
+   * Carried by `adaptSwapSlot` BY HAND like every other field here -- dropping it there leaves a two-step sheet asking
+   * who replaces a player nobody replaces, while the slot's own unit tests stay green.
+   */
+  offOnly?: true;
   /** Builds the concrete event once both picks are made — `football.sub`
    *  where the module declares one, `core.lineup.substitution` otherwise
    *  (design §2.7). Runs through the SAME dispatch guard as every other v3
    *  event (`createSkinDispatch` — item 5), so an invented type still fails
-   *  at the call site. */
+   *  at the call site. An `offOnly` slot is handed `on === ""` and ignores it. */
   buildEvent(off: string, on: string): TapEvent;
 }
 

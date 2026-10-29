@@ -12,7 +12,7 @@ import {
   REPLAY_LINEUP_POLICY,
   initSquads,
   isLineupEventType,
-  reduceLineupEvent,
+  reduceLineupEventFor,
   type LineupPolicy,
   type SquadState,
 } from "./lineup.ts";
@@ -788,6 +788,15 @@ export interface FoldableModule<Cfg = unknown, State = unknown> {
    * three family kernels; nothing in `src/sports/**` implements it yet.
    */
   onLineup?(state: State, squads: SquadState): State;
+
+  /**
+   * W2e Task 32 fix (M12b; PO decision I-1, 2026-10-29) — the squads a `core.lineup.*` event is JUDGED against, for a module
+   * whose own events also move people on and off. Football's legacy `football.sub` is folded by football alone, so the
+   * kernel's squads never see it: without this, retiring the substitute who had just come on was refused "not on the field",
+   * and retiring the starter he replaced was accepted. The module returns the kernel's squads with who is on the field taken
+   * from its own State; the accepted result becomes the kernel's squads. Absent (every module but football) ⇒ the kernel's own. A REPLAY refusal on these falls back to the kernel's own (`judgeLineupEvent`): only a write refuses.
+   */
+  squadsForLineup?(state: State, squads: SquadState): SquadState;
 }
 
 /**
@@ -1298,10 +1307,10 @@ export function foldMatchWithStoppage<Cfg, State>(
       // substitution to no-return, must not make every already-scored fixture
       // in the division unreadable. cfg is not the ledger's to police
       // retroactively.
-      const reduced = reduceLineupEvent(
-        squads,
-        event,
-        strict ? lineupPolicy : REPLAY_LINEUP_POLICY,
+      const reduced = reduceLineupEventFor(
+        module, state, squads,
+        event, // judged on the module's squads; on replay a refusal there falls back to the kernel's (`judgeLineupEvent`)
+        strict ? lineupPolicy : REPLAY_LINEUP_POLICY, strict,
       );
       if (!reduced.ok) {
         if (strict) {

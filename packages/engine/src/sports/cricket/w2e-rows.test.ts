@@ -13,6 +13,7 @@ import { EngineError } from "../../core/errors.ts";
 import { foldMatch, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StageCtx } from "../../core/types.ts";
 import { derivedMetricText } from "../../competition/display.ts";
+import { MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS, MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS } from "../../sport/module.ts";
 import type { StandingsRow } from "../../competition/standings.ts";
 import { makeEnvelope } from "../../testkit/index.ts";
 import { CRICKET_EVENT_SCHEMAS, CricketWicket, cricket, type CricketCfg } from "./cricket.ts";
@@ -365,6 +366,19 @@ describe("CK-MO-1 minimum overs: 5 in the t20 preset and 20 in the odi preset; a
     expect(presets).toHaveLength(2);
   });
 
+  // PR B final review M-1, the sibling of CK-BO-1's: the floor may not exceed the innings length, and the refusal's sentence is the
+  // same kind of wire contract (apps/web `LOCALIZED_CONFIG_ISSUES`), typed out here for the same reason.
+  it("CK-MO-1 a minimum longer than the innings is refused with the exact wire sentence, and only it", () => {
+    expect(MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS).toBe("minOversForResult exceeds the innings length");
+    // 120 balls is 20 overs: a 20-over floor is the whole innings and allowed, a 21-over floor is refused.
+    expect(cricket.configSchema.safeParse({ ...cricket.variants.t20, minOversForResult: 20 }).success).toBe(true);
+    const refused = cricket.configSchema.safeParse({ ...cricket.variants.t20, minOversForResult: 21 });
+    expect(refused.success).toBe(false);
+    expect(refused.success ? [] : refused.error.issues.map((issue) => issue.message)).toEqual([MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS]);
+    // A timeless innings has no length to exceed.
+    expect(cricket.configSchema.safeParse({ ...cricket.variants.test, minOversForResult: 500 }).success).toBe(true);
+  });
+
   it("CK-MO-1 an abandon one ball short of the minimum is a no result, and at the minimum a Duckworth/Lewis/Stern result", () => {
     let checked = 0;
     for (const [name, base, minOvers, quota, firstRuns] of presets) {
@@ -586,6 +600,17 @@ describe("CK-BO-1 no bowler bowls more than maxOversPerBowler overs in an inning
     expect(cricket.configSchema.safeParse({ ...cricket.variants.t20, maxOversPerBowler: 21 }).success).toBe(false);
     // A timeless innings has no length to exceed.
     expect(cricket.configSchema.safeParse({ ...cricket.variants.test, maxOversPerBowler: 500 }).success).toBe(true);
+  });
+
+  // PR B final review M-1. The refusal's SENTENCE is a wire contract: a client matches the issue by whole message and maps it to
+  // its own localized copy (apps/web `LOCALIZED_CONFIG_ISSUES`), so the literal is the source of truth here and is typed out, not
+  // read off the constant (a constant mutated to "" would otherwise agree with the refinement carrying it). The refinement must
+  // carry that constant, and nothing else, as the only issue.
+  it("CK-BO-1 the refusal of an over-long limit carries the exact wire sentence, and only it", () => {
+    expect(MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS).toBe("maxOversPerBowler exceeds the innings length");
+    const refused = cricket.configSchema.safeParse({ ...cricket.variants.t20, maxOversPerBowler: 21 });
+    expect(refused.success).toBe(false);
+    expect(refused.success ? [] : refused.error.issues.map((issue) => issue.message)).toEqual([MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS]);
   });
 });
 

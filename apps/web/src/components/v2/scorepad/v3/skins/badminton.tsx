@@ -97,6 +97,7 @@ import {
   type WhoLine,
 } from "../types";
 import type { SportTone } from "../sport-theme";
+import { SANCTION_LEVEL_STEP_ID, endsMatchStep } from "./sanction-ending";
 
 export type TFn = (key: string, vars?: Record<string, string | number>) => string;
 export type Side = "home" | "away";
@@ -1079,13 +1080,13 @@ function setScoreSheet(view: PadHostView): GuidedSheetSpec {
  * chassis change, not a skin change. Same ruling tennis's own sanction sheet
  * records.
  */
-function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
+function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
   const state = asState(view.state);
   const players = onFieldPlayers(view.squads, side);
   const sole = players.length === 1 ? players[0]!.personId : null;
   const steps: GuidedSheetStep[] = [
     {
-      id: "level",
+      id: SANCTION_LEVEL_STEP_ID,
       kind: "choice",
       title: "pad.badminton.sheet.sanction.level.title",
       options: SANCTION_LEVELS.map((level) => ({
@@ -1105,6 +1106,11 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
       candidates: players.map((member) => member.personId),
     });
   }
+  // W2e T30 (D3): a level the module declares as ENDING the match closes the sheet on its read-back and one Confirm. Last, so
+  // nothing is asked after the question "this ends the match".
+  if (badmintonModule.sanctionEnding !== undefined) {
+    steps.push(endsMatchStep(badmintonModule.sanctionEnding, side, view.entrantNames, t));
+  }
   return {
     event: SANCTION_TYPE,
     steps,
@@ -1119,11 +1125,11 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
   };
 }
 
-export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> {
+export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   const sheets: Record<string, GuidedSheetSpec> = {
     [SET_SCORE_TILE_ID]: setScoreSheet(view),
   };
-  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side);
+  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side, t);
   return sheets;
 }
 
@@ -1312,7 +1318,7 @@ export function badmintonSkinV3(t: TFn): SkinDefV3<PadHostView> {
     scorebug: (view) => buildScorebug(view, t),
     tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
-    sheets: buildSheets,
+    sheets: (view) => buildSheets(view, t),
     refusedEventTypes,
     activityDetail: badmintonDetail,
     // No swap()/contextSelect() — see this file's header.

@@ -7,6 +7,7 @@
 import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MatchRuleFields, buildRuleOverride, rulesFor } from "./match-rules";
+import { ruleFormState } from "./match-rules-state";
 import { ruleContextFor } from "@/lib/match-rules";
 import {
   STAGE_TEMPLATES,
@@ -27,6 +28,7 @@ import type { ViewerPlan } from "@/lib/viewer-plan";
 import { doubleElimFormatReason } from "@/lib/feature-copy";
 import { venueNoun, venueLabel, pluralizeVenue } from "@/lib/venue";
 import { defaultMatchMinutes } from "@/lib/match-length";
+import { pickVariant } from "@/lib/preferred-variant";
 import { FormatExplainerPanel } from "@/components/v2/format-explainer-panel";
 import { FormatRecommendStrip } from "@/components/v2/format-recommend-strip";
 import { DateTimeField } from "@/components/v2/shared/datetime-field";
@@ -36,6 +38,8 @@ import type { Venue } from "@/components/v2/shared/court-multi-picker";
 import { useMsg, useLocale } from "@/components/i18n/dict-provider";
 import type { MessageKey } from "@/lib/messages";
 import { sportLabel } from "@/lib/scoring-vocab";
+import { variantHint, variantOptionLabel } from "@/lib/variant-label-keys";
+import { configIssueText, settingsSaveErrorText } from "@/lib/config-issue-copy";
 // RS007/V380: the wizard's Eligibility tab and the registration hub config
 // panel edit the SAME first-class `category` column now (the jsonb
 // `eligibility` array this replaced is gone) — the value union is imported
@@ -55,20 +59,6 @@ export interface SportOption {
   /** `config` is the variant's preset (`sport_variants.config`): what the rule fields convert by where they scale a value
    *  (cricket's overs, in the variant's over length). Absent on a variant whose row stores none. */
   variants: { key: string; name: string; system: boolean; config?: Record<string, unknown> }[];
-}
-
-// The most common variant to preselect per sport (else the first listed).
-const PREFERRED_VARIANT: Record<string, string> = {
-  cricket: "t20",
-  tennis: "tour",
-  icehockey: "iihf",
-  hockey: "fih-outdoor",
-};
-
-function pickVariant(sportKey: string, variants: { key: string }[]): string {
-  const pref = PREFERRED_VARIANT[sportKey.toLowerCase()];
-  if (pref && variants.some((v) => v.key === pref)) return pref;
-  return variants[0]?.key ?? "";
 }
 
 // Wizard template → format-gallery family (v3/06 §4 "How this works →").
@@ -408,6 +398,13 @@ export function DivisionBuilder({
     setPaywallFeature(null);
     setPaywallReason(undefined);
 
+    // The rules the basics tab let through are judged again at the end: the wizard's tabs can be jumped between.
+    const ruleProblem = ruleProblemText();
+    if (ruleProblem !== null) {
+      setError(ruleProblem);
+      return;
+    }
+
     // A backwards range IS refused server-side now (`PutScheduleSettings`,
     // #498) — but that refusal arrives on the schedule-settings SEED PUT
     // below, which is deliberately non-fatal and swallows every error so a
@@ -502,12 +499,27 @@ export function DivisionBuilder({
         // naming Rounds rather than a raw wire message.
         setError(msg("stage.err.swissRoundsRequired"));
       } else {
-        setError(err instanceof Error ? err.message : msg("wizard.failed"));
+        // Every other refusal says itself in the reader's language off its code and issues (a rule-lock sentence, the write
+        // doors' engine sentences), never the wire's raw message; an error with neither keeps its own message.
+        setError(settingsSaveErrorText(err, msg, msg("wizard.failed")));
       }
       setBusy(false);
     }
   }
 
+  const hint = variantHint(sportKey, variantKey, locale);
+  // W2e Task 29: what the rule grid knows before Create - the write doors' refusals beside their fields, the fields this variant
+  // has no use for, the detail a switch holds. The values are laid over the variant's own preset, as the server will lay them.
+  const ruleState = ruleFormState({
+    sportKey,
+    variantKey,
+    values: ruleValues,
+    base: sport?.variants.find((v) => v.key === variantKey)?.config ?? {},
+  });
+  const ruleProblemText = (): string | null => {
+    const problem = ruleState.problems[0];
+    return problem === undefined ? null : configIssueText({ path: [], message: problem.sentence }, msg);
+  };
   const templateInfo = STAGE_TEMPLATES.find((t) => t.key === template);
   const venue = venueNoun(sportKey); // "pitch" / "table" / "court" / "board"
   const VenueCap = venueLabel(sportKey);
@@ -522,6 +534,10 @@ export function DivisionBuilder({
       if (!name.trim()) return msg("wizard.err.name");
       if (!sportKey) return msg("wizard.err.sport");
       if (!variantKey) return msg("wizard.err.variant");
+      // A format the sport's write door would refuse (best of 1 with a match tie-break; a set played to fewer points than the
+      // floor) stops here, beside the field it is about, rather than at Create on the last tab.
+      const ruleProblem = ruleProblemText();
+      if (ruleProblem !== null) return ruleProblem;
     }
     if (t === "eligibility" && maxAge) {
       const n = Number(maxAge);
@@ -662,16 +678,23 @@ export function DivisionBuilder({
                 setVariantKey(e.target.value);
                 if (!matchMinutesTouched) setMatchMinutes(defaultMatchMinutes(sportKey, e.target.value));
               }}
+              aria-describedby={hint === undefined ? undefined : "division-variant-hint"}
+              data-testid="division-builder-variant"
               className="select"
             >
               {(sport?.variants ?? []).map((v) => (
                 <option key={v.key} value={v.key}>
-                  {v.name}
+                  {variantOptionLabel(sportKey, v, msg)}
                   {v.system ? "" : msg("wizard.orgPreset")}
                 </option>
               ))}
             </select>
           </label>
+          {hint !== undefined && (
+            <p id="division-variant-hint" role="note" data-testid="division-variant-hint" className="min-w-0 rounded-md bg-slate-50 px-3 py-2 text-xs leading-snug text-slate-700 sm:col-span-2">
+              {msg(hint.key, hint.vars)}
+            </p>
+          )}
         </div>
         {rulesFor(sportKey).length > 0 && (
           <div className="border-t border-slate-100 pt-4">
@@ -680,7 +703,7 @@ export function DivisionBuilder({
             </h3>
             <p className="mt-0.5 text-xs text-slate-400">{msg("wizard.matchRulesHint")}</p>
             <div className="mt-3">
-              <MatchRuleFields sportKey={sportKey} values={ruleValues} onChange={setRuleValues} />
+              <MatchRuleFields sportKey={sportKey} values={ruleValues} onChange={setRuleValues} state={ruleState} />
             </div>
           </div>
         )}

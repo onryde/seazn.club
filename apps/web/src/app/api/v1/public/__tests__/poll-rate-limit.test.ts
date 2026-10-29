@@ -41,7 +41,8 @@ const usecase = vi.hoisted(() => ({
   publicCompetitionHub: vi.fn(async () => ({ competitionId: "c1" })),
   publicPlayerMatches: vi.fn(async () => ({ matches: [] })),
   publicOrgLive: vi.fn(async () => ({ competitions: [] })),
-  publicStandings: vi.fn(async () => ({ rows: [] })),
+  // The usecase's own document shape (`{ division_id, standings }`): the route reads each table's rows (D11 b, rank null).
+  publicStandings: vi.fn(async () => ({ division_id: "d1", standings: [] })),
   publicCompetition: vi.fn(async () => ({ id: "c1" })),
   loadOverlayLiveData: vi.fn(async () => ({ id: "f1" })),
   discoveryList: vi.fn(async () => ({ items: [], nextOffset: null })),

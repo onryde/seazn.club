@@ -84,12 +84,13 @@ describe("planW1Driving — the whole set", () => {
     const plan = planW1Driving(variantFor, {});
     // 11 F1 page_playoff_only drops (Task 2) + the four scripts on each cell the product refuses (follow-up to #1027).
     expect(drops).toBe(11 + REFUSED_CELLS.length * W1_DRIVING_SCENARIOS.length);
-    expect(testCases).toBe(24);
+    expect(testCases).toBe(25);
     expect(cricketTests().length).toBe(testCases);
     expect(plan.length).toBe(expected + testCases);
-    // 231×4 − 11 (F1 page_playoff_only, Task 2) − 2×4 (chess americano/mexicano, refused) + 24 — the typed pin must equal the derivation.
+    // 231×4 − 11 (F1 page_playoff_only, Task 2) − 2×4 (chess americano/mexicano, refused) + 25 (cricket `test` cases since the W2e
+    // catalogue regen; 24 before) — the typed pin must equal the derivation.
     expect(ROW_KEYS.length * SPORT_KEYS.length).toBe(231);
-    expect(plan.length).toBe(929);
+    expect(plan.length).toBe(930);
     expect(plan.filter((c) => isRefusedCell(`${c.row}|${c.sport}`))).toEqual([]);
     expect(new Set(plan.map((c) => c.caseId)).size).toBe(plan.length);
   });
@@ -123,7 +124,7 @@ describe("planW1Driving — the whole set", () => {
       expect(c, vc.id).toEqual({ caseId: `${vc.row}|cricket|test|LIFECYCLE|${vc.id}`, row: vc.row, sport: "cricket", variant: "test", scenario: "LIFECYCLE", canary: false, overrides: vc.overrides });
       checked++;
     }
-    expect(checked).toBe(24);
+    expect(checked).toBe(25);
     // The grid's cricket cases ride the builder default, not `test` (else the count above would double-count).
     expect(variantFor("cricket")).not.toBe("test");
   });
@@ -159,7 +160,7 @@ describe("planW1Driving — --only and --scenario", () => {
     const cells = ROW_KEYS.length * SPORT_KEYS.length - REFUSED_CELLS.length;
     expect(planW1Driving(variantFor, { scenario: "M1" }).length).toBe(cells);
     expect(planW1Driving(variantFor, { scenario: "F1" }).length).toBe(cells - 11);
-    expect(planW1Driving(variantFor, { scenario: "LIFECYCLE" }).length).toBe(cells + 24);
+    expect(planW1Driving(variantFor, { scenario: "LIFECYCLE" }).length).toBe(cells + 25);
   });
   it("every sport of the registry, one row: --only <row>|<sport> plans its four scenarios on that sport's variant (and cricket its test case)", () => {
     let checked = 0;
@@ -254,7 +255,7 @@ describe("the committed-file readers (PF-11)", () => {
       expect(() => dropIndexOf(bad), JSON.stringify(bad)).toThrow(DropListUnreadable);
     }
   });
-  it("readVariantsFile reads the committed variants: every sport, cricket's 24 test cases among them", () => {
+  it("readVariantsFile reads the committed variants: every sport, cricket's 25 test cases among them", () => {
     const f = readVariantsFile();
     expect(f.sports.map((s) => s.sport).sort()).toEqual([...SPORT_KEYS].sort());
     expect(f.sports.find((s) => s.sport === "cricket")!.cases.filter((c) => c.preset === "test").length).toBe(cricketTests().length);
@@ -266,7 +267,7 @@ describe("the w1-driving planner (run.ts --set w1-driving) and the slice planner
     const whole = makeW1DrivingPlanner()({});
     expect([...whole.sports]).toEqual([...SPORT_KEYS]);
     expect(whole.deniesFeatures).toBe(false);
-    expect(whole.plan(variantFor).length).toBe(929);
+    expect(whole.plan(variantFor).length).toBe(930);
     const one = makeW1DrivingPlanner()({ only: "league_ko|football", scenario: "LIFECYCLE" });
     expect([...one.sports]).toEqual(["football"]);
     expect(one.plan(variantFor).map((c) => c.caseId)).toEqual([`league_ko|football|${variantFor("football")}|LIFECYCLE`]);

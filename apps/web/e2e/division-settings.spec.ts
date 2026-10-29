@@ -519,13 +519,16 @@ test.describe("online chess: the division's camera group (Task 6's owed browser 
     await gotoSettings(page, rig.settings);
     await setLocaleCookie(page, "fr");
     await gotoSettings(page, rig.settings);
-    // The Format group's title in French, then the clock fields (sport-rules vocabulary: English in every locale).
+    // The Format group's title in French, then the clock fields. The fields' names are drawn from the dictionary in every locale
+    // (W2e PR B localized ALL rule-field labels, not only the five ruling-157 ones), so each is looked up through the key the
+    // product renders (`RuleField.labelKey`) rather than typed in English - an English literal here is a name that only the
+    // `en` page has.
     await page.getByRole("button", { name: new RegExp(escapeRe(uiString("fr", "divset.format"))) }).first().click();
     // Online play is still Off, so the free clock fields are there: type a 1+0 the server will refuse. THEN turn
     // Lichess on — the picker takes the fields' place, finds none of the supported controls in the typed clock, and
     // says so (item 2, 2026-10-19: with Lichess the clock is a picker, not three free inputs).
-    await page.getByRole("spinbutton", { name: "Time per side (minutes)" }).fill("1");
-    await page.getByRole("spinbutton", { name: "Increment per move (seconds, Fischer)" }).fill("0");
+    await page.getByRole("spinbutton", { name: uiString("fr", "rules.field.clockBaseMinutes.label") }).fill("1");
+    await page.getByRole("spinbutton", { name: uiString("fr", "rules.field.clockIncrementSeconds.label") }).fill("0");
     await page.getByTestId("division-online-play").selectOption("lichess");
     await expect(page.getByTestId("division-time-control"), "a typed 1+0 is none of the supported controls").toHaveValue("");
     await expect(page.getByText(uiString("fr", "divset.timeControl.unsupported"))).toBeVisible();

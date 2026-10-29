@@ -260,6 +260,9 @@ export interface SwapSheetSpec {
    *  drift. Absent renders every row exactly as it did before this field
    *  existed — see `CandidateMeta` (types.ts). */
   readonly candidateMeta?: Readonly<Record<string, CandidateMeta>>;
+  /** W2e Task 32 (M12b) -- `SwapSlot.offOnly` carried through verbatim by `adaptSwapSlot`. The sheet has no ON step: tapping
+   *  an off candidate calls `onSwap(off, "")` at once. Absent is the ordinary two-step sheet, byte for byte. */
+  readonly offOnly?: boolean;
 }
 
 export interface SwapSheetProps {
@@ -360,7 +363,8 @@ export function SwapSheet({
               spec.offCandidates ?? resolvePool({ pool: "onfield" }, view),
               personNames,
               t,
-              setOffId,
+              // M12b: a retirement has no ON step, so the pick IS the answer (`onSwap(off, "")`; `SwapSlot.offOnly`).
+              spec.offOnly === true ? (off) => onSwap(off, "") : setOffId,
               emptyText,
               undefined,
               spec.candidateMeta,

@@ -26,6 +26,15 @@ const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const TR = join(REPO, "docs/superpowers/specs/2026-09-27-format-matrix-prompts/truth-runs");
 const scripts = (JSON.parse(readFileSync(resolve(REPO, "package.json"), "utf8")) as { scripts: Record<string, string> }).scripts;
 
+/** L3 is `--set w1-driving`: the 905 grid cases (231 cells x 4 scripts - 11 F1 page_playoff_only - 8 chess americano/mexicano; w1-driving-set.test.ts
+ *  derives the same figure from the drop list) plus cricket's `test` variant cases, which the COMMITTED variants.json holds. Their count is READ from
+ *  that file, not typed: a catalogue regen moves it (24 -> 25 at T36a, 29378e40ad, when T28's two cricket factors joined the pairwise cover and a
+ *  typed L3 total of 929 went stale in three places). The file is read directly, not through the planner this total is checked against. */
+const L3_GRID = 905;
+const L3_TEST_CASES = (JSON.parse(readFileSync(resolve(REPO, "tools/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: { preset: string }[] }[] })
+  .sports.find((s) => s.sport === "cricket")!.cases.filter((c) => c.preset === "test").length;
+const L3_PLAN = L3_GRID + L3_TEST_CASES;
+
 const flags = (n: number, driven = n): boolean[] => Array.from({ length: n }, (_, i) => i < driven);
 /** The per-case ceilings the brief derives from the committed evidence: 210 s, 30 s, 30 s. */
 const C: Record<Layer, number> = { L1: 210, L2: 30, L3: 30 };
@@ -394,13 +403,15 @@ describe("drivenInPlanOrder (lib/expected-plan.ts): the plan's items in the orde
     expect(checked).toBe(plans.length);
     // The sizes the brief gives, by plan: 6 / 231 / 68 / 1,729 / 937 / 33 (L2 was 1,731 before X-DR-1; layers-grid.test.ts:183),
     // less the chess americano/mexicano cells the product refuses since the follow-up to #1027 (owner ruling 2026-10-26):
-    // 2 cells off the L1 grid (231 -> 229), and their 4 scripts each off the w1-driving set (937 -> 929).
+    // 2 cells off the L1 grid (231 -> 229), and their 4 scripts each off the w1-driving set (937 -> 929); the w1-driving total then
+    // moves with the committed cricket `test` cases (L3_PLAN: 929 with 24, 930 with 25).
     expect(drivenInPlanOrder("--layer L1").length).toBe(6);
     expect(drivenInPlanOrder("--layer L1 --scope grid").length).toBe(229);
     expect(drivenInPlanOrder("--layer L2").length).toBe(68);
     expect(drivenInPlanOrder("--layer L2").filter(Boolean).length).toBe(3);
     expect(drivenInPlanOrder("--layer L2 --scope grid").length).toBe(1729);
-    expect(drivenInPlanOrder("--set w1-driving").length).toBe(929);
+    expect(L3_TEST_CASES, "the committed variants.json holds cricket `test` cases (zero would make L3_PLAN the grid alone)").toBeGreaterThan(0);
+    expect(drivenInPlanOrder("--set w1-driving").length).toBe(L3_PLAN);
     expect(drivenInPlanOrder("--set pr-sample --rows none").length).toBe(33);
   });
 
@@ -468,7 +479,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
       const r = runs.get(j.layer)![j.k - 1];
       const workers = j.args.includes("--workers 4") ? 4 : 1;
       // L2's plan size is the regenerated 1,729 (X-DR-1, W2a; was 1,731 - layers-grid.test.ts:183).
-      expect(r.shard, `${j.layer} ${j.k}/${j.of}`).toEqual({ index: j.k, of: j.of, planSize: { L1: 229, L2: 1729, L3: 929 }[j.layer] });
+      expect(r.shard, `${j.layer} ${j.k}/${j.of}`).toEqual({ index: j.k, of: j.of, planSize: { L1: 229, L2: 1729, L3: L3_PLAN }[j.layer] });
       expect(r.cases.length).toBeGreaterThan(0);
       // The budget basis: the cases the stripe DROVE (no `planned` marker), counted from the evidence the runner wrote.
       const drivenReal = r.cases.filter((c) => c.planned !== true).length;
@@ -500,7 +511,7 @@ describe("the seam, through the REAL runner (class 1: a fixture on both ends pro
       const m = mergeShards(inputs, `ci-1-1-${l.toLowerCase()}`);
       expect(m.merged.shards, l).toBe(shards.length);
       // L2 checks the regenerated 1,729 (X-DR-1, W2a; was 1,731 - layers-grid.test.ts:183).
-      expect(m.checked, l).toBe({ L1: 229, L2: 1729, L3: 929 }[l]);
+      expect(m.checked, l).toBe({ L1: 229, L2: 1729, L3: L3_PLAN }[l]);
       expect(matchPlanIds(m.merged).compared, l).toBe(m.checked);
       merged++;
     }

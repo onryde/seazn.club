@@ -10,7 +10,7 @@ import type { RuleField } from "../types.ts";
 import { assertPinned, judgeBuilds, judgeRanges } from "./run-contract.ts";
 
 const field = (key: string, o: Partial<RuleField> & Pick<RuleField, "kind">): RuleField => ({
-  label: key, edits: [key], build: (v) => ({ [key]: Number(v) }), ...o, key,
+  label: key, labelKey: "rules.field.winBy.label", edits: [key], build: (v) => ({ [key]: Number(v) }), ...o, key,
 });
 const num = (key: string, min: number, max: number, o: Partial<RuleField> = {}): RuleField => field(key, { kind: "number", min, max, ...o });
 

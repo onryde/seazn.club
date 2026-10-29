@@ -34,12 +34,13 @@
 //                SHOOTOUT | done/final/abandoned) mapped DOWN to the three-value
 //                UI concept here, never by widening `PadPhase`.
 
-import { AttemptOutcome } from "@seazn/engine/core";
+import { AttemptOutcome, onFieldPersons, playingSquad } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import type { SportTone } from "../sport-theme";
 import type { PadClockSpec } from "../clock";
+import { retirementSlotsOf, retirementTilesOf } from "../retirement-slot";
 import {
   MORE_SHEET_KEY,
   type ActivityDetailContext,
@@ -311,13 +312,16 @@ function otherSide(side: Side): Side {
 
 /** Who is on the field/ice right now, from the squad state the HOST always
  *  resolves (`PadHostView.squads`, `state.squads` else `initSquads(lineups)`) —
- *  never from `state.squads` directly, which most folds never populate. */
+ *  never from `state.squads` directly, which most folds never populate.
+ *  PLAYERS ONLY, through the engine's own reader (W2e review M6): the lineup editor lets a coach sit in a "starting" slot,
+ *  `initSquads` seats him, and the engine refuses him on and off the field ("not-a-player", ruling 3). */
 export function onFieldOf(view: PadHostView, side: Side): readonly string[] {
-  return view.squads[side].members.filter((m) => m.onField).map((m) => m.personId);
+  return onFieldPersons(view.squads[side]);
 }
 
+/** Who may come ON: a player off the field (the same filter, for a coach or staff member on the bench). */
 function benchOf(view: PadHostView, side: Side): readonly string[] {
-  return view.squads[side].members.filter((m) => !m.onField).map((m) => m.personId);
+  return playingSquad(view.squads[side]).filter((m) => !m.onField).map((m) => m.personId);
 }
 
 // ---------------------------------------------------------------------------
@@ -1021,6 +1025,10 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
     }
   }
 
+  // W2e Task 32 (M12b): "injured, no replacement" -- a tile per side that has somebody on the ice/field, offered under the
+  // swap's own gate and derived from the SAME slots `swap()` declares, so the tile and its sheet cannot disagree.
+  tiles.push(...retirementTilesOf(buildRetirementSlots(spec, view)));
+
   if (offerable(e.setPiece)) {
     // FULL WIDTH, not a half tile: the release tile above comes and goes with
     // the box, so a span-2 set piece sat alone on its own row exactly half the
@@ -1505,6 +1513,23 @@ export function buildSwap(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Swap
   });
 }
 
+/**
+ * W2e Task 32 (M12b) -- the retirement slots ("player injured, no replacement") for both sides, under the swap slot's own
+ * gate. `retirement-slot.ts` owns the event and the rules; what only the period pad knows is passed in: play is on
+ * (`isPlayPhaseToken`), the side's entrant, and who is on the ice/field (`onFieldOf`, the same reader `buildSwap` offers).
+ * `t` is optional because the TILE only needs to know a slot exists; the picker's row decoration (shirt number, captain) is
+ * built only for the `swap()` declaration that opens the sheet.
+ */
+export function buildRetirementSlots(spec: PeriodSkinSpec, view: PadHostView, t?: TFn): SwapSlot[] {
+  const state = asState(view.state);
+  return retirementSlotsOf(view, (side) => ({
+    inPlay: isPlayPhaseToken(readPhase(state)),
+    by: entrantOf(state, side),
+    onField: onFieldOf(view, side),
+    ...(t === undefined ? {} : { candidateMeta: periodCandidateMeta(spec, view, side, t) }),
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // dock()
 // ---------------------------------------------------------------------------
@@ -1809,7 +1834,7 @@ export function makePeriodSkin(spec: PeriodSkinSpec): (t: TFn) => SkinDefV3<PadH
     tiles: (view) => buildTiles(spec, view, t),
     dock: (eventType, view, payload) => buildDock(spec, eventType, view, t, payload),
     sheets: (view) => buildSheets(spec, view, t),
-    swap: (view) => buildSwap(spec, view, t),
+    swap: (view) => [...buildSwap(spec, view, t), ...buildRetirementSlots(spec, view, t)],
     refusedEventTypes: (view) => refusedEventTypesFor(spec, view),
     activityDetail: (ctx) => buildActivityDetail(spec, ctx),
     clock: buildClock,

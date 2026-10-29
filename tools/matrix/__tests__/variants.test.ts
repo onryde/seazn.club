@@ -108,11 +108,11 @@ describe("builder default variant, derived offline", () => {
 
 describe("boundary classes (from SPORT_RULES — the engine schema is unbounded)", () => {
   it("empty cases first: an unbounded number field and an option-less select are refused", () => {
-    expect(() => levelsOf({ key: "x", label: "x", edits: [], kind: "number", build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
-    expect(() => levelsOf({ key: "x", label: "x", edits: [], kind: "select", options: [], build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
+    expect(() => levelsOf({ key: "x", label: "x", labelKey: "rules.field.pointsToWin.label", edits: [], kind: "number", build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
+    expect(() => levelsOf({ key: "x", label: "x", labelKey: "rules.field.pointsToWin.label", edits: [], kind: "select", options: [], build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
     // A declared but non-finite bound is no bound either: String(Infinity) is not a number the editor can hold.
-    expect(() => levelsOf({ key: "x", label: "x", edits: [], kind: "number", min: 0, max: Infinity, build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
-    expect(() => levelsOf({ key: "x", label: "x", edits: [], kind: "number", min: Number.NaN, max: 5, build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
+    expect(() => levelsOf({ key: "x", label: "x", labelKey: "rules.field.pointsToWin.label", edits: [], kind: "number", min: 0, max: Infinity, build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
+    expect(() => levelsOf({ key: "x", label: "x", labelKey: "rules.field.pointsToWin.label", edits: [], kind: "number", min: Number.NaN, max: 5, build: () => ({}) } as RuleField)).toThrow(FieldUnbounded);
   });
   it("W2c Task 8 fix round 1 / Task 17: a sequence field (chess's tie-break rung list) has no boundary classes, so it is no variant factor even though the editor now shows it", () => {
     // An ordered list is not a bound or an option set, so `levelsOf` refuses it by name rather than answering undefined...
@@ -548,12 +548,30 @@ describe("scorability (the generatability sweep)", () => {
       n++;
     }
     expect(n).toBeGreaterThan(0);
-    // Since the write door joined resolveSportCfg no shipped case is refused, so every recorded value above is null and cannot tell
-    // wired from left null (a mutant that records null survives). A case that DOES carry a reason proves the seam: the generator
-    // records what its scorer answers, for each case, whichever it is.
+    // The corpus has no natural reason to tell null from wired: it used to (volleyball's and table tennis's range ends were 1, a
+    // set target the engine's write door has refused since W2e ruling 31, so those cases could not be scored), and those boundaries
+    // are gone now the fields start at the engine's floor. The seam is witnessed by a REAL reason, not a string of the test's own
+    // (W2e T33a, T29 M2): the injected judge asks the product's own `scorable` about the same case with `bestOf: 2`, which the
+    // engine's schema refuses ("bestOf must be odd") whatever else the case holds, so what each case records is the engine's
+    // refusal, passed through the generator untouched. Counted, and the positive pair is the corpus's own answer for the same cases.
+    const judgeAtEvenBestOf = (vc: Parameters<typeof scorable>[0]) => scorable({ ...vc, overrides: { ...vc.overrides, bestOf: 2 } });
+    let recorded = 0;
+    for (const sport of ["volleyball", "badminton", "tabletennis"]) {
+      const built = buildSportVariants(sport, { scorable: judgeAtEvenBestOf });
+      expect(built.cases.length, sport).toBeGreaterThan(0);
+      for (const c of built.cases) {
+        expect(c.scorable, `${c.id}: the generator records the judge's answer, not null`).toMatch(/^cfg: CfgInvalid: .*bestOf must be odd/);
+        expect(c.scorable, c.id).toBe(judgeAtEvenBestOf({ ...c, scorable: null }));
+        // The positive pair: judged at its own overrides the same case is scorable, so the reason above is the judge's, not the case's.
+        expect(scorable({ ...c, scorable: null }), `${c.id} at its own overrides`).toBeNull();
+        recorded++;
+      }
+    }
+    expect(recorded).toBeGreaterThan(20);
+    // And the order (W2e T24): the generator asks its judge once per case, in case order, and records whatever it answers.
     const seen: string[] = [];
     const stub = (vc: { id: string }): string | null => { seen.push(vc.id); return `win-home: stubbed ${vc.id}`; };
-    const built = buildSportVariants("football", { score: stub as unknown as typeof scorable });
+    const built = buildSportVariants("football", { scorable: stub });
     expect(built.cases.length).toBeGreaterThan(0);
     expect(seen, "the scorer is asked once per case, in order").toEqual(built.cases.map((c) => c.id));
     expect(built.cases.map((c) => c.scorable)).toEqual(built.cases.map((c) => `win-home: stubbed ${c.id}`));

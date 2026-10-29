@@ -206,6 +206,7 @@
 import type { LineupPolicy, LineupRejectionReason, SquadMember, SquadState } from "@seazn/engine/core";
 import { DEFAULT_LINEUP_POLICY, memberOf, onFieldPersons } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
+import { entrantKindCap } from "@seazn/engine/sport";
 import {
   volleyball as volleyballModule,
   setBasedServeContext,
@@ -235,6 +236,8 @@ import {
   type WhoLine,
 } from "../types";
 import type { SportTone } from "../sport-theme";
+import { retirementSlotsOf, retirementTilesOf } from "../retirement-slot";
+import { SANCTION_LEVEL_STEP_ID, sideNameOf } from "./sanction-ending";
 
 export type TFn = (key: string, vars?: Record<string, string | number>) => string;
 export type Side = "home" | "away";
@@ -248,6 +251,9 @@ export const RALLY_TYPE = `${SPORT}.rally`;
  *  (`reference_gallery_racquet_capture_traps.md`). */
 export const SUMMARY_TYPE = `${SPORT}.${volleyballModule.coarseEventType}`;
 export const SANCTION_TYPE = `${SPORT}.sanction`;
+/** The sanction sheet's last step (W2e T31, D12): "Can <team> still field <N> players?" - N is six indoors and two on the beach
+ *  (`playersToField`). The id names the indoor question it was born as; the answers it stores are the same for both. */
+export const FIELD_SIX_STEP_ID = "fieldSix";
 export const TIMEOUT_TYPE = `${SPORT}.timeout`;
 /** FIVB's own scoresheet substitution-BOX tally (`SetBasedSub`,
  *  `setbased/kernel.ts`) — `{by, off?, on?}`, a per-set count with no policy
@@ -1043,6 +1049,24 @@ function recordsFlag(view: PadHostView, flag: keyof VolleyballRecordFlags): bool
   return cfgOf(view).records?.[flag] === true;
 }
 
+/** The number words the field-six question can name: `playersToField` answers 6 (indoor) or 2 (a beach pair). */
+const PLAYER_COUNT_WORD: Readonly<Record<number, MessageKey>> = {
+  6: "pad.volleyball.sheet.sanction.fieldSix.count.6",
+  2: "pad.volleyball.sheet.sanction.fieldSix.count.2",
+};
+
+/**
+ * W2e T33a (PO decision): how many players a side must field for the match to go on - the number the field-six question
+ * names. Derived from this FIXTURE's cfg, never typed: the preset's `rotationImpliedBy` cfg flag (`records.substitutions`)
+ * says whether the side is a rotating six - indoor, the engine's `rotationCycle` - or a beach pair, whose size is the engine's
+ * own declaration for the pair kind (`entrantKindCap("pair")`), the same fact `fieldsTheRotation` reads from the other side.
+ */
+export function playersToField(view: PadHostView): number {
+  const implied = volleyballModule.serveRotation.rotationImpliedBy;
+  const rotates = implied !== undefined && recordsFlag(view, implied);
+  return rotates ? ROTATION_CYCLE : entrantKindCap("pair");
+}
+
 /** Whether a role a `SquadMember` carries includes "libero". */
 function hasLiberoRole(member: SquadMember): boolean {
   return member.roles?.includes("libero") === true;
@@ -1131,6 +1155,11 @@ export function buildTiles(view: PadHostView): TileSpec[] {
       });
     }
   }
+
+  // W2e Task 32 (M12b): "injured, no replacement" -- one tile per side with somebody on court, derived from the SAME slots
+  // `swap()` declares so the tile and its sheet cannot disagree about whether the control exists. Another side-paired block,
+  // pushed BEFORE the unpaired tiles below for the reason the order note above states.
+  tiles.push(...retirementTilesOf(buildRetirementSlots(view)));
 
   // Set score — the band-0 action that survives at every band. Withheld
   // while the CURRENT set is being scored rally-by-rally; the paired
@@ -1247,13 +1276,13 @@ function setScoreSheet(view: PadHostView): GuidedSheetSpec {
  *  four-step ladder. `reason` is free text with no text step in this
  *  chassis, so it is not collected, same ruling badminton/table tennis both
  *  record for their own sanction sheets. */
-function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
+function sanctionSheet(view: PadHostView, side: Side, t: TFn): GuidedSheetSpec {
   const state = asState(view.state);
   const players = onFieldPlayers(view.squads, side);
   const sole = players.length === 1 ? players[0]!.personId : null;
   const steps: GuidedSheetStep[] = [
     {
-      id: "level",
+      id: SANCTION_LEVEL_STEP_ID,
       kind: "choice",
       title: "pad.volleyball.sheet.sanction.level.title",
       options: SANCTION_LEVELS.map((level) => ({
@@ -1273,6 +1302,38 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
       candidates: players.map((member) => member.personId),
     });
   }
+  // W2e T31 (D12, VB-SE-1): an expulsion or a disqualification never ends a volleyball match by itself (FIVB: the team plays
+  // on while it can field six), so the sheet ASKS before the write, as its last step, and only for the levels the ENGINE's
+  // declaration names (`sanctionEnding.promptLevels`). "No" is the incomplete-team ending (VB-RT-1, FIVB 6.4.3): the host
+  // sends the sanction and then `core.forfeit{retired}` as one bound pair (pad-host.tsx's `runEnding`). "Yes" sends the
+  // sanction alone.
+  const prompt = volleyballModule.sanctionEnding?.promptLevels ?? [];
+  const asksFieldSix = (answers: Readonly<Record<string, string>>): boolean => prompt.includes(answers[SANCTION_LEVEL_STEP_ID] ?? "");
+  if (prompt.length > 0) {
+    const team = sideNameOf(view.entrantNames, side, t);
+    const count = playersToField(view);
+    const countWord = PLAYER_COUNT_WORD[count];
+    // A count with no word (a custom cfg the engine would have to grow into) still reads: the numeral, never a blank.
+    const players = countWord !== undefined ? t(countWord) : String(count);
+    steps.push({
+      id: FIELD_SIX_STEP_ID,
+      kind: "choice",
+      title: "pad.volleyball.sheet.sanction.fieldSix.title",
+      // Pre-localised: the question names the team and the count, which no dictionary holds (the key stays the canonical title).
+      titleText: t("pad.volleyball.sheet.sanction.fieldSix.title", { team, count: players }),
+      when: asksFieldSix,
+      // Both answers are sentences, so they read as full-width rows rather than pills.
+      layout: "rows",
+      options: [
+        { id: "yes", label: "pad.volleyball.sheet.sanction.fieldSix.yes" },
+        {
+          id: "no",
+          label: "pad.volleyball.sheet.sanction.fieldSix.no",
+          labelText: t("pad.volleyball.sheet.sanction.fieldSix.no", { team }),
+        },
+      ],
+    });
+  }
   return {
     event: SANCTION_TYPE,
     steps,
@@ -1284,6 +1345,9 @@ function sanctionSheet(view: PadHostView, side: Side): GuidedSheetSpec {
         ...(person !== undefined && person !== null ? { person } : {}),
       };
     },
+    // The answer travels beside the payload (which is the same for yes and no). Re-checked against the level: an answer to a
+    // question that was never asked for this level (Back-and-change) retires nobody.
+    sideRetires: (answers) => asksFieldSix(answers) && answers[FIELD_SIX_STEP_ID] === "no",
   };
 }
 
@@ -1383,7 +1447,7 @@ function serveAnchorSheet(view: PadHostView): GuidedSheetSpec {
   };
 }
 
-export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> {
+export function buildSheets(view: PadHostView, t: TFn): Record<string, GuidedSheetSpec> {
   const sheets: Record<string, GuidedSheetSpec> = {
     [SET_SCORE_TILE_ID]: setScoreSheet(view),
     [SERVE_ANCHOR_TILE_ID]: serveAnchorSheet(view),
@@ -1393,7 +1457,7 @@ export function buildSheets(view: PadHostView): Record<string, GuidedSheetSpec> 
   // reachable (`needsSetOpener`). A sheet nobody opens is inert — the same
   // posture `sanctionSheetKey`'s pair already takes.
   for (const side of SIDES) sheets[openerSheetKey(side)] = serveOpenerSheet(view, side);
-  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side);
+  for (const side of SIDES) sheets[sanctionSheetKey(side)] = sanctionSheet(view, side, t);
   return sheets;
 }
 
@@ -1659,6 +1723,22 @@ function liberoCandidateMeta(
   return meta;
 }
 
+/**
+ * W2e Task 32 (M12b) -- the retirement slots ("player injured, no replacement") for both sides, under the swap's own gate:
+ * the pad is live. Unlike the libero swap this is NOT conditional on a named libero -- any player on court can be hurt. Who
+ * is on court is the engine's own reader over `view.squads` (`state.squads` for volleyball, the live court); the row
+ * decoration is the libero sheet's (position first, "Libero" marked), so a court of six reads the way it does there.
+ * `retirement-slot.ts` owns the event, the reason and the band.
+ */
+export function buildRetirementSlots(view: PadHostView, t?: TFn): SwapSlot[] {
+  const state = asState(view.state);
+  return retirementSlotsOf(view, (side) => ({
+    inPlay: resolvePhase(view) === "live",
+    by: entrantOf(state, side),
+    ...(t === undefined ? {} : { candidateMeta: liberoCandidateMeta(view.squads, side, t) }),
+  }));
+}
+
 export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
   const state = asState(view.state);
   if (resolvePhase(view) !== "live" || view.band < LIBERO_BAND) return [];
@@ -1834,8 +1914,8 @@ export function volleyballSkinV3(t: TFn): SkinDefV3<PadHostView> {
     scorebug: (view) => buildScorebug(view, t),
     tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
-    sheets: buildSheets,
-    swap: (view) => buildSwap(view, t),
+    sheets: (view) => buildSheets(view, t),
+    swap: (view) => [...buildSwap(view, t), ...buildRetirementSlots(view, t)],
     refusedEventTypes,
     activityDetail: volleyballDetail,
     // No contextSelect() — this skin declares no context strip at all (W1 /

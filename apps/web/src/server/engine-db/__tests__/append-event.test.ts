@@ -20,6 +20,7 @@ import { sportCases } from "@seazn/engine/testkit";
 import { sql, withTenant } from "@/lib/db";
 import { appendEvent } from "../index";
 import { appendEventInTx } from "../append-event";
+import { v1 } from "@/server/api-v1/http";
 
 // F10 (R3.5 review) — the fold's catch only instrumented the EngineError
 // (422) case; a TypeError/RangeError from inside a sport module, or a Zod
@@ -620,5 +621,36 @@ describe("no logger outside the sanctioned funnel (R3.5 Task K, K6/K7)", () => {
       /from\s+["']pino["']|require\(\s*["']pino["']\s*\)/.test(readFileSync(f, "utf8")),
     );
     expect(offenders).toEqual([]);
+  });
+});
+
+// W2e T32 fix round 2 (item 3) — the API behaviour `docs/api-v1-breaking-changes.md` (2026-10-29) promises, at the funnel
+// `POST /api/v1/fixtures/{id}/events` ends in, through the route's own `v1()` wrapper: a football `core.lineup.*` event is
+// judged on the pitch a `football.sub` left. single-sport: football is the one sport with a second substitution vocabulary
+// (`squadsForLineup`; w2e-retirement.test.ts pins that from the skins).
+describe.skipIf(!HAS_DB)("W2e M12b: a football lineup event is judged on the pitch a football.sub left (POST /fixtures/{id}/events)", () => {
+  it("retiring the starter football.sub took off is 422 LINEUP_INVALID, nothing written; retiring the substitute it brought on is accepted and written", async () => {
+    const s = await seedFootball(football.configSchema.parse({}));
+    const sheets = await seedSheets(s);
+    const retire = (personId: string) => ({ type: "core.lineup.retirement", payload: { side: s.home, personId, reason: "injured" } });
+    await appendEvent(s.orgId, s.fixtureId, 0, { type: "core.start", payload: {} });
+    await appendEvent(s.orgId, s.fixtureId, 1, { type: "football.sub", payload: { by: s.home, off: sheets.homeStarter, on: sheets.homeBench } });
+    expect(await ledgerSize(s.fixtureId), "start, sub").toBe(2);
+
+    // The refusal, as the route answers it: the documented status, code and sentence, and the ledger untouched.
+    const refused = await v1(() => appendEvent(s.orgId, s.fixtureId, 2, retire(sheets.homeStarter)));
+    expect(refused.status).toBe(422);
+    const body = (await refused.json()) as { ok: boolean; error: { code: string; message: string } };
+    expect(body).toMatchObject({ ok: false, error: { code: "LINEUP_INVALID", message: `"${sheets.homeStarter}" is not on the field` } });
+    expect(await ledgerSize(s.fixtureId), "nothing written").toBe(2);
+    expect(linesNamed("scoring event refused").at(-1)).toMatchObject({ fixtureId: s.fixtureId, eventType: "core.lineup.retirement", code: "LINEUP_INVALID" });
+
+    // The substitute football.sub brought on retires: accepted at the same expected seq (the refusal consumed none), written.
+    const accepted = await v1(() => appendEvent(s.orgId, s.fixtureId, 2, retire(sheets.homeBench)));
+    expect(accepted.status).toBeLessThan(300);
+    expect(await ledgerSize(s.fixtureId), "start, sub, retirement").toBe(3);
+    const [last] = await sql<{ type: string; payload: { personId: string } }[]>`
+      select type, payload from score_events where fixture_id = ${s.fixtureId} order by seq desc limit 1`;
+    expect(last).toMatchObject({ type: "core.lineup.retirement", payload: { personId: sheets.homeBench } });
   });
 });

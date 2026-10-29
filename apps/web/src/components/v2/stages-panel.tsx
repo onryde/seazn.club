@@ -44,7 +44,7 @@ import { TagChipInput } from "@/components/ui/tag-chip-input";
 // Per-stage rules row (design §T5, D7; W2c Task 17). The fields come from the engine's `ruleKeys` through
 // `stage-rules/stage-rule-fields.tsx`, which renders the SAME `RuleFieldControl` the division builder and Settings tab
 // do, so the format editors cannot drift. The table itself comes from `@/lib/match-rules`.
-import { hydrateRuleValues, ruleOptionLabel } from "@/lib/match-rules";
+import { hydrateRuleValues, ruleOptionText, type RuleMsg } from "@/lib/match-rules";
 import { moduleFor } from "@/lib/rule-scope";
 import { mergedStageRules } from "@/lib/stage-decider-off";
 import { sportLabel } from "@/lib/scoring-vocab";
@@ -2337,7 +2337,7 @@ function StageFormatRow({
   const overridden = Object.keys(rules).length > 0;
   // SUMMARY — effective config. See the header.
   const effective = useMemo(() => ({ ...divisionConfig, ...rules }), [divisionConfig, rules]);
-  const headline = stageFormatHeadline(sportKey, effective);
+  const headline = stageFormatHeadline(sportKey, effective, msg);
   // The rules this stage would store if Save were pressed now, for the notice while the editor is open: the stored
   // rules with the fragment a Save would send merged in (the endpoint's own merge, `mergedStageRules`).
   const noticeRules = useMemo(
@@ -2672,12 +2672,13 @@ export { stageFormatSaveFragment };
 export function stageFormatHeadline(
   sportKey: string,
   effective: Record<string, unknown>,
+  msg: RuleMsg,
 ): string | null {
   const raw = hydrateRuleValues(sportKey, effective).bestOf;
   if (raw === undefined) return null;
   // The saved value may be valid while THIS sport's picker does not offer it —
   // badminton offers [1,3,5] while `{"bestOf":7}` is a perfectly good config
-  // (D9). `ruleOptionLabel` borrows the label from a peer sport that
+  // (D9). `ruleOptionText` borrows the label from a peer sport that
   // does offer it, so the line reads "Best of 7 · Stage override" as the
   // design table specifies without assembling an English string here. It is
   // the SAME lookup `MatchRuleFields` labels its synthetic option with: the
@@ -2686,7 +2687,7 @@ export function stageFormatHeadline(
   // "5 · Stage override" directly under "Best of 3 · Locked". (That original
   // case was `bestOf: 5` against a picker offering [1,3]; the owner widened
   // badminton to [1,3,5] on 2026-09-20, so 5 is now the sport's OWN label.)
-  return ruleOptionLabel(sportKey, "bestOf", raw) ?? raw;
+  return ruleOptionText(sportKey, "bestOf", raw, msg) ?? raw;
 }
 
 // #622 — per-stage required court tags, stage-wide and per round role.

@@ -1,9 +1,9 @@
 // football: goals and period markers, which is all the matrix generator emits
 // (streams/football.ts). The references into football.tsx:
-//  - :760-771 the goal tiles `goal-${side}`; :769 writes `{by}` ALONE — the
+//  - :761-772 the goal tiles `goal-${side}`; :770 writes `{by}` ALONE — the
 //    scorer and assist are dock chips offered on the hold, never the tile's;
-//  - :852-867 the `period` tile, which opens the "period" sheet;
-//  - :1069-1093 periodSheet: one choice step whose option ids ARE the markers
+//  - :857-872 the `period` tile, which opens the "period" sheet;
+//  - :1074-1098 periodSheet: one choice step whose option ids ARE the markers
 //    (periodMarkersOf), building `{phase: <the chosen id>}`.
 // Step 0 (2026-09-30, 320, the builder default `11-a-side`, rosterless team
 // entrants) saw:
@@ -29,9 +29,9 @@ import type { MatrixPadAdapter } from "./types.ts";
 /** The engine's football event types (football.eventSchemas; pinned). */
 export const FOOTBALL_GOAL = "football.goal";
 export const FOOTBALL_PERIOD = "football.period";
-/** football.tsx:854 (text-pinned in pad-adapters.test.ts). */
+/** football.tsx:859 (text-pinned in pad-adapters.test.ts). */
 export const FOOTBALL_PERIOD_TILE = "period";
-/** football.tsx:763 (text-pinned). */
+/** football.tsx:764 (text-pinned). */
 export const footballGoalTile = (side: "home" | "away"): string => `goal-${side}`;
 /** W2e: the engine's shoot-out kick (football.eventSchemas; pinned). */
 export const FOOTBALL_SHOOTOUT_KICK = "football.shootout.kick";
@@ -83,7 +83,7 @@ export const footballPad: MatrixPadAdapter = {
     {
       eventType: FOOTBALL_GOAL,
       writes: [FOOTBALL_GOAL],
-      why: "football.tsx:769 — the goal tile writes {by} alone; the generated minute has no tap (Step 0 2026-09-30: row keys [by]), so its judge holds `by` to the side credited and any other key the row carries to the event",
+      why: "football.tsx:770 — the goal tile writes {by} alone; the generated minute has no tap (Step 0 2026-09-30: row keys [by]), so its judge holds `by` to the side credited and any other key the row carries to the event",
       rowsFor: () => 1,
       // Fix round 1 (I-1): the side credited is the goal. A minute the pad
       // might store later must equal the generated one; a key the goal never

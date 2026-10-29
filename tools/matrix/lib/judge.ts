@@ -232,6 +232,11 @@ export const JudgeOutSchema = z.strictObject({
   skipped: z.number().int().min(0).default(0),
   skippedIds: z.array(z.string().min(1)).default([]),
   unexpectedSkips: z.array(z.string().min(1)).default([]),
+  /** T18 M1 (carried to the W2 truth run): `regression` only — which judge wrote the verdict. true: `--sample`, a deliberate subset of the baseline
+   *  (the PR sample; its other baseline cases are counted, never refused). false: the strict release judge, where every baseline case `--expect`
+   *  does not name must be listed in `--expected-skips`. Absent in `faults` and `across`, which judge no baseline. Committed evidence carries it so a
+   *  sample's verdict cannot be read as a release judgement. */
+  sample: z.boolean().optional(),
   faults: z.array(z.strictObject({ run: z.string().min(1), caseId: z.string().min(1), kind: z.enum(FAULT_KINDS), reason: z.string() })),
   differing: z.array(z.strictObject({ caseId: z.string().min(1), states: z.array(z.string().min(1)).min(2) })),
   /** What `statesAcross` returns; the CLI refuses a non-empty list (CaseIdsDiffer) before it writes a verdict, so a file's is always []. */

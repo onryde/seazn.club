@@ -45,7 +45,7 @@ export const CHECKER_FILES: readonly string[] = [
  *  lists the row (plan 2026-10-20-format-matrix-w2d.md). Each wave's proof commit deletes the entry and fills `proved by`;
  *  W2d Task 21 requires the map empty for W2d ids.
  *  W2d Task 21 (the fold) emptied it: all 43 W2d rows now name their proving tests and are signed by ruling 197. */
-/** W2e's rows (spec 2026-10-28 section 8, signed 2026-10-28 as `W2e-D<n>`): the value names the task of the W2e plan that proves the row. The proving
+/** W2e's rows (spec 2026-10-28 section 8, signed 2026-10-28 by rulings 221-239, which are the design's D1-D19 plus 220): the value names the task of the W2e plan that proves the row. The proving
  *  commit deletes the entry and fills `proved by`; every W2e entry is to be gone before PR A merges. */
 export const AWAITING_PROOF: ReadonlyMap<string, string> = new Map<string, string>([]);
 

@@ -20,7 +20,7 @@
 // pad shape, is proven here rather than assumed.
 import { describe, expect, it } from "vitest";
 import type { EventEnvelope, Lineup, LineupPair } from "@seazn/engine/core";
-import { initSquads } from "@seazn/engine/core";
+import { foldMatchWithStoppage, initSquads } from "@seazn/engine/core";
 import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
 import { carrom } from "@seazn/engine/sports/carrom";
@@ -303,6 +303,21 @@ describe("buildTiles — live phase", () => {
     expect(tileById(v1, "adjustDeduct")).toMatchObject({ kind: "minor", span: 2, action: { sheet: "adjustDeduct" } });
   });
 
+  // W2e T33a (SC-O9 follow-up): a deduction needs a score to take points off, so at 0-0 the tile is shown and held, and it
+  // wakes with the first board. The sequence, not just the state: it falls asleep again when the deduction takes the side back
+  // to 0, and the credit tile is never held.
+  it("the deduction tile is held while neither side has points in the open game, and wakes once a board scores", () => {
+    const at00 = view({ events: stream(start()) });
+    expect(tileById(at00, "adjustDeduct")!.disabled, "0-0: nothing to deduct").toBe(true);
+    expect(tileById(at00, "adjustCredit")!.disabled, "a credit is always possible").toBeUndefined();
+    const scored = view({ events: stream(start(), board({ winner: "H", opponentCoinsLeft: 4 })) });
+    expect(tileById(scored, "adjustDeduct")!.disabled, "home has 4").toBe(false);
+    const deductedToZero = view({
+      events: stream(start(), board({ winner: "H", opponentCoinsLeft: 4 }), ["carrom.game.adjust", { entrantId: "H", delta: -4, reason: "foul" }]),
+    });
+    expect(tileById(deductedToZero, "adjustDeduct")!.disabled, "back to 0-0: held again").toBe(true);
+  });
+
   it("never re-offers the toss tile once the match has started", () => {
     expect(tileIds(view({ events: stream(start()) }))).not.toContain("toss");
   });
@@ -417,15 +432,82 @@ describe("buildSheets — umpire adjustment", () => {
     }
   });
 
-  it("deduct: delta bounded -cfg.gameTo..-1 — the mirror image, never zero-reachable", () => {
-    const sheet = buildSheets(view({ cfg: DEFAULT_CFG }))["adjustDeduct"]!;
-    const delta = sheet.steps.find((s) => s.id === "delta");
+  // W2e T33a (SC-O9 follow-up): the chip was `-gameTo`, which an open game's score (always under gameTo) can never reach, so it
+  // always failed the strict "below zero" rule. The deduction is now bounded by the score of the side it is taken from.
+  it("deduct: a side with points is asked its own number, from -1 down to minus its current score; a side at 0 is not offered", () => {
+    const events = stream(start(), board({ winner: "H", opponentCoinsLeft: 4 }));
+    const v = view({ events });
+    const sheet = buildSheets(v)["adjustDeduct"]!;
+    expect(sheet.steps.map((s) => s.id)).toEqual(["side", "delta:home", "reason"]);
+    const side = sheet.steps[0]!;
+    expect(side.kind === "choice" ? side.options.map((o) => o.id) : null, "away has no points to lose").toEqual(["home"]);
+    const delta = sheet.steps.find((s) => s.id === "delta:home");
     expect(delta?.kind).toBe("number");
     if (delta?.kind === "number") {
-      expect(delta.min).toBe(-25);
+      expect(delta.min).toBe(-4);
       expect(delta.max).toBe(-1);
       expect(delta.initial).toBe(-1);
+      expect(delta.when?.({ side: "home" })).toBe(true);
+      expect(delta.when?.({ side: "away" })).toBe(false);
     }
+  });
+
+  it("deduct: both sides with points are each bounded by their own score, and only the chosen side's number is asked", () => {
+    const events = stream(start(), board({ winner: "H", opponentCoinsLeft: 4 }), board({ winner: "A", opponentCoinsLeft: 2 }));
+    const sheet = buildSheets(view({ events }))["adjustDeduct"]!;
+    expect(sheet.steps.map((s) => s.id)).toEqual(["side", "delta:home", "delta:away", "reason"]);
+    const bound = (id: string) => {
+      const step = sheet.steps.find((s) => s.id === id);
+      return step?.kind === "number" ? step.min : undefined;
+    };
+    expect(bound("delta:home")).toBe(-4);
+    expect(bound("delta:away")).toBe(-2);
+    const shown = (answers: Record<string, string>) => sheet.steps.filter((s) => s.when === undefined || s.when(answers)).map((s) => s.id);
+    expect(shown({ side: "home" })).toEqual(["side", "delta:home", "reason"]);
+    expect(shown({ side: "away" })).toEqual(["side", "delta:away", "reason"]);
+  });
+
+  // The bound is the engine's, derived by asking the engine, never typed: a deduction of exactly the offered minimum folds under
+  // the STRICT write path, and one point more is refused. Both cfgs, both sides, counted.
+  it("deduct: the offered minimum is the strict write path's own boundary, on both cfgs and both sides", () => {
+    let checked = 0;
+    for (const cfg of [DEFAULT_CFG, CLUB29_CFG]) {
+      const base = [start(), board({ winner: "H", opponentCoinsLeft: 3 }), board({ winner: "A", opponentCoinsLeft: 5 })] as const;
+      const sheet = buildSheets(view({ cfg, events: stream(...base) }))["adjustDeduct"]!;
+      for (const side of ["home", "away"] as const) {
+        const step = sheet.steps.find((s) => s.id === `delta:${side}`);
+        if (step?.kind !== "number") throw new Error(`no number step for ${side}`);
+        const strictFold = (delta: number) => {
+          const payload = sheet.buildPayload({ side, [`delta:${side}`]: String(delta), reason: "foul" });
+          return foldMatchWithStoppage(carrom, cfg, SOLO, [...stream(...base), ev(base.length, "carrom.game.adjust", payload)], { strictFromSeq: 0 });
+        };
+        expect(() => strictFold(step.min!), `${side} at its offered minimum ${step.min}`).not.toThrow();
+        expect(() => strictFold(step.max!), `${side} at its offered maximum ${step.max}`).not.toThrow();
+        expect(() => strictFold(step.min! - 1), `${side} one past the minimum is the engine's refusal`).toThrow(/below zero/);
+        checked++;
+      }
+    }
+    expect(checked, "cfg x side combinations checked").toBe(4);
+  });
+
+  // The sequence across a game boundary: game 1's points are over once it is decided, and the deduction is about the OPEN game.
+  it("deduct: after game 1 is decided, the open game 2 starts at 0-0, so the tile is held and the sheet offers no side", () => {
+    const won = [start(), board({ winner: "H", opponentCoinsLeft: 9 }), board({ winner: "H", opponentCoinsLeft: 9 }), board({ winner: "H", opponentCoinsLeft: 9 })] as const;
+    const v = view({ events: stream(...won) });
+    const games = (v.state as { games: { winner: string | null; score: { home: number } }[] }).games;
+    expect(games.length, "premise: game 2 is open").toBe(2);
+    expect(games[0]!.winner, "premise: game 1 is decided").toBe("home");
+    expect(games[0]!.score.home, "premise: game 1 left home with points").toBeGreaterThan(0);
+    expect(tileById(v, "adjustDeduct")!.disabled).toBe(true);
+    const side = buildSheets(v)["adjustDeduct"]!.steps[0]!;
+    expect(side.kind === "choice" ? side.options : null).toEqual([]);
+  });
+
+  it("deduct: with no points anywhere the sheet offers no side (its tile is held, so it cannot be opened)", () => {
+    const sheet = buildSheets(view({ events: stream(start()) }))["adjustDeduct"]!;
+    const side = sheet.steps[0]!;
+    expect(side.kind === "choice" ? side.options : null).toEqual([]);
+    expect(sheet.steps.map((s) => s.id)).toEqual(["side", "reason"]);
   });
 
   it("the bound follows cfg.gameTo — club-29 widens it to 29", () => {
@@ -527,7 +609,7 @@ describe("every payload this pad can produce folds through the real engine", () 
   it("the adjustment deduct sheet's payload takes the score down, clamped at zero by the engine, never negative", () => {
     const base = stream(start(), board({ winner: "H", opponentCoinsLeft: 4 }));
     const sheet = buildSheets(view({ events: base }))["adjustDeduct"]!;
-    const payload = sheet.buildPayload({ side: "home", delta: "-2", reason: "due_coins" });
+    const payload = sheet.buildPayload({ side: "home", "delta:home": "-2", reason: "due_coins" });
     const folded = foldOne(DEFAULT_CFG, base, "carrom.game.adjust", payload) as {
       games: { score: { home: number; away: number } }[];
     };

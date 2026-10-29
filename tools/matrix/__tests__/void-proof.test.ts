@@ -348,13 +348,39 @@ describe("firstOpenFixture / assertVoidable: which fixture the proof is on and w
 describe("voidLedger / voidFold on their own: what each item holds the product to", () => {
   const rowOf = (seq: number, type: string, payload: unknown = {}) => ({ id: `r${seq}`, seq, type, payload });
   const state = (over: Partial<FixtureStateOut> = {}): FixtureStateOut => ({ status: "in_play", last_seq: 3, outcome: null, ...over });
-  const cfg = resolveSportCfg("badminton", offlineBuilderDefault("badminton"));
-  const held: StreamEvent[] = [START, { type: SUMMARY, payload: { home: 21, away: 0 } }];
+  // The format is STATED, not inherited from the builder's default: the strict fold refuses a game score the format cannot
+  // reach (set summary "is not a reachable final score under the set predicate"), so a score typed for one format reds the
+  // day the default moves to another (W2e T29 made a new badminton division 3x15, setTo 15 / cap 21, and 21-0 — a game
+  // under the 21-point "bwf" — stopped being reachable). The first game is the one the sport's own generator writes for THIS
+  // cfg, reachable by construction; the strict fold is the judge (the format test below).
+  const FORMAT = "bwf-3x15";
+  const cfg = resolveSportCfg("badminton", FORMAT);
+  const firstGame = generateStream({ sportKey: "badminton", cfg, stageKind: "league", home: "H", away: "A", outcome: { kind: "win", winner: "home" } })[1]!;
+  const won = firstGame.payload as { home: number; away: number };
+  /** The same game with the sides swapped: reachable too, and a score of its own (the away side takes the game). */
+  const lost = { home: won.away, away: won.home };
+  const held: StreamEvent[] = [START, firstGame];
   const good = (): VoidProofObs => ({
     fixtureId: "f1", home: "H", away: "A", held,
-    rows: [rowOf(1, "core.start"), rowOf(2, SUMMARY, { home: 21, away: 0 }), rowOf(3, VOID_EVENT, { event_id: "r2" })],
+    rows: [rowOf(1, "core.start"), rowOf(2, SUMMARY, won), rowOf(3, VOID_EVENT, { event_id: "r2" })],
     voided: { voidedEventId: "r2", voidedType: SUMMARY },
     state: state(),
+  });
+
+  it("the fixture's format is the one it states and its game is reachable under it: the strict fold takes the generated game, and refuses the 21-point format's 21-0 — which the 21-point format takes", () => {
+    const m = sportModule("badminton");
+    const twentyOneNil: StreamEvent[] = [START, { type: SUMMARY, payload: { home: 21, away: 0 } }];
+    // The generator's second event is a game summary (the guard behind `won`/`lost`), not something else that happens to fold.
+    expect(firstGame.type).toBe(SUMMARY);
+    // The positive pair first: the generated game folds, and so does 21-0 under the format it is a game in (so the refusal
+    // below is the FORMAT's, not a malformed event's).
+    expect(() => foldStream(m, cfg, "H", "A", held)).not.toThrow();
+    expect(() => foldStream(m, resolveSportCfg("badminton", "bwf"), "H", "A", twentyOneNil)).not.toThrow();
+    // The differential: under the stated format 21-0 is not a game (the engine's words), and the cfg really is the 15-point one.
+    expect(() => foldStream(m, cfg, "H", "A", twentyOneNil)).toThrow(/not a reachable final score/);
+    expect((cfg as { setTo: number }).setTo).toBeLessThan(21);
+    // The mirrored game (the `third` score below) is reachable too.
+    expect(() => foldStream(m, cfg, "H", "A", [START, { type: SUMMARY, payload: lost }])).not.toThrow();
   });
 
   it("the good observation passes every item of both checks (the positive pair for each negative below)", () => {
@@ -383,7 +409,7 @@ describe("voidLedger / voidFold on their own: what each item holds the product t
   });
 
   it("void-fold: the ledger's fold equals the fold of the stream before the event, and DIFFERS from the one with it — a void that moved nothing proves nothing", () => {
-    // The with-event and without-event folds differ: the first game (21-0) is a game won.
+    // The with-event and without-event folds differ: the first game is a game won.
     const m = sportModule("badminton");
     const withEvent = JSON.stringify(m.summary(foldStream(m, cfg, "H", "A", held).state));
     const without = JSON.stringify(m.summary(foldStream(m, cfg, "H", "A", held.slice(0, 1)).state));
@@ -402,9 +428,10 @@ describe("voidLedger / voidFold on their own: what each item holds the product t
   });
 
   it("void-fold: each item fails on its own — a ledger that folds to a THIRD score fails only the first, an unvoided one fails the first AND the third", () => {
-    // held: [start, 21-0]; before = nothing played, with = the home side a game up. This ledger voids the 21-0 and
-    // holds a 0-21 instead: neither score, so only the equality with the score before the event fails.
-    const third = voidFold("badminton", cfg, { ...good(), rows: [rowOf(1, "core.start"), rowOf(2, SUMMARY, { home: 21, away: 0 }), rowOf(3, SUMMARY, { home: 0, away: 21 }), rowOf(4, VOID_EVENT, { event_id: "r2" })] });
+    // held: [start, the home side's game]; before = nothing played, with = the home side a game up. This ledger voids that
+    // game and holds the mirrored one instead (the away side a game up): neither score, so only the equality with the score
+    // before the event fails.
+    const third = voidFold("badminton", cfg, { ...good(), rows: [rowOf(1, "core.start"), rowOf(2, SUMMARY, won), rowOf(3, SUMMARY, lost), rowOf(4, VOID_EVENT, { event_id: "r2" })] });
     expect(third).toMatchObject({ verdict: "fail", checked: 3 });
     expect(third.evidence).toHaveLength(1);
     expect(third.evidence[0]).toMatch(/the ledger folds to .* the score before the event is /);
@@ -417,7 +444,7 @@ describe("voidLedger / voidFold on their own: what each item holds the product t
   });
 
   it("void-fold: a ledger the engine refuses (a void naming an unknown event) is a failing item carrying the engine's words, not a crash; no ledger read is a named failure", () => {
-    const refused = voidFold("badminton", cfg, { ...good(), rows: [rowOf(1, "core.start"), rowOf(2, SUMMARY, { home: 21, away: 0 }), rowOf(3, VOID_EVENT, { event_id: "zzz" })] });
+    const refused = voidFold("badminton", cfg, { ...good(), rows: [rowOf(1, "core.start"), rowOf(2, SUMMARY, won), rowOf(3, VOID_EVENT, { event_id: "zzz" })] });
     expect(refused.verdict).toBe("fail");
     expect(refused.evidence.join("\n")).toMatch(/targets unknown or non-prior event/);
     const none = voidFold("badminton", cfg, { ...good(), rows: null });

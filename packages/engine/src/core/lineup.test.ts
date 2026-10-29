@@ -14,11 +14,13 @@ import { describe, expect, it } from "vitest";
 import {
   DEFAULT_LINEUP_POLICY,
   initSquads,
+  judgeLineupEvent,
   memberOf,
   onFieldPersons,
   personsAtPosition,
   playingSquad,
   reduceLineupEvent,
+  reduceLineupEventFor,
   sideOf,
   type LineupEventInput,
   type LineupPolicy,
@@ -660,5 +662,52 @@ describe("reduceLineupEvent never throws", () => {
       result = reduceLineupEvent(squads, event, p);
     }).not.toThrow();
     expect(result?.ok).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2e T32 fix round 2 — `judgeLineupEvent` / `reduceLineupEventFor`: judged on the module's squads, and a REPLAY refusal
+// there falls back to the kernel's own (only a strict write refuses). `judged` here is the kernel's squads with h-df
+// already off the field: what football's pitch says after a sending-off the kernel never heard of.
+// ---------------------------------------------------------------------------
+
+describe("judgeLineupEvent: one judgment for the kernel and every replay that restates it", () => {
+  const squads = initSquads(lineups);
+  const judged = accept(reduceLineupEvent(squads, retirement("H", "h-df"), policy()));
+  const offOnJudged = retirement("H", "h-df");
+
+  it("anti-vacuity: the two squads disagree about h-df, and only about h-df", () => {
+    expect(onFieldPersons(squads.home)).toContain("h-df");
+    expect(onFieldPersons(judged.home)).not.toContain("h-df");
+    expect(onFieldPersons(judged.home)).toHaveLength(onFieldPersons(squads.home).length - 1);
+  });
+
+  it("a strict write is held to the judged squads: refused not-on-field", () => {
+    const verdict = judgeLineupEvent(judged, squads, offOnJudged, policy(), true);
+    expect(verdict).toMatchObject({ ok: false, reason: "not-on-field" });
+  });
+
+  it("a replay of the same event falls back to the kernel's squads and accepts it there", () => {
+    const after = accept(judgeLineupEvent(judged, squads, offOnJudged, policy(), false));
+    expect(onFieldPersons(after.home)).not.toContain("h-df");
+    expect(onFieldPersons(after.home)).toEqual(onFieldPersons(judged.home));
+  });
+
+  it("an event the judged squads accept is folded on THEM, strict or not (the fallback is for refusals only)", () => {
+    for (const strict of [true, false]) {
+      const after = accept(judgeLineupEvent(judged, squads, retirement("H", "h-fw"), policy(), strict));
+      expect(onFieldPersons(after.home), `strict=${strict}`).toEqual(["h-gk"]);
+    }
+  });
+
+  it("a structural refusal on both is still a refusal on replay (nobody to fall back to)", () => {
+    const verdict = judgeLineupEvent(judged, squads, retirement("H", "h-sub-mf"), policy(), false);
+    expect(verdict).toMatchObject({ ok: false, reason: "not-on-field" });
+  });
+
+  it("reduceLineupEventFor judges on the module's squadsForLineup when it declares one, else on the kernel's own", () => {
+    const hooked = { squadsForLineup: (_state: null, _squads: SquadState) => judged };
+    expect(reduceLineupEventFor(hooked, null, squads, offOnJudged, policy(), true)).toMatchObject({ ok: false });
+    expect(reduceLineupEventFor({}, null, squads, offOnJudged, policy(), true)).toMatchObject({ ok: true });
   });
 });

@@ -61,15 +61,17 @@ export const BUILDER_KNOB_BOUNDS: Readonly<Record<"qualified" | "poolCount", Rea
   poolCount: Object.freeze({ min: 2, max: 8 }),
 });
 
-/** division-builder.tsx:56-61 — pinned by catalogue.test.ts. */
+/** apps/web/src/lib/preferred-variant.ts (PREFERRED_VARIANT; the builder and the /start funnel both read it) — pinned by
+ *  catalogue.test.ts. W2e D2 added badminton: a new division is BWF 3x15. */
 export const BUILDER_PREFERRED_VARIANT: Readonly<Record<string, string>> = Object.freeze({
   cricket: "t20",
   tennis: "tour",
   icehockey: "iihf",
   hockey: "fih-outdoor",
+  badminton: "bwf-3x15",
 });
 
-/** pickVariant (division-builder.tsx:63-67): the preferred key when the DB offers
+/** pickVariant (apps/web/src/lib/preferred-variant.ts): the preferred key when the DB offers
  *  it, else the first listed. The list order is a DB fact
  *  (`order by is_system desc, name`, d/new/page.tsx:51-55), so the caller passes it. */
 export function builderDefaultVariant(sport: string, variantsInBuilderOrder: readonly string[]): string {

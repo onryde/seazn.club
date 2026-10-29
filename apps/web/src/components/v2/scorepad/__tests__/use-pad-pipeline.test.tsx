@@ -26,7 +26,9 @@ import {
   type UsePadPipelineParams,
   type UsePadPipelineResult,
 } from "../use-pad-pipeline";
-import { runAmend } from "../v3/pad-host";
+import { endingPlanOf, endingPromptOf, runAmend, runEnding } from "../v3/pad-host";
+import { builtinModules } from "@seazn/engine/sports";
+import { makeEnvelope } from "@seazn/engine/testkit";
 
 // S12/#421 pass H test seam: this suite's vitest environment is Node, with
 // no real `indexedDB` (queue-store.ts's own documented fallback — see the
@@ -2894,6 +2896,237 @@ describe("R8/#675 — a reload inside the amendment's hold window", () => {
       "the original event stands, exactly once",
     ).toHaveLength(1);
     expect(appendCalls, "and nothing further was ever sent").toHaveLength(1);
+  });
+
+  it("a REFUSED replacement takes its bound void with it, so the void cannot drain alone and delete the scored event (W2e T30 fix round 1, M-1)", async () => {
+    // The mirror of the take-back case above, for the other way a held replacement dies: the server refuses it. Before the
+    // reject-cascade in `runDrain` the bound void stayed in the durable queue, drained next, and retired an original that
+    // nothing had replaced — the same silent loss as the amendment's "round 1", reached through a refusal instead of a
+    // take-back.
+    const { transport, appendCalls } = fakeTransport({
+      appendResults: [success(1), { kind: "rejected", code: "INVALID_EVENT", message: "refused" }],
+    });
+    const pad = mountPipeline(baseParams({ transport, queueDbName: "amend-refused-replacement" }));
+    await vi.advanceTimersByTimeAsync(0);
+    await pad.current.submit("generic.score", { by: "H", points: 1 });
+    const originalId = pad.current.events.find((e) => e.type === "generic.score")!.id;
+    await vi.advanceTimersByTimeAsync(DOUBLE_SUBMIT_WINDOW_MS + 50);
+
+    const heldId = await runAmend(
+      { voidId: originalId, type: "generic.score", payload: { by: "H", points: 1 } },
+      {
+        // The release closure is the host's own (`handleAmend`): once the hold is up, drain.
+        submitHeld: (type, payload) =>
+          pad.current.submitHeld(type, payload, HOLD_MS, () => {
+            void pad.current.retryDrain();
+          }),
+        submit: (type, payload, opts) => pad.current.submit(type, payload, opts),
+      },
+    );
+    expect(heldId).not.toBeNull();
+    // Before the refusal: the replacement and the void are both in the queue and the optimistic ledger.
+    expect(await pad.current.queueStore.list(), "the pair is queued behind the hold").toHaveLength(2);
+    expect(pad.current.events.filter((e) => e.type === "core.void")).toHaveLength(1);
+
+    // The hold releases; the replacement is refused.
+    await vi.advanceTimersByTimeAsync(HOLD_MS + 100);
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(
+      appendCalls.map((c) => c.body.type),
+      "the original and the refused replacement were sent; the bound void was NOT",
+    ).toEqual(["generic.score", "generic.score"]);
+    expect(await pad.current.queueStore.list(), "nothing is left queued to drain behind the refusal").toEqual([]);
+    expect(
+      pad.current.events.filter((e) => e.type === "core.void"),
+      "and the optimistic fold no longer retires the original",
+    ).toEqual([]);
+    expect(
+      pad.current.events.filter((e) => e.type === "generic.score"),
+      "the original stands, exactly once: the refused replacement is gone",
+    ).toHaveLength(1);
+    expect(pad.current.lastRejection, "the refusal is reported to the scorer").not.toBeNull();
+    // Nothing further drains later either.
+    await vi.advanceTimersByTimeAsync(HOLD_MS * 3);
+    expect(appendCalls, "no late send").toHaveLength(2);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// W2e Task 30 (D3, D13) — a disqualifying sanction and its ending, over the REAL pipeline
+// ---------------------------------------------------------------------------
+//
+// Same reasoning as the amendment block above: `runEnding` binds the forfeit to the held sanction with the durable
+// `dropWith` field, and only this suite can reach the places that binding matters — take-back (the optimistic mirror as
+// well as the queue), a reload taken inside the hold (the resume path), a refused second append (the ledger the pad is
+// left holding), and a refused FIRST append (the follower must not drain alone). Swept over every sport whose module
+// declares an end level (`sanctionEnding.endLevels`), read from the engine, with the count asserted.
+describe("W2e T30 — the sanction-and-ending pair over the real pipeline", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  const DECLARING = builtinModules.filter((m) => (m.sanctionEnding?.endLevels.length ?? 0) > 0);
+  const rigFor = (key: string) => {
+    const mod = DECLARING.find((m) => m.key === key)!;
+    const client = resolveModuleClient(mod.key, mod.version);
+    const cfg = client.configSchema.parse({});
+    const lineups = defaultLineupPair(resolvePositions(client, cfg));
+    const start = makeEnvelope(1, { type: "core.start", payload: {} } as never);
+    const decl = mod.sanctionEnding!;
+    const plan = endingPlanOf(mod, decl.eventType, { by: lineups.home.entrantId, level: decl.endLevels[0] })!;
+    const promptOf = (pad: { events: readonly EventEnvelope[]; state: unknown }) =>
+      endingPromptOf({
+        module: mod,
+        rows: pad.events.map((e) => ({ id: e.id, seq: e.seq, type: e.type, payload: e.payload, voids: e.voids ?? null })),
+        state: pad.state,
+        canOrganise: true,
+        ownEventIds: new Set(),
+        deviceLinkId: null,
+        lineups,
+      });
+    return { mod, client, cfg, lineups, start, decl, plan, promptOf };
+  };
+  const io = (pad: { current: UsePadPipelineResult }) => ({
+    submitHeld: (type: string, payload: unknown) =>
+      pad.current.submitHeld(type, payload, HOLD_MS, () => {
+        void pad.current.retryDrain();
+      }),
+    submit: (type: string, payload: unknown, opts?: { dropWith?: string }) => pad.current.submit(type, payload, opts),
+  });
+
+  it("the engine declares an end level for at least badminton and tennis (anti-vacuity)", () => {
+    expect(DECLARING.map((m) => m.key)).toEqual(expect.arrayContaining(["badminton", "tennis"]));
+  });
+
+  it("take back during the hold drops both events — from the queue AND from the optimistic fold", async () => {
+    let swept = 0;
+    for (const { key } of DECLARING.map((m) => ({ key: m.key }))) {
+      const r = rigFor(key);
+      const { transport, appendCalls } = fakeTransport({ appendResults: [] });
+      const pad = mountPipeline(
+        baseParams({ module: r.client, cfg: r.cfg, lineups: r.lineups, transport, initialEvents: [r.start], queueDbName: `end-takeback-${key}` }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      const heldId = await runEnding(r.plan, io(pad));
+      expect(heldId, key).not.toBeNull();
+      // Both are in the optimistic ledger, so the match reads decided and the prompt is not shown.
+      expect(pad.current.events.map((e) => e.type).slice(1), key).toEqual([r.decl.eventType, "core.forfeit"]);
+      expect(r.promptOf(pad.current), `${key}: decided optimistically, no prompt`).toBeNull();
+
+      expect(await pad.current.dropHeldSubmission(heldId as string), key).toBe(true);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(await pad.current.queueStore.list(), `${key}: the queue is clean`).toEqual([]);
+      expect(pad.current.events.map((e) => e.type), `${key}: and so is the optimistic fold`).toEqual(["core.start"]);
+      expect(r.promptOf(pad.current), `${key}: nothing is pending after the take-back`).toBeNull();
+      await vi.advanceTimersByTimeAsync(HOLD_MS + 100);
+      expect(appendCalls, `${key}: nothing was ever sent — the forfeit did not drain alone`).toHaveLength(0);
+      pad.unmount();
+      swept++;
+    }
+    expect(swept).toBe(DECLARING.length);
+  });
+
+  it("a reload inside the hold resumes BOTH events, the sanction first", async () => {
+    let swept = 0;
+    for (const { key } of DECLARING.map((m) => ({ key: m.key }))) {
+      const r = rigFor(key);
+      const DB_NAME = `end-reload-${key}`;
+      const { transport, appendCalls } = fakeTransport({ appendResults: [success(2), success(3)] });
+      const pad1 = mountPipeline(
+        baseParams({ module: r.client, cfg: r.cfg, lineups: r.lineups, transport, initialEvents: [r.start], queueDbName: DB_NAME }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await runEnding(r.plan, io(pad1))).not.toBeNull();
+      expect(appendCalls, `${key}: still held`).toHaveLength(0);
+
+      pad1.unmount(); // the reload: a fresh mount over the same durable queue, with a fresh (empty) tick map
+      const pad2 = mountPipeline(
+        baseParams({ module: r.client, cfg: r.cfg, lineups: r.lineups, transport, initialEvents: [r.start], queueDbName: DB_NAME }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(HOLD_MS + 100);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(appendCalls.map((c) => c.body.type), `${key}: the resumed sanction is followed by its ending`).toEqual([
+        r.decl.eventType,
+        "core.forfeit",
+      ]);
+      expect(appendCalls[1]!.body.payload, key).toEqual({ by: r.lineups.home.entrantId, reason: "disqualified" });
+      expect(await pad2.current.queueStore.list(), `${key}: nothing left queued`).toEqual([]);
+      expect(r.promptOf(pad2.current), `${key}: decided, no prompt`).toBeNull();
+      pad2.unmount();
+      swept++;
+    }
+    expect(swept).toBe(DECLARING.length);
+  });
+
+  it("a failed second append leaves the prompt on reload", async () => {
+    let swept = 0;
+    for (const { key } of DECLARING.map((m) => ({ key: m.key }))) {
+      const r = rigFor(key);
+      // The sanction is acknowledged; the forfeit behind it is refused (a legacy 403, a network fault turned permanent...).
+      const { transport } = fakeTransport({
+        appendResults: [success(2), { kind: "rejected", code: "FORBIDDEN", message: "refused" }],
+      });
+      const pad = mountPipeline(
+        baseParams({ module: r.client, cfg: r.cfg, lineups: r.lineups, transport, initialEvents: [r.start], queueDbName: `end-fail2-${key}` }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await runEnding(r.plan, io(pad))).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(HOLD_MS + 100);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(pad.current.lastRejection, `${key}: the refusal is reported`).not.toBeNull();
+      expect(pad.current.events.map((e) => e.type), `${key}: the sanction stands, the forfeit does not`).toEqual([
+        "core.start",
+        r.decl.eventType,
+      ]);
+      const prompt = r.promptOf(pad.current);
+      expect(prompt, `${key}: the pad is left on the ending prompt`).not.toBeNull();
+      expect(prompt!.by).toBe(r.lineups.home.entrantId);
+
+      // A RELOAD from the server's ledger: the same prompt, from the rows alone.
+      const ledger = pad.current.events;
+      pad.unmount();
+      const pad2 = mountPipeline(
+        baseParams({ module: r.client, cfg: r.cfg, lineups: r.lineups, transport: fakeTransport({ appendResults: [] }).transport, initialEvents: ledger, queueDbName: `end-fail2-reload-${key}` }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(r.promptOf(pad2.current), `${key}: still on the prompt after a reload`).not.toBeNull();
+      pad2.unmount();
+      swept++;
+    }
+    expect(swept).toBe(DECLARING.length);
+  });
+
+  it("a refused FIRST append takes its bound ending with it (the forfeit must not drain alone)", async () => {
+    let swept = 0;
+    for (const { key } of DECLARING.map((m) => ({ key: m.key }))) {
+      const r = rigFor(key);
+      const { transport, appendCalls } = fakeTransport({
+        appendResults: [{ kind: "rejected", code: "INVALID_EVENT", message: "refused" }],
+      });
+      const pad = mountPipeline(
+        baseParams({ module: r.client, cfg: r.cfg, lineups: r.lineups, transport, initialEvents: [r.start], queueDbName: `end-fail1-${key}` }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      expect(await runEnding(r.plan, io(pad))).not.toBeNull();
+      await vi.advanceTimersByTimeAsync(HOLD_MS + 100);
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(appendCalls.map((c) => c.body.type), `${key}: only the sanction was ever sent`).toEqual([r.decl.eventType]);
+      expect(await pad.current.queueStore.list(), `${key}: and nothing is left to drain`).toEqual([]);
+      expect(pad.current.events.map((e) => e.type), `${key}: the optimistic fold carries neither`).toEqual(["core.start"]);
+      expect(pad.current.lastRejection, key).not.toBeNull();
+      pad.unmount();
+      swept++;
+    }
+    expect(swept).toBe(DECLARING.length);
   });
 });
 

@@ -44,12 +44,13 @@ import { readPublicUi } from "../browser/pages/public-division.ts";
 import { judgeTodayDefault, openFixtureUi, type DefaultFilterSeen } from "../browser/pages/run-sheet.ts";
 import { completeStageUi, generateUi, judgeFoldBranch, type RailHooks, type StagePosition } from "../browser/pages/stage-rail.ts";
 import { readStandingsUi, type UiTable } from "../browser/pages/standings.ts";
-import { FORFEIT_REASONS, SETTLE_METHODS } from "@seazn/engine/core";
+import { FORFEIT_REASONS, SETTLE_METHODS, type StageKind } from "@seazn/engine/core";
 // W2b Task 11 (review I-1): the reasons PF-2 reserves for the withdrawal cascade, the PRODUCT's list (the console's
 // dialog and the server's refusal read it too), never a hand copy. It imports only @seazn/engine/core (boundary.test.ts).
 import { CASCADE_ONLY_FORFEIT_REASONS } from "../../../../apps/web/src/lib/forfeit-phase-refusal.ts";
 import { ORGANISER_ONLY_SPORT_EVENTS, isOrganiserOnlyEvent } from "../../../../apps/web/src/lib/organiser-only-events.ts";
 import { noPadReason } from "../pad-sports.ts";
+import { storedRulesFor } from "../sport-cfg.ts";
 import { replayEvents, type ReplayResult } from "../pads/replay.ts";
 import type { MatrixPadAdapter } from "../pads/types.ts";
 import type { CheckResult } from "../results.ts";
@@ -358,18 +359,59 @@ function bySeq(stages: readonly Comparable[], side: string, out: string[]): Map<
   return m;
 }
 
+/** The sport and variant a division was created under: what the create door stores a stage's preset `rules` from. The
+ *  product's own answer for the division the builder made, never the case's request. */
+export interface DoorDivision { readonly sportKey: string; readonly variantKey: string | null }
+
+/** Exclusive bound of the seed the create door gives a stage: a random 31-bit integer (W2d Task 10, `withRngSeed`). */
+export const RNG_SEED_BOUND = 2 ** 31;
+const isDoorSeed = (v: unknown): boolean => typeof v === "number" && Number.isInteger(v) && v >= 0 && v < RNG_SEED_BOUND;
+
+/** The config the create door stores for a body the harness posted: the posted keys, and the `rules` the PRODUCT's own
+ *  composition stores (`storedStageRules`: the sport's preset for this kind and variant, the posted rules merged over it;
+ *  none stored when nothing is left). The door's seed is not here: it is random, judged on the built side. */
+function doorStoredConfig(body: StagePostBody, door: DoorDivision): Record<string, unknown> {
+  const { rules: posted, ...rest } = body.config;
+  const stored = storedRulesFor(door.sportKey, body.kind as StageKind, door.variantKey, posted);
+  return stored !== null && Object.keys(stored).length > 0 ? { ...rest, rules: stored } : rest;
+}
+
 /** What the builder posted against the harness's bodies for the same row:
  *  kind, config and progression by seq, keys sorted; ids, names and statuses
- *  are the product's and are not judged. */
-export function builderVsHarness(built: readonly StageOut[], bodies: readonly StagePostBody[]): CheckResult {
+ *  are the product's and are not judged.
+ *
+ *  W2e Task 35: the create door owns two config keys the harness never posts, and the comparison is made against what
+ *  the door STORES for the harness's body, not against the body: (1) `rngSeed`, a random integer in [0, 2^31) on every
+ *  stage unless the body posted one (then it is a posted key and must be equal); (2) the sport's preset `rules`
+ *  (`doorStoredConfig`). Both were absent from the comparison until a real builder run reddened 164 of 176 L1 cells on
+ *  them. Every other key, and any value of these two that the door would not store, is still a difference. */
+export function builderVsHarness(built: readonly StageOut[], bodies: readonly StagePostBody[], door: DoorDivision): CheckResult {
   const evidence: string[] = [];
-  const b = bySeq(built, "built", evidence);
-  const h = bySeq(bodies, "harness", evidence);
+  const postedSeed = new Map(bodies.map((x) => [x.seq, (x.config ?? {}).rngSeed] as const));
+  const seedFails = new Map<number, string>();
+  const builtJudged = built.map((s) => {
+    const { rngSeed, ...rest } = s.config ?? {};
+    const posted = postedSeed.get(s.seq);
+    if (posted !== undefined && posted !== null) return s; // the harness posted a seed: kept as posted, compared as posted
+    if (rngSeed !== undefined && !isDoorSeed(rngSeed)) seedFails.set(s.seq, `stage[${s.seq}].config.rngSeed: built ${show(rngSeed)}, the door stores an integer in [0, ${RNG_SEED_BOUND})`);
+    return { ...s, config: rest };
+  });
+  // A body that posted a seed keeps it in the expectation; one that did not has the door's, judged above.
+  const expected = bodies.map((x) => {
+    const seed = postedSeed.get(x.seq);
+    return { ...x, config: { ...doorStoredConfig(x, door), ...(seed !== undefined && seed !== null ? { rngSeed: seed } : {}) } };
+  });
+  const b = bySeq(builtJudged, "built", evidence);
+  const h = bySeq(expected, "harness", evidence);
   for (const seq of [...new Set([...b.keys(), ...h.keys()])].sort((x, y) => x - y)) {
     const x = b.get(seq);
     const y = h.get(seq);
     if (x === undefined || y === undefined) evidence.push(`stage[${seq}]: built ${x?.kind ?? "(none)"}, harness ${y?.kind ?? "(none)"}`);
-    else diffPaths(`stage[${seq}]`, x, y, evidence);
+    else {
+      const seed = seedFails.get(seq);
+      if (seed !== undefined) evidence.push(seed);
+      diffPaths(`stage[${seq}]`, x, y, evidence);
+    }
   }
   const checked = Math.max(built.length, bodies.length);
   if (checked === 0) return { id: "builder-posted-as-harness", kind: "assertion", verdict: "fail", checked: 0, reason: "vacuous: neither the builder nor the harness has a stage (checked 0 is a failure)", evidence: [] };
@@ -438,7 +480,7 @@ export class BrowserDriver implements OrganiserDriver {
    *  driver built, posted or listed, so its place among its division's stages is known. */
   readonly #stages = new Map<string, { readonly divisionId: string; readonly seq: number }>();
   /** The builder's answer, until the harness's one postStages for that division consumes it. */
-  #built: { divisionId: string; stages: StageOut[] } | null = null;
+  #built: { divisionId: string; stages: StageOut[]; door: DoorDivision } | null = null;
   #uiPathJudged = false;
   /** Stages completed, or whose complete ended unknown: never completed again (design §6.4). */
   readonly #completed = new Set<string>();
@@ -655,7 +697,7 @@ export class BrowserDriver implements OrganiserDriver {
       { name: input.name, sportKey: input.sportKey, variantKey: input.variantKey, row })));
     this.#register(division.id, compSlug, division.slug);
     this.#know(division.id, stages);
-    this.#built = { divisionId: division.id, stages };
+    this.#built = { divisionId: division.id, stages, door: { sportKey: division.sport_key, variantKey: division.variant_key } };
     if (!this.#uiPathJudged) {
       this.#uiPathJudged = true;
       this.#checks.push(assertion("organiser-ui-path", [{ ok: true, note: `the division builder built ${row}` }]));
@@ -672,7 +714,7 @@ export class BrowserDriver implements OrganiserDriver {
     const b = this.#built;
     if (b !== null && b.divisionId === divisionId) {
       this.#built = null;
-      this.#checks.push(builderVsHarness(b.stages, stages));
+      this.#checks.push(builderVsHarness(b.stages, stages, b.door));
       return b.stages.map(toStageRef);
     }
     const out = await this.#write(() => this.#http.postStages(divisionId, stages));

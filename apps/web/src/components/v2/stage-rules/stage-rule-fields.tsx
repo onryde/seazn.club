@@ -9,11 +9,13 @@
 // (`grid-cols-1`, two columns from `sm`), so a phone needs no second tree.
 import { useId, useMemo } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { buildRuleOverride, setRuleValue, visibleRuleFields, type RuleField } from "@/lib/match-rules";
+import { buildRuleOverride, fieldOptionText, setRuleValue, visibleRuleFields, type RuleField } from "@/lib/match-rules";
 import { divisionOnlyStageKeys } from "@/lib/online-time-control";
 import type { StageKind } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
+import { configIssueText } from "@/lib/config-issue-copy";
+import { ruleProblemsOf } from "../match-rules-state";
 import { RuleFieldControl, type OptionState } from "./rule-field-control";
 import { abandonOptionStates, deciderOfDetail, detailIsInert, stageSections, type StageSectionId } from "./stage-row-model";
 
@@ -74,6 +76,9 @@ export function StageRuleFields({
     return new Map<string, OptionState>(abandonOptionStates(module, effective).map((o) => [o.value, o] as const));
   }, [module, sportKey, values, divisionConfig]);
   const reasons = [...optionStates.entries()].filter(([, s]) => s.disabled && s.reasonKey !== null);
+  // W2e T33a: what a write door would refuse the cfg this stage would play with, beside the fields it is about (a best of 1 with a
+  // match tie-break; a set target under the floor), not only after Save. The save's own refusal is unchanged.
+  const problems = useMemo(() => (resolved === null ? null : ruleProblemsOf(sportKey, resolved).invalid), [sportKey, resolved]);
 
   const edit = (key: string, raw: string) => onChange(setRuleValue(sportKey, values, key, raw, divisionConfig));
 
@@ -95,13 +100,14 @@ export function StageRuleFields({
                 // the label of the field that switches it).
                 const inert = detailIsInert(module, field, resolved);
                 const decider = inert ? deciderOfDetail(module, field) : null;
-                const switchLabel = decider === null ? undefined : sections.flatMap((x) => x.fields).find((f) => f.edits[0] === decider)?.label;
+                const switchField = decider === null ? undefined : sections.flatMap((x) => x.fields).find((f) => f.edits[0] === decider);
+                const switchLabel = switchField === undefined ? undefined : msg(switchField.labelKey);
                 return (
                   <div
                     key={field.key}
                     data-testid={`stage-rule-field-${topSegment(field)}`}
                     data-source={set ? "stage" : "division"}
-                    className={`min-w-0 rounded-lg border border-slate-200 px-3 py-2 ${inert ? "bg-slate-50 [&_input]:bg-slate-100" : "bg-white"} ${field.kind === "sequence" ? "sm:col-span-2 lg:col-span-3" : ""}`}
+                    className={`min-w-0 rounded-lg border border-slate-200 px-3 py-2 ${inert ? "bg-slate-50 [&_input]:bg-slate-100 [&_select]:bg-slate-100" : "bg-white"} ${field.kind === "sequence" ? "sm:col-span-2 lg:col-span-3" : ""}`}
                   >
                     <RuleFieldControl
                       sportKey={sportKey}
@@ -113,6 +119,11 @@ export function StageRuleFields({
                       sequenceInherits={divisionConfig}
                       optionStates={s.id === "abandon" ? optionStates : undefined}
                       describedBy={s.id === "abandon" && reasons.length > 0 ? reasonId : undefined}
+                      problem={
+                        problems?.get(field.key) === undefined
+                          ? undefined
+                          : { text: problems.get(field.key)!.map((message) => configIssueText({ path: [], message }, msg)).join(" "), idScope: reasonId }
+                      }
                     />
                     <span className={`mt-1 block text-[11px] ${set ? "text-teal-800" : "text-slate-600"}`}>
                       {msg(set ? "stageRules.source.stage" : "stageRules.source.division")}
@@ -126,7 +137,7 @@ export function StageRuleFields({
                       <ul id={reasonId} className="mt-1 space-y-0.5 text-[11px] text-slate-600">
                         {reasons.map(([value, state]) => (
                           <li key={value} data-testid={`stage-abandon-unavailable-${value}`}>
-                            {field.options?.find((o) => o.value === value)?.label ?? value}: {msg(state.reasonKey!)}
+                            {fieldOptionText(field, value, msg)}: {msg(state.reasonKey!)}
                           </li>
                         ))}
                       </ul>

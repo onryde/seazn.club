@@ -622,8 +622,10 @@ export function resultInStats(events: readonly EventEnvelope[], module: StatsPla
  * 4 — R115 review M3 (the set-based, nested and carrom folds count `matches` through `playedInStats`);
  * 5 — ruling 120 (an abandon is a match only if something was played before it; carrom's wins follow the reader);
  * 6 — ruling 127 (a withdrawal after play is a match for both sides' players, with no personal result).
+ * 7 — W2e T32 fix round 2 (football's keeper stats judge a `core.lineup.*` event on the pitch a `football.sub` moved, as
+ *     the match fold does: a keeper named in goal after a legacy substitution is charged, not the man who left).
  */
-export const STATS_FOLD_VERSION = 6;
+export const STATS_FOLD_VERSION = 7;
 
 /**
  * Fold one fixture's event ledger into per-person stat contributions

@@ -21,6 +21,9 @@ import { MatchRuleFields } from "@/components/v2/match-rules";
 import { StageRuleFields } from "@/components/v2/stage-rules/stage-rule-fields";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
+import esUi from "@/dictionaries/es/ui.json";
+import frUi from "@/dictionaries/fr/ui.json";
+import nlUi from "@/dictionaries/nl/ui.json";
 import {
   SPORT_RULES,
   buildRuleOverride,
@@ -28,6 +31,7 @@ import {
   setRuleValue,
   visibleRuleFields,
 } from "@/lib/match-rules";
+import { msg } from "@/lib/messages";
 import { pointsTheOnlyGameIsPlayedTo } from "@/lib/__tests__/_single-game-target";
 import { badminton } from "@seazn/engine/sports/setbased";
 import { BRACKET_KINDS, StageKind } from "@seazn/engine/core";
@@ -430,14 +434,14 @@ describe("the two derivations — one function, two different inputs", () => {
       .options!.find((o) => o.value === "3")!.label;
     // Derived from the declaration, so relabelling "Best of 3" moves this test
     // rather than leaving it asserting yesterday's string.
-    expect(stageFormatHeadline("badminton", { bestOf: 3 })).toBe(label);
-    expect(stageFormatHeadline("badminton", { ...{ bestOf: 3 }, ...{ bestOf: 1 } })).toBe(
+    expect(stageFormatHeadline("badminton", { bestOf: 3 }, msg)).toBe(label);
+    expect(stageFormatHeadline("badminton", { ...{ bestOf: 3 }, ...{ bestOf: 1 } }, msg)).toBe(
       "Best of 1",
     );
   });
 
   it("says nothing rather than inventing a number when the config names no bestOf", () => {
-    expect(stageFormatHeadline("badminton", {})).toBeNull();
+    expect(stageFormatHeadline("badminton", {}, msg)).toBeNull();
   });
 
   it("labels a value the sport's own picker cannot offer (D9)", () => {
@@ -456,8 +460,8 @@ describe("the two derivations — one function, two different inputs", () => {
     const borrowed = (SPORT_RULES.tabletennis ?? [])
       .find((f) => f.key === "bestOf")!
       .options!.find((o) => o.value === "7")!.label;
-    expect(stageFormatHeadline("badminton", { bestOf: 7 })).toBe(borrowed);
-    expect(stageFormatHeadline("badminton", { bestOf: 7 })).toBe("Best of 7");
+    expect(stageFormatHeadline("badminton", { bestOf: 7 }, msg)).toBe(borrowed);
+    expect(stageFormatHeadline("badminton", { bestOf: 7 }, msg)).toBe("Best of 7");
   });
 
   it("states badminton's own 5 from its own option, not a borrow (2026-09-20)", () => {
@@ -469,7 +473,7 @@ describe("the two derivations — one function, two different inputs", () => {
       .find((f) => f.key === "bestOf")!
       .options!.find((o) => o.value === "5")!.label;
     expect(own).toBe("Best of 5");
-    expect(stageFormatHeadline("badminton", { bestOf: 5 })).toBe(own);
+    expect(stageFormatHeadline("badminton", { bestOf: 5 }, msg)).toBe(own);
   });
 
   it("borrows through the SAME lookup the editor's synthetic option uses", () => {
@@ -484,14 +488,32 @@ describe("the two derivations — one function, two different inputs", () => {
     // fallback — all three branches of `ruleOptionLabel`, through both paths.
     for (const value of ["1", "3", "5", "7", "9"]) {
       const expected = ruleOptionLabel("badminton", "bestOf", value) ?? value;
-      expect(stageFormatHeadline("badminton", { bestOf: Number(value) })).toBe(expected);
+      expect(stageFormatHeadline("badminton", { bestOf: Number(value) }, msg)).toBe(expected);
     }
+  });
+
+  it("says the number in the page's language, through the option's dictionary key - the sport's own and the borrowed alike (W2e T33a, counted)", () => {
+    const bestOf = (sport: string, value: string) => SPORT_RULES[sport]!.find((f) => f.key === "bestOf")!.options!.find((o) => o.value === value)!;
+    let judged = 0;
+    for (const dict of [esUi, frUi, nlUi] as unknown as Array<Record<string, string>>) {
+      const inLanguage = (key: string) => dict[key]!;
+      // 3 is badminton's own option, 7 is borrowed from table tennis; both read from the locale's dictionary.
+      for (const [value, from] of [["3", "badminton"], ["7", "tabletennis"]] as const) {
+        const text = dict[bestOf(from, value).labelKey!]!;
+        expect(stageFormatHeadline("badminton", { bestOf: Number(value) }, inLanguage)).toBe(text);
+        expect(text, "premise: the locale's text is not the English label").not.toBe(bestOf(from, value).label);
+        judged++;
+      }
+      // The bare-value fallback is the same in every language.
+      expect(stageFormatHeadline("badminton", { bestOf: 9 }, inLanguage)).toBe("9");
+    }
+    expect(judged).toBe(6);
   });
 
   it("falls back to the bare value when no sport offers it at all", () => {
     // 9 is in no picker anywhere, so there is no label to borrow and the row
     // states the raw number rather than inventing copy.
-    expect(stageFormatHeadline("badminton", { bestOf: 9 })).toBe("9");
+    expect(stageFormatHeadline("badminton", { bestOf: 9 }, msg)).toBe("9");
   });
 });
 
@@ -553,6 +575,7 @@ describe("what a Save actually PUTs", () => {
         key: "gone",
         edits: ["gone"],
         label: "Gone",
+        labelKey: "rules.field.winBy.label",
         kind: "number",
         build: (v) => ({ gone: Number(v) }),
         buildOnBlank: () => ({ gone: undefined }),

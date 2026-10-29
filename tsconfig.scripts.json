@@ -26,7 +26,14 @@
     "types": ["node"],
     // Scripts reach into apps/web sources (openapi-gen, i18n) which use the
     // app's own "@/…" alias.
-    "paths": { "@/*": ["./apps/web/src/*"] }
+    //
+    // `@/lib/messages` is the one module redirected: its real file cannot be checked under nodenext (a JSON import without an
+    // attribute), and the scripts program reaches it only for the `MessageKey` TYPE, through `lib/match-rules/**`. The stub is
+    // the longer pattern, so it wins over `@/*`. See scripts/typecheck/message-key.ts.
+    "paths": {
+      "@/lib/messages": ["./scripts/typecheck/message-key.ts"],
+      "@/*": ["./apps/web/src/*"]
+    }
   },
   // tools/ (the dev-only harnesses — tools/matrix and tools/bench, ruling 56)
   // runs the same way and was type-checked here under scripts/ before each

@@ -1584,6 +1584,9 @@ export async function cleanup(tag: string): Promise<void> {
     `delivered+w2c_${tag}@resend.dev`,
     // w2dTablesSuite's own org (W2d A-smoke) — its competition, the pinned stage and its stored lots draws cascade with it.
     `delivered+w2d_${tag}@resend.dev`,
+    // w2eRefusalsSuite's own Pro org (W2e T33) — its competition, eight divisions, the badminton fixture's device link and the
+    // generic league's standings snapshot cascade with it.
+    `delivered+w2e_${tag}@resend.dev`,
     // youtubeConnectSuite's two orgs (YouTube Connect T21) - the connections, destinations, broadcasts, fixtures and pending grants
     // all cascade with the org (V479: on delete cascade on org_id).
     `delivered+ytconnect_${tag}@resend.dev`,

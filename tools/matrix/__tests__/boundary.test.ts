@@ -219,9 +219,13 @@ describe("tools/matrix import boundary", () => {
   // `./shared`, so nothing else in the repo goes red when a sibling import loses its `.ts`.
   // The expected API is the public surface the single-file module exported (the Task 1 brief's interface list), not
   // anything read back from the code under test.
+  // W2e Task 33a joined six: every field names its dictionary keys, so the screens need the lookups that read them in the viewer's
+  // language - `ruleOptionFor` / `ruleOptionText` / `borrowOption` (the option itself, and its text), `optionText` / `fieldOptionText`
+  // (an option's or a field's option text through `msg`), and `SINGLE_SET_POINTS_LABEL_KEY` (the best-of-1 relabel's key).
   const MATCH_RULES_API = [
-    "SINGLE_SET_POINTS_LABEL", "SPORT_RULES", "alignBestOfOnePoints", "borrowOptionLabel",
-    "buildRuleOverride", "clearedSequenceKeys", "configKeysFor", "hydrateRuleValues", "keysEmittedBy", "ruleContextFor", "ruleOptionLabel", "rulesFor", "setRuleValue",
+    "SINGLE_SET_POINTS_LABEL", "SINGLE_SET_POINTS_LABEL_KEY", "SPORT_RULES", "alignBestOfOnePoints", "borrowOption", "borrowOptionLabel",
+    "buildRuleOverride", "clearedSequenceKeys", "configKeysFor", "fieldOptionText", "hydrateRuleValues", "keysEmittedBy", "optionText", "ruleContextFor",
+    "ruleOptionFor", "ruleOptionLabel", "ruleOptionText", "rulesFor", "setRuleValue",
     "showsOnePointsField", "visibleRuleFields",
   ];
   // `rulesFor` joined the public surface in the W2c batch-6 fix round (T20-2): the settings form reads a sport's fields

@@ -33,7 +33,7 @@ import { resolvePositions } from "../sport/catalog.ts";
 import type { AnySportModule } from "../sport/module.ts";
 import { SHOOTOUT_ATTEMPTS_DEFAULT } from "../sports/football/football.ts";
 import { periodLabels } from "../sports/period/kernel.ts";
-import { corpusFormat, recomputeStream, slimStream, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
+import { benchedLineups, corpusFormat, recomputeStream, slimStream, type GoldenCorpus, type GoldenEvent, type GoldenStream } from "./golden.ts";
 import { buildWalk, defaultLineupPair, makeEnvelope } from "./helpers.ts";
 
 const STRICT_ALL = { strictFromSeq: 0 } as const;
@@ -202,6 +202,29 @@ function reachesShootoutSuddenDeath(r: Recorded): string | null {
   const kicks = obj(played.state.shootout).kicks as { side: string }[];
   const taken = (side: string): number => kicks.filter((k) => k.side === side).length;
   if (Math.max(taken("home"), taken("away")) <= attempts) return `no side kicked past its ${attempts} attempts, so the shoot-out was decided without sudden death`;
+  return null;
+}
+
+/** football M12b (W2e T32 fix round 1; PO decision I-1): a `core.lineup.*` event is judged on FOOTBALL'S pitch, so the substitute
+ *  who came on by the legacy `football.sub` can retire injured - the flow the pad's "Injured (no sub)" offers once the side has
+ *  no substitution left (`maxSubs` is that precondition, the one cfg key the flow names; nothing in a cfg switches the pitch
+ *  judgement itself). The stream: a `football.sub`, the `core.lineup.retirement` of the man it brought on, then a goal by someone
+ *  still on the pitch - the last event, so the fold has to carry the retirement through to a later event. The strict fold is the
+ *  verdict's other half: before the fix the kernel judged that retirement against its OWN squads, which never saw the
+ *  substitution, and refused it as not on the field (`reduceLineupEventFor`, `judgeLineupEvent`); replay dropped it and kept him
+ *  on the pitch. The test beside this file folds the same ledger under the module WITHOUT `squadsForLineup` and asks for exactly that. */
+function reachesPitchRetirement(r: Recorded): string | null {
+  if (typeof obj(r.raw).maxSubs !== "number") return "its config caps no substitutions (maxSubs), so the injured substitute's side has none left";
+  if (lastEvent(r)?.type !== "football.goal") return "the ledger does not end on a goal scored after the retirement";
+  const broughtOn = new Set<string>();
+  let retired = false;
+  for (const e of r.events) {
+    if (e.type === "football.sub") broughtOn.add(String(obj(e.payload).on));
+    if (e.type === "core.lineup.retirement" && broughtOn.has(String(obj(e.payload).personId))) retired = true;
+  }
+  if (!retired) return "no core.lineup.retirement names a person a football.sub brought on";
+  const played = replay(r, r.raw);
+  if (typeof played === "string") return played;
   return null;
 }
 
@@ -388,6 +411,9 @@ export interface BranchStory {
   readonly seed: number;
   /** The config the stream is recorded under. A name the corpus already holds keeps its recorded raw (which must match). */
   readonly config: { readonly name: string; readonly raw: Record<string, unknown> };
+  /** The stream is recorded with the module's coverage BENCH (`benchedLineups`, carried on the stream as `lineups`): football cannot
+   *  substitute without one. Absent = the default lineups, as every other story. */
+  readonly benched?: boolean;
   /** The branch this exists for, in the words of the ruling. */
   readonly what: string;
   /** null when a RECORDED stream reaches the branch, else why it does not. */
@@ -587,6 +613,31 @@ export const BRANCH_STORIES: readonly BranchStory[] = [
       return stepFold(c, levelToTiebreak(c, () => to, () => null), (state) => closedOnDecidingPoint(state, to));
     },
   },
+  {
+    // W2e review M-2 (PR B final review): the football epoch bump to 4 had no corpus witness, so `fold-epoch:check` could not see the
+    // fold it was bumped for - no stored stream held a `core.lineup.*` event after a `football.sub`.
+    id: "football.pitch_retirement",
+    sport: "football",
+    key: "maxSubs",
+    seed: BRANCH_SEED_BASE + 15,
+    config: { name: "oneSub", raw: { maxSubs: 1 } },
+    benched: true,
+    what: "the substitute who came on by football.sub retires injured, the side having no substitution left, and the side scores a man down (M12b)",
+    reached: reachesPitchRetirement,
+    build: (c) => {
+      const side = c.lineups.home;
+      const [off, scorer] = side.slots.filter((slot) => slot.slot === "starting" && slot.positionKey !== "GK");
+      const on = side.slots.find((slot) => slot.slot === "bench");
+      if (off === undefined || scorer === undefined || on === undefined) return null;
+      const events = [
+        ev("core.start"),
+        ev("football.sub", { by: side.entrantId, off: off.personId, on: on.personId }),
+        ev("core.lineup.retirement", { side: side.entrantId, personId: on.personId, reason: "injured" }),
+        ev("football.goal", { by: side.entrantId, scorer: scorer.personId }),
+      ];
+      return reachesPitchRetirement(c.recorded(events)) === null ? events : null;
+    },
+  },
 ];
 
 // ------------------------------------------------------------------------------------------------------------- driver
@@ -634,20 +685,21 @@ export function extendBranches(module: AnySportModule, existing: GoldenCorpus, s
       throw new Error(`golden branches: ${module.key} already has a stream ${name}#${story.seed}; the epoch guard keys streams by that identity`);
     }
     const cfg = module.configSchema.parse(raw) as unknown;
-    const lineups = defaultLineupPair(resolvePositions(module, cfg));
+    const benched = story.benched === true ? benchedLineups(module, cfg) : undefined;
+    const lineups = benched ?? defaultLineupPair(resolvePositions(module, cfg));
     const events = story.build({
       module,
       raw,
       cfg,
       lineups,
-      recorded: (ledger) => ({ module, raw, lineups: undefined, events: ledger }),
+      recorded: (ledger) => ({ module, raw, lineups: benched, events: ledger }),
     });
     if (events === null) {
       stillMissing.push(story.id);
       continue;
     }
     corpus.configs[name] = raw;
-    const stream: GoldenStream = { config: name, seed: story.seed, events, ...recomputeStream(module, raw, events, undefined, corpusFormat(corpus)) };
+    const stream: GoldenStream = { config: name, seed: story.seed, ...(benched === undefined ? {} : { lineups: benched }), events, ...recomputeStream(module, raw, events, benched, corpusFormat(corpus)) };
     const verdict = story.reached(recordedOf(module, corpus, stream));
     if (verdict !== null) throw new Error(`golden branches: the ledger built for ${story.id} does not reach its branch: ${verdict}`);
     corpus.streams.push(slimStream(module, corpus, stream));

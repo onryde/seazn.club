@@ -1,0 +1,43 @@
+{
+  "version": 1,
+  "mode": "regression",
+  "exit": 0,
+  "layer": "L1",
+  "runs": [
+    "ci-40874582041-1-l1"
+  ],
+  "plannedNotRun": null,
+  "compared": 209,
+  "skipped": 22,
+  "skippedIds": [
+    "league|badminton|bwf|LIFECYCLE@1280",
+    "triple_rr|badminton|bwf|LIFECYCLE@1280",
+    "league_ko|badminton|bwf|LIFECYCLE@1280",
+    "groups_ko|badminton|bwf|LIFECYCLE@1280",
+    "group_stepladder|badminton|bwf|LIFECYCLE@1280",
+    "group_playoffs|badminton|bwf|LIFECYCLE@1280",
+    "swiss|badminton|bwf|LIFECYCLE@1280",
+    "swiss_playoff|badminton|bwf|LIFECYCLE@1280",
+    "swiss_knockout|badminton|bwf|LIFECYCLE@1280",
+    "knockout|badminton|bwf|LIFECYCLE@1280",
+    "ko_plate|badminton|bwf|LIFECYCLE@1280",
+    "qualifying_main|badminton|bwf|LIFECYCLE@1280",
+    "double_elim|badminton|bwf|LIFECYCLE@1280",
+    "americano|boardgame|blitz|LIFECYCLE@1280",
+    "americano|badminton|bwf|LIFECYCLE@1280",
+    "mexicano|boardgame|blitz|LIFECYCLE@1280",
+    "mexicano|badminton|bwf|LIFECYCLE@1280",
+    "ladder|badminton|bwf|LIFECYCLE@1280",
+    "group_group_ko|badminton|bwf|LIFECYCLE@1280",
+    "knockout_third_place|badminton|bwf|LIFECYCLE@1280",
+    "page_playoff_only|badminton|bwf|LIFECYCLE@1280",
+    "stepladder_only|badminton|bwf|LIFECYCLE@1280"
+  ],
+  "unexpectedSkips": [],
+  "sample": false,
+  "faults": [],
+  "differing": [],
+  "missing": [],
+  "regressed": [],
+  "absent": []
+}

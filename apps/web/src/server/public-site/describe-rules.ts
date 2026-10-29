@@ -446,6 +446,30 @@ export function deciderIsOn(module_: AnySportModule, key: string, c: Record<stri
 }
 
 /**
+ * The SWITCHES the engine pairs a detail with that are not deciders (`RuleKeyFact.detailOf` whose host carries no
+ * `decider: true`): cricket's DLS, which only the result floor `minOversForResult` is read under (`dlsAbandonmentPar`). A DLS
+ * par decides an abandoned chase, never a level match, so DLS is NOT in `DECIDERS` (that table is the public line's and is
+ * pinned one-to-one to the engine's whole deciders) and is never said as how a tie ends. Read from the PARSED, resolved
+ * config, by the value shape the engine's schema declares.
+ */
+const SWITCHES: Record<string, (c: Record<string, unknown>) => boolean> = {
+  /** Cricket: `dls` is `{enabled, edition}`; every variant parses it to off. */
+  dls: (c) => record(c.dls)?.enabled === true,
+};
+
+/** Every switch key this table reads: pinned to the engine's declared non-decider detail hosts. */
+export const SWITCH_DESCRIBED_KEYS: readonly string[] = Object.keys(SWITCHES);
+
+/**
+ * Whether the host a detail is paired with (`detailOf`) is ON in `c` - the PARSED, bracket-resolved config: a switch through
+ * `SWITCHES`, anything else (a whole decider) through `deciderIsOn`, so the editor holds a detail by the very table the
+ * public line reads for a decider. A host nothing here knows is never read as off, the same rule `deciderIsOn` applies.
+ */
+export function detailHostIsOn(module_: AnySportModule, key: string, c: Record<string, unknown>): boolean {
+  return Object.hasOwn(SWITCHES, key) ? SWITCHES[key]!(c) : deciderIsOn(module_, key, c);
+}
+
+/**
  * How a tied match ends in a stage of this `kind`, as clauses - from the engine's own declarations
  * (`deciderKeysFor`) and the parsed, BRACKET-RESOLVED config:
  *  - a decider that is ON is said, with its numbers (the stage's, never the division's);
