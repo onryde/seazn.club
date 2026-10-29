@@ -5,7 +5,12 @@
 // loads at runtime, so tools/matrix still loads this directory under plain `node --experimental-strip-types`.
 import type { MessageKey } from "@/lib/messages";
 
-/** One choice of a `select` field. `labelKey` localizes `label` exactly as `RuleField.labelKey` does the field's. */
+/**
+ * One choice of a `select` field. `labelKey` localizes `label` exactly as `RuleField.labelKey` does the field's. Every
+ * option of every curated field names one (W2e Task 33a; `match-rules-labels.test.ts` sweeps the whole table). It is the
+ * one optional key of the two because a CALLER can build an option from text it has already localized (the match form's
+ * "Off" and its half lengths, `match-rules-block-model.ts`); that option has nothing to look up.
+ */
 export interface RuleFieldOption {
   value: string;
   label: string;
@@ -17,12 +22,12 @@ export interface RuleField {
   /** The English text. Canonical English like every rule label (design 2026-09-17), and the FALLBACK of `labelKey`. */
   label: string;
   /**
-   * W2e Task 28 (owner D5, ruling 157): the dictionary key that localizes `label`, in all four locales. A field that
-   * names one is drawn from the dictionary (`RuleFieldControl`); one that does not keeps its English `label`, as every
-   * field did before D5. The English dictionary value and `label` are the same sentence (pinned in `w2e-fields.test.ts`),
-   * so the fallback and the localized text cannot drift.
+   * The dictionary key that localizes `label`, in all four locales (W2e Task 28, owner D5, ruling 157; REQUIRED since
+   * Task 33a, so the compiler lists every field that has not named one and the next field cannot ship English-only). The
+   * English dictionary value and `label` are the same sentence (pinned in `w2e-fields.test.ts` for every field of every
+   * sport), so `label` stays the English fallback and the two cannot drift.
    */
-  labelKey?: MessageKey;
+  labelKey: MessageKey;
   help?: string;
   /** `help`'s dictionary key, as `labelKey` is `label`'s. */
   helpKey?: MessageKey;

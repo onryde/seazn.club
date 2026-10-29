@@ -1,7 +1,7 @@
 // Tennis's curated match-rule fields. Client-safe: no "use client", no JSX,
 // no `@/components` or `@/server` import.
 import { tennis } from "@seazn/engine/sports/tennis";
-import { ownOr, readNumber, readShape } from "./shared.ts";
+import { bestOfOptions, ownOr, readNumber, readShape } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 /** The margin a tie-break is won by when nothing names one: the engine's own default (`tiebreak.winBy`, two), read off the
@@ -66,8 +66,9 @@ export const TENNIS_RULES: RuleField[] = [
     key: "bestOf",
     edits: ["bestOf"],
     label: "Best of (sets)",
+    labelKey: "rules.field.bestOf.label",
     kind: "select",
-    options: [1, 3, 5].map((n) => ({ value: String(n), label: `Best of ${n}` })),
+    options: bestOfOptions([1, 3, 5]),
     build: (v) => ({ bestOf: Number(v) }),
     read: readNumber("bestOf"),
   },
@@ -75,15 +76,16 @@ export const TENNIS_RULES: RuleField[] = [
     key: "setType",
     edits: ["set"],
     label: "Set type",
+    labelKey: "rules.field.setType.label",
     kind: "select",
     options: [
-      { value: "tb6", label: "Tie-break sets (to 6)" },
-      { value: "fast4", label: "Fast4 (to 4, TB at 3–3)" },
-      { value: "short4", label: "Short sets (to 4, TB at 4–4)" },
-      { value: "advantage", label: "Advantage sets" },
+      { value: "tb6", label: "Tie-break sets (to 6)", labelKey: "rules.field.setType.option.tb6" },
+      { value: "fast4", label: "Fast4 (to 4, TB at 3–3)", labelKey: "rules.field.setType.option.fast4" },
+      { value: "short4", label: "Short sets (to 4, TB at 4–4)", labelKey: "rules.field.setType.option.short4" },
+      { value: "advantage", label: "Advantage sets", labelKey: "rules.field.setType.option.advantage" },
     ],
     // Saved values the picker shows as themselves but does not offer (`RuleField.legacyOptions`).
-    legacyOptions: [{ value: "fast4Margin2", label: "Fast4 (to 4, TB at 3–3, win by two)" }],
+    legacyOptions: [{ value: "fast4Margin2", label: "Fast4 (to 4, TB at 3–3, win by two)", labelKey: "rules.field.setType.option.fast4Margin2" }],
     // Unknown values keep falling through to `tb6`, as the chained ternary
     // this replaced did — `ownOr`, not `??`, so an INHERITED key is unknown
     // too. Copied, not shared by reference: the result is spread into a
@@ -97,12 +99,13 @@ export const TENNIS_RULES: RuleField[] = [
     key: "finalSet",
     edits: ["finalSet"],
     label: "Deciding set",
+    labelKey: "rules.field.finalSet.label",
     kind: "select",
     options: [
-      { value: "same", label: "Same as other sets" },
-      { value: "mtb10", label: "Match tie-break to 10" },
-      { value: "mtb7", label: "Match tie-break to 7" },
-      { value: "tb10", label: "Set with tie-break to 10" },
+      { value: "same", label: "Same as other sets", labelKey: "rules.field.finalSet.option.same" },
+      { value: "mtb10", label: "Match tie-break to 10", labelKey: "rules.field.finalSet.option.mtb10" },
+      { value: "mtb7", label: "Match tie-break to 7", labelKey: "rules.field.finalSet.option.mtb7" },
+      { value: "tb10", label: "Set with tie-break to 10", labelKey: "rules.field.finalSet.option.tb10" },
     ],
     build: (v) => {
       const shape = ownOr<unknown>(TENNIS_FINAL_SET_SHAPES, v, "same");
@@ -114,7 +117,9 @@ export const TENNIS_RULES: RuleField[] = [
     key: "noAd",
     edits: ["game.noAd"],
     label: "No-ad games",
+    labelKey: "rules.field.noAd.label",
     help: "A single deciding point at deuce.",
+    helpKey: "rules.field.noAd.help",
     kind: "bool",
     build: (v) => ({ game: { noAd: v === "on" } }),
     // Reads `game`. A non-boolean `noAd` hydrates blank rather than
@@ -137,8 +142,8 @@ export const TENNIS_RULES: RuleField[] = [
     helpKey: "rules.field.tiebreakWinBy.help",
     kind: "select",
     options: [
-      { value: "2", label: "Win by two (standard)" },
-      { value: "1", label: "Sudden death (first to target wins)" },
+      { value: "2", label: "Win by two (standard)", labelKey: "rules.field.tiebreakWinBy.option.2" },
+      { value: "1", label: "Sudden death (first to target wins)", labelKey: "rules.field.tiebreakWinBy.option.1" },
     ],
     build: (v) => ({ tiebreak: { winBy: Number(v) } }),
     // Reads `tiebreak`, not `tiebreakWinBy`.

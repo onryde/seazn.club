@@ -1,6 +1,6 @@
 // Table tennis's curated match-rule fields. Client-safe: no "use client", no
 // JSX, no `@/components` or `@/server` import.
-import { readNumber, WIN_BY } from "./shared.ts";
+import { bestOfOptions, readNumber, WIN_BY } from "./shared.ts";
 import { setTargetFloorOf } from "./set-target-floor.ts";
 import type { RuleField } from "./types.ts";
 
@@ -13,8 +13,9 @@ export const TABLETENNIS_RULES: RuleField[] = [
     key: "bestOf",
     edits: ["bestOf"],
     label: "Best of (sets)",
+    labelKey: "rules.field.bestOf.label",
     kind: "select",
-    options: [1, 3, 5, 7].map((n) => ({ value: String(n), label: `Best of ${n}` })),
+    options: bestOfOptions([1, 3, 5, 7]),
     build: (v) => ({ bestOf: Number(v) }),
     read: readNumber("bestOf"),
   },
@@ -22,6 +23,7 @@ export const TABLETENNIS_RULES: RuleField[] = [
     key: "setTo",
     edits: ["setTo"],
     label: "Points to win a set",
+    labelKey: "rules.field.setTo.label",
     kind: "number",
     min: SET_TARGET_FLOOR,
     max: 100,
@@ -32,6 +34,7 @@ export const TABLETENNIS_RULES: RuleField[] = [
     key: "finalSetTo",
     edits: ["finalSetTo"],
     label: "Points in the deciding set",
+    labelKey: "rules.field.finalSetTo.label",
     kind: "number",
     min: SET_TARGET_FLOOR,
     max: 100,

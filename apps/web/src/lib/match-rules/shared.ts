@@ -2,7 +2,8 @@
 // knows a sport's rules except `WIN_BY`, the one field three sets-based sports
 // share verbatim. Client-safe like the rest of this directory.
 import type { AnySportModule } from "@seazn/engine/sport";
-import type { RuleField } from "./types.ts";
+import type { MessageKey } from "@/lib/messages";
+import type { RuleField, RuleFieldOption } from "./types.ts";
 
 /**
  * The inverse of the `build: (v) => ({ <key>: Number(v) })` shape that thirteen
@@ -91,7 +92,9 @@ export function readShape(
 export const WIN_BY: RuleField = {
   key: "winBy",
   label: "Win margin (points)",
+  labelKey: "rules.field.winBy.label",
   help: "How many clear points are needed to win a set.",
+  helpKey: "rules.field.winBy.help",
   edits: ["winBy"],
   kind: "number",
   min: 1,
@@ -112,14 +115,37 @@ export const ABANDON_LABELS: Readonly<Record<string, string>> = {
   share: "Share the points",
 };
 
+/** W2e Task 33a — `ABANDON_LABELS`' dictionary keys, one per policy, so the picker reads in the viewer's language. */
+export const ABANDON_LABEL_KEYS: Readonly<Record<string, MessageKey>> = {
+  replay: "rules.field.abandon.option.replay",
+  award: "rules.field.abandon.option.award",
+  q4_stands: "rules.field.abandon.option.q4_stands",
+  share: "rules.field.abandon.option.share",
+};
+
 /**
  * The abandon picker's options for a sport: the module's own declared list (`SportModule.abandonOptions`), in its
  * order, each through `ABANDON_LABELS`. A module that declares none offers none. A policy the table cannot label is a
  * programming error (an engine value added without its row), so it throws instead of rendering a blank option.
  */
-export function abandonOptions(module: AnySportModule): { value: string; label: string }[] {
+export function abandonOptions(module: AnySportModule): RuleFieldOption[] {
   return (module.abandonOptions ?? []).map((value) => {
-    if (!Object.hasOwn(ABANDON_LABELS, value)) throw new Error(`${module.key}: no label for abandon policy "${value}"`);
-    return { value, label: ABANDON_LABELS[value]! };
+    if (!Object.hasOwn(ABANDON_LABELS, value) || !Object.hasOwn(ABANDON_LABEL_KEYS, value)) {
+      throw new Error(`${module.key}: no label for abandon policy "${value}"`);
+    }
+    return { value, label: ABANDON_LABELS[value]!, labelKey: ABANDON_LABEL_KEYS[value]! };
   });
+}
+
+/** W2e Task 33a — the "Best of N" choices the sets- and games-based sports share: English `Best of N`, localized through
+ *  `rules.field.bestOf.option.N`. Only the odd counts a sport plays exist as keys; a count with no key is a type error. */
+const BEST_OF_OPTION_KEYS = {
+  1: "rules.field.bestOf.option.1",
+  3: "rules.field.bestOf.option.3",
+  5: "rules.field.bestOf.option.5",
+  7: "rules.field.bestOf.option.7",
+} as const satisfies Record<number, MessageKey>;
+
+export function bestOfOptions(counts: readonly (keyof typeof BEST_OF_OPTION_KEYS)[]): RuleFieldOption[] {
+  return counts.map((n) => ({ value: String(n), label: `Best of ${n}`, labelKey: BEST_OF_OPTION_KEYS[n] }));
 }

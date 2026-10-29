@@ -31,7 +31,7 @@ const keysOf = (fs: readonly RuleField[]): string[] => fs.map((f) => f.key);
 const inOrder = (got: readonly string[], want: readonly string[]): void => {
   expect(got.filter((k) => want.includes(k))).toEqual([...want]);
 };
-const field = (key: string, edits: string[], build: RuleField["build"] = () => ({})): RuleField => ({ key, label: key, kind: "number", edits, build });
+const field = (key: string, edits: string[], build: RuleField["build"] = () => ({})): RuleField => ({ key, label: key, labelKey: "rules.field.winBy.label", kind: "number", edits, build });
 
 describe("rule-scope — web reads the engine declaration (D2)", () => {
   it("X-SR-1 moduleFor finds every builtin and refuses an unknown key, an inherited one included", () => {

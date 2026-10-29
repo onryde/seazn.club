@@ -27,11 +27,16 @@
 // which owns the table, and delegate here with the sport's field list. The
 // public surface is unchanged.
 // ---------------------------------------------------------------------------
+import type { MessageKey } from "@/lib/messages";
 import type { RuleField } from "./types.ts";
 
 /** The one points field's label on best of 1. Sport-rules vocabulary, canonical
  *  English like every label in this table (per-stage rules ruling D4). */
 export const SINGLE_SET_POINTS_LABEL = "Points to win";
+
+/** `SINGLE_SET_POINTS_LABEL`'s dictionary key (W2e Task 33a): the relabelled field is a COPY of `finalSetTo`, so the copy has
+ *  to name the new text's key too, or it would keep reading "Points in the deciding set" in every language but English. */
+export const SINGLE_SET_POINTS_LABEL_KEY: MessageKey = "rules.field.pointsToWin.label";
 
 /** The pair: `shown` is the key the engine plays at best of 1 and the one the
  *  single field is bound to; `shadow` is hidden and written to match it. */

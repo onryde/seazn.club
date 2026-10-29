@@ -91,7 +91,7 @@ export function MatchRuleFields({
             />
             {heldBy !== undefined && (
               <p className="mt-1 text-[11px] leading-snug text-slate-700" data-testid={`rule-field-off-${field.key}`}>
-                {msg("stageRules.detail.off", { decider: heldBy })}
+                {msg("stageRules.detail.off", { decider: msg(heldBy) })}
               </p>
             )}
             {lock !== undefined && (

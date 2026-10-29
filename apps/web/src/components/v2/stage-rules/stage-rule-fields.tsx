@@ -9,7 +9,7 @@
 // (`grid-cols-1`, two columns from `sm`), so a phone needs no second tree.
 import { useId, useMemo } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
-import { buildRuleOverride, setRuleValue, visibleRuleFields, type RuleField } from "@/lib/match-rules";
+import { buildRuleOverride, fieldOptionText, setRuleValue, visibleRuleFields, type RuleField } from "@/lib/match-rules";
 import { divisionOnlyStageKeys } from "@/lib/online-time-control";
 import type { StageKind } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
@@ -100,7 +100,8 @@ export function StageRuleFields({
                 // the label of the field that switches it).
                 const inert = detailIsInert(module, field, resolved);
                 const decider = inert ? deciderOfDetail(module, field) : null;
-                const switchLabel = decider === null ? undefined : sections.flatMap((x) => x.fields).find((f) => f.edits[0] === decider)?.label;
+                const switchField = decider === null ? undefined : sections.flatMap((x) => x.fields).find((f) => f.edits[0] === decider);
+                const switchLabel = switchField === undefined ? undefined : msg(switchField.labelKey);
                 return (
                   <div
                     key={field.key}
@@ -136,7 +137,7 @@ export function StageRuleFields({
                       <ul id={reasonId} className="mt-1 space-y-0.5 text-[11px] text-slate-600">
                         {reasons.map(([value, state]) => (
                           <li key={value} data-testid={`stage-abandon-unavailable-${value}`}>
-                            {field.options?.find((o) => o.value === value)?.label ?? value}: {msg(state.reasonKey!)}
+                            {fieldOptionText(field, value, msg)}: {msg(state.reasonKey!)}
                           </li>
                         ))}
                       </ul>

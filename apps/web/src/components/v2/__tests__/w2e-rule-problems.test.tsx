@@ -229,11 +229,11 @@ describe("cricket's minimum overs for a result: held while DLS is off, gone wher
   it("held while DLS is off (the default), free once it is switched on, on every variant that can play DLS; the reason names the switch (counted)", () => {
     expect(variantsWithDls.length, "premise: some variants can play DLS and one cannot").toBeGreaterThan(0);
     expect(variantsWithDls.length).toBeLessThan(Object.keys(cricket.variants).length);
-    const switchLabel = rulesFor("cricket").find((f) => f.key === "dls")!.label;
+    const switchKey = rulesFor("cricket").find((f) => f.key === "dls")!.labelKey;
     let judged = 0;
     for (const variant of variantsWithDls) {
       const off = ruleFormState({ sportKey: "cricket", variantKey: variant, values: {}, base: presetOf(cricket, variant) });
-      expect(off.held.get(FIELD), `${variant}: held while DLS is off`).toBe(switchLabel);
+      expect(off.held.get(FIELD), `${variant}: held while DLS is off (names the switch by its dictionary key)`).toBe(switchKey);
       const explicitOff = ruleFormState({ sportKey: "cricket", variantKey: variant, values: { dls: "off" }, base: presetOf(cricket, variant) });
       expect(explicitOff.held.has(FIELD), `${variant}: explicitly off is off`).toBe(true);
       const on = ruleFormState({ sportKey: "cricket", variantKey: variant, values: { dls: "on" }, base: presetOf(cricket, variant) });
@@ -270,6 +270,7 @@ describe("cricket's minimum overs for a result: held while DLS is off, gone wher
 
   it("the grid draws a held field disabled with the reason beside it, omits a hidden one, and still draws the free one (static render)", () => {
     activeDict.current = EN;
+    const EN_REASON_SWITCH = rulesFor("cricket").find((f) => f.key === "dls")!.label;
     const grid = (variant: string, values: Record<string, string>) =>
       renderToStaticMarkup(
         <MatchRuleFields
@@ -280,7 +281,7 @@ describe("cricket's minimum overs for a result: held while DLS is off, gone wher
         />,
       );
     const label = EN["rules.field.minOversForResult.label"]!;
-    const reason = EN["stageRules.detail.off"]!.replace("{decider}", rulesFor("cricket").find((f) => f.key === "dls")!.label);
+    const reason = EN["stageRules.detail.off"]!.replace("{decider}", EN_REASON_SWITCH);
     const held = grid("t20", {});
     expect(held).toContain(label);
     expect(held).toContain(reason);
@@ -296,6 +297,28 @@ describe("cricket's minimum overs for a result: held while DLS is off, gone wher
     const kept = rulesFor("cricket").filter((f) => !ruleFormState({ sportKey: "cricket", variantKey: "test", values: {}, base: presetOf(cricket, "test") }).hidden.has(f.key));
     expect(kept.length).toBeGreaterThan(0);
     expect(kept.length).toBeLessThan(rulesFor("cricket").length);
+  });
+
+  it("the held reason names the switch in the viewer's language, in all four locales - the dictionary's own words, not the English label (counted)", () => {
+    const switchKey = rulesFor("cricket").find((f) => f.key === "dls")!.labelKey;
+    let judged = 0;
+    for (const [locale, dict] of [["en", EN], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as const) {
+      activeDict.current = dict as Record<string, string>;
+      const html = renderToStaticMarkup(
+        <MatchRuleFields
+          sportKey="cricket"
+          values={{}}
+          onChange={() => {}}
+          state={ruleFormState({ sportKey: "cricket", variantKey: "t20", values: {}, base: presetOf(cricket, "t20") })}
+        />,
+      );
+      const localized = (dict as Record<string, string>)[switchKey]!;
+      const reason = (dict as Record<string, string>)["stageRules.detail.off"]!.replace("{decider}", localized);
+      expect(html, `${locale}: the reason reads in this locale`).toContain(escaped(reason));
+      if (locale !== "en") expect(localized, `${locale}: the switch is translated, not copied`).not.toBe(EN[switchKey]);
+      judged++;
+    }
+    expect(judged).toBe(4);
   });
 
   it("a sport with no switch-held detail holds nothing, with every switch off (every sport counted)", () => {

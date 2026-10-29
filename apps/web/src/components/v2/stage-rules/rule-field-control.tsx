@@ -11,7 +11,7 @@
 // from the dictionary and every other field keeps its English `label`. The English text is the fallback either way.
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { RuleField } from "@/lib/match-rules";
-import { ruleOptionLabel } from "@/lib/match-rules";
+import { optionText, ruleOptionText } from "@/lib/match-rules";
 import type { MessageKey } from "@/lib/messages";
 import { SequenceField } from "./sequence-field";
 
@@ -73,7 +73,7 @@ export function RuleFieldControl({
   const problemId = `rule-problem-${problem?.idScope ?? "none"}-${sportKey}-${field.key}`;
   const described = [describedBy, problem === undefined ? undefined : problemId].filter((id) => id !== undefined).join(" ") || undefined;
   const invalidMark = problem === undefined ? undefined : true;
-  const label = field.labelKey === undefined ? field.label : msg(field.labelKey);
+  const label = msg(field.labelKey);
   const help = field.helpKey === undefined ? field.help : msg(field.helpKey);
   const offered = field.kind === "bool" ? ["on", "off"] : (field.options ?? []).map((o) => o.value);
   const unofferable = field.kind !== "sequence" && value !== "" && !offered.includes(value);
@@ -127,11 +127,11 @@ export function RuleFieldControl({
               field is unset over a config that really carries a value. That misreading is one tap from data loss on the
               stage panel, whose PUT is a FRAGMENT where an omitted key means INHERIT.
 
-              Labelled through `ruleOptionLabel` - the SAME lookup the stage card's summary line uses. This option
+              Labelled through `ruleOptionText` (`ruleOptionLabel` in the viewer's language) - the SAME lookup the stage card's summary line uses. This option
               shipped as a bare value, so the open dropdown read `Default · 5 · Best of 1 · Best of 3` directly under a
               summary line saying "Best of 5": one value, two labels, one screen. Falls back to the raw value when NO
               sport declares one - inventing copy for a value the table does not declare would be a second lie. */}
-          {unofferable && <option value={value}>{ruleOptionLabel(sportKey, field.key, value) ?? value}</option>}
+          {unofferable && <option value={value}>{ruleOptionText(sportKey, field.key, value, msg) ?? value}</option>}
           {field.kind === "bool" ? (
             <>
               <option value="on">{msg("rules.on")}</option>
@@ -140,7 +140,7 @@ export function RuleFieldControl({
           ) : (
             (field.options ?? []).map((o) => (
               <option key={o.value} value={o.value} disabled={optionStates?.get(o.value)?.disabled === true}>
-                {o.labelKey === undefined ? o.label : msg(o.labelKey)}
+                {optionText(o, msg)}
               </option>
             ))
           )}

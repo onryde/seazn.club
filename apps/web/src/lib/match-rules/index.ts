@@ -2,10 +2,11 @@
 // object (previously a raw-JSON textarea). Blank = keep the variant default;
 // the pinned module's configSchema still validates server-side. Shared by
 // the division builder and the division Settings tab (v8) so the two format
-// editors can't drift. Field labels/options are sport-rules vocabulary, kept
-// canonical/English like sport + format names; only the picker chrome
-// (Default / On / Off) localizes — and that chrome lives in the client
-// component `@/components/v2/match-rules`, which re-exports everything here.
+// editors can't drift. Every field names the dictionary keys that localize its
+// label, help and options (`labelKey` / `helpKey` / option `labelKey`, W2e Tasks 28
+// and 33a); the English `label` stays beside them as the canonical text and the
+// fallback. The picker chrome (Default / On / Off) lives in the client component
+// `@/components/v2/match-rules`, which re-exports everything here.
 //
 // NO "use client", NO JSX, NO `@/components` import, on purpose (design
 // 2026-09-17 §T0): the server derives the per-stage rules allowlist from this
@@ -26,9 +27,11 @@
 // boundary.test.ts pins it.
 
 import { BADMINTON_RULES } from "./badminton.ts";
+import type { MessageKey } from "@/lib/messages";
 import {
   BEST_OF_ONE_PAIR,
   SINGLE_SET_POINTS_LABEL,
+  SINGLE_SET_POINTS_LABEL_KEY,
   alignBestOfOnePointsIn,
   showsOnePointsFieldIn,
 } from "./best-of-one.ts";
@@ -42,11 +45,11 @@ import { ICEHOCKEY_RULES } from "./icehockey.ts";
 import { ownOr } from "./shared.ts";
 import { TABLETENNIS_RULES } from "./tabletennis.ts";
 import { TENNIS_RULES } from "./tennis.ts";
-import type { RuleField } from "./types.ts";
+import type { RuleField, RuleFieldOption } from "./types.ts";
 import { VOLLEYBALL_RULES } from "./volleyball.ts";
 
 export type { RuleField } from "./types.ts";
-export { SINGLE_SET_POINTS_LABEL } from "./best-of-one.ts";
+export { SINGLE_SET_POINTS_LABEL, SINGLE_SET_POINTS_LABEL_KEY } from "./best-of-one.ts";
 
 /** The same trap one level up, where it is a CRASH rather than a wrong value:
  *  `SPORT_RULES["constructor"] ?? []` answers the Object constructor, and
@@ -100,7 +103,9 @@ export function visibleRuleFields(
   if (!showsOnePointsField(sportKey, values, inherited)) return fields;
   return fields
     .filter((f) => f.key !== BEST_OF_ONE_PAIR.shadow)
-    .map((f) => (f.key === BEST_OF_ONE_PAIR.shown ? { ...f, label: SINGLE_SET_POINTS_LABEL } : f));
+    .map((f) =>
+      f.key === BEST_OF_ONE_PAIR.shown ? { ...f, label: SINGLE_SET_POINTS_LABEL, labelKey: SINGLE_SET_POINTS_LABEL_KEY } : f,
+    );
 }
 
 /** One edit to the editor's raw values. On best of 1 the single points field
@@ -275,19 +280,46 @@ export function configKeysFor(sportKey: string): ReadonlySet<string> {
  * inventing copy for a value the table does not declare is a second lie — the
  * caller renders the raw value.
  */
-export function ruleOptionLabel(
+export function ruleOptionFor(
   sportKey: string,
   fieldKey: string,
   value: string,
-): string | undefined {
+): RuleFieldOption | undefined {
   const field = rulesFor(sportKey).find((f) => f.key === fieldKey);
   if (field === undefined) return undefined;
-  const own = (field.options?.find((o) => o.value === value) ?? field.legacyOptions?.find((o) => o.value === value))?.label;
+  const own = field.options?.find((o) => o.value === value) ?? field.legacyOptions?.find((o) => o.value === value);
   if (own !== undefined) return own;
   const peers = Object.keys(SPORT_RULES)
     .filter((k) => k !== sportKey)
     .flatMap((k) => rulesFor(k).filter((f) => f.key === fieldKey));
-  return borrowOptionLabel(field, peers, value);
+  return borrowOption(field, peers, value);
+}
+
+/** `ruleOptionFor`'s English label: the canonical text, for the callers that have no `msg` (the e2e helpers, the tests). */
+export function ruleOptionLabel(sportKey: string, fieldKey: string, value: string): string | undefined {
+  return ruleOptionFor(sportKey, fieldKey, value)?.label;
+}
+
+/** `ruleOptionFor`'s text in the viewer's language (W2e Task 33a): the option's dictionary entry, else its English label. */
+export function ruleOptionText(sportKey: string, fieldKey: string, value: string, msg: RuleMsg): string | undefined {
+  const option = ruleOptionFor(sportKey, fieldKey, value);
+  return option === undefined ? undefined : optionText(option, msg);
+}
+
+/** The text of `field`'s option `value` in the viewer's language; the raw value when the field offers no such option (a saved
+ *  value the picker cannot offer is shown as itself, never as invented copy). */
+export function fieldOptionText(field: RuleField, value: string, msg: RuleMsg): string {
+  const option = field.options?.find((o) => o.value === value);
+  return option === undefined ? value : optionText(option, msg);
+}
+
+/** What `msg` is to this directory: a key to its text. The hook's `msg` (and `Msg` in `division-settings-locks.ts`) fit. */
+export type RuleMsg = (key: MessageKey) => string;
+
+/** An option's text in the viewer's language: its dictionary entry, else (an option a caller built from text it had already
+ *  localized, see `RuleFieldOption`) its own label. */
+export function optionText(option: RuleFieldOption, msg: RuleMsg): string {
+  return option.labelKey === undefined ? option.label : msg(option.labelKey);
 }
 
 /**
@@ -302,15 +334,20 @@ export function ruleOptionLabel(
  * the field the line falls back to the bare value instead of rendering
  * another sport's noun, and a test proves that is what happens.
  */
-export function borrowOptionLabel(
+export function borrowOption(
   field: RuleField,
   peers: RuleField[],
   value: string,
-): string | undefined {
+): RuleFieldOption | undefined {
   for (const peer of peers) {
     if (peer.label !== field.label) continue;
-    const borrowed = peer.options?.find((o) => o.value === value)?.label;
+    const borrowed = peer.options?.find((o) => o.value === value);
     if (borrowed !== undefined) return borrowed;
   }
   return undefined;
+}
+
+/** `borrowOption`'s English label (what the label test pins; the screen takes `borrowOption`'s option through `optionText`). */
+export function borrowOptionLabel(field: RuleField, peers: RuleField[], value: string): string | undefined {
+  return borrowOption(field, peers, value)?.label;
 }

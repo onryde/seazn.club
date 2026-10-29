@@ -2319,7 +2319,10 @@ describe("carrom", () => {
     expect(skin).toMatch(/if \(phase === "live"\) \{[\s\S]{0,300}?tiles\.push\(\{\s*id: "board",[\s\S]{0,200}?action: \{ sheet: "board" \},/);
     expect(CARROM_BOARD_TILE).toBe("board");
     expect(skin).toContain(`${CARROM_BOARD_TILE}: boardSheet(state),`);
-    expect(skin).toContain("return SIDES.map((side) => ({ id: side, label: SIDE_LABEL[side] }));");
+    // W2e T33a: the side options take the sides the question offers (the deduction offers only a side with points to lose); the
+    // default is still both, which is what the credit sheet and the board winner ask.
+    expect(skin).toContain("function sideOptions(sides: readonly Side[] = SIDES)");
+    expect(skin).toContain("return sides.map((side) => ({ id: side, label: SIDE_LABEL[side] }));");
     expect(skin).toMatch(/function boardSheet\(state: CarromStateShape\): GuidedSheetSpec \{\s*return \{\s*event: "carrom\.board\.summary",[\s\S]{0,400}?buildPayload: \(answers\) => \(\{\s*winner: entrantOf\(state, sideAnswer\(answers\.winner\)\),\s*opponentCoinsLeft: Number\(answers\.coins \?\? 0\),\s*\}\),/);
     expect(skin).toContain("`queenTo` is simply never");
     expect(Object.keys(carrom.eventSchemas ?? {})).toContain(CARROM_BOARD);

@@ -16,7 +16,7 @@
 // One DOM at every width: every button is a 44px tap target, and the list is a single column, so a phone needs no second
 // tree.
 import { useMsg } from "@/components/i18n/dict-provider";
-import type { RuleField } from "@/lib/match-rules";
+import { fieldOptionText, optionText, type RuleField } from "@/lib/match-rules";
 
 /** The raw value as a list: the field's own default order for a blank, `[]` for the empty token, else the items in order. */
 export function sequenceItems(field: RuleField, value: string): string[] {
@@ -64,14 +64,15 @@ export function SequenceField({
   const items = sequenceItems(field, value === "" ? (inheritedValue ?? "") : value);
   const isDefault = value === "";
   const fromDivision = inheritedValue !== undefined;
-  const labelOf = (v: string): string => field.options?.find((o) => o.value === v)?.label ?? v;
+  const labelOf = (v: string): string => fieldOptionText(field, v, msg);
+  const fieldLabel = msg(field.labelKey);
   const remaining = (field.options ?? []).filter((o) => !items.includes(o.value));
   const set = (next: readonly string[]) => onChange(sequenceValue(field, next));
   const move = (i: number, by: -1 | 1) => set(moveSequenceItem(items, i, by));
   const testId = `stage-rule-sequence-${field.key}`;
 
   return (
-    <div role="group" aria-label={field.label} data-testid={testId} className="mt-1 rounded-lg border border-slate-200 bg-white">
+    <div role="group" aria-label={fieldLabel} data-testid={testId} className="mt-1 rounded-lg border border-slate-200 bg-white">
       {items.length === 0 ? (
         <p className="px-3 py-3 text-xs text-slate-700" data-testid={`${testId}-empty`}>
           {msg("stageRules.sequence.empty")}
@@ -123,7 +124,7 @@ export function SequenceField({
           {remaining.length > 0 && (
             <select
               className="select min-h-11 min-w-[10rem] flex-1"
-              aria-label={`${field.label}: ${msg("stageRules.sequence.add")}`}
+              aria-label={`${fieldLabel}: ${msg("stageRules.sequence.add")}`}
               data-testid={`${testId}-add`}
               disabled={disabled}
               value=""
@@ -134,7 +135,7 @@ export function SequenceField({
               <option value="">{msg("stageRules.sequence.add")}</option>
               {remaining.map((o) => (
                 <option key={o.value} value={o.value}>
-                  {o.label}
+                  {optionText(o, msg)}
                 </option>
               ))}
             </select>

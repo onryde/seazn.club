@@ -8,6 +8,7 @@
 // (`detailHostIsOn`) - so this editor, the stage editor and the server cannot say three things about one config.
 import { BO1_MATCH_TIEBREAK, SET_TARGET_BELOW_FLOOR, ruleKeyApplies, writeConfigIssues } from "@seazn/engine/sport";
 import { sentenceSlots } from "@/lib/config-issue-copy";
+import type { MessageKey } from "@/lib/messages";
 import { buildRuleOverride, rulesFor } from "@/lib/match-rules";
 import { moduleFor } from "@/lib/rule-scope";
 import { SWITCH_DESCRIBED_KEYS, detailHostIsOn } from "@/server/public-site/describe-rules";
@@ -23,8 +24,9 @@ export interface RuleProblem {
 export interface RuleFormState {
   /** Field keys the variant has no use for (the engine's `appliesTo`): not drawn, their values untouched, as the stage editor does. */
   readonly hidden: ReadonlySet<string>;
-  /** Field key -> the label of the switch that holds it: drawn disabled, with the reason beside it (cricket's result floor while DLS is off). */
-  readonly held: ReadonlyMap<string, string>;
+  /** Field key -> the dictionary key of the label of the switch that holds it: drawn disabled, with the reason beside it
+   *  (cricket's result floor while DLS is off). A KEY, not text: this module has no `msg`, and the screen resolves it. */
+  readonly held: ReadonlyMap<string, MessageKey>;
   readonly problems: readonly RuleProblem[];
   /** Field key -> the sentences about it, for the control to draw beside itself. */
   readonly invalid: ReadonlyMap<string, readonly string[]>;
@@ -71,13 +73,13 @@ export function ruleFormState(input: {
   if (!parsed.success) return { ...NONE, hidden };
   const resolved = parsed.data as Record<string, unknown>;
 
-  const held = new Map<string, string>();
+  const held = new Map<string, MessageKey>();
   for (const f of fields) {
     if (hidden.has(f.key)) continue;
     const host = deciderOfDetail(sportModule, f);
     if (host === null || !SWITCH_DESCRIBED_KEYS.includes(host) || detailHostIsOn(sportModule, host, resolved)) continue;
     const switchField = fields.find((x) => x.edits[0] === host && !hidden.has(x.key));
-    if (switchField !== undefined) held.set(f.key, switchField.label);
+    if (switchField !== undefined) held.set(f.key, switchField.labelKey);
   }
 
   return { hidden, held, ...ruleProblemsOf(input.sportKey, resolved, hidden) };

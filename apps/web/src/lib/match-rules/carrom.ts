@@ -1,7 +1,7 @@
 // Carrom's curated match-rule fields. Client-safe: no "use client", no JSX, no
 // `@/components` or `@/server` import.
 import { carrom } from "@seazn/engine/sports/carrom";
-import { abandonOptions, readBool, readNumber, readText } from "./shared.ts";
+import { abandonOptions, bestOfOptions, readBool, readNumber, readText } from "./shared.ts";
 import type { RuleField } from "./types.ts";
 
 export const CARROM_RULES: RuleField[] = [
@@ -9,7 +9,9 @@ export const CARROM_RULES: RuleField[] = [
     key: "gameTo",
     edits: ["gameTo"],
     label: "Points to win a game",
+    labelKey: "rules.field.gameTo.label",
     help: "Also lowers the queen bonus cutoff below if that field is left blank.",
+    helpKey: "rules.field.gameTo.help",
     kind: "number",
     min: 5,
     max: 50,
@@ -36,7 +38,9 @@ export const CARROM_RULES: RuleField[] = [
     key: "maxBoards",
     edits: ["maxBoards"],
     label: "Max boards per game",
+    labelKey: "rules.field.maxBoards.label",
     help: "ICF: leader after 8 boards wins if untied.",
+    helpKey: "rules.field.maxBoards.help",
     kind: "number",
     min: 1,
     max: 20,
@@ -47,8 +51,9 @@ export const CARROM_RULES: RuleField[] = [
     key: "bestOf",
     edits: ["bestOf"],
     label: "Best of (games)",
+    labelKey: "rules.field.carrom.bestOf.label",
     kind: "select",
-    options: [1, 3, 5].map((n) => ({ value: String(n), label: `Best of ${n}` })),
+    options: bestOfOptions([1, 3, 5]),
     build: (v) => ({ bestOf: Number(v) }),
     read: readNumber("bestOf"),
   },
@@ -72,6 +77,7 @@ export const CARROM_RULES: RuleField[] = [
     key: "queenPoints",
     edits: ["queenPoints"],
     label: "Queen bonus (points)",
+    labelKey: "rules.field.queenPoints.label",
     kind: "number",
     min: 0,
     max: 10,
@@ -82,7 +88,9 @@ export const CARROM_RULES: RuleField[] = [
     key: "queenCapAt",
     edits: ["queenCapAt"],
     label: "Queen bonus cutoff (score)",
+    labelKey: "rules.field.queenCapAt.label",
     help: "Must not exceed points to win a game.",
+    helpKey: "rules.field.queenCapAt.help",
     kind: "number",
     min: 1,
     max: 50,
@@ -93,7 +101,9 @@ export const CARROM_RULES: RuleField[] = [
     key: "queenFollowsBoard",
     edits: ["queenFollowsBoard"],
     label: "Queen always follows board winner",
+    labelKey: "rules.field.queenFollowsBoard.label",
     help: "House rule — skips tracking who covered the queen (ICF requires it).",
+    helpKey: "rules.field.queenFollowsBoard.help",
     kind: "bool",
     build: (v) => ({ queenFollowsBoard: v === "on" }),
     read: readBool("queenFollowsBoard"),
@@ -102,10 +112,11 @@ export const CARROM_RULES: RuleField[] = [
     key: "tieBoard",
     edits: ["tieBoard"],
     label: "Game tied at max boards",
+    labelKey: "rules.field.tieBoard.label",
     kind: "select",
     options: [
-      { value: "extra", label: "Sudden-death extra board (ICF)" },
-      { value: "draw", label: "Drawn game (house rule; enables league draws)" },
+      { value: "extra", label: "Sudden-death extra board (ICF)", labelKey: "rules.field.tieBoard.option.extra" },
+      { value: "draw", label: "Drawn game (house rule; enables league draws)", labelKey: "rules.field.tieBoard.option.draw" },
     ],
     build: (v) => ({ tieBoard: v }),
     read: readText("tieBoard"),
@@ -114,6 +125,7 @@ export const CARROM_RULES: RuleField[] = [
     key: "abandon",
     edits: ["abandonPolicy"],
     label: "If a match is abandoned",
+    labelKey: "rules.field.abandon.label",
     kind: "select",
     options: abandonOptions(carrom),
     build: (v) => ({ abandonPolicy: v }),
