@@ -30,7 +30,7 @@ import {
  * postgres handle - the update the app's own `markReconnectNeeded` makes - so the status is the ONLY thing that can refuse Go live (the
  * token opens, the fake would accept it) and moving it back is the pair that proves it. The rows probes 5, 7, 8 and 9 only LIST are written
  * through the same handle with a token that opens nothing, always as `reconnect_needed`: the daily pass health-checks only `connected`
- * rows, so such a seed can never turn probe 2's `failed` red. No token, key or KEK is ever printed.
+ * rows, so such a seed can never turn probe 2's own-row check red (that probe reads its own connection row, never the pass's server-wide counters). No token, key or KEK is ever printed.
  *
  * ONE SPORT (generic), by design: nothing under server/youtube/ or the connect panel reads a sport (the walkthrough's header says the
  * same). SMOKE_ONLY=youtubeConnect runs it alone (SELECTABLE_SUITES).
@@ -283,6 +283,17 @@ export async function youtubeConnectSuite(): Promise<void> {
     premise(secret !== "", "CRON_SECRET is not in the smoke env, so the right-secret answer cannot be read (the server and the smoke must share it)");
     const wrong = await fetch(`${BASE}/api/cron/stream-tick`, { method: "POST", headers: { "x-cron-secret": "definitely-wrong-youtube-tick" } });
     step(`a wrong secret is refused 401 (got ${wrong.status})`, wrong.status === 401);
+    // The tick is GLOBAL (every organisation's broadcasts), so its `failed` is not this suite's to pin at 0 on a database other runs
+    // have used. What it CAN bound is the rows it may fail: one count per broadcast that was open when the tick began, so the count
+    // is read BEFORE (a row the tick finalizes `failed` is no longer open afterwards). Only the rows of organisations that are not
+    // this suite's: on a clean database that is 0, i.e. the strict `failed === 0`.
+    const othersOpen = await withDb(async (sql) => {
+      const [r] = await sql<{ n: number }[]>`
+        select count(*)::int as n from youtube_broadcasts
+         where state in ('created', 'bound', 'reserved', 'live', 'ending') and org_id <> ${a.orgId} and org_id <> ${b.orgId}`;
+      return r?.n;
+    });
+    premise(typeof othersOpen === "number", "the count of other organisations' open broadcasts was not returned");
     const right = await cronPost("/api/cron/stream-tick", secret);
     const yt = right.body?.data?.youtube as Record<string, unknown> | undefined;
     step(`the right secret answers 200 (got ${right.status})`, right.status === 200 && right.body?.ok === true);
@@ -291,13 +302,28 @@ export async function youtubeConnectSuite(): Promise<void> {
       "data.youtube carries a number for ended, neverLive, orphans, failed and deferred, and data.failed is a number",
       allNumbers(yt, ["ended", "neverLive", "orphans", "failed", "deferred"]) && typeof right.body?.data?.failed === "number",
     );
-    step(`data.youtube.failed is 0 (got ${String(yt?.failed)}): the end step could run, with the key it needs`, yt?.failed === 0);
+    step(
+      `data.youtube.failed is at most the ${String(othersOpen)} open broadcast(s) of other organisations (got ${String(yt?.failed)}): the end step ran, and a whole-step failure (answered failed: 1) shows on a database holding none`,
+      typeof yt?.failed === "number" && typeof othersOpen === "number" && yt.failed <= othersOpen,
+    );
   });
 
   // --- 2. relay-sweep answers (T17) -------------------------------------------------------------------------------------------
   await probe("relay-sweep answers", async (step) => {
     premise(secret !== "", "CRON_SECRET is not in the smoke env");
     premise(real !== null, `the channel this probe's health check must visit was not connected: ${realFailure}`);
+    const ownRow = (): Promise<{ status: string; last_health_at: Date | null; last_error_code: string | null } | undefined> =>
+      withDb(async (sql) => {
+        const [r] = await sql<{ status: string; last_health_at: Date | null; last_error_code: string | null }[]>`
+          select status, last_health_at, last_error_code from org_youtube_connections where id = ${real?.connectionId ?? ""}`;
+        return r;
+      });
+    // The witness is OUR row, not the pass's server-wide counters (a database other runs used holds rows this suite never made, sealed
+    // under keys this server no longer has: they count `failed` and `checked` whatever this suite does). A connection is saved with
+    // last_health_at NULL and only a SUCCESSFUL health check stamps it, so non-null afterwards is the sweep reaching this row, opening
+    // its sealed token under the server's key and getting an answer from the (fake) YouTube. Asserted null BEFORE, or "stamped" proves nothing.
+    const before = await ownRow();
+    premise(before?.status === "connected" && before.last_health_at === null, "the channel did not start connected and never health-checked");
     const wrong = await fetch(`${BASE}/api/cron/relay-sweep`, { method: "POST", headers: { "x-cron-secret": "definitely-wrong-youtube-sweep" } });
     step(`a wrong secret is refused 401 (got ${wrong.status})`, wrong.status === 401);
     const right = await cronPost("/api/cron/relay-sweep", secret);
@@ -307,9 +333,15 @@ export async function youtubeConnectSuite(): Promise<void> {
       "data.youtube carries a number for checked, reconnectNeeded, refreshed, removed, keysRemoved, purged, failed and deferred",
       allNumbers(yt, ["checked", "reconnectNeeded", "refreshed", "removed", "keysRemoved", "purged", "failed", "deferred"]),
     );
-    // Not vacuous: a connected channel exists (the one connected above), so a pass that looked at nothing would read 0 here.
-    step(`the daily pass visited a connection: checked >= 1 (got ${String(yt?.checked)})`, typeof yt?.checked === "number" && yt.checked >= 1);
-    step(`data.youtube.failed is 0 (got ${String(yt?.failed)}): the pass could run, with the key it needs`, yt?.failed === 0);
+    const after = await ownRow();
+    step(
+      `this probe's own channel was health-checked: still connected, last_health_at stamped (got ${String(after?.status)}, ${after?.last_health_at ? "stamped" : "not stamped"})`,
+      after?.status === "connected" && after.last_health_at instanceof Date,
+    );
+    step(
+      `...and the check found nothing wrong with it: last_error_code is null (got ${String(after?.last_error_code)})`,
+      after?.last_error_code === null,
+    );
   });
 
   // --- 3. connect without consent is refused (T7) -----------------------------------------------------------------------------
@@ -452,13 +484,15 @@ export async function youtubeConnectSuite(): Promise<void> {
     const hidden = id();
     const HOUR = 3_600_000;
     const at = (hoursAgo: number): Date => new Date(Date.now() - hoursAgo * HOUR);
-    // Three complete broadcasts. The parts are numbered by START (created_at), so `first` is Part 1 though it FINISHED after `second`
-    // (the order differs from the completion order, or the numbering could not be told apart); `hidden` is private on YouTube.
+    // Three complete broadcasts on ONE fixture. The parts are numbered by START (created_at), so `first` is Part 1 though it FINISHED
+    // after `second` (the order differs from the completion order, or the numbering could not be told apart). `hidden` is private on
+    // YouTube and STARTED BETWEEN the two others, so it is not the public's to see AND the public's numbers close up over it
+    // (Part 1, Part 2 - a view that numbered before it filtered would read Part 1, Part 3, and one that did not filter would show three).
     await withDb(async (sql) => {
       for (const [video, privacy, started, finished] of [
         [first, "unlisted", at(5), at(0.5)],
         [second, "public", at(2), at(1.5)],
-        [hidden, "private", at(1), at(0.2)],
+        [hidden, "private", at(3.5), at(0.2)],
       ] as const) {
         await sql`
           insert into youtube_broadcasts (org_id, connection_id, fixture_id, yt_broadcast_id, title, privacy, state, created_at, completed_at)
@@ -470,9 +504,9 @@ export async function youtubeConnectSuite(): Promise<void> {
     const page = await html(newSession(), path);   // anonymous: a spectator's view
     const replay = sectionFrom(page.body, 'data-testid="replay-embed"');
     step(`the public page renders the replay region (got ${page.status})`, page.status === 200 && replay !== "");
-    const tabs = [...replay.matchAll(/role="tab"[^>]*>([^<]*)</g)].map((m) => (m[1] ?? "").replace(/<!--.*?-->/g, ""));
+    const tabs = [...replay.matchAll(/role="tab"[^>]*>([^<]*)</g)].map((m) => m[1] ?? "");
     step(
-      `two parts, as two tabs read from the dictionary: ${JSON.stringify([en("streaming.youtube.part", { n: 1 }), en("streaming.youtube.part", { n: 2 })])} (got ${JSON.stringify(tabs)})`,
+      `two parts (the private one in between is not a third), as two tabs read from the dictionary: ${JSON.stringify([en("streaming.youtube.part", { n: 1 }), en("streaming.youtube.part", { n: 2 })])} (got ${JSON.stringify(tabs)})`,
       tabs.length === 2 && tabs[0] === en("streaming.youtube.part", { n: 1 }) && tabs[1] === en("streaming.youtube.part", { n: 2 }),
     );
     step(
@@ -480,7 +514,7 @@ export async function youtubeConnectSuite(): Promise<void> {
       replay.includes('data-testid="replay-facade"') && replay.includes(`data-testid="replay-open"`) && replay.includes(`href="${youtubeWatchUrl(first)}"`) && !replay.includes(second),
     );
     step("click-to-play: no player iframe is in the page before a tap", !replay.includes("<iframe"));
-    step("a broadcast that is private on YouTube is not on the page at all", !page.body.includes(hidden));
+    step("a broadcast that is private on YouTube, started between the two visible parts, is not on the page at all", !page.body.includes(hidden));
   });
 
   // --- 9. disconnect unknown -> 404 (T18) -------------------------------------------------------------------------------------
