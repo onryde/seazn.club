@@ -1794,6 +1794,18 @@
       "original": "state.cfg.shootout !== null",
       "line": "state.phase === \"SHOOTOUT\" && state.shootout !== null && state.cfg.shootout !== null",
       "reason": "W2e T25 (summary.shootoutNext, HK-SO-1). A TypeScript narrowing conjunct past phase === 'SHOOTOUT'. The one transition into that phase (resolveEnd, kernel.ts:1104) happens only when state.cfg.shootout !== null, and a match's cfg is fixed by its fold, so cfg.shootout is never null in that phase."
+    },
+    {
+      "mutant": "src/sports/cricket/cricket.ts:3637:41 ConditionalExpression → false",
+      "original": "team1 === undefined",
+      "line": "if (state.cfg.inningsPerSide !== 1 || team1 === undefined || chase === undefined) return played;",
+      "reason": "W2e T25 (nrrCredits, CK-RR-1). Array destructuring: team1 is innings[0], so whenever it is undefined, chase (innings[1]) is undefined too and the next operand still returns played. The test 'a settled win over a match that never reached its chase' pins the no-innings case."
+    },
+    {
+      "mutant": "src/sports/cricket/cricket.ts:3637:7 LogicalOperator → state.cfg.inningsPerSide !== 1 && team1 === undefined",
+      "original": "state.cfg.inningsPerSide !== 1 || team1 === undefined",
+      "line": "if (state.cfg.inningsPerSide !== 1 || team1 === undefined || chase === undefined) return played;",
+      "reason": "W2e T25 (nrrCredits, CK-RR-1). Lets a two-innings match with a second innings past the guard, where it is credited as played anyway. A two-innings match takes no revise (cricket.ts:1096, refused on replay too) and gets no DLS target (maybeComputeDlsTarget, cricket.ts:1067, gates on one innings), so r1, r2 and targetSource stay null and ballsLimit stays the quota, and neither the par branch nor the revised branch can apply."
     }
   ]
 }

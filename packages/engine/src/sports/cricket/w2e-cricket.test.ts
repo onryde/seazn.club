@@ -15,7 +15,7 @@ import { derivedMetricText } from "../../competition/display.ts";
 import { foldResults } from "../../competition/standings.ts";
 import { rankStandings } from "../../competition/tiebreakers.ts";
 import { EngineError } from "../../core/errors.ts";
-import { foldMatch, type EventEnvelope } from "../../core/events.ts";
+import { foldMatch, foldMatchWithStoppage, outcomeOf, type EventEnvelope } from "../../core/events.ts";
 import type { LineupPair, StandingsDelta } from "../../core/types.ts";
 import { resolvePositions } from "../../sport/catalog.ts";
 import { declaredCfgs } from "../../testkit/declared-cfgs.ts";
@@ -607,6 +607,34 @@ describe("CK-RR-1 net run rate under DLS or revised overs (ICC 16.10.7, RB2A-20,
       checked++;
     }
     expect(checked).toBe(states.length);
+  });
+
+  it("CK-RR-1 a settled win over a match that never reached its chase credits NRR as played, and what one side is credited the other is charged (counted)", () => {
+    // An organiser settle (X-ST-1) can turn a washout into a win. With no Team 2 innings there is no target to read, so ICC
+    // 16.10.7's default applies: each side is credited what it batted, off the balls it faced. The expected figures are the
+    // ledger's own summary. Single-format: NRR exists only in cricket; both innings formats are swept.
+    let checked = 0;
+    const cases = [
+      ["one-innings, no innings", ONE_INNINGS, [], { runs: 0, balls: 0 }],
+      ["one-innings, Team 1's innings only", ONE_INNINGS, [summary(80, 2, 60, true)], { runs: 80, balls: 60 }],
+      ["two-innings, the first innings only", TWO_INNINGS, [summary(80, 2, 60, true)], { runs: 80, balls: 60 }],
+    ] as const;
+    for (const [name, cfg, specs, batted] of cases) {
+      const lineups = lineupsFor(cfg);
+      const events = ledger([["core.start"], ...specs, ["core.abandon", { reason: "rain" }], ["core.settle", { winner: lineups.home.entrantId, method: "lot" }]]);
+      const folded = foldMatchWithStoppage(cricket, cfg, lineups, events);
+      const outcome = outcomeOf(cricket, folded);
+      expect(outcome, name).toMatchObject({ kind: "win", winner: lineups.home.entrantId, method: "settled_lot" });
+      const state = folded.state;
+      const [home, away] = cricket.standingsDelta(outcome!, cfg, { kind: "league" }, state);
+      const first = state.innings[0]?.battingSide ?? "home";
+      const [batter, fielder] = first === "home" ? [home, away] : [away, home];
+      expect([batter.metrics.runs_for, batter.metrics.balls_faced_eff], name).toEqual([batted.runs, batted.balls]);
+      expect([fielder.metrics.runs_against, fielder.metrics.balls_bowled_eff], name).toEqual([batted.runs, batted.balls]);
+      expect([fielder.metrics.runs_for, batter.metrics.runs_against], `${name}: the side that never batted is credited nothing`).toEqual([0, 0]);
+      checked++;
+    }
+    expect(checked).toBe(cases.length);
   });
 
   it("CK-RR-1 premise: DLS is on only in a limited-overs match and a timeless one takes no revise, so a DLS chase always holds its quota, R1, R2 and allocation", () => {
