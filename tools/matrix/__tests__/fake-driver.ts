@@ -30,7 +30,7 @@ export const rulesOfConfig = (config: Readonly<Record<string, unknown>> | undefi
 };
 import { DEPARTED_STATUSES } from "../lib/observed.ts";
 import { STREAM_GENERATORS, forfeitPosting } from "../lib/streams/index.ts";
-import type { ForfeitReason, StreamEvent, StreamLineups } from "../lib/streams/types.ts";
+import { canon, type ForfeitReason, type StreamEvent, type StreamLineups } from "../lib/streams/types.ts";
 import {
   DriverMisuse, LineupUnchecked, RefusedCall, VOID_EVENT, idempotencyKey, inSquadOrder, voidTargetOf,
   type CompetitionRef, type CompleteOut, type DivisionRef, type EntrantInput, type EntrantMember, type EntrantRow, type FixtureRow,
@@ -62,13 +62,6 @@ function templateStageConfig(st: RawCatalogTemplate["divisions"][number]["stages
   return cfg;
 }
 
-/** Key-sorted JSON, the product's canonicalJson comparison (divisions.ts:852-855). */
-function canonical(v: unknown): string {
-  return JSON.stringify(v, (_k, x: unknown) =>
-    x !== null && typeof x === "object" && !Array.isArray(x)
-      ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
-      : x);
-}
 function withoutEntrants(c: Record<string, unknown>): Record<string, unknown> {
   const { entrants: _e, ...rest } = c;
   return rest;
@@ -674,7 +667,7 @@ export class FakeLeagueDriver implements OrganiserDriver {
       } catch {
         return { status: 422, code: "CONFIG_INVALID" };
       }
-      if (locked && canonical(withoutEntrants(parsed)) !== canonical(withoutEntrants(this.divisionConfig))) return { status: 409, code: "DIVISION_FORMAT_LOCKED" };
+      if (locked && canon(withoutEntrants(parsed)) !== canon(withoutEntrants(this.divisionConfig))) return { status: 409, code: "DIVISION_FORMAT_LOCKED" };
       const entrants = config.entrants;
       const next = entrantKindsFor(this.sport, entrants != null && typeof entrants === "object" ? { ...parsed, entrants } : parsed);
       if (this.kindsInUse().some((k) => !next.includes(k))) return { status: 422, code: "ENTRANT_KIND_IN_USE" };

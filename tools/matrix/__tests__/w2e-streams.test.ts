@@ -9,6 +9,9 @@ import { EngineError, FORFEIT_REASONS, StageKind, sanctionEndingIssues, scorerMa
 import { BO1_MATCH_TIEBREAK, checkFixtureOverride, deciderKeysFor, stageKeysFor, writeConfigIssues } from "@seazn/engine/sport";
 import { CricketBall, CricketCfg, dlsTarget, soBattingSideAt, type CricketState } from "@seazn/engine/sports/cricket";
 import { football, footballNextKicker, type ShootoutKick } from "@seazn/engine/sports/football";
+import { readdirSync, readFileSync } from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { mergeRulesOverride } from "../../../apps/web/src/server/engine-db/fixture-cfg.ts";
 import { SPORT_KEYS } from "../lib/catalogue.ts";
@@ -109,6 +112,22 @@ describe("W2e request vocabulary (Task 19: the interface Tasks 20–24 build on)
     expect(canon({})).toBe("{}");
     // The real shapes it compares: a cfg parsed from a preset and one parsed from overrides.
     expect(canon(resolveSportCfg("tennis", "tour"))).toBe(canon(JSON.parse(JSON.stringify(resolveSportCfg("tennis", "tour")))));
+  });
+
+  it("canon is the ONLY key-sorting canonical form in the matrix (Task 24 M-5): no other file under tools/matrix spells one, and the three that did (fake-driver, lock-diff, scenarios/assertions) import it", () => {
+    const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+    const walk = (dir: string): string[] => readdirSync(dir, { withFileTypes: true }).flatMap((d) =>
+      d.isDirectory() ? (d.name === "node_modules" || d.name === "catalogue" ? [] : walk(join(dir, d.name))) : d.name.endsWith(".ts") ? [join(dir, d.name)] : []);
+    const files = walk(root);
+    // A key-sorted JSON spelling: `.sort()` over Object.keys feeding a `${JSON.stringify(k)}:` member, or a JSON.stringify replacer that
+    // sorts Object.entries. The needles are built, not spelled, so this file does not match itself.
+    const needles = [new RegExp("Object\\.keys\\([^)]*\\)[^;]*\\.sort\\(\\)[^;]*" + "JSON\\.stringify\\(k\\)"), new RegExp("JSON\\.stringify\\([^;]*Object\\.fromEntries\\(Object\\.entries\\([^)]*\\)\\.sort\\(")];
+    const spellers = files.filter((f) => !f.endsWith("w2e-streams.test.ts") && needles.some((n) => n.test(readFileSync(f, "utf8"))));
+    expect(files.length, "the walk found the matrix's sources").toBeGreaterThan(100);
+    expect(spellers.map((f) => relative(root, f)), "only streams/types.ts spells canon").toEqual(["lib/streams/types.ts"]);
+    for (const f of ["lib/lock-diff.ts", "lib/scenarios/assertions.ts", "__tests__/fake-driver.ts"]) {
+      expect(readFileSync(join(root, f), "utf8"), `${f} imports canon from streams/types.ts`).toMatch(/import \{[^}]*\bcanon\b[^}]*\} from "[^"]*streams\/types\.ts"/);
+    }
   });
 
   it("a path is witnessed on the fold's STATE as well as its outcome: matchesRequest refuses a path request handed no state, by name", () => {
