@@ -499,7 +499,7 @@ describe("the two checks this task adds, on their own", () => {
   const stageRef = (seq: number) => ({ id: `s${seq}`, seq, kind: seq === 1 ? "league" : "knockout", config: {}, status: "active" });
   const RANK_1_TO_4 = [{ kind: "rankRange", from: 1, to: 4 }];
   const adv = (over: Partial<AdvanceObs>): AdvanceObs =>
-    ({ status: 200, code: null, proposalId: "sp-2-1", filled: 4, seeded: ["a", "b", "c", "d"], declared: 4, takes: RANK_1_TO_4, tiePicked: false, ...over });
+    ({ status: 200, code: null, proposalId: "sp-2-1", filled: 4, seeded: ["a", "b", "c", "d"], declared: 4, takes: RANK_1_TO_4, seats: [4], tiePicked: false, ...over });
   const done: CompleteObs = { status: 200, code: null, completed: true, finalRanks: null, seedProposal: { id: "sp-2-1", status: "draft" } };
   const root: StagePlay = { stage: stageRef(1), field: ["a", "b", "c", "d", "e", "f"], advance: null, complete: done };
   /** Stage 1's observed table: the product ranked a..f 1..6 (one pool). */
@@ -548,14 +548,48 @@ describe("the two checks this task adds, on their own", () => {
     const pools = { stages: [{ id: "s1", standings: [{ poolId: "p1", rows: [r("a", 1), r("b", 2), r("c", 3)] }, { poolId: "p2", rows: [r("d", 1), r("e", 2), r("f", 3)] }], fixtures: [] }] } as unknown as Pick<ObservedRun, "stages">;
     const takes = [{ kind: "bestNth", nth: 3, count: 1 }];
     expect(withdrawnQualifiers(takes as never, pools.stages[0] as never, new Set(["c", "f"])).length, "premise: the bound names both").toBe(2);
-    const overSeeded: StagePlay = { stage: stageRef(2), field: ["a", "d"], advance: adv({ takes, declared: 1, seeded: ["a", "d"], filled: 2 }), complete: null };
+    const overSeeded: StagePlay = { stage: stageRef(2), field: ["a", "d"], advance: adv({ takes, seats: [1], declared: 1, seeded: ["a", "d"], filled: 2 }), complete: null };
     expect(advanceSeededAsDeclared([root, overSeeded], pools, new Set(["c", "f"]))).toMatchObject({
       verdict: "fail",
       evidence: ["stage 2: seeded 2, declared 1 less at most 1 withdrawn qualifier(s)"],
     });
     // The positive pair: one seat, the one withdrawn qualifier it can lose - seeded 0 is allowed.
-    const none: StagePlay = { stage: stageRef(2), field: [], advance: adv({ takes, declared: 1, seeded: [], filled: 0 }), complete: null };
+    const none: StagePlay = { stage: stageRef(2), field: [], advance: adv({ takes, seats: [1], declared: 1, seeded: [], filled: 0 }), complete: null };
     expect(advanceSeededAsDeclared([root, none], pools, new Set(["c", "f"]))).toMatchObject({ verdict: "pass", checked: 3 });
+  });
+  it("advance-seeded-as-declared (T33b): the slack is capped per TAKE - one take's withdrawn rows cannot excuse another take's empty seats", () => {
+    // Three pools of two. Take 1: each pool's winner (3 seats). Take 2: the best runner-up (1 seat). All three runners-up withdrew,
+    // so bestNth's upper bound names 3 qualifiers - but only the ONE seat the second take offers can be left empty. Capped at the
+    // TOTAL (4 seats) the slack read 3, and a stage that lost two seats with no winner withdrawn passed.
+    const pools3 = {
+      stages: [{ id: "s1", fixtures: [], standings: [
+        { poolId: "p1", rows: [r("a1", 1), r("a2", 2)] },
+        { poolId: "p2", rows: [r("b1", 1), r("b2", 2)] },
+        { poolId: "p3", rows: [r("c1", 1), r("c2", 2)] },
+      ] }],
+    } as unknown as Pick<ObservedRun, "stages">;
+    const takes = [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }];
+    const runnersUp = new Set(["a2", "b2", "c2"]);
+    expect(withdrawnQualifiers(takes as never, pools3.stages[0] as never, runnersUp).length, "premise: the bound names all three runners-up").toBe(3);
+    const src: StagePlay = { ...root, field: ["a1", "a2", "b1", "b2", "c1", "c2"] };
+    const stage2 = (seeded: string[]): StagePlay => ({
+      stage: stageRef(2), field: seeded, complete: null,
+      advance: adv({ takes, seats: [3, 1], declared: 4, seeded, filled: seeded.length }),
+    });
+    // The seat that CAN be empty: the best runner-up withdrew, her seat is left, three winners are seeded.
+    expect(advanceSeededAsDeclared([src, stage2(["a1", "b1", "c1"])], pools3, runnersUp)).toMatchObject({ verdict: "pass", checked: 3 });
+    // A winner's seat lost as well, with no winner withdrawn: two seats gone against one seat of slack.
+    expect(advanceSeededAsDeclared([src, stage2(["a1", "b1"])], pools3, runnersUp)).toMatchObject({
+      verdict: "fail",
+      evidence: ["stage 2: seeded 2, declared 4 less at most 1 withdrawn qualifier(s)"],
+    });
+    // Counted, not assumed: a withdrawn WINNER is a qualifier of the first take, so the slack is then two.
+    expect(advanceSeededAsDeclared([src, stage2(["b1", "c1"])], pools3, new Set(["a1", "a2", "b2", "c2"]))).toMatchObject({ verdict: "pass", checked: 3 });
+  });
+  it("advance-seeded-as-declared (T33b): seats that do not line up with the takes are a named error, never a guess at the slack", () => {
+    const takes = [{ kind: "topNPerGroup", n: 1 }, { kind: "bestNth", nth: 2, count: 1 }];
+    const lopsided: StagePlay = { stage: stageRef(2), field: ["a"], complete: null, advance: adv({ takes, seats: [4], declared: 4, seeded: ["a"], filled: 1 }) };
+    expect(() => advanceSeededAsDeclared([root, lopsided], observed, new Set(["a"]))).toThrow(/seats/);
   });
   it("advance-seeded-as-declared: a source stage the snapshot did not observe is a named failing item, never a silent zero", () => {
     const ok: StagePlay = { stage: stageRef(2), field: ["a", "b", "c", "d"], advance: adv({}), complete: null };
