@@ -1917,6 +1917,28 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(await streamUrlOf(f1)).toBe(youtubeWatchUrl(done.ytId));
     });
 
+    it("B6 round 2 C6: the failed-row retention never WAITS for a row another transaction holds (a disconnect's purge locks the connection's rows in id order, so waiting for one can deadlock with it): the held row is skipped and goes on the next pass, the free one goes now", async () => {
+      const w = await world({ fixtures: 1, credits: 1 });
+      const mk = async () => (await sql<{ id: string }[]>`
+        insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, last_error_code, created_at)
+        values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't17 refused', 'unlisted', 'failed', 'admission_refused', now() - (31::float8 * interval '1 day'))
+        returning id`)[0]!.id;
+      const [held, free] = [await mk(), await mk()];
+      let pass!: Promise<YoutubeDailyResult>;
+      let race = "";
+      await sql.begin(async (h) => {
+        await h`select id from youtube_broadcasts where id = ${held} for update`;   // what a disconnect's purge holds mid-way
+        pass = daily(w);
+        race = await Promise.race([pass.then(() => "finished"), sleep(2000).then(() => "waiting")]);
+      });
+      expect(race, "the pass did not wait for the held row").toBe("finished");
+      expect(await pass).toEqual({ ...ZERO, checked: 1, removed: 1 });
+      expect(await sql`select 1 from youtube_broadcasts where id = ${free}`, "the free row went").toHaveLength(0);
+      expect(await sql`select 1 from youtube_broadcasts where id = ${held}`, "the held row was skipped").toHaveLength(1);
+      expect(await daily(w), "released: the next pass takes it").toEqual({ ...ZERO, checked: 1, removed: 1 });
+      expect(await sql`select 1 from youtube_broadcasts where id = ${held}`).toHaveLength(0);
+    });
+
     it("a failed row with NO completed_at (a Go live that prepare refused fails without one) ages from created_at: 29 days kept, 31 days gone", async () => {
       const w = await world({ fixtures: 1, credits: 1 });
       const mk = async (ageDays: number) => (await sql<{ id: string }[]>`

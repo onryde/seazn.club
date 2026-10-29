@@ -241,11 +241,15 @@ async function deleteBroadcasts(
  *    break it, so a connection in any other status throws and nothing changes. A connection that does not exist is a no-op (nothing of it
  *    can remain: every table cascades from the org).
  *  - IDEMPOTENT: a second call finds nothing and returns zeros.
- *  - LOCK ORDER. It locks the connection and then its broadcast rows - the order every writer of a connection's rows takes (Go live's
- *    pick, the refresh, a disconnect). A reconnect's SAVE is the one writer that comes the other way: it locks its pending grant FIRST
- *    and the connection second. So the pending grants below are deleted `skip locked`: a grant a save holds is left alone (that save then
- *    finds the connection revoked and refuses, rolling its take back), instead of this transaction waiting for a row whose holder is
- *    waiting for the connection this one holds - a deadlock. A grant left behind is the stranded leg's, on the next pass.
+ *  - LOCK ORDER. A transaction that locks a connection AND its rows takes the connection FIRST: this one, Go live's pick and a disconnect
+ *    (`for update`), the refresh and the key deletes (`for share`) - so they queue on the connection instead of meeting half-way through
+ *    a set of row locks. A writer that does NOT hold the connection must not WAIT on a row a connection holder may want: the end step
+ *    claims its broadcast row `for update skip locked`, the failed-row retention (leg 6) takes its rows `skip locked`, and the stuck
+ *    finalizer updates one row at a time (one lock cannot be half of a cycle). A reconnect's SAVE is the one writer that comes the other
+ *    way round: it locks its pending grant FIRST and the connection second. So the pending grants below are deleted `skip locked`: a
+ *    grant a save holds is left alone (that save then finds the connection revoked and refuses, rolling its take back), instead of this
+ *    transaction waiting for a row whose holder is waiting for the connection this one holds - a deadlock. A grant left behind is the
+ *    stranded leg's, on the next pass.
  *  - It writes nothing outside the transaction, and cannot expire the public pages itself (a revalidation inside an open transaction
  *    would race the commit): the caller expires `result.divisions` after the commit. */
 export async function purgeConnectionData(tx: Tx, connectionId: string, hooks: DailyHooks = {}): Promise<PurgeResult> {
@@ -828,11 +832,15 @@ export async function youtubeDaily(
     await eachOf(p, "stranded_purge", left, (c) => purgeStranded(p, c));
   });
 
-  // 6. Failed broadcast rows past their retention.
+  // 6. Failed broadcast rows past their retention. This statement holds no connection lock, so it takes its rows `skip locked`: a
+  //    disconnect's purge locks its connection and then ALL the connection's rows in id order, and a delete that waited for one of them
+  //    while holding another could deadlock with it. A row left behind is the purge's (or tomorrow's).
   await leg(p, "failed_rows", async () => {
     const old = await sql<{ id: string }[]>`
       delete from youtube_broadcasts
-       where state = 'failed' and coalesce(completed_at, created_at) < ${daysBefore(now, YOUTUBE_FAILED_ROW_RETENTION_DAYS)} ${inOrgs("org_id")}
+       where id in (select id from youtube_broadcasts
+                     where state = 'failed' and coalesce(completed_at, created_at) < ${daysBefore(now, YOUTUBE_FAILED_ROW_RETENTION_DAYS)} ${inOrgs("org_id")}
+                       for update skip locked)
       returning id`;
     p.out.removed += old.length;
   });
