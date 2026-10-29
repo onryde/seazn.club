@@ -20,6 +20,7 @@ import { describe, expect, it } from "vitest";
 import { z } from "zod";
 import { EngineError } from "../../core/errors.ts";
 import { foldMatch, type EventEnvelope, type FoldOptions } from "../../core/events.ts";
+import { mulberry32 } from "../../core/rng.ts";
 import type { LineupPair } from "../../core/types.ts";
 import type { AnySportModule, ModuleEvent } from "../../sport/module.ts";
 import { declaredCfgs } from "../../testkit/declared-cfgs.ts";
@@ -182,6 +183,64 @@ describe("HK-SO-1 FIH shoot-out series order (RB2B-10)", () => {
     }
     expect(walkedPairs, "pair starts checked, both sides starting, four series of three").toBe(24);
     expect(pair4Checks, "pair 4 checked from both starting sides").toBe(2);
+  });
+
+  it("HK-SO-1 the generator reads the cfg's attempts too: at attempts 3 every shoot-out attempt arbitraryEvent emits opens its pair by the series order and folds on the write path (FIH App 12 §20c/21b)", () => {
+    // single-sport: FIH's series order is hockey's own. The generator feeds every seed sweep and the golden corpus; one that
+    // read a constant five instead of `state.cfg.shootout.attempts` opens pair 4 with the side that opened series 1, which
+    // the strict fold refuses (W2e batch A1 review M-6). The expected opener is the rule's, not the code's: pair p (counted
+    // from 0) opens with F in an even series floor(p / attempts) and with the other side in an odd one (20c, 21b).
+    const base = hockey.variants["fih-shootout"] as { shootout: Record<string, unknown> };
+    const three: ShootoutSport = {
+      ...FIH,
+      name: "hockey fih-shootout, attempts 3",
+      cfg: hockey.configSchema.parse({ ...base, shootout: { ...base.shootout, attempts: 3 } }),
+      attempts: 3,
+    };
+    const opener = (first: Side, pairs: number, attempts: number): Side => (Math.floor(pairs / attempts) % 2 === 0 ? first : other(first));
+    const sideOfId = (id: unknown): Side => {
+      if (id === ID.home) return "home";
+      if (id === ID.away) return "away";
+      throw new Error(`not an entrant: ${String(id)}`);
+    };
+    const generate = hockey.arbitraryEvent!.bind(hockey) as unknown as (state: PeriodState, rng: () => number) => ModuleEvent | null;
+    let emitted = 0;
+    let pairOpens = 0;
+    let opensWhereFiveDiffers = 0;
+    let decided = 0;
+    for (let seed = 1; seed <= 120; seed++) {
+      const rng = mulberry32(seed);
+      const ledger: ModuleEvent[] = [...three.toShootout];
+      for (let step = 0; step < 80; step++) {
+        const state = fold(three, ledger);
+        if (state.phase !== "SHOOTOUT") {
+          expect(state.outcome, `seed ${seed}: the shoot-out ends decided`).toMatchObject({ kind: "win", method: "shootout" });
+          decided++;
+          break;
+        }
+        const event = generate(state, rng);
+        expect(event?.type, `seed ${seed} step ${step}: a shoot-out attempt`).toBe(three.attemptType);
+        const by = sideOfId((event!.payload as { by: unknown }).by);
+        const counted = state.shootout!.kicks.filter((k) => k.void !== true);
+        const taken = { home: counted.filter((k) => k.side === "home").length, away: counted.filter((k) => k.side === "away").length };
+        if (counted.length > 0 && taken.home === taken.away) {
+          const first = state.shootout!.kicks[0]!.side;
+          const want = opener(first, taken.home, three.attempts);
+          expect(by, `seed ${seed}: pair ${taken.home + 1} opens with the series-order side`).toBe(want);
+          pairOpens++;
+          if (want !== opener(first, taken.home, 5)) opensWhereFiveDiffers++;
+        }
+        expect(refusalOf(() => fold(three, [...ledger, event!])), `seed ${seed} step ${step}: the write path takes it`).toBeNull();
+        ledger.push(event!);
+        emitted++;
+      }
+    }
+    // anti-vacuity: the sweep reaches the pairs where a five-attempt series would name the other opener
+    const counts = `${emitted} attempts, ${pairOpens} pair openings, ${opensWhereFiveDiffers} where five differs, ${decided}/120 decided`;
+    expect(emitted, `attempts emitted (${counts})`).toBeGreaterThan(0);
+    expect(pairOpens, `pair openings checked against the series order (${counts})`).toBeGreaterThan(0);
+    expect(opensWhereFiveDiffers, `openings where attempts 3 and attempts 5 name different sides (${counts})`).toBeGreaterThan(0);
+    expect(decided, `streams that reach a decision (${counts})`).toBeGreaterThan(0);
   });
 
   it("HK-SO-1 the early finish holds inside the second series, after equal numbers, before all five (FIH App 12 §20d)", () => {
