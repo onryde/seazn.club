@@ -28,6 +28,11 @@ import "server-only";
 //   6. FAILED ROWS (carry d) — a `failed` broadcast row is deleted 30 days after it failed. The plan names no retention for a failed row;
 //      it holds a title and (usually) a video id, i.e. YouTube data, so DP III.E.4's 30 days applies.
 //
+// THE BUDGET. The pass shares the Worker's 60 s with the relay sweep that follows it, and a connection is three or four Google calls: every
+// call of the connection leg (health, refresh, idle keys) starts only while `YOUTUBE_DAILY_BUDGET_MS` has time left (`gated`). A connection
+// the slice cut - never started, or left between two calls - is counted `deferred` (not `failed`: the Worker's alert is unchanged) and,
+// being the least recently checked, is the first one tomorrow. The database-only legs (the purges, the retention) call nobody and always run.
+//
 // DECISIONS the brief left open (also in the T17 report):
 //  - g (insufficientLivePermissions). YouTube's "the request is not authorized to <live>" is a fact about the CHANNEL's live permission,
 //    which a reconnect of the same account may not cure. It is live_blocked EVERYWHERE (controller ruling, fix round 1): the connection
@@ -51,16 +56,18 @@ import { YOUTUBE_LIVE_STATE_OF_REFUSAL, youtubeVideoId, type YoutubeLiveStateRef
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { recordLiveState } from "./connections";
-import { CLAIM_LEASE_MINUTES, OPEN_STATES, YOUTUBE_END_BACKOFF_CAP_MINUTES, endBackoffMinutes } from "./end-step";
+import { BudgetSpent, CLAIM_LEASE_MINUTES, OPEN_STATES, YOUTUBE_END_BACKOFF_CAP_MINUTES, endBackoffMinutes } from "./end-step";
 import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePort } from "./port";
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken, revokeConnection } from "./token-store";
 
 /** `checked` connections health-checked; `reconnectNeeded` connections this pass found dead; `refreshed` / `removed` broadcast rows
  *  confirmed / deleted (removed: a video gone from YouTube, a complete row of a dead grant past the ceiling, or a failed row past its
  *  retention); `keysRemoved` pooled stream keys deleted (retired ones, and ones idle past the ceiling); `purged` connections whose data was
- *  purged; `failed` what did not work and is retried tomorrow, plus every stuck broadcast (the Worker alerts on this one). */
+ *  purged; `failed` what did not work and is retried tomorrow, plus every stuck broadcast (the Worker alerts on this one); `deferred`
+ *  connections the pass's wall-clock budget cut short (not started, or left between two of their YouTube calls) - not a failure: they are
+ *  the least recently checked, so tomorrow's pass reaches them first. */
 export type YoutubeDailyResult = {
-  checked: number; reconnectNeeded: number; refreshed: number; removed: number; keysRemoved: number; purged: number; failed: number;
+  checked: number; reconnectNeeded: number; refreshed: number; removed: number; keysRemoved: number; purged: number; failed: number; deferred: number;
 };
 
 /** A stored video link is re-confirmed after this long (spec §6.6 "~25 days"; DP III.E.4 allows 30, so a failed day has slack). */
@@ -72,6 +79,13 @@ export const YOUTUBE_DATA_CEILING_DAYS = 30;
 export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = YOUTUBE_DATA_CEILING_DAYS;
 /** A `failed` broadcast row is deleted this long after it failed (DP III.E.4; the plan names no other figure). */
 export const YOUTUBE_FAILED_ROW_RETENTION_DAYS = YOUTUBE_DATA_CEILING_DAYS;
+
+/** The pass's own wall-clock slice for its YouTube calls. The pass runs on the relay-sweep firing, inside the cron Worker's 60 s job
+ *  timeout (apps/cron-worker call.ts), ahead of the relay sweep, which has no budget of its own: a connection costs three or four Google
+ *  calls of up to `YOUTUBE_CALL_BOUND_MS` each, so a long list of channels could use the whole minute. A call starts only while the slice
+ *  has time left, so the pass overruns it by at most the one call in flight; with that overrun it takes at most half the Worker's minute,
+ *  and the sweep keeps the rest. (The pass's database-only legs - the purges, the retention - are not bounded by it: they call nobody.) */
+export const YOUTUBE_DAILY_BUDGET_MS = 20_000;
 
 /** videos.list takes at most 50 ids per call (Google). */
 const VIDEOS_PER_CALL = 50;
@@ -129,7 +143,7 @@ const REFUSAL_OF_LIVE_STATE = Object.fromEntries(
   Object.entries(YOUTUBE_LIVE_STATE_OF_REFUSAL).map(([code, state]) => [state, code]),
 ) as Record<"not_enabled" | "blocked", YoutubeLiveStateRefusal>;
 
-const zero = (): YoutubeDailyResult => ({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0 });
+const zero = (): YoutubeDailyResult => ({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0, deferred: 0 });
 
 /** Test-only seams (end-step.ts's `EndStepHooks.afterClaim` precedent): each runs in the window between a READ and the WRITE that acts on
  *  it, the only place a concurrent writer can land, which only a hook can make deterministic. Production passes none. */
@@ -259,13 +273,32 @@ async function viaPort<T>(call: () => Promise<T>, c: Pick<Conn, "id" | "org_id">
   try {
     return await call();
   } catch (err) {
-    if (err instanceof YouTubeError) throw err;
+    if (err instanceof YouTubeError || err instanceof BudgetSpent) throw err;
     const kind = (err instanceof Error ? err.name : typeof err).replace(/[^A-Za-z]/g, "").slice(0, 64);
     captureError(new Error(`youtube daily: a port call raised a non-port error (${kind})`), {
       orgId: c.org_id, route: "youtube.daily.port", extra: { connectionId: c.id, step },
     });
     throw new YouTubeError("youtube_unavailable");
   }
+}
+
+/** The port with every call the connection leg makes gated on the slice: a call starts only while `room()` says there is time, else it
+ *  throws `BudgetSpent` without calling (end-step.ts's gate, for the daily pass's calls). `revoke` is NOT gated: the Google revoke of a
+ *  purged grant is the policy's step and is made past the budget, as a disconnect's is. Each call runs on the ORIGINAL port (`this`). */
+function gated(port: YouTubePort, room: () => boolean): YouTubePort {
+  const g = Object.create(port) as YouTubePort;
+  const gate = <A extends unknown[], R>(call: (...a: A) => Promise<R>) =>
+    async (...a: A): Promise<R> => {
+      if (!room()) throw new BudgetSpent();
+      return call.call(port, ...a);
+    };
+  g.accessToken = gate(port.accessToken);
+  g.listMyChannels = gate(port.listMyChannels);
+  g.liveEnabled = gate(port.liveEnabled);
+  g.existingVideos = gate(port.existingVideos);
+  g.deleteStream = gate(port.deleteStream);
+  g.revoke = (refreshToken) => port.revoke(refreshToken);
+  return g;
 }
 
 /** The connection's grant is dead: reconnect_needed, status_since now (token-store's writer; false when it already was). */
@@ -332,6 +365,7 @@ async function checkHealth(p: Pass, at: string, c: Conn): Promise<boolean> {
     await recordLiveState(sql, c.org_id, c.id, code);   // last_health_at = the database's now(), the clock status_since is on (carry f)
     return true;
   } catch (err) {
+    if (err instanceof BudgetSpent) throw err;   // the connection is cut here (checkConnection counts it deferred)
     if (isDeadGrantRefusal(err)) {
       await flip(c, p.out);
       return false;
@@ -377,6 +411,7 @@ async function refreshVideos(p: Pass, at: string, c: Conn): Promise<void> {
       p.out.removed += removed.deleted;
       expirePages(removed.divisions);
     } catch (err) {
+      if (err instanceof BudgetSpent) throw err;   // the rest of the batches wait for tomorrow
       if (isDeadGrantRefusal(err)) {
         await flip(c, p.out);   // the token died between the health check and this call
         return;
@@ -395,18 +430,28 @@ async function checkConnection(p: Pass, c: Conn): Promise<void> {
     return;
   }
   if (refresh === null) return;   // revoked since the list was read
-  p.out.checked++;
   let at: string;
   try {
     at = await viaPort(() => p.port.accessToken(refresh), c, "token");
   } catch (err) {
+    if (err instanceof BudgetSpent) {   // no slice left to start this connection: tomorrow's pass reaches it first
+      p.out.deferred++;
+      return;
+    }
+    p.out.checked++;
     if (isDeadGrantRefusal(err)) await flip(c, p.out);   // invalid_grant: the grant is dead
     else failedStep(err, c, p.out, "token");
     return;
   }
-  if (await checkHealth(p, at, c)) {
-    await refreshVideos(p, at, c);
-    await deleteIdleKeys(p, at, c);
+  p.out.checked++;
+  try {
+    if (await checkHealth(p, at, c)) {
+      await refreshVideos(p, at, c);
+      await deleteIdleKeys(p, at, c);
+    }
+  } catch (err) {
+    if (!(err instanceof BudgetSpent)) throw err;
+    p.out.deferred++;   // the slice ran out between two of its calls: what is left (the rest of the refresh) waits for tomorrow
   }
 }
 
@@ -497,7 +542,9 @@ async function deleteIdleKeys(p: Pass, at: string, c: Conn): Promise<void> {
     try {
       await viaPort(() => p.port.deleteStream(at, streamId), c, "idle_stream");
     } catch (err) {
-      // A stream already gone resolves (port.ts), so a refusal here is a real one: reported by its CODE (never a body, id or key).
+      // The rows are gone either way. A slice spent (`BudgetSpent`, not a YouTubeError) is silent here, and the gate refuses the streams after
+      // it too: an unused liveStream left in the club's Studio costs nothing but a slot there. A stream already gone resolves (port.ts), so a
+      // refusal is a real one: reported by its CODE (never a body, id or key).
       if (err instanceof YouTubeError) {
         captureError(new Error(`youtube daily: deleting an idle stream was refused (${err.code})`), {
           orgId: c.org_id, route: "youtube.daily.idle_stream", extra: { connectionId: c.id },
@@ -628,16 +675,23 @@ async function eachOf<T extends { id: string; org_id: string }>(p: Pass, name: s
 }
 
 /** The daily YouTube pass. `orgIds` (test-only) scopes every leg to those organisations; an empty list is refused - `org_id in ()` read as
- *  "no filter" would health-check, refresh and PURGE every organisation. Never throws for a fault in one connection or one leg. */
+ *  "no filter" would health-check, refresh and PURGE every organisation. `budgetMs` (default `YOUTUBE_DAILY_BUDGET_MS`) and `wallClock`
+ *  (test-only: scripts the clock) bound the YouTube calls of the connection leg. Never throws for a fault in one connection or one leg. */
 export async function youtubeDaily(
-  port: YouTubePort, now: Date, o: { orgIds?: readonly string[]; hooks?: DailyHooks } = {},
+  port: YouTubePort, now: Date,
+  o: { orgIds?: readonly string[]; hooks?: DailyHooks; budgetMs?: number; wallClock?: () => number } = {},
 ): Promise<YoutubeDailyResult> {
   const orgIds = o.orgIds === undefined ? undefined : [...o.orgIds];
   if (orgIds !== undefined && orgIds.length === 0) {
     throw new Error("youtube daily: orgIds is empty - omit it to cover every organisation, or name at least one");
   }
   const hooks = o.hooks ?? {};
-  const p: Pass = { port, now, orgIds, out: zero(), hooks };
+  const wallClock = o.wallClock ?? Date.now;
+  const started = wallClock();
+  const budgetMs = o.budgetMs ?? YOUTUBE_DAILY_BUDGET_MS;
+  /** Time left in the slice: the ONE rule for starting each of the connection leg's YouTube calls. */
+  const room = () => wallClock() - started < budgetMs;
+  const p: Pass = { port: gated(port, room), now, orgIds, out: zero(), hooks };
   const inOrgs = (column: string) => (orgIds ? sql`and ${sql(column)} in ${sql(orgIds)}` : sql``);
 
   // 1. Expired pending grants: the sealed token and the picker's channel titles go with them.
@@ -645,7 +699,8 @@ export async function youtubeDaily(
     await sql`delete from youtube_connect_pending where expires_at < ${now} ${inOrgs("org_id")}`;
   });
 
-  // 2. Health and refresh, per connected channel (the least-recently checked first, so a pass cut short reaches the rest tomorrow).
+  // 2. Health and refresh, per connected channel (the least-recently checked first, so a pass cut short by its budget - the gated port
+  //    refuses to start a call past it, the connection it cut is counted `deferred` - reaches the rest tomorrow).
   await leg(p, "connections", async () => {
     const connected = await sql<Conn[]>`
       select id, org_id, channel_id, channel_title from org_youtube_connections

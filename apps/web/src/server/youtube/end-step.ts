@@ -119,8 +119,9 @@ type Tag = "ended" | "neverLive" | "orphan" | "failed" | "reconnect" | "deferred
 
 /** The pass's slice ran out between two YouTube calls of one row. Not a failure and not a port refusal: the row keeps its claim and its
  *  lease and the next firing that finds the lease lapsed carries on from the beginning of its calls (every one of them is idempotent
- *  against what YouTube already holds: a complete broadcast reads `complete`, a deleted one `absent`). */
-class BudgetSpent extends Error {
+ *  against what YouTube already holds: a complete broadcast reads `complete`, a deleted one `absent`). The daily pass (daily.ts) gates
+ *  its own calls with the same error, and counts what it cut as `deferred`. */
+export class BudgetSpent extends Error {
   constructor() {
     super("budget_spent");
     this.name = "BudgetSpent";

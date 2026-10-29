@@ -22,7 +22,8 @@ import { log } from "@/server/logger";
 // outside the image, still loads the REAL modules, so the seam stays real and only its types are restated here.
 type Job = { id: string; path: string; failureCounts?: readonly string[] };
 const cronSrc = (file: string) => new URL(`../../../../../../cron-worker/src/${file}`, import.meta.url).href;
-const { failureCountsOver0 } = (await import(/* @vite-ignore */ cronSrc("call.ts"))) as {
+const { JOB_TIMEOUT_MS, failureCountsOver0 } = (await import(/* @vite-ignore */ cronSrc("call.ts"))) as {
+  JOB_TIMEOUT_MS: number;
   failureCountsOver0: (job: Job, bodyText: string | null) => Record<string, number | "unreadable">;
 };
 const { JOBS } = (await import(/* @vite-ignore */ cronSrc("schedule.ts"))) as { JOBS: readonly Job[] };
@@ -49,7 +50,7 @@ const req = () => new Request("http://internal:3000/api/cron/relay-sweep", { met
 
 const ROW = JOBS.find((j: Job) => j.id === "relay-sweep");
 /** The YouTube pass's answer when it had nothing to do (YoutubeDailyResult, youtube/daily.ts). */
-const YZERO = { checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0 };
+const YZERO = { checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0, deferred: 0 };
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -109,7 +110,7 @@ describe("POST /api/cron/relay-sweep", () => {
     authorised();
     m.deps.mockReturnValue(m.sentinel);
     const summary = { backstop: { candidates: 3, visited: 3 }, machinesListed: 1, videosListed: 7 };
-    const youtube = { checked: 4, reconnectNeeded: 1, refreshed: 9, removed: 2, keysRemoved: 0, purged: 1, failed: 0 };
+    const youtube = { checked: 4, reconnectNeeded: 1, refreshed: 9, removed: 2, keysRemoved: 0, purged: 1, failed: 0, deferred: 0 };
     m.sweep.mockResolvedValue(summary);
     m.daily.mockResolvedValue(youtube);
     const res = await POST(req());
@@ -190,8 +191,19 @@ describe("POST /api/cron/relay-sweep", () => {
       return failureCountsOver0(ROW!, await res.text());
     };
     expect(await read(YZERO), "nothing connected: healthy").toEqual({});
-    expect(await read({ checked: 9, reconnectNeeded: 3, refreshed: 40, removed: 5, keysRemoved: 0, purged: 2, failed: 0 }), "a dead grant is the pass working, not failing").toEqual({});
+    expect(await read({ checked: 9, reconnectNeeded: 3, refreshed: 40, removed: 5, keysRemoved: 0, purged: 2, failed: 0, deferred: 0 }), "a dead grant is the pass working, not failing").toEqual({});
     expect(await read({ ...YZERO, checked: 9, failed: 2 })).toEqual({ "data.youtube.failed": 2 });
+    // B6 batch review m3: connections the pass's budget cut short are tomorrow's first, not a failure - the Worker's counters are unchanged.
+    expect(await read({ ...YZERO, checked: 9, deferred: 4 }), "a deferred connection is not degraded").toEqual({});
+    expect(await read({ ...YZERO, checked: 9, deferred: 4, failed: 1 }), "and a failure beside it still is, by its own count").toEqual({ "data.youtube.failed": 1 });
+  });
+
+  it("the YouTube pass's wall-clock slice, plus the one call that can be in flight past it, is at most half the Worker's per-job timeout - the relay sweep behind it keeps the rest (B6 batch review m3)", async () => {
+    const { YOUTUBE_DAILY_BUDGET_MS } = await vi.importActual<typeof import("@/server/youtube/daily")>("@/server/youtube/daily");
+    const { YOUTUBE_CALL_BOUND_MS } = await vi.importActual<typeof import("@/server/youtube/port")>("@/server/youtube/port");
+    expect(JOB_TIMEOUT_MS, "the Worker's timeout was read from the Worker's own module").toBeGreaterThan(0);
+    expect(YOUTUBE_DAILY_BUDGET_MS, "a slice that fits at least one call").toBeGreaterThan(YOUTUBE_CALL_BOUND_MS);
+    expect(YOUTUBE_DAILY_BUDGET_MS + YOUTUBE_CALL_BOUND_MS).toBeLessThanOrEqual(JOB_TIMEOUT_MS / 2);
   });
 
   // R5 (Task 14b): a production deployment with RELAY_DRIVERS unset has no relay — every provider port refuses. The sweep

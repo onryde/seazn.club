@@ -53,7 +53,8 @@ import { createSession as organiserStart, currentSession, stopSession, type Sess
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { connectionViews, saveConnectionFromGrant } from "../connections";
 import {
-  YOUTUBE_DATA_CEILING_DAYS, YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES, deriveStuckBounds, purgeConnectionData, youtubeDaily,
+  YOUTUBE_DATA_CEILING_DAYS, YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES, YOUTUBE_REFRESH_AFTER_DAYS, deriveStuckBounds,
+  purgeConnectionData, youtubeDaily,
   type PurgeResult, type YoutubeDailyResult,
 } from "../daily";
 import { disconnectYoutube } from "../disconnect";
@@ -76,7 +77,7 @@ const STUCK_MINUTES = 1503;       // 1 + 2 + 4 + 8 + 16 + 32 + 24 * 60
 const P6_BACKOFF = [1, 2, 4, 8, 16, 32, 60, 60];
 const DISCONNECTED_LABEL = "YouTube channel (disconnected)";
 const CLUB_LINK = "https://example.com/club-stream";
-const ZERO: YoutubeDailyResult = { checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0 };
+const ZERO: YoutubeDailyResult = { checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0, deferred: 0 };
 const NO_END: YoutubeEndResult = { ended: 0, neverLive: 0, orphans: 0, failed: 0, deferred: 0 };
 /** V479's shape check on a stored error code. */
 const CODE_SHAPE = /^[a-z_:]{1,64}$/;
@@ -719,8 +720,9 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
     });
 
     it("B6 m2 - a grant another connection's Google account still runs on is NOT revoked (Google would drop that connection's token too): the purge goes ahead, the sibling keeps working; when the sibling is purged in its turn, the revoke is made", async () => {
-      const w = await world({ sub: "acct-shared-by-two-clubs" });
-      const sibling = await w.addChannel({ sub: "acct-shared-by-two-clubs" });
+      const sub = `acct-shared-by-two-clubs-${randomUUID()}`;   // unique per run: a fixed literal meets the rows an earlier (failed) run left behind
+      const w = await world({ sub });
+      const sibling = await w.addChannel({ sub });
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
       await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
       expect(await daily(w)).toEqual({ ...ZERO, checked: 1, purged: 1 });
@@ -1311,6 +1313,77 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(out).toMatchObject({ removed: 0, failed: 0 });
       expect((await connRow(w.connectionId)).status).toBe("connected");
       expect((await broadcastRow(m.broadcastId)).state, "the reconnect won: the row is kept").toBe("complete");
+    });
+  });
+
+  // ═══ the wall-clock budget (B6 batch review m3) ════════════════════════════════════════════════════════════════════════
+  describe("the wall-clock budget", () => {
+    /** One pass whose clock is the YouTube calls made: every call costs a second, so a slice of `calls` seconds lets exactly `calls` calls start. */
+    const passOf = (w: Pick<World, "orgId" | "fake">, calls: number) => {
+      const base = w.fake.calls.length;
+      return youtubeDaily(w.fake, new Date(), { orgIds: [w.orgId], budgetMs: calls * 1000, wallClock: () => (w.fake.calls.length - base) * 1000 });
+    };
+    const callsSince = (f: FakeYouTube, from: number) => f.calls.slice(from).map((c) => c.method);
+
+    it("EMPTY CASE FIRST: nothing to check, so a slice of ZERO defers nothing and asks nobody; the same slice over a connected channel defers it", async () => {
+      const empty = await seedOrg();
+      const fake = new FakeYouTube();
+      expect(await youtubeDaily(fake, new Date(), { orgIds: [empty.auth.orgId], budgetMs: 0 })).toEqual(ZERO);
+      expect(fake.calls).toEqual([]);
+      const w = await world();
+      expect(await passOf(w, 0), "the positive pair: one channel, no time").toEqual({ ...ZERO, deferred: 1 });
+      expect(w.fake.calls, "and not one call was started").toEqual([]);
+    });
+
+    it("EVERY call of a connection is gated: a slice of k calls makes exactly k calls, for each k up to the connection's five (token, channels, live state, videos, an idle key's stream) - the connection the slice cut is `deferred`, one cut after its last needed call is not", async () => {
+      const w = await world();
+      const m = await completedMatch(w, w.fixtures[0]!);
+      const ORDER = ["accessToken", "listMyChannels", "liveEnabled", "existingVideos", "deleteStream"];
+      let passes = 0;
+      for (let k = 0; k <= ORDER.length; k++) {
+        await shiftBroadcasts([m.broadcastId], "refreshed_at", YOUTUBE_REFRESH_AFTER_DAYS + 1);   // a stale row to confirm, every time
+        await sql`delete from youtube_stream_keys k where k.connection_id = ${w.connectionId}
+                   and not exists (select 1 from youtube_broadcasts b where b.key_id = k.id)`;
+        await seedKey(w, 2, YOUTUBE_DATA_CEILING_DAYS + 1);   // an idle key to delete, every time
+        const base = w.fake.calls.length;
+        const out = await passOf(w, k);
+        expect(callsSince(w.fake, base), `a slice of ${k} calls`).toEqual(ORDER.slice(0, k));
+        expect(out, `a slice of ${k} calls`).toEqual({
+          ...ZERO, checked: k >= 1 ? 1 : 0, refreshed: k >= 4 ? 1 : 0, keysRemoved: k >= 4 ? 1 : 0, deferred: k < 4 ? 1 : 0,
+        });
+        passes++;
+      }
+      expect(passes, "anti-vacuity: six slices judged").toBe(6);
+    });
+
+    it("the connections a slice cuts are the LEAST recently checked, so the next pass reaches them first: three channels and a slice for one - three passes check three different channels, each pass defers the other two", async () => {
+      const w = await world();
+      await w.addChannel();
+      await w.addChannel();
+      const stamped = async () => (await sql<{ n: number }[]>`
+        select count(*)::int as n from org_youtube_connections where org_id = ${w.orgId} and last_health_at is not null`)[0]!.n;
+      expect(await stamped(), "premise: nobody checked yet").toBe(0);
+      const perChannel = 3;   // token, channels, live state
+      const seen: number[] = [];
+      for (let pass = 1; pass <= 3; pass++) {
+        expect(await passOf(w, perChannel), `pass ${pass}`).toEqual({ ...ZERO, checked: 1, deferred: 2 });
+        seen.push(await stamped());
+      }
+      expect(seen, "each pass reached a channel the earlier ones had not").toEqual([1, 2, 3]);
+    });
+
+    it("the slice bounds the YouTube calls of the connection leg and nothing else: with no time at all the expired grant is still deleted, the 30-day-dead grant is still purged AND revoked at Google (the policy's step, past the budget), and the connected channel is deferred", async () => {
+      const w = await world();
+      const dead = await w.addChannel();
+      await markReconnectNeeded(sql, w.orgId, dead.connectionId);
+      await shiftConnection(dead.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      const expired = await grant(w.org, { startedMinutesAgo: 20 });
+      expect(await pendingCount(expired.id), "premise").toBe(1);
+      expect(await passOf(w, 0)).toEqual({ ...ZERO, deferred: 1, purged: 1 });
+      expect(await pendingCount(expired.id)).toBe(0);
+      expect((await connRow(dead.connectionId)).status).toBe("revoked");
+      expect(callsOf(w.fake, "revoke"), "the revoke is past the budget").toBe(1);
+      expect(callsOf(w.fake, "accessToken"), "the connected channel was not asked").toBe(0);
     });
   });
 

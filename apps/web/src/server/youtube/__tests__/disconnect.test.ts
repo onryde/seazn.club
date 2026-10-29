@@ -349,7 +349,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     await completedMatch(w, w.fixtures[0]!);
     await disconnect(w);
     const out = await youtubeDaily(w.fake, new Date(), { orgIds: [w.orgId] });
-    expect(out).toEqual({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0 });
+    expect(out).toEqual({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0, deferred: 0 });
   });
 
   it("O-T17a: after the transaction COMMITS, the division of a fixture that carried the watch link is revalidated - once per division, and the revalidation sees the connection already revoked (not an uncommitted tx)", async () => {

@@ -11,7 +11,7 @@ import { youtubeDriver } from "@/server/youtube/driver";
 
 /** What a throw out of the WHOLE YouTube pass reads as: the pass could not run, which is one failure, and never a reason to skip the
  *  relay sweep. (A fault on one connection or one leg is caught inside the pass, by `youtubeDaily`, and counted there.) */
-const PASS_FAILED: YoutubeDailyResult = { checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 1 };
+const PASS_FAILED: YoutubeDailyResult = { checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 1, deferred: 0 };
 
 /** The daily YouTube pass (YouTube Connect T17, spec §6.6), over EVERY organisation (no `orgIds`: that option is the test seam). Never
  *  throws: a throw out of it - the database down, or a YOUTUBE_DRIVER that is not `fake` or `live`, which the deps' port getter raises

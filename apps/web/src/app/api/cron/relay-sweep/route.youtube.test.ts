@@ -163,7 +163,7 @@ const rowOf = async (id: string) =>
 const streamUrlOf = async (fixtureId: string) =>
   (await sql<{ stream_url: string | null }[]>`select stream_url from fixtures where id = ${fixtureId}`)[0]!.stream_url;
 
-interface Counters { checked: number; reconnectNeeded: number; refreshed: number; removed: number; keysRemoved: number; purged: number; failed: number }
+interface Counters { checked: number; reconnectNeeded: number; refreshed: number; removed: number; keysRemoved: number; purged: number; failed: number; deferred: number }
 interface Answer { ok: boolean; data: { disabled?: true; youtube: Counters } & Record<string, unknown> }
 const call = async () => {
   const res = await POST(new Request("http://internal:3000/api/cron/relay-sweep", { method: "POST", headers: { "x-forwarded-host": "app.example" } }));
@@ -176,7 +176,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - POST /api/cron/relay-sweep, driv
     const w = await world();
     const r = await call();
     expect(r.status).toBe(200);
-    expect(r.body.data.youtube).toEqual({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0 });
+    expect(r.body.data.youtube).toEqual({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0, deferred: 0 });
     expect(w.fake.calls, "nothing connected, nothing asked").toEqual([]);
     expect(failureCountsOver0(ROW, r.text)).toEqual({});
   });
@@ -201,7 +201,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - POST /api/cron/relay-sweep, driv
     expect(r.status).toBe(200);
     // Scoped to this file's org, so the counters are EXACT: 3 connections checked (the dead one counts: its token was opened), one
     // dead, one refreshed (the video still there), one removed (the video gone).
-    expect(r.body.data.youtube).toEqual({ checked: 3, reconnectNeeded: 1, refreshed: 1, removed: 1, keysRemoved: 0, purged: 0, failed: 0 });
+    expect(r.body.data.youtube).toEqual({ checked: 3, reconnectNeeded: 1, refreshed: 1, removed: 1, keysRemoved: 0, purged: 0, failed: 0, deferred: 0 });
 
     // The rename reached the connection AND its destination row.
     expect(await connRow(renamed.connectionId)).toMatchObject({ status: "connected", channel_title: "Riverside FC (renamed)" });
@@ -272,7 +272,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - POST /api/cron/relay-sweep, driv
     vi.stubEnv("YOUTUBE_DRIVER", "fkae");
     const r = await call();
     expect(r.status).toBe(200);
-    expect(r.body.data.youtube).toEqual({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 1 });
+    expect(r.body.data.youtube).toEqual({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 1, deferred: 0 });
     expect(seen.daily, "the pass was never reached").toEqual([]);
     expect(seen.sweep, "the sweep went on").toHaveLength(1);
     expect(sentry.captureError.mock.calls.filter((c) => (c[1] as { route?: string } | undefined)?.route === "cron.relay_sweep.youtube")).toHaveLength(1);
