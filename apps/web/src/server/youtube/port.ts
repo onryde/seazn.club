@@ -86,6 +86,14 @@ export interface BroadcastLifeInfo {
   madeForKids: boolean | null;
 }
 
+/** What videos.list(part=id,status) says of a video that still exists. `madeForKids` is its `status.madeForKids` - YouTube's CURRENT
+ *  made-for-kids status, which may differ from what Seazn declared (YouTube can designate a video after the end step read it). Only a real
+ *  boolean is an answer: the field absent, or anything else, is `null` ("did not say"). The daily re-confirm ORs a `true` into the
+ *  broadcast's stamp (V482) and never writes a `false`. */
+export interface VideoFacts {
+  madeForKids: boolean | null;
+}
+
 /** The longest ONE port call may take: a driver bounds every request by it (google.ts's request timeout). The end step budgets with it:
  *  a call is started only while its slice has time left, so a pass overruns its slice by at most one call in flight. */
 export const YOUTUBE_CALL_BOUND_MS = 10_000;
@@ -111,7 +119,8 @@ export interface YouTubePort {
   complete(at: string, broadcastId: string): Promise<void>;
   /** A broadcast that is already absent resolves. */
   deleteBroadcast(at: string, broadcastId: string): Promise<void>;
-  /** At most 50 ids per call (videos.list's page), otherwise it throws without calling. */
-  existingVideos(at: string, ids: readonly string[]): Promise<Set<string>>;
+  /** At most 50 ids per call (videos.list's page), otherwise it throws without calling. The keys are the ids YouTube still has (an id it
+   *  does not return is absent); each is answered with what the SAME call says of it (`VideoFacts`). */
+  existingVideos(at: string, ids: readonly string[]): Promise<Map<string, VideoFacts>>;
   revoke(refreshToken: string): Promise<void>;
 }

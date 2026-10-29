@@ -35,7 +35,7 @@ import { createHash } from "node:crypto";
 //
 // What it does not model: a daily stream-creation cap (unpublished) and a stream's own title rules.
 import { YOUTUBE_SCOPE, type YoutubePrivacy } from "@/lib/youtube";
-import { YOUTUBE_ERROR_CODES, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type YoutubeErrorCode, type YouTubePort } from "./port";
+import { YOUTUBE_ERROR_CODES, YouTubeError, type BroadcastLife, type BroadcastLifeInfo, type VideoFacts, type YoutubeErrorCode, type YouTubePort } from "./port";
 
 // Google's limits — "10 active streams allowed per channel and 3 active streams per stream key" — are the fake's OWN literals
 // (https://support.google.com/youtube/answer/2474026). The tests type them again from the same page rather than import them.
@@ -74,6 +74,9 @@ const PORT_METHODS: Record<PortMethod, true> = {
 /** Every method of the port (not `mode`), in one place for the control route's schema and for sweeps. */
 export const FAKE_YOUTUBE_METHODS = Object.keys(PORT_METHODS) as PortMethod[];
 
+/** YouTube's CURRENT `status.madeForKids` of a broadcast: its own designation when it made one, else what the club declared. */
+const currentMadeForKids = (b: Pick<Broadcast, "madeForKids" | "designated">): boolean => b.designated ?? b.madeForKids;
+
 type Channel = { id: string; title: string };
 type LiveState = "enabled" | "not_enabled" | "blocked";
 /** Scope a control to one channel: only calls made with that channel's tokens see it. Absent: every channel. */
@@ -82,6 +85,9 @@ interface Stream { id: string; title: string; channelId: string; video: boolean 
 interface Broadcast {
   id: string; channelId: string; title: string; description: string; scheduledStart: Date; privacy: YoutubePrivacy;
   madeForKids: boolean; streamId: string | null; life: Exclude<BroadcastLife, "absent">;
+  /** What YouTube decided of its own accord (`designateMadeForKids`), over what the club declared: null until it does. YouTube's
+   *  CURRENT `status.madeForKids` is this when set, else what the broadcast was created with. `madeForKids` above stays what was SENT. */
+  designated: boolean | null;
   /** When it went live / was completed, by the injected clock — what YouTube's `snippet.actualStartTime` / `actualEndTime` say. */
   actualStart: Date | null; actualEnd: Date | null;
 }
@@ -332,6 +338,15 @@ export class FakeYouTube implements YouTubePort {
     if (!this.broadcasts.delete(videoId)) throw new YouTubeError("youtube_not_found", "videoNotFound");
   }
 
+  /** YouTube designates the video made for kids (or not) ITSELF, whatever Seazn declared when it made the broadcast: from now on
+   *  `broadcastLife` and `existingVideos` report it. `null` withdraws the designation (back to what the broadcast was created with).
+   *  `inspectBroadcast` keeps what was SENT. */
+  designateMadeForKids(videoId: string, madeForKids: boolean | null): void {
+    const b = this.broadcasts.get(videoId);
+    if (!b) throw new YouTubeError("youtube_not_found", "videoNotFound");
+    b.designated = madeForKids;
+  }
+
   /** YouTube revoked the broadcast (a policy takedown): life `revoked`, which frees its key and its live slot. T14's end step
    *  maps this life; nothing else in the fake produces it. */
   revokeBroadcast(broadcastId: string): void {
@@ -461,7 +476,7 @@ export class FakeYouTube implements YouTubePort {
     const id = `fakebc${this.pad()}`;
     this.broadcasts.set(id, {
       id, channelId: who.channelId, title: a.title, description: a.description, scheduledStart: a.scheduledStart, privacy: a.privacy,
-      madeForKids: a.madeForKids, streamId: null, life: "created", actualStart: null, actualEnd: null,
+      madeForKids: a.madeForKids, designated: null, streamId: null, life: "created", actualStart: null, actualEnd: null,
     });
     return { broadcastId: id };
   }
@@ -493,7 +508,7 @@ export class FakeYouTube implements YouTubePort {
     const b = this.ownBroadcast(who.channelId, broadcastId);
     // YouTube's `status.madeForKids` is, unless it decides otherwise, what the broadcast was created with (selfDeclaredMadeForKids).
     return b
-      ? { life: b.life, actualStartAt: copyOf(b.actualStart), actualEndAt: copyOf(b.actualEnd), madeForKids: b.madeForKids }
+      ? { life: b.life, actualStartAt: copyOf(b.actualStart), actualEndAt: copyOf(b.actualEnd), madeForKids: currentMadeForKids(b) }
       : { life: "absent", actualStartAt: null, actualEndAt: null, madeForKids: null };
   }
 
@@ -515,15 +530,20 @@ export class FakeYouTube implements YouTubePort {
     if (this.ownBroadcast(who.channelId, broadcastId)) this.broadcasts.delete(broadcastId);
   }
 
-  async existingVideos(at: string, ids: readonly string[]): Promise<Set<string>> {
+  async existingVideos(at: string, ids: readonly string[]): Promise<Map<string, VideoFacts>> {
     // Refused or answered BEFORE it counts as a call, like the real driver (which refuses > 50 without calling Google, and answers
     // an empty list with an empty set without calling it either: Google answers an empty `id` with a 400). So `[]` needs no valid
     // token, takes no injected failure and is not logged.
     if (ids.length > MAX_VIDEO_IDS_PER_CALL) throw new RangeError(`existingVideos takes at most ${MAX_VIDEO_IDS_PER_CALL} ids per call`);
-    if (ids.length === 0) return new Set();
+    if (ids.length === 0) return new Map();
     this.enter("existingVideos", this.channelOfAccess(at));
     const who = this.who(at);
-    return new Set(ids.filter((id) => this.ownBroadcast(who.channelId, id) !== undefined));
+    const found = new Map<string, VideoFacts>();
+    for (const id of ids) {
+      const b = this.ownBroadcast(who.channelId, id);
+      if (b !== undefined) found.set(id, { madeForKids: currentMadeForKids(b) });
+    }
+    return found;
   }
 
   /** Google's revoke kills the user's whole grant to the client, not the one token (…/oauth2/web-server, "Token revocation"): so

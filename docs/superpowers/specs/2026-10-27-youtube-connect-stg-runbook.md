@@ -471,14 +471,18 @@ None of these is B7 code, and none is for the agent.
    to apply to. Built on branch `feat/youtube-mfk-replay` (the follow-up PR raised from it; migration V482):
    - the flag is kept per broadcast (`youtube_broadcasts.made_for_kids`), stamped when Go live creates the broadcast from
      the same value it sends YouTube, so a later change of the connection's choice moves no existing replay;
-   - the end step ORs in YouTube's own `status.madeForKids` from the `liveBroadcasts.list` it already makes (no new API
-     call; the 25-day refresh is `videos.list part=id` and does not carry it, so option (b) was not taken);
+   - YouTube's own `status.madeForKids` is OR-ed into that flag (it only ever goes false to true), and it is read twice, with
+     no new API call: at the end step, from the `liveBroadcasts.list` it already makes, and at the 25-day re-confirm, from
+     the same `videos.list` call widened from `part=id` to `part=id,status` (same call count; the quota cost of the extra
+     part is not verified against Google's page). A video YouTube designates made for kids AFTER its end step is therefore
+     caught by the next re-confirm, so it can stay embedded for up to 25 days; the page it flips on is expired at once;
    - a part whose flag is true, or unknown, links out; it is decided part by part, so a match with a made-for-kids part
      and an ordinary one shows one link and one player;
    - the privacy (section 7) and cookie ("YouTube replays") pages each say it in one sentence.
 
    Before prod: V482 backfills every existing broadcast from its connection's current flag and prints the counts in the
-   migration log (`V482: youtube_broadcasts.made_for_kids backfilled ...`); read that line. On stg, connect with
+   migration log (`V482: youtube_broadcasts.made_for_kids backfilled ...`); read that line. Prod holds no complete part yet, so
+   expect 0 rows backfilled there (only stg rows exist). On stg, connect with
    **Made for kids = Yes**, stream and end a match, and open its public page: a link card, no player, no thumbnail.
 
 ---

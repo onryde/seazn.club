@@ -802,28 +802,48 @@ describe("the rest of the port's behaviour", () => {
     const { f, at } = await rig();
     const a = (await f.insertBroadcast(at, bcast())).broadcastId;
     const b = (await f.insertBroadcast(at, bcast())).broadcastId;
-    expect(await f.existingVideos(at, [a, b, "ghost"])).toEqual(new Set([a, b]));
-    expect(await f.existingVideos(at, [])).toEqual(new Set());
+    expect(new Set((await f.existingVideos(at, [a, b, "ghost"])).keys())).toEqual(new Set([a, b]));
+    expect((await f.existingVideos(at, [])).size).toBe(0);
     f.deleteVideo(a);
-    expect(await f.existingVideos(at, [a, b]), "a video deleted on YouTube is gone").toEqual(new Set([b]));
+    expect([...(await f.existingVideos(at, [a, b])).keys()], "a video deleted on YouTube is gone").toEqual([b]);
     expect((await f.broadcastLife(at, a)).life).toBe("absent");
     const fifty = Array.from({ length: 50 }, (_, i) => `id${i}`);
-    await expect(f.existingVideos(at, fifty)).resolves.toEqual(new Set());
+    expect((await f.existingVideos(at, fifty)).size).toBe(0);
     const before = f.calls.length;
     await expect(f.existingVideos(at, [...fifty, "id50"])).rejects.toThrow();
     expect(f.calls.length, "refused before it counts as a call").toBe(before);
     expect(() => f.deleteVideo("never-existed")).toThrow(YouTubeError);
   });
 
+  it("existingVideos answers each present id with YouTube's CURRENT made-for-kids (what it was created with until YouTube designates otherwise); broadcastLife reads the same; inspectBroadcast keeps what was SENT", async () => {
+    const { f, at } = await rig();
+    const kids = (await f.insertBroadcast(at, { ...bcast(), madeForKids: true })).broadcastId;
+    const plain = (await f.insertBroadcast(at, bcast())).broadcastId;
+    const facts = async () => [...(await f.existingVideos(at, [kids, plain, "ghost"]))].map(([id, v]) => [id === kids ? "kids" : "plain", v.madeForKids]);
+    expect(await facts(), "created with: what was sent; the ghost is absent").toEqual([["kids", true], ["plain", false]]);
+    // YouTube decides a video the club said was ordinary is made for kids: both reads follow, the record of what was sent does not.
+    f.designateMadeForKids(plain, true);
+    expect(await facts()).toEqual([["kids", true], ["plain", true]]);
+    expect((await f.broadcastLife(at, plain)).madeForKids, "the end step's read follows the same designation").toBe(true);
+    expect(f.inspectBroadcast(plain)!.madeForKids, "what Go live SENT is still false").toBe(false);
+    // ...and the other way (YouTube may say not-for-kids of a video the club declared), then the designation is withdrawn.
+    f.designateMadeForKids(kids, false);
+    expect(await facts()).toEqual([["kids", false], ["plain", true]]);
+    f.designateMadeForKids(kids, null);
+    f.designateMadeForKids(plain, null);
+    expect(await facts(), "withdrawn: back to what each was created with").toEqual([["kids", true], ["plain", false]]);
+    expect(() => f.designateMadeForKids("never-existed", true)).toThrow(YouTubeError);
+  });
+
   it("existingVideos([]) follows the live driver: an empty set with NO token check, NO call logged and NO injected failure taken", async () => {
     const f = new FakeYouTube();
     const before = f.calls.length;
-    await expect(f.existingVideos("never-issued-access-token", []), "no token check").resolves.toEqual(new Set());
+    expect((await f.existingVideos("never-issued-access-token", [])).size, "no token check").toBe(0);
     expect(f.calls.length, "not a call").toBe(before);
     // an injected failure waits for a call that is one
     const { f: g, at } = await rig();
     g.failNext("existingVideos", "youtube_unavailable", "backendError");
-    await expect(g.existingVideos(at, [])).resolves.toEqual(new Set());
+    expect((await g.existingVideos(at, [])).size).toBe(0);
     expect(((await rejection(g.existingVideos(at, ["aaa"]))) as YouTubeError).reason, "the injection was still waiting").toBe("backendError");
     // the positive pair: a non-empty list does check the token
     expect(((await rejection(f.existingVideos("never-issued-access-token", ["aaa"]))) as YouTubeError).code).toBe("youtube_reconnect_needed");
@@ -893,8 +913,8 @@ describe("channels belong to grants: a token cannot reach another channel's reso
 
   it("existingVideos lists only the caller's channel's videos", async () => {
     const { f, atA, atB, a, b } = await twoChannels();
-    expect(await f.existingVideos(atA, [a.broadcastId, b.broadcastId])).toEqual(new Set([a.broadcastId]));
-    expect(await f.existingVideos(atB, [a.broadcastId, b.broadcastId])).toEqual(new Set([b.broadcastId]));
+    expect([...(await f.existingVideos(atA, [a.broadcastId, b.broadcastId])).keys()]).toEqual([a.broadcastId]);
+    expect([...(await f.existingVideos(atB, [a.broadcastId, b.broadcastId])).keys()]).toEqual([b.broadcastId]);
   });
 
   it("injections are scoped by channel where they are per-resource: failNext, setLive and autoVideo for A leave B alone", async () => {

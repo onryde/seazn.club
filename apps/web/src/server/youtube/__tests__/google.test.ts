@@ -465,13 +465,26 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
   it("existingVideos: GET videos?part=id&id=a,b,c; answers only ids it asked about; ids Google omits (deleted) are absent from the set", async () => {
     handler = () => res(200, { items: [{ id: "aaa" }, { id: "ccc" }, { id: "not-asked-for" }] });
     const out = await driver().existingVideos(AT, ["aaa", "bbb", "ccc"]);
-    expect([...out].sort()).toEqual(["aaa", "ccc"]);
+    expect([...out.keys()].sort()).toEqual(["aaa", "ccc"]);
     const u = new URL(sent[0]!.url);
     expect([sent[0]!.method, u.origin + u.pathname]).toEqual(["GET", "https://www.googleapis.com/youtube/v3/videos"]);
-    expect(u.searchParams.get("part")).toBe("id");
+    expect(u.searchParams.get("part"), "the same ONE call, with the status part added").toBe("id,status");
     expect(u.searchParams.get("id")).toBe("aaa,bbb,ccc");
     handler = () => res(200, { kind: "youtube#videoListResponse" });
     expect((await driver().existingVideos(AT, ["aaa"])).size, "no items key").toBe(0);
+  });
+
+  it("existingVideos answers each present id with YouTube's OWN status.madeForKids: a boolean is an answer, anything else is null (it did not say) - in the SAME one call", async () => {
+    handler = () => res(200, { items: [
+      { id: "aaa", status: { madeForKids: true } }, { id: "bbb", status: { madeForKids: false } }, { id: "ccc", status: {} },
+      { id: "ddd", status: { madeForKids: "true" } }, { id: "eee" }, { id: "fff", status: null },
+    ] });
+    const out = await driver().existingVideos(AT, ["aaa", "bbb", "ccc", "ddd", "eee", "fff", "ggg"]);
+    expect(sent, "still one call: the status is one more part of it, not a second request").toHaveLength(1);
+    expect([...out].map(([id, v]) => [id, v.madeForKids]), "true and false are answers; absent, empty, a string and null are not").toEqual([
+      ["aaa", true], ["bbb", false], ["ccc", null], ["ddd", null], ["eee", null], ["fff", null],
+    ]);
+    expect(out.has("ggg"), "an id Google omits is absent, not 'not for kids'").toBe(false);
   });
 
   it("existingVideos refuses > 50 ids WITHOUT calling; exactly 50 is one call; none is an empty set and no call", async () => {
@@ -624,7 +637,7 @@ describe("existingVideos and Google's 404 videoNotFound (fix round 1, I1)", () =
 
   it("a 404 videoNotFound on ONE id is that id missing: an empty set, not an error", async () => {
     handler = () => apiError(404, "videoNotFound");
-    expect([...(await driver().existingVideos(AT, ["aaa"]))]).toEqual([]);
+    expect([...(await driver().existingVideos(AT, ["aaa"])).keys()]).toEqual([]);
     expect(sent, "one call: nothing to split").toHaveLength(1);
     // The positive pair: a 404 with some other reason is NOT 'missing'; it is thrown.
     handler = () => apiError(404, "somethingNew");
@@ -658,7 +671,7 @@ describe("existingVideos and Google's 404 videoNotFound (fix round 1, I1)", () =
     expect(checked).toBe(others.length);
     // the positive pair: videoNotFound itself is forgiven (an empty set), so the throw above is the reason and not the 404
     handler = () => apiError(404, "videoNotFound");
-    expect([...(await driver().existingVideos(AT, ["aaa"]))]).toEqual([]);
+    expect([...(await driver().existingVideos(AT, ["aaa"])).keys()]).toEqual([]);
   });
 
   it("a 404 on a BATCH is never read as 'all missing': it is re-asked one id per call, and only the id whose own call is a 404 is absent", async () => {
@@ -670,23 +683,33 @@ describe("existingVideos and Google's 404 videoNotFound (fix round 1, I1)", () =
       return id === "bbb" ? apiError(404, "videoNotFound") : res(200, { items: [{ id }] });
     };
     const out = await driver().existingVideos(AT, ["aaa", "bbb", "ccc"]);
-    expect([...out].sort(), "bbb alone is absent").toEqual(["aaa", "ccc"]);
+    expect([...out.keys()].sort(), "bbb alone is absent").toEqual(["aaa", "ccc"]);
     expect(sent.map(idOf), "the batch, then one call per id, in order").toEqual(["aaa,bbb,ccc", "aaa", "bbb", "ccc"]);
-    for (const r of sent) expect(new URL(r.url).searchParams.get("part")).toBe("id");
+    for (const r of sent) expect(new URL(r.url).searchParams.get("part")).toBe("id,status");
+  });
+
+  it("the per-id fallback after a batch 404 carries each id's STATUS too, not only its presence", async () => {
+    handler = (req) => {
+      const id = idOf(req);
+      if (id.includes(",")) return apiError(404, "videoNotFound");
+      return id === "bbb" ? apiError(404, "videoNotFound") : res(200, { items: [{ id, status: { madeForKids: id === "aaa" } }] });
+    };
+    const out = await driver().existingVideos(AT, ["aaa", "bbb", "ccc"]);
+    expect([...out].map(([id, v]) => [id, v.madeForKids]), "aaa true, ccc false (differ), bbb absent").toEqual([["aaa", true], ["ccc", false]]);
   });
 
   it("the fallback's other answers differ from the 'all missing' constant: every id present, every id missing, a duplicate id", async () => {
     // all present singly -> all present (the wrong answer would be the empty set)
     handler = (req) => (idOf(req).includes(",") ? apiError(404, "videoNotFound") : res(200, { items: [{ id: idOf(req) }] }));
-    expect([...(await driver().existingVideos(AT, ["aaa", "bbb"]))].sort()).toEqual(["aaa", "bbb"]);
+    expect([...(await driver().existingVideos(AT, ["aaa", "bbb"])).keys()].sort()).toEqual(["aaa", "bbb"]);
     // all missing singly -> empty
     sent = [];
     handler = () => apiError(404, "videoNotFound");
-    expect([...(await driver().existingVideos(AT, ["aaa", "bbb"]))]).toEqual([]);
+    expect([...(await driver().existingVideos(AT, ["aaa", "bbb"])).keys()]).toEqual([]);
     expect(sent, "the batch plus one call per id").toHaveLength(3);
     // a duplicate id is asked once, and a batch of one distinct id is not split
     sent = [];
-    expect([...(await driver().existingVideos(AT, ["aaa", "aaa"]))]).toEqual([]);
+    expect([...(await driver().existingVideos(AT, ["aaa", "aaa"])).keys()]).toEqual([]);
     expect(sent.map(idOf)).toEqual(["aaa"]);
   });
 
@@ -709,11 +732,12 @@ describe("existingVideos and Google's 404 videoNotFound (fix round 1, I1)", () =
     handler = (req) => {
       const id = idOf(req);
       if (id.includes(",")) return apiError(404, "videoNotFound");
-      return id === present ? res(200, { items: [{ id }] }) : apiError(404, "videoNotFound");
+      return id === present ? res(200, { items: [{ id, status: { madeForKids: false } }] }) : apiError(404, "videoNotFound");
     };
     const viaGoogle = await driver().existingVideos(AT, asked);
-    expect([...viaGoogle].sort()).toEqual([...viaFake].sort());
-    expect([...viaFake], "anti-vacuity: one present, two missing").toEqual([present]);
+    expect(viaGoogle.get(present), "the same facts, not only the same ids").toEqual(viaFake.get(present));
+    expect([...viaGoogle.keys()].sort()).toEqual([...viaFake.keys()].sort());
+    expect([...viaFake.keys()], "anti-vacuity: one present, two missing").toEqual([present]);
   });
 });
 
@@ -784,9 +808,9 @@ describe("refusal order agrees with the fake (fix round 1, Mc: the fake follows 
     const fake = new FakeYouTube();
     const before = fake.calls.length;
     // a token the fake never issued: if it were checked, this would be invalid_grant / reconnect_needed
-    expect([...(await fake.existingVideos("not-an-access-token", []))]).toEqual([]);
+    expect([...(await fake.existingVideos("not-an-access-token", [])).keys()]).toEqual([]);
     expect(fake.calls.length, "the fake did not count it as a call").toBe(before);
-    expect([...(await driver().existingVideos("not-an-access-token", []))]).toEqual([]);
+    expect([...(await driver().existingVideos("not-an-access-token", [])).keys()]).toEqual([]);
     expect(sent, "nor did the driver").toHaveLength(0);
     // the positive pair: a non-empty list DOES check the token, in the fake
     await expect(fake.existingVideos("not-an-access-token", ["aaa"])).rejects.toBeInstanceOf(YouTubeError);
