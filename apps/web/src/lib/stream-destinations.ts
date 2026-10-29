@@ -167,8 +167,6 @@ export const isStreamPlatform = (kind: string): kind is StreamPlatform => (STREA
  *  Twitch row are unchanged, so an existing Twitch destination still lists, renames, replaces its key and goes live. */
 export const ADDABLE_STREAM_PLATFORMS = ["youtube"] as const satisfies readonly StreamPlatform[];
 export type AddableStreamPlatform = (typeof ADDABLE_STREAM_PLATFORMS)[number];
-/** Whether the add form can create this kind — the ONE test behind "re-adding the key brings it back" (a stored Twitch row cannot be re-added). */
-export const isAddableStreamPlatform = (kind: string): kind is AddableStreamPlatform => (ADDABLE_STREAM_PLATFORMS as readonly string[]).includes(kind);
 
 /** The ingest address the SERVER fills per platform — the organiser never types one (spec §4 "No server field").
  *  YouTube: rtmp://a.rtmp.youtube.com/live2 — delivered to YouTube on staging 2026-09-30 (spec §5.4); also OBS

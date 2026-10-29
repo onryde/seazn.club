@@ -20,7 +20,6 @@ import {
   STREAM_PLATFORM_PRESETS,
   checkDestination,
   destinationIdentity,
-  isAddableStreamPlatform,
   isStreamPlatform,
   resolveStreamTarget,
   type DestinationRefusal,
@@ -451,21 +450,6 @@ describe("platform presets (D6)", () => {
     const hidden = STREAM_PLATFORMS.filter((p) => !(ADDABLE_STREAM_PLATFORMS as readonly string[]).includes(p));
     expect(hidden.length, "something is hidden (Twitch)").toBeGreaterThan(0);
     expect(hidden as readonly string[]).toContain("twitch");
-  });
-
-  it("isAddableStreamPlatform — the ONE 'can the form add this kind' test: true for the addable platforms; false for a hidden platform (Twitch), every legacy kind, a wrong case and prototype keys", () => {
-    let checked = 0;
-    for (const p of ADDABLE_STREAM_PLATFORMS) {
-      expect(isAddableStreamPlatform(p), p).toBe(true);
-      checked++;
-    }
-    const notAddable = StreamTargetKind.options.filter((k) => !(ADDABLE_STREAM_PLATFORMS as readonly string[]).includes(k));
-    expect(notAddable, "Twitch is a stored kind the form no longer adds").toContain("twitch");
-    for (const k of [...notAddable, "", "YouTube", "constructor", "toString"]) {
-      expect(isAddableStreamPlatform(k), JSON.stringify(k)).toBe(false);
-      checked++;
-    }
-    expect(checked).toBe(ADDABLE_STREAM_PLATFORMS.length + notAddable.length + 4);
   });
 
   // Moved here in T2a from stream-targets.test.ts, whose A18 cases drove these URLs through createStreamTarget's

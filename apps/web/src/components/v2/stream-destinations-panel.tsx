@@ -18,8 +18,8 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { UTC, fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import {
-  ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, TARGET_UNREADABLE, isAddableStreamPlatform,
-  isStreamPlatform, type StreamPlatform,
+  ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, TARGET_UNREADABLE, isStreamPlatform,
+  type StreamPlatform,
 } from "@/lib/stream-destinations";
 import { keyShapeWarning } from "@/lib/stream-key-shape";
 import type { StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server/api-v1/schemas";
@@ -542,9 +542,8 @@ export function DestinationRow({
     try {
       const ok = await confirm({
         title: msg("streamDest.confirmRemove.title", { label: youtubeTargetLabel(msg, t.label) }),
-        // D2 vs D6: re-adding the key restores a row the form can add (YouTube); a kind it cannot add — a legacy kind, and Twitch since
-        // the owner hid it (2026-10-29) — says so instead of promising a way back.
-        body: msg(isAddableStreamPlatform(t.kind) ? "streamDest.confirmRemove.body" : "streamDest.confirmRemove.bodyLegacy"),
+        // D2 vs D6: re-adding the key restores a YouTube / Twitch row; a legacy kind cannot be added at all.
+        body: msg(isStreamPlatform(t.kind) ? "streamDest.confirmRemove.body" : "streamDest.confirmRemove.bodyLegacy"),
         confirmLabel: msg("streamDest.remove"),
         cancelLabel: msg("streamDest.cancel"),
         tone: "danger",

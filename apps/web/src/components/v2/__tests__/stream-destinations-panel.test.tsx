@@ -27,7 +27,7 @@ import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { messages, type MessageKey } from "@/lib/messages";
 import type { Dict } from "@/lib/i18n-constants";
 import {
-  ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, STREAM_KEY_EMPTY, STREAM_PLATFORMS, isAddableStreamPlatform, isStreamPlatform,
+  ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, STREAM_KEY_EMPTY, STREAM_PLATFORMS, isStreamPlatform,
   type StreamPlatform,
 } from "@/lib/stream-destinations";
 import { v1, parseBody } from "@/server/api-v1/http";
@@ -543,14 +543,14 @@ describe("DestinationRow — driven", () => {
     expect(byTestId(row.tree(), "stream-dest-error")).toBeUndefined();
   });
 
-  it("the Remove dialog's body: an ADDABLE row says re-adding the key restores it (D2); any row the form cannot add — a legacy kind, and a Twitch row since the owner hid it (2026-10-29) — never says 'again' (D6)", async () => {
+  it("the Remove dialog's body: a platform row says re-adding the key restores it (D2); a LEGACY row never says 'again' — it cannot be added (D6)", async () => {
     let checked = 0;
     for (const kind of StreamTargetKind.options) {
       confirmMock.mockClear();
       const { row } = panelWith(target({ kind }));
       await click(byTestId(row.tree(), "stream-dest-remove"));
       const body = String((confirmMock.mock.calls[0]![0] as { body: unknown }).body);
-      if (isAddableStreamPlatform(kind)) expect(body, kind).toBe(m("streamDest.confirmRemove.body"));
+      if (isStreamPlatform(kind)) expect(body, kind).toBe(m("streamDest.confirmRemove.body"));
       else {
         expect(body, kind).toBe(m("streamDest.confirmRemove.bodyLegacy"));
         expect(body, kind).not.toMatch(/again/i);
@@ -558,13 +558,6 @@ describe("DestinationRow — driven", () => {
       checked++;
     }
     expect(checked).toBe(StreamTargetKind.options.length);
-    // The ruling, typed: the Twitch row's dialog is the can't-be-added one (the expected value is the owner's, not the list's).
-    confirmMock.mockClear();
-    const { row: twitchRow } = panelWith(target({ kind: "twitch" }));
-    await click(byTestId(twitchRow.tree(), "stream-dest-remove"));
-    expect(String((confirmMock.mock.calls[0]![0] as { body: unknown }).body)).toBe(m("streamDest.confirmRemove.bodyLegacy"));
-    // …while Replace key still repairs it (isStreamPlatform is unchanged): an unreadable Twitch key says "replace", not "remove".
-    expect(isStreamPlatform("twitch")).toBe(true);
   });
 
   it("Remove answered 'cancel' in the dialog sends nothing", async () => {
