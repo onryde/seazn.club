@@ -257,6 +257,17 @@ const ageKey = (id: string, days: number) =>
 const ageBroadcast = (id: string, days: number) =>
   sql`update youtube_broadcasts set created_at = now() - (${days}::float8 * interval '1 day') where id = ${id}`;
 const callsOf = (f: FakeYouTube, method: string): number => f.calls.filter((c) => c.method === method).length;
+/** Run `fn` while every sealed token will not open (sealed under another key): a damaged token, or a deployment without its key. The key
+ *  is put back afterwards, whatever `fn` did. */
+async function withUnreadableTokens<T>(fn: () => Promise<T>): Promise<T> {
+  const kek = process.env.YOUTUBE_TOKEN_KEK;
+  process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");
+  try {
+    return await fn();
+  } finally {
+    process.env.YOUTUBE_TOKEN_KEK = kek;
+  }
+}
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Hold a connection row `for update` in another transaction (what Go live's pick and a disconnect's purge take), until `release()`;
  *  `inTx` runs inside it, uncommitted (Go live's pick names a key in a new broadcast under that lock). */
@@ -1313,17 +1324,67 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect((await broadcastRow(young.broadcastId)).state).toBe("complete");
     });
 
-    it("a CONNECTED channel's stale row is the refresh leg's, never the lapse leg's: while YouTube cannot answer, a 31-day-old row stays (retried tomorrow), then it is confirmed", async () => {
-      const w = await world();
-      const m = await completedMatch(w, w.fixtures[0]!);
-      await shiftBroadcasts([m.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);
+    it("a CONNECTED channel is under the ceiling too (PO ruling: no carve-outs): while YouTube cannot answer, the 31-day-old complete row is deleted (its link cleared, its public page expired) and the 29-day-old one stays; once YouTube answers the survivor is confirmed", async () => {
+      const w = await world({ fixtures: 2, credits: 2 });
+      const [f1, f2] = w.fixtures as [string, string];
+      const young = await completedMatch(w, f1);
+      const old = await completedMatch(w, f2);
+      await shiftBroadcasts([young.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS - 1);
+      await shiftBroadcasts([old.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);
+      expect((await connRow(w.connectionId)).status, "premise: the grant is alive").toBe("connected");
       w.fake.failNext("existingVideos", "youtube_unavailable", "backendError", { channelId: w.channel.id });
-      expect(await daily(w), "YouTube down: the batch failed, nothing removed").toEqual({ ...ZERO, checked: 1, failed: 1 });
-      expect((await broadcastRow(m.broadcastId)).state, "kept for tomorrow").toBe("complete");
-      expect(await daily(w), "YouTube back: confirmed").toEqual({ ...ZERO, checked: 1, refreshed: 1 });
+      revalidateHook.calls = [];
+      expect(await daily(w), "YouTube down: the one batch failed (retried tomorrow), the row past the ceiling is deleted anyway").toEqual({ ...ZERO, checked: 1, failed: 1, removed: 1 });
+      expect((await broadcastsOfConnection(w.connectionId)).map((r) => r.id), "only the 31-day row is gone").toEqual([young.broadcastId]);
+      expect(await streamUrlOf(f2), "the link that pointed at the removed video is cleared").toBeNull();
+      expect(await streamUrlOf(f1), "the 29-day row's link stays").toBe(youtubeWatchUrl(young.ytId));
+      expect(revalidateHook.calls.map((c) => c.divisionId), "the public page that listed the part is expired after the commit").toContain(w.divisionId);
+      expect((await connRow(w.connectionId)).status, "the connection is untouched").toBe("connected");
+      expect(await daily(w), "YouTube back: the survivor is confirmed").toEqual({ ...ZERO, checked: 1, refreshed: 1 });
+      expect((await broadcastRow(young.broadcastId)).state).toBe("complete");
     });
 
-    it("RACE: a reconnect that lands AFTER the pass listed the lapsed connection and BEFORE its delete wins - the row is kept (the delete re-checks the status under the lock)", async () => {
+    it("a CONNECTED channel whose token will not open (so no refresh can ever run) is under the ceiling too: the 31-day row is deleted and the 29-day row stays, with no call to YouTube; the failure to open the token is still counted for tomorrow", async () => {
+      const w = await world({ fixtures: 2, credits: 2 });
+      const [f1, f2] = w.fixtures as [string, string];
+      const young = await completedMatch(w, f1);
+      const old = await completedMatch(w, f2);
+      await shiftBroadcasts([young.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS - 1);
+      await shiftBroadcasts([old.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);
+      const before = w.fake.calls.length;
+      revalidateHook.calls = [];
+      const out = await withUnreadableTokens(() => daily(w));
+      expect(out).toEqual({ ...ZERO, failed: 1, removed: 1 });
+      expect(w.fake.calls.length - before, "no token, no call").toBe(0);
+      expect((await broadcastsOfConnection(w.connectionId)).map((r) => r.id)).toEqual([young.broadcastId]);
+      expect(await streamUrlOf(f2)).toBeNull();
+      expect(await streamUrlOf(f1)).toBe(youtubeWatchUrl(young.ytId));
+      expect(revalidateHook.calls.map((c) => c.divisionId)).toContain(w.divisionId);
+      expect(await withUnreadableTokens(() => daily(w)), "a second pass finds nothing more to delete").toEqual({ ...ZERO, failed: 1 });
+    });
+
+    it("RACE: a disconnect that lands AFTER the pass listed the lapsed connection and BEFORE its delete wins - the lapse leg leaves the row (the delete re-checks the status under the lock) and the stranded leg purges it in the same pass", async () => {
+      const w = await world();
+      const m = await completedMatch(w, w.fixtures[0]!);
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);   // the refresh leg does not reach it, so the row is still stale when the lapse leg lists it
+      await shiftBroadcasts([m.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);
+      let listed = 0;
+      const out = await youtubeDaily(w.fake, new Date(), {
+        orgIds: [w.orgId],
+        hooks: {
+          afterLapsedListed: async () => {
+            listed++;
+            await sql.begin((tx) => revokeConnection(tx, w.orgId, w.connectionId));   // the first half of a disconnect: revoked, rows not yet purged
+          },
+        },
+      });
+      expect(listed, "premise: the hook ran, i.e. the connection WAS listed as lapsed").toBe(1);
+      expect((await connRow(w.connectionId)).status).toBe("revoked");
+      expect(out, "the lapse leg removed nothing (the purge's row), the stranded leg took it").toMatchObject({ removed: 0, purged: 1, failed: 0 });
+      expect((await broadcastsOfConnection(w.connectionId)).length).toBe(0);
+    });
+
+    it("RACE: a reconnect that lands AFTER the pass listed the lapsed connection and BEFORE its delete changes nothing for a row past the ceiling (no carve-outs): it is deleted, the connection stays connected, and the page is expired", async () => {
       const w = await world();
       const m = await completedMatch(w, w.fixtures[0]!);
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
@@ -1340,9 +1401,9 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
         },
       });
       expect(listed, "premise: the hook ran, i.e. the lapsed connection WAS listed").toBe(1);
-      expect(out).toMatchObject({ removed: 0, failed: 0 });
-      expect((await connRow(w.connectionId)).status).toBe("connected");
-      expect((await broadcastRow(m.broadcastId)).state, "the reconnect won: the row is kept").toBe("complete");
+      expect(out).toMatchObject({ removed: 1, failed: 0 });
+      expect((await connRow(w.connectionId)).status, "the reconnect went through").toBe("connected");
+      expect(await sql`select 1 from youtube_broadcasts where id = ${m.broadcastId}`, "past the ceiling: gone").toHaveLength(0);
     });
   });
 
@@ -1365,25 +1426,26 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(w.fake.calls, "and not one call was started").toEqual([]);
     });
 
-    it("EVERY call of a connection is gated: a slice of k calls makes exactly k calls, for each k up to the connection's five (token, channels, live state, videos, an idle key's stream) - the connection the slice cut is `deferred`, one cut after its last needed call is not", async () => {
+    it("EVERY call of the pass is gated: a slice of k calls makes exactly k calls, for each k up to six (token, channels, live state, videos; then the idle-key leg's own token and its stream) - the connection the slice cut is `deferred`, one cut after its last needed call is not, and the idle key's ROW goes whatever the slice (it calls nobody)", async () => {
       const w = await world();
       const m = await completedMatch(w, w.fixtures[0]!);
-      const ORDER = ["accessToken", "listMyChannels", "liveEnabled", "existingVideos", "deleteStream"];
+      const ORDER = ["accessToken", "listMyChannels", "liveEnabled", "existingVideos", "accessToken", "deleteStream"];
       let passes = 0;
       for (let k = 0; k <= ORDER.length; k++) {
         await shiftBroadcasts([m.broadcastId], "refreshed_at", YOUTUBE_REFRESH_AFTER_DAYS + 1);   // a stale row to confirm, every time
         await sql`delete from youtube_stream_keys k where k.connection_id = ${w.connectionId}
                    and not exists (select 1 from youtube_broadcasts b where b.key_id = k.id)`;
-        await seedKey(w, 2, YOUTUBE_DATA_CEILING_DAYS + 1);   // an idle key to delete, every time
+        const idle = await seedKey(w, 2, YOUTUBE_DATA_CEILING_DAYS + 1);   // an idle key to delete, every time
         const base = w.fake.calls.length;
         const out = await passOf(w, k);
         expect(callsSince(w.fake, base), `a slice of ${k} calls`).toEqual(ORDER.slice(0, k));
         expect(out, `a slice of ${k} calls`).toEqual({
-          ...ZERO, checked: k >= 1 ? 1 : 0, refreshed: k >= 4 ? 1 : 0, keysRemoved: k >= 4 ? 1 : 0, deferred: k < 4 ? 1 : 0,
+          ...ZERO, checked: k >= 1 ? 1 : 0, refreshed: k >= 4 ? 1 : 0, keysRemoved: 1, deferred: k < 4 ? 1 : 0,
         });
+        expect((await keyRows(w.connectionId)).map((x) => x.id), `a slice of ${k} calls: the idle key's row is gone`).not.toContain(idle.id);
         passes++;
       }
-      expect(passes, "anti-vacuity: six slices judged").toBe(6);
+      expect(passes, "anti-vacuity: seven slices judged").toBe(7);
     });
 
     it("the connections a slice cuts are the LEAST recently checked, so the next pass reaches them first: three channels and a slice for one - three passes check three different channels, each pass defers the other two", async () => {
@@ -1409,11 +1471,16 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       await shiftConnection(dead.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
       const expired = await grant(w.org, { startedMinutesAgo: 20 });
       expect(await pendingCount(expired.id), "premise").toBe(1);
-      expect(await passOf(w, 0)).toEqual({ ...ZERO, deferred: 1, purged: 1 });
+      const stale = await completedMatch(w, w.fixtures[0]!);
+      await shiftBroadcasts([stale.broadcastId], "refreshed_at", YOUTUBE_DATA_CEILING_DAYS + 1);   // past the ceiling on the connected channel
+      const idle = await seedKey(w, 2, YOUTUBE_DATA_CEILING_DAYS + 1);                              // and an idle key (slot 1 is the match's own)
+      const before = w.fake.calls.length;
+      expect(await passOf(w, 0)).toEqual({ ...ZERO, deferred: 1, purged: 1, removed: 1, keysRemoved: 1 });
       expect(await pendingCount(expired.id)).toBe(0);
       expect((await connRow(dead.connectionId)).status).toBe("revoked");
-      expect(callsOf(w.fake, "revoke"), "the revoke is past the budget").toBe(1);
-      expect(callsOf(w.fake, "accessToken"), "the connected channel was not asked").toBe(0);
+      expect(w.fake.calls.slice(before).map((c) => c.method), "the only call is the revoke, past the budget: the connected channel was not asked, no stream deleted").toEqual(["revoke"]);
+      expect((await broadcastsOfConnection(w.connectionId)).length, "the ceiling is not the budget's: the stale row went anyway").toBe(0);
+      expect((await keyRows(w.connectionId)).map((k) => k.id), "and so did the idle key (the match's own young key stays)").not.toContain(idle.id);
     });
   });
 
@@ -1666,22 +1733,40 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(dailyReports(), "already gone: nothing to report").toEqual([]);
     });
 
-    it("a DEAD grant's idle key is left to the grant's own purge (no token to delete the stream with); after a reconnect the next pass deletes it; a retired key is the retired leg's and costs YouTube no call", async () => {
+    it("a DEAD grant's idle key goes at the ceiling too (PO ruling: no carve-outs), as a row: 31 days gone, 29 days kept (the key's age), a retired key is the retired leg's; its liveStream is not asked about (the dead grant has no token) and nothing is reported", async () => {
       const w = await world();
       const k = await seedKey(w, 1, CEIL + 1);
-      const r = await seedKey(w, 2, CEIL + 1);
+      const young = await seedKey(w, 2, CEIL - 1);
+      const r = await seedKey(w, 3, CEIL + 1);
       await sql`update youtube_stream_keys set retired_at = now() where id = ${r.id}`;
+      w.fake.killToken(w.token);
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
-      expect(await daily(w), "not connected: only the retired key goes").toEqual({ ...ZERO, keysRemoved: 1 });
-      expect((await keyRows(w.connectionId)).map((x) => x.id), "the idle key of a dead grant stays").toEqual([k.id]);
-
-      const g = await grant(w.org, { connectionId: w.connectionId, channels: [w.channel] });
-      await saveConnectionFromGrant({ pendingId: g.id, channelId: w.channel.id, userId: w.userId }, w.fake);
-      w.fake.seedGrant({ refreshToken: g.token, channelId: w.channel.id, channelTitle: w.channel.title });
       const before = w.fake.calls.length;
-      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, keysRemoved: 1 });
+      expect(await daily(w), "the retired key and the idle one go; the 29-day key and the connection stay").toEqual({ ...ZERO, keysRemoved: 2 });
+      expect((await keyRows(w.connectionId)).map((x) => x.id)).toEqual([young.id]);
+      expect(w.fake.calls.slice(before).filter((c) => c.method === "deleteStream"), "no token, no stream delete").toEqual([]);
+      expect(dailyReports(), "a dead grant's missing stream delete is expected, not a report").toEqual([]);
+      expect(k.id).toBeTruthy();
+      expect(await daily(w), "a second pass is idempotent").toEqual(ZERO);
+    });
+
+    it("the YouTube half is best effort WHERE A TOKEN OPENS: a flipped connection whose token Google still honours loses the idle key's liveStream too; a connected channel whose token will not open loses only the row, and the failure is still counted", async () => {
+      const w = await world();
+      const k = await seedKey(w, 1, CEIL + 1);
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);   // flipped for a reason that left the token alive at Google
+      expect(w.fake.streamsCount(w.channel.id), "premise: the liveStream exists").toBe(1);
+      expect(await daily(w)).toEqual({ ...ZERO, keysRemoved: 1 });
       expect(await keyRows(w.connectionId)).toEqual([]);
-      expect(w.fake.calls.slice(before).filter((c) => c.method === "deleteStream").length, "the idle key's stream, and only it").toBe(1);
+      expect(w.fake.streamsCount(w.channel.id), "the token opened: the stream is deleted at YouTube").toBe(0);
+
+      const v = await world();
+      await seedKey(v, 1, CEIL + 1);
+      const before = v.fake.calls.length;
+      expect(await withUnreadableTokens(() => daily(v)), "the token will not open: the connection leg fails it, the idle leg still deletes the row").toEqual({ ...ZERO, failed: 1, keysRemoved: 1 });
+      expect(await keyRows(v.connectionId)).toEqual([]);
+      expect(v.fake.calls.length - before, "and calls nobody").toBe(0);
+      expect(dailyReports().filter((c) => (c[1] as { route?: string }).route === "youtube.daily.idle_token"), "the idle leg does not repeat the connection leg's report of a damaged token").toEqual([]);
+      expect(k.id).toBeTruthy();
     });
 
     it("a retired key that is also older than the ceiling is the retired leg's: removed once, with no YouTube call (its stream is already gone)", async () => {

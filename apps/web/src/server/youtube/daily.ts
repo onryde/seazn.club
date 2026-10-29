@@ -14,11 +14,14 @@ import "server-only";
 //      REFRESH — the `complete` rows whose video was last confirmed more than 25 days ago, in batches of 50 (Google's per-call id cap):
 //      still there → refreshed_at = the pass's now; gone → the row is deleted and fixtures.stream_url is cleared WHEN IT POINTS AT THAT
 //      VIDEO (a club's own link is never touched).
-//      IDLE KEYS — the pooled keys of a connected channel that nothing has used for the whole 30-day ceiling are deleted (`deleteIdleKeys`).
-//   2b. LAPSED VIDEOS — a `complete` row of a connection whose grant is dead cannot be refreshed; once it has gone the 30-day ceiling
-//      without a confirmation it is deleted (and the link that pointed at it cleared), without waiting for the grant's own purge (4).
+//   2b. LAPSED VIDEOS — THE CEILING HAS NO CARVE-OUT (PO ruling, B6 round 2): a `complete` row of ANY non-revoked connection that has gone the
+//      30-day ceiling without a confirmation is deleted (and the link that pointed at it cleared, the public page expired after the commit).
+//      For a dead grant the refresh above cannot run at all; for a connected channel it did not complete (the token will not open, YouTube
+//      refuses, the budget never reached it). The delete reads no token and spends no budget. The dead grant's own purge (4) comes later.
 //   2c. RETIRED KEYS — a pooled key whose liveStream is gone at YouTube (retired by Go live) keeps a sealed ingest key for nothing: it is
 //      deleted, the finished broadcasts that named it forgetting it first. An open broadcast on it keeps it until it finishes.
+//   2d. IDLE KEYS — the pooled keys of ANY non-revoked connection that nothing has used for the whole ceiling are deleted (`deleteIdleKeys`):
+//      the row at once, with no token and no budget; the liveStream at YouTube afterwards, best effort, only where a token opens.
 //   3. STUCK BROADCASTS (carries a, b) — see `settleStuck`.
 //   4. DEAD GRANTS — reconnect_needed for 30 days → revokeConnection (token-store's ONE statement, R1/B1-R1) + `purgeConnectionData`.
 //      No call is made to Google: the grant is already dead, and a revoke of it would answer nothing.
@@ -154,7 +157,7 @@ export type DailyHooks = {
   afterLapsedListed?: () => Promise<void>;
   /** After the stuck broadcasts were listed, before the first is finalized. */
   afterStuckListed?: () => Promise<void>;
-  /** After a connected channel's videos were refreshed, before its idle pooled keys are looked at. */
+  /** After the connections holding a pooled key past the ceiling were listed, before one connection's idle keys are looked at. */
   beforeIdleKeys?: () => Promise<void>;
   /** After the dead grants were listed, before the first purge. */
   afterDeadGrantsListed?: () => Promise<void>;
@@ -450,10 +453,7 @@ async function checkConnection(p: Pass, c: Conn): Promise<void> {
   }
   p.out.checked++;
   try {
-    if (await checkHealth(p, at, c)) {
-      await refreshVideos(p, at, c);
-      await deleteIdleKeys(p, at, c);
-    }
+    if (await checkHealth(p, at, c)) await refreshVideos(p, at, c);
   } catch (err) {
     if (!(err instanceof BudgetSpent)) throw err;
     p.out.deferred++;   // the slice ran out between two of its calls: what is left (the rest of the refresh) waits for tomorrow
@@ -462,17 +462,20 @@ async function checkConnection(p: Pass, c: Conn): Promise<void> {
 
 // ─── leg 2b: videos the pass can no longer refresh ───────────────────────────────────────────────────────────────────────────────────
 
-/** A `complete` row of a connection whose grant is DEAD cannot be refreshed (YouTube cannot be asked), and the dead-grant purge only
- *  comes `YOUTUBE_DEAD_GRANT_PURGE_DAYS` after the grant died: a row last confirmed on the day the grant died would otherwise sit until
- *  ~day 55 (25 + 30), with its public replay link (DP III.E.4's ceiling). Such a row is deleted - and the link that pointed at its video
- *  cleared - once it has gone `YOUTUBE_DATA_CEILING_DAYS` without a confirmation. Under the connection's lock, re-checked: a reconnect that
- *  lands after the list wins (the refresh leg confirms the row tomorrow), exactly as the dead-grant purge's does. */
+/** The ceiling's backstop for a `complete` row (DP III.E.4; PO ruling, no carve-outs): once it has gone `YOUTUBE_DATA_CEILING_DAYS`
+ *  without a confirmation it is deleted - and the link that pointed at its video cleared - whatever the state of its connection, so long
+ *  as it is not revoked (a revoked one is the purge's). A DEAD grant cannot be refreshed (YouTube cannot be asked) and its purge only comes
+ *  `YOUTUBE_DEAD_GRANT_PURGE_DAYS` after it died: a row last confirmed on the day the grant died would otherwise sit until ~day 55 (25 + 30).
+ *  A CONNECTED channel whose refresh did not complete (a token that will not open, a refusal from YouTube, a budget that never reached it)
+ *  would otherwise keep the row for ever. Reads no token and calls nobody. Under the connection's lock, re-checked: a connection revoked
+ *  after the list is the purge's (the stranded leg takes what is left); a reconnect that lands after it changes nothing, the row being past
+ *  the ceiling either way. The public pages that listed the part are expired after the commit. */
 async function deleteLapsedVideos(p: Pass, c: { id: string; org_id: string }): Promise<void> {
   const cutoff = daysBefore(p.now, YOUTUBE_DATA_CEILING_DAYS);
   const gone = await sql.begin(async (tx) => {
     const [row] = await tx<{ status: string }[]>`
       select status from org_youtube_connections where id = ${c.id} and org_id = ${c.org_id} for update`;
-    if (!row || row.status !== "reconnect_needed") return null;
+    if (!row || row.status === "revoked") return null;
     const rows = await tx<StoredBroadcast[]>`
       select id, fixture_id, yt_broadcast_id from youtube_broadcasts
        where connection_id = ${c.id} and org_id = ${c.org_id} and state = 'complete' and refreshed_at < ${cutoff}
@@ -515,41 +518,55 @@ async function deleteRetiredKeys(p: Pass, c: { id: string; org_id: string }): Pr
   p.out.keysRemoved += gone.length;
 }
 
-/** An IDLE key (PO ruling, B6 batch review I1c): nothing refreshes a live pooled key's stored ingest key, so one that nothing has used for
- *  the whole ceiling goes too - the key itself is older than the ceiling, no broadcast of it is open, and none was made in the last
- *  ceiling's worth of days. "No broadcast of it is open" is `deleteKeyRows`' own guard (a key an open broadcast names is never deleted,
- *  however old that broadcast), so the query below does not say it a second time. Its finished broadcasts forget it; the pool simply
- *  regrows on the next Go live (one `liveStreams.insert`).
+/** An IDLE key (PO ruling, B6 batch review I1c; round 2: no carve-outs): nothing refreshes a live pooled key's stored ingest key, so one
+ *  that nothing has used for the whole ceiling goes too - the key itself is older than the ceiling, no broadcast of it is open, and none
+ *  was made in the last ceiling's worth of days. "No broadcast of it is open" is `deleteKeyRows`' own guard (a key an open broadcast names
+ *  is never deleted, however old that broadcast), so the query below does not say it a second time. Its finished broadcasts forget it; the
+ *  pool simply regrows on the next Go live (one `liveStreams.insert`).
+ *  For EVERY non-revoked connection (a revoked one is the purge's), and the ROW's delete reads no token and spends no budget: a dead grant
+ *  and a connected channel whose token will not open are under the ceiling like any other.
  *  Judged INSIDE the transaction that holds the connection `for share`: Go live's pick takes it `for update`, so a key it is choosing
  *  right now is either already named by a fresh broadcast (not idle) or picked after this commit (and finds one fewer key). Afterwards,
- *  BEST EFFORT and outside every transaction, the liveStream is deleted at YouTube (a refusal is reported by its code only; the row is
- *  gone either way). Only for a CONNECTED channel: a dead grant's keys go with the grant, at its 30-day purge. */
-async function deleteIdleKeys(p: Pass, at: string, c: Conn): Promise<void> {
+ *  BEST EFFORT and outside every transaction, the liveStream is deleted at YouTube - only where a token opens and the slice has room: a
+ *  dead grant or a damaged token is silent (nothing to ask with), a refusal of the delete is reported by its code only. The row is gone
+ *  either way; an unused liveStream left in the club's Studio costs nothing but a slot there. */
+async function deleteIdleKeys(p: Pass, c: { id: string; org_id: string }): Promise<void> {
   const idleSince = daysBefore(p.now, YOUTUBE_DATA_CEILING_DAYS);
-  let streams: string[];
+  await p.hooks.beforeIdleKeys?.();
+  const streams = await sql.begin(async (tx) => {
+    if (!(await lockConnectionShared(tx, c.org_id, c.id))) return [];
+    const idle = await tx<{ id: string }[]>`
+      select k.id from youtube_stream_keys k
+       where k.connection_id = ${c.id} and k.org_id = ${c.org_id} and k.retired_at is null and k.created_at < ${idleSince}
+         and not exists (select 1 from youtube_broadcasts b where b.key_id = k.id and b.created_at >= ${idleSince})
+       order by k.id`;
+    return deleteKeyRows(tx, c.org_id, c.id, idle.map((k) => k.id));
+  });
+  p.out.keysRemoved += streams.length;
+  if (streams.length > 0) await deleteStreamsAtYouTube(p, c, streams);
+}
+
+/** The YouTube half of an idle key's delete: best effort, silent when there is nothing to ask with (no token that opens, a grant Google
+ *  refuses, a slice with no room: the gated port throws `BudgetSpent` before calling). One access token for the connection's streams. */
+async function deleteStreamsAtYouTube(p: Pass, c: { id: string; org_id: string }, streams: readonly string[]): Promise<void> {
+  let at: string;
   try {
-    await p.hooks.beforeIdleKeys?.();
-    streams = await sql.begin(async (tx) => {
-      if (!(await lockConnectionShared(tx, c.org_id, c.id))) return [];
-      const idle = await tx<{ id: string }[]>`
-        select k.id from youtube_stream_keys k
-         where k.connection_id = ${c.id} and k.org_id = ${c.org_id} and k.retired_at is null and k.created_at < ${idleSince}
-           and not exists (select 1 from youtube_broadcasts b where b.key_id = k.id and b.created_at >= ${idleSince})
-         order by k.id`;
-      return deleteKeyRows(tx, c.org_id, c.id, idle.map((k) => k.id));
-    });
+    const refresh = await openToken(sql, c.org_id, c.id);
+    if (refresh === null) return;
+    at = await viaPort(() => p.port.accessToken(refresh), c, "idle_token");
   } catch (err) {
-    failedStep(err, c, p.out, "idle_keys");
+    // A damaged token is the connection leg's to report, a dead grant is expected, a slice spent is silent; anything else is ours.
+    if (!(err instanceof YoutubeTokenUnreadableError) && !(err instanceof YouTubeError) && !(err instanceof BudgetSpent)) {
+      captureError(err, { orgId: c.org_id, route: "youtube.daily.idle_token", extra: { connectionId: c.id } });
+    }
     return;
   }
-  p.out.keysRemoved += streams.length;
   for (const streamId of streams) {
     try {
       await viaPort(() => p.port.deleteStream(at, streamId), c, "idle_stream");
     } catch (err) {
-      // The rows are gone either way. A slice spent (`BudgetSpent`, not a YouTubeError) is silent here, and the gate refuses the streams after
-      // it too: an unused liveStream left in the club's Studio costs nothing but a slot there. A stream already gone resolves (port.ts), so a
-      // refusal is a real one: reported by its CODE (never a body, id or key).
+      // A slice spent (`BudgetSpent`, not a YouTubeError) is silent here, and the gate refuses the streams after it too. A stream already
+      // gone resolves (port.ts), so a refusal is a real one: reported by its CODE (never a body, id or key).
       if (err instanceof YouTubeError) {
         captureError(new Error(`youtube daily: deleting an idle stream was refused (${err.code})`), {
           orgId: c.org_id, route: "youtube.daily.idle_stream", extra: { connectionId: c.id },
@@ -715,12 +732,13 @@ export async function youtubeDaily(
     await eachOf(p, "connection", connected, (c) => checkConnection(p, c));
   });
 
-  // 2b. Stale `complete` rows of a dead grant: the refresh above cannot reach them, and the 30-day purge below comes too late for them.
+  // 2b. `complete` rows past the ceiling of ANY non-revoked connection: the refresh above could not reach or confirm them, and the
+  //     dead-grant purge below comes too late for a dead grant's. Reads no token, spends no budget.
   await leg(p, "lapsed", async () => {
     const lapsed = await sql<{ id: string; org_id: string }[]>`
       select distinct c.id, c.org_id from org_youtube_connections c
         join youtube_broadcasts b on b.connection_id = c.id and b.org_id = c.org_id
-       where c.status = 'reconnect_needed' and b.state = 'complete' and b.refreshed_at < ${daysBefore(now, YOUTUBE_DATA_CEILING_DAYS)} ${inOrgs("c.org_id")}
+       where c.status <> 'revoked' and b.state = 'complete' and b.refreshed_at < ${daysBefore(now, YOUTUBE_DATA_CEILING_DAYS)} ${inOrgs("c.org_id")}
        order by c.id`;
     await hooks.afterLapsedListed?.();
     await eachOf(p, "lapsed_videos", lapsed, (c) => deleteLapsedVideos(p, c));
@@ -733,6 +751,16 @@ export async function youtubeDaily(
        where k.retired_at is not null ${inOrgs("k.org_id")}
        order by 1`;
     await eachOf(p, "retired_keys_delete", holders, (c) => deleteRetiredKeys(p, c));
+  });
+
+  // 2d. Idle pooled keys of ANY non-revoked connection: the row at once, the liveStream at YouTube best effort.
+  await leg(p, "idle_keys", async () => {
+    const holders = await sql<{ id: string; org_id: string }[]>`
+      select distinct k.connection_id as id, k.org_id from youtube_stream_keys k
+        join org_youtube_connections c on c.id = k.connection_id and c.org_id = k.org_id
+       where c.status <> 'revoked' and k.retired_at is null and k.created_at < ${daysBefore(now, YOUTUBE_DATA_CEILING_DAYS)} ${inOrgs("k.org_id")}
+       order by 1`;
+    await eachOf(p, "idle_keys_delete", holders, (c) => deleteIdleKeys(p, c));
   });
 
   // 3. Stuck broadcasts.
