@@ -67,3 +67,36 @@ export function variantWord(sportKey: string, variantKey: string, msg: (key: Mes
   const key = variantWordKey(sportKey, variantKey);
   return key !== undefined ? msg(key) : variantKey;
 }
+
+/** A variant picker's option as the organiser reads it: the localized word where `VARIANT_LABEL_KEYS` names the variant,
+ *  else the raw `sport_variants.name` (scripts/sync-sports.ts titleCases the key; an org preset keeps the name its
+ *  organiser typed). An ORG's own preset (`system: false`) is never relabelled, even where it reuses a system key: the
+ *  name is the organiser's. `system` absent = a system row (the builder and the Settings picker both pass what they know). */
+export function variantOptionLabel(
+  sportKey: string,
+  variant: { key: string; name: string; system?: boolean },
+  msg: (key: MessageKey) => string,
+): string {
+  if (variant.system === false) return variant.name;
+  const key = variantWordKey(sportKey, variant.key);
+  return key !== undefined ? msg(key) : variant.name;
+}
+
+/**
+ * W2e D2: the note that sits under a variant picker, for the variants it is true of. BWF moves badminton to 3x15 on
+ * 2027-01-04 while 3x21 is still the law until then, and new divisions default to 3x15 from the day W2e ships (the owner
+ * accepted that gap), so the picker names both formats with the date. Closed per sport, like the label map; a variant
+ * with no entry has no note. `Object.hasOwn` on both levels, as `variantWordKey`.
+ */
+export const VARIANT_HINT_KEYS: Readonly<Record<string, Readonly<Record<string, MessageKey>>>> = {
+  badminton: {
+    bwf: "variant.badminton.hint3x15",
+    "bwf-3x15": "variant.badminton.hint3x15",
+  },
+};
+
+export function variantHintKey(sportKey: string, variantKey: string): MessageKey | undefined {
+  if (!Object.hasOwn(VARIANT_HINT_KEYS, sportKey)) return undefined;
+  const bySport = VARIANT_HINT_KEYS[sportKey]!;
+  return Object.hasOwn(bySport, variantKey) ? bySport[variantKey] : undefined;
+}

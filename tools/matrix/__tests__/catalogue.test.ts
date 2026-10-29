@@ -17,6 +17,8 @@ import {
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
 const BUILDER = readFileSync(resolve(REPO, "apps/web/src/components/v2/division-builder.tsx"), "utf8");
+/** The table the builder AND the /start funnel pick a new division's variant from (W2e: moved out of the builder). */
+const PREFERRED = readFileSync(resolve(REPO, "apps/web/src/lib/preferred-variant.ts"), "utf8");
 /** The product's one group → group → knockout shape (server/templates/catalog). */
 const super8 = JSON.parse(readFileSync(resolve(REPO, "apps/web/src/server/templates/catalog/t20-super8.json"), "utf8")) as
   { divisions: { stages: { kind: string; groups?: number; progression?: unknown }[] }[] };
@@ -25,14 +27,14 @@ const super8 = JSON.parse(readFileSync(resolve(REPO, "apps/web/src/server/templa
  *  catalogue.ts (TEST-STRATEGY: never derive from the code under test). */
 const product = (key: string) => buildTemplateStages(key, BUILDER_DEFAULT_KNOBS);
 
-/** Parses the builder's PREFERRED_VARIANT literal. Fails LOUDLY when an entry
+/** Parses the PREFERRED_VARIANT literal (lib/preferred-variant.ts). Fails LOUDLY when an entry
  *  cannot be parsed (a computed key, a duplicate, an unquoted value) instead of
  *  dropping it — a dropped entry would let the builder drift while the pin
  *  stays green. The entry count comes from splitting the literal on commas,
  *  independently of the entry regex. */
 function preferredVariantPin(src: string): Record<string, string> {
   const block = /const PREFERRED_VARIANT: Record<string, string> = \{([^}]*)\}/.exec(src)?.[1];
-  if (block === undefined) throw new Error("PREFERRED_VARIANT literal not found in division-builder.tsx");
+  if (block === undefined) throw new Error("PREFERRED_VARIANT literal not found in preferred-variant.ts");
   const entries = block.split(",").map((s) => s.replace(/\/\/.*$/gm, "").trim()).filter((s) => s.length > 0);
   const parsed = Object.fromEntries(
     [...block.matchAll(/["']?([\w-]+)["']?\s*:\s*["']([^"']+)["']/g)].map((m) => [m[1]!, m[2]!]),
@@ -403,19 +405,22 @@ describe("catalogue — builder parity (text pins; a builder change reds here)",
     expect(BUILDER).toMatch(/useState<StandingsCarry>\("none"\)/);
   });
 
-  it("PREFERRED_VARIANT matches the builder's literal", () => {
-    const parsed = preferredVariantPin(BUILDER);
+  it("PREFERRED_VARIANT matches the product's literal, and the builder reads it from there", () => {
+    const parsed = preferredVariantPin(PREFERRED);
     expect(Object.keys(parsed).length).toBeGreaterThan(0);
     expect(parsed).toEqual(BUILDER_PREFERRED_VARIANT);
+    // The builder keeps no literal of its own any more: it picks through the shared table.
+    expect(BUILDER).not.toMatch(/const PREFERRED_VARIANT\b/);
+    expect(BUILDER).toMatch(/import \{ pickVariant \} from "@\/lib\/preferred-variant"/);
   });
 
   it("the PREFERRED_VARIANT pin reads either quote style, and refuses an entry it cannot parse", () => {
-    const quoted = BUILDER.replace(`hockey: "fih-outdoor"`, `"hockey": 'fih-outdoor'`);
-    expect(quoted).not.toBe(BUILDER);
+    const quoted = PREFERRED.replace(`hockey: "fih-outdoor"`, `"hockey": 'fih-outdoor'`);
+    expect(quoted).not.toBe(PREFERRED);
     expect(preferredVariantPin(quoted)).toEqual(BUILDER_PREFERRED_VARIANT);
-    const computed = BUILDER.replace(`hockey: "fih-outdoor"`, `[HOCKEY]: "fih-outdoor"`);
-    expect(computed).not.toBe(BUILDER);
-    expect(() => preferredVariantPin(computed)).toThrow(/parsed 3 of 4 entries/);
+    const computed = PREFERRED.replace(`hockey: "fih-outdoor"`, `[HOCKEY]: "fih-outdoor"`);
+    expect(computed).not.toBe(PREFERRED);
+    expect(() => preferredVariantPin(computed)).toThrow(/parsed 4 of 5 entries/);
   });
 
   it("builderDefaultVariant: preferred when offered, else the first in builder order; empty refuses", () => {

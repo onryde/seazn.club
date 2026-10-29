@@ -113,7 +113,8 @@ const deps = (over: Over = {}): ModelDeps => {
     preflight: async () => ({ ok: true, refusals: [] }),
     openDb: async () => ({
       userIdForEmail: async () => "u1",
-      variantKeysInBuilderOrder: async (s: string) => (s === "generic" ? ["score", "win_loss"] : ["bwf", "short"]),
+      // badminton lists its W2e 3x15 variant, as the live DB does: the builder's default there is now `bwf-3x15` (D2).
+      variantKeysInBuilderOrder: async (s: string) => (s === "generic" ? ["score", "win_loss"] : s === "badminton" ? ["bwf", "bwf-3x15", "short"] : ["bwf", "short"]),
       chooseTopPublicPlan: async () => "pro",
       planGrants: async () => [],
       planLimit: async () => null,

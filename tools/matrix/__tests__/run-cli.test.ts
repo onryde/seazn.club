@@ -570,8 +570,9 @@ describe("runSlice — a run", () => {
     expect(ctx.driver).toBe(d.drivers[0]!.driver);
     expect(ctx.orgSlug).toBe("m-t11-1");
     expect(ctx.tag).toBe("t11-1");
-    expect(ctx.spec).toEqual({ caseId: "league|badminton|bwf|LIFECYCLE", row: "league", sport: "badminton", variant: "bwf", scenario: "LIFECYCLE", canary: false });
-    expect(ctx.cfg).toEqual(resolveSportCfg("badminton", "bwf"));
+    // W2e T29 (owner D2): a new badminton division is 3x15, so the builder's default for the slice's badminton is bwf-3x15.
+    expect(ctx.spec).toEqual({ caseId: "league|badminton|bwf-3x15|LIFECYCLE", row: "league", sport: "badminton", variant: "bwf-3x15", scenario: "LIFECYCLE", canary: false });
+    expect(ctx.cfg).toEqual(resolveSportCfg("badminton", "bwf-3x15"));
   });
 
   it("a failed org switch reds ONLY its own case: no driver for it, and the rest of the cell still runs", async () => {
@@ -750,13 +751,18 @@ describe("runSlice — a run", () => {
     const reads = readsOf(deps());
     expect(await runSlice(reads.deps(), ["--run-id", "t8b", "--report-dir", dir])).toBe(0);
     expect(reads.sports).toEqual([...SLICE_SPORTS]); // once each, in the slice's own order
-    // The builder default for a slice sport is the first variant the DB lists:
-    // neither slice sport has a BUILDER_PREFERRED_VARIANT entry (guarded here).
+    // The builder default for a slice sport is the first variant the DB lists, unless the table names one (W2e T29, owner D2:
+    // badminton is 3x15, and only badminton of the two slice sports is named - guarded here).
     const variantOf = (sport: string): string => {
-      expect(BUILDER_PREFERRED_VARIANT[sport], sport).toBeUndefined();
-      const first = reads.lists.get(sport)?.[0];
+      const list = reads.lists.get(sport);
+      const first = list?.[0];
       if (first === undefined) throw new Error(`test: no variant list was read for '${sport}'`);
-      return first;
+      const named = BUILDER_PREFERRED_VARIANT[sport];
+      if (named === undefined) return first;
+      expect(sport, "only badminton is named among the slice sports").toBe("badminton");
+      expect(named).toBe("bwf-3x15");
+      expect(list, `${sport}: the DB lists the named variant`).toContain(named);
+      return named;
     };
     // Expected ids from the slice's DECLARED rows, sports and scenarios — not from planSliceCases.
     const expected = SLICE_ROWS.flatMap((row) => SLICE_SPORTS.flatMap((sport) => SCENARIO_KEYS.map((sc) => `${row}|${sport}|${variantOf(sport)}|${sc}`)));
@@ -958,10 +964,13 @@ describe("runSlice — aborts after the start gates", () => {
   // Review Focus 5 (W1b Task 10). The live lists are derived from the offline
   // order (engine variants, codepoint-sorted titles), never typed: reversed,
   // the builder's first pick changes for any sport with no preferred variant.
+  // A sport the table names (badminton, W2e T29) cannot drift by reordering - the named variant wins wherever it sits - so its
+  // drift is a live DB that does not list the named variant at all, and falls back to its first.
   const reversedDefault = (sport: string): string[] => {
-    const live = [...offlineVariantOrder(sport)].reverse();
-    expect(BUILDER_PREFERRED_VARIANT[sport], sport).toBeUndefined();
-    expect(builderDefaultVariant(sport, live), `${sport}: reversing did not move the default`).not.toBe(offlineBuilderDefault(sport));
+    const named = BUILDER_PREFERRED_VARIANT[sport];
+    const live = named === undefined ? [...offlineVariantOrder(sport)].reverse() : offlineVariantOrder(sport).filter((k) => k !== named);
+    expect(live.length, `${sport}: the drifted list is not empty`).toBeGreaterThan(0);
+    expect(builderDefaultVariant(sport, live), `${sport}: the drift did not move the default`).not.toBe(offlineBuilderDefault(sport));
     return live;
   };
   const dbWith = (lists: (s: string) => string[]): Partial<RunDeps> => ({ openDb: async () => ({
@@ -1894,8 +1903,8 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
   const SLICE_L2 = RAW_L2.filter((r) => SLICE_CELLS.has(`${r.row}|${r.sport}`));
   const scripted = (r: RawRun) => Object.hasOwn(HARNESS_SCENARIO, r.scenario);
   const owningWave = (r: RawRun) => { const a = ATOMIC.find((x) => x.id === r.scenario)!; return a.knownNoPath ?? a.l2NoPath; };
-  /** The fake DB's builder defaults (deps(): generic → score, every other sport → bwf). */
-  const fakeDefault = (s: string) => (s === "generic" ? "score" : "bwf");
+  /** The fake DB's builder defaults (deps(): generic → score, badminton → bwf-3x15 by the table (owner D2), every other sport → bwf). */
+  const fakeDefault = (s: string) => (s === "generic" ? "score" : s === "badminton" ? "bwf-3x15" : "bwf");
   const vacuousLine = (out: string) => /vacuous: (.*)/.exec(out)?.[1] ?? "(no summary line)";
 
   it("usage: --layer L1 runs at 1280 only; --layer L2 and the layered sets refuse --width; --layer takes --driver browser and neither --set nor --canary; L2 takes no --scenario; a plain browser run still needs --width — each refused (exit 2) before anything runs", async () => {
@@ -2060,7 +2069,7 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
     expect(raw.layer).toBe("L2");
     expect(raw.cases.map((c) => c.width)).toEqual([...L2_WIDTHS]);
     expect(raw.cases.map((c) => c.width)).toContain(320);
-    expect(raw.cases.map((c) => c.caseId)).toEqual(L2_WIDTHS.map((w) => `knockout|badminton|bwf|LIFECYCLE@${w}`));
+    expect(raw.cases.map((c) => c.caseId)).toEqual(L2_WIDTHS.map((w) => `knockout|badminton|bwf-3x15|LIFECYCLE@${w}`));
     expect(fb.opts.map((o) => o.width)).toEqual([...L2_WIDTHS]);
     expect(fb.log).toEqual([...L2_WIDTHS.flatMap((_w, i) => [`open case-${i + 1}`, `close case-${i + 1}`]), "run closed"]);
   });
@@ -2417,7 +2426,7 @@ describe("runSlice — --workers N (W1-driving T11, ruling 46, D10)", () => {
     });
     return Object.assign(base, { sessions, prepared, driven });
   }
-  const planIds = SEVEN.map((k) => { const [sport, scenario] = k.split("|"); return `league|${sport}|${sport === "generic" ? "score" : "bwf"}|${scenario}`; });
+  const planIds = SEVEN.map((k) => { const [sport, scenario] = k.split("|"); return `league|${sport}|${sport === "generic" ? "score" : sport === "badminton" ? "bwf-3x15" : "bwf"}|${scenario}`; });
 
   it("--workers 3 over 7 planned cases signs in exactly 3 times, every time as the run's owner", async () => {
     capture();

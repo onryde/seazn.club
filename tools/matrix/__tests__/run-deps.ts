@@ -48,7 +48,8 @@ export function deps(over: Partial<RunDeps> = {}, o: { failOrgAt?: number } = {}
     preflight: async () => { order.push("preflight"); return { ok: true, refusals: [] }; },
     openDb: async () => { order.push("openDb"); return {
       userIdForEmail: async (e: string) => { emails.push(`db ${e}`); return "u1"; },
-      variantKeysInBuilderOrder: async (s: string) => (s === "generic" ? ["score", "win_loss"] : ["bwf", "short"]),
+      // badminton lists its W2e 3x15 variant, as the live DB does: the builder's default there is now `bwf-3x15` (D2).
+      variantKeysInBuilderOrder: async (s: string) => (s === "generic" ? ["score", "win_loss"] : s === "badminton" ? ["bwf", "bwf-3x15", "short"] : ["bwf", "short"]),
       chooseTopPublicPlan: async () => "pro",
       planGrants: async (k: string) => { planReads.push(k); return [...ALL_GATES]; },
       planLimit: async () => null,

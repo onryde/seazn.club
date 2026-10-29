@@ -12,6 +12,7 @@ import { createOrgForUser, getUserOrgs } from "@/lib/auth";
 import { consumeReferralCookie } from "@/lib/referral";
 import { createCompetition } from "@/server/usecases/competitions";
 import { createDivision } from "@/server/usecases/divisions";
+import { pickVariant } from "@/lib/preferred-variant";
 import { routes } from "@/lib/routes";
 import type { AuthCtx } from "@/server/api-v1/auth";
 
@@ -77,18 +78,24 @@ export async function consumeFunnelDraft(token: string): Promise<FunnelDraft | n
 }
 
 /** Map the funnel's free-text sport onto the engine catalog: an exact-name
- *  sport with its first system variant, else the generic score module. */
-async function resolveSport(
+ *  sport with its PREFERRED system variant (the one the division builder
+ *  preselects - `lib/preferred-variant.ts`, so the two creation paths cannot
+ *  disagree; W2e D2 made badminton's 3x15), else the first system variant by
+ *  key, else the generic score module. */
+export async function resolveSport(
   sport: string,
 ): Promise<{ sport_key: string; variant_key: string }> {
-  const [match] = await sql<{ sport_key: string; variant_key: string }[]>`
+  const rows = await sql<{ sport_key: string; variant_key: string }[]>`
     select s.key as sport_key, v.key as variant_key
     from sports s
     join sport_variants v on v.sport_key = s.key and v.is_system
     where lower(s.name) = ${sport.toLowerCase()}
-    order by v.key
-    limit 1`;
-  if (match) return match;
+    order by s.key, v.key`;
+  const first = rows[0];
+  if (first) {
+    const variants = rows.filter((r) => r.sport_key === first.sport_key).map((r) => ({ key: r.variant_key }));
+    return { sport_key: first.sport_key, variant_key: pickVariant(first.sport_key, variants) };
+  }
   const [generic] = await sql<{ variant_key: string }[]>`
     select key as variant_key from sport_variants
     where sport_key = 'generic' and is_system

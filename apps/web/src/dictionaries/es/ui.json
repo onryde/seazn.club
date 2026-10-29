@@ -3349,6 +3349,7 @@
   "variant.badminton.bwf": "BWF 3×21 (21 puntos)",
   "variant.badminton.bwf3x15": "BWF 3×15 (15 puntos)",
   "variant.badminton.short": "Corto (11 puntos)",
+  "variant.badminton.hint3x15": "La BWF adopta el formato 3×15 a partir del 4 de enero de 2027. Hasta entonces se aplica el 3×21.",
   "variant.boardgame.classical": "Clásica",
   "variant.boardgame.rapid": "Rápida",
   "variant.boardgame.blitz": "Blitz",

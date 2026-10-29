@@ -8421,6 +8421,7 @@ export type DictionaryKey =
   | "useCases.startFree"
   | "variant.badminton.bwf"
   | "variant.badminton.bwf3x15"
+  | "variant.badminton.hint3x15"
   | "variant.badminton.short"
   | "variant.boardgame.blitz"
   | "variant.boardgame.classical"

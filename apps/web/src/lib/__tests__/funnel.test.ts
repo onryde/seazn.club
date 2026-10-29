@@ -10,8 +10,10 @@ import {
   consumeFunnelDraft,
   createFromDraft,
   createFunnelDraft,
+  resolveSport,
   type FunnelPayload,
 } from "@/lib/funnel";
+import { builtinModules } from "@seazn/engine/sports";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -83,13 +85,19 @@ describe.skipIf(!HAS_DB)("funnel drafts (v3/07 §6)", () => {
     // Badminton has been a registered module since the v6 sports wave, so
     // the draft's sport name resolves to the real module (not the generic
     // fallback this test predates).
-    const [div] = await sql<{ sport_key: string; name: string }[]>`
-      select d.sport_key, d.name from divisions d
+    const [div] = await sql<{ sport_key: string; name: string; variant_key: string; config: { setTo: number; finalSetTo: number; cap: number } }[]>`
+      select d.sport_key, d.name, d.variant_key, d.config from divisions d
       join competitions c on c.id = d.competition_id
       join organizations o on o.id = c.org_id
       where o.created_by = ${userId}`;
     expect(div.sport_key).toBe("badminton");
     expect(div.name).toBe("Badminton");
+    // W2e D2: a new badminton division is BWF 3x15 (15 / 15 / cap 21), the engine's own declaration of that variant.
+    const badminton = builtinModules.find((m) => m.key === "badminton")!;
+    const threeBy15 = (badminton.variants as Record<string, { setTo: number; finalSetTo: number; cap: number }>)["bwf-3x15"]!;
+    expect(div.variant_key).toBe("bwf-3x15");
+    expect(div.config).toMatchObject({ setTo: threeBy15.setTo, finalSetTo: threeBy15.finalSetTo, cap: threeBy15.cap });
+    expect(div.config.setTo, "premise: 3x15 really differs from the 3x21 default").not.toBe(21);
 
     // A second claimed draft reuses the existing org (org-if-none rule).
     const second = await createFunnelDraft("builder@example.com", {
@@ -123,6 +131,39 @@ describe.skipIf(!HAS_DB)("funnel drafts (v3/07 §6)", () => {
     const [{ n }] = await sql<{ n: number }[]>`
       select count(*)::int as n from organizations where created_by = ${userId}`;
     expect(n).toBe(1);
+  });
+
+  // W2e D2: the funnel and the division builder preselect the SAME variant. Every shipped sport, by its display name (the
+  // funnel's free text), is resolved: a sport the table names gets that variant, any other the first system variant by key.
+  // The expected variants are the owner-ruled ones (badminton D1/D2; the others are the builder's long-standing picks).
+  it("D2 the funnel resolves every shipped sport to the builder's preselected variant", async () => {
+    const EXPECTED_PREFERRED: Record<string, string> = {
+      badminton: "bwf-3x15",
+      cricket: "t20",
+      hockey: "fih-outdoor",
+      icehockey: "iihf",
+      tennis: "tour",
+    };
+    const rows = await sql<{ key: string; name: string }[]>`select key, name from sports order by key`;
+    let checked = 0;
+    let preferredChecked = 0;
+    for (const sport of rows) {
+      const variants = await sql<{ key: string }[]>`
+        select key from sport_variants where sport_key = ${sport.key} and is_system order by key`;
+      if (variants.length === 0) continue;
+      const resolved = await resolveSport(sport.name);
+      expect(resolved.sport_key, sport.name).toBe(sport.key);
+      const wanted = EXPECTED_PREFERRED[sport.key];
+      if (wanted !== undefined && variants.some((v) => v.key === wanted)) {
+        expect(resolved.variant_key, `${sport.key}: the preselected variant`).toBe(wanted);
+        preferredChecked++;
+      } else {
+        expect(resolved.variant_key, `${sport.key}: no preference, the first variant by key`).toBe(variants[0]!.key);
+      }
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every shipped sport was resolved").toBe(builtinModules.length);
+    expect(preferredChecked, "anti-vacuity: all five preferred sports were checked").toBe(Object.keys(EXPECTED_PREFERRED).length);
   });
 
   // Unknown-sport fallback: GenericCfg now defaults points, so
