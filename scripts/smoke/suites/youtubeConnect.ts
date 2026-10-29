@@ -582,9 +582,17 @@ export async function youtubeConnectSuite(): Promise<void> {
     const kids = await replayOf(kidsFx);
     step(`the made-for-kids match's public page renders the replay region (got ${kids.status})`, kids.status === 200 && kids.replay !== "");
     step("it is the link-out card", kids.replay.includes('data-testid="replay-linkout"'));
+    // The link's attributes are read one by one, never as one literal: React serialises props in source order, so a harmless reorder of
+    // the JSX must not red this check (it asserts what the link is, not how the tag is spelled). `rel` is compared as a token set.
+    const openTag = (kids.replay.match(/<a\b[^>]*\bdata-testid="replay-linkout-open"[^>]*>/) ?? [""])[0];
+    const attr = (name: string): string | null => (openTag.match(new RegExp(`\\s${name}="([^"]*)"`)) ?? [])[1] ?? null;
+    const relTokens = new Set((attr("rel") ?? "").split(/\s+/).filter(Boolean));
     step(
       "the one link is to the video on YouTube, in a new tab, without the opener",
-      kids.replay.includes(`data-testid="replay-linkout-open" href="${youtubeWatchUrl(kidsVideo)}" target="_blank" rel="noopener noreferrer"`) &&
+      openTag !== "" &&
+        attr("href") === youtubeWatchUrl(kidsVideo) &&
+        attr("target") === "_blank" &&
+        relTokens.has("noopener") && relTokens.has("noreferrer") &&
         (kids.replay.match(/<a /g) ?? []).length === 1,
     );
     step(`the link reads the dictionary's "${en("streaming.youtube.replay.watch")}" and the page says why: "${en("streaming.youtube.replay.madeForKids")}"`,
