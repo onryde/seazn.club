@@ -13,6 +13,12 @@
 //       the override is never decoration over a case that never flipped;
 //   (d) a later run's `works` on them reads as an improvement and its `red` as no change — driven through the REAL judge
 //       CLI (and the real `matrix:sample`, whose run alone is stood in), never through a fixture on both ends.
+// W2e Task 35 re-baselined the committed L3 to the W2e truth run's CI L3 (the W1d baseline predates the 3x15 badminton default, so
+// the sample's badminton ids had no baseline twin): the block was carried forward BY HAND with the new run's provenance, as
+// lib/pr-sample.ts says to. The W1d record that JUSTIFIES the ruling (the three dispatches, HARNESS-GREEN.md, dispatch-cuts.json) is
+// still read from w1d-baseline, as history; the baseline the judge reads is the new one. The new baseline's own pattern is not
+// asserted to be the W1d one (two worked, one red): it is read from the file, and what the tests need of it is a red among the
+// ruling's cells (else the ruling is stale) and a works (else the override has nothing to clear).
 // T21 review round 1 adds what keeps the override honest after the day it is written:
 //   M2  the loader refuses any id set but the ruling's exact three AT RUNTIME (the real judge exits 2), not only in this file;
 //   M1  the block is bound to the run it qualifies (workflow run, tag, tag commit): a re-baselined L3 refuses it, a baseline that is
@@ -40,17 +46,23 @@ const RULING_70 = [
   "swiss_knockout|carrom|club-29|R4",
   "swiss_knockout|generic|score|R4",
 ] as const;
-const BASELINE_DIR = `${TRUTH_RUNS}/w1d-baseline`;
-/** The baseline run the block qualifies, typed from the progress record (T17): the third dispatch on the pinned tag. */
-const WORKFLOW_RUN = 37346206686;
-const TAG = "matrix-truth/w1d-baseline";
-const TAG_SHA = "47f210e3f2094405e4ed4c8b5c9ea6bd2a6085d9";
-/** The six swiss_knockout R4 sports that are works in all three dispatches, typed from HARNESS-GREEN.md's prose: the over-reach controls. */
-const CONTROL_SPORTS = ["cricket", "volleyball", "badminton", "tabletennis", "tennis", "icehockey"] as const;
+/** The committed baseline's run directory (L1, L2, L3): the W2e truth run's CI artifact (W2e Task 35). */
+const BASELINE_DIR = `${TRUTH_RUNS}/w2e-final/ci`;
+/** The W1d record the ruling was made on: three dispatches, kept as history (the ruling's justification), no longer the baseline. */
+const W1D_DIR = `${TRUTH_RUNS}/w1d-baseline`;
+/** The baseline run the block qualifies, typed from the dispatch record (W2e Task 35): the workflow run that made the committed L3, the
+ *  ref it was dispatched on (no tag was cut; the harness commit below pins it), and that run's full harness commit. */
+const WORKFLOW_RUN = 40874582041;
+const TAG = "feat/format-matrix-w2e-b";
+const TAG_SHA = "080186e92c2b80116d2d1b173dff6f75662a05a8";
+/** The W1d record's own third dispatch (run 37346206686, tag matrix-truth/w1d-baseline): the run the ruling's evidence reads from. */
+const W1D_THIRD_RUN = 37346206686;
 
 interface Loose { caseId: string; state: string; [k: string]: unknown }
 interface LooseRun { cases: Loose[]; [k: string]: unknown }
 let baseline: LooseRun;
+/** The W1d record's third dispatch (history): read in the (b)/(c) tests only. */
+let w1dThird: LooseRun;
 const stateOf = (id: string): string => {
   const c = baseline.cases.find((x) => x.caseId === id);
   if (c === undefined) throw new Error(`${id} is not a case of the committed L3 baseline`);
@@ -58,6 +70,7 @@ const stateOf = (id: string): string => {
 };
 beforeAll(() => {
   baseline = JSON.parse(readFileSync(baselineL3Path(), "utf8")) as LooseRun;
+  w1dThird = JSON.parse(readFileSync(resolve(REPO, W1D_DIR, "L3", "results.json"), "utf8")) as LooseRun;
 });
 
 const scratch = mkdtempSync(join(tmpdir(), "w1d-t21-r70-"));
@@ -68,7 +81,7 @@ const fresh = (label: string): string => { const d = join(scratch, `${label}-${+
 // --- (a) the list, and the baseline file that holds it ----------------------------------------------------------------
 
 describe("catalogue/baseline.json: the ruling-70 list", () => {
-  it("(a) names the committed third-dispatch L3 and exactly ruling 70's three ids, forced red with cause P6 (SW-H1, W3)", () => {
+  it("(a) names the committed baseline L3 (the W2e truth run's) and exactly ruling 70's three ids, forced red with cause P6 (SW-H1, W3)", () => {
     expect(baselineL3Path()).toBe(resolve(REPO, BASELINE_DIR, "L3", "results.json"));
     const o = baselineOverrides();
     expect(o, "baseline.json carries a ruling70 block").not.toBeNull();
@@ -118,9 +131,9 @@ describe("catalogue/baseline.json: the ruling-70 list", () => {
       ["one of the three", { ...block, ids: [RULING_70[0]] }],
       ["the third swapped for another held case", { ...block, ids: [...RULING_70.slice(0, 2), fourth()] }],
       ["no workflowRun", { ...block, workflowRun: undefined }],
-      ["a workflowRun that is not a number", { ...block, workflowRun: "37346206686" }],
+      ["a workflowRun that is not a number", { ...block, workflowRun: String(WORKFLOW_RUN) }],
       ["no tag", { ...block, tag: "" }],
-      ["a tagCommit that is not a full commit", { ...block, tagCommit: "47f210e" }],
+      ["a tagCommit that is not a full commit", { ...block, tagCommit: TAG_SHA.slice(0, 7) }],
       ["no cause", { ...block, cause: "" }],
       ["no gap", { ...block, gap: "" }],
       ["no wave", { ...block, wave: "" }],
@@ -153,9 +166,9 @@ describe("catalogue/baseline.json: the ruling-70 list", () => {
 
   it("the block refuses a baseline L3 it was not written for: a later workflow run, another layer's run id, another commit, or no provenance at all — never silently applied (T21 review M1)", () => {
     const rows: [string, Record<string, unknown>, RegExp][] = [
-      ["the L3 was re-baselined (a later workflow run)", { runId: "ci-37400000000-1-l3" }, /written for workflow run 37346206686 \(tag matrix-truth\/w1d-baseline\)/],
+      ["the L3 was re-baselined (a later workflow run)", { runId: "ci-37400000000-1-l3" }, new RegExp(`written for workflow run ${WORKFLOW_RUN} \\(tag ${TAG.replace(/[/]/g, "\\/")}\\)`)],
       ["a run id of another layer", { runId: `ci-${WORKFLOW_RUN}-1-l1` }, /written for workflow run/],
-      ["the L3 was run from another commit", { harnessCommit: "abcdef0" }, /names tag matrix-truth\/w1d-baseline at 47f210e3f/],
+      ["the L3 was run from another commit", { harnessCommit: "abcdef0" }, new RegExp(`names tag ${TAG.replace(/[/]/g, "\\/")} at ${TAG_SHA.slice(0, 9)}`)],
       ["the L3 carries no harnessCommit", { harnessCommit: undefined }, /carries no runId and harnessCommit/],
       ["the L3 carries no runId", { runId: undefined }, /carries no runId and harnessCommit/],
     ];
@@ -176,11 +189,11 @@ describe("catalogue/baseline.json: the ruling-70 list", () => {
 
 // --- (b), (c): the override is not decoration over a case that never flipped -------------------------------------------
 
-describe("(b) and (c): each of the three was red in at least one of the three T17 dispatches, and works in at least one", () => {
+describe("(b) and (c): each of the three was red in at least one of the three T17 dispatches, and works in at least one (the W1d record the ruling was made on)", () => {
   /** The `judge across` output for L3, verbatim in HARNESS-GREEN.md: "  differing <id>: <state>, <state>, <state>". Read inside
    *  the test, never at describe level: a missing file must fail these tests BY NAME, not fail the whole file to collect. */
   const differing = (): Map<string, string[]> => {
-    const green = readFileSync(resolve(REPO, BASELINE_DIR, "HARNESS-GREEN.md"), "utf8");
+    const green = readFileSync(resolve(REPO, W1D_DIR, "HARNESS-GREEN.md"), "utf8");
     const out = new Map<string, string[]>();
     for (const m of green.matchAll(/^ {2}differing (\S+): (\S+(?:, \S+)*)$/gm)) out.set(m[1]!, m[2]!.split(", "));
     return out;
@@ -200,8 +213,8 @@ describe("(b) and (c): each of the three was red in at least one of the three T1
     expect(checked).toBe(RULING_70.length);
   });
 
-  it("the committed cut of the three dispatches (dispatch-cuts.json) agrees with the across output, case by case, and its third dispatch IS the committed L3", () => {
-    const cuts = JSON.parse(readFileSync(resolve(REPO, BASELINE_DIR, "dispatch-cuts.json"), "utf8")) as { dispatches: { n: number; cases: Loose[] }[] };
+  it("the committed cut of the three dispatches (dispatch-cuts.json) agrees with the across output, case by case, and its third dispatch IS the W1d record's L3", () => {
+    const cuts = JSON.parse(readFileSync(resolve(REPO, W1D_DIR, "dispatch-cuts.json"), "utf8")) as { dispatches: { n: number; cases: Loose[] }[] };
     expect(cuts.dispatches.map((x) => x.n)).toEqual([1, 2, 3]);
     const d = differing();
     let checked = 0;
@@ -211,17 +224,19 @@ describe("(b) and (c): each of the three was red in at least one of the three T1
       checked++;
     }
     expect(checked).toBe(RULING_70.length);
-    // Dispatch 3's cut is the committed run's own cases, field for field: the cut is no second source of truth.
+    // Dispatch 3's cut is the W1d record's own cases, field for field: the cut is no second source of truth.
     const third = cuts.dispatches[2]!.cases;
     expect(third.length).toBeGreaterThanOrEqual(RULING_70.length);
-    for (const c of third) expect(c, c.caseId).toEqual(baseline.cases.find((x) => x.caseId === c.caseId));
+    for (const c of third) expect(c, c.caseId).toEqual(w1dThird.cases.find((x) => x.caseId === c.caseId));
   });
 
-  it("the third run in each row is the committed baseline's own state — the baseline IS dispatch 3", () => {
+  it("the third run in each row is the W1d record's own L3 state — that L3 IS dispatch 3 (it was the baseline until Task 35)", () => {
     const d = differing();
-    for (const id of RULING_70) expect(d.get(id)![2], id).toBe(stateOf(id));
-    // Both extremes occur in the committed run itself: it holds a red among the three and a works among them.
-    expect(new Set(RULING_70.map(stateOf))).toEqual(new Set(["red", "works"]));
+    const third = (id: string): string => w1dThird.cases.find((x) => x.caseId === id)!.state;
+    for (const id of RULING_70) expect(d.get(id)![2], id).toBe(third(id));
+    expect(w1dThird.runId).toBe(`ci-${W1D_THIRD_RUN}-1-l3`);
+    // Both extremes occur in that run itself: it holds a red among the three and a works among them.
+    expect(new Set(RULING_70.map(third))).toEqual(new Set(["red", "works"]));
   });
 
   it("the triage fixture (cut from the three runs) agrees: it lists each id red in exactly the dispatches the across output says", () => {
@@ -292,24 +307,19 @@ describe("(d) judge regression against the REAL committed baseline", () => {
     judgeMain(["regression", "--baseline", baselineFile, "--now", files.now, "--expect", files.expect, "--sample", ...(jsonOut === undefined ? [] : ["--json-out", jsonOut])], over);
   const reset = (): void => { out = []; err = []; };
   const allRed = Object.fromEntries(RULING_70.map((id) => [id, "red" as const]));
-  /** The six held swiss_knockout R4 cells outside the ruling, by the sports HARNESS-GREEN.md names, each checked held in the committed baseline. */
+  /** Every held (works) swiss_knockout R4 cell outside the ruling, read from the committed baseline: the over-reach controls.
+   *  W2e Task 35: derived from the baseline, not typed from the W1d prose — the W1d list was six sports; the new baseline holds
+   *  the cells that were stalled then and are not now, and a cell that flips red in a re-baseline is not a control. Anti-vacuity:
+   *  at least six, so a baseline that holds few cannot pass with a handful. */
   const controls = (): string[] => {
-    const ids = CONTROL_SPORTS.map((sport) => {
-      const c = baseline.cases.find((x) => x.caseId.startsWith(`swiss_knockout|${sport}|`) && x.caseId.endsWith("|R4"));
-      expect(c, `swiss_knockout|${sport}|…|R4 is a case of the committed baseline`).toBeDefined();
-      expect(c!.state, `${sport}: held (works) in the committed baseline`).toBe("works");
-      return c!.caseId;
-    });
-    // Complete: the six ARE every held swiss_knockout R4 case the ruling does not name, so no seventh escapes the loop.
-    const held = baseline.cases.filter((x) => x.caseId.startsWith("swiss_knockout|") && x.caseId.endsWith("|R4") && x.state === "works" && !(RULING_70 as readonly string[]).includes(x.caseId)).map((x) => x.caseId);
-    expect(held.slice().sort()).toEqual(ids.slice().sort());
-    expect(ids).toHaveLength(6);
+    const ids = baseline.cases.filter((x) => x.caseId.startsWith("swiss_knockout|") && x.caseId.endsWith("|R4") && x.state === "works" && !(RULING_70 as readonly string[]).includes(x.caseId)).map((x) => x.caseId);
+    expect(ids.length, "held swiss_knockout R4 cells outside the ruling").toBeGreaterThanOrEqual(6);
     return ids;
   };
   const verdict = (p: string): { regressed: { caseId: string; was: string; now: string }[]; compared: number; exit: number } => JSON.parse(readFileSync(p, "utf8")) as never;
 
-  it("red stays red: every ruling-70 id red in the later run is NO CHANGE — exit 0, 0 regressions, all four compared (two of them WORKED in the committed run)", () => {
-    expect(RULING_70.map(stateOf).filter((s) => s === "works"), "the carrom and generic cells worked in the committed run").toHaveLength(2);
+  it("red stays red: every ruling-70 id red in the later run is NO CHANGE — exit 0, 0 regressions, all four compared (at least one of them WORKED in the committed run)", () => {
+    expect(RULING_70.map(stateOf).filter((s) => s === "works").length, "a ruling cell worked in the committed run: the override has something to clear").toBeGreaterThanOrEqual(1);
     const ids = [...RULING_70, control()];
     const o = join(fresh("o"), "v.json");
     const code = judge(later(ids, Object.fromEntries(RULING_70.map((id) => [id, "red" as const]))), o);
@@ -329,7 +339,7 @@ describe("(d) judge regression against the REAL committed baseline", () => {
     expect(said()).toMatch(/0 regressions/);
   });
 
-  it("the override does not over-reach: ALL SIX held swiss_knockout R4 cells outside the ruling going red ARE regressions, exit 1, each named, the ruling's three not (T21 review M8)", () => {
+  it("the override does not over-reach: ALL the held swiss_knockout R4 cells outside the ruling going red ARE regressions, exit 1, each named, the ruling's three not (T21 review M8)", () => {
     const ctls = controls();
     const ids = [...RULING_70, ...ctls];
     const o = join(fresh("o"), "v.json");
@@ -337,7 +347,7 @@ describe("(d) judge regression against the REAL committed baseline", () => {
     expect(code, said()).toBe(1);
     expect(verdict(o).regressed.map((r) => [r.caseId, r.was, r.now]).sort()).toEqual(ctls.map((id) => [id, "works", "red"]).sort());
     expect(verdict(o).compared).toBe(ids.length);
-    // One at a time too: the six are six separate guards, not one that happens to cover them.
+    // One at a time too: they are separate guards, not one that happens to cover them.
     let alone = 0;
     for (const ctl of ctls) {
       reset();
@@ -346,10 +356,10 @@ describe("(d) judge regression against the REAL committed baseline", () => {
       expect(verdict(o1).regressed.map((r) => r.caseId), ctl).toEqual([ctl]);
       alone++;
     }
-    expect(alone).toBe(6);
+    expect(alone).toBe(ctls.length);
   });
 
-  it("TEETH: with the ruling70 block absent, the same later run IS a regression on the two cells that worked — the override is what clears them", () => {
+  it("TEETH: with the ruling70 block absent, the same later run IS a regression on the cells that worked — the override is what clears them", () => {
     const cat = fresh("cat-none");
     writeFileSync(join(cat, "baseline.json"), JSON.stringify({ L3: `${BASELINE_DIR}/L3/results.json` }));
     const ids = [...RULING_70, control()];
@@ -403,17 +413,19 @@ describe("(d) judge regression against the REAL committed baseline", () => {
     const cat = catWith(goodBlock, (() => { const f = join(fresh("l3"), "results.json"); writeFileSync(f, JSON.stringify({ ...baseline, runId: "ci-37400000000-1-l3" })); return f; })());
     const code = judge(later([...RULING_70, control()], {}), undefined, { catalogue: cat });
     expect(code, said()).toBe(2);
-    expect(said()).toMatch(/judge: BaselineUnreadable: .*written for workflow run 37346206686 .*the SW-H1 fix removes ruling70 and re-baselines L3/s);
+    expect(said()).toMatch(new RegExp(`judge: BaselineUnreadable: .*written for workflow run ${WORKFLOW_RUN} .*the SW-H1 fix removes ruling70 and re-baselines L3`, "s"));
   });
 
   it("M1: handed a baseline that is not the run the list was written for, judge forces nothing (a regression stays one), and says so only when the sample holds a ruling case", () => {
     const other = join(fresh("other"), "results.json");
     writeFileSync(other, JSON.stringify({ ...baseline, runId: "ci-37400000000-1-l3" }));
-    const carrom = RULING_70[1];
-    // Not forced: carrom WORKED in this baseline, so carrom red now is a regression, exit 1 — with the real baseline it is no change, exit 0.
+    const worked = RULING_70.find((id) => stateOf(id) === "works");
+    expect(worked, "a ruling cell that WORKED in the committed baseline").toBeDefined();
+    const carrom = worked!;
+    // Not forced: this cell WORKED in this baseline, so it red now is a regression, exit 1 — with the real baseline it is no change, exit 0.
     reset();
     expect(judge(later([carrom], { [carrom]: "red" }), undefined, undefined, other), said()).toBe(1);
-    expect(said()).toMatch(/baseline overrides: not applied — the baseline is ci-37400000000-1-l3 and owner ruling 70's list was written for workflow run 37346206686 \(tag matrix-truth\/w1d-baseline\); 1 of its case\(s\) are in this sample/);
+    expect(said()).toMatch(new RegExp(`baseline overrides: not applied — the baseline is ci-37400000000-1-l3 and owner ruling 70's list was written for workflow run ${WORKFLOW_RUN} \\(tag ${TAG.replace(/[/]/g, "\\/")}\\); 1 of its case\\(s\\) are in this sample`));
     expect(said(), "no held-red line when nothing was held").not.toMatch(/case\(s\) held red/);
     reset();
     expect(judge(later([carrom], { [carrom]: "red" })), said()).toBe(0);
@@ -424,7 +436,7 @@ describe("(d) judge regression against the REAL committed baseline", () => {
   });
 
   it("M7: the 'baseline overrides' line counts the ruling's cases IN THIS SAMPLE — none planned prints no line, two planned says two, all three says three", () => {
-    const [football, carrom, generic] = RULING_70;
+    const [football, carrom, generic] = RULING_70; // names only: the cases' own states are not read here (a forced-red baseline holds all three)
     // None of the three planned: the override is live on the baseline but did nothing for this sample, so the verdict does not claim it.
     reset();
     expect(judge(later([control()], {}), undefined), said()).toBe(0);
@@ -528,9 +540,9 @@ writeFileSync(dir + "/" + id + "/results.json", JSON.stringify({ ...base, runId:
     expect(held.length).toBeGreaterThan(0);
   });
 
-  it("the two cells that WORKED in the committed run going red in a sample is no regression: exit 0 after ONE pass, and the judge says the override was live", () => {
+  it("the cells that WORKED in the committed run going red in a sample is no regression: exit 0 after ONE pass, and the judge says the override was live", () => {
     const flip = RULING_70.filter((id) => stateOf(id) === "works");
-    expect(flip).toHaveLength(2);
+    expect(flip.length, "at least one ruling cell worked in the committed run").toBeGreaterThanOrEqual(1);
     const s = sample(flip);
     expect(s.status, `${s.stderr}\n${s.stdout}`).toBe(0);
     expect(s.stdout).toMatch(/compared \d+ cases; 0 regressions/);
@@ -539,21 +551,24 @@ writeFileSync(dir + "/" + id + "/results.json", JSON.stringify({ ...base, runId:
     expect(`${s.stdout}${s.stderr}`, "one pass").toMatch(/pass 1: run exit 0/);
   }, spawnBudget(1, 4 * SPAWN_MS));
 
-  it("the sample plans all six held swiss_knockout R4 cells outside the ruling (T21 review M8: the controls are planned, not assumed)", () => {
-    const p = planned();
-    const ctls = CONTROL_SPORTS.map((sport) => p.find((id) => id.startsWith(`swiss_knockout|${sport}|`) && id.endsWith("|R4")));
-    expect(ctls.filter((x) => x === undefined)).toEqual([]);
-    expect(ctls.every((id) => stateOf(id!) === "works")).toBe(true);
-    expect(ctls).toHaveLength(6);
+  /** The held swiss_knockout R4 cells outside the ruling that the sample plans (T21 review M8): derived from the plan and the baseline. */
+  const plannedControls = (): string[] => planned().filter((id) => id.startsWith("swiss_knockout|") && id.endsWith("|R4") && stateOf(id) === "works" && !(RULING_70 as readonly string[]).includes(id));
+
+  it("the sample plans every held swiss_knockout R4 cell outside the ruling (T21 review M8: the controls are planned, not assumed)", () => {
+    const ctls = plannedControls();
+    expect(ctls.length, "controls planned").toBeGreaterThanOrEqual(6);
+    // Complete: no held cell of the baseline's is left out of the plan.
+    const held = baseline.cases.filter((x) => x.caseId.startsWith("swiss_knockout|") && x.caseId.endsWith("|R4") && x.state === "works" && !(RULING_70 as readonly string[]).includes(x.caseId)).map((x) => x.caseId);
+    expect(ctls.slice().sort()).toEqual(held.slice().sort());
   });
 
-  it("held cases outside the ruling going red in a sample ARE regressions — all six of them: re-run once, reproduced, exit 1, each named", () => {
-    const p = planned();
-    const ctls = CONTROL_SPORTS.map((sport) => p.find((id) => id.startsWith(`swiss_knockout|${sport}|`) && id.endsWith("|R4"))!);
+  it("held cases outside the ruling going red in a sample ARE regressions — all of them: re-run once, reproduced, exit 1, each named", () => {
+    const ctls = plannedControls();
+    expect(ctls.length).toBeGreaterThanOrEqual(6);
     const s = sample([...ctls, ...RULING_70]);
     expect(s.status, `${s.stderr}\n${s.stdout}`).toBe(1);
     for (const ctl of ctls) expect(s.stdout, ctl).toContain(ctl);
-    expect(s.stdout).toMatch(/6 regressions reproduced by the re-run/);
+    expect(s.stdout).toMatch(new RegExp(`${ctls.length} regressions reproduced by the re-run`));
     // The ruling's three, flipped in the same sample, are not among the regressions.
     for (const id of RULING_70) expect(s.stdout.split("regressions reproduced by the re-run")[1] ?? "", id).not.toContain(id);
   }, spawnBudget(2, 4 * SPAWN_MS));
