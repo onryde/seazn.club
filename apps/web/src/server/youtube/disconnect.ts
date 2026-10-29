@@ -79,11 +79,8 @@ async function attempt<T>(call: () => Promise<T>, c: Ctx, step: string): Promise
     return { ok: true, value: await call() };
   } catch (err) {
     if (err instanceof YouTubeError) {
-      // `isDeadGrantRefusal` is a type guard, so its false branch narrows `err` to never; read the code first.
-      const code: string = err.code;
-      const deadGrant = isDeadGrantRefusal(err);
-      if (!deadGrant) {
-        captureError(new Error(`youtube disconnect: ${step} was refused (${code})`), { orgId: c.orgId, route: "youtube.disconnect.port", extra: { connectionId: c.connectionId, step } });
+      if (!isDeadGrantRefusal(err)) {
+        captureError(new Error(`youtube disconnect: ${step} was refused (${err.code})`), { orgId: c.orgId, route: "youtube.disconnect.port", extra: { connectionId: c.connectionId, step } });
       }
     } else {
       const kind = (err instanceof Error ? err.name : typeof err).replace(/[^A-Za-z]/g, "").slice(0, 64);
