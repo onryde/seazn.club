@@ -57,6 +57,7 @@ A further 17 cases differ only in a number inside an otherwise identical reason 
 |---|---|
 | `L1/`, `L2/`, `L3/` | `results.json` and `MATRIX.md` of the third dispatch's merged run |
 | `HARNESS-GREEN.md` | the verdict (ruling 61 with owner ruling 70) and the three `judge across` outputs, verbatim, with every dispatch's `judge faults` |
+| `baseline.json` | the `tools/matrix/catalogue/baseline.json` this run was the baseline under (a byte copy, added at W2e Task 35 when the live file was re-baselined to `w2e-final`); the ruling-70 block in it qualifies THIS run, and `lib/backlog.ts` reads it in place of the live file so the backlog counted from this directory stays byte-for-byte |
 | `dispatch-cuts.json` | the 14 L3 cases whose state, failing-check set or reason differs between the three dispatches beyond a number (ruling 70's three, nine `mexicano|*|R4` cells and two `swiss_playoff|*|R4` cells), as each of the three dispatches recorded them |
 | `TRIAGE.md` | every red of the three layers keyed to one audit gap or one new gap, with its design section 8 wave (209 reds, 0 untriaged) |
 | `REKEY.md` | the W1-driving P-rule reds, each with the gap it now has |
