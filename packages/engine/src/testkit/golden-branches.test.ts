@@ -83,6 +83,7 @@ describe("the branch table", () => {
       "tennis.short_set_deciding_point",
       "tennis.short_set_deciding_point_played",
       "tennis.final_set_tiebreak_match_margin",
+      "tennis.fast4_deciding_point_played",
     ]);
   });
 
@@ -417,6 +418,29 @@ describe("each branch stream takes the branch it is named for (the engine's own 
     expect(refused).toBeInstanceOf(EngineError);
   });
 
+  it("tennis.fast4_deciding_point_played: the config IS the shipped fast4 variant; the tie-break opens at three games all (4–3 in games), is PLAYED to four all and closed 5–4 by a point; at the match's margin of two the same point leaves it running", () => {
+    const c = byId("tennis.fast4_deciding_point_played");
+    // the corpus holds the variant the product ships, by the name it ships under (the pre-W2e shape is fast4-legacy)
+    expect(c.raw).toEqual(tennis.variants.fast4);
+    expect(c.stream.config).toBe("fast4");
+    const cfg = fold(c.module, c.raw, []).cfg as { set: { tiebreakAt: number; tiebreakTo: number; tiebreakWinBy: number; gamesTo: number } };
+    // premises, from the config: the trigger is three games all, the target five, the set's own margin one (App VI §1-2)
+    expect([cfg.set.tiebreakAt, cfg.set.tiebreakTo, cfg.set.tiebreakWinBy]).toEqual([3, 5, 1]);
+    const events = c.stream.events;
+    expect(events[events.length - 1]!.type).toBe("tennis.point");
+    expect(events.some((e) => e.type === "tennis.set_summary"), "no set is summarised").toBe(false);
+    const before = fold(c.module, c.raw, events.slice(0, -1)).state;
+    expect(before.points).toMatchObject({ kind: "tiebreak", home: 4, away: 4 });
+    expect(before.games).toMatchObject({ home: 3, away: 3 });
+    expect(before.sets).toEqual([]);
+    const after = fold(c.module, c.raw, events).state;
+    expect(after.sets).toEqual([{ home: 4, away: 3, tb: { home: 5, away: 4 } }]);
+    // the legacy shape (margin of two) leaves the same point an ordinary one
+    const legacy = fold(c.module, { ...c.raw, set: { ...(c.raw.set as object), tiebreakWinBy: 2 } }, events).state;
+    expect(legacy.sets).toEqual([]);
+    expect(legacy.points).toMatchObject({ kind: "tiebreak", home: 5, away: 4 });
+  });
+
   it("football.shootout_sudden_death: level after the configured kicks, decided in sudden death, and still running under the default of five", () => {
     const c = byId("football.shootout_sudden_death");
     const events = c.stream.events;
@@ -513,6 +537,7 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
     "tennis.short_set_deciding_point": /set tie-break is not won by one point/,
     "tennis.short_set_deciding_point_played": /set tie-break is not won by one point/,
     "tennis.final_set_tiebreak_match_margin": /plays no final-set tie-break/,
+    "tennis.fast4_deciding_point_played": /does not open its tie-break at three games all/,
   };
   const DECIDER_GONE: Record<string, RegExp> = {
     "football.shootoutAttempts": /does not end in a shoot-out win/,
@@ -528,6 +553,7 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
     "tennis.short_set_deciding_point": /no set closes on its tie-break's deciding point/,
     "tennis.short_set_deciding_point_played": /no set closes on its tie-break's deciding point/,
     "tennis.final_set_tiebreak_match_margin": /no final-set tie-break closes past/,
+    "tennis.fast4_deciding_point_played": /no set closes on its tie-break's deciding point/,
   };
   /** Counterfactuals every story has: the key gone, and the deciding event (the last one in every story) dropped. */
   const common = (c: Case): Counterfactual[] => [
@@ -641,6 +667,17 @@ describe("each verdict has teeth: the stream passes, its counterfactuals do not"
           ["no set margin of its own", { ...c.recorded, raw: { ...c.raw, set: matchMarginSet } }, /set tie-break is not won by one point/],
           // one set each, then the decider's 11–9 stated by a summary: the point fold never ran through 10–9
           ["the decider stated by a summary", { ...c.recorded, events: [events[0]!, summary(4, 0), summary(0, 4), summary(5, 4, { home: 11, away: 9 })] }, /not closed by a played point/],
+        ];
+      }
+      case "tennis.fast4_deciding_point_played": {
+        const set = c.raw.set as Record<string, unknown>;
+        const { tiebreakWinBy: _own, ...preW2eSet } = set;
+        return [
+          ["the set margin of two", { ...c.recorded, raw: { ...c.raw, set: { ...set, tiebreakWinBy: 2 } } }, /set tie-break is not won by one point/],
+          // Fast4 as stored before W2e: it names `set` and a tie-break to five at three all, with no margin of its own
+          ["the pre-W2e Fast4 set", { ...c.recorded, raw: { ...c.raw, set: preW2eSet } }, /set tie-break is not won by one point/],
+          // the short-sets shape (tie-break at FOUR all) is a different story's: this one is the Fast4 trigger
+          ["the tie-break at four games all", { ...c.recorded, raw: { ...c.raw, set: { ...set, tiebreakAt: 4 } } }, /does not open its tie-break at three games all/],
         ];
       }
       default:

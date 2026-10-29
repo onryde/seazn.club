@@ -238,6 +238,21 @@ function reachesShortSetDecidingPointPlayed(r: Recorded): string | null {
   return null;
 }
 
+/** tennis Fast4 (W2e TN-SS-2, batch A1 review M-4; ITF App VI §1-2): the shipped `fast4` variant opens its set tie-break at THREE
+ *  games all (4–3 in games), not at four like `short-sets`, and `reachesShortSetDecidingPointPlayed` is blind to the difference -
+ *  it would accept a stream recorded at four all under a config that opens at three. So this verdict first asks the config for the
+ *  three-all trigger, then the played close of the margin of one, then the closed set's games: 4–3. */
+function reachesFast4DecidingPointPlayed(r: Recorded): string | null {
+  if (obj(obj(r.raw).set).tiebreakAt !== 3) return "its config does not open its tie-break at three games all";
+  const closed = reachesShortSetDecidingPointPlayed(r);
+  if (closed !== null) return closed;
+  const played = replay(r, r.raw);
+  if (typeof played === "string") return played;
+  const sets = Array.isArray(played.state.sets) ? (played.state.sets as unknown[]) : [];
+  if (!sets.some((s) => Math.max(Number(obj(s).home), Number(obj(s).away)) === 4 && Math.min(Number(obj(s).home), Number(obj(s).away)) === 3)) return "no set closes 4–3 in games";
+  return null;
+}
+
 /** tennis `finalSet` beside a set's own margin (W2e TN-SS-2; RBS:349, App VI §5): short sets, whose tie-break is won by one,
  *  with a final-set tie-break to ten, which keeps the match's margin of two. The deciding set's tie-break is PLAYED past its
  *  target, ending two clear (11–9): it went through 10–9, which the set's margin of one would have closed. */
@@ -560,6 +575,21 @@ export const BRANCH_STORIES: readonly BranchStory[] = [
         levelToTiebreak(c, (state) => (deciding(state) ? to : setTo), (played) => (played === 0 ? "home" : played === 1 ? "away" : null)),
         (state) => held(state) !== null,
       );
+    },
+  },
+  {
+    // Batch A1 review M-4: the corpus held only the pre-W2e Fast4 (margin two, now `fast4-legacy`), and `short-sets` opens at four
+    // all, so no stream recorded the Fast4 the product ships. The config is the declared variant itself (the premise test pins it).
+    id: "tennis.fast4_deciding_point_played",
+    sport: "tennis",
+    key: "set",
+    seed: BRANCH_SEED_BASE + 14,
+    config: { name: "fast4", raw: { set: { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5, tiebreakWinBy: 1 }, game: { noAd: true } } },
+    what: "Fast4 (App VI §1-2): the set tie-break at three games all PLAYED to four points all and won 5–4 on the deciding point (`set.tiebreakWinBy` 1)",
+    reached: reachesFast4DecidingPointPlayed,
+    build: (c) => {
+      const to = Number(obj(obj(c.cfg).set).tiebreakTo);
+      return stepFold(c, levelToTiebreak(c, () => to, () => null), (state) => closedOnDecidingPoint(state, to));
     },
   },
 ];
