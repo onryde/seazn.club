@@ -3316,6 +3316,8 @@
   "pad.sheet.decrease": "{title} verminderen",
   "pad.sheet.increase": "{title} verhogen",
   "pad.swap.refused": "Die wissel is nu niet toegestaan.",
+  "pad.retirement.action": "Geblesseerd, geen wissel",
+  "pad.retirement.off": "Wie is geblesseerd en kan niet vervangen worden?",
   "pad.recording.band.0": "Alleen resultaat",
   "pad.recording.band.1": "Hoogtepunten",
   "pad.recording.band.2": "Volledige tijdlijn",

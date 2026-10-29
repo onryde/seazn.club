@@ -1082,6 +1082,8 @@ export function adaptSwapSlot(
       // here is dead on the production path while both ends' unit tests stay
       // green — the defect this comment block was written for.
       candidateMeta: slot.candidateMeta,
+      // W2e Task 32 (M12b): same hand-copy, same reason -- a dropped `offOnly` leaves a retirement asking who comes ON.
+      offOnly: slot.offOnly,
     },
     view: sidePool(slot.side, squads),
     policyVerdict: slot.policyOk

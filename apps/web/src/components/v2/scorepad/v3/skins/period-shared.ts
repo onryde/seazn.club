@@ -40,6 +40,7 @@ import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import type { SportTone } from "../sport-theme";
 import type { PadClockSpec } from "../clock";
+import { retirementSlotsOf, retirementTilesOf } from "../retirement-slot";
 import {
   MORE_SHEET_KEY,
   type ActivityDetailContext,
@@ -1021,6 +1022,10 @@ export function buildTiles(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Til
     }
   }
 
+  // W2e Task 32 (M12b): "injured, no replacement" -- a tile per side that has somebody on the ice/field, offered under the
+  // swap's own gate and derived from the SAME slots `swap()` declares, so the tile and its sheet cannot disagree.
+  tiles.push(...retirementTilesOf(buildRetirementSlots(spec, view)));
+
   if (offerable(e.setPiece)) {
     // FULL WIDTH, not a half tile: the release tile above comes and goes with
     // the box, so a span-2 set piece sat alone on its own row exactly half the
@@ -1505,6 +1510,23 @@ export function buildSwap(spec: PeriodSkinSpec, view: PadHostView, t: TFn): Swap
   });
 }
 
+/**
+ * W2e Task 32 (M12b) -- the retirement slots ("player injured, no replacement") for both sides, under the swap slot's own
+ * gate. `retirement-slot.ts` owns the event and the rules; what only the period pad knows is passed in: play is on
+ * (`isPlayPhaseToken`), the side's entrant, and who is on the ice/field (`onFieldOf`, the same reader `buildSwap` offers).
+ * `t` is optional because the TILE only needs to know a slot exists; the picker's row decoration (shirt number, captain) is
+ * built only for the `swap()` declaration that opens the sheet.
+ */
+export function buildRetirementSlots(spec: PeriodSkinSpec, view: PadHostView, t?: TFn): SwapSlot[] {
+  const state = asState(view.state);
+  return retirementSlotsOf(view, (side) => ({
+    inPlay: isPlayPhaseToken(readPhase(state)),
+    by: entrantOf(state, side),
+    onField: onFieldOf(view, side),
+    ...(t === undefined ? {} : { candidateMeta: periodCandidateMeta(spec, view, side, t) }),
+  }));
+}
+
 // ---------------------------------------------------------------------------
 // dock()
 // ---------------------------------------------------------------------------
@@ -1809,7 +1831,7 @@ export function makePeriodSkin(spec: PeriodSkinSpec): (t: TFn) => SkinDefV3<PadH
     tiles: (view) => buildTiles(spec, view, t),
     dock: (eventType, view, payload) => buildDock(spec, eventType, view, t, payload),
     sheets: (view) => buildSheets(spec, view, t),
-    swap: (view) => buildSwap(spec, view, t),
+    swap: (view) => [...buildSwap(spec, view, t), ...buildRetirementSlots(spec, view, t)],
     refusedEventTypes: (view) => refusedEventTypesFor(spec, view),
     activityDetail: (ctx) => buildActivityDetail(spec, ctx),
     clock: buildClock,

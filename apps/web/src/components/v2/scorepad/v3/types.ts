@@ -1121,11 +1121,21 @@ export interface SwapSlot {
    * `reentry: "none"` will refuse.
    */
   blocked?: Blocked;
+  /**
+   * W2e Task 32 (M12b, "player injured, no replacement: the team plays short") — this slot's sheet ENDS after the OFF
+   * pick. `core.lineup.retirement` takes a person off with nobody on, so there is no ON step to ask: `SwapSheet` completes
+   * the moment an off candidate is tapped, calling `onSwap(off, "")`, and `buildEvent` is handed that empty ON and must
+   * ignore it (`retirement-slot.ts`). Absent keeps every swap slot exactly as it was: off, then on.
+   *
+   * Carried by `adaptSwapSlot` BY HAND like every other field here -- dropping it there leaves a two-step sheet asking
+   * who replaces a player nobody replaces, while the slot's own unit tests stay green.
+   */
+  offOnly?: true;
   /** Builds the concrete event once both picks are made — `football.sub`
    *  where the module declares one, `core.lineup.substitution` otherwise
    *  (design §2.7). Runs through the SAME dispatch guard as every other v3
    *  event (`createSkinDispatch` — item 5), so an invented type still fails
-   *  at the call site. */
+   *  at the call site. An `offOnly` slot is handed `on === ""` and ignores it. */
   buildEvent(off: string, on: string): TapEvent;
 }
 

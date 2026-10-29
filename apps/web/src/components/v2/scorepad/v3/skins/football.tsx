@@ -58,6 +58,7 @@ import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import type { SportTone } from "../sport-theme";
 import type { PadClockSpec } from "../clock";
+import { retirementSlotsOf, retirementTilesOf } from "../retirement-slot";
 import {
   MORE_SHEET_KEY,
   type ActivityDetailContext,
@@ -849,6 +850,10 @@ export function buildTiles(view: PadHostView): TileSpec[] {
     }
   }
 
+  // W2e Task 32 (M12b): "injured, no replacement" -- one tile per side with somebody on the pitch, derived from the SAME
+  // slots `swap()` declares so the tile and its sheet cannot disagree about whether the control exists.
+  tiles.push(...retirementTilesOf(buildRetirementSlots(view)));
+
   if (offerable("football.period")) {
     tiles.push({
       id: "period",
@@ -1350,6 +1355,23 @@ function footballCandidateMeta(squads: SquadState, side: Side, t: TFn): Readonly
   return meta;
 }
 
+/**
+ * W2e Task 32 (M12b) -- the retirement slots ("player injured, no replacement") for both sides, under the substitution's own
+ * gate: a play phase (`PLAY_PHASES`, the phases `buildSwap` below is offered in). Who may leave is the LIVE pitch --
+ * `squadOf(state, side).onPitch`, exactly as `buildSwap`'s `offCandidates` -- and never `view.squads`, which for football is
+ * the frozen kickoff sheet: after a retirement it would offer the person who just left (`reduceLineupEvent` refuses "off"
+ * for someone not on the field). `retirement-slot.ts` owns the event, the reason and the band.
+ */
+export function buildRetirementSlots(view: PadHostView, t?: TFn): SwapSlot[] {
+  const state = asState(view.state);
+  return retirementSlotsOf(view, (side) => ({
+    inPlay: PLAY_PHASES.has(readPhase(state)),
+    by: entrantOf(state, side),
+    onField: squadOf(state, side).onPitch,
+    ...(t === undefined ? {} : { candidateMeta: footballCandidateMeta(view.squads, side, t) }),
+  }));
+}
+
 export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
   const state = asState(view.state);
   const cfg = asCfg(view.cfg);
@@ -1648,7 +1670,7 @@ export function footballSkinV3(t: TFn): SkinDefV3<PadHostView> {
     tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
     sheets: (view) => buildSheets(view, t),
-    swap: (view) => buildSwap(view, t),
+    swap: (view) => [...buildSwap(view, t), ...buildRetirementSlots(view, t)],
     // Declared HERE, not merely exported: without it the generic More sheet
     // keeps listing goal/sub/shot/sin-bin during a shoot-out, every one of
     // them WRONG_PHASE on tap and two of them reachable at band 0.

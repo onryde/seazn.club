@@ -3369,6 +3369,8 @@
   "pad.sheet.decrease": "Réduire {title}",
   "pad.sheet.increase": "Augmenter {title}",
   "pad.swap.refused": "Ce changement n'est pas autorisé pour le moment.",
+  "pad.retirement.action": "Blessé, sans remplaçant",
+  "pad.retirement.off": "Qui est blessé et ne peut pas être remplacé ?",
   "pad.recording.band.0": "Résultat uniquement",
   "pad.recording.band.1": "Moments clés",
   "pad.recording.band.2": "Chronologie complète",

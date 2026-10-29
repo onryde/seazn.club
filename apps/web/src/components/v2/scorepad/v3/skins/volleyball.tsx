@@ -235,6 +235,7 @@ import {
   type WhoLine,
 } from "../types";
 import type { SportTone } from "../sport-theme";
+import { retirementSlotsOf, retirementTilesOf } from "../retirement-slot";
 import { SANCTION_LEVEL_STEP_ID, sideNameOf } from "./sanction-ending";
 
 export type TFn = (key: string, vars?: Record<string, string | number>) => string;
@@ -1135,6 +1136,11 @@ export function buildTiles(view: PadHostView): TileSpec[] {
     }
   }
 
+  // W2e Task 32 (M12b): "injured, no replacement" -- one tile per side with somebody on court, derived from the SAME slots
+  // `swap()` declares so the tile and its sheet cannot disagree about whether the control exists. Another side-paired block,
+  // pushed BEFORE the unpaired tiles below for the reason the order note above states.
+  tiles.push(...retirementTilesOf(buildRetirementSlots(view)));
+
   // Set score — the band-0 action that survives at every band. Withheld
   // while the CURRENT set is being scored rally-by-rally; the paired
   // `refusedEventTypes` entry keeps the generic More sheet from offering the
@@ -1693,6 +1699,22 @@ function liberoCandidateMeta(
   return meta;
 }
 
+/**
+ * W2e Task 32 (M12b) -- the retirement slots ("player injured, no replacement") for both sides, under the swap's own gate:
+ * the pad is live. Unlike the libero swap this is NOT conditional on a named libero -- any player on court can be hurt. Who
+ * is on court is the engine's own reader over `view.squads` (`state.squads` for volleyball, the live court); the row
+ * decoration is the libero sheet's (position first, "Libero" marked), so a court of six reads the way it does there.
+ * `retirement-slot.ts` owns the event, the reason and the band.
+ */
+export function buildRetirementSlots(view: PadHostView, t?: TFn): SwapSlot[] {
+  const state = asState(view.state);
+  return retirementSlotsOf(view, (side) => ({
+    inPlay: resolvePhase(view) === "live",
+    by: entrantOf(state, side),
+    ...(t === undefined ? {} : { candidateMeta: liberoCandidateMeta(view.squads, side, t) }),
+  }));
+}
+
 export function buildSwap(view: PadHostView, t: TFn): SwapSlot[] {
   const state = asState(view.state);
   if (resolvePhase(view) !== "live" || view.band < LIBERO_BAND) return [];
@@ -1869,7 +1891,7 @@ export function volleyballSkinV3(t: TFn): SkinDefV3<PadHostView> {
     tiles: buildTiles,
     dock: (eventType, view, payload) => buildDock(eventType, view, t, payload),
     sheets: (view) => buildSheets(view, t),
-    swap: (view) => buildSwap(view, t),
+    swap: (view) => [...buildSwap(view, t), ...buildRetirementSlots(view, t)],
     refusedEventTypes,
     activityDetail: volleyballDetail,
     // No contextSelect() — this skin declares no context strip at all (W1 /

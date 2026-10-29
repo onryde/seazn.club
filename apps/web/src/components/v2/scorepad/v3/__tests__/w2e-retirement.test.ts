@@ -1,0 +1,440 @@
+// W2e Task 32 (B2-3; D3 (3) as amended by D15; checklist M12b) -- the "player injured, no replacement: the team plays short"
+// control on the scoring pad.
+//
+// WHAT THIS PROVES, AND WHY IT IS BUILT THIS WAY. `core.lineup.retirement` already existed in the engine and the HTTP door;
+// no pad control sent it (the catalogue's M12b `l2NoPath`). The control is an off-picker copied from the period pad's swap
+// slot (`period-shared.ts`'s `buildSwap`): a `SwapSlot` that stops after the OFF pick. Three ways it could be declared and
+// inert, so none of them is proved with a fixture on both ends (AGENTS.md class 1):
+//   - the slot is built from the REAL skin of each sport over a view folded from the REAL module, and its payload is folded
+//     back through `foldMatch` (the production consumer), reading the on-field count off the ENGINE's state;
+//   - the picker is driven through the REAL `SwapSheet` and the REAL `adaptSwapSlot` (a field added to `SwapSlot` but not to
+//     the hand-copied adapter is dead on the production path while both ends' unit tests stay green -- adaptSwapSlot's own doc);
+//   - the tile is the one the skin's own `tiles()` returns, and it names a slot the skin's own `swap()` declares.
+//
+// Every expected value comes from the engine's declarations or the rulebook, never from the code under test: who is on the
+// field comes from the lineup the fixture declares and from the engine's state after the fold; the reasons cricket and
+// generic offer nothing are READ from their disposition rows (CK-DV-3, GN-DV-1), not typed here.
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { describe, expect, it } from "vitest";
+import { foldMatch, onFieldPersons, type EventEnvelope, type LineupPair } from "@seazn/engine/core";
+import type { AnySportModule } from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
+import { makeEnvelope } from "@seazn/engine/testkit";
+import { propsOf, renderIsland, textOf, walk } from "@/components/__tests__/_hook-harness";
+import { adaptSwapSlot, resolveSwapSlot, squadStateOf } from "../pad-host";
+import { resolvePad } from "../registry";
+import { createSkinDispatch } from "../skin-dispatch";
+import { SwapSheet } from "../swap-sheet";
+import { RETIREMENT_BAND, RETIREMENT_REASON, RETIREMENT_TYPE, buildRetirement, retireSlotId } from "../retirement-slot";
+import { SWAP_BAND } from "../skins/period-shared";
+import type { FidelityBand } from "@seazn/engine/sport";
+import type { PadHostView, SkinDefV3, SwapSlot, TileSpec } from "../types";
+import { lineupsFor, periodCfg } from "./_period-fold";
+
+const t = (key: string): string => key;
+const SIDES = ["home", "away"] as const;
+type Side = (typeof SIDES)[number];
+
+/** The four sports the owner named (spec 6.2: "only where it changes something"). The sweep below proves nothing outside
+ *  this set offers the control, and the engine-side declaration that makes the four different (a lineup policy and a squad
+ *  that plays short) is asserted, so a fifth team sport is a red here rather than a silent omission. */
+const OFFERING = ["football", "volleyball", "hockey", "icehockey"] as const;
+/** The two sports the owner gave disposition rows instead (spec 6.2, checklist 18). */
+const DISPOSITIONS = [
+  { key: "cricket", id: "CK-DV-3", file: "cricket.md" },
+  { key: "generic", id: "GN-DV-1", file: "generic.md" },
+] as const;
+
+function moduleOf(key: string): AnySportModule {
+  const found = builtinModules.find((m) => m.key === key);
+  if (!found) throw new Error(`no sport "${key}" in the registry`);
+  return found as AnySportModule;
+}
+
+/** A view folded from the real module, the way the host builds it: `squads` is `squadStateOf(state, lineups)`, so a sport
+ *  whose fold keeps a private squad shape (football) reads the frozen kickoff sheet here exactly as it does in production. */
+function viewOf(
+  key: string,
+  specs: readonly { type: string; payload?: unknown }[] = [{ type: "core.start" }],
+  o: { band?: FidelityBand; cfg?: Record<string, unknown> } = {},
+): { view: PadHostView; module: AnySportModule; lineups: LineupPair; events: EventEnvelope[]; state: Record<string, unknown> } {
+  const sportModule = moduleOf(key);
+  const cfg = periodCfg(sportModule, o.cfg ?? {});
+  const lineups = lineupsFor(sportModule, cfg);
+  const events = specs.map((s, i) => makeEnvelope(i + 1, { type: s.type, payload: s.payload ?? {} } as never));
+  const state = foldMatch(sportModule as never, cfg as never, lineups, events) as Record<string, unknown>;
+  const view: PadHostView = {
+    cfg,
+    state,
+    summary: sportModule.summary(state as never),
+    phase: "live",
+    band: o.band ?? 3,
+    entitlements: {},
+    personNames: {},
+    squads: squadStateOf(state, lineups),
+    events,
+    contextOverrides: {},
+    stageKind: null,
+    canOrganise: true,
+    entrantNames: {},
+  };
+  return { view, module: sportModule, lineups, events, state };
+}
+
+/** Who the ENGINE says is on the field for `side`: football keeps its own `{onPitch}` projection, every other adopter the
+ *  kernel's `SquadState`. Read off the folded state, never off a skin. */
+function engineOnField(state: Record<string, unknown>, lineups: LineupPair, side: Side): readonly string[] {
+  const squads = (state as { squads?: Record<string, unknown> }).squads;
+  const own = squads?.[side] as { onPitch?: readonly string[] } | undefined;
+  if (own && Array.isArray(own.onPitch)) return own.onPitch;
+  return onFieldPersons(squadStateOf(state, lineups)[side]);
+}
+
+/** The kickoff XI the fixture declares: the lineup, not the pad. */
+function declaredStarters(lineups: LineupPair, side: Side): string[] {
+  return lineups[side].slots.filter((s) => s.slot === "starting").map((s) => s.personId);
+}
+
+function skinOf(key: string): SkinDefV3<PadHostView> {
+  return resolvePad(key, t) as SkinDefV3<PadHostView>;
+}
+
+function retireSlots(view: PadHostView, key: string): SwapSlot[] {
+  return (skinOf(key).swap?.(view) ?? []).filter((s) => s.eventType === RETIREMENT_TYPE);
+}
+function retireTiles(view: PadHostView, key: string): TileSpec[] {
+  return skinOf(key).tiles(view).filter((tile) => "swap" in tile.action && tile.action.swap.startsWith("retire-"));
+}
+
+/** Append `event` as the next envelope and fold it through the REAL module. */
+function applyRetirement(
+  key: string,
+  base: ReturnType<typeof viewOf>,
+  event: { type: string; payload: unknown },
+): ReturnType<typeof viewOf> {
+  const specs = [...base.events.map((e) => ({ type: e.type, payload: e.payload })), event];
+  return viewOf(key, specs);
+}
+
+describe("M12b the four sports offer the control and its payload folds through the real engine", () => {
+  it("anti-vacuity: the four sports are in the registry and each declares a lineup policy (a squad that can play short)", () => {
+    expect(OFFERING).toHaveLength(4);
+    for (const key of OFFERING) {
+      const m = moduleOf(key);
+      expect(typeof m.lineupPolicy, `${key} declares a lineup policy`).toBe("function");
+    }
+  });
+
+  it("sweep: every sport x side offers a retirement slot for exactly the people the fixture put on the field", () => {
+    let checked = 0;
+    for (const key of OFFERING) {
+      const { view, lineups } = viewOf(key);
+      const slots = retireSlots(view, key);
+      expect(slots.map((s) => s.id).sort(), `${key} declares one retirement slot per side`).toEqual(
+        SIDES.map((s) => retireSlotId(s)).sort(),
+      );
+      for (const side of SIDES) {
+        const slot = slots.find((s) => s.id === retireSlotId(side))!;
+        expect(slot.side).toBe(side);
+        expect(slot.eventType, `${key}: the static event type is the one buildEvent returns`).toBe(RETIREMENT_TYPE);
+        expect(slot.offOnly, `${key}: the picker stops after the OFF pick`).toBe(true);
+        expect(slot.policyOk).toBe(true);
+        expect([...(slot.offCandidates ?? [])].sort(), `${key} ${side}: who may leave is who the lineup put on the field`).toEqual(
+          declaredStarters(lineups, side).sort(),
+        );
+        expect(slot.offCandidates!.length, `${key} ${side} has an XI/six/pair to choose from`).toBeGreaterThan(1);
+        checked += 1;
+      }
+    }
+    expect(checked, "4 sports x 2 sides were checked").toBe(OFFERING.length * SIDES.length);
+  });
+
+  it("the payload folds through the REAL engine: the retired person leaves the field, the squad plays one short, the other side is untouched", () => {
+    let checked = 0;
+    for (const key of OFFERING) {
+      for (const side of SIDES) {
+        const base = viewOf(key);
+        const other = side === "home" ? "away" : "home";
+        const before = engineOnField(base.state, base.lineups, side);
+        const otherBefore = engineOnField(base.state, base.lineups, other);
+        const slot = retireSlots(base.view, key).find((s) => s.id === retireSlotId(side))!;
+        const leaving = slot.offCandidates![0]!;
+        const event = slot.buildEvent(leaving, "");
+
+        expect(event.type).toBe(RETIREMENT_TYPE);
+        // The payload is what the engine's schema takes (a strict object: any extra key would be refused at the door), the
+        // entrant is the lineup's own, and the reason is the pad's one word for "hurt, not replaced".
+        expect(event.payload).toEqual({ side: base.lineups[side].entrantId, personId: leaving, reason: RETIREMENT_REASON });
+        expect(RETIREMENT_REASON).toBe("injured");
+
+        const after = applyRetirement(key, base, event);
+        const onFieldAfter = engineOnField(after.state, after.lineups, side);
+        expect(onFieldAfter.length, `${key} ${side}: one fewer on the field`).toBe(before.length - 1);
+        expect(onFieldAfter, `${key} ${side}: the retired person is off`).not.toContain(leaving);
+        expect(engineOnField(after.state, after.lineups, other), `${key}: the other side is untouched`).toEqual(otherBefore);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(OFFERING.length * SIDES.length);
+  });
+
+  it("a second call after a retirement: the person who left is not offered again and the slot shrinks by one", () => {
+    let checked = 0;
+    for (const key of OFFERING) {
+      const base = viewOf(key);
+      const slot = retireSlots(base.view, key).find((s) => s.id === retireSlotId("home"))!;
+      const leaving = slot.offCandidates![0]!;
+      const after = applyRetirement(key, base, slot.buildEvent(leaving, ""));
+      const next = retireSlots(after.view, key).find((s) => s.id === retireSlotId("home"));
+      expect(next, `${key}: still offered while others are on`).toBeDefined();
+      expect(next!.offCandidates, `${key}: the retired person is gone from the picker`).not.toContain(leaving);
+      expect(next!.offCandidates!.length).toBe(slot.offCandidates!.length - 1);
+      // The away side is untouched by home's retirement.
+      expect(retireSlots(after.view, key).find((s) => s.id === retireSlotId("away"))!.offCandidates!.length).toBe(
+        slot.offCandidates!.length,
+      );
+      checked += 1;
+    }
+    expect(checked).toBe(OFFERING.length);
+  });
+
+  it("the empty case: with nobody left on the field the slot and its tile are gone, not an empty picker", () => {
+    let checked = 0;
+    for (const key of OFFERING) {
+      let cur = viewOf(key);
+      let guard = 0;
+      for (;;) {
+        const slot = retireSlots(cur.view, key).find((s) => s.id === retireSlotId("home"));
+        if (!slot) break;
+        expect(retireTiles(cur.view, key).some((tile) => tile.id === retireSlotId("home")), `${key}: tile and slot agree`).toBe(true);
+        cur = applyRetirement(key, cur, slot.buildEvent(slot.offCandidates![0]!, ""));
+        guard += 1;
+        expect(guard, `${key}: the loop must terminate`).toBeLessThan(40);
+      }
+      expect(engineOnField(cur.state, cur.lineups, "home"), `${key}: nobody is left on the field`).toEqual([]);
+      expect(retireTiles(cur.view, key).some((tile) => tile.id === retireSlotId("home")), `${key}: no tile for an empty side`).toBe(false);
+      // The other side still has its own control.
+      expect(retireSlots(cur.view, key).some((s) => s.id === retireSlotId("away"))).toBe(true);
+      expect(guard, `${key}: the whole XI was retired one by one`).toBeGreaterThan(1);
+      checked += 1;
+    }
+    expect(checked).toBe(OFFERING.length);
+  });
+
+  it("a fixture with no team sheet has nobody to retire: no slot, no tile (a rosterless division is ordinary)", () => {
+    // single-sport exemption, one line: football's pad reads its own folded `onPitch`, whose empty case is the all-retired
+    // test above; the three kernel sports read `view.squads`, which a rosterless fixture leaves with no members.
+    let checked = 0;
+    for (const key of OFFERING.filter((k) => k !== "football")) {
+      const base = viewOf(key);
+      const bare: PadHostView = {
+        ...base.view,
+        squads: { home: { ...base.view.squads.home, members: [] }, away: { ...base.view.squads.away, members: [] } },
+      };
+      expect(retireSlots(bare, key), `${key}: nothing to offer`).toEqual([]);
+      expect(retireTiles(bare, key), `${key}: no tile for nobody`).toEqual([]);
+      checked += 1;
+    }
+    expect(checked).toBe(3);
+  });
+});
+
+describe("M12b the control is gated like the swap slot: the band and the play phase", () => {
+  it("the band is the swap slot's own", () => {
+    expect(RETIREMENT_BAND).toBe(SWAP_BAND);
+  });
+
+  it("below the band: no slot and no tile; at and above it: both, for every sport", () => {
+    let checked = 0;
+    for (const key of OFFERING) {
+      for (const band of [0, 1, 2, 3] as const) {
+        const { view } = viewOf(key, undefined, { band });
+        const offered = band >= SWAP_BAND;
+        expect(retireSlots(view, key).length > 0, `${key} band ${band}: slot`).toBe(offered);
+        expect(retireTiles(view, key).length > 0, `${key} band ${band}: tile`).toBe(offered);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(OFFERING.length * 4);
+  });
+
+  it("outside play (before the start, after the match is abandoned): no slot and no tile", () => {
+    let checked = 0;
+    for (const key of OFFERING) {
+      const pre = viewOf(key, []);
+      expect(retireSlots(pre.view, key), `${key}: before the start`).toEqual([]);
+      expect(retireTiles(pre.view, key), `${key}: before the start`).toEqual([]);
+      const over = viewOf(key, [{ type: "core.start" }, { type: "core.abandon", payload: { reason: "floodlight failure" } }]);
+      expect(retireSlots(over.view, key), `${key}: abandoned`).toEqual([]);
+      expect(retireTiles(over.view, key), `${key}: abandoned`).toEqual([]);
+      checked += 1;
+    }
+    expect(checked).toBe(OFFERING.length);
+  });
+});
+
+describe("M12b the tile and the slot: one control, two declared halves", () => {
+  it("each sport's tile per side is a minor swap tile naming a slot its own swap() declares", () => {
+    let checked = 0;
+    for (const key of OFFERING) {
+      const { view } = viewOf(key);
+      const tiles = retireTiles(view, key);
+      const slots = skinOf(key).swap?.(view) ?? [];
+      expect(tiles.map((x) => x.id).sort()).toEqual(SIDES.map((s) => retireSlotId(s)).sort());
+      for (const tile of tiles) {
+        const action = tile.action as { swap: string };
+        expect(resolveSwapSlot(action.swap, slots), `${key}: ${tile.id} names a declared slot`).not.toBeNull();
+        expect(tile.kind).toBe("minor");
+        expect(tile.phases).toEqual(["live"]);
+        expect(tile.sublabel, `${key}: the tile says whose player`).toBe(`scorepad.attribution.${tile.id === "retire-home" ? "home" : "away"}`);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(OFFERING.length * SIDES.length);
+  });
+
+  it("ids are unique within each skin: the retirement ids collide with no sub / libero / tile id", () => {
+    for (const key of OFFERING) {
+      const { view } = viewOf(key);
+      const ids = skinOf(key).tiles(view).map((x) => x.id);
+      expect(new Set(ids).size, `${key}: tile ids are unique`).toBe(ids.length);
+      const slotIds = (skinOf(key).swap?.(view) ?? []).map((s) => s.id);
+      expect(new Set(slotIds).size, `${key}: slot ids are unique`).toBe(slotIds.length);
+    }
+  });
+});
+
+describe("M12b the seam is driven through its real producer and consumer, not a fixture", () => {
+  it("adaptSwapSlot carries offOnly across (it copies by hand), and a swap slot without it stays two-step", () => {
+    for (const key of OFFERING) {
+      const { view } = viewOf(key);
+      const slot = retireSlots(view, key)[0]!;
+      expect(adaptSwapSlot(slot, view.squads).spec.offOnly, `${key}: the sheet is told to stop after the OFF pick`).toBe(true);
+      expect(adaptSwapSlot({ ...slot, offOnly: undefined }, view.squads).spec.offOnly).toBeUndefined();
+    }
+  });
+
+  it("tapping a person on the real SwapSheet completes the retirement at once; the same sheet without offOnly asks who comes ON", () => {
+    let checked = 0;
+    for (const key of OFFERING) {
+      const base = viewOf(key);
+      const slot = retireSlots(base.view, key).find((s) => s.id === retireSlotId("home"))!;
+      const adapted = adaptSwapSlot(slot, base.view.squads);
+      const picks: [string, string][] = [];
+      const names = Object.fromEntries(slot.offCandidates!.map((id) => [id, `Player ${id}`]));
+      const island = renderIsland(SwapSheet, {
+        spec: adapted.spec,
+        view: adapted.view,
+        policyVerdict: adapted.policyVerdict,
+        personNames: names,
+        t,
+        onSwap: (off: string, on: string) => picks.push([off, on]),
+      });
+      const buttons = walk(island.tree()).filter((el) => el.type === "button");
+      // The first candidate button (the last button is Cancel).
+      // (a row carries its shirt number / position decoration beside the name, so match on containing the name)
+      const buttonFor = (els: typeof buttons, id: string) => els.find((b) => textOf(b).includes(`Player ${id}`))!;
+      const first = buttonFor(buttons, slot.offCandidates![0]!);
+      expect(first, `${key}: the on-field person is a button`).toBeDefined();
+      (propsOf(first).onClick as () => void)();
+      expect(picks, `${key}: one tap completes it`).toHaveLength(1);
+      const [off, on] = picks[0]!;
+      expect(off).toBe(slot.offCandidates![0]!);
+      // The producer's event, folded through the consumer.
+      const after = applyRetirement(key, base, slot.buildEvent(off, on));
+      expect(engineOnField(after.state, after.lineups, "home")).not.toContain(off);
+
+      // The contrast, so the one-tap result above cannot be a property of the harness: the SAME slot adapted WITHOUT its
+      // offOnly flag is the ordinary two-step sheet -- the first tap completes nothing and asks who comes on.
+      const twoStep = adaptSwapSlot({ ...slot, offOnly: undefined }, base.view.squads);
+      const stepped: [string, string][] = [];
+      const island2 = renderIsland(SwapSheet, {
+        spec: twoStep.spec,
+        view: twoStep.view,
+        policyVerdict: twoStep.policyVerdict,
+        personNames: names,
+        t,
+        onSwap: (a: string, b: string) => stepped.push([a, b]),
+      });
+      const firstOf2 = buttonFor(walk(island2.tree()).filter((el) => el.type === "button"), slot.offCandidates![0]!);
+      (propsOf(firstOf2).onClick as () => void)();
+      expect(stepped, `${key}: without offOnly the first tap only picks who goes OFF`).toEqual([]);
+      checked += 1;
+    }
+    expect(checked).toBe(OFFERING.length);
+  });
+
+  it("the skin dispatch gate admits the retirement for a sport whose spec does not declare it (kernel events are dispatchable)", async () => {
+    const sent: string[] = [];
+    const dispatch = createSkinDispatch({ panels: [] } as never, async (type) => {
+      sent.push(type);
+    });
+    await dispatch(RETIREMENT_TYPE, {});
+    expect(sent).toEqual([RETIREMENT_TYPE]);
+  });
+
+  it("buildRetirement ignores the ON argument: an off-only slot's buildEvent(off, '') equals buildEvent(off, 'x')", () => {
+    const { view } = viewOf("hockey");
+    const slot = retireSlots(view, "hockey")[0]!;
+    const off = slot.offCandidates![0]!;
+    expect(slot.buildEvent(off, "")).toEqual(slot.buildEvent(off, "someone-else"));
+  });
+
+  it("buildRetirement refuses a person who is not on the field (a stray id never becomes an event)", () => {
+    const { view } = viewOf("hockey");
+    const slot = buildRetirement(view, "home", { inPlay: true, by: "H" })!;
+    expect(slot).not.toBeNull();
+    expect(() => slot.buildEvent("not-on-the-field", "")).toThrow(/on the field/);
+  });
+});
+
+/** Read one row of an engine rules table: `| id | rule | citation | status | enforced at | proved by |`. */
+function ruleRow(file: string, id: string): { rule: string; status: string } {
+  const text = readFileSync(fileURLToPath(new URL(`../../../../../../../../packages/engine/rules/${file}`, import.meta.url)), "utf8");
+  const line = text.split("\n").find((l) => l.startsWith(`| ${id} |`));
+  if (!line) throw new Error(`no ${id} row in ${file}`);
+  const cells = line.split("|").map((c) => c.trim());
+  return { rule: cells[2]!, status: cells[4]! };
+}
+
+describe("M12b cricket and generic offer none", () => {
+  it("the reason is the disposition row's, read from the rulebook, and it names the retirement", () => {
+    for (const d of DISPOSITIONS) {
+      const row = ruleRow(d.file, d.id);
+      expect(row.rule, `${d.id} is about the lineup retirement`).toMatch(/retirement/i);
+      expect(row.status, `${d.id} is a W2e disposition, signed or deviation`).toMatch(/^(deviation|signed) W2e-D3/);
+    }
+    // And what each row says is the reason (cricket: the all-out count stays; generic: no squad), so the absence is a
+    // product decision on record, not an omission.
+    expect(ruleRow("cricket.md", "CK-DV-3").rule).toMatch(/all-out/);
+    expect(ruleRow("generic.md", "GN-DV-1").rule).toMatch(/LINEUP_NOT_SUPPORTED/);
+  });
+
+  it("cricket and generic offer no retirement slot and no retirement tile", () => {
+    const cricket = viewOf("cricket");
+    const generic = viewOf("generic", undefined, { cfg: { resultMode: "score", allowDraws: true } });
+    for (const [key, v] of [["cricket", cricket], ["generic", generic]] as const) {
+      expect(retireSlots(v.view, key), `${key}: no slot`).toEqual([]);
+      expect(retireTiles(v.view, key), `${key}: no tile`).toEqual([]);
+    }
+  });
+});
+
+describe("M12b no other sport offers it: the control is for the team sports whose pad this wave names", () => {
+  // single reason, one line: M12 applies to team-entrant sports only (the catalogue's R16 rule), and the racquet, board and
+  // carrom pads have no squad to play short.
+  it("the registry sweep: every other sport's skin has no retirement slot and no retirement tile", () => {
+    let checked = 0;
+    const rest = builtinModules.filter((m) => !(OFFERING as readonly string[]).includes(m.key) && !DISPOSITIONS.some((d) => d.key === m.key));
+    for (const m of rest) {
+      const parsed = m.configSchema.safeParse({});
+      if (!parsed.success) continue;
+      const { view } = viewOf(m.key);
+      expect(retireSlots(view, m.key), `${m.key}: no slot`).toEqual([]);
+      expect(retireTiles(view, m.key), `${m.key}: no tile`).toEqual([]);
+      checked += 1;
+    }
+    expect(checked, "at least the racquet and board sports were swept").toBeGreaterThan(3);
+  });
+});

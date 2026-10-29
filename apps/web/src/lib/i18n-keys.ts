@@ -4745,6 +4745,8 @@ export type DictionaryKey =
   | "pad.recording.lead"
   | "pad.recording.pick"
   | "pad.recording.question"
+  | "pad.retirement.action"
+  | "pad.retirement.off"
   | "pad.ribbon.core.abandon"
   | "pad.ribbon.core.abandon.expunge"
   | "pad.ribbon.core.award"
