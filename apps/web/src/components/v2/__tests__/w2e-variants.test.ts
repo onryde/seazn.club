@@ -703,26 +703,30 @@ describe("pickers print the localised variant label, with the raw name as fallba
   it("the Settings picker prints the same words and the hint, and leaves an org preset's name alone", () => {
     const ENTRANT_MODEL: EffectiveEntrantModel = { kinds: ["individual"], defaultKind: "individual", squadNumbers: false, captain: false, maxTeamMembers: null };
     const variants = [...sportWith([ORG_PRESET])[0]!.variants];
+    // try/finally: a failed expectation must not leave the fake clock or the Spanish locale for the next test to inherit.
     vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(BEFORE);
-    for (const [dict, label] of [[enUi, "en"], [esUi, "es"]] as const) {
-      activeDict.current = dict as Record<string, string>;
-      activeLocale.current = label;
-      const h = renderIsland(DivisionSettings, {
-        division: { id: "d1", name: "Open", sport_key: "badminton", variant_key: "bwf-3x15", config: storedFor(BADMINTON, "bwf-3x15"), logo_url: null, logo_storage_path: null },
-        orgId: "org1", variants, structureLocked: false, lockedFields: [], stages: [], canEdit: true,
-        divisionPathPrefix: "/o/org/c/comp/d/", fixturesHref: "/o/org/c/comp/d/div/fixtures", embed: null, danger: null,
-        entrantModel: ENTRANT_MODEL, entrantModelSource: "sport", autoPosts: false, canAutoPost: false, showSeeds: true, viewerPlan: "community",
-      } as unknown as Parameters<typeof DivisionSettings>[0]);
-      const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-settings-variant")!;
-      const text = Object.fromEntries(optionsOf(sel).map((o) => [o.value, o.text]));
-      expect(text.bwf, label).toBe(dict["variant.badminton.bwf"]);
-      expect(text["bwf-3x15"], label).toBe(dict["variant.badminton.bwf3x15"]);
-      expect(text["club-night"], label).toBe(ORG_PRESET.name);
-      const hint = h.tree().find((e) => propsOf(e)["data-testid"] === "division-variant-hint");
-      expect(hint && textOf(hint).trim(), label).toBe(dict["variant.badminton.hint3x15"].replace("{date}", dateIn(label)));
+    try {
+      vi.setSystemTime(BEFORE);
+      for (const [dict, label] of [[enUi, "en"], [esUi, "es"]] as const) {
+        activeDict.current = dict as Record<string, string>;
+        activeLocale.current = label;
+        const h = renderIsland(DivisionSettings, {
+          division: { id: "d1", name: "Open", sport_key: "badminton", variant_key: "bwf-3x15", config: storedFor(BADMINTON, "bwf-3x15"), logo_url: null, logo_storage_path: null },
+          orgId: "org1", variants, structureLocked: false, lockedFields: [], stages: [], canEdit: true,
+          divisionPathPrefix: "/o/org/c/comp/d/", fixturesHref: "/o/org/c/comp/d/div/fixtures", embed: null, danger: null,
+          entrantModel: ENTRANT_MODEL, entrantModelSource: "sport", autoPosts: false, canAutoPost: false, showSeeds: true, viewerPlan: "community",
+        } as unknown as Parameters<typeof DivisionSettings>[0]);
+        const sel = h.tree().find((e) => e.type === "select" && propsOf(e)["data-testid"] === "division-settings-variant")!;
+        const text = Object.fromEntries(optionsOf(sel).map((o) => [o.value, o.text]));
+        expect(text.bwf, label).toBe(dict["variant.badminton.bwf"]);
+        expect(text["bwf-3x15"], label).toBe(dict["variant.badminton.bwf3x15"]);
+        expect(text["club-night"], label).toBe(ORG_PRESET.name);
+        const hint = h.tree().find((e) => propsOf(e)["data-testid"] === "division-variant-hint");
+        expect(hint && textOf(hint).trim(), label).toBe(dict["variant.badminton.hint3x15"].replace("{date}", dateIn(label)));
+      }
+    } finally {
+      vi.useRealTimers();
+      activeLocale.current = "en";
     }
-    vi.useRealTimers();
-    activeLocale.current = "en";
   });
 });
