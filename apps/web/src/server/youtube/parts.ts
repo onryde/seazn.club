@@ -16,7 +16,7 @@ import "server-only";
 //                                        not show anyone. It also lists the broadcasts that are PRIVATE on YouTube, flagged
 //                                        `private: true` (the public view hides them - owner ruling 2026-10-28, option A).
 //
-// A part is `{ partNo, url }` (the public read adds `madeForKids`, V481). The url is the video's watch URL: a broadcast id is also its video id. Only `complete` rows count - a
+// A part is `{ partNo, url }` (the public read adds `madeForKids`, V482). The url is the video's watch URL: a broadcast id is also its video id. Only `complete` rows count - a
 // failed, open or ending broadcast is not a replay yet (V479's check: a complete row always has a finish time and a video id).
 import { sql } from "@/lib/db";
 import { youtubeWatchUrl, type OrganiserReplayPart, type PublicReplayPart, type ReplayPart } from "@/lib/youtube";
@@ -29,7 +29,7 @@ interface PartRow {
 }
 
 /** The parts the PUBLIC may see for this fixture, in order. An unpublished fixture (setup division, private competition) has none.
- *  Each carries the BROADCAST's own made-for-kids stamp (V481, read from the view): a made-for-kids replay is a link out on the page,
+ *  Each carries the BROADCAST's own made-for-kids stamp (V482, read from the view): a made-for-kids replay is a link out on the page,
  *  never a player (DP III.E.4.j) - the page decides, this only says. The organiser's read below carries no such field. */
 export async function replayParts(fixtureId: string): Promise<PublicReplayPart[]> {
   const rows = await sql<(PartRow & { made_for_kids: boolean })[]>`

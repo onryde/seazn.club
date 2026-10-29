@@ -468,7 +468,7 @@ None of these is B7 code, and none is for the agent.
 
    **Decision (owner, 2026-10-29): option (a), link out.** A replay part of a broadcast that is made for kids is shown on
    the public match page as a "Watch on YouTube" link and never as a player: no embed, so the tracking rule has nothing
-   to apply to. Built on branch `feat/youtube-mfk-replay` (the follow-up PR raised from it; migration V481):
+   to apply to. Built on branch `feat/youtube-mfk-replay` (the follow-up PR raised from it; migration V482):
    - the flag is kept per broadcast (`youtube_broadcasts.made_for_kids`), stamped when Go live creates the broadcast from
      the same value it sends YouTube, so a later change of the connection's choice moves no existing replay;
    - the end step ORs in YouTube's own `status.madeForKids` from the `liveBroadcasts.list` it already makes (no new API
@@ -477,8 +477,8 @@ None of these is B7 code, and none is for the agent.
      and an ordinary one shows one link and one player;
    - the privacy (section 7) and cookie ("YouTube replays") pages each say it in one sentence.
 
-   Before prod: V481 backfills every existing broadcast from its connection's current flag and prints the counts in the
-   migration log (`V481: youtube_broadcasts.made_for_kids backfilled ...`); read that line. On stg, connect with
+   Before prod: V482 backfills every existing broadcast from its connection's current flag and prints the counts in the
+   migration log (`V482: youtube_broadcasts.made_for_kids backfilled ...`); read that line. On stg, connect with
    **Made for kids = Yes**, stream and end a match, and open its public page: a link card, no player, no thumbnail.
 
 ---

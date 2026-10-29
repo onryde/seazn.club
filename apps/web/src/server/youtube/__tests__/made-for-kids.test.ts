@@ -4,7 +4,7 @@
 //
 //   R1  the flag is PER BROADCAST, stamped when Go live makes the row, from the SAME value sent to YouTube (selfDeclaredMadeForKids).
 //       The connection's flag is editable later (PATCH), so the connection is never re-read: a later PATCH moves NO existing row.
-//       V481 backfills the rows that exist from their connection - the migration's own update statement, read from the file here.
+//       V482 backfills the rows that exist from their connection - the migration's own update statement, read from the file here.
 //   R1  and the column is NOT NULL with NO default: a writer that forgets it is refused, not defaulted to "not for kids".
 //   R2  YouTube's own determination counts too, but through a call that already exists: the end step's `broadcastLife` read
 //       (liveBroadcasts.list part=status) - its `status.madeForKids` is ORed in, so a flag never goes back from true to false.
@@ -12,7 +12,7 @@
 // Expected values are typed from the rulings. The "sent to YouTube" side is read from the FAKE's own record of what it was sent
 // (`inspectBroadcast`), not from the row - so a stamp read from anywhere but the call's argument cannot agree with it by construction.
 // Real Postgres required; skipped without DATABASE_URL. Sport: not applicable (a broadcast row reads no sport rule).
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -136,17 +136,22 @@ describe.skipIf(!HAS_DB)("R1: the column is NOT NULL with no default - a writer 
   });
 });
 
-describe.skipIf(!HAS_DB)("R1: V481's backfill sets every existing row from its connection", () => {
+describe.skipIf(!HAS_DB)("R1: V482's backfill sets every existing row from its connection", () => {
   // The migration's OWN update, read from the file (never retyped), run against a TEMP table that shadows youtube_broadcasts for
   // this transaction only (a temp table is searched first by an unqualified name), with the NOT NULL dropped from the temp copy
-  // - the state the real table is in between V481's `add column` and `set not null`. Nothing shared is locked or changed.
+  // - the state the real table is in between V482's `add column` and `set not null`. Nothing shared is locked or changed.
   // Read inside each test (not at module scope), so a missing file fails THAT test with its path rather than failing the collection.
-  const migrationCode = (): string =>
-    readFileSync(resolve(__dirname, "../../../../../../db/migration/deltas/V481__youtube_broadcast_made_for_kids.sql"), "utf8").replace(/--.*$/gm, "");
+  // Found by NAME with the version left open (as w2e-migration.test.ts does), so a renumber after a collision with main cannot strand it.
+  const migrationCode = (): string => {
+    const dir = resolve(__dirname, "../../../../../../db/migration/deltas");
+    const found = readdirSync(dir).filter((f) => /^V\d+__youtube_broadcast_made_for_kids\.sql$/.test(f));
+    expect(found, "exactly one delta carries the made-for-kids column").toHaveLength(1);
+    return readFileSync(resolve(dir, found[0]!), "utf8").replace(/--.*$/gm, "");
+  };
 
   it("a row of a made-for-kids connection becomes true, a row of a connection that is not becomes false, and nothing is left NULL", async () => {
     const update = /update youtube_broadcasts[\s\S]*?;/.exec(migrationCode())?.[0];
-    expect(update, "V481 holds the backfill update").toBeDefined();
+    expect(update, "V482 holds the backfill update").toBeDefined();
 
     const kids = await world(true);
     const plain = await world(false);

@@ -114,7 +114,7 @@ interface Claimed {
 
 type Outcome =
   // `madeForKids`: YouTube's own status.madeForKids from the reads this outcome came from (true only when it SAID true); `finalize` ORs it
-  // into the broadcast's stamp, so the stamp goes false -> true and never back (V481).
+  // into the broadcast's stamp, so the stamp goes false -> true and never back (V482).
   | { kind: "complete"; startedAt: Date | null; endedAt: Date | null; madeForKids: boolean }
   | { kind: "failed"; code: typeof CODE_NEVER_LIVE | typeof CODE_ORPHAN | typeof CODE_REVOKED };
 type Tag = "ended" | "neverLive" | "orphan" | "failed" | "reconnect" | "deferred" | "none";

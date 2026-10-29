@@ -78,7 +78,7 @@ export type BroadcastLife = "created" | "ready" | "testing" | "live" | "complete
  *  `madeForKids` is liveBroadcasts `status.madeForKids` - YouTube's CURRENT made-for-kids status of the broadcast, which may differ from
  *  what Seazn declared when it made it (`selfDeclaredMadeForKids`): YouTube can designate a video itself. It rides the same
  *  liveBroadcasts.list(part=status,snippet) read, so reading it costs no call. `null` when YouTube did not say (the field absent or not
- *  a boolean) and for `absent`. The end step ORs a `true` into the broadcast's own stamp (V481): the stamp only ever goes false -> true. */
+ *  a boolean) and for `absent`. The end step ORs a `true` into the broadcast's own stamp (V482): the stamp only ever goes false -> true. */
 export interface BroadcastLifeInfo {
   life: BroadcastLife;
   actualStartAt: Date | null;

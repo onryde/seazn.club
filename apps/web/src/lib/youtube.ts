@@ -102,7 +102,7 @@ export interface ReplayPart {
 /** The PUBLIC match page's part: the same plus whether the video was MADE FOR KIDS. Google's YouTube API Services Developer Policies
  *  (III.E.4.j) bar tracking on a page that embeds such a video, and this site tracks (consent-gated analytics in the root layout), so a
  *  made-for-kids replay is a link to YouTube and never an embedded player (owner ruling 2026-10-29). The flag is the BROADCAST's own,
- *  stamped when Go live made it (V481 `youtube_broadcasts.made_for_kids`), never the connection's current one.
+ *  stamped when Go live made it (V482 `youtube_broadcasts.made_for_kids`), never the connection's current one.
  *
  *  `null` is "not known": the database column is NOT NULL, so the reader never produces it; it exists for a document that did not carry
  *  the flag (an older cached entry) and for any future shape that cannot say. It is treated as made-for-kids - see `mayEmbedReplay`. */

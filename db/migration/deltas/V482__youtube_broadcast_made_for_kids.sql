@@ -1,4 +1,4 @@
--- V481 — YouTube Connect: whether a broadcast was MADE FOR KIDS, stamped on the broadcast row.
+-- V482 — YouTube Connect: whether a broadcast was MADE FOR KIDS, stamped on the broadcast row.
 -- (Owner ruling 2026-10-29, controller rulings R1/R2: the public match page shows a made-for-kids replay as a link to YouTube and
 -- never as an embedded player - Google's YouTube API Services Developer Policies III.E.4.j: a page that embeds a video made for kids
 -- must not track, and the root layout runs consent-gated PostHog.)
@@ -34,7 +34,7 @@ declare
   kids  int;
 begin
   select count(*), count(*) filter (where made_for_kids) into total, kids from youtube_broadcasts;
-  raise notice 'V481: youtube_broadcasts.made_for_kids backfilled from each row''s connection - % rows, % made for kids, % not',
+  raise notice 'V482: youtube_broadcasts.made_for_kids backfilled from each row''s connection - % rows, % made for kids, % not',
     total, kids, total - kids;
 end
 $$;

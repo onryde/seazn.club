@@ -693,7 +693,7 @@ describe.skipIf(!HAS_DB)("the youtube_connect delta — the constraints are real
     }
     expect(seen).toBe(3);
 
-    // The view's columns, in order. V481 appended `made_for_kids` (a replace may only add columns at the end).
+    // The view's columns, in order. V482 appended `made_for_kids` (a replace may only add columns at the end).
     const cols = await sql<{ column_name: string }[]>`
       select column_name from information_schema.columns
        where table_schema = current_schema() and table_name = 'public_fixture_youtube_parts_v' order by ordinal_position`;
