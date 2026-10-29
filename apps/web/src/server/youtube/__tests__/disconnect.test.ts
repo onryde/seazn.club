@@ -789,4 +789,109 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     expect(lost[0]!.reason).toMatchObject({ status: 404 });
     expect(count(w.fake, "revoke"), "revoked at Google once").toBe(1);
   });
+
+  // ═══ guards the first mutation sweep found undefended ══════════════════════════════════════════════════════════════════
+  it("the grace boundary is the end step's own: Stopped exactly 5 minutes ago the broadcast is DUE (disconnect proceeds); one millisecond earlier it is not (409) - and the real end step agrees at both instants", async () => {
+    const w = await world();
+    const m = await playAndStop(w, w.fixtures[0]!);
+    w.setNow(afterStop(m, min(5) - 1));
+    await expect(disconnect(w), "1 ms before the grace ends").rejects.toMatchObject({ status: 409, code: "YOUTUBE_IN_USE" });
+    expect(await w.step({ at: afterStop(m, min(5) - 1) }), "the end step also leaves it").toMatchObject({ ended: 0 });
+    expect((await connRow(w.connectionId)).status).toBe("connected");
+
+    w.setNow(afterStop(m, min(5)));
+    await expect(disconnect(w), "exactly at the end of the grace").resolves.toMatchObject({ revokedAtGoogle: true, purged: { broadcasts: 1 } });
+    // the same instant, through the real end step on a second channel: it claims and ends the broadcast (parity of the two clocks)
+    const v = await world();
+    const mv = await playAndStop(v, v.fixtures[0]!);
+    expect(await v.step({ at: afterStop(mv, min(5)) }), "the end step ends it at exactly the same instant").toMatchObject({ ended: 1 });
+  });
+
+  it("O-T17a for MANY divisions: every division whose fixture carried a replay link is revalidated, not only the first (anti-vacuity: two divisions)", async () => {
+    const w = await world({ credits: 2 });
+    const second = await divisionRig(w.auth, { entrants: 2 });
+    await pairPresentPhone(second.fixtureIds[0]!);
+    await completedMatch(w, w.fixtures[0]!);
+    await completedMatch(w, second.fixtureIds[0]!);
+    const divisions = await sql<{ id: string; competition_id: string }[]>`
+      select id, competition_id from divisions where id in ${sql([w.divisionId, second.divisionId])} order by id`;
+    expect(divisions.length, "premise: two distinct divisions").toBe(2);
+    for (const f of [w.fixtures[0]!, second.fixtureIds[0]!]) expect(await streamUrlOf(f), "premise: each carries a replay link").not.toBeNull();
+    forgetRevalidations();
+
+    await disconnect(w);
+    const seen = [...revalidateHook.calls].sort((a, b) => a.divisionId.localeCompare(b.divisionId));
+    expect(seen, "one expiry per division").toEqual(divisions.map((d) => ({ divisionId: d.id, competitionId: d.competition_id })));
+  });
+
+  it("a missing token KEK is the deployment's fault, not 'no token': the disconnect fails loudly and NOTHING changes (the transaction rolls back), then works once the KEK is back", async () => {
+    const w = await world();
+    await completedMatch(w, w.fixtures[0]!);
+    const before = await snapshot(w);
+    const kek = process.env.YOUTUBE_TOKEN_KEK;
+    delete process.env.YOUTUBE_TOKEN_KEK;
+    try {
+      const failure = await disconnect(w).then(() => null, (e: unknown) => e);
+      expect(failure, "it rejected").not.toBeNull();
+      expect((failure as { status?: number }).status, "not the 404/409 of a business refusal").toBeUndefined();
+    } finally {
+      process.env.YOUTUBE_TOKEN_KEK = kek;
+    }
+    expect(await snapshot(w), "nothing changed").toEqual(before);
+    await expect(disconnect(w)).resolves.toMatchObject({ revokedAtGoogle: true });
+  });
+
+  it("the connection lock is scoped to the caller's org: org B asking for org A's connection while A's row is locked is the 404 at once - it does not queue behind A", async () => {
+    const w = await world();
+    const intruder = await seedYoutubeOrg();
+    let release!: () => void;
+    let taken!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const locked = new Promise<void>((r) => { taken = r; });
+    const holder = sql.begin(async (tx) => {
+      await tx`select id from org_youtube_connections where id = ${w.connectionId} for update`;
+      taken();
+      await gate;
+    });
+    try {
+      await locked;
+      const answer = await Promise.race([
+        disconnect(w, { auth: intruder.auth, orgId: intruder.orgId }).then(() => "resolved", (e: { status?: number }) => `rejected ${e.status}`),
+        new Promise<string>((r) => setTimeout(() => r("hung behind the lock"), 3000)),
+      ]);
+      expect(answer).toBe("rejected 404");
+    } finally {
+      release();
+      await holder;
+    }
+  });
+
+  it("the broadcast rows are locked before the guard reads them: a change committed while the disconnect waits is SEEN - a 'created' row that becomes 'bound' under it makes the call a 409, not a purge of a channel a match just took", async () => {
+    const w = await world();
+    const [{ id: rowId }] = await sql<{ id: string }[]>`
+      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state)
+      values (${w.orgId}, ${w.connectionId}, ${w.fixtures[0]!}, 't18 lock', 'unlisted', 'created') returning id`;
+    let release!: () => void;
+    let taken!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const locked = new Promise<void>((r) => { taken = r; });
+    const holder = sql.begin(async (tx) => {
+      await tx`select id from youtube_broadcasts where id = ${rowId} for update`;
+      taken();
+      await gate;
+      await tx`update youtube_broadcasts set state = 'bound' where id = ${rowId}`;
+    });
+    await locked;
+    let settled = false;
+    const run = disconnect(w).then((v) => ({ ok: true as const, v }), (e: unknown) => ({ ok: false as const, e })).finally(() => { settled = true; });
+    await new Promise((r) => setTimeout(r, 600));
+    expect(settled, "the disconnect waits for the row's lock instead of reading around it").toBe(false);
+    release();
+    await holder;
+    const out = await run;
+    expect(out.ok, "the committed 'bound' state was seen").toBe(false);
+    if (!out.ok) expect(out.e).toMatchObject({ status: 409, code: "YOUTUBE_IN_USE" });
+    expect((await connRow(w.connectionId)).status).toBe("connected");
+    expect(await broadcastsOf(w.connectionId), "the row is still there").toHaveLength(1);
+  });
 });
