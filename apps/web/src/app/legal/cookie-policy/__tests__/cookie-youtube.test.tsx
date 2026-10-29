@@ -60,10 +60,14 @@ describe("cookie policy — the embedded YouTube player (T19, O2)", () => {
     ["has its own section, headed 'YouTube replays'", () => {
       expect(text(yt.match(/<h2[^>]*>(.*?)<\/h2>/)?.[1] ?? "")).toBe("YouTube replays");
     }],
-    ["before a tap: only the thumbnail, from the host the facade really loads - no player, no script, no cookie", () => {
+    ["before a tap: only the thumbnail, from the host the facade really loads - and only what WE control is claimed (M4)", () => {
       expect(ytText).toContain("until you tap play");
       expect(ytText).toContain(`from ${bare(THUMB_HOSTS[0]!)}`);
-      expect(ytText).toContain("no player, no script and no cookie");
+      // What we can vouch for: our page sets no cookie and loads no Google script or frame before the tap (the facade test below holds it).
+      expect(ytText).toContain("our page sets no cookie and loads no Google script or player");
+      // What we cannot: whether Google's image server sets one. The old absolute is gone, and the request is said to reach Google.
+      expect(ytText).not.toContain("no player, no script and no cookie");
+      expect(ytText).toContain("that request reaches Google's servers with your IP address and browser details");
     }],
     ["after a tap: the privacy-enhanced player, from the host the iframe really loads, and Google may set its own cookies", () => {
       expect(ytText).toContain(`loaded from ${bare(PLAYER_HOSTS[0]!)}`);

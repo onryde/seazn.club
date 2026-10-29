@@ -172,6 +172,8 @@ describe("privacy — what the YouTube section says about the other halves of th
     expect(ytText).toContain("Nothing from the player loads until you tap play");
     expect(ytText).toContain("only the video's thumbnail");
     expect(ytText).toContain("may store cookies or similar data on your device");
+    // M4: loading either one sends the visitor's address to Google.
+    expect(ytText).toContain("each send your IP address and browser details to Google");
     expect(yt).toContain('href="/legal/cookie-policy"');
   });
 
