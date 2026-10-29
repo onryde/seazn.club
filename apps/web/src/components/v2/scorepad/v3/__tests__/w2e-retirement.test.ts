@@ -54,16 +54,23 @@ function moduleOf(key: string): AnySportModule {
 
 /** A view folded from the real module, the way the host builds it: `squads` is `squadStateOf(state, lineups)`, so a sport
  *  whose fold keeps a private squad shape (football) reads the frozen kickoff sheet here exactly as it does in production. */
+type Spec = { type: string; payload?: unknown; voids?: string };
+
+/** STRICT, as the write path folds a scorer's new event (`strictFromSeq: 0`): a refusal throws here instead of being
+ *  dropped the way replay drops it, so a control whose event the engine would refuse cannot pass as one that worked. */
+const STRICT = { strictFromSeq: 0 } as const;
+
 function viewOf(
   key: string,
-  specs: readonly { type: string; payload?: unknown }[] = [{ type: "core.start" }],
+  specs: readonly Spec[] = [{ type: "core.start" }],
   o: { band?: FidelityBand; cfg?: Record<string, unknown> } = {},
 ): { view: PadHostView; module: AnySportModule; lineups: LineupPair; events: EventEnvelope[]; state: Record<string, unknown> } {
   const sportModule = moduleOf(key);
   const cfg = periodCfg(sportModule, o.cfg ?? {});
   const lineups = lineupsFor(sportModule, cfg);
-  const events = specs.map((s, i) => makeEnvelope(i + 1, { type: s.type, payload: s.payload ?? {} } as never));
-  const state = foldMatch(sportModule as never, cfg as never, lineups, events) as Record<string, unknown>;
+  // Envelope ids are `e-<seq>` with seq counting from 1 in `specs`, so a void names its target as `e-<index + 1>`.
+  const events = specs.map((s, i) => makeEnvelope(i + 1, { type: s.type, payload: s.payload ?? {} } as never, s.voids));
+  const state = foldMatch(sportModule as never, cfg as never, lineups, events, STRICT) as Record<string, unknown>;
   const view: PadHostView = {
     cfg,
     state,
@@ -111,9 +118,9 @@ function retireTiles(view: PadHostView, key: string): TileSpec[] {
 function applyRetirement(
   key: string,
   base: ReturnType<typeof viewOf>,
-  event: { type: string; payload: unknown },
+  event: Spec,
 ): ReturnType<typeof viewOf> {
-  const specs = [...base.events.map((e) => ({ type: e.type, payload: e.payload })), event];
+  const specs: Spec[] = [...base.events.map((e) => ({ type: e.type, payload: e.payload, ...(e.voids === undefined ? {} : { voids: e.voids }) })), event];
   return viewOf(key, specs);
 }
 
@@ -237,6 +244,97 @@ describe("M12b the four sports offer the control and its payload folds through t
       checked += 1;
     }
     expect(checked).toBe(3);
+  });
+});
+
+describe("M12b retire, then void: the person comes back (every sport, strict fold)", () => {
+  it("a void of the retirement puts the person back on the field and back in the picker; a second retirement takes them off again", () => {
+    let checked = 0;
+    for (const key of OFFERING) {
+      for (const side of SIDES) {
+        const base = viewOf(key);
+        const before = engineOnField(base.state, base.lineups, side);
+        const slot = retireSlots(base.view, key).find((s) => s.id === retireSlotId(side))!;
+        const leaving = slot.offCandidates![0]!;
+        const retired = applyRetirement(key, base, slot.buildEvent(leaving, ""));
+        expect(engineOnField(retired.state, retired.lineups, side), `${key} ${side}: off after the retirement`).not.toContain(leaving);
+        // The retirement is the last envelope; its id is `e-<seq>` and seq is its 1-based position.
+        const voided = applyRetirement(key, retired, { type: "core.void", payload: {}, voids: `e-${retired.events.length}` });
+        expect([...engineOnField(voided.state, voided.lineups, side)].sort(), `${key} ${side}: the void restores the field`).toEqual(
+          [...before].sort(),
+        );
+        const again = retireSlots(voided.view, key).find((s) => s.id === retireSlotId(side))!;
+        expect(again.offCandidates, `${key} ${side}: offered again after the void`).toContain(leaving);
+        const twice = applyRetirement(key, voided, again.buildEvent(leaving, ""));
+        expect(engineOnField(twice.state, twice.lineups, side), `${key} ${side}: a second retirement folds`).not.toContain(leaving);
+        expect(engineOnField(twice.state, twice.lineups, side)).toHaveLength(before.length - 1);
+        checked += 1;
+      }
+    }
+    expect(checked).toBe(OFFERING.length * SIDES.length);
+  });
+});
+
+describe("M12b a substitute who came on through the pad's own Sub can then retire injured (PO decision I-1)", () => {
+  /** The pad's ordinary substitution slot for `side` (not the retirement, not volleyball's libero exchange). */
+  function subSlotOf(view: PadHostView, key: string, side: Side): SwapSlot | undefined {
+    return (skinOf(key).swap?.(view) ?? []).find(
+      (s) => s.side === side && s.eventType !== RETIREMENT_TYPE && s.eventType !== "core.lineup.replacement",
+    );
+  }
+
+  it("Sub on, then Injured (no sub) for that substitute: the strict fold accepts it and he leaves the field", () => {
+    // Volleyball's pad has no ordinary Sub (only the libero exchange, when a libero is named), so it is not in this sweep;
+    // its retirement is covered by every other block in this file.
+    const subbing = OFFERING.filter((k) => k !== "volleyball");
+    let checked = 0;
+    for (const key of subbing) {
+      const base = viewOf(key);
+      const sub = subSlotOf(base.view, key, "home");
+      expect(sub, `${key}: the pad offers a Sub`).toBeDefined();
+      const off = sub!.offCandidates![0]!;
+      const on = sub!.candidates[0]!;
+      expect(on, `${key}: there is someone on the bench`).toBeDefined();
+      const subbed = applyRetirement(key, base, sub!.buildEvent(off, on));
+      expect(engineOnField(subbed.state, subbed.lineups, "home"), `${key}: the substitute is on`).toContain(on);
+
+      const slot = retireSlots(subbed.view, key).find((s) => s.id === retireSlotId("home"))!;
+      expect(slot.offCandidates, `${key}: the substitute is offered`).toContain(on);
+      expect(slot.offCandidates, `${key}: the player he replaced is not`).not.toContain(off);
+      const retired = applyRetirement(key, subbed, slot.buildEvent(on, ""));
+      const field = engineOnField(retired.state, retired.lineups, "home");
+      expect(field, `${key}: the substitute left`).not.toContain(on);
+      expect(field, `${key}: the player he replaced did not come back`).not.toContain(off);
+      expect(field, `${key}: the side plays one short`).toHaveLength(declaredStarters(base.lineups, "home").length - 1);
+
+      // And a void of the retirement brings the substitute back, not the starter.
+      const voided = applyRetirement(key, retired, { type: "core.void", payload: {}, voids: `e-${retired.events.length}` });
+      expect(engineOnField(voided.state, voided.lineups, "home"), `${key}: void restores the substitute`).toContain(on);
+      expect(engineOnField(voided.state, voided.lineups, "home")).not.toContain(off);
+      checked += 1;
+    }
+    expect(checked).toBe(subbing.length);
+    expect(subbing).toContain("football");
+  });
+
+  it("a pad whose Sub sends the sport's OWN event (not core.lineup.*) is exactly a sport that tells the engine its pitch", () => {
+    // The engine judges core.lineup.* against its own squads unless the module hands it the pitch (`squadsForLineup`). A pad
+    // substituting with a module event (football.sub) moves a pitch the kernel never folds, so it needs the hook; one
+    // substituting with core.lineup.* moves the kernel's squads directly and must not need it.
+    let checked = 0;
+    for (const key of OFFERING) {
+      const { view } = viewOf(key);
+      const subTypes = SIDES.flatMap((side) => {
+        const slot = subSlotOf(view, key, side);
+        return slot === undefined ? [] : [slot.eventType];
+      });
+      const ownEvent = subTypes.some((type) => !type.startsWith("core.lineup."));
+      const declares = typeof (moduleOf(key) as { squadsForLineup?: unknown }).squadsForLineup === "function";
+      expect(declares, `${key}: Sub sends ${subTypes.join(", ") || "nothing"}`).toBe(ownEvent);
+      checked += 1;
+    }
+    expect(checked).toBe(OFFERING.length);
+    expect(typeof (moduleOf("football") as { squadsForLineup?: unknown }).squadsForLineup).toBe("function");
   });
 });
 
