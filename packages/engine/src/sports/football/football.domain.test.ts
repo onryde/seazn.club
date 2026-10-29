@@ -1130,6 +1130,30 @@ describe("goalkeeper stats: clean sheets, goals conceded (S8/#417)", () => {
     expect(rows.find((r) => r.personId === homeSub1)?.stats.goals_conceded).toBe(1);
   });
 
+  // W2e T33a (T32 fix round 2, M3) - the carried limitation DOMAIN.md states for this fold, witnessed so the text cannot
+  // drift from the behaviour: a sending-off and a sin bin are football-private state (`FootballSquad.sentOff` / `sinBin`),
+  // so the kernel squads this fold reads still have the dismissed keeper on the field at "GK". Naming his replacement
+  // "GK" with a `core.lineup.position` event (a RECORDED position) does not move him, and the goal conceded after it is
+  // charged to the dismissed keeper. Both dismissals, so neither can be dropped from the text.
+  for (const [what, dismissal] of [
+    ["sent off (football.card, red)", { type: "football.card", payload: { by: H, person: homeKeeper, color: "red" } }],
+    ["sin-binned (football.sinbin.start)", { type: "football.sinbin.start", payload: { by: H, person: homeKeeper, minutes: 10 } }],
+  ] as const) {
+    it(`CARRIED LIMITATION: a keeper ${what} whose replacement's position is recorded is still the keeper this fold charges`, () => {
+      const events = [
+        start,
+        makeEnvelope(1, dismissal),
+        makeEnvelope(2, { type: "core.lineup.position", payload: { side: H, personId: "H-p2", positionKey: "GK" } }),
+        goalEv(3, A),
+      ];
+      // Premise: the match fold takes all of it as a WRITE, so this is a ledger the product holds.
+      foldMatchWithStoppage(football, cfgOf({}), lineups, events, { strictFromSeq: 0 });
+      const rows = aggregatePlayerStats(events, model, lineups);
+      expect(rows.find((r) => r.personId === homeKeeper)?.stats.goals_conceded, "charged to the dismissed keeper").toBe(1);
+      expect(rows.find((r) => r.personId === "H-p2")?.stats.goals_conceded, "not to the man now in goal").toBeUndefined();
+    });
+  }
+
   // W2e T33a (T32 fix round 2, M2): this fold is a REPLAY, so a lineup event the pitch refuses falls back to the kernel's own
   // squads (`judgeLineupEvent(..., strict = false)`) - the ledger was accepted when it was written, before the pitch was
   // consulted, and it must not lose a recorded change. The strict write path refuses the same event.
