@@ -88,6 +88,9 @@ import type { EventEnvelope } from "@seazn/engine/core";
 // exactly what the engine's own filter already is, so the mirror is DELETED
 // and the rule imported. Same reasoning `nextBattingSide` was granted on.
 import { activeInnings, eligibleBowlers, eligibleIncomingBatters, nextBattingSide, reviewsRemaining, soBattingSideAt, soEligibleBatters, suggestedIncomingBatter } from "@seazn/engine/sports/cricket";
+// Pad wave P2: every closed rule set this skin offers (dismissal modes, extras, who is credited, the free hit, toss/retire/
+// review/close options, the penalty and wide runs, balls per over) is the engine's own declaration, read here and never copied.
+import { cricketPadRules } from "@seazn/engine/pad";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
 import {
@@ -109,46 +112,12 @@ import {
 } from "../types";
 
 // ---------------------------------------------------------------------------
-// Closed vocabularies (mirrors ../../skins/cricket-skin.tsx's own — NOT
-// imported from it, that file is v2 surface this wave replaces, not a
-// dependency; see this file's own header). Scouted facts, not re-derived:
-// WICKET_KINDS(10)/EXTRA_KINDS(5)/FIELDER_ELIGIBLE(3)/VARIABLE_OUT(1)/
-// BOWLER_CREDITED(5) match CRICKET_WICKET/CRICKET_EXTRAS exactly
-// (packages/engine/src/sports/cricket/cricket.ts:144-174).
+// Closed vocabularies: the engine's (`cricketPadRules`, @seazn/engine/pad).
+// Pad wave P2 deleted this file's copies of the dismissal modes, the extras,
+// the fielder-credited / bowler-credited / free-hit / either-batter sets and
+// the innings-close reasons; `no-rule-literals.test.ts` stops them coming
+// back. The skin keeps only presentation: labels, tile weight, dock presets.
 // ---------------------------------------------------------------------------
-
-export type WicketKind =
-  | "bowled" | "caught" | "lbw" | "runout" | "stumped"
-  | "hitwicket" | "retired" | "obstructed" | "timedout" | "hitballtwice";
-export type ExtraKind = "wide" | "noball" | "bye" | "legbye" | "penalty";
-
-export const WICKET_KINDS: readonly WicketKind[] = [
-  "bowled", "caught", "lbw", "runout", "stumped",
-  "hitwicket", "retired", "obstructed", "timedout", "hitballtwice",
-];
-export const EXTRA_KINDS: readonly ExtraKind[] = ["wide", "noball", "bye", "legbye", "penalty"];
-
-/** Dismissals where naming a fielder is meaningful. */
-export const FIELDER_ELIGIBLE_KINDS = new Set<WicketKind>(["caught", "runout", "stumped"]);
-/** The one kind where the batter dismissed genuinely varies — every other
- *  kind always dismisses the striker, so asking "who's out" there would be
- *  the wasted tap D-15 exists to remove. */
-export const VARIABLE_OUT_KINDS = new Set<WicketKind>(["runout"]);
-/**
- * R2b-over (review finding — the fourth instance of "the pad must never
- * offer what the engine will refuse", `_INDEX.md`): dismissals still legal
- * while a free hit is pending — the engine's own restriction, verbatim
- * (`cricket.ts:1275-1276`): `if (fine.freeHitPending && wicket.kind !==
- * "runout" && wicket.kind !== "obstructed") invalid(...)`. Every OTHER
- * WICKET_KINDS member is refused outright in that state. `wicketSheet`
- * (below) is the only reader — narrows the "kind" step's `options` to this
- * set whenever `freeHitPending(view.events, ...)` (the SAME fold
- * `buildScorebug`'s indicator and `cricketBallDetail`'s activity note
- * already use) is true, so the sheet can never offer a tap the server would
- * bounce.
- */
-export const FREE_HIT_WICKET_KINDS = new Set<WicketKind>(["runout", "obstructed"]);
-const BOWLER_CREDITED_KINDS = new Set<WicketKind>(["bowled", "caught", "lbw", "stumped", "hitwicket"]);
 
 const BALL_EVENT_TYPES = new Set(["cricket.ball", "cricket.superover.ball"]);
 
@@ -284,11 +253,12 @@ export function cricketHasNoInnings(rawState: unknown): boolean {
   return (asState(rawState).innings ?? []).length === 0;
 }
 
-/** `cfg.ballsPerOver`, falling back to 6 — the `hundred` variant sets 5
- *  (cricket.ts:2811); this must never be assumed. */
+/** `cfg.ballsPerOver` read through the engine's own schema
+ *  (`cricketPadRules.ballsPerOver`): an absent key is the schema default, a
+ *  value the schema refuses throws. The `hundred` variant sets 5; this must
+ *  never be assumed. */
 export function ballsPerOverOf(cfg: unknown): number {
-  const bpo = asCfg(cfg).ballsPerOver;
-  return typeof bpo === "number" && bpo > 0 ? bpo : 6;
+  return cricketPadRules.ballsPerOver(cfg);
 }
 
 /** Decimalised overs notation, mirrored from the engine's own convention:
@@ -784,11 +754,14 @@ function basePayload(state: CricketStateShape, cfg: CricketCfgShape, overrides: 
 }
 
 function runPayload(base: Record<string, unknown>, runs: number): Record<string, unknown> {
-  const boundary = runs === 4 ? 4 : runs === 6 ? 6 : undefined;
+  const boundary = cricketPadRules.boundaryValues.includes(runs) ? runs : undefined;
   return { ...base, runs: { bat: runs }, ...(boundary !== undefined ? { boundary } : {}) };
 }
 
-function extraPayload(base: Record<string, unknown>, kind: ExtraKind, runs = 1): Record<string, unknown> {
+/** `runs` defaults to the single a no ball, a bye or a leg bye opens with
+ *  (the dock raises it). The wide and the penalty tiles pass the engine's own
+ *  runs (`cricketPadRules.wideDefaultRuns` / `.penaltyRuns`). */
+function extraPayload(base: Record<string, unknown>, kind: string, runs = 1): Record<string, unknown> {
   return { ...base, runs: { bat: 0, extras: { kind, runs } } };
 }
 
@@ -808,8 +781,8 @@ function vocabKey(field: string, value: string): MessageKey | null {
 }
 
 /** Throws only for a value genuinely absent from ENUM_VOCAB — unreachable
- *  through this file's own closed `WICKET_KINDS`/`EXTRA_KINDS`/literal enum
- *  call sites below, kept total (never a silently-wrong fallback string). */
+ *  through the engine's closed enums (`cricketPadRules`) this file's call
+ *  sites below read, kept total (never a silently-wrong fallback string). */
 function requiredVocabKey(field: string, value: string): MessageKey {
   const key = vocabKey(field, value);
   if (key === null) throw new Error(`cricket skin: no vocab key for ${field}="${value}"`);
@@ -1320,7 +1293,10 @@ export function buildScorebug(view: PadHostView, t: TFn): ScorebugSpec {
 
 const RUN_VALUES = [0, 1, 2, 3, 4, 6] as const;
 const PRIMARY_RUNS = new Set<number>([0, 1]);
-const MINOR_EXTRA_KINDS: readonly ExtraKind[] = ["noball", "bye", "legbye", "penalty"];
+/** Presentation: which extras render as `minor` tiles (the wide is a
+ *  `standard` tile of its own). Every one is a `cricketPadRules.extraKinds`
+ *  member (pinned by pad-rules-cricket.test.ts). */
+const MINOR_EXTRA_KINDS: readonly string[] = ["noball", "bye", "legbye", "penalty"];
 
 /**
  * R2b (owner sign-off finding, single-line label fix): the over-summary
@@ -1443,7 +1419,7 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
       label: requiredVocabKey("kind", "wide"),
       kind: "standard",
       phases: ["live"],
-      action: { event: { type, payload: extraPayload(base, "wide") } },
+      action: { event: { type, payload: extraPayload(base, "wide", cricketPadRules.wideDefaultRuns) } },
     }));
 
     tiles.push(ballTile({
@@ -1456,11 +1432,12 @@ export function buildTiles(view: PadHostView, t: TFn = (key) => key): TileSpec[]
     }));
 
     for (const kind of MINOR_EXTRA_KINDS) {
-      // R2b task 4 (`_INDEX.md`, owner ruling): penalty runs default to 5
-      // (Law 41), not the ordinary single every OTHER minor extra opens
-      // with — a real, deliberate exception, not an oversight. The other
-      // three kinds (noball/bye/legbye) keep `extraPayload`'s own default.
-      const runs = kind === "penalty" ? 5 : undefined;
+      // R2b task 4 (`_INDEX.md`, owner ruling): penalty runs default to one
+      // Law 41 award (`cricketPadRules.penaltyRuns`, five), not the ordinary
+      // single every OTHER minor extra opens with — a real, deliberate
+      // exception, not an oversight. The other three kinds (noball/bye/
+      // legbye) keep `extraPayload`'s own default.
+      const runs = kind === "penalty" ? cricketPadRules.penaltyRuns : undefined;
       tiles.push(ballTile({
         id: `extra-${kind}`,
         label: requiredVocabKey("kind", kind),
@@ -1666,7 +1643,7 @@ const EXTRA_RUN_VALUES = [2, 3, 4] as const;
  *  own convention for the plain run4/run6 tiles exactly: the same two
  *  literal values, the same "boundary present only for 4 or 6" shape. */
 function batRunChip(n: (typeof BAT_RUN_VALUES)[number]): DockChip {
-  const boundary = n === 4 ? 4 : n === 6 ? 6 : undefined;
+  const boundary = cricketPadRules.boundaryValues.includes(n) ? n : undefined;
   return {
     id: `batRun${n}`,
     label: `pad.cricket.dock.batRun${n}`,
@@ -2145,10 +2122,20 @@ export function buildContext(view: PadHostView, t: TFn = (key) => key): ContextS
 // scorebug/dock's pre-resolved fields.
 // ---------------------------------------------------------------------------
 
-const CLOSE_REASONS: readonly (readonly [string, string])[] = [
-  ["all_out", "allOut"], ["overs_complete", "oversComplete"], ["target_reached", "targetReached"],
-  ["time", "time"], ["weather", "weather"], ["forfeited", "forfeited"], ["other", "other"],
-];
+/** Presentation: each innings-close reason's dictionary suffix. The reasons
+ *  themselves, and their order, are the engine's
+ *  (`cricketPadRules.inningsCloseReasons`); a reason with no suffix here
+ *  throws rather than render a raw key. */
+const CLOSE_REASON_LABEL: Readonly<Record<string, string>> = {
+  all_out: "allOut", overs_complete: "oversComplete", target_reached: "targetReached",
+  time: "time", weather: "weather", forfeited: "forfeited", other: "other",
+};
+
+function closeReasonLabel(reason: string): string {
+  const suffix = CLOSE_REASON_LABEL[reason];
+  if (suffix === undefined) throw new Error(`cricket skin: no label for innings-close reason "${reason}"`);
+  return `pad.cricket.sheet.inningsClose.reason.${suffix}`;
+}
 
 function incomingPersonStep(
   state: CricketStateShape,
@@ -2225,11 +2212,14 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
   // buildScorebug uses, so this gate can never disagree with what the
   // scorer is already shown on the scorebug strip.
   const freeHit = freeHitPending(view.events, cfg.ballsPerInnings !== null);
-  // FREE_HIT_WICKET_KINDS' own doc (above) has the engine restriction this
-  // mirrors (cricket.ts:1275-1276). Filtering WICKET_KINDS (rather than
-  // hardcoding the pair here too) means a future change to either closed
-  // set only has one place to update.
-  const kindOptions = (freeHit ? WICKET_KINDS.filter((k) => FREE_HIT_WICKET_KINDS.has(k)) : WICKET_KINDS).map((k) => ({
+  // R2b-over (review finding — the fourth instance of "the pad must never
+  // offer what the engine will refuse", `_INDEX.md`): while a free hit is
+  // pending the fold refuses every mode outside its free-hit set
+  // (`cricketPadRules.freeHitDismissalKinds`, the engine's
+  // FREE_HIT_DISMISSAL_KINDS), so the kind step narrows to it. Filtering the
+  // engine's mode list keeps its order.
+  const { wicketKinds, freeHitDismissalKinds, variableOutKinds, fielderCreditedKinds, bowlerCreditedKinds } = cricketPadRules;
+  const kindOptions = (freeHit ? wicketKinds.filter((k) => freeHitDismissalKinds.includes(k)) : wicketKinds).map((k) => ({
     id: k,
     label: requiredVocabKey("kind", k),
   }));
@@ -2256,7 +2246,10 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       pool: "onfield",
       side: people.battingSide,
       candidates: outCandidates,
-      when: (answers) => VARIABLE_OUT_KINDS.has(answers.kind as WicketKind),
+      // Either batter can be out run out (Law 38.1) or obstructing the field
+      // (Law 37.1.1): ask. Every other mode is the striker's, and asking would
+      // be the wasted tap D-15 exists to remove.
+      when: (answers) => variableOutKinds.includes(answers.kind ?? ""),
     },
     {
       id: "fielder",
@@ -2264,7 +2257,9 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
       title: "pad.cricket.sheet.wicket.fielder.title",
       pool: "onfield",
       side: people.bowlingSide,
-      when: (answers) => FIELDER_ELIGIBLE_KINDS.has(answers.kind as WicketKind),
+      // The modes the fold credits a named fielder for (FIELDER_CREDIT_COLUMN;
+      // obstructed is the house rulebook's, P2 Q1).
+      when: (answers) => fielderCreditedKinds.includes(answers.kind ?? ""),
     },
   ];
   const incoming = incomingPersonStep(state, cfg, people, "pad.cricket.sheet.wicket.incoming.title");
@@ -2274,9 +2269,9 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
     event: ballEventType(state),
     steps,
     buildPayload: (answers) => {
-      const kind = answers.kind as WicketKind;
-      const out = VARIABLE_OUT_KINDS.has(kind) ? answers.out : people.striker;
-      const fielder = FIELDER_ELIGIBLE_KINDS.has(kind) ? answers.fielder : undefined;
+      const kind = answers.kind ?? "";
+      const out = variableOutKinds.includes(kind) ? answers.out : people.striker;
+      const fielder = fielderCreditedKinds.includes(kind) ? answers.fielder : undefined;
       return {
         ...base,
         runs: { bat: 0 },
@@ -2285,7 +2280,7 @@ function wicketSheet(view: PadHostView): GuidedSheetSpec {
           out,
           ...(fielder ? { fielder } : {}),
           ...(answers.incoming ? { incoming: answers.incoming } : {}),
-          bowlerCredited: BOWLER_CREDITED_KINDS.has(kind),
+          bowlerCredited: bowlerCreditedKinds.includes(kind),
         },
       };
     },
@@ -2313,10 +2308,7 @@ function tossSheet(view: PadHostView): GuidedSheetSpec {
         id: "elected",
         kind: "choice",
         title: "pad.cricket.sheet.toss.elected.title",
-        options: [
-          { id: "bat", label: requiredVocabKey("elected", "bat") },
-          { id: "bowl", label: requiredVocabKey("elected", "bowl") },
-        ],
+        options: cricketPadRules.tossElections.map((id) => ({ id, label: requiredVocabKey("elected", id) })),
       },
     ],
     buildPayload: (answers) => ({ wonBy: answers.wonBy, elected: answers.elected }),
@@ -2376,11 +2368,7 @@ function retireSheet(view: PadHostView): GuidedSheetSpec {
         id: "reason",
         kind: "choice",
         title: "pad.cricket.sheet.retire.reason.title",
-        options: [
-          { id: "hurt", label: "pad.cricket.sheet.retire.reason.hurt" },
-          { id: "out", label: "pad.cricket.sheet.retire.reason.out" },
-          { id: "other", label: "pad.cricket.sheet.retire.reason.other" },
-        ],
+        options: cricketPadRules.retireReasons.map((id) => ({ id, label: `pad.cricket.sheet.retire.reason.${id}` })),
       },
       ...(incoming ? [incoming] : []),
     ],
@@ -2447,20 +2435,13 @@ function reviewSheet(view: PadHostView, t: TFn): GuidedSheetSpec {
         id: "kind",
         kind: "choice",
         title: "pad.cricket.sheet.review.kind.title",
-        options: [
-          { id: "player", label: requiredVocabKey("kind", "player") },
-          { id: "umpire", label: requiredVocabKey("kind", "umpire") },
-        ],
+        options: cricketPadRules.reviewKinds.map((id) => ({ id, label: requiredVocabKey("kind", id) })),
       },
       {
         id: "outcome",
         kind: "choice",
         title: "pad.cricket.sheet.review.outcome.title",
-        options: [
-          { id: "upheld", label: requiredVocabKey("outcome", "upheld") },
-          { id: "struck_down", label: requiredVocabKey("outcome", "struck_down") },
-          { id: "umpires_call", label: requiredVocabKey("outcome", "umpires_call") },
-        ],
+        options: cricketPadRules.reviewOutcomes.map((id) => ({ id, label: requiredVocabKey("outcome", id) })),
       },
       {
         id: "by",
@@ -2490,7 +2471,7 @@ function inningsCloseSheet(): GuidedSheetSpec {
         id: "reason",
         kind: "choice",
         title: "pad.cricket.sheet.inningsClose.reason.title",
-        options: CLOSE_REASONS.map(([value, suffix]) => ({ id: value, label: `pad.cricket.sheet.inningsClose.reason.${suffix}` })),
+        options: cricketPadRules.inningsCloseReasons.map((value) => ({ id: value, label: closeReasonLabel(value) })),
       },
     ],
     buildPayload: (answers) => ({ reason: answers.reason }),

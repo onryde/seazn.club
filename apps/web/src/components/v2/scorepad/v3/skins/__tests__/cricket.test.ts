@@ -7,15 +7,12 @@ import { describe, expect, it } from "vitest";
 import type { EventEnvelope, SquadState } from "@seazn/engine/core";
 import { initSquads } from "@seazn/engine/core";
 import { cricket } from "@seazn/engine/sports/cricket";
+import { cricketPadRules } from "@seazn/engine/pad";
 import { ballSeq, cricketEnvelopes, foldCricket, tiedWithSuperOver, type CricketEventSpec } from "../../__tests__/_cricket-fold";
 import { answerStep, backStep, currentStep, initialSheetState } from "../../guided-sheet";
 import { assertDisabledTilesExplained } from "../../tile-grid";
 import type { GuidedSheetSpec, PadHostView, SkinDefV3 } from "../../types";
 import {
-  EXTRA_KINDS,
-  FIELDER_ELIGIBLE_KINDS,
-  VARIABLE_OUT_KINDS,
-  WICKET_KINDS,
   ballEventType,
   ballsPerOverOf,
   bowlerBlockReason,
@@ -146,9 +143,9 @@ describe("ballsPerOverOf", () => {
   it("reads the hundred's 5-ball over from cfg — never assumes 6", () => {
     expect(ballsPerOverOf({ ballsPerOver: 5 })).toBe(5);
   });
-  it("ignores a non-positive value and falls back to 6", () => {
-    expect(ballsPerOverOf({ ballsPerOver: 0 })).toBe(6);
-    expect(ballsPerOverOf({ ballsPerOver: -1 })).toBe(6);
+  it("refuses a value the engine's cfg schema refuses, never inventing a fallback (pad wave P2: the schema reads it)", () => {
+    expect(() => ballsPerOverOf({ ballsPerOver: 0 })).toThrow();
+    expect(() => ballsPerOverOf({ ballsPerOver: -1 })).toThrow();
   });
 });
 
@@ -2601,7 +2598,7 @@ describe("buildSheets — wicket flow (D-15)", () => {
   it("every WICKET_KINDS member is offered as a kind option, each with a real label", () => {
     const spec = wicketSpec();
     const options = spec.steps[0]!.kind === "choice" ? spec.steps[0]!.options : [];
-    expect(options.map((o) => o.id).sort()).toEqual([...WICKET_KINDS].sort());
+    expect(options.map((o) => o.id).sort()).toEqual([...cricketPadRules.wicketKinds].sort());
     expect(options.every((o) => typeof o.label === "string" && o.label.length > 0)).toBe(true);
   });
 
@@ -2702,7 +2699,7 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
   it("no free hit pending: all ten kinds still offered and no hint — without this, the fix could over-restrict permanently and still pass", () => {
     const spec = buildSheets(view(), t).wicket; // view()'s default events: [] — nothing pending
     const kind = kindStepOf(spec);
-    expect(kind.options.map((o) => o.id).sort()).toEqual([...WICKET_KINDS].sort());
+    expect(kind.options.map((o) => o.id).sort()).toEqual([...cricketPadRules.wicketKinds].sort());
     expect(kind.hintKey).toBeUndefined();
   });
 
@@ -2733,14 +2730,21 @@ describe("buildSheets — wicket kind gated by free hit (R2b-over)", () => {
       wicket: { kind: "runout", out: "h2", fielder: "a3", bowlerCredited: false, incoming: "h3" },
     });
 
+    // Pad wave P2 (Q1, Q1b owner rulings): obstructing the field asks who is out (either batter, Law 37.1.1) and the fielder
+    // the house rulebook credits a run out, exactly as run out does.
     const afterObstructed = answerStep(spec, initialSheetState(), "obstructed");
     if (afterObstructed.done) throw new Error("expected not done");
-    const obstructedFinal = answerStep(spec, afterObstructed.state, "h3");
+    expect(currentStep(spec, afterObstructed.state)!.id).toBe("out");
+    const afterObstructedOut = answerStep(spec, afterObstructed.state, "h2");
+    if (afterObstructedOut.done) throw new Error("expected not done");
+    expect(currentStep(spec, afterObstructedOut.state)!.id).toBe("fielder");
+    const afterObstructedFielder = answerStep(spec, afterObstructedOut.state, "a3");
+    if (afterObstructedFielder.done) throw new Error("expected not done");
+    const obstructedFinal = answerStep(spec, afterObstructedFielder.state, "h3");
     if (!obstructedFinal.done) throw new Error("expected done");
     expect(obstructedFinal.event.payload).toMatchObject({
-      wicket: { kind: "obstructed", out: "h1", bowlerCredited: false, incoming: "h3" },
+      wicket: { kind: "obstructed", out: "h2", fielder: "a3", bowlerCredited: false, incoming: "h3" },
     });
-    expect((obstructedFinal.event.payload as { wicket: { fielder?: string } }).wicket.fielder).toBeUndefined();
   });
 });
 
@@ -3036,22 +3040,10 @@ describe("cricketSkinV3", () => {
   });
 });
 
-// Sanity: EXTRA_KINDS/WICKET_KINDS/FIELDER_ELIGIBLE_KINDS/VARIABLE_OUT_KINDS
-// exports match the scouted facts the brief pinned (do-not-re-derive list).
-describe("closed vocabularies", () => {
-  it("WICKET_KINDS has all 10 members", () => {
-    expect(WICKET_KINDS).toHaveLength(10);
-  });
-  it("EXTRA_KINDS has all 5 members", () => {
-    expect(EXTRA_KINDS).toHaveLength(5);
-  });
-  it("FIELDER_ELIGIBLE_KINDS is exactly caught/runout/stumped", () => {
-    expect([...FIELDER_ELIGIBLE_KINDS].sort()).toEqual(["caught", "runout", "stumped"]);
-  });
-  it("VARIABLE_OUT_KINDS is exactly runout", () => {
-    expect([...VARIABLE_OUT_KINDS]).toEqual(["runout"]);
-  });
-});
+// The closed vocabularies (dismissal modes, extras, the fielder / either-batter
+// / free-hit / bowler-credited sets) are the engine's since pad wave P2:
+// `packages/engine/src/pad/cricket.test.ts` drives them through the fold, and
+// `pad-rules-cricket.test.ts` drives this skin's builders against them.
 
 // ---------------------------------------------------------------------------
 // R2c / C1 — the bowler chip's own candidate list.
