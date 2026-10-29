@@ -5,10 +5,10 @@
 // and settings' grid) so the stage format row (`stage-rule-fields.tsx`) renders the same markup, the same D9 synthetic
 // option for a saved value the picker cannot offer, and the same inherited placeholder: two editors that cannot drift.
 //
-// Field labels and options are sport-rules vocabulary, kept canonical English like sport and format names; only the
-// picker chrome (Default / On / Off) localizes - EXCEPT a field that names a dictionary key (`labelKey`, `helpKey`, an
-// option's `labelKey`): W2e Task 28 (owner D5) asks the five ruling-157 fields for all four locales, so those are drawn
-// from the dictionary and every other field keeps its English `label`. The English text is the fallback either way.
+// Every field's label, help and option text is drawn from the dictionary in all four locales (W2e Task 33a: `labelKey` is
+// REQUIRED on a `RuleField`, `helpKey` is on any field that has a help, an option's `labelKey` on any option that names one),
+// next to the picker chrome (Default / On / Off). The table's English `label` / `help` / option `label` is the fallback of its
+// key, never what renders while the key resolves (`field-copy.test.ts` pins that the two say the same).
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { RuleField } from "@/lib/match-rules";
 import { optionText, ruleOptionText } from "@/lib/match-rules";
