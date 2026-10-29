@@ -5019,11 +5019,68 @@ for (const sport of RETIREMENT_SPORTS) {
     await expect(swap, `${sport.sportKey}: the retirement picker must open`).toBeVisible({ timeout: 20_000 });
     await expect(swap.locator("[data-candidate-id]"), "one row per starter on the field").toHaveCount(home.length, { timeout: 20_000 });
     for (const p of home) {
-      await assertTouchFloor(swap.locator(`[data-candidate-id="${fx.personIds[p.fullName]!}"]`), `${sport.sportKey}: picker row ${p.positionKey}`);
+      // Hit-tested at both edges, not box-measured (review M2): a row is a tap target, and a painted 44 that a finger cannot
+      // land on is exactly what `assertTapFloor` exists to catch.
+      await assertTapFloor(swap.locator(`[data-candidate-id="${fx.personIds[p.fullName]!}"]`), `${sport.sportKey}: picker row ${p.positionKey}`);
     }
     await expectNoHorizontalScroll(page);
   });
 }
+
+// W2e Task 31 (D12, VB-SE-1) -- THE FIELD-SIX QUESTION, AT EVERY WIDTH (review M3).
+//
+// An expulsion or a disqualification asks "Can <team> still field six players?" BEFORE anything is written
+// (`scorepad-v3-ending-sanction.spec.ts` drives both answers end to end at one width). This is its width gate: the question is
+// on screen, both answers clear the 44px floor the way a finger meets them (`assertTapFloor`), nothing in the sheet is
+// clipped, and the page does not scroll sideways. The sanction tile is on the board, not in a fold, but the console around it
+// folds (AGENTS.md failure class 22), so EVERY fold instance is opened first (`openEveryPhoneFold`: attached, never visible;
+// gated on the toggle being visible, never on a width). Not answered: an answer commits and starts the hold.
+// The level is the engine's own first prompt level (`sanctionEnding.promptLevels`), its label the pad's word for it.
+const FIELD_SIX_LEVEL = builtinModules.find((m) => m.key === "volleyball")!.sanctionEnding!.promptLevels[0]!;
+
+test("volleyball v3 pad: the field-six question and both answers hold the 44px floor with every fold open, no horizontal scroll", async ({
+  page,
+  request,
+}) => {
+  test.setTimeout(120_000);
+  const roster = (side: string) =>
+    VB_COURT.map((positionKey, i) => ({ fullName: `Mobile F6 ${side}${i + 1} ${TAG}-${projectTag()}`, positionKey }));
+  const fx = await seedRosteredFixture(request, {
+    label: `Mobile Field-six ${TAG}-${projectTag()}`,
+    sportKey: "volleyball",
+    variantKey: "indoor",
+    entrantKind: "team",
+    home: roster("H"),
+    away: roster("A"),
+    emitCoreStart: true,
+  });
+
+  await page.goto(await fixturePath(page.request, fx.fixtureId), { waitUntil: "load" });
+  await dismissCookieBanner(page);
+  await assertV3PadHoldsAtThisWidth(page, "volleyball pad at rest", 4);
+  const folds = await openEveryPhoneFold(page);
+  expect(folds, "at least one fold instance existed to open (a console with none would make this step vacuous)").toBeGreaterThan(0);
+
+  await assertTapFloor(padTile(page, "sanction-home"), "volleyball: home sanction tile, every fold open");
+  await padTile(page, "sanction-home").click();
+  const sheet = v3Sheet(page);
+  await expect(sheet, "the sanction sheet must open").toBeVisible({ timeout: 20_000 });
+  const levelLabel = uiEn[`sanction.${FIELD_SIX_LEVEL}`];
+  expect(levelLabel, `the dictionary names the ${FIELD_SIX_LEVEL} level`).toBeTruthy();
+  await sheet.getByRole("button", { name: levelLabel!, exact: true }).click();
+  // WHO: the first on-field player (a team sheet is declared, so the person step is asked before the question).
+  await sheet.locator("[data-candidate-id]").first().click();
+
+  await expect(sheet, "the question is asked").toContainText(/still field six players\?/i);
+  await assertTapFloor(sheet.locator('[data-choice-option-id="yes"]'), "field-six: Yes");
+  await assertTapFloor(sheet.locator('[data-choice-option-id="no"]'), "field-six: No");
+  const o = await overflowingIn(page, '[data-role="v3-sheet"]', "*", "the field-six sheet is missing");
+  expect(o.clipped, `nothing in the field-six sheet is clipped at ${page.viewportSize()!.width}`).toEqual([]);
+  await expectNoHorizontalScroll(page);
+  // Asking wrote nothing.
+  const rows = await apiJson<{ type: string }[]>(request, `/api/v1/fixtures/${fx.fixtureId}/events?since_seq=0`);
+  expect((rows.data ?? []).map((e) => e.type), "the question is asked before anything is written").toEqual(["core.start"]);
+});
 
 test("carrom v3 pad: the two board tiles and the board sheet's winner/coins steps hold the 44px floor, no horizontal scroll", async ({
   page,
