@@ -52,7 +52,7 @@ import { youtubeWatchUrl } from "@/lib/youtube";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { setFixtureStreamUrlIfEmpty } from "@/server/usecases/fixtures";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts } from "./end-rule";
-import { YouTubeError, type BroadcastLifeInfo, type YouTubePort } from "./port";
+import { YouTubeError, isLiveBlockedRefusal, type BroadcastLifeInfo, type YouTubePort } from "./port";
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken } from "./token-store";
 
 export type YoutubeEndResult = { ended: number; neverLive: number; orphans: number; failed: number; deferred: number };
@@ -67,12 +67,24 @@ export type EndStepHooks = { afterClaim?: (broadcastId: string) => Promise<void>
 const ORPHAN_AFTER_MINUTES = 10;
 /** How long a claim holds its row against another firing. A call is bounded by google.ts's 10 s request timeout × five calls, so
  *  two minutes outlasts a healthy pass and a crashed one is retried on the next firing after it. */
-const CLAIM_LEASE_MINUTES = 2;
+export const CLAIM_LEASE_MINUTES = 2;
 /** The 5th failure of a row: a failed `complete` re-reads the life (see the header). */
 const COMPLETE_FAILURES_BEFORE_REREAD = 5;
 
-/** Open states: a broadcast the step may still have to end. `complete` and `failed` are finished. */
-const OPEN_STATES = ["created", "bound", "reserved", "live", "ending"] as const;
+/** Open states: a broadcast the step may still have to end. `complete` and `failed` are finished. Exported for the daily pass (daily.ts),
+ *  which settles the rows this step can never finish. */
+export const OPEN_STATES = ["created", "bound", "reserved", "live", "ending"] as const;
+
+/** P6: the retry backoff caps here, in minutes. Exported with `endBackoffMinutes` so daily.ts derives its stuck-row bound from the
+ *  backoff the step really applies, not from a number of its own. */
+export const YOUTUBE_END_BACKOFF_CAP_MINUTES = 60;
+/** The exponent is clamped so the power cannot grow without bound (2^10 is far past the cap). */
+const BACKOFF_EXPONENT_LIMIT = 10;
+/** Minutes to the next try after a row's `failures`-th failure (1-based): 1, 2, 4, … up to the cap. `recordFailure`'s SQL takes the same
+ *  two constants, so this function and the stored `next_attempt_at` cannot disagree (daily.test.ts reads the stored one back). */
+export function endBackoffMinutes(failures: number): number {
+  return Math.min(2 ** Math.min(failures - 1, BACKOFF_EXPONENT_LIMIT), YOUTUBE_END_BACKOFF_CAP_MINUTES);
+}
 
 const MINUTE_MS = 60_000;
 const plusMinutes = (at: Date, n: number): Date => new Date(at.getTime() + n * MINUTE_MS);
@@ -107,8 +119,9 @@ type Tag = "ended" | "neverLive" | "orphan" | "failed" | "reconnect" | "deferred
 
 /** The pass's slice ran out between two YouTube calls of one row. Not a failure and not a port refusal: the row keeps its claim and its
  *  lease and the next firing that finds the lease lapsed carries on from the beginning of its calls (every one of them is idempotent
- *  against what YouTube already holds: a complete broadcast reads `complete`, a deleted one `absent`). */
-class BudgetSpent extends Error {
+ *  against what YouTube already holds: a complete broadcast reads `complete`, a deleted one `absent`). The daily pass (daily.ts) gates
+ *  its own calls with the same error, and counts what it cut as `deferred`. */
+export class BudgetSpent extends Error {
   constructor() {
     super("budget_spent");
     this.name = "BudgetSpent";
@@ -338,6 +351,7 @@ async function finalize(row: Claimed, outcome: Outcome, now: Date): Promise<bool
 
 /** The code a failure is stored under: a port refusal's own code, or one of ours. Never Google's reason, never a message. */
 function codeOf(err: unknown): string {
+  if (isLiveBlockedRefusal(err)) return "youtube_live_blocked";   // "not authorized to <live>": the channel's, not a dead grant (T17 carry g)
   if (err instanceof YouTubeError) return err.code;
   if (err instanceof EndStepCodeError) return err.code;
   if (err instanceof EndRuleInvariantError) return CODE_INVARIANT;
@@ -351,7 +365,8 @@ async function recordFailure(orgId: string, id: string, code: string, now: Date)
   await sql`
     update youtube_broadcasts
        set attempts = attempts + 1,
-           next_attempt_at = ${now}::timestamptz + (least(power(2, least(attempts, 10)), 60)::int * interval '1 minute'),
+           next_attempt_at = ${now}::timestamptz
+             + (least(power(2, least(attempts, ${BACKOFF_EXPONENT_LIMIT}::int)), ${YOUTUBE_END_BACKOFF_CAP_MINUTES}::int)::int * interval '1 minute'),
            last_error_code = ${code}
      where id = ${id} and org_id = ${orgId} and state in ${sql([...OPEN_STATES])}`;
 }

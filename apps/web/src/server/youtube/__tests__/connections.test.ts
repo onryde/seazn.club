@@ -418,16 +418,18 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — refusals leave the pending
 
 // =====================================================================================================================================
 describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a reconnect", () => {
-  async function openBroadcast(o: Org, connectionId: string, fixtureId: string, state: string, next: Date | null) {
+  async function openBroadcast(o: Org, connectionId: string, fixtureId: string, state: string, next: Date | null, attempts = 0) {
     const done = state === "complete";
     const [row] = await sql<{ id: string }[]>`
-      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, next_attempt_at, completed_at, yt_broadcast_id)
-      values (${o.orgId}, ${connectionId}, ${fixtureId}, 'Match', 'unlisted', ${state}, ${next}, ${done ? new Date() : null}, ${done ? `vid-${randomUUID().slice(0, 8)}` : null})
+      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state, next_attempt_at, attempts, completed_at, yt_broadcast_id)
+      values (${o.orgId}, ${connectionId}, ${fixtureId}, 'Match', 'unlisted', ${state}, ${next}, ${attempts}, ${done ? new Date() : null}, ${done ? `vid-${randomUUID().slice(0, 8)}` : null})
       returning id`;
     return row!.id;
   }
   const nextOf = async (id: string): Promise<Date | null> =>
     (await sql<{ n: Date | null }[]>`select next_attempt_at as n from youtube_broadcasts where id = ${id}`)[0]!.n;
+  const attemptsOf = async (id: string): Promise<number> =>
+    (await sql<{ n: number }[]>`select attempts as n from youtube_broadcasts where id = ${id}`)[0]!.n;
 
   it("replaces the token and revives the connection (connected, status_since moved, error cleared), keeps the destination row and its id, records the new grant's Google account and scope, and consumes the pending grant", async () => {
     const o = await org();
@@ -461,26 +463,62 @@ describe.skipIf(!HAS_DB)("saveConnectionFromGrant — a reconnect", () => {
     expect((await connRow(first.connectionId)).google_sub).toBe("sub-next");
   });
 
-  it("clears the retry backoff of every OPEN broadcast of THIS connection (the 'ending' one among them) and nothing else: a complete one, another connection's, a broadcast with no backoff", async () => {
+  it("clears the retry backoff AND the failure count of every OPEN broadcast of THIS connection (the 'ending' one among them) and nothing else: a complete one, another connection's, a broadcast with no backoff", async () => {
     const o = await org();
     const { fixtureId } = await startedDivisionWithFixture(o.auth);
     const mine = await connect(o);
     const theirs = await connect(o);
     const later = new Date(Date.now() + 3_600_000);
-    const live = await openBroadcast(o, mine.connectionId, fixtureId, "live", later);
-    const ending = await openBroadcast(o, mine.connectionId, fixtureId, "ending", later);
-    const quiet = await openBroadcast(o, mine.connectionId, fixtureId, "failed", later);
-    const complete = await openBroadcast(o, mine.connectionId, fixtureId, "complete", later);
-    const notMine = await openBroadcast(o, theirs.connectionId, fixtureId, "ending", later);
+    const live = await openBroadcast(o, mine.connectionId, fixtureId, "live", later, 7);
+    const ending = await openBroadcast(o, mine.connectionId, fixtureId, "ending", later, 31);
+    const quiet = await openBroadcast(o, mine.connectionId, fixtureId, "failed", later, 5);
+    const complete = await openBroadcast(o, mine.connectionId, fixtureId, "complete", later, 3);
+    const notMine = await openBroadcast(o, theirs.connectionId, fixtureId, "ending", later, 9);
     const p = await grant(o, { channels: [mine.channel], connectionId: mine.connectionId });
     await saveConnectionFromGrant({ pendingId: p.id, channelId: mine.channel.id, userId: o.userId }, fake);
 
     expect(await nextOf(live), "live").toBeNull();
     expect(await nextOf(ending), "ending").toBeNull();
+    expect([await attemptsOf(live), await attemptsOf(ending)], "a fresh start: the failure count goes with the backoff").toEqual([0, 0]);
     // Not open / not this connection's: untouched (the positive pair of the two lines above).
     expect((await nextOf(quiet))?.getTime(), "failed is not open").toBe(later.getTime());
     expect((await nextOf(complete))?.getTime(), "complete is not open").toBe(later.getTime());
     expect((await nextOf(notMine))?.getTime(), "another connection's").toBe(later.getTime());
+    expect([await attemptsOf(quiet), await attemptsOf(complete), await attemptsOf(notMine)], "and their failure counts stand").toEqual([5, 3, 9]);
+  });
+
+  it("restarts the stuck-age clock (claimed_at) of every ENDING broadcast of THIS connection, with a backoff or without (an admission claim has none), so a reconnect is a fresh start for the age rule too; an open 'live' one, a failed one and another connection's keep theirs", async () => {
+    const o = await org();
+    const { fixtureId } = await startedDivisionWithFixture(o.auth);
+    const mine = await connect(o);
+    const theirs = await connect(o);
+    const later = new Date(Date.now() + 3_600_000);
+    const backedOff = await openBroadcast(o, mine.connectionId, fixtureId, "ending", later, 4);
+    const noBackoff = await openBroadcast(o, mine.connectionId, fixtureId, "ending", null, 0);   // the admission claim: ending, no lease
+    const failed = await openBroadcast(o, mine.connectionId, fixtureId, "failed", later, 5);
+    const notMine = await openBroadcast(o, theirs.connectionId, fixtureId, "ending", later, 9);
+    const live = await openBroadcast(o, mine.connectionId, fixtureId, "live", later, 2);   // matched by the reset, unclaimed: must stay so
+    // Three days of age on every row that can carry a claim: older than the stuck bound (about a day) by a wide margin.
+    await sql`update youtube_broadcasts set claimed_at = now() - interval '3 days' where id in ${sql([backedOff, noBackoff, failed, notMine])}`;
+    const claimedAt = async (id: string): Promise<Date | null> =>
+      (await sql<{ c: Date | null }[]>`select claimed_at as c from youtube_broadcasts where id = ${id}`)[0]!.c;
+    const old = [await claimedAt(failed), await claimedAt(notMine)];
+    expect(old.every((d) => d !== null), "premise: the seeded age is there").toBe(true);
+
+    const [{ t: before }] = await sql<{ t: Date }[]>`select now() as t`;
+    const p = await grant(o, { channels: [mine.channel], connectionId: mine.connectionId });
+    await saveConnectionFromGrant({ pendingId: p.id, channelId: mine.channel.id, userId: o.userId }, fake);
+    const [{ t: after }] = await sql<{ t: Date }[]>`select now() as t`;
+
+    for (const [name, id] of [["backed-off ending", backedOff], ["ending with no backoff", noBackoff]] as const) {
+      const c = await claimedAt(id);
+      expect(c, name).not.toBeNull();
+      expect(c!.getTime(), `${name}: restarted at the save`).toBeGreaterThanOrEqual(before.getTime());
+      expect(c!.getTime(), `${name}: restarted at the save`).toBeLessThanOrEqual(after.getTime());
+    }
+    expect(await claimedAt(live), "an open broadcast that was never claimed stays unclaimed").toBeNull();
+    expect((await claimedAt(failed))?.getTime(), "failed is not open").toBe(old[0]!.getTime());
+    expect((await claimedAt(notMine))?.getTime(), "another connection's").toBe(old[1]!.getTime());
   });
 
   it("a consent given on NEWER wording is written onto the connection (version, time, person); a reconnect on the SAME wording leaves the first consent alone", async () => {

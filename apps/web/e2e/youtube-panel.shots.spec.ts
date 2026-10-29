@@ -62,6 +62,10 @@ async function open(page: Page, url: string): Promise<void> {
 }
 async function shot(page: Page, name: string): Promise<void> {
   await declineCookies(page);
+  // A full-page capture of a page that is scrolled draws the STICKY nav at the scroll offset, so the first picture of a 320px page whose
+  // button Playwright had scrolled to showed a blank band above the nav (60-127px) and the back link above it. The page was never
+  // broken (`expectNavPinned` proves it each time); the capture was. Capture from the top, where the nav and the band coincide.
+  await page.evaluate(() => window.scrollTo(0, 0));
   const path = resolve(SHOTS, `${name}.png`);
   await page.screenshot({ path, fullPage: true });
   await test.info().attach(name, { path, contentType: "image/png" });
@@ -813,4 +817,203 @@ test("Fixture panel - after a match: the replay parts (one; two; one plus the cl
   }
   expect(casesWalked, "anti-vacuity: every shape was walked").toBe(cases.length);
   expect(rowsRead, "anti-vacuity: every link of every shape was read at every width").toBe(WIDTHS.length * cases.reduce((n, c) => n + c.hrefs.length, 0));
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
+// 3. Disconnect (T18): the confirm, the refusal while a match is using the channel, the disconnected state, and the
+//    restricted Streaming page an org keeps after it has lost Go live
+// ---------------------------------------------------------------------------------------------------------------------
+const connectionState = (connectionId: string) =>
+  withDb((sql) => sql<{ status: string; tokenGone: boolean; archived: number }[]>`
+    select c.status, c.refresh_token_enc is null as "tokenGone",
+           (select count(*)::int from org_stream_targets t where t.youtube_connection_id = c.id and t.archived_at is not null) as archived
+      from org_youtube_connections c where c.id = ${connectionId}`).then((rows) => rows[0]!);
+
+/** The nav is pinned to the top of the VIEWPORT whatever the page's scroll (it is `sticky top-0`), and nothing but a modal sits over it.
+ *  At 320 these pages scroll (Playwright scrolls the Disconnect button into view), which is what once looked like a blank band above
+ *  the nav in a full-page capture: this is the evidence that the app does not have one. */
+async function expectNavPinned(page: Page, where: string): Promise<void> {
+  const s = await page.evaluate(() => {
+    const h = document.querySelector("header");
+    const at = document.elementFromPoint(160, 10);
+    return { headerTop: h ? h.getBoundingClientRect().top : null, overHeader: !!at?.closest("header"), modal: !!document.querySelector('[role="alertdialog"]') };
+  });
+  expect(s.headerTop, `${where}: the nav is at the top of the viewport`).not.toBeNull();
+  expect(Math.abs(s.headerTop!), `${where}: the nav is at the top of the viewport (was ${s.headerTop})`).toBeLessThanOrEqual(0.5);
+  if (!s.modal) expect(s.overHeader, `${where}: the nav, not blank page, is what is at the top of the screen`).toBe(true);
+}
+
+/** Sideways room for a dialog: its box sits inside the viewport on both sides. */
+async function expectInsideViewport(loc: Locator, page: Page, where: string): Promise<void> {
+  const box = await loc.boundingBox();
+  const vw = page.viewportSize()!.width;
+  expect(box, `${where}: measurable`).not.toBeNull();
+  expect(box!.x, `${where}: starts inside the viewport`).toBeGreaterThanOrEqual(-0.5);
+  expect(box!.x + box!.width, `${where}: ends inside the viewport`).toBeLessThanOrEqual(vw + 0.5);
+}
+
+test("Disconnect - the confirm dialog, the refusal while a match is using the channel, and the disconnected state - at 1280, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ navs: WIDTHS.length * 8, acts: WIDTHS.length * 16 }));
+  const r = await rig(page, { match: true });
+  let confirmed = 0;
+  let refused = 0;
+  let disconnected = 0;
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    await open(page, "/streaming");
+    const ch = channel(`Riverside Live ${w}`);
+    await connectChannel(page, [ch], "youtube-connect-empty");
+    const row = page.getByTestId("youtube-channel-row");
+    await expect(row).toHaveCount(1, { timeout: NAV_MS });
+    const connectionId = (await row.getAttribute("data-connection-id"))!;
+    // A match is using the channel: SQL puts a `bound` broadcast on the rig's fixture (the shape of Go live mid-admission); the end rule
+    // says "not due". Deleted below, once the refusal has been seen.
+    await withDb((sql) => sql`
+      insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state)
+      values (${r.orgId}, ${connectionId}, ${r.fixtureId!}, ${"disconnect shots " + w}, 'unlisted', 'bound')`);
+    // Premise (B6 batch review N2): the refusal shot below only means something if a match really holds the channel. Read the row back.
+    const held = () => withDb((sql) => sql<{ n: number }[]>`
+      select count(*)::int as n from youtube_broadcasts where connection_id = ${connectionId} and state = 'bound'`).then((x) => x[0]!.n);
+    expect(await held(), `premise at ${w}: a bound broadcast holds the channel`).toBe(1);
+
+    const disconnect = row.getByTestId("youtube-disconnect");
+    await waitForHydration(disconnect);
+    await expect(disconnect, `the row's action at ${w}`).toHaveText(en("streaming.youtube.action.disconnect"));
+    await expectTappable(disconnect, `Disconnect at ${w}`);
+    await expectNoPageScroll(page, `the row with Disconnect at ${w}`);
+    await expectNavPinned(page, `the row at ${w}`);
+    await shot(page, `disconnect-row-${w}`);
+
+    // (1) The confirm: names the channel, says what goes and what stays; both buttons reachable; Cancel changes nothing.
+    await disconnect.click();
+    const dialog = page.getByRole("alertdialog");
+    await expect(dialog).toBeVisible();
+    await expect(dialog).toHaveAccessibleName(en("streaming.youtube.disconnect.title", { name: ch.title }));
+    await expect(dialog).toContainText(en("streaming.youtube.disconnect.body"));
+    const confirmBtn = dialog.getByRole("button", { name: en("streaming.youtube.disconnect.confirm"), exact: true });
+    const cancelBtn = dialog.getByRole("button", { name: en("streamDest.cancel"), exact: true });
+    await expectTappable(confirmBtn, `the confirm button at ${w}`);
+    await expectTappable(cancelBtn, `the cancel button at ${w}`);
+    await expectInsideViewport(dialog, page, `the dialog at ${w}`);
+    await expectNoPageScroll(page, `the dialog open at ${w}`);
+    await expectNavPinned(page, `the confirm at ${w}`);
+    await shot(page, `disconnect-confirm-${w}`);
+    await cancelBtn.click();
+    await expect(dialog, "Cancel closes it").toHaveCount(0);
+    expect((await connectionState(connectionId)).status, `Cancel at ${w} changed nothing`).toBe("connected");
+    confirmed++;
+
+    // (2) Confirm while the match is using it: the refusal is a sentence in the row, and nothing was disconnected.
+    await disconnect.click();
+    await dialog.getByRole("button", { name: en("streaming.youtube.disconnect.confirm"), exact: true }).click();
+    await expect(row.getByTestId("youtube-error")).toHaveText(en("streaming.youtube.error.inUse"));
+    expect(await connectionState(connectionId), `refused at ${w}: still connected, token kept, destination not archived`).toEqual({ status: "connected", tokenGone: false, archived: 0 });
+    await expectNoPageScroll(page, `the refusal at ${w}`);
+    await expectNavPinned(page, `the refusal at ${w}`);
+    await shot(page, `disconnect-in-use-${w}`);
+    refused++;
+
+    // (3) The match is over: the same tap now disconnects. The channel leaves the list; the page keeps the news.
+    await withDb((sql) => sql`delete from youtube_broadcasts where connection_id = ${connectionId}`);
+    expect(await held(), `premise at ${w}: the match is over - nothing holds the channel`).toBe(0);
+    await disconnect.click();
+    await dialog.getByRole("button", { name: en("streaming.youtube.disconnect.confirm"), exact: true }).click();
+    const notice = page.getByTestId("youtube-disconnected");
+    await expect(notice).toContainText(en("streaming.youtube.disconnect.done", { name: ch.title }));
+    // m6: the button that asked left with the row; the news takes focus, so a keyboard or screen-reader user is not dropped at the top.
+    await expect(notice, `focus follows the news at ${w}`).toBeFocused();
+    await expect(page.getByTestId("youtube-channel-row"), "the channel left the list").toHaveCount(0);
+    // F5: connecting this channel raised "YouTube channel connected."; it must not sit above "X is disconnected", and a reload must not bring it back
+    await expect(page.getByTestId("youtube-landing"), `the stale connect banner is gone at ${w}`).toHaveCount(0);
+    await expect(page, `its query is cleared at ${w}`).toHaveURL(/\/streaming$/);
+    expect(await connectionState(connectionId), `disconnected at ${w}: revoked, token gone, destination archived`).toEqual({ status: "revoked", tokenGone: true, archived: 1 });
+    await expectTappable(page.getByTestId("youtube-disconnected-dismiss"), `Dismiss at ${w}`);
+    await expectNoPageScroll(page, `the disconnected page at ${w}`);
+    await expectNavPinned(page, `the disconnected page at ${w}`);
+    await shot(page, `disconnect-done-${w}`);
+    await page.getByTestId("youtube-disconnected-dismiss").click();
+    await expect(notice, "Dismiss clears the news").toHaveCount(0);
+    disconnected++;
+  }
+  expect([confirmed, refused, disconnected], "anti-vacuity: every width walked the whole path").toEqual([WIDTHS.length, WIDTHS.length, WIDTHS.length]);
+});
+
+test("Disconnect stays reachable after the org loses Go live - the restricted Streaming page, then a 404 once nothing is left - at 1280, 768 and 320", async ({ page }) => {
+  test.setTimeout(budget({ navs: WIDTHS.length * 3 + 12, acts: 40 }));
+  const r = await rig(page);
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page, "/streaming");
+  const a = channel("Riverside FC");
+  const b = channel("Riverside Juniors");
+  await connectChannel(page, [a], "youtube-connect-empty");
+  await expect(page.getByTestId("youtube-channel-row")).toHaveCount(1, { timeout: NAV_MS });
+  await connectChannel(page, [b], "youtube-connect");
+  await expect(page.getByTestId("youtube-channel-row")).toHaveCount(2, { timeout: NAV_MS });
+
+  // The org loses streaming (no overlay, no relay): the same two overrides the route test uses. There is no cache in front of the
+  // entitlements here (REDIS_URL is unset locally and in CI), so the next request reads them.
+  await withDb(async (sql) => {
+    for (const feature of ["streaming.overlay", "streaming.relay"]) {
+      await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+                values (${r.orgId}, ${feature}, false, 'disconnect shots') on conflict (org_id, feature_key) do update set bool_value = false`;
+    }
+  });
+
+  let walked = 0;
+  for (const w of WIDTHS) {
+    await page.setViewportSize({ width: w, height: w === 320 ? 700 : 900 });
+    await open(page, "/streaming");
+    const panel = page.getByTestId("stream-disconnect-only");
+    await expect(panel, `the restricted page at ${w}`).toBeVisible();
+    await expect(page.getByTestId("nav-streaming"), `the nav still offers the page at ${w}`).toHaveCount(1);
+    await expect(page.getByTestId("stream-disconnect-only-note")).toHaveText(en("streaming.youtube.disconnectOnly.note"));
+    const rows = page.getByTestId("youtube-channel-row");
+    await expect(rows).toHaveCount(2);
+    for (let i = 0; i < 2; i++) {
+      const row = rows.nth(i);
+      await expectTappable(row.getByTestId("youtube-disconnect"), `Disconnect #${i} at ${w}`);
+      for (const id of ["youtube-settings", "youtube-reconnect", "youtube-review-terms", "youtube-channel-line"]) {
+        await expect(row.getByTestId(id), `${id} is not on the restricted row #${i} at ${w}`).toHaveCount(0);
+      }
+    }
+    for (const id of ["youtube-connect", "youtube-connect-empty", "stream-dest-add", "stream-dest-empty"]) {
+      await expect(page.getByTestId(id), `${id} is not on the restricted page at ${w}`).toHaveCount(0);
+    }
+    await expectNoPageScroll(page, `the restricted page at ${w}`);
+    await shot(page, `disconnect-only-${w}`);
+    walked++;
+  }
+  expect(walked, "anti-vacuity: every width").toBe(WIDTHS.length);
+
+  // Disconnect both from this page: the first leaves one, the second leaves the empty line - and the page is not re-read (a re-read
+  // would be the 404 an org with nothing to disconnect gets).
+  await page.setViewportSize({ width: 1280, height: 900 });
+  await open(page, "/streaming");
+  const rows = page.getByTestId("youtube-channel-row");
+  await waitForHydration(rows.first().getByTestId("youtube-disconnect"));
+  for (const [left, name] of [[1, a.title], [0, b.title]] as const) {
+    await rows.first().getByTestId("youtube-disconnect").click();
+    await page.getByRole("alertdialog").getByRole("button", { name: en("streaming.youtube.disconnect.confirm"), exact: true }).click();
+    await expect(rows).toHaveCount(left);
+    await expect(page.getByTestId("youtube-disconnected")).toContainText(en("streaming.youtube.disconnect.done", { name }));
+    await expect(page.getByTestId("youtube-disconnected"), `focus follows the news on the restricted page too (${name})`).toBeFocused();
+  }
+  await expect(page.getByTestId("stream-disconnect-only-empty")).toHaveText(en("streaming.youtube.disconnectOnly.none"));
+  // F7: the last one took the page's own nav with it - the page re-rendered at the emptied URL (not the 404), and what the person was
+  // told is still on screen, so the nav no longer offers a link that would 404 and the confirmation was not swapped for a 404.
+  await expect(page, "still on the page, at the emptied address").toHaveURL(/\/streaming\?disconnected=1$/);
+  await expect(page.getByTestId("nav-streaming"), "the nav dropped the item without a reload").toHaveCount(0);
+  await expect(page.getByTestId("youtube-disconnected"), "the news is still there").toContainText(en("streaming.youtube.disconnect.done", { name: b.title }));
+  await expect(page.getByTestId("stream-disconnect-only-empty"), "and the empty line").toHaveText(en("streaming.youtube.disconnectOnly.none"));
+  await expectNoPageScroll(page, "the restricted page, emptied");
+  await shot(page, "disconnect-only-empty-1280");
+  const left = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from org_youtube_connections where org_id = ${r.orgId} and status <> 'revoked'`);
+  expect(left[0]!.n, "both connections are revoked").toBe(0);
+
+  // Nothing left to disconnect, and no Go live: the page is the 404 it always was, and the nav no longer offers it.
+  const gone = await page.goto("/streaming", { waitUntil: "load" });
+  expect(gone?.status(), "an org with nothing to disconnect and no Go live gets the 404").toBe(404);
+  await page.goto("/dashboard", { waitUntil: "load" });
+  await declineCookies(page);
+  await expect(page.getByTestId("nav-streaming"), "the nav no longer offers Streaming").toHaveCount(0);
 });

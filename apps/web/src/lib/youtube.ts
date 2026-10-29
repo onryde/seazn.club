@@ -187,8 +187,10 @@ export const YOUTUBE_TOS_URL = "https://www.youtube.com/t/terms";
 export const YOUTUBE_GUIDELINES_URL = "https://www.youtube.com/t/community_guidelines";
 /** Developer Policies III.A.2: the privacy policy must link Google's, exactly as Google spells it. */
 export const GOOGLE_PRIVACY_URL = "http://www.google.com/policies/privacy";
-/** Developer Policies III.A.2: where a user revokes access to Seazn. */
-export const GOOGLE_PERMISSIONS_URL = "https://security.google.com/settings/security/permissions";
+/** Where a person removes Seazn from their Google account: its third-party access page. The ONE link for it - Developer Policies III.A.2
+ *  ("where a user revokes access to Seazn") and the Disconnect notice for an organiser whose revoke Seazn could not confirm are the same
+ *  place (a plain link - no Google logo). The old `security.google.com/settings/security/permissions` form is not kept beside it. */
+export const GOOGLE_THIRD_PARTY_ACCESS_URL = "https://myaccount.google.com/connections";
 
 // --- The Streaming page and the connect round trip's landing --------------------------------------------------------------
 
@@ -196,6 +198,10 @@ export const GOOGLE_PERMISSIONS_URL = "https://security.google.com/settings/secu
  *  the old `/directory?tab=streaming`). The ONE href for the nav item, the fixture panel's "Manage destinations" links and the
  *  connect flow's landing. Constants only: no import, so the OpenAPI loader can read this file bare. */
 export const STREAMING_PAGE_HREF = "/streaming";
+/** Where the restricted Streaming page (an org that lost Go live but kept a YouTube connection) sends ITSELF once its last channel has
+ *  been disconnected: the page re-renders - so its own nav stops offering a link to a page that would now 404 - and, because of the
+ *  query, an editor who has just emptied it stays on it (empty, with the news of what they did) instead of landing on the 404. */
+export const STREAMING_DISCONNECTED_HREF = `${STREAMING_PAGE_HREF}?disconnected=1`;
 
 // Every exit of the OAuth callback (and the start's own refusals that are not a bad request) is a 303 to the Streaming page
 // carrying one outcome, as `?youtube=<code>`. The page maps a code to a sentence; a value that is not one of these shows

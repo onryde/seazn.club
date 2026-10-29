@@ -748,6 +748,45 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — refusals (spec §6.2 D6 ta
     expect(w.fake.calls.length).toBe(calls);
   });
 
+  it("T17 carry g: 'not authorized to <live>' (insufficientLivePermissions) at a broadcast call is the CHANNEL's live permission, not a dead grant: the connection STAYS connected with status_since unchanged, the refusal is youtube_live_blocked and is recorded on it; positive pair: the same step refused as a plain dead grant still flips (checked === 3 steps x 2 refusals)", async () => {
+    const w = await world();
+    const f = w.fixtures[0]!;
+    const conn = async () =>
+      (await sql<{ status: string; status_since: Date; last_error_code: string | null; last_health_at: Date | null }[]>`
+        select status, status_since, last_error_code, last_health_at from org_youtube_connections where id = ${w.connectionId}`)[0]!;
+    // Ordered so each step is REACHED (insertStream runs only while the pool is empty; see the table test above).
+    const steps = ["insertStream", "insertBroadcast", "bind"] as const;
+    let checked = 0;
+    for (const step of steps) {
+      await sql`update org_youtube_connections set status_since = now() - interval '2 days' where id = ${w.connectionId}`;
+      const before = await conn();
+      const rowsBefore = (await rowsOf(f)).length;
+
+      w.fake.failNext(step, "youtube_reconnect_needed", "insufficientLivePermissions");
+      const err = await refusal(prep(w, f));
+      expect(err, step).toMatchObject({ status: 409, code: "youtube_live_blocked", extra: { connectionId: w.connectionId } });
+      const after = await conn();
+      expect(after.status, `${step}: still connected - no Reconnect prompt, no purge clock`).toBe("connected");
+      expect(after.status_since.getTime(), `${step}: status_since untouched`).toBe(before.status_since.getTime());
+      expect(after.last_error_code, `${step}: recorded where the Streaming page reads it`).toBe("youtube_live_blocked");
+      expect(after.last_health_at, step).toBeInstanceOf(Date);
+      const rows = await rowsOf(f);
+      expect([rows.length, rows.at(-1)!.state, rows.at(-1)!.last_error_code], step).toEqual([rowsBefore + 1, "failed", "youtube_live_blocked"]);
+      expect(await openCount(f), step).toBe(0);
+      await sql`update org_youtube_connections set last_error_code = null, last_health_at = null where id = ${w.connectionId}`;
+
+      // The positive pair: the SAME step refused as a plain dead grant (no reason) is the club's grant - it flips.
+      w.fake.failNext(step, "youtube_reconnect_needed");
+      expect((await refusal(prep(w, f))).code, `${step}: plain`).toBe("youtube_reconnect_needed");
+      expect((await conn()).status, `${step}: a dead grant flips`).toBe("reconnect_needed");
+      await sql`update org_youtube_connections set status = 'connected', status_since = now(), last_error_code = null, last_health_at = null where id = ${w.connectionId}`;
+      checked++;
+    }
+    expect(checked).toBe(3);
+    // Sequence: the channel is still usable for the next Go live (nothing short-circuited it).
+    expect((await must(prep(w, f))).reused).toBe(false);
+  });
+
   it("a connection in reconnect_needed → youtube_reconnect_needed before any port call; positive pair: connected → goes ahead", async () => {
     const w = await world();
     const f = w.fixtures[0]!;

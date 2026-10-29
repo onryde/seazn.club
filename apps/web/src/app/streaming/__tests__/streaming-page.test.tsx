@@ -15,6 +15,7 @@ const m = vi.hoisted(() => ({
   hasFeature: vi.fn<(orgId: string, key: string, competitionId?: string) => Promise<boolean>>(),
   requirePageAuth: vi.fn(),
   listStreamTargets: vi.fn<() => Promise<{ id: string; label: string }[]>>(async () => []),
+  hasLiveConnection: vi.fn<(orgId: string) => Promise<boolean>>(async () => false),
   expireTargetHolders: vi.fn(async () => undefined),
   defaultDeps: vi.fn((appUrl: string) => ({ appUrl, marker: "deps" })),
   captureError: vi.fn(),
@@ -26,6 +27,8 @@ vi.mock("@/lib/sentry", () => ({ captureError: m.captureError }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => "en" }));
 vi.mock("@/lib/base-url", () => ({ baseUrlFromHeaders: async () => "http://app.test" }));
 vi.mock("@/server/usecases/stream-targets", () => ({ listStreamTargets: m.listStreamTargets }));
+// The one read the disconnect-only page adds; the real query is DB-tested in youtube-connections-routes.test.ts.
+vi.mock("@/server/youtube/connections", () => ({ hasLiveConnection: m.hasLiveConnection }));
 vi.mock("@/server/usecases/stream-sessions", () => ({
   expireTargetHolders: m.expireTargetHolders, defaultDeps: m.defaultDeps, relayCredits: async () => ({ total: 0, monthly: 0, pack: 0, monthlyAllowance: 0 }),
 }));
@@ -45,18 +48,28 @@ vi.mock("@/components/v2/stream-destinations-panel", () => ({
   ),
 }));
 
+// The restricted page's panel, identifiable and showing the channels it was handed.
+vi.mock("@/components/v2/youtube-disconnect-only-panel", () => ({
+  YoutubeDisconnectOnlyPanel: ({ orgId, targets }: { orgId: string; targets: { id: string; label: string }[] }) => (
+    <div data-testid="disconnect-only-panel" data-org-id={orgId}>
+      {targets.map((t) => <span key={t.id} data-target-label={t.label} />)}
+    </div>
+  ),
+}));
+
 import StreamingPage from "../page";
 import { disabledRelayDrivers, setRelayDriversForTest } from "@/server/relay/drivers";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 
 const ORG = "org-1";
-type Params = { youtube?: string | string[]; pending?: string | string[] };
+type Params = { youtube?: string | string[]; pending?: string | string[]; disconnected?: string | string[] };
 const page = (params: Params = {}) => StreamingPage({ searchParams: Promise.resolve(params) });
 const render = async (params: Params = {}) => {
   const { prelude } = await prerender(await page(params));
   return new Response(prelude).text();
 };
 const PANEL = 'data-testid="stream-destinations-panel"';
+const DISCONNECT_ONLY = 'data-testid="disconnect-only-panel"';
 /** What Next throws for `notFound()` — the digest the framework turns into the 404 page. */
 const NOT_FOUND = { digest: "NEXT_HTTP_ERROR_FALLBACK;404" };
 
@@ -64,6 +77,7 @@ beforeEach(() => {
   m.requirePageAuth.mockReset().mockResolvedValue({ auth: { orgId: ORG, userId: "u-1", role: "owner", via: "session", keyId: null }, canEdit: true });
   m.hasFeature.mockReset().mockResolvedValue(true);
   m.listStreamTargets.mockReset().mockResolvedValue([]);
+  m.hasLiveConnection.mockReset().mockResolvedValue(false);
   m.expireTargetHolders.mockReset().mockResolvedValue(undefined);
   m.defaultDeps.mockClear();
   m.captureError.mockClear();
@@ -179,5 +193,115 @@ describe("Streaming page — offered exactly when the fixture panel offers Go li
     setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });
     await render({ youtube: "connected" });
     expect(m.listStreamTargets).toHaveBeenCalledTimes(1);
+  });
+});
+
+// T18 (Google API Services User Data Policy, DP III): an org that can no longer go live must still be able to disconnect a channel.
+describe("Streaming page — the disconnect-only page for an org that is not offered Go live but holds a YouTube connection (T18)", () => {
+  const reasons: [string, () => void][] = [
+    ["streaming.overlay switched off", () => m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.overlay")],
+    ["streaming.relay switched off", () => m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.relay")],
+    ["the deployment cannot start a stream", () => setRelayDriversForTest(disabledRelayDrivers())],
+  ];
+  const reset = (apply: () => void) => {
+    m.hasFeature.mockReset().mockResolvedValue(true);
+    setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });
+    m.listStreamTargets.mockClear();
+    m.expireTargetHolders.mockClear();
+    m.hasLiveConnection.mockClear();
+    apply();
+  };
+
+  it("for each of the three reasons, an editor WITH a connection gets the restricted page: the channels only, no key read, no holder expiry, never the full panel", async () => {
+    m.hasLiveConnection.mockResolvedValue(true);
+    m.listStreamTargets.mockResolvedValue([{ id: "t-1", label: "Riverside FC" }]);
+    let checked = 0;
+    for (const [why, apply] of reasons) {
+      reset(apply);
+      const html = await render();
+      expect(html, why).toContain(DISCONNECT_ONLY);
+      expect(html, why).toContain('data-target-label="Riverside FC"');
+      expect(html, why).toContain(`data-org-id="${ORG}"`);
+      expect(html, `${why}: not the full panel`).not.toContain(PANEL);
+      expect(html, `${why}: the page chrome`).toContain("<h1");
+      expect(m.hasLiveConnection, why).toHaveBeenCalledWith(ORG);
+      // the list is asked for the CHANNELS ONLY: that option is what keeps the pasted keys unread
+      expect((m.listStreamTargets.mock.calls as unknown[][])[0]!.slice(1), why).toEqual([ORG, { channelsOnly: true }]);
+      expect(m.expireTargetHolders, `${why}: no holder expiry`).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("an editor with NO connection is still a 404 for each reason (the empty case), then gets the page the moment a connection exists (the sequence)", async () => {
+    let checked = 0;
+    for (const [why, apply] of reasons) {
+      reset(apply);
+      m.hasLiveConnection.mockResolvedValue(false);
+      await expect(page(), why).rejects.toMatchObject(NOT_FOUND);
+      expect(m.listStreamTargets, why).not.toHaveBeenCalled();
+      m.hasLiveConnection.mockResolvedValue(true);
+      await expect(page(), `${why}: with a connection`).resolves.toBeDefined();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a viewer is a 404 even WITH a connection (only an owner or admin can disconnect), and the connection is not even looked up for them", async () => {
+    m.requirePageAuth.mockResolvedValue({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, canEdit: false });
+    m.hasLiveConnection.mockResolvedValue(true);
+    let checked = 0;
+    for (const [why, apply] of reasons) {
+      reset(apply);
+      await expect(page(), why).rejects.toMatchObject(NOT_FOUND);
+      expect(m.hasLiveConnection, why).not.toHaveBeenCalled();
+      expect(m.listStreamTargets, why).not.toHaveBeenCalled();
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("F7: an editor who has just disconnected the LAST channel (nothing offered, no connection left) and arrives with ?disconnected=1 stays on the restricted page - empty, nothing read - while the same org without it, a viewer with it, and any other value are the 404 they always were (anti-vacuity: 3 reasons)", async () => {
+    let checked = 0;
+    for (const [why, apply] of reasons) {
+      reset(apply);
+      m.hasLiveConnection.mockResolvedValue(false);
+      const html = await render({ disconnected: "1" });
+      expect(html, `${why}: the restricted page`).toContain(DISCONNECT_ONLY);
+      expect(html, `${why}: nothing to list`).not.toContain("data-target-label");
+      expect(html, `${why}: not the full panel`).not.toContain(PANEL);
+      expect(m.listStreamTargets, `${why}: no destination is read for an org with nothing`).not.toHaveBeenCalled();
+      expect(m.expireTargetHolders, why).not.toHaveBeenCalled();
+      // the negative pairs: without the param, with another value, as a list, and for a viewer - the 404
+      await expect(page(), `${why}: no param`).rejects.toMatchObject(NOT_FOUND);
+      await expect(page({ disconnected: "0" }), `${why}: another value`).rejects.toMatchObject(NOT_FOUND);
+      await expect(page({ disconnected: ["1", "1"] }), `${why}: a list`).rejects.toMatchObject(NOT_FOUND);
+      m.requirePageAuth.mockResolvedValueOnce({ auth: { orgId: ORG, userId: "u-2", role: "viewer", via: "session", keyId: null }, canEdit: false });
+      await expect(page({ disconnected: "1" }), `${why}: a viewer`).rejects.toMatchObject(NOT_FOUND);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("F7: ?disconnected=1 changes nothing for an org that is OFFERED the page (the full panel, the unrestricted list) or that still has a channel (the channels are listed)", async () => {
+    const offered = await render({ disconnected: "1" });
+    expect(offered).toContain(PANEL);
+    expect(offered).not.toContain(DISCONNECT_ONLY);
+    reset(reasons[0]![1]);
+    m.hasLiveConnection.mockResolvedValue(true);
+    m.listStreamTargets.mockResolvedValue([{ id: "t-1", label: "Riverside FC" }]);
+    const restricted = await render({ disconnected: "1" });
+    expect(restricted).toContain(DISCONNECT_ONLY);
+    expect(restricted, "a channel that is still there is still listed").toContain('data-target-label="Riverside FC"');
+  });
+
+  it("an OFFERED org keeps the full page even with a connection: the full panel, the holder expiry, the unrestricted list, and no connection lookup", async () => {
+    m.hasLiveConnection.mockResolvedValue(true);
+    const html = await render();
+    expect(html).toContain(PANEL);
+    expect(html).not.toContain(DISCONNECT_ONLY);
+    expect(m.hasLiveConnection).not.toHaveBeenCalled();
+    expect(m.expireTargetHolders).toHaveBeenCalledTimes(1);
+    expect((m.listStreamTargets.mock.calls as unknown[][])[0]!.slice(1)).toEqual([ORG]);
   });
 });

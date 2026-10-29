@@ -3,21 +3,24 @@ export const dynamic = "force-dynamic";
 // It was the Directory's fifth tab; the Directory keeps four, and nothing forwards from `/directory?tab=streaming` (owner:
 // "we don't need a forward") — an unknown tab simply opens the first one, as it always did.
 //
-// Offered exactly when the fixture panel offers Go live (`streamingPageOffered`, the one predicate the nav item and the connect
-// start ask too): entitled to the panel AND the relay, on a deployment that can start a stream. Otherwise a real 404, and no
-// destination is read — a stream key is only ever used by Go live, so a page for an org that cannot go live has nothing to show.
+// Offered in full exactly when the fixture panel offers Go live (`streamingPageOffered`, the predicate the connect start asks too):
+// entitled to the panel AND the relay, on a deployment that can start a stream. An editor of an org that is NOT offered it, but still
+// holds a YouTube connection, gets the disconnect-only page (T18, DP III: a downgrade never strands a grant) - `streamingPageAccess`,
+// which the nav item asks too. Otherwise a real 404, and no destination is read — a stream key is only ever used by Go live, so a
+// page for an org that cannot go live has nothing to show.
 import { notFound } from "next/navigation";
 import { BackLink } from "@/components/back-link";
 import { Nav } from "@/components/nav";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import { StreamDestinationsPanel } from "@/components/v2/stream-destinations-panel";
+import { YoutubeDisconnectOnlyPanel } from "@/components/v2/youtube-disconnect-only-panel";
 import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t } from "@/lib/i18n";
 import { baseUrlFromHeaders } from "@/lib/base-url";
 import { captureError } from "@/lib/sentry";
 import { youtubeLandingFrom } from "@/lib/youtube";
 import { requirePageAuth } from "@/server/page-auth";
-import { streamingPageOffered } from "@/server/stream-panel-context";
+import { streamingPageAccess } from "@/server/stream-panel-context";
 import { listStreamTargets } from "@/server/usecases/stream-targets";
 import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessions";
 
@@ -25,11 +28,36 @@ import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessi
 // Replace key / Remove render only for canEdit (owner or admin), matching the API's write gate. Read server-side
 // through the same use-case the API serves, so the list, its key hints and its "in use" badges are the API's projection,
 // never a second query.
-export default async function StreamingPage({ searchParams }: { searchParams: Promise<{ youtube?: string | string[]; pending?: string | string[] }> }) {
+export default async function StreamingPage({ searchParams }: { searchParams: Promise<{ youtube?: string | string[]; pending?: string | string[]; disconnected?: string | string[] }> }) {
   const { auth, canEdit } = await requirePageAuth();
-  if (!(await streamingPageOffered(auth.orgId))) notFound();
+  const access = await streamingPageAccess(auth.orgId, canEdit);
+  const query = await searchParams;
+  // An editor who has just disconnected the LAST channel of an org that cannot go live is sent here by the restricted page itself
+  // (`STREAMING_DISCONNECTED_HREF`): the page re-renders so its nav drops the item, and must not turn into the 404 under the person
+  // who is reading the confirmation. It lists nothing - there is nothing - and the query opens nothing else: every other case
+  // (a viewer, any other value, no query) is the 404 it always was.
+  const justEmptied = access === "none" && canEdit && query.disconnected === "1";
+  if (access === "none" && !justEmptied) notFound();
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
+
+  if (access === "disconnect_only" || justEmptied) {
+    // The channels only: no pasted key is read, no holder expiry is run, and the page says nothing of going live.
+    const channels = justEmptied ? [] : await listStreamTargets(auth, auth.orgId, { channelsOnly: true });
+    return (
+      <DictProvider dict={ui} locale={locale}>
+        <Nav />
+        <main className="mx-auto max-w-4xl px-4 py-8">
+          <BackLink href="/dashboard" label={t(ui, "common.dashboard")} />
+          <div className="mb-6">
+            <p className="app-eyebrow mb-1">{t(ui, "streaming.eyebrow")}</p>
+            <h1 className="page-title">{t(ui, "streaming.title")}</h1>
+          </div>
+          <YoutubeDisconnectOnlyPanel orgId={auth.orgId} targets={channels} />
+        </main>
+      </DictProvider>
+    );
+  }
 
   // M-3 (final review): every holder of the org's destinations gets its lazy expiry BEFORE the list is read. The list's
   // "In use" lock disables Replace and Remove — the very buttons whose routes tick a held target — so an abandoned Go
@@ -44,7 +72,7 @@ export default async function StreamingPage({ searchParams }: { searchParams: Pr
   }
   const targets = await listStreamTargets(auth, auth.orgId);
   // Where the YouTube connect round trip landed (`?youtube=<code>[&pending=<id>]`): read once, here, into the one shape the panel takes.
-  const landing = youtubeLandingFrom(await searchParams);
+  const landing = youtubeLandingFrom(query);
 
   return (
     <DictProvider dict={ui} locale={locale}>

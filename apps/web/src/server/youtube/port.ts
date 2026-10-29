@@ -49,6 +49,23 @@ export class YouTubeError extends Error {
   }
 }
 
+/** Google's reason for "the request is not authorized to <live>" (the liveBroadcasts / liveStreams pages, google.ts maps it to
+ *  `youtube_reconnect_needed`). It is a fact about the CHANNEL's live permission, not about the grant: a reconnect of the same account
+ *  does not cure it, so it is NOT a dead grant (controller ruling, T17 carry g). */
+export const LIVE_PERMISSIONS_REASON = "insufficientLivePermissions";
+
+/** The ONE predicate for that refusal - the daily health check, Go live's prepare and the end step all ask it, so they cannot disagree.
+ *  Such a refusal is a live-blocked channel: the connection stays `connected` (no reconnect prompt, no 30-day purge clock), the
+ *  refusal code is `youtube_live_blocked`. */
+export const isLiveBlockedRefusal = (err: unknown): boolean =>
+  err instanceof YouTubeError && err.code === "youtube_reconnect_needed" && err.reason === LIVE_PERMISSIONS_REASON;
+
+/** A DEAD GRANT: a reconnect refusal that is not the live-permission one. Only this moves a connection to `reconnect_needed`.
+ *  Both predicates answer a plain boolean, NOT a type guard: one that is `err is YouTubeError` narrows its caller's false branch to
+ *  `never` when the caller already knows `err` is a YouTubeError (disconnect.ts had to read `err.code` first to get round that). */
+export const isDeadGrantRefusal = (err: unknown): boolean =>
+  err instanceof YouTubeError && err.code === "youtube_reconnect_needed" && !isLiveBlockedRefusal(err);
+
 /** A broadcast's place in YouTube's life cycle (liveBroadcasts `status.lifeCycleStatus`), plus `absent` for an id YouTube
  *  does not know (deleted, or never there). */
 export type BroadcastLife = "created" | "ready" | "testing" | "live" | "complete" | "revoked" | "absent";

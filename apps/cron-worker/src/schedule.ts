@@ -78,7 +78,20 @@ export const JOBS: readonly Job[] = [
   // overlap a pass still alive server-side, and the sweep's overlap safety
   // (per-session advisory locks) is unproven. A missed day costs nothing,
   // because the sweep owns nothing time-critical (relay-sweep.ts:2-3).
-  { id: "relay-sweep", path: "/api/cron/relay-sweep", trigger: TRIGGER_CRON, due: { kind: "daily", hourUtc: 4 }, retry: false, manual: true },
+  // YouTube Connect T17 (spec §6.6): the same daily firing runs the daily YouTube pass (channel health, the 25-day video
+  // refresh, the 30-day dead-grant purge) before the sweep, on a relay-disabled deployment too. `youtube.failed` counts what
+  // did not work this pass (a connection or leg that threw, a refresh batch YouTube could not answer) plus every broadcast
+  // the end step can never settle - all retried the next day, or needing a person. A dead grant (`reconnectNeeded`) is the pass
+  // WORKING, not failing, so it is not a failure counter. The sweep reports no counter of its own.
+  {
+    id: "relay-sweep",
+    path: "/api/cron/relay-sweep",
+    trigger: TRIGGER_CRON,
+    due: { kind: "daily", hourUtc: 4 },
+    retry: false,
+    manual: true,
+    failureCounts: ["data.youtube.failed"],
+  },
   {
     id: "billing-quantity",
     path: "/api/cron/billing-quantity",

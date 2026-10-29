@@ -17,10 +17,14 @@ const m = vi.hoisted(() => ({
   hasClaimedProfile: vi.fn(async () => false),
   captureError: vi.fn(),
   locale: { value: "en" as string },
+  hasLiveConnection: vi.fn<(orgId: string) => Promise<boolean>>(),
 }));
 
 vi.mock("@/lib/entitlements", () => ({ hasFeature: m.hasFeature, orgPlanKey: async () => "pro" }));
 vi.mock("@/lib/sentry", () => ({ captureError: m.captureError }));
+// The one DB read the disconnect-only page adds (an org that can no longer go live but still holds a YouTube connection): doubled, so the
+// real predicate (`streamingPageAccess`, real `relayOffer`, real relay drivers) runs over it. The real query is route-tested with the DB.
+vi.mock("@/server/youtube/connections", () => ({ hasLiveConnection: m.hasLiveConnection }));
 vi.mock("@/lib/auth", () => ({ getCurrentUser: m.getCurrentUser, getUserOrgs: m.getUserOrgs, getActiveOrgId: m.getActiveOrgId }));
 vi.mock("@/lib/resolve-locale", () => ({ resolveLocale: async () => m.locale.value }));
 vi.mock("@/server/usecases/me", () => ({ hasClaimedProfile: m.hasClaimedProfile }));
@@ -54,6 +58,7 @@ beforeEach(() => {
   m.getActiveOrgId.mockReset().mockResolvedValue(ORG.id);
   m.hasClaimedProfile.mockReset().mockResolvedValue(false);
   m.captureError.mockClear();
+  m.hasLiveConnection.mockReset().mockResolvedValue(false);
   setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });   // a deployment that can start a stream
 });
 afterEach(() => setRelayDriversForTest(null));
@@ -108,6 +113,11 @@ describe("Nav › Streaming item", () => {
     expect(checked).toBe(3);
   });
 
+  it("OFFERED: the connection question is never asked (the whole page is there; a second read would be waste)", async () => {
+    expect(streamingLink(await render())).not.toBeNull();
+    expect(m.hasLiveConnection).not.toHaveBeenCalled();
+  });
+
   it("a failed entitlement read hides the item, reports once, and does NOT take the chrome down", async () => {
     const boom = new Error("db down");
     m.hasFeature.mockRejectedValue(boom);
@@ -148,6 +158,67 @@ describe("Nav › Streaming item", () => {
       checked++;
     }
     expect(checked).toBe(LOCALES.length);
+  });
+});
+
+describe("Nav › Streaming item for an org that can no longer go live (T18: Disconnect stays reachable)", () => {
+  const reasons: [string, () => void][] = [
+    ["streaming.overlay switched off", () => m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.overlay")],
+    ["streaming.relay switched off", () => m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.relay")],
+    ["the deployment cannot start a stream", () => setRelayDriversForTest(disabledRelayDrivers())],
+  ];
+  const asRole = (role: string) => m.getUserOrgs.mockResolvedValue([{ ...ORG, role }]);
+
+  it("an editor whose org holds a YouTube connection keeps the link, for each of the three reasons the whole page is gone - and the question is asked for the org the chrome shows", async () => {
+    let checked = 0;
+    for (const [why, apply] of reasons) {
+      m.hasLiveConnection.mockClear().mockResolvedValue(true);
+      m.hasFeature.mockReset().mockResolvedValue(true);
+      setRelayDriversForTest({ ingest: new FakeIngest(), runner: new FakeRunner() });
+      apply();
+      const a = streamingLink(await render());
+      expect(a, why).not.toBeNull();
+      expect(a, why).toContain('href="/streaming"');
+      expect(m.hasLiveConnection, why).toHaveBeenCalledTimes(1);
+      expect(m.hasLiveConnection, why).toHaveBeenCalledWith(ORG.id);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("an owner AND an admin get it; a viewer, a scorer and any other role do not - and for them the connection is never even looked up", async () => {
+    m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.relay");
+    m.hasLiveConnection.mockResolvedValue(true);
+    const seen: Record<string, boolean> = {};
+    for (const role of ["owner", "admin", "viewer", "scorer", "member"]) {
+      m.hasLiveConnection.mockClear();
+      asRole(role);
+      seen[role] = streamingLink(await render()) !== null;
+      if (role === "owner" || role === "admin") expect(m.hasLiveConnection, role).toHaveBeenCalledTimes(1);
+      else expect(m.hasLiveConnection, role).not.toHaveBeenCalled();
+    }
+    expect(seen).toEqual({ owner: true, admin: true, viewer: false, scorer: false, member: false });
+  });
+
+  it("an editor with NO connection gets no link (the empty case - the page would be a 404), then does once a connection exists (the sequence)", async () => {
+    m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.relay");
+    m.hasLiveConnection.mockResolvedValue(false);
+    const html = await render();
+    expect(streamingLink(html)).toBeNull();
+    expect(html, "the rest of the nav stays").toContain('href="/directory"');
+    m.hasLiveConnection.mockResolvedValue(true);
+    expect(streamingLink(await render())).not.toBeNull();
+  });
+
+  it("a failed connection read hides the item, reports once under the nav's own route, and does not take the chrome down", async () => {
+    m.hasFeature.mockImplementation(async (_o, key) => key !== "streaming.relay");
+    const boom = new Error("db down");
+    m.hasLiveConnection.mockRejectedValue(boom);
+    const html = await render();
+    expect(streamingLink(html)).toBeNull();
+    expect(html).toContain('href="/directory"');
+    expect(m.captureError).toHaveBeenCalledTimes(1);
+    expect(m.captureError).toHaveBeenCalledWith(boom, expect.objectContaining({ orgId: ORG.id, route: "nav.streaming_offered" }));
   });
 });
 

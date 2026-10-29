@@ -10,18 +10,21 @@
 //
 // Copy: every refusal is mapped from its machine CODE to this page's dictionary (`youtubeErrorText`). The server's `message` is
 // English API prose and is never rendered. Unlike a pasted-key row, a connected channel has NO Rename, Replace key or Remove —
-// the server answers each with 422 YOUTUBE_USE_DISCONNECT — and Disconnect itself is T18, not here.
+// the server answers each with 422 YOUTUBE_USE_DISCONNECT. Disconnect (T18) is the one way a channel leaves: a confirm dialog, then a
+// DELETE; the refusal while a match is using the channel (409 YOUTUBE_IN_USE) is a sentence in the row.
 import { Fragment, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import Link from "@/components/ui/console-link";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { useConfirm } from "@/components/ui/confirm-provider";
 import { apiV1 } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
 import {
-  STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_GUIDELINES_URL, YOUTUBE_PRIVACIES, YOUTUBE_TOS_URL, youtubeLanding,
+  GOOGLE_THIRD_PARTY_ACCESS_URL, STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_GUIDELINES_URL, YOUTUBE_PRIVACIES, YOUTUBE_TOS_URL, youtubeLanding,
   type YoutubeLandingCode, type YoutubePrivacy,
 } from "@/lib/youtube";
-import type { StreamTarget, YoutubeConnectionSaved, YoutubePendingChannels } from "@/server/api-v1/schemas";
+import type { StreamTarget, YoutubeConnectionSaved, YoutubeDisconnected, YoutubePendingChannels } from "@/server/api-v1/schemas";
+import { REFUSAL_FOCUS_RING, focusRefusalBlock } from "./refusal-focus";
 import { YoutubeIconLink } from "./youtube-icon";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -48,6 +51,8 @@ export function youtubeErrorText(msg: Msg, err: unknown): string {
     case "YOUTUBE_PENDING_EXPIRED": return msg("streaming.youtube.landing.expired");
     case "YOUTUBE_DIFFERENT_CHANNEL": return msg("streaming.youtube.landing.different_channel");
     case "YOUTUBE_CHANNEL_NOT_OFFERED": return msg("streaming.youtube.error.notOffered");
+    case "YOUTUBE_IN_USE": return msg("streaming.youtube.error.inUse");
+    case "YOUTUBE_END_UNKNOWN": return msg("streaming.youtube.error.endUnknown");
     case "FORBIDDEN": return msg("streamDest.error.forbidden");
     case "UNAUTHENTICATED": return msg("streamDest.error.signedOut");
     case "PAYMENT_REQUIRED": return w.extra.feature_key === FROZEN_SEAT_FEATURE ? msg("streamDest.error.seatFrozen") : msg("streamDest.error.generic");
@@ -264,6 +269,41 @@ export function YoutubeLandingNotice({ code }: { code: BannerCode }) {
   );
 }
 
+/** What a disconnect did, as the page keeps it once the channel has left the list: its name and what became of the grant at Google. */
+export type DisconnectNews = { name: string; outcome: YoutubeDisconnected["revokeOutcome"] };
+
+/** What a disconnect said, once the channel has left the list: this is the PAGE's notice, because the row that asked is gone with the
+ *  refresh. The button that asked left with the row, which would drop focus to the top of the page, so the notice takes focus as it
+ *  attaches (refusal-focus.tsx: a callback ref, so a re-render does not steal it back); the page keys it by its news, so the next
+ *  disconnect is a new element and focuses again. Dismissing it is local state (it is not a URL outcome like the landing banner). The sentence follows the revoke's outcome:
+ *  the grant was revoked; it was left alone on purpose (another channel on the same Google account still runs on it); or Seazn could not
+ *  confirm it - then the person is told where to remove Seazn themselves, a plain link to their Google account's third-party access. */
+export function YoutubeDisconnectedNotice({ name, outcome, onDismiss }: DisconnectNews & { onDismiss: () => void }) {
+  const msg = useMsg();
+  const unconfirmed = outcome === "not_confirmed";
+  const sentence =
+    outcome === "revoked" ? msg("streaming.youtube.disconnect.done", { name })
+    : outcome === "skipped_shared_account" ? msg("streaming.youtube.disconnect.doneShared", { name })
+    : withSlots(msg("streaming.youtube.disconnect.doneUnconfirmed", { name }), {
+      link: <a href={GOOGLE_THIRD_PARTY_ACCESS_URL} data-testid="youtube-disconnected-google-link" {...EXTERNAL} className={LINK}>{msg("streaming.youtube.disconnect.googleLink")}</a>,
+    });
+  return (
+    <div
+      ref={focusRefusalBlock}
+      tabIndex={-1}
+      data-testid="youtube-disconnected"
+      data-outcome={outcome}
+      role={unconfirmed ? "alert" : "status"}
+      className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col md:items-center ${REFUSAL_FOCUS_RING} ${unconfirmed ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}
+    >
+      <p className="min-w-0 flex-1 break-words">{sentence}</p>
+      <button type="button" data-testid="youtube-disconnected-dismiss" onClick={onDismiss} className="btn btn-ghost min-h-11 shrink-0 px-3 max-md:w-full">
+        {msg("streaming.youtube.dismiss")}
+      </button>
+    </div>
+  );
+}
+
 // ─── the channel picker ─────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** A refusal of the picker's lookup or pick. A request that is not found (404) is a grant that expired or was used: the same
@@ -395,9 +435,21 @@ export const TONE: Record<Tone, { pill: string; dot: string }> = {
 
 const ACTION = "btn min-h-11 px-3 max-md:w-full";
 
-export function YoutubeChannelRow({ t, canEdit, orgId, badge }: { t: StreamTarget; canEdit: boolean; orgId: string; badge: ReactNode }) {
+/** A connected channel's row. `disconnectOnly` is the restricted Streaming page an org sees when it can no longer go live but still has a
+ *  connection (the relay is not offered): the only action is Disconnect, because Reconnect and Settings belong to a channel that can
+ *  stream. `onDisconnected` hands the page the channel's name and what became of the grant at Google, for the notice that outlives this
+ *  row (a disconnected channel leaves the list). */
+export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = false, onDisconnected, onGone, refreshAfter = true }: {
+  t: StreamTarget; canEdit: boolean; orgId: string; badge: ReactNode; disconnectOnly?: boolean; onDisconnected?: (news: DisconnectNews) => void;
+  /** The server says this channel is no longer connected (a second tab disconnected it): the page that keeps its own list drops the row, as
+   *  it does after a success - there is nothing left to disconnect, and no notice, since THIS tab disconnected nothing. */
+  onGone?: () => void;
+  /** Re-read the page after a disconnect (the default). The restricted page turns it off: see youtube-disconnect-only-panel.tsx. */
+  refreshAfter?: boolean;
+}) {
   const msg = useMsg();
   const router = useRouter();
+  const confirm = useConfirm();
   const y = t.youtube;
   const [mode, setMode] = useState<"settings" | "terms" | null>(null);
   const [privacy, setPrivacy] = useState<YoutubePrivacy>(y?.privacy ?? "unlisted");
@@ -434,6 +486,42 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge }: { t: StreamTarge
       setBusy(false);
     }
   };
+  const disconnect = async () => {
+    if (saving.current) return;
+    saving.current = true;
+    try {
+      const ok = await confirm({
+        title: msg("streaming.youtube.disconnect.title", { name: y.channelTitle }),
+        body: msg("streaming.youtube.disconnect.body"),
+        confirmLabel: msg("streaming.youtube.disconnect.confirm"),
+        cancelLabel: msg("streamDest.cancel"),
+        tone: "danger",
+        size: "touch",
+      });
+      if (!ok) return;
+      setBusy(true);
+      setError(null);
+      const done = await apiV1<YoutubeDisconnected>(`/api/v1/orgs/${orgId}/youtube-connections/${y.connectionId}`, { method: "DELETE" });
+      // An answer that does not say what became of the grant is told as the cautious one: the person is pointed at Google, never
+      // assured of a revoke nobody confirmed.
+      onDisconnected?.({ name: y.channelTitle, outcome: done?.revokeOutcome ?? "not_confirmed" });
+      if (refreshAfter) router.refresh();
+    } catch (err) {
+      // Already disconnected elsewhere (404): the list is the news - re-read, or dropped by the page that keeps its own list. A match
+      // using the channel (409) is a sentence under the row.
+      if (wireOf(err)?.status === 404) {
+        if (refreshAfter) router.refresh();
+        if (onGone) {
+          onGone();
+          return;
+        }
+      }
+      setError(youtubeErrorText(msg, err));
+    } finally {
+      saving.current = false;
+      setBusy(false);
+    }
+  };
   const open = (which: "settings" | "terms") => {
     setError(null);
     setConsent(false);
@@ -455,17 +543,20 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge }: { t: StreamTarge
               <span aria-hidden className={`h-1.5 w-1.5 shrink-0 rounded-full ${tone.dot}`} />
               {msg(status.pill)}
             </span>
-            {y.termsOutdated && (
+            {!disconnectOnly && y.termsOutdated && (
               <span data-testid="youtube-channel-terms" className="badge inline-flex items-center normal-case ring-1 bg-amber-50 text-amber-800 ring-amber-200">
                 {msg("streaming.youtube.status.reviewTerms")}
               </span>
             )}
           </div>
-          <p data-testid="youtube-channel-line" className="mt-1.5 text-sm text-slate-700">
-            {msg(status.line)}
-            {status.hint && <span data-testid="youtube-channel-hint">{` ${msg(status.hint)}`}</span>}
-          </p>
-          {y.termsOutdated && (
+          {/* The restricted page says nothing about going live: the page's note says it can't, and "Matches can go live here" would be false. */}
+          {!disconnectOnly && (
+            <p data-testid="youtube-channel-line" className="mt-1.5 text-sm text-slate-700">
+              {msg(status.line)}
+              {status.hint && <span data-testid="youtube-channel-hint">{` ${msg(status.hint)}`}</span>}
+            </p>
+          )}
+          {!disconnectOnly && y.termsOutdated && (
             <p data-testid="youtube-channel-terms-line" className="mt-1 text-sm text-slate-700">
               {msg(reviewFirst ? "streaming.youtube.statusLine.reviewFirst" : "streaming.youtube.statusLine.reviewTerms")}
             </p>
@@ -475,7 +566,7 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge }: { t: StreamTarge
       </div>
       {canEdit && (
         <div data-role="youtube-channel-actions" className="mt-3 flex flex-wrap gap-2 max-md:flex-col md:pl-11">
-          {reconnect && !y.termsOutdated && (
+          {!disconnectOnly && reconnect && !y.termsOutdated && (
             // Reconnect is a navigation to Google, so a form POST (T7). The consent on file is current: no tick (ruling T7-R2).
             <form method="post" action="/api/youtube/connect" data-testid="youtube-reconnect-form" className="max-md:w-full">
               <input type="hidden" name="orgId" value={orgId} />
@@ -487,17 +578,23 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge }: { t: StreamTarge
               </button>
             </form>
           )}
-          {y.termsOutdated && (
+          {!disconnectOnly && y.termsOutdated && (
             <button type="button" data-testid="youtube-review-terms" aria-expanded={mode === "terms"} onClick={() => open("terms")} className={`${ACTION} ${reviewFirst ? "btn-primary" : "btn-ghost"}`}>
               {msg("streaming.youtube.action.reviewTerms")}
             </button>
           )}
-          <button type="button" data-testid="youtube-settings" aria-expanded={mode === "settings"} onClick={() => open("settings")} className={`${ACTION} btn-ghost`}>
-            {msg("streaming.youtube.action.settings")}
+          {!disconnectOnly && (
+            <button type="button" data-testid="youtube-settings" aria-expanded={mode === "settings"} onClick={() => open("settings")} className={`${ACTION} btn-ghost`}>
+              {msg("streaming.youtube.action.settings")}
+            </button>
+          )}
+          {/* On every status: a channel that needs a reconnect, is blocked or is not enabled can still be disconnected (DP III). */}
+          <button type="button" data-testid="youtube-disconnect" disabled={busy} onClick={() => void disconnect()} className={`${ACTION} btn-danger`}>
+            {msg("streaming.youtube.action.disconnect")}
           </button>
         </div>
       )}
-      {canEdit && mode === "settings" && (
+      {canEdit && !disconnectOnly && mode === "settings" && (
         <form
           data-testid="youtube-settings-form"
           aria-label={msg("streaming.youtube.action.settings")}
@@ -520,7 +617,7 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge }: { t: StreamTarge
           </div>
         </form>
       )}
-      {canEdit && mode === "terms" && (
+      {canEdit && !disconnectOnly && mode === "terms" && (
         <form
           data-testid="youtube-terms-form"
           aria-label={msg("streaming.youtube.action.reviewTerms")}
