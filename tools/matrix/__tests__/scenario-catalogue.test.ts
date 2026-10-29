@@ -16,7 +16,7 @@ import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import { spellingsOf } from "../lib/harness-path.ts";
 import {
-  ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, l2Atomic, l3Atomic, loadRegressions, parseRegressions, replayFences,
+  ATOMIC, HARNESS_SCENARIO, LIFECYCLE_ID, MATCH_REQUIRED_CHECKS, PARENTS, REGRESSIONS_PATH, UI_PATH_BUILT, l2Atomic, l2NoPathFor, l3Atomic, loadRegressions, parseRegressions, replayFences,
 } from "../lib/scenario-catalogue.ts";
 import { productMessageOf } from "../lib/driver/types.ts";
 import { FENCES } from "../lib/model/fences.ts";
@@ -242,6 +242,41 @@ describe("atomic cases", () => {
       expect(a.layers, id).toEqual(["L2", "L3"]); // L3 runs over HTTP; the L2 run records the 🚫
       expect(a.knownNoPath, id).toBeNull(); // not a design-wide 🚫: the API route exists
     }
+  });
+  // W2e Task 32 (B2-3): the pad gained the "player injured, no replacement" control in four sports. The atom keeps its
+  // l2NoPath (cricket and generic owe the wave: their dispositions, not a screen); the sport decides (l2NoPathFor).
+  it("W2e T32: M12b has a screen path exactly in the sports whose skin wires the retirement tiles, and still owes W2 everywhere else", () => {
+    const SKINS = join(REPO, "apps/web/src/components/v2/scorepad/v3/skins");
+    const files = readdirSync(SKINS).filter((f) => /\.tsx?$/.test(f));
+    // The skins that wire the control, read off the product's source (a call site, never a comment: the call opens a paren).
+    const wiring = files.filter((f) => /\bretirementTilesOf\(/.test(readFileSync(join(SKINS, f), "utf8").replace(/\/\/.*$/gm, "")));
+    expect(wiring.sort(), "football, volleyball and the shared period pad wire it").toEqual(["football.tsx", "period-shared.ts", "volleyball.tsx"]);
+    // A wiring file named after a sport is that sport; the shared period pad is every sport whose own skin imports it.
+    const built = new Set<string>();
+    for (const f of wiring) {
+      const name = f.replace(/\.tsx?$/, "");
+      if ((SPORT_KEYS as readonly string[]).includes(name)) built.add(name);
+      else {
+        for (const sport of SPORT_KEYS) {
+          const skin = files.find((g) => g.replace(/\.tsx?$/, "") === sport);
+          if (skin !== undefined && new RegExp(`from "\\./${name}"`).test(readFileSync(join(SKINS, skin), "utf8"))) built.add(sport);
+        }
+      }
+    }
+    expect([...built].sort()).toEqual(["football", "hockey", "icehockey", "volleyball"]);
+    expect([...(UI_PATH_BUILT.M12b ?? [])].sort(), "the catalogue's carve-out is that set").toEqual([...built].sort());
+
+    const m12b = ATOMIC.find((a) => a.id === "M12b")!;
+    expect(m12b.l2NoPath, "the atom still owes W2: cricket and generic").toBe("W2");
+    let judged = 0;
+    for (const sport of SPORT_KEYS) {
+      expect(l2NoPathFor(m12b, sport), sport).toBe(built.has(sport) ? null : "W2");
+      judged += 1;
+    }
+    expect(judged).toBe(SPORT_KEYS.length);
+    expect(built.size).toBe(4);
+    // Every OTHER atom is untouched by the carve-out.
+    for (const a of ATOMIC.filter((x) => x.id !== "M12b")) expect(l2NoPathFor(a, "football"), a.id).toBe(a.l2NoPath);
   });
   it("the W1a harness map is a one-to-one cover of W1a's scenarios, onto real atoms", () => {
     const ids = new Set([LIFECYCLE_ID, ...ATOMIC.map((a) => a.id)]);

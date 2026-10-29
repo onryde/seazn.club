@@ -46,7 +46,7 @@ import { resolveSportCfg } from "../lib/sport-cfg.ts";
 import { DataDirMismatch, ORG_COOKIE, OrgSwitchFailed, type MatrixSql } from "../lib/seed-org.ts";
 import { SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, planSliceCases } from "../lib/slice.ts";
 import { EXIT, NOTES_CAP, PlanStageCapTooLow, SETS, TURN_DEADLINE_MS, closeHandles, describeCommit, gatesNeeded, keepNotes, planOf, realDeps, runSlice, stagesNeeded, summariseRun, withoutBareDashes, type BrowserRun, type DbFactories, type PlanCases, type PlanLayers, type RunDeps } from "../run.ts";
-import { ATOMIC, HARNESS_SCENARIO } from "../lib/scenario-catalogue.ts";
+import { ATOMIC, HARNESS_SCENARIO, l2NoPathFor } from "../lib/scenario-catalogue.ts";
 import { BROWSER_WIDTHS, L2_WIDTHS } from "../lib/widths.ts";
 import { FakeDeniedDriver, FakeKnockoutDriver, FakeLeagueDriver } from "./fake-driver.ts";
 import { ALL_GATES, deps, fakeBrowserRun, type Deps } from "./run-deps.ts";
@@ -1902,7 +1902,7 @@ describe("runSlice — --layer and the layered sets (W1c Task 12, ruling 39)", (
   const SLICE_CELLS = new Set(SLICE_ROWS.flatMap((r) => SLICE_SPORTS.map((s) => `${r}|${s}`)));
   const SLICE_L2 = RAW_L2.filter((r) => SLICE_CELLS.has(`${r.row}|${r.sport}`));
   const scripted = (r: RawRun) => Object.hasOwn(HARNESS_SCENARIO, r.scenario);
-  const owningWave = (r: RawRun) => { const a = ATOMIC.find((x) => x.id === r.scenario)!; return a.knownNoPath ?? a.l2NoPath; };
+  const owningWave = (r: RawRun) => { const a = ATOMIC.find((x) => x.id === r.scenario)!; return a.knownNoPath ?? l2NoPathFor(a, r.sport); };
   /** The fake DB's builder defaults (deps(): generic → score, badminton → bwf-3x15 by the table (owner D2), every other sport → bwf). */
   const fakeDefault = (s: string) => (s === "generic" ? "score" : s === "badminton" ? "bwf-3x15" : "bwf");
   const vacuousLine = (out: string) => /vacuous: (.*)/.exec(out)?.[1] ?? "(no summary line)";
@@ -2375,7 +2375,7 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(opened()).toBe(1);
   }, 120_000);
 
-  it("--layer L2 --scope grid, through the real planner and runner: 1,729 runs at their own widths — 62 driven, 164 🚫, 1,503 ░ — each recording the pair-run it is", async () => {
+  it("--layer L2 --scope grid, through the real planner and runner: 1,729 runs at their own widths — 62 driven, 145 🚫, 1,522 ░ — each recording the pair-run it is", async () => {
     capture();
     const dir = dirFor();
     const { d, reads } = gridDeps();
@@ -2384,11 +2384,12 @@ describe("runSlice — --scope slice|grid (W1d Task 3, ruling 64, item 2)", () =
     expect(r.cases).toHaveLength(RAW_RUNS.length);
     expect(r.cases.every((c) => c.layer === "L2" && c.l2 !== undefined)).toBe(true);
     expect(new Set(r.cases.map((c) => c.l2!.n)).size).toBe(RAW_RUNS.length);
-    // X-DR-1 (W2a): 1,731 -> 1,729 runs; driven 62 and 🚫 164 unchanged, ░ 1,503 (layers-grid.test.ts:183).
+    // X-DR-1 (W2a): 1,731 -> 1,729 runs; driven 62 and 🚫 164 unchanged, ░ 1,503. W2e Task 32: 19 M12b runs have a screen
+    // path (🚫 164 -> 145, ░ 1,503 -> 1,522; layers-grid.test.ts).
     expect(r.cases.filter((c) => c.planned === undefined)).toHaveLength(62);
-    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(164);
-    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1503);
-    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(164 + 1503);
+    expect(r.cases.filter((c) => c.state === "no_path")).toHaveLength(145);
+    expect(r.cases.filter((c) => c.state === "not_run")).toHaveLength(1522);
+    expect(r.cases.filter((c) => c.planned === true)).toHaveLength(145 + 1522);
     // Only the driven runs' sports were asked for: a planned run posts nothing.
     expect(reads.length).toBeGreaterThan(0);
     expect(reads.length).toBeLessThan(SPORT_KEYS.length + 1);

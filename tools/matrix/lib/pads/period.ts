@@ -44,7 +44,7 @@ import { overtimeWhistles, periodLabels, type PeriodOvertime } from "../streams/
 import { judgeKeys, judgeOneRow, type Stamp } from "./judge.ts";
 import type { MatrixPadAdapter } from "./types.ts";
 
-/** What the advance tile stamps beside `to` (period-shared.ts:976, Step 0
+/** What the advance tile stamps beside `to` (period-shared.ts:977, Step 0
  *  2026-09-30: `{period: "Q1", elapsed: 0}`): the phase it leaves and the
  *  seconds into it, nothing else. */
 const AT_STAMP: Stamp = {
@@ -58,9 +58,9 @@ const AT_STAMP: Stamp = {
   },
 };
 
-/** period-shared.ts:967 (text-pinned in pad-adapters.test.ts). */
+/** period-shared.ts:968 (text-pinned in pad-adapters.test.ts). */
 export const PERIOD_ADVANCE_TILE = "advance";
-/** period-shared.ts:919 (text-pinned). */
+/** period-shared.ts:920 (text-pinned). */
 export const periodGoalTile = (side: "home" | "away"): string => `goal-${side}`;
 
 /** period-shared.ts:891 attemptSheetKey (text-pinned in pad-adapters.test.ts). */
@@ -156,7 +156,7 @@ export function makePeriodPad(sport: "hockey" | "icehockey"): MatrixPadAdapter {
       {
         eventType: advance,
         writes: [advance],
-        why: "period-shared.ts:976 — the advance tile stamps `at` {period, elapsed} beside `to` (Step 0 2026-09-30: row keys [at, to]); an object is no tolerable id, so its judge holds `to` to the event and `at` to the shape the tile stamps",
+        why: "period-shared.ts:977 — the advance tile stamps `at` {period, elapsed} beside `to` (Step 0 2026-09-30: row keys [at, to]); an object is no tolerable id, so its judge holds `to` to the event and `at` to the shape the tile stamps",
         rowsFor: () => 1,
         // Fix round 1 (I-1): the label the pad wrote is the one the event names.
         judge: (event, rows) => judgeOneRow(rows, "the advance tile", (row) => judgeKeys(event, row, { required: ["to"], stamped: { at: AT_STAMP } })),
