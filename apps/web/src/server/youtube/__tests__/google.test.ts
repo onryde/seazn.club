@@ -490,7 +490,8 @@ describe("Data API request shapes (developers.google.com/youtube/v3/…)", () =>
 // live and `actualEndTime` once it is complete, both ISO 8601 (https://developers.google.com/youtube/v3/live/docs/liveBroadcasts),
 // so `broadcastLife` asks for `snippet` as well and reads them. Wire strings are typed here from that page.
 describe("broadcastLife reports the actual start and end (B2 fix I4)", () => {
-  const item = (lifeCycleStatus: string, snippet?: Record<string, unknown>) => ({ id: "bc1", status: { lifeCycleStatus }, ...(snippet ? { snippet } : {}) });
+  const item = (lifeCycleStatus: string, snippet?: Record<string, unknown>, madeForKids?: boolean) =>
+    ({ id: "bc1", status: { lifeCycleStatus, ...(madeForKids === undefined ? {} : { madeForKids }) }, ...(snippet ? { snippet } : {}) });
 
   it("reads snippet.actualStartTime and actualEndTime as instants: live has a start and no end; complete has both; created, ready and revoked have neither", async () => {
     const rows: [string, ReturnType<typeof item>, { life: string; start: string | null; end: string | null }][] = [
@@ -568,12 +569,14 @@ describe("broadcastLife reports the actual start and end (B2 fix I4)", () => {
     // What YouTube would put on the wire for the fake's own state, written from the docs: the status, and the two instants once they exist.
     const wireOf = (): ReturnType<typeof item> => {
       const v = fake.inspectBroadcast(broadcastId)!;
-      const base = item(v.life, {
-        ...(v.actualStartAt ? { actualStartTime: v.actualStartAt.toISOString() } : {}),
-        ...(v.actualEndAt ? { actualEndTime: v.actualEndAt.toISOString() } : {}),
-      });
       // `status.madeForKids` is YouTube's status of the broadcast: unless it decides otherwise, what it was created with.
-      return { ...base, id: broadcastId, status: { ...base.status, madeForKids: v.madeForKids } };
+      return {
+        ...item(v.life, {
+          ...(v.actualStartAt ? { actualStartTime: v.actualStartAt.toISOString() } : {}),
+          ...(v.actualEndAt ? { actualEndTime: v.actualEndAt.toISOString() } : {}),
+        }, v.madeForKids),
+        id: broadcastId,
+      };
     };
     const compare = async (name: string, want: { life: string; start: string | null; end: string | null }) => {
       const viaFake = await fake.broadcastLife(at, broadcastId);
