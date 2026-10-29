@@ -34,7 +34,7 @@
 //                SHOOTOUT | done/final/abandoned) mapped DOWN to the three-value
 //                UI concept here, never by widening `PadPhase`.
 
-import { AttemptOutcome } from "@seazn/engine/core";
+import { AttemptOutcome, onFieldPersons, playingSquad } from "@seazn/engine/core";
 import type { FidelityBand } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ENUM_VOCAB } from "@/lib/scoring-vocab";
@@ -312,13 +312,16 @@ function otherSide(side: Side): Side {
 
 /** Who is on the field/ice right now, from the squad state the HOST always
  *  resolves (`PadHostView.squads`, `state.squads` else `initSquads(lineups)`) —
- *  never from `state.squads` directly, which most folds never populate. */
+ *  never from `state.squads` directly, which most folds never populate.
+ *  PLAYERS ONLY, through the engine's own reader (W2e review M6): the lineup editor lets a coach sit in a "starting" slot,
+ *  `initSquads` seats him, and the engine refuses him on and off the field ("not-a-player", ruling 3). */
 export function onFieldOf(view: PadHostView, side: Side): readonly string[] {
-  return view.squads[side].members.filter((m) => m.onField).map((m) => m.personId);
+  return onFieldPersons(view.squads[side]);
 }
 
+/** Who may come ON: a player off the field (the same filter, for a coach or staff member on the bench). */
 function benchOf(view: PadHostView, side: Side): readonly string[] {
-  return view.squads[side].members.filter((m) => !m.onField).map((m) => m.personId);
+  return playingSquad(view.squads[side]).filter((m) => !m.onField).map((m) => m.personId);
 }
 
 // ---------------------------------------------------------------------------

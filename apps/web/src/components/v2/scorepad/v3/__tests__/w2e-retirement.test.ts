@@ -63,11 +63,12 @@ const STRICT = { strictFromSeq: 0 } as const;
 function viewOf(
   key: string,
   specs: readonly Spec[] = [{ type: "core.start" }],
-  o: { band?: FidelityBand; cfg?: Record<string, unknown> } = {},
+  o: { band?: FidelityBand; cfg?: Record<string, unknown>; lineups?: (declared: LineupPair) => LineupPair } = {},
 ): { view: PadHostView; module: AnySportModule; lineups: LineupPair; events: EventEnvelope[]; state: Record<string, unknown> } {
   const sportModule = moduleOf(key);
   const cfg = periodCfg(sportModule, o.cfg ?? {});
-  const lineups = lineupsFor(sportModule, cfg);
+  const declared = lineupsFor(sportModule, cfg);
+  const lineups = o.lineups === undefined ? declared : o.lineups(declared);
   // Envelope ids are `e-<seq>` with seq counting from 1 in `specs`, so a void names its target as `e-<index + 1>`.
   const events = specs.map((s, i) => makeEnvelope(i + 1, { type: s.type, payload: s.payload ?? {} } as never, s.voids));
   const state = foldMatch(sportModule as never, cfg as never, lineups, events, STRICT) as Record<string, unknown>;
@@ -335,6 +336,46 @@ describe("M12b a substitute who came on through the pad's own Sub can then retir
     }
     expect(checked).toBe(OFFERING.length);
     expect(typeof (moduleOf("football") as { squadsForLineup?: unknown }).squadsForLineup).toBe("function");
+  });
+});
+
+describe("M12b a coach or staff member on the team sheet is never offered (review M6)", () => {
+  // The lineup editor lets any row be a coach and any row be "starting" (`lineup-editor.tsx`), and `initSquads` seats a
+  // starting slot whatever its role, so a coach can sit in `view.squads` with `onField: true`. The engine never lets a
+  // non-player leave or take the field (`takeOff` / `bringOn`: "not-a-player", ruling 3), so offering one is a dead tap.
+  const withOfficials = (declared: LineupPair): LineupPair => ({
+    home: {
+      ...declared.home,
+      slots: [
+        ...declared.home.slots,
+        { personId: "H-coach", slot: "starting", orderNo: 90, role: "coach" },
+        { personId: "H-staff", slot: "bench", orderNo: 91, role: "staff" },
+      ],
+    },
+    away: declared.away,
+  });
+
+  it("the engine refuses a coach's retirement (the reason the pad must not offer one)", () => {
+    const base = viewOf("hockey", undefined, { lineups: withOfficials });
+    expect(() =>
+      applyRetirement("hockey", base, { type: RETIREMENT_TYPE, payload: { side: base.lineups.home.entrantId, personId: "H-coach", reason: RETIREMENT_REASON } }),
+    ).toThrow(/coach/);
+  });
+
+  it("no retirement picker and no Sub picker offers a non-player, in any of the four sports", () => {
+    let checked = 0;
+    for (const key of OFFERING) {
+      const { view } = viewOf(key, undefined, { lineups: withOfficials });
+      // anti-vacuity: the coach IS seated by the kickoff sheet, so the filter is what keeps him out
+      if (key !== "football") expect(view.squads.home.members.find((m) => m.personId === "H-coach")?.onField, `${key}: seated`).toBe(true);
+      for (const slot of (skinOf(key).swap?.(view) ?? []).filter((s) => s.side === "home")) {
+        expect(slot.offCandidates ?? [], `${key} ${slot.id}: off`).not.toContain("H-coach");
+        expect(slot.candidates, `${key} ${slot.id}: on`).not.toContain("H-staff");
+        expect(slot.candidates, `${key} ${slot.id}: on`).not.toContain("H-coach");
+        checked += 1;
+      }
+    }
+    expect(checked, "every sport's home slots were checked").toBeGreaterThanOrEqual(OFFERING.length);
   });
 });
 
