@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { test, expect, type APIRequestContext, type Page } from "@playwright/test";
+import { test, expect, type APIRequestContext, type Browser, type Page } from "@playwright/test";
 import { builtinModules } from "@seazn/engine/sports";
-import { apiJson, fixturePath, seedRosteredFixture, TAG, type RosteredFixture } from "./helpers";
+import { apiJson, fixturePath, loginUi, seedRosteredFixture, TAG, withDb, type RosteredFixture } from "./helpers";
 import { HOLD_MS } from "../src/components/v2/scorepad/queue";
-import { consentedAnonymousState, measureOverflowPx } from "./scorepad-a11y-kit";
+import { consentedAnonymousState, dismissCookieBanner, measureOverflowPx } from "./scorepad-a11y-kit";
 
 // W2e Task 30 (B2-1; D3, D13; rules X-SE-1, X-SE-3) — a disqualifying sanction ends the match FROM THE PAD.
 //
@@ -16,10 +16,13 @@ import { consentedAnonymousState, measureOverflowPx } from "./scorepad-a11y-kit"
 // the pair in order, that the match really is decided for the OTHER side, and that voiding the ending really brings the
 // prompt back.
 //
-// TWO SURFACES, BOTH WITHOUT THE ORGANISER'S SPECIAL PATH:
+// THREE SURFACES, TWO OF THEM WITHOUT THE ORGANISER'S SPECIAL PATH:
 //   - the HANDED DEVICE (`/score/[token]`) — a scorer, `canOrganise` false. Its forfeit is admitted by the server ONLY as the
 //     ending of its own side's sanction (D13), so it exercises `scorerMayForfeit` end to end. "Void my last entry" is the
 //     device chrome's own control (the pad unmounts nothing here: the fixture is decided, not finalized).
+//   - the OFFICIAL SCORER (session auth on the console page: an org VIEWER whose person is the accepted scorer the fixture
+//     names — not an organiser, not a device link). D13's headline path: the same `scorerMayForfeit` predicate, reached
+//     through the session door, and the official's own void-any-event power (the activity row).
 //   - the ORGANISER'S CONSOLE (`/competitions/.../fixtures/..`) — the organiser's void of the ending is the activity row's
 //     two-step Void.
 //
@@ -63,6 +66,61 @@ function pad(page: Page) {
 }
 const sheet = (page: Page) => pad(page).locator('[data-role="v3-sheet"]');
 const prompt = (page: Page) => page.getByTestId("pad-ending-pending");
+const scorebug = (page: Page) => pad(page).locator('[data-role="v3-scorebug"]');
+const scorebugHalves = (page: Page) => pad(page).locator('[data-role="v3-scorebug-half"]');
+
+/** The sport's own scorebug invitation to tap ("Tap to award the rally"), from the dictionary's declared `…scorebug.*.hint` keys. */
+function scorebugHintsOf(sportKey: string): string[] {
+  const re = new RegExp(`^pad\\.${sportKey}\\.scorebug\\..*hint$`);
+  const hints = Object.entries(EN).filter(([key]) => re.test(key)).map(([, text]) => text);
+  expect(hints.length, `${sportKey}: the dictionary declares a scorebug hint to look for`).toBeGreaterThan(0);
+  return hints;
+}
+
+/**
+ * An ACCEPTED official scorer for one fixture, minted as bracket-finish.spec.ts:187 and forfeit-dialog.spec.ts:154 mint one (the
+ * suite has no official storage state): an org VIEWER whose person is the official the fixture names, signed in by session.
+ * The viewer row is a team SEAT in the shared org (Pro `members.max`), so it lives exactly as long as the page: `close()` frees it.
+ */
+async function officialScorerPage(browser: Browser, fixtureId: string): Promise<{ page: Page; close: () => Promise<void> }> {
+  const tag = Math.random().toString(36).slice(2, 8);
+  const email = `delivered+w2e-official-${TAG}-${tag}@resend.dev`;
+  let orgId = "";
+  let userId = "";
+  await withDb(async (sql) => {
+    const [u] = await sql<{ id: string }[]>`
+      insert into users (email, display_name, email_verified) values (${email}, ${"W2e Official " + tag}, true) returning id`;
+    const [o] = await sql<{ org_id: string }[]>`
+      select c.org_id from fixtures f join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id
+       where f.id = ${fixtureId}`;
+    orgId = o!.org_id;
+    userId = u!.id;
+    await sql`insert into org_members (org_id, user_id, role) values (${o!.org_id}, ${u!.id}, 'viewer')`;
+    const [p] = await sql<{ id: string }[]>`
+      insert into persons (org_id, full_name, user_id, lane) values (${o!.org_id}, ${"W2e Official " + tag}, ${u!.id}, 'official') returning id`;
+    const [off] = await sql<{ id: string }[]>`
+      insert into officials (org_id, display_name, role_keys, person_id)
+      values (${o!.org_id}, ${"W2e Official " + tag}, ${sql.json(["scorer"])}, ${p!.id}) returning id`;
+    await sql`insert into fixture_officials (org_id, fixture_id, official_id, role_key, response)
+              values (${o!.org_id}, ${fixtureId}, ${off!.id}, 'scorer', 'accepted')`;
+  });
+  const context = await browser.newContext({ storageState: { cookies: [], origins: [] }, viewport: { width: 1280, height: 900 } });
+  const page = await context.newPage();
+  await loginUi(page, email);
+  await page.request.post("/api/onboarding/complete", { data: {} }).catch(() => undefined);
+  return {
+    page,
+    close: async () => {
+      try {
+        await context.close();
+      } finally {
+        await withDb(async (sql) => {
+          await sql`delete from org_members where org_id = ${orgId} and user_id = ${userId}`;
+        });
+      }
+    },
+  };
+}
 
 interface LedgerRow {
   id: string;
@@ -134,6 +192,11 @@ for (const sport of SPORTS) {
       if ((await accept.count()) > 0) await accept.click();
       await expect(pad(page), "the v3 pad must render on the device link").toBeVisible({ timeout: 20_000 });
 
+      // The positive pair for I-1 below: a quiet pad's scorebug DOES invite the tap, and is not inert.
+      const hints = scorebugHintsOf(sport.key);
+      await expect(scorebug(page), "a live scorebug shows its tap hint").toContainText(hints[0]!);
+      await expect(pad(page).locator('[data-scorebug-inert="true"]')).toHaveCount(0);
+
       const sentence = await sanctionHomeUpToConfirm(page, sport);
       expect(sentence).toMatch(/^This ends the match: .+ loses$/);
       // Nothing was recorded by asking.
@@ -180,6 +243,25 @@ for (const sport of SPORTS) {
       await expect(page.getByTestId("device-void-mine"), "the scorer keeps a way to take the sanction back").toBeVisible();
       // The board is not offered under the prompt.
       await expect(pad(page).locator('[data-role="v3-tiles"]')).toHaveCount(0);
+
+      // I-1 — the SCOREBUG under the prompt. It stops inviting taps (no hint, both halves inert), and a tap on it is refused,
+      // said so in the scorer's words, and writes nothing — not even after the soft-commit hold a recorded tap would sit in.
+      await expect(scorebugHalves(page), "both halves are on the pad").toHaveCount(2);
+      for (const half of await scorebugHalves(page).all()) {
+        await expect(half).toHaveAttribute("data-scorebug-inert", "true");
+        await expect(half).toHaveAttribute("aria-disabled", "true");
+      }
+      for (const hint of hints) await expect(scorebug(page), `"${hint}" must be gone under the prompt`).not.toContainText(hint);
+      const before = await ledger(request, fx.fixtureId);
+      // `force`: the half is aria-disabled ON PURPOSE (Playwright would otherwise wait for it to become enabled); a scorer's
+      // habitual tap on the score is exactly what this proves is answered.
+      await scorebugHalves(page).first().click({ force: true });
+      await expect(page.locator('[data-role="v3-rejection"]'), "the tap is answered, in the scorer's words").toHaveText(
+        EN["pad.ending.blocked"]!,
+      );
+      await page.waitForTimeout(HOLD_MS + 1_500);
+      expect(await ledger(request, fx.fixtureId), "a refused scorebug tap writes nothing").toEqual(before);
+      await expect(prompt(page), "and the prompt stays in front").toBeVisible();
 
       // Re-confirm from the prompt: a fresh ending against the same side, and the match is decided again.
       await page.getByTestId("pad-ending-record").click();
@@ -245,6 +327,60 @@ for (const sport of SPORTS) {
     await expect(pad(page).locator('[data-role="v3-tiles"]'), "play resumes on the board").toBeVisible();
   });
 }
+
+// ---------------------------------------------------------------------------
+// The official scorer — session auth, not an organiser and not a device link (D13's headline path)
+// ---------------------------------------------------------------------------
+
+test("badminton v3 official scorer: the disqualification asks, sends the pair, and the official's void of the ending from the activity row brings the prompt back", async ({
+  browser,
+  request,
+}) => {
+  test.setTimeout(BUDGET_MS);
+  // single-sport: the scorer's door (session vs device link) is sport-blind, and the per-sport pair is already swept above
+  // for the device link and the console; badminton is the sport the owner's D13 table names first.
+  const sport = SPORTS.find((s) => s.key === "badminton")!;
+  expect(sport, "badminton must declare an end level").toBeDefined();
+  const fx = await seed(request, sport.key, "Official");
+  const official = await officialScorerPage(browser, fx.fixtureId);
+  try {
+    const page = official.page;
+    await page.goto(await fixturePath(request, fx.fixtureId));
+    await dismissCookieBanner(page);
+    await expect(page.getByRole("link", { name: /My matches/ }), "a scorer here, not a bare viewer").toBeVisible();
+    await expect(pad(page), "an accepted official scorer is given the pad").toBeVisible({ timeout: 20_000 });
+    await expect(page.getByTestId("score-forfeit"), "and, as a scorer, not the organiser's Forfeit").toHaveCount(0);
+
+    // Ask, confirm: the sanction and its ending, against the same entrant, written by the OFFICIAL's session.
+    expect(await sanctionHomeUpToConfirm(page, sport)).toMatch(/^This ends the match: .+ loses$/);
+    await confirmEnding(page);
+    await expect.poll(async () => (await typesOf(request, fx.fixtureId)).length, { timeout: DRAIN_MS }).toBe(3);
+    const rows = await ledger(request, fx.fixtureId);
+    expect(rows.map((e) => e.type)).toEqual(["core.start", sport.eventType, "core.forfeit"]);
+    expect(rows[1]!.payload.by).toBe(fx.homeEntrantId);
+    expect(rows[2]!.payload, "the ending names the same entrant, disqualified").toEqual({
+      by: fx.homeEntrantId,
+      reason: "disqualified",
+    });
+    const state = await apiJson<{ outcome: { winner?: string } | null }>(request, `/api/v1/fixtures/${fx.fixtureId}/state`);
+    expect(state.data?.outcome?.winner, "the other side wins").toBe(fx.awayEntrantId);
+    await expect(prompt(page)).toHaveCount(0);
+
+    // The official voids the ending from the activity row (two-step), and the prompt is back.
+    const newestRow = page.locator('[data-role="v3-activity-row"]').first();
+    await newestRow.locator('[data-role="v3-activity-void"]').click();
+    await newestRow.locator('[data-role="v3-activity-void-confirm"]').click();
+    await expect
+      .poll(async () => (await typesOf(request, fx.fixtureId)).at(-1), { timeout: 30_000 })
+      .toBe("core.void");
+    await expect(prompt(page), "voiding the ending must bring the prompt back").toBeVisible({ timeout: 30_000 });
+    // D13: the sanction is the last live event again, so the official may record the ending once more.
+    await expect(page.getByTestId("pad-ending-record")).toBeVisible();
+    await expect(pad(page).locator('[data-role="v3-tiles"]')).toHaveCount(0);
+  } finally {
+    await official.close();
+  }
+});
 
 // ---------------------------------------------------------------------------
 // A warning is one ordinary event
