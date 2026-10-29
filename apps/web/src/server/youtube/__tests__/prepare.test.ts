@@ -32,6 +32,7 @@ import fr from "@/dictionaries/fr/ui.json";
 import nl from "@/dictionaries/nl/ui.json";
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
+import { siteOrigin } from "@/lib/site-origin";
 import { youtubeRefusalIsStale } from "@/components/v2/fixture-stream-panel";
 import { insertStreamTarget } from "@/server/relay/secret-columns";
 import { listStreamTargets } from "@/server/usecases/stream-targets";
@@ -249,11 +250,17 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
   it("RF4 (R4): the title and description are in the org's default_locale — es (and every locale, checked === 4); the en words are ABSENT", async () => {
     const w = await world(4);
     const dicts = { en, es, fr, nl } as Record<string, Record<string, string>>;
+    // The site link under the description is the same origin the match URL uses (stg links stg, prod links prod), read through
+    // the same function the app reads it with: this proves the link is WIRED (a locale, a trailing "/"), not what the origin is.
+    const origin = siteOrigin();
+    expect(origin).toMatch(/^https?:\/\/[^/]+$/);
     const [{ comp }] = await sql<{ comp: string }[]>`
       select c.name as comp from fixtures f join divisions d on d.id = f.division_id join competitions c on c.id = d.competition_id
        where f.id = ${w.fixtures[0]!}`;
     let checked = 0;
     let witnessed = 0;   // locale words that differ from English, so their absence is a real witness
+    let poweredChecked = 0;   // locales whose description carries the localised "Powered by Seazn Club · origin/" paragraph
+    let poweredWitnessed = 0;   // of those, the non-en ones whose words differ from English (so the English words' absence is a witness)
     // es first (the brief's case); fr's schedule.vs ("contre") is the one locale whose vs differs from en's "vs".
     for (const [i, locale] of (["es", "fr", "nl", "en"] as const).entries()) {
       const f = w.fixtures[i]!;
@@ -266,7 +273,18 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
       const d = dicts[locale]!;
       expect(yt.title, locale).toBe(`${home} ${d["schedule.vs"]} ${d["schedule.tbd"]} · Open · ${comp}`);
       expect(yt.description.startsWith(`${d["streaming.youtube.broadcast.descriptionLine"]} `), locale).toBe(true);
+      // Second paragraph (owner request 2026-10-29): "Powered by Seazn Club · <origin>/", in the org's locale, and last.
+      const poweredBy = d["streaming.youtube.broadcast.poweredBy"]!;
+      expect(poweredBy, `${locale} has the key`).toBeTruthy();
+      expect(yt.description.endsWith(`\n\n${poweredBy} · ${origin}/`), locale).toBe(true);
+      const paragraphs = yt.description.split("\n\n");
+      expect(paragraphs, `${locale} paragraphs`).toHaveLength(2);
+      expect(paragraphs[0], `${locale} first paragraph still carries the match URL`).toContain(`${origin}/shared/`);
+      poweredChecked++;
       if (locale !== "en") {
+        expect(poweredBy, `${locale} words differ from en`).not.toBe(en["streaming.youtube.broadcast.poweredBy"]);
+        expect(yt.description, `${locale} has no en powered-by words`).not.toContain(en["streaming.youtube.broadcast.poweredBy"]);
+        poweredWitnessed++;
         for (const key of ["schedule.vs", "schedule.tbd"]) {
           if (d[key] === en[key as keyof typeof en]) continue;
           expect(yt.title, `${locale} ${key}`).not.toContain(` ${en[key as keyof typeof en]}`);
@@ -282,6 +300,8 @@ describe.skipIf(!HAS_DB)("prepareYoutubeBroadcast — a new broadcast (spec §6.
     expect(checked).toBe(4);
     // es: tbd + line; fr: vs + tbd + line; nl: tbd + line.
     expect(witnessed).toBe(7);
+    expect(poweredChecked).toBe(4);
+    expect(poweredWitnessed).toBe(3);   // es, fr, nl
   });
 
   it("two fixtures prepared at once on one channel → two keys; when the first completes, a third fixture reuses its key (no insertStream)", async () => {

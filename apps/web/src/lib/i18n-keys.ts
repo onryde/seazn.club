@@ -7839,6 +7839,7 @@ export type DictionaryKey =
   | "streaming.youtube.action.settings"
   | "streaming.youtube.alreadyConnected"
   | "streaming.youtube.broadcast.descriptionLine"
+  | "streaming.youtube.broadcast.poweredBy"
   | "streaming.youtube.channelLink"
   | "streaming.youtube.channels"
   | "streaming.youtube.connect"

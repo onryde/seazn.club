@@ -1463,6 +1463,7 @@
   "streaming.youtube.error.notOffered": "Ese canal no es uno de los que ofrece esta cuenta de Google. Elige de nuevo o empieza otra vez.",
   "streaming.youtube.error.gone": "Este canal ya no está conectado. Recarga la página.",
   "streaming.youtube.broadcast.descriptionLine": "Marcador en directo y resultados:",
+  "streaming.youtube.broadcast.poweredBy": "Con la tecnología de Seazn Club",
   "streaming.youtube.part": "Parte {n}",
   "streaming.youtube.replay.region": "Repetición del partido",
   "streaming.youtube.replay.tabs": "Partes de la repetición",
