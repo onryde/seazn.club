@@ -7,6 +7,16 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-10-29",
+    title: "The standings export prints what the public standings table prints",
+    lines: [
+      "GET /divisions/{id}/exports/standings (PDF and XLSX) now builds its columns and cells from the same selection as the public table. After Pts it prints the sport's derived columns the stage's tie-break order uses (cricket NRR, set-sport ratios and differences, carrom ratios, chess Buchholz Cut-1, Buchholz and Sonneborn-Berger, hockey field goals, tennis game ratio), in the public order, with the public header and text.",
+      "A value nobody recorded prints \u2014 where it used to print 0: a team that has not played shows \u2014 for goals for, goals against and goal difference, as the public table does. Counts (played, won, drawn, lost, points) stay numbers. In the XLSX a recorded whole number is still a numeric cell; a \u2014, a decimal under a declared precision, a half-point (1\u00bd) and every derived value is a text cell.",
+      "A reader that finds a column by its header text is unaffected; one that reads columns by position will find the derived columns after Pts. The PDF's standings columns are also sized from their own content now.",
+      "This is the document the organiser prints: no JSON field of the API changes.",
+    ],
+  },
+  {
+    date: "2026-10-29",
     title: "Breaking: a cricket test-variant stage no longer accepts superOverStillTied",
     lines: [
       "superOverStillTied is what a tied super over does (another super over, or a tied match). A cricket test match is two innings a side and has no super over, so the key is now offered only on the t20, odi and hundred variants.",
