@@ -367,7 +367,6 @@ async function checkConnection(p: Pass, c: Conn): Promise<void> {
  *  is active, when the key is in use and the row is only reported. Its `stream_url` rules are unchanged: a failed row writes no link. */
 async function settleStuck(p: Pass): Promise<void> {
   const byAge = new Date(p.now.getTime() - YOUTUBE_END_STUCK_AFTER_MINUTES * MINUTE_MS);
-  const leaseEnd = new Date(p.now.getTime() + CLAIM_LEASE_MINUTES * MINUTE_MS);
   const stuck = await sql<{ id: string; org_id: string; connection_id: string; state: string; attempts: number; last_error_code: string | null }[]>`
     select b.id, b.org_id, b.connection_id, b.state, b.attempts, b.last_error_code
       from youtube_broadcasts b
@@ -386,12 +385,16 @@ async function settleStuck(p: Pass): Promise<void> {
     try {
       // Not under a claim in flight: the end step leases a row it is calling YouTube for (next_attempt_at = claim + CLAIM_LEASE_MINUTES),
       // and finalizing under that call would let a `complete` that is about to succeed be overwritten by `failed`. The window is only
-      // the lease's own length - a row failing for good sits in the hourly backoff, far beyond it, and must stay finalizable.
+      // the lease's own length - a row failing for good sits in the hourly backoff, far beyond it, and must stay finalizable. It is
+      // read on the DATABASE's clock, here at the finalize, never on `p.now`: a lease is written at claim time, which can be long after
+      // the pass began (`p.now` is its start instant), and a window anchored on the start would call a lease taken since then "far
+      // beyond" it and finalize under the call (the same reason last_health_at is stamped by the database).
       await sql`
         update youtube_broadcasts b
            set state = 'failed', last_error_code = ${CODE_STUCK}, completed_at = ${p.now}, reserved_until = null, next_attempt_at = null
          where b.id = ${b.id} and b.org_id = ${b.org_id} and b.state in ${sql([...OPEN_STATES])}
-           and (b.next_attempt_at is null or b.next_attempt_at <= ${p.now} or b.next_attempt_at > ${leaseEnd})
+           and (b.next_attempt_at is null or b.next_attempt_at <= now()
+                or b.next_attempt_at > now() + (${CLAIM_LEASE_MINUTES}::float8 * interval '1 minute'))
            and not exists (select 1 from fixture_stream_sessions s
                             where s.youtube_broadcast_id = b.id and s.state in ${sql([...ACTIVE_STATES])})`;
     } catch (err) {

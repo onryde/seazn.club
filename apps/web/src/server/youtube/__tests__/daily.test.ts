@@ -887,28 +887,32 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(row.last_error_code).not.toBe("end_stuck");
     });
 
-    it("a stuck row the end step has CLAIMED right now (its lease in the future, a call in flight) is reported but not finalized under it; the pass after the step settles is free to (carry f, fix round 1)", async () => {
+    it("a stuck row the end step has CLAIMED right now (its lease in the future, a call in flight) is reported but not finalized under it - even when the pass's own clock runs an hour BEHIND the claim; the pass after the step settles is free to (carry f, fix rounds 1 and 2)", async () => {
       const w = await world();
       refuseComplete(w.fake);
       const m = await playAndStop(w, w.fixtures[0]!);
       await failTo(w, m.broadcastId, STUCK_ATTEMPTS, afterStop(m, min(6)));
-      const dueAt = (await broadcastRow(m.broadcastId)).next_attempt_at!.getTime();
+      // The hourly backoff runs out BY THE DATABASE'S CLOCK (the world's simulated one ran a day ahead of it while the failures were played);
+      // the world returns to the present, where a real claim and the daily pass that races it both happen.
+      await sql`update youtube_broadcasts set next_attempt_at = now() - interval '1 minute' where id = ${m.broadcastId}`;
+      w.setNow(Date.now());
+      const claimAt = w.now();
 
-      // The REAL step claims the row at its own backoff instant; the daily pass runs while that claim's call is in flight.
+      // The REAL step claims the row at claim time; the daily pass - started an hour earlier by its own clock - runs while that call is in flight.
       let during: YoutubeDailyResult | null = null;
       let leaseSeen: Date | null = null;
       await w.step({
-        at: dueAt,
+        at: claimAt,
         hooks: {
           afterClaim: async (id) => {
             if (id !== m.broadcastId) return;
             leaseSeen = (await broadcastRow(id)).next_attempt_at;
-            during = await daily(w, { now: new Date(w.now()) });
+            during = await daily(w, { now: new Date(claimAt - min(60)) });
           },
         },
       });
       expect(leaseSeen, "premise: the step leased the row (next_attempt_at is the lease)").not.toBeNull();
-      expect((leaseSeen as unknown as Date).getTime() - dueAt, "premise: a lease is the engine's own CLAIM_LEASE_MINUTES").toBe(CLAIM_LEASE_MINUTES * MIN);
+      expect((leaseSeen as unknown as Date).getTime() - claimAt, "premise: a lease is the engine's own CLAIM_LEASE_MINUTES").toBe(CLAIM_LEASE_MINUTES * MIN);
       expect(during, "premise: the pass ran during the claim").not.toBeNull();
       expect(during).toMatchObject({ failed: 1 });   // it was stuck, so it was reported ...
       const row = await broadcastRow(m.broadcastId);
@@ -917,20 +921,23 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(row.attempts, "premise: the step's own failure landed after the pass").toBe(STUCK_ATTEMPTS + 1);
 
       // The positive pair: once the step has settled (its lease replaced by the hourly backoff), the same row IS finalized.
-      expect(await daily(w, { now: new Date(w.now()) })).toMatchObject({ failed: 1 });
+      expect(await daily(w, { now: new Date(w.now() - min(60)) })).toMatchObject({ failed: 1 });
       expect(await broadcastRow(m.broadcastId)).toMatchObject({ state: "failed", last_error_code: "end_stuck" });
     });
 
-    // The window is [now, now + lease]: a row in the hourly backoff (the normal state of a row that fails for good) must NOT hide in it,
-    // or no row would ever be finalized. Each case is a fresh world: a finalized row cannot be un-finalized.
-    const LEASE_WINDOW: { name: string; next: (now: number) => number | null; finalized: boolean }[] = [
-      { name: "no lease (an admission claim, or a cleared backoff)", next: () => null, finalized: true },
-      { name: "a lease that ran out a minute ago (a crashed claim)", next: (now) => now - min(1), finalized: true },
-      { name: "a lease that runs out at this very instant", next: (now) => now, finalized: true },
-      { name: "a lease with half its life left", next: (now) => now + (CLAIM_LEASE_MINUTES * MIN) / 2, finalized: false },
-      { name: "a lease that has all its life left", next: (now) => now + CLAIM_LEASE_MINUTES * MIN, finalized: false },
-      { name: "a wait a minute longer than any lease (the hourly backoff of a row that fails for good)", next: (now) => now + (CLAIM_LEASE_MINUTES + 1) * MIN, finalized: true },
-      { name: "the hourly backoff itself", next: (now) => now + 60 * MIN, finalized: true },
+    // The window is (now, now + lease] on the DATABASE's clock - the one a lease is written against at claim time, and later than the
+    // pass's own start instant - so every case seeds next_attempt_at relative to the database and hands the pass a clock an hour BEHIND.
+    // A row in the hourly backoff (the normal state of a row that fails for good) must NOT hide in the window, or no row would ever be
+    // finalized. Each case is a fresh world: a finalized row cannot be un-finalized. (The instant `next_attempt_at = now()` is not a case:
+    // the gate reads a later now() than the seed, so the two edges cannot be told apart from outside.)
+    const LEASE_WINDOW: { name: string; nextInSeconds: number | null; finalized: boolean }[] = [
+      { name: "no lease (an admission claim, or a cleared backoff)", nextInSeconds: null, finalized: true },
+      { name: "a lease that ran out a minute ago (a crashed claim)", nextInSeconds: -60, finalized: true },
+      { name: "a lease that ran out a second ago", nextInSeconds: -1, finalized: true },
+      { name: "a lease with half its life left", nextInSeconds: (CLAIM_LEASE_MINUTES * 60) / 2, finalized: false },
+      { name: "a lease that has all its life left", nextInSeconds: CLAIM_LEASE_MINUTES * 60, finalized: false },
+      { name: "a wait a minute longer than any lease", nextInSeconds: (CLAIM_LEASE_MINUTES + 1) * 60, finalized: true },
+      { name: "the hourly backoff of a row that fails for good", nextInSeconds: 60 * 60, finalized: true },
     ];
     for (const c of LEASE_WINDOW) {
       it(`the stuck finalize and the lease window - ${c.name}: ${c.finalized ? "finalized" : "left to the end step"}`, async () => {
@@ -938,12 +945,14 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
         refuseComplete(w.fake);
         const m = await playAndStop(w, w.fixtures[0]!);
         await failTo(w, m.broadcastId, 1, afterStop(m, min(6)));
-        const at = w.now();
-        const next = c.next(at);
-        await sql`update youtube_broadcasts set attempts = ${STUCK_ATTEMPTS}, next_attempt_at = ${next === null ? null : new Date(next)} where id = ${m.broadcastId}`;
+        await sql`
+          update youtube_broadcasts
+             set attempts = ${STUCK_ATTEMPTS},
+                 next_attempt_at = ${c.nextInSeconds === null ? null : sql`now() + (${c.nextInSeconds}::float8 * interval '1 second')`}
+           where id = ${m.broadcastId}`;
         expect(await broadcastRow(m.broadcastId), "premise: an ending row at the bound").toMatchObject({ state: "ending", attempts: STUCK_ATTEMPTS });
 
-        expect(await daily(w, { now: new Date(at) }), "it is stuck either way: reported").toMatchObject({ failed: 1 });
+        expect(await daily(w, { now: new Date(Date.now() - min(60)) }), "it is stuck either way: reported").toMatchObject({ failed: 1 });
         expect((await broadcastRow(m.broadcastId)).state).toBe(c.finalized ? "failed" : "ending");
       });
     }
