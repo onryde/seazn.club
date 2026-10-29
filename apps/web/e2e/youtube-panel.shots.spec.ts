@@ -871,6 +871,10 @@ test("Disconnect - the confirm dialog, the refusal while a match is using the ch
     await withDb((sql) => sql`
       insert into youtube_broadcasts (org_id, connection_id, fixture_id, title, privacy, state)
       values (${r.orgId}, ${connectionId}, ${r.fixtureId!}, ${"disconnect shots " + w}, 'unlisted', 'bound')`);
+    // Premise (B6 batch review N2): the refusal shot below only means something if a match really holds the channel. Read the row back.
+    const held = () => withDb((sql) => sql<{ n: number }[]>`
+      select count(*)::int as n from youtube_broadcasts where connection_id = ${connectionId} and state = 'bound'`).then((x) => x[0]!.n);
+    expect(await held(), `premise at ${w}: a bound broadcast holds the channel`).toBe(1);
 
     const disconnect = row.getByTestId("youtube-disconnect");
     await waitForHydration(disconnect);
@@ -911,10 +915,13 @@ test("Disconnect - the confirm dialog, the refusal while a match is using the ch
 
     // (3) The match is over: the same tap now disconnects. The channel leaves the list; the page keeps the news.
     await withDb((sql) => sql`delete from youtube_broadcasts where connection_id = ${connectionId}`);
+    expect(await held(), `premise at ${w}: the match is over - nothing holds the channel`).toBe(0);
     await disconnect.click();
     await dialog.getByRole("button", { name: en("streaming.youtube.disconnect.confirm"), exact: true }).click();
     const notice = page.getByTestId("youtube-disconnected");
     await expect(notice).toContainText(en("streaming.youtube.disconnect.done", { name: ch.title }));
+    // m6: the button that asked left with the row; the news takes focus, so a keyboard or screen-reader user is not dropped at the top.
+    await expect(notice, `focus follows the news at ${w}`).toBeFocused();
     await expect(page.getByTestId("youtube-channel-row"), "the channel left the list").toHaveCount(0);
     // F5: connecting this channel raised "YouTube channel connected."; it must not sit above "X is disconnected", and a reload must not bring it back
     await expect(page.getByTestId("youtube-landing"), `the stale connect banner is gone at ${w}`).toHaveCount(0);
@@ -989,6 +996,7 @@ test("Disconnect stays reachable after the org loses Go live - the restricted St
     await page.getByRole("alertdialog").getByRole("button", { name: en("streaming.youtube.disconnect.confirm"), exact: true }).click();
     await expect(rows).toHaveCount(left);
     await expect(page.getByTestId("youtube-disconnected")).toContainText(en("streaming.youtube.disconnect.done", { name }));
+    await expect(page.getByTestId("youtube-disconnected"), `focus follows the news on the restricted page too (${name})`).toBeFocused();
   }
   await expect(page.getByTestId("stream-disconnect-only-empty")).toHaveText(en("streaming.youtube.disconnectOnly.none"));
   // F7: the last one took the page's own nav with it - the page re-rendered at the emptied URL (not the 404), and what the person was
