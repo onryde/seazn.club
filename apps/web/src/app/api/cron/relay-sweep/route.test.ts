@@ -49,7 +49,7 @@ const req = () => new Request("http://internal:3000/api/cron/relay-sweep", { met
 
 const ROW = JOBS.find((j: Job) => j.id === "relay-sweep");
 /** The YouTube pass's answer when it had nothing to do (YoutubeDailyResult, youtube/daily.ts). */
-const YZERO = { checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, purged: 0, failed: 0 };
+const YZERO = { checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0 };
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -109,7 +109,7 @@ describe("POST /api/cron/relay-sweep", () => {
     authorised();
     m.deps.mockReturnValue(m.sentinel);
     const summary = { backstop: { candidates: 3, visited: 3 }, machinesListed: 1, videosListed: 7 };
-    const youtube = { checked: 4, reconnectNeeded: 1, refreshed: 9, removed: 2, purged: 1, failed: 0 };
+    const youtube = { checked: 4, reconnectNeeded: 1, refreshed: 9, removed: 2, keysRemoved: 0, purged: 1, failed: 0 };
     m.sweep.mockResolvedValue(summary);
     m.daily.mockResolvedValue(youtube);
     const res = await POST(req());
@@ -190,7 +190,7 @@ describe("POST /api/cron/relay-sweep", () => {
       return failureCountsOver0(ROW!, await res.text());
     };
     expect(await read(YZERO), "nothing connected: healthy").toEqual({});
-    expect(await read({ checked: 9, reconnectNeeded: 3, refreshed: 40, removed: 5, purged: 2, failed: 0 }), "a dead grant is the pass working, not failing").toEqual({});
+    expect(await read({ checked: 9, reconnectNeeded: 3, refreshed: 40, removed: 5, keysRemoved: 0, purged: 2, failed: 0 }), "a dead grant is the pass working, not failing").toEqual({});
     expect(await read({ ...YZERO, checked: 9, failed: 2 })).toEqual({ "data.youtube.failed": 2 });
   });
 
