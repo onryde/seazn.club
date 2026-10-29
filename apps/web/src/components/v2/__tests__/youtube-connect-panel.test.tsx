@@ -1030,7 +1030,7 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     answerWith(async () => { throw await wire(inUse()); });
     const row = mount({}, { onDisconnected });
     await click(disconnectBtn(row));
-    expect(textAt(row.tree(), "youtube-error")).toBe("A match is live on this channel, or about to be. Disconnect it once that match has ended.");
+    expect(textAt(row.tree(), "youtube-error")).toBe("A match is live on this channel, or its stream only just stopped and the channel is held for a few minutes. Disconnect it once that time has passed.");
     expect(textAt(row.tree(), "youtube-error")).toBe(m("streaming.youtube.error.inUse"));
     expect(nav.refresh).not.toHaveBeenCalled();
     expect(onDisconnected).not.toHaveBeenCalled();
@@ -1227,6 +1227,30 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
     expect(m("streaming.youtube.disconnect.doneShared", { name: "X" })).toMatch(/another channel on the same Google account is still connected/);
     expect(m("streaming.youtube.disconnect.doneUnconfirmed", { name: "X" })).toMatch(/couldn't confirm that Google removed Seazn's access/);
     expect(m("streaming.youtube.disconnect.done", { name: "X" })).not.toMatch(/Google/);
+  });
+
+  it("B6 batch review m5 / N5, in every locale: the in-use sentence says the channel is held a few minutes after a stream stops; the shared-account sentence names the account that connected THIS channel, never 'your' account; the end-unknown sentence is a persistent fault - reported, contact support, no 'try again'", () => {
+    // The wording each locale must carry (typed from the ruling), and the wording it must NOT: the old sentences' tell-tales.
+    const want: Record<string, { inUse: RegExp; sharedNot: RegExp; unknownYes: RegExp; unknownNot: RegExp }> = {
+      en: { inUse: /held for a few minutes/, sharedNot: /your Google account/, unknownYes: /has been reported.*contact support/, unknownNot: /try again/i },
+      es: { inUse: /unos minutos/, sharedNot: /tu cuenta de Google/, unknownYes: /comunicado.*soporte/, unknownNot: /Inténtalo/ },
+      fr: { inUse: /quelques minutes/, sharedNot: /votre compte Google/, unknownYes: /signalé.*support/, unknownNot: /Réessayez/ },
+      nl: { inUse: /enkele minuten/, sharedNot: /je Google-account/, unknownYes: /gemeld.*support/, unknownNot: /Probeer het/ },
+    };
+    expect(m("streaming.youtube.disconnect.doneShared", { name: "X" })).toMatch(/the Google account that connected this channel/);
+    let checked = 0;
+    for (const l of LOCALES) {
+      const w = want[l]!;
+      const d = localeDict(l);
+      expect(d["streaming.youtube.error.inUse"], `${l} inUse`).toMatch(w.inUse);
+      expect(d["streaming.youtube.disconnect.doneShared"], `${l} doneShared`).not.toMatch(w.sharedNot);
+      expect(d["streaming.youtube.disconnect.doneShared"], `${l} doneShared keeps its slot`).toContain("{name}");
+      expect(d["streaming.youtube.error.endUnknown"], `${l} endUnknown`).toMatch(w.unknownYes);
+      expect(d["streaming.youtube.error.endUnknown"], `${l} endUnknown is not a retry`).not.toMatch(w.unknownNot);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every locale judged").toBe(LOCALES.length);
+    expect(Object.keys(want).sort(), "and the table covers exactly the locales there are").toEqual([...LOCALES].sort());
   });
 
   it("the new sentences exist in all four locales, keep their {name} slot where they have one, and are not the English in es/fr/nl", () => {
