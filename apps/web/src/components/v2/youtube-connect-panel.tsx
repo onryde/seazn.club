@@ -20,7 +20,7 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { apiV1 } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
 import {
-  STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_GUIDELINES_URL, YOUTUBE_PRIVACIES, YOUTUBE_TOS_URL, youtubeLanding,
+  GOOGLE_THIRD_PARTY_ACCESS_URL, STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_GUIDELINES_URL, YOUTUBE_PRIVACIES, YOUTUBE_TOS_URL, youtubeLanding,
   type YoutubeLandingCode, type YoutubePrivacy,
 } from "@/lib/youtube";
 import type { StreamTarget, YoutubeConnectionSaved, YoutubeDisconnected, YoutubePendingChannels } from "@/server/api-v1/schemas";
@@ -267,17 +267,30 @@ export function YoutubeLandingNotice({ code }: { code: BannerCode }) {
   );
 }
 
+/** What a disconnect did, as the page keeps it once the channel has left the list: its name and what became of the grant at Google. */
+export type DisconnectNews = { name: string; outcome: YoutubeDisconnected["revokeOutcome"] };
+
 /** What a disconnect said, once the channel has left the list: this is the PAGE's notice, because the row that asked is gone with the
- *  refresh. Dismissing it is local state (it is not a URL outcome like the landing banner). */
-export function YoutubeDisconnectedNotice({ name, onDismiss }: { name: string; onDismiss: () => void }) {
+ *  refresh. Dismissing it is local state (it is not a URL outcome like the landing banner). The sentence follows the revoke's outcome:
+ *  the grant was revoked; it was left alone on purpose (another channel on the same Google account still runs on it); or Seazn could not
+ *  confirm it - then the person is told where to remove Seazn themselves, a plain link to their Google account's third-party access. */
+export function YoutubeDisconnectedNotice({ name, outcome, onDismiss }: DisconnectNews & { onDismiss: () => void }) {
   const msg = useMsg();
+  const unconfirmed = outcome === "not_confirmed";
+  const sentence =
+    outcome === "revoked" ? msg("streaming.youtube.disconnect.done", { name })
+    : outcome === "skipped_shared_account" ? msg("streaming.youtube.disconnect.doneShared", { name })
+    : withSlots(msg("streaming.youtube.disconnect.doneUnconfirmed", { name }), {
+      link: <a href={GOOGLE_THIRD_PARTY_ACCESS_URL} data-testid="youtube-disconnected-google-link" {...EXTERNAL} className={LINK}>{msg("streaming.youtube.disconnect.googleLink")}</a>,
+    });
   return (
     <div
       data-testid="youtube-disconnected"
-      role="status"
-      className="flex items-start gap-3 rounded-lg border border-emerald-200 bg-emerald-50 p-3 text-sm text-emerald-900 max-md:flex-col md:items-center"
+      data-outcome={outcome}
+      role={unconfirmed ? "alert" : "status"}
+      className={`flex items-start gap-3 rounded-lg border p-3 text-sm max-md:flex-col md:items-center ${unconfirmed ? "border-amber-200 bg-amber-50 text-amber-900" : "border-emerald-200 bg-emerald-50 text-emerald-900"}`}
     >
-      <p className="min-w-0 flex-1 break-words">{msg("streaming.youtube.disconnect.done", { name })}</p>
+      <p className="min-w-0 flex-1 break-words">{sentence}</p>
       <button type="button" data-testid="youtube-disconnected-dismiss" onClick={onDismiss} className="btn btn-ghost min-h-11 shrink-0 px-3 max-md:w-full">
         {msg("streaming.youtube.dismiss")}
       </button>
@@ -418,9 +431,10 @@ const ACTION = "btn min-h-11 px-3 max-md:w-full";
 
 /** A connected channel's row. `disconnectOnly` is the restricted Streaming page an org sees when it can no longer go live but still has a
  *  connection (the relay is not offered): the only action is Disconnect, because Reconnect and Settings belong to a channel that can
- *  stream. `onDisconnected` hands the channel's name to the page, whose notice outlives this row (a disconnected channel leaves the list). */
+ *  stream. `onDisconnected` hands the page the channel's name and what became of the grant at Google, for the notice that outlives this
+ *  row (a disconnected channel leaves the list). */
 export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = false, onDisconnected, refreshAfter = true }: {
-  t: StreamTarget; canEdit: boolean; orgId: string; badge: ReactNode; disconnectOnly?: boolean; onDisconnected?: (name: string) => void;
+  t: StreamTarget; canEdit: boolean; orgId: string; badge: ReactNode; disconnectOnly?: boolean; onDisconnected?: (news: DisconnectNews) => void;
   /** Re-read the page after a disconnect (the default). The restricted page turns it off: see youtube-disconnect-only-panel.tsx. */
   refreshAfter?: boolean;
 }) {
@@ -478,8 +492,10 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
       if (!ok) return;
       setBusy(true);
       setError(null);
-      await apiV1<YoutubeDisconnected>(`/api/v1/orgs/${orgId}/youtube-connections/${y.connectionId}`, { method: "DELETE" });
-      onDisconnected?.(y.channelTitle);
+      const done = await apiV1<YoutubeDisconnected>(`/api/v1/orgs/${orgId}/youtube-connections/${y.connectionId}`, { method: "DELETE" });
+      // An answer that does not say what became of the grant is told as the cautious one: the person is pointed at Google, never
+      // assured of a revoke nobody confirmed.
+      onDisconnected?.({ name: y.channelTitle, outcome: done?.revokeOutcome ?? "not_confirmed" });
       if (refreshAfter) router.refresh();
     } catch (err) {
       // Already disconnected elsewhere (404): the list is the news. A match using the channel (409) is a sentence under the row.

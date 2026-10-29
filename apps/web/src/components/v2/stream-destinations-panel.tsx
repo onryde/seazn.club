@@ -27,6 +27,7 @@ import type { YoutubeLanding } from "@/lib/youtube";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 import {
   YoutubeChannelPicker, YoutubeChannelRow, YoutubeConnectCard, YoutubeDisconnectedNotice, YoutubeLandingNotice, wireOf, youtubeTargetLabel,
+  type DisconnectNews,
 } from "./youtube-connect-panel";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -129,8 +130,8 @@ export function StreamDestinationsPanel({
   const [addOpen, setAddOpen] = useState(initialAddOpen);
   const [connectOpen, setConnectOpen] = useState(initialConnectOpen);
   const [addError, setAddError] = useState<string | null>(null);
-  // The channel that was just disconnected: the row leaves the list on the refresh, so its news is kept here.
-  const [disconnected, setDisconnected] = useState<string | null>(null);
+  // The channel that was just disconnected and what became of its grant: the row leaves the list on the refresh, so its news is kept here.
+  const [disconnected, setDisconnected] = useState<DisconnectNews | null>(null);
 
   const run: Run = async (op, kind, call) => {
     try {
@@ -178,7 +179,7 @@ export function StreamDestinationsPanel({
     <div data-testid="stream-destinations" className="space-y-4">
       {landing && landing.code !== "pick" && <YoutubeLandingNotice code={landing.code} />}
       {pickPending !== null && <YoutubeChannelPicker orgId={orgId} pendingId={pickPending} />}
-      {disconnected !== null && <YoutubeDisconnectedNotice name={disconnected} onDismiss={() => setDisconnected(null)} />}
+      {disconnected !== null && <YoutubeDisconnectedNotice name={disconnected.name} outcome={disconnected.outcome} onDismiss={() => setDisconnected(null)} />}
       {canEdit && targets.length > 0 && (
         <div className="flex flex-wrap gap-2 max-md:flex-col">
           <button

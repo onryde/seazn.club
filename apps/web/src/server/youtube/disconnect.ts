@@ -30,7 +30,7 @@ import "server-only";
 //     shared ACCOUNT can - one person administering two clubs - and revoking its grant would drop that club's connection). The skip is
 //     recorded on the revoked row as the code `revoke_skipped_shared_grant`.
 // A YouTube failure never undoes or blocks the purge (it is already committed): the answer says what did not happen
-// (`revokedAtGoogle: false`, a lower `keysDeleted`), and the report carries a CODE or a class name, never a body.
+// (`revokeOutcome`: `not_confirmed`, a lower `keysDeleted`), and the report carries a CODE or a class name, never a body.
 //
 // SECRETS. The token lives in one local variable. A port refusal is a code (port.ts); anything else is reported as a fresh error naming
 // only its class (its message may hold a token). No token, key, ingest URL or Google body reaches a log line, a report, an error or a row.
@@ -193,5 +193,8 @@ export async function disconnectYoutube(
     if (!done.shared) revokedAtGoogle = (await attempt(() => port.revoke(token), c, "revoke")).ok;
   }
 
-  return { revokedAtGoogle, keysDeleted, purged: { broadcasts: done.purged.broadcasts, streamUrlsCleared: done.purged.streamUrlsCleared } };
+  // Three outcomes, never two: a grant left alone ON PURPOSE (another club runs on the account) is not a failure the organiser must fix
+  // at Google, and one that was tried and failed, or never tried for want of a usable token, is.
+  const revokeOutcome: YoutubeDisconnected["revokeOutcome"] = done.shared ? "skipped_shared_account" : revokedAtGoogle ? "revoked" : "not_confirmed";
+  return { revokedAtGoogle, revokeOutcome, keysDeleted, purged: { broadcasts: done.purged.broadcasts, streamUrlsCleared: done.purged.streamUrlsCleared } };
 }

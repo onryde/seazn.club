@@ -10,12 +10,12 @@
 import { useState } from "react";
 import { useMsg } from "@/components/i18n/dict-provider";
 import type { StreamTarget } from "@/server/api-v1/schemas";
-import { YoutubeChannelRow, YoutubeDisconnectedNotice } from "./youtube-connect-panel";
+import { YoutubeChannelRow, YoutubeDisconnectedNotice, type DisconnectNews } from "./youtube-connect-panel";
 
 export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; targets: StreamTarget[] }) {
   const msg = useMsg();
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
-  const [disconnected, setDisconnected] = useState<string | null>(null);
+  const [disconnected, setDisconnected] = useState<DisconnectNews | null>(null);
   const channels = targets.filter((t) => t.youtube !== null && !gone.has(t.id));
 
   return (
@@ -23,7 +23,7 @@ export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; 
       <p data-testid="stream-disconnect-only-note" className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm text-slate-700">
         {msg("streaming.youtube.disconnectOnly.note")}
       </p>
-      {disconnected !== null && <YoutubeDisconnectedNotice name={disconnected} onDismiss={() => setDisconnected(null)} />}
+      {disconnected !== null && <YoutubeDisconnectedNotice name={disconnected.name} outcome={disconnected.outcome} onDismiss={() => setDisconnected(null)} />}
       {channels.length > 0 ? (
         <div className="card overflow-visible">
           <ul data-testid="youtube-channel-list" className="divide-y divide-slate-100" aria-label={msg("streaming.youtube.channels")}>
@@ -36,9 +36,9 @@ export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; 
                 badge={null}
                 disconnectOnly
                 refreshAfter={false}
-                onDisconnected={(name) => {
+                onDisconnected={(news) => {
                   setGone((g) => new Set(g).add(t.id));
-                  setDisconnected(name);
+                  setDisconnected(news);
                 }}
               />
             ))}

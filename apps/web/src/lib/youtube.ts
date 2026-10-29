@@ -189,6 +189,9 @@ export const YOUTUBE_GUIDELINES_URL = "https://www.youtube.com/t/community_guide
 export const GOOGLE_PRIVACY_URL = "http://www.google.com/policies/privacy";
 /** Developer Policies III.A.2: where a user revokes access to Seazn. */
 export const GOOGLE_PERMISSIONS_URL = "https://security.google.com/settings/security/permissions";
+/** The Disconnect notice's link for an organiser whose revoke Seazn could not confirm: their Google account's third-party access page,
+ *  where they remove Seazn themselves (a plain link - no Google logo). */
+export const GOOGLE_THIRD_PARTY_ACCESS_URL = "https://myaccount.google.com/connections";
 
 // --- The Streaming page and the connect round trip's landing --------------------------------------------------------------
 
