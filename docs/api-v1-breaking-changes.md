@@ -229,12 +229,21 @@ its own format, set that match back to its stage's format first.
 
 Key on `error.code` and the issues' `message`, not on `error.message`.
 
-Only a new write is judged; a stored config that breaks one still loads and
-plays as before. None is left stored: the release's migration, which runs
-before the deploy, counts every stored config that breaks either rule (in a
-division's config, a stage's rules, a match's own format, a match's frozen
+**Data.** Only a new write is judged; a stored config that breaks one still
+loads and plays as before. None is left stored: the release's migration, which
+runs before the deploy, counts every stored config that breaks either rule (in
+a division's config, a stage's rules, a match's own format, a match's frozen
 snapshot and its cached state) and, if it finds any, stops the deploy and
 names each one. So no division is left that every later save would refuse.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, ruling 31 and decision D8, rules VB-CF-1, TT-CF-1 and
+TN-CF-1 (RB2A-13). The pinning tests are
+`packages/engine/src/sport/config-write-issues.test.ts` and
+`apps/web/src/server/usecases/__tests__/w2e-config-write.test.ts`; the
+migration's is `apps/web/src/server/__tests__/w2e-migration.test.ts`.
 
 ## 2026-10-28 — a short-set tie-break ends at 5–4 (Fast4 and the new short-sets format)
 
@@ -273,7 +282,17 @@ ends 5–0 to 5–4.
 { "ok": false, "error": { "code": "INVALID_EVENT", "message": "tie-break summary is not a reachable final score" }, "requestId": "…" }
 ```
 
-Summaries recorded before the change still replay as recorded.
+**Data.** Only a new write is judged: summaries recorded before the change
+still replay as recorded. The one stored change is the margin pin described
+above, which the release's migration writes before the deploy.
+
+**Why in place.** No client outside the web app uses the API yet (owner,
+2026-10-27).
+
+**Background.** W2e, decisions D8 and D18, rule TN-SS-2 (RB2A-12; ITF Rules of
+Tennis, Appendix VI). The pinning test is
+`packages/engine/src/sports/nested/w2e-tennis.test.ts`; the migration's is
+`apps/web/src/server/__tests__/w2e-migration.test.ts`.
 
 ## 2026-10-28 — a tennis set score no set can reach is refused
 
