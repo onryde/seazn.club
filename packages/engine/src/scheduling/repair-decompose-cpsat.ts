@@ -78,7 +78,7 @@
 // its POSSIBLE participants only in `people`; C10 threads that field onto
 // the wire for every MOVABLE fixture (`build.ts`'s `solveBuild` →
 // `@seazn/scheduler`'s `placement-client.ts` `personIndices`, a namespace separate from
-// `entrantIds`), and narrowed `services/placement/src/placement/schema.py`'s
+// `entrantIds`), and narrowed `seazn.club.placement/src/placement/schema.py`'s
 // refusal to "neither `entrant_indices` nor `person_indices`" rather than
 // "no `entrant_indices`" alone. Two TBD siblings that share `people`, both
 // genuinely movable (violators, never folded into `existing` — see below),

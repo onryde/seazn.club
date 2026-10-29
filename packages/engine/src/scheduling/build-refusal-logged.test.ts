@@ -1,6 +1,6 @@
 // The placement service can REFUSE a request — a validation failure in
 // `request_to_model_input`, say — and it says exactly why: `error_response`
-// (`services/placement/src/placement/schema.py:817`) puts a `code` and a
+// (`seazn.club.placement/src/placement/schema.py:817`) puts a `code` and a
 // human-readable `message` on the response. That is a RESOLVED response, not a
 // rejection, so `solveBuild` returns it normally and `buildSchedule`'s
 // `catch` — the one arm on this path that logs — never runs.

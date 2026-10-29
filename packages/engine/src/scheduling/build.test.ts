@@ -1163,7 +1163,7 @@ describe("buildSchedule — lexicographic tiers", () => {
   // siblings above, and mocking a compliant response here would be
   // dishonest: what this test checks is IMPOSSIBLE for placement to guarantee
   // today, confirmed straight from the Python model's own source
-  // (`services/placement/src/placement/model.py:186-193`, its own docstring, not
+  // (`seazn.club.placement/src/placement/model.py`, its own docstring, not
   // an inference):
   //
   //   "`existing` rows are not counted against day caps. `on_day` is built
@@ -1187,7 +1187,7 @@ describe("buildSchedule — lexicographic tiers", () => {
   // Not Task 07's (parity/integration) either — 07 tests behavior against a
   // real service, and a real service would fail this exactly as documented
   // above. This needs a `PinnedRow.division_index` wire change in
-  // `services/placement`, own task, own owner decision.
+  // `seazn.club.placement`, own task, own owner decision.
 });
 
 describe("buildSchedule — the lattice is the configured courts", () => {
@@ -1920,7 +1920,7 @@ describe("buildSchedule — Placement path", () => {
     "pool",
     // Stated as an EXPANSION, not as a scope: `buildRuleGroups` emits one
     // `RuleGroup` per entity rather than one holding every fixture. The wire
-    // has no scope field by design (`proto/scheduler.proto`), and one group
+    // has no scope field by design (`packages/scheduler/proto/scheduler.proto`), and one group
     // over the whole board would be a competition-wide cap.
     "every_entrant",
     "every_person",
