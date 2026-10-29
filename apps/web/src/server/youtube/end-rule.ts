@@ -25,10 +25,12 @@ import "server-only";
 //   - a finished status with no finished_at — fixtures_track_finished (V430/V432) stamps every finished status on insert
 //     and on every update that names status, and V430 backfilled the rest.
 import { sql, type Tx } from "@/lib/db";
+import { YOUTUBE_GRACE_MINUTES } from "@/lib/youtube";
 import { ACTIVE_STATES, TERMINAL_STATES } from "@/server/relay/domain/session";
 
-/** D4: after Stop the broadcast stays open this long, so the same match going live again continues the same video. */
-export const YOUTUBE_GRACE_MINUTES = 5;
+/** D4: after Stop the broadcast stays open this long, so the same match going live again continues the same video. Declared in lib/youtube
+ *  (the e2e walkthrough cannot import this `server-only` module) and re-exported here, so every server reader is unchanged. */
+export { YOUTUBE_GRACE_MINUTES };
 /** D5: a finished match's broadcast ends this long after Stop, or after the result when it lands inside the grace. */
 export const YOUTUBE_FINISHED_END_MINUTES = 2;
 /** Spec §6.4: the fixture statuses that make a match finished. NEVER needs_decision (F8). */

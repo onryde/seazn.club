@@ -205,6 +205,14 @@ export const GOOGLE_THIRD_PARTY_ACCESS_URL = "https://security.google.com/settin
  *  and the purge are one number. */
 export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = 7;
 
+/** D4 (the end rule, spec §6.4): after a match's Stop its broadcast stays open this many minutes, so the same match going live again
+ *  continues the same video; once the latest Stop is longer ago than this, the broadcast is due to end and the next Go live makes a new one.
+ *
+ *  Declared HERE, beside the purge clock, and re-exported by server/youtube/end-rule.ts (a `server-only` module), because a process that
+ *  cannot import that module still has to count from it: the e2e walkthrough ages a Stop past this figure from this one declaration
+ *  instead of reading the server file's text. */
+export const YOUTUBE_GRACE_MINUTES = 5;
+
 // --- The Streaming page and the connect round trip's landing --------------------------------------------------------------
 
 /** The org's Streaming page (owner, 2026-10-27: Streaming is its own top-nav page, not a Directory tab, and nothing forwards from

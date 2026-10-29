@@ -17,8 +17,8 @@
 //
 // HOW TIME IS ADVANCED. The server has no clock override (SessionDeps.now is `new Date()`), so "the match stopped more than the
 // grace ago" is made the way the end rule itself reads it: the `ended_at` of the sessions on that broadcast is stamped back past
-// `YOUTUBE_GRACE_MINUTES` (read from end-rule.ts - a `server-only` module this process cannot import - so the wait is derived from
-// the rule's own declaration and a rename fails loudly). Go live then finds the broadcast DUE and claims it `ending` (prepare.ts
+// `YOUTUBE_GRACE_MINUTES` (imported from lib/youtube, the one declaration server/youtube/end-rule.ts re-exports, so the wait moves with
+// the rule). Go live then finds the broadcast DUE and claims it `ending` (prepare.ts
 // step 2); no tick is needed for that. The END STEP - what turns a due broadcast into a finished replay part - IS the cron tick, and
 // the tick (like the daily relay-sweep) is GLOBAL: it ticks every open session on the server. Two tests need it, so they take the
 // WHOLE stream-slot pool first (capture-phone.spec.ts W22's exclusion): while they hold it no other stream test has a session open.
@@ -52,6 +52,7 @@ import {
   GOOGLE_PRIVACY_URL,
   GOOGLE_THIRD_PARTY_ACCESS_URL,
   YOUTUBE_DEAD_GRANT_PURGE_DAYS,
+  YOUTUBE_GRACE_MINUTES,
   YOUTUBE_GUIDELINES_URL,
   YOUTUBE_TOS_URL,
   youtubeWatchUrl,
@@ -112,14 +113,12 @@ const budget = (c: { navs: number; cycles?: number; slot?: boolean; connects?: n
     (c.slot ? SLOT_WAIT_MS : 0) + SEED_MS + (c.connects ?? 1) * CONNECT_MS + (c.cycles ?? 0) * CYCLE_MS + c.navs * NAV_MS + 30_000,
   );
 
-/** The end rule's grace after a Stop (D4), read from the declaration: end-rule.ts is `server-only`, so it cannot be imported here. */
+/** The end rule's grace after a Stop (D4): lib/youtube's own declaration, the one server/youtube/end-rule.ts re-exports. */
 const GRACE_MINUTES = ((): number => {
-  const src = readFileSync(fileURLToPath(new URL("../../src/server/youtube/end-rule.ts", import.meta.url)), "utf8");
-  const m = /export const YOUTUBE_GRACE_MINUTES = (\d+);/.exec(src);
-  if (!m) throw new Error("end-rule.ts no longer declares `export const YOUTUBE_GRACE_MINUTES = <n>;` - the spec derives its waits from it");
-  const n = Number(m[1]);
-  if (!(n > 0)) throw new Error(`YOUTUBE_GRACE_MINUTES is ${n}: the spec's "past the grace" has no meaning`);
-  return n;
+  if (!Number.isInteger(YOUTUBE_GRACE_MINUTES) || YOUTUBE_GRACE_MINUTES <= 0) {
+    throw new Error(`YOUTUBE_GRACE_MINUTES is ${YOUTUBE_GRACE_MINUTES}: the spec's "past the grace" has no meaning`);
+  }
+  return YOUTUBE_GRACE_MINUTES;
 })();
 /** A Stop this many minutes ago is past the grace: the broadcast is due. */
 const PAST_GRACE_MINUTES = GRACE_MINUTES + 1;
