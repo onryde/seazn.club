@@ -5,7 +5,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BRACKET_KINDS, type StageKind } from "@seazn/engine/core";
-import { deciderKeysFor } from "@seazn/engine/sport";
+import { BO1_MATCH_TIEBREAK, SET_TARGET_BELOW_FLOOR, deciderKeysFor, setTargetBelowFloor, writeConfigIssues } from "@seazn/engine/sport";
 import { builtinModules } from "@seazn/engine/sports";
 import { DictProvider } from "@/components/i18n/dict-provider";
 import enUi from "@/dictionaries/en/ui.json";
@@ -13,10 +13,13 @@ import esUi from "@/dictionaries/es/ui.json";
 import frUi from "@/dictionaries/fr/ui.json";
 import nlUi from "@/dictionaries/nl/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
-import { SPORT_RULES } from "@/lib/match-rules";
+import { SPORT_RULES, buildRuleOverride } from "@/lib/match-rules";
+import { configIssueText } from "@/lib/config-issue-copy";
+import { setTargetFloorOf } from "@/lib/match-rules/set-target-floor";
 import { stageFieldsFor } from "@/lib/rule-scope";
 import { stageDefaultsFor } from "@seazn/engine/sport";
 import { resolvedStageCfg } from "../stage-row-model";
+import { ruleFormState } from "../../match-rules-state";
 import { MatchRuleFields } from "../../match-rules";
 import { StageRuleFields } from "../stage-rule-fields";
 
@@ -371,5 +374,80 @@ describe("R157 the five fields are drawn by the real stage row, from the diction
     const carrom = builtinModules.find((m) => m.key === "carrom")!;
     const club = carrom.configSchema.parse(Object.values(carrom.variants)[0]) as Record<string, unknown>;
     expect(blockOf(render("carrom", "league", {}, club), "pointsPerCoin")).toContain(`placeholder="Default (${String(club.pointsPerCoin)})"`);
+  });
+});
+
+// W2e T33a (carry from the stage-rules PO decision): a write door's refusal is drawn beside the stage's fields before Save, in the
+// reader's language, from the cfg the stage WOULD play with. Where each expected value comes from: whether a pair is refused is the
+// engine's own door (`writeConfigIssues`), the floor is `setTargetBelowFloor`, the words are the dictionaries on disk.
+describe("a stage row says what the write door would refuse, beside the fields it is about (T33a)", () => {
+  const LOCALES = [["en", enUi], ["es", esUi], ["fr", frUi], ["nl", nlUi]] as const;
+  const tennis = builtinModules.find((m) => m.key === "tennis")!;
+  const volleyball = builtinModules.find((m) => m.key === "volleyball")!;
+  const tour = tennis.configSchema.parse((tennis.variants as Record<string, unknown>).tour) as Record<string, unknown>;
+  const indoor = volleyball.configSchema.parse({}) as Record<string, unknown>;
+  const rowFor = (m: typeof tennis, division: Record<string, unknown>, values: Record<string, string>, locale: (typeof LOCALES)[number]) => {
+    const resolved = resolvedStageCfg(m, division, "league", buildRuleOverride(m.key, values, division));
+    return render(m.key, "league", values, division, null, resolved, locale[1] as Dict, locale[0]);
+  };
+  const escaped = (text: string): string =>
+    text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;").replace(/'/g, "&#x27;");
+  const sentenceIds = (markup: string): string[] => [...markup.matchAll(/<span id="([^"]+)" role="alert"/g)].map((m) => m[1]!);
+
+  it("a best of 1 with a match tie-break is drawn beside both fields of the pair, in every locale, and the engine's door agrees it is refused", () => {
+    let judged = 0;
+    for (const locale of LOCALES) {
+      const values = { bestOf: "1", finalSet: "mtb10" };
+      const resolved = resolvedStageCfg(tennis, tour, "league", buildRuleOverride("tennis", values, tour));
+      expect(writeConfigIssues(tennis, resolved!), `${locale[0]}: premise - the door refuses it`).toEqual([BO1_MATCH_TIEBREAK]);
+      const markup = rowFor(tennis, tour, values, locale);
+      const sentence = (locale[1] as Record<string, string>)["rules.err.bo1MatchTiebreak"]!;
+      expect(markup.split(escaped(sentence)).length - 1, `${locale[0]}: once beside each field of the pair`).toBe(2);
+      expect(markup.match(/aria-invalid="true"/g)?.length ?? 0, `${locale[0]}: the two controls are marked`).toBe(2);
+      const ids = sentenceIds(markup);
+      expect(ids.length).toBe(2);
+      for (const id of ids) expect(markup, `${locale[0]}: ${id} is named by a control`).toMatch(new RegExp(`aria-describedby="[^"]*${id.replace(/[:.]/g, "\\$&")}`));
+      judged++;
+    }
+    expect(judged).toBe(4);
+  });
+
+  it("a pair the door accepts, and a stage with no edit at all, draw no sentence (the positive pair)", () => {
+    const accepted = rowFor(tennis, tour, { bestOf: "3", finalSet: "mtb10" }, LOCALES[0]);
+    expect(accepted).not.toContain('role="alert"');
+    expect(accepted).not.toContain("aria-invalid");
+    expect(rowFor(tennis, tour, {}, LOCALES[0])).not.toContain('role="alert"');
+  });
+
+  it("a set target under the engine's floor is drawn beside the field that holds it, with the floor in the sentence", () => {
+    const floor = setTargetFloorOf("volleyball");
+    expect(floor, "premise: volleyball's door refuses a short set").toBeGreaterThan(1);
+    const values = { setTo: String(floor - 1) };
+    const resolved = resolvedStageCfg(volleyball, indoor, "league", buildRuleOverride("volleyball", values, indoor))!;
+    const issues = writeConfigIssues(volleyball, resolved);
+    expect(issues.length, "premise: the door refuses a set under the floor").toBeGreaterThan(0);
+    expect(issues).toContain(setTargetBelowFloor(floor));
+    const markup = rowFor(volleyball, indoor, values, LOCALES[0]);
+    expect(markup).toContain(escaped(configIssueText({ path: [], message: setTargetBelowFloor(floor) }, (k, v) => (enUi as Record<string, string>)[k]!.replace(/\{(\w+)\}/g, (m, n: string) => String(v?.[n] ?? m)))));
+    expect(sentenceIds(markup).length, "beside the field, once").toBeGreaterThanOrEqual(1);
+    expect(SET_TARGET_BELOW_FLOOR, "the sentence is the engine's template").toBeTruthy();
+  });
+
+  it("two stage rows on one page never share a sentence id, and neither shares one with the division grid", () => {
+    const values = { bestOf: "1", finalSet: "mtb10" };
+    const resolved = resolvedStageCfg(tennis, tour, "league", buildRuleOverride("tennis", values, tour));
+    const row = (
+      <StageRuleFields sportKey="tennis" module={tennis} kind="league" variant={null} values={values} onChange={() => undefined} disabled={false} divisionConfig={tour} resolved={resolved} />
+    );
+    const markup = renderToStaticMarkup(
+      <DictProvider dict={enUi as Dict} locale="en">
+        {row}
+        {row}
+        <MatchRuleFields sportKey="tennis" values={values} onChange={() => undefined} state={ruleFormState({ sportKey: "tennis", variantKey: null, values, base: tour })} />
+      </DictProvider>,
+    );
+    const ids = sentenceIds(markup);
+    expect(ids.length, "two sentences per row, two rows, two in the grid").toBe(6);
+    expect(new Set(ids).size, `ids are unique: ${ids.join(" | ")}`).toBe(6);
   });
 });

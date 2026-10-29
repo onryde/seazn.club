@@ -44,7 +44,7 @@ export function RuleFieldControl({
   sequenceInherits,
   optionStates,
   describedBy,
-  invalid,
+  problem,
 }: {
   sportKey: string;
   field: RuleField;
@@ -61,15 +61,18 @@ export function RuleFieldControl({
   /** The id of the element that says why an option is unavailable, so the select is described by it. */
   describedBy?: string;
   /** W2e Task 29: the sentence a write door would refuse this field's value with, drawn beside it (role="alert") and named by
-   *  the control's `aria-describedby`; the control is `aria-invalid`. Absent: nothing is wrong with it. */
-  invalid?: string;
+   *  the control's `aria-describedby`; the control is `aria-invalid`. Absent: nothing is wrong with it.
+   *  W2e T33a: the sentence comes WITH the scope that keeps its element id unique on the page. It is named by id, and the same
+   *  field is drawn once per stage row as well as once in the division grid, so an id built from the field alone would repeat; one
+   *  prop (not two) makes a sentence with no scope impossible to write. */
+  problem?: { readonly text: string; readonly idScope: string };
 }) {
   const msg = useMsg();
-  // Derived, not `useId`: the test harness that expands this control (`expandWithHooks`) reads context hooks only, and one grid is
-  // on a page at a time (the builder's or Settings'; the stage row passes no `invalid`).
-  const problemId = `rule-problem-${sportKey}-${field.key}`;
-  const described = [describedBy, invalid === undefined ? undefined : problemId].filter((id) => id !== undefined).join(" ") || undefined;
-  const invalidMark = invalid === undefined ? undefined : true;
+  // Derived, not `useId`: the test harness that expands this control (`expandWithHooks`) reads context hooks only. The caller's
+  // `idScope` (a stage row's own `useId`, the division grid's constant) is what keeps two grids on a page from sharing an id.
+  const problemId = `rule-problem-${problem?.idScope ?? "none"}-${sportKey}-${field.key}`;
+  const described = [describedBy, problem === undefined ? undefined : problemId].filter((id) => id !== undefined).join(" ") || undefined;
+  const invalidMark = problem === undefined ? undefined : true;
   const label = field.labelKey === undefined ? field.label : msg(field.labelKey);
   const help = field.helpKey === undefined ? field.help : msg(field.helpKey);
   const offered = field.kind === "bool" ? ["on", "off"] : (field.options ?? []).map((o) => o.value);
@@ -150,9 +153,9 @@ export function RuleFieldControl({
       )}
     </label>
     {/* Outside the label, so the sentence is not read as part of the control's name; the control names it by aria-describedby. */}
-    {invalid !== undefined && (
+    {problem !== undefined && (
       <span id={problemId} role="alert" className="mt-1 block text-[11px] font-medium leading-snug text-red-700">
-        {invalid}
+        {problem.text}
       </span>
     )}
     </>

@@ -14,6 +14,8 @@ import { divisionOnlyStageKeys } from "@/lib/online-time-control";
 import type { StageKind } from "@seazn/engine/core";
 import type { AnySportModule } from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
+import { configIssueText } from "@/lib/config-issue-copy";
+import { ruleProblemsOf } from "../match-rules-state";
 import { RuleFieldControl, type OptionState } from "./rule-field-control";
 import { abandonOptionStates, deciderOfDetail, detailIsInert, stageSections, type StageSectionId } from "./stage-row-model";
 
@@ -74,6 +76,9 @@ export function StageRuleFields({
     return new Map<string, OptionState>(abandonOptionStates(module, effective).map((o) => [o.value, o] as const));
   }, [module, sportKey, values, divisionConfig]);
   const reasons = [...optionStates.entries()].filter(([, s]) => s.disabled && s.reasonKey !== null);
+  // W2e T33a: what a write door would refuse the cfg this stage would play with, beside the fields it is about (a best of 1 with a
+  // match tie-break; a set target under the floor), not only after Save. The save's own refusal is unchanged.
+  const problems = useMemo(() => (resolved === null ? null : ruleProblemsOf(sportKey, resolved).invalid), [sportKey, resolved]);
 
   const edit = (key: string, raw: string) => onChange(setRuleValue(sportKey, values, key, raw, divisionConfig));
 
@@ -113,6 +118,11 @@ export function StageRuleFields({
                       sequenceInherits={divisionConfig}
                       optionStates={s.id === "abandon" ? optionStates : undefined}
                       describedBy={s.id === "abandon" && reasons.length > 0 ? reasonId : undefined}
+                      problem={
+                        problems?.get(field.key) === undefined
+                          ? undefined
+                          : { text: problems.get(field.key)!.map((message) => configIssueText({ path: [], message }, msg)).join(" "), idScope: reasonId }
+                      }
                     />
                     <span className={`mt-1 block text-[11px] ${set ? "text-teal-800" : "text-slate-600"}`}>
                       {msg(set ? "stageRules.source.stage" : "stageRules.source.division")}

@@ -87,7 +87,7 @@ export function MatchRuleFields({
               onEdit={(raw) => edit(field.key, raw)}
               disabled={disabled || lock !== undefined || heldBy !== undefined}
               inherited={inherited}
-              invalid={problems === undefined ? undefined : problems.map((message) => configIssueText({ path: [], message }, msg)).join(" ")}
+              problem={problems === undefined ? undefined : { text: problems.map((message) => configIssueText({ path: [], message }, msg)).join(" "), idScope: "division" }}
             />
             {heldBy !== undefined && (
               <p className="mt-1 text-[11px] leading-snug text-slate-700" data-testid={`rule-field-off-${field.key}`}>

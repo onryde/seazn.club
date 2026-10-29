@@ -80,6 +80,23 @@ export function ruleFormState(input: {
     if (switchField !== undefined) held.set(f.key, switchField.label);
   }
 
+  return { hidden, held, ...ruleProblemsOf(input.sportKey, resolved, hidden) };
+}
+
+/**
+ * The write doors' refusals of a RESOLVED config, mapped to the fields they are about: the part of `ruleFormState` the stage
+ * editor shares (W2e T33a - it holds the config its stage would play with, `resolvedStageCfg`, and shows the sentence beside the
+ * fields instead of only on Save). `hidden` is the fields the caller does not draw; a sentence is never mapped to one of them.
+ * An unknown sport has no door: no problems.
+ */
+export function ruleProblemsOf(
+  sportKey: string,
+  resolved: Record<string, unknown>,
+  hidden: ReadonlySet<string> = new Set(),
+): Pick<RuleFormState, "problems" | "invalid"> {
+  const sportModule = moduleFor(sportKey);
+  if (sportModule === null) return { problems: [], invalid: new Map() };
+  const fields = rulesFor(sportKey);
   const editing = (keys: readonly string[]) => fields.filter((f) => !hidden.has(f.key) && f.edits.some((e) => keys.includes(topOf(e))));
   const fieldsOf = (sentence: string): string[] => {
     if (sentence === BO1_MATCH_TIEBREAK) return editing(["bestOf", "finalSet"]).map((f) => f.key);
@@ -96,5 +113,5 @@ export function ruleFormState(input: {
 
   const invalid = new Map<string, string[]>();
   for (const p of problems) for (const key of p.fields) invalid.set(key, [...(invalid.get(key) ?? []), p.sentence]);
-  return { hidden, held, problems, invalid };
+  return { problems, invalid };
 }
