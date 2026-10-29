@@ -692,12 +692,15 @@ describe("tennis", () => {
     // 1-0 up: set two is not the deciding one - a match-tie-break-shaped score there is just games.
     pad.stepsFor(TN_SET(6, 2), ctx);
     expect(() => pad.stepsFor(TN_SET(mtb.set.tiebreakAt + 1, mtb.set.tiebreakAt), ctx), "7-6 at 1-0: an ordinary set").toThrow(/is a tie-break set/);
-    // 1-1: now the deciding set - the match tie-break's points are typed, 10-8 included (more than a games sheet allows by the games rule).
+    // 1-1: now the deciding set. A second start is a NEW fixture: the count restarts, so the same 7-6 is an ordinary set again
+    // (a pad that kept the 1-1 would type it as the match tie-break).
     pad.stepsFor(TN_SET(2, 6), ctx);
-    expect(pad.stepsFor(TN_SET(to, to - 2), ctx)).toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, { home: to, away: to - 2 }));
-    // A second start is a new fixture: the count restarts, so 7-6 is an ordinary set again.
     pad.stepsFor(START, ctx);
-    expect(() => pad.stepsFor(TN_SET(7, 6), ctx)).toThrow(/is a tie-break set/);
+    expect(() => pad.stepsFor(TN_SET(7, 6), ctx), "after a second start").toThrow(/is a tie-break set/);
+    // ...and without the restart the deciding set is the match tie-break: its points are typed, 10-8 included.
+    const level = makeTennisPad();
+    level.stepsFor(START, ctx); level.stepsFor(TN_SET(6, 2), ctx); level.stepsFor(TN_SET(2, 6), ctx);
+    expect(level.stepsFor(TN_SET(to, to - 2), ctx)).toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, { home: to, away: to - 2 }));
     // Two adapters share nothing: the first's 1-1 does not make the second's set a deciding one.
     const a = makeTennisPad();
     const b = makeTennisPad();
