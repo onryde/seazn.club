@@ -16,7 +16,8 @@
 //     stored YouTube datum is gone 30 days after a grant dies (DP III.E.4, spec §6.8) or after a broadcast failed (the same 30 days,
 //     DP III.E.4: the plan names no other retention for a failed row);
 //   - the end step's retry backoff is 1, 2, 4, 8, 16, 32, then 60 minutes (P6). The stuck-row bound is "a row that has failed for a
-//     full DAY at the 60-minute cap": 6 failures to reach the cap + 24 at it = 31 failures, 63 + 24 * 60 = 1503 minutes (typed, so a
+//     full DAY at the 60-minute cap": 7 failures to reach the cap (the 7th is the first to store 60) + 24 more at it = 31 failures; the
+//     waits stored after failures 1-6 are 63 minutes and after failures 7-30 are 24 * 60, so 63 + 24 * 60 = 1503 minutes (typed, so a
 //     change to the backoff reds this file and forces a conscious re-decision of the bound);
 //   - the destination row a revoke archives is labelled "YouTube channel (disconnected)".
 // Sport: not applicable - streaming is sport-agnostic (global-constraints "Test rules"); every rig rides `generic`.
@@ -68,7 +69,7 @@ const GRACE_MINUTES = 5;
 const BUDGET_MS = 15_000;
 const ROOMY_STORAGE_MINUTES = 100_000_000;
 const VIDEOS_PER_CALL = 50;
-const STUCK_ATTEMPTS = 31;        // 6 failures to reach the 60-minute cap + 24 at it (P6, one full day)
+const STUCK_ATTEMPTS = 31;        // 7 failures to reach the 60-minute cap + 24 more at it (P6, one full day)
 const STUCK_MINUTES = 1503;       // 1 + 2 + 4 + 8 + 16 + 32 + 24 * 60
 const P6_BACKOFF = [1, 2, 4, 8, 16, 32, 60, 60];
 const DISCONNECTED_LABEL = "YouTube channel (disconnected)";
@@ -346,12 +347,14 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
 
     it("invalid_grant -> reconnect_needed with status_since NOW (the purge clock starts); a second pass leaves it alone and asks YouTube nothing", async () => {
       const w = await world();
+      await shiftConnection(w.connectionId, 2);   // connected for two days: a flip that left status_since alone would show
       const before = await connRow(w.connectionId);
       w.fake.killToken(w.token);
       expect(await daily(w)).toEqual({ ...ZERO, checked: 1, reconnectNeeded: 1 });
       const row = await connRow(w.connectionId);
       expect(row).toMatchObject({ status: "reconnect_needed", last_error_code: "youtube_reconnect_needed" });
-      expect(row.status_since.getTime(), "status_since moved to now").toBeGreaterThanOrEqual(before.status_since.getTime());
+      expect(row.status_since.getTime(), "status_since moved to now (strictly later than two days ago)").toBeGreaterThan(before.status_since.getTime());
+      expect(row.status_since.getTime() - before.status_since.getTime(), "... by about those two days").toBeGreaterThan(2 * 24 * 60 * MIN - 60 * MIN);
       expect(await liveStateOf(w, w.connectionId), "a dead grant cannot be asked, so the state is unknown").toBe("unknown");
 
       const calls = w.fake.calls.length;
