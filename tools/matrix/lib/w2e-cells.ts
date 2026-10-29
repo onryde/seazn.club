@@ -80,14 +80,15 @@ export function w2eOverridesFor(key: W2eScenarioKey, sport: string): Readonly<Re
 
 /** The division-config overrides that turn the builder default of `sport` into `variant` (the top-level cfg keys that differ,
  *  resolved back to that variant's cfg exactly), or null when overrides cannot express it (a key the target lacks cannot be
- *  removed by an override). */
-function overridesToVariant(sport: string, variant: string): Readonly<Record<string, unknown>> | null {
+ *  removed by an override). `resolve` is the cfg resolver (injected so a test can hand it a variant no shipped sport has: every
+ *  shipped variant is expressible, so the null arm is otherwise unreached). */
+export function overridesToVariant(sport: string, variant: string, resolve: typeof resolveSportCfg = resolveSportCfg): Readonly<Record<string, unknown>> | null {
   const def = offlineBuilderDefault(sport);
-  const base = resolveSportCfg(sport, def) as Record<string, unknown>;
-  const target = resolveSportCfg(sport, variant) as Record<string, unknown>;
+  const base = resolve(sport, def) as Record<string, unknown>;
+  const target = resolve(sport, variant) as Record<string, unknown>;
   const overrides: Record<string, unknown> = {};
   for (const k of new Set([...Object.keys(base), ...Object.keys(target)])) if (canon(base[k]) !== canon(target[k])) overrides[k] = target[k];
-  return canon(resolveSportCfg(sport, def, { ...overrides })) === canon(target) ? overrides : null;
+  return canon(resolve(sport, def, { ...overrides })) === canon(target) ? overrides : null;
 }
 
 /** Task 23 M1/M7: the keys that play EVERY declared variant that builds one of their paths, not the first. Tennis's variants differ

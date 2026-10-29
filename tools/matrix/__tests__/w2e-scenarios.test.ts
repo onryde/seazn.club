@@ -32,7 +32,7 @@ import { PROBE_LINEUPS, type ProductFold, type StreamEvent, type StreamLineups }
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { W1_DRIVING_SCENARIOS, planW1Driving } from "../lib/w1-driving-set.ts";
 import { bracketRootRows } from "../lib/w2a-cells.ts";
-import { W2eOverridesNameNoVariant, w2eApplies, w2eBracketCfgOf, w2eCells, w2eNameVariant, w2eOverridesFor, w2eOverridesSetsFor } from "../lib/w2e-cells.ts";
+import { W2eOverridesNameNoVariant, overridesToVariant, w2eApplies, w2eBracketCfgOf, w2eCells, w2eNameVariant, w2eOverridesFor, w2eOverridesSetsFor } from "../lib/w2e-cells.ts";
 import type { FixtureStateOut } from "../lib/driver/types.ts";
 import { FakeKnockoutDriver } from "./fake-driver.ts";
 import { capBinds, decidingSetReachable, setSportsOf, type SetCfg, type SetFoldState } from "./set-oracles.ts";
@@ -183,6 +183,32 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
     const tbIds = planW1Driving(variantFor, { scenario: "W2E_TB_SET" }).map((c) => c.caseId);
     expect(tbIds.filter((id) => id.split("|").length === 4).length, "the default as it is has four segments, on each row").toBe(bracketRootRows().length);
     expect(new Set(tbIds.filter((id) => id.split("|").length === 5).map((id) => id.split("|")[4])), "the other tie-break variants are named").toEqual(new Set(["as-grand-slam", "as-doubles-noad-mtb10"]));
+  });
+
+  it("overridesToVariant (V4): a variant the overrides cannot express is null, not a wrong cell - a key the target LACKS cannot be removed by an override; the shipped variants are all expressible (counted)", () => {
+    const def = variantFor("tennis");
+    // A variant no shipped sport has: the default's cfg without one of its keys. The override can only SET a key (undefined gives the
+    // schema's default back), so resolving the default under it never reaches the bare target.
+    const key = Object.keys(resolveSportCfg("tennis", def) as object)[0]!;
+    const resolver: typeof resolveSportCfg = (sport, variant, overrides) => {
+      if (variant !== "synthetic-bare") return resolveSportCfg(sport, variant, overrides);
+      const bare = { ...(resolveSportCfg(sport, def) as Record<string, unknown>) };
+      delete bare[key];
+      return bare;
+    };
+    expect(overridesToVariant("tennis", "synthetic-bare", resolver), `no override removes '${key}'`).toBeNull();
+    // The same resolver on a variant it leaves alone is expressible: the null above is the missing key's, not the resolver's.
+    expect(overridesToVariant("tennis", def, resolver)).toEqual({});
+    // Every shipped variant of every sport is expressible (the arm is otherwise unreached), counted.
+    let expressible = 0;
+    for (const sport of SPORT_KEYS) for (const variant of variantKeys(sport)) {
+      const o = overridesToVariant(sport, variant);
+      expect(o, `${sport}/${variant}`).not.toBeNull();
+      expressible++;
+    }
+    expect(expressible).toBe(SPORT_KEYS.reduce((n, s) => n + variantKeys(s).length, 0));
+    expect(expressible).toBeGreaterThan(SPORT_KEYS.length);
+    expect(overridesToVariant("tennis", variantFor("tennis")), "the default needs no override").toEqual({});
   });
 
   it("W2E_SHORT_SETS plans tennis's default (tour has no short-set tie-break) as the first variant that has one: the overrides resolve back to that variant's cfg exactly, the variant is not the default, and its sets close at the set's own margin; W2E_TB_SET needs none", () => {
