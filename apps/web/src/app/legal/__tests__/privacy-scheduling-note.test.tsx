@@ -56,9 +56,10 @@ describe("privacy page — scheduling grouping disclosure (#403)", () => {
     expect(html).toContain(`Last updated: ${shown}`);
   });
 
-  it("numbers its sections 1..13 with no repeat or gap", () => {
-    // 13 since final review I-4 added "6. Online chess: camera video and your Lichess account".
+  it("numbers its sections 1..14 with no repeat or gap", () => {
+    // 13 since final review I-4 added "6. Online chess: camera video and your Lichess account"; 14 since YouTube Connect T19 added
+    // "7. YouTube live streaming (YouTube API Services)".
     const numbers = [...html.matchAll(/<h2[^>]*>(\d+)\./g)].map((m) => Number(m[1]));
-    expect(numbers).toEqual(Array.from({ length: 13 }, (_, i) => i + 1));
+    expect(numbers).toEqual(Array.from({ length: 14 }, (_, i) => i + 1));
   });
 });

@@ -25,6 +25,7 @@ const KNOWN = [
   "outboxTrialWarning",
   "w2dTables",
   "funnelReminder",
+  "youtubeConnect",
 ] as const;
 
 describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
@@ -84,8 +85,9 @@ describe("SMOKE_ONLY — selectSmokeSuites (review R1)", () => {
     // matrix W2c T10), then epochFloorOverride (engine-split 5.6, override review I2: its own org, nothing from SubsetCtx),
     // then registrationOpenFlow (email outbox phase 3 T13: its own org and its own sign-in, nothing from SubsetCtx),
     // then outboxTrialWarning (email outbox phase 3 wave 2 T11: its own org and its own sign-in, nothing from SubsetCtx);
-    // w2dTables (own org) after that (format matrix W2d A14); funnelReminder last (email outbox phase 3 wave 5 T8: no
-    // session at all, nothing from SubsetCtx).
+    // w2dTables (own org) after that (format matrix W2d A14); funnelReminder (email outbox phase 3 wave 5 T8: no
+    // session at all, nothing from SubsetCtx); youtubeConnect last (YouTube Connect T21: its own two orgs and sign-ins, nothing from
+    // SubsetCtx).
     const block = /const SELECTABLE_SUITES\b[\s\S]*?=\s*\{([\s\S]*?)\n\};/.exec(src)?.[1] ?? "";
     const names = [...block.matchAll(/^\s*(\w+):/gm)].map((m) => m[1]);
     expect(names.length, "the registry block was found and read").toBeGreaterThan(0);

@@ -31,7 +31,7 @@ async function dailyYoutube(deps: SessionDeps): Promise<YoutubeDailyResult> {
 /** POST /api/cron/relay-sweep — DAILY (owner 2026-09-14; streaming R1, design §6.3): the expiry backstop, orphan
  *  Machines (and the confirmed-gone mark admission reads), the storage headroom warning, and recording retention
  *  (videos before inputs). Time-critical rules do NOT live here — they fire lazily on reads (stream-sessions.ts).
- *  YouTube Connect T17 (spec §6.6): the daily YouTube pass (channel health, the 25-day video refresh, the 30-day dead-grant purge,
+ *  YouTube Connect T17 (spec §6.6): the daily YouTube pass (channel health, the 25-day video refresh, the 7-day dead-grant purge,
  *  stuck broadcasts, expired grants) runs FIRST and on a relay-disabled deployment too - what Seazn stores from YouTube is
  *  refreshed or deleted within 30 days (DP III.E.4) whether or not this deployment still has a relay. Its counters ride the answer
  *  at `data.youtube` (`youtube.failed` is the one the Worker alerts on, apps/cron-worker/src/schedule.ts), the disabled answer

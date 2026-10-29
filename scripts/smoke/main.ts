@@ -112,6 +112,7 @@ import { registrationOpenFlowSuite } from "./suites/registrationOpenFlow.ts";
 import { registrationWaitlistPromoteSuite } from "./suites/registrationWaitlistPromote.ts";
 import { registrationTeamOpsSuite } from "./suites/registrationTeamOps.ts";
 import { registrationSelfLinkAndConsentSuite } from "./suites/registrationSelfLinkAndConsent.ts";
+import { youtubeConnectSuite } from "./suites/youtubeConnect.ts";
 
 export async function main() {
   const admin = newSession();
@@ -1230,6 +1231,12 @@ export async function main() {
   // Format matrix W2d PR A (tables and tie-breaks): a stage is pinned at generate, and a stored lots draw gives the same
   // order on two reloads. Own fresh owner; needs DATABASE_URL (the pin read).
   await suite("w2dTables", () => w2dTablesSuite());
+
+  // YouTube Connect (T21): ten probes over the cron answers, the connect and Go live refusals, the destination list, the fake control
+  // route, the Streaming page, the public replay parts, Disconnect and the privacy policy. LAST on purpose: stream-tick ticks EVERY
+  // open session on the server, so no earlier suite has one left to be ended under it. Own two fresh orgs; needs DATABASE_URL and
+  // CRON_SECRET, and a server on YOUTUBE_DRIVER=fake (the smoke-e2e job's first server).
+  await suite("youtubeConnect", () => youtubeConnectSuite());
 }
 
 async function smokePlanMatrix(): Promise<void> {

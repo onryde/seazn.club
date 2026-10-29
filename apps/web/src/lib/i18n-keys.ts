@@ -7775,6 +7775,7 @@ export type DictionaryKey =
   | "streaming.youtube.statusLine.connected"
   | "streaming.youtube.statusLine.notEnabled"
   | "streaming.youtube.statusLine.reconnectNeeded"
+  | "streaming.youtube.statusLine.reconnectPurge"
   | "streaming.youtube.statusLine.reviewFirst"
   | "streaming.youtube.statusLine.reviewTerms"
   | "streaming.youtube.statusLine.unknown"

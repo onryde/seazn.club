@@ -1421,6 +1421,7 @@
   "streaming.youtube.status.reviewTerms": "Review updated terms",
   "streaming.youtube.statusLine.connected": "Matches can go live on this channel.",
   "streaming.youtube.statusLine.reconnectNeeded": "Google stopped accepting Seazn's access. Matches can't go live here until you reconnect.",
+  "streaming.youtube.statusLine.reconnectPurge": "Seazn deletes this channel's stored data {days} days after it stopped working, unless you reconnect it.",
   "streaming.youtube.statusLine.notEnabled": "This channel isn't enabled for live streaming yet.",
   "streaming.youtube.notEnabledHint": "YouTube can take up to 24 hours.",
   "streaming.youtube.statusLine.blocked": "YouTube has blocked live streaming on this channel. Matches can't go live here until YouTube lifts it.",

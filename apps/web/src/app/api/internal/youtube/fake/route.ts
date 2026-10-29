@@ -5,6 +5,7 @@ import { sql } from "@/lib/db";
 import { YOUTUBE_ERROR_CODES, YouTubeError } from "@/server/youtube/port";
 import { FAKE_YOUTUBE_METHODS, isFakeYouTube, type FakeYouTube } from "@/server/youtube/fake";
 import { youtubeDriver, youtubeFakeRoutesEnabled } from "@/server/youtube/driver";
+import { fixtureStreamTarget } from "@/server/usecases/stream-codes";
 import { openToken } from "@/server/youtube/token-store";
 
 const NOT_FOUND = "Not found";
@@ -135,13 +136,16 @@ async function fixtureState(fake: FakeYouTube, fixtureId: string) {
      order by b.created_at, b.id`;
   let connectionId = rows.length > 0 ? rows[rows.length - 1]!.connection_id : null;
   if (connectionId === null) {
-    // No broadcast yet: the connection is the fixture's chosen destination's, if that destination is a connection.
-    const [dest] = await sql<{ youtube_connection_id: string | null }[]>`
-      select t.youtube_connection_id
-        from fixture_stream_settings s
-        join org_stream_targets t on t.id = s.target_id
-       where s.fixture_id = ${fixtureId} and s.org_id = ${fixture.org_id}`;
-    connectionId = dest?.youtube_connection_id ?? null;
+    // No broadcast yet: the connection is the fixture's destination's, if that destination is a connection. The destination is
+    // the one the panel's picker shows and the phone's start streams to - `fixtureStreamTarget`, the ONE default-target resolver
+    // (a saved choice wins; with none saved, the org's oldest live destination) - NOT a read of the saved row alone: with one
+    // destination the panel shows it chosen and saves nothing, and this must name the same grant Go live will use.
+    const pick = await fixtureStreamTarget(sql, { orgId: fixture.org_id, fixtureId });
+    if (pick !== null) {
+      const [dest] = await sql<{ youtube_connection_id: string | null }[]>`
+        select youtube_connection_id from org_stream_targets where id = ${pick.id} and org_id = ${fixture.org_id}`;
+      connectionId = dest?.youtube_connection_id ?? null;
+    }
   }
   const refreshToken = connectionId === null ? null : await openToken(sql, fixture.org_id, connectionId);
   return {

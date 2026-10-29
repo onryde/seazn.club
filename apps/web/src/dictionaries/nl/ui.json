@@ -1421,6 +1421,7 @@
   "streaming.youtube.status.reviewTerms": "Bijgewerkte voorwaarden bekijken",
   "streaming.youtube.statusLine.connected": "Wedstrijden kunnen live gaan op dit kanaal.",
   "streaming.youtube.statusLine.reconnectNeeded": "Google accepteert de toegang van Seazn niet meer. Wedstrijden kunnen hier niet live gaan totdat je opnieuw koppelt.",
+  "streaming.youtube.statusLine.reconnectPurge": "Seazn verwijdert de opgeslagen gegevens van dit kanaal {days} dagen nadat het niet meer werkte, tenzij je het opnieuw koppelt.",
   "streaming.youtube.statusLine.notEnabled": "Livestreamen is voor dit kanaal nog niet ingeschakeld.",
   "streaming.youtube.notEnabledHint": "YouTube kan tot 24 uur nodig hebben.",
   "streaming.youtube.statusLine.blocked": "YouTube heeft livestreamen op dit kanaal geblokkeerd. Wedstrijden kunnen hier niet live gaan totdat YouTube dit opheft.",

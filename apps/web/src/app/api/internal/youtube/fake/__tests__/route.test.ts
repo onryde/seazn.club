@@ -526,16 +526,62 @@ describe.skipIf(!HAS_DB)("POST /api/internal/youtube/fake — state (real Postgr
     expect(data.tokenHandle, "and not the older one's").not.toBe(fake.tokenHandle(r.refreshToken));
   });
 
-  it("a fixture with a YouTube destination but no broadcast yet: the connection and its handle, and an EMPTY list (not an error)", async () => {
+  /** A connected channel's destination row, `createdAt` fixing its place in the org's oldest-first order. */
+  async function channelTarget(r: Awaited<ReturnType<typeof rig>>, createdAt: Date): Promise<string> {
+    const [target] = await sql<{ id: string }[]>`
+      insert into org_stream_targets (org_id, kind, label, youtube_connection_id, dest_fingerprint, created_at)
+      values (${r.orgId}, 'youtube', 'State FC', ${r.connectionId}, ${fingerprintYoutubeChannel(r.channelId)}, ${createdAt}) returning id`;
+    return target!.id;
+  }
+  const emptyState = (r: { connectionId: string; refreshToken: string }, fake: FakeYouTube) =>
+    ({ connectionId: r.connectionId, tokenHandle: fake.tokenHandle(r.refreshToken), broadcasts: [] });
+
+  it("a fixture with a SAVED YouTube destination but no broadcast yet: the connection and its handle, and an EMPTY list (not an error)", async () => {
     const fake = theFake();
     const r = await rig();
-    const [target] = await sql<{ id: string }[]>`
-      insert into org_stream_targets (org_id, kind, label, youtube_connection_id, dest_fingerprint)
-      values (${r.orgId}, 'youtube', 'State FC', ${r.connectionId}, ${fingerprintYoutubeChannel(r.channelId)}) returning id`;
-    await sql`insert into fixture_stream_settings (fixture_id, org_id, target_id) values (${r.fixtureId}, ${r.orgId}, ${target!.id})`;
+    const target = await channelTarget(r, new Date());
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, target_id, target_chosen) values (${r.fixtureId}, ${r.orgId}, ${target}, true)`;
     const res = await call({ op: "state", fixtureId: r.fixtureId });
     expect(res.status).toBe(200);
-    expect(await dataOf(res)).toEqual({ connectionId: r.connectionId, tokenHandle: fake.tokenHandle(r.refreshToken), broadcasts: [] });
+    expect(await dataOf(res)).toEqual(emptyState(r, fake));
+  });
+
+  it("an UNSAVED default: no settings row at all and one YouTube destination - the connection and handle of the destination the panel shows chosen (what Go live will use)", async () => {
+    const fake = theFake();
+    const r = await rig();
+    await channelTarget(r, new Date());
+    expect(
+      await sql`select 1 from fixture_stream_settings where fixture_id = ${r.fixtureId}`,
+      "PREMISE: nothing is saved for this fixture - the default is all there is",
+    ).toHaveLength(0);
+    expect(await dataOf(await call({ op: "state", fixtureId: r.fixtureId }))).toEqual(emptyState(r, fake));
+  });
+
+  it("a settings row that CHOSE nothing (the auto switch's) reads as no row: the default destination, not a null", async () => {
+    const fake = theFake();
+    const r = await rig();
+    await channelTarget(r, new Date());
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, auto_stream, target_chosen) values (${r.fixtureId}, ${r.orgId}, true, false)`;
+    expect(await dataOf(await call({ op: "state", fixtureId: r.fixtureId }))).toEqual(emptyState(r, fake));
+  });
+
+  it("a saved choice BEATS the default, and a choice that was cleared is NONE (not the default): two channels, the oldest is the default, the second is chosen, then the choice is cleared", async () => {
+    const fake = theFake();
+    const r = await rig();
+    const second = await addConnection(r);
+    const hour = 3_600_000;
+    await channelTarget(r, new Date(Date.now() - 2 * hour));          // the oldest live destination: the default
+    const chosen = await channelTarget(second, new Date(Date.now() - hour));
+    // Unsaved: the oldest wins.
+    expect(await dataOf(await call({ op: "state", fixtureId: r.fixtureId })), "no choice: the OLDEST destination's grant").toEqual(emptyState(r, fake));
+    // Saved: the choice wins, and its handle is not the default's (the case a read of the oldest alone would get wrong).
+    await sql`insert into fixture_stream_settings (fixture_id, org_id, target_id, target_chosen) values (${r.fixtureId}, ${r.orgId}, ${chosen}, true)`;
+    const saved = await dataOf(await call({ op: "state", fixtureId: r.fixtureId }));
+    expect(saved, "a saved choice: the CHOSEN destination's grant").toEqual(emptyState(second, fake));
+    expect(fake.tokenHandle(second.refreshToken), "PREMISE: the two grants have different handles").not.toBe(fake.tokenHandle(r.refreshToken));
+    // Cleared: a choice that is gone is never swapped for another destination.
+    await sql`update fixture_stream_settings set target_id = null where fixture_id = ${r.fixtureId}`;
+    expect(await dataOf(await call({ op: "state", fixtureId: r.fixtureId })), "a cleared choice: no connection, no handle").toEqual({ connectionId: null, tokenHandle: null, broadcasts: [] });
   });
 
   it("a fixture with no YouTube destination and no broadcast: nulls and an empty list; an unknown fixture is 404", async () => {

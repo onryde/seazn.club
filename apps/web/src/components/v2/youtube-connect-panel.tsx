@@ -20,7 +20,7 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { apiV1 } from "@/lib/client-v1";
 import type { MessageKey } from "@/lib/messages";
 import {
-  GOOGLE_THIRD_PARTY_ACCESS_URL, STREAMING_PAGE_HREF, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_GUIDELINES_URL, YOUTUBE_PRIVACIES, YOUTUBE_TOS_URL, youtubeLanding,
+  GOOGLE_THIRD_PARTY_ACCESS_URL, STREAMING_PAGE_HREF, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_GUIDELINES_URL, YOUTUBE_PRIVACIES, YOUTUBE_TOS_URL, youtubeLanding,
   type YoutubeLandingCode, type YoutubePrivacy,
 } from "@/lib/youtube";
 import type { StreamTarget, YoutubeConnectionSaved, YoutubeDisconnected, YoutubePendingChannels } from "@/server/api-v1/schemas";
@@ -554,6 +554,13 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
             <p data-testid="youtube-channel-line" className="mt-1.5 text-sm text-slate-700">
               {msg(status.line)}
               {status.hint && <span data-testid="youtube-channel-hint">{` ${msg(status.hint)}`}</span>}
+            </p>
+          )}
+          {/* The grant is dead, so the daily pass deletes this channel's stored data a fixed time after it stopped (DP III.D.2). Said here, beside the
+              button that stops it - the restricted page has no Reconnect, so it does not carry the sentence. */}
+          {!disconnectOnly && reconnect && (
+            <p data-testid="youtube-channel-purge" className="mt-1 text-sm text-amber-800">
+              {msg("streaming.youtube.statusLine.reconnectPurge", { days: YOUTUBE_DEAD_GRANT_PURGE_DAYS })}
             </p>
           )}
           {!disconnectOnly && y.termsOutdated && (

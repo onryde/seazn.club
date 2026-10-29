@@ -187,10 +187,31 @@ export const YOUTUBE_TOS_URL = "https://www.youtube.com/t/terms";
 export const YOUTUBE_GUIDELINES_URL = "https://www.youtube.com/t/community_guidelines";
 /** Developer Policies III.A.2: the privacy policy must link Google's, exactly as Google spells it. */
 export const GOOGLE_PRIVACY_URL = "http://www.google.com/policies/privacy";
-/** Where a person removes Seazn from their Google account: its third-party access page. The ONE link for it - Developer Policies III.A.2
- *  ("where a user revokes access to Seazn") and the Disconnect notice for an organiser whose revoke Seazn could not confirm are the same
- *  place (a plain link - no Google logo). The old `security.google.com/settings/security/permissions` form is not kept beside it. */
-export const GOOGLE_THIRD_PARTY_ACCESS_URL = "https://myaccount.google.com/connections";
+/** Where a person removes Seazn from their Google account: Google's security-permissions page, the URL the Developer Policies name
+ *  (III.A.2.h, "users can revoke access via ..."; it answers 301 to myaccount.google.com/permissions). The ONE link for it - the privacy
+ *  policy and the Disconnect notice for an organiser whose revoke Seazn could not confirm are the same place (a plain link - no Google
+ *  logo). T19 fix round 1 (PO ruling) moved it here from `myaccount.google.com/connections`, which the policy does not name; no second
+ *  constant for the page may exist (lib/__tests__/youtube-google-urls.test.ts sweeps every export). */
+export const GOOGLE_THIRD_PARTY_ACCESS_URL = "https://security.google.com/settings/security/permissions";
+
+/** A grant that has been dead this long (counted from the flip to `reconnect_needed`) has its YouTube data purged. SEVEN days, not the
+ *  ceiling's thirty (PO ruling, T19 fix round 1): Google's Developer Policies (III.D.2) give 30 days from the REVOCATION when access is
+ *  revoked at Google's page, and the daily pass finds a revoked grant only on its next check - a day later, more when the health slice
+ *  defers the connection - so a purge clocked from the flip at the ceiling could land past 30 days from the revocation. A week leaves a
+ *  club time to reconnect and every deadline room.
+ *
+ *  Declared HERE, not in server/youtube/daily.ts (which re-exports it), because the customer is told the figure: the Streaming page's
+ *  reconnect-needed row (a client component, which cannot import a `server-only` module) fills its warning from this, so the sentence
+ *  and the purge are one number. */
+export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = 7;
+
+/** D4 (the end rule, spec §6.4): after a match's Stop its broadcast stays open this many minutes, so the same match going live again
+ *  continues the same video; once the latest Stop is longer ago than this, the broadcast is due to end and the next Go live makes a new one.
+ *
+ *  Declared HERE, beside the purge clock, and re-exported by server/youtube/end-rule.ts (a `server-only` module), because a process that
+ *  cannot import that module still has to count from it: the e2e walkthrough ages a Stop past this figure from this one declaration
+ *  instead of reading the server file's text. */
+export const YOUTUBE_GRACE_MINUTES = 5;
 
 // --- The Streaming page and the connect round trip's landing --------------------------------------------------------------
 

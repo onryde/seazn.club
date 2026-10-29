@@ -939,7 +939,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T2 — pooled keys and API-backed dest
     // before the revoke: pooling works and the key opens (so each refusal below is the revoke's doing, not an empty table)
     const { keyId } = await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 1, liveStreamId: "ls-live", ingest: k }));
     expect(await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId))).toEqual(k);
-    // reconnect_needed is NOT revoked: a dead grant still holds its keys until the 30-day purge revokes it
+    // reconnect_needed is NOT revoked: a dead grant still holds its keys until the 7-day dead-grant purge revokes it
     await sql`update org_youtube_connections set status = 'reconnect_needed' where id = ${r.connectionId}`;
     expect(await sql.begin((tx) => readPooledKey(tx, r.orgId, keyId)), "reconnect_needed still opens").toEqual(k);
     await sql.begin((tx) => insertPooledKey(tx, { orgId: r.orgId, connectionId: r.connectionId, slot: 2, liveStreamId: "ls-rn", ingest: ingest() }));

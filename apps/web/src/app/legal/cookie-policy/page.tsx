@@ -13,7 +13,7 @@ export default function CookiePolicyPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Cookie Policy</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 13 October 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 29 October 2026</p>
         <div className="space-y-6 text-sm text-slate-700">
 
           <section>
@@ -72,6 +72,12 @@ export default function CookiePolicyPage() {
           <section>
             <h2 className="mb-2 text-lg font-semibold text-slate-800">Third-party cookies</h2>
             <p>We use <a href="https://posthog.com/" className="text-purple-600 underline" target="_blank" rel="noopener noreferrer">PostHog</a> for product analytics to understand how Seazn Club is used and improve it. These cookies are only set if you choose <strong>Accept</strong> on the cookie banner — reject and none are set. We do not use advertising cookies. Stripe may set cookies during the checkout flow — see <a href="https://stripe.com/cookies-policy/legal" className="text-purple-600 underline" target="_blank" rel="noopener noreferrer">Stripe's cookie policy</a>.</p>
+          </section>
+
+          <section id="youtube-player">
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">YouTube replays</h2>
+            <p>A recorded match on a public match page can show its replay from YouTube. The page puts no player on screen until you tap play. Until then your browser fetches only the video&apos;s thumbnail picture, from <span className="font-mono">i.ytimg.com</span>: the replay itself sets no cookie of ours and loads no Google script or player (the rest of the page uses the cookies listed above). Like any picture on a web page, that request reaches Google&apos;s servers with your IP address and browser details.</p>
+            <p className="mt-2">After you tap play, the player is loaded from <span className="font-mono">youtube-nocookie.com</span>, YouTube&apos;s privacy-enhanced mode. The player is third-party content from YouTube, and Google may set its own cookies or similar storage on your device. Those are Google&apos;s, not ours, and are covered by the <a href="http://www.google.com/policies/privacy" className="text-purple-600 underline" target="_blank" rel="noopener noreferrer">Google Privacy Policy</a>. If you do not tap play, nothing from the player loads.</p>
           </section>
 
           <section>

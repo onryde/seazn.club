@@ -10,7 +10,7 @@ import "server-only";
 //      grant → reconnect_needed) and `liveEnabled` (→ last_error_code youtube_live_not_enabled / youtube_live_blocked, or null), stamped
 //      with the DATABASE's clock (carry f: `liveStateOf` compares last_health_at with status_since, which the database wrote).
 //      A dead grant (`invalid_grant`, or a reconnect refusal that is not the live-permission one - see carry g below) → reconnect_needed,
-//      status_since now: the 30-day purge clock starts.
+//      status_since now: the dead-grant purge clock (YOUTUBE_DEAD_GRANT_PURGE_DAYS, 7) starts.
 //      REFRESH — the `complete` rows whose video was last confirmed more than 25 days ago, in batches of 50 (Google's per-call id cap):
 //      still there → refreshed_at = the pass's now; gone → the row is deleted and fixtures.stream_url is cleared WHEN IT POINTS AT THAT
 //      VIDEO (a club's own link is never touched).
@@ -23,7 +23,7 @@ import "server-only";
 //   2d. IDLE KEYS — the pooled keys of ANY non-revoked connection that nothing has used for the whole ceiling are deleted (`deleteIdleKeys`):
 //      the row at once, with no token and no budget; the liveStream at YouTube afterwards, best effort, only where a token opens.
 //   3. STUCK BROADCASTS (carries a, b) — see `settleStuck`.
-//   4. DEAD GRANTS — reconnect_needed for 30 days → revokeConnection (token-store's ONE statement, R1/B1-R1) + `purgeConnectionData`, then,
+//   4. DEAD GRANTS — reconnect_needed for YOUTUBE_DEAD_GRANT_PURGE_DAYS (7) → revokeConnection (token-store's ONE statement, R1/B1-R1) + `purgeConnectionData`, then,
 //      after the commit and best effort, the grant is revoked AT GOOGLE (DP III.E.4: the access goes too; not every flip is a dead token). That
 //      revoke is the one Google call outside the connection slice, and has its OWN allowance (`YOUTUBE_DAILY_REVOKE_BUDGET_MS`): a purge that
 //      needs a revoke starts only while the allowance has time left, and is otherwise left WHOLE for the next pass (counted `deferred`) -
@@ -52,7 +52,7 @@ import "server-only";
 //    constants), or sits `ending` longer than that schedule takes to run (a claim deferred on every firing never counts an attempt). It is
 //    reported (captureError, codes and ids only) and counted `failed` (the Worker's degraded line), and finalized `failed` / `end_stuck`
 //    so its key frees, UNLESS a session on it is active (a key is never freed under a stream). A row on a `reconnect_needed` connection is
-//    not stuck: it waits for the club (a reconnect clears the backoff and the end succeeds) and for the 30-day purge.
+//    not stuck: it waits for the club (a reconnect clears the backoff and the end succeeds) and for the 7-day dead-grant purge.
 //  - c (stranded). A revoked connection's rows are PURGED, not finalized: the connection is gone, and DP III.E.4 asks for the data to go.
 //
 // purgeConnectionData is SHARED with T18's disconnect: it takes a transaction, refuses a connection that is not revoked, is idempotent, and
@@ -62,7 +62,7 @@ import "server-only";
 // token is opened in memory for one pass, and what is reported carries ids and codes only. The file names no sealed column.
 import { sql, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
-import { YOUTUBE_LIVE_STATE_OF_REFUSAL, youtubeVideoId, type YoutubeLiveStateRefusal } from "@/lib/youtube";
+import { YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_LIVE_STATE_OF_REFUSAL, youtubeVideoId, type YoutubeLiveStateRefusal } from "@/lib/youtube";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { recordLiveState } from "./connections";
@@ -71,12 +71,13 @@ import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePor
 import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken, revokeConnection } from "./token-store";
 
 /** `checked` connections health-checked; `reconnectNeeded` connections this pass found dead; `refreshed` / `removed` broadcast rows
- *  confirmed / deleted (removed: a video gone from YouTube, a complete row of a dead grant past the ceiling, or a failed row past its
- *  retention); `keysRemoved` pooled stream keys deleted (retired ones, and ones idle past the ceiling); `purged` connections whose data was
- *  purged; `failed` what did not work and is retried tomorrow, plus every stuck broadcast (the Worker alerts on this one); `deferred`
- *  connections a wall-clock budget cut short (not started, or left between two of their YouTube calls) and dead grants whose purge waits
- *  for the revoke allowance - not a failure: a later pass reaches them (a connection never started is the first one tomorrow; one cut
- *  after its health check queues behind the ones not yet checked). */
+ *  confirmed / deleted (removed: a video gone from YouTube, a complete row of ANY non-revoked connection past the ceiling - a dead
+ *  grant's, or a connected channel's that was never confirmed - or a failed row past its retention); `keysRemoved` pooled stream keys
+ *  deleted (retired ones, and ones idle past the ceiling); `purged` connections whose data was purged; `failed` what did not work and is
+ *  retried tomorrow, plus every stuck broadcast (the Worker alerts on this one); `deferred` connections a wall-clock budget cut
+ *  short (not started, or left between two of their YouTube calls) and dead grants whose purge waits for the revoke allowance - not a
+ *  failure: a later pass reaches them (a connection never started is the first one tomorrow; one cut after its health check queues
+ *  behind the ones not yet checked). */
 export type YoutubeDailyResult = {
   checked: number; reconnectNeeded: number; refreshed: number; removed: number; keysRemoved: number; purged: number; failed: number; deferred: number;
 };
@@ -86,8 +87,9 @@ export const YOUTUBE_REFRESH_AFTER_DAYS = 25;
 /** THE CEILING (Google API Services User Data Policy III.E.4): what Seazn stores from YouTube is refreshed or deleted within this many
  *  days. Every other 30 here is this one fact, so a change to it moves them together. */
 export const YOUTUBE_DATA_CEILING_DAYS = 30;
-/** A grant that has been dead this long has its YouTube data purged (DP III.E.4, spec §6.8). */
-export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = YOUTUBE_DATA_CEILING_DAYS;
+/** A grant that has been dead this long (counted from the flip to `reconnect_needed`) has its YouTube data purged: SEVEN days, declared in
+ *  lib/youtube (the Streaming page tells the customer the same figure) and re-exported here for the pass's own callers and tests. */
+export { YOUTUBE_DEAD_GRANT_PURGE_DAYS };
 /** A `failed` broadcast row is deleted this long after it failed (DP III.E.4; the plan names no other figure). */
 export const YOUTUBE_FAILED_ROW_RETENTION_DAYS = YOUTUBE_DATA_CEILING_DAYS;
 
@@ -489,7 +491,7 @@ async function checkConnection(p: Pass, c: Conn): Promise<void> {
 /** The ceiling's backstop for a `complete` row (DP III.E.4; PO ruling, no carve-outs): once it has gone `YOUTUBE_DATA_CEILING_DAYS`
  *  without a confirmation it is deleted - and the link that pointed at its video cleared - whatever the state of its connection, so long
  *  as it is not revoked (a revoked one is the purge's). A DEAD grant cannot be refreshed (YouTube cannot be asked) and its purge only comes
- *  `YOUTUBE_DEAD_GRANT_PURGE_DAYS` after it died: a row last confirmed on the day the grant died would otherwise sit until ~day 55 (25 + 30).
+ *  `YOUTUBE_DEAD_GRANT_PURGE_DAYS` after it died: a row last confirmed 25 days before the grant died would otherwise sit until day 32 (25 + 7), past the ceiling.
  *  A CONNECTED channel whose refresh did not complete (a token that will not open, a refusal from YouTube, a budget that never reached it)
  *  would otherwise keep the row for ever. Reads no token and calls nobody. Under the connection's lock, re-checked: a connection revoked
  *  after the list is the purge's (the stranded leg takes what is left); a reconnect that lands after it changes nothing, the row being past
@@ -579,7 +581,9 @@ async function deleteStreamsAtYouTube(p: Pass, c: { id: string; org_id: string }
     if (refresh === null) return;
     at = await viaPort(() => p.port.accessToken(refresh), c, "idle_token");
   } catch (err) {
-    // A damaged token is the connection leg's to report, a dead grant is expected, a slice spent is silent; anything else is ours.
+    // A damaged token is the connection leg's to report, and that leg runs for a CONNECTED channel only: a flipped connection's damaged token
+    // is not reported from here (nothing could be asked with it either way). A dead grant is expected, a slice spent is silent; anything
+    // else is ours.
     if (!(err instanceof YoutubeTokenUnreadableError) && !(err instanceof YouTubeError) && !(err instanceof BudgetSpent)) {
       captureError(err, { orgId: c.org_id, route: "youtube.daily.idle_token", extra: { connectionId: c.id } });
     }
@@ -808,7 +812,7 @@ export async function youtubeDaily(
   // 3. Stuck broadcasts.
   await leg(p, "stuck", () => settleStuck(p));
 
-  // 4. Dead grants, 30 days.
+  // 4. Dead grants, YOUTUBE_DEAD_GRANT_PURGE_DAYS after the flip.
   await leg(p, "dead_grants", async () => {
     const dead = await sql<{ id: string; org_id: string }[]>`
       select id, org_id from org_youtube_connections

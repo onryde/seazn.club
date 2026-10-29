@@ -55,7 +55,7 @@ export class YouTubeError extends Error {
 export const LIVE_PERMISSIONS_REASON = "insufficientLivePermissions";
 
 /** The ONE predicate for that refusal - the daily health check, Go live's prepare and the end step all ask it, so they cannot disagree.
- *  Such a refusal is a live-blocked channel: the connection stays `connected` (no reconnect prompt, no 30-day purge clock), the
+ *  Such a refusal is a live-blocked channel: the connection stays `connected` (no reconnect prompt, no 7-day purge clock), the
  *  refusal code is `youtube_live_blocked`. */
 export const isLiveBlockedRefusal = (err: unknown): boolean =>
   err instanceof YouTubeError && err.code === "youtube_reconnect_needed" && err.reason === LIVE_PERMISSIONS_REASON;

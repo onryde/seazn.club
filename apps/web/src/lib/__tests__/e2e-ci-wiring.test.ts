@@ -517,6 +517,13 @@ const WALKTHROUGH_SPECS: string[] = [
   // fixture servers: D12's unopened round, the organiser's open, the camera
   // preflight's cards, the game made and played at Lichess, the sweep, round 2.
   "chess-external-play.spec.ts",
+
+  // YouTube Connect (plan T20) — the whole feature on the fake YouTube port: connect through consent and the picker
+  // (1280 and 320), Go live on the connected channel, the same video after a Stop and a NEW video past the grace,
+  // the refusal copy, the replay parts on the public page (the cron tick under the whole stream pool), the
+  // reconnect-needed row (the daily sweep, same exclusion), Disconnect and its three outcomes, two matches on one
+  // channel, and the consent links.
+  "youtube-connect.spec.ts",
 ];
 
 /** The values of `E2E_WALKTHROUGH_SLICE` that e2e.yml dispatches. Named here
