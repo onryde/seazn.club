@@ -21,6 +21,26 @@ function floorOf(sport: string, variant: string): number {
   for (let n = 1; n <= 40; n++) if (writeConfigIssues(sportModule(sport), resolveSchemaCfg(sport, variant, { setTo: n, finalSetTo: n })).length === 0) return n;
   throw new Error(`${sport}/${variant}: no set target up to 40 passes the door`);
 }
+/** The rulebook rows whose refusal is a set target below the engine's floor (VB-CF-1, TT-CF-1; TN-CF-1 is a best of 1 with a match
+ *  tie-break instead). Since W2e T29 the editor's set-target inputs start AT that floor (`set-target-floor.ts`), so the generator's
+ *  input for these sports carries no value the door refuses: their door count is asserted ZERO with that reason checked, not excused. */
+const SET_TARGET_FLOOR_ROWS: ReadonlySet<string> = new Set(["VB-CF-1", "TT-CF-1"]);
+/** Every non-blank `setTo` / `finalSetTo` level the generator offers for `sport`, checked at or above the engine's floor under every
+ *  preset it offers; returns how many levels it checked (zero would make the check vacuous, so callers require more). */
+function setTargetLevelsAtFloor(sport: string): number {
+  const fs = factorsFor(sport);
+  const presets = fs[1]!.levels.map((l) => l.raw);
+  let n = 0;
+  for (const f of fs) {
+    if (f.name !== "setTo" && f.name !== "finalSetTo") continue;
+    for (const l of f.levels) {
+      if (l.raw === "") continue;
+      for (const p of presets) expect(Number(l.raw), `${sport} ${f.name}=${l.raw} on ${p}: at or above the engine's floor`).toBeGreaterThanOrEqual(floorOf(sport, p));
+      n++;
+    }
+  }
+  return n;
+}
 
 describe("the write door in resolveSportCfg", () => {
   it("empty case first: the sports that declare a door are exactly the rulebook's three (counted), and each has its row", () => {
@@ -98,15 +118,24 @@ describe("the generator plans no case the door refuses (variants.json input)", (
     return { total, doorRefused, harnessRefusedByRow };
   }
 
-  it("per door sport: the pairs the engine door refuses are exactly the ones buildVariant refuses naming the row (counted, non-zero)", () => {
+  it("per door sport: the pairs the engine door refuses are exactly the ones buildVariant refuses naming the row (counted, non-zero where the editor can reach the door)", () => {
     const seen: string[] = [];
+    let refusedTotal = 0;
     for (const sport of DOOR_SPORTS) {
       const r = pairInput(sport);
       seen.push(`${sport}: ${r.doorRefused}/${r.total}`);
       expect(r.total, sport).toBeGreaterThan(0);
-      expect(r.doorRefused, `${sport}: the door refuses some pair of the generator's input`).toBeGreaterThan(0);
+      if (SET_TARGET_FLOOR_ROWS.has(RULEBOOK_ROW[sport]!)) {
+        // W2e T29: the editor offers no set target below the floor, so the door refuses none of this input (checked, not excused).
+        expect(setTargetLevelsAtFloor(sport), `${sport}: set-target levels checked`).toBeGreaterThan(0);
+        expect(r.doorRefused, `${sport}: the editor starts at the floor, so the door refuses no pair of the generator's input`).toBe(0);
+      } else {
+        expect(r.doorRefused, `${sport}: the door refuses some pair of the generator's input`).toBeGreaterThan(0);
+      }
       expect(r.harnessRefusedByRow, sport).toBe(r.doorRefused);
+      refusedTotal += r.doorRefused;
     }
+    expect(refusedTotal, "the door refuses some pair of the generator's input, over every door sport").toBeGreaterThan(0);
     console.info(`write-door: pairs the engine door refuses, over the generator's input - ${seen.join("; ")}`);
   });
 
@@ -153,6 +182,7 @@ describe("the generator plans no case the door refuses (variants.json input)", (
 
   it("every uncoverable pair of a door sport names its rule row exactly when the engine's door is what refuses its completions: the schema accepts some, the door refuses all (derived by exhaustive product, counted)", () => {
     const seen: string[] = [];
+    let doorClassTotal = 0;
     for (const sport of DOOR_SPORTS) {
       const fs = factorsFor(sport);
       const states = productStates(sport);
@@ -179,9 +209,13 @@ describe("the generator plans no case the door refuses (variants.json input)", (
       }
       expect(named, sport).toBe(doorClass);
       seen.push(`${sport}: ${doorClass} door-class of ${v.uncoverable.length} uncoverable (${states.length} combinations)`);
-      // anti-vacuity, every door sport (tennis included: its Bo1 + match tie-break pairs are the door's, TN-CF-1)
-      expect(doorClass, `${sport}: the door's class is non-empty`).toBeGreaterThan(0);
+      // anti-vacuity, every door sport the editor can reach the door in (tennis: its Bo1 + match tie-break pairs are the door's,
+      // TN-CF-1); a set-target-floor sport's editor starts at the floor (W2e T29), so its door class is exactly empty.
+      if (SET_TARGET_FLOOR_ROWS.has(RULEBOOK_ROW[sport]!)) expect(doorClass, `${sport}: no input the door refuses, so no uncoverable pair is the door's`).toBe(0);
+      else expect(doorClass, `${sport}: the door's class is non-empty`).toBeGreaterThan(0);
+      doorClassTotal += doorClass;
     }
+    expect(doorClassTotal, "some uncoverable pair is the door's, over every door sport").toBeGreaterThan(0);
     console.info(`write-door: ${seen.join("; ")}`);
   });
 });
