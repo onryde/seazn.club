@@ -6,7 +6,7 @@
 // anti-vacuity). `ALL_OUTCOMES` stays frozen: the new shapes run here, in their own sweeps (spec §10).
 import { decidedInFor } from "@seazn/engine/competition";
 import { EngineError, StageKind } from "@seazn/engine/core";
-import { checkFixtureOverride, deciderKeysFor, stageKeysFor } from "@seazn/engine/sport";
+import { checkFixtureOverride, deciderKeysFor, stageKeysFor, writeConfigIssues } from "@seazn/engine/sport";
 import { CricketBall, CricketCfg, dlsTarget, soBattingSideAt, type CricketState } from "@seazn/engine/sports/cricket";
 import { football, footballNextKicker, type ShootoutKick } from "@seazn/engine/sports/football";
 import { describe, expect, it, vi } from "vitest";
@@ -17,11 +17,13 @@ import { resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/spor
 import { STREAM_GENERATORS, generateStream, matchesRequest } from "../lib/streams/index.ts";
 import { SO_PAIRS, superOverStream, type SuperOverPair } from "../lib/streams/cricket.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
+import { setbasedGenerator } from "../lib/streams/setbased.ts";
 import {
   ALL_OUTCOMES, DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, outcomeLabel,
-  type DecidingPath, type RequestedOutcome, type Side, type StreamLineups, type StreamRequest,
+  type DecidingPath, type PathFold, type ProductFold, type RequestedOutcome, type Side, type StreamEvent, type StreamLineups, type StreamRequest,
 } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
+import { capBinds, decidingSetReachable, foldSet, majority, setSportsOf, type SetCfg, type SetFoldState } from "./set-oracles.ts";
 
 // The product's own override merge lives in a `server-only` file that reaches its siblings by the app's `@/` alias, neither of
 // which the matrix's vitest (no config of its own) resolves: both are stubbed to the REAL thing, so `mergeRulesOverride` below
@@ -801,6 +803,354 @@ describe("G4 G5 cricket: a win by super over (each still-tied policy) and a win 
   it("G4 G5 vocabulary: ALL_OUTCOMES is still W2b's seven and nothing is known-unsupported - the new shapes run in their own sweeps", () => {
     expect(ALL_OUTCOMES.map(outcomeLabel)).toEqual(["win-home", "win-away", "draw", "forfeit-away-walkover", "forfeit-home-retired", "abandon", "tie"]);
     expect(ALL_OUTCOMES).toHaveLength(7);
+    expect(KNOWN_UNSUPPORTED).toEqual([]);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Task 22 — G6 (a win in the deciding set), G7 (a win by the score cap): badminton, volleyball, table tennis.
+// Neither path is NAMED by the outcome (every set sport's win is method 'regulation', decided 'regulation'), so both are state
+// only: the witness reads the sets the fold holds — the PRODUCT's state when the fold carries it (Task 21).
+
+/** The set sports, by the ENGINE's own mark (set-oracles.ts). */
+const SET_SPORTS: readonly string[] = setSportsOf(SPORT_KEYS);
+/** Every set variant × every stage kind the engine declares, under the cfg the product folds that stage's fixtures under. */
+const SET_CELLS = SET_SPORTS.flatMap((sport) => variantKeys(sport).flatMap((variant) =>
+  StageKind.options.map((kind) => ({ sport, variant, kind, cfg: stageCfg(sport, resolveSportCfg(sport, variant), kind, variant) as SetCfg }))));
+const foldS = (sport: string, cfg: unknown, events: readonly StreamEvent[]) => foldSet(sport, cfg, events, ID.home, ID.away);
+const otherSide = (s: Side): Side => (s === "home" ? "away" : "home");
+const setWin = (sport: string, cfg: unknown, winner: Side, path?: DecidingPath): StreamRequest =>
+  req(sport, cfg, "knockout", path === undefined ? { kind: "win", winner } : { kind: "win", winner, path });
+/** The sets a side won, by the higher score of each CLOSED set. */
+const setsWonBy = (st: SetFoldState, side: Side): number => st.sets.filter((s) => s.closed && s[side] > s[otherSide(side)]).length;
+/** A cfg the product could WRITE: the variant with `over` laid on it, parsed by the module's schema and not refused by the write
+ *  door (the engine's set-target floors, ruling 31) - so no stream below is built from a below-floor setTo. */
+function okCfg(sport: string, variant: string, over: Record<string, unknown> = {}): SetCfg {
+  const cfg = stageCfg(sport, resolveSportCfg(sport, variant, over), "knockout", variant);
+  expect(writeConfigIssues(sportModule(sport), cfg), `${sport}/${variant} ${JSON.stringify(over)} is a cfg a write door refuses`).toEqual([]);
+  return cfg as SetCfg;
+}
+/** The write door's set-target floor FOUND from the engine's own refusal: the smallest `setTo = finalSetTo` it accepts (1 = none). */
+function floorOf(sport: string, variant: string): number {
+  for (let n = 1; n <= 40; n++) if (writeConfigIssues(sportModule(sport), resolveSportCfg(sport, variant, { setTo: n, finalSetTo: n })).length === 0) return n;
+  throw new Error(`${sport}/${variant}: no set target up to 40 passes the write door`);
+}
+const productOfFold = (sport: string, cfg: unknown, events: readonly StreamEvent[]): ProductFold => {
+  const { state } = foldStream(sportModule(sport), cfg, ID.home, ID.away, events);
+  return JSON.parse(JSON.stringify({ summary: sportModule(sport).summary(state as never), state })) as ProductFold;
+};
+/** A PathFold for `events` folded locally, handed `product` as the product's evidence (null = none: the generator's own request match). */
+const pathFoldOf = (sport: string, cfg: unknown, events: readonly StreamEvent[], product: ProductFold | null): PathFold => {
+  const f = foldStream(sportModule(sport), cfg, ID.home, ID.away, events);
+  return { sportKey: sport, outcome: f.outcome!, state: f.state, cfg, product };
+};
+const witnessOf = (sport: string, path: DecidingPath, fold: PathFold): boolean => STREAM_GENERATORS[sport]!.pathWitness!(path, fold);
+const clone = <T,>(x: T): T => JSON.parse(JSON.stringify(x)) as T;
+const SET_PATHS = ["decidingSet", "cap"] as const;
+
+describe("G6 G7 set sports: a win in the deciding set, a win by the score cap (Task 22)", () => {
+  it("empty case first: the set sports are the engine's and the generator serves exactly them; none declares a decider rule key or reaches anything but regulation, so the outcome cannot name either path - both are state only", () => {
+    expect(SET_SPORTS.length).toBeGreaterThan(0);
+    expect([...SET_SPORTS].sort(), "the engine's set sports are the generator's").toEqual([...setbasedGenerator.sportKeys].sort());
+    expect(SET_SPORTS.every((s) => STREAM_GENERATORS[s]!.pathWitness !== undefined), "each builds paths").toBe(true);
+    let cells = 0;
+    for (const { sport, variant, kind, cfg } of SET_CELLS) {
+      const m = sportModule(sport);
+      expect(deciderKeysFor(m, kind, variant), `${sport}/${variant}/${kind}`).toEqual([]);
+      expect([...m.reachableDecidedIn(cfg as never, kind)], `${sport}/${variant}/${kind}`).toEqual(["regulation"]);
+      cells++;
+    }
+    expect(cells).toBe(SET_CELLS.length);
+    expect(cells).toBeGreaterThan(SET_SPORTS.length);
+  });
+
+  it("everything a request or a cfg cannot build is refused BY NAME as OutcomeUnreachable, never GeneratorUnsupported: a path the sport has no rule for, a cap the cfg does not declare, a cap that never binds, a deciding set a best of one lacks", () => {
+    const foreign = DECIDING_PATHS.filter((p) => !(SET_PATHS as readonly string[]).includes(p));
+    let refused = 0;
+    for (const sport of SET_SPORTS) {
+      const cfg = okCfg(sport, offlineBuilderDefault(sport));
+      for (const path of foreign) {
+        const ask = () => generateStream(setWin(sport, cfg, "home", path));
+        expect(ask, `${sport} ${path}`).toThrow(OutcomeUnreachable);
+        expect(ask, `${sport} ${path}`).toThrow(`${sport} has no '${path}' deciding path (its deciders: decidingSet, cap)`);
+        refused++;
+      }
+    }
+    expect(refused).toBe(SET_SPORTS.length * foreign.length);
+    expect(foreign.length).toBe(DECIDING_PATHS.length - 2);
+    // A cap the cfg does not declare: every cell whose cap is null (volleyball, table tennis), and the engine's oracle agrees.
+    let noCap = 0;
+    for (const { sport, variant, kind, cfg } of SET_CELLS) {
+      if (cfg.cap !== null) continue;
+      expect(capBinds(sport, cfg), `${sport}/${variant}/${kind}`).toBe(false);
+      const ask = () => generateStream(setWin(sport, cfg, "home", "cap"));
+      expect(ask, `${sport}/${variant}/${kind}`).toThrow(OutcomeUnreachable);
+      expect(ask, `${sport}/${variant}/${kind}`).toThrow(/the cfg declares no cap/);
+      noCap++;
+    }
+    expect(noCap).toBeGreaterThan(0);
+    // A cap that never binds: a lead of one already wins (winBy 1), so the set ends before the deuce - the engine's fold says so.
+    const oneUp = okCfg("badminton", "bwf", { winBy: 1 });
+    expect(oneUp.cap, "a cap is declared...").toBe(30);
+    expect(capBinds("badminton", oneUp), "...and never decides a set").toBe(false);
+    expect(() => generateStream(setWin("badminton", oneUp, "home", "cap"))).toThrow(/a lead of one already wins/);
+    // A deciding set a best of one lacks: its only set IS the match (the engine's oracle: no level sets are possible).
+    let bo1 = 0;
+    for (const sport of SET_SPORTS) {
+      const cfg = okCfg(sport, offlineBuilderDefault(sport), { bestOf: 1 });
+      expect(decidingSetReachable(sport, cfg), sport).toBe(false);
+      expect(() => generateStream(setWin(sport, cfg, "home", "decidingSet")), sport).toThrow(OutcomeUnreachable);
+      expect(() => generateStream(setWin(sport, cfg, "home", "decidingSet")), sport).toThrow(/bestOf 1 has no deciding set/);
+      bo1++;
+    }
+    expect(bo1).toBe(SET_SPORTS.length);
+    // ...while a best of one with a cap still has its one set capped.
+    const bo1Cap = okCfg("badminton", "bwf", { bestOf: 1 });
+    const one = foldS("badminton", bo1Cap, generateStream(setWin("badminton", bo1Cap, "away", "cap")));
+    expect(one.state.sets).toEqual([{ home: bo1Cap.cap! - 1, away: bo1Cap.cap!, closed: true }]);
+  });
+
+  it("G6: every set sport x variant builds a win IN THE DECIDING SET for both winners - the sets level at majority-1 each, the last to the deciding target (finalSetTo, not setTo) - under a strict fold, with an outcome no different from a straight-sets win's, counted per variant", () => {
+    const perVariant = new Map<string, number>();
+    let differing = 0;
+    for (const { sport, variant, kind, cfg } of SET_CELLS) {
+      const at0 = `${sport}/${variant}/${kind}`;
+      expect(decidingSetReachable(sport, cfg), at0).toBe(true);
+      const m = sportModule(sport);
+      const k = majority(cfg.bestOf);
+      for (const winner of SIDES) {
+        const at = `${at0} ${winner}`;
+        const r = setWin(sport, cfg, winner, "decidingSet");
+        const events = generateStream(r);
+        const f = foldS(sport, cfg, events);
+        expect(f.outcome, at).toMatchObject({ kind: "win", winner: ID[winner], loser: ID[otherSide(winner)] });
+        // State only: the outcome is the straight-sets win's, byte for byte, and decided 'regulation' - the outcome cannot say it.
+        expect(f.outcome, at).toEqual(foldS(sport, cfg, generateStream(setWin(sport, cfg, winner))).outcome);
+        expect(decidedInFor(m, f.outcome!), at).toBe("regulation");
+        const sets = f.state.sets;
+        expect(sets.length, `${at}: every set of the best of ${cfg.bestOf} was played`).toBe(cfg.bestOf);
+        expect(sets.every((s) => s.closed), at).toBe(true);
+        expect(setsWonBy(f.state, winner), at).toBe(k);
+        expect(setsWonBy(f.state, otherSide(winner)), at).toBe(k - 1);
+        const before = { ...f.state, sets: sets.slice(0, -1) };
+        expect(setsWonBy(before, "home"), `${at}: level before the last set`).toBe(k - 1);
+        expect(setsWonBy(before, "away"), `${at}: level before the last set`).toBe(k - 1);
+        expect(sets.at(-1)![winner] > sets.at(-1)![otherSide(winner)], `${at}: the winner took the last set`).toBe(true);
+        // Each set ends exactly at its target: setTo, and the DECIDING set's own finalSetTo.
+        sets.forEach((s, i) => expect(Math.max(s.home, s.away), `${at} set ${i + 1}`).toBe(i === cfg.bestOf - 1 ? cfg.finalSetTo : cfg.setTo));
+        expect(matchesRequest(r, f.outcome, f.state), at).toBe("match");
+        expect(matchesRequest(setWin(sport, cfg, otherSide(winner), "decidingSet"), f.outcome, f.state), `${at}: the other winner`).toBe("mismatch");
+        expect(matchesRequest(setWin(sport, cfg, winner, "cap"), f.outcome, f.state), `${at}: not a cap win`).toBe("mismatch");
+        expect(foldS(sport, cfg, events.slice(0, -1)).outcome, `${at}: decides on its last event`).toBeNull();
+        expect(generateStream(r), `${at}: a second call`).toEqual(events);
+        if (cfg.finalSetTo !== cfg.setTo) differing++;
+        perVariant.set(`${sport}/${variant}`, (perVariant.get(`${sport}/${variant}`) ?? 0) + 1);
+      }
+    }
+    console.info(`G6 set sports: wins per variant ${JSON.stringify(Object.fromEntries(perVariant))}; ${differing} win(s) whose deciding set is played to a different target`);
+    for (const sport of SET_SPORTS) for (const v of variantKeys(sport)) expect(perVariant.get(`${sport}/${v}`) ?? 0, `${sport}/${v}: no deciding-set win was checked`).toBeGreaterThan(0);
+    // The right answer differs from the wrong one: volleyball plays its deciding set to 15, not the 25 (or 21) of the others.
+    expect(differing, "some variant's deciding set is played to a different target than its other sets").toBeGreaterThan(0);
+    const vb = SET_CELLS.find((c) => c.sport === "volleyball" && c.variant === "indoor" && c.kind === "knockout")!;
+    expect(vb.cfg.finalSetTo).not.toBe(vb.cfg.setTo);
+    // ...and the engine refuses the wrong constant: the deciding set played to setTo is not a reachable final score there.
+    const events = generateStream(setWin("volleyball", vb.cfg, "home", "decidingSet"));
+    const last = events.at(-1)!;
+    const wrong = [...events.slice(0, -1), { ...last, payload: { home: vb.cfg.setTo, away: 0 } }];
+    expect(() => foldS("volleyball", vb.cfg, wrong)).toThrow(/not a reachable final score/);
+  });
+
+  it("G7: a win BY THE CAP wherever the engine's own rally fold says the cap decides a set (and a refusal by name where it does not): every set the winner takes ends cap : cap-1, under a strict fold, with an outcome no different from a straight-sets win's", () => {
+    const perVariant = new Map<string, number>();
+    let binding = 0;
+    let unbound = 0;
+    for (const { sport, variant, kind, cfg } of SET_CELLS) {
+      const at0 = `${sport}/${variant}/${kind}`;
+      const binds = capBinds(sport, cfg);
+      if (!binds) {
+        expect(() => generateStream(setWin(sport, cfg, "home", "cap")), at0).toThrow(OutcomeUnreachable);
+        unbound++;
+        continue;
+      }
+      binding++;
+      const m = sportModule(sport);
+      for (const winner of SIDES) {
+        const at = `${at0} ${winner}`;
+        const r = setWin(sport, cfg, winner, "cap");
+        const events = generateStream(r);
+        const f = foldS(sport, cfg, events);
+        expect(f.outcome, at).toMatchObject({ kind: "win", winner: ID[winner], loser: ID[otherSide(winner)] });
+        expect(f.outcome, at).toEqual(foldS(sport, cfg, generateStream(setWin(sport, cfg, winner))).outcome);
+        expect(decidedInFor(m, f.outcome!), at).toBe("regulation");
+        const sets = f.state.sets;
+        expect(sets.length, `${at}: straight sets`).toBe(majority(cfg.bestOf));
+        for (const [i, s] of sets.entries()) {
+          expect(s.closed, `${at} set ${i + 1}`).toBe(true);
+          expect([s[winner], s[otherSide(winner)]], `${at} set ${i + 1}: the cap, then one short of it`).toEqual([cfg.cap, cfg.cap! - 1]);
+        }
+        expect(matchesRequest(r, f.outcome, f.state), at).toBe("match");
+        expect(matchesRequest(setWin(sport, cfg, otherSide(winner), "cap"), f.outcome, f.state), `${at}: the other winner`).toBe("mismatch");
+        expect(matchesRequest(setWin(sport, cfg, winner, "decidingSet"), f.outcome, f.state), `${at}: not a deciding-set win`).toBe("mismatch");
+        expect(foldS(sport, cfg, events.slice(0, -1)).outcome, `${at}: decides on its last event`).toBeNull();
+        expect(generateStream(r), `${at}: a second call`).toEqual(events);
+        perVariant.set(`${sport}/${variant}`, (perVariant.get(`${sport}/${variant}`) ?? 0) + 1);
+      }
+    }
+    console.info(`G7 set sports: ${binding} cell(s) where the cap binds, ${unbound} where it does not; wins per variant ${JSON.stringify(Object.fromEntries(perVariant))}`);
+    expect(binding).toBeGreaterThan(0);
+    expect(unbound).toBeGreaterThan(0);
+    // Every variant whose cfg declares a cap (with winBy 2) was checked, and only those: badminton's three.
+    const declaring = new Set(SET_CELLS.filter((c) => c.cfg.cap !== null && c.cfg.winBy >= 2).map((c) => `${c.sport}/${c.variant}`));
+    expect([...perVariant.keys()].sort()).toEqual([...declaring].sort());
+    expect([...declaring].every((v) => v.startsWith("badminton/")), "only badminton ships a cap").toBe(true);
+    expect(declaring.size).toBe(variantKeys("badminton").length);
+  });
+
+  it("G7 the right answer differs from the wrong one: 21-20 ends a set under bwf-3x15 (cap 21) and 30-29 under bwf (cap 30) - and the strict fold refuses each under the other's cfg; the rulebook anchors both (BWF Laws 7.4 / 7.5: at 29-all the 30th point wins; the 3x15 format: at 20-all the 21st)", () => {
+    const cfgs = new Map(variantKeys("badminton").map((v) => [v, okCfg("badminton", v)] as const));
+    const streams = new Map([...cfgs].map(([v, cfg]) => [v, generateStream(setWin("badminton", cfg, "home", "cap"))] as const));
+    const scoreOf = (e: StreamEvent) => (e.payload as { home: number; away: number });
+    // The rulebook's numbers, typed once as the independent anchor (the cfg's declared cap is the engine's, the code under test).
+    expect(scoreOf(streams.get("bwf-3x15")![1]!)).toEqual({ home: 21, away: 20 });
+    expect(scoreOf(streams.get("bwf")![1]!)).toEqual({ home: 30, away: 29 });
+    expect(new Set([...cfgs.values()].map((c) => c.cap)).size, "the variants' caps differ").toBe(cfgs.size);
+    let refused = 0;
+    for (const [a, eventsA] of streams) for (const [b, cfgB] of cfgs) {
+      if (a === b) continue;
+      expect(() => foldS("badminton", cfgB, eventsA), `${a}'s capped set under ${b}`).toThrow(/not a reachable final score/);
+      expect(matchesRequest(setWin("badminton", cfgB, "home", "cap"), { kind: "win", winner: ID.home, loser: ID.away, method: "regulation" }, foldS("badminton", cfgs.get(a)!, eventsA).state), `${a}'s state asked as ${b}`).toBe("mismatch");
+      refused++;
+    }
+    expect(refused).toBe(cfgs.size * (cfgs.size - 1));
+    // 3x15's declared shape is 15 / 15 / 21: the deciding-set override equals setTo, and the cap sits above both.
+    const x = cfgs.get("bwf-3x15")!;
+    expect([x.setTo, x.finalSetTo, x.cap]).toEqual([15, 15, 21]);
+    // ...and a decidingSet win under 3x15 is played to 15, which is not a cap ending (15-x, x <= 10 ... a plain win).
+    const ds = foldS("badminton", x, generateStream(setWin("badminton", x, "home", "decidingSet"))).state;
+    expect(ds.sets.at(-1)!.home).toBe(x.finalSetTo);
+    expect(ds.sets.at(-1)!.home).not.toBe(x.cap);
+  });
+
+  it("one generator, three sports: a cap can be declared on volleyball too (its own rule key lets a match set one), at a set target at the write door's floor, and every cfg used here passes the engine's write door - table tennis, whose ruleKeys bar a cap, never gets one", () => {
+    // The floors, found from the engine's refusal: volleyball and table tennis have one, badminton none.
+    expect(floorOf("badminton", "bwf")).toBe(1);
+    const vbFloor = floorOf("volleyball", "indoor");
+    const ttFloor = floorOf("tabletennis", "bo5");
+    expect(vbFloor).toBeGreaterThan(1);
+    expect(ttFloor).toBeGreaterThan(1);
+    expect(writeConfigIssues(sportModule("volleyball"), resolveSportCfg("volleyball", "indoor", { setTo: vbFloor - 1 })), "one below the floor is refused").not.toEqual([]);
+    let built = 0;
+    // At the floor: the shortest legal sets still build both paths for both winners, and the strict fold takes them.
+    for (const [sport, variant, floor] of [["volleyball", "indoor", vbFloor], ["volleyball", "beach", vbFloor], ["tabletennis", "bo5", ttFloor]] as const) {
+      const cfg = okCfg(sport, variant, { setTo: floor, finalSetTo: floor });
+      for (const winner of SIDES) {
+        const f = foldS(sport, cfg, generateStream(setWin(sport, cfg, winner, "decidingSet")));
+        expect(f.outcome, `${sport}/${variant} at the floor ${winner}`).toMatchObject({ kind: "win", winner: ID[winner] });
+        expect(f.state.sets.length).toBe(cfg.bestOf);
+        built++;
+      }
+    }
+    // Volleyball with a cap: the set kernel's cap, on a sport that ships none.
+    const vbCap = okCfg("volleyball", "indoor", { cap: 28 });
+    expect(Object.hasOwn(sportModule("volleyball").ruleKeys!, "cap"), "volleyball's matches may set a cap").toBe(true);
+    expect(Object.hasOwn(sportModule("tabletennis").ruleKeys!, "cap"), "table tennis's may not").toBe(false);
+    expect(capBinds("volleyball", vbCap)).toBe(true);
+    for (const winner of SIDES) {
+      const f = foldS("volleyball", vbCap, generateStream(setWin("volleyball", vbCap, winner, "cap")));
+      expect(f.state.sets.every((s) => s[winner] === 28 && s[otherSide(winner)] === 27), `volleyball cap ${winner}`).toBe(true);
+      expect(f.state.sets.length).toBe(majority(vbCap.bestOf));
+      built++;
+    }
+    // The deciding set of that volleyball cfg still plays to finalSetTo (15), under a cap of 28.
+    const vbDs = foldS("volleyball", vbCap, generateStream(setWin("volleyball", vbCap, "home", "decidingSet")));
+    expect(Math.max(vbDs.state.sets.at(-1)!.home, vbDs.state.sets.at(-1)!.away)).toBe(vbCap.finalSetTo);
+    expect(vbCap.finalSetTo).not.toBe(vbCap.cap);
+    built++;
+    // A best of 7 (table tennis bo7): three sets level, a seventh to decide.
+    const bo7 = okCfg("tabletennis", "bo7");
+    const f7 = foldS("tabletennis", bo7, generateStream(setWin("tabletennis", bo7, "away", "decidingSet")));
+    expect([setsWonBy(f7.state, "home"), setsWonBy(f7.state, "away"), f7.state.sets.length]).toEqual([3, 4, 7]);
+    built++;
+    expect(built).toBe(3 * 2 + 2 + 1 + 1);
+  });
+
+  it("the witness reads the PRODUCT's state when the fold carries it: a product that never reached the deciding set or the cap reds a stream the local fold proves, the product's state is believed over the local fold's, a right path under the wrong key reds, and a half or inconsistent product reds", () => {
+    const triples: readonly (readonly [string, string, DecidingPath])[] = [
+      ["badminton", "bwf-3x15", "decidingSet"], ["badminton", "bwf-3x15", "cap"], ["badminton", "bwf", "cap"], ["badminton", "bwf", "decidingSet"],
+      ["volleyball", "indoor", "decidingSet"], ["volleyball", "beach", "decidingSet"], ["tabletennis", "bo5", "decidingSet"], ["tabletennis", "bo7", "decidingSet"],
+    ];
+    let rows = 0;
+    for (const [sport, variant, path] of triples) {
+      const cfg = okCfg(sport, variant);
+      const at = `${sport}/${variant} ${path}`;
+      const events = generateStream(setWin(sport, cfg, "home", path));
+      const plain = generateStream(setWin(sport, cfg, "home"));
+      const own = productOfFold(sport, cfg, events);
+      const straight = productOfFold(sport, cfg, plain);
+      const row = (label: string, want: boolean, local: readonly StreamEvent[], product: ProductFold | null, asked: DecidingPath = path) => {
+        expect(witnessOf(sport, asked, pathFoldOf(sport, cfg, local, product)), `${at}: ${label}`).toBe(want);
+        rows++;
+      };
+      row("the product's own state", true, events, own);
+      row("no product: the generator's own request match reads the local fold", true, events, null);
+      row("a product that never reached the path (a straight-sets win) although the local fold did", false, events, straight);
+      row("the product's state is believed over the local fold's", true, plain, own);
+      row("the local fold plain and no product", false, plain, null);
+      // Right path under the wrong key: the same stream asked as the other path, or as a path the sport lacks.
+      for (const other of SET_PATHS.filter((p) => p !== path)) row(`asked as '${other}'`, false, events, own, other);
+      row("asked as a shoot-out", false, events, own, "shootout");
+      // A half or inconsistent product.
+      row("no summary", false, events, { summary: null, state: own.state });
+      row("no state", false, events, { summary: own.summary, state: null });
+      row("a state that is no object", false, events, { summary: own.summary, state: "done" });
+      const strip = clone(own) as { summary: { detail: { sets: { home: number }[] } } };
+      strip.summary.detail.sets[0]!.home += 1;
+      row("a summary whose set strip is not the state's", false, events, strip as unknown as ProductFold);
+      const otherCfg = clone(own) as { state: { cfg: SetCfg } };
+      otherCfg.state.cfg.setTo += 1;
+      row("a state folded under another cfg than the one asked", false, events, otherCfg as unknown as ProductFold);
+      const otherWinner = clone(own) as { state: { outcome: { winner: string } } };
+      otherWinner.state.outcome.winner = ID.away;
+      row("a state whose own outcome names the other winner", false, events, otherWinner as unknown as ProductFold);
+      const live = clone(own) as { state: { phase: string } };
+      live.state.phase = "live";
+      row("a match not yet done", false, events, live as unknown as ProductFold);
+      const open = clone(own) as { state: { sets: { closed: boolean }[] } };
+      open.state.sets[open.state.sets.length - 1]!.closed = false;
+      row("a last set still open", false, events, open as unknown as ProductFold);
+      if (path === "decidingSet") {
+        // A set table with a closed TIED set in it (no engine state has one): the two count guards each stand alone - one set
+        // short of a loser's win, and one set past the best of N.
+        type SetRow = { home: number; away: number; closed: boolean };
+        const withSets = (edit: (sets: SetRow[]) => void): ProductFold => {
+          const c = clone(own) as { summary: { detail: { sets: SetRow[] } }; state: { sets: SetRow[] } };
+          edit(c.state.sets);
+          edit(c.summary.detail.sets);
+          return c as unknown as ProductFold;
+        };
+        row("a loser's set replaced by a tie (the sets are not level before the last)", false, events, withSets((sets) => { sets[0] = { home: 5, away: 5, closed: true }; }));
+        row("a tied set past the best of N (the counts are right, the table is too long)", false, events, withSets((sets) => { sets.unshift({ home: 5, away: 5, closed: true }); }));
+      }
+    }
+    // A cap that EQUALS the set target (a legal cfg: the engine's cap field is 15..35): a plain win to 21 also reaches the cap's
+    // number, but a lead of five is no cap ending - only a lead shorter than winBy is (cap : cap-1). The cap stream is.
+    const flat = okCfg("badminton", "bwf", { cap: 21 });
+    expect([flat.setTo, flat.cap, capBinds("badminton", flat)], "the cap sits ON the target and still binds").toEqual([21, 21, true]);
+    const plainFlat = generateStream(setWin("badminton", flat, "home"));
+    const capFlat = generateStream(setWin("badminton", flat, "home", "cap"));
+    expect(witnessOf("badminton", "cap", pathFoldOf("badminton", flat, capFlat, null)), "21-20 under a cap of 21").toBe(true);
+    expect(witnessOf("badminton", "cap", pathFoldOf("badminton", flat, plainFlat, null)), "a plain win to 21 is not a cap ending").toBe(false);
+    expect(witnessOf("badminton", "cap", pathFoldOf("badminton", flat, plainFlat, productOfFold("badminton", flat, plainFlat))), "...nor on the product's state").toBe(false);
+    rows += 3;
+    console.info(`G6 G7 witness: ${rows} row(s) over ${triples.length} path win(s)`);
+    expect(rows).toBeGreaterThan(triples.length * 10);
+  });
+
+  it("G6 G7 vocabulary: ALL_OUTCOMES is still W2b's seven and nothing is known-unsupported - the new shapes run in their own sweep", () => {
+    expect(ALL_OUTCOMES.map(outcomeLabel)).toEqual(["win-home", "win-away", "draw", "forfeit-away-walkover", "forfeit-home-retired", "abandon", "tie"]);
+    expect(ALL_OUTCOMES).toHaveLength(7);
+    expect(ALL_OUTCOMES.filter((o) => o.kind === "win" && o.path !== undefined)).toEqual([]);
     expect(KNOWN_UNSUPPORTED).toEqual([]);
   });
 });

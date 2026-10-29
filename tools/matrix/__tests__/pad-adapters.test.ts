@@ -506,6 +506,81 @@ describe("volleyball", () => {
   });
 });
 
+// ── W2e Task 22: the set sports' deciding-set and cap streams, typed on the setScore sheet ──────────────────────────────
+// A cap or deciding-set stream is the same `<sport>.<game|set>.summary {home, away}` the adapters already route (no new event
+// type, so `emits` and the routing sweep are unchanged); what is new is the SCORES: a cap set ends at cap : cap-1 (30-29), the
+// number the sheet's field must accept. The sheet's bound is the engine's own padSpec summary-field max (kernel
+// summaryScoreBound), which the skin copies as `scoreBound`: pinned to that source below, so a skin that bounded the field
+// below the cap would red here and not at a scorer's thumb.
+describe("the set sports' deciding-set and cap streams on the setScore sheet (W2e Task 22)", () => {
+  const SKIN_OF: Readonly<Record<string, { file: string; pad: MatrixPadAdapter; summary: string; tile: string }>> = {
+    badminton: { file: "badminton.tsx", pad: badmintonPad, summary: BADMINTON_SUMMARY, tile: BADMINTON_SET_SCORE_TILE },
+    volleyball: { file: "volleyball.tsx", pad: volleyballPad, summary: VOLLEYBALL_SUMMARY, tile: VOLLEYBALL_SET_SCORE_TILE },
+    tabletennis: { file: "tabletennis.tsx", pad: tabletennisPad, summary: TABLETENNIS_SUMMARY, tile: TABLETENNIS_SET_SCORE_TILE },
+  };
+  /** The engine's own bound on the summary action's number fields under `cfg` (padSpec, not the skin's copy of it). */
+  const boundOf = (sport: string, cfg: unknown): number => {
+    const spec = sportModule(sport).padSpec?.(cfg as never);
+    const action = spec?.panels.flatMap((p) => p.actions).find((a) => a.type === SKIN_OF[sport]!.summary);
+    expect(action, `${sport}: padSpec declares the summary action`).toBeDefined();
+    const maxes = action!.fields.filter((f) => f.kind === "number").map((f) => (f as { max?: number }).max);
+    expect(maxes.length, `${sport}: two number fields`).toBe(2);
+    expect(maxes[0]).toBe(maxes[1]);
+    expect(typeof maxes[0]).toBe("number");
+    return maxes[0] as number;
+  };
+
+  it("every set variant's deciding-set and cap summary is typed as the sheet's two number steps, each within the engine's declared field bound, counted per path", () => {
+    const perPath = new Map<string, number>();
+    let capNeeds = 0;
+    for (const sport of Object.keys(SKIN_OF)) {
+      const { pad, summary } = SKIN_OF[sport]!;
+      for (const variant of variantKeys(sport)) {
+        const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant) as { cap: number | null };
+        const bound = boundOf(sport, cfg);
+        for (const path of ["decidingSet", "cap"] as const) {
+          const r: StreamRequest = { sportKey: sport, cfg, stageKind: "knockout", home: HOME, away: AWAY, outcome: { kind: "win", winner: "home", path } };
+          let stream: StreamEvent[];
+          try { stream = generateStream(r); } catch (e) {
+            if (e instanceof OutcomeUnreachable) continue; // the cfg declares no such path (cap null): refused by name elsewhere
+            throw e;
+          }
+          const sums = stream.filter((e) => e.type === summary);
+          expect(sums.length, `${sport}/${variant} ${path}`).toBeGreaterThan(0);
+          for (const e of sums) {
+            const p = e.payload as { home: number; away: number };
+            expect(Math.max(p.home, p.away), `${sport}/${variant} ${path}: within the sheet's bound ${bound}`).toBeLessThanOrEqual(bound);
+            expect(pad.stepsFor(e, { ...ctxOf(r) }), `${sport}/${variant} ${path}`).toEqual(sheetSteps(SKIN_OF[sport]!.tile, p));
+            if (path === "cap") capNeeds = Math.max(capNeeds, p.home, p.away);
+          }
+          perPath.set(`${sport}/${path}`, (perPath.get(`${sport}/${path}`) ?? 0) + 1);
+        }
+      }
+    }
+    console.info(`pad-adapters: set-sport path summaries typed ${JSON.stringify(Object.fromEntries(perPath))}`);
+    // Every sport reached its deciding set; only badminton's variants reached a cap; 30 is the highest score a sheet must hold.
+    expect([...perPath.keys()].filter((k) => k.endsWith("/decidingSet")).sort()).toEqual(["badminton/decidingSet", "tabletennis/decidingSet", "volleyball/decidingSet"]);
+    expect([...perPath.keys()].filter((k) => k.endsWith("/cap"))).toEqual(["badminton/cap"]);
+    expect(perPath.get("badminton/cap")).toBe(variantKeys("badminton").length);
+    expect(capNeeds).toBe(Math.max(...variantKeys("badminton").map((v) => (resolveSportCfg("badminton", v) as { cap: number }).cap)));
+  });
+
+  it("the skins bound the sheet the way the engine does: the cap when the cfg has one, else the larger target plus 20 - so a cap score (cap, cap-1) is always typeable", () => {
+    let pinned = 0;
+    for (const [sport, { file }] of Object.entries(SKIN_OF)) {
+      const skin = readFileSync(resolve(REPO, SKINS, file), "utf8");
+      expect(skin, `${file}: scoreBound`).toMatch(/function scoreBound\(cfg: \w+\): number \{\s*const cap = cfg\.cap;\s*if \(typeof cap === "number"\) return cap;\s*return Math\.max\(cfg\.setTo \?\? \d+, cfg\.finalSetTo \?\? \d+\) \+ 20;\s*\}/);
+      pinned++;
+      // ...and the engine's declaration is the same arithmetic, for each variant.
+      for (const variant of variantKeys(sport)) {
+        const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant) as { cap: number | null; setTo: number; finalSetTo: number };
+        expect(boundOf(sport, cfg), `${sport}/${variant}`).toBe(cfg.cap ?? Math.max(cfg.setTo, cfg.finalSetTo) + 20);
+      }
+    }
+    expect(pinned).toBe(Object.keys(SKIN_OF).length);
+  });
+});
+
 describe("tennis", () => {
   let skin = "";
   beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "tennis.tsx"), "utf8"); });
