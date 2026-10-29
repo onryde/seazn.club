@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { MarketingNav } from "@/components/marketing-nav";
 import { MarketingFooter } from "@/components/marketing-footer";
 import Link from "next/link";
+import { YOUTUBE_TOS_URL } from "@/lib/youtube";
 
 export const metadata: Metadata = {
   title: "Terms of Service — Seazn Club",
@@ -13,7 +14,7 @@ export default function TermsPage() {
       <MarketingNav />
       <main className="mx-auto max-w-3xl px-4 py-16">
         <h1 className="mb-2 text-3xl font-bold text-purple-900">Terms of Service</h1>
-        <p className="mb-8 text-sm text-slate-400">Last updated: 14 July 2026</p>
+        <p className="mb-8 text-sm text-slate-400">Last updated: 29 October 2026</p>
         <div className="space-y-6 text-sm text-slate-700">
 
           <section>
@@ -72,33 +73,38 @@ export default function TermsPage() {
             <p>You retain ownership of data you upload. By using the service you grant us a limited licence to store and process that data to provide the service. See our <Link href="/legal/privacy" className="text-purple-600 underline">Privacy Policy</Link> for details.</p>
           </section>
 
+          <section id="youtube-live-streaming">
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">8. YouTube live streaming</h2>
+            <p>If you connect a YouTube channel to Seazn Club or use Seazn Club&apos;s YouTube features, you agree to be bound by the <a href={YOUTUBE_TOS_URL} className="text-purple-600 underline" target="_blank" rel="noopener noreferrer">YouTube Terms of Service</a>. Seazn Club uses YouTube API Services; what we access, store, use and share, how to revoke our access and how long we keep anything are in the YouTube section of our <Link href="/legal/privacy#youtube-api-services" className="text-purple-600 underline">Privacy Policy</Link>.</p>
+          </section>
+
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">8. Availability and SLA</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">9. Availability and SLA</h2>
             <p>We aim for high availability but do not guarantee uninterrupted access. Planned maintenance will be communicated in advance. The service is provided "as is" without warranty of any kind.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">9. Limitation of liability</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">10. Limitation of liability</h2>
             <p>To the maximum extent permitted by law, Seazn Club' total liability for any claim arising from use of the service is limited to the amount you paid us in the 12 months preceding the claim. We are not liable for indirect, incidental, or consequential damages.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">10. Termination</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">11. Termination</h2>
             <p>You may close your account at any time from Settings → Account. We may suspend or terminate accounts that violate these Terms, with or without notice depending on severity. On termination, your data is scheduled for deletion as described in our Privacy Policy.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">11. Governing law</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">12. Governing law</h2>
             <p>These Terms are governed by the laws of England and Wales. Disputes shall be subject to the exclusive jurisdiction of the courts of England and Wales.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">12. Changes</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">13. Changes</h2>
             <p>We will notify you of material changes by email at least 14 days before they take effect. Continued use after that date constitutes acceptance.</p>
           </section>
 
           <section>
-            <h2 className="mb-2 text-lg font-semibold text-slate-800">13. Contact</h2>
+            <h2 className="mb-2 text-lg font-semibold text-slate-800">14. Contact</h2>
             <p><a href="mailto:legal@seazn.club" className="text-purple-600 underline">legal@seazn.club</a></p>
           </section>
         </div>
