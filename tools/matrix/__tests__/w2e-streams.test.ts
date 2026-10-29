@@ -34,6 +34,13 @@ import { engineRefuses, foldTennis, tbIsClosestFinish, tennisSetsWonBy, withLast
 // is the product's function, not a copy (Task 20 M1).
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/stage-decider-off", async () => await import("../../../apps/web/src/lib/stage-decider-off.ts"));
+// A synthetic sport key whose module declares one level twice (below, G12 M-2): every real key passes through to the real registry.
+const TWICE_DECLARED = "twice-declared-sanction";
+vi.mock("../lib/sport-cfg.ts", async (importOriginal) => {
+  const real = await importOriginal<typeof import("../lib/sport-cfg.ts")>();
+  const twice = { ...real.sportModule("badminton"), sanctionEnding: { eventType: "badminton.sanction", endLevels: ["black"], promptLevels: ["black"] } };
+  return { ...real, sportModule: (key: string) => (key === "twice-declared-sanction" ? twice : real.sportModule(key)) };
+});
 
 const SIDES: readonly Side[] = ["home", "away"];
 const ID: Readonly<Record<Side, string>> = { home: "H", away: "A" };
@@ -1929,5 +1936,22 @@ describe("G12 a sanction that ends the match (Task 24)", () => {
     expect(KNOWN_UNSUPPORTED).toEqual([]);
     expect(sanctionToken("tennis", "e1", "default")).toEqual({ type: "tennis.sanction", payload: { by: "e1", level: "default" } });
     expect(() => sanctionToken("football", "e1", "red")).toThrow(/declares no sanction event/);
+  });
+
+  it("endingReasonOf refuses a declaration that names a level as BOTH an end and a prompt level (two endings admitted), by sport, level and both reasons; a lawful level answers one reason and an unnamed level none (counted)", () => {
+    // The synthetic module is the real badminton one with its declaration's `black` level in both lists, so the engine's D13 rule
+    // (scorerMayForfeit) admits `disqualified` (end level) AND `retired` (prompt level) after the same sanction.
+    const admitted = FORFEIT_REASONS.filter((reason) => scorerMayForfeit(sportModule(TWICE_DECLARED), { type: "badminton.sanction", payload: { by: "side", level: "black" } }, { by: "side", reason }));
+    expect(admitted, "premise: the engine's own rule admits two endings after that level").toEqual(["retired", "disqualified"]);
+    expect(() => endingReasonOf(TWICE_DECLARED, "black")).toThrow(/twice-declared-sanction's 'black' sanction admits several endings \(retired, disqualified\)/);
+    // The same synthetic module at a level it names nowhere: no ending, no throw (the guard is the two-reasons case, not every call).
+    expect(endingReasonOf(TWICE_DECLARED, "a-level-nothing-names")).toBeNull();
+    // The real declarations are single-valued at every level they name: the guard does not fire on them (counted).
+    let judged = 0;
+    for (const sport of SE_SPORTS) for (const level of [...seDecl(sport).endLevels, ...seDecl(sport).promptLevels]) {
+      expect(() => endingReasonOf(sport, level), `${sport} ${level}`).not.toThrow();
+      judged++;
+    }
+    expect(judged).toBeGreaterThan(0);
   });
 });
