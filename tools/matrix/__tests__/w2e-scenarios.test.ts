@@ -1,6 +1,6 @@
 // W2e Tasks 19–24 (spec §10, D16): the opt-in deciding-path scenarios the local truth run plays with `--scenario`, one key
 // per stream (W2E_ET and W2E_SO from Task 19, W2E_OT from Task 20, W2E_SUPER_OVER and W2E_DLS from Task 21, W2E_DECIDER and
-// W2E_CAP from Task 22, W2E_TB_SET and W2E_SHORT_SETS from Task 23). Each forces EVERY bracket match of a bracket-root row down its key's path,
+// W2E_CAP from Task 22, W2E_TB_SET and W2E_SHORT_SETS from Task 23, W2E_SANCTION_END from Task 24). Each forces EVERY bracket match of a bracket-root row down its key's path,
 // so a green run cannot have got there by the policy's rotation. Expected values come from the engine's own declarations
 // (`decidedInFor` over the module's win-method table; the decider presets a bracket stage is created with), never from
 // the scenario's text.
@@ -23,10 +23,11 @@ import { decideState } from "../lib/results.ts";
 import { Recorder } from "../lib/scenarios/common.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
 import { W2E_SCENARIO_KEYS, type CaseSpec, type W2eScenarioKey } from "../lib/scenarios/types.ts";
-import { W2E_SCENARIO_PATHS, W2eMisplanned, everyMatchTookTheDecidingPath } from "../lib/scenarios/w2e-deciding-paths.ts";
+import { W2E_SCENARIO_PATHS, W2eMisplanned, everyMatchEndedBySanction, everyMatchTookTheDecidingPath, sanctionPick } from "../lib/scenarios/w2e-deciding-paths.ts";
 import { SCENARIO_KEYS } from "../lib/slice.ts";
 import { resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { generateStream } from "../lib/streams/index.ts";
+import { endingLevelOf, endingReasonOf } from "../lib/streams/sanction.ts";
 import { PROBE_LINEUPS, type ProductFold, type StreamEvent, type StreamLineups } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { W1_DRIVING_SCENARIOS, planW1Driving } from "../lib/w1-driving-set.ts";
@@ -38,6 +39,13 @@ import { capBinds, decidingSetReachable, setSportsOf, type SetCfg, type SetFoldS
 import { tbIsClosestFinish, type TennisCfg, type TennisFoldState } from "./tennis-oracles.ts";
 
 const variantFor = offlineBuilderDefault;
+/** Task 24: W2E_SANCTION_END forces no deciding path (its matches end in an AWARD), so the path-shaped tables and sweeps below
+ *  take the other keys; the sanction key has its own describes. */
+const SANCTION_KEY = "W2E_SANCTION_END" as const;
+type PathKey = Exclude<W2eScenarioKey, typeof SANCTION_KEY>;
+const PATH_KEYS: readonly PathKey[] = W2E_SCENARIO_KEYS.filter((k): k is PathKey => k !== SANCTION_KEY);
+/** The sports whose module declares a sanction that ends a match (SportModule.sanctionEnding), from the engine. */
+const sanctionSports = (): string[] => SPORT_KEYS.filter((s) => sportModule(s).sanctionEnding !== undefined);
 /** What the product serves at /state for a fixture folded to `stream`: the engine's own summary of the fold and the fold's
  *  state, through JSON as the match_states jsonb columns hold them (apps/web usecases/fixtures.ts getFixtureState). A
  *  HAND-BUILT drive's product — the integrated runs below read it from the fake driver's /state instead. */
@@ -47,7 +55,7 @@ function productOf(module: ReturnType<typeof sportModule>, cfg: unknown, home: s
 }
 /** What decides each key's matches, in the engine's own vocabulary (sport/module.ts DecidedIn): extra time and overtime are
  *  decided "in overtime", the shoot-out (and the GWS) "by a shoot-out". */
-const DECIDED_IN: Readonly<Record<W2eScenarioKey, DecidedIn>> = { W2E_ET: "ot", W2E_SO: "so", W2E_OT: "ot", W2E_SUPER_OVER: "so", W2E_DLS: "regulation", W2E_DECIDER: "regulation", W2E_CAP: "regulation", W2E_TB_SET: "regulation", W2E_SHORT_SETS: "regulation" };
+const DECIDED_IN: Readonly<Record<PathKey, DecidedIn>> = { W2E_ET: "ot", W2E_SO: "so", W2E_OT: "ot", W2E_SUPER_OVER: "so", W2E_DLS: "regulation", W2E_DECIDER: "regulation", W2E_CAP: "regulation", W2E_TB_SET: "regulation", W2E_SHORT_SETS: "regulation" };
 /** Task 22: the set sports' two keys. Neither path is a stage decider or a decidedIn the outcome can name (a set sport's win is
  *  'regulation' whichever way its sets went), so the engine's declarations that make them reachable are the set kernel's own:
  *  `reachableSetScores` (a deciding set is played) and the rally fold that closes a set at the cap (set-oracles.ts). */
@@ -77,15 +85,16 @@ const tbKeyApplies = (k: TbKey, s: string): boolean => {
 const METHOD_OF: Readonly<Partial<Record<W2eScenarioKey, string>>> = { W2E_DLS: "dls" };
 /** Which of the engine's decider rule keys each scenario plays (`deciderKeysFor`: football's extraTime and shootout, the
  *  period kernel's overtime and shootout — the IIHF's is its GWS). With DECIDED_IN it names the sports the key is FOR. */
-const ENGINE_DECIDER: Readonly<Record<Exclude<W2eScenarioKey, SetKey | TbKey>, string>> = { W2E_ET: "extraTime", W2E_SO: "shootout", W2E_OT: "overtime", W2E_SUPER_OVER: "superOver", W2E_DLS: "dls" };
+const ENGINE_DECIDER: Readonly<Record<Exclude<PathKey, SetKey | TbKey>, string>> = { W2E_ET: "extraTime", W2E_SO: "shootout", W2E_OT: "overtime", W2E_SUPER_OVER: "superOver", W2E_DLS: "dls" };
 /** The rule keys the engine lets a knockout stage set: the deciders (`decider: true`) for the first four keys; cricket's `dls`
  *  is a stage rule but no decider (a revised target is no extra play), so it is read off the stage's settable keys. */
-const keysOf = (k: Exclude<W2eScenarioKey, SetKey | TbKey>, s: string): readonly string[] => (k === "W2E_DLS" ? stageKeysFor : deciderKeysFor)(sportModule(s), "knockout", variantFor(s));
+const keysOf = (k: Exclude<PathKey, SetKey | TbKey>, s: string): readonly string[] => (k === "W2E_DLS" ? stageKeysFor : deciderKeysFor)(sportModule(s), "knockout", variantFor(s));
 /** The sports the ENGINE declares the key's decider for on a knockout, and whose bracket preset reaches the decidedIn it
  *  produces — derived from the modules, not from any generator or scenario. The set keys (Task 22) read the set kernel's own
  *  declarations on the builder default's knockout cfg: a deciding set where `reachableSetScores` has a split-then-decided
  *  score, a cap where the engine's rally fold closes a set at cap : cap-1. */
 const engineSports = (k: W2eScenarioKey): string[] => SPORT_KEYS.filter((s) => {
+  if (k === SANCTION_KEY) return sportModule(s).sanctionEnding !== undefined;
   if (isTbKey(k)) return tbKeyApplies(k, s);
   if (isSetKey(k)) {
     if (!setSportsOf([s]).length) return false;
@@ -97,9 +106,9 @@ const engineSports = (k: W2eScenarioKey): string[] => SPORT_KEYS.filter((s) => {
 });
 
 describe("the W2e keys: frozen names, registered, opt-in", () => {
-  it("the keys are W2E_ET and W2E_SO (Task 19), W2E_OT (Task 20), W2E_SUPER_OVER and W2E_DLS (Task 21), W2E_DECIDER and W2E_CAP (Task 22) and W2E_TB_SET and W2E_SHORT_SETS (Task 23), each naming its deciding paths — the shoot-out key lists the IIHF's GWS after hockey's shoot-out; each is registered under its own key with no canary, outside the slice and the w1-driving scripts", () => {
-    expect([...W2E_SCENARIO_KEYS]).toEqual(["W2E_ET", "W2E_SO", "W2E_OT", "W2E_SUPER_OVER", "W2E_DLS", "W2E_DECIDER", "W2E_CAP", "W2E_TB_SET", "W2E_SHORT_SETS"]);
-    expect(W2E_SCENARIO_PATHS).toEqual({ W2E_ET: ["extraTime"], W2E_SO: ["shootout", "gws"], W2E_OT: ["overtime"], W2E_SUPER_OVER: ["superOver"], W2E_DLS: ["dls"], W2E_DECIDER: ["decidingSet"], W2E_CAP: ["cap"], W2E_TB_SET: ["tiebreakSet"], W2E_SHORT_SETS: ["shortSetTb"] });
+  it("the keys are W2E_ET and W2E_SO (Task 19), W2E_OT (Task 20), W2E_SUPER_OVER and W2E_DLS (Task 21), W2E_DECIDER and W2E_CAP (Task 22) and W2E_TB_SET and W2E_SHORT_SETS (Task 23) and W2E_SANCTION_END (Task 24, no path), each naming its deciding paths — the shoot-out key lists the IIHF's GWS after hockey's shoot-out; each is registered under its own key with no canary, outside the slice and the w1-driving scripts", () => {
+    expect([...W2E_SCENARIO_KEYS]).toEqual(["W2E_ET", "W2E_SO", "W2E_OT", "W2E_SUPER_OVER", "W2E_DLS", "W2E_DECIDER", "W2E_CAP", "W2E_TB_SET", "W2E_SHORT_SETS", "W2E_SANCTION_END"]);
+    expect(W2E_SCENARIO_PATHS).toEqual({ W2E_ET: ["extraTime"], W2E_SO: ["shootout", "gws"], W2E_OT: ["overtime"], W2E_SUPER_OVER: ["superOver"], W2E_DLS: ["dls"], W2E_DECIDER: ["decidingSet"], W2E_CAP: ["cap"], W2E_TB_SET: ["tiebreakSet"], W2E_SHORT_SETS: ["shortSetTb"], W2E_SANCTION_END: [] });
     let checked = 0;
     for (const k of W2E_SCENARIO_KEYS) {
       expect(SCENARIOS[k].key, k).toBe(k);
@@ -108,7 +117,7 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
       expect((W1_DRIVING_SCENARIOS as readonly string[]).includes(k), `${k} is one of the w1-driving scripts`).toBe(false);
       checked++;
     }
-    expect(checked).toBe(9);
+    expect(checked).toBe(10);
   });
 
   it("no filter plans none of them; a named key plans only its own cells, with the w1-driving case-id shape", () => {
@@ -132,7 +141,7 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
       planned += cases.length;
     }
     expect(planned).toBeGreaterThan(0);
-    // Exactly the short-set key's cells carry overrides: nine keys, one of them (W2E_SHORT_SETS) on tennis's eight bracket rows.
+    // Exactly the short-set key's cells carry overrides: ten keys, one of them (W2E_SHORT_SETS) on tennis's eight bracket rows.
     expect(overridden).toBe(bracketRootRows().length);
   });
 
@@ -180,6 +189,17 @@ describe("the W2e keys: frozen names, registered, opt-in", () => {
       expect(() => planW1Driving(variantFor, { scenario, only: "knockout|tennis" }), scenario).not.toThrow();
       for (const only of ["knockout|badminton", "knockout|volleyball", "knockout|football", "knockout|cricket", "knockout|generic", "league|tennis"]) expect(() => planW1Driving(variantFor, { scenario, only }), `${scenario} ${only}`).toThrow(/plans no case/);
     }
+    // Task 24: the sanction key plans exactly the sports whose module declares a sanction that ends a match (on a knockout), no other
+    // sport, no table row.
+    let sanctionPlanned = 0;
+    for (const sport of SPORT_KEYS) {
+      const only = `knockout|${sport}`;
+      if (sanctionSports().includes(sport)) { expect(() => planW1Driving(variantFor, { scenario: SANCTION_KEY, only }), only).not.toThrow(); sanctionPlanned++; }
+      else expect(() => planW1Driving(variantFor, { scenario: SANCTION_KEY, only }), only).toThrow(/plans no case/);
+    }
+    expect(sanctionPlanned).toBe(sanctionSports().length);
+    expect(sanctionPlanned).toBeGreaterThan(0);
+    expect(() => planW1Driving(variantFor, { scenario: SANCTION_KEY, only: "league|badminton" })).toThrow(/plans no case/);
     expect(() => planW1Driving(variantFor, { scenario: "W2E_NOPE" })).toThrow(/--scenario.*W2E_NOPE/);
   });
 
@@ -216,6 +236,9 @@ describe("the cells: bracket-root rows × the sports whose generator builds the 
     // belongs to its variants that declare the set's own margin (tiebreakWinBy), not to the builder default.
     expect(engineSports("W2E_TB_SET")).toEqual(["tennis"]);
     expect(engineSports("W2E_SHORT_SETS")).toEqual(["tennis"]);
+    // Task 24: the sports whose module declares a sanction that ends a match - badminton's black card (BD-SE-1), tennis's default
+    // (TN-SE-1), volleyball's incomplete-team question (VB-SE-1); table tennis's, football's and hockey's sanctions end nothing.
+    expect([...engineSports(SANCTION_KEY)].sort(), "(registry order is wave order, not alphabetical)").toEqual(["badminton", "tennis", "volleyball"]);
     let total = 0;
     for (const k of W2E_SCENARIO_KEYS) {
       const cells = w2eCells(k);
@@ -237,21 +260,23 @@ describe("the cells: bracket-root rows × the sports whose generator builds the 
   });
 });
 
+/** One scenario run on the knockout fake, as the planner builds the case (w1-driving-set.ts), with every check the run reports. */
+async function runScenario(key: W2eScenarioKey, row: RowKey = "knockout", sport = "football") {
+  const variant = variantFor(sport);
+  // The case as the planner builds it (w1-driving-set.ts): the builder default's variant, under the overrides the cell carries.
+  const overrides = w2eOverridesFor(key, sport);
+  const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|${key}`, row, sport, variant, scenario: key, canary: false, ...(overrides === null || Object.keys(overrides).length === 0 ? {} : { overrides }) };
+  const out = await SCENARIOS[key].run({ driver: new FakeKnockoutDriver(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant, { ...(spec.overrides ?? {}) }), tag: "t", denied: [] });
+  const checks = [...evaluateInvariants(out.observed), ...out.assertions];
+  return { out, checks, state: decideState({ checks, deferred: null, error: null }).state };
+}
+
 describe("each key, run on the knockout fake for every sport it is for", () => {
-  async function runScenario(key: W2eScenarioKey, row: RowKey = "knockout", sport = "football") {
-    const variant = variantFor(sport);
-    // The case as the planner builds it (w1-driving-set.ts): the builder default's variant, under the overrides the cell carries.
-    const overrides = w2eOverridesFor(key, sport);
-    const spec: CaseSpec = { caseId: `${row}|${sport}|${variant}|${key}`, row, sport, variant, scenario: key, canary: false, ...(overrides === null || Object.keys(overrides).length === 0 ? {} : { overrides }) };
-    const out = await SCENARIOS[key].run({ driver: new FakeKnockoutDriver(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant, { ...(spec.overrides ?? {}) }), tag: "t", denied: [] });
-    const checks = [...evaluateInvariants(out.observed), ...out.assertions];
-    return { out, checks, state: decideState({ checks, deferred: null, error: null }).state };
-  }
 
   it("works: its own check passes on a counted item per bracket match, the shared bracket checks pass, and every product result was decided down the key's path (decidedIn from the engine) — for every sport the key is for", async () => {
     let ran = 0;
     const perKey = new Map<string, number>();
-    for (const key of W2E_SCENARIO_KEYS) for (const sport of engineSports(key)) {
+    for (const key of PATH_KEYS) for (const sport of engineSports(key)) {
       const at = `${key}/${sport}`;
       const { out, checks, state } = await runScenario(key, "knockout", sport);
       expect(checks.filter((c) => c.verdict === "fail").map((c) => `${c.id}: ${c.reason}`).join(" | "), at).toBe("");
@@ -279,8 +304,8 @@ describe("each key, run on the knockout fake for every sport it is for", () => {
       perKey.set(key, (perKey.get(key) ?? 0) + 1);
     }
     console.info(`w2e-scenarios: ${ran} run(s) on the fake, per key ${JSON.stringify(Object.fromEntries(perKey))}`);
-    expect(ran).toBe(W2E_SCENARIO_KEYS.reduce((n, k) => n + engineSports(k).length, 0));
-    for (const key of W2E_SCENARIO_KEYS) expect(perKey.get(key) ?? 0, `${key}: no sport was run`).toBeGreaterThan(0);
+    expect(ran).toBe(PATH_KEYS.reduce((n, k) => n + engineSports(k).length, 0));
+    for (const key of PATH_KEYS) expect(perKey.get(key) ?? 0, `${key}: no sport was run`).toBeGreaterThan(0);
   });
 
   it("a key planned on a cell it is not for is refused by name before any driver call: a table row, or EVERY sport the engine declares no such decider for (including the other period and football sports)", async () => {
@@ -291,7 +316,7 @@ describe("each key, run on the knockout fake for every sport it is for", () => {
     for (const key of W2E_SCENARIO_KEYS) {
       const cells: (readonly [RowKey, string, RegExp])[] = [
         [tableRow, engineSports(key)[0]!, /root stage is not a bracket kind/],
-        ...SPORT_KEYS.filter((sport) => !engineSports(key).includes(sport)).map((sport) => ["knockout", sport, /builds no such path/] as const),
+        ...SPORT_KEYS.filter((sport) => !engineSports(key).includes(sport)).map((sport) => ["knockout", sport, key === SANCTION_KEY ? /builds no sanction that ends a match/ : /builds no such path/] as const),
       ];
       expected += cells.length;
       for (const [row, sport, why] of cells) {
@@ -920,5 +945,157 @@ describe("Task 23: what the fake knockout product holds for each W2E_TB_SET / W2
       }
     }
     expect(streams, "some recorded stream was checked").toBeGreaterThan(0);
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Task 24 (G12): W2E_SANCTION_END. Every bracket match is ended by a sanction against the lower seed. Expected values: the sport list
+// is the modules' `sanctionEnding` declarations; the forfeit reason is the rulebook's (BD-SE-1 and TN-SE-1: disqualified; VB-SE-1 /
+// VB-RT-1: the incomplete team retires), typed ONCE here and set against the engine's own ending rule.
+const SANCTION_REASON: Readonly<Record<string, "disqualified" | "retired">> = { badminton: "disqualified", tennis: "disqualified", volleyball: "retired" };
+
+describe("W2E_SANCTION_END, run on the knockout fake for every sport that declares a sanction ending", () => {
+  it("works: its own check passes on a counted item per bracket match, every product result is an award in the rulebook's reason to the side NOT sanctioned, the shared bracket checks pass - for every declaring sport", async () => {
+    let ran = 0;
+    const sports = sanctionSports();
+    expect(sports.length).toBeGreaterThan(0);
+    for (const sport of sports) {
+      const { out, checks, state } = await runScenario(SANCTION_KEY, "knockout", sport);
+      expect(checks.filter((c) => c.verdict === "fail").map((c) => `${c.id}: ${c.reason}`).join(" | "), sport).toBe("");
+      expect(state, sport).toBe("works");
+      const own = checks.find((c) => c.id === "w2e-every-match-ended-by-sanction")!;
+      expect(own, sport).toBeDefined();
+      expect(own.verdict, sport).toBe("pass");
+      const level = endingLevelOf(sport);
+      expect(level, `${sport}: a level that ends a match`).not.toBeNull();
+      expect(endingReasonOf(sport, level!), `${sport}: the engine's ending rule agrees with the rulebook`).toBe(SANCTION_REASON[sport]);
+      const awards = out.observed.stages[0]!.fixtures.filter((f) => f.outcome?.kind === "award");
+      expect(awards.length, `${sport}: more than one bracket match was ended`).toBeGreaterThan(1);
+      expect(own.checked, sport).toBe(awards.length);
+      for (const f of awards) expect(f.outcome, `${sport} ${f.id}`).toMatchObject({ kind: "award", reason: SANCTION_REASON[sport] });
+      expect(out.observed.stages[0]!.fixtures.filter((f) => f.outcome?.kind === "win"), `${sport}: no match was played to a plain win`).toEqual([]);
+      for (const id of ["life-reference-bracket-finish", "life-fold-parity"]) {
+        const c = checks.find((x) => x.id === id)!;
+        expect(c.verdict, `${sport} ${id}`).toBe("pass");
+        expect(c.checked, `${sport} ${id}`).toBeGreaterThan(0);
+      }
+      ran++;
+    }
+    console.info(`w2e-scenarios: W2E_SANCTION_END ran on ${ran} sport(s) ${JSON.stringify(sports)}`);
+    expect(ran).toBe(sports.length);
+  });
+});
+
+describe("W2E_SANCTION_END owes a scheduled fixture (the guard in decideFixture, reached through a driver)", () => {
+  it("a fixture the product already holds under way would drop the sanction (the forfeit is posted bare there): the run is refused by name before any event is posted, never run as a plain forfeit under a sanction's name", async () => {
+    class UnderWay extends FakeKnockoutDriver {
+      override async fixtureState(id: string): Promise<FixtureStateOut> { return { ...(await super.fixtureState(id)), status: "in_play" }; }
+    }
+    let posted = 0;
+    class Counting extends UnderWay {
+      override async postStream(id: string, events: readonly StreamEvent[], prefix = "") { posted++; return super.postStream(id, events, prefix); }
+    }
+    const sport = sanctionSports()[0]!;
+    const variant = variantFor(sport);
+    const spec: CaseSpec = { caseId: `knockout|${sport}|${variant}|${SANCTION_KEY}`, row: "knockout", sport, variant, scenario: SANCTION_KEY, canary: false };
+    const err = await SCENARIOS[SANCTION_KEY].run({ driver: new Counting(), spec, orgSlug: "o", cfg: resolveSportCfg(sport, variant), tag: "t", denied: [] }).then(() => null, (e: unknown) => e as Error);
+    expect(err, "the run is refused").toBeInstanceOf(Error);
+    expect(err!.message).toMatch(/a sanction ending is posted on a scheduled fixture.*in_play.*where the sanction would be dropped/);
+    expect(posted, "nothing was posted").toBe(0);
+  });
+});
+
+describe("everyMatchEndedBySanction, on hand-built drives (a wrong product is named, an empty run fails)", () => {
+  const A = "a";
+  const B = "b";
+  interface Built { d: BracketDrive; stream: StreamEvent[]; cfg: unknown }
+  const built = (sport: string, by: "home" | "away", level: string): Built => {
+    const variant = variantFor(sport);
+    const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant);
+    const stream = generateStream({ sportKey: sport, cfg, stageKind: "knockout", home: A, away: B, outcome: { kind: "sanctionEnd", by, level } });
+    const folded = foldStream(sportModule(sport), cfg, A, B, stream);
+    const d: BracketDrive = {
+      fixtureId: "f1", stageKind: "knockout", sport, home: A, away: B, asked: { kind: "sanctionEnd", by, level }, levelAs: null, status: "forfeited",
+      outcome: JSON.parse(JSON.stringify(folded.outcome)) as BracketDrive["outcome"], loser: { line: "none" }, next: { line: "none" }, forfeitPlay: { kind: "in_progress" }, refusal: null,
+      product: productOf(sportModule(sport), cfg, A, B, stream),
+    };
+    return { d, stream, cfg };
+  };
+  const levelsOf = (sport: string): string[] => { const decl = sportModule(sport).sanctionEnding!; return [...decl.endLevels, ...decl.promptLevels]; };
+  const check = (x: Built, over: Partial<BracketDrive> = {}, stream: StreamEvent[] = x.stream) => {
+    const r = new Recorder();
+    r.bracketDrives.push({ ...x.d, ...over });
+    if (stream.length > 0) r.streams.set(x.d.fixtureId, stream);
+    return everyMatchEndedBySanction(r, () => x.cfg);
+  };
+
+  it("the right product passes for every sanction sport, level and side; the check names a plain win, a plain forfeit, a product with no sanction on record, the other side's or level's sanction, a state not done, the wrong award, a held match, no stream and no product - each red alone; an empty run fails (R25)", () => {
+    let right = 0;
+    let reds = 0;
+    for (const sport of sanctionSports()) {
+      for (const level of levelsOf(sport)) for (const by of ["home", "away"] as const) {
+        const x = built(sport, by, level);
+        const at = `${sport} ${level} ${by}`;
+        expect(check(x), at).toMatchObject({ verdict: "pass", checked: 1 });
+        right++;
+        const reason = endingReasonOf(sport, level)!;
+        const plain = generateStream({ sportKey: sport, cfg: x.cfg, stageKind: "knockout", home: A, away: B, outcome: { kind: "forfeit", by, reason, at: "after_start" } });
+        const clone = (): { summary: unknown; state: Record<string, unknown> & { sanctions: { by: string; level: string }[]; phase: string } } => JSON.parse(JSON.stringify(x.d.product)) as never;
+        const editState = (edit: (s: ReturnType<typeof clone>["state"]) => void): BracketDrive["product"] => { const p = clone(); edit(p.state); return p as never; };
+        const other = by === "home" ? "away" : "home";
+        const NOT_SHOWN = /do not show the match ended by that sanction/;
+        const wrong: readonly [string, ReturnType<typeof check>, RegExp][] = [
+          ["a plain win asked", check(x, { asked: { kind: "win", winner: by === "home" ? "away" : "home" } }), /not a sanction ending/],
+          ["a level that ends nothing asked", check(x, { asked: { kind: "sanctionEnd", by, level: "no-such-level" } }), /ends nothing/],
+          ["the product forfeited it as a PLAIN forfeit (no sanction on its record)", check(x, { product: productOf(sportModule(sport), x.cfg, A, B, plain) }), NOT_SHOWN],
+          ["the stream posted is a plain forfeit (the local fold has no sanction)", check(x, {}, plain), /not the sanction's ending/],
+          ["the product's state records the sanction against the OTHER side", check(x, { product: editState((s) => { s.sanctions[s.sanctions.length - 1]!.by = other; }) }), NOT_SHOWN],
+          ["the product's state records no sanction at all", check(x, { product: editState((s) => { s.sanctions = []; }) }), NOT_SHOWN],
+          ["the product's state is not done", check(x, { product: editState((s) => { s.phase = "live"; }) }), NOT_SHOWN],
+          ["the award goes to the sanctioned side", check(x, { outcome: { kind: "award", winner: by === "home" ? A : B, loser: by === "home" ? B : A, reason } }), NOT_SHOWN],
+          ["the award carries another reason", check(x, { outcome: { kind: "award", winner: by === "home" ? B : A, loser: by === "home" ? A : B, reason: reason === "retired" ? "disqualified" : "retired" } }), NOT_SHOWN],
+          ["the product shows a win", check(x, { outcome: { kind: "win", winner: by === "home" ? B : A } }), NOT_SHOWN],
+          ["held, not forfeited", check(x, { status: "needs_decision" }), /did not forfeit/],
+          ["the product shows no outcome", check(x, { outcome: null }), /holds no outcome/],
+          ["no stream was recorded", check(x, {}, []), /no stream was recorded/],
+          ["the product's own /state was not recorded", check(x, { product: null }), /was not recorded/],
+          ["a drive recorded with no product at all", check(((): Built => ({ ...x, d: (({ product: _p, ...rest }) => rest)(x.d) }))()), /was not recorded/],
+        ];
+        for (const [label, got, why] of wrong) {
+          expect(got, `${at}: ${label}`).toMatchObject({ verdict: "fail", checked: 1 });
+          expect(got.reason, `${at}: ${label}`).toMatch(why);
+          reds++;
+        }
+      }
+    }
+    expect(right).toBeGreaterThan(0);
+    expect(reds).toBe(right * 15);
+    const x = built("badminton", "home", "disqualification");
+    const r = new Recorder();
+    expect(everyMatchEndedBySanction(r, () => x.cfg)).toMatchObject({ verdict: "fail", checked: 0 });
+    // One wrong match among right ones is named; and a level that ends nothing is refused by name, not judged.
+    const two = new Recorder();
+    two.bracketDrives.push(x.d, { ...x.d, fixtureId: "f2", status: "decided" });
+    two.streams.set("f1", x.stream);
+    two.streams.set("f2", x.stream);
+    expect(everyMatchEndedBySanction(two, () => x.cfg)).toMatchObject({ verdict: "fail", checked: 2 });
+    expect(check(x, { asked: { kind: "sanctionEnd", by: "home", level: "warning" } })).toMatchObject({ verdict: "fail", checked: 1 });
+  });
+
+  it("the pick sanctions the side that is NOT the better seed, so the better seed advances (as every path scenario's pick does), at the level the declaration ends a match with; a sport that declares none is refused by name", () => {
+    let picked = 0;
+    for (const sport of sanctionSports()) {
+      const level = endingLevelOf(sport);
+      const pick = sanctionPick("knockout", sport);
+      const row = { id: "f1" } as never;
+      expect(pick(row, 1, "home", {}), sport).toEqual({ kind: "sanctionEnd", by: "away", level });
+      expect(pick(row, 2, "away", {}), sport).toEqual({ kind: "sanctionEnd", by: "home", level });
+      picked++;
+    }
+    expect(picked).toBe(sanctionSports().length);
+    expect(picked).toBeGreaterThan(0);
+    const none = SPORT_KEYS.find((s) => !sanctionSports().includes(s))!;
+    expect(() => sanctionPick("knockout", none)({ id: "f1" } as never, 1, "home", {}), none).toThrow(W2eMisplanned);
   });
 });

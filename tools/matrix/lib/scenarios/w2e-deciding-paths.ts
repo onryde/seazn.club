@@ -15,6 +15,10 @@
 //           final-set tie-break, the doubles norm's match tie-break (G8: tennis, whose default variant plays them)
 //   W2E_SHORT_SETS  every match won by a set the SHORT-SET tie-break closed (G8: tennis; the builder default has none, so the
 //           case carries the overrides that make it the first variant that does - w2e-cells.ts w2eOverridesFor)
+//   W2E_SANCTION_END  every match ended by a SANCTION against the lower seed - the level that ends the match, or (volleyball) prompts
+//           its ending and is answered with the retirement - then the forfeit it ends in (G12: badminton, tennis, volleyball; the
+//           sport list is the modules' `sanctionEnding` declarations). No path: an AWARD, judged by its own check
+//           (everyMatchEndedBySanction) on the product's outcome AND the sanction on its state.
 //
 // The sport's own rule decides every match, so no organiser settle or tie-break is owed (life-bracket-decider-
 // exercised is left out, as W2a's BRACKET_EXTRA_BOARD leaves it). The shared bracket assertions apply, and the
@@ -34,9 +38,10 @@ import type { BracketDrive } from "../reference-bracket.ts";
 import type { CheckResult } from "../results.ts";
 import { sportModule } from "../sport-cfg.ts";
 import { STREAM_GENERATORS, matchesRequest } from "../streams/index.ts";
+import { endingLevelOf, endingReasonOf, sanctionEndWitness } from "../streams/sanction.ts";
 import { idOf, outcomeLabel, productEvidence, type RequestedOutcome } from "../streams/types.ts";
 import { bracketRootRows } from "../w2a-cells.ts";
-import { w2eBracketCfgOf, w2ePathUnder } from "../w2e-cells.ts";
+import { w2eBracketCfgOf, w2ePathUnder, w2eSanctionBuilds } from "../w2e-cells.ts";
 import { advanceSeededAsDeclared } from "./advance.ts";
 import { assertion, builtAsPosted, foldParity, lineupsPut, loopBounded, publicStandingsMatch, referenceBracketFinish, resultsAsPosted, stageCompleted, type Item } from "./assertions.ts";
 import { Recorder, caseStageCfg, playDivision, setUpDivision, snapshot, type BracketPick } from "./common.ts";
@@ -103,7 +108,45 @@ export function everyMatchTookTheDecidingPath(rec: Recorder, key: W2eScenarioKey
   return assertion("w2e-every-match-took-the-path", items);
 }
 
+/** Every bracket match ended by a sanction against the lower seed, at the level the sport's declaration ends a match with
+ *  (streams/sanction.ts endingLevelOf). A sport that declares none is a misplanned case, refused by name. */
+export function sanctionPick(row: string, sport: string): BracketPick {
+  return (f, _n, higher) => {
+    const level = endingLevelOf(sport);
+    if (level === null) throw new W2eMisplanned("W2E_SANCTION_END", row, sport, `fixture ${f.id}: the sport's module declares no sanction that ends a match`);
+    return { kind: "sanctionEnd", by: higher === "home" ? "away" : "home", level };
+  };
+}
+
+/** The sanction scenario's own check: one item per bracket match. A match passes when the harness ASKED a sanction ending, the
+ *  product forfeited it for the side NOT sanctioned, the stream posted folds (strictly) to that request, and the PRODUCT's own
+ *  outcome and state - recorded after the post - say the match ended by that sanction: an award to the other side in the
+ *  reason the engine's ending rule gives the level, the match done, the sanction on the state's record against the asked side.
+ *  A plain forfeit in the same reason, a sanction at another level or against the other side, and a drive that recorded no
+ *  product all fail (the local fold alone would pass a product that dropped the sanction). An empty run fails (R25). */
+export function everyMatchEndedBySanction(rec: Recorder, cfgOf: (d: BracketDrive) => unknown): CheckResult {
+  const items: Item[] = rec.bracketDrives.map((d): Item => {
+    const a: RequestedOutcome = d.asked;
+    const product = d.outcome;
+    const productNote = `product ${d.status ?? "(no status)"} ${product?.kind ?? "(no outcome)"}${product !== null && "reason" in product ? ` ${String(product.reason)}` : ""}`;
+    const note = (why: string) => `${d.fixtureId}: asked ${outcomeLabel(a)}, ${productNote} — ${why}`;
+    if (a.kind !== "sanctionEnd") return { ok: false, note: note("not a sanction ending") };
+    if (endingReasonOf(d.sport, a.level) === null) return { ok: false, note: note(`'${a.level}' ends nothing in ${d.sport}`) };
+    const req = { sportKey: d.sport, cfg: cfgOf(d), stageKind: d.stageKind as StageKind, home: d.home, away: d.away, outcome: a };
+    if (d.status !== "forfeited") return { ok: false, note: note("the product did not forfeit it") };
+    const stream = rec.streams.get(d.fixtureId);
+    if (stream === undefined || stream.length === 0) return { ok: false, note: note("no stream was recorded for it") };
+    const local = foldStream(sportModule(d.sport), req.cfg, d.home, d.away, stream);
+    if (matchesRequest(req, local.outcome, local.state) !== "match") return { ok: false, note: note(`the stream posted folds to ${JSON.stringify(local.outcome)}, not the sanction's ending`) };
+    if (d.product === undefined || d.product === null) return { ok: false, note: note("the product's own /state (summary and state) was not recorded for it") };
+    if (product === null) return { ok: false, note: note("the product holds no outcome") };
+    return { ok: sanctionEndWitness({ sportKey: d.sport, outcome: product, evidence: productEvidence(d.product) }, { by: a.by, level: a.level, home: d.home, away: d.away }), note: note(`the product's outcome and state do not show the match ended by that sanction`) };
+  });
+  return assertion("w2e-every-match-ended-by-sanction", items);
+}
+
 function scenario(key: W2eScenarioKey): Scenario {
+  const sanction = key === "W2E_SANCTION_END";
   return {
     key,
     entrantCount: 8,
@@ -112,10 +155,12 @@ function scenario(key: W2eScenarioKey): Scenario {
       const { row, sport } = ctx.spec;
       if (!(bracketRootRows() as readonly string[]).includes(row)) throw new W2eMisplanned(key, row, sport, `the row's root stage is not a bracket kind, so no match plays a decider (only ${bracketRootRows().join(", ")})`);
       // The CASE's own cfg (its variant under its overrides, w2eOverridesFor): a hand-built case on the wrong variant is refused by name.
-      if (w2ePathUnder(key, sport, w2eBracketCfgOf(sport, ctx.spec.overrides)) === null) throw new W2eMisplanned(key, row, sport, `this case's cfg (variant ${ctx.spec.variant}, overrides ${JSON.stringify(ctx.spec.overrides ?? {})}) builds no such path (${W2E_SCENARIO_PATHS[key].join(", ")}) under the bracket presets (w2e-cells.ts)`);
+      if (sanction) {
+        if (!w2eSanctionBuilds(sport, w2eBracketCfgOf(sport, ctx.spec.overrides))) throw new W2eMisplanned(key, row, sport, `this case's cfg (variant ${ctx.spec.variant}) builds no sanction that ends a match (the module declares none, or the generator refuses it)`);
+      } else if (w2ePathUnder(key, sport, w2eBracketCfgOf(sport, ctx.spec.overrides)) === null) throw new W2eMisplanned(key, row, sport, `this case's cfg (variant ${ctx.spec.variant}, overrides ${JSON.stringify(ctx.spec.overrides ?? {})}) builds no such path (${W2E_SCENARIO_PATHS[key].join(", ")}) under the bracket presets (w2e-cells.ts)`);
       const rec = new Recorder();
       const setup = await setUpDivision(ctx, rec, fieldSizeFor(row, key, ctx.spec.template));
-      const plays = await playDivision(ctx, rec, setup, { bracketPick: pathPick(key, row, sport) });
+      const plays = await playDivision(ctx, rec, setup, { bracketPick: sanction ? sanctionPick(row, sport) : pathPick(key, row, sport) });
       const observed: ObservedRun = await snapshot(ctx, rec, setup, plays, { configEdit: null, withdrawal: null });
       const pub = await ctx.driver.publicStandings({ orgSlug: ctx.orgSlug, competitionSlug: setup.competition.slug, divisionSlug: setup.division.slug });
       return {
@@ -132,7 +177,7 @@ function scenario(key: W2eScenarioKey): Scenario {
           loopBounded(rec, observed),
           advanceSeededAsDeclared(plays, observed, rec.withdrawn),
           lineupsPut(rec, setup),
-          everyMatchTookTheDecidingPath(rec, key, (d) => caseStageCfg(ctx, d.stageKind as StageKind)),
+          sanction ? everyMatchEndedBySanction(rec, (d) => caseStageCfg(ctx, d.stageKind as StageKind)) : everyMatchTookTheDecidingPath(rec, key, (d) => caseStageCfg(ctx, d.stageKind as StageKind)),
         ],
       };
     },
@@ -149,4 +194,5 @@ export const w2eScenarios: Readonly<Record<W2eScenarioKey, Scenario>> = Object.f
   W2E_CAP: scenario("W2E_CAP"),
   W2E_TB_SET: scenario("W2E_TB_SET"),
   W2E_SHORT_SETS: scenario("W2E_SHORT_SETS"),
+  W2E_SANCTION_END: scenario("W2E_SANCTION_END"),
 });
