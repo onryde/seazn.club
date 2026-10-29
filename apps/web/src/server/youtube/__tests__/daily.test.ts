@@ -113,8 +113,8 @@ interface World {
   step(over?: { at?: number; wallClock?: () => number; hooks?: EndStepHooks }): Promise<YoutubeEndResult>;
   /** Video arrives on the broadcast's stream: YouTube makes it `live` (auto-start). */
   video(ytId: string): void;
-  /** A further channel connected through the real save, known to this world's fake. */
-  addChannel(): Promise<Chan>;
+  /** A further channel connected through the real save, known to this world's fake (`sub`: the Google account it reports). */
+  addChannel(o?: { sub?: string | null }): Promise<Chan>;
 }
 
 async function override(orgId: string, key: string, value: boolean) {
@@ -126,7 +126,7 @@ async function override(orgId: string, key: string, value: boolean) {
 
 /** An org with the relay, `fixtures` fixtures each with a present phone, `credits` match credits, and a channel connected through the
  *  real save and KNOWN to the fake (`seedGrant`: the connection's channel id is the one the fake lists, as at connect). */
-async function world(o: { fixtures?: number; credits?: number } = {}): Promise<World> {
+async function world(o: { fixtures?: number; credits?: number; sub?: string | null } = {}): Promise<World> {
   const seeded = await seedOrg();
   const auth = { ...seeded.auth, userId: await rigUser() };
   const n = o.fixtures ?? 1;
@@ -154,12 +154,12 @@ async function world(o: { fixtures?: number; credits?: number } = {}): Promise<W
     issued.push({ url: s.ingest.url, streamKey: s.ingest.streamKey });
     return s;
   };
-  const addChannel = async (): Promise<Chan> => {
-    const c = await connectChannel(org);
-    fake.seedGrant({ refreshToken: c.token, channelId: c.channel.id, channelTitle: c.channel.title });
+  const addChannel = async (a: { sub?: string | null } = {}): Promise<Chan> => {
+    const c = await connectChannel(org, a.sub !== undefined ? { sub: a.sub } : {});
+    fake.seedGrant({ refreshToken: c.token, channelId: c.channel.id, channelTitle: c.channel.title, ...(a.sub !== undefined ? { sub: a.sub } : {}) });
     return { connectionId: c.connectionId, targetId: c.targetId, token: c.token, channel: c.channel };
   };
-  const first = await addChannel();
+  const first = await addChannel(o.sub !== undefined ? { sub: o.sub } : {});
   const deps: SessionDeps = { drivers: { ingest, runner }, now: () => new Date(now), appUrl: "http://app.test", youtube: fake };
   return {
     auth, orgId: auth.orgId, userId: auth.userId, org, fixtures, divisionId: d.divisionId, ...first,
@@ -253,6 +253,7 @@ const ageKey = (id: string, days: number) =>
   sql`update youtube_stream_keys set created_at = now() - (${days}::float8 * interval '1 day') where id = ${id}`;
 const ageBroadcast = (id: string, days: number) =>
   sql`update youtube_broadcasts set created_at = now() - (${days}::float8 * interval '1 day') where id = ${id}`;
+const callsOf = (f: FakeYouTube, method: string): number => f.calls.filter((c) => c.method === method).length;
 const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
 /** Hold a connection row `for update` in another transaction (what Go live's pick and a disconnect's purge take), until `release()`;
  *  `inTx` runs inside it, uncommitted (Go live's pick names a key in a new broadcast under that lock). */
@@ -674,6 +675,78 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(m1.ytId).toBeTruthy();   // m1 is the part whose link was cleared above
 
       expect(await daily(w), "a second pass finds nothing to purge").toEqual(ZERO);
+    });
+
+    it("B6 m2 - EMPTY CASE FIRST: a dead grant whose token will not open is purged all the same, with nothing to revoke (no Google call, no report); the purge never waits on a token", async () => {
+      const w = await world();
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);
+      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      const kek = process.env.YOUTUBE_TOKEN_KEK;
+      process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");   // sealed under another key: unreadable now
+      try {
+        expect(await daily(w)).toEqual({ ...ZERO, purged: 1 });
+      } finally {
+        process.env.YOUTUBE_TOKEN_KEK = kek;
+      }
+      expect((await connRow(w.connectionId)).status).toBe("revoked");
+      expect(callsOf(w.fake, "revoke"), "no token, no revoke").toBe(0);
+      expect(dailyReports(), "an unreadable token is the connection's fault, not a report").toEqual([]);
+    });
+
+    it("B6 m2: the purge REVOKES the grant at Google, once, after it committed, with the token it held in memory: a channel gone from the grant's list leaves a token Google still honours - dead at Google afterwards; a grant that was already dead is revoked all the same; a second pass calls nobody", async () => {
+      const w = await world();
+      const other = await w.addChannel();
+      w.fake.removeChannel(w.channel.id);   // the flip is "channel gone from the grant", NOT a dead token
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 2, reconnectNeeded: 1 });
+      await expect(w.fake.accessToken(w.token), "premise: the token Google holds is still good").resolves.toBeTruthy();
+      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, purged: 1 });
+      expect(callsOf(w.fake, "revoke")).toBe(1);
+      await expect(w.fake.accessToken(w.token), "revoked at Google").rejects.toMatchObject({ code: "youtube_reconnect_needed" });
+      await expect(w.fake.accessToken(other.token), "another channel's grant is untouched").resolves.toBeTruthy();
+      expect(dailyReports()).toEqual([]);
+      expect(await daily(w), "a second pass calls no revoke").toEqual({ ...ZERO, checked: 1 });
+      expect(callsOf(w.fake, "revoke")).toBe(1);
+
+      // The already-dead grant (invalid_grant): revoked all the same - Google answers invalid_token and the port resolves it.
+      const v = await world();
+      v.fake.killToken(v.token);
+      expect(await daily(v)).toEqual({ ...ZERO, checked: 1, reconnectNeeded: 1 });
+      await shiftConnection(v.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      expect(await daily(v)).toEqual({ ...ZERO, purged: 1 });
+      expect(callsOf(v.fake, "revoke")).toBe(1);
+      expect(dailyReports(), "a dead grant's revoke is not a report").toEqual([]);
+    });
+
+    it("B6 m2 - a grant another connection's Google account still runs on is NOT revoked (Google would drop that connection's token too): the purge goes ahead, the sibling keeps working; when the sibling is purged in its turn, the revoke is made", async () => {
+      const w = await world({ sub: "acct-shared-by-two-clubs" });
+      const sibling = await w.addChannel({ sub: "acct-shared-by-two-clubs" });
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);
+      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, purged: 1 });
+      expect(callsOf(w.fake, "revoke"), "shared: not revoked").toBe(0);
+      await expect(w.fake.accessToken(sibling.token), "the sibling's token still works").resolves.toBeTruthy();
+      expect((await connRow(sibling.connectionId)).status).toBe("connected");
+
+      w.fake.killToken(sibling.token);   // the sibling's grant dies in its turn
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, reconnectNeeded: 1 });
+      await shiftConnection(sibling.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      expect(await daily(w)).toEqual({ ...ZERO, purged: 1 });
+      expect(callsOf(w.fake, "revoke"), "the last connection on the account revokes it").toBe(1);
+    });
+
+    it("B6 m2: a Google revoke that is refused is reported by its CODE only (never the token) and the purge stands - not a failure to retry, the token is gone", async () => {
+      const w = await world();
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);
+      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      w.fake.failNext("revoke", "youtube_unavailable", "backendError");
+      expect(await daily(w)).toEqual({ ...ZERO, purged: 1 });
+      expect((await connRow(w.connectionId)).status).toBe("revoked");
+      const reports = dailyReports().filter((c) => (c[1] as { route?: string }).route === "youtube.daily.revoke");
+      expect(reports.length).toBe(1);
+      const text = `${(reports[0]![0] as Error).message} ${JSON.stringify(reports[0]![1])}`;
+      expect(text).toContain("youtube_unavailable");
+      expect(text, "no token").not.toContain(w.token);
     });
 
     it("the 30-day line is per connection inside ONE pass: 31 days dead is purged beside a 29-days-dead one and a connected one, both untouched", async () => {

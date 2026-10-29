@@ -41,7 +41,7 @@ import { captureError } from "@/lib/sentry";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type { YoutubeDisconnected } from "@/server/api-v1/schemas";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
-import { purgeConnectionData } from "./daily";
+import { accountIsShared, purgeConnectionData } from "./daily";
 import { EndRuleInvariantError, broadcastEndDueAt, readEndFacts } from "./end-rule";
 import { OPEN_STATES } from "./end-step";
 import { YouTubeError, isDeadGrantRefusal, type YouTubePort } from "./port";
@@ -164,9 +164,7 @@ export async function disconnectYoutube(
     }
 
     // The account's grant is shared when another NON-revoked connection (any org) reports the same non-null Google account.
-    const shared = c.google_sub !== null && (await tx<{ shared: boolean }[]>`
-      select exists (select 1 from org_youtube_connections o
-                      where o.id <> ${connectionId} and o.status <> 'revoked' and o.google_sub = ${c.google_sub}) as shared`)[0]!.shared;
+    const shared = await accountIsShared(tx, connectionId, c.google_sub);
 
     if (!(await revokeConnection(tx, orgId, connectionId))) throw notFound();
     if (shared) {

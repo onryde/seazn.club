@@ -53,7 +53,7 @@ import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { recordLiveState } from "./connections";
 import { CLAIM_LEASE_MINUTES, OPEN_STATES, YOUTUBE_END_BACKOFF_CAP_MINUTES, endBackoffMinutes } from "./end-step";
 import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePort } from "./port";
-import { markReconnectNeeded, openToken, revokeConnection } from "./token-store";
+import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken, revokeConnection } from "./token-store";
 
 /** `checked` connections health-checked; `reconnectNeeded` connections this pass found dead; `refreshed` / `removed` broadcast rows
  *  confirmed / deleted (removed: a video gone from YouTube, a complete row of a dead grant past the ceiling, or a failed row past its
@@ -233,6 +233,18 @@ export async function purgeConnectionData(tx: Tx, connectionId: string, hooks: D
     delete from youtube_connect_pending
      where id in (select id from youtube_connect_pending where connection_id = ${connectionId} and org_id = ${orgId} for update skip locked)`;
   return { broadcasts: gone.deleted, streamUrlsCleared: gone.cleared, divisions: gone.divisions };
+}
+
+/** Whether another NON-revoked connection (any organisation) reports the same non-null Google account as this one. Revoking a grant at
+ *  Google kills EVERY token of that account, so a connection whose account another still runs on must not revoke it (T6-R2 as amended:
+ *  V479's one-live-channel index is global, so a shared CHANNEL cannot happen, but one person can administer two clubs). Shared by the
+ *  dead-grant purge here and T18's disconnect; read in the transaction that revokes the connection. */
+export async function accountIsShared(tx: Tx, connectionId: string, googleSub: string | null): Promise<boolean> {
+  if (googleSub === null) return false;
+  const [r] = await tx<{ shared: boolean }[]>`
+    select exists (select 1 from org_youtube_connections o
+                    where o.id <> ${connectionId} and o.status <> 'revoked' and o.google_sub = ${googleSub}) as shared`;
+  return r!.shared;
 }
 
 // ─── port calls ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -543,19 +555,47 @@ async function settleStuck(p: Pass): Promise<void> {
 // ─── legs 4 and 5: purge ─────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** One dead connection, in ONE transaction: re-check it under its lock (a reconnect since the list was read moves status_since and wins),
- *  revoke it through token-store (token cleared, status revoked, channel scrubbed, destination archived - one statement), then purge. */
+ *  read what the Google revoke will need, revoke it through token-store (token cleared, status revoked, channel scrubbed, destination
+ *  archived - one statement), then purge.
+ *
+ *  AFTER the commit, best effort, the grant is revoked AT GOOGLE with the in-memory token (DP III.E.4: a purged connection's access must go
+ *  too). Not every flip is a dead grant - a channel missing from the grant's list, or a 401 on a call that is not the live one, leave a
+ *  token Google still honours - and a token that is dead answers `invalid_token`, which `revoke` resolves. Skipped for a grant another
+ *  connection's account shares (see `accountIsShared`), and when the token cannot be opened (damaged, or no key: reported, ids only - the
+ *  purge itself never waits on a token). A refusal is reported by its code; the purge stands. Made past the budget, like a disconnect's. */
 async function purgeDeadGrant(p: Pass, c: { id: string; org_id: string }): Promise<void> {
   const cutoff = daysBefore(p.now, YOUTUBE_DEAD_GRANT_PURGE_DAYS);
   const purged = await sql.begin(async (tx) => {
-    const [row] = await tx<{ status: string; status_since: Date }[]>`
-      select status, status_since from org_youtube_connections where id = ${c.id} and org_id = ${c.org_id} for update`;
+    const [row] = await tx<{ status: string; status_since: Date; google_sub: string | null }[]>`
+      select status, status_since, google_sub from org_youtube_connections where id = ${c.id} and org_id = ${c.org_id} for update`;
     if (!row || row.status !== "reconnect_needed" || row.status_since.getTime() >= cutoff.getTime()) return null;
+    let token: string | null = null;
+    try {
+      token = await openToken(tx, c.org_id, c.id);
+    } catch (err) {
+      if (!(err instanceof YoutubeTokenUnreadableError)) captureError(err, { orgId: c.org_id, route: "youtube.daily.purge_token", extra: { connectionId: c.id } });
+    }
+    const shared = await accountIsShared(tx, c.id, row.google_sub);
     if (!(await revokeConnection(tx, c.org_id, c.id))) return null;
-    return purgeConnectionData(tx, c.id, p.hooks);
+    return { data: await purgeConnectionData(tx, c.id, p.hooks), token, shared };
   });
   if (purged === null) return;
   p.out.purged++;
-  expirePages(purged.divisions);
+  expirePages(purged.data.divisions);
+  if (purged.token !== null && !purged.shared) await revokeAtGoogle(p, c, purged.token);
+}
+
+/** The Google revoke of a purged dead grant: best effort, its refusal reported by CODE only (a token, an id and a body never are). */
+async function revokeAtGoogle(p: Pass, c: { id: string; org_id: string }, token: string): Promise<void> {
+  try {
+    await viaPort(() => p.port.revoke(token), c, "revoke");
+  } catch (err) {
+    if (err instanceof YouTubeError) {
+      captureError(new Error(`youtube daily: the Google revoke of a purged grant was refused (${err.code})`), {
+        orgId: c.org_id, route: "youtube.daily.revoke", extra: { connectionId: c.id },
+      });
+    }
+  }
 }
 
 /** A revoked connection that still holds anything the purge removes, purged now (carry c). Idempotent: a clean one is never listed. */
