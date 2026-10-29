@@ -142,8 +142,11 @@ export interface SportStreamGenerator {
 }
 
 /** W2e (Task 19, preflight F8): what a path witness reads — the STRICT fold (lib/fold.ts `foldStream`) of the stream as
- *  posted, and the cfg it was folded under. `outcome` is the win matchesRequest already matched to the requested winner. */
+ *  posted, and the cfg it was folded under. `outcome` is the win matchesRequest already matched to the requested winner.
+ *  `sportKey` (Task 20): a generator that serves several sports (the period kernel's hockey and ice hockey) reads the
+ *  sport's own module with it — the outcome and state alone do not say which sport folded them. */
 export interface PathFold {
+  readonly sportKey: string;
   readonly outcome: MatchOutcome;
   readonly state: unknown;
   readonly cfg: unknown;

@@ -75,7 +75,7 @@ export function everyMatchTookTheDecidingPath(rec: Recorder, key: W2eScenarioKey
     if (gen?.pathWitness === undefined) return { ok: false, note: note("the sport's generator witnesses no deciding path") };
     const loser = winner === d.home ? d.away : d.home;
     const shown: MatchOutcome = product.method === undefined ? { kind: "win", winner, loser } : { kind: "win", winner, loser, method: product.method };
-    return { ok: gen.pathWitness(path, { outcome: shown, state: local.state, cfg: req.cfg }), note: note(`the product's outcome is not decided down '${path}'`) };
+    return { ok: gen.pathWitness(path, { sportKey: d.sport, outcome: shown, state: local.state, cfg: req.cfg }), note: note(`the product's outcome is not decided down '${path}'`) };
   });
   return assertion("w2e-every-match-took-the-path", items);
 }

@@ -255,7 +255,7 @@ export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null,
       if (state === undefined) throw new Error(`streams: ${req.sportKey} path '${o.path}' is witnessed on the folded state, and matchesRequest was handed none (pass foldStream(...).state)`);
       const gen = STREAM_GENERATORS[req.sportKey];
       if (gen?.pathWitness === undefined) throw new GeneratorUnsupported(req.sportKey, outcomeLabel(o), "its generator builds no deciding path, so none can be witnessed");
-      return gen.pathWitness(o.path, { outcome, state, cfg: req.cfg }) ? "match" : "mismatch";
+      return gen.pathWitness(o.path, { sportKey: req.sportKey, outcome, state, cfg: req.cfg }) ? "match" : "mismatch";
     }
     case "double_walkover": return outcome.kind === "double_walkover" ? "match" : "mismatch";
     case "forfeit": {
