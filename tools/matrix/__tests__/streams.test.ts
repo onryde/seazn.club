@@ -389,7 +389,7 @@ describe("cricket two-innings and tie (ruling 44, D4)", () => {
   // outcome (win either side, draw, tie) on a stage that allows the draw and
   // one that refuses it; then the variations the right answer depends on —
   // the follow-on on/off/out of reach, the super over on, a sport with no tie.
-  /** The 24 committed `test`-preset cases (ruling 31), read from the committed catalogue as the other tests read it. */
+  /** The 25 committed `test`-preset cases (ruling 31; 24 until the W2e catalogue regen added cricket's ruling-157 fields), read from the committed catalogue as the other tests read it. */
   const testCases = (): VariantCase[] =>
     (JSON.parse(readFileSync(resolve(REPO, "tools/matrix/catalogue/variants.json"), "utf8")) as { sports: { sport: string; cases: VariantCase[] }[] })
       .sports.find((s) => s.sport === "cricket")!.cases.filter((c) => c.preset === "test");
@@ -419,10 +419,10 @@ describe("cricket two-innings and tie (ruling 44, D4)", () => {
     expect(got.filter((g) => g.endsWith(":unreachable"))).toEqual(["knockout:draw:unreachable"]);
   });
 
-  it("the 24 committed test-preset cases each fold every reachable outcome to the requested result — counted", () => {
+  it("the 25 committed test-preset cases each fold every reachable outcome to the requested result — counted", () => {
     let folded = 0;
     const cases = testCases();
-    expect(cases.length).toBe(24);
+    expect(cases.length).toBe(25);
     for (const vc of cases) {
       const cfg = resolveSportCfg("cricket", "test", vc.overrides);
       for (const stageKind of ["league", "knockout"] as const) {

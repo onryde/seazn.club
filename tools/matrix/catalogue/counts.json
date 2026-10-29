@@ -27,11 +27,11 @@
     "lifecycle": 229,
     "atomicApplicable": 15200,
     "bound": 178,
-    "variantCasesScorable": 1090,
+    "variantCasesScorable": 1095,
     "variantCasesUnscorable": 0,
     "denied": 7,
     "regressions": 9,
-    "value": 16535
+    "value": 16540
   },
   "drops": {
     "total": 4899,
@@ -130,20 +130,20 @@
   },
   "variants": {
     "perSport": {
-      "football": 92,
-      "cricket": 107,
+      "football": 93,
+      "cricket": 114,
       "boardgame": 82,
-      "carrom": 97,
+      "carrom": 99,
       "generic": 66,
-      "volleyball": 144,
+      "volleyball": 127,
       "badminton": 112,
-      "tabletennis": 105,
-      "tennis": 109,
+      "tabletennis": 109,
+      "tennis": 117,
       "icehockey": 90,
       "hockey": 86
     },
-    "cases": 1090,
-    "scorable": 1090,
+    "cases": 1095,
+    "scorable": 1095,
     "unscorable": 0,
     "engineUnscorable": {
       "count": 0,
@@ -158,10 +158,9 @@
       "ids": []
     },
     "noOp": {
-      "count": 16,
+      "count": 15,
       "why": "no overrides at the sport's builder-default preset: the case runs the builder-default cfg again (listed, not removed from the variant set)",
       "ids": [
-        "cricket#031",
         "boardgame#010",
         "boardgame#063",
         "boardgame#064",
@@ -179,6 +178,6 @@
         "boardgame#076"
       ]
     },
-    "uncoverablePairs": 222
+    "uncoverablePairs": 42
   }
 }
