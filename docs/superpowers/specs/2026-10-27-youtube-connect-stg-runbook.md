@@ -170,17 +170,84 @@ Only after the agent has finished S0–S4. Disconnect is refused while a match i
 
 ## 3. Read-only stg SQL (the agent runs it)
 
-**SELECT only**, inside a read-only transaction, against stg through `REMOTE_DATABASE_URL`, schema `seazn_club`. The
-agent reads the URL from the environment and never prints it, writes it into a file, or puts it in argv, a log or chat.
-Pass the ids with `\set`. S0–S4 use the fixture; S5 also needs the connection id from S1.
+**SELECT only**, inside a read-only transaction, against stg, schema `seazn_club`. The agent never prints the database
+URL, writes it into a file, or puts it in argv, a log or chat.
 
-```sql
-begin read only;
-set local search_path = seazn_club;
-\set org     '<organisation uuid>'
-\set fixture '<fixture uuid, or its first 8 characters>'
-\set conn    '<connection uuid, from S1>'
+**Why not `psql`.** `psql "$REMOTE_DATABASE_URL"` puts the URL in argv, where `ps` shows it, so it is not used (nor are
+`source .env.local` or `echo`). The agent runs the script below instead. It takes the URL **inside its own process**, from
+`REMOTE_DATABASE_URL` in the environment or, if that is unset, from the line in the shared `.env.local` (the file keeps it
+commented out, near the top), so the URL is never an argument. It does **not** fall back to `DATABASE_URL`,
+which is a local database. It runs the SQL of one block below (S0–S5) in a `begin read only` transaction, refuses a
+statement that is not a `select`, binds the ids as parameters (the `:'name'` placeholders in the blocks are the ones
+psql would have filled), prints the rows as JSON, and on a failure prints the error's class and code, or the database's own
+message for an error the SERVER raised, never the message of a client error (a malformed URL can quote itself in one).
+
+Save it as `stg-read.mjs` in the agent's scratchpad (not in the repo) and run it **from `apps/web`**, so that `postgres`
+resolves from that checkout's `node_modules`:
+
+```js
+// node <scratchpad>/stg-read.mjs <path to this runbook> <S0..S5> name=value ...
+import { createRequire } from "node:module";
+import { readFileSync } from "node:fs";
+
+const [doc, label, ...pairs] = process.argv.slice(2);
+const vals = Object.fromEntries(pairs.map((p) => [p.slice(0, p.indexOf("=")), p.slice(p.indexOf("=") + 1)]));
+const stop = (m) => { console.error(m); process.exit(2); };
+
+// 1. The URL: the environment, else the (commented-out) line of the shared .env.local. Never DATABASE_URL.
+let url = process.env.REMOTE_DATABASE_URL;
+if (!url) {
+  try { url = readFileSync("../../.env.local", "utf8").match(/^#?\s*REMOTE_DATABASE_URL=(.+)$/m)?.[1]; } catch { /* no file */ }
+}
+url = url?.trim().replace(/^["']|["']$/g, "");
+if (!url) stop("REMOTE_DATABASE_URL is not set and not in .env.local - stopping (there is no fallback to DATABASE_URL)");
+
+// 2. The block: the first sql fence after the label's heading. SELECT statements only.
+const FENCE = "`".repeat(3);
+const md = readFileSync(doc, "utf8");
+const head = md.indexOf(`\n**${label} `);
+if (head < 0) stop(`no block ${label} in the runbook`);
+const open = md.indexOf(FENCE + "sql", head);
+const close = md.indexOf(FENCE, open + 6);
+const statements = md.slice(open + 6, close).split(";").map((t) => t.trim()).filter(Boolean);
+if (statements.length === 0) stop(`block ${label} holds no statement`);
+if (!statements.every((t) => /^select\b/i.test(t))) stop(`block ${label} holds a statement that is not a SELECT`);
+for (const t of statements) for (const [, n] of t.matchAll(/:'([a-z]+)'/g)) if (!(n in vals)) stop(`block ${label} needs ${n}=<value>`);
+
+// 3. Run them read-only, ids bound as parameters. EVERYTHING that touches the URL is inside the try: an uncaught
+//    "Invalid URL" error prints its input, which is the secret.
+let sql;
+try {
+  const postgres = createRequire(`${process.cwd()}/package.json`)("postgres");
+  const local = /@(localhost|127\.0\.0\.1)[:/]/.test(url);
+  sql = postgres(url, {
+    ssl: local ? false : "require", prepare: !url.includes(":6543"), max: 1, idle_timeout: 5, connect_timeout: 15,
+    debug: false, onnotice: () => {}, connection: { search_path: "seazn_club" },
+  });
+  await sql.begin("read only", async (tx) => {
+    console.log(JSON.stringify((await tx`select current_setting('transaction_read_only') as read_only, current_schema() as schema`)[0]));
+    for (const text of statements) {
+      const names = [];
+      const query = text.replace(/:'([a-z]+)'/g, (_, n) => {
+        names.push(n);
+        return `$${names.length}`;
+      });
+      console.log(`\n-- ${query.replace(/\s+/g, " ").slice(0, 70)}...`);
+      console.log(JSON.stringify(await tx.unsafe(query, names.map((n) => vals[n])), null, 1));
+    }
+  });
+} catch (err) {
+  console.error(err?.severity ? `server: ${err.message}` : `${err?.name ?? "Error"} ${err?.code ?? ""}`);
+  process.exitCode = 1;
+} finally {
+  await sql?.end({ timeout: 5 });
+}
 ```
+
+Each block says which ids it needs: S0, S2, S3 and S4 take `fixture=<uuid, or its first 8 characters>`; S1 takes
+`org=<organisation uuid>`; S5 takes `conn=<connection uuid, from S1>` and `fixture=`. For example, S2:
+`node stg-read.mjs <path to this file> S2 fixture=1a2b3c4d`. The first line it prints must read
+`{"read_only":"on","schema":"seazn_club"}`; anything else, stop.
 
 **S0 — baseline (step 1).** Expect: `status` not in decided/finalized/forfeited/abandoned/cancelled, `finished_at` and
 `stream_url` null, `division_status` not `setup`, `visibility` public or unlisted.
@@ -293,8 +360,6 @@ select f.stream_url from fixtures f where starts_with(f.id::text, :'fixture');
 
 select s.id, s.youtube_broadcast_id
   from fixture_stream_sessions s where starts_with(s.fixture_id::text, :'fixture');
-
-rollback;
 ```
 
 ---
