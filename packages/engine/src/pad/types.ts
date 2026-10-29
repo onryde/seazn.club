@@ -79,21 +79,27 @@ export interface SetBasedPadRules extends PadRulesBase {
   readonly sanctionLevels: readonly string[];
   bestOf(cfg: unknown): number;
   setTo(cfg: unknown): number;
+  /** P3.1: the target of the set at `setIndex` (0-based), the deciding set's own included - the kernel's `setTarget`. */
+  setTarget(cfg: unknown, setIndex: number): number;
   scoreBound(cfg: unknown): number;
-  /** (c) "golden point" / "setting" / null for the open game. */
+  /** (c) "golden point" / "setting" / null for the open game. `state` is the folded state (or a pre-fold `{}`). */
   deuceNote(state: unknown, cfg: unknown): "goldenPoint" | "setting" | null;
 }
 
 export interface BadmintonPadRules extends SetBasedPadRules {
   /** (c) ceil(target/2). */
   intervalMark(cfg: unknown, setIndex: number): number;
+  /** (c) P3.1: BWF 10.1/11.1, the service court for the serving side's score in the game (even: right). */
+  serviceCourt(servingSideScore: number): "right" | "left";
 }
 
 export interface TableTennisPadRules extends SetBasedPadRules {
   /** toBe-equal to the kernel's EXPEDITE_RETURNS. */
   readonly expediteReturns: number;
-  /** (c) 9. */
+  /** (c) 9. Advisory: the fold enforces no floor (ITTF 2.15.1's guard lives in the pad, DOMAIN.tabletennis.md). */
   readonly expediteScoreFloor: number;
+  /** P3.1: ITTF 2.15.2 as the fold applies it - whether a rally that reached `expediteReturns` may credit `winnerSide`. */
+  expediteReturnsCreditable(servingSide: "home" | "away", winnerSide: "home" | "away"): boolean;
 }
 
 export interface VolleyballPadRules extends SetBasedPadRules {

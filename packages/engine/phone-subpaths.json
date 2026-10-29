@@ -15,6 +15,7 @@
       "src/core/time.ts",
       "src/core/types.ts",
       "src/pad/index.ts",
+      "src/pad/setbased.ts",
       "src/pad/spec-lookup.ts",
       "src/sport/abandon-share.ts",
       "src/sport/catalog.ts",

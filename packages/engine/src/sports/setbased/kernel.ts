@@ -422,6 +422,20 @@ export function expectedDoublesServer(
  *  cricket uses for a schema-unbounded numeric field (`UNBOUNDED_BALLS_SENTINEL`). */
 export const EXPEDITE_RETURNS = 13;
 
+/** ITTF Law 2.15.1's score half (pad wave P3.1): expedite is not introduced once BOTH players or pairs have scored at least
+ *  9 points in the game. ADVISORY, not a fold rule: DOMAIN.tabletennis.md puts this guard in the pad beside the
+ *  ten-minute clock (the engine owns no clock), and `applyExpedite` refuses only a second start. The table tennis pad
+ *  hides its Expedite tile from here; the fold accepts an expedite start at any live score. A number in the law, so it
+ *  does not scale with a variant's target. */
+export const EXPEDITE_SCORE_FLOOR = 9;
+
+/** ITTF Law 2.15.2 as `checkExpedite` applies it (pad wave P3.1): a rally that reached the receiver's thirteenth good
+ *  return is the RECEIVER's point, so it may be credited only to the side that did not serve. The pad reads it to decline
+ *  the 13-return question for a rally the fold would refuse. */
+export function expediteReturnsCreditable(servingSide: Side, winnerSide: Side): boolean {
+  return servingSide !== winnerSide;
+}
+
 function opponent(side: Side): Side {
   return side === "home" ? "away" : "home";
 }
@@ -454,9 +468,17 @@ function parsePayload<T>(schema: z.ZodType<T>, payload: unknown, type: string): 
 const majority = (bestOf: number): number => Math.ceil(bestOf / 2);
 
 // The deciding set is the last possible one (index bestOf−1, reached only at
-// ⌈bestOf/2⌉−1 sets each) and uses finalSetTo (spec 04 §3.3).
-function setTarget(params: SetBasedParams, setIndex: number): number {
+// ⌈bestOf/2⌉−1 sets each) and uses finalSetTo (spec 04 §3.3). Exported for
+// `@seazn/engine/pad` (pad wave P3.1): the pads read the fold's own target.
+export function setTarget(params: SetBasedParams, setIndex: number): number {
   return setIndex === params.bestOf - 1 ? params.finalSetTo : params.setTo;
+}
+
+/** BWF Law 16.2 (pad wave P3.1): the interval comes when the leading score reaches half the game's target, rounded up -
+ *  11 in a game to 21, 8 in the 3x15 law's game to 15, 6 in the short game to 11. The fold holds no interval (it is a
+ *  break in play, not an event); the badminton pad announces it from here. */
+export function setIntervalMark(params: SetBasedParams, setIndex: number): number {
+  return Math.ceil(setTarget(params, setIndex) / 2);
 }
 
 // Winner of a set at score (h,a), or null while it is still live. `cap` is the
@@ -476,6 +498,20 @@ function setWinner(
   if (cap !== null && hi >= cap) return winner;
   if (hi >= target && hi - lo >= winBy) return winner;
   return null;
+}
+
+/** What the next point means at a set score (pad wave P3.1), read off `setWinner` itself so the pad's note and the fold
+ *  cannot disagree. Level scores only; anything else is `null`.
+ *   - `goldenPoint`: the next point wins the set whoever takes it (BWF 7.5's 29-all under the cap of 30; a win-by-one
+ *     cfg at target-1 all).
+ *   - `setting`: from target-1 all onward a side needs `winBy` clear (BWF 7.4 "setting", ITTF 2.11.1 and FIVB 6.1.2
+ *     "deuce") - at every level score that follows, not only the first.
+ *   - `null`: below target-1 all, or not level. */
+export function setDeuceNote(params: SetBasedParams, setIndex: number, home: number, away: number): "goldenPoint" | "setting" | null {
+  if (home !== away) return null;
+  const target = setTarget(params, setIndex);
+  if (setWinner(home + 1, away, target, params.winBy, params.cap) !== null) return "goldenPoint";
+  return home >= target - 1 ? "setting" : null;
 }
 
 // A summary score is *reachable* iff it is terminal and the score one point
@@ -503,7 +539,9 @@ function reachableSetScore(
 // Fold helpers
 // ---------------------------------------------------------------------------
 
-function openSet(state: SetBasedState): { set: SetState; index: number } | null {
+// Exported for `@seazn/engine/pad` (pad wave P3.1): the pads read "the set being played" the way the fold does. It reads
+// `sets` and nothing else.
+export function openSet(state: Pick<SetBasedState, "sets">): { set: SetState; index: number } | null {
   const index = state.sets.length - 1;
   const set = state.sets[index];
   if (set === undefined || set.closed) return null;
@@ -590,7 +628,7 @@ function checkExpedite(
   if (payload.serving === undefined) return (state.expediteUnchecked ?? 0) + 1;
   // `serving`, never `server`: one is the side, the other is a person, and in
   // doubles they disagree.
-  if (sideOf(state, payload.serving) === winner) {
+  if (!expediteReturnsCreditable(sideOf(state, payload.serving), winner)) {
     throw new EngineError(
       "EXPEDITE_WRONG_WINNER",
       `under expedite the receiver wins the point on their ${EXPEDITE_RETURNS}th good return — ` +
@@ -1475,6 +1513,20 @@ export function setBasedServeContext(
   };
 }
 
+/**
+ * BWF Laws 10.1 (singles) and 11.1 (doubles), pad wave P3.1 - WHICH SERVICE COURT. The serve is from the RIGHT court when
+ * the serving side has not scored or has scored an even number of points in the game, from the LEFT when it is odd. Beside
+ * the serve-context reader because it is the other half of the same call, and outside it because it is a pure function of
+ * the serving side's score: the fold has no field for it (badminton names no doubles server, see `badminton.ts`'s `serve`).
+ * A score no game holds (negative, fractional, NaN) is refused rather than given a court.
+ */
+export function serviceCourtOf(servingSideScore: number): "right" | "left" {
+  if (!Number.isInteger(servingSideScore) || servingSideScore < 0) {
+    throw new RangeError(`serviceCourtOf: ${servingSideScore} is not a game score`);
+  }
+  return servingSideScore % 2 === 0 ? "right" : "left";
+}
+
 // ---------------------------------------------------------------------------
 // Generator helper — a reachable completed-set score for the given target.
 // ---------------------------------------------------------------------------
@@ -1676,8 +1728,9 @@ function makeMetrics(unit: { one: string; many: string }): MetricSpec[] {
  *  no upper bound at all) — the same sentinel pattern cricket's padSpec uses
  *  for `cricket.innings.summary.runs`. Capped sports (badminton) use the cap
  *  itself; uncapped ones (volleyball, table tennis) get a margin past the
- *  target generous enough for any plausible deuce ending. */
-function summaryScoreBound(cfg: SetBasedCfg): number {
+ *  target generous enough for any plausible deuce ending. Exported for
+ *  `@seazn/engine/pad` (pad wave P3.1): the set-score sheets read this bound. */
+export function summaryScoreBound(cfg: SetBasedCfg): number {
   return cfg.cap ?? Math.max(cfg.setTo, cfg.finalSetTo) + 20;
 }
 
@@ -1710,7 +1763,7 @@ function rallyAttributedAttribution(key: string): PadAttribution {
   ];
 }
 
-function setBasedPadSpec(preset: SetBasedPreset, cfg: SetBasedCfg): PadSpec {
+function setBasedPadSpec(preset: SetBasedPreset, cfg: SetBasedCfg, fidelity: PadSpec["fidelity"]): PadSpec {
   const key = preset.key;
   const rallyType = `${key}.rally`;
   const summaryType = `${key}.${preset.coarseEventType}`;
@@ -1865,29 +1918,40 @@ function setBasedPadSpec(preset: SetBasedPreset, cfg: SetBasedCfg): PadSpec {
       : []),
   ];
 
+  return { panels, fidelity };
+}
+
+/** The band of the administrative/incident records (timeout, sanction, sub, expedite): see `setBasedFidelity`. */
+const ADMIN_RECORD_BAND: FidelityBand = 1;
+
+/** Pad wave P3.1 - the band the volleyball pad offers its libero exchange at (a `core.lineup.replacement` with the
+ *  `libero` exemption, FIVB 19.3). Not a sport-namespaced type, so it has no `fidelity` entry of its own; it is a
+ *  non-scoring lineup record, the administrative tier the fidelity map gives the scoresheet sub tally. */
+export const LIBERO_BAND: FidelityBand = ADMIN_RECORD_BAND;
+
+/**
+ * The fidelity map of one preset. Built ONCE per module (`makeSetBasedModule`) and handed to every `padSpec(cfg)`, so every
+ * cfg's spec carries the same object: it is a function of the preset's event types and nothing in cfg (pad wave P3.1,
+ * `@seazn/engine/pad`'s `eventBands` is that object).
+ *
+ * One band per REGISTERED type (all 6, per the module-level note above) — not merely the ones a cfg happens to build an
+ * action for. Modelled on cricket: the bare result alone (band 0) already reaches a decided match (a set-based match is
+ * decided by `bankSet` off summaries alone); administrative/incident records (timeout, sanction, sub, expedite — none of
+ * which touches the score) sit at band 1, the same band cricket gives its own admin events (toss, interruption, review,
+ * powerplay); rally-by-rally scoring is the maximum-granularity record for this kernel, band 3. Band 2 is genuinely
+ * unoccupied for this kernel today — there is no player-line/box-score analogue — which is honest, not a gap: S2/#430
+ * parked exactly this (per-event rally-length / 1st-vs-2nd -serve detail) as future T3-lane work, not this session's.
+ */
+function setBasedFidelity(preset: SetBasedPreset): Readonly<Record<string, FidelityBand>> {
+  const key = preset.key;
   return {
-    panels,
-    // One band per REGISTERED type (all 6, per the module-level note above) —
-    // not merely the ones this cfg happens to build an action for. Modelled
-    // on cricket: the bare result alone (band 0) already reaches a decided
-    // match (a set-based match is decided by `bankSet` off summaries alone);
-    // administrative/incident records (timeout, sanction, sub, expedite —
-    // none of which touches the score) sit at band 1, the same band cricket
-    // gives its own admin events (toss, interruption, review, powerplay);
-    // rally-by-rally scoring is the maximum-granularity record for this
-    // kernel, band 3. Band 2 is genuinely unoccupied for this kernel today —
-    // there is no player-line/box-score analogue — which is honest, not a
-    // gap: S2/#430 parked exactly this (per-event rally-length / 1st-vs-2nd
-    // -serve detail) as future T3-lane work, not this session's.
-    fidelity: {
-      [summaryType]: 0,
-      [timeoutType]: 1,
-      [sanctionType]: 1,
-      [subType]: 1,
-      [expediteType]: 1,
-      [rallyType]: 3,
-    } satisfies Record<string, FidelityBand>,
-  };
+    [`${key}.${preset.coarseEventType}`]: 0,
+    [`${key}.timeout`]: ADMIN_RECORD_BAND,
+    [`${key}.sanction`]: ADMIN_RECORD_BAND,
+    [`${key}.sub`]: ADMIN_RECORD_BAND,
+    [`${key}.expedite.start`]: ADMIN_RECORD_BAND,
+    [`${key}.rally`]: 3,
+  } satisfies Record<string, FidelityBand>;
 }
 
 // ---------------------------------------------------------------------------
@@ -2279,6 +2343,8 @@ export function makeSetBasedModule(
   // precision is not needed there).
   const declaredRecords = preset.defaults.records;
   const coarsenParams = preset.defaults; // spec 04 §9.6 conformance runs at default cfg
+  // Pad wave P3.1 — one fidelity map per module, the same object in every cfg's padSpec (see `setBasedFidelity`).
+  const fidelity = setBasedFidelity(preset);
   // One per module, so the init handshake it keys on cannot leak between the
   // three sports sharing this kernel (see `sports/squad-state.ts`).
   const squadAdopter = makeSquadAdopter<SetBasedState>();
@@ -2483,7 +2549,7 @@ export function makeSetBasedModule(
     // R8/WS-B — `required` stamped ONCE here, from the SAME `eventSchemas`
     // registry already declared above (never hand-typed per action; see
     // module.ts's own doc comment).
-    padSpec: (padCfg) => stampAttributionRequired(setBasedPadSpec(preset, padCfg), eventSchemas),
+    padSpec: (padCfg) => stampAttributionRequired(setBasedPadSpec(preset, padCfg, fidelity), eventSchemas),
     positions: preset.positions,
     variants: preset.variants,
     ruleKeys: preset.ruleKeys,
