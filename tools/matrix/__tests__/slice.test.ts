@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { ROW_KEYS, SPORT_KEYS } from "../lib/catalogue.ts";
 import { SCENARIOS } from "../lib/scenarios/index.ts";
-import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
 import {
   CANARY_CHECK, SCENARIO_KEYS, SLICE_ROWS, SLICE_SPORTS, UnknownFilter, checkCanary, checkCellFilter, checkSliceFilter, isSliceCell, planCanaryCase, planSliceCases,
 } from "../lib/slice.ts";
 
-const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS];
+const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS];
 
 const v = (s: string) => (s === "generic" ? "score" : "bwf");
 

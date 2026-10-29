@@ -5,6 +5,7 @@ import type { RowKey } from "../catalogue.ts";
 import type { OrganiserDriver } from "../driver/types.ts";
 import type { ObservedRun } from "../observed.ts";
 import type { CheckResult } from "../results.ts";
+import type { DecidingPath } from "../streams/types.ts";
 
 /** W2a (Task 14): the opt-in bracket-finish scenarios. They are planned ONLY when `--set w1-driving --scenario <key>`
  *  names one, so no committed plan holds them. Defined here, beside the type that names them, so the key list has
@@ -18,7 +19,17 @@ export type W2aScenarioKey = (typeof W2A_SCENARIO_KEYS)[number];
 export const W2B_SCENARIO_KEYS = ["WO-PRE", "RT-PART", "DW-ALL", "AB-AWARD", "WD-CASC"] as const;
 export type W2bScenarioKey = (typeof W2B_SCENARIO_KEYS)[number];
 
-export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey;
+/** W2e (Tasks 19–23, spec §10, D16): the opt-in deciding-path scenarios — every bracket match of the case forced down
+ *  one sport-rule path (football's extra time, its shoot-out; Tasks 20–23 add theirs). Planned ONLY by
+ *  `--set w1-driving --scenario <key>`, as W2a's and W2b's are; each key's paths are w2e-deciding-paths.ts's
+ *  W2E_SCENARIO_PATHS. */
+export const W2E_SCENARIO_KEYS = ["W2E_ET", "W2E_SO"] as const;
+export type W2eScenarioKey = (typeof W2E_SCENARIO_KEYS)[number];
+/** The deciding paths each W2e key forces, in the order a sport's generator is asked for them (the first it builds is
+ *  the case's). One authority: the cells (w2e-cells.ts), the pick and the scenario's own check all read it. */
+export const W2E_SCENARIO_PATHS: Readonly<Record<W2eScenarioKey, readonly DecidingPath[]>> = Object.freeze({ W2E_ET: ["extraTime"], W2E_SO: ["shootout"] });
+
+export type ScenarioKey = "LIFECYCLE" | "M1" | "R4" | "F1" | "DENIED" | "PADPROOF" | "VOIDPROOF" | W2aScenarioKey | W2bScenarioKey | W2eScenarioKey;
 
 /** W2c Task 12 fix round 1 (R-T12-3): the scenarios whose premise is "a level knockout is HELD for the organiser"
  *  (BRACKET_SETTLE_LEVEL's level settle, WD-CASC's held line). Since Task 12 a new bracket stage plays its sport's

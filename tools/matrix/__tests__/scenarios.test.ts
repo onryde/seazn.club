@@ -29,7 +29,7 @@ import { cascadeItems, expectedPolicy, policyFamilyFor, skippedItem } from "../l
 import { SIDE_SIZE_ROUTE, entrantName, rosterSize } from "../lib/scenarios/rosters.ts";
 import { entrantInput } from "../lib/model/state.ts";
 import { BRACKET_KINDS, BRACKET_OF, STRUCTURAL_FINAL_KINDS, terminalFinalKeys } from "../lib/scenarios/terminal-finals.ts";
-import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
+import { W2A_SCENARIO_KEYS, W2B_SCENARIO_KEYS, W2E_SCENARIO_KEYS } from "../lib/scenarios/types.ts";
 import type { CaseSpec, ScenarioContext, ScenarioKey } from "../lib/scenarios/types.ts";
 import { START } from "../lib/streams/types.ts";
 import { offlineBuilderDefault, offlineVariantOrder, type VariantCase } from "../lib/variants.ts";
@@ -75,7 +75,7 @@ const failed = (checks: { id: string; verdict: string }[]) => checks.filter((c) 
  *  void-proof.test.ts is its suite. */
 // The slice's scripts: not the gated ones, and not the W2a bracket-finish or W2b forfeit-credit scenarios (opt-in:
 // w2a-scenarios.test.ts, w2b-scenarios.test.ts).
-const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS];
+const OPT_IN: readonly string[] = [...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS];
 const SCENARIO_KEYS = (Object.keys(SCENARIOS) as ScenarioKey[]).filter((k) => k !== "DENIED" && k !== "PADPROOF" && k !== "VOIDPROOF" && !OPT_IN.includes(k));
 
 describe("assertion helper — empty first (R25)", () => {
@@ -1043,7 +1043,7 @@ describe("pilots on the fake league", () => {
     expect(r.checks.find((c) => c.id === "f1-everyone-drawn")).toMatchObject({ verdict: "fail", checked: 7, evidence: [`${driver.entrants.at(-1)!.id} appears in no fixture`] });
   });
   it("every scenario is registered under its own key and the three pilots name their canary check", () => {
-    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF", ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS].sort());
+    expect(Object.keys(SCENARIOS).sort()).toEqual(["DENIED", "F1", "LIFECYCLE", "M1", "PADPROOF", "R4", "VOIDPROOF", ...W2A_SCENARIO_KEYS, ...W2B_SCENARIO_KEYS, ...W2E_SCENARIO_KEYS].sort());
     expect(SCENARIO_KEYS.sort()).toEqual(["F1", "LIFECYCLE", "M1", "R4"]);
     for (const k of Object.keys(SCENARIOS) as ScenarioKey[]) expect(SCENARIOS[k].key).toBe(k);
     expect(SCENARIOS.LIFECYCLE.canaryCheck).toBeNull();
