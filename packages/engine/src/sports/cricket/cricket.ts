@@ -40,6 +40,7 @@ import {
 } from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
+  FidelityBand,
   ModuleEvent,
   PadAction,
   PadAttribution,
@@ -189,6 +190,13 @@ export const CricketWicket = z.strictObject({
   incoming: PersonId.optional(),
   bowlerCredited: z.boolean(),
 });
+
+/** The ten modes of dismissal and the five kinds of extra, named: the very enums `CricketWicket.kind` and `CricketExtras.kind`
+ *  parse with, so `@seazn/engine/pad` reads these objects rather than a copy of the lists (pad wave P2). */
+export const WicketKind = CricketWicket.shape.kind;
+export type WicketKind = z.infer<typeof WicketKind>;
+export const ExtraKind = CricketExtras.shape.kind;
+export type ExtraKind = z.infer<typeof ExtraKind>;
 
 export const CricketBall = z.strictObject({
   over: z.number().int().nonnegative(),
@@ -1229,9 +1237,8 @@ function applyAbandon(state: CricketState): CricketState {
 // Ball application — spec §2.2 grammar + legality rules
 // ---------------------------------------------------------------------------
 
-const BOWLER_CREDITED_KINDS = new Set(["bowled", "caught", "lbw", "stumped", "hitwicket"]);
-
-type WicketKind = z.infer<typeof CricketWicket>["kind"];
+/** The modes the bowler is credited with (MCC Laws 32, 33, 35, 36, 39): `wicket.bowlerCredited` must say exactly this. */
+export const BOWLER_CREDITED_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["bowled", "caught", "lbw", "stumped", "hitwicket"]);
 
 /** W2e T8b (CK-NB-1, D8) — the modes of dismissal that stand off a no ball. ICC Men's T20 World Cup 2026 Playing
  *  Conditions 21.18 (MCC Law 21.18 alike): "When No ball has been called, neither batter shall be out under any of the
@@ -1245,17 +1252,34 @@ const WIDE_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["hitw
 
 /** The free hit's (spec §2.2, CK-FH-1). ICC 21.19.2 gives it the no ball's three ("only under the circumstances that apply
  *  for a No ball"); the engine leaves hit the ball twice out, CK-FH-1's recorded deviation (W2e ruling I-2). */
-const FREE_HIT_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(
+export const FREE_HIT_DISMISSAL_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(
   [...NO_BALL_DISMISSAL_KINDS].filter((kind) => kind !== "hitballtwice"),
 );
 
-// W4 — which dismissals put a fielder in the scorebook, and under which column.
-const FIELDER_CREDIT_COLUMN: Record<string, keyof FieldingCredit> = {
+// W4 — which dismissals put a fielder in the scorebook, and under which column. `obstructed` is the house rulebook's
+// (DOMAIN.md, Dismissals: "credits the fielder a run out"); MCC Law 37 credits nobody. Kept by owner ruling (pad wave P2, Q1).
+export const FIELDER_CREDIT_COLUMN: Readonly<Record<string, keyof FieldingCredit>> = {
   caught: "catches",
   stumped: "stumpings",
   runout: "runOuts",
   obstructed: "runOuts",
 };
+
+/** (pad wave P2, Q1b) The modes in which EITHER batter can be the one out: run out (MCC Law 38.1, "Either batter is out Run
+ *  out") and obstructing the field (Law 37.1.1, "Either batter is out Obstructing the field"); every other mode is the
+ *  striker's. A declaration for the pad (it asks "who's out" for exactly these), NOT a fold guard: `applyDelivery` checks only
+ *  that `wicket.out` is at the crease, for every mode. */
+export const VARIABLE_OUT_KINDS: ReadonlySet<WicketKind> = new Set<WicketKind>(["runout", "obstructed"]);
+
+/** (pad wave P2) MCC Law 37.5.1, "any one-run Penalty for No ball or Wide": a wide and a no ball each carry a penalty of one
+ *  run. The batters never run it, so `applyDelivery`'s striker rotation nets it off both before it counts crossings. */
+export const WIDE_NO_BALL_PENALTY_RUNS = 1;
+/** (pad wave P2) A bare wide records its one-run penalty and nothing more: the runs the pad's wide tile records. */
+export const WIDE_DEFAULT_RUNS = WIDE_NO_BALL_PENALTY_RUNS;
+/** (pad wave P2) MCC Law 41.2.1, "the award of 5 Penalty runs": one award of penalty runs is five. The fold does not compute
+ *  it (a `penalty` extra carries its own runs; two awards on one ball are ten), so nothing in `applyDelivery` reads this:
+ *  it is the pad's runs for one award. */
+export const PENALTY_RUNS = 5;
 
 function bumpFielding(
   fielding: Record<string, FieldingCredit> | undefined,
@@ -1610,7 +1634,7 @@ function applyDelivery(
   let crossings = 0;
   if (payload.boundary === undefined) crossings += batRuns;
   if (extras !== undefined) {
-    if (extras.kind === "wide" || extras.kind === "noball") crossings += extras.runs - 1;
+    if (extras.kind === "wide" || extras.kind === "noball") crossings += extras.runs - WIDE_NO_BALL_PENALTY_RUNS;
     else if (extras.kind !== "penalty") crossings += extras.runs;
   }
   if (payload.wicket === undefined && crossings % 2 === 1) {
@@ -3099,6 +3123,33 @@ function ballBaseFields(cfg: CricketCfg): PadField[] {
   ];
 }
 
+// S6 owner ruling (`_INDEX.md`, "OWNER RULING: redesign the fidelity
+// model, in S6") — one band per event type, no repetition. The retired
+// cumulative-tier model listed `cricket.superover.ball` in BOTH tier 1
+// and tier 3 — the non-nesting inconsistency S2/#430 found, and the
+// reason for this redesign. A super-over ball is the same
+// shape and the same granularity as an ordinary ball, so it belongs at
+// band 3 here, matching `cricket.ball`, not band 1.
+//
+// One map for every cfg (pad wave P2): `padSpec(cfg).fidelity` is this object, and `@seazn/engine/pad` reads the same one.
+export const CRICKET_FIDELITY: Readonly<Record<string, FidelityBand>> = {
+  "cricket.innings.summary": 0,
+  "cricket.toss": 1,
+  "cricket.innings.declare": 1,
+  "cricket.innings.close": 1,
+  "cricket.match.close": 1,
+  "cricket.interruption": 1,
+  "cricket.revise": 1,
+  "cricket.followon": 1,
+  "cricket.newball": 1,
+  "cricket.powerplay": 1,
+  "cricket.review": 1,
+  "cricket.player.line": 2,
+  "cricket.ball": 3,
+  "cricket.superover.ball": 3,
+  "cricket.retire": 3,
+};
+
 export function padSpec(cfg: CricketCfg): PadSpec {
   const base = ballBaseFields(cfg);
 
@@ -3579,30 +3630,7 @@ export function padSpec(cfg: CricketCfg): PadSpec {
   return stampAttributionRequired(
     {
       panels,
-      // S6 owner ruling (`_INDEX.md`, "OWNER RULING: redesign the fidelity
-      // model, in S6") — one band per event type, no repetition. The retired
-      // cumulative-tier model listed `cricket.superover.ball` in BOTH tier 1
-      // and tier 3 — the non-nesting inconsistency S2/#430 found, and the
-      // reason for this redesign. A super-over ball is the same
-      // shape and the same granularity as an ordinary ball, so it belongs at
-      // band 3 here, matching `cricket.ball`, not band 1.
-      fidelity: {
-        "cricket.innings.summary": 0,
-        "cricket.toss": 1,
-        "cricket.innings.declare": 1,
-        "cricket.innings.close": 1,
-        "cricket.match.close": 1,
-        "cricket.interruption": 1,
-        "cricket.revise": 1,
-        "cricket.followon": 1,
-        "cricket.newball": 1,
-        "cricket.powerplay": 1,
-        "cricket.review": 1,
-        "cricket.player.line": 2,
-        "cricket.ball": 3,
-        "cricket.superover.ball": 3,
-        "cricket.retire": 3,
-      },
+      fidelity: CRICKET_FIDELITY,
     },
     CRICKET_EVENT_SCHEMAS,
   );
