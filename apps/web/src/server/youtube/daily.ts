@@ -10,7 +10,7 @@ import "server-only";
 //      grant → reconnect_needed) and `liveEnabled` (→ last_error_code youtube_live_not_enabled / youtube_live_blocked, or null), stamped
 //      with the DATABASE's clock (carry f: `liveStateOf` compares last_health_at with status_since, which the database wrote).
 //      A dead grant (`invalid_grant`, or a reconnect refusal that is not the live-permission one - see carry g below) → reconnect_needed,
-//      status_since now: the 30-day purge clock starts.
+//      status_since now: the dead-grant purge clock (YOUTUBE_DEAD_GRANT_PURGE_DAYS, 7) starts.
 //      REFRESH — the `complete` rows whose video was last confirmed more than 25 days ago, in batches of 50 (Google's per-call id cap):
 //      still there → refreshed_at = the pass's now; gone → the row is deleted and fixtures.stream_url is cleared WHEN IT POINTS AT THAT
 //      VIDEO (a club's own link is never touched).
@@ -23,7 +23,7 @@ import "server-only";
 //   2d. IDLE KEYS — the pooled keys of ANY non-revoked connection that nothing has used for the whole ceiling are deleted (`deleteIdleKeys`):
 //      the row at once, with no token and no budget; the liveStream at YouTube afterwards, best effort, only where a token opens.
 //   3. STUCK BROADCASTS (carries a, b) — see `settleStuck`.
-//   4. DEAD GRANTS — reconnect_needed for 30 days → revokeConnection (token-store's ONE statement, R1/B1-R1) + `purgeConnectionData`, then,
+//   4. DEAD GRANTS — reconnect_needed for YOUTUBE_DEAD_GRANT_PURGE_DAYS (7) → revokeConnection (token-store's ONE statement, R1/B1-R1) + `purgeConnectionData`, then,
 //      after the commit and best effort, the grant is revoked AT GOOGLE (DP III.E.4: the access goes too; not every flip is a dead token). That
 //      revoke is the one Google call outside the connection slice, and has its OWN allowance (`YOUTUBE_DAILY_REVOKE_BUDGET_MS`): a purge that
 //      needs a revoke starts only while the allowance has time left, and is otherwise left WHOLE for the next pass (counted `deferred`) -
@@ -87,8 +87,12 @@ export const YOUTUBE_REFRESH_AFTER_DAYS = 25;
 /** THE CEILING (Google API Services User Data Policy III.E.4): what Seazn stores from YouTube is refreshed or deleted within this many
  *  days. Every other 30 here is this one fact, so a change to it moves them together. */
 export const YOUTUBE_DATA_CEILING_DAYS = 30;
-/** A grant that has been dead this long has its YouTube data purged (DP III.E.4, spec §6.8). */
-export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = YOUTUBE_DATA_CEILING_DAYS;
+/** A grant that has been dead this long (counted from the flip to `reconnect_needed`) has its YouTube data purged. SEVEN days, not the
+ *  ceiling's thirty (PO ruling, T19 fix round 1): Google's Developer Policies (III.D.2) give 30 days from the REVOCATION when access is
+ *  revoked at Google's page, and this pass finds a revoked grant only on its next daily check - a day later, more when the health slice
+ *  defers the connection - so a purge clocked from the flip at the ceiling could land past 30 days from the revocation. A week leaves a
+ *  club time to reconnect and every deadline room. */
+export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = 7;
 /** A `failed` broadcast row is deleted this long after it failed (DP III.E.4; the plan names no other figure). */
 export const YOUTUBE_FAILED_ROW_RETENTION_DAYS = YOUTUBE_DATA_CEILING_DAYS;
 
@@ -490,7 +494,7 @@ async function checkConnection(p: Pass, c: Conn): Promise<void> {
 /** The ceiling's backstop for a `complete` row (DP III.E.4; PO ruling, no carve-outs): once it has gone `YOUTUBE_DATA_CEILING_DAYS`
  *  without a confirmation it is deleted - and the link that pointed at its video cleared - whatever the state of its connection, so long
  *  as it is not revoked (a revoked one is the purge's). A DEAD grant cannot be refreshed (YouTube cannot be asked) and its purge only comes
- *  `YOUTUBE_DEAD_GRANT_PURGE_DAYS` after it died: a row last confirmed on the day the grant died would otherwise sit until ~day 55 (25 + 30).
+ *  `YOUTUBE_DEAD_GRANT_PURGE_DAYS` after it died: a row last confirmed 25 days before the grant died would otherwise sit until day 32 (25 + 7), past the ceiling.
  *  A CONNECTED channel whose refresh did not complete (a token that will not open, a refusal from YouTube, a budget that never reached it)
  *  would otherwise keep the row for ever. Reads no token and calls nobody. Under the connection's lock, re-checked: a connection revoked
  *  after the list is the purge's (the stranded leg takes what is left); a reconnect that lands after it changes nothing, the row being past
@@ -811,7 +815,7 @@ export async function youtubeDaily(
   // 3. Stuck broadcasts.
   await leg(p, "stuck", () => settleStuck(p));
 
-  // 4. Dead grants, 30 days.
+  // 4. Dead grants, YOUTUBE_DEAD_GRANT_PURGE_DAYS after the flip.
   await leg(p, "dead_grants", async () => {
     const dead = await sql<{ id: string; org_id: string }[]>`
       select id, org_id from org_youtube_connections

@@ -1,6 +1,6 @@
 // YouTube Connect T17 (spec §6.6 "Daily", §6.8, §9.2; plan T17 with the post-T2 amendment; controller overrides O2 carries a-h, O3, O4):
-// the DAILY YouTube pass on the relay-sweep cron - channel health, the 25-day refresh of stored video links, the 30-day purge of a
-// dead grant, and the clean-up of rows the minute-by-minute end step can never settle.
+// the DAILY YouTube pass on the relay-sweep cron - channel health, the 25-day refresh of stored video links, the purge of a dead grant
+// (YOUTUBE_DEAD_GRANT_PURGE_DAYS after the flip), and the clean-up of rows the minute-by-minute end step can never settle.
 //
 // Everything runs through the REAL producers wherever one exists: Go live is the organiser's `createSession` against a FakeYouTube
 // (prepare, the pool, the session insert and the attach are the real ones), Stop is `stopSession`, the replay link and the complete
@@ -12,9 +12,11 @@
 // ("a producer's output moved in time"), or the injected clock is scripted forward.
 //
 // Expected values are the spec's and Google's literals, typed here and never imported from the code under test:
-//   - videos.list takes at most 50 ids per call; the stored video links are refreshed after 25 days (spec §6.6 "~25 days") and every
-//     stored YouTube datum is gone 30 days after a grant dies (DP III.E.4, spec §6.8) or after a broadcast failed (the same 30 days,
-//     DP III.E.4: the plan names no other retention for a failed row);
+//   - videos.list takes at most 50 ids per call; the stored video links are refreshed after 25 days (spec §6.6 "~25 days"); every stored
+//     YouTube datum is refreshed or gone within 30 days (DP III.E.4, the ceiling; a failed row's retention is the same 30); and a grant
+//     that died is purged 7 days after the flip (PO ruling, T19 fix round 1: a revoke at Google is found within a day and DP III.D.2
+//     allows 30 days from the revocation, so a 30-day wait after the flip could land past it). The ceiling and the dead-grant window are
+//     typed ONCE, in the pin tests below; every other age in this file is a pair derived from them (`CEIL`, `DEAD`);
 //   - the end step's retry backoff is 1, 2, 4, 8, 16, 32, then 60 minutes (P6). The stuck-row bound is "a row that has failed for a
 //     full DAY at the 60-minute cap": 7 failures to reach the cap (the 7th is the first to store 60) + 24 more at it = 31 failures; the
 //     waits stored after failures 1-6 are 63 minutes and after failures 7-30 are 24 * 60, so 63 + 24 * 60 = 1503 minutes (typed, so a
@@ -53,7 +55,7 @@ import { createSession as organiserStart, currentSession, stopSession, type Sess
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { connectionViews, saveConnectionFromGrant } from "../connections";
 import {
-  YOUTUBE_DATA_CEILING_DAYS, YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES, YOUTUBE_REFRESH_AFTER_DAYS, deriveStuckBounds,
+  YOUTUBE_DATA_CEILING_DAYS, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES, YOUTUBE_REFRESH_AFTER_DAYS, deriveStuckBounds,
   purgeConnectionData, youtubeDaily,
   type PurgeResult, type YoutubeDailyResult,
 } from "../daily";
@@ -74,6 +76,9 @@ const GRACE_MINUTES = 5;
 const BUDGET_MS = 15_000;
 const ROOMY_STORAGE_MINUTES = 100_000_000;
 const VIDEOS_PER_CALL = 50;
+/** The dead-grant purge window, read from the engine's own declaration (daily.ts): every dead-grant age in this file is a pair around it -
+ *  `DEAD - 1` days dead is kept, `DEAD + 1` is purged - so moving the constant moves the tests with it. */
+const DEAD = YOUTUBE_DEAD_GRANT_PURGE_DAYS;
 const STUCK_ATTEMPTS = 31;        // 7 failures to reach the 60-minute cap + 24 more at it (P6, one full day)
 const STUCK_MINUTES = 1503;       // 1 + 2 + 4 + 8 + 16 + 32 + 24 * 60
 const P6_BACKOFF = [1, 2, 4, 8, 16, 32, 60, 60];
@@ -644,8 +649,8 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
   });
 
   // ═══ the dead-grant purge ══════════════════════════════════════════════════════════════════════════════════════════════
-  describe("dead-grant purge (DP III.E.4: 30 days)", () => {
-    it("reconnect_needed for 31 days -> PURGED: broadcast rows gone, the key pool gone, stream_urls pointing at its videos cleared (a club's link kept), token cleared + status revoked + destination archived (token-store's revokeConnection), sub and pending reconnect cleared; 29 days -> untouched", async () => {
+  describe("dead-grant purge (DP III.D.2 / III.E.4: YOUTUBE_DEAD_GRANT_PURGE_DAYS after the flip)", () => {
+    it("reconnect_needed for DEAD+1 days -> PURGED: broadcast rows gone, the key pool gone, stream_urls pointing at its videos cleared (a club's link kept), token cleared + status revoked + destination archived (token-store's revokeConnection), sub and pending reconnect cleared; DEAD-1 days -> untouched", async () => {
       const w = await world({ fixtures: 3, credits: 3 });
       const [f1, f2, f3] = w.fixtures as [string, string, string];
       await sql`update fixtures set stream_url = ${CLUB_LINK} where id = ${f2}`;
@@ -660,16 +665,16 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       // The health check finds the dead grant (the real producer of reconnect_needed) ...
       w.fake.killToken(w.token);
       expect(await daily(w)).toMatchObject({ reconnectNeeded: 1, purged: 0 });
-      // ... 29 days later nothing is purged ...
-      await shiftConnection(w.connectionId, 29);
+      // ... DEAD-1 days later nothing is purged ...
+      await shiftConnection(w.connectionId, DEAD - 1);
       expect(await daily(w)).toEqual(ZERO);
       expect((await connRow(w.connectionId)).status).toBe("reconnect_needed");
       expect((await broadcastsOfConnection(w.connectionId)).length).toBe(3);
       expect(await keysOf(w.connectionId)).toBeGreaterThan(0);
       expect(await pendingCount(pendingReconnect.id)).toBe(1);
 
-      // ... and at 31 days it is.
-      await shiftConnection(w.connectionId, 31);
+      // ... and at DEAD+1 days it is.
+      await shiftConnection(w.connectionId, DEAD + 1);
       revalidateHook.calls = [];
       expect(await daily(w)).toEqual({ ...ZERO, purged: 1 });
       const row = await connRow(w.connectionId);
@@ -694,7 +699,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
     it("B6 m2 - EMPTY CASE FIRST: a dead grant whose token will not open is purged all the same, with nothing to revoke (no Google call, no report); the purge never waits on a token", async () => {
       const w = await world();
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
-      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(w.connectionId, DEAD + 1);
       const kek = process.env.YOUTUBE_TOKEN_KEK;
       process.env.YOUTUBE_TOKEN_KEK = randomBytes(32).toString("hex");   // sealed under another key: unreadable now
       try {
@@ -713,7 +718,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       w.fake.removeChannel(w.channel.id);   // the flip is "channel gone from the grant", NOT a dead token
       expect(await daily(w)).toEqual({ ...ZERO, checked: 2, reconnectNeeded: 1 });
       await expect(w.fake.accessToken(w.token), "premise: the token Google holds is still good").resolves.toBeTruthy();
-      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(w.connectionId, DEAD + 1);
       expect(await daily(w)).toEqual({ ...ZERO, checked: 1, purged: 1 });
       expect(callsOf(w.fake, "revoke")).toBe(1);
       await expect(w.fake.accessToken(w.token), "revoked at Google").rejects.toMatchObject({ code: "youtube_reconnect_needed" });
@@ -726,7 +731,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       const v = await world();
       v.fake.killToken(v.token);
       expect(await daily(v)).toEqual({ ...ZERO, checked: 1, reconnectNeeded: 1 });
-      await shiftConnection(v.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(v.connectionId, DEAD + 1);
       expect(await daily(v)).toEqual({ ...ZERO, purged: 1 });
       expect(callsOf(v.fake, "revoke")).toBe(1);
       expect(dailyReports(), "a dead grant's revoke is not a report").toEqual([]);
@@ -737,7 +742,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       const w = await world({ sub });
       const sibling = await w.addChannel({ sub });
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
-      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(w.connectionId, DEAD + 1);
       expect(await daily(w)).toEqual({ ...ZERO, checked: 1, purged: 1 });
       expect(callsOf(w.fake, "revoke"), "shared: not revoked").toBe(0);
       await expect(w.fake.accessToken(sibling.token), "the sibling's token still works").resolves.toBeTruthy();
@@ -745,7 +750,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
 
       w.fake.killToken(sibling.token);   // the sibling's grant dies in its turn
       expect(await daily(w)).toEqual({ ...ZERO, checked: 1, reconnectNeeded: 1 });
-      await shiftConnection(sibling.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(sibling.connectionId, DEAD + 1);
       expect(await daily(w)).toEqual({ ...ZERO, purged: 1 });
       expect(callsOf(w.fake, "revoke"), "the last connection on the account revokes it").toBe(1);
     });
@@ -754,7 +759,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       const sub = `acct-lock-${randomUUID()}`;
       const w = await world({ sub });
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
-      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(w.connectionId, DEAD + 1);
       const hold = await holdAccountLock(sub);
       let settled = false;
       const pass = daily(w).then((r) => { settled = true; return r; });
@@ -769,7 +774,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       // The positive pair: another account's lock held by someone else does not hold this purge.
       const other = await world({ sub: `acct-lock-${randomUUID()}` });
       await markReconnectNeeded(sql, other.orgId, other.connectionId);
-      await shiftConnection(other.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(other.connectionId, DEAD + 1);
       const unrelated = await holdAccountLock(`acct-lock-${randomUUID()}`);
       try {
         expect(await daily(other)).toEqual({ ...ZERO, purged: 1 });
@@ -781,7 +786,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
     it("B6 m2: a Google revoke that is refused is reported by its CODE only (never the token) and the purge stands - not a failure to retry, the token is gone", async () => {
       const w = await world();
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
-      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(w.connectionId, DEAD + 1);
       w.fake.failNext("revoke", "youtube_unavailable", "backendError");
       expect(await daily(w)).toEqual({ ...ZERO, purged: 1 });
       expect((await connRow(w.connectionId)).status).toBe("revoked");
@@ -792,23 +797,23 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(text, "no token").not.toContain(w.token);
     });
 
-    it("the 30-day line is per connection inside ONE pass: 31 days dead is purged beside a 29-days-dead one and a connected one, both untouched", async () => {
+    it("the purge line is per connection inside ONE pass: DEAD+1 days dead is purged beside a DEAD-1-days-dead one and a connected one, both untouched", async () => {
       const w = await world();
       const dead31 = await w.addChannel();
       const dead29 = await w.addChannel();
       for (const c of [dead31, dead29]) await markReconnectNeeded(sql, w.orgId, c.connectionId);
-      await shiftConnection(dead31.connectionId, 31);
-      await shiftConnection(dead29.connectionId, 29);
+      await shiftConnection(dead31.connectionId, DEAD + 1);
+      await shiftConnection(dead29.connectionId, DEAD - 1);
       expect(await daily(w)).toMatchObject({ purged: 1, reconnectNeeded: 0 });
       expect((await connRow(dead31.connectionId)).status).toBe("revoked");
       expect((await connRow(dead29.connectionId)).status).toBe("reconnect_needed");
       expect((await connRow(w.connectionId)).status).toBe("connected");
     });
 
-    it("a reconnect before the pass resets the clock: a connection dead for 31 days that was RECONNECTED through the real save is not purged", async () => {
+    it("a reconnect before the pass resets the clock: a connection dead for DEAD+1 days that was RECONNECTED through the real save is not purged", async () => {
       const w = await world();
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
-      await shiftConnection(w.connectionId, 31);
+      await shiftConnection(w.connectionId, DEAD + 1);
       const g = await grant(w.org, { connectionId: w.connectionId, channels: [w.channel] });
       await saveConnectionFromGrant({ pendingId: g.id, channelId: w.channel.id, userId: w.userId }, w.fake);
       w.fake.seedGrant({ refreshToken: g.token, channelId: w.channel.id, channelTitle: w.channel.title });
@@ -821,7 +826,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       const w = await world({ credits: 1 });
       const m = await completedMatch(w, w.fixtures[0]!);
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
-      await shiftConnection(w.connectionId, 31);
+      await shiftConnection(w.connectionId, DEAD + 1);
       let reconnected = 0;
       const out = await youtubeDaily(w.fake, new Date(), {
         orgIds: [w.orgId],
@@ -842,17 +847,20 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(await streamUrlOf(w.fixtures[0]!)).toBe(youtubeWatchUrl(m.ytId));
     });
 
-    it("RACE, each predicate of the lock re-check ALONE: a connection flipped back to `connected` with its 31-day-old status_since still standing is not purged (status), and one that stays reconnect_needed but whose status_since moved to now is not purged either (since); positive pair: neither window opened -> purged", async () => {
+    it("RACE, each predicate of the lock re-check ALONE: a connection flipped back to `connected` with its DEAD+1-day-old status_since still standing is not purged (status), and one that stays reconnect_needed but whose status_since moved to now is not purged either (since), nor one whose status_since moved to inside the window (the purge's own cutoff); positive pair: neither window opened -> purged", async () => {
       const pokes: { name: string; poke: (id: string) => Promise<unknown>; status: string }[] = [
         { name: "status only", poke: (id) => sql`update org_youtube_connections set status = 'connected' where id = ${id}`, status: "connected" },
         { name: "since only", poke: (id) => sql`update org_youtube_connections set status_since = now() where id = ${id}`, status: "reconnect_needed" },
+        // The purge's own cutoff ALONE (a guard that the list's predicate would otherwise cover): still reconnect_needed, `since` moved
+        // to INSIDE the window but not to now, so only the re-check's comparison against YOUTUBE_DEAD_GRANT_PURGE_DAYS can refuse it.
+        { name: "since inside the window", poke: (id) => sql`update org_youtube_connections set status_since = now() - (${DEAD - 1}::float8 * interval '1 day') where id = ${id}`, status: "reconnect_needed" },
       ];
       let checked = 0;
       for (const v of pokes) {
         const w = await world({ credits: 1 });
         await completedMatch(w, w.fixtures[0]!);
         await markReconnectNeeded(sql, w.orgId, w.connectionId);
-        await shiftConnection(w.connectionId, 31);
+        await shiftConnection(w.connectionId, DEAD + 1);
         let ran = 0;
         const out = await youtubeDaily(w.fake, new Date(), {
           orgIds: [w.orgId],
@@ -865,12 +873,13 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
         expect(await openToken(sql, w.orgId, w.connectionId), `${v.name}: its token was kept`).not.toBeNull();
         checked++;
       }
-      expect(checked).toBe(2);
+      expect(checked).toBe(pokes.length);
+      expect(checked, "three pokes").toBe(3);
       // The positive pair: with the window left shut the same connection IS purged.
       const w = await world({ credits: 1 });
       await completedMatch(w, w.fixtures[0]!);
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
-      await shiftConnection(w.connectionId, 31);
+      await shiftConnection(w.connectionId, DEAD + 1);
       expect((await daily(w)).purged).toBe(1);
     });
 
@@ -894,13 +903,13 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(m2.ytId).not.toBe(m1.ytId);
     });
 
-    it("tenancy: the purge of org A's dead grant leaves org B's (also dead for 31 days, but out of the pass's scope) exactly as it was - its rows, keys and link included", async () => {
+    it("tenancy: the purge of org A's dead grant leaves org B's (also dead for DEAD+1 days, but out of the pass's scope) exactly as it was - its rows, keys and link included", async () => {
       const a = await world();
       const b = await world();
       const mb = await completedMatch(b, b.fixtures[0]!);
       for (const w of [a, b]) {
         await markReconnectNeeded(sql, w.orgId, w.connectionId);
-        await shiftConnection(w.connectionId, 31);
+        await shiftConnection(w.connectionId, DEAD + 1);
       }
       const keysB = await keysOf(b.connectionId);
       expect(keysB, "premise: org B holds a pooled key").toBeGreaterThan(0);
@@ -1270,6 +1279,18 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(YOUTUBE_DATA_CEILING_DAYS).toBe(30);
     });
 
+    it("the dead-grant purge window is 7 days (PO ruling, T19 fix round 1; typed here: the pairs elsewhere derive from the constant, so this pins the constant itself) and sits well inside the ceiling counted from a REVOCATION at Google (DP III.D.2)", () => {
+      expect(YOUTUBE_DEAD_GRANT_PURGE_DAYS).toBe(7);
+      // DP III.D.2: access revoked at Google's page => delete within 30 days OF THE REVOCATION. The clock here starts at the FLIP, which
+      // the pass makes on its next daily check (a day), later when the health slice defers the connection (another day or more), and the
+      // purge itself can be deferred a pass by the revoke allowance (one more). Two days of slack is the least that must stay.
+      const DISCOVERY_AND_DEFERRAL_DAYS = 3;
+      expect(YOUTUBE_DEAD_GRANT_PURGE_DAYS + DISCOVERY_AND_DEFERRAL_DAYS).toBeLessThanOrEqual(YOUTUBE_DATA_CEILING_DAYS);
+      // A window equal to the ceiling is the defect this fixes: the pair DEAD-1 / DEAD+1 must straddle a line that is NOT the ceiling's.
+      expect(YOUTUBE_DEAD_GRANT_PURGE_DAYS).not.toBe(YOUTUBE_DATA_CEILING_DAYS);
+      expect(DEAD - 1, "the pair's kept side is a real, positive age").toBeGreaterThan(0);
+    });
+
     it("EMPTY CASE FIRST: a dead grant that holds no complete row lapses nothing (counters flip only), a second pass is all zeros; the same channel with a stale row then loses it (the positive pair)", async () => {
       const w = await world();
       expect((await broadcastsOfConnection(w.connectionId)).length, "premise: no row").toBe(0);
@@ -1495,11 +1516,11 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(await refreshedAt()).toBeGreaterThan(r0);
     });
 
-    it("the slice bounds the YouTube calls of the connection leg and nothing else: with no time at all the expired grant is still deleted, the 30-day-dead grant is still purged AND revoked at Google (the revoke has its own allowance, not the slice), and the connected channel is deferred", async () => {
+    it("the slice bounds the YouTube calls of the connection leg and nothing else: with no time at all the expired grant is still deleted, the grant dead past its window is still purged AND revoked at Google (the revoke has its own allowance, not the slice), and the connected channel is deferred", async () => {
       const w = await world();
       const dead = await w.addChannel();
       await markReconnectNeeded(sql, w.orgId, dead.connectionId);
-      await shiftConnection(dead.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(dead.connectionId, DEAD + 1);
       const expired = await grant(w.org, { startedMinutesAgo: 20 });
       expect(await pendingCount(expired.id), "premise").toBe(1);
       const stale = await completedMatch(w, w.fixtures[0]!);
@@ -1525,7 +1546,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
     };
     const statusOf = async (id: string) => (await connRow(id)).status;
 
-    it("EMPTY CASE FIRST: no dead grant, an allowance of ZERO defers nothing and calls nobody; then four grants dead past the ceiling and an allowance for two revokes: the two longest-dead are revoked at Google and purged, the other two are left whole and counted deferred; the next pass finishes them; a third finds nothing", async () => {
+    it("EMPTY CASE FIRST: no dead grant, an allowance of ZERO defers nothing and calls nobody; then four grants dead past the purge window and an allowance for two revokes: the two longest-dead are revoked at Google and purged, the other two are left whole and counted deferred; the next pass finishes them; a third finds nothing", async () => {
       const empty = await seedOrg();
       const idle = new FakeYouTube();
       expect(await youtubeDaily(idle, new Date(), { orgIds: [empty.auth.orgId], revokeBudgetMs: 0 })).toEqual(ZERO);
@@ -1535,9 +1556,9 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       const chans = [{ connectionId: w.connectionId }, await w.addChannel(), await w.addChannel(), await w.addChannel()];
       for (const [i, c] of chans.entries()) {
         await markReconnectNeeded(sql, w.orgId, c.connectionId);
-        await shiftConnection(c.connectionId, YOUTUBE_DATA_CEILING_DAYS + 10 - i);   // chans[0] has been dead the longest
+        await shiftConnection(c.connectionId, DEAD + 10 - i);   // chans[0] has been dead the longest
       }
-      expect(await Promise.all(chans.map((c) => statusOf(c.connectionId))), "premise: four dead grants past the ceiling").toEqual(Array(4).fill("reconnect_needed"));
+      expect(await Promise.all(chans.map((c) => statusOf(c.connectionId))), "premise: four dead grants past the purge window").toEqual(Array(4).fill("reconnect_needed"));
       const revokes0 = callsOf(w.fake, "revoke");
 
       expect(await revoking(w, 2), "an allowance for two revokes").toEqual({ ...ZERO, purged: 2, deferred: 2 });
@@ -1554,7 +1575,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       const w = await world();
       const m = await completedMatch(w, w.fixtures[0]!);
       await markReconnectNeeded(sql, w.orgId, w.connectionId);
-      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(w.connectionId, DEAD + 1);
       const before = w.fake.calls.length;
       expect(await revoking(w, 0), "no allowance: held back, not failed").toEqual({ ...ZERO, deferred: 1 });
       expect(w.fake.calls.length - before, "and nobody was called").toBe(0);
@@ -1569,7 +1590,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       const s = await world({ sub });
       const sibling = await s.addChannel({ sub });
       await markReconnectNeeded(sql, s.orgId, s.connectionId);
-      await shiftConnection(s.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      await shiftConnection(s.connectionId, DEAD + 1);
       expect(await revoking(s, 0), "a shared account is not revoked, so a spent allowance does not hold its purge back").toEqual({ ...ZERO, checked: 1, purged: 1 });
       expect(callsOf(s.fake, "revoke")).toBe(0);
       expect((await connRow(sibling.connectionId)).status).toBe("connected");

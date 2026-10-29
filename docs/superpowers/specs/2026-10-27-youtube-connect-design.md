@@ -403,8 +403,10 @@ tick after reconnect. The destination row shows "Reconnect needed" with the reas
   refresh token kills the other's grant; if it does, delete our token without the Google revoke and record why), null `refresh_token_enc`, connection → `revoked`, archive
   the destination row, and **purge stored YouTube data now**: broadcast ids/titles, and every `fixtures.stream_url`
   pointing at that channel's videos (DP III.E.4: 7 days; doing it inline satisfies it).
-- Revoked on Google's side (discovered as `invalid_grant`): connection stays `reconnect_needed`; after **30 days**
-  without reconnect, the same purge runs from the daily sweep.
+- Revoked on Google's side (discovered as `invalid_grant`): connection stays `reconnect_needed`; after **7 days**
+  without reconnect, the same purge runs from the daily sweep. *(PO ruling 2026-10-29, T19 fix round 1: DP III.D.2 gives 30 days
+  from the revocation, and the sweep finds a revocation up to a day later, so a 30-day wait after the flip could land past it. The
+  one constant is `YOUTUBE_DEAD_GRANT_PURGE_DAYS`.)*
 
 ### 6.9 UI (to be shown to the owner as 2+ options before building)
 

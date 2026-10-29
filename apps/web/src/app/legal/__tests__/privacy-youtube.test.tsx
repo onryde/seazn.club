@@ -10,8 +10,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 //
 // WHERE THE EXPECTED VALUES COME FROM. The three URLs are the policy's own literals (developers.google.com/youtube/terms/
 // developer-policies, re-read 2026-10-29): the rulebook, not our constants, so a constant that drifts from the policy reds here.
-// The day counts are read from the declarations in server/youtube/daily.ts (the one authority for the 30-day ceiling and the 25-day
-// re-confirmation), never typed into this file, so moving a constant moves the policy text's test with it.
+// The day counts are read from the declarations in server/youtube/daily.ts (the one authority for the 30-day ceiling, the 25-day
+// re-confirmation and the dead-grant purge window), never typed into this file, so moving a constant moves the policy text's test with it.
 //
 // The page is static English like the rest of /legal (the sibling tests pin its sentences the same way): no dictionary is involved.
 vi.mock("@/components/marketing-nav", () => ({ MarketingNav: () => null }));
@@ -34,6 +34,7 @@ const declaredDays = (name: string): number => {
 };
 const CEILING = declaredDays("YOUTUBE_DATA_CEILING_DAYS");
 const REFRESH = declaredDays("YOUTUBE_REFRESH_AFTER_DAYS");
+const DEAD = declaredDays("YOUTUBE_DEAD_GRANT_PURGE_DAYS");
 
 // ─── the page ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 const html = renderToStaticMarkup(<PrivacyPage />);
@@ -52,9 +53,11 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
     expect(yt, "the section with id=\"youtube-api-services\"").not.toBe("");
     expect(CEILING, "read from daily.ts").toBeGreaterThan(0);
     expect(REFRESH, "read from daily.ts").toBeGreaterThan(0);
-    // The two numbers are different facts: a page that said the ceiling twice could not be told from one that said both.
-    expect(REFRESH).not.toBe(CEILING);
+    expect(DEAD, "read from daily.ts").toBeGreaterThan(0);
+    // The three numbers are different facts: a page that said one twice could not be told from one that said both.
+    expect(new Set([REFRESH, CEILING, DEAD]).size, "three distinct windows").toBe(3);
     expect(REFRESH).toBeLessThan(CEILING);
+    expect(DEAD, "the dead-grant purge is sooner than the ceiling (DP III.D.2: counted from a revocation)").toBeLessThan(CEILING);
   });
 
   /** The seven things DP III.A.2 (with the override on disconnect) owes the page. Each is a predicate over the section; `ran` proves each
@@ -95,10 +98,15 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
       expect(checked).toBe(16);
       return missing;
     }],
-    ["says Disconnect deletes at once what was stored and asks Google to revoke", () =>
-      ["Disconnecting deletes at once everything we stored from YouTube", "refresh token", "stream keys", "replay links", "channel id and title", "asks Google to revoke"]
-        .filter((n) => !ytText.includes(n))
-        .concat(/\b(7|seven) (calendar )?days\b/i.test(ytText) ? ["NO mention of a 7-day purge: Disconnect deletes at once"] : [])],
+    ["says Disconnect deletes at once what was stored and asks Google to revoke", () => {
+      const disconnect = text(yt.match(/<p[^>]*><strong>Disconnecting and revoking access\.<\/strong>.*?<\/p>/)?.[0] ?? "");
+      return disconnect === ""
+        ? ["the Disconnecting paragraph"]
+        : ["Disconnecting deletes at once everything we stored from YouTube", "refresh token", "stream keys", "replay links", "channel id and title", "asks Google to revoke"]
+            .filter((n) => !disconnect.includes(n))
+            // Disconnect has no waiting period (the dead-grant purge below has one, so the section may say "7 days" - not THIS paragraph).
+            .concat(/\b(7|seven|\d+) (calendar )?days\b/i.test(disconnect) ? ["NO waiting period in the Disconnect paragraph: it deletes at once"] : []);
+    }],
     ["gives a contact for privacy questions and complaints (III.A.2.i)", () => ['href="mailto:privacy@seazn.club"'].filter((n) => !yt.includes(n))],
   ];
 
@@ -114,11 +122,11 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
 });
 
 describe("privacy — what the YouTube section says about the other halves of the lifecycle", () => {
-  it("a grant that stops working (revoked at Google) is deleted after the declared dead-grant window", () => {
-    // The window is the ceiling by declaration: guard the assumption instead of commenting it.
-    expect(dailySrc).toMatch(/export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = YOUTUBE_DATA_CEILING_DAYS;/);
-    expect(ytText).toContain(`not reconnected within ${CEILING} days`);
+  it("a grant that stops working (revoked at Google) is deleted after the DECLARED dead-grant window - not the ceiling's", () => {
+    expect(ytText).toContain(`not reconnected within ${DEAD} days`);
     expect(ytText).toContain("removed Seazn Club at Google");
+    // The negative pair: the window it replaced (the ceiling's) is not promised there.
+    expect(ytText).not.toContain(`not reconnected within ${CEILING} days`);
   });
 
   it("a private broadcast is not shown on public match pages; a replay link is shown to anyone who can open the page", () => {
