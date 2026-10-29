@@ -309,6 +309,8 @@ describe("standings export parity — hand-worked cells", () => {
     return m;
   };
   const cricket = () => {
+    // single-sport: cricket is the only sport whose cascade carries NRR, and the value below is the rulebook's own arithmetic
+    // (ICC / ECB 16.9.4(a)), hand-worked. The registry sweep above holds every sport's derived cells to the public table.
     const m = sport("cricket");
     return { m, doc: unpinnedRulesDoc({ module: m, kind: "league", divisionConfig: m.variants.t20 }) };
   };
@@ -328,6 +330,8 @@ describe("standings export parity — hand-worked cells", () => {
   });
 
   it("football: a goal count nobody recorded is '—', a RECORDED 0 stays the number 0 — the pair is asserted to be reached, not skipped", () => {
+    // single-sport: football's goals for / against / difference are the plain displayed counts (no derived value on them), so
+    // they are the hand-typed oracle for a recorded 0 against an unrecorded "—"; the sweep above covers every sport's cells.
     const m = sport("football");
     const doc = unpinnedRulesDoc({ module: m, kind: "league", divisionConfig: m.variants["11-a-side"] });
     const rows = [
@@ -347,6 +351,8 @@ describe("standings export parity — hand-worked cells", () => {
   });
 
   it("`#` is the stored place, not the row's position in the document (the public table's rankText): a table whose places are 1, 2, 2, 4 prints them", () => {
+    // single-sport: `#` reads the row's stored place, not the sport; football's plain league table is the simplest hand-built
+    // one to hand a gapped place to. The sweep above holds every sport's `#` to the public table.
     const m = sport("football");
     const doc = unpinnedRulesDoc({ module: m, kind: "league", divisionConfig: m.variants["11-a-side"] });
     const gf = (n: number) => ({ gf: n, ga: 1, gd: n - 1 });
@@ -361,6 +367,8 @@ describe("standings export parity — hand-worked cells", () => {
   });
 
   it("a metric under a declared number of decimals prints as the public formatMetric does: '3.0' (text), '12.5' (a number cell), '—' when unrecorded", () => {
+    // single-sport: no built-in sport declares metric decimals, so the specs are handed in (below) and the sport only supplies
+    // a league cascade; generic's is the plainest and carries no metric of its own to confuse the columns.
     const m = sport("generic");
     const doc = unpinnedRulesDoc({ module: m, kind: "league", divisionConfig: m.variants.score });
     const specs: MetricSpecLike[] = [{ key: "for", label: "For", decimals: 1 }, { key: "against", label: "Against" }];
@@ -402,6 +410,8 @@ describe("standings export parity — hand-worked cells", () => {
     let checked = 0;
 
     // football: one unplayed team
+    // single-sport: football's plain count columns plus an unplayed team: the counts are numeric cells, the unrecorded GF/GA/GD
+    // string cells. (The sweep above covers every sport's cell TEXT; this reads the real sheet's cell TYPES.)
     const fm = sport("football");
     const fdoc = unpinnedRulesDoc({ module: fm, kind: "league", divisionConfig: fm.variants["11-a-side"] });
     const frows = [
@@ -431,6 +441,7 @@ describe("standings export parity — hand-worked cells", () => {
     }
 
     // cricket: NRR is derived text, '+1.000' and '—'
+    // single-sport: cricket is the only sport with an NRR column, the derived text the sheet must hold as a string.
     const cm = sport("cricket");
     const cdoc = unpinnedRulesDoc({ module: cm, kind: "league", divisionConfig: cm.variants.t20 });
     const crows = [
@@ -450,6 +461,8 @@ describe("standings export parity — hand-worked cells", () => {
     checked += 2;
 
     // chess: half-point Pts is text ("1½"), the count columns stay numeric
+    // single-sport: boardgame (chess) is the only sport whose points unit is "half" (the premise below asserts it), so the only
+    // sheet whose Pts is text by unit.
     const bm = sport("boardgame");
     const bdoc = unpinnedRulesDoc({ module: bm, kind: "swiss", divisionConfig: bm.variants.classical });
     const bl = tableLayoutFor(bdoc);
