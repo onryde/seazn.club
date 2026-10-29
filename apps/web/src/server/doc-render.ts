@@ -261,7 +261,7 @@ function tableGrid(doc: PDFKit.PDFDocument, table: DocTable, numeric = table.col
 const RANK_W = 28;
 const COUNT_ROOM = 2; // breathing room a count column keeps beyond its text and the cell's own insets
 const COUNT_MIN = 20; // no count column narrower than a two-digit number: P, W, D, L … are one letter over one digit
-const COUNT_CAP = 64; // what a cell's text may claim of a count column (a header's own measure always fits)
+export const COUNT_CAP = 64; // what a cell's text may claim of a count column (a header's own measure always fits)
 const TEAM_MIN = 120;
 
 function standingsGrid(doc: PDFKit.PDFDocument, table: DocTable): TableGrid | null {

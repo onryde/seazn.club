@@ -14,7 +14,7 @@ import { beforeAll, describe, expect, it } from "vitest";
 import PDFDocument from "pdfkit";
 import { buildParticipants, buildRoster, buildStandings, buildTimetable, type DocModel, type DocSection, type ExportStandingsRow } from "@seazn/engine/exports";
 import { FONT, registerFonts } from "../doc-theme";
-import { MARGIN, docModelToPdf } from "../doc-render";
+import { COUNT_CAP, MARGIN, docModelToPdf } from "../doc-render";
 import { pdfTextRuns, type PdfTextRun } from "../../../e2e/pdf-uris";
 import { useBrandFonts } from "./_sheet-fixtures";
 
@@ -132,14 +132,16 @@ describe("doc-render standings grid (parity item 5)", () => {
     expect(rightEdge(run), "and inside the page").toBeLessThanOrEqual(A4_PORTRAIT - MARGIN + 0.01);
   });
 
-  it("a runaway cell cannot take the page: a count column holding a 60-character text claims no more than a fifth of it, and Team keeps the rest", async () => {
+  it("a runaway cell cannot take the page: a count column holding a 60-character text is held to exactly the cap, the cap is under a fifth of the page, and Team keeps the rest", async () => {
     const RUNAWAY = "x".repeat(60);
     const model = standings(table(undefined, E.slice(0, 3), { rows: (n, i) => row(n, i, { metrics: { gf: 12, ga: 4, gd: RUNAWAY as unknown as number } }) }));
     const [head] = await headerRows(model);
     const gd = head!.find((r) => r.text === "GD")!;
     const prev = head![head!.indexOf(gd) - 1]!;
-    expect(rightEdge(gd) - rightEdge(prev), "premise: the runaway text is far wider than a fifth of the page").toBeLessThan(CONTENT / 5);
-    expect(measure(RUNAWAY, BODY_SIZE), "premise: the text itself is wider than the cap").toBeGreaterThan(CONTENT / 5);
+    expect(measure(RUNAWAY, BODY_SIZE), "premise: the text itself is far wider than the cap").toBeGreaterThan(COUNT_CAP * 2);
+    expect(measure("GD", HEADER_SIZE) + 2 * CELL_INSET, "premise: the header is narrower than the cap, so the cap is what binds").toBeLessThan(COUNT_CAP);
+    expect(rightEdge(gd) - rightEdge(prev), "the runaway column is exactly the cap wide").toBeCloseTo(COUNT_CAP, 1);
+    expect(COUNT_CAP, "and the cap is a small share of the page: under a fifth").toBeLessThan(CONTENT / 5);
     const team = head![1]!;
     expect(rightEdge(head![2]!) - (team.x - CELL_INSET), "Team still has its room: P's right edge less Team's left edge").toBeGreaterThan(CONTENT * 0.4);
   });

@@ -15,6 +15,7 @@
 // deltas the sport's own ledger keys name), and every stage's rules the loader's own pure mapping (`unpinnedRulesDoc`).
 // The expected derived values in the hand-worked cases are the rulebook's arithmetic (NRR: ICC / ECB 16.9.4(a)), typed
 // here, not read back from the engine.
+import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -44,7 +45,8 @@ import { formatMetric, type MetricSpecLike } from "@/lib/public-site";
 import { StandingsTable } from "@/components/public-site/standings-table";
 import { unpinnedRulesDoc } from "@/server/engine-db/__tests__/helpers/table-rules-doc";
 import { tableOrderOf } from "@/server/engine-db/table-rules";
-import { buildTableView, tableLayoutFor, type TableViewInput } from "@/server/public-site/standings-view";
+import { buildTableView, columnHeader, tableColumns, tableLayoutFor, type TableViewInput } from "@/server/public-site/standings-view";
+import { docModelToXlsx } from "../../doc-render";
 import { exportCell, standingsTableSections } from "../exports-standings";
 import { readPublicTable, type PublicTableRead } from "./_public-table-markup";
 
@@ -311,7 +313,7 @@ describe("standings export parity — hand-worked cells", () => {
     return { m, doc: unpinnedRulesDoc({ module: m, kind: "league", divisionConfig: m.variants.t20 }) };
   };
 
-  it("cricket: NRR follows Pts, '+1.000' for 120 off 20 overs against 100 off 20 (6 × 120/120 − 6 × 100/120), and a team with nothing counted prints '—' beside a recorded 0", () => {
+  it("cricket: NRR follows Pts, '+1.000' for 120 off 20 overs against 100 off 20 (6 × 120/120 − 6 × 100/120), and a team with nothing counted prints '—'", () => {
     const { m, doc } = cricket();
     const rows = [
       rowOf("A", 1, { metrics: { runs_for: 120, balls_faced_eff: 120, runs_against: 100, balls_bowled_eff: 120, ties: 0 }, points: 2 }),
@@ -323,12 +325,39 @@ describe("standings export parity — hand-worked cells", () => {
     const pts = table.columns.indexOf(en["table.abbr.points"]);
     expect(table.rows[0]![pts + 1], "Ash: +1.000").toBe("+1.000");
     expect(table.rows[1]![pts + 1], "Dogwood: nothing counted").toBe(DASH);
-    // the recorded 0 stays a number (ties: 0 is a count), the unrecorded one is the dash — never 0
-    const tiesAt = table.columns.indexOf(en["table.abbr.ties" as keyof typeof en] ?? "ties");
-    if (tiesAt >= 0) {
-      expect(table.rows[0]![tiesAt], "recorded 0").toBe(0);
-      expect(table.rows[1]![tiesAt], "unrecorded").toBe(DASH);
-    }
+  });
+
+  it("football: a goal count nobody recorded is '—', a RECORDED 0 stays the number 0 — the pair is asserted to be reached, not skipped", () => {
+    const m = sport("football");
+    const doc = unpinnedRulesDoc({ module: m, kind: "league", divisionConfig: m.variants["11-a-side"] });
+    const rows = [
+      rowOf("A", 1, { played: 1, won: 1, lost: 0, points: 3, metrics: { gf: 2, ga: 0, gd: 2 } }),
+      rowOf("B", 2, { played: 1, won: 0, lost: 1, points: 0, metrics: { gf: 0, ga: 2, gd: -2 } }),
+      rowOf("D", 3, { played: 0, won: 0, lost: 0, points: 0, metrics: {} }),
+    ];
+    const table = exported(doc, m, rows, "en");
+    // the GF column, found by the PUBLIC selection and the public header (not by a hand-typed label that could miss)
+    const shown = tableColumns(m.metrics, tableOrderOf(doc), rows, tableLayoutFor(doc));
+    const gf = shown.find((c) => c.key === "gf");
+    expect(gf, "premise: the public table shows a GF column").toBeDefined();
+    const gfAt = table.columns.indexOf(columnHeader(gf!, msgOf("en")).abbr);
+    expect(gfAt, "premise: the export prints that column").toBeGreaterThan(1);
+    expect(table.rows.map((r) => r[gfAt]), "Ash: 2 (a number), Birch: a recorded 0 (the number 0), Dogwood: nothing recorded").toEqual([2, 0, DASH]);
+    expect(table.rows.map((r) => r[1 + 1]), "premise: P is a counted fact, 0 for Dogwood").toEqual([1, 1, 0]);
+  });
+
+  it("`#` is the stored place, not the row's position in the document (the public table's rankText): a table whose places are 1, 2, 2, 4 prints them", () => {
+    const m = sport("football");
+    const doc = unpinnedRulesDoc({ module: m, kind: "league", divisionConfig: m.variants["11-a-side"] });
+    const gf = (n: number) => ({ gf: n, ga: 1, gd: n - 1 });
+    const rows = [
+      rowOf("A", 1, { points: 6, metrics: gf(4) }), rowOf("B", 2, { points: 3, metrics: gf(2) }),
+      rowOf("C", 2, { points: 3, metrics: gf(2) }), rowOf("D", 4, { points: 0, metrics: gf(0) }),
+    ];
+    const table = exported(doc, m, rows, "en");
+    expect(table.columns[0], "premise: # is the first column").toBe("#");
+    expect(table.rows.map((r) => r[0]), "the stored places, in the document's order — never 1, 2, 3, 4").toEqual([1, 2, 2, 4]);
+    expect(table.rows.map((r) => r[1]), "premise: the order is the places' order").toEqual(["Ash", "Birch", "Cedar", "Dogwood"]);
   });
 
   it("a metric under a declared number of decimals prints as the public formatMetric does: '3.0' (text), '12.5' (a number cell), '—' when unrecorded", () => {
@@ -355,6 +384,93 @@ describe("standings export parity — hand-worked cells", () => {
     const table = buildStandings("S", [{ name: "Ash", played: 0, won: 0, drawn: 0, lost: 0, points: 0, metrics: {} }], { printedAt: PRINTED_AT, metricColumns: ["gf"] }).sections[0]!.table!;
     expect(String(table.rows[0]![6])).toBe(formatMetric(undefined));
     expect(formatMetric(undefined), "premise: the public cell for a value nobody recorded").toBe(DASH);
+  });
+
+  it("XLSX, read back from the real sheet: a whole count is a numeric cell; '—', a derived value and half-point Pts are string cells", async () => {
+    const sheetOf = async (sections: ReturnType<typeof standingsTableSections>) => {
+      const model = { ...buildStandings("Open — Standings", [], { printedAt: PRINTED_AT }), sections };
+      const book = new ExcelJS.Workbook();
+      await book.xlsx.load((await docModelToXlsx(model)) as never); // exceljs types `load` against an older Buffer
+      const sheet = book.worksheets[0]!;
+      let headerAt = -1;
+      sheet.eachRow((row, n) => { if (row.getCell(1).value === "#") headerAt = n; });
+      expect(headerAt, "premise: the table's header row is on the sheet").toBeGreaterThan(0);
+      return { sheet, headerAt };
+    };
+    // exceljs's ValueType is a plain name -> number object (Number 2, String 3 ...), not a reverse-mapped enum
+    const typeName = (v: unknown) => Object.entries(ExcelJS.ValueType).find(([, n]) => n === v)?.[0];
+    let checked = 0;
+
+    // football: one unplayed team
+    const fm = sport("football");
+    const fdoc = unpinnedRulesDoc({ module: fm, kind: "league", divisionConfig: fm.variants["11-a-side"] });
+    const frows = [
+      rowOf("A", 1, { played: 1, won: 1, lost: 0, points: 3, metrics: { gf: 2, ga: 0, gd: 2 } }),
+      rowOf("D", 2, { played: 0, won: 0, lost: 0, points: 0, metrics: {} }),
+    ];
+    const football = await sheetOf(standingsTableSections({
+      title: "Open — Standings", common: { printedAt: PRINTED_AT }, rows: frows, metricSpecs: fm.metrics, cascade: tableOrderOf(fdoc),
+      layout: tableLayoutFor(fdoc), nameOf: (id) => NAMES[id] ?? id, msg: (k) => t(en as unknown as Dict, k),
+    }));
+    const header = football.sheet.getRow(football.headerAt).values as unknown[];
+    const col = (label: string) => { const i = header.indexOf(label); expect(i, `${label} is a column of the sheet`).toBeGreaterThan(0); return i; };
+    const cell = (rowAt: number, label: string) => football.sheet.getRow(football.headerAt + rowAt).getCell(col(label));
+    for (const label of ["P", "W", "L", "GF", "GA", "GD", "Pts"]) {
+      expect(typeName(cell(1, label).type), `Ash ${label}: a count is a numeric cell`).toBe("Number");
+      checked++;
+    }
+    for (const label of ["P", "W", "L", "Pts"]) {
+      expect(typeName(cell(2, label).type), `Dogwood ${label}: a counted 0 is a numeric cell`).toBe("Number");
+      expect(cell(2, label).value).toBe(0);
+      checked++;
+    }
+    for (const label of ["GF", "GA", "GD"]) {
+      expect(typeName(cell(2, label).type), `Dogwood ${label}: nothing recorded is a string cell`).toBe("String");
+      expect(cell(2, label).value).toBe(DASH);
+      checked++;
+    }
+
+    // cricket: NRR is derived text, '+1.000' and '—'
+    const cm = sport("cricket");
+    const cdoc = unpinnedRulesDoc({ module: cm, kind: "league", divisionConfig: cm.variants.t20 });
+    const crows = [
+      rowOf("A", 1, { metrics: { runs_for: 120, balls_faced_eff: 120, runs_against: 100, balls_bowled_eff: 120, ties: 0 } }),
+      rowOf("D", 2, { played: 0, won: 0, lost: 0, points: 0, metrics: {} }),
+    ];
+    const cricket = await sheetOf(standingsTableSections({
+      title: "Open — Standings", common: { printedAt: PRINTED_AT }, rows: crows, metricSpecs: cm.metrics, cascade: tableOrderOf(cdoc),
+      layout: tableLayoutFor(cdoc), nameOf: (id) => NAMES[id] ?? id, msg: (k) => t(en as unknown as Dict, k),
+    }));
+    const cheader = cricket.sheet.getRow(cricket.headerAt).values as unknown[];
+    const nrrAt = cheader.indexOf("NRR");
+    expect(nrrAt, "NRR is a column of the sheet").toBeGreaterThan(0);
+    const nrr = [1, 2].map((n) => cricket.sheet.getRow(cricket.headerAt + n).getCell(nrrAt));
+    expect(nrr.map((c) => typeName(c.type)), "derived values are string cells").toEqual(["String", "String"]);
+    expect(nrr.map((c) => c.value)).toEqual(["+1.000", DASH]);
+    checked += 2;
+
+    // chess: half-point Pts is text ("1½"), the count columns stay numeric
+    const bm = sport("boardgame");
+    const bdoc = unpinnedRulesDoc({ module: bm, kind: "swiss", divisionConfig: bm.variants.classical });
+    const bl = tableLayoutFor(bdoc);
+    expect(bl.unit, "premise: a chess table counts half-points").toBe("half");
+    const brows = [
+      rowOf("A", 1, { played: 2, won: 1, drawn: 1, lost: 0, points: 3, metrics: {} }), // "1½"
+      rowOf("B", 2, { played: 2, won: 1, drawn: 0, lost: 1, points: 2, metrics: {} }), // "1": a whole number as TEXT, one type to the column
+    ];
+    const chess = await sheetOf(standingsTableSections({
+      title: "Open — Standings", common: { printedAt: PRINTED_AT }, rows: brows, metricSpecs: bm.metrics, cascade: tableOrderOf(bdoc),
+      layout: bl, nameOf: (id) => NAMES[id] ?? id, msg: (k) => t(en as unknown as Dict, k),
+    }));
+    const bheader = chess.sheet.getRow(chess.headerAt).values as unknown[];
+    const ptsAt = bheader.indexOf("Pts");
+    const pts = [1, 2].map((n) => chess.sheet.getRow(chess.headerAt + n).getCell(ptsAt));
+    expect(pts.map((c) => typeName(c.type)), "half-point Pts is a string cell, even where the text is a whole number").toEqual(["String", "String"]);
+    expect(pts.map((c) => c.value)).toEqual(["1½", "1"]);
+    expect(typeName(chess.sheet.getRow(chess.headerAt + 1).getCell(bheader.indexOf("P")).type), "P is numeric").toBe("Number");
+    checked += 3;
+
+    expect(checked, "anti-vacuity: sheet cells whose type was checked").toBe(7 + 4 + 3 + 2 + 3);
   });
 
   it("exportCell: a number only when printing it gives back the public text", () => {
