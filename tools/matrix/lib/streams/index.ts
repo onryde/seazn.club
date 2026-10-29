@@ -165,6 +165,12 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   const gen = STREAM_GENERATORS[req.sportKey];
   if (gen === undefined) throw new GeneratorUnsupported(req.sportKey, label, "no generator registered");
   const o = req.outcome;
+  // W2e G12 is Task 24's: the shape is typed (Task 19) so the vocabulary has one author, and nothing builds it yet.
+  if (o.kind === "sanctionEnd") throw new GeneratorUnsupported(req.sportKey, label, "a sanction ending (W2e G12) is Task 24's, and no generator builds it yet");
+  // W2e (F8): a path is built only by a generator that can witness it; any other would build a plain win under its name.
+  if (o.kind === "win" && o.path !== undefined && gen.pathWitness === undefined) {
+    throw new GeneratorUnsupported(req.sportKey, label, `its generator builds no deciding path (W2e Tasks 19–23 add each sport's), so '${o.path}' is not built as a plain win`);
+  }
   if (o.kind === "forfeit") {
     const play = o.at === "before_start" ? [] : partialPlay(req);
     // Ruling 113: a sport whose partial play holds nothing played cannot retire — named here, so a sweep reads it as the
@@ -216,22 +222,50 @@ export function levelReachable(sportKey: string, cfg: unknown, stageKind: Stream
 
 export type RequestMatch = "match" | "mismatch" | "unasserted";
 
+/** W2e G12 asked of matchesRequest before Task 24 gives it a meaning: an answer would be a guess, so it is refused. */
+export class SanctionEndUnmatched extends Error {
+  constructor(sportKey: string, label: string) {
+    super(`streams: matchesRequest cannot judge ${sportKey} '${label}' — a sanction ending (W2e G12) is Task 24's to build and to match`);
+    this.name = "SanctionEndUnmatched";
+  }
+}
+
 /** Did the folded outcome equal the requested one? Abandon is RECORDED, not
- *  asserted (its per-sport meaning is W2's rulebook, design §8). */
-export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null): RequestMatch {
+ *  asserted (its per-sport meaning is W2's rulebook, design §8). W2e: a win that
+ *  names a deciding `path` is judged on the fold's STATE too (`state`, the
+ *  foldStream state of the same stream), by the sport generator's own
+ *  `pathWitness`; a path request handed no state is refused by name. */
+export function matchesRequest(req: StreamRequest, outcome: MatchOutcome | null, state?: unknown): RequestMatch {
   const o = req.outcome;
+  if (o.kind === "sanctionEnd") throw new SanctionEndUnmatched(req.sportKey, outcomeLabel(o));
   if (o.kind === "abandon") return "unasserted";
   if (outcome === null) return "mismatch";
-  // W2a: a level request must fold level; a settle must fold to ITS winner by ITS method (X-ST-1: the method is
-  // recorded as settled_<method>); a tie-break must fold to ITS winner on ITS rung (BG-KO-1).
-  if (o.kind === "level") return isLevelOutcome(outcome) ? "match" : "mismatch";
-  if (o.kind === "settle") return outcome.kind === "win" && outcome.winner === idOf(req, o.then) && outcome.method === `settled_${o.method}` ? "match" : "mismatch";
-  if (o.kind === "tiebreak") return outcome.kind === "win" && outcome.winner === idOf(req, o.winner) && outcome.method === `tiebreak_${o.rung}` ? "match" : "mismatch";
-  if (o.kind === "draw") return outcome.kind === "draw" ? "match" : "mismatch";
-  if (o.kind === "tie") return outcome.kind === "tie" ? "match" : "mismatch";
-  if (o.kind === "win") return outcome.kind === "win" && outcome.winner === idOf(req, o.winner) ? "match" : "mismatch";
-  if (o.kind === "double_walkover") return outcome.kind === "double_walkover" ? "match" : "mismatch";
-  // W2b (D2): a forfeit folds to an AWARD to the other side, carrying the reason asked (X-RS-1).
-  const beneficiary = idOf(req, o.by === "home" ? "away" : "home");
-  return outcome.kind === "award" && outcome.winner === beneficiary && (outcome as { reason?: unknown }).reason === o.reason ? "match" : "mismatch";
+  switch (o.kind) {
+    // W2a: a level request must fold level; a settle must fold to ITS winner by ITS method (X-ST-1: the method is
+    // recorded as settled_<method>); a tie-break must fold to ITS winner on ITS rung (BG-KO-1).
+    case "level": return isLevelOutcome(outcome) ? "match" : "mismatch";
+    case "settle": return outcome.kind === "win" && outcome.winner === idOf(req, o.then) && outcome.method === `settled_${o.method}` ? "match" : "mismatch";
+    case "tiebreak": return outcome.kind === "win" && outcome.winner === idOf(req, o.winner) && outcome.method === `tiebreak_${o.rung}` ? "match" : "mismatch";
+    case "draw": return outcome.kind === "draw" ? "match" : "mismatch";
+    case "tie": return outcome.kind === "tie" ? "match" : "mismatch";
+    case "win": {
+      if (outcome.kind !== "win" || outcome.winner !== idOf(req, o.winner)) return "mismatch";
+      if (o.path === undefined) return "match";
+      // W2e (F8): the path is the ENGINE's fact about the fold, read by the generator that built it.
+      if (state === undefined) throw new Error(`streams: ${req.sportKey} path '${o.path}' is witnessed on the folded state, and matchesRequest was handed none (pass foldStream(...).state)`);
+      const gen = STREAM_GENERATORS[req.sportKey];
+      if (gen?.pathWitness === undefined) throw new GeneratorUnsupported(req.sportKey, outcomeLabel(o), "its generator builds no deciding path, so none can be witnessed");
+      return gen.pathWitness(o.path, { outcome, state, cfg: req.cfg }) ? "match" : "mismatch";
+    }
+    case "double_walkover": return outcome.kind === "double_walkover" ? "match" : "mismatch";
+    case "forfeit": {
+      // W2b (D2): a forfeit folds to an AWARD to the other side, carrying the reason asked (X-RS-1).
+      const beneficiary = idOf(req, o.by === "home" ? "away" : "home");
+      return outcome.kind === "award" && outcome.winner === beneficiary && (outcome as { reason?: unknown }).reason === o.reason ? "match" : "mismatch";
+    }
+    default: {
+      const unhandled: never = o;
+      throw new Error(`streams: matchesRequest has no arm for ${JSON.stringify(unhandled)}`);
+    }
+  }
 }

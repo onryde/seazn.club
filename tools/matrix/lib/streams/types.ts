@@ -1,7 +1,17 @@
-import type { SETTLE_METHODS, StageKind } from "@seazn/engine/core";
+import type { MatchOutcome, SETTLE_METHODS, StageKind } from "@seazn/engine/core";
 import type { TIEBREAK_RUNGS } from "@seazn/engine/sports/boardgame";
 
 export type Side = "home" | "away";
+
+/** W2e (Tasks 19–23, spec §10, G1–G8): how a won match was DECIDED, as a request names it — the deciding path a sport's
+ *  generator builds a win down (football's extra time and shoot-out; the period kernel's overtime, shoot-out and GWS;
+ *  cricket's super over and DLS; a set sport's deciding set and its cap; tennis's tie-break set and short-set tie-break).
+ *  One closed list for every task, so the label and the sweeps read one vocabulary; a generator builds the ones its sport
+ *  has (`SportStreamGenerator.pathWitness`). */
+export const DECIDING_PATHS = Object.freeze([
+  "extraTime", "shootout", "overtime", "gws", "superOver", "dls", "decidingSet", "cap", "tiebreakSet", "shortSetTb",
+] as const);
+export type DecidingPath = (typeof DECIDING_PATHS)[number];
 
 /** W2a: the organiser's three ways to close a match no play decided (engine core, X-ST-1). */
 export type SettleMethod = (typeof SETTLE_METHODS)[number];
@@ -21,7 +31,9 @@ export type ForfeitAt = "before_start" | "after_start";
 export const NATURAL_FORFEIT_AT: Readonly<Record<ForfeitReason, ForfeitAt>> = Object.freeze({ walkover: "before_start", withdrew: "before_start", retired: "after_start", disqualified: "after_start" });
 
 export type RequestedOutcome =
-  | { readonly kind: "win"; readonly winner: Side }
+  /** `path` (W2e, Tasks 19–23): the win is DECIDED down that path (extra time, a shoot-out, a super over, a set cap...),
+   *  checked on the fold by the generator's own `pathWitness`. Absent = a win by any path, byte for byte the W1 request. */
+  | { readonly kind: "win"; readonly winner: Side; readonly path?: DecidingPath }
   | { readonly kind: "draw" }
   /** W2b: `by` is the side that forfeits; `at` is when (see ForfeitAt). */
   | { readonly kind: "forfeit"; readonly by: Side; readonly reason: ForfeitReason; readonly at: ForfeitAt }
@@ -48,7 +60,12 @@ export type RequestedOutcome =
    *  derives who advances; `winner` is the side that does, and is Black either way (a drawn Armageddon advances Black).
    *  `result` picks how the Armageddon ended: "black" (Black won, the default) or "draw"; it means nothing on rapid or
    *  blitz, so naming it there is a refusal. */
-  | { readonly kind: "tiebreak"; readonly rung: TiebreakRung; readonly winner: Side; readonly result?: "black" | "draw" };
+  | { readonly kind: "tiebreak"; readonly rung: TiebreakRung; readonly winner: Side; readonly result?: "black" | "draw" }
+  /** W2e G12 (Task 24 builds and matches it; typed here by Task 19 so the vocabulary has one author): `by` is the side
+   *  given a sanction of `level` (the module's own sanction-level name) that ENDS the match, recorded after START and some
+   *  play, then the forfeit that ends it — an award to the other side. Partial play comes from `partialPlay`, so there is
+   *  no "when" field (preflight D-3). Until Task 24, generateStream refuses it by name and matchesRequest throws. */
+  | { readonly kind: "sanctionEnd"; readonly by: Side; readonly level: string };
 
 export type DecidedOutcome = Extract<RequestedOutcome, { kind: "win" | "draw" }>;
 
@@ -64,7 +81,8 @@ export const ALL_OUTCOMES: readonly RequestedOutcome[] = Object.freeze([
 
 export function outcomeLabel(o: RequestedOutcome): string {
   switch (o.kind) {
-    case "win": return `win-${o.winner}`;
+    // W2e: a path win names its path; a win that names none is W1's label, byte for byte (committed case ids).
+    case "win": return `win-${o.winner}${o.path === undefined ? "" : `-${o.path}`}`;
     case "draw": return "draw";
     // The two labels W1 shipped stay byte-identical (a walkover before start, a retirement after it); any other
     // phase is named in the label.
@@ -75,6 +93,7 @@ export function outcomeLabel(o: RequestedOutcome): string {
     case "level": return "level";
     case "settle": return `settle-${o.then}-${o.method}-after-${o.after}`;
     case "tiebreak": return `tiebreak-${o.rung}-${o.winner}`;
+    case "sanctionEnd": return `sanction-${o.by}-${o.level}`;
   }
 }
 
@@ -113,6 +132,21 @@ export interface SportStreamGenerator {
    *  the sport can score one short of a result. Empty where it cannot (chess: the game is its result). generateStream
    *  folds `[START, ...partial]` and refuses one that decides. */
   partial(req: StreamRequest): StreamEvent[];
+  /** W2e (Task 19, preflight F8): did the folded match end down `path`? Read from the ENGINE's own facts about the fold
+   *  — football: `decidedInFor` over the module's win-method table; a set sport: its folded set scores; cricket: the
+   *  outcome's method or the super-over innings — never from the stream the generator built. matchesRequest asks it after
+   *  the winner matched. Present exactly when `decided` builds paths: generateStream refuses a path request to a generator
+   *  that declares none (GeneratorUnsupported), so no path is ever built as a plain win, and `decided` itself refuses
+   *  (OutcomeUnreachable) a path its sport has no rule for, or one the request's cfg does not switch on. */
+  pathWitness?(path: DecidingPath, fold: PathFold): boolean;
+}
+
+/** W2e (Task 19, preflight F8): what a path witness reads — the STRICT fold (lib/fold.ts `foldStream`) of the stream as
+ *  posted, and the cfg it was folded under. `outcome` is the win matchesRequest already matched to the requested winner. */
+export interface PathFold {
+  readonly outcome: MatchOutcome;
+  readonly state: unknown;
+  readonly cfg: unknown;
 }
 
 /** First in every stream that plays. A walkover and a double walkover are recorded BEFORE it (W2b D3: the phase guard

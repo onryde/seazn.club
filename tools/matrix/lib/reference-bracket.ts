@@ -98,6 +98,14 @@ export class LevelKindUnread extends Error {
   }
 }
 
+/** W2e G12 reached the bracket oracle before Task 24 wrote its row. */
+export class SanctionEndUnjudged extends Error {
+  constructor(sport: string, why: string) {
+    super(`reference-bracket: ${sport} sanctionEnd — ${why}`);
+    this.name = "SanctionEndUnjudged";
+  }
+}
+
 /** The harness's own stream before its forfeit could not be read as a play the oracle has a row for. */
 export class ForfeitPlayUnread extends Error {
   constructor(sport: string, why: string) {
@@ -118,11 +126,13 @@ const isLevelKind = (k: string | undefined): k is LevelKind => k !== undefined &
  *  stream's first result carries as `winner: null` (under the bracket cfg the fold holds it in phase tiebreak, with no
  *  outcome to read). A request that plays no level result is null. */
 export function levelKindOf(sport: string, cfg: unknown, home: string, away: string, asked: RequestedOutcome, events: readonly StreamEvent[]): LevelKind | null {
+  // W2e G12: a sanction that ends the match (sanctionEnd) ends it in an award, never level (Task 24 drives it).
   switch (asked.kind) {
     case "win":
     case "forfeit":
     case "double_walkover":
     case "abandon":
+    case "sanctionEnd":
       return null;
     case "draw":
     case "tie":
@@ -198,6 +208,10 @@ export function bracketCaseOf(d: BracketDrive): BracketCase | { readonly notJudg
       if (a.kind === "double_walkover" && d.next.line === "unresolved") return { notJudged: `double_walkover: whether ${d.fixtureId} feeds a next match could not be read (${d.next.why})` };
       return { ...base, play: d.forfeitPlay, actions: [forfeit], ...(d.next.line === "unresolved" ? {} : { hasNextMatch: d.next.line === "next" }) };
     }
+    // W2e G12: the oracle's row for a sanction ending is Task 24's to write; until then a drive asking one is refused by
+    // name, never judged as some other case.
+    case "sanctionEnd":
+      throw new SanctionEndUnjudged(d.sport, `${d.fixtureId}: a sanction ending (W2e G12) has no bracket-finish row until Task 24`);
   }
 }
 

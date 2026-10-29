@@ -28,7 +28,7 @@ import { ARMAGEDDON, BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, BOARDGAME_TIEBREAK, 
 import { CARROM_BOARD, CARROM_BOARD_TILE, CARROM_COIN_MAX, carromPad } from "../lib/pads/carrom.ts";
 import { CRICKET_OVER_TILE, CRICKET_SUMMARY, cricketPad, makeCricketPad, overSplit } from "../lib/pads/cricket.ts";
 import { BADMINTON_SET_SCORE_TILE, BADMINTON_SUMMARY, badmintonPad } from "../lib/pads/badminton.ts";
-import { FOOTBALL_GOAL, FOOTBALL_PERIOD, FOOTBALL_PERIOD_TILE, footballGoalTile, footballPad } from "../lib/pads/football.ts";
+import { FOOTBALL_GOAL, FOOTBALL_KICK_MISSED, FOOTBALL_KICK_SCORED, FOOTBALL_PERIOD, FOOTBALL_PERIOD_TILE, FOOTBALL_SHOOTOUT_KICK, footballGoalTile, footballKickTile, footballPad } from "../lib/pads/football.ts";
 import { GENERIC_DRAW_TILE_ID, genericPad } from "../lib/pads/generic.ts";
 import { hockeyPad } from "../lib/pads/hockey.ts";
 import { icehockeyPad } from "../lib/pads/icehockey.ts";
@@ -43,7 +43,7 @@ import { replayOnModel, type RowIn } from "./pad-model.ts";
 import { drawsAllowed, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { declaredAllOut } from "../lib/streams/cricket.ts";
 import { generateStream, matchesRequest } from "../lib/streams/index.ts";
-import { GeneratorUnsupported, OutcomeUnreachable, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
+import { DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -84,10 +84,16 @@ function bracketOutcomesFor(): RequestedOutcome[] {
   ];
 }
 
+/** W2e (Tasks 19–23): a win down every deciding path, by both sides. A sport's generator builds the paths its sport
+ *  has (a request for any other is refused by name, so it routes nothing); the events a built one carries (football's
+ *  extra-time markers and shoot-out kicks) join the adapter's `emits` and its routes like any other. */
+const pathWins = (): RequestedOutcome[] => DECIDING_PATHS.flatMap((path) => (["home", "away"] as const).map((winner) => ({ kind: "win", winner, path }) as const));
+
 /** Every request over every system variant of `sport` in a LEAGUE, then (W2a) the bracket requests on the builder
- *  default under the knockout overlay. The builder default (offlineBuilderDefault, pinned to division-builder.tsx by
- *  catalogue.test.ts) comes first, and it is what PADPROOF plays. Since W1d item 16 cricket's two innings a side (the
- *  `test` preset) are inside the pad's route like any other. */
+ *  default under the knockout overlay, then (W2e) a win down every deciding path on each variant's knockout overlay —
+ *  the presets switch the deciders on there (X-SR-6). The builder default (offlineBuilderDefault, pinned to
+ *  division-builder.tsx by catalogue.test.ts) comes first, and it is what PADPROOF plays. Since W1d item 16 cricket's
+ *  two innings a side (the `test` preset) are inside the pad's route like any other. */
 function requestsFor(sport: string): StreamRequest[] {
   const def = offlineBuilderDefault(sport);
   const variants = [def, ...variantKeys(sport).filter((v) => v !== def)];
@@ -96,7 +102,11 @@ function requestsFor(sport: string): StreamRequest[] {
     return outcomesFor(sport, cfg).map((o) => req(sport, cfg, o));
   });
   const cfg = stageCfg(sport, resolveSportCfg(sport, def), "knockout", def);
-  return [...league, ...bracketOutcomesFor().map((o) => bracketReq(sport, cfg, o))];
+  const paths = variants.flatMap((v) => {
+    const ko = stageCfg(sport, resolveSportCfg(sport, v), "knockout", v);
+    return pathWins().map((o) => bracketReq(sport, ko, o));
+  });
+  return [...league, ...bracketOutcomesFor().map((o) => bracketReq(sport, cfg, o)), ...paths];
 }
 /** The events a request generates, or [] where the generator declares the case unsupported. */
 function streamOf(r: StreamRequest): StreamEvent[] {
@@ -548,12 +558,17 @@ const CHOICE_ID = /^\[data-choice-option-id="([^"]+)"\]$/;
 
 /** football as Step 0 saw it (2026-09-30, 320, 11-a-side): Start writes
  *  core.start; a goal tile writes `{by}` alone; the period tile then a marker
- *  choice writes `{phase: <the choice's id>}`. Anything else writes nothing. */
+ *  choice writes `{phase: <the choice's id>}`. W2e (Task 19, read off the skin's
+ *  source — no browser saw it yet): a side's kick tile then the Scored / Missed
+ *  choice writes `{by, scored}` (football.tsx kickSheet's buildPayload). Anything
+ *  else writes nothing. */
 function footballModel(ctx: TapAdapterContext, goal: (side: "home" | "away") => unknown = (side) => ({ by: ctx.entrants[side] })) {
   return (taps: readonly string[]): RowIn[] => {
     if (taps.length === 1 && taps[0] === START_SEL) return [{ type: "core.start", payload: {} }];
     for (const side of ["home", "away"] as const) {
       if (taps.length === 1 && taps[0] === TILE(`goal-${side}`)) return [{ type: "football.goal", payload: goal(side) }];
+      const kick = taps.length === 2 && taps[0] === TILE(`kick-${side}`) ? CHOICE_ID.exec(taps[1]!) : null;
+      if (kick !== null && (kick[1] === "scored" || kick[1] === "missed")) return [{ type: "football.shootout.kick", payload: { by: ctx.entrants[side], scored: kick[1] === "scored" } }];
     }
     const m = taps.length === 2 && taps[0] === TILE("period") ? CHOICE_ID.exec(taps[1]!) : null;
     return m === null ? [] : [{ type: "football.period", payload: { phase: m[1] } }];
@@ -742,6 +757,63 @@ describe("football", () => {
     expect(skin).toContain("buildPayload: (answers) => ({ phase: answers.marker }),");
     expect(sportModule("football")).toBe(football);
     expect(Object.keys(football.eventSchemas ?? {})).toEqual(expect.arrayContaining([FOOTBALL_GOAL, FOOTBALL_PERIOD]));
+  });
+
+  it("W2e G1 G2: a win down extra time and down the shoot-out, every variant's knockout, both winners, replays on the fake ledger — the ET markers through the period sheet, each kick its side's kick tile then Scored / Missed, no finding — and the stored rows fold to the requested path", async () => {
+    let cases = 0;
+    let kicks = 0;
+    let etMarkers = 0;
+    for (const v of variantKeys("football")) {
+      const cfg = stageCfg("football", resolveSportCfg("football", v), "knockout", v);
+      for (const path of ["extraTime", "shootout"] as const) for (const winner of ["home", "away"] as const) {
+        const at = `${v} ${path} ${winner}`;
+        const r = bracketReq("football", cfg, { kind: "win", winner, path });
+        const evs = generateStream(r);
+        const { res, ledger } = await replayOnModel(footballPad, evs, ctxOf(r), footballModel(ctxOf(r)));
+        expect(res.findings, at).toEqual([]);
+        expect(res.rows.map((x) => x.expected.type), at).toEqual(evs.map((e) => e.type));
+        for (const row of res.rows) expect(row.verdict, `${at} ${row.expected.type}`).toBe(row.expected.type === FOOTBALL_GOAL ? "fallback" : "equal");
+        kicks += res.rows.filter((x) => x.expected.type === FOOTBALL_SHOOTOUT_KICK).length;
+        etMarkers += res.rows.filter((x) => x.expected.type === FOOTBALL_PERIOD && String((x.expected.payload as { phase: string }).phase).startsWith("ET_")).length;
+        const folded = foldStream(football, cfg, HOME, AWAY, asEvents(ledger));
+        expect(matchesRequest(r, folded.outcome, folded.state), at).toBe("match");
+        cases++;
+      }
+    }
+    console.info(`pad-adapters: football W2e: ${cases} path win(s) replayed, ${kicks} kick(s) and ${etMarkers} extra-time marker(s) routed`);
+    expect(cases).toBe(variantKeys("football").length * 4);
+    expect(kicks).toBeGreaterThan(0);
+    expect(etMarkers).toBeGreaterThan(0);
+  });
+
+  it("W2e G2 routes: a kick is its side's kick tile then the Scored or Missed choice; a kick off the sheet's {by, scored} shape, or by no entrant of the fixture, is refused by name", () => {
+    const { r } = summariesOf("football", FOOTBALL_GOAL, "home");
+    const ctx = ctxOf(r);
+    let checked = 0;
+    for (const side of ["home", "away"] as const) for (const scored of [true, false]) {
+      expect(footballPad.stepsFor({ type: FOOTBALL_SHOOTOUT_KICK, payload: { by: ctx.entrants[side], scored } }, ctx), `${side} ${scored}`)
+        .toEqual([{ kind: "tile", tileId: footballKickTile(side) }, { kind: "choice", optionId: scored ? FOOTBALL_KICK_SCORED : FOOTBALL_KICK_MISSED }]);
+      checked++;
+    }
+    expect(checked).toBe(4);
+    for (const payload of [null, {}, { by: "stranger", scored: true }, { by: HOME }, { by: HOME, scored: "yes" }, { by: HOME, scored: true, person: "p1" }] as unknown[]) {
+      expect(() => footballPad.stepsFor({ type: FOOTBALL_SHOOTOUT_KICK, payload }, ctx), JSON.stringify(payload)).toThrow(/football\.shootout\.kick payload .* is not the kick sheet's \{by: one of the fixture's entrants, scored: true or false\}/);
+    }
+  });
+
+  it("W2e G2 pins: each side's kick tile is `kick-<side>` under the shoot-out offer, gated by the engine's own next kicker, and opens a one-step Scored / Missed sheet that writes {by, scored}", () => {
+    expect(footballKickTile("home")).toBe("kick-home");
+    expect(footballKickTile("away")).toBe("kick-away");
+    expect(skin).toMatch(/export function kickSheetKey\(side: Side\): string \{\s*return `kick-\$\{side\}`;/);
+    expect(skin).toMatch(/if \(offerable\("football\.shootout\.kick"\)\) \{\s*const next = state\.shootout \? footballNextKicker\(state\.shootout\.kicks\) : null;\s*for \(const side of SIDES\) \{\s*tiles\.push\(\{\s*id: kickSheetKey\(side\),/);
+    expect(skin).toContain("action: { sheet: kickSheetKey(side) },");
+    expect(skin).toContain("for (const side of SIDES) sheets[kickSheetKey(side)] = kickSheet(view, side);");
+    const sheet = skin.slice(skin.indexOf("function kickSheet(view: PadHostView, side: Side): GuidedSheetSpec {"));
+    expect(sheet.length, "football.tsx no longer declares kickSheet").toBeLessThan(skin.length);
+    expect(sheet).toMatch(/^[\s\S]*?event: "football\.shootout\.kick",[\s\S]*?\{ id: "scored", [\s\S]*?\{ id: "missed", [\s\S]*?buildPayload: \(answers\) => \(\{ by, scored: answers\.outcome === "scored" \}\),/);
+    expect([FOOTBALL_KICK_SCORED, FOOTBALL_KICK_MISSED]).toEqual(["scored", "missed"]);
+    expect(Object.keys(football.eventSchemas ?? {})).toContain(FOOTBALL_SHOOTOUT_KICK);
+    expect(footballPad.emits).toContain(FOOTBALL_SHOOTOUT_KICK);
   });
 });
 

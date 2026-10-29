@@ -653,9 +653,11 @@ export async function decideFixture(ctx: ScenarioContext, rec: Recorder, setup: 
     return;
   }
   const m = sportModule(ctx.spec.sport);
-  const folded = foldStream(m, cfg, home, away, whole).outcome;
-  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked }, folded);
-  rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(folded), product: productOutcome, foreign: 0, finishedBefore: null, request });
+  // W2e: the fold's state goes with its outcome, so a win asked down a deciding path is judged by the sport's own
+  // witness (streams matchesRequest), not taken as any win.
+  const folded = foldStream(m, cfg, home, away, whole);
+  const request = matchesRequest({ sportKey: ctx.spec.sport, cfg, stageKind: stage.kind as StageKind, home, away, outcome: asked }, folded.outcome, folded.state);
+  rec.parity.push({ fixtureId: f.id, local: toObservedOutcome(folded.outcome), product: productOutcome, foreign: 0, finishedBefore: null, request });
   const dp = declaredPoints(m, cfg, stageCtx(stage.kind, f), home, away, whole);
   if (dp !== null) rec.declared.set(f.id, { home: dp.home, away: dp.away, forOutcome: toObservedOutcome(dp.forOutcome)! });
 }
