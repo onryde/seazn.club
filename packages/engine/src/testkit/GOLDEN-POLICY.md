@@ -822,7 +822,7 @@ Branch streams carry `seed` in `[BRANCH_SEED_BASE, FLOOR_SEED_STRIDE)` (90001
 and up): above every generator seed, below the floor's stride, so the floor's
 reproduction and keep-rule never count them. They are appended streams, so they
 owe no version bump. They add configs, appended at the end of `configs`; no
-existing stream or config changes. The thirteen stories today: football
+existing stream or config changes. The fourteen stories today: football
 `shootoutAttempts` (and its sudden-death arm), hockey `q4_stands`, carrom and
 generic `share`, the `award` abandon with a withdrawal's expunge for football,
 hockey and ice hockey, football's level (draw) arm, ice hockey's level
@@ -840,7 +840,10 @@ plays a tie-break point by point about never within `WALK_MAX`, so these two
 builders step the FOLD instead (`stepFold`): every event is folded strictly
 from the state the kernel holds, the winners kept level up to the score the
 rule is about and then one side's. No score line is typed: the fold decides
-when the set, the tie-break and the match end. Five verdicts (the two award expunge arms, the
+when the set, the tie-break and the match end. The fourteenth story (W2e batch
+A1 M-4) records the Fast4 the product ships, `fast4#90014`: the set tie-break
+opens at THREE games all and closes 5–4 on a played point, under a `fast4`
+config equal to the variant (the pre-W2e shape, margin two, is `fast4-legacy`). Five verdicts (the two award expunge arms, the
 4th quarter, the flagged level award `reachesLevelAwardFlagged` and the football
 level draw `reachesAwardLevelDraw`) carry no replay differential: an abandon is
 applied only to a match still in play, so a ledger that ends on one and holds a

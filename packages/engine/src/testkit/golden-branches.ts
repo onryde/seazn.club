@@ -241,16 +241,11 @@ function reachesShortSetDecidingPointPlayed(r: Recorded): string | null {
 /** tennis Fast4 (W2e TN-SS-2, batch A1 review M-4; ITF App VI §1-2): the shipped `fast4` variant opens its set tie-break at THREE
  *  games all (4–3 in games), not at four like `short-sets`, and `reachesShortSetDecidingPointPlayed` is blind to the difference -
  *  it would accept a stream recorded at four all under a config that opens at three. So this verdict first asks the config for the
- *  three-all trigger, then the played close of the margin of one, then the closed set's games: 4–3. */
+ *  three-all trigger, then the played close of the margin of one. (The closed set's games, 4–3, follow from the trigger: a set that
+ *  closes on a tie-break closes at `tiebreakAt + 1` to `tiebreakAt`, so asking them too would be a guard nothing could kill.) */
 function reachesFast4DecidingPointPlayed(r: Recorded): string | null {
   if (obj(obj(r.raw).set).tiebreakAt !== 3) return "its config does not open its tie-break at three games all";
-  const closed = reachesShortSetDecidingPointPlayed(r);
-  if (closed !== null) return closed;
-  const played = replay(r, r.raw);
-  if (typeof played === "string") return played;
-  const sets = Array.isArray(played.state.sets) ? (played.state.sets as unknown[]) : [];
-  if (!sets.some((s) => Math.max(Number(obj(s).home), Number(obj(s).away)) === 4 && Math.min(Number(obj(s).home), Number(obj(s).away)) === 3)) return "no set closes 4–3 in games";
-  return null;
+  return reachesShortSetDecidingPointPlayed(r);
 }
 
 /** tennis `finalSet` beside a set's own margin (W2e TN-SS-2; RBS:349, App VI §5): short sets, whose tie-break is won by one,
