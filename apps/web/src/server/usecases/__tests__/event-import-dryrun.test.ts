@@ -7,11 +7,16 @@ vi.mock("@/server/engine-db/fixture-cfg", async (importOriginal) => {
 });
 
 import { builtinModules } from "@seazn/engine/sports";
+import { boardgame, DECISIVE_METHODS, DRAWN_METHODS } from "@seazn/engine/sports/boardgame";
+import { carrom } from "@seazn/engine/sports/carrom";
+import { cricket } from "@seazn/engine/sports/cricket";
+import { tennis } from "@seazn/engine/sports/tennis";
 import { sql } from "@/lib/db";
 import { resolveFixtureCfg } from "@/server/engine-db/fixture-cfg";
 import { seedBracket } from "@/server/engine-db/__tests__/helpers/seed-bracket";
 import { invalidateOrgEntitlements } from "@/lib/entitlements";
-import { importEvents, IMPORT_CAPS } from "../event-import";
+import type { AuthCtx } from "@/server/api-v1/auth";
+import { importEvents, IMPORT_CAPS, type ImportStreamResult } from "../event-import";
 import {
   seedOrg,
   startedDivisionWithFixture,
@@ -176,6 +181,156 @@ describe.skipIf(!HAS_DB)("importEvents — guards and dry run", () => {
       checked++;
     }
     expect(checked).toBe(ends.length);
+  });
+
+  // Final review M-1 (W2e PR A; ledger carry T10 M3). The import is the second STRICT write path, so each refusal W2e added to
+  // the engine's strict fold reaches an importer by name: `import.fold_rejected` carrying the engine's own code, nothing
+  // written, and the same shape with a LEGAL value imported (the control that makes the refusal mean something). The cases
+  // below cover the four codes the case above does not (ENDING_SANCTION_PENDING is that one). Every refused value is built
+  // from the engine's own declarations (a variant's config, the engine's method lists) and the rulebook's rule, never typed.
+  //
+  // Which guard each case witnesses (mutation, final review M-1): `engineCode: err.code` in the envelope is witnessed by all four.
+  // The dry run's `strictFromSeq: 1` (event-import.ts:310) is witnessed on its own by the tennis and carrom cases, whose refused
+  // stream is UNDECIDED under a lenient fold (a lenient dry run then answers import.not_decided); a refused stream that a lenient
+  // fold DECIDES (a chase total past the winning run, a result with a contradicting method) is refused a second time by the
+  // append-time strict fold (append-event.ts, `strictFromSeq: candidate.seq`), in the same envelope, so the dry run's flag is not
+  // observable through those two - they witness the envelope and the append path, not :310.
+  type Ev = { type: string; payload: Record<string, unknown> };
+  const importOne = async (s: { auth: AuthCtx; divisionId: string }, fixtureId: string, importId: string, events: Ev[]): Promise<ImportStreamResult> =>
+    (await importEvents(s.auth, s.divisionId, { import_id: importId, streams: [{ fixture: { id: fixtureId }, events }] })).results[0]!;
+  const writtenCount = async (fixtureId: string): Promise<number> =>
+    (await sql<{ n: number }[]>`select count(*)::int as n from score_events where fixture_id = ${fixtureId}`)[0]!.n;
+  /** The refusal: rejected under `import.fold_rejected` with the engine's code, no event appended, nothing in the ledger. */
+  const expectFoldRefused = async (result: ImportStreamResult, fixtureId: string, engineCode: string, label: string): Promise<void> => {
+    expect(result, label).toMatchObject({ status: "rejected", eventsAppended: 0, error: { code: "import.fold_rejected", engineCode } });
+    expect(await writtenCount(fixtureId), `${label}: nothing written`).toBe(0);
+  };
+  /** The control: imported, every event of the stream in the ledger. */
+  const expectImported = async (result: ImportStreamResult, fixtureId: string, events: Ev[], label: string): Promise<void> => {
+    expect(result.error, `${label}: the legal stream is not refused`).toBeUndefined();
+    expect(result.status, `${label}: the legal stream is imported`).toBe("imported");
+    expect(await writtenCount(fixtureId), `${label}: every event of the stream is in the ledger`).toBe(events.length);
+  };
+
+  it("TN-SS-1 event import refuses a set score no set can reach: import.fold_rejected, SET_SCORE_UNREACHABLE, writes NOTHING; the legal score imports", async () => {
+    // single-sport: only tennis's nested kernel judges a games score (SET_SCORE_UNREACHABLE); the sweep is every variant tennis declares
+    // that plays a set tie-break (a set with none is an advantage set: no finished plain score is unreachable there).
+    const declared = Object.keys(tennis.variants).map((key) => ({ key, cfg: tennis.configSchema.parse(tennis.variants[key]) }));
+    const withTiebreak = declared.filter((v) => v.cfg.set.tiebreakAt !== null);
+    expect(withTiebreak.length, "tennis declares variants that play a set tie-break (zero = nothing checked)").toBeGreaterThan(0);
+    let checked = 0;
+    for (const { key, cfg } of withTiebreak) {
+      const { gamesTo, winBy } = cfg.set;
+      const tiebreakAt = cfg.set.tiebreakAt!;
+      // ITF Rule 6b / App VI: at tiebreakAt-all the next game is the tie-break, so a finished plain score never has the loser at
+      // tiebreakAt or more (RBS:343/345/346/350: 8-6 in a tie-break set, 5-3 at TB-3, 6-4 at TB-4 are impossible). The smallest
+      // such score: the loser at tiebreakAt, the winner a winBy lead ahead and at least gamesTo.
+      const refused = { winner: Math.max(gamesTo, tiebreakAt + winBy), loser: tiebreakAt };
+      // The legal plain final: gamesTo to gamesTo - winBy (6-4, 4-2).
+      const legal = { winner: gamesTo, loser: gamesTo - winBy };
+      expect(winBy, `${key}: premise, a lead of one would make the refused score the tie-break score itself`).toBeGreaterThan(1);
+      expect(legal.loser, `${key}: premise, the legal final sits below the tie-break entry`).toBeLessThan(tiebreakAt);
+      const s = await seedBracket({ sport: "tennis", variant: key, stageKind: "league", entrants: 2 });
+      const fixtureId = s.fixtureIds[0]!;
+      const summary = (score: { winner: number; loser: number }): Ev => ({ type: "tennis.set_summary", payload: { home: score.winner, away: score.loser } });
+      const refusedStream: Ev[] = [{ type: "core.start", payload: {} }, summary(refused)];
+      await expectFoldRefused(await importOne(s, fixtureId, `imp-set-unreachable-${key}`, refusedStream), fixtureId, "SET_SCORE_UNREACHABLE", `${key} ${refused.winner}-${refused.loser}`);
+      // The control: the legal score in as many sets as win the match (a majority of the best of), by the same side.
+      const setsToWin = Math.ceil(cfg.bestOf / 2);
+      const legalStream: Ev[] = [{ type: "core.start", payload: {} }, ...Array.from({ length: setsToWin }, () => summary(legal))];
+      await expectImported(await importOne(s, fixtureId, `imp-set-reachable-${key}`, legalStream), fixtureId, legalStream, `${key} ${legal.winner}-${legal.loser}`);
+      checked++;
+    }
+    expect(checked).toBe(withTiebreak.length);
+  });
+
+  it("CK-CH-1 event import refuses a coarse chase total past the winning run: import.fold_rejected, CHASE_OVERSHOOT, writes NOTHING; the winning run itself imports", async () => {
+    // single-sport: a chase and its target exist only in cricket's innings model. The sweep is every variant cricket declares.
+    // The bound is the Laws' (ICC T20 World Cup 2026 Playing Conditions 16.5.1/16.5.3; RBS:433, RB2A-22): a chase ends AT the winning
+    // run, so from one run short the most one delivery adds is a no-ball (1) hit for six (6).
+    const NO_BALL = 1;
+    const SIX = 6;
+    const boundOf = (target: number): number => target - 1 + NO_BALL + SIX;
+    const variants = Object.keys(cricket.variants).map((key) => ({ key, cfg: cricket.configSchema.parse(cricket.variants[key]) }));
+    expect(variants.length, "cricket declares variants (zero = nothing checked)").toBeGreaterThan(0);
+    const summary = (runs: number, wickets: number, legalBalls: number): Ev => ({ type: "cricket.innings.summary", payload: { runs, wickets, legalBalls } });
+    let checked = 0;
+    for (const { key, cfg } of variants) {
+      // The innings before the chase, all out, and the target the Laws give the chase: one more than the other side's total
+      // (one innings a side), or one more than its aggregate lead (two a side: H 200 + 100 against A 150 first).
+      const quota = cfg.ballsPerInnings ?? 400;
+      const before: Ev[] = cfg.inningsPerSide === 1
+        ? [summary(99, 10, Math.min(60, quota))]
+        : [summary(200, 10, quota), summary(150, 10, quota), summary(100, 10, quota)];
+      const target = cfg.inningsPerSide === 1 ? 99 + 1 : 200 + 100 - 150 + 1;
+      const s = await seedBracket({ sport: "cricket", variant: key, stageKind: "league", entrants: 2 });
+      const fixtureId = s.fixtureIds[0]!;
+      const stream = (chaseRuns: number): Ev[] => [{ type: "core.start", payload: {} }, ...before, summary(chaseRuns, 2, 30)];
+      await expectFoldRefused(await importOne(s, fixtureId, `imp-chase-overshoot-${key}`, stream(boundOf(target) + 1)), fixtureId, "CHASE_OVERSHOOT", `${key} chase ${boundOf(target) + 1} of target ${target}`);
+      // The control: the winning run's own bound is a chase total the engine takes, and it ends the match.
+      await expectImported(await importOne(s, fixtureId, `imp-chase-at-bound-${key}`, stream(boundOf(target))), fixtureId, stream(boundOf(target)), `${key} chase ${boundOf(target)} of target ${target}`);
+      checked++;
+    }
+    expect(checked).toBe(variants.length);
+  });
+
+  it("BG-RS-1 event import refuses a result whose method contradicts its winner: import.fold_rejected, RESULT_METHOD_CONTRADICTS_WINNER, writes NOTHING; the agreeing result imports", async () => {
+    // single-sport: boardgame is the one sport whose result carries a method (the engine's DECISIVE_METHODS / DRAWN_METHODS, the
+    // pad's own partition of FIDE Laws 5.1, 5.2 and 9.2-9.6). `adjudication` is in both lists and is free either way.
+    const decisiveOnly = DECISIVE_METHODS.filter((m) => !(DRAWN_METHODS as readonly string[]).includes(m));
+    const drawnOnly = DRAWN_METHODS.filter((m) => !(DECISIVE_METHODS as readonly string[]).includes(m));
+    expect(decisiveOnly.length, "decisive-only methods (zero = nothing checked)").toBeGreaterThan(0);
+    expect(drawnOnly.length, "drawn-only methods (zero = nothing checked)").toBeGreaterThan(0);
+    // three fixtures: the refusals (which write nothing, so they share one) and one control per direction.
+    const s = await seedBracket({ sport: "boardgame", variant: Object.keys(boardgame.variants)[0]!, stageKind: "league", entrants: 3 });
+    const [refusals, decisiveControl, drawnControl] = s.fixtureIds as [string, string, string];
+    const [fx] = await sql<{ home: string }[]>`select home_entrant_id as home from fixtures where id = ${refusals}`;
+    const stream = (result: Record<string, unknown>): Ev[] => [{ type: "core.start", payload: {} }, { type: "boardgame.result", payload: result }];
+    let refused = 0;
+    for (const method of decisiveOnly) {
+      // a win-only method with no winner (null, and the key left out)
+      for (const result of [{ winner: null, method }, { method }]) {
+        await expectFoldRefused(await importOne(s, refusals, `imp-bg-${method}-${refused}`, stream(result)), refusals, "RESULT_METHOD_CONTRADICTS_WINNER", `${method} ${JSON.stringify(result)}`);
+        refused++;
+      }
+    }
+    for (const method of drawnOnly) {
+      // a draw-only method with a winner
+      await expectFoldRefused(await importOne(s, refusals, `imp-bg-${method}-${refused}`, stream({ winner: fx!.home, method })), refusals, "RESULT_METHOD_CONTRADICTS_WINNER", `${method} with a winner`);
+      refused++;
+    }
+    expect(refused, "refusals checked").toBe(decisiveOnly.length * 2 + drawnOnly.length);
+    // The controls: the agreeing shape of each direction imports.
+    const decisiveStream = stream({ winner: fx!.home, method: decisiveOnly[0]! });
+    await expectImported(await importOne(s, decisiveControl, "imp-bg-decisive-agrees", decisiveStream), decisiveControl, decisiveStream, `${decisiveOnly[0]} with a winner`);
+    const drawnStream = stream({ winner: null, method: drawnOnly[0]! });
+    await expectImported(await importOne(s, drawnControl, "imp-bg-drawn-agrees", drawnStream), drawnControl, drawnStream, `${drawnOnly[0]} without a winner`);
+  });
+
+  it("CA-AD-1 event import refuses a carrom adjustment past the game target: import.fold_rejected, ADJUST_OUT_OF_RANGE, writes NOTHING; the whole target imports", async () => {
+    // single-sport: carrom is the one sport with a score adjustment bounded by its game target (`gameTo`, ICF Law 56a). The sweep is
+    // every variant carrom declares, both directions of the adjustment (a credit past the target, a deduction past it).
+    const variants = Object.keys(carrom.variants).map((key) => ({ key, cfg: carrom.configSchema.parse(carrom.variants[key]) }));
+    expect(variants.length, "carrom declares variants (zero = nothing checked)").toBeGreaterThan(0);
+    let checked = 0;
+    for (const { key, cfg } of variants) {
+      const g = cfg.gameTo;
+      const s = await seedBracket({ sport: "carrom", variant: key, stageKind: "league", entrants: 2 });
+      const fixtureId = s.fixtureIds[0]!;
+      const [fx] = await sql<{ home: string }[]>`select home_entrant_id as home from fixtures where id = ${fixtureId}`;
+      const adjust = (delta: number): Ev => ({ type: "carrom.game.adjust", payload: { entrantId: fx!.home, delta, reason: "foul" } });
+      for (const delta of [g + 1, -(g + 1)]) {
+        const stream: Ev[] = [{ type: "core.start", payload: {} }, adjust(delta)];
+        await expectFoldRefused(await importOne(s, fixtureId, `imp-adjust-${key}-${delta}`, stream), fixtureId, "ADJUST_OUT_OF_RANGE", `${key} adjust ${delta} past gameTo ${g}`);
+        checked++;
+      }
+      // The control: the whole target in one credit closes a game for that side (Law 56a), and a majority of the best of games
+      // (Law 57) decides the match.
+      const gamesToWin = Math.ceil(cfg.bestOf / 2);
+      const legalStream: Ev[] = [{ type: "core.start", payload: {} }, ...Array.from({ length: gamesToWin }, () => adjust(g))];
+      await expectImported(await importOne(s, fixtureId, `imp-adjust-at-target-${key}`, legalStream), fixtureId, legalStream, `${key} adjust +${g}`);
+    }
+    expect(checked, "refused adjustments").toBe(variants.length * 2);
   });
 
   it("rejects a fixture that already has events", async () => {
