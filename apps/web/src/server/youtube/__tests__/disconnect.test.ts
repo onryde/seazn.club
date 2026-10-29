@@ -46,12 +46,14 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { FakeIngest, FakeRunner } from "@/server/relay/fakes";
 import { pairPresentPhone, rigUser, spendMonthlyStreamGrant } from "@/server/relay/__tests__/_session-rig";
-import { divisionRig, seedOrg } from "@/server/usecases/__tests__/_rig";
+import { decidingStream, divisionRig, seedOrg } from "@/server/usecases/__tests__/_rig";
+import { scoreEvent } from "@/server/usecases/scoring";
 import { grantCredits } from "@/server/usecases/stream-credits";
 import { createSession as organiserStart, currentSession, stopSession, type SessionDeps } from "@/server/usecases/stream-sessions";
 import { connectionViews, recordLiveState } from "../connections";
 import { youtubeDaily } from "../daily";
 import { disconnectYoutube } from "../disconnect";
+import { FINISHED_STATUSES, YOUTUBE_FINISHED_END_MINUTES, YOUTUBE_GRACE_MINUTES } from "../end-rule";
 import { endDueBroadcasts, type EndStepHooks, type YoutubeEndResult } from "../end-step";
 import { FakeYouTube } from "../fake";
 import type { YouTubePort } from "../port";
@@ -896,6 +898,41 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     expect((failure as { code?: string }).code, "and it is not the named refusal").toBeUndefined();
     expect(await snapshot(w)).toEqual(before);
     expect(disconnectReports(), "and not reported as an end-rule break").toEqual([]);
+  });
+
+  // ═══ F4: a FINISHED match ends sooner than the grace ═══════════════════════════════════════════════════════════════════
+  it("F4: a match that was DECIDED by a real result is due at Stop + the finished-end minutes, not the grace's: the channel disconnects 1 ms later than that, is refused 1 ms before - and the same instant on an UNFINISHED match is still 409 (the right answer differs from the wrong one's)", async () => {
+    // premises from the rule's own constants: the two answers are different instants, so a test at +FINISHED_END+1 can tell them apart
+    expect(YOUTUBE_FINISHED_END_MINUTES, "the finished end comes first").toBeLessThan(YOUTUBE_GRACE_MINUTES);
+    const finishedDue = min(YOUTUBE_FINISHED_END_MINUTES);
+    const betweenTheTwo = finishedDue + min(1);
+    expect(betweenTheTwo, "an instant after the finished end and inside the grace").toBeLessThan(min(YOUTUBE_GRACE_MINUTES));
+
+    // an UNFINISHED match, checked inside the grace but after the finished end: still using the channel
+    const open = await world();
+    const mo = await playAndStop(open, open.fixtures[0]!);
+    open.setNow(afterStop(mo, betweenTheTwo));
+    await expect(disconnect(open), "no result: the grace applies").rejects.toMatchObject({ status: 409, code: "YOUTUBE_IN_USE" });
+
+    // the SAME match once a REAL result is recorded (start, result, finalize through the scoring write path)
+    const w = await world();
+    const m = await playAndStop(w, w.fixtures[0]!);
+    let seq = 0;
+    for (const ev of decidingStream()) await scoreEvent(w.auth, w.fixtures[0]!, { expected_seq: seq++, type: ev.type, payload: ev.payload } as never);
+    const [fx] = await sql<{ status: string; finished_at: Date | null }[]>`select status, finished_at from fixtures where id = ${w.fixtures[0]!}`;
+    expect(FINISHED_STATUSES as readonly string[], "premise: the real result made the fixture finished").toContain(fx!.status);
+    expect(fx!.finished_at, "premise: and the database stamped when").toBeInstanceOf(Date);
+    // finished_at is the database's clock, the Stop is the injected one a minute ahead of it: the Stop is the later of the two
+    const due = Math.max(m.endedAt.getTime(), fx!.finished_at!.getTime()) + finishedDue;
+
+    w.setNow(due - 1);
+    await expect(disconnect(w), "1 ms before the finished end").rejects.toMatchObject({ status: 409, code: "YOUTUBE_IN_USE" });
+    expect(await w.step({ at: due - 1 }), "the end step also leaves it").toMatchObject({ ended: 0 });
+    expect((await connRow(w.connectionId)).status).toBe("connected");
+    w.setNow(afterStop(m, betweenTheTwo));
+    expect(w.now(), "premise: this is the instant the unfinished match was refused at").toBeGreaterThanOrEqual(due);
+    await expect(disconnect(w), "after the finished end, inside the grace").resolves.toMatchObject({ revokeOutcome: "revoked", purged: { broadcasts: 1 } });
+    expect((await connRow(w.connectionId)).status).toBe("revoked");
   });
 
   it("O-T17a for MANY divisions: every division whose fixture carried a replay link is revalidated, not only the first (anti-vacuity: two divisions)", async () => {
