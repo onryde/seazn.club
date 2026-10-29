@@ -1237,6 +1237,43 @@ describe.skipIf(!HAS_DB)("tickOpenSessions (W22, T7b): the stream-tick job's pas
     expect(await readBy(from), "b read; c, the newest, deferred").toEqual([b.sessionId]);
     for (const s of [a, b, c]) expect((await s.row()).state, "no pass ended anything (none was due)").toBe("warming");
   });
+
+  it("T15: the pass takes its budget from the caller — the stream-tick route hands it 45 s minus what the YouTube step spent. The same clock under a SMALLER budget defers what the default would have ticked", async () => {
+    const f = fleet();
+    await f.add();
+    await f.add();
+    // Reads: the start, then once before each session. 9_999 ms in, 10_000 ms in.
+    const clock = () => {
+      const reads = [0, 9_999, 10_000];
+      let looks = 0;
+      return () => reads[Math.min(looks++, reads.length - 1)]!;
+    };
+    // A 10 s budget: the first session starts at 9_999 (inside), the second at 10_000 (spent) — deferred, not failed.
+    expect(await tickOpenSessions(f.deps, { ...f.scope(), wallClock: clock(), budgetMs: 10_000 })).toEqual({ ticked: 1, ended: 0, failed: 0, deferred: 1 });
+    // The pair: the same clock with no budget given is the default 45 s, which neither read reaches — both are ticked. So the 10 s
+    // above is the caller's budget being read, not the constant.
+    expect(await tickOpenSessions(f.deps, { ...f.scope(), wallClock: clock() })).toEqual({ ticked: 2, ended: 0, failed: 0, deferred: 0 });
+  });
+
+  it("T15: a budget of 0 (the YouTube step spent the whole tick) DEFERS every open session — the pass is not skipped, and nothing is ticked or lost; a budget that is negative or not a number is refused by name", async () => {
+    const f = fleet();
+    const a = await f.add();
+    const b = await f.add();
+    await settle();
+    const from = f.calls.length;
+    expect(await tickOpenSessions(f.deps, { ...f.scope(), budgetMs: 0 })).toEqual({ ticked: 0, ended: 0, failed: 0, deferred: 2 });
+    await settle();
+    expect(f.calls.slice(from).filter((x) => x.operation === "inputStatus"), "no session was read").toEqual([]);
+    let refused = 0;
+    for (const budgetMs of [-1, -0.5, Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      await expect(tickOpenSessions(f.deps, { ...f.scope(), budgetMs }), String(budgetMs)).rejects.toThrow(/budgetMs/);
+      refused++;
+    }
+    expect(refused).toBe(5);
+    for (const s of [a, b]) expect((await s.row()).state, "refused before touching a session").toBe("warming");
+    // The pair: with the default budget, the same two sessions ARE ticked.
+    expect(await tickOpenSessions(f.deps, f.scope())).toEqual({ ticked: 2, ended: 0, failed: 0, deferred: 0 });
+  });
 });
 
 // ===========================================================================================================================

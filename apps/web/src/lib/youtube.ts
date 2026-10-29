@@ -44,9 +44,10 @@ export type YoutubeLiveStateRefusal = keyof typeof YOUTUBE_LIVE_STATE_OF_REFUSAL
 export const isYoutubeLiveStateRefusal = (c: unknown): c is YoutubeLiveStateRefusal =>
   typeof c === "string" && Object.hasOwn(YOUTUBE_LIVE_STATE_OF_REFUSAL, c);
 
-/** How long a recorded not-enabled / blocked reading of a channel is believed by Go live (controller ruling, B4 fix round 1, I-2):
- *  inside it a Go live (and an automatic start's every retry) is refused with the same code and NO call to YouTube; after it the next
- *  Go live asks YouTube again. Judged on the time the refusal was recorded (`last_health_at`). */
+/** How long a recorded not-enabled / blocked reading of a channel is believed by an AUTOMATIC start (controller ruling, B4 fix round 1,
+ *  I-2; narrowed to the automatic start in fix round 2, F2): inside it each of that start's retries is refused with the same code and NO
+ *  call to YouTube; after it the next retry asks YouTube again. A person's tap — the organiser's Go live, the phone operator's Start —
+ *  never consults the record and always asks YouTube. Judged on the time the refusal was recorded (`last_health_at`). */
 export const YOUTUBE_LIVE_STATE_FRESH_MINUTES = 10;
 
 /** Is this a link to YouTube itself? A replay URL is the club's own `stream_url` when it set one (nothing overwrites it), so the
@@ -90,6 +91,95 @@ export const YOUTUBE_REFUSAL_REMEDY: Record<YoutubeRefusalCode, "fix_destination
 
 /** The replay link for a broadcast: a YouTube broadcast id is also the id of its video. */
 export const youtubeWatchUrl = (videoId: string): string => `https://www.youtube.com/watch?v=${videoId}`;
+
+/** One replay part of a fixture: its place in the order the broadcasts finished (1-based) and the video's watch address. Plain data,
+ *  so the server reader (server/youtube/parts.ts), the match page and the browser-side player all speak the one shape. */
+export interface ReplayPart {
+  partNo: number;
+  url: string;
+}
+
+/** The ORGANISER's part: the same plus whether the broadcast is PRIVATE on YouTube. The public never sees a private broadcast (owner
+ *  ruling 2026-10-28), so the public shape has no such flag; the organiser's panel lists it and says so. Its `partNo` numbers every
+ *  complete broadcast, so it may differ from the number the public page gives the same video when privacies are mixed. */
+export interface OrganiserReplayPart extends ReplayPart {
+  private: boolean;
+}
+
+// --- The public match page's replay player (T16) --------------------------------------------------------------------------------
+// The player is a click-to-play facade: nothing is loaded from Google but the video's thumbnail until the person taps, and then the
+// iframe comes from YouTube's privacy-enhanced host. The CSP (src/proxy.ts) allows exactly these two origins and no other.
+
+/** The privacy-enhanced embed host (`youtube-nocookie.com`): it sets no cookie until the viewer plays. The CSP's `frame-src` names
+ *  this origin, and the page checks a player message's origin against it. */
+export const YOUTUBE_EMBED_ORIGIN = "https://www.youtube-nocookie.com";
+/** Where a video's public thumbnail image lives; the CSP's `img-src` names this origin. */
+export const YOUTUBE_THUMBNAIL_ORIGIN = "https://i.ytimg.com";
+
+/** A YouTube video id: 11 characters from [A-Za-z0-9_-]. The ONE shape an address is built from. */
+const YOUTUBE_VIDEO_ID = /^[A-Za-z0-9_-]{11}$/;
+/** The paths (under a youtube.com host) whose SECOND segment is the video id. */
+const VIDEO_PATH_KINDS = new Set(["live", "embed", "shorts", "v"]);
+
+/** The video id inside a YouTube video URL, or `null` for anything that is not provably one: the URL must pass `isYoutubeUrl` (https,
+ *  youtube.com or a subdomain, or youtu.be) AND carry an id of the exact shape in one of YouTube's video forms (`/watch?v=`,
+ *  `/live/`, `/embed/`, `/shorts/`, `/v/`, or `youtu.be/<id>`). A channel, a playlist, a handle, a bare host, or an id with an
+ *  extra path segment is `null`. `null` means "show a link, never an iframe". */
+export function youtubeVideoId(url: string): string | null {
+  if (!isYoutubeUrl(url)) return null;
+  const u = new URL(url);
+  const segments = u.pathname.split("/").filter((s) => s !== "");
+  let candidate: string | null = null;
+  if (u.hostname.toLowerCase() === "youtu.be") {
+    if (segments.length === 1) candidate = segments[0]!;
+  } else if (segments.length === 1 && segments[0] === "watch") {
+    candidate = u.searchParams.get("v");
+  } else if (segments.length === 2 && VIDEO_PATH_KINDS.has(segments[0]!)) {
+    candidate = segments[1]!;
+  }
+  return candidate !== null && YOUTUBE_VIDEO_ID.test(candidate) ? candidate : null;
+}
+
+/** Is `link` the video one of the parts already is? Compared by VIDEO, so `youtu.be/<id>`, `/live/<id>` and `watch?v=<id>` are one
+ *  video; a link that is not a YouTube video address can only match by being the identical string. The ONE rule the public match
+ *  page ("never the same replay twice") and the organiser's panel both apply to the fixture's own `stream_url`. */
+export function linkIsOneOfParts(link: string, parts: readonly ReplayPart[]): boolean {
+  const id = youtubeVideoId(link);
+  return parts.some((p) => p.url === link || (id !== null && youtubeVideoId(p.url) === id));
+}
+
+/** The links the organiser's after-match area lists: every part in order, then the fixture's own `stream_url` when it is NOT one of
+ *  the parts (a club's own different link still shows; the end step's Part 1 link is not shown twice). `partNo` is null for the
+ *  club's own link. */
+export function replayRows(streamUrl: string | null, parts: readonly OrganiserReplayPart[]): { key: string; url: string; partNo: number | null; private: boolean }[] {
+  const own = streamUrl !== null && streamUrl !== "" && !linkIsOneOfParts(streamUrl, parts);
+  return [
+    ...parts.map((p) => ({ key: `part-${p.partNo}`, url: p.url, partNo: p.partNo, private: p.private })),
+    ...(own ? [{ key: "own", url: streamUrl, partNo: null, private: false }] : []),
+  ];
+}
+
+const assertVideoId = (id: string): string => {
+  if (!YOUTUBE_VIDEO_ID.test(id)) throw new Error("not a YouTube video id");
+  return id;
+};
+
+/** The player's address, built only after a tap: privacy-enhanced host, autoplay on (the person just asked to play), no end-of-video
+ *  suggestions from other channels (`rel=0`), inline on iOS, and `enablejsapi` + `origin` so the page can hear the player say
+ *  "embedding is disabled for this video" (error 101 / 150) without loading any script from YouTube. Throws on a malformed id. */
+export function youtubeEmbedUrl(videoId: string, pageOrigin: string): string {
+  const u = new URL(`${YOUTUBE_EMBED_ORIGIN}/embed/${assertVideoId(videoId)}`);
+  u.searchParams.set("autoplay", "1");
+  u.searchParams.set("rel", "0");
+  u.searchParams.set("playsinline", "1");
+  u.searchParams.set("enablejsapi", "1");
+  u.searchParams.set("origin", pageOrigin);
+  return u.toString();
+}
+
+/** A video's public thumbnail (480x360, the 16:9 picture letterboxed: the facade crops the bars with `object-cover`). Throws on a
+ *  malformed id. */
+export const youtubeThumbnailUrl = (videoId: string): string => `${YOUTUBE_THUMBNAIL_ORIGIN}/vi/${assertVideoId(videoId)}/hqdefault.jpg`;
 
 /** Developer Policies III.A.1: a link to YouTube's Terms of Service, shown where the user agrees to be bound by them. */
 export const YOUTUBE_TOS_URL = "https://www.youtube.com/t/terms";

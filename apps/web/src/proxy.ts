@@ -71,7 +71,9 @@ export function cspHeader(
     // Tailwind ships an external stylesheet; 'unsafe-inline' covers the small
     // inline styles Next injects. Styles are low-risk vs script injection.
     `style-src 'self' 'unsafe-inline'`,
-    `img-src 'self' blob: data: https:`,
+    // The replay facade's thumbnail (YouTube Connect T16, owner ruling O4): `https:` already covers it today, and the explicit origin is
+    // the declaration, so tightening `https:` later cannot silently break the facade.
+    `img-src 'self' blob: data: https: https://i.ytimg.com`,
     `font-src 'self' data:`,
     // Stripe: api.stripe.com for tokenization; supabase + sentry as before.
     // RealtimeKit: the match room's camera tile joins from the browser; its
@@ -79,8 +81,9 @@ export function cspHeader(
     // (Cloudflare's RealtimeKit network allowlist; proxy-csp-realtimekit.test.ts).
     // R2005: the compositor's loopback phase channel, on `/overlay` only (overlayLoopbackOrigin).
     `connect-src 'self' https://api.stripe.com https://*.supabase.co wss://*.supabase.co https://*.realtime.cloudflare.com wss://*.realtime.cloudflare.com https://*.ingest.sentry.io https://*.sentry.io${posthogApiOrigin()}${overlayLoopbackOrigin(opts.pathname ?? "")}`,
-    // Embedded Checkout renders inside a Stripe-hosted iframe.
-    `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com`,
+    // Embedded Checkout renders inside a Stripe-hosted iframe. The public match page's replay player (YouTube Connect T16) is YouTube's
+    // privacy-enhanced embed, loaded only after a tap: `youtube-nocookie.com` and its www host, and no `youtube.com` origin.
+    `frame-src 'self' https://js.stripe.com https://*.stripe.com https://hooks.stripe.com https://www.youtube-nocookie.com https://youtube-nocookie.com`,
     `object-src 'none'`,
     `base-uri 'self'`,
     `form-action 'self'`,

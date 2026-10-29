@@ -43,6 +43,7 @@
 //   render values can legitimately differ by the seconds the network round
 //   trip took; that is expected drift, not the corruption
 //   `suppressHydrationWarning` normally papers over on OTHER attributes.
+import type { ReactNode } from "react";
 import { EntityLogo } from "@/components/ui/entity-logo";
 import { ScoreSentence } from "@/components/score-sentence";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
@@ -53,6 +54,9 @@ import { useNow } from "./use-now";
 export interface CourtCardProps {
   header: MatchCentreHeaderT;
   dict: PublicDict;
+  /** The match's replay player (YouTube Connect T16), rendered inside the card directly under the scoreline - the server page
+   *  builds it, so the card knows nothing of YouTube. Absent means no replay and the card is exactly what it was. */
+  replay?: ReactNode;
 }
 
 /** Exhaustive on `header.status` — a `never` check in `default` means a new
@@ -100,7 +104,7 @@ function lookupPhaseTerm(dict: PublicDict, phase: string): string | null {
   return typeof value === "string" && value !== "" ? value : null;
 }
 
-export function CourtCard({ header, dict }: CourtCardProps) {
+export function CourtCard({ header, dict, replay }: CourtCardProps) {
   const now = useNow();
   const parsedUpdatedAt = Date.parse(header.updatedAt);
   const seconds = Number.isFinite(parsedUpdatedAt) ? Math.max(0, Math.floor((now - parsedUpdatedAt) / 1000)) : 0;
@@ -286,6 +290,7 @@ export function CourtCard({ header, dict }: CourtCardProps) {
             ) : null}
           </div>
         ) : null}
+        {replay ?? null}
         {inPlay ? (
           <p
             data-testid="mc-updated-at"

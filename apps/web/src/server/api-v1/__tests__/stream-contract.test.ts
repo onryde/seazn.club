@@ -105,7 +105,7 @@ describe("relay wire enums equal their declarations", () => {
   it("W4 + A9: StreamSessionCurrent's exact key set — no `qr`, `restart` the one restart field — and no QR schema re-exported", () => {
     expect(Object.keys(S.StreamSessionCurrent.shape).sort()).toEqual([
       "balance", "countdown", "creditUsed", "desiredState", "endReason", "endedAt", "failReason", "fixtureDecided", "fixtureHeld", "fixtureId",
-      "health", "id", "ingest", "mode", "output", "overlay", "replayUrl", "restart", "startCause", "startedAt", "state", "target",
+      "health", "id", "ingest", "mode", "output", "overlay", "replayParts", "replayUrl", "restart", "startCause", "startedAt", "state", "target",
     ]);
     expect(Object.keys(S).filter((k) => /^CaptureQr/.test(k))).toEqual([]);
   });
@@ -275,11 +275,20 @@ describe("relay request schemas refuse what they must", () => {
   it("StreamSessionCurrent is strict — a v1 `qr` riding along is refused", () => {
     const current = {
       id: "s", fixtureId: "f", mode: "passthrough", overlay: null, state: "warming", desiredState: "live", failReason: null,
-      health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null,
+      health: null, ingest: null, output: null, balance: 3, startedAt: null, endedAt: null, replayUrl: null, replayParts: [],
       target: { id: "t", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
       startCause: "organiser", restart: null, countdown: null,
     };
     expect(S.StreamSessionCurrent.safeParse(current).success).toBe(true);
+    // I1 (owner ruling 2026-10-28): each replay part says whether its broadcast is PRIVATE on YouTube - REQUIRED and a boolean, so the
+    // organiser's panel never has to guess (an absent flag is not "public"), and closed (strict) like the rest. The empty list is valid.
+    const part = { partNo: 1, url: "https://www.youtube.com/watch?v=aaaaaaaaaaa", private: true };
+    expect(S.StreamSessionCurrent.safeParse({ ...current, replayParts: [part, { ...part, partNo: 2, private: false }] }).success, "both flags are accepted").toBe(true);
+    const withoutFlag: Record<string, unknown> = { ...part };
+    delete withoutFlag.private;
+    expect(S.StreamSessionCurrent.safeParse({ ...current, replayParts: [withoutFlag] }).success, "a part with no private flag is refused").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, replayParts: [{ ...part, private: "yes" }] }).success, "a non-boolean flag is refused").toBe(false);
+    expect(S.StreamSessionCurrent.safeParse({ ...current, replayParts: [{ ...part, extra: 1 }] }).success, "a part is closed").toBe(false);
     // T9 (W24): countdown is REQUIRED (null when there is none) and closed — a kind the panel has no copy for, a
     // negative or fractional duration, or an extra key is refused.
     const withoutCountdown: Record<string, unknown> = { ...current };

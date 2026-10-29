@@ -30,6 +30,7 @@ import type { SlotLabel } from "@/server/usecases/stage-seeding";
 import type { z } from "zod";
 import type { StageKind } from "@/server/api-v1/schemas";
 import { anyOptedOut, isPersonNameMasked, resolvePersonDisplayName } from "@/lib/name-display";
+import { replayParts, type ReplayPart } from "@/server/youtube/parts";
 import { cachedIfFound } from "./cache-found";
 import { loadMatchCentre } from "./match-centre-load";
 import { competitionTag, divisionTag, orgTag, personTag } from "./cache-tags";
@@ -1181,6 +1182,11 @@ export async function getPublicFixture(
   /** Option B (owner ruling 2026-10-13) — which entrant plays White as the pairing stands: the names on the start
    *  position before a game is on file. Null for a division that does not play online (no read is made for it). */
   pairedWhiteSide: "home" | "away" | null;
+  /** YouTube Connect T16 — the fixture's replay parts, in the order the broadcasts finished (`[]` for a fixture that was never
+   *  streamed through a connected channel, a pasted-key match among them). Read from the parts view on the privileged client
+   *  (R7), which already leaves out a division still in setup. It says what exists, not what the page may show: a void fixture
+   *  (cancelled, abandoned, forfeited) shows no replay, and that rule is the page's (`streamLinkLabelKey`). */
+  parts: ReplayPart[];
 } | null> {
   if (!/^[0-9a-f-]{36}$/i.test(fixtureId)) return null;
   const found = await findPublicDivision(orgSlug, compSlug, divSlug);
@@ -1216,9 +1222,12 @@ export async function getPublicFixture(
         where v.id = ${fixtureId} and v.division_id = ${division.id} limit 1`;
       if (!fixtureRow) return null;
       // T4 — everything below needs only the fixture row and none of it needs
-      // another, so it reads in four lanes at once; the match centre, which
-      // needs all four, follows. Four pooled connections at most, never a tx.
-      const [fixture, names, { rt, variantRow }, { tzRow, stageRow }] = await Promise.all([
+      // another, so it reads in lanes at once; the match centre, which needs
+      // the first four, follows. The fifth lane is the replay parts (YouTube
+      // Connect T16): it needs only the fixture id, so it rides the same
+      // round trip instead of adding a sequential one after the match centre.
+      // Five pooled connections at most, never a tx.
+      const [fixture, names, { rt, variantRow }, { tzRow, stageRow }, parts] = await Promise.all([
         withCourtVenueName(normalizeFixture(fixtureRow)),
         (async () => {
           const rawNames = await sql<{ id: string; kind: string; display_name: string }[]>`
@@ -1282,6 +1291,7 @@ export async function getPublicFixture(
             select name from stages where id = ${fixtureRow.stage_id}`;
           return { tzRow, stageRow };
         })(),
+        replayParts(fixtureId),
       ]);
       const locale = toLocale(shell.org.default_locale);
       const basePath = `/shared/${shell.org.slug}/${shell.competition.slug}/${division.slug}`;
@@ -1324,6 +1334,7 @@ export async function getPublicFixture(
         venueTz: resolveVenueTz(tzRow?.division_tz, tzRow?.org_tz),
         stageName: stageRow?.name ?? null,
         externalPlay: await loadPublicExternalPlay(fixtureId),
+        parts,
         ...(await (async () => {
           if (!(supportsOnlinePlay(division.sport_key) && readOnlinePlay(division.config) === "lichess")) {
             return { roundOpened: false, roundOpenedAt: null, pairedWhiteSide: null };
@@ -1369,7 +1380,9 @@ export async function getPublicFixture(
     // has none, so the board before the first move would name each side by its colour only. The same round (C)
     // names an online chess division's format by its time control (variant-label.ts), so a `-v7` entry also
     // carries the declared clock family's word in its header — "Classical" over a 10+5 game.
-    ["pub-fixture-v8", fixtureId],
+    //
+    // v9 (YouTube Connect T16): `parts`, the fixture's replay parts. A `-v8` entry has none, and the page reads the list.
+    ["pub-fixture-v9", fixtureId],
     { tags: [divisionTag(division.id)], revalidate: REVALIDATE_FAST },
   );
   if (!detail) return null;

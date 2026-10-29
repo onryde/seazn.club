@@ -505,7 +505,7 @@ export interface FixtureStreamOut {
  *
  * The revalidation is `fireDivisionRevalidate` (revalidate.ts:14), NOT
  * `broadcastRevalidate` — the latter is the peer primitive that helper calls
- * internally. It is what busts the `["pub-fixture-v8", fixtureId]` cache entry
+ * internally. It is what busts the `["pub-fixture-v9", fixtureId]` cache entry
  * tagged `divisionTag(division.id)` (`getPublicFixture`, data.ts), which is the
  * entry the public match page reads the link from.
  */
@@ -514,22 +514,57 @@ export async function setFixtureStreamUrl(
   id: string,
   streamUrl: string | null,
 ): Promise<FixtureStreamOut> {
+  const { id: fixtureId, stream_url } = await writeStreamUrl(auth, id, streamUrl, false);
+  return { id: fixtureId, stream_url };
+}
+
+/** The YouTube end step's write (YouTube Connect, F-m3): the SAME path as `setFixtureStreamUrl` (validation, tenant scope, the same
+ *  revalidation), but the column is filled only while it is EMPTY, and that is decided by the UPDATE itself (`where stream_url is
+ *  null`), never by a read before it - a club link saved between the end step's decision and its write is not overwritten. `written`
+ *  says which happened; `stream_url` is what is stored afterwards (the winner's, when another write got there first).
+ *
+ *  The pages are expired either way: a replay part that just completed is on the match page's parts list whether or not it also took
+ *  the link, and a later part would otherwise show only when the cache window ran out (T16). */
+export async function setFixtureStreamUrlIfEmpty(
+  auth: AuthCtx,
+  id: string,
+  streamUrl: string,
+): Promise<FixtureStreamOut & { written: boolean }> {
+  const { id: fixtureId, stream_url, written } = await writeStreamUrl(auth, id, streamUrl, true);
+  return { id: fixtureId, stream_url, written };
+}
+
+/** The ONE stream-link write. `onlyIfEmpty` adds the `stream_url is null` condition to the UPDATE; a row that condition refused is
+ *  read back (same transaction) so "taken" is told apart from "no such fixture", which is a 404 either way a write is asked for. */
+async function writeStreamUrl(
+  auth: AuthCtx,
+  id: string,
+  streamUrl: string | null,
+  onlyIfEmpty: boolean,
+): Promise<FixtureStreamOut & { written: boolean }> {
   rejectDeviceLink(auth);
   const parsed = streamUrlSchema.safeParse(streamUrl);
   if (!parsed.success) throw new HttpError(422, "invalid stream link");
   const value = parsed.data;
+  type Row = { id: string; stream_url: string | null; division_id: string; competition_id: string };
   const out = await withTenant(auth.orgId, async (tx) => {
-    const [row] = await tx<{ id: string; stream_url: string | null; division_id: string; competition_id: string }[]>`
+    const [row] = await tx<Row[]>`
       update fixtures f
          set stream_url = ${value}
         from divisions d
-       where f.id = ${id} and d.id = f.division_id
+       where f.id = ${id} and d.id = f.division_id ${onlyIfEmpty ? sql`and f.stream_url is null` : sql``}
       returning f.id, f.stream_url, f.division_id, d.competition_id`;
-    if (!row) throw new HttpError(404, "fixture not found");
-    return row;
+    if (row) return { ...row, written: true };
+    if (!onlyIfEmpty) throw new HttpError(404, "fixture not found");
+    const [taken] = await tx<Row[]>`
+      select f.id, f.stream_url, f.division_id, d.competition_id
+        from fixtures f join divisions d on d.id = f.division_id
+       where f.id = ${id}`;
+    if (!taken) throw new HttpError(404, "fixture not found");
+    return { ...taken, written: false };
   });
   fireDivisionRevalidate(out.division_id, out.competition_id);
-  return { id: out.id, stream_url: out.stream_url };
+  return { id: out.id, stream_url: out.stream_url, written: out.written };
 }
 
 export interface LineupOut {

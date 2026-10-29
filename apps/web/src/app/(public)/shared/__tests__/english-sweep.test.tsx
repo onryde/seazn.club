@@ -218,6 +218,7 @@ import { getDictionary } from "@/lib/i18n";
 import { msgFor } from "@/lib/messages-i18n";
 import { toLocale } from "@/lib/i18n-constants";
 import { resolveLatestModule } from "@/server/engine-db";
+import { youtubeWatchUrl, type ReplayPart } from "@/lib/youtube";
 import type {
   PublicDivision,
   PublicEntrant,
@@ -637,7 +638,17 @@ const DECIDED_CRICKET: Script = {
   ],
 };
 
-type FixtureCase = { name: string; build: () => { division: PublicDivision; fixture: PublicFixture; doc: MatchCentreDocT } };
+/** What `getPublicFixture` carries as `parts` (YouTube Connect T16): the match's replay, one part per broadcast. Two parts, so the
+ *  player draws its tab rail as well as its facade and its "Open on YouTube" link - the whole of the replay's copy, in every locale. */
+const REPLAY_PARTS: ReplayPart[] = [
+  { partNo: 1, url: youtubeWatchUrl("swpvideo001") },
+  { partNo: 2, url: youtubeWatchUrl("swpvideo002") },
+];
+
+type FixtureCase = {
+  name: string;
+  build: () => { division: PublicDivision; fixture: PublicFixture; doc: MatchCentreDocT; parts?: ReplayPart[] };
+};
 
 const fixtureInput = (fixtureRow: PublicFixture, div: PublicDivision) => ({
   fixture: fixtureRow,
@@ -674,7 +685,7 @@ const FIXTURE_CASES: FixtureCase[] = [
         summary: cricket.summary(ledger.state) as PublicFixture["summary"],
       });
       const doc = buildMatchCentre({ ...fixtureInput(fixtureRow, div), sportKey: "cricket", cfg: ledger.cfg, events: ledger.events });
-      return { division: div, fixture: fixtureRow, doc };
+      return { division: div, fixture: fixtureRow, doc, parts: REPLAY_PARTS };
     },
   },
   {
@@ -713,8 +724,10 @@ const FIXTURE_CASES: FixtureCase[] = [
 
 async function renderFixtures(): Promise<Segment[]> {
   const out: Segment[] = [];
+  let withReplay = 0;
+  let replayDrawn = 0;
   for (const c of FIXTURE_CASES) {
-    const { division: div, fixture: fixtureRow, doc } = c.build();
+    const { division: div, fixture: fixtureRow, doc, parts = [] } = c.build();
     stub.getPublicFixture.mockResolvedValue({
       org: org(),
       competition: hubCompetition(),
@@ -725,21 +738,27 @@ async function renderFixtures(): Promise<Segment[]> {
       matchCentre: doc,
       venueTz: "Europe/London",
       stageName: "9zqstage",
+      parts,
     });
     const p = params({ orgSlug: ORG_SLUG, competitionSlug: COMP_SLUG, divisionSlug: div.slug, fixtureId: FIXTURE_ID });
     out.push(...(await served(Fixture, p)));
     expect(doc.tabs.length, `${c.name}: the document has tabs`).toBeGreaterThan(1);
+    if (parts.length > 0) withReplay++;
     for (const tab of doc.tabs) {
       state.search = `tab=${tab}`;
       try {
         const markup = renderToStaticMarkup((await Fixture.default(p)) as ReactElement);
         expect(markup, `${c.name}: the ${tab} panel rendered`).toContain(`data-testid="mc-tab-panel-${tab}"`);
+        if (parts.length > 0 && markup.includes('data-testid="replay-embed"')) replayDrawn++;
         out.push(...extractSegments(markup));
       } finally {
         state.search = "";
       }
     }
   }
+  // Anti-vacuity: a case that carries parts must have DRAWN the player, or the replay copy was never in the sweep.
+  expect(withReplay, "a fixture case carries replay parts").toBeGreaterThan(0);
+  expect(replayDrawn, "the replay player was drawn for it").toBeGreaterThanOrEqual(withReplay);
   return out;
 }
 
@@ -772,7 +791,7 @@ const UPCOMING_FOOTBALL: FixtureCase = {
 async function renderPosters(): Promise<Segment[]> {
   const out: Segment[] = [];
   for (const c of [...FIXTURE_CASES, UPCOMING_FOOTBALL]) {
-    const { division: div, fixture: fixtureRow, doc } = c.build();
+    const { division: div, fixture: fixtureRow, doc, parts = [] } = c.build();
     stub.getPublicFixture.mockResolvedValue({
       org: org(),
       competition: hubCompetition(),
@@ -783,6 +802,7 @@ async function renderPosters(): Promise<Segment[]> {
       matchCentre: doc,
       venueTz: "Europe/London",
       stageName: "9zqstage",
+      parts,
     });
     const p = params({ orgSlug: ORG_SLUG, competitionSlug: COMP_SLUG, divisionSlug: div.slug, fixtureId: FIXTURE_ID });
     images.drawn.length = 0;

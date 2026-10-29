@@ -669,7 +669,7 @@ const LEGACY = readModel({ legacy: true, phone: null, code: null });
 const session = (over: Partial<StreamSessionView> = {}): StreamSessionView => ({
   id: "s1", fixtureId: "f-1", mode: "passthrough", overlay: null, state: "warming", desiredState: "live",
   failReason: null, health: null, ingest: { state: "disconnected", protocol: null }, output: null,
-  balance: 2, startedAt: null, endedAt: null, replayUrl: null,
+  balance: 2, startedAt: null, endedAt: null, replayUrl: null, replayParts: [],
   target: { id: "t1", kind: "youtube", label: "Club" }, fixtureDecided: false, fixtureHeld: false, endReason: null, creditUsed: false,
   startCause: "organiser", restart: null, countdown: null,
   ...over,
@@ -6057,5 +6057,204 @@ describe("T12: after a match — the replay row, and the destination's name read
     expect(html.split(es["streaming.youtube.disconnectedLabel"]!).length - 1, "the label is drawn by the ending line AND the chain").toBeGreaterThanOrEqual(2);
     // The positive pair: the customer's own label passes through untouched.
     expect(textAt(body({ view: session({ state: "ending", target: { id: "t1", kind: "youtube", label: "Club TV" } }), balance: 1 }), "stream-ending")).toBe(m("stream.phone.ending", { destination: "Club TV" }));
+  });
+});
+
+// ─── YouTube Connect T16 (O6): the after-match area lists the replay PARTS ──────────────────────────────────────────────────
+// A restart makes a second broadcast, so a fixture can have two replays. The area lists every part (from COMPLETE broadcasts, read by
+// the organiser-scoped `replayParts` on the polled session view), then the club's own stream_url when it is not one of the parts.
+// With no parts it is the single row T12 built. The logo follows the LINK: drawn when `isYoutubeUrl(row.url)`, never otherwise.
+describe("T16: after a match - the replay parts", () => {
+  const ENDED = { state: "completed" as const, startedAt: "2026-09-14T11:00:00Z", endedAt: "2026-09-14T11:45:00Z", endReason: "stopped" as const };
+  const P1 = { partNo: 1, url: "https://www.youtube.com/watch?v=aaaaaaaaaaa", private: false };
+  const P2 = { partNo: 2, url: "https://www.youtube.com/watch?v=bbbbbbbbbbb", private: false };
+  const PRIV1 = { partNo: 1, url: "https://www.youtube.com/watch?v=ppppppppppp", private: true };
+  const PRIV2 = { partNo: 2, url: "https://www.youtube.com/watch?v=qqqqqqqqqqq", private: true };
+  const TWITCH_VOD = "https://www.twitch.tv/videos/1";
+  const links = (tree: ReactElement[]) => allTestIds(tree, "stream-replay");
+  const hrefs = (tree: ReactElement[]) => links(tree).map((el) => attr(el, "href"));
+  const copies = (tree: ReactElement[]) => tree.filter((el) => el.type === ReplayCopyButton).map((el) => propsOf(el).url);
+  const labels = (tree: ReactElement[]) => allTestIds(tree, "stream-replay-part").map((el) => textOf(el).replace(/\s+/g, " ").trim());
+  const iconsIn = (link: ReactElement) => walk(propsOf(link).children as ReactElement[]).filter((el) => el.type === YoutubeIcon).length;
+
+  it("EMPTY CASE FIRST: no parts and no link is no row at all; no parts and a link is the one row it always was, with no part label", () => {
+    const none = body({ view: session({ ...ENDED, replayParts: [] }), balance: 1 });
+    expect(byTestId(none, "stream-replay-row")).toBeUndefined();
+    expect(links(none)).toHaveLength(0);
+    const one = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [] }), balance: 1 });
+    expect(hrefs(one)).toEqual([TWITCH_VOD]);
+    expect(labels(one)).toEqual([]);
+    expect(copies(one)).toEqual([TWITCH_VOD]);
+  });
+
+  it("one part and no stream_url: the row exists (it used to need a stream_url) and links the part; no part label for a single part", () => {
+    const tree = body({ view: session({ ...ENDED, replayParts: [P1] }), balance: 1 });
+    expect(byTestId(tree, "stream-replay-row")).toBeDefined();
+    expect(hrefs(tree)).toEqual([P1.url]);
+    expect(copies(tree)).toEqual([P1.url]);
+    expect(labels(tree), "one part is just the replay").toEqual([]);
+  });
+
+  it("one part and a stream_url that IS that part (what the end step writes): listed once, not twice", () => {
+    const tree = body({ view: session({ ...ENDED, replayUrl: P1.url, replayParts: [P1] }), balance: 1 });
+    expect(hrefs(tree)).toEqual([P1.url]);
+    expect(copies(tree)).toEqual([P1.url]);
+    // The same video in another spelling is the same video.
+    const spelled = body({ view: session({ ...ENDED, replayUrl: "https://youtu.be/aaaaaaaaaaa", replayParts: [P1] }), balance: 1 });
+    expect(hrefs(spelled)).toEqual([P1.url]);
+  });
+
+  it("two parts: both listed in order, each labelled with its own number, each with its own Copy link; the times line is shown once", () => {
+    const tree = body({ view: session({ ...ENDED, replayUrl: P1.url, replayParts: [P1, P2] }), balance: 1 });
+    expect(hrefs(tree)).toEqual([P1.url, P2.url]);
+    expect(copies(tree), "each copy button copies the link beside it").toEqual([P1.url, P2.url]);
+    expect(labels(tree)).toEqual([m("streaming.youtube.part", { n: 1 }), m("streaming.youtube.part", { n: 2 })]);
+    expect(allTestIds(tree, "stream-replay-times")).toHaveLength(1);
+    expect(allTestIds(tree, "stream-replay-item")).toHaveLength(2);
+  });
+
+  it("a club's own DIFFERENT link is listed after the parts, unlabelled; one part plus a different link is two rows and no part label", () => {
+    const tree = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [P1, P2] }), balance: 1 });
+    expect(hrefs(tree)).toEqual([P1.url, P2.url, TWITCH_VOD]);
+    expect(labels(tree)).toHaveLength(2);
+    const single = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [P1] }), balance: 1 });
+    expect(hrefs(single)).toEqual([P1.url, TWITCH_VOD]);
+    expect(labels(single), "with one part there is no part label even beside another link").toEqual([]);
+  });
+
+  it("two links to two different places are told apart by their WORDS, not by an icon alone: the YouTube part keeps 'Watch replay', the club's own link reads 'Your stream link'", () => {
+    const linkTexts = (tree: ReactElement[]) => links(tree).map((el) => textOf(el).replace(/\s+/g, " ").trim());
+    const WATCH = m("stream.phone.replay");
+    const OWN = m("stream.url.label");
+    expect(WATCH, "premise: the two words differ").not.toBe(OWN);
+
+    // One part + a club link: the reviewer's case (two identical 'Watch replay' links, apart by the icon only).
+    const single = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [P1] }), balance: 1 });
+    expect(hrefs(single)).toEqual([P1.url, TWITCH_VOD]);
+    expect(linkTexts(single)).toEqual([WATCH, OWN]);
+
+    // Two parts + a club link: both parts say Watch replay (under their Part labels), the club's link says its own.
+    const two = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [P1, P2] }), balance: 1 });
+    expect(linkTexts(two)).toEqual([WATCH, WATCH, OWN]);
+
+    // The row it always was: a club link and NO parts has nothing to be told apart from, and still says Watch replay.
+    const own = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [] }), balance: 1 });
+    expect(linkTexts(own)).toEqual([WATCH]);
+    // And a part that IS the stored link is just the part.
+    const same = body({ view: session({ ...ENDED, replayUrl: P1.url, replayParts: [P1] }), balance: 1 });
+    expect(linkTexts(same)).toEqual([WATCH]);
+  });
+
+  it("the times line belongs to the LATEST session: with two or more parts it says so; with one part (or none) it is the line it always was", () => {
+    const times = m("stream.replay.times", { start: "12:00", end: "12:45" });
+    const latest = (t: string) => m("stream.replay.latestSession", { times: t });
+    expect(latest(times), "premise: the label wraps the times, it does not replace them").toContain(times);
+    expect(latest(times)).not.toBe(times);
+
+    const two = body({ view: session({ ...ENDED, replayParts: [P1, P2] }), balance: 1 });
+    expect(textAt(two, "stream-replay-times")).toBe(latest(times));
+    // A session still open (no end yet) gets the same label around its own wording.
+    const open = body({ view: session({ ...ENDED, endedAt: null, replayParts: [P1, P2] }), balance: 1 });
+    expect(textAt(open, "stream-replay-times")).toBe(latest(m("stream.replay.timesOpen", { start: "12:00" })));
+
+    const one = body({ view: session({ ...ENDED, replayParts: [P1] }), balance: 1 });
+    expect(textAt(one, "stream-replay-times"), "one part: nothing to disambiguate").toBe(times);
+    const none = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [] }), balance: 1 });
+    expect(textAt(none, "stream-replay-times")).toBe(times);
+  });
+
+  it("the new words read in the locale's own (es): the club link's label and the latest-session label", () => {
+    const es = uiDict("es");
+    const en = uiDict("en");
+    const html = renderToStaticMarkup(
+      <DictProvider dict={es} locale="es">
+        <PhoneTabBody {...BODY} view={session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [P1, P2] })} balance={1} />
+      </DictProvider>,
+    );
+    for (const key of ["stream.url.label", "stream.replay.latestSession"] as const) {
+      expect(es[key], `premise: ${key} is translated`).toBeTruthy();
+      expect(es[key], `premise: ${key} differs from English`).not.toBe(en[key]);
+    }
+    expect(html).toContain(es["stream.url.label"]!);
+    expect(html).toContain(es["stream.replay.latestSession"]!.split("{times}")[0]!.trim());
+    expect(html).not.toContain(en["stream.replay.latestSession"]!.split("{times}")[0]!.trim());
+  });
+
+  it("I1 (owner ruling A): a part that is PRIVATE on YouTube is still listed for the organiser - link, Copy link and all - with the 'Private on YouTube' note beside it; public parts carry no note", () => {
+    const NOTE = m("streaming.youtube.replay.private");
+    const notes = (tree: ReactElement[]) => allTestIds(tree, "stream-replay-private").map((el) => textOf(el).replace(/\s+/g, " ").trim());
+    expect(NOTE, "premise: the note has words").toBeTruthy();
+
+    // Empty case of the note: no private part, no note anywhere (the twin below is what makes this silence a fact).
+    const open = body({ view: session({ ...ENDED, replayUrl: P1.url, replayParts: [P1, P2] }), balance: 1 });
+    expect(notes(open)).toEqual([]);
+    expect(allTestIds(open, "stream-replay-private")).toHaveLength(0);
+
+    // Private only: the one row stays (the organiser's own data), unlabelled as a single part, and says it is private.
+    const only = body({ view: session({ ...ENDED, replayParts: [PRIV1] }), balance: 1 });
+    expect(byTestId(only, "stream-replay-row"), "the row exists").toBeDefined();
+    expect(hrefs(only)).toEqual([PRIV1.url]);
+    expect(copies(only)).toEqual([PRIV1.url]);
+    expect(labels(only), "one part is just the replay").toEqual([]);
+    expect(notes(only)).toEqual([NOTE]);
+
+    // Mixed: Part 1 public, Part 2 private - both listed with their Part labels, the note on Part 2 ONLY.
+    const mixed = body({ view: session({ ...ENDED, replayUrl: P1.url, replayParts: [P1, PRIV2] }), balance: 1 });
+    expect(hrefs(mixed)).toEqual([P1.url, PRIV2.url]);
+    expect(labels(mixed)).toEqual([m("streaming.youtube.part", { n: 1 }), m("streaming.youtube.part", { n: 2 })]);
+    const items = allTestIds(mixed, "stream-replay-item");
+    expect(items).toHaveLength(2);
+    const inside = (item: ReactElement) => walk(propsOf(item).children as ReactElement[]);
+    expect(allTestIds(inside(items[0]!), "stream-replay-part"), "premise: the walk reaches inside an item").toHaveLength(1);
+    expect(allTestIds(inside(items[0]!), "stream-replay-private"), "Part 1 is public: no note").toHaveLength(0);
+    expect(allTestIds(inside(items[1]!), "stream-replay-private").map((el) => textOf(el).replace(/\s+/g, " ").trim()), "Part 2 is private: the note").toEqual([NOTE]);
+
+    // Both private: a note on each.
+    const both = body({ view: session({ ...ENDED, replayParts: [PRIV1, PRIV2] }), balance: 1 });
+    expect(notes(both)).toEqual([NOTE, NOTE]);
+
+    // A club's own link beside a private part is not private: no note on it.
+    const own = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [PRIV1] }), balance: 1 });
+    expect(hrefs(own)).toEqual([PRIV1.url, TWITCH_VOD]);
+    expect(notes(own), "the note is on the private part only").toEqual([NOTE]);
+    expect(allTestIds(inside(allTestIds(own, "stream-replay-item")[1]!), "stream-replay"), "premise: the walk reaches the club link's own anchor").toHaveLength(1);
+    expect(allTestIds(inside(allTestIds(own, "stream-replay-item")[1]!), "stream-replay-private")).toHaveLength(0);
+  });
+
+  it("the note reads in the locale's own words (es, fr, nl)", () => {
+    const en = uiDict("en");
+    for (const locale of ["es", "fr", "nl"] as const) {
+      const dict = uiDict(locale);
+      expect(dict["streaming.youtube.replay.private"], `premise: ${locale} is translated`).toBeTruthy();
+      expect(dict["streaming.youtube.replay.private"], `premise: ${locale} differs from English`).not.toBe(en["streaming.youtube.replay.private"]);
+      const html = renderToStaticMarkup(
+        <DictProvider dict={dict} locale={locale}>
+          <PhoneTabBody {...BODY} view={session({ ...ENDED, replayParts: [PRIV1] })} balance={1} />
+        </DictProvider>,
+      );
+      expect(html, locale).toContain(dict["streaming.youtube.replay.private"]!);
+      expect(html, `${locale}: not the English words`).not.toContain(en["streaming.youtube.replay.private"]!);
+    }
+  });
+
+  it("the logo follows each LINK: on a YouTube part, not on the club's Twitch link beside it", () => {
+    const tree = body({ view: session({ ...ENDED, replayUrl: TWITCH_VOD, replayParts: [P1, P2] }), balance: 1 });
+    const l = links(tree);
+    expect(l.map(iconsIn)).toEqual([1, 1, 0]);
+    // Each icon sits INSIDE its anchor: the anchors' hrefs lead to YouTube exactly where the icon is.
+    expect(l.map((el) => isYoutubeUrl(attr(el, "href") as string))).toEqual([true, true, false]);
+  });
+
+  it("the label reads in the locale's words (es), the link text too", () => {
+    const es = uiDict("es");
+    const html = renderToStaticMarkup(
+      <DictProvider dict={es} locale="es">
+        <PhoneTabBody {...BODY} view={session({ ...ENDED, replayParts: [P1, P2] })} balance={1} />
+      </DictProvider>,
+    );
+    expect(uiDict("en")["streaming.youtube.part"], "premise: es differs").not.toBe(es["streaming.youtube.part"]);
+    expect(html).toContain(es["streaming.youtube.part"]!.replace("{n}", "1"));
+    expect(html).toContain(es["streaming.youtube.part"]!.replace("{n}", "2"));
+    expect(html).not.toContain(uiDict("en")["streaming.youtube.part"]!.replace("{n}", "2"));
   });
 });

@@ -42739,6 +42739,31 @@
                                 }
                               ]
                             },
+                            "replayParts": {
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "partNo": {
+                                    "type": "integer",
+                                    "minimum": 1,
+                                    "maximum": 9007199254740991
+                                  },
+                                  "url": {
+                                    "type": "string"
+                                  },
+                                  "private": {
+                                    "type": "boolean"
+                                  }
+                                },
+                                "required": [
+                                  "partNo",
+                                  "url",
+                                  "private"
+                                ],
+                                "additionalProperties": false
+                              }
+                            },
                             "target": {
                               "type": "object",
                               "properties": {
@@ -42929,6 +42954,7 @@
                             "startedAt",
                             "endedAt",
                             "replayUrl",
+                            "replayParts",
                             "target",
                             "fixtureDecided",
                             "fixtureHeld",
@@ -42982,6 +43008,13 @@
                     "startedAt": "example",
                     "endedAt": "example",
                     "replayUrl": "example",
+                    "replayParts": [
+                      {
+                        "partNo": 1,
+                        "url": "example",
+                        "private": true
+                      }
+                    ],
                     "target": {
                       "id": "example",
                       "kind": "youtube",
@@ -43490,6 +43523,31 @@
                             }
                           ]
                         },
+                        "replayParts": {
+                          "type": "array",
+                          "items": {
+                            "type": "object",
+                            "properties": {
+                              "partNo": {
+                                "type": "integer",
+                                "minimum": 1,
+                                "maximum": 9007199254740991
+                              },
+                              "url": {
+                                "type": "string"
+                              },
+                              "private": {
+                                "type": "boolean"
+                              }
+                            },
+                            "required": [
+                              "partNo",
+                              "url",
+                              "private"
+                            ],
+                            "additionalProperties": false
+                          }
+                        },
                         "target": {
                           "type": "object",
                           "properties": {
@@ -43680,6 +43738,7 @@
                         "startedAt",
                         "endedAt",
                         "replayUrl",
+                        "replayParts",
                         "target",
                         "fixtureDecided",
                         "fixtureHeld",
@@ -43728,6 +43787,13 @@
                     "startedAt": "example",
                     "endedAt": "example",
                     "replayUrl": "example",
+                    "replayParts": [
+                      {
+                        "partNo": 1,
+                        "url": "example",
+                        "private": true
+                      }
+                    ],
                     "target": {
                       "id": "example",
                       "kind": "youtube",

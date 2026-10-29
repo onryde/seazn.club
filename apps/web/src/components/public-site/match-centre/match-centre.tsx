@@ -24,7 +24,7 @@
 //   is only ever one panel rendered at a time, so one wrapper at the single
 //   call site gives the exact same DOM contract without touching every
 //   panel file individually.
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import type { Dict as PublicDict } from "@/lib/i18n-constants";
 import type { MatchCentreTabIdT } from "@/server/public-site/match-centre-schema";
 import type { LiveFixtureData } from "../live-score-data";
@@ -42,6 +42,9 @@ export interface MatchCentreProps {
   realtime: boolean;
   dict: PublicDict;
   tabParam: string | null;
+  /** The replay player (YouTube Connect T16): inside the court card, or - when the page has no match-centre document and falls
+   *  back to the plain scoreboard - under that scoreboard, so a replay the pill no longer carries is never dropped. */
+  replay?: ReactNode;
 }
 
 function initialTab(tabParam: string | null, tabs: MatchCentreTabIdT[]): MatchCentreTabIdT {
@@ -49,7 +52,7 @@ function initialTab(tabParam: string | null, tabs: MatchCentreTabIdT[]): MatchCe
   return tabs[0]!;
 }
 
-export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam }: MatchCentreProps) {
+export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam, replay }: MatchCentreProps) {
   // CourtCard derives its freshness line from `doc.header.updatedAt`
   // (IMPORTANT 4), not the hook's own `updatedAt` — but `transport` is
   // still needed here, to thread `subscribed` down to whichever panel (or
@@ -110,6 +113,11 @@ export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam }: Ma
           dict={dict}
           subscribed={subscribed}
         />
+        {replay ? (
+          <div data-testid="mc-fallback-replay" className="mt-4 rounded-2xl bg-court p-5 text-court-ink shadow-lg [&>section]:mt-0 [&>section]:border-0 [&>section]:pt-0">
+            {replay}
+          </div>
+        ) : null}
       </div>
     );
   }
@@ -120,7 +128,7 @@ export function MatchCentre({ fixtureId, initial, realtime, dict, tabParam }: Ma
 
   return (
     <div data-testid="mc-root" className="space-y-4">
-      <CourtCard header={doc.header} dict={dict} />
+      <CourtCard header={doc.header} dict={dict} replay={replay} />
       {/* R11 fix round, C8 — the "sets" tab's label reads the sport's OWN
           unit (`doc.sets?.unit`: "set"/"game"/"period"), never a fixed
           word — see `tab-rail.tsx`'s own doc comment. */}

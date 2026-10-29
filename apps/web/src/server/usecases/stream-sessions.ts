@@ -58,6 +58,7 @@ import { CAMERA_LIVE_PHASE, PROGRAMME_PHASE_EVENT, latestLiveRung, recordEvent, 
 import { mintRelayToken, relayTokenExpiry, verifyRelayToken } from "@/server/relay/tokens";
 import { log } from "@/server/logger";
 import { captureError } from "@/lib/sentry";
+import { fixtureReplayParts } from "@/server/youtube/parts";
 import {
   NoCreditsError, consumeForSession, creditBalance, creditBreakdown, ensureMonthlyStreamGrant, ensureMonthlyStreamGrantWithRate,
   lockOrg, neverLiveRefundStanding, refundConsumeForSession, restartAllowance, streamMonthlyRate, type StreamCreditBreakdown,
@@ -2503,10 +2504,11 @@ async function endIfAutoStopDue(row: Row, deps: SessionDeps, cause: "poll" | "be
 /** T7b (§6.11, W22): one stream-tick pass's answer. Written out LITERALLY, never inferred: the cron Worker reads
  *  `data.failed` as its failure counter (R3), and apps/cron-worker/test/drift.test.ts finds that field by reading this
  *  module's CODE (comments stripped) for its numeric declaration. `deferred` (the budget ran out) is NOT a failure: the
- *  next firing, five minutes on, reaches those sessions. */
+ *  next firing — a minute on in production, five on stg — reaches those sessions. */
 export type StreamTickResult = { ticked: number; ended: number; failed: number; deferred: number };
 
-/** T7b: the pass stops STARTING ticks once this much wall-clock time has gone. The cron Worker abandons a job at 60 s
+/** T7b: the pass stops STARTING ticks once this much wall-clock time has gone (T15: the whole tick's figure — the route gives the
+ *  session pass this minus what the YouTube end step spent). The cron Worker abandons a job at 60 s
  *  (JOB_TIMEOUT_MS, apps/cron-worker/src/call.ts) and records a timeout; stopping here leaves the tick in flight 15 s to
  *  finish, so an overrun usually reads `deferred` instead. stream-tick/route.test.ts pins it below the Worker's figure.
  *  RESIDUAL (B5 review m-2), a flat figure because no derived one exists: one tick's worst case is unbounded — a Fly
@@ -2520,16 +2522,23 @@ export const STREAM_TICK_BUDGET_MS = 45_000;
  *  ended (ask 10, W19, m-5) within one firing. Each session is ticked inside its own try/catch: a throw adds 1 to `failed`
  *  and is logged, and never stops the next. A terminal result adds 1 to `ended` — "open when selected, terminal after its
  *  tick", so with two firings overlapping both may count one end; the END itself happens once (the locked re-check).
- *  Sessions not started before the wall-clock budget is spent are counted in `deferred`.
+ *  Sessions not started before the wall-clock budget are counted in `deferred`.
+ *  `budgetMs` (YouTube Connect T15) is that budget, `STREAM_TICK_BUDGET_MS` unless given: the cron route runs the YouTube end
+ *  step FIRST and hands the pass what is left of the tick's 45 s. It must be a finite number of at least 0 (anything else is
+ *  refused by name — a NaN would make the comparison below never true, i.e. no budget at all); 0 defers every open session.
  *  TEST-ONLY options: `orgIds` scopes the selection (an empty list is refused — `org_id in ()` silently read as "no
  *  filter" would tick every org) and `wallClock` scripts the budget's clock. The cron route passes neither. */
 export async function tickOpenSessions(
   deps: SessionDeps,
-  opts: { orgIds?: readonly string[]; wallClock?: () => number } = {},
+  opts: { orgIds?: readonly string[]; wallClock?: () => number; budgetMs?: number } = {},
 ): Promise<StreamTickResult> {
   const orgIds = opts.orgIds === undefined ? undefined : [...opts.orgIds];
   if (orgIds !== undefined && orgIds.length === 0) {
     throw new Error("stream tick: orgIds is empty — omit it to tick every organisation, or name at least one");
+  }
+  const budgetMs = opts.budgetMs ?? STREAM_TICK_BUDGET_MS;
+  if (!Number.isFinite(budgetMs) || budgetMs < 0) {
+    throw new Error(`stream tick: budgetMs must be a finite number of milliseconds, 0 or more, got ${budgetMs}`);
   }
   const wallClock = opts.wallClock ?? Date.now;
   const started = wallClock();
@@ -2539,7 +2548,7 @@ export async function tickOpenSessions(
      order by created_at, id`;
   const out: StreamTickResult = { ticked: 0, ended: 0, failed: 0, deferred: 0 };
   for (let i = 0; i < open.length; i++) {
-    if (wallClock() - started >= STREAM_TICK_BUDGET_MS) {
+    if (wallClock() - started >= budgetMs) {
       out.deferred = open.length - i;
       break;
     }
@@ -2640,6 +2649,7 @@ export async function currentSession(auth: AuthCtx, fixtureId: string, deps: Ses
     startedAt: row.started_at ? new Date(row.started_at).toISOString() : null,
     endedAt: row.ended_at ? new Date(row.ended_at).toISOString() : null,
     replayUrl: fx?.stream_url ?? null,
+    replayParts: await fixtureReplayParts(row.org_id, fixtureId),
     target: { id: target!.id, kind: target!.kind, label: target!.label },
     fixtureDecided: fx?.status === "decided" || fx?.status === "finalized",
     fixtureHeld: fx?.status === "needs_decision",

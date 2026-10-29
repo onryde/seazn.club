@@ -239,10 +239,11 @@ export async function recordLiveState(
   return rows.length === 1;
 }
 
-/** Step 1 of Go live's prepare: the not-enabled / restricted refusal this channel's recorded state still stands for, or null. It stands
- *  only while the recording is FRESH (younger than YOUTUBE_LIVE_STATE_FRESH_MINUTES on `now`) and only when the Streaming page would
- *  read it as that state (`liveStateOf`: a connected row, a check made since the token last changed). Anything else — never checked,
- *  a stale reading, a reconnect since, a dead grant, another code — is null, and Go live asks YouTube. */
+/** Step 1 of prepare, for an AUTOMATIC start only (prepare.ts calls it solely when `startCause` is "automatic"; an organiser's or an
+ *  operator's tap never consults it): the not-enabled / restricted refusal this channel's recorded state still stands for, or null. It
+ *  stands only while the recording is FRESH (younger than YOUTUBE_LIVE_STATE_FRESH_MINUTES on `now`) and only when the Streaming page
+ *  would read it as that state (`liveStateOf`: a connected row, a check made since the token last changed). Anything else — never
+ *  checked, a stale reading, a reconnect since, a dead grant, another code — is null, and the start asks YouTube. */
 export function freshLiveRefusal(
   r: { status: string | null; last_health_at: Date | null; last_error_code: string | null; status_since: Date | null }, now: Date,
 ): YoutubeLiveStateRefusal | null {

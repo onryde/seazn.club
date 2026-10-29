@@ -63,6 +63,10 @@ export interface BroadcastLifeInfo {
   actualEndAt: Date | null;
 }
 
+/** The longest ONE port call may take: a driver bounds every request by it (google.ts's request timeout). The end step budgets with it:
+ *  a call is started only while its slice has time left, so a pass overruns its slice by at most one call in flight. */
+export const YOUTUBE_CALL_BOUND_MS = 10_000;
+
 export interface YouTubePort {
   readonly mode: "fake" | "live";
   authorizeUrl(a: { state: string; codeChallenge: string; redirectUri: string }): string;
