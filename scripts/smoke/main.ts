@@ -35,6 +35,7 @@ import { matchCentreSmoke } from "./suites/matchCentreSmoke.ts";
 import { stageRulesFormatSmoke } from "./suites/stageRulesFormatSmoke.ts";
 import { w2cStageRulesSuite } from "./suites/w2cStageRules.ts";
 import { w2dTablesSuite } from "./suites/w2dTables.ts";
+import { w2eRefusalsSuite } from "./suites/w2eRefusals.ts";
 import { w4aTimeModelSuite } from "./suites/w4aTimeModel.ts";
 import { cricketDlsSuite } from "./suites/cricketDls.ts";
 import { configSnapshotSuite } from "./suites/configSnapshot.ts";
@@ -1232,6 +1233,10 @@ export async function main() {
   // order on two reloads. Own fresh owner; needs DATABASE_URL (the pin read).
   await suite("w2dTables", () => w2dTablesSuite());
 
+  // Format matrix W2e PR B (the write path's new refusals, the scorer's forfeit exception, rank null on a level table): one
+  // check per refusal through the live route, each beside the legal event the same ledger then takes. Own fresh Pro owner;
+  // needs DATABASE_URL (the plan flip).
+  await suite("w2eRefusals", () => w2eRefusalsSuite());
   // YouTube Connect (T21): ten probes over the cron answers, the connect and Go live refusals, the destination list, the fake control
   // route, the Streaming page, the public replay parts, Disconnect and the privacy policy. LAST on purpose: stream-tick ticks EVERY
   // open session on the server, so no earlier suite has one left to be ended under it. Own two fresh orgs; needs DATABASE_URL and
