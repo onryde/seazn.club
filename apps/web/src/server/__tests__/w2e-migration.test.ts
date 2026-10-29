@@ -493,6 +493,22 @@ const FAST4_SEEDS: Seed[] = [
     division: fast4Legacy(),
     override: { set: { tiebreakTo: 6 } },
   },
+  // Review I-1 (fix round 1): a stage that inherits the division's Fast4 set at the division's own margin needs no pin of
+  // its own (the division's reaches it through the shallow merge), so its stored rules stay as they are.
+  {
+    label: "kept: a Fast4 division (margin 2), a stage that changed only bestOf",
+    sport: "tennis",
+    variant: "fast4",
+    division: fast4Legacy(),
+    stageRules: { bestOf: 5 },
+  },
+  {
+    label: "kept: a Fast4 division (margin 2), a stage whose tie-break equals the division's",
+    sport: "tennis",
+    variant: "fast4",
+    division: fast4Legacy(),
+    stageRules: { tiebreak: fast4Legacy().tiebreak as Json },
+  },
   {
     label: "untouched: a short-sets-shaped set (tie-break at 4-all) without the key",
     sport: "tennis",
@@ -658,6 +674,16 @@ describe.skipIf(!HAS_DB)("W2e migration — the keys it removes and the margins 
         set: { ...(fast4Legacy().set as Json), tiebreakWinBy: 1 },
       });
       expect(cfgOf("fixtures.rules_override", row("a Fast4 division, a match that changed only its tie-break target").fixtureId)).toEqual({ set: { tiebreakTo: 6 } });
+      // A stage inheriting the Fast4 set at the division's margin keeps its rules, value and row (ctid); its division is pinned.
+      let kept = 0;
+      for (const s of rows.filter((r) => r.label.startsWith("kept: "))) {
+        const b = before["stages.config.rules"].find((r) => r.id === s.stageId)!;
+        expect(isObj(b.cfg) && Object.keys(b.cfg).length > 0, `${s.label}: rig, the stage has rules`).toBe(true);
+        expect(after["stages.config.rules"].find((r) => r.id === s.stageId), `${s.label}: stage rules`).toEqual(b);
+        expect(tbwb(cfgOf("divisions.config", s.divisionId)), `${s.label}: its division`).toBe(2);
+        kept += 1;
+      }
+      expect(kept, "anti-vacuity: kept stages").toBe(2);
       // 3. Untouched, value and row: not a Fast4 shape, already explicit, or not tennis.
       let untouched = 0;
       for (const s of rows.filter((r) => r.label.startsWith("untouched"))) {
