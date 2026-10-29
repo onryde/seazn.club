@@ -9,7 +9,8 @@ import "server-only";
 //      HEALTH  — `listMyChannels` (rename → the connection's channel_title AND its destination row's label; the channel gone from the
 //      grant → reconnect_needed) and `liveEnabled` (→ last_error_code youtube_live_not_enabled / youtube_live_blocked, or null), stamped
 //      with the DATABASE's clock (carry f: `liveStateOf` compares last_health_at with status_since, which the database wrote).
-//      A dead grant (`invalid_grant`, or any reconnect refusal) → reconnect_needed, status_since now: the 30-day purge clock starts.
+//      A dead grant (`invalid_grant`, or a reconnect refusal that is not the live-permission one - see carry g below) → reconnect_needed,
+//      status_since now: the 30-day purge clock starts.
 //      REFRESH — the `complete` rows whose video was last confirmed more than 25 days ago, in batches of 50 (Google's per-call id cap):
 //      still there → refreshed_at = the pass's now; gone → the row is deleted and fixtures.stream_url is cleared WHEN IT POINTS AT THAT
 //      VIDEO (a club's own link is never touched).
