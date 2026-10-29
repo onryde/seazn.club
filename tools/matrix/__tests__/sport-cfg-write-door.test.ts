@@ -179,7 +179,8 @@ describe("the generator plans no case the door refuses (variants.json input)", (
       }
       expect(named, sport).toBe(doorClass);
       seen.push(`${sport}: ${doorClass} door-class of ${v.uncoverable.length} uncoverable (${states.length} combinations)`);
-      if (sport !== "tennis") expect(doorClass, `${sport}: the door's class is non-empty`).toBeGreaterThan(0);
+      // anti-vacuity, every door sport (tennis included: its Bo1 + match tie-break pairs are the door's, TN-CF-1)
+      expect(doorClass, `${sport}: the door's class is non-empty`).toBeGreaterThan(0);
     }
     console.info(`write-door: ${seen.join("; ")}`);
   });
