@@ -32,6 +32,7 @@ import { buildTableView, cellText, tableColumns, tableLayoutFor, type TableViewI
 const EN = en as unknown as Dict;
 const NAMES: Record<string, string> = { A: "Ash", B: "Birch", C: "Cedar", D: "Dogwood" };
 
+// single-sport: net run rate and an over length (`ballsPerOver`) exist only in cricket.
 const cricket: AnySportModule = (() => {
   const m = builtinModules.find((x) => x.key === "cricket");
   if (m === undefined) throw new Error("premise: cricket is a built-in sport");

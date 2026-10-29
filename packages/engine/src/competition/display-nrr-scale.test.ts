@@ -18,6 +18,7 @@
 // `ballsPerOver`). The last case of the first block shows the other derived keys ignore the length.
 import { describe, expect, it } from "vitest";
 import type { StandingsDelta } from "../core/types.ts";
+// single-sport: net run rate and an over length (`ballsPerOver`) exist only in cricket.
 import { cricket } from "../sports/cricket/cricket.ts";
 import { reachableOutcomes, tableLayoutOf } from "./points.ts";
 import { DEFAULT_BALLS_PER_OVER, PLAIN_LAYOUT, derivedMetricText } from "./display.ts";
