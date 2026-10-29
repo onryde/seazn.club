@@ -18,9 +18,11 @@
 // buttons is pinned by reading the source (the precedent of pad-host-band-storage.test.tsx) and is driven for real by
 // e2e/scorepad-v3-ending-sanction.spec.ts.
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve } from "node:path";
 import { createElement, type ComponentProps } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import type * as TS from "typescript";
 import { describe, expect, it } from "vitest";
 import {
   EngineError,
@@ -48,11 +50,16 @@ import { memoryQueueStore, type QueueStore } from "../../queue-store";
 import type { PadTransport } from "../../transport";
 import type { PendingEvent } from "../../types";
 import { answerStep, currentStep, initialSheetState } from "../guided-sheet";
-import { PadHostV3, admitsTapWhileEndingPending, endingPlanOf, endingPromptOf, runEnding } from "../pad-host";
+import { EndingPrompt } from "../ending-prompt";
+import { PadHostV3, admitsTapWhileEndingPending, endingPlanOf, endingPromptOf, runEnding, sanctionRowOf } from "../pad-host";
 import { resolvePad } from "../registry";
 import type { ActivityEvent } from "../activity";
 import type { GuidedSheetSpec, PadHostView, SheetChoiceStep } from "../types";
 import { liveView } from "./_views";
+
+// `typescript` through require, not import: vite's import analysis chokes on the 10 MB CJS bundle (the precedent is
+// forfeit-vocabulary-scan.test.ts). The type side is a type-only import, erased before vite sees it.
+const ts: typeof TS = createRequire(import.meta.url)("typescript");
 
 // ---------------------------------------------------------------------------
 // Fixtures
@@ -518,6 +525,60 @@ describe("W2e T30 — the ending prompt model", () => {
   });
 });
 
+describe("W2e T30 fix round 1 (M-2, M-3) — the prompt's two assumptions are guards, not fallbacks", () => {
+  it("M-2: `sanctionRowOf` finds the latest LIVE row of the pending side and level, and refuses loudly when there is none", () => {
+    let swept = 0;
+    for (const m of DECLARING) {
+      const level = endLevelOf(m);
+      const eventType = decl(m).eventType;
+      const pending = { by: ENTRANT.home, level };
+      const events = ledger([START, sanctionRow(m, "home", level), sanctionRow(m, "home", level)]);
+      // Two live rows of the same side and level: the LATEST is the one to void.
+      expect(sanctionRowOf(eventType, pending, rowsOf(events)).id, `${m.key}: the latest live row`).toBe("e-3");
+      // The latest voided: the earlier live one.
+      const voided = ledger([START, sanctionRow(m, "home", level), sanctionRow(m, "home", level), ["core.void", { event_id: "e-3" }, 3] as const]);
+      expect(sanctionRowOf(eventType, pending, rowsOf(voided)).id, `${m.key}: skips a voided row`).toBe("e-2");
+      // No row at all, a voided-only row, another side's row and another level's row: each is a broken invariant (the engine
+      // said an ending is pending for THIS side and level, so a live row carrying them must exist) and a plain error, never null.
+      for (const [name, rows] of [
+        ["an empty ledger", ledger([START])],
+        ["only a voided row", ledger([START, sanctionRow(m, "home", level), ["core.void", { event_id: "e-2" }, 2] as const])],
+        ["only the other side's row", ledger([START, sanctionRow(m, "away", level)])],
+        ["only another level's row", ledger([START, sanctionRow(m, "home", "warning")])],
+      ] as const) {
+        expect(() => sanctionRowOf(eventType, pending, rowsOf(rows)), `${m.key}: ${name}`).toThrow(/no live .* row for the pending ending/);
+        swept++;
+      }
+    }
+    expect(swept).toBe(DECLARING.length * 4);
+  });
+
+  it("M-3: a sanction whose `by` is neither lineup's entrant is refused loudly — never read as the away side", () => {
+    let swept = 0;
+    for (const m of DECLARING) {
+      const rig = rigOf(m);
+      const stranger = [decl(m).eventType, { by: "NOT-A-LINEUP-ENTRANT", level: endLevelOf(m) }] as const;
+      const events = ledger([START, stranger]);
+      // The engine reads it as pending (it only needs a live end-level sanction)...
+      expect(pendingEndingSanction(m, rowsOf(events), { decided: false, abandonActive: false }), `${m.key}: the engine reads it as pending`).not.toBeNull();
+      // ...and the pad refuses to name a side for it. (The client fold itself refuses a stranger, `unknown entrant`, and the
+      // pipeline then keeps its last good state: the model is handed that state here directly, the one way to reach its guard.)
+      const state = foldClient(rig.module, rig.cfg, rig.lineups, ledger([START]));
+      expect(
+        () =>
+          endingPromptOf({ module: rig.module, rows: rowsOf(events), state, canOrganise: true, ownEventIds: new Set(), deviceLinkId: null, lineups: rig.lineups }),
+        m.key,
+      ).toThrow(/neither lineup/);
+      // The positive pair: the same ledger shape against each real side names that side.
+      for (const side of SIDES) {
+        expect(promptFor(rig, ledger([START, sanctionRow(m, side, endLevelOf(m))]), { canOrganise: true })?.side, `${m.key}/${side}`).toBe(side);
+      }
+      swept++;
+    }
+    expect(swept).toBe(DECLARING.length);
+  });
+});
+
 describe("W2e T30 — admitsTapWhileEndingPending (the modal shape of T18's admitsTap)", () => {
   it("admits a tap only when no ending is pending", () => {
     expect(admitsTapWhileEndingPending(null)).toBe(true);
@@ -653,6 +714,41 @@ describe("W2e T30 — the pad opens on the ending prompt for a ledger whose last
     expect(hosts).toBe(DECLARING.length * 5);
   });
 
+  /** The sport's own scorebug hint lines ("Tap to award the rally"), read off the dictionary's declared keys. */
+  const hintTextsOf = (m: AnySportModule): string[] =>
+    Object.entries(en as Record<string, string>)
+      .filter(([key]) => new RegExp(`^pad\\.${m.key}\\.scorebug\\..*hint$`).test(key))
+      .map(([, text]) => text);
+
+  it("I-1: under the prompt the scorebug stops inviting taps (no hint, inert halves); a quiet ledger's scorebug still does (the positive pair)", () => {
+    let hosts = 0;
+    for (const m of DECLARING) {
+      const rig = rigOf(m);
+      const hints = hintTextsOf(m);
+      expect(hints.length, `${m.key}: the dictionary declares scorebug hint lines to look for`).toBeGreaterThan(0);
+
+      // Quiet: the halves are tappable buttons, carry their hint and are not inert.
+      const quiet = renderHost(rig, ledger([START]), { canOrganise: true });
+      expect(hints.some((h) => quiet.includes(h)), `${m.key}: a live scorebug shows its hint`).toBe(true);
+      expect(quiet, `${m.key}: and is not inert`).not.toContain("data-scorebug-inert");
+      expect(quiet).not.toContain("cursor-default");
+
+      for (const o of [{ canOrganise: true }, { canOrganise: false, deviceLinkId: "dl-1" }]) {
+        const html = renderHost(rig, ledger([START, sanctionRow(m, "home", endLevelOf(m))]), o);
+        const label = `${m.key}/${o.canOrganise ? "organiser" : "scorer"}`;
+        expect(html, `${label}: the prompt is up`).toContain('data-testid="pad-ending-pending"');
+        // The two halves, each inert...
+        expect(html.match(/data-scorebug-inert="true"/g)?.length, `${label}: both halves are inert`).toBe(2);
+        expect(html.match(/aria-disabled="true"/g)?.length, `${label}: and say so to assistive tech`).toBe(2);
+        // ...and nothing on the page still invites a score tap.
+        for (const hint of hints) expect(html, `${label}: "${hint}" is gone`).not.toContain(hint);
+        expect(html, `${label}: no hover wash on a half that does nothing`).not.toContain("pad-half");
+        hosts++;
+      }
+    }
+    expect(hosts).toBe(DECLARING.length * 2);
+  });
+
   it("a scorer who may record the ending (the sanction is the last live event) is offered it, and may void only their own row", () => {
     let hosts = 0;
     for (const m of DECLARING) {
@@ -690,6 +786,51 @@ describe("W2e T30 — the host wires the pair, the modal and the buttons (source
     expect(src).toContain('data-role="v3-ending"');
   });
 
+  /** The arrow function a `const <name> = useCallback(<arrow>, [deps])` declares, found with the TypeScript parser (so a
+   *  comment, a string or a rename of a neighbour cannot satisfy it). */
+  function callbackOf(name: string): { body: TS.Block; deps: string[] } {
+    const file = ts.createSourceFile("pad-host.tsx", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let found: { body: TS.Block; deps: string[] } | null = null;
+    const visit = (node: TS.Node): void => {
+      if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && node.name.text === name && node.initializer !== undefined && ts.isCallExpression(node.initializer)) {
+        const [fn, deps] = node.initializer.arguments;
+        if (fn !== undefined && ts.isArrowFunction(fn) && ts.isBlock(fn.body) && deps !== undefined && ts.isArrayLiteralExpression(deps)) {
+          found = { body: fn.body, deps: deps.elements.map((e) => e.getText(file)) };
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    if (found === null) throw new Error(`pad-host.tsx: no \`const ${name} = useCallback(<arrow>, [deps])\``);
+    return found;
+  }
+
+  it("I-1: `send` and `handleOpenSheet` each open on the ending guard — refuse with the blocked banner and return — before anything is opened or sent", () => {
+    let pinned = 0;
+    for (const [name, firstEffect] of [
+      ["send", "stampFor"],
+      ["handleOpenSheet", "resolveSheet"],
+    ] as const) {
+      const { body, deps } = callbackOf(name);
+      const first = body.statements.find((st) => !ts.isEmptyStatement(st));
+      expect(first && ts.isIfStatement(first), `${name}: the guard is the callback's first statement`).toBe(true);
+      const guard = first as TS.IfStatement;
+      expect(guard.expression.getText(), `${name}: asks the modal predicate`).toBe("!admitsTapWhileEndingPending(endingPrompt)");
+      const then = guard.thenStatement;
+      expect(ts.isBlock(then), `${name}: the guard's body is a block`).toBe(true);
+      const effects = (then as TS.Block).statements.map((st) => st.getText());
+      expect(effects, `${name}: says why, then stops`).toEqual(['setDispatchRefusal(msg("pad.ending.blocked"));', "return;"]);
+      // The guard precedes the first thing the callback does for a tap.
+      const at = body.getText().indexOf(firstEffect);
+      expect(at, `${name}: still calls ${firstEffect}`).toBeGreaterThan(0);
+      expect(guard.getEnd() - body.getStart(), `${name}: the guard comes before ${firstEffect}`).toBeLessThan(at);
+      // A callback that does not list the prompt as a dependency reads a stale one.
+      expect(deps, `${name}: re-created when the prompt changes`).toContain("endingPrompt");
+      pinned++;
+    }
+    expect(pinned).toBe(2);
+  });
+
   it("the board, dock, swap and sheets are not rendered while an ending is pending", () => {
     const tiles = src.indexOf('<div data-role="v3-tiles">');
     expect(tiles).toBeGreaterThan(0);
@@ -700,6 +841,24 @@ describe("W2e T30 — the host wires the pair, the modal and the buttons (source
 // ---------------------------------------------------------------------------
 // Copy
 // ---------------------------------------------------------------------------
+
+describe("W2e T30 fix round 1 (M-7) — the prompt's phone/desktop boundary is `md`, like the rest of the pad (AGENTS.md \"One DOM\")", () => {
+  it("buttons stack and fill the width below `md` and sit in a row from `md`; no `sm:` boundary is left", () => {
+    let rendered = 0;
+    for (const [canRecord, canVoid] of [[true, true], [true, false], [false, true]] as const) {
+      const html = renderToStaticMarkup(
+        createElement(EndingPrompt, { sideName: "Asha", canRecord, canVoid, busy: false, onRecord: () => {}, onVoid: () => {}, t: en_t }),
+      );
+      const buttons = html.match(/<button\b[^>]*>/g) ?? [];
+      expect(buttons.length, `record ${canRecord}, void ${canVoid}`).toBe((canRecord ? 1 : 0) + (canVoid ? 1 : 0));
+      for (const b of buttons) expect(b, "a button fills the phone width").toMatch(/\bmax-md:w-full\b/);
+      expect(html).toMatch(/\bmd:flex-row\b/);
+      expect(html, "no `sm:` / `max-sm:` utility").not.toMatch(/(^|[\s"])(max-)?sm:/);
+      rendered++;
+    }
+    expect(rendered).toBe(3);
+  });
+});
 
 describe("W2e T30 — the copy is in all four locales, with its variables intact", () => {
   const LOCALES = { en, es, fr, nl } as Record<string, Record<string, string>>;

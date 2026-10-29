@@ -1695,9 +1695,11 @@ export interface EndingPromptInput {
  * (`pendingEndingSanction` over `matchEndFacts`): the same reading the write path refuses scoring on, so the pad is open on
  * the prompt exactly when the server would refuse a tap with `ENDING_SANCTION_PENDING`.
  *
- * `settlement` is read as null, as `summaryOf` does on this surface: the pad folds the ledger but does not carry the
- * organiser's settle record. A settled match whose settle is its only decision therefore still reads as pending here; the
- * server refuses that tap too, and the organiser resolves it from the console.
+ * `settlement` is read as null, as `summaryOf` does on this surface. A settle is a ledger event (`core.settle`) and the
+ * engine's fold derives a `settlement` from it, but the pad pipeline keeps only the fold's `state` and `levelWithdrawal`
+ * and does not expose it. A match whose ONLY decision is a settle therefore still reads as pending here; the server's own
+ * reading counts the settle as the decision, so it takes the next write, and the organiser resolves the prompt from the
+ * console.
  *
  * `canRecord` is asked of the SERVER's predicate (`scorerMayForfeit` over `lastLiveEvent`), so a scorer is offered the
  * ending only where the same forfeit would be admitted. Where it would not be (a pre-W2e ledger with rallies behind the
@@ -1705,14 +1707,18 @@ export interface EndingPromptInput {
  */
 export function endingPromptOf(input: EndingPromptInput): EndingPromptModel | null {
   const { module, rows } = input;
+  // A sport that declares no ending never has one: not an assumption, the declaration's own absence.
+  const decl = module.sanctionEnding;
+  if (decl === undefined) return null;
   const facts = matchEndFacts(module, { state: input.state as never, settlement: null }, rows);
   const pending = pendingEndingSanction(module, rows, facts);
   if (pending === null) return null;
-  const decl = module.sanctionEnding;
-  if (decl === undefined) return null;
+  // Two assumptions the engine's reading hands us, each a GUARD (W2e T30 fix round 1, M-2 and M-3): a pending ending is
+  // about a live sanction row, and about one of the two lineups' entrants. Either failing means the pad and the engine
+  // disagree about the ledger; the answer is a plain error that pages, never "no prompt" (the board would then offer taps
+  // the write path refuses) and never a guess at the side (the prompt would name the wrong entrant).
   const sanction = sanctionRowOf(decl.eventType, pending, rows);
-  if (sanction === null) return null;
-  const side = input.lineups.home.entrantId === pending.by ? "home" : "away";
+  const side = sideOfEntrant(input.lineups, pending.by);
   return {
     by: pending.by,
     level: pending.level,
@@ -1724,8 +1730,21 @@ export function endingPromptOf(input: EndingPromptInput): EndingPromptModel | nu
   };
 }
 
-/** The LIVE row of `eventType` the pending ending is about: the latest one carrying the pending side and level. */
-function sanctionRowOf(eventType: string, pending: PendingEndingSanction, rows: readonly ActivityEvent[]): ActivityEvent | null {
+/** Which lineup `entrantId` is: "home" or "away". Neither is a broken invariant, not a default. */
+function sideOfEntrant(lineups: LineupPair, entrantId: string): "home" | "away" {
+  if (lineups.home.entrantId === entrantId) return "home";
+  if (lineups.away.entrantId === entrantId) return "away";
+  throw new Error(
+    `endingPromptOf: the sanctioned entrant "${entrantId}" is neither lineup's entrant ("${lineups.home.entrantId}", "${lineups.away.entrantId}")`,
+  );
+}
+
+/**
+ * The LIVE row of `eventType` the pending ending is about: the latest one carrying the pending side and level. The engine's
+ * `pendingEndingSanction` reads the same rows by the same void rule, so a pending ending always has one; none is a broken
+ * invariant and throws (M-2) instead of reading as "no prompt".
+ */
+export function sanctionRowOf(eventType: string, pending: PendingEndingSanction, rows: readonly ActivityEvent[]): ActivityEvent {
   const voided = new Set<string>();
   for (const row of rows) if (row.type === "core.void" && typeof row.voids === "string") voided.add(row.voids);
   for (let i = rows.length - 1; i >= 0; i--) {
@@ -1734,7 +1753,9 @@ function sanctionRowOf(eventType: string, pending: PendingEndingSanction, rows: 
     const fields = (row.payload ?? {}) as { by?: unknown; level?: unknown };
     if (fields.by === pending.by && fields.level === pending.level) return row;
   }
-  return null;
+  throw new Error(
+    `endingPromptOf: no live ${eventType} row for the pending ending (by ${pending.by}, level ${pending.level}) in ${rows.length} ledger rows`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2875,6 +2896,7 @@ export function PadHostV3(props: PadHostV3Props) {
           t={t}
           onTap={(event: TapEvent) => send(event.type, event.payload)}
           onOpenSheet={handleOpenSheet}
+          inert={endingPrompt !== null}
         />
       </div>
 

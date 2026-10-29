@@ -15,7 +15,8 @@
 //
 // House look, from the pad's own sheets: the guided-sheet card (white, `rounded-2xl`, slate hairline) with the dock's top rule
 // in the sanction's rose instead of the dock's lime, and the sheet's one violet commit button. The sentence is the loudest
-// thing on it; both buttons are 44px and stack full-width on a phone, side by side from `sm`.
+// thing on it; both buttons are 44px and stack full-width on a phone, side by side from `md`
+// (768): AGENTS.md "One DOM" — everything below Tailwind `md` is the phone composition, so `sm` (640) is not a boundary here.
 import type { TFn } from "./context-strip";
 
 export interface EndingPromptProps {
@@ -39,10 +40,10 @@ export function endingBodyKey(canRecord: boolean, canVoid: boolean): string {
 }
 
 const recordButtonClass =
-  "min-w-0 max-w-full break-words rounded-full border-2 border-transparent bg-violet-600 px-6 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lime-400 max-sm:w-full";
+  "min-w-0 max-w-full break-words rounded-full border-2 border-transparent bg-violet-600 px-6 py-1.5 text-sm font-semibold text-white shadow-sm transition-colors hover:bg-violet-700 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-lime-400 max-md:w-full";
 
 const voidButtonClass =
-  "min-w-0 max-w-full break-words rounded-full border border-slate-300 bg-white px-6 py-1.5 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 max-sm:w-full";
+  "min-w-0 max-w-full break-words rounded-full border border-slate-300 bg-white px-6 py-1.5 text-sm font-medium text-slate-800 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-lime-400 max-md:w-full";
 
 export function EndingPrompt({ sideName, canRecord, canVoid, busy, onRecord, onVoid, t }: EndingPromptProps) {
   return (
@@ -63,7 +64,7 @@ export function EndingPrompt({ sideName, canRecord, canVoid, busy, onRecord, onV
         </p>
       </div>
       {(canRecord || canVoid) && (
-        <div className="flex min-w-0 flex-col gap-2 px-4 pb-3 pt-2 sm:flex-row sm:flex-wrap">
+        <div className="flex min-w-0 flex-col gap-2 px-4 pb-3 pt-2 md:flex-row md:flex-wrap">
           {canRecord && (
             <button
               type="button"

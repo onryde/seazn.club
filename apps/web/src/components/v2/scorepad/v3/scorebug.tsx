@@ -92,6 +92,13 @@ export interface ScorebugProps {
    *  `onTap`. The host opens it through the same `resolveSheet` path a tile
    *  uses, so a half-opened sheet and a tile-opened sheet cannot diverge. */
   onOpenSheet?: (sheetKey: string) => void;
+  /** W2e Task 30 fix round 1 (I-1) — the pad is held on a blocking prompt (an ending sanction with no ending recorded), so
+   *  every score tap would be refused by the write path. The halves stop INVITING taps: no hint line, no hover wash, a default
+   *  cursor, `aria-disabled`. A half stays a real `<button>` wired to the same handlers on purpose: a scorer's habitual tap on
+   *  the score is then answered with the host's own refusal banner ("Record the ending or void the sanction first") instead of
+   *  silence, and the host's guards stay reachable. Not the native `disabled` the tile grid uses: that swallows the tap, and
+   *  here the tap is the one question that has an answer. */
+  inert?: boolean;
 }
 
 /**
@@ -295,7 +302,7 @@ const STRIP_SIZER_CLASS =
  * combining the who-line with the hint; a non-tappable one is a plain,
  * unfocusable <div>), the context line, and the stat strip.
  */
-export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
+export function Scorebug({ spec, t, onTap, onOpenSheet, inert = false }: ScorebugProps) {
   const isPhone = useIsPhone();
   return (
     <div
@@ -318,7 +325,8 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
 
       <div className={`grid grid-cols-2 divide-x ${NIGHT_TILE_CLASSES.rule}`}>
         {spec.halves.map((half, i) => {
-          const hintText = half.hintKey ? padLabel(half.hintKey, t, half.hintKey) : "";
+          // An inert scorebug (see `ScorebugProps.inert`) says nothing about tapping: the hint is the invitation.
+          const hintText = !inert && half.hintKey ? padLabel(half.hintKey, t, half.hintKey) : "";
           const content = <HalfContent half={half} hintText={hintText} />;
           if (half.tappable) {
             return (
@@ -354,8 +362,10 @@ export function Scorebug({ spec, t, onTap, onOpenSheet }: ScorebugProps) {
                   if (half.tapEvent) onTap?.(half.tapEvent);
                 }}
                 aria-label={[whoNames(half.who), hintText].filter(Boolean).join(" ")}
+                {...(inert ? { "aria-disabled": true, "data-scorebug-inert": "true" } : {})}
                 style={{ minHeight: 44 }}
-                className={`${NIGHT_TILE_CLASSES.half} flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors focus-visible:outline focus-visible:outline-2 max-md:px-2 max-md:py-2`}
+                // `pad-half` is the hover wash + the sport's focus ring; an inert half carries neither, and its cursor says so.
+                className={`${inert ? "cursor-default" : NIGHT_TILE_CLASSES.half} flex min-w-0 flex-col items-center justify-center gap-1 px-3 py-3 text-center outline-offset-[-3px] transition-colors focus-visible:outline focus-visible:outline-2 max-md:px-2 max-md:py-2`}
               >
                 {content}
               </button>
