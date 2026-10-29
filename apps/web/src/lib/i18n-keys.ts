@@ -6070,6 +6070,8 @@ export type DictionaryKey =
   | "rules.err.formatDoesNotFitPlayBecause"
   | "rules.err.match"
   | "rules.err.matchSays"
+  | "rules.err.maxOversPerBowlerExceedsInnings"
+  | "rules.err.minOversForResultExceedsInnings"
   | "rules.err.notSettable.onlineDivision"
   | "rules.err.outcome.draw"
   | "rules.err.outcome.set"

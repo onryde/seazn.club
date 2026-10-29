@@ -1159,6 +1159,12 @@ export function setTargetBelowFloor(min: number): string {
 /** W2e RB2A-13 (TN-CF-1) — the write-door refusal of a tennis best of 1 whose final set is a match tie-break: ITF App VI's
  *  match tie-break REPLACES a deciding set, and a best of 1 has no set to replace. */
 export const BO1_MATCH_TIEBREAK = "A match tie-break replaces a deciding set; best of 1 has none.";
+/** W2e T33a (cricket) — the schema's refusals of an over count longer than the innings: a bowler's cap (`maxOversPerBowler`) and
+ *  the result floor (`minOversForResult`), each against `ballsPerInnings`. They are zod messages on the cfg itself, so they ride
+ *  CONFIG_INVALID's `issues`; a client matches them by whole message and maps them to its own localized copy
+ *  (apps/web `LOCALIZED_CONFIG_ISSUES`), the cricket refinements using these very constants. */
+export const MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS = "maxOversPerBowler exceeds the innings length";
+export const MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS = "minOversForResult exceeds the innings length";
 
 /**
  * W2e (spec 2026-10-28 §5.5, E15) — the sentences a write door refuses `cfg` with (`SportModule.configWriteIssues`), over

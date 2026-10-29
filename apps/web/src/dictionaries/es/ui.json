@@ -2490,6 +2490,8 @@
   "rules.err.shareNeedsDrawnGame": "Compartir los puntos requiere que sea posible un juego empatado: primero cambia 'Game tied at max boards' a 'Drawn game'.",
   "rules.err.setTargetBelowFloor": "Un set debe jugarse a un mínimo de {min} puntos.",
   "rules.err.bo1MatchTiebreak": "Un super tie-break sustituye al set decisivo; un partido a un solo set no tiene ninguno.",
+  "rules.err.maxOversPerBowlerExceedsInnings": "Un lanzador no puede lanzar más overs de los que tiene la entrada.",
+  "rules.err.minOversForResultExceedsInnings": "El mínimo de overs para un resultado no puede superar los que tiene la entrada.",
   "rules.err.stageFormatLocked": "{stage} ya ha empezado: sus reglas están bloqueadas.",
   "rules.err.divisionTableRulesLocked": "{stage} ya ha empezado: las reglas de la clasificación están bloqueadas.",
   "rules.err.divisionFormatLocked": "{stage} ya ha empezado; su formato de partido está bloqueado. Cambia en su lugar los partidos que aún no han empezado.",

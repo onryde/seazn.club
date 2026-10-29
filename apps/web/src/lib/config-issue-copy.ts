@@ -3,7 +3,14 @@
 // The engine's sentences are English; a sentence this codebase owns (the share-on-abandon refusals) maps to a dictionary
 // key in all four locales, and anything else shows the engine's own message rather than the generic "invalid config".
 // No `server-only`: the settings forms read it.
-import { BO1_MATCH_TIEBREAK, SET_TARGET_BELOW_FLOOR, SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS } from "@seazn/engine/sport";
+import {
+  BO1_MATCH_TIEBREAK,
+  MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS,
+  MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS,
+  SET_TARGET_BELOW_FLOOR,
+  SHARE_NEEDS_DRAWN_GAME,
+  SHARE_NEEDS_DRAWS,
+} from "@seazn/engine/sport";
 import type { MessageKey } from "@/lib/messages";
 import { ruleRefusalSentence } from "@/lib/rule-errors";
 
@@ -40,6 +47,9 @@ export const LOCALIZED_CONFIG_ISSUES: ReadonlyMap<string, MessageKey> = new Map<
   // W2e (spec §5.5; VB-CF-1, TT-CF-1, TN-CF-1): the write doors' refusals of ruling 31's floor and RB2A-13.
   [SET_TARGET_BELOW_FLOOR, "rules.err.setTargetBelowFloor"],
   [BO1_MATCH_TIEBREAK, "rules.err.bo1MatchTiebreak"],
+  // W2e T33a (cricket): the schema's two over-count refusals - schema messages, not write-door ones, so they ride the same issues.
+  [MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS, "rules.err.maxOversPerBowlerExceedsInnings"],
+  [MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS, "rules.err.minOversForResultExceedsInnings"],
 ]);
 
 /** A sentence as a whole-message matcher: literal text, each `{name}` slot a named run of digits. */

@@ -2,7 +2,16 @@
 // (server/api-v1/http.ts); this is the reader that turns them into the sentence the organiser sees, localized where this
 // app owns the sentence. Expected values come from the engine's own constants and the dictionaries, never retyped.
 import { describe, expect, it } from "vitest";
-import { BO1_MATCH_TIEBREAK, SET_TARGET_BELOW_FLOOR, SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS, setTargetBelowFloor } from "@seazn/engine/sport";
+import {
+  BO1_MATCH_TIEBREAK,
+  MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS,
+  MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS,
+  SET_TARGET_BELOW_FLOOR,
+  SHARE_NEEDS_DRAWN_GAME,
+  SHARE_NEEDS_DRAWS,
+  setTargetBelowFloor,
+} from "@seazn/engine/sport";
+import { builtinModules } from "@seazn/engine/sports";
 import { ApiV1Error } from "@/lib/client-v1";
 import { msg, type MessageKey } from "@/lib/messages";
 import en from "@/dictionaries/en/ui.json";
@@ -27,7 +36,9 @@ describe("configIssuesOf", () => {
 });
 
 // W2e Task 13 (VB-CF-1, TT-CF-1, TN-CF-1): the write-door refusals of ruling 31 and RB2A-13 join the share-on-abandon ones.
-const OWNED = [SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS, SET_TARGET_BELOW_FLOOR, BO1_MATCH_TIEBREAK];
+// W2e T33a adds cricket's two over-count refusals (schema messages, localized the same way).
+const CRICKET_OVERS = [MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS, MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS];
+const OWNED = [SHARE_NEEDS_DRAWN_GAME, SHARE_NEEDS_DRAWS, SET_TARGET_BELOW_FLOOR, BO1_MATCH_TIEBREAK, ...CRICKET_OVERS];
 
 describe("the config refusals this app owns are localized in all four locales (not the English wire text)", () => {
   it("every sentence this app owns maps to a key present in en/es/fr/nl, non-empty, and translated", () => {
@@ -47,6 +58,14 @@ describe("the config refusals this app owns are localized in all four locales (n
   it("each sentence maps to ITS key: the English copy opens with the engine's own sentence, so the pairing cannot be swapped", () => {
     let checked = 0;
     for (const [sentence, key] of LOCALIZED_CONFIG_ISSUES) {
+      if (CRICKET_OVERS.includes(sentence)) {
+        // Cricket's two are schema messages written in the field's key ("maxOversPerBowler exceeds ..."): the dictionary says it in
+        // words, so the pairing is witnessed by the field both name instead.
+        const field = sentence.split(" ")[0]!;
+        expect(key.toLowerCase(), `${key} is about ${field}`).toContain(field.toLowerCase());
+        checked++;
+        continue;
+      }
       // The engine's sentence ends in a full stop; the dictionary copy may carry the setting to change after it.
       expect((en as Record<string, string>)[key]!.startsWith(sentence.replace(/\.$/, "")), `${key} opens with its engine sentence`).toBe(true);
       checked++;
@@ -102,6 +121,38 @@ describe("the config refusals this app owns are localized in all four locales (n
     expect(configIssueText({ path: [], message: odd }, localOf(es))).toBe(odd);
     const longer = `${setTargetBelowFloor(5)} And more.`;
     expect(configIssueText({ path: [], message: longer }, localOf(es))).toBe(longer);
+  });
+
+  // The seam, through its real producer: the cricket schema's own refusal of each over count, read back through the wire's
+  // envelope, is the sentence this app localizes - a constant matching a message the schema never emits would be inert.
+  it("T33a cricket: a bowler cap or a result floor longer than the innings is refused by the REAL schema, and the refusal reads in each locale", () => {
+    const cricket = builtinModules.find((m) => m.key === "cricket")!;
+    const t20 = cricket.variants.t20 as Record<string, unknown>;
+    const innings = (cricket.configSchema.parse(t20) as { ballsPerInnings: number; ballsPerOver: number }).ballsPerInnings / 6;
+    expect(Number.isInteger(innings) && innings > 0, "premise: the t20 innings is a whole number of overs").toBe(true);
+    const cases: [string, Record<string, unknown>, string][] = [
+      ["maxOversPerBowler", { ...t20, maxOversPerBowler: innings + 1 }, MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS],
+      ["minOversForResult", { ...t20, minOversForResult: innings + 1 }, MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS],
+    ];
+    const localOf = (dict: unknown) => (key: MessageKey, vars?: Record<string, string | number>) =>
+      (dict as Record<string, string>)[key]!.replace(/\{(\w+)\}/g, (m, name: string) => (vars && name in vars ? String(vars[name]) : m));
+    let checked = 0;
+    for (const [field, cfg, sentence] of cases) {
+      // The positive pair: the same cfg at the innings length is accepted.
+      expect(cricket.configSchema.safeParse({ ...cfg, [field]: innings }).success, `${field} at the innings length is accepted`).toBe(true);
+      const parsed = cricket.configSchema.safeParse(cfg);
+      expect(parsed.success, `${field} over the innings is refused`).toBe(false);
+      if (parsed.success) continue;
+      const wire = invalid(parsed.error.issues.map((i) => ({ path: i.path, message: i.message })));
+      expect(configIssuesOf((wire as { extra?: unknown }).extra)?.map((i) => i.message), `${field}: the schema says the constant`).toContain(sentence);
+      for (const [loc, dict] of [["en", en], ["es", es], ["fr", fr], ["nl", nl]] as const) {
+        const text = settingsSaveErrorText(wire, localOf(dict), "fallback");
+        expect(text, `${loc} ${field}`).toBe((dict as Record<string, string>)[LOCALIZED_CONFIG_ISSUES.get(sentence)!]);
+        expect(text, `${loc} ${field}: not the engine's English wire text`).not.toBe(sentence);
+        checked++;
+      }
+    }
+    expect(checked, "cases x locales").toBe(8);
   });
 
   it("settingsSaveErrorText: a known issue reads its localized sentence; an unknown one reads the engine's own message", () => {

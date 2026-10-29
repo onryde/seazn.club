@@ -2543,6 +2543,8 @@
   "rules.err.shareNeedsDrawnGame": "Partager les points nécessite qu'une partie nulle soit possible : réglez d'abord « Game tied at max boards » sur « Drawn game ».",
   "rules.err.setTargetBelowFloor": "Un set doit se jouer en au moins {min} points.",
   "rules.err.bo1MatchTiebreak": "Un super tie-break remplace le set décisif ; un match en un seul set n'en a pas.",
+  "rules.err.maxOversPerBowlerExceedsInnings": "Un lanceur ne peut pas lancer plus d'overs que la manche n'en compte.",
+  "rules.err.minOversForResultExceedsInnings": "Le minimum d'overs pour un résultat ne peut pas dépasser ceux de la manche.",
   "rules.err.stageFormatLocked": "{stage} a commencé : ses règles sont verrouillées.",
   "rules.err.divisionTableRulesLocked": "{stage} a commencé : les règles du classement sont verrouillées.",
   "rules.err.divisionFormatLocked": "{stage} a commencé ; son format de rencontre est verrouillé. Modifiez plutôt les rencontres qui n'ont pas encore commencé, une par une.",

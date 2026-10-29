@@ -2543,6 +2543,8 @@
   "rules.err.shareNeedsDrawnGame": "Sharing the points needs a drawn game to be possible — set 'Game tied at max boards' to 'Drawn game' first.",
   "rules.err.setTargetBelowFloor": "A set must be played to at least {min} points.",
   "rules.err.bo1MatchTiebreak": "A match tie-break replaces a deciding set; best of 1 has none.",
+  "rules.err.maxOversPerBowlerExceedsInnings": "A bowler can't bowl more overs than the innings has.",
+  "rules.err.minOversForResultExceedsInnings": "The minimum overs for a result can't be more than the innings has.",
   "rules.err.stageFormatLocked": "{stage} has started — its rules are locked.",
   "rules.err.divisionTableRulesLocked": "{stage} has started — table rules are locked.",
   "rules.err.divisionFormatLocked": "{stage} has started; its match format is locked. Change individual unstarted matches instead.",

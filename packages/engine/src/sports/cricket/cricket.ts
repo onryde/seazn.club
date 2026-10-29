@@ -30,7 +30,14 @@ import {
   type StandingsDelta,
 } from "../../core/types.ts";
 import type { PositionCatalog } from "../../sport/catalog.ts";
-import { boundsFrom, stampAttributionRequired, winMethodTable, type DecidedIn } from "../../sport/module.ts";
+import {
+  MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS,
+  MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS,
+  boundsFrom,
+  stampAttributionRequired,
+  winMethodTable,
+  type DecidedIn,
+} from "../../sport/module.ts";
 import { awardOffenderSide, awardReasonOf, creditFor, creditedMetrics, doubleWalkoverCredit } from "../../sport/forfeit-credit.ts";
 import type {
   ModuleEvent,
@@ -126,7 +133,7 @@ export const CricketCfg = CricketCfgBase.refine(
     cfg.maxOversPerBowler === undefined ||
     cfg.ballsPerInnings === null ||
     cfg.maxOversPerBowler <= Math.ceil(cfg.ballsPerInnings / cfg.ballsPerOver),
-  { message: "maxOversPerBowler exceeds the innings length" },
+  { message: MAX_OVERS_PER_BOWLER_EXCEEDS_INNINGS },
 )
   .refine((cfg) => !(cfg.followOn?.enabled === true) || cfg.inningsPerSide === 2, {
     message: "followOn requires inningsPerSide = 2",
@@ -141,7 +148,7 @@ export const CricketCfg = CricketCfgBase.refine(
     (cfg) =>
       cfg.ballsPerInnings === null ||
       cfg.minOversForResult * cfg.ballsPerOver <= cfg.ballsPerInnings,
-    { message: "minOversForResult exceeds the innings length" },
+    { message: MIN_OVERS_FOR_RESULT_EXCEEDS_INNINGS },
   );
 export type CricketCfg = z.infer<typeof CricketCfg>;
 
