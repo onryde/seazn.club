@@ -148,7 +148,9 @@ export const setbasedGenerator: SportStreamGenerator = {
       return cfg.bestOf >= 3 && sets.length === cfg.bestOf && won(side, other) === m && won(other, side) === m - 1;
     }
     // cap: the set that ended the match ended at the cap - the winner's score IS the cap and the lead is shorter than a win-by
-    // rule would end it on (only the cap ends a set that way).
+    // rule would end it on (only the cap ends a set that way). Only that LAST set is held to it: the generator's own cap stream
+    // caps every set its winner takes, but a match that levels 1-1 and ends 30-29 in its deciding set is a cap ending too, and a
+    // capped first set under an ordinary last one is not (w2e-streams.test.ts, Task 22 M2 rows).
     return cfg.cap !== null && (last[side] as number) === cfg.cap && (last[side] as number) - (last[other] as number) < cfg.winBy;
   },
   // W2b (VB-RT-1, TT-RT-1, BD-RT-1): a rally to each side — `${key}.rally {wonBy}`, the kernel's own point event.

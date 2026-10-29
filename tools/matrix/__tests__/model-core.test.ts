@@ -1091,7 +1091,7 @@ describe("RR-1: a knockout take-back whose next match has started is refused BY 
       await play(m, d, [["Score", 0, 0]]);
       const { fin } = byOrder(m);
       expect(fin.home, "sf1 seated the final").not.toBeNull();
-      expect(await d.fixtureState(fin.id)).toMatchObject({ status: next.notStarted, last_seq: 0, outcome: null });
+      expect(await d.fixtureState(fin.id)).toEqual({ status: next.notStarted, last_seq: 0, outcome: null });
       if (!known) fin.ledger = null;
       const e = await violation(play(m, d, [["Void", 0]]));
       expect(e.check, `known ${known}`).toBe(UNEXPECTED_REFUSAL);
@@ -1250,7 +1250,7 @@ describe("RR-1: a knockout take-back whose next match has started is refused BY 
     const { sf1, fin } = byOrder(m);
     // A second writer's note: the final stays scheduled, with a live event the model never posted.
     await d.postStream(fin.id, [{ type: "core.note", payload: { text: "court change" } }]);
-    expect(await d.fixtureState(fin.id)).toMatchObject({ status: next.notStarted, last_seq: 1, outcome: null });
+    expect(await d.fixtureState(fin.id)).toEqual({ status: next.notStarted, last_seq: 1, outcome: null });
     const before = [...(sf1.ledger ?? [])];
     await play(m, d, [["Void", 0]]);
     expect(m.counts.Void).toEqual(counts(1, { refused: 1 }));

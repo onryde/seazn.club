@@ -22,7 +22,7 @@ import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
 import { setbasedGenerator } from "../lib/streams/setbased.ts";
 import { tennisGenerator } from "../lib/streams/tennis.ts";
 import {
-  ALL_OUTCOMES, DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, START, evidenceState, localEvidence, outcomeLabel, productEvidence,
+  ALL_OUTCOMES, DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, START, canon, evidenceState, localEvidence, outcomeLabel, productEvidence,
   type DecidingPath, type PathFold, type ProductFold, type RequestedOutcome, type Side, type StreamEvent, type StreamLineups, type StreamRequest,
 } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
@@ -89,6 +89,19 @@ describe("W2e request vocabulary (Task 19: the interface Tasks 20–24 build on)
     expect(STREAM_GENERATORS.football!.pathWitness, "Task 19: football builds its paths").toBeDefined();
     expect(witnessed).toBeGreaterThan(0);
     expect(refused).toBeGreaterThan(0);
+  });
+
+  it("canon is the ONE canonical form the witnesses and the cells compare with (Task 23 M4): key order is immaterial at every depth, undefined members are dropped, arrays keep their order, and different values differ", () => {
+    expect(canon({ b: 1, a: { d: [1, { y: 2, x: 1 }], c: null } })).toBe(canon({ a: { c: null, d: [1, { x: 1, y: 2 }] }, b: 1 }));
+    expect(canon({ a: 1, b: undefined })).toBe(canon({ a: 1 }));
+    expect(canon([1, 2])).not.toBe(canon([2, 1]));
+    expect(canon({ a: null })).not.toBe(canon({}));
+    expect(canon({ a: 1 })).not.toBe(canon({ a: "1" }));
+    expect(canon(undefined)).toBe("null");
+    expect(canon("x")).toBe('"x"');
+    expect(canon({})).toBe("{}");
+    // The real shapes it compares: a cfg parsed from a preset and one parsed from overrides.
+    expect(canon(resolveSportCfg("tennis", "tour"))).toBe(canon(JSON.parse(JSON.stringify(resolveSportCfg("tennis", "tour")))));
   });
 
   it("a path is witnessed on the fold's STATE as well as its outcome: matchesRequest refuses a path request handed no state, by name", () => {
@@ -798,6 +811,59 @@ describe("G4 G5 cricket: a win by super over (each still-tied policy) and a win 
     expect([...flavours].sort()).toEqual(["false", "true"]);
   });
 
+  // Task 21 review M1: the cricket witness is a CONJUNCTION. Each conjunct is perturbed alone on the state a real stream folds to,
+  // so a witness that dropped one still answers true on the others and is caught here.
+  it("the cricket path witness holds each of its conjuncts: a super over needs a done match, WHOLE closed pairs of innings (not none, not odd, not open) and the margin its method names, decided in 'so'; DLS needs the dls method AND a revised target with a source the engine writes - each perturbed alone on a real stream's state, both entry points", () => {
+    const wit = STREAM_GENERATORS[CKT]!.pathWitness!;
+    const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
+    interface St { phase: string; margin: { kind: string } | null; superOver: { innings: { closed: boolean }[] } | null; targetSource: string | null; revisedTarget: number | null }
+    let rows = 0;
+    const judge = (path: DecidingPath, cfg: CkCfg, outcome: unknown, state: unknown, want: boolean, label: string): void => {
+      const fold = (evidence: PathFold["evidence"]): PathFold => ({ sportKey: CKT, outcome: outcome as never, cfg, evidence });
+      // Both entry points answer the same: the local strict fold's state and the product's served copy of it.
+      expect(wit(path, fold(localEvidence(state))), `${path} ${label} (local)`).toBe(want);
+      expect(wit(path, fold(productEvidence({ summary: null, state }))), `${path} ${label} (product)`).toBe(want);
+      rows++;
+    };
+    for (const policy of SO_POLICIES) {
+      const cfg = ckKnockout("t20", { superOverStillTied: policy });
+      const { outcome, state } = foldK(cfg, generateStream(ckWin(cfg, "home", "superOver")));
+      const st = state as unknown as St;
+      judge("superOver", cfg, outcome, st, true, `${policy}: the real fold`);
+      const edit = (e: (s: St) => void): St => { const c = clone(st); e(c); return c; };
+      judge("superOver", cfg, outcome, edit((c) => { c.phase = "live"; }), false, `${policy}: not done`);
+      judge("superOver", cfg, outcome, edit((c) => { c.superOver = null; }), false, `${policy}: no super over on the state`);
+      judge("superOver", cfg, outcome, edit((c) => { c.superOver = { innings: [] }; }), false, `${policy}: no innings`);
+      judge("superOver", cfg, outcome, edit((c) => { c.superOver!.innings.push({ closed: true }); }), false, `${policy}: an odd number of innings (a pair is open)`);
+      judge("superOver", cfg, outcome, edit((c) => { c.superOver!.innings[c.superOver!.innings.length - 1]!.closed = false; }), false, `${policy}: the last innings is still open`);
+      judge("superOver", cfg, outcome, edit((c) => { c.margin = { kind: "runs" }; }), false, `${policy}: a margin the method does not name`);
+      judge("superOver", cfg, outcome, edit((c) => { c.margin = null; }), false, `${policy}: no margin`);
+      // The outcome is held to the engine's decidedIn as well: the same state under a regulation win is not a super-over win.
+      judge("superOver", cfg, { ...(outcome as object), method: "regulation" }, st, false, `${policy}: decided in regulation`);
+      // ...and alone: a state whose margin AGREES with a regulation method (so the margin conjunct holds) but whose outcome the engine
+      // does not call a super-over decision.
+      judge("superOver", cfg, { ...(outcome as object), method: "regulation" }, edit((c) => { c.margin = { kind: "regulation" }; }), false, `${policy}: a regulation win over a state that holds super-over innings`);
+      // A method cricket does not write at all is no evidence either - answered false, never thrown out of the witness.
+      judge("superOver", cfg, { ...(outcome as object), method: "runs" }, edit((c) => { c.margin = { kind: "runs" }; }), false, `${policy}: a method cricket does not write`);
+    }
+    for (const dlsOn of [false, true]) {
+      const cfg = ckKnockout("t20", { dls: { enabled: dlsOn, edition: "standard" } });
+      const { outcome, state } = foldK(cfg, generateStream(ckWin(cfg, "home", "dls", null)), null);
+      const st = state as unknown as St;
+      judge("dls", cfg, outcome, st, true, `dls ${dlsOn ? "on" : "off"}: the real fold (source ${String(st.targetSource)})`);
+      const edit = (e: (s: St) => void): St => { const c = clone(st); e(c); return c; };
+      judge("dls", cfg, { ...(outcome as object), method: "regulation" }, st, false, `dls ${dlsOn ? "on" : "off"}: the regulation method`);
+      judge("dls", cfg, outcome, edit((c) => { c.targetSource = null; }), false, `dls ${dlsOn ? "on" : "off"}: no target source`);
+      judge("dls", cfg, outcome, edit((c) => { c.targetSource = "organiser"; }), false, `dls ${dlsOn ? "on" : "off"}: a source the engine does not write`);
+      judge("dls", cfg, outcome, edit((c) => { c.revisedTarget = null; }), false, `dls ${dlsOn ? "on" : "off"}: no revised target`);
+      judge("dls", cfg, outcome, edit((c) => { (c as { revisedTarget: unknown }).revisedTarget = "120"; }), false, `dls ${dlsOn ? "on" : "off"}: a revised target that is no number`);
+    }
+    // A path cricket has no rule for, and a state that is no object, answer false rather than throw.
+    judge("extraTime", ckKnockout("t20"), { kind: "win", winner: ID.home, method: "regulation" }, {}, false, "a path cricket does not build");
+    judge("dls", ckKnockout("t20"), { kind: "win", winner: ID.home, method: "dls" }, null, false, "no state at all");
+    expect(rows, "anti-vacuity: rows judged").toBe(SO_POLICIES.length * 11 + 2 * 6 + 2);
+  });
+
   it("G5 bound: the chase total is the engine's CHASE_OVERSHOOT edge - target - 1 + 7 is accepted, one more is refused with the engine's code - so the generator's chase stays inside a guard that is reached", () => {
     let edges = 0;
     for (const variant of DLS_VARIANTS) {
@@ -1069,6 +1135,15 @@ describe("G6 G7 set sports: a win in the deciding set, a win by the score cap (T
     const vbCap = okCfg("volleyball", "indoor", { cap: 28 });
     expect(Object.hasOwn(sportModule("volleyball").ruleKeys!, "cap"), "volleyball's matches may set a cap").toBe(true);
     expect(Object.hasOwn(sportModule("tabletennis").ruleKeys!, "cap"), "table tennis's may not").toBe(false);
+    // Task 22 M3: the cap is a value a match can really hold - the engine's own writer check (checkFixtureOverride) accepts a
+    // volleyball match's `cap` override and refuses table tennis's by name, and the cfg the product folds under (the stage's
+    // resolved cfg with the override laid over it, fixture-cfg.ts mergeRulesOverride) is the cfg this test plays.
+    const vbStage = stageCfg("volleyball", resolveSportCfg("volleyball", "indoor"), "knockout", "indoor") as Record<string, unknown>;
+    const ttStage = stageCfg("tabletennis", resolveSportCfg("tabletennis", "bo5"), "knockout", "bo5") as Record<string, unknown>;
+    expect(checkFixtureOverride(sportModule("volleyball"), "knockout", "indoor", vbStage, { cap: 28 }), "volleyball: a match may set a cap").toEqual({ ok: true, changed: ["cap"] });
+    expect(checkFixtureOverride(sportModule("tabletennis"), "knockout", "bo5", ttStage, { cap: 28 }), "table tennis: a cap is no rule of its").toMatchObject({ ok: false, code: "UNKNOWN_RULE_KEY", path: "cap" });
+    expect(mergeRulesOverride(vbStage, { cap: 28 }).cap, "the override reached the cfg the product folds under").toBe(28);
+    expect(mergeRulesOverride(vbStage, { cap: 28 }), "...and it is the cfg played here").toEqual(vbCap);
     expect(capBinds("volleyball", vbCap)).toBe(true);
     for (const winner of SIDES) {
       const f = foldS("volleyball", vbCap, generateStream(setWin("volleyball", vbCap, winner, "cap")));
@@ -1133,16 +1208,22 @@ describe("G6 G7 set sports: a win in the deciding set, a win by the score cap (T
       const open = clone(own) as { state: { sets: { closed: boolean }[] } };
       open.state.sets[open.state.sets.length - 1]!.closed = false;
       row("a last set still open", false, events, open as unknown as ProductFold);
+      type SetRow = { home: number; away: number; closed: boolean };
+      const withSets = (edit: (sets: SetRow[]) => void): ProductFold => {
+        const c = clone(own) as { summary: { detail: { sets: SetRow[] } }; state: { sets: SetRow[] } };
+        edit(c.state.sets);
+        edit(c.summary.detail.sets);
+        return c as unknown as ProductFold;
+      };
+      // Task 22 M5: a state (and a summary strip) with NO sets - nothing was played - is no evidence of any path, and a state that
+      // seats neither entrant as the outcome's winner cannot say which side's set table to read.
+      row("a state with no sets at all", false, events, withSets((sets) => { sets.length = 0; }));
+      const strangers = clone(own) as { state: { entrants: { home: string; away: string } } };
+      strangers.state.entrants = { home: "stranger-1", away: "stranger-2" };
+      row("a state whose entrants do not include the outcome's winner", false, events, strangers as unknown as ProductFold);
       if (path === "decidingSet") {
         // A set table with a closed TIED set in it (no engine state has one): the two count guards each stand alone - one set
         // short of a loser's win, and one set past the best of N.
-        type SetRow = { home: number; away: number; closed: boolean };
-        const withSets = (edit: (sets: SetRow[]) => void): ProductFold => {
-          const c = clone(own) as { summary: { detail: { sets: SetRow[] } }; state: { sets: SetRow[] } };
-          edit(c.state.sets);
-          edit(c.summary.detail.sets);
-          return c as unknown as ProductFold;
-        };
         row("a loser's set replaced by a tie (the sets are not level before the last)", false, events, withSets((sets) => { sets[0] = { home: 5, away: 5, closed: true }; }));
         row("a tied set past the best of N (the counts are right, the table is too long)", false, events, withSets((sets) => { sets.unshift({ home: 5, away: 5, closed: true }); }));
       }
@@ -1157,6 +1238,36 @@ describe("G6 G7 set sports: a win in the deciding set, a win by the score cap (T
     expect(witnessOf("badminton", "cap", pathFoldOf("badminton", flat, plainFlat, null)), "a plain win to 21 is not a cap ending").toBe(false);
     expect(witnessOf("badminton", "cap", pathFoldOf("badminton", flat, plainFlat, productOfFold("badminton", flat, plainFlat))), "...nor on the product's state").toBe(false);
     rows += 3;
+    // Task 22 M2: the cap witness holds the set that ENDED the match to the cap, whatever the earlier sets were. (The generator's own
+    // cap stream caps every set its winner takes - the G7 sweep asserts each - but a real match can level 1-1 and then end 30-29 in
+    // its deciding set, and that is a cap ending too; a capped FIRST set under an ordinary last one is not.)
+    let capShapes = 0;
+    for (const variant of ["bwf", "bwf-3x15"]) {
+      const cfg = okCfg("badminton", variant);
+      const at = `badminton/${variant}`;
+      const ds = generateStream(setWin("badminton", cfg, "home", "decidingSet"));
+      expect(ds.map((e) => e.type), `${at}: START, three sets`).toHaveLength(4);
+      const capped = { ...ds[3]!, payload: { home: cfg.cap, away: cfg.cap! - 1 } };
+      const levelThenCap = [ds[0]!, ds[1]!, ds[2]!, capped];
+      const f = foldS("badminton", cfg, levelThenCap);
+      expect(f.state.sets.map((x) => [x.home, x.away]), `${at}: 1-1, then the deciding set at the cap`).toEqual([[f.state.sets[0]!.home, f.state.sets[0]!.away], [f.state.sets[1]!.home, f.state.sets[1]!.away], [cfg.cap, cfg.cap! - 1]]);
+      expect([setsWonBy(f.state, "home"), setsWonBy(f.state, "away")], `${at}: sets level before the last`).toEqual([2, 1]);
+      for (const asked of ["cap", "decidingSet"] as const) {
+        expect(witnessOf("badminton", asked, pathFoldOf("badminton", cfg, levelThenCap, null)), `${at}: a 1-1 match ended at the cap is a '${asked}' ending (local)`).toBe(true);
+        expect(witnessOf("badminton", asked, pathFoldOf("badminton", cfg, levelThenCap, productOfFold("badminton", cfg, levelThenCap))), `${at}: ...and so on the product's state`).toBe(true);
+      }
+      expect(matchesRequest(setWin("badminton", cfg, "home", "cap"), f.outcome, f.state), `${at}: the request match agrees`).toBe("match");
+      // A capped first set under an ordinary deciding set: the cap did not end the match.
+      const firstCapped = [ds[0]!, { ...ds[2]!, payload: { home: cfg.cap, away: cfg.cap! - 1 } }, ds[1]!, ds[3]!];
+      const g = foldS("badminton", cfg, firstCapped);
+      expect(g.outcome, `${at}: still a home win`).toMatchObject({ kind: "win", winner: ID.home });
+      expect(witnessOf("badminton", "cap", pathFoldOf("badminton", cfg, firstCapped, null)), `${at}: a capped FIRST set under an ordinary last one is no cap ending`).toBe(false);
+      expect(witnessOf("badminton", "cap", pathFoldOf("badminton", cfg, firstCapped, productOfFold("badminton", cfg, firstCapped))), `${at}: ...nor on the product's state`).toBe(false);
+      expect(witnessOf("badminton", "decidingSet", pathFoldOf("badminton", cfg, firstCapped, null)), `${at}: but it IS a deciding-set win`).toBe(true);
+      capShapes++;
+      rows += 7; // four level-then-cap witness rows, three first-set-capped rows
+    }
+    expect(capShapes, "anti-vacuity: both cap variants").toBe(2);
     console.info(`G6 G7 witness: ${rows} row(s) over ${triples.length} path win(s)`);
     expect(rows).toBeGreaterThan(triples.length * 10);
   });
@@ -1195,8 +1306,18 @@ const tnWin = (cfg: unknown, winner: Side, path?: DecidingPath): StreamRequest =
 /** A tennis cfg the product could WRITE: the variant with `over` laid on it, parsed by the module's schema and not refused by the
  *  write door (TN-CF-1) - so no stream below is built from a cfg the product would refuse at create. */
 function tnCfg(variant: string, over: Record<string, unknown> = {}): TennisCfg {
-  const cfg = stageCfg(TENNIS, resolveSportCfg(TENNIS, variant, over), "knockout", variant);
-  expect(writeConfigIssues(sportModule(TENNIS), cfg), `${variant} ${JSON.stringify(over)} is a cfg a write door refuses`).toEqual([]);
+  const resolved = resolveSportCfg(TENNIS, variant, over) as Record<string, unknown>;
+  // Task 23 M6, fail-closed: an override the schema drops (a misspelt key, a field the cfg does not have) would leave the variant
+  // unchanged and the test green on the cfg it never meant to build. Every key must reach the cfg, with the value laid on it.
+  for (const [k, v] of Object.entries(over)) {
+    expect(Object.hasOwn(resolved, k), `${variant}: the override key '${k}' was dropped by the cfg schema (a typo, not a test)`).toBe(true);
+    if (typeof v === "object" && v !== null) expect(resolved[k], `${variant}: override '${k}' reached the cfg`).toMatchObject(v);
+    else expect(resolved[k], `${variant}: override '${k}' reached the cfg`).toEqual(v);
+  }
+  // The door sees the DIVISION's cfg (what the editor writes) and the stage's folds are the same cfg under the presets: both lawful.
+  expect(writeConfigIssues(sportModule(TENNIS), resolved), `${variant} ${JSON.stringify(over)} is a cfg a write door refuses`).toEqual([]);
+  const cfg = stageCfg(TENNIS, resolved, "knockout", variant);
+  expect(writeConfigIssues(sportModule(TENNIS), cfg), `${variant} ${JSON.stringify(over)} (under the knockout presets) is a cfg a write door refuses`).toEqual([]);
   return cfg as TennisCfg;
 }
 /** The rules the tie-break of a set was played under, read off the cfg's declarations (nested/kernel.ts `rulesFor`, W2e RB2A-12):
@@ -1446,6 +1567,13 @@ describe("G8 tennis: a win down a tie-break set, a win down the short-set tie-br
     expect(matchesRequest(tnWin(cfg, "home", "tiebreakSet"), standardFold.outcome, standardFold.state)).toBe("match");
   });
 
+  it("tnCfg fails closed: an override key the schema drops, and a cfg the write door refuses, are refused by name instead of building the unmodified variant", () => {
+    expect(() => tnCfg("tour", { bestOff: 1 }), "a misspelt key").toThrow(/dropped by the cfg schema/);
+    expect(() => tnCfg("tour", { bestOf: 2 }), "a cfg the write door refuses (an even best of)").toThrow();
+    expect(tnCfg("tour", { bestOf: 1 }).bestOf, "a lawful override reaches the cfg").toBe(1);
+    expect(tnCfg("grand-slam", { finalSet: { tiebreakTo: 7 } }).finalSet, "a nested override reaches the cfg").toMatchObject({ tiebreakTo: 7 });
+  });
+
   it("the witness reads the PRODUCT's state when the fold carries it: a product that never reached the path reds a stream the local fold proves, the product's state is believed over the local fold's, a right path under the wrong key reds, a plain win reds, product null falls back to the local fold, and a half or inconsistent product reds", () => {
     const double = tnCfg("short-sets", { finalSet: { tiebreakTo: 10 } });
     const triples: readonly (readonly [string, TennisCfg, DecidingPath, DecidingPath | null])[] = [
@@ -1499,6 +1627,23 @@ describe("G8 tennis: a win down a tie-break set, a win down the short-set tie-br
       const otherCfg = clone(own) as { state: { cfg: TennisCfg } };
       otherCfg.state.cfg.set.tiebreakTo += 1;
       row("a state folded under another tie-break target than the one asked", false, events, otherCfg as unknown as ProductFold);
+      // Task 23 M3: each field the witness holds the state's cfg to, perturbed ALONE (a cfg equal in all the others), so a witness that
+      // dropped one of them is caught by its own row and not covered for by the target row above.
+      type CfgBag = Record<string, unknown> & { set: Record<string, unknown>; tiebreak: { winBy: number } };
+      const perturbed = (label: string, edit: (cfg: CfgBag) => void): void => {
+        const c = clone(own) as unknown as { state: { cfg: CfgBag } };
+        edit(c.state.cfg);
+        row(`a state folded under another ${label} than the one asked`, false, events, c as unknown as ProductFold);
+      };
+      perturbed("bestOf", (cfg) => { cfg.bestOf = (cfg.bestOf as number) + 2; });
+      perturbed("finalSet rule", (cfg) => { cfg.finalSet = typeof cfg.finalSet === "string" ? { tiebreakTo: 9 } : "same"; });
+      perturbed("match tie-break margin (tiebreak.winBy)", (cfg) => { cfg.tiebreak = { ...cfg.tiebreak, winBy: cfg.tiebreak.winBy + 1 }; });
+      perturbed("set target (set.gamesTo)", (cfg) => { cfg.set = { ...cfg.set, gamesTo: (cfg.set.gamesTo as number) + 1 }; });
+      perturbed("set margin (set.winBy)", (cfg) => { cfg.set = { ...cfg.set, winBy: (cfg.set.winBy as number) + 1 }; });
+      perturbed("tie-break trigger (set.tiebreakAt)", (cfg) => { cfg.set = { ...cfg.set, tiebreakAt: (cfg.set.tiebreakAt as number) + 1 }; });
+      const noCfg = clone(own) as { state: { cfg?: unknown } };
+      delete noCfg.state.cfg;
+      row("a state carrying no cfg at all", false, events, noCfg as unknown as ProductFold);
       const noMargin = clone(own) as { state: { cfg: TennisCfg } };
       if (noMargin.state.cfg.set.tiebreakWinBy !== undefined) { delete noMargin.state.cfg.set.tiebreakWinBy; row("a state folded without the short set's own margin", false, events, noMargin as unknown as ProductFold); }
       const otherWinner = clone(own) as { state: { outcome: { winner: string } } };

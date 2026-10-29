@@ -43,6 +43,7 @@ import { compareRow } from "../lib/pads/replay.ts";
 import { replayOnModel, type RowIn } from "./pad-model.ts";
 import { engineRefuses } from "./tennis-oracles.ts";
 import { drawsAllowed, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
+import { setSportsOf } from "./set-oracles.ts";
 import { declaredAllOut } from "../lib/streams/cricket.ts";
 import { generateStream, matchesRequest } from "../lib/streams/index.ts";
 import { DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
@@ -63,6 +64,9 @@ function outcomesFor(sport: string, cfg: unknown): RequestedOutcome[] {
     { kind: "abandon" },
   ];
 }
+/** The noControl events after which the driver sends the rest of the stream over http and the pad is never asked for it: the
+ *  interruption and the revise (cricket's DLS), whose aftermath is judged against a target the pad cannot set. */
+const SKIPS_THE_REST: ReadonlySet<string> = new Set([CRICKET_INTERRUPTION, CRICKET_REVISE]);
 /** W2a: what only the ORGANISER does — a walkover (core.forfeit), an abandon (core.abandon) and a settle
  *  (core.settle, X-ST-2). The pad adapter refuses to emit their events; the console page objects do. Their requests
  *  are marked here once, by request kind, and their events by event type. */
@@ -218,21 +222,26 @@ describe.each(ADAPTERS)("%s adapter", (sport, a) => {
     let routed = 0;
     let barred = 0;
     let afterBarred = 0;
+    let routedAfterBarred = 0;
+    let anyBarred = false;
     const noControl = new Set(a.noControl?.eventTypes ?? []);
     const routedTypes = new Set<string>();
     const afterBarredTypes = new Set<string>();
     for (const r of requestsFor(sport)) {
       // A stream holding an event the pad has no control for goes over http WHOLE (browser-driver.ts, W1d item 16): the pad
-      // is never asked for the events after the first such event, and what they need may depend on it (Task 21: a chase
-      // after a revise is judged against the revised target the pad cannot set). So they are not routed here, but their
-      // TYPES must be routed in some stream the driver does tap - checked below, never skipped.
+      // is never asked for the events after the first such event, and what they need may depend on it. The skip is SCOPED to the
+      // two events whose aftermath depends on what the pad cannot set (Task 21 review M2: a chase after an interruption/revise is
+      // judged against the revised target) - after any other noControl event (a follow-on, a match close) every event is still
+      // routed and asserted. Skipped events' TYPES must be routed in some stream the driver does tap - checked below, never skipped.
       let sawBarred = false;
+      anyBarred = false;
       for (const e of scorerEvents(streamOf(r))) {
         const at = `${JSON.stringify(r.outcome)} ${e.type}`;
         if (noControl.has(e.type)) {
           expect(() => a.stepsFor(e, ctxOf(r)), at).toThrow(/has no addressable pad control/);
           barred++;
-          sawBarred = true;
+          anyBarred = true;
+          if (SKIPS_THE_REST.has(e.type)) sawBarred = true;
           continue;
         }
         if (sawBarred) {
@@ -243,10 +252,17 @@ describe.each(ADAPTERS)("%s adapter", (sport, a) => {
         expect(a.stepsFor(e, ctxOf(r)).length, at).toBeGreaterThan(0);
         routedTypes.add(e.type);
         routed++;
+        if (anyBarred) routedAfterBarred++;
       }
     }
     console.info(`pad-adapters: ${sport}: ${routed} generated event(s) routed, ${barred} declared noControl, ${afterBarred} after one (their types routed elsewhere)`);
     expect(routed).toBeGreaterThan(0);
+    // The skip is reached exactly where it is owed (cricket's interruption/revise): a sport with none skips nothing, and cricket skips something.
+    if (sport === "cricket") expect(afterBarred, "cricket's DLS streams have events after the revise, which the pad is never asked for").toBeGreaterThan(0);
+    else expect(afterBarred, `${sport} skipped events after a noControl event`).toBe(0);
+    console.info(`pad-adapters: ${sport}: ${routedAfterBarred} event(s) routed AFTER a noControl event that does not skip the rest`);
+    // ...and the scoping is witnessed: events after cricket's follow-on / match close ARE routed and asserted (not skipped with the DLS tail).
+    if (sport === "cricket") expect(routedAfterBarred, "cricket: some event follows a follow-on or match close and is routed").toBeGreaterThan(0);
     for (const t of afterBarredTypes) expect(routedTypes.has(t), `${sport}: ${t} appears only after an event the pad has no control for, so no tappable stream routes it`).toBe(true);
     // Every type an adapter declares noControl is one its generator emits (a stale declaration is a failure), and the route is frozen.
     for (const t of noControl) expect(a.emits, t).toContain(t);
@@ -523,6 +539,14 @@ describe("the set sports' deciding-set and cap streams on the setScore sheet (W2
     volleyball: { file: "volleyball.tsx", pad: volleyballPad, summary: VOLLEYBALL_SUMMARY, tile: VOLLEYBALL_SET_SCORE_TILE },
     tabletennis: { file: "tabletennis.tsx", pad: tabletennisPad, summary: TABLETENNIS_SUMMARY, tile: TABLETENNIS_SET_SCORE_TILE },
   };
+  // Task 22 M6: the sports this table must cover are the ENGINE's set sports (the module marks them with reachableSetScores), not
+  // a list typed here - a set sport added to the registry without a skin row fails this, instead of being skipped by the sweeps.
+  const SET_SPORTS = setSportsOf(SPORT_KEYS);
+  const skinRows = (): [string, (typeof SKIN_OF)[string]][] => SET_SPORTS.map((sport) => {
+    const row = SKIN_OF[sport];
+    if (row === undefined) throw new Error(`SKIN_OF has no row for the set sport ${sport}`);
+    return [sport, row];
+  });
   /** The engine's own bound on the summary action's number fields under `cfg` (padSpec, not the skin's copy of it). */
   const boundOf = (sport: string, cfg: unknown): number => {
     const spec = sportModule(sport).padSpec?.(cfg as never);
@@ -538,8 +562,9 @@ describe("the set sports' deciding-set and cap streams on the setScore sheet (W2
   it("every set variant's deciding-set and cap summary is typed as the sheet's two number steps, each within the engine's declared field bound, counted per path", () => {
     const perPath = new Map<string, number>();
     let capNeeds = 0;
-    for (const sport of Object.keys(SKIN_OF)) {
-      const { pad, summary } = SKIN_OF[sport]!;
+    expect(SET_SPORTS.length, "anti-vacuity: the engine marks set sports").toBeGreaterThan(0);
+    expect([...Object.keys(SKIN_OF)].sort(), "SKIN_OF covers exactly the engine's set sports").toEqual([...SET_SPORTS].sort());
+    for (const [sport, { pad, summary }] of skinRows()) {
       for (const variant of variantKeys(sport)) {
         const cfg = stageCfg(sport, resolveSportCfg(sport, variant), "knockout", variant) as { cap: number | null };
         const bound = boundOf(sport, cfg);
@@ -572,7 +597,7 @@ describe("the set sports' deciding-set and cap streams on the setScore sheet (W2
 
   it("the skins bound the sheet the way the engine does: the cap when the cfg has one, else the larger target plus 20 - so a cap score (cap, cap-1) is always typeable", () => {
     let pinned = 0;
-    for (const [sport, { file }] of Object.entries(SKIN_OF)) {
+    for (const [sport, { file }] of skinRows()) {
       const skin = readFileSync(resolve(REPO, SKINS, file), "utf8");
       expect(skin, `${file}: scoreBound`).toMatch(/function scoreBound\(cfg: \w+\): number \{\s*const cap = cfg\.cap;\s*if \(typeof cap === "number"\) return cap;\s*return Math\.max\(cfg\.setTo \?\? \d+, cfg\.finalSetTo \?\? \d+\) \+ 20;\s*\}/);
       pinned++;
@@ -582,7 +607,8 @@ describe("the set sports' deciding-set and cap streams on the setScore sheet (W2
         expect(boundOf(sport, cfg), `${sport}/${variant}`).toBe(cfg.cap ?? Math.max(cfg.setTo, cfg.finalSetTo) + 20);
       }
     }
-    expect(pinned).toBe(Object.keys(SKIN_OF).length);
+    expect(pinned).toBe(SET_SPORTS.length);
+    expect(pinned).toBeGreaterThan(0);
   });
 });
 
@@ -645,7 +671,7 @@ describe("tennis", () => {
     }
   });
 
-  it("CL7-3 the adapter accepts an MTB-decided summary and refuses a 7–6 without tb where tiebreakAt is absent", () => {
+  it("CL7-3 the adapter accepts an MTB-decided summary (7-6 in the deciding set) and refuses the same 7-6 without tb in an ordinary set; with tiebreakAt ABSENT the skin's default trigger (6) still refuses a bare 7-6 as a tie-break set that omits its tb, while a match tie-break in the deciding set still accepts it", () => {
     // The match tie-break to 7 by 1 (the ENGINE's cfg: finalSet.matchTiebreakTo, tiebreak.winBy): 7-6 is a finished MATCH TIE-BREAK in the
     // deciding set and a tie-break-shaped ORDINARY set (tiebreakAt+1 : tiebreakAt) anywhere else. The engine says which, then the pad follows.
     const mtb = resolveSportCfg("tennis", "tour", { finalSet: { matchTiebreakTo: 7 }, tiebreak: { winBy: 1 } }) as { set: { tiebreakAt: number }; bestOf: number };

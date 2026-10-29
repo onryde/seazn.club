@@ -196,6 +196,18 @@ export function evidenceState(evidence: FoldEvidence): unknown {
  *  sport's own module with it — the outcome and state alone do not say which sport folded them.
  *  Product evidence (Task 21) is what a path the outcome cannot name (a shoot-out's label, a super over) is witnessed
  *  on; the scenario check refuses a drive that recorded none. */
+/** A value as canonical JSON: object keys sorted (the product's jsonb reorders them; a cfg parsed from a preset and one parsed from
+ *  overrides differ in key order), `undefined` members dropped. The ONE implementation the W2e witnesses and cells compare with
+ *  (Task 23 M4: tennis.ts and w2e-cells.ts each carried a copy). */
+export function canon(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canon).join(",")}]`;
+  if (typeof v === "object" && v !== null) {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canon(o[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v) ?? "null";
+}
+
 export interface PathFold {
   readonly sportKey: string;
   readonly outcome: MatchOutcome;

@@ -26,6 +26,7 @@
 //    kept inside CK-CH-1's bound (target - 1 + 7). It needs a single limited-overs innings (the engine's revise refusal).
 // Both are read back from the PRODUCT's state by `pathWitness`; neither is a stage decider the outcome alone names.
 import { decidedInFor } from "@seazn/engine/competition";
+import { EngineError } from "@seazn/engine/core";
 import type { PadSpec } from "@seazn/engine/sport";
 import { dlsTarget, resourcesFromBalls, soBattingSideAt } from "@seazn/engine/sports/cricket";
 import { foldStream } from "../fold.ts";
@@ -306,7 +307,13 @@ export const cricketGenerator: SportStreamGenerator = {
     if (state === null || typeof state !== "object") return false;
     const method = (fold.outcome as { method?: unknown }).method;
     if (path === "superOver") {
-      if (decidedInFor(sportModule(fold.sportKey), fold.outcome) !== "so") return false;
+      // A method cricket does not write is no super-over decision - never a throw out of a witness.
+      try {
+        if (decidedInFor(sportModule(fold.sportKey), fold.outcome) !== "so") return false;
+      } catch (e) {
+        if (EngineError.is(e)) return false;
+        throw e;
+      }
       const innings = state.superOver?.innings;
       // Done, whole pairs, every innings closed, and the margin the engine records is the one the outcome's method names.
       return state.phase === "done" && Array.isArray(innings) && innings.length >= 2 && innings.length % 2 === 0

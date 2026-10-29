@@ -21,7 +21,7 @@ import { EngineError } from "@seazn/engine/core";
 import { sportModule } from "../sport-cfg.ts";
 import { winningSetScore } from "./setbased.ts";
 import {
-  GeneratorUnsupported, OutcomeUnreachable, START, evidenceState, outcomeLabel,
+  GeneratorUnsupported, OutcomeUnreachable, START, canon, evidenceState, outcomeLabel,
   type DecidedRequest, type DecidingPath, type PathFold, type Side, type SportStreamGenerator, type StreamEvent,
 } from "./types.ts";
 
@@ -129,12 +129,6 @@ interface WitnessState {
   outcome?: { kind?: string; winner?: string } | null;
 }
 const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === "object" && v !== null && !Array.isArray(v);
-/** A value as canonical JSON: object keys sorted (the product's jsonb reorders them), undefined dropped. */
-function canon(v: unknown): string {
-  if (Array.isArray(v)) return `[${v.map(canon).join(",")}]`;
-  if (isRecord(v)) return `{${Object.keys(v).filter((k) => v[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${canon(v[k])}`).join(",")}}`;
-  return JSON.stringify(v) ?? "null";
-}
 /** The cfg fields a witness holds the product's state to (the state carries the cfg it folded under). */
 const cfgKey = (c: unknown): string => {
   const x = (isRecord(c) ? c : {}) as Partial<TennisCfg>;
