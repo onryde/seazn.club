@@ -96,9 +96,16 @@ export function buildRetirement(view: PadHostView, side: Side, input: Retirement
   };
 }
 
-/** The tiles for the sides that have a slot -- derived from the slots, never from a second condition. */
+/** The tiles for the sides that have a slot -- derived from the slots, never from a second condition.
+ *
+ *  Two tiles share a four-column row (span 2 each). When only one side has somebody on the field (the other's XI has all gone
+ *  off, `buildRetirement`'s empty case) a lone span-2 tile would leave half its row empty and shift every tile after it by two
+ *  columns, so it takes the whole row instead (W2e T33a; the same rule `tile-grid.tsx` gives a sole tile, and the period pads'
+ *  set-piece row gives for the same reason). The skins push these tiles in pairs-of-halves with the Sub tiles, so a full row
+ *  keeps whatever follows aligned. */
 export function retirementTilesOf(slots: readonly (SwapSlot | null)[]): TileSpec[] {
-  return SIDES.flatMap((side) => (slots.some((slot) => slot?.id === retireSlotId(side)) ? [retirementTile(side)] : []));
+  const tiles = SIDES.flatMap((side) => (slots.some((slot) => slot?.id === retireSlotId(side)) ? [retirementTile(side)] : []));
+  return tiles.length === 1 ? tiles.map((tile) => ({ ...tile, span: 4 as const })) : tiles;
 }
 
 /** Both sides' slots, nulls dropped. */

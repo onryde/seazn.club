@@ -224,6 +224,11 @@ describe("M12b the four sports offer the control and its payload folds through t
       expect(retireTiles(cur.view, key).some((tile) => tile.id === retireSlotId("home")), `${key}: no tile for an empty side`).toBe(false);
       // The other side still has its own control.
       expect(retireSlots(cur.view, key).some((s) => s.id === retireSlotId("away"))).toBe(true);
+      // ...and, being alone, its tile takes the whole row (T33a): a lone span-2 tile would leave the row half empty and shift every
+      // tile after it by two columns. Both sides on the field is the pair of half tiles (the "one control, two halves" test below).
+      const lone = retireTiles(cur.view, key);
+      expect(lone.map((tile) => tile.id), `${key}: only the away tile is left`).toEqual([retireSlotId("away")]);
+      expect(lone[0]!.span, `${key}: a lone retirement tile is a full row`).toBe(4);
       expect(guard, `${key}: the whole XI was retired one by one`).toBeGreaterThan(1);
       checked += 1;
     }
@@ -425,6 +430,7 @@ describe("M12b the tile and the slot: one control, two declared halves", () => {
         const action = tile.action as { swap: string };
         expect(resolveSwapSlot(action.swap, slots), `${key}: ${tile.id} names a declared slot`).not.toBeNull();
         expect(tile.kind).toBe("minor");
+        expect(tile.span, `${key}: with both sides on the field the two tiles pair in one row`).toBe(2);
         expect(tile.phases).toEqual(["live"]);
         expect(tile.sublabel, `${key}: the tile says whose player`).toBe(`scorepad.attribution.${tile.id === "retire-home" ? "home" : "away"}`);
         checked += 1;
