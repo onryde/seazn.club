@@ -212,7 +212,8 @@ const decider: Predicate = (f) => DECIDERS[f.sport]?.(f.cfg) ?? false;
  *  period/kernel.ts:1450; every schema defaults to "replay"), and hockey also
  *  under "q4_stands" once the last regulation period has started (kernel.ts
  *  applyAbandon; W2c Task 7). Cricket when DLS
- *  is on (a chase past minOversForResult, cricket.ts:1152-1161) or at two
+ *  is on and minOversForResult is short of the innings (a chase past it,
+ *  cricket.ts dlsAbandonmentPar) or at two
  *  innings a side (a draw, cricket.ts:1143). Every other sport's abandon
  *  replays (null) or records no_result. Keys recorded and pinned against each
  *  schema.json; each arm witnessed, and every committed variant checked, by a
@@ -223,7 +224,14 @@ export const ABANDON_RESULTS: Readonly<Record<string, (cfg: Readonly<Record<stri
   // result - so it is a second switch; ice hockey does not offer it.
   hockey: (c) => c.abandonPolicy === "award" || c.abandonPolicy === "q4_stands",
   icehockey: (c) => c.abandonPolicy === "award",
-  cricket: (c) => (c.dls as { enabled?: unknown } | undefined)?.enabled === true || c.inningsPerSide === 2,
+  // A DLS par decides only a chase that has faced minOversForResult (cricket.ts dlsAbandonmentPar), and a chase is open only while
+  // it is short of its innings, so a floor at the innings length leaves no undecided abandon a result (W2e ruling 157 put the floor
+  // on the editor, so the variants now reach it). The floor's keys are read whenever the innings is limited, so the reads
+  // recorded over every preset see them.
+  cricket: (c) => {
+    const floorBelowInnings = typeof c.ballsPerInnings === "number" && Number(c.minOversForResult) * Number(c.ballsPerOver) < c.ballsPerInnings;
+    return ((c.dls as { enabled?: unknown } | undefined)?.enabled === true && floorBelowInnings) || c.inningsPerSide === 2;
+  },
 });
 const abandonWithResult: Predicate = (f) => ABANDON_RESULTS[f.sport]?.(f.cfg) ?? false;
 /** Ruling 30, M12c: read from the module's own event declarations

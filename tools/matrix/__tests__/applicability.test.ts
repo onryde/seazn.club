@@ -730,7 +730,7 @@ describe("ruling 30 — M4a/M4b: ABANDON_RESULTS agrees with the real engine's a
     abandonOutcomes(sport, cfg).some((o) => o !== "null" && o !== "no_result" && !o.startsWith("refused:"));
 
   it("each key ABANDON_RESULTS reads is declared by the sport's configSchema (reads recorded, not typed)", () => {
-    const expected: Record<string, string[]> = { football: ["abandonPolicy"], hockey: ["abandonPolicy"], icehockey: ["abandonPolicy"], cricket: ["dls", "inningsPerSide"] };
+    const expected: Record<string, string[]> = { football: ["abandonPolicy"], hockey: ["abandonPolicy"], icehockey: ["abandonPolicy"], cricket: ["ballsPerInnings", "ballsPerOver", "dls", "inningsPerSide", "minOversForResult"] };
     expect(Object.keys(ABANDON_RESULTS)).toEqual(Object.keys(expected));
     let judged = 0;
     for (const [sport, fn] of Object.entries(ABANDON_RESULTS)) {
