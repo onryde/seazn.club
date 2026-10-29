@@ -15,7 +15,7 @@ const SUB_PROCESSORS = [
   },
   {
     name: "Fly.io",
-    purpose: "Application hosting (containers)",
+    purpose: "Application hosting (containers); a machine we start for a match streamed with the score overlay, which adds the overlay to the stream",
     location: "UK (London)",
     url: "https://fly.io/legal/privacy-policy",
   },
