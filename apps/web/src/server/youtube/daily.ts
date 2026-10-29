@@ -71,24 +71,45 @@ const DAY_MS = 86_400_000;
 const daysBefore = (at: Date, days: number): Date => new Date(at.getTime() - days * DAY_MS);
 
 // ─── the stuck-row bound, DERIVED from the end step's backoff (carry a) ──────────────────────────────────────────────────────────────
-/** A row that fails every time waits 1, 2, 4 … minutes and then sits at the cap. It is stuck once it has failed for this many full days AT
- *  the cap: long enough that no outage YouTube has is the cause, short enough that a key does not stay held for a week. */
+/** The most failures a schedule may take to reach its cap. Real schedules are exponential (7 for 1, 2, 4 ... 60); a bound keeps a schedule
+ *  that never gets there from hanging the module load (a `while` that never ends), and turns it into a loud, named error. */
+const MAX_FAILURES_TO_REACH_CAP = 32;
+
+/** The stuck-row bound, derived from a backoff schedule. A row that fails every time waits `backoffMinutes(1)`, `backoffMinutes(2)` ...
+ *  until it sits at `capMinutes`; it is stuck after `attempts` failures - the failures to reach the cap, plus `daysAtCap` days of them at it -
+ *  and `minutes` is how long such a row takes to get there (the waits between its first failure and its last). Throws, naming this bound,
+ *  when the schedule never reaches the cap within `MAX_FAILURES_TO_REACH_CAP` failures or the cap is not a positive whole number of minutes. */
+export function deriveStuckBounds(
+  o: { capMinutes: number; backoffMinutes: (failures: number) => number; daysAtCap: number },
+): { attempts: number; minutes: number } {
+  if (!Number.isInteger(o.capMinutes) || o.capMinutes < 1) {
+    throw new Error(`the stuck-broadcast bound cannot be derived: the backoff cap must be a positive whole number of minutes, got ${o.capMinutes}`);
+  }
+  let toCap = 0;
+  for (let n = 1; n <= MAX_FAILURES_TO_REACH_CAP; n++) {
+    if (o.backoffMinutes(n) >= o.capMinutes) {
+      toCap = n;
+      break;
+    }
+  }
+  if (toCap === 0) {
+    throw new Error(`the stuck-broadcast bound cannot be derived: the end step's backoff does not reach its ${o.capMinutes}-minute cap within ${MAX_FAILURES_TO_REACH_CAP} failures`);
+  }
+  const attempts = toCap + Math.ceil((o.daysAtCap * 24 * 60) / o.capMinutes);
+  let minutes = 0;
+  for (let k = 1; k < attempts; k++) minutes += o.backoffMinutes(k);
+  return { attempts, minutes };
+}
+
+/** A row that has failed for a full day AT the cap is stuck: long enough that no outage YouTube has is the cause, short enough that a key
+ *  does not stay held for a week. */
 const STUCK_DAYS_AT_CAP = 1;
-const failuresToReachCap = (): number => {
-  let n = 1;
-  while (endBackoffMinutes(n) < YOUTUBE_END_BACKOFF_CAP_MINUTES) n++;
-  return n;
-};
-/** The failure count at which a row is stuck: the failures to reach the cap, plus a day of them at it (31 with P6's 1, 2 … 60). */
-export const YOUTUBE_END_STUCK_AFTER_ATTEMPTS =
-  failuresToReachCap() + Math.ceil((STUCK_DAYS_AT_CAP * 24 * 60) / YOUTUBE_END_BACKOFF_CAP_MINUTES);
-/** How long a row that fails every time it is tried takes to get there: the waits between its first failure and the last. An `ending` row
- *  claimed longer ago than this is stuck by age (1503 minutes with P6). */
-export const YOUTUBE_END_STUCK_AFTER_MINUTES = (() => {
-  let total = 0;
-  for (let k = 1; k < YOUTUBE_END_STUCK_AFTER_ATTEMPTS; k++) total += endBackoffMinutes(k);
-  return total;
-})();
+const STUCK_BOUNDS = deriveStuckBounds({ capMinutes: YOUTUBE_END_BACKOFF_CAP_MINUTES, backoffMinutes: endBackoffMinutes, daysAtCap: STUCK_DAYS_AT_CAP });
+/** The failure count at which a row is stuck: the failures to reach the cap, plus a day of them at it (31 with P6's 1, 2 ... 60). */
+export const YOUTUBE_END_STUCK_AFTER_ATTEMPTS = STUCK_BOUNDS.attempts;
+/** How long a row that fails every time it is tried takes to get there. An `ending` row claimed longer ago than this is stuck by age
+ *  (1503 minutes with P6). */
+export const YOUTUBE_END_STUCK_AFTER_MINUTES = STUCK_BOUNDS.minutes;
 
 /** Which refusal each non-enabled live state is recorded as: the INVERSE of the shared table connections.ts `liveStateOf` reads, so the
  *  writer here and the reader cannot disagree. */

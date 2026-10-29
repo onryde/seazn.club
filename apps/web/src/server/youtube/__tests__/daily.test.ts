@@ -51,7 +51,8 @@ import { createSession as organiserStart, currentSession, stopSession, type Sess
 import type { AuthCtx } from "@/server/api-v1/auth";
 import { connectionViews, saveConnectionFromGrant } from "../connections";
 import {
-  YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES, purgeConnectionData, youtubeDaily, type PurgeResult, type YoutubeDailyResult,
+  YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES, deriveStuckBounds, purgeConnectionData, youtubeDaily,
+  type PurgeResult, type YoutubeDailyResult,
 } from "../daily";
 import { endBackoffMinutes, endDueBroadcasts, type YoutubeEndResult } from "../end-step";
 import { FakeYouTube } from "../fake";
@@ -786,6 +787,27 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       const m = await playAndStop(w, w.fixtures[0]!);
       const waits = await failTo(w, m.broadcastId, P6_BACKOFF.length, afterStop(m, min(6)));
       expect(waits, "the waits the real end step stored after each failure").toEqual(P6_BACKOFF);
+    });
+
+    it("the derivation of the bound is BOUNDED: a backoff that never reaches its cap (or a cap that is not a positive whole number of minutes) throws a clear error instead of hanging the module load; the arithmetic is checked on inputs whose answer is worked by hand", () => {
+      // Worked by hand: waits 1, 2, 3, 4, 5, 5 ... with a 5-minute cap -> 5 failures to reach it, a day at it is ceil(1440 / 5) = 288 more
+      // = 293 failures, and the 292 waits between the first failure and the last are 1 + 2 + 3 + 4 + 288 * 5 = 1450 minutes.
+      expect(deriveStuckBounds({ capMinutes: 5, backoffMinutes: (n) => Math.min(n, 5), daysAtCap: 1 })).toEqual({ attempts: 293, minutes: 1450 });
+      // And the real schedule's (typed: 7 failures to reach 60 + 24 at it = 31; 63 + 24 * 60 = 1503 minutes).
+      expect(deriveStuckBounds({ capMinutes: 60, backoffMinutes: endBackoffMinutes, daysAtCap: 1 })).toEqual({ attempts: 31, minutes: 1503 });
+      expect([YOUTUBE_END_STUCK_AFTER_ATTEMPTS, YOUTUBE_END_STUCK_AFTER_MINUTES], "the exported constants are that derivation").toEqual([31, 1503]);
+
+      let refused = 0;
+      for (const bad of [
+        { capMinutes: 60, backoffMinutes: () => 1, daysAtCap: 1 },              // never reaches the cap
+        { capMinutes: 60, backoffMinutes: (n: number) => n, daysAtCap: 1 },     // reaches it only after 60 steps - beyond the bound
+        { capMinutes: 0, backoffMinutes: () => 0, daysAtCap: 1 },               // a zero cap would divide by zero
+        { capMinutes: 2.5, backoffMinutes: () => 3, daysAtCap: 1 },             // not a whole number of minutes
+      ]) {
+        expect(() => deriveStuckBounds(bad), JSON.stringify({ cap: bad.capMinutes })).toThrow(/stuck-broadcast bound/);
+        refused++;
+      }
+      expect(refused, "refusals checked").toBe(4);
     });
 
     it("live with a PERMANENT complete refusal: untouched at 30 failures; at 31 it is finalized 'end_stuck', reported once (ids and codes only), counted failed, its KEY IS FREE (the next Go live reuses it, no second key) and its stream_url rules are unchanged", async () => {
