@@ -36,6 +36,7 @@ Import only from these. Nothing else in the package is public.
 | `./sport` | the `SportModule` contract, the registry and the position catalog |
 | `./sports` | every shipped sport module, aggregated (`builtinModules`, `registerBuiltins`) |
 | `./sports/*` | one sport module, by directory name |
+| `./pad` | the scoring pad's rule facts, declared once beside the fold: per-sport record types and `padSpec` lookups; phone-safe |
 | `./stats` | the player statistics fold |
 | `./competition` | the sport-agnostic competition engine: stages, standings, tiebreakers, progression |
 | `./exports` | pure document-model builders |
@@ -59,7 +60,7 @@ Importing a subpath registers nothing: the sport registry is filled only by an e
 
 ### Phone-safe subpaths
 
-The phone-safe subpaths are `./core`, `./sport`, `./sports` and `./sports/*`. They are listed in `phone-subpaths.json` (also exported as
+The phone-safe subpaths are `./core`, `./sport`, `./sports`, `./sports/*` and `./pad`. They are listed in `phone-subpaths.json` (also exported as
 `./phone-subpaths.json`, and shipped in the package), which pins the closure too: `closure.modules` is the sorted set of modules those
 subpaths reach by value import. Its entries are `src/` paths, the workspace's own; the package ships their compiled twins, the `.js` file
 of the same name under `dist/`.

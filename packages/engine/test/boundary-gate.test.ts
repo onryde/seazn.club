@@ -612,8 +612,9 @@ describe("phone-safe subpaths: the real engine", () => {
   }, PHONE_MS);
 
   it("lists the D25 phone subpaths, and every one is a key of the package's exports", () => {
-    // D25 (plan 1c-1): core, sport, sports and every sport directory. The list is the authority; this pins it against the decision.
-    expect(cfg.subpaths).toEqual(["./core", "./sport", "./sports", "./sports/*"]);
+    // D25 (plan 1c-1): core, sport, sports and every sport directory; D35 (pad wave P0.1) added ./pad, the rule facts the scoring pad reads.
+    // The list is the authority; this pins it against the decisions.
+    expect(cfg.subpaths).toEqual(["./core", "./sport", "./sports", "./sports/*", "./pad"]);
     for (const p of cfg.subpaths) expect(Object.keys(pkg.exports), p).toContain(p);
   });
 
