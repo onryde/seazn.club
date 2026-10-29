@@ -162,7 +162,8 @@ Only after the agent has finished S0–S4. Disconnect is refused while a match i
    removed its access.
 3. Verify at Google: reload the third-party access page. **Record** what it lists for Seazn now (gone entirely, or only
    its YouTube access gone, or still listed), against the two snapshots from steps 1 and 2.
-4. Verify in YouTube Studio: the stream keys Seazn created (named **Seazn stream key**) are gone from the stream-key
+4. Verify in YouTube Studio: the stream keys Seazn created (named **Seazn Club · stream key 1**, **… 2**, … by pool slot, in the
+   organisation's default locale) are gone from the stream-key
    list. **The two videos stay** ("Videos already on YouTube stay there.", says the Disconnect dialog).
 5. Verify on the match page: the replay player and the stream link are gone.
 
@@ -511,7 +512,7 @@ Read from the tree on `4e3b165274`.
 | Dead-grant purge: 7 days | `YOUTUBE_DEAD_GRANT_PURGE_DAYS`, `lib/youtube.ts:206` |
 | Refresh at 25 days, ceiling 30, failed-row retention 30, revoke allowance 5 s | `server/youtube/daily.ts:86`, `:89`, `:94`, `:107` |
 | 10 live keys per channel | `lib/youtube.ts:33` |
-| Pooled key's name in Studio: "Seazn stream key" | `server/youtube/prepare.ts:66` |
+| Pooled key's name in Studio: "Seazn Club · stream key {n}", n = its pool slot 1–10 (never the match; es/fr/nl words in `dictionaries/*/ui.json` `streaming.youtube.streamKeyTitle`); read just before the stream is made, so two Go lives racing may share a number | `growPool` in `server/youtube/prepare.ts` |
 | Title shape, 100-character limit, `vs` word from `schedule.vs` | `server/youtube/title.ts:13-14`, `prepare.ts:279-285`, `dictionaries/en/ui.json` |
 | Streaming page `/streaming` | `STREAMING_PAGE_HREF`, `lib/youtube.ts:221` |
 | Google permissions page the policy names | `GOOGLE_THIRD_PARTY_ACCESS_URL`, `lib/youtube.ts:195` |
