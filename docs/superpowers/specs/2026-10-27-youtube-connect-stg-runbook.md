@@ -385,6 +385,27 @@ None of these is B7 code, and none is for the agent.
 4. **Testing-mode 7-day token expiry until the app is verified.** With no feature switch (D11), every organisation that
    connects before verification sees "Reconnect needed" weekly, and Seazn purges its stored data 7 days after the
    connection stops working (§5 item 4). Time the prod release against the verification result.
+5. **The public replay embed does not honour "Made for kids" (Google Developer Policies III.E.4.j).** Not a stg
+   blocker, but it must be fixed before prod and before Google verifies the app. The policy (read on the policy page,
+   2026-10-29, section III.E.4.j under "Handling YouTube Data and Content") requires an app that embeds YouTube videos to
+   look up the Made For Kids status of each embedded video and, for a video designated Made For Kids, to turn off
+   tracking and make sure all data collection for that player complies with the applicable law. Seazn does neither:
+   - The public match page embeds the replay (`ReplayEmbed`, the shared fixture page, `app/(public)/shared/…/fixtures/[fixtureId]/page.tsx:464`;
+     `components/public-site/match-centre/replay-embed.tsx`). There is
+     no status lookup: `youtube_broadcasts` has no made-for-kids column (`V479__youtube_connect.sql:172-195`), only the
+     CONNECTION carries the organisation's current choice (`:64`), and the one place Seazn sends it is when it creates a
+     broadcast (`selfDeclaredMadeForKids`, `server/youtube/google.ts:315`). A video the club later flips in Studio is
+     never read back.
+   - The page keeps the site's analytics: the root layout mounts the consent-gated PostHog (`AnalyticsBootstrap`
+     and `CookieConsent`, `app/layout.tsx:77`, `:79`) on every route, the public match page included.
+   - The obvious case is a youth club that connects with **Made for kids = Yes**. This run uses No, so it will not
+     show the problem. (Line numbers in this item were pinned on `32b79e5aab`.)
+
+   Decide, then have it built (B5's surface): either (a) show only the "Open on YouTube" link, with no player, for a
+   broadcast made while the connection was Made For Kids (needs the flag kept per broadcast); or (b) look up
+   `status.madeForKids` with `videos.list` in the 25-day refresh, keep it per broadcast, and switch analytics off on a
+   page that embeds a Made For Kids video. The privacy and cookie pages say nothing about this yet; whichever you choose,
+   say it there too.
 
 ---
 
