@@ -198,12 +198,15 @@ describe("POST /api/cron/relay-sweep", () => {
     expect(await read({ ...YZERO, checked: 9, deferred: 4, failed: 1 }), "and a failure beside it still is, by its own count").toEqual({ "data.youtube.failed": 1 });
   });
 
-  it("the YouTube pass's wall-clock slice, plus the one call that can be in flight past it, is at most half the Worker's per-job timeout - the relay sweep behind it keeps the rest (B6 batch review m3)", async () => {
-    const { YOUTUBE_DAILY_BUDGET_MS } = await vi.importActual<typeof import("@/server/youtube/daily")>("@/server/youtube/daily");
+  it("the YouTube pass's YouTube calls - its slice, the dead grants' revoke allowance, and the one call that can be in flight past EACH - fit in two thirds of the Worker's per-job timeout; the relay sweep behind it keeps the rest (B6 round 2 C2)", async () => {
+    const { YOUTUBE_DAILY_BUDGET_MS, YOUTUBE_DAILY_REVOKE_BUDGET_MS } = await vi.importActual<typeof import("@/server/youtube/daily")>("@/server/youtube/daily");
     const { YOUTUBE_CALL_BOUND_MS } = await vi.importActual<typeof import("@/server/youtube/port")>("@/server/youtube/port");
     expect(JOB_TIMEOUT_MS, "the Worker's timeout was read from the Worker's own module").toBeGreaterThan(0);
     expect(YOUTUBE_DAILY_BUDGET_MS, "a slice that fits at least one call").toBeGreaterThan(YOUTUBE_CALL_BOUND_MS);
-    expect(YOUTUBE_DAILY_BUDGET_MS + YOUTUBE_CALL_BOUND_MS).toBeLessThanOrEqual(JOB_TIMEOUT_MS / 2);
+    expect(YOUTUBE_DAILY_REVOKE_BUDGET_MS, "an allowance that fits at least one revoke").toBeGreaterThan(0);
+    // The two budgets are spent one after the other (the connection leg, then the dead grants), each overrunning by at most one call.
+    const worstCase = YOUTUBE_DAILY_BUDGET_MS + YOUTUBE_DAILY_REVOKE_BUDGET_MS + 2 * YOUTUBE_CALL_BOUND_MS;
+    expect(worstCase).toBeLessThanOrEqual((JOB_TIMEOUT_MS * 2) / 3);
   });
 
   // R5 (Task 14b): a production deployment with RELAY_DRIVERS unset has no relay — every provider port refuses. The sweep

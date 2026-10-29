@@ -1464,7 +1464,7 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(seen, "each pass reached a channel the earlier ones had not").toEqual([1, 2, 3]);
     });
 
-    it("the slice bounds the YouTube calls of the connection leg and nothing else: with no time at all the expired grant is still deleted, the 30-day-dead grant is still purged AND revoked at Google (the policy's step, past the budget), and the connected channel is deferred", async () => {
+    it("the slice bounds the YouTube calls of the connection leg and nothing else: with no time at all the expired grant is still deleted, the 30-day-dead grant is still purged AND revoked at Google (the revoke has its own allowance, not the slice), and the connected channel is deferred", async () => {
       const w = await world();
       const dead = await w.addChannel();
       await markReconnectNeeded(sql, w.orgId, dead.connectionId);
@@ -1481,6 +1481,67 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(w.fake.calls.slice(before).map((c) => c.method), "the only call is the revoke, past the budget: the connected channel was not asked, no stream deleted").toEqual(["revoke"]);
       expect((await broadcastsOfConnection(w.connectionId)).length, "the ceiling is not the budget's: the stale row went anyway").toBe(0);
       expect((await keyRows(w.connectionId)).map((k) => k.id), "and so did the idle key (the match's own young key stays)").not.toContain(idle.id);
+    });
+  });
+
+  // ═══ the dead-grant revokes' own allowance (B6 round 2 C2) ═══════════════════════════════════════════════════════════════
+  describe("the dead-grant revoke allowance", () => {
+    /** One pass over this organisation whose clock is the YouTube calls made (a second each): an allowance of `revokes` seconds lets
+     *  exactly `revokes` Google revokes start. */
+    const revoking = (w: Pick<World, "orgId" | "fake">, revokes: number) => {
+      const base = w.fake.calls.length;
+      return youtubeDaily(w.fake, new Date(), { orgIds: [w.orgId], revokeBudgetMs: revokes * 1000, wallClock: () => (w.fake.calls.length - base) * 1000 });
+    };
+    const statusOf = async (id: string) => (await connRow(id)).status;
+
+    it("EMPTY CASE FIRST: no dead grant, an allowance of ZERO defers nothing and calls nobody; then four grants dead past the ceiling and an allowance for two revokes: the two longest-dead are revoked at Google and purged, the other two are left whole and counted deferred; the next pass finishes them; a third finds nothing", async () => {
+      const empty = await seedOrg();
+      const idle = new FakeYouTube();
+      expect(await youtubeDaily(idle, new Date(), { orgIds: [empty.auth.orgId], revokeBudgetMs: 0 })).toEqual(ZERO);
+      expect(idle.calls).toEqual([]);
+
+      const w = await world();
+      const chans = [{ connectionId: w.connectionId }, await w.addChannel(), await w.addChannel(), await w.addChannel()];
+      for (const [i, c] of chans.entries()) {
+        await markReconnectNeeded(sql, w.orgId, c.connectionId);
+        await shiftConnection(c.connectionId, YOUTUBE_DATA_CEILING_DAYS + 10 - i);   // chans[0] has been dead the longest
+      }
+      expect(await Promise.all(chans.map((c) => statusOf(c.connectionId))), "premise: four dead grants past the ceiling").toEqual(Array(4).fill("reconnect_needed"));
+      const revokes0 = callsOf(w.fake, "revoke");
+
+      expect(await revoking(w, 2), "an allowance for two revokes").toEqual({ ...ZERO, purged: 2, deferred: 2 });
+      expect(callsOf(w.fake, "revoke") - revokes0, "two Google revokes were made").toBe(2);
+      expect(await Promise.all(chans.map((c) => statusOf(c.connectionId))), "the longest-dead two are revoked, the others untouched").toEqual(["revoked", "revoked", "reconnect_needed", "reconnect_needed"]);
+
+      expect(await revoking(w, 2), "the next pass finishes the rest").toEqual({ ...ZERO, purged: 2 });
+      expect(callsOf(w.fake, "revoke") - revokes0, "four revokes in all").toBe(4);
+      expect(await Promise.all(chans.map((c) => statusOf(c.connectionId)))).toEqual(Array(4).fill("revoked"));
+      expect(await revoking(w, 2), "and a third pass finds nothing").toEqual(ZERO);
+    });
+
+    it("a deferred purge leaves the connection's data whole, and an allowance spent holds back ONLY the purges that need a Google revoke: a grant whose token will not open (nothing to revoke) is purged past a spent allowance", async () => {
+      const w = await world();
+      const m = await completedMatch(w, w.fixtures[0]!);
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);
+      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      const before = w.fake.calls.length;
+      expect(await revoking(w, 0), "no allowance: held back, not failed").toEqual({ ...ZERO, deferred: 1 });
+      expect(w.fake.calls.length - before, "and nobody was called").toBe(0);
+      expect((await connRow(w.connectionId)).status).toBe("reconnect_needed");
+      expect((await broadcastRow(m.broadcastId)).state, "its data is whole").toBe("complete");
+      expect(await withUnreadableTokens(() => revoking(w, 0)), "nothing to revoke, nothing to wait for: purged").toEqual({ ...ZERO, purged: 1 });
+      expect((await connRow(w.connectionId)).status).toBe("revoked");
+      expect(callsOf(w.fake, "revoke"), "no token, no revoke").toBe(0);
+
+      // The other purge with nothing to revoke: the account another connection still runs on (Google would drop that one's token too).
+      const sub = `acct-allowance-${randomUUID()}`;   // unique per run
+      const s = await world({ sub });
+      const sibling = await s.addChannel({ sub });
+      await markReconnectNeeded(sql, s.orgId, s.connectionId);
+      await shiftConnection(s.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      expect(await revoking(s, 0), "a shared account is not revoked, so a spent allowance does not hold its purge back").toEqual({ ...ZERO, checked: 1, purged: 1 });
+      expect(callsOf(s.fake, "revoke")).toBe(0);
+      expect((await connRow(sibling.connectionId)).status).toBe("connected");
     });
   });
 

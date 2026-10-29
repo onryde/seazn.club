@@ -23,8 +23,12 @@ import "server-only";
 //   2d. IDLE KEYS — the pooled keys of ANY non-revoked connection that nothing has used for the whole ceiling are deleted (`deleteIdleKeys`):
 //      the row at once, with no token and no budget; the liveStream at YouTube afterwards, best effort, only where a token opens.
 //   3. STUCK BROADCASTS (carries a, b) — see `settleStuck`.
-//   4. DEAD GRANTS — reconnect_needed for 30 days → revokeConnection (token-store's ONE statement, R1/B1-R1) + `purgeConnectionData`.
-//      No call is made to Google: the grant is already dead, and a revoke of it would answer nothing.
+//   4. DEAD GRANTS — reconnect_needed for 30 days → revokeConnection (token-store's ONE statement, R1/B1-R1) + `purgeConnectionData`, then,
+//      after the commit and best effort, the grant is revoked AT GOOGLE (DP III.E.4: the access goes too; not every flip is a dead token). That
+//      revoke is the one Google call outside the connection slice, and has its OWN allowance (`YOUTUBE_DAILY_REVOKE_BUDGET_MS`): a purge that
+//      needs a revoke starts only while the allowance has time left, and is otherwise left WHOLE for the next pass (counted `deferred`) -
+//      the token is cleared with the purge, so a purge cannot be done now and its revoke later. A purge with nothing to revoke (a token that
+//      will not open, an account another connection runs on) calls nobody and is never held back.
 //   5. STRANDED ROWS (carry c) — a revoked connection that still holds rows, keys, a sub, an archived watch link or a pending grant (the
 //      end step skips revoked connections, so an open broadcast on one never settles; a disconnect whose purge transaction failed leaves
 //      the same) is purged.
@@ -32,9 +36,11 @@ import "server-only";
 //      it holds a title and (usually) a video id, i.e. YouTube data, so DP III.E.4's 30 days applies.
 //
 // THE BUDGET. The pass shares the Worker's 60 s with the relay sweep that follows it, and a connection is three or four Google calls: every
-// call of the connection leg (health, refresh, idle keys) starts only while `YOUTUBE_DAILY_BUDGET_MS` has time left (`gated`). A connection
-// the slice cut - never started, or left between two calls - is counted `deferred` (not `failed`: the Worker's alert is unchanged) and,
-// being the least recently checked, is the first one tomorrow. The database-only legs (the purges, the retention) call nobody and always run.
+// call of the connection leg (health, refresh) and the idle keys' stream deletes starts only while `YOUTUBE_DAILY_BUDGET_MS` has time left
+// (`gated`). A connection the slice cut - never started, or left between two calls - is counted `deferred` (not `failed`: the Worker's alert
+// is unchanged) and, being the least recently checked, is the first one tomorrow. The dead grants' Google revokes take their own, smaller
+// allowance (4). The database-only deletes (the lapsed videos, the idle and retired key rows, the retention, a purge with nothing to
+// revoke) call nobody, spend neither, and always run: the 30-day ceiling is not the budget's to defer.
 //
 // DECISIONS the brief left open (also in the T17 report):
 //  - g (insufficientLivePermissions). YouTube's "the request is not authorized to <live>" is a fact about the CHANNEL's live permission,
@@ -67,8 +73,8 @@ import { YoutubeTokenUnreadableError, markReconnectNeeded, openToken, revokeConn
  *  confirmed / deleted (removed: a video gone from YouTube, a complete row of a dead grant past the ceiling, or a failed row past its
  *  retention); `keysRemoved` pooled stream keys deleted (retired ones, and ones idle past the ceiling); `purged` connections whose data was
  *  purged; `failed` what did not work and is retried tomorrow, plus every stuck broadcast (the Worker alerts on this one); `deferred`
- *  connections the pass's wall-clock budget cut short (not started, or left between two of their YouTube calls) - not a failure: they are
- *  the least recently checked, so tomorrow's pass reaches them first. */
+ *  connections a wall-clock budget cut short (not started, or left between two of their YouTube calls) and dead grants whose purge waits
+ *  for the revoke allowance - not a failure: tomorrow's pass reaches them. */
 export type YoutubeDailyResult = {
   checked: number; reconnectNeeded: number; refreshed: number; removed: number; keysRemoved: number; purged: number; failed: number; deferred: number;
 };
@@ -83,12 +89,18 @@ export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = YOUTUBE_DATA_CEILING_DAYS;
 /** A `failed` broadcast row is deleted this long after it failed (DP III.E.4; the plan names no other figure). */
 export const YOUTUBE_FAILED_ROW_RETENTION_DAYS = YOUTUBE_DATA_CEILING_DAYS;
 
-/** The pass's own wall-clock slice for its YouTube calls. The pass runs on the relay-sweep firing, inside the cron Worker's 60 s job
- *  timeout (apps/cron-worker call.ts), ahead of the relay sweep, which has no budget of its own: a connection costs three or four Google
- *  calls of up to `YOUTUBE_CALL_BOUND_MS` each, so a long list of channels could use the whole minute. A call starts only while the slice
- *  has time left, so the pass overruns it by at most the one call in flight; with that overrun it takes at most half the Worker's minute,
- *  and the sweep keeps the rest. (The pass's database-only legs - the purges, the retention - are not bounded by it: they call nobody.) */
-export const YOUTUBE_DAILY_BUDGET_MS = 20_000;
+/** The pass's own wall-clock slice for its health, refresh and idle-stream YouTube calls. The pass runs on the relay-sweep firing, inside
+ *  the cron Worker's 60 s job timeout (apps/cron-worker call.ts), ahead of the relay sweep, which has no budget of its own: a connection
+ *  costs three or four Google calls of up to `YOUTUBE_CALL_BOUND_MS` each, so a long list of channels could use the whole minute. A call
+ *  starts only while the slice has time left, so the pass overruns it by at most the one call in flight. */
+export const YOUTUBE_DAILY_BUDGET_MS = 15_000;
+/** The dead grants' own allowance for their Google revokes (DP III.E.4: a purged connection's access must go too). A revoke is a call that
+ *  cannot wait for a slice with room - the purge clears the token it needs - so it is bounded separately: a purge that needs one starts
+ *  only while this has time left (counted from the first such purge), else it waits for tomorrow, whole. It overruns by at most the one
+ *  call in flight. The pass in all, YouTube calls only: `YOUTUBE_DAILY_BUDGET_MS` + `YOUTUBE_DAILY_REVOKE_BUDGET_MS` + two calls in flight
+ *  (`YOUTUBE_CALL_BOUND_MS` each) = 40 s, two thirds of the Worker's minute - the relay sweep keeps the rest (the database work is not
+ *  counted: it is fast, and the policy's deletes are not the clock's to cut). */
+export const YOUTUBE_DAILY_REVOKE_BUDGET_MS = 5_000;
 
 /** videos.list takes at most 50 ids per call (Google). */
 const VIDEOS_PER_CALL = 50;
@@ -272,7 +284,11 @@ export async function accountIsShared(tx: Tx, connectionId: string, googleSub: s
 // ─── port calls ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 interface Conn { id: string; org_id: string; channel_id: string; channel_title: string }
-interface Pass { port: YouTubePort; now: Date; orgIds: string[] | undefined; out: YoutubeDailyResult; hooks: DailyHooks }
+interface Pass {
+  port: YouTubePort; now: Date; orgIds: string[] | undefined; out: YoutubeDailyResult; hooks: DailyHooks;
+  /** Whether a dead grant's Google revoke may start now (`YOUTUBE_DAILY_REVOKE_BUDGET_MS`): the one rule for starting each of them. */
+  revokeRoom: () => boolean;
+}
 
 /** A port call. Whatever it throws becomes a YouTubeError: a driver maps Google's answers already, and anything else is YouTube not
  *  answering. The original is dropped, never wrapped (it may hold what must not be kept) - and REPORTED, as a fresh error that names only
@@ -291,8 +307,9 @@ async function viaPort<T>(call: () => Promise<T>, c: Pick<Conn, "id" | "org_id">
 }
 
 /** The port with every call the connection leg makes gated on the slice: a call starts only while `room()` says there is time, else it
- *  throws `BudgetSpent` without calling (end-step.ts's gate, for the daily pass's calls). `revoke` is NOT gated: the Google revoke of a
- *  purged grant is the policy's step and is made past the budget, as a disconnect's is. Each call runs on the ORIGINAL port (`this`). */
+ *  throws `BudgetSpent` without calling (end-step.ts's gate, for the daily pass's calls). `revoke` is NOT gated by the slice: the Google
+ *  revoke of a purged grant is the policy's step, and `purgeDeadGrant` bounds it by its own allowance before it commits the purge. Each
+ *  call runs on the ORIGINAL port (`this`). */
 function gated(port: YouTubePort, room: () => boolean): YouTubePort {
   const g = Object.create(port) as YouTubePort;
   const gate = <A extends unknown[], R>(call: (...a: A) => Promise<R>) =>
@@ -631,7 +648,12 @@ async function settleStuck(p: Pass): Promise<void> {
  *  too). Not every flip is a dead grant - a channel missing from the grant's list, or a 401 on a call that is not the live one, leave a
  *  token Google still honours - and a token that is dead answers `invalid_token`, which `revoke` resolves. Skipped for a grant another
  *  connection's account shares (see `accountIsShared`), and when the token cannot be opened (damaged, or no key: reported, ids only - the
- *  purge itself never waits on a token). A refusal is reported by its code; the purge stands. Made past the budget, like a disconnect's. */
+ *  purge itself never waits on a token). A refusal is reported by its code; the purge stands.
+ *
+ *  The revoke is made outside the connection slice, and inside its OWN allowance (`YOUTUBE_DAILY_REVOKE_BUDGET_MS`), decided in the
+ *  transaction, before anything is written: a purge that needs a revoke when the allowance has no room commits nothing and returns
+ *  `"deferred"` - the connection stays `reconnect_needed`, whole, with its token, and the next pass (oldest dead first) takes it. A purge
+ *  with nothing to revoke is not held back. */
 async function purgeDeadGrant(p: Pass, c: { id: string; org_id: string }): Promise<void> {
   const cutoff = daysBefore(p.now, YOUTUBE_DEAD_GRANT_PURGE_DAYS);
   const purged = await sql.begin(async (tx) => {
@@ -645,10 +667,15 @@ async function purgeDeadGrant(p: Pass, c: { id: string; org_id: string }): Promi
       if (!(err instanceof YoutubeTokenUnreadableError)) captureError(err, { orgId: c.org_id, route: "youtube.daily.purge_token", extra: { connectionId: c.id } });
     }
     const shared = await accountIsShared(tx, c.id, row.google_sub);
+    if (token !== null && !shared && !p.revokeRoom()) return "deferred" as const;   // nothing written yet: the next pass takes it whole
     if (!(await revokeConnection(tx, c.org_id, c.id))) return null;
     return { data: await purgeConnectionData(tx, c.id, p.hooks), token, shared };
   });
   if (purged === null) return;
+  if (purged === "deferred") {
+    p.out.deferred++;
+    return;
+  }
   p.out.purged++;
   expirePages(purged.data.divisions);
   if (purged.token !== null && !purged.shared) await revokeAtGoogle(p, c, purged.token);
@@ -697,11 +724,12 @@ async function eachOf<T extends { id: string; org_id: string }>(p: Pass, name: s
 }
 
 /** The daily YouTube pass. `orgIds` (test-only) scopes every leg to those organisations; an empty list is refused - `org_id in ()` read as
- *  "no filter" would health-check, refresh and PURGE every organisation. `budgetMs` (default `YOUTUBE_DAILY_BUDGET_MS`) and `wallClock`
- *  (test-only: scripts the clock) bound the YouTube calls of the connection leg. Never throws for a fault in one connection or one leg. */
+ *  "no filter" would health-check, refresh and PURGE every organisation. `budgetMs` (default `YOUTUBE_DAILY_BUDGET_MS`) bounds the YouTube
+ *  calls of the connection leg, `revokeBudgetMs` (default `YOUTUBE_DAILY_REVOKE_BUDGET_MS`) the dead grants' Google revokes, and
+ *  `wallClock` (test-only: scripts the clock) is what both read. Never throws for a fault in one connection or one leg. */
 export async function youtubeDaily(
   port: YouTubePort, now: Date,
-  o: { orgIds?: readonly string[]; hooks?: DailyHooks; budgetMs?: number; wallClock?: () => number } = {},
+  o: { orgIds?: readonly string[]; hooks?: DailyHooks; budgetMs?: number; revokeBudgetMs?: number; wallClock?: () => number } = {},
 ): Promise<YoutubeDailyResult> {
   const orgIds = o.orgIds === undefined ? undefined : [...o.orgIds];
   if (orgIds !== undefined && orgIds.length === 0) {
@@ -713,7 +741,14 @@ export async function youtubeDaily(
   const budgetMs = o.budgetMs ?? YOUTUBE_DAILY_BUDGET_MS;
   /** Time left in the slice: the ONE rule for starting each of the connection leg's YouTube calls. */
   const room = () => wallClock() - started < budgetMs;
-  const p: Pass = { port: gated(port, room), now, orgIds, out: zero(), hooks };
+  /** Time left in the revoke allowance, counted from the first purge that needs a revoke (the database work before it is not the allowance's). */
+  const revokeBudgetMs = o.revokeBudgetMs ?? YOUTUBE_DAILY_REVOKE_BUDGET_MS;
+  let revokeStarted: number | null = null;
+  const revokeRoom = () => {
+    revokeStarted ??= wallClock();
+    return wallClock() - revokeStarted < revokeBudgetMs;
+  };
+  const p: Pass = { port: gated(port, room), now, orgIds, out: zero(), hooks, revokeRoom };
   const inOrgs = (column: string) => (orgIds ? sql`and ${sql(column)} in ${sql(orgIds)}` : sql``);
 
   // 1. Expired pending grants: the sealed token and the picker's channel titles go with them.
