@@ -17,6 +17,7 @@
 // A pre-W2e ledger is written by raw SQL, the one way such a row can exist now: the shape an earlier build left behind.
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, describe, expect, it, vi } from "vitest";
+import type { ForfeitReason } from "@seazn/engine/core";
 import { builtinModules } from "@seazn/engine/sports";
 import { sql, withTenant } from "@/lib/db";
 import { POST as eventsRoute } from "@/app/api/v1/fixtures/[id]/events/route";
@@ -44,7 +45,7 @@ afterAll(async () => {
 
 // ---------------------------------------------------------------------------------------------------------------
 // The rulebook: D13's text (spec 2026-10-28 §3, D13; §5.2), one row per sanction level that a scorer's forfeit may end.
-type Reason = "disqualified" | "retired";
+type Reason = Extract<ForfeitReason, "disqualified" | "retired">; // tsc: both are members of the engine's FORFEIT_REASONS
 interface D13Row { sport: string; variant: string; level: string; reason: Reason }
 const D13: readonly D13Row[] = [
   { sport: "badminton", variant: "bwf", level: "disqualification", reason: "disqualified" }, // the black card
@@ -53,7 +54,7 @@ const D13: readonly D13Row[] = [
   { sport: "volleyball", variant: "indoor", level: "disqualification", reason: "retired" },
 ];
 /** The forfeit reasons a writer may send (X-RS-1; `withdrew` is the cascade's alone, PF-2). */
-const WRITER_REASONS = ["walkover", "retired", "disqualified"] as const;
+const WRITER_REASONS = ["walkover", "retired", "disqualified"] as const satisfies readonly ForfeitReason[];
 /** A sanction level each declaring sport records that is neither an end nor a prompt level, and a sport that declares
  *  no ending at all with the level that ends badminton: a scorer's forfeit after either is an ordinary organiser-only
  *  forfeit. */
