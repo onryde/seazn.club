@@ -294,7 +294,7 @@ describe("M12b a substitute who came on through the pad's own Sub can then retir
       const sub = subSlotOf(base.view, key, "home");
       expect(sub, `${key}: the pad offers a Sub`).toBeDefined();
       const off = sub!.offCandidates![0]!;
-      const on = sub!.candidates[0]!;
+      const on = (sub!.candidates ?? [])[0]!;
       expect(on, `${key}: there is someone on the bench`).toBeDefined();
       const subbed = applyRetirement(key, base, sub!.buildEvent(off, on));
       expect(engineOnField(subbed.state, subbed.lineups, "home"), `${key}: the substitute is on`).toContain(on);
