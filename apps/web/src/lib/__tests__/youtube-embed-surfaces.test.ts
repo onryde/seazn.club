@@ -23,8 +23,9 @@ function sourceFiles(dir: string): string[] {
 // Built lazily: nothing is read at collection.
 const files = () => sourceFiles(SRC_ROOT).map((p) => ({ rel: relative(SRC_ROOT, p).split("\\").join("/"), text: readFileSync(p, "utf8") }));
 
-/** What makes a browser load YouTube's player or a video's thumbnail: calling the embed or thumbnail builder, or naming either host. */
-const LOADS_YOUTUBE_MEDIA = /youtubeEmbedUrl\(|youtubeThumbnailUrl\(|youtube-nocookie\.com|i\.ytimg\.com/;
+/** What makes a browser load YouTube's player or a video's thumbnail: calling the embed or thumbnail builder, or naming any host that
+ *  serves either (the privacy-enhanced embed host, the plain embed path, and both thumbnail hosts - i.ytimg.com and img.youtube.com). */
+const LOADS_YOUTUBE_MEDIA = /youtubeEmbedUrl\(|youtubeThumbnailUrl\(|youtube-nocookie\.com|youtube\.com\/embed|i\.ytimg\.com|img\.youtube\.com/;
 /** The registered files. lib/youtube.ts DEFINES the builders and hosts; proxy.ts names the hosts in the CSP; replay-embed.tsx is the one
  *  component that uses them; the cookie policy page describes them in prose. */
 const REGISTERED = new Set([
@@ -43,6 +44,19 @@ describe("the YouTube player and thumbnail are built in one place, and that plac
     expect(hits.filter((h) => !REGISTERED.has(h)), "a file outside the registry loads YouTube media").toEqual([]);
     // Every registered file really is found by the probe, so the registry cannot go stale unnoticed.
     expect(hits.filter((h) => REGISTERED.has(h)).sort()).toEqual([...REGISTERED].sort());
+  });
+
+  it("the probe recognises every way to load YouTube media, and passes a plain link to YouTube (anti-vacuity: each alternative is witnessed)", () => {
+    const loads = [
+      "youtubeEmbedUrl(id)", "youtubeThumbnailUrl(id)", "https://www.youtube-nocookie.com/embed/abc", "https://i.ytimg.com/vi/abc/hqdefault.jpg",
+      "https://www.youtube.com/embed/abc", "https://img.youtube.com/vi/abc/0.jpg",
+    ];
+    for (const text of loads) expect(LOADS_YOUTUBE_MEDIA.test(text), `the probe must flag: ${text}`).toBe(true);
+    expect(loads.length, "anti-vacuity: six forms were put to it").toBe(6);
+    // The positive pair's other half: what a made-for-kids part IS (a link out) loads nothing, so it must not be flagged.
+    for (const text of ["https://www.youtube.com/watch?v=abc", "https://youtu.be/abc", "https://www.youtube.com/t/terms", "https://www.youtube.com/"]) {
+      expect(LOADS_YOUTUBE_MEDIA.test(text), `the probe must pass: ${text}`).toBe(false);
+    }
   });
 
   it("the component that builds the iframe and the thumbnail decides with mayEmbedReplay - and so does nothing else need to: it is the ONLY caller of the builders", () => {
