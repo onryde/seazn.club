@@ -434,8 +434,11 @@ const ACTION = "btn min-h-11 px-3 max-md:w-full";
  *  connection (the relay is not offered): the only action is Disconnect, because Reconnect and Settings belong to a channel that can
  *  stream. `onDisconnected` hands the page the channel's name and what became of the grant at Google, for the notice that outlives this
  *  row (a disconnected channel leaves the list). */
-export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = false, onDisconnected, refreshAfter = true }: {
+export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = false, onDisconnected, onGone, refreshAfter = true }: {
   t: StreamTarget; canEdit: boolean; orgId: string; badge: ReactNode; disconnectOnly?: boolean; onDisconnected?: (news: DisconnectNews) => void;
+  /** The server says this channel is no longer connected (a second tab disconnected it): the page that keeps its own list drops the row, as
+   *  it does after a success - there is nothing left to disconnect, and no notice, since THIS tab disconnected nothing. */
+  onGone?: () => void;
   /** Re-read the page after a disconnect (the default). The restricted page turns it off: see youtube-disconnect-only-panel.tsx. */
   refreshAfter?: boolean;
 }) {
@@ -499,8 +502,15 @@ export function YoutubeChannelRow({ t, canEdit, orgId, badge, disconnectOnly = f
       onDisconnected?.({ name: y.channelTitle, outcome: done?.revokeOutcome ?? "not_confirmed" });
       if (refreshAfter) router.refresh();
     } catch (err) {
-      // Already disconnected elsewhere (404): the list is the news. A match using the channel (409) is a sentence under the row.
-      if (refreshAfter && wireOf(err)?.status === 404) router.refresh();
+      // Already disconnected elsewhere (404): the list is the news - re-read, or dropped by the page that keeps its own list. A match
+      // using the channel (409) is a sentence under the row.
+      if (wireOf(err)?.status === 404) {
+        if (refreshAfter) router.refresh();
+        if (onGone) {
+          onGone();
+          return;
+        }
+      }
       setError(youtubeErrorText(msg, err));
     } finally {
       saving.current = false;

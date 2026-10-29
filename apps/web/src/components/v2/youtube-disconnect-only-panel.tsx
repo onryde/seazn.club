@@ -40,6 +40,7 @@ export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; 
                   setGone((g) => new Set(g).add(t.id));
                   setDisconnected(news);
                 }}
+                onGone={() => setGone((g) => new Set(g).add(t.id))}
               />
             ))}
           </ul>

@@ -1225,6 +1225,7 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe("the disconnect-only Streaming page (T18) - an org that can no longer go live can still disconnect", () => {
+  const inUse409 = () => new HttpError(409, "A match is using this channel", "YOUTUBE_IN_USE");
   const two = (): StreamTarget[] => [
     channel({ connectionId: "c-1", channelTitle: "Riverside FC" }, { id: "t-1" }),
     channel({ connectionId: "c-2", channelTitle: "Riverside Juniors" }, { id: "t-2" }),
@@ -1271,6 +1272,41 @@ describe("the disconnect-only Streaming page (T18) - an org that can no longer g
     expect(rowsOf(panel).map((r) => attr(r, "t") as StreamTarget).map((t) => t.id), "only the other channel is left").toEqual(["t-2"]);
     expect(attr(ofType(panel.tree(), YoutubeDisconnectedNotice)!, "name")).toBe("Riverside FC");
     expect(nav.refresh, "the page is not re-read: the server would 404 an org with nothing left").not.toHaveBeenCalled();
+  });
+
+  it("F3: a channel that was already disconnected elsewhere (the DELETE answers 404) leaves the restricted page's list like a success - no dead row with an error, no re-read, no false 'disconnected' notice - and the LAST one leaves the empty line (anti-vacuity: both rows)", async () => {
+    answerWith(async () => { throw await wire(new HttpError(404, "Not found")); });
+    const panel = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: two() });
+    expect(rowsOf(panel), "premise: two rows").toHaveLength(2);
+    expect(attr(rowsOf(panel)[0]!, "onGone"), "the panel gives each row a way to drop itself").toBeTypeOf("function");
+
+    const first = renderIsland(YoutubeChannelRow, propsOf(rowsOf(panel)[0]!) as never);
+    await click(byTestId(first.tree(), "youtube-disconnect"));
+    expect(apiCalls.map((c) => c.url), "the DELETE was tried").toEqual(["/api/v1/orgs/o/youtube-connections/c-1"]);
+    expect(rowsOf(panel).map((r) => (attr(r, "t") as StreamTarget).id), "only the other channel is left").toEqual(["t-2"]);
+    expect(byTestId(first.tree(), "youtube-error"), "no dead row with an error").toBeUndefined();
+    expect(ofType(panel.tree(), YoutubeDisconnectedNotice), "this tab disconnected nothing: no notice").toBeUndefined();
+    expect(nav.refresh, "a re-read of the last-channel page would 404").not.toHaveBeenCalled();
+
+    const second = renderIsland(YoutubeChannelRow, propsOf(rowsOf(panel)[0]!) as never);
+    await click(byTestId(second.tree(), "youtube-disconnect"));
+    expect(rowsOf(panel)).toHaveLength(0);
+    expect(byTestId(panel.tree(), "stream-disconnect-only-empty"), "the empty line").toBeDefined();
+    expect(nav.refresh).not.toHaveBeenCalled();
+  });
+
+  it("F3: only a 404 drops the row - a 409 (a match is using it) and a dropped connection keep it and say why", async () => {
+    let kept = 0;
+    for (const [name, err] of [["409", () => wire(inUse409())], ["network", async () => new TypeError("Failed to fetch")]] as const) {
+      answerWith(async () => { throw await err(); });
+      const panel = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: two() });
+      const real = renderIsland(YoutubeChannelRow, propsOf(rowsOf(panel)[0]!) as never);
+      await click(byTestId(real.tree(), "youtube-disconnect"));
+      expect(rowsOf(panel), name).toHaveLength(2);
+      expect(byTestId(real.tree(), "youtube-error"), name).toBeDefined();
+      kept++;
+    }
+    expect(kept).toBe(2);
   });
 
   it("the LAST channel leaves: an empty line instead of a list, the news stays, still no re-read (the empty case, then the sequence)", async () => {
