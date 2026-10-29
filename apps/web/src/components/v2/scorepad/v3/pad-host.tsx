@@ -2757,6 +2757,10 @@ export function PadHostV3(props: PadHostV3Props) {
   }
 
   async function handleUndo(eventId: string) {
+    // W2e T31 (T29 carry, M1): the pad's ONE void path, behind the ribbon's Take back, the activity row's Void and the ending
+    // prompt's "Void the sanction". A void resolves whatever "record the ending or void the sanction first" a refused tap left
+    // on screen, so it clears the banner like the prompt's own two answers do (N1).
+    setDispatchRefusal(null);
     const decision = decideUndo(eventId, held?.id ?? null);
     setVoidingId(eventId);
     try {

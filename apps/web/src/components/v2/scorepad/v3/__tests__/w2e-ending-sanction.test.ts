@@ -859,6 +859,21 @@ describe("W2e T30 — the host wires the pair, the modal and the buttons (source
     expect(pinned).toBe(2);
   });
 
+  it("T29 carry (M1): every void path clears the stale banner - the ribbon's Take back and the activity row's Void both go through `handleUndo`, which clears it first", () => {
+    // The banner is `dispatchRefusal`. `recordEnding` / `voidSanction` clear it (N1 above), but the ribbon's Take back and the
+    // activity row's Void reach `handleUndo` directly, so after a tap refused under the prompt ("record the ending or void
+    // the sanction first") a void that RESOLVED the pending ending left the red sentence on screen.
+    const body = functionOf("handleUndo");
+    const first = body.statements.find((st) => !ts.isEmptyStatement(st));
+    expect(first?.getText(), "handleUndo clears the refusal before it decides or writes anything").toBe("setDispatchRefusal(null);");
+    // The two entry points named by the carry really are handleUndo's callers (a rename would orphan the clear)...
+    expect(src).toMatch(/takeBack\.kind === "cancel-question" \? cancelQuestion\(\) : void handleUndo\(takeBack\.target\)/);
+    expect(src).toMatch(/onVoid=\{\(eventId\) => void handleUndo\(eventId\)\}/);
+    // ...and Take back's third branch (cancelling an open question) clears it in `cancelQuestion`.
+    const cancel = callbackOf("cancelQuestion").body.getText();
+    expect(cancel).toContain("setDispatchRefusal(null);");
+  });
+
   it("the board, dock, swap and sheets are not rendered while an ending is pending", () => {
     const tiles = src.indexOf('<div data-role="v3-tiles">');
     expect(tiles).toBeGreaterThan(0);
