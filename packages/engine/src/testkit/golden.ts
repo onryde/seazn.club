@@ -1150,7 +1150,7 @@ const COVERAGE_CONFIG_KNOBS: Record<string, Record<string, unknown>> = {
  *  these lineups ride on the stream (`GoldenStream.lineups`). */
 const COVERAGE_BENCH: Record<string, number> = { football: 7 };
 
-function benchedLineups(module: AnySportModule, cfg: unknown): LineupPair | undefined {
+export function benchedLineups(module: AnySportModule, cfg: unknown): LineupPair | undefined {
   const size = COVERAGE_BENCH[module.key];
   if (size === undefined) return undefined;
   const base = defaultLineupPair(resolvePositions(module, cfg));
