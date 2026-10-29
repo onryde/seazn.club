@@ -413,6 +413,20 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect((await connRow(w.connectionId)).status).toBe("reconnect_needed");
     });
 
+    it("a connection revoked AFTER the pass listed it and BEFORE its token was opened is skipped: not checked, YouTube is asked nothing, nothing fails (the stranded leg then purges what it held)", async () => {
+      const w = await world();
+      let ran = 0;
+      const out = await youtubeDaily(w.fake, new Date(), {
+        orgIds: [w.orgId],
+        hooks: { afterConnectionsListed: async () => { expect(await revokeConnection(sql, w.orgId, w.connectionId)).toBe(true); ran++; } },
+      });
+      expect(ran, "premise: the connection was listed").toBe(1);
+      // Not checked, nothing failed, YouTube asked nothing; the revoked connection still holds its Google account id, so the STRANDED
+      // leg (a different guard) purges it in the same pass.
+      expect(out).toEqual({ ...ZERO, purged: 1 });
+      expect(w.fake.calls, "no token, no call").toEqual([]);
+    });
+
     it("the connection's channel is gone from the grant's list -> reconnect_needed (nothing to stream to; the purge clock starts); a channel that IS listed beside others stays connected", async () => {
       const w = await world();
       const other = await w.addChannel();
@@ -671,6 +685,58 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(await streamUrlOf(w.fixtures[0]!)).toBe(youtubeWatchUrl(m.ytId));
     });
 
+    it("RACE, each predicate of the lock re-check ALONE: a connection flipped back to `connected` with its 31-day-old status_since still standing is not purged (status), and one that stays reconnect_needed but whose status_since moved to now is not purged either (since); positive pair: neither window opened -> purged", async () => {
+      const pokes: { name: string; poke: (id: string) => Promise<unknown>; status: string }[] = [
+        { name: "status only", poke: (id) => sql`update org_youtube_connections set status = 'connected' where id = ${id}`, status: "connected" },
+        { name: "since only", poke: (id) => sql`update org_youtube_connections set status_since = now() where id = ${id}`, status: "reconnect_needed" },
+      ];
+      let checked = 0;
+      for (const v of pokes) {
+        const w = await world({ credits: 1 });
+        await completedMatch(w, w.fixtures[0]!);
+        await markReconnectNeeded(sql, w.orgId, w.connectionId);
+        await shiftConnection(w.connectionId, 31);
+        let ran = 0;
+        const out = await youtubeDaily(w.fake, new Date(), {
+          orgIds: [w.orgId],
+          hooks: { afterDeadGrantsListed: async () => { await v.poke(w.connectionId); ran++; } },
+        });
+        expect(ran, `${v.name}: premise: the dead grant was listed`).toBe(1);
+        expect(out.purged, v.name).toBe(0);
+        expect((await connRow(w.connectionId)).status, v.name).toBe(v.status);
+        expect((await broadcastsOfConnection(w.connectionId)).length, `${v.name}: its rows were kept`).toBe(1);
+        expect(await openToken(sql, w.orgId, w.connectionId), `${v.name}: its token was kept`).not.toBeNull();
+        checked++;
+      }
+      expect(checked).toBe(2);
+      // The positive pair: with the window left shut the same connection IS purged.
+      const w = await world({ credits: 1 });
+      await completedMatch(w, w.fixtures[0]!);
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);
+      await shiftConnection(w.connectionId, 31);
+      expect((await daily(w)).purged).toBe(1);
+    });
+
+    it("RACE (stream_url): a club that saves its OWN link between the purge's read of the links and its clear keeps it - the clear is a compare-and-set on the value it read (streamUrlsCleared 0); positive pair: the link that stood is cleared", async () => {
+      const w = await world({ credits: 2, fixtures: 2 });
+      const [f1, f2] = w.fixtures as [string, string];
+      const m1 = await completedMatch(w, f1);
+      const m2 = await completedMatch(w, f2);
+      expect(await streamUrlOf(f1), "premise: the real end step wrote the replay link").toBe(youtubeWatchUrl(m1.ytId));
+      expect(await revokeConnection(sql, w.orgId, w.connectionId)).toBe(true);
+      let ran = 0;
+      // One purge, two fixtures: the hook rewrites f1's link in the window; f2's is left alone.
+      const out = await sql.begin((tx) => purgeConnectionData(tx, w.connectionId, {
+        afterLinksRead: async () => { await sql`update fixtures set stream_url = ${CLUB_LINK} where id = ${f1}`; ran++; },
+      }));
+      expect(ran, "premise: the hook ran between the read and the clear").toBe(1);
+      expect(await streamUrlOf(f1), "the club's concurrent link survives").toBe(CLUB_LINK);
+      expect(await streamUrlOf(f2), "the link that stood is cleared").toBeNull();
+      expect(out.streamUrlsCleared, "only the link that stood was cleared").toBe(1);
+      expect(out.broadcasts, "both rows went").toBe(2);
+      expect(m2.ytId).not.toBe(m1.ytId);
+    });
+
     it("tenancy: the purge of org A's dead grant leaves org B's (also dead for 31 days, but out of the pass's scope) exactly as it was - its rows, keys and link included", async () => {
       const a = await world();
       const b = await world();
@@ -772,6 +838,28 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       await failTo(w, m.broadcastId, STUCK_ATTEMPTS, afterStop(m, min(6)));
       expect(await daily(w, { now: new Date(w.now()) })).toMatchObject({ failed: 1 });
       expect(await broadcastRow(m.broadcastId)).toMatchObject({ state: "failed", last_error_code: "end_stuck" });
+    });
+
+    it("RACE: a row the end step COMPLETES after the pass listed it as stuck is not overwritten with 'failed' (the finalize moves only an open row); it was listed, so it was reported", async () => {
+      const w = await world();
+      refuseComplete(w.fake);
+      const m = await playAndStop(w, w.fixtures[0]!);
+      await failTo(w, m.broadcastId, STUCK_ATTEMPTS, afterStop(m, min(6)));
+      let ran = 0;
+      const out = await youtubeDaily(w.fake, new Date(w.now()), {
+        orgIds: [w.orgId],
+        hooks: {
+          afterStuckListed: async () => {   // the video finally ends: the real end step's outcome, written by SQL (no producer can win this race on cue)
+            await sql`update youtube_broadcasts set state = 'complete', completed_at = now(), next_attempt_at = null where id = ${m.broadcastId}`;
+            ran++;
+          },
+        },
+      });
+      expect(ran, "premise: the row was listed as stuck").toBe(1);
+      expect(out.failed).toBe(1);
+      const row = await broadcastRow(m.broadcastId);
+      expect(row.state, "a finished row is not failed after the fact").toBe("complete");
+      expect(row.last_error_code).not.toBe("end_stuck");
     });
 
     it("a row on a RECONNECT-NEEDED connection is waiting for the club, not stuck: untouched and unreported at 31 failures; once the club reconnects (the real save) the next pass finalizes it", async () => {

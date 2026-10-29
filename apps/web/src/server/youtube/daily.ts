@@ -98,6 +98,19 @@ const REFUSAL_OF_LIVE_STATE = Object.fromEntries(
 
 const zero = (): YoutubeDailyResult => ({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, purged: 0, failed: 0 });
 
+/** Test-only seams (end-step.ts's `EndStepHooks.afterClaim` precedent): each runs in the window between a READ and the WRITE that acts on
+ *  it, the only place a concurrent writer can land, which only a hook can make deterministic. Production passes none. */
+export type DailyHooks = {
+  /** After the connected channels were listed, before the first token is opened. */
+  afterConnectionsListed?: () => Promise<void>;
+  /** After the stuck broadcasts were listed, before the first is finalized. */
+  afterStuckListed?: () => Promise<void>;
+  /** After the dead grants were listed, before the first purge. */
+  afterDeadGrantsListed?: () => Promise<void>;
+  /** After the purge / removal read the fixtures' links, before it clears one. */
+  afterLinksRead?: () => Promise<void>;
+};
+
 type Division = { divisionId: string; competitionId: string };
 export type PurgeResult = { broadcasts: number; streamUrlsCleared: number; divisions: Division[] };
 
@@ -121,12 +134,13 @@ async function divisionsOf(tx: Tx, orgId: string, fixtureIds: readonly string[])
 /** Clear `fixtures.stream_url` on the fixtures of these broadcasts WHEN IT POINTS AT ONE OF THEIR VIDEOS (compared by video, so `youtu.be/<id>`
  *  and `watch?v=<id>` are one video, as lib/youtube's `linkIsOneOfParts` compares). A club's own link to anything else is not touched, and the
  *  clear is conditional on the value just read, so a link saved meanwhile is not lost. Returns how many links it cleared. */
-async function clearStreamUrlsPointingAt(tx: Tx, orgId: string, rows: readonly StoredBroadcast[]): Promise<number> {
+async function clearStreamUrlsPointingAt(tx: Tx, orgId: string, rows: readonly StoredBroadcast[], hooks: DailyHooks): Promise<number> {
   const videos = new Set(rows.flatMap((r) => (r.yt_broadcast_id === null ? [] : [r.yt_broadcast_id])));
   const fixtureIds = [...new Set(rows.map((r) => r.fixture_id))];
   if (videos.size === 0 || fixtureIds.length === 0) return 0;
   const linked = await tx<{ id: string; stream_url: string }[]>`
     select id, stream_url from fixtures where id = any(${fixtureIds}::uuid[]) and org_id = ${orgId} and stream_url is not null`;
+  await hooks.afterLinksRead?.();
   let cleared = 0;
   for (const f of linked) {
     const video = youtubeVideoId(f.stream_url);
@@ -138,9 +152,11 @@ async function clearStreamUrlsPointingAt(tx: Tx, orgId: string, rows: readonly S
 }
 
 /** Delete these broadcast rows and clear the links that pointed at their videos, in the caller's transaction. */
-async function deleteBroadcasts(tx: Tx, orgId: string, rows: readonly StoredBroadcast[]): Promise<{ deleted: number; cleared: number; divisions: Division[] }> {
+async function deleteBroadcasts(
+  tx: Tx, orgId: string, rows: readonly StoredBroadcast[], hooks: DailyHooks,
+): Promise<{ deleted: number; cleared: number; divisions: Division[] }> {
   if (rows.length === 0) return { deleted: 0, cleared: 0, divisions: [] };
-  const cleared = await clearStreamUrlsPointingAt(tx, orgId, rows);
+  const cleared = await clearStreamUrlsPointingAt(tx, orgId, rows, hooks);
   const gone = await tx<{ fixture_id: string }[]>`
     delete from youtube_broadcasts where id = any(${rows.map((r) => r.id)}::uuid[]) and org_id = ${orgId} returning fixture_id`;
   return { deleted: gone.length, cleared, divisions: await divisionsOf(tx, orgId, [...new Set(gone.map((g) => g.fixture_id))]) };
@@ -160,7 +176,7 @@ async function deleteBroadcasts(tx: Tx, orgId: string, rows: readonly StoredBroa
  *  - It locks the connection and then its broadcast rows (the order T8's reconnect uses) and writes nothing outside the transaction. It
  *    cannot expire the public pages itself (a revalidation inside an open transaction would race the commit): the caller expires
  *    `result.divisions` after the commit. */
-export async function purgeConnectionData(tx: Tx, connectionId: string): Promise<PurgeResult> {
+export async function purgeConnectionData(tx: Tx, connectionId: string, hooks: DailyHooks = {}): Promise<PurgeResult> {
   const [c] = await tx<{ org_id: string; status: string }[]>`
     select org_id, status from org_youtube_connections where id = ${connectionId} for update`;
   if (!c) return { broadcasts: 0, streamUrlsCleared: 0, divisions: [] };
@@ -168,7 +184,7 @@ export async function purgeConnectionData(tx: Tx, connectionId: string): Promise
   const orgId = c.org_id;
   const rows = await tx<StoredBroadcast[]>`
     select id, fixture_id, yt_broadcast_id from youtube_broadcasts where connection_id = ${connectionId} and org_id = ${orgId} for update`;
-  const gone = await deleteBroadcasts(tx, orgId, rows);   // before the keys: a broadcast row references its key
+  const gone = await deleteBroadcasts(tx, orgId, rows, hooks);   // before the keys: a broadcast row references its key
   await tx`delete from youtube_stream_keys where connection_id = ${connectionId} and org_id = ${orgId}`;
   await tx`update org_stream_targets set watch_url = null where youtube_connection_id = ${connectionId} and org_id = ${orgId} and watch_url is not null`;
   await tx`update org_youtube_connections set google_sub = null where id = ${connectionId} and org_id = ${orgId} and google_sub is not null`;
@@ -179,7 +195,7 @@ export async function purgeConnectionData(tx: Tx, connectionId: string): Promise
 // ─── port calls ─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 interface Conn { id: string; org_id: string; channel_id: string; channel_title: string }
-interface Pass { port: YouTubePort; now: Date; orgIds: string[] | undefined; out: YoutubeDailyResult }
+interface Pass { port: YouTubePort; now: Date; orgIds: string[] | undefined; out: YoutubeDailyResult; hooks: DailyHooks }
 
 /** A port call. Whatever it throws becomes a YouTubeError: a driver maps Google's answers already, and anything else is YouTube not
  *  answering. The original is dropped, never wrapped (it may hold what must not be kept) - and REPORTED, as a fresh error that names only
@@ -285,7 +301,7 @@ async function refreshVideos(p: Pass, at: string, c: Conn): Promise<void> {
         if (here.length > 0) {
           await tx`update youtube_broadcasts set refreshed_at = ${p.now} where id = any(${here.map((r) => r.id)}::uuid[]) and org_id = ${c.org_id}`;
         }
-        return deleteBroadcasts(tx, c.org_id, gone);
+        return deleteBroadcasts(tx, c.org_id, gone, p.hooks);
       });
       p.out.refreshed += here.length;
       p.out.removed += removed.deleted;
@@ -338,6 +354,7 @@ async function settleStuck(p: Pass): Promise<void> {
        and (b.attempts >= ${YOUTUBE_END_STUCK_AFTER_ATTEMPTS} or (b.state = 'ending' and b.claimed_at < ${byAge}))
        ${p.orgIds ? sql`and b.org_id in ${sql(p.orgIds)}` : sql``}
      order by b.created_at, b.id`;
+  await p.hooks.afterStuckListed?.();
   for (const b of stuck) {
     p.out.failed++;
     captureError(new Error("youtube daily: a broadcast cannot be ended"), {
@@ -368,7 +385,7 @@ async function purgeDeadGrant(p: Pass, c: { id: string; org_id: string }): Promi
       select status, status_since from org_youtube_connections where id = ${c.id} and org_id = ${c.org_id} for update`;
     if (!row || row.status !== "reconnect_needed" || row.status_since.getTime() >= cutoff.getTime()) return null;
     if (!(await revokeConnection(tx, c.org_id, c.id))) return null;
-    return purgeConnectionData(tx, c.id);
+    return purgeConnectionData(tx, c.id, p.hooks);
   });
   if (purged === null) return;
   p.out.purged++;
@@ -377,7 +394,7 @@ async function purgeDeadGrant(p: Pass, c: { id: string; org_id: string }): Promi
 
 /** A revoked connection that still holds anything the purge removes, purged now (carry c). Idempotent: a clean one is never listed. */
 async function purgeStranded(p: Pass, c: { id: string; org_id: string }): Promise<void> {
-  const purged = await sql.begin((tx) => purgeConnectionData(tx, c.id));
+  const purged = await sql.begin((tx) => purgeConnectionData(tx, c.id, p.hooks));
   p.out.purged++;
   expirePages(purged.divisions);
 }
@@ -404,10 +421,6 @@ async function eachOf<T extends { id: string; org_id: string }>(p: Pass, name: s
   }
 }
 
-/** Test-only seam (end-step.ts's `EndStepHooks` precedent). `afterDeadGrantsListed` runs between the dead-grant leg's list and its first
- *  purge: the window in which a reconnect can land, which only a hook can make deterministic. Production passes none. */
-export type DailyHooks = { afterDeadGrantsListed?: () => Promise<void> };
-
 /** The daily YouTube pass. `orgIds` (test-only) scopes every leg to those organisations; an empty list is refused - `org_id in ()` read as
  *  "no filter" would health-check, refresh and PURGE every organisation. Never throws for a fault in one connection or one leg. */
 export async function youtubeDaily(
@@ -417,7 +430,8 @@ export async function youtubeDaily(
   if (orgIds !== undefined && orgIds.length === 0) {
     throw new Error("youtube daily: orgIds is empty - omit it to cover every organisation, or name at least one");
   }
-  const p: Pass = { port, now, orgIds, out: zero() };
+  const hooks = o.hooks ?? {};
+  const p: Pass = { port, now, orgIds, out: zero(), hooks };
   const inOrgs = (column: string) => (orgIds ? sql`and ${sql(column)} in ${sql(orgIds)}` : sql``);
 
   // 1. Expired pending grants: the sealed token and the picker's channel titles go with them.
@@ -431,6 +445,7 @@ export async function youtubeDaily(
       select id, org_id, channel_id, channel_title from org_youtube_connections
        where status = 'connected' ${inOrgs("org_id")}
        order by last_health_at nulls first, id`;
+    await hooks.afterConnectionsListed?.();
     await eachOf(p, "connection", connected, (c) => checkConnection(p, c));
   });
 
@@ -443,7 +458,7 @@ export async function youtubeDaily(
       select id, org_id from org_youtube_connections
        where status = 'reconnect_needed' and status_since < ${daysBefore(now, YOUTUBE_DEAD_GRANT_PURGE_DAYS)} ${inOrgs("org_id")}
        order by status_since, id`;
-    await o.hooks?.afterDeadGrantsListed?.();
+    await hooks.afterDeadGrantsListed?.();
     await eachOf(p, "purge", dead, (c) => purgeDeadGrant(p, c));
   });
 
