@@ -831,6 +831,34 @@ describe("W2e T30 — the host wires the pair, the modal and the buttons (source
     expect(pinned).toBe(2);
   });
 
+  /** The `async function <name>` the host declares, found with the TypeScript parser. */
+  function functionOf(name: string): TS.Block {
+    const file = ts.createSourceFile("pad-host.tsx", src, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    let found: TS.Block | null = null;
+    const visit = (node: TS.Node): void => {
+      if (ts.isFunctionDeclaration(node) && node.name?.text === name && node.body !== undefined) found = node.body;
+      ts.forEachChild(node, visit);
+    };
+    visit(file);
+    if (found === null) throw new Error(`pad-host.tsx: no \`function ${name}\``);
+    return found;
+  }
+
+  it("T30 N1: the prompt's two answers each clear the stale 'record the ending or void the sanction first' banner before they act", () => {
+    // The banner is `dispatchRefusal`; `pad.ending.blocked` sets it when a tap is refused under the prompt. Neither answer
+    // used to clear it, so the red sentence outlived the answer that resolved it (the e2e re-confirm step saw it stay).
+    let pinned = 0;
+    for (const name of ["recordEnding", "voidSanction"] as const) {
+      const body = functionOf(name);
+      const first = body.statements.find((st) => !ts.isEmptyStatement(st));
+      expect(first?.getText(), `${name}: clears the refusal first, ahead of the guard and the try`).toBe("setDispatchRefusal(null);");
+      // And it is the CLEAR that comes first, not the only mention: a failure of the answer still says so afterwards.
+      expect(body.getText(), `${name}: a failed answer still sets its own refusal`).toMatch(/setDispatchRefusal\(msg\("scorepad\.rejection\.fallback"\)\)/);
+      pinned++;
+    }
+    expect(pinned).toBe(2);
+  });
+
   it("the board, dock, swap and sheets are not rendered while an ending is pending", () => {
     const tiles = src.indexOf('<div data-role="v3-tiles">');
     expect(tiles).toBeGreaterThan(0);

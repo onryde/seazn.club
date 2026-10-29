@@ -273,6 +273,9 @@ for (const sport of SPORTS) {
       const last = (await ledger(request, fx.fixtureId)).at(-1)!;
       expect(last.payload).toEqual({ by: fx.homeEntrantId, reason: "disqualified" });
       await expect(prompt(page)).toHaveCount(0);
+      // N1: answering the prompt resolves the red "record the ending or void the sanction first" the refused scorebug tap
+      // left behind - the sentence must not outlive the answer that resolved it.
+      await expect(page.locator('[data-role="v3-rejection"]'), "the stale refusal is gone once the ending is recorded").toHaveCount(0);
     } finally {
       await ctx.close();
     }

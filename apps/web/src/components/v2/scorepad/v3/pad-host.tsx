@@ -2774,6 +2774,8 @@ export function PadHostV3(props: PadHostV3Props) {
   // offered it only where the server's `scorerMayForfeit` admits it, so a 403 is not the expected path); Void goes through
   // `handleUndo`, the pad's one void path, for the sanction row the prompt names.
   async function recordEnding(): Promise<void> {
+    // The answer resolves whatever "record the ending or void the sanction first" a refused tap left on screen (N1).
+    setDispatchRefusal(null);
     if (endingPrompt === null) return;
     setEndingActing(true);
     try {
@@ -2786,6 +2788,7 @@ export function PadHostV3(props: PadHostV3Props) {
     }
   }
   async function voidSanction(): Promise<void> {
+    setDispatchRefusal(null);
     if (endingPrompt === null) return;
     setEndingActing(true);
     try {
