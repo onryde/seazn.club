@@ -31,9 +31,10 @@ import { ROUTES } from "@/server/api-v1/openapi";
 import { v1 } from "@/server/api-v1/http";
 import { PickYoutubeChannel, StreamTargetKind, YoutubeConnectionSaved, YoutubeConnectionSettings, type StreamTarget } from "@/server/api-v1/schemas";
 import {
-  ConsentBox, KidsChoice, PrivacyChoice, YoutubeChannelPicker, YoutubeChannelRow, YoutubeConnectCard, YoutubeLandingNotice,
+  ConsentBox, KidsChoice, PrivacyChoice, YoutubeChannelPicker, YoutubeChannelRow, YoutubeConnectCard, YoutubeDisconnectedNotice, YoutubeLandingNotice,
   channelStatus, youtubeErrorText, youtubeTargetLabel,
 } from "../youtube-connect-panel";
+import { YoutubeDisconnectOnlyPanel } from "../youtube-disconnect-only-panel";
 import { AddForm, DestinationRow, StreamDestinationsPanel } from "../stream-destinations-panel";
 
 // ─── doubles ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -53,7 +54,15 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/streaming",
   useSearchParams: () => new URLSearchParams(""),
 }));
-vi.mock("@/components/ui/confirm-provider", () => ({ useConfirm: () => async () => true }));
+// The confirm dialog, answerable: `answer` is what the person clicked, `asked` is every dialog the page opened.
+const confirmState = vi.hoisted(() => ({ answer: true, asked: [] as Record<string, unknown>[], hold: null as null | Promise<void> }));
+vi.mock("@/components/ui/confirm-provider", () => ({
+  useConfirm: () => async (opts: Record<string, unknown>) => {
+    confirmState.asked.push(opts);
+    if (confirmState.hold) await confirmState.hold;
+    return confirmState.answer;
+  },
+}));
 
 /** Records every call and answers `answer(url, method)`; the default is an empty object. */
 function answerWith(answer: (url: string, method: string) => unknown | Promise<unknown> = () => ({})) {
@@ -65,6 +74,9 @@ function answerWith(answer: (url: string, method: string) => unknown | Promise<u
 }
 beforeEach(() => {
   apiCalls.length = 0;
+  confirmState.answer = true;
+  confirmState.asked.length = 0;
+  confirmState.hold = null;
   nav.refresh.mockReset();
   nav.replace.mockReset();
   answerWith();
@@ -608,6 +620,7 @@ describe("youtubeErrorText — every refusal the connection routes answer reads 
     ["410 YOUTUBE_PENDING_EXPIRED", () => new HttpError(410, "This connect request has expired; connect the channel again", "YOUTUBE_PENDING_EXPIRED"), m("streaming.youtube.landing.expired")],
     ["422 YOUTUBE_CHANNEL_NOT_OFFERED", () => new HttpError(422, "That channel is not one of the channels this Google account offered", "YOUTUBE_CHANNEL_NOT_OFFERED"), m("streaming.youtube.error.notOffered")],
     ["422 YOUTUBE_DIFFERENT_CHANNEL", () => new HttpError(422, "That grant is for a different channel than this connection", "YOUTUBE_DIFFERENT_CHANNEL"), m("streaming.youtube.landing.different_channel")],
+    ["409 YOUTUBE_IN_USE (a match is using the channel)", () => new HttpError(409, "A match is using this channel", "YOUTUBE_IN_USE"), m("streaming.youtube.error.inUse")],
     ["404 (a connection that is gone)", () => new HttpError(404, "Not found"), m("streaming.youtube.error.gone")],
     ["403 FORBIDDEN (a viewer's stale tab)", () => new HttpError(403, "Insufficient permissions"), m("streamDest.error.forbidden")],
     ["401 UNAUTHENTICATED", () => new AuthError("Not signed in"), m("streamDest.error.signedOut")],
@@ -637,7 +650,7 @@ describe("youtubeErrorText — every refusal the connection routes answer reads 
   it("every sentence it can answer exists in all four locales (no English fallback in es/fr/nl)", () => {
     const keys: MessageKey[] = [
       "streaming.youtube.landing.other_org", "streaming.youtube.landing.expired", "streaming.youtube.landing.different_channel",
-      "streaming.youtube.error.notOffered", "streaming.youtube.error.gone", "streamDest.error.forbidden", "streamDest.error.signedOut",
+      "streaming.youtube.error.notOffered", "streaming.youtube.error.gone", "streaming.youtube.error.inUse", "streamDest.error.forbidden", "streamDest.error.signedOut",
       "streamDest.error.seatFrozen", "streamDest.error.generic",
     ];
     let checked = 0;
@@ -735,9 +748,9 @@ describe("a connected channel's row", () => {
     expect(html).toContain('data-testid="stream-dest-badge"');
   });
 
-  it("NO Rename, Replace key, Remove or Disconnect, for anyone, in any state (the server answers each with 422 YOUTUBE_USE_DISCONNECT; Disconnect is T18)", () => {
-    const forbiddenTestIds = ["stream-dest-rename", "stream-dest-replace", "stream-dest-remove", "stream-dest-menu", "stream-dest-menu-remove", "youtube-disconnect"];
-    const forbiddenWords = [m("streamDest.rename"), m("streamDest.replaceKey"), m("streamDest.remove"), "Disconnect"];
+  it("NO Rename, Replace key or Remove, for anyone, in any state (the server answers each with 422 YOUTUBE_USE_DISCONNECT: a channel leaves by Disconnect, T18)", () => {
+    const forbiddenTestIds = ["stream-dest-rename", "stream-dest-replace", "stream-dest-remove", "stream-dest-menu", "stream-dest-menu-remove"];
+    const forbiddenWords = [m("streamDest.rename"), m("streamDest.replaceKey"), m("streamDest.remove")];
     let checked = 0;
     for (const canEdit of [true, false]) {
       for (const [status, liveState] of MATRIX) {
@@ -753,19 +766,20 @@ describe("a connected channel's row", () => {
     expect(checked).toBe(2 * MATRIX.length * 2);
   });
 
-  it("who sees which action: Reconnect only on a dead grant with CURRENT terms; Review terms whenever the terms moved on; Settings for every editor; a viewer sees none", () => {
+  it("who sees which action: Reconnect only on a dead grant with CURRENT terms; Review terms whenever the terms moved on; Settings and Disconnect for every editor; a viewer sees none", () => {
     const actions = (html: string) => ({
       reconnect: html.includes('data-testid="youtube-reconnect"'),
       review: html.includes('data-testid="youtube-review-terms"'),
       settings: html.includes('data-testid="youtube-settings"'),
+      disconnect: html.includes('data-testid="youtube-disconnect"'),
     });
-    expect(actions(rowHtml(channel()))).toEqual({ reconnect: false, review: false, settings: true });
-    expect(actions(rowHtml(channel({ status: "reconnect_needed" })))).toEqual({ reconnect: true, review: false, settings: true });
-    expect(actions(rowHtml(channel({ termsOutdated: true })))).toEqual({ reconnect: false, review: true, settings: true });
-    expect(actions(rowHtml(channel({ status: "reconnect_needed", termsOutdated: true })))).toEqual({ reconnect: false, review: true, settings: true });
+    expect(actions(rowHtml(channel()))).toEqual({ reconnect: false, review: false, settings: true, disconnect: true });
+    expect(actions(rowHtml(channel({ status: "reconnect_needed" })))).toEqual({ reconnect: true, review: false, settings: true, disconnect: true });
+    expect(actions(rowHtml(channel({ termsOutdated: true })))).toEqual({ reconnect: false, review: true, settings: true, disconnect: true });
+    expect(actions(rowHtml(channel({ status: "reconnect_needed", termsOutdated: true })))).toEqual({ reconnect: false, review: true, settings: true, disconnect: true });
     let checked = 0;
     for (const y of [{}, { status: "reconnect_needed" as const }, { termsOutdated: true }]) {
-      expect(actions(rowHtml(channel(y), false)), JSON.stringify(y)).toEqual({ reconnect: false, review: false, settings: false });
+      expect(actions(rowHtml(channel(y), false)), JSON.stringify(y)).toEqual({ reconnect: false, review: false, settings: false, disconnect: false });
       checked++;
     }
     expect(checked).toBe(3);
@@ -917,6 +931,296 @@ describe("a connected channel's row", () => {
       expect(byTestId(row.tree(), "youtube-settings-form")).toBeUndefined();
       expect(byTestId(row.tree(), "youtube-terms-form")).toBeDefined();
     });
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe("Disconnect (T18) — the one way a channel leaves", () => {
+  const STATES: [status: View["status"], liveState: View["liveState"]][] = [
+    ["connected", "enabled"], ["connected", "not_enabled"], ["connected", "blocked"], ["connected", "unknown"],
+    ["reconnect_needed", "enabled"], ["reconnect_needed", "blocked"],
+  ];
+  const DELETE_URL = "/api/v1/orgs/org-1/youtube-connections/c-9";
+  const mount = (y: Partial<View> = {}, extra: Record<string, unknown> = {}) =>
+    renderIsland(YoutubeChannelRow, { t: channel({ connectionId: "c-9", ...y }), canEdit: true, orgId: "org-1", badge: null, ...extra });
+  const disconnectBtn = (row: ReturnType<typeof mount>) => byTestId(row.tree(), "youtube-disconnect");
+  const inUse = () => new HttpError(409, "A match is using this channel", "YOUTUBE_IN_USE");
+
+  it("an editor sees Disconnect on EVERY state - a dead grant, a blocked channel, outdated terms included (the policy's door is never behind a health check); a viewer sees none", () => {
+    let seen = 0;
+    for (const [status, liveState] of STATES) {
+      for (const termsOutdated of [false, true]) {
+        const html = rowHtml(channel({ status, liveState, termsOutdated }), true);
+        const btn = new RegExp('<button\\b[^>]*data-testid="youtube-disconnect"[^>]*>([\\s\\S]*?)</button>').exec(html);
+        expect(btn, `${status}/${liveState}/${termsOutdated}`).not.toBeNull();
+        expect(plain(btn![1]!)).toBe("Disconnect");
+        expect(btn![0], "a danger button").toMatch(/\bbtn-danger\b/);
+        expect(btn![0], "44px floor").toMatch(/\bmin-h-11\b/);
+        expect(btn![0], "full width on a phone").toMatch(/\bmax-md:w-full\b/);
+        expect(rowHtml(channel({ status, liveState, termsOutdated }), false), `viewer ${status}/${liveState}/${termsOutdated}`).not.toContain('data-testid="youtube-disconnect"');
+        seen++;
+      }
+    }
+    expect(seen).toBe(STATES.length * 2);
+  });
+
+  it("the confirm dialog names the channel and says what goes (revoke, stream keys, replay links) and what stays (the videos); it is the danger dialog with touch buttons, never window.confirm", async () => {
+    const row = mount({ channelTitle: "Riverside FC" });
+    await click(disconnectBtn(row));
+    expect(confirmState.asked).toHaveLength(1);
+    const asked = confirmState.asked[0]!;
+    expect(asked).toMatchObject({ tone: "danger", size: "touch", cancelLabel: m("streamDest.cancel") });
+    expect(asked.title).toBe("Disconnect Riverside FC?");
+    expect(asked.confirmLabel).toBe("Disconnect channel");
+    expect(String(asked.body)).toMatch(/revoke its access to this channel/);
+    expect(String(asked.body)).toMatch(/stream keys/);
+    expect(String(asked.body)).toMatch(/replay links/);
+    expect(String(asked.body)).toMatch(/Videos already on YouTube stay there/);
+  });
+
+  it("confirmed: DELETEs THIS connection on a route the API serves, tells the page which channel, and re-reads the list - once", async () => {
+    const onDisconnected = vi.fn();
+    const row = mount({ channelTitle: "Riverside FC" }, { onDisconnected });
+    await click(disconnectBtn(row));
+    expect(apiCalls).toEqual([{ url: DELETE_URL, method: "DELETE", json: undefined }]);
+    expect(isRealRoute("DELETE", DELETE_URL), "the route table serves this path and method").toBe(true);
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(onDisconnected).toHaveBeenCalledWith("Riverside FC");
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+    expect(byTestId(row.tree(), "youtube-error"), "no error line").toBeUndefined();
+  });
+
+  it("cancelled: nothing is sent, nothing is re-read, nobody is told - and the next confirmed tap works (the sequence)", async () => {
+    const onDisconnected = vi.fn();
+    const row = mount({}, { onDisconnected });
+    confirmState.answer = false;
+    await click(disconnectBtn(row));
+    expect(confirmState.asked, "the dialog opened").toHaveLength(1);
+    expect(apiCalls).toEqual([]);
+    expect(nav.refresh).not.toHaveBeenCalled();
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(byTestId(row.tree(), "youtube-error")).toBeUndefined();
+
+    confirmState.answer = true;
+    await click(disconnectBtn(row));
+    expect(confirmState.asked).toHaveLength(2);
+    expect(apiCalls.map((c) => c.method)).toEqual(["DELETE"]);
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+  });
+
+  it("a match is using the channel (409 YOUTUBE_IN_USE): the reason in plain words, IN the row, nothing re-read and nobody told; Disconnect stays available and works once the match is over (the sequence)", async () => {
+    const onDisconnected = vi.fn();
+    answerWith(async () => { throw await wire(inUse()); });
+    const row = mount({}, { onDisconnected });
+    await click(disconnectBtn(row));
+    expect(textAt(row.tree(), "youtube-error")).toBe("A match is live on this channel, or about to be. Disconnect it once that match has ended.");
+    expect(textAt(row.tree(), "youtube-error")).toBe(m("streaming.youtube.error.inUse"));
+    expect(nav.refresh).not.toHaveBeenCalled();
+    expect(onDisconnected).not.toHaveBeenCalled();
+    expect(attr(disconnectBtn(row)!, "disabled"), "still available").toBe(false);
+
+    answerWith();
+    await click(disconnectBtn(row));
+    expect(byTestId(row.tree(), "youtube-error"), "the refusal is cleared by the next attempt").toBeUndefined();
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(nav.refresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("other refusals: a channel already gone (404) re-reads the list and says so; a viewer's stale tab (403) says so and re-reads nothing; a dropped connection is the generic retry line", async () => {
+    const cases: [name: string, err: () => Promise<unknown>, sentence: string, refreshes: number][] = [
+      ["404", () => wire(new HttpError(404, "Not found")), m("streaming.youtube.error.gone"), 1],
+      ["403", () => wire(new HttpError(403, "Insufficient permissions")), m("streamDest.error.forbidden"), 0],
+      ["network", async () => new TypeError("Failed to fetch"), m("streamDest.error.generic"), 0],
+    ];
+    let checked = 0;
+    for (const [name, err, sentence, refreshes] of cases) {
+      nav.refresh.mockReset();
+      answerWith(async () => { throw await err(); });
+      const row = mount();
+      await click(disconnectBtn(row));
+      expect(textAt(row.tree(), "youtube-error"), name).toBe(sentence);
+      expect(nav.refresh, name).toHaveBeenCalledTimes(refreshes);
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("a second tap while the dialog is open asks nothing more and sends one DELETE (the double-submit guard)", async () => {
+    let release!: () => void;
+    confirmState.hold = new Promise<void>((r) => { release = r; });
+    const row = mount();
+    const tap = attr(disconnectBtn(row)!, "onClick") as () => Promise<void>;
+    const first = tap();
+    const second = tap();
+    release();
+    await Promise.all([first, second]);
+    await settle();
+    expect(confirmState.asked).toHaveLength(1);
+    expect(apiCalls.map((c) => c.method)).toEqual(["DELETE"]);
+  });
+
+  it("refreshAfter={false} (the restricted page) tells the page but never re-reads - on success or on a 404", async () => {
+    const onDisconnected = vi.fn();
+    const ok = mount({}, { onDisconnected, refreshAfter: false });
+    await click(disconnectBtn(ok));
+    expect(onDisconnected).toHaveBeenCalledTimes(1);
+    expect(nav.refresh).not.toHaveBeenCalled();
+
+    answerWith(async () => { throw await wire(new HttpError(404, "Not found")); });
+    const gone = mount({}, { refreshAfter: false });
+    await click(disconnectBtn(gone));
+    expect(textAt(gone.tree(), "youtube-error")).toBe(m("streaming.youtube.error.gone"));
+    expect(nav.refresh).not.toHaveBeenCalled();
+  });
+
+  it("disconnectOnly: Disconnect and nothing else - no Reconnect, Settings, Review terms, no go-live sentence, no terms badge - in every state (the pill still says what the channel is)", () => {
+    const statusLines: MessageKey[] = [
+      "streaming.youtube.statusLine.connected", "streaming.youtube.statusLine.reconnectNeeded", "streaming.youtube.statusLine.notEnabled",
+      "streaming.youtube.statusLine.blocked", "streaming.youtube.statusLine.unknown", "streaming.youtube.statusLine.reviewTerms", "streaming.youtube.statusLine.reviewFirst",
+    ];
+    const only = (t: StreamTarget) =>
+      renderToStaticMarkup(<DictProvider dict={messages as unknown as Dict} locale="en"><ul><YoutubeChannelRow t={t} canEdit orgId="o" badge={null} disconnectOnly /></ul></DictProvider>);
+    let checked = 0;
+    for (const [status, liveState] of STATES) {
+      for (const termsOutdated of [false, true]) {
+        const t = channel({ status, liveState, termsOutdated });
+        const html = only(t);
+        const where = `${status}/${liveState}/${termsOutdated}`;
+        expect(html, where).toContain('data-testid="youtube-disconnect"');
+        expect(html, where).toContain('data-testid="youtube-channel-status"');
+        for (const id of ["youtube-reconnect", "youtube-reconnect-form", "youtube-settings", "youtube-review-terms", "youtube-channel-line", "youtube-channel-terms", "youtube-channel-terms-line", "youtube-channel-hint"]) {
+          expect(html, `${where} ${id}`).not.toContain(`data-testid="${id}"`);
+        }
+        for (const k of statusLines) expect(plain(html), `${where} ${k}`).not.toContain(m(k));
+        // the positive pair: the SAME channel in the full page does say its line
+        expect(rowHtml(t), where).toContain('data-testid="youtube-channel-line"');
+        checked++;
+      }
+    }
+    expect(checked).toBe(STATES.length * 2);
+  });
+
+  it("the panel keeps the news of a disconnect after the row has left the list, and Dismiss clears it", async () => {
+    const panel = renderIsland(StreamDestinationsPanel, { orgId: "o", canEdit: true, targets: [channel()], locale: "en" });
+    expect(ofType(panel.tree(), YoutubeDisconnectedNotice), "no notice before").toBeUndefined();
+    (attr(ofType(panel.tree(), YoutubeChannelRow)!, "onDisconnected") as (name: string) => void)("Riverside FC");
+    const notice = ofType(panel.tree(), YoutubeDisconnectedNotice);
+    expect(notice, "the notice").toBeDefined();
+    expect(attr(notice!, "name")).toBe("Riverside FC");
+    const html = renderToStaticMarkup(<DictProvider dict={messages as unknown as Dict} locale="en"><YoutubeDisconnectedNotice name="Riverside FC" onDismiss={() => {}} /></DictProvider>);
+    expect(plain(html)).toContain("Riverside FC is disconnected. Seazn deleted what it stored from YouTube for this channel.");
+    expect(html).toMatch(/data-testid="youtube-disconnected"[^>]*\brole="status"|\brole="status"[^>]*data-testid="youtube-disconnected"/);
+    (attr(notice!, "onDismiss") as () => void)();
+    expect(ofType(panel.tree(), YoutubeDisconnectedNotice), "dismissed").toBeUndefined();
+  });
+
+  it("the new sentences exist in all four locales, keep their {name} slot where they have one, and are not the English in es/fr/nl", () => {
+    const slotted: MessageKey[] = ["streaming.youtube.disconnect.title", "streaming.youtube.disconnect.done"];
+    const plainKeys: MessageKey[] = [
+      "streaming.youtube.action.disconnect", "streaming.youtube.disconnect.body", "streaming.youtube.disconnect.confirm", "streaming.youtube.error.inUse",
+      "streaming.youtube.disconnectOnly.note", "streaming.youtube.disconnectOnly.none",
+    ];
+    let checked = 0;
+    for (const l of LOCALES) {
+      for (const k of [...slotted, ...plainKeys]) {
+        const v = localeDict(l)[k];
+        expect(v, `${l} ${k}`).toBeTypeOf("string");
+        expect(v!.length, `${l} ${k} is not empty`).toBeGreaterThan(0);
+        if (l !== "en") expect(v, `${l} ${k} is not the English`).not.toBe(localeDict("en")[k]);
+        if (slotted.includes(k)) expect(v, `${l} ${k} keeps {name}`).toContain("{name}");
+        else expect(v, `${l} ${k} has no stray slot`).not.toMatch(/[{}]/);
+        checked++;
+      }
+    }
+    expect(checked).toBe(LOCALES.length * (slotted.length + plainKeys.length));
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe("the disconnect-only Streaming page (T18) - an org that can no longer go live can still disconnect", () => {
+  const two = (): StreamTarget[] => [
+    channel({ connectionId: "c-1", channelTitle: "Riverside FC" }, { id: "t-1" }),
+    channel({ connectionId: "c-2", channelTitle: "Riverside Juniors" }, { id: "t-2" }),
+  ];
+  const onlyHtml = (targets: StreamTarget[], locale = "en") =>
+    inLocale(locale, <YoutubeDisconnectOnlyPanel orgId="o" targets={targets} />);
+  const rowsOf = (panel: { tree: () => ReactElement[] }) => panel.tree().filter((el) => el.type === YoutubeChannelRow);
+
+  it("renders the note and ONE disconnect-only row per channel - no Connect, Add, Settings, Reconnect, and no pasted key at all (even if one is handed in)", () => {
+    const html = onlyHtml([...two(), pasted()]);
+    expect(html.match(/data-testid="youtube-channel-row"/g)).toHaveLength(2);
+    expect(html.match(/data-testid="youtube-disconnect"/g)).toHaveLength(2);
+    expect(plain(html)).toContain("Matches can't go live from this organisation right now. You can still disconnect the YouTube channels below.");
+    expect(plain(html)).toContain("Riverside FC");
+    expect(plain(html)).toContain("Riverside Juniors");
+    expect(plain(html), "a pasted destination is not this page's business").not.toContain("Club YouTube");
+    for (const id of ["youtube-connect", "youtube-connect-empty", "stream-dest-add", "stream-dest-empty-add", "youtube-settings", "youtube-reconnect", "stream-dest-row", "stream-dest-empty"]) {
+      expect(html, id).not.toContain(`data-testid="${id}"`);
+    }
+  });
+
+  it("its note is the locale's own sentence in all four locales", () => {
+    let checked = 0;
+    for (const l of LOCALES) {
+      const html = onlyHtml(two(), l);
+      expect(html, l).toContain(esc(localeDict(l)["streaming.youtube.disconnectOnly.note"]!));
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
+  });
+
+  it("each row is handed the restricted props (disconnectOnly, no re-read) - and driven through the REAL row, a disconnect removes just that channel, shows the news, and never re-reads the page", async () => {
+    const panel = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: two() });
+    expect(rowsOf(panel)).toHaveLength(2);
+    for (const r of rowsOf(panel)) {
+      expect(attr(r, "disconnectOnly")).toBe(true);
+      expect(attr(r, "refreshAfter")).toBe(false);
+      expect(attr(r, "canEdit")).toBe(true);
+    }
+    // the real row, mounted with exactly the props the panel gave the first channel
+    const real = renderIsland(YoutubeChannelRow, propsOf(rowsOf(panel)[0]!) as never);
+    await click(byTestId(real.tree(), "youtube-disconnect"));
+    expect(apiCalls).toEqual([{ url: "/api/v1/orgs/o/youtube-connections/c-1", method: "DELETE", json: undefined }]);
+    expect(rowsOf(panel).map((r) => attr(r, "t") as StreamTarget).map((t) => t.id), "only the other channel is left").toEqual(["t-2"]);
+    expect(attr(ofType(panel.tree(), YoutubeDisconnectedNotice)!, "name")).toBe("Riverside FC");
+    expect(nav.refresh, "the page is not re-read: the server would 404 an org with nothing left").not.toHaveBeenCalled();
+  });
+
+  it("the LAST channel leaves: an empty line instead of a list, the news stays, still no re-read (the empty case, then the sequence)", async () => {
+    const panel = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: two() });
+    (attr(rowsOf(panel)[0]!, "onDisconnected") as (n: string) => void)("Riverside FC");
+    (attr(rowsOf(panel)[0]!, "onDisconnected") as (n: string) => void)("Riverside Juniors");
+    expect(rowsOf(panel)).toHaveLength(0);
+    expect(textAt(panel.tree(), "stream-disconnect-only-empty")).toBe("No YouTube channels are connected.");
+    expect(attr(ofType(panel.tree(), YoutubeDisconnectedNotice)!, "name"), "the latest news").toBe("Riverside Juniors");
+    expect(byTestId(panel.tree(), "stream-disconnect-only-note"), "the note stays").toBeDefined();
+    expect(nav.refresh).not.toHaveBeenCalled();
+    // and an empty list handed in from the server says the same, with no news
+    const empty = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: [] });
+    expect(textAt(empty.tree(), "stream-disconnect-only-empty")).toBe(m("streaming.youtube.disconnectOnly.none"));
+    expect(ofType(empty.tree(), YoutubeDisconnectedNotice)).toBeUndefined();
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+describe("T18: the archived label in a LIST that contains an archived row", () => {
+  it("in every locale the list shows the locale's wording for the archived literal, never the English literal outside en; the customer's own label passes through (anti-vacuity: 4 locales)", () => {
+    let checked = 0;
+    for (const l of LOCALES) {
+      const html = inLocale(
+        l,
+        <StreamDestinationsPanel
+          orgId="o" canEdit locale={l}
+          targets={[channel(), pasted({ id: "t-a", label: YOUTUBE_DISCONNECTED_LABEL }), pasted({ id: "t-b", label: "Club YouTube" })]}
+        />,
+      );
+      expect(html.match(/data-testid="stream-dest-row"/g), `${l}: both pasted rows listed`).toHaveLength(2);
+      expect(html, l).toContain(esc(localeDict(l)["streaming.youtube.disconnectedLabel"]!));
+      if (l !== "en") expect(html, `${l}: no English literal`).not.toContain(YOUTUBE_DISCONNECTED_LABEL);
+      expect(html, `${l}: the customer's own words`).toContain("Club YouTube");
+      checked++;
+    }
+    expect(checked).toBe(LOCALES.length);
   });
 });
 

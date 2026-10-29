@@ -271,6 +271,14 @@ function toView(r: ConnectionViewRow): YoutubeConnectionView {
   };
 }
 
+/** Whether the org has a connection that is not revoked - the one question the restricted Streaming page (an org that can no longer go
+ *  live, but must still be able to disconnect: T18, DP III) and its nav item ask. Org-scoped in SQL. */
+export async function hasLiveConnection(orgId: string): Promise<boolean> {
+  const [r] = await sql<{ live: boolean }[]>`
+    select exists (select 1 from org_youtube_connections where org_id = ${orgId} and status <> 'revoked') as live`;
+  return r!.live;
+}
+
 /** The org's live connections as the Streaming page shows them, by connection id. Org-scoped in SQL. Revoked connections are history
  *  and have no view. `only` narrows to one connection (a PATCH's reply). */
 export async function connectionViews(orgId: string, only?: string): Promise<Map<string, YoutubeConnectionView>> {

@@ -31,9 +31,10 @@ import { invalidateOrgEntitlements } from "@/lib/entitlements";
 import { buildOpenApiDocument } from "@/server/api-v1/openapi";
 import { matchKeyRoute, NEVER_KEY_ROUTES } from "@/server/api-v1/key-scopes";
 import { createApiKey } from "@/server/usecases/api-keys";
-import { streamingPageOffer } from "@/server/stream-panel-context";
+import { streamingPageAccess, streamingPageOffer } from "@/server/stream-panel-context";
 import { divisionRig } from "@/server/usecases/__tests__/_rig";
-import { createStreamTarget } from "@/server/usecases/stream-targets";
+import { createStreamTarget, listStreamTargets } from "@/server/usecases/stream-targets";
+import { hasLiveConnection } from "@/server/youtube/connections";
 import { setYoutubeDriverForTest } from "@/server/youtube/driver";
 import { revokeConnection } from "@/server/youtube/token-store";
 import { GET as LIST } from "../../stream-targets/route";
@@ -555,5 +556,99 @@ describe.skipIf(!HAS_DB)("DELETE — Disconnect a channel (T18)", () => {
     const dataProps = Object.keys(((ok.properties!.data as { properties: Record<string, unknown> }).properties));
     expect(dataProps.sort()).toEqual(["keysDeleted", "purged", "revokedAtGoogle"]);
     expect(checked).toBe(6);
+  });
+});
+
+// =====================================================================================================================================
+// The disconnect-only Streaming page (T18; DP III): the predicate, the listing and the nav's question, over the REAL database.
+describe.skipIf(!HAS_DB)("the disconnect-only Streaming page (T18) - the real predicate and listing", () => {
+  const seed = (c: { token: string; channel: { id: string; title: string } }) =>
+    fake.seedGrant({ refreshToken: c.token, channelId: c.channel.id, channelTitle: c.channel.title });
+  const loseStreaming = async (orgId: string) => {
+    for (const feature of ["streaming.overlay", "streaming.relay"]) {
+      await sql`insert into org_entitlement_overrides (org_id, feature_key, bool_value, reason)
+                values (${orgId}, ${feature}, false, 't18 access') on conflict (org_id, feature_key) do update set bool_value = false`;
+    }
+    await invalidateOrgEntitlements(orgId);
+  };
+
+  it("hasLiveConnection: false for an org that never connected, true with a connection (any live status), false again once it is disconnected - and another org's connection never counts (the sequence)", async () => {
+    setYoutubeDriverForTest(fake);
+    const o = await org();
+    const other = await org();
+    signedInAs(o.userId);
+    expect(await hasLiveConnection(o.orgId), "the empty case").toBe(false);
+    const oc = await connect(other);
+    seed(oc);
+    expect(await hasLiveConnection(o.orgId), "another org's connection is not ours").toBe(false);
+    const c = await connect(o);
+    seed(c);
+    expect(await hasLiveConnection(o.orgId)).toBe(true);
+    await sql`update org_youtube_connections set status = 'reconnect_needed' where id = ${c.connectionId}`;
+    expect(await hasLiveConnection(o.orgId), "a connection that needs a reconnect is still live (it can be disconnected)").toBe(true);
+    await sql`update org_youtube_connections set status = 'connected' where id = ${c.connectionId}`;
+    expect((await disconnectCall(o.orgId, c.connectionId)).status).toBe(200);
+    expect(await hasLiveConnection(o.orgId), "disconnected: nothing left to disconnect").toBe(false);
+    expect(await hasLiveConnection(other.orgId), "the other org is unaffected").toBe(true);
+  });
+
+  it("streamingPageAccess: an offered org gets the full page; one that lost streaming gets the disconnect-only page ONLY as an editor with a connection; everyone else keeps the 404 (anti-vacuity: 7 cells)", async () => {
+    setYoutubeDriverForTest(fake);
+    const o = await org();
+    const c = await connect(o);
+    seed(c);
+    let cells = 0;
+    expect(await streamingPageOffer(o.orgId), "premise: offered").toBe("offered");
+    for (const canEdit of [true, false]) { expect(await streamingPageAccess(o.orgId, canEdit), `offered, canEdit=${canEdit}`).toBe("full"); cells++; }
+
+    await loseStreaming(o.orgId);
+    expect(await streamingPageOffer(o.orgId), "premise: the org lost streaming").toBe("not_entitled");
+    expect(await streamingPageAccess(o.orgId, true), "editor + connection").toBe("disconnect_only"); cells++;
+    expect(await streamingPageAccess(o.orgId, false), "a viewer cannot disconnect").toBe("none"); cells++;
+
+    signedInAs(o.userId);
+    expect((await disconnectCall(o.orgId, c.connectionId)).status).toBe(200);
+    expect(await streamingPageAccess(o.orgId, true), "editor, nothing left to disconnect").toBe("none"); cells++;
+
+    const bare = await org();
+    await loseStreaming(bare.orgId);
+    expect(await streamingPageAccess(bare.orgId, true), "editor, never connected").toBe("none"); cells++;
+    expect(await streamingPageAccess(bare.orgId, false)).toBe("none"); cells++;
+    expect(cells).toBe(7);
+  });
+
+  it("listStreamTargets({ channelsOnly }) lists the connected channels and NOTHING else: no pasted destination, no key hint read, no holder - and the unrestricted list still lists both", async () => {
+    setYoutubeDriverForTest(fake);
+    const o = await org();
+    signedInAs(o.userId);
+    const c = await connect(o);
+    seed(c);
+    await createStreamTarget(o.auth, o.orgId, { kind: "youtube", label: "Pasted club key", streamKey: `pk-${randomUUID()}` });
+    const full = await listStreamTargets(o.auth, o.orgId);
+    expect(full.map((t) => t.youtube === null ? "pasted" : "channel").sort(), "premise: both kinds exist").toEqual(["channel", "pasted"]);
+    expect(full.find((t) => t.youtube === null)!.keyHint, "premise: the full list reads the pasted key's hint").not.toBeNull();
+
+    const channels = await listStreamTargets(o.auth, o.orgId, { channelsOnly: true });
+    expect(channels).toHaveLength(1);
+    expect(channels[0]!.youtube).toMatchObject({ connectionId: c.connectionId, status: "connected" });
+    expect(channels[0]!.keyHint, "no key hint is read").toBeNull();
+    expect(channels[0]!.inUse).toBeNull();
+    expect(channels.some((t) => t.label === "Pasted club key"), "no pasted destination").toBe(false);
+
+    // "No pasted key is read" is observable: with the sealing KEK gone, the full list cannot open the pasted key and fails loudly, while
+    // the channels-only list - the page an org keeps after a downgrade - does not touch it and still answers.
+    const kek = process.env.RELAY_KEK;
+    delete process.env.RELAY_KEK;
+    try {
+      await expect(listStreamTargets(o.auth, o.orgId), "premise: the full list needs the KEK").rejects.toThrow();
+      expect((await listStreamTargets(o.auth, o.orgId, { channelsOnly: true })).map((t) => t.youtube?.connectionId)).toEqual([c.connectionId]);
+    } finally {
+      process.env.RELAY_KEK = kek;
+    }
+
+    // The empty case, and the sequence: after a disconnect the channel is gone from this list too.
+    expect((await disconnectCall(o.orgId, c.connectionId)).status).toBe(200);
+    expect(await listStreamTargets(o.auth, o.orgId, { channelsOnly: true }), "nothing left").toEqual([]);
+    expect((await listStreamTargets(o.auth, o.orgId)).map((t) => t.label), "the pasted destination is untouched").toEqual(["Pasted club key"]);
   });
 });

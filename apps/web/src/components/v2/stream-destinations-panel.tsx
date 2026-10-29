@@ -26,7 +26,7 @@ import type { StreamTarget, StreamTargetKind, StreamTargetSaved } from "@/server
 import type { YoutubeLanding } from "@/lib/youtube";
 import { PlatformMark, platformName } from "./stream-platform-mark";
 import {
-  YoutubeChannelPicker, YoutubeChannelRow, YoutubeConnectCard, YoutubeLandingNotice, wireOf, youtubeTargetLabel,
+  YoutubeChannelPicker, YoutubeChannelRow, YoutubeConnectCard, YoutubeDisconnectedNotice, YoutubeLandingNotice, wireOf, youtubeTargetLabel,
 } from "./youtube-connect-panel";
 
 type Msg = (key: MessageKey, vars?: Record<string, string | number>) => string;
@@ -129,6 +129,8 @@ export function StreamDestinationsPanel({
   const [addOpen, setAddOpen] = useState(initialAddOpen);
   const [connectOpen, setConnectOpen] = useState(initialConnectOpen);
   const [addError, setAddError] = useState<string | null>(null);
+  // The channel that was just disconnected: the row leaves the list on the refresh, so its news is kept here.
+  const [disconnected, setDisconnected] = useState<string | null>(null);
 
   const run: Run = async (op, kind, call) => {
     try {
@@ -176,6 +178,7 @@ export function StreamDestinationsPanel({
     <div data-testid="stream-destinations" className="space-y-4">
       {landing && landing.code !== "pick" && <YoutubeLandingNotice code={landing.code} />}
       {pickPending !== null && <YoutubeChannelPicker orgId={orgId} pendingId={pickPending} />}
+      {disconnected !== null && <YoutubeDisconnectedNotice name={disconnected} onDismiss={() => setDisconnected(null)} />}
       {canEdit && targets.length > 0 && (
         <div className="flex flex-wrap gap-2 max-md:flex-col">
           <button
@@ -245,7 +248,7 @@ export function StreamDestinationsPanel({
               <div className="card overflow-visible">
                 <ul data-testid="youtube-channel-list" className="divide-y divide-slate-100" aria-label={msg("streaming.youtube.channels")}>
                   {channels.map((t) => (
-                    <YoutubeChannelRow key={t.id} t={t} canEdit={canEdit} orgId={orgId} badge={badgeOf(t, msg)} />
+                    <YoutubeChannelRow key={t.id} t={t} canEdit={canEdit} orgId={orgId} badge={badgeOf(t, msg)} onDisconnected={setDisconnected} />
                   ))}
                 </ul>
               </div>
@@ -508,7 +511,7 @@ export function DestinationRow({
     busy.current = true;
     try {
       const ok = await confirm({
-        title: msg("streamDest.confirmRemove.title", { label: t.label }),
+        title: msg("streamDest.confirmRemove.title", { label: youtubeTargetLabel(msg, t.label) }),
         // D2 vs D6: re-adding the key restores a YouTube / Twitch row; a legacy kind cannot be added at all.
         body: msg(isStreamPlatform(t.kind) ? "streamDest.confirmRemove.body" : "streamDest.confirmRemove.bodyLegacy"),
         confirmLabel: msg("streamDest.remove"),
@@ -645,7 +648,7 @@ export function DestinationRow({
             data-testid="stream-dest-menu"
             aria-haspopup="menu"
             aria-expanded={menuOpen}
-            aria-label={msg("streamDest.more", { label: t.label })}
+            aria-label={msg("streamDest.more", { label: youtubeTargetLabel(msg, t.label) })}
             onClick={() => setMenuOpen((v) => !v)}
             className="grid h-11 w-11 shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 md:hidden"
           >
@@ -656,7 +659,7 @@ export function DestinationRow({
       {canEdit && menuOpen && (
         <div
           role="menu"
-          aria-label={msg("streamDest.more", { label: t.label })}
+          aria-label={msg("streamDest.more", { label: youtubeTargetLabel(msg, t.label) })}
           className="ml-11 mt-2 rounded-xl border border-slate-200 bg-white p-1 shadow-lg md:hidden"
           onKeyDown={(e) => {
             if (e.key === "Escape") setMenuOpen(false);

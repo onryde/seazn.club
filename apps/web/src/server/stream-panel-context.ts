@@ -27,6 +27,7 @@ import { NO_STREAM_PREFS_READ, type StreamPrefsRead } from "@/lib/stream-setting
 import { AUTO_STOP_AFTER_RESULT_SECONDS, PHONE_LOST_LIVE_MINUTES, RELAY_OVERLAY_DELAY_DEFAULT_MS, tunable } from "@/server/relay/config";
 import { composedUnavailable, relayUnavailable } from "@/server/relay/drivers";
 import { streamPrefsOf } from "@/server/usecases/stream-codes";
+import { hasLiveConnection } from "@/server/youtube/connections";
 import { reconcileStreamCreditsCheckout } from "@/server/usecases/stream-credits-checkout";
 import { relayCredits } from "@/server/usecases/stream-sessions";
 
@@ -73,6 +74,18 @@ export async function streamingPageOffer(orgId: string): Promise<StreamingPageOf
  *  hand-made URL gets what the nav would not offer. */
 export async function streamingPageOffered(orgId: string): Promise<boolean> {
   return (await streamingPageOffer(orgId)) === "offered";
+}
+
+/** What the Streaming page shows an org (T18). `full` is the page (`streamingPageOffered`). `disconnect_only` is an editor of an org that
+ *  can no longer go live (downgraded, or a deployment with no relay) but still has a YouTube connection: the page exists for that org
+ *  with ONE action, Disconnect, so a downgrade never strands a grant the organiser wants to revoke (the Google API Services User Data
+ *  Policy, DP III) - nothing else about the page is offered. Everyone else gets what they got before: no page. The nav item and the
+ *  page both ask THIS, so a link is never shown to a page that would 404. `canEdit`: only an owner or admin can disconnect. */
+export type StreamingPageAccess = "full" | "disconnect_only" | "none";
+export async function streamingPageAccess(orgId: string, canEdit: boolean): Promise<StreamingPageAccess> {
+  if (await streamingPageOffered(orgId)) return "full";
+  if (!canEdit) return "none";
+  return (await hasLiveConnection(orgId)) ? "disconnect_only" : "none";
 }
 
 /** Capture QR v2 (carry 2, owner 2026-10-04): the PostHog flag that offers the phone-camera option — UI-only (the routes

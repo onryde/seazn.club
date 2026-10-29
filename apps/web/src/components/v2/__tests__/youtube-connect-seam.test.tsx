@@ -51,6 +51,7 @@ import { insertConnectionWithToken } from "@/server/youtube/token-store";
 import { seedOrg } from "@/server/usecases/__tests__/_rig";
 import { POST as START } from "@/app/api/youtube/connect/route";
 import type { StreamTarget } from "@/server/api-v1/schemas";
+import { ConfirmProvider } from "@/components/ui/confirm-provider";
 import { KidsChoice, PrivacyChoice, YoutubeChannelRow, YoutubeConnectCard } from "../youtube-connect-panel";
 
 const HAS_DB = !!process.env.DATABASE_URL;
@@ -132,7 +133,7 @@ async function liveConnection(r: { orgId: string; userId: string }, consentVersi
     }));
   return connectionId;
 }
-const rowMarkup = (t: StreamTarget, orgId: string): string => renderToStaticMarkup((<ul><YoutubeChannelRow t={t} canEdit orgId={orgId} badge={null} /></ul>) as ReactElement);
+const rowMarkup = (t: StreamTarget, orgId: string): string => renderToStaticMarkup((<ConfirmProvider><ul><YoutubeChannelRow t={t} canEdit orgId={orgId} badge={null} /></ul></ConfirmProvider>) as ReactElement);
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe.skipIf(!HAS_DB)("the consent form -> POST /api/youtube/connect", () => {
