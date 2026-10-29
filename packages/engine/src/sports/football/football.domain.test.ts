@@ -1157,7 +1157,11 @@ describe("goalkeeper stats: clean sheets, goals conceded (S8/#417)", () => {
   // W2e T33a (T32 fix round 2, M2): this fold is a REPLAY, so a lineup event the pitch refuses falls back to the kernel's own
   // squads (`judgeLineupEvent(..., strict = false)`) - the ledger was accepted when it was written, before the pitch was
   // consulted, and it must not lose a recorded change. The strict write path refuses the same event.
-  it("a replay never refuses a change the pitch would: the keeper football.sub took off is named off again by core.lineup.substitution, and the fold hands the position over", () => {
+  // SCOPE (T33b): this is the usual order, with NO accepted core.lineup.* event between the football.sub and the substitution.
+  // The hole PO parked (owner 10-26; football/DOMAIN.md "Known, parked") is the same order with one in between: the kernel's
+  // squads are then the judged ones and the substitution is refused on replay. It is not witnessed here, and the title must
+  // not claim it is.
+  it("a replay falls back to the kernel's squads for a change the pitch refuses: the keeper football.sub took off is named off again by core.lineup.substitution with no accepted lineup event between them, and the fold hands the position over", () => {
     const events = [
       start,
       makeEnvelope(1, { type: "football.sub", payload: { by: H, off: homeKeeper, on: homeSub1 } }),
