@@ -1,5 +1,10 @@
 // A streaming destination's platform: its name and its mark (spec 2026-09-30 §4; mockup `directory.html` — brand-
 // coloured rounded squares with an initial). Shared by the Streaming page and the fixture panel's picker.
+// YouTube is the exception, and the other way round from what T12 first did (owner, 2026-10-28): YouTube's branding terms say
+// "any logo used within an application must be clickable and link back to YouTube content", and a row's platform mark is not a link.
+// So no row's PlatformMark is ever the logo (youtube-icon.tsx owns the logo, and draws it only inside a link): YouTube's mark here is the
+// house NEUTRAL tile (custom_rtmp's slate), with its initial so a YouTube row stays aligned with every other row. Never a tile of our own
+// drawing in YouTube's red.
 // Every STORED kind lists (spec §5.4: legacy rows keep listing until removed), so every kind has a name and a mark here —
 // even though only STREAM_PLATFORMS can be created (D6).
 import type { StreamTargetKind } from "@/server/api-v1/schemas";
@@ -19,7 +24,8 @@ export function platformName(msg: Msg, kind: StreamTargetKind): string {
 }
 
 const MARK: Record<StreamTargetKind, { bg: string; fg: string; letter: string }> = {
-  youtube: { bg: "#ff0033", fg: "#ffffff", letter: "Y" },
+  // Neutral on purpose (see the header): the same slate as the unbranded `custom_rtmp` tile, never YouTube's red.
+  youtube: { bg: "#e2e8f0", fg: "#334155", letter: "Y" },
   twitch: { bg: "#9146ff", fg: "#ffffff", letter: "T" },
   facebook: { bg: "#1877f2", fg: "#ffffff", letter: "f" },
   kick: { bg: "#53fc18", fg: "#0b0e0f", letter: "K" },

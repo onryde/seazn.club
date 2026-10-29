@@ -14,7 +14,7 @@ import { resolveLocale } from "@/lib/resolve-locale";
 import { getDictionary, t, type Dict } from "@/lib/i18n";
 import { STREAMING_PAGE_HREF } from "@/lib/youtube";
 import { captureError } from "@/lib/sentry";
-import { streamingPageOffered } from "@/server/stream-panel-context";
+import { streamingPageAccess } from "@/server/stream-panel-context";
 
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL ?? "";
 
@@ -60,13 +60,14 @@ export async function Nav({ orgSlug }: { orgSlug?: string } = {}) {
     }
   }
   const logoUrl = activeOrg ? orgLogoUrl(activeOrg) : null;
-  // The Streaming item (owner, 2026-10-27) is shown to exactly the orgs the Streaming page exists for — the page's own predicate,
-  // asked for the org the chrome is showing, never guessed client-side. A failed read hides the item (and is reported): the chrome
+  // The Streaming item (owner, 2026-10-27) is shown to exactly the orgs the Streaming page exists for — the page's own predicate
+  // (`streamingPageAccess`: the whole page, or the disconnect-only page an editor of an org that cannot go live still gets while it holds
+  // a YouTube connection), asked for the org the chrome is showing, never guessed client-side. A failed read hides the item (and is reported): the chrome
   // must not take a page down, and a missing link is the honest fail-closed answer for a page that would 404.
   let streamingOffered = false;
   if (activeOrg) {
     try {
-      streamingOffered = await streamingPageOffered(activeOrg.id);
+      streamingOffered = (await streamingPageAccess(activeOrg.id, (EDITOR_ROLES as readonly string[]).includes(activeOrg.role))) !== "none";
     } catch (err) {
       captureError(err, { orgId: activeOrg.id, route: "nav.streaming_offered" });
     }

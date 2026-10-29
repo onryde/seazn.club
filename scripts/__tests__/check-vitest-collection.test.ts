@@ -180,6 +180,7 @@ const REST = [
   // W2d PR B (format matrix, T17): the public table's OTW/OTL columns, points unit, level table and h2h note on
   // every split row. Begins with "s", so it belongs here rather than in C_GLOBBED.
   "src/server/public-site/__tests__/standings-view-w2d.test.ts",
+  "src/server/public-site/__tests__/public-fixture-replay-parts.test.ts",
 ];
 const EXCLUDE_C = "**/public-site/__tests__/c*";
 

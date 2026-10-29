@@ -398,6 +398,8 @@ export const NEVER_KEY_ROUTES: readonly string[] = [
   "POST /orgs/:id/youtube-connections",
   "GET /orgs/:id/youtube-connections/pending/:pendingId",
   "PATCH /orgs/:id/youtube-connections/:connectionId",
+  // T18: Disconnect revokes the signed-in person's own Google grant and purges the channel's data - a person's act, never a key's.
+  "DELETE /orgs/:id/youtube-connections/:connectionId",
   "POST /registrations/:id/refund",
   // Online chess (T19, D12): opening a round emails real people and starts a
   // clock against them, and its stamp names the USER who opened it

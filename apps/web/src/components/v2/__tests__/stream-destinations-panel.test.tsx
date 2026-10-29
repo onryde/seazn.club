@@ -158,6 +158,7 @@ describe("the Streaming page (spec §4)", () => {
     const html = panelHtml({ targets: [target()] });
     expect(html).toMatch(/data-testid="stream-dest-subline"[^>]*>YouTube · key ends …8hd · added 12 Sept?</);
     expect(html).toMatch(/data-platform-mark="youtube"/);
+    expect(html, "a pasted-key row is not a link to YouTube, so it draws no YouTube logo (owner 2026-10-28)").not.toContain("data-youtube-icon");
     expect(html).toMatch(/data-testid="stream-dest-row"[^>]*data-target-id="t1"/);
   });
 

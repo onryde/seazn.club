@@ -80,6 +80,8 @@ const baseData = (
     // T16 — `getPublicFixture` always carries these (null / false when the
     // division does not play online): the watch panel reads them.
     externalPlay: null,
+    // T16 — the YouTube replay parts (none unless a broadcast completed for this fixture).
+    parts: [],
     roundOpened: false,
     roundOpenedAt: null,
     pairedWhiteSide: null,

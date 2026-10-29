@@ -3,11 +3,25 @@
 // written here must arrive on `public_fixtures_v`, because `PublicFixture`'s
 // column list is hand-maintained in two places and a column read everywhere /
 // written nowhere is this repo's most-shipped defect class.
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { sql } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
 import { seedOrg, startedDivisionWithFixture, setupDivisionWithFixture } from "./_rig";
-import { setFixtureStreamUrl } from "../fixtures";
+import { setFixtureStreamUrl, setFixtureStreamUrlIfEmpty } from "../fixtures";
+
+/** fireDivisionRevalidate, spied: a pass-through that records each call. */
+const revalidated = vi.hoisted(() => ({ calls: [] as { divisionId: string; competitionId: string | undefined }[] }));
+vi.mock("@/server/public-site/revalidate", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/server/public-site/revalidate")>();
+  return {
+    ...real,
+    fireDivisionRevalidate: vi.fn((divisionId: string, competitionId?: string) => {
+      revalidated.calls.push({ divisionId, competitionId });
+      return real.fireDivisionRevalidate(divisionId, competitionId);
+    }),
+  };
+});
+beforeEach(() => { revalidated.calls = []; });
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -81,5 +95,82 @@ describe.skipIf(!HAS_DB)("setFixtureStreamUrl", () => {
       view?.stream_url,
       "an unreleased ('setup') division's link must not leak ahead of its schedule",
     ).toBeNull();
+  });
+});
+
+// The end step's write (YouTube Connect, F-m3): the same path, but the column is only filled while it is EMPTY - decided by the UPDATE
+// itself, so a club link saved between the end step's decision and its write is never overwritten.
+describe.skipIf(!HAS_DB)("setFixtureStreamUrlIfEmpty", () => {
+  const stored = async (fixtureId: string) =>
+    (await sql<{ stream_url: string | null }[]>`select stream_url from fixtures where id = ${fixtureId}`)[0]!.stream_url;
+  const idsOf = async (fixtureId: string) =>
+    (await sql<{ division_id: string; competition_id: string }[]>`
+      select f.division_id, d.competition_id from fixtures f join divisions d on d.id = f.division_id where f.id = ${fixtureId}`)[0]!;
+
+  it("an empty link is written, reported written, expires the division's pages once, and arrives on the public view", async () => {
+    const { auth } = await seedOrg();
+    const { fixtureId } = await startedDivisionWithFixture(auth);
+    const url = "https://www.youtube.com/watch?v=abc123";
+    const ids = await idsOf(fixtureId);
+    revalidated.calls = [];   // the rig expired pages of its own
+
+    const out = await setFixtureStreamUrlIfEmpty(auth, fixtureId, url);
+    expect(out).toEqual({ id: fixtureId, stream_url: url, written: true });
+    expect(await stored(fixtureId)).toBe(url);
+    expect((await sql<{ stream_url: string | null }[]>`select stream_url from public_fixtures_v where id = ${fixtureId}`)[0]!.stream_url).toBe(url);
+    expect(revalidated.calls, "the same revalidation as the plain write").toEqual([{ divisionId: ids.division_id, competitionId: ids.competition_id }]);
+  });
+
+  it("a link already there (a club's own, or Part 1's) is left exactly as it is - reported NOT written - and the pages are still expired (the replay that arrived changes the match page either way)", async () => {
+    const { auth } = await seedOrg();
+    const { fixtureId } = await startedDivisionWithFixture(auth);
+    const ids = await idsOf(fixtureId);
+    await setFixtureStreamUrl(auth, fixtureId, "https://twitch.tv/seaznclub");
+    revalidated.calls = [];
+
+    const out = await setFixtureStreamUrlIfEmpty(auth, fixtureId, "https://www.youtube.com/watch?v=abc123");
+    expect(out, "the answer carries what is stored, not what was offered").toEqual({ id: fixtureId, stream_url: "https://twitch.tv/seaznclub", written: false });
+    expect(await stored(fixtureId)).toBe("https://twitch.tv/seaznclub");
+    expect(revalidated.calls).toEqual([{ divisionId: ids.division_id, competitionId: ids.competition_id }]);
+  });
+
+  it("the sequence: written, then cleared by the club (null), then offered again - written again; and once more it is taken", async () => {
+    const { auth } = await seedOrg();
+    const { fixtureId } = await startedDivisionWithFixture(auth);
+    const first = "https://www.youtube.com/watch?v=aaa111";
+    const second = "https://www.youtube.com/watch?v=bbb222";
+    expect((await setFixtureStreamUrlIfEmpty(auth, fixtureId, first)).written).toBe(true);
+    expect((await setFixtureStreamUrlIfEmpty(auth, fixtureId, second)).written, "taken").toBe(false);
+    await setFixtureStreamUrl(auth, fixtureId, null);
+    expect((await setFixtureStreamUrlIfEmpty(auth, fixtureId, second)).written, "empty again").toBe(true);
+    expect(await stored(fixtureId)).toBe(second);
+    expect((await setFixtureStreamUrlIfEmpty(auth, fixtureId, first)).written, "taken again").toBe(false);
+    expect(await stored(fixtureId)).toBe(second);
+  });
+
+  it("THE RACE: many writers at once - exactly one is written, and what is stored is that writer's link (an unconditional write would report every one of them written)", async () => {
+    const { auth } = await seedOrg();
+    const { fixtureId } = await startedDivisionWithFixture(auth);
+    const urls = Array.from({ length: 12 }, (_, i) => `https://www.youtube.com/watch?v=race${String(i).padStart(4, "0")}`);
+    const outs = await Promise.all(urls.map((u) => setFixtureStreamUrlIfEmpty(auth, fixtureId, u)));
+    const winners = outs.filter((o) => o.written);
+    expect(outs, "anti-vacuity: every writer answered").toHaveLength(urls.length);
+    expect(winners, "exactly one writer won").toHaveLength(1);
+    expect(await stored(fixtureId)).toBe(winners[0]!.stream_url);
+    expect(urls, "and it is one of the offered links").toContain(winners[0]!.stream_url);
+    for (const o of outs.filter((x) => !x.written)) expect(o.stream_url, "the others are told what won").toBe(winners[0]!.stream_url);
+  });
+
+  it("refuses what the plain write refuses: a fixture that is not this org's is a 404 (never `written: false`), a host outside the allowlist a 422, and neither touches the column or expires anything", async () => {
+    const { auth } = await seedOrg();
+    const other = await seedOrg();
+    const { fixtureId } = await startedDivisionWithFixture(other.auth);
+    const mine = await startedDivisionWithFixture(auth);
+    revalidated.calls = [];
+    await expect(setFixtureStreamUrlIfEmpty(auth, fixtureId, "https://www.youtube.com/watch?v=abc123")).rejects.toMatchObject({ status: 404 });
+    await expect(setFixtureStreamUrlIfEmpty(auth, mine.fixtureId, "https://evil.example/www.youtube.com")).rejects.toMatchObject({ status: 422 });
+    expect(await stored(fixtureId)).toBeNull();
+    expect(await stored(mine.fixtureId)).toBeNull();
+    expect(revalidated.calls).toEqual([]);
   });
 });

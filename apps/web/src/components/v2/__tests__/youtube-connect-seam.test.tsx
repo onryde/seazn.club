@@ -13,6 +13,8 @@
 import { randomBytes, randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ReactElement } from "react";
 
 const jar = vi.hoisted(() => ({ values: new Map<string, string>() }));
@@ -36,6 +38,12 @@ vi.mock("@/lib/auth", async (importOriginal) => {
     },
   };
 });
+// The confirm dialog is answered "yes" (the dialog's own wording is proven in youtube-connect-panel.test.tsx); the provider stays real
+// for the markup helpers below.
+vi.mock("@/components/ui/confirm-provider", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/ui/confirm-provider")>()),
+  useConfirm: () => async () => true,
+}));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ refresh: () => {}, replace: () => {}, push: () => {} }),
   usePathname: () => "/streaming",
@@ -51,7 +59,15 @@ import { insertConnectionWithToken } from "@/server/youtube/token-store";
 import { seedOrg } from "@/server/usecases/__tests__/_rig";
 import { POST as START } from "@/app/api/youtube/connect/route";
 import type { StreamTarget } from "@/server/api-v1/schemas";
-import { KidsChoice, PrivacyChoice, YoutubeChannelRow, YoutubeConnectCard } from "../youtube-connect-panel";
+import { ConfirmProvider } from "@/components/ui/confirm-provider";
+import { DictProvider } from "@/components/i18n/dict-provider";
+import { propsOf, renderIsland } from "@/components/__tests__/_hook-harness";
+import { DELETE as DISCONNECT } from "@/app/api/v1/orgs/[id]/youtube-connections/[connectionId]/route";
+import { listStreamTargets } from "@/server/usecases/stream-targets";
+import { connect, fake as rigFake, org as rigOrg } from "@/server/youtube/__tests__/_connect-rig";
+import type { Dict } from "@/lib/i18n-constants";
+import { KidsChoice, PrivacyChoice, YoutubeChannelRow, YoutubeConnectCard, YoutubeDisconnectedNotice } from "../youtube-connect-panel";
+import { StreamDestinationsPanel } from "../stream-destinations-panel";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 const KEKS = ["YOUTUBE_TOKEN_KEK", "RELAY_KEK"] as const;
@@ -132,7 +148,7 @@ async function liveConnection(r: { orgId: string; userId: string }, consentVersi
     }));
   return connectionId;
 }
-const rowMarkup = (t: StreamTarget, orgId: string): string => renderToStaticMarkup((<ul><YoutubeChannelRow t={t} canEdit orgId={orgId} badge={null} /></ul>) as ReactElement);
+const rowMarkup = (t: StreamTarget, orgId: string): string => renderToStaticMarkup((<ConfirmProvider><ul><YoutubeChannelRow t={t} canEdit orgId={orgId} badge={null} /></ul></ConfirmProvider>) as ReactElement);
 
 // ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
 describe.skipIf(!HAS_DB)("the consent form -> POST /api/youtube/connect", () => {
@@ -180,7 +196,7 @@ describe.skipIf(!HAS_DB)("the consent form -> POST /api/youtube/connect", () => 
 describe.skipIf(!HAS_DB)("the Reconnect form -> POST /api/youtube/connect", () => {
   const dead = (connectionId: string, over: Partial<NonNullable<StreamTarget["youtube"]>> = {}): StreamTarget => ({
     id: "t-seam", kind: "youtube", label: "Seam FC", watchUrl: null, createdAt: "2026-10-20T10:00:00.000Z", keyHint: null, inUse: null,
-    youtube: { connectionId, channelTitle: "Seam FC", privacy: "public", madeForKids: true, status: "reconnect_needed", liveState: "unknown", termsOutdated: false, openBroadcasts: 0, ...over },
+    youtube: { connectionId, channelId: "UC7xK2mQ9rVbN4tLpA1sZ0wE", channelTitle: "Seam FC", privacy: "public", madeForKids: true, status: "reconnect_needed", liveState: "unknown", termsOutdated: false, openBroadcasts: 0, ...over },
   });
 
   it("a dead connection whose consent is CURRENT: the form as shipped (no consent field) reconnects it — the pending grant is bound to THAT connection (T7-R2)", async () => {
@@ -208,5 +224,79 @@ describe.skipIf(!HAS_DB)("the Reconnect form -> POST /api/youtube/connect", () =
     const res = await post(bare);
     expect(res.status).toBe(400);
     expect(await pendingRows(r.orgId)).toEqual([]);
+  });
+});
+
+// ═════════════════════════════════════════════════════════════════════════════════════════════════════════════════════
+// F1 (T18 fix round 1): the Disconnect row -> the REAL DELETE route -> the page's notice. The route's `revokeOutcome` is produced by the
+// real usecase over a real Postgres and the FakeYouTube; the row's `apiV1` is the real client (only `fetch` is a hop to the route's
+// handler); the panel is the real one. A notice built from a fixture on both ends would prove the fixture.
+
+const enDict = JSON.parse(readFileSync(join(__dirname, "..", "..", "..", "dictionaries", "en", "ui.json"), "utf8")) as Record<string, string>;
+const noticeText = (name: string, outcome: "revoked" | "skipped_shared_account" | "not_confirmed"): string =>
+  renderToStaticMarkup(<DictProvider dict={enDict as unknown as Dict} locale="en"><YoutubeDisconnectedNotice name={name} outcome={outcome} onDismiss={() => {}} /></DictProvider>)
+    .replace(/<[^>]*>/g, "").replace(/&#x27;/g, "'").replace(/\s+/g, " ").trim();
+
+describe.skipIf(!HAS_DB)("the Disconnect row -> DELETE /api/v1/orgs/:id/youtube-connections/:id -> the notice", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("each of the three outcomes - revoked, left alone because another channel uses the Google account, and tried-and-not-confirmed - reaches the rendered notice as its own sentence, and a damaged saved token is the third, not the second (anti-vacuity: 3 outcomes + 1)", async () => {
+    setYoutubeDriverForTest(rigFake);
+    vi.stubGlobal("fetch", async (url: string, init?: RequestInit) => {
+      const hit = /^\/api\/v1\/orgs\/([^/]+)\/youtube-connections\/([^/]+)$/.exec(url);
+      if (!hit || init?.method !== "DELETE") throw new Error(`the seam routes only the DELETE: ${init?.method} ${url}`);
+      return DISCONNECT(new Request(`http://localhost${url}`, { method: "DELETE", headers: init.headers }), { params: Promise.resolve({ id: hit[1]!, connectionId: hit[2]! }) });
+    });
+    const seen: string[] = [];
+    const scenarios: { name: string; want: "revoked" | "skipped_shared_account" | "not_confirmed"; setup: (c: { token: string; channel: { id: string }; connectionId: string }, sub: string) => Promise<void> }[] = [
+      { name: "plain", want: "revoked", setup: async () => {} },
+      {
+        name: "shared Google account", want: "skipped_shared_account",
+        setup: async (_c, sub) => {
+          const other = await rigOrg();
+          const b = await connect(other, { sub });
+          rigFake.seedGrant({ refreshToken: b.token, channelId: b.channel.id, channelTitle: b.channel.title });
+        },
+      },
+      { name: "Google did not answer", want: "not_confirmed", setup: async (c) => { rigFake.failNext("revoke", "youtube_unavailable", "backendError", { channelId: c.channel.id }); } },
+      {
+        name: "damaged saved token", want: "not_confirmed",
+        setup: async (c) => { await sql`update org_youtube_connections set refresh_token_enc = decode('deadbeef', 'hex') where id = ${c.connectionId}`; },
+      },
+    ];
+    for (const sc of scenarios) {
+      const o = await rigOrg();
+      session.user = { id: o.userId };
+      const sub = `sub-seam-${randomUUID()}`;
+      const c = await connect(o, { sub });
+      rigFake.seedGrant({ refreshToken: c.token, channelId: c.channel.id, channelTitle: c.channel.title });
+      await sc.setup(c, sub);
+
+      const targets = await listStreamTargets(o.auth, o.orgId);
+      expect(targets.filter((t) => t.youtube !== null), `${sc.name}: premise - the channel is listed`).toHaveLength(1);
+      const panel = renderIsland(StreamDestinationsPanel, { orgId: o.orgId, canEdit: true, targets, locale: "en" });
+      const rowEl = panel.tree().find((el) => el.type === YoutubeChannelRow)!;
+      const row = renderIsland(YoutubeChannelRow, propsOf(rowEl) as never);
+      const button = row.tree().find((el) => propsOf(el)["data-testid"] === "youtube-disconnect")!;
+      // the button's handler does not return its promise (`() => void disconnect()`): wait for what the tap leads to, a notice or a refusal
+      (propsOf(button).onClick as () => void)();
+      await vi.waitFor(() => {
+        const done = panel.tree().some((el) => el.type === YoutubeDisconnectedNotice) || row.tree().some((el) => propsOf(el)["data-testid"] === "youtube-error");
+        if (!done) throw new Error("the tap has not led anywhere yet");
+      }, { timeout: 15_000 });
+
+      expect((await sql<{ status: string }[]>`select status from org_youtube_connections where id = ${c.connectionId}`)[0]!.status, `${sc.name}: the route disconnected it`).toBe("revoked");
+      const notice = panel.tree().find((el) => el.type === YoutubeDisconnectedNotice);
+      expect(notice, `${sc.name}: the page shows a notice`).toBeDefined();
+      expect(propsOf(notice!).outcome, sc.name).toBe(sc.want);
+      expect(propsOf(notice!).name, sc.name).toBe(c.channel.title);
+      expect(noticeText(c.channel.title, propsOf(notice!).outcome as never), sc.name).toContain(
+        sc.want === "revoked" ? `${c.channel.title} is disconnected. Seazn deleted what it stored from YouTube for this channel.`
+        : sc.want === "skipped_shared_account" ? "another channel on the same Google account is still connected"
+        : "couldn't confirm that Google removed Seazn's access");
+      seen.push(`${sc.name}=${String(propsOf(notice!).outcome)}`);
+    }
+    expect(seen, "all four scenarios ran").toHaveLength(4);
+    expect(new Set(seen.map((x) => x.split("=")[1])), "and the three outcomes were all produced by the real route").toEqual(new Set(["revoked", "skipped_shared_account", "not_confirmed"]));
   });
 });

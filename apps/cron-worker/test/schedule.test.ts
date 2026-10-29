@@ -31,8 +31,12 @@ const EVERY_MINUTE = "* * * * *";
  *  (owner ruling 2026-10-20) rides the same one fast trigger per env. Typed from the specs, never read from JOBS. The
  *  fast-trigger rows, in table order. */
 const FAST_ROWS = ["stream-tick", "external-play", "email-outbox"];
-/** The two rows that are the 5-minute jobs: on prod they hang off the minute trigger and run on every fifth minute. */
-const FIVE_MINUTE_JOBS = ["stream-tick", "external-play"];
+/** The ONE row that is still a 5-minute job: on prod it hangs off the minute trigger and runs on every fifth minute. The
+ *  stream tick left this list on 2026-10-28 (YouTube Connect T15, spec §6.7, D9 as amended by owner Q1 = b): it runs on EVERY
+ *  fast firing, so a broadcast whose end is due is ended within a minute on prod. */
+const FIVE_MINUTE_JOBS = ["external-play"];
+/** The rows due at a prod minute that is NOT a multiple of five: the every-firing rows, in table order. */
+const EVERY_FIRING_ROWS = ["stream-tick", "email-outbox"];
 /** A well-formed trigger no row names. */
 const UNKNOWN = "*/7 * * * *";
 
@@ -97,16 +101,17 @@ describe("dueJobs is keyed on the firing trigger (R4)", () => {
     expect(FIVE_MINUTES).toBe(5);
   });
 
-  it("the stream-tick row is in the table exactly once, on the env's fast trigger, due on every fifth minute (W22)", () => {
+  it("the stream-tick row is in the table exactly once, on the env's fast trigger, due on EVERY firing, never retried (YouTube Connect T15; was every fifth minute, W22)", () => {
     expect(JOBS.filter((j) => j.id === "stream-tick")).toEqual([
       {
         id: "stream-tick",
         path: "/api/cron/stream-tick",
         trigger: FAST_TRIGGER,
-        due: { kind: "minuteMod", every: FIVE_MINUTES },
+        due: { kind: "every" },
         retry: false,
         manual: true,
-        failureCounts: ["data.failed"],
+        // The session pass's `failed` and the YouTube end step's `failed` (route answer `data.youtube.failed`).
+        failureCounts: ["data.failed", "data.youtube.failed"],
       },
     ]);
   });
@@ -153,25 +158,73 @@ describe("dueJobs is keyed on the firing trigger (R4)", () => {
     expect(ids(at("2026-09-28T08:05:00Z"), EVERY_MINUTE, "stg")).toEqual([]);
   });
 
-  it("on prod's minute trigger the 5-minute jobs run on minutes divisible by 5 and the outbox on every minute", () => {
+  it("on prod's minute trigger the stream tick and the outbox run on EVERY minute and the 5-minute job only on minutes divisible by 5", () => {
     let checked = 0;
     for (let m = 0; m < 60; m++) {
-      const want = m % FIVE_MINUTES === 0 ? FAST_ROWS : ["email-outbox"];
+      const want = m % FIVE_MINUTES === 0 ? FAST_ROWS : EVERY_FIRING_ROWS;
       expect(ids(new Date(Date.UTC(2026, 8, 28, 8, m)), MINUTE_CRON, "prod"), `:${m}`).toEqual(want);
       checked++;
     }
     expect(checked).toBe(60);
   });
 
+  // YouTube Connect T15 (spec §6.7; owner Q1 = b, 2026-10-27). The four cadence rulings, each at the instants the owner's words name.
+  describe("T15: the stream tick runs on every fast firing; stg keeps */5", () => {
+    it("stream-tick is due on EVERY fast firing on prod: 10:01, 10:02 and 10:03 each include it (it was due only at 10:00 and 10:05 before)", () => {
+      let checked = 0;
+      for (const minute of [1, 2, 3, 4, 6, 7, 59]) {
+        const got = ids(new Date(Date.UTC(2026, 9, 28, 10, minute)), MINUTE_CRON, "prod");
+        expect(got, `10:${String(minute).padStart(2, "0")}`).toContain("stream-tick");
+        expect(got, `10:${String(minute).padStart(2, "0")} is not a fifth minute`).not.toContain("external-play");
+        checked++;
+      }
+      expect(checked).toBe(7);
+    });
+
+    it("stg's fast trigger stays '*/5 * * * *' (owner Q1 = b: a minute trigger would keep stg awake all day); stream-tick is due at every stg firing, 10:05 and 10:10", () => {
+      expect(FAST_TRIGGER.stg).toBe("*/5 * * * *");
+      let checked = 0;
+      for (const minute of [0, 5, 10, 15, 55]) {
+        expect(ids(new Date(Date.UTC(2026, 9, 28, 10, minute)), FAST_TRIGGER.stg, "stg"), `stg 10:${String(minute).padStart(2, "0")}`).toEqual(FAST_ROWS);
+        checked++;
+      }
+      expect(checked).toBe(5);
+      // The pair: stg's trigger is the only one that fires it there — the minute trigger is unknown to stg.
+      expect(ids(new Date(Date.UTC(2026, 9, 28, 10, 1)), MINUTE_CRON, "stg")).toEqual([]);
+    });
+
+    it("external-play stays 5-minutely on prod: due at 10:05, NOT at 10:06 (the positive pair of the case above)", () => {
+      expect(ids(new Date(Date.UTC(2026, 9, 28, 10, 5)), MINUTE_CRON, "prod")).toContain("external-play");
+      expect(ids(new Date(Date.UTC(2026, 9, 28, 10, 6)), MINUTE_CRON, "prod")).not.toContain("external-play");
+      expect(JOBS.find((j) => j.id === "external-play")!.due).toEqual({ kind: "minuteMod", every: 5 });
+    });
+
+    it("email-outbox cadence is unchanged: every fast firing in both envs (prod every minute, stg every 5 minutes)", () => {
+      let prod = 0;
+      for (let m = 0; m < 60; m++) {
+        expect(ids(new Date(Date.UTC(2026, 9, 28, 10, m)), MINUTE_CRON, "prod"), `prod :${m}`).toContain("email-outbox");
+        prod++;
+      }
+      expect(prod).toBe(60);
+      let stg = 0;
+      for (let m = 0; m < 60; m += 5) {
+        expect(ids(new Date(Date.UTC(2026, 9, 28, 10, m)), FAST_TRIGGER.stg, "stg"), `stg :${m}`).toContain("email-outbox");
+        stg++;
+      }
+      expect(stg).toBe(12);
+      expect(JOBS.find((j) => j.id === "email-outbox")!.due).toEqual({ kind: "every" });
+    });
+  });
+
   describe("keyed on the SCHEDULED minute, never the wall clock", () => {
     afterEach(() => vi.useRealTimers());
 
-    it("scheduled :05 delivered at :06 runs the 5-minute jobs; scheduled :06 delivered at :10 does not", () => {
+    it("scheduled :05 delivered at :06 runs the 5-minute job; scheduled :06 delivered at :10 does not", () => {
       vi.useFakeTimers({ toFake: ["Date"] });
       vi.setSystemTime(at("2026-09-28T08:06:00Z"));
       expect(ids(at("2026-09-28T08:05:00Z"), MINUTE_CRON, "prod")).toEqual(FAST_ROWS);
       vi.setSystemTime(at("2026-09-28T08:10:00Z"));
-      expect(ids(at("2026-09-28T08:06:00Z"), MINUTE_CRON, "prod")).toEqual(["email-outbox"]);
+      expect(ids(at("2026-09-28T08:06:00Z"), MINUTE_CRON, "prod")).toEqual(EVERY_FIRING_ROWS);
       // Anti-vacuity: the fake clock is the one the code would have read.
       expect(new Date().getUTCMinutes()).toBe(10);
     });
@@ -292,7 +345,7 @@ describe("a simulated hour: how many times each job actually runs (derived from 
     expect(() => firesAt("*/5 9 * * *", 0)).toThrow(/firesAt/);
   });
 
-  it("prod runs the 5-minute jobs 12 times and the outbox 60; stg runs both 12", () => {
+  it("prod runs the stream tick and the outbox 60 times and the 5-minute job 12; stg runs all three 12 (stg's trigger fires every 5 minutes)", () => {
     const prod = tally("prod");
     const stg = tally("stg");
     const fiveMin = 60 / FIVE_MINUTES; // 12, from the constant
@@ -302,6 +355,9 @@ describe("a simulated hour: how many times each job actually runs (derived from 
       expect(prod[id], `prod ${id}`).toBe(fiveMin);
       expect(stg[id], `stg ${id}`).toBe(fiveMin);
     }
+    // T15: the stream tick runs on every firing of the env's fast trigger, as the outbox does.
+    expect(prod["stream-tick"], "prod stream-tick").toBe(minute);
+    expect(stg["stream-tick"], "stg stream-tick").toBe(stgTick);
     expect(prod["email-outbox"], "prod email-outbox").toBe(minute);
     expect(stg["email-outbox"], "stg email-outbox").toBe(stgTick);
     // The hourly rows are untouched by any of this: once an hour on both envs.
@@ -348,8 +404,12 @@ describe("JOBS table", () => {
       "billing-events": ["data.failed", "data.alerted"],
       "billing-quantity": ["data.failed", "data.orphanGroups.failed", "data.addonPrices.mismatched"],
       "billing-grant": ["data.failed"],
-      // T7b: stream-tick's StreamTickResult.failed — `deferred` is NOT a failure (reached at the next firing).
-      "stream-tick": ["data.failed"],
+      // T17: the relay-sweep route's daily YouTube pass - YoutubeDailyResult.failed (a connection or leg that threw, a refresh batch
+      // YouTube could not answer, a broadcast the end step can never settle), at data.youtube.failed. `reconnectNeeded` is NOT a failure.
+      "relay-sweep": ["data.youtube.failed"],
+      // T7b: stream-tick's StreamTickResult.failed — `deferred` is NOT a failure (reached at the next firing). T15: and the
+      // YouTube end step's YoutubeEndResult.failed (broadcasts that failed this pass and will be retried), at data.youtube.failed.
+      "stream-tick": ["data.failed", "data.youtube.failed"],
       // Final review I-1: SweepReport.failed (fixtures whose action threw) and .skipped (1 when another pass held the
       // lock). `deferred` is NOT a failure (the pass budget ran out; the next firing reaches the rest).
       "external-play": ["data.failed", "data.skipped"],

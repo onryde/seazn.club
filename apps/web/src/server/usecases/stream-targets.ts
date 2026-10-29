@@ -61,14 +61,17 @@ export class TargetUnreadableError extends HttpError {
 
 const streamKeyEmpty = () => new HttpError(422, "The stream key is empty", STREAM_KEY_EMPTY);
 
-export async function listStreamTargets(auth: AuthCtx, orgId: string): Promise<StreamTarget[]> {
+/** `channelsOnly`: the restricted Streaming page of an org that can no longer go live (T18) - only the connected YouTube channels, with
+ *  NO pasted key read (no hint, so no key decrypted) and no holder lookup: it exists so such an org can still disconnect a channel. */
+export async function listStreamTargets(auth: AuthCtx, orgId: string, opts: { channelsOnly?: boolean } = {}): Promise<StreamTarget[]> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
+  const channelsOnly = opts.channelsOnly === true;
   const [rows, hints, holders, connections] = await Promise.all([
     sql<{ id: string; kind: StreamTarget["kind"]; label: string; watch_url: string | null; created_at: string; youtube_connection_id: string | null }[]>`
       select id, kind, label, watch_url, created_at, youtube_connection_id from org_stream_targets
        where org_id = ${orgId} and archived_at is null order by created_at asc, id asc`,
-    sql.begin((tx) => readKeyHints(tx, orgId)) as Promise<Map<string, string | null>>,
-    holderRows(sql, { orgId }),
+    channelsOnly ? Promise.resolve(new Map<string, string | null>()) : (sql.begin((tx) => readKeyHints(tx, orgId)) as Promise<Map<string, string | null>>),
+    channelsOnly ? Promise.resolve([]) : holderRows(sql, { orgId }),
     connectionViews(orgId),
   ]);
   // holderRows is oldest-first, so the FIRST holder seen for a target is the one the list names.
@@ -76,6 +79,7 @@ export async function listStreamTargets(auth: AuthCtx, orgId: string): Promise<S
   for (const h of holders) if (!heldBy.has(h.targetId)) heldBy.set(h.targetId, h);
   const listed: StreamTarget[] = [];
   for (const r of rows) {
+    if (channelsOnly && r.youtube_connection_id === null) continue;
     // YouTube Connect (T8): an API-backed row is shown with its connection. An ACTIVE one whose connection is not live (revoked, or
     // missing) is not shown at all: the revoke statement archives the destination in the same statement, so it should not exist,
     // and rendered as a pasted row it would offer Rename / Replace key / Remove on a destination with no key.

@@ -43,18 +43,22 @@ export const TRIGGER_CRON = "17 * * * *";
 
 /** Capture QR v2 §6.11 (W22): stream-tick's own trigger. With the hourly one, 2 per env, 4 of the Free plan's 5.
  *  The external-play sweep (chess in-page design §4) shares it: same cadence, no new trigger. Since the email outbox
- *  (owner ruling 2026-10-20) it is STG's fast trigger; prod's is `MINUTE_CRON`. */
+ *  (owner ruling 2026-10-20) it is STG's fast trigger; prod's is `MINUTE_CRON`. The stream tick runs on EVERY firing of
+ *  its env's fast trigger (YouTube Connect T15), so on stg it is still every 5 minutes. */
 export const STREAM_TICK_CRON = "*/5 * * * *";
 
 /** Every minute. Prod's one fast trigger: it REPLACES `*\/5` there (still 2 triggers per env, 4 of the Free plan's 5),
- *  so the email outbox's worker runs every minute on prod, and the 5-minute jobs ride it on their `minuteMod` firings. */
+ *  so the stream tick and the email outbox's worker run every minute on prod, and the one 5-minute job left (the
+ *  external-play sweep) rides it on its `minuteMod` firings. */
 export const MINUTE_CRON = "* * * * *";
 
-/** The 5-minute jobs' period, in minutes: their `minuteMod` on a faster trigger, and the cadence stg's `*\/5` fires at. */
+/** The 5-minute job's period, in minutes: the external-play sweep's `minuteMod` on a faster trigger, and the cadence stg's
+ *  `*\/5` fires at. */
 export const FIVE_MINUTES = 5;
 
 /** The ONE fast trigger per env. Prod's replaces `*\/5`; stg keeps it (stg is `min_machines_running = 0`, and a minute
- *  trigger would keep it awake all day), so the outbox runs there on the existing 5-minute tick and adds no wake-up. */
+ *  trigger would keep it awake all day), so the outbox and the stream tick run there on the existing 5-minute tick and add
+ *  no wake-up. A broadcast's end on stg can therefore land up to 5 minutes late (owner, YouTube Connect Q1 = b, 2026-10-27). */
 export const FAST_TRIGGER: Readonly<Record<EnvName, string>> = { prod: MINUTE_CRON, stg: STREAM_TICK_CRON };
 
 export const JOBS: readonly Job[] = [
@@ -74,7 +78,20 @@ export const JOBS: readonly Job[] = [
   // overlap a pass still alive server-side, and the sweep's overlap safety
   // (per-session advisory locks) is unproven. A missed day costs nothing,
   // because the sweep owns nothing time-critical (relay-sweep.ts:2-3).
-  { id: "relay-sweep", path: "/api/cron/relay-sweep", trigger: TRIGGER_CRON, due: { kind: "daily", hourUtc: 4 }, retry: false, manual: true },
+  // YouTube Connect T17 (spec §6.6): the same daily firing runs the daily YouTube pass (channel health, the 25-day video
+  // refresh, the 30-day dead-grant purge) before the sweep, on a relay-disabled deployment too. `youtube.failed` counts what
+  // did not work this pass (a connection or leg that threw, a refresh batch YouTube could not answer) plus every broadcast
+  // the end step can never settle - all retried the next day, or needing a person. A dead grant (`reconnectNeeded`) is the pass
+  // WORKING, not failing, so it is not a failure counter. The sweep reports no counter of its own.
+  {
+    id: "relay-sweep",
+    path: "/api/cron/relay-sweep",
+    trigger: TRIGGER_CRON,
+    due: { kind: "daily", hourUtc: 4 },
+    retry: false,
+    manual: true,
+    failureCounts: ["data.youtube.failed"],
+  },
   {
     id: "billing-quantity",
     path: "/api/cron/billing-quantity",
@@ -108,17 +125,21 @@ export const JOBS: readonly Job[] = [
     manual: true,
   },
   // Capture QR v2 T7b (§6.11, W22): ticks every open stream session so a phone that dies with no panel open is
-  // still ended (ask 10, W19). Never retried: its next firing, 5 minutes later, IS the retry, and a re-send could
-  // overlap a pass still running server-side. `failed` counts sessions whose tick threw; `deferred` (the budget ran
-  // out) is not a failure, because the next firing reaches them.
+  // still ended (ask 10, W19). YouTube Connect T15 (spec §6.7): the same firing first ENDS the YouTube broadcasts that
+  // are due (the route runs the end step before the session pass), so this row is due on EVERY firing of the env's fast
+  // trigger: every minute on prod, every 5 minutes on stg (owner Q1 = b: a minute trigger would keep stg awake all day,
+  // so there a broadcast's end can land up to 5 minutes late). Never retried: its next firing, a minute (stg: 5) later,
+  // IS the retry, and a re-send could overlap a pass still running server-side. `failed` counts sessions whose tick
+  // threw; `youtube.failed` counts broadcasts whose end failed this pass (they back off and are retried). `deferred`
+  // (a budget ran out) is not a failure in either, because the next firing reaches them.
   {
     id: "stream-tick",
     path: "/api/cron/stream-tick",
     trigger: FAST_TRIGGER,
-    due: { kind: "minuteMod", every: FIVE_MINUTES },
+    due: { kind: "every" },
     retry: false,
     manual: true,
-    failureCounts: ["data.failed"],
+    failureCounts: ["data.failed", "data.youtube.failed"],
   },
   // Chess in-page board design §4: "The 5-minute cron … is NOT optional". One pass of the external-play sweep: the
   // deadline no-show, the mint retry after a 429, meeting teardown, the reconcile of every game on file, camera evidence

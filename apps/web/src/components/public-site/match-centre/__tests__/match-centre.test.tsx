@@ -227,3 +227,47 @@ describe("MatchCentre — the tabpanel wrapper is focusable", () => {
     expect(html).not.toContain('role="tabpanel"');
   });
 });
+
+// YouTube Connect T16: the replay reaches the card from the page, and the plain-scoreboard fallback does not lose it. The fallback is
+// the case that bites: the page hides the "Replay" pill when the player already carries the same video, so a fallback that dropped
+// the player would leave a finished match with no replay anywhere.
+describe("MatchCentre replay slot", () => {
+  const marker = <section data-testid="replay-slot-probe">REPLAY</section>;
+
+  it("with a document, the replay renders once, inside the court card", () => {
+    const html = renderToStaticMarkup(<MatchCentre {...props(fullDoc)} replay={marker} />);
+    expect([...html.matchAll(/replay-slot-probe/g)]).toHaveLength(1);
+    const card = html.slice(html.indexOf('data-testid="mc-court-card"'), html.indexOf('data-testid="mc-tab-'));
+    expect(card).toContain("replay-slot-probe");
+  });
+
+  it("without a replay, nothing is added (the positive pair of the case above)", () => {
+    expect(renderToStaticMarkup(<MatchCentre {...props(fullDoc)} />)).not.toContain("replay-slot-probe");
+  });
+
+  it("the no-document fallback still shows the replay, in a slab of its own", () => {
+    const initial: LiveFixtureData = { status: "scheduled", summary: null, outcome: null };
+    const html = renderToStaticMarkup(
+      <MatchCentre fixtureId="fx-none" initial={initial} realtime={false} dict={dict} tabParam={null} replay={marker} />,
+    );
+    expect(html).toContain('data-testid="mc-fallback"');
+    expect(html).not.toContain('data-testid="mc-court-card"');
+    const slab = /<div data-testid="mc-fallback-replay"[^>]*>(.*?)<\/div>/.exec(html)?.[1] ?? "";
+    expect(slab).toContain("replay-slot-probe");
+    expect(slab, "the slab is the dark court surface the player's text is styled for").not.toBe("");
+    expect(/<div data-testid="mc-fallback-replay"[^>]*>/.exec(html)![0]).toMatch(/\bbg-court\b/);
+  });
+
+  it("an empty-tabs document falls back the same way and keeps the replay", () => {
+    const doc = buildDoc({ tabs: [] as unknown as MatchCentreTabIdT[] });
+    const html = renderToStaticMarkup(<MatchCentre {...props(doc)} replay={marker} />);
+    expect(html).toContain('data-testid="mc-fallback"');
+    expect(html).toContain("replay-slot-probe");
+  });
+
+  it("the fallback without a replay renders no replay slab at all", () => {
+    const initial: LiveFixtureData = { status: "scheduled", summary: null, outcome: null };
+    const html = renderToStaticMarkup(<MatchCentre fixtureId="fx-none" initial={initial} realtime={false} dict={dict} tabParam={null} />);
+    expect(html).not.toContain("mc-fallback-replay");
+  });
+});

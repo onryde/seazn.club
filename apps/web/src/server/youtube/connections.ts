@@ -10,7 +10,10 @@ import "server-only";
 // that organisation's live connection runs on, and revoking it would kill that connection.
 import { sql, type Tx } from "@/lib/db";
 import { HttpError } from "@/lib/errors";
-import { YOUTUBE_CONSENT_VERSION, YOUTUBE_PRIVACIES, type YoutubePrivacy } from "@/lib/youtube";
+import {
+  YOUTUBE_CONSENT_VERSION, YOUTUBE_LIVE_STATE_FRESH_MINUTES, YOUTUBE_LIVE_STATE_OF_REFUSAL, YOUTUBE_PRIVACIES, isYoutubeLiveStateRefusal,
+  type YoutubeLiveStateRefusal, type YoutubePrivacy,
+} from "@/lib/youtube";
 import type { AuthCtx } from "@/server/api-v1/auth";
 import type {
   PickYoutubeChannel, YoutubeConnectionSaved, YoutubeConnectionSettings, YoutubeConnectionView, YoutubePendingChannels,
@@ -88,7 +91,8 @@ async function ensureDestination(tx: Tx, orgId: string, connectionId: string, ch
  *  statement (token-store.ts, R1). Around it, in the same transaction: the connection learns whose Google account now holds its
  *  token (T18's "revoke unless another connection shares the sub" reads it) and which scope was granted; a consent given on
  *  NEWER wording than the connection carries is recorded on it (replaceConnectionToken does not touch consent); and every open
- *  broadcast's retry backoff is cleared, so the end step that was waiting for a working token tries again at once. */
+ *  broadcast's retry backoff, failure count and stuck-age clock are cleared, so the end step that was waiting for a working token
+ *  tries again at once, from a fresh start. */
 async function reconnect(
   tx: Tx, p: PendingRow, connectionId: string, channel: { id: string; title: string }, token: string, consentVersionOnConnection: number,
 ): Promise<YoutubeConnectionSaved> {
@@ -101,9 +105,13 @@ async function reconnect(
       update org_youtube_connections set consent_version = ${p.consent_version}, consent_at = ${p.consent_at}, consent_by = ${p.user_id}
        where id = ${connectionId} and org_id = ${p.org_id}`;
   }
+  // A fresh start: the failure count and the stuck-age clock (claimed_at, read only by daily.ts's age rule) go with the backoff,
+  // or the daily pass would finalize `end_stuck` a row the club's reconnect just gave a working token, one failure later. An
+  // `ending` row with no backoff (an admission claim holds no lease) has no failure to clear but has aged all the same.
   await tx`
-    update youtube_broadcasts set next_attempt_at = null
-     where connection_id = ${connectionId} and org_id = ${p.org_id} and next_attempt_at is not null
+    update youtube_broadcasts
+       set next_attempt_at = null, attempts = 0, claimed_at = case when state = 'ending' then now() else claimed_at end
+     where connection_id = ${connectionId} and org_id = ${p.org_id} and (next_attempt_at is not null or state = 'ending')
        and state in ${tx(OPEN_BROADCAST_STATES)}`;
   const targetId = await ensureDestination(tx, p.org_id, connectionId, channel.id, channel.title);
   await tx`delete from youtube_connect_pending where id = ${p.id}`;
@@ -204,7 +212,7 @@ export async function pickYoutubeChannel(
 // The Streaming page's projection
 
 interface ConnectionViewRow {
-  id: string; channel_title: string; default_privacy: YoutubePrivacy; made_for_kids: boolean; status: "connected" | "reconnect_needed";
+  id: string; channel_id: string; channel_title: string; default_privacy: YoutubePrivacy; made_for_kids: boolean; status: "connected" | "reconnect_needed";
   last_health_at: Date | null; last_error_code: string | null; consent_version: number; open_broadcasts: number; status_since: Date;
 }
 
@@ -218,14 +226,43 @@ function liveStateOf(
   if (r.status === "reconnect_needed" || r.last_health_at === null) return "unknown";
   if (r.last_health_at < r.status_since) return "unknown";
   if (r.last_error_code === null) return "enabled";
-  if (r.last_error_code === "youtube_live_blocked") return "blocked";
-  if (r.last_error_code === "youtube_live_not_enabled") return "not_enabled";
-  return "unknown";
+  return isYoutubeLiveStateRefusal(r.last_error_code) ? YOUTUBE_LIVE_STATE_OF_REFUSAL[r.last_error_code] : "unknown";
+}
+
+/** Go live's own health check (B4 fix round 1, I-2): a bind that YouTube refused for the channel's live state (not enabled, or
+ *  restricted) writes the code, and a bind that succeeded clears it (`null`), each with `last_health_at = now()` on the DATABASE's clock —
+ *  the clock `status_since` is on, so `liveStateOf` compares like with like and reads exactly `not_enabled` / `blocked` / `enabled`. Only
+ *  a `connected` row, and only this org's: a dead grant says nothing about the channel's live state (`liveStateOf` calls it `unknown`),
+ *  and a foreign id writes nothing. False when no row was written. */
+export async function recordLiveState(
+  exec: Tx | typeof sql, orgId: string, connectionId: string, code: YoutubeLiveStateRefusal | null,
+): Promise<boolean> {
+  const rows = await exec<{ id: string }[]>`
+    update org_youtube_connections set last_error_code = ${code}, last_health_at = now()
+     where id = ${connectionId} and org_id = ${orgId} and status = 'connected'
+    returning id`;
+  return rows.length === 1;
+}
+
+/** Step 1 of prepare, for an AUTOMATIC start only (prepare.ts calls it solely when `startCause` is "automatic"; an organiser's or an
+ *  operator's tap never consults it): the not-enabled / restricted refusal this channel's recorded state still stands for, or null. It
+ *  stands only while the recording is FRESH (younger than YOUTUBE_LIVE_STATE_FRESH_MINUTES on `now`) and only when the Streaming page
+ *  would read it as that state (`liveStateOf`: a connected row, a check made since the token last changed). Anything else — never
+ *  checked, a stale reading, a reconnect since, a dead grant, another code — is null, and the start asks YouTube. */
+export function freshLiveRefusal(
+  r: { status: string | null; last_health_at: Date | null; last_error_code: string | null; status_since: Date | null }, now: Date,
+): YoutubeLiveStateRefusal | null {
+  if (r.status !== "connected" || r.last_health_at === null || r.status_since === null) return null;
+  if (now.getTime() - r.last_health_at.getTime() >= YOUTUBE_LIVE_STATE_FRESH_MINUTES * 60_000) return null;
+  const code = r.last_error_code;
+  if (!isYoutubeLiveStateRefusal(code)) return null;
+  const state = liveStateOf({ status: "connected", last_health_at: r.last_health_at, last_error_code: code, status_since: r.status_since });
+  return state === YOUTUBE_LIVE_STATE_OF_REFUSAL[code] ? code : null;
 }
 
 function toView(r: ConnectionViewRow): YoutubeConnectionView {
   return {
-    connectionId: r.id, channelTitle: r.channel_title, privacy: r.default_privacy, madeForKids: r.made_for_kids, status: r.status,
+    connectionId: r.id, channelId: r.channel_id, channelTitle: r.channel_title, privacy: r.default_privacy, madeForKids: r.made_for_kids, status: r.status,
     liveState: liveStateOf(r),
     // Read at call time (not captured), so a bump of the consent text is seen by the next read. Less than: a connection consented
     // under a LATER wording than this build's (a rollback) is not "outdated".
@@ -234,11 +271,19 @@ function toView(r: ConnectionViewRow): YoutubeConnectionView {
   };
 }
 
+/** Whether the org has a connection that is not revoked - the one question the restricted Streaming page (an org that can no longer go
+ *  live, but must still be able to disconnect: T18, DP III) and its nav item ask. Org-scoped in SQL. */
+export async function hasLiveConnection(orgId: string): Promise<boolean> {
+  const [r] = await sql<{ live: boolean }[]>`
+    select exists (select 1 from org_youtube_connections where org_id = ${orgId} and status <> 'revoked') as live`;
+  return r!.live;
+}
+
 /** The org's live connections as the Streaming page shows them, by connection id. Org-scoped in SQL. Revoked connections are history
  *  and have no view. `only` narrows to one connection (a PATCH's reply). */
 export async function connectionViews(orgId: string, only?: string): Promise<Map<string, YoutubeConnectionView>> {
   const rows = await sql<ConnectionViewRow[]>`
-    select c.id, c.channel_title, c.default_privacy, c.made_for_kids, c.status, c.last_health_at, c.last_error_code, c.consent_version, c.status_since,
+    select c.id, c.channel_id, c.channel_title, c.default_privacy, c.made_for_kids, c.status, c.last_health_at, c.last_error_code, c.consent_version, c.status_since,
            (select count(*)::int from youtube_broadcasts b
              where b.connection_id = c.id and b.org_id = c.org_id and b.state in ${sql(OPEN_BROADCAST_STATES)}) as open_broadcasts
       from org_youtube_connections c
