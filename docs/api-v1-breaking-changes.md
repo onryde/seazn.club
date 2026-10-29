@@ -42,9 +42,11 @@ its own format, set that match back to its stage's format first.
 Key on `error.code` and the issues' `message`, not on `error.message`.
 
 Only a new write is judged; a stored config that breaks one still loads and
-plays as before. The release's migration counts stored configs below the floor
-and stops the deploy if it finds any, so none is left that every later save of
-its division would refuse.
+plays as before. None is left stored: the release's migration, which runs
+before the deploy, counts every stored config that breaks either rule (in a
+division's config, a stage's rules, a match's own format, a match's frozen
+snapshot and its cached state) and, if it finds any, stops the deploy and
+names each one. So no division is left that every later save would refuse.
 
 ## 2026-10-28 — a short-set tie-break ends at 5–4 (Fast4 and the new short-sets format)
 
@@ -66,9 +68,11 @@ never at 10–9.
 | Same path, a Fast4 `tb` block of 6–4 or 6–5 | 6–4 accepted | 422 `INVALID_EVENT`, nothing written |
 | Both write paths, any tie-break or match tie-break played to a margin of one (`set.tiebreakWinBy: 1`, or `tiebreak.winBy: 1`), a `tb` block or match tie-break summary past its target (8–7 in a tie-break to 7; 11–10 in a match tie-break to 10) | accepted (only the point before was checked) | refused, `"INVALID_EVENT"` ("not a reachable final score"); `events/import` rejects the stream with `error.engineCode` `"INVALID_EVENT"` |
 
-A Fast4 division that existed before this release keeps a two-point margin:
-the release's migration writes `set.tiebreakWinBy: 2` into its stored config
-explicitly. A division created from the `fast4` format afterwards plays the
+A Fast4 division that existed before this release keeps the margin it played:
+the release's migration writes its own `tiebreak.winBy` into the stored set as
+`set.tiebreakWinBy` (2, the default, unless the organiser chose a margin of
+one), in the division's config and in every stage rule, match format, frozen
+snapshot and cached state that holds a Fast4 set. A division created from the `fast4` format afterwards plays the
 deciding point. A new format, `short-sets` (tie-break at 4-all, advantage
 games), plays it too.
 
@@ -212,9 +216,10 @@ reading it.
 (`"progressScore": false`) keeps working unchanged. A client that reads
 `config.progressScore` gets `undefined` where it used to get a boolean.
 
-**Data.** Existing stored copies are removed by W2e's data migration (Task
-13b), which runs before the deploy. Until it has run, a stored copy is still
-there and still ignored. The generic sport's fold epoch is raised from 3 to 4
+**Data.** The release's migration, which runs before the deploy, removes
+every stored copy: from the division's config, a stage's rules, a match's own
+format, a match's frozen snapshot and its cached state. Until it has run, a
+stored copy is still there and still ignored. The generic sport's fold epoch is raised from 3 to 4
 (every recorded match state embeds its config), so the server's epoch gate
 refuses a native scoring client that still sends epoch 3 for a generic fixture
 until it updates.

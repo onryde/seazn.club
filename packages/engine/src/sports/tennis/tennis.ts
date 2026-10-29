@@ -34,7 +34,7 @@ const nestedTennis = makeNestedModule({
     // ITF App VI short sets: to 4 games, TB at 3–3 (§1's alternative) to 5
     // with a deciding point at 4–4 (§2's short-set tie-break, margin 1; W2e
     // RB2A-12, TN-SS-2), no-ad games. A Fast4 config stored before W2e carries
-    // no `tiebreakWinBy`; Task 13b's migration writes it an explicit 2 (D18).
+    // no `tiebreakWinBy`; the W2e migration (D18) writes its `tiebreak.winBy`.
     fast4: {
       set: { gamesTo: 4, winBy: 2, tiebreakAt: 3, tiebreakTo: 5, tiebreakWinBy: 1 },
       game: { noAd: true },

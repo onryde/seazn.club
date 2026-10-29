@@ -13,7 +13,7 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
       "The same paths refuse a tennis config of best of 1 whose final set is a match tie-break (finalSet.matchTiebreakTo) the same way: \"A match tie-break replaces a deciding set; best of 1 has none.\" Best of 1 with a final-set tie-break (finalSet.tiebreakTo) is still accepted.",
       "POST /competitions/from-template refuses a template whose division or stage would be such a config with 422 TEMPLATE_INSTANTIATION_FAILED (divisionIndex, stageIndex, cause).",
       "A division or stage save that would leave an unstarted match's own format (PUT /fixtures/{id}/rules) one of these configs is refused 422 CONFIG_INVALID naming the match (error.fixture_id).",
-      "Configs stored before this release still load and play: only a new write is judged. This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
+      "Configs stored before this release still load and play: only a new write is judged. The release's migration counts stored configs that break either rule and, if it finds any, stops the deploy and names each one. This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
     ],
   },
   {
@@ -23,7 +23,7 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
       "A tennis set may carry its own tie-break margin, set.tiebreakWinBy (optional). Absent, a set tie-break plays to tiebreak.winBy as before; the match tie-break and a final-set tie-break (finalSet.tiebreakTo) always do, whatever set.tiebreakWinBy says.",
       "A Fast4 division created from this release on, and the new short-sets format (tie-break at 4-all), play ITF Appendix VI's short-set tie-break: first to 5 with a deciding point at 4–4. A tennis.point at 4–4 ends the set; a summary of 4–3 with tb 5–4 is accepted; a tb block of 6–4 or 6–5 is refused 422 INVALID_EVENT.",
       "Any tie-break played to a margin of one (set.tiebreakWinBy 1 or tiebreak.winBy 1) refuses a tb block or match tie-break summary past its target (8–7 to seven) with INVALID_EVENT, on POST /fixtures/{id}/events and events/import alike.",
-      "Fast4 divisions created before this release keep a two-point margin: the release's migration writes set.tiebreakWinBy 2 into them. Summaries recorded before the change still replay as recorded. Details: docs/api-v1-breaking-changes.md.",
+      "Fast4 divisions created before this release keep the margin they played: the release's migration writes each one's own tiebreak.winBy (2 unless the organiser chose a margin of one) into set.tiebreakWinBy. Summaries recorded before the change still replay as recorded. Details: docs/api-v1-breaking-changes.md.",
     ],
   },
   {
@@ -53,7 +53,7 @@ const ENTRIES: { date: string; title: string; lines: string[] }[] = [
     title: "Breaking: a generic division's config no longer carries progressScore",
     lines: [
       "The generic sport's division config had a progressScore flag, carried over from the v1 stepladder import. Nothing ever read it, so it is removed: GET /divisions/{id} stops returning config.progressScore once the stored copies are migrated.",
-      "POST /competitions/{id}/divisions and PATCH /divisions/{id} do not refuse a config that still sends it: the key is dropped and the rest of the config is read as before. Stored copies are removed by the W2e data migration, which runs before the deploy. The generic sport's fold epoch is now 4: a native scoring client still on epoch 3 must update.",
+      "POST /competitions/{id}/divisions and PATCH /divisions/{id} do not refuse a config that still sends it: the key is dropped and the rest of the config is read as before. Stored copies are removed by the release's migration, which runs before the deploy. The generic sport's fold epoch is now 4: a native scoring client still on epoch 3 must update.",
       "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
     ],
   },
