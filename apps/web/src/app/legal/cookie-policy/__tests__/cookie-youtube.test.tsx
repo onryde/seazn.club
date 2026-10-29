@@ -19,10 +19,11 @@ import { DictProvider } from "@/components/i18n/dict-provider";
 import { ReplayStage } from "@/components/public-site/match-centre/replay-embed";
 import uiEn from "@/dictionaries/en/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
-import type { ReplayPart } from "@/lib/youtube";
+import type { PublicReplayPart } from "@/lib/youtube";
 
 const POLICY_GOOGLE_PRIVACY = "http://www.google.com/policies/privacy"; // DP III.A.2.c, exactly as Google spells it (http)
-const PART: ReplayPart = { partNo: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ" };
+// Not made for kids: the only kind of replay that is ever embedded (a made-for-kids one is a link out: see the made-for-kids cases).
+const PART: PublicReplayPart = { partNo: 1, url: "https://www.youtube.com/watch?v=dQw4w9WgXcQ", madeForKids: false };
 
 const stage = (mode: "facade" | "playing") =>
   renderToStaticMarkup(

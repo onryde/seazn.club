@@ -1468,6 +1468,8 @@
   "streaming.youtube.replay.tabs": "Parties du replay",
   "streaming.youtube.replay.play": "Lire sur YouTube",
   "streaming.youtube.replay.open": "Ouvrir sur YouTube",
+  "streaming.youtube.replay.watch": "Regarder sur YouTube",
+  "streaming.youtube.replay.madeForKids": "Cette vidéo est conçue pour les enfants, elle se lit donc sur YouTube.",
   "streaming.youtube.replay.playerTitle": "Replay du match",
   "streaming.youtube.replay.playerTitlePart": "Replay du match, partie {n}",
   "streaming.youtube.replay.unavailable": "Cette vidéo ne peut pas être lue ici. Ouvrez-la sur YouTube.",

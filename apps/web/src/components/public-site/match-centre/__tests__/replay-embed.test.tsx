@@ -21,7 +21,7 @@ import uiEs from "@/dictionaries/es/ui.json";
 import uiFr from "@/dictionaries/fr/ui.json";
 import uiNl from "@/dictionaries/nl/ui.json";
 import type { Dict } from "@/lib/i18n-constants";
-import type { ReplayPart } from "@/lib/youtube";
+import type { PublicReplayPart } from "@/lib/youtube";
 import {
   ReplayEmbed, ReplayStage, REPLAY_UNPLAYABLE_CODES, focusTarget, initialReplayState, playerReportsUnplayable, replayReducer,
   type ReplayMode, type ReplayState,
@@ -30,15 +30,23 @@ import {
 const ID1 = "dQw4w9WgXcQ";
 const ID2 = "a-B_c1D2e3F";
 const ID3 = "x9Y8z7W6v5U";
-const P1: ReplayPart = { partNo: 1, url: `https://www.youtube.com/watch?v=${ID1}` };
-const P2: ReplayPart = { partNo: 2, url: `https://www.youtube.com/watch?v=${ID2}` };
-const P3: ReplayPart = { partNo: 3, url: `https://www.youtube.com/watch?v=${ID3}` };
-const CHANNEL_ONLY: ReplayPart = { partNo: 1, url: "https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv" };   // YouTube, but no video id
+// Every part the player tests below drive is positively NOT made for kids (the only kind that may be embedded - DP III.E.4.j); the
+// made-for-kids cases build their own parts with `kids(...)`.
+const P1: PublicReplayPart = { partNo: 1, url: `https://www.youtube.com/watch?v=${ID1}`, madeForKids: false };
+const P2: PublicReplayPart = { partNo: 2, url: `https://www.youtube.com/watch?v=${ID2}`, madeForKids: false };
+const P3: PublicReplayPart = { partNo: 3, url: `https://www.youtube.com/watch?v=${ID3}`, madeForKids: false };
+const CHANNEL_ONLY: PublicReplayPart = { partNo: 1, url: "https://www.youtube.com/channel/UCabcdefghijklmnopqrstuv", madeForKids: false };   // YouTube, but no video id
+/** The same part with another made-for-kids value (`undefined`: the field missing, as in a document that predates it). */
+const kids = (p: PublicReplayPart, madeForKids: boolean | null | undefined): PublicReplayPart => {
+  const out: Partial<PublicReplayPart> = { partNo: p.partNo, url: p.url };
+  if (madeForKids !== undefined) out.madeForKids = madeForKids;
+  return out as PublicReplayPart;
+};
 
 const UI: Record<string, Dict> = { en: uiEn as Dict, es: uiEs as Dict, fr: uiFr as Dict, nl: uiNl as Dict };
 const render = (node: React.ReactNode, locale = "en") =>
   renderToStaticMarkup(<DictProvider dict={UI[locale]!} locale={locale as "en"}>{node}</DictProvider>);
-const embed = (parts: ReplayPart[], locale = "en") => render(<ReplayEmbed parts={parts} />, locale);
+const embed = (parts: PublicReplayPart[], locale = "en") => render(<ReplayEmbed parts={parts} />, locale);
 // React escapes an apostrophe in text (can't -> can&#x27;t); a markup assertion compares what the browser would be sent.
 const esc = (s: string) => s.replaceAll("&", "&amp;").replaceAll("'", "&#x27;").replaceAll('"', "&quot;");
 const copy = (locale: string, key: string, vars: Record<string, string | number> = {}) =>
@@ -106,6 +114,43 @@ describe("replayReducer: the player's states", () => {
   });
 });
 
+// ─── made for kids: a link out, never a player (DP III.E.4.j) ─────────────────────────────────────────────────────────────
+describe("made for kids: the state machine gives a part a player only when it is positively NOT made for kids", () => {
+  it("EMPTY CASE FIRST: no parts is still an empty state; then one part per made-for-kids value - true, null and MISSING are the link, only false is a facade", () => {
+    expect(initialReplayState([])).toEqual({ active: 0, modes: [] });
+    const cases: [string, boolean | null | undefined, ReplayMode][] = [
+      ["false (not made for kids)", false, "facade"],
+      ["true (made for kids)", true, "linkout"],
+      ["null (not known)", null, "linkout"],
+      ["missing (a document from before the flag)", undefined, "linkout"],
+    ];
+    let checked = 0;
+    for (const [name, value, mode] of cases) {
+      expect(initialReplayState([kids(P1, value)]).modes, name).toEqual([mode]);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: every value was asked").toBe(4);
+  });
+
+  it("per PART: a match with a part that may be embedded and one that may not starts as a facade for the first and the link for the second - in either order", () => {
+    expect(initialReplayState([P1, kids(P2, true)]).modes).toEqual(["facade", "linkout"]);
+    expect(initialReplayState([kids(P1, true), P2]).modes).toEqual(["linkout", "facade"]);
+    expect(initialReplayState([kids(P1, null), P2, kids(P3, true)]).modes).toEqual(["linkout", "facade", "linkout"]);
+  });
+
+  it("a link-out part is inert: a tap, a player error and a tab round-trip leave it a link, and the other part still plays", () => {
+    const start = initialReplayState([kids(P1, true), P2]);
+    expect(replayReducer(start, { type: "play" }), "a tap on a link-out part starts nothing").toEqual(start);
+    expect(replayReducer(start, { type: "unavailable" }), "a stray error cannot turn it into anything else").toEqual(start);
+    const onSecond = replayReducer(start, { type: "select", index: 1 });
+    expect(onSecond.modes).toEqual(["linkout", "facade"]);
+    const playing = replayReducer(onSecond, { type: "play" });
+    expect(playing.modes, "the other part plays").toEqual(["linkout", "playing"]);
+    const back = replayReducer(playing, { type: "select", index: 0 });
+    expect(back.modes, "back on the link-out part: it is still a link, and the player stopped").toEqual(["linkout", "facade"]);
+  });
+});
+
 // ─── where focus goes when the stage changes ──────────────────────────────────────────────────────────────────────────────
 describe("focusTarget: a button that had focus is replaced by something that must take it - and a TAB CHOICE never takes focus (the wiring itself is browser-only)", () => {
   const MODES: ReplayMode[] = ["facade", "playing", "unavailable"];
@@ -147,7 +192,7 @@ describe("focusTarget: a button that had focus is replaced by something that mus
 
   it("through the REAL reducer: the player's own error on the active part moves focus to the link; choosing a tab whose part had already failed moves nothing - and the two states are the ones the reducer made", () => {
     // [P1 playable, channel link: never a player]. Part 2 is `unavailable` from the start.
-    const parts: ReplayPart[] = [P1, { ...CHANNEL_ONLY, partNo: 2 }];
+    const parts: PublicReplayPart[] = [P1, { ...CHANNEL_ONLY, partNo: 2 }];
     const start = initialReplayState(parts);
     expect(start.modes, "premise: Part 2 is already the link").toEqual(["facade", "unavailable"]);
 
@@ -363,7 +408,7 @@ describe("ReplayEmbed: nothing to play, and the link fallback", () => {
 
   it("a part that is not a YouTube address at all is neither embedded nor linked as 'Open on YouTube'", () => {
     for (const url of ["https://example.com/watch?v=dQw4w9WgXcQ", "javascript:alert(1)", "http://www.youtube.com/watch?v=dQw4w9WgXcQ"]) {
-      const html = embed([{ partNo: 1, url }]);
+      const html = embed([{ partNo: 1, url, madeForKids: false }]);
       expect(html, url).not.toContain("<iframe");
       expect(html, url).not.toContain(`href="${url}"`);
     }
@@ -433,6 +478,134 @@ describe("ReplayStage: each state of the player box", () => {
     expect(html).not.toContain("<iframe");
     expect(html).toContain('data-testid="replay-unavailable"');
   });
+});
+
+// ─── made for kids: the card's markup ─────────────────────────────────────────────────────────────────────────────────────
+describe("ReplayEmbed: a made-for-kids replay is a link out - no player, no iframe, no thumbnail request, one link", () => {
+  // Functions, not values: a missing key must fail THE TEST that reads it, not the collection of the whole file.
+  const WATCH = () => copy("en", "streaming.youtube.replay.watch");
+  const WHY = () => esc(copy("en", "streaming.youtube.replay.madeForKids"));
+  /** Every <a> in the markup that goes to youtube.com. */
+  const youtubeLinks = (html: string) => [...html.matchAll(/<a [^>]*href="https:\/\/(?:www\.)?youtube\.com[^"]*"[^>]*>/g)].map((m) => m[0]);
+
+  it("one made-for-kids part: the card, the reason, ONE 'Watch on YouTube' link (new tab, noopener noreferrer) to the part's watch address - and none of the player's markup", () => {
+    const html = embed([kids(P1, true)]);
+    expect(html).toContain('data-testid="replay-linkout"');
+    expect(html).toContain(WHY());
+    const links = youtubeLinks(html);
+    expect(links, "exactly one link to youtube.com").toHaveLength(1);
+    expect(links[0]).toContain(`href="${P1.url}"`);
+    expect(links[0]).toContain('target="_blank"');
+    expect(links[0]).toContain('rel="noopener noreferrer"');
+    expect(links[0], "a 44px hit area").toMatch(/\bmin-h-11\b/);
+    const label = /<a [^>]*data-testid="replay-linkout-open"[^>]*>(.*?)<\/a>/.exec(html)?.[1] ?? "";
+    expect(label.replace(/<[^>]+>/g, ""), "the link's words").toBe(WATCH());
+    expect(label, "its glyph is decorative").toMatch(/<svg [^>]*aria-hidden="true"/);
+    // The negatives the ruling is about, each with the positive pair below proving the probe can see the thing.
+    expect(html).not.toContain("<iframe");
+    expect(html).not.toContain("youtube-nocookie");
+    expect(html).not.toContain("i.ytimg.com");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("replay-facade");
+    expect(html).not.toContain("replay-box");
+    expect(html, "the player's own 'Open on YouTube' link is not drawn beside the card's: ONE link").not.toContain('data-testid="replay-open"');
+    expect(html).not.toContain(copy("en", "streaming.youtube.replay.play"));
+    expect(html).not.toContain(copy("en", "streaming.youtube.replay.open"));
+    // Positive pair: the same part not made for kids IS a facade with a thumbnail and the player's link.
+    const plain = embed([P1]);
+    expect(plain).toContain("replay-facade");
+    expect(plain).toContain("i.ytimg.com");
+    expect(plain).not.toContain("replay-linkout");
+    expect(plain).not.toContain(WHY());
+  });
+
+  it("fails closed in markup too: null and a MISSING flag render the link, never the player", () => {
+    let checked = 0;
+    for (const value of [null, undefined, true]) {
+      const html = embed([kids(P1, value)]);
+      expect(html, String(value)).toContain('data-testid="replay-linkout"');
+      expect(html, String(value)).not.toContain("<iframe");
+      expect(html, String(value)).not.toContain("i.ytimg.com");
+      expect(html, String(value)).not.toContain("replay-facade");
+      checked++;
+    }
+    expect(checked).toBe(3);
+  });
+
+  it("the card is the replay part's own frame: the same 16:9 box with the 200px floor, so choosing between a player part and a link part does not move the page", () => {
+    const card = /<div [^>]*data-testid="replay-linkout"[^>]*>/.exec(embed([kids(P1, true)]))?.[0] ?? "";
+    const box = /<div [^>]*data-testid="replay-box"[^>]*>/.exec(embed([P1]))?.[0] ?? "";
+    expect(card, "premise: both rendered").not.toBe("");
+    expect(box, "premise: both rendered").not.toBe("");
+    for (const cls of [/\baspect-video\b/, /\bmin-h-\[200px\]/, /\bw-full\b/, /\brounded-xl\b/]) {
+      expect(card, `the card carries ${cls}`).toMatch(cls);
+      expect(box, `and so does the player's box (${cls})`).toMatch(cls);
+    }
+  });
+
+  it("two parts, the first made for kids: the tab rail is unchanged ('Part 1', 'Part 2'), the active panel is the link card for Part 1, and Part 2's video appears nowhere", () => {
+    const html = embed([kids(P1, true), P2]);
+    const tabs = [...html.matchAll(/<button [^>]*role="tab"[^>]*>(.*?)<\/button>/g)];
+    expect(tabs.map((m) => m[1]!.replace(/<[^>]+>/g, ""))).toEqual([copy("en", "streaming.youtube.part", { n: 1 }), copy("en", "streaming.youtube.part", { n: 2 })]);
+    expect(html).toContain('data-testid="replay-linkout"');
+    expect(youtubeLinks(html)).toHaveLength(1);
+    expect(youtubeLinks(html)[0]).toContain(ID1);
+    expect(html).not.toContain(ID2);
+    expect(html).not.toContain("<iframe");
+  });
+
+  it("MIXED match (R4): each part is drawn by its own flag - the stage of the not-for-kids part is the facade, the stage of the made-for-kids part is the card, from the SAME initial state", () => {
+    const parts = [P1, kids(P2, true), P3];
+    const state = initialReplayState(parts);
+    expect(state.modes).toEqual(["facade", "linkout", "facade"]);
+    const stageOf = (i: number) => render(
+      <ReplayStage part={parts[i]!} mode={state.modes[i]!} multi pageOrigin="https://seazn.club" onPlay={() => {}} iframeRef={{ current: null }} onFrameLoad={() => {}} />,
+    );
+    const html = parts.map((_, i) => stageOf(i));
+    expect(html[0]).toContain("replay-facade");
+    expect(html[0]).not.toContain("replay-linkout");
+    expect(html[1]).toContain("replay-linkout");
+    expect(html[1]).not.toContain("replay-facade");
+    expect(html[1]).not.toContain("<iframe");
+    expect(html[1]).toContain(`href="${parts[1]!.url}"`);
+    expect(html[2]).toContain("replay-facade");
+    expect(html.filter((h) => h.includes("replay-linkout")), "exactly one of three is a link card").toHaveLength(1);
+  });
+
+  it("the stage itself refuses to mount a player or a facade for a part that may not be embedded, whatever mode it is told - a second guard, independent of the state", () => {
+    let checked = 0;
+    for (const mode of ["facade", "playing", "unavailable", "linkout"] as ReplayMode[]) {
+      for (const value of [true, null, undefined]) {
+        const html = render(
+          <ReplayStage part={kids(P1, value)} mode={mode} multi={false} pageOrigin="https://seazn.club" onPlay={() => {}} iframeRef={{ current: null }} onFrameLoad={() => {}} />,
+        );
+        expect(html, `${mode} / ${String(value)}`).toContain('data-testid="replay-linkout"');
+        expect(html, `${mode} / ${String(value)}`).not.toContain("<iframe");
+        expect(html, `${mode} / ${String(value)}`).not.toContain("i.ytimg.com");
+        expect(html, `${mode} / ${String(value)}`).not.toContain("replay-facade");
+        checked++;
+      }
+    }
+    expect(checked, "anti-vacuity: 4 modes x 3 values").toBe(12);
+  });
+
+  it("a made-for-kids part with no provable video id is still just a link out (not the 'cannot play here' note, which says to open it on YouTube)", () => {
+    const html = embed([kids(CHANNEL_ONLY, true)]);
+    expect(html).toContain('data-testid="replay-linkout"');
+    expect(html).not.toContain("replay-unavailable");
+  });
+
+  for (const locale of ["en", "es", "fr", "nl"] as const) {
+    it(`${locale}: the link and the reason are that locale's words`, () => {
+      const html = embed([kids(P1, true)], locale);
+      for (const key of ["streaming.youtube.replay.watch", "streaming.youtube.replay.madeForKids"]) {
+        expect(copy(locale, key), `premise: ${key} exists in ${locale}`).toBeTruthy();
+        if (locale !== "en") expect(copy(locale, key), `premise: ${key} differs from English in ${locale}`).not.toBe(copy("en", key));
+        expect(html, key).toContain(esc(copy(locale, key)));
+        if (locale !== "en") expect(html, `${key} in English`).not.toContain(esc(copy("en", key)));
+      }
+    });
+  }
 });
 
 describe("the words come from the dictionary of the page's own language", () => {

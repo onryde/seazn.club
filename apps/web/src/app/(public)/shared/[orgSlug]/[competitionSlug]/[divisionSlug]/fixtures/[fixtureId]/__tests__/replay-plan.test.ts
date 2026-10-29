@@ -18,8 +18,8 @@ const ID1 = "dQw4w9WgXcQ";
 const ID2 = "a-B_c1D2e3F";
 const WATCH1 = `https://www.youtube.com/watch?v=${ID1}`;
 const WATCH2 = `https://www.youtube.com/watch?v=${ID2}`;
-const P1 = { partNo: 1, url: WATCH1 };
-const P2 = { partNo: 2, url: WATCH2 };
+const P1 = { partNo: 1, url: WATCH1, madeForKids: false };
+const P2 = { partNo: 2, url: WATCH2, madeForKids: false };
 const TWITCH = "https://www.twitch.tv/seaznclub";
 const DECIDED = "decided";
 
@@ -54,12 +54,35 @@ describe("replayPlan: the parts the page lists", () => {
   });
 
   it("a part that is not a YouTube address is never offered a player; the YouTube ones are kept", () => {
-    const stray = { partNo: 2, url: "https://example.com/watch?v=dQw4w9WgXcQ" };
+    const stray = { partNo: 2, url: "https://example.com/watch?v=dQw4w9WgXcQ", madeForKids: false };
     expect(replayPlan({ status: DECIDED, streamUrl: null, parts: [P1, stray] }).parts).toEqual([P1]);
     expect(replayPlan({ status: DECIDED, streamUrl: null, parts: [stray] }).parts).toEqual([]);
     for (const bad of ["javascript:alert(1)", "http://www.youtube.com/watch?v=dQw4w9WgXcQ", "", "//youtu.be/dQw4w9WgXcQ"]) {
-      expect(replayPlan({ status: DECIDED, streamUrl: null, parts: [{ partNo: 1, url: bad }] }).parts, JSON.stringify(bad)).toEqual([]);
+      expect(replayPlan({ status: DECIDED, streamUrl: null, parts: [{ partNo: 1, url: bad, madeForKids: false }] }).parts, JSON.stringify(bad)).toEqual([]);
     }
+  });
+});
+
+describe("replayPlan: each part keeps its made-for-kids flag exactly as given (the player decides what it means, failing closed)", () => {
+  it("EMPTY CASE FIRST: no parts carries no flag at all; then true, false and null each come through untouched and in order - a mixed match keeps the flag per part", () => {
+    expect(replayPlan({ status: DECIDED, streamUrl: null, parts: [] }).parts).toEqual([]);
+    let checked = 0;
+    for (const value of [true, false, null]) {
+      const part = { partNo: 1, url: WATCH1, madeForKids: value };
+      const out = replayPlan({ status: DECIDED, streamUrl: null, parts: [part] }).parts;
+      expect(out, `madeForKids ${String(value)}`).toEqual([part]);
+      expect(out[0]!.madeForKids, `${String(value)} is not normalised to another value`).toBe(value);
+      checked++;
+    }
+    expect(checked, "anti-vacuity: all three values").toBe(3);
+    const mixed = [{ ...P1, madeForKids: true }, { ...P2, madeForKids: false }, { partNo: 3, url: `https://www.youtube.com/watch?v=x9Y8z7W6v5U`, madeForKids: null }];
+    expect(replayPlan({ status: DECIDED, streamUrl: null, parts: mixed }).parts.map((p) => p.madeForKids)).toEqual([true, false, null]);
+  });
+
+  it("a part dropped for being no YouTube address takes its flag with it and moves no other part's", () => {
+    const stray = { partNo: 2, url: "https://example.com/x", madeForKids: true };
+    const out = replayPlan({ status: DECIDED, streamUrl: null, parts: [{ ...P1, madeForKids: true }, stray, P2] }).parts;
+    expect(out.map((p) => [p.partNo, p.madeForKids])).toEqual([[1, true], [2, false]]);
   });
 });
 
