@@ -58,6 +58,8 @@ import {
 // import it. The picker's own option label, so a rename of "Best of 3" moves
 // this file with it instead of leaving it asserting yesterday's copy.
 import { SINGLE_SET_POINTS_LABEL, SPORT_RULES, ruleOptionLabel } from "../../src/lib/match-rules";
+// The dictionary key of a variant label is the map's, not `variant.<sport>.<key>`: `bwf-3x15` is `variant.badminton.bwf3x15`.
+import { variantWordKey } from "../../src/lib/variant-label-keys";
 
 /** Every user-facing string this file asserts comes from the dictionary the
  *  product renders — never retyped here (house pattern: run-sheet.spec.ts,
@@ -131,8 +133,9 @@ const ANY_POINTS_FIELD = /^Points/;
 /** What the Finals is played to once it is best of 1. Asserted below to differ
  *  from the division's own deciding-game number: a save that silently kept
  *  inheriting would otherwise read the same. In badminton's declared range
- *  (11–30) and under the bwf cap (30). */
-const BO1_POINTS = 15;
+ *  (11–30) and under the cap of the default (bwf-3x15: 21; it is 15 points
+ *  there and 21 on `bwf`, so neither equals this). */
+const BO1_POINTS = 19;
 /** The inheriting stage's number, different again from both. */
 const BO1_INHERITED_POINTS = 13;
 /** The division settings editor's number, different again. */
@@ -584,7 +587,10 @@ test("a spectator reads the league stage's own format: on its match page, on the
   const leagueLine = fill(P["format.rules.bestOfPointsCap"], { n: LEAGUE_BEST_OF, points: setTo, cap });
   // The division's own label — what every page said before, and what the
   // Finals must still say.
-  const preset = L[`variant.badminton.${division.data!.variant_key}`];
+  // W2e Task 29: a new badminton division is `bwf-3x15` (owner D1), whose key is not `variant.badminton.<variant_key>`.
+  const presetKey = variantWordKey(SPORT, division.data!.variant_key);
+  expect(presetKey, `a label key for variant ${division.data!.variant_key}`).toBeDefined();
+  const preset = L[presetKey!];
   expect(preset, `a dictionary label for variant ${division.data!.variant_key}`).toBeDefined();
 
   const [, orgSlug, compSlug] = (await competitionPath(request, compId)).match(/^\/o\/([^/]+)\/c\/([^/]+)$/)!;
