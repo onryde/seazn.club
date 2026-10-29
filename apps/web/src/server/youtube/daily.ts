@@ -16,6 +16,8 @@ import "server-only";
 //      VIDEO (a club's own link is never touched).
 //   2b. LAPSED VIDEOS — a `complete` row of a connection whose grant is dead cannot be refreshed; once it has gone the 30-day ceiling
 //      without a confirmation it is deleted (and the link that pointed at it cleared), without waiting for the grant's own purge (4).
+//   2c. RETIRED KEYS — a pooled key whose liveStream is gone at YouTube (retired by Go live) keeps a sealed ingest key for nothing: it is
+//      deleted, the finished broadcasts that named it forgetting it first. An open broadcast on it keeps it until it finishes.
 //   3. STUCK BROADCASTS (carries a, b) — see `settleStuck`.
 //   4. DEAD GRANTS — reconnect_needed for 30 days → revokeConnection (token-store's ONE statement, R1/B1-R1) + `purgeConnectionData`.
 //      No call is made to Google: the grant is already dead, and a revoke of it would answer nothing.
@@ -53,9 +55,12 @@ import { YouTubeError, isDeadGrantRefusal, isLiveBlockedRefusal, type YouTubePor
 import { markReconnectNeeded, openToken, revokeConnection } from "./token-store";
 
 /** `checked` connections health-checked; `reconnectNeeded` connections this pass found dead; `refreshed` / `removed` broadcast rows
- *  confirmed / deleted (removed: a video gone from YouTube, or a failed row past its retention); `purged` connections whose data was
+ *  confirmed / deleted (removed: a video gone from YouTube, a complete row of a dead grant past the ceiling, or a failed row past its
+ *  retention); `keysRemoved` pooled stream keys deleted (retired ones, and ones idle past the ceiling); `purged` connections whose data was
  *  purged; `failed` what did not work and is retried tomorrow, plus every stuck broadcast (the Worker alerts on this one). */
-export type YoutubeDailyResult = { checked: number; reconnectNeeded: number; refreshed: number; removed: number; purged: number; failed: number };
+export type YoutubeDailyResult = {
+  checked: number; reconnectNeeded: number; refreshed: number; removed: number; keysRemoved: number; purged: number; failed: number;
+};
 
 /** A stored video link is re-confirmed after this long (spec §6.6 "~25 days"; DP III.E.4 allows 30, so a failed day has slack). */
 export const YOUTUBE_REFRESH_AFTER_DAYS = 25;
@@ -123,7 +128,7 @@ const REFUSAL_OF_LIVE_STATE = Object.fromEntries(
   Object.entries(YOUTUBE_LIVE_STATE_OF_REFUSAL).map(([code, state]) => [state, code]),
 ) as Record<"not_enabled" | "blocked", YoutubeLiveStateRefusal>;
 
-const zero = (): YoutubeDailyResult => ({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, purged: 0, failed: 0 });
+const zero = (): YoutubeDailyResult => ({ checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0 });
 
 /** Test-only seams (end-step.ts's `EndStepHooks.afterClaim` precedent): each runs in the window between a READ and the WRITE that acts on
  *  it, the only place a concurrent writer can land, which only a hook can make deterministic. Production passes none. */
@@ -390,6 +395,46 @@ async function deleteLapsedVideos(p: Pass, c: { id: string; org_id: string }): P
   expirePages(gone.divisions);
 }
 
+// ─── leg 2c: pooled stream keys ───────────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** Delete these pooled keys' rows (the sealed ingest URL and key are YouTube API data: DP III.E.4), in the caller's transaction. A finished
+ *  broadcast (`complete` / `failed`) forgets the key first - its FK names the key with no action, and a finished broadcast never streams
+ *  again - while a key an OPEN broadcast still names is left (`ending` holds its key until the end step is done). Returns the YouTube
+ *  liveStream ids of the rows it deleted. */
+async function deleteKeyRows(tx: Tx, orgId: string, connectionId: string, keyIds: readonly string[]): Promise<string[]> {
+  if (keyIds.length === 0) return [];
+  await tx`
+    update youtube_broadcasts set key_id = null
+     where key_id = any(${[...keyIds]}::uuid[]) and org_id = ${orgId} and state in ('complete', 'failed')`;
+  const gone = await tx<{ live_stream_id: string }[]>`
+    delete from youtube_stream_keys k
+     where k.id = any(${[...keyIds]}::uuid[]) and k.org_id = ${orgId} and k.connection_id = ${connectionId}
+       and not exists (select 1 from youtube_broadcasts b where b.key_id = k.id)
+    returning k.live_stream_id`;
+  return gone.map((g) => g.live_stream_id);
+}
+
+/** The connection row, held `for share` for the rest of the transaction: Go live's pick and a disconnect's purge hold it `for update`, so
+ *  the key work below queues behind them (and they behind it) instead of meeting them half-way through a set of row locks - the order every
+ *  writer of this connection's rows takes is the connection first, then its rows. False when the connection is gone or revoked. */
+async function lockConnectionShared(tx: Tx, orgId: string, connectionId: string): Promise<boolean> {
+  const [c] = await tx<{ status: string }[]>`
+    select status from org_youtube_connections where id = ${connectionId} and org_id = ${orgId} for share`;
+  return !!c && c.status !== "revoked";
+}
+
+/** A RETIRED key (its liveStream is gone at YouTube: prepare.ts `retireKey`) is of no use to anyone and still holds a sealed ingest key:
+ *  it is deleted on the next pass - unless an open broadcast still names it, when it waits for that broadcast to finish. */
+async function deleteRetiredKeys(p: Pass, c: { id: string; org_id: string }): Promise<void> {
+  const gone = await sql.begin(async (tx) => {
+    if (!(await lockConnectionShared(tx, c.org_id, c.id))) return [];
+    const keys = await tx<{ id: string }[]>`
+      select id from youtube_stream_keys where connection_id = ${c.id} and org_id = ${c.org_id} and retired_at is not null order by id`;
+    return deleteKeyRows(tx, c.org_id, c.id, keys.map((k) => k.id));
+  });
+  p.out.keysRemoved += gone.length;
+}
+
 // ─── leg 3: stuck broadcasts ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** Carries a and b. A broadcast the end step can never settle holds its pooled key (and the fixture's one open slot) for good, and nothing
@@ -519,6 +564,15 @@ export async function youtubeDaily(
        order by c.id`;
     await hooks.afterLapsedListed?.();
     await eachOf(p, "lapsed_videos", lapsed, (c) => deleteLapsedVideos(p, c));
+  });
+
+  // 2c. Retired pooled keys.
+  await leg(p, "retired_keys", async () => {
+    const holders = await sql<{ id: string; org_id: string }[]>`
+      select distinct k.connection_id as id, k.org_id from youtube_stream_keys k
+       where k.retired_at is not null ${inOrgs("k.org_id")}
+       order by 1`;
+    await eachOf(p, "retired_keys_delete", holders, (c) => deleteRetiredKeys(p, c));
   });
 
   // 3. Stuck broadcasts.

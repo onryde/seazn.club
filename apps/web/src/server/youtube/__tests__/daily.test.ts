@@ -74,7 +74,7 @@ const STUCK_MINUTES = 1503;       // 1 + 2 + 4 + 8 + 16 + 32 + 24 * 60
 const P6_BACKOFF = [1, 2, 4, 8, 16, 32, 60, 60];
 const DISCONNECTED_LABEL = "YouTube channel (disconnected)";
 const CLUB_LINK = "https://example.com/club-stream";
-const ZERO: YoutubeDailyResult = { checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, purged: 0, failed: 0 };
+const ZERO: YoutubeDailyResult = { checked: 0, reconnectNeeded: 0, refreshed: 0, removed: 0, keysRemoved: 0, purged: 0, failed: 0 };
 const NO_END: YoutubeEndResult = { ended: 0, neverLive: 0, orphans: 0, failed: 0, deferred: 0 };
 /** V479's shape check on a stored error code. */
 const CODE_SHAPE = /^[a-z_:]{1,64}$/;
@@ -233,6 +233,27 @@ const shiftBroadcasts = (ids: string[], col: "refreshed_at" | "completed_at", da
   col === "refreshed_at"
     ? sql`update youtube_broadcasts set refreshed_at = now() - (${days}::float8 * interval '1 day') where id = any(${ids}::uuid[])`
     : sql`update youtube_broadcasts set completed_at = now() - (${days}::float8 * interval '1 day') where id = any(${ids}::uuid[])`;
+
+interface KeyRow { id: string; slot: number; live_stream_id: string; retired_at: Date | null; created_at: Date }
+const keyRows = (connectionId: string) =>
+  sql<KeyRow[]>`select id, slot, live_stream_id, retired_at, created_at from youtube_stream_keys where connection_id = ${connectionId} order by slot, created_at`;
+const keyIdOf = async (broadcastId: string): Promise<string | null> =>
+  (await sql<{ key_id: string | null }[]>`select key_id from youtube_broadcasts where id = ${broadcastId}`)[0]!.key_id;
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+/** Hold a connection row `for update` in another transaction (what Go live's pick and a disconnect's purge take), until `release()`. */
+async function holdConnection(connectionId: string): Promise<{ release: () => Promise<void> }> {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => { open = r; });
+  let locked!: () => void;
+  const held = new Promise<void>((r) => { locked = r; });
+  const tx = sql.begin(async (t) => {
+    await t`select 1 from org_youtube_connections where id = ${connectionId} for update`;
+    locked();
+    await gate;
+  });
+  await held;
+  return { release: async () => { open(); await tx; } };
+}
 
 /** Passthrough: the fake ingest connects 3 s after its input was made; the session goes live on the next read. */
 async function reachLive(w: World, fixtureId: string): Promise<void> {
@@ -1201,6 +1222,111 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       expect(out).toMatchObject({ removed: 0, failed: 0 });
       expect((await connRow(w.connectionId)).status).toBe("connected");
       expect((await broadcastRow(m.broadcastId)).state, "the reconnect won: the row is kept").toBe("complete");
+    });
+  });
+
+  // ═══ pooled stream keys: a retired key (B6 batch review I1b) ═════════════════════════════════════════════════════════
+  describe("retired pooled keys", () => {
+    it("EMPTY CASE FIRST (no key, then only a live key: nothing removed); a key RETIRED by a real Go live is deleted on the next pass and the finished rows that named it forget it - the replay stays; an open broadcast keeps a retired key until it finishes; the pool then regrows", async () => {
+      const w = await world({ fixtures: 2, credits: 3 });
+      const [f1, f2] = w.fixtures as [string, string];
+      expect(await daily(w), "no key at all").toEqual({ ...ZERO, checked: 1 });
+      const m1 = await completedMatch(w, f1);
+      const [K] = await keyRows(w.connectionId);
+      expect(K!.retired_at, "premise: a live key").toBeNull();
+      expect(await daily(w), "a live key is not removed").toEqual({ ...ZERO, checked: 1 });
+      expect((await keyRows(w.connectionId)).length).toBe(1);
+
+      // The club deletes the stream in YouTube Studio; the next Go live fails at bind and RETIRES the key (the real producer).
+      await w.fake.deleteStream(await w.fake.accessToken(w.token), K!.live_stream_id);
+      await expect(goLive(w, f2)).rejects.toMatchObject({ status: 503 });
+      expect((await keyRows(w.connectionId))[0]!.retired_at, "premise: retired by Go live").toBeInstanceOf(Date);
+      const failedRow = (await broadcastsOfConnection(w.connectionId)).find((b) => b.state === "failed")!;
+      expect([await keyIdOf(failedRow.id), await keyIdOf(m1.broadcastId)], "premise: both finished rows name the retired key").toEqual([K!.id, K!.id]);
+      // The second Go live grows a NEW key, and its match is played to its Stop (the broadcast stays open for the grace).
+      const m2 = await playAndStop(w, f2);
+      const live = (await keyRows(w.connectionId)).filter((k) => k.retired_at === null);
+      expect(live.length, "premise: one live key beside the retired one").toBe(1);
+      expect(await keyIdOf(m2.broadcastId)).toBe(live[0]!.id);
+
+      expect(await daily(w), "the retired key goes; the live key stays").toEqual({ ...ZERO, checked: 1, keysRemoved: 1 });
+      expect((await keyRows(w.connectionId)).map((k) => k.id)).toEqual([live[0]!.id]);
+      expect([await keyIdOf(failedRow.id), await keyIdOf(m1.broadcastId)], "the finished rows forgot the key").toEqual([null, null]);
+      expect((await broadcastRow(m1.broadcastId)).state, "the replay part is untouched").toBe("complete");
+      expect(await streamUrlOf(f1), "and so is its link").toBe(youtubeWatchUrl(m1.ytId));
+      expect(await keyIdOf(m2.broadcastId), "the OPEN broadcast keeps its (live) key").toBe(live[0]!.id);
+      expect(await daily(w), "a second pass is idempotent").toEqual({ ...ZERO, checked: 1 });
+
+      // An open broadcast keeps a RETIRED key (retired under it by SQL: no producer does, a retire follows the row's failure).
+      await sql`update youtube_stream_keys set retired_at = now() where id = ${live[0]!.id}`;
+      expect(await daily(w), "kept while an open broadcast names it").toEqual({ ...ZERO, checked: 1 });
+      expect(await keyIdOf(m2.broadcastId)).toBe(live[0]!.id);
+      expect(await w.step({ at: afterStop(m2, min(6)) }), "premise: the real end step finishes it").toMatchObject({ ended: 1 });
+      expect(await daily(w), "finished: the retired key goes and the row forgets it").toEqual({ ...ZERO, checked: 1, keysRemoved: 1 });
+      expect(await keyRows(w.connectionId)).toEqual([]);
+      expect(await keyIdOf(m2.broadcastId)).toBeNull();
+      expect((await broadcastRow(m2.broadcastId)).state).toBe("complete");
+
+      // After the deletion the pool regrows on the next Go live (a fresh liveStream), and nothing is left retired.
+      await goLive(w, f1);
+      const regrown = await keyRows(w.connectionId);
+      expect(regrown.length).toBe(1);
+      expect(regrown[0]!.retired_at).toBeNull();
+      expect(regrown[0]!.id).not.toBe(K!.id);
+    });
+
+    it("a retired key of a DEAD grant is deleted too (no token is needed), and another organisation's retired key is out of the pass's scope", async () => {
+      const w = await world();
+      const m = await completedMatch(w, w.fixtures[0]!);
+      const other = await world();
+      await completedMatch(other, other.fixtures[0]!);
+      await sql`update youtube_stream_keys set retired_at = now() where connection_id in ${sql([w.connectionId, other.connectionId])}`;
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);
+      expect(await daily(w)).toEqual({ ...ZERO, keysRemoved: 1 });
+      expect(await keyRows(w.connectionId)).toEqual([]);
+      expect(await keyIdOf(m.broadcastId)).toBeNull();
+      expect((await keyRows(other.connectionId)).length, "another organisation's key").toBe(1);
+    });
+
+    it("a FREE live key beside a retired one is left alone (the pool reuses it): only the retired key goes, and the live key's finished rows keep naming it", async () => {
+      const w = await world({ fixtures: 2, credits: 2 });
+      const [f1, f2] = w.fixtures as [string, string];
+      const a = await playAndStop(w, f1);
+      const b = await playAndStop(w, f2);   // f1's broadcast still holds its key (inside the grace): the second Go live grows a second one
+      expect(await w.step({ at: afterStop(b, min(6)) }), "premise: both matches are ended by the real end step").toMatchObject({ ended: 2 });
+      const [k1, k2] = await keyRows(w.connectionId);
+      expect([k1?.slot, k2?.slot], "premise: two keys, both free").toEqual([1, 2]);
+      expect([await keyIdOf(a.broadcastId), await keyIdOf(b.broadcastId)], "premise: each match streamed on its own key").toEqual([k1!.id, k2!.id]);
+      await sql`update youtube_stream_keys set retired_at = now() where id = ${k1!.id}`;
+      expect(await daily(w)).toEqual({ ...ZERO, checked: 1, keysRemoved: 1 });
+      expect((await keyRows(w.connectionId)).map((k) => k.id), "the free live key stays").toEqual([k2!.id]);
+      expect([await keyIdOf(a.broadcastId), await keyIdOf(b.broadcastId)]).toEqual([null, k2!.id]);
+    });
+
+    it("a REVOKED connection's retired key is the stranded purge's, not this leg's: the pass purges the connection (its key goes with it) and counts no key removed here", async () => {
+      const w = await world();
+      await completedMatch(w, w.fixtures[0]!);
+      await sql`update youtube_stream_keys set retired_at = now() where connection_id = ${w.connectionId}`;
+      expect(await revokeConnection(sql, w.orgId, w.connectionId), "premise: revoked without its purge").toBe(true);
+      expect((await keyRows(w.connectionId)).length, "premise: the key row is still there").toBe(1);
+      expect(await daily(w)).toEqual({ ...ZERO, purged: 1 });
+      expect(await keyRows(w.connectionId)).toEqual([]);
+    });
+
+    it("the key work queues behind a holder of the connection row (Go live's pick, a disconnect's purge) instead of meeting it half-way through its row locks", async () => {
+      const w = await world();
+      await completedMatch(w, w.fixtures[0]!);
+      await sql`update youtube_stream_keys set retired_at = now() where connection_id = ${w.connectionId}`;
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);   // no health write to queue on: the key leg alone meets the lock
+      const hold = await holdConnection(w.connectionId);
+      let settled = false;
+      const pass = daily(w).then((r) => { settled = true; return r; });
+      await sleep(500);
+      expect(settled, "the pass is still waiting for the connection").toBe(false);
+      expect((await keyRows(w.connectionId)).length, "and nothing was deleted behind the holder's back").toBe(1);
+      await hold.release();
+      expect(await pass).toEqual({ ...ZERO, keysRemoved: 1 });
+      expect(await keyRows(w.connectionId)).toEqual([]);
     });
   });
 
