@@ -49,6 +49,12 @@ export interface FootballPadRules extends PadRulesBase {
   subWindowsCap(cfg: unknown): number | undefined;
   /** Takes the cfg because the fold's period-marker refusals do (`cfg.halves`). */
   eventAllowedInPhase(eventType: string, phase: string, cfg: unknown): boolean;
+  /** The `football.period` markers this cfg offers, in offer order (halves HT/FT, quarters QT/HT/3QT/FT, plus ET_HT/ET_FT with extra time). Added by P1.2. */
+  periodMarkers(cfg: unknown): readonly string[];
+  /** The marker(s) the fold accepts in `phase` under this cfg: at most one, none outside the in-play phases. Added by P1.2. */
+  legalPeriodMarkers(phase: string, cfg: unknown): readonly string[];
+  /** Whether the fold lets a substituted-off player come back on (football's `lineupPolicy(cfg).reentry`; false under the Laws, true under `rollingSubs`). Added by P1.2. */
+  reentryAllowed(cfg: unknown): boolean;
 }
 
 /** cricket (P2). */
