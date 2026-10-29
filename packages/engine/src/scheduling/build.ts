@@ -183,7 +183,7 @@ export const BUILD_MAIN_RLIMIT_SHARE = 0.75;
 export const DEFAULT_BUILD_WALL_MS = 30_000;
 /** The tier ladder's names, in order — the SHARED VOCABULARY with the
  *  placement service (`placement/objective.py`'s `TIER_ORDER`) and with
- *  `proto/scheduler.proto`'s `Tier.name` comment. Same strings on both sides;
+ *  `packages/scheduler/proto/scheduler.proto`'s `Tier.name` comment. Same strings on both sides;
  *  the DDD ubiquitous-language rule allows the case convention to change at a
  *  language boundary and nothing else, and these need no change at all.
  *
@@ -1388,7 +1388,7 @@ function buildRuleGroups(
   // subsystem has hit repeatedly; see this function's own docstring, #447).
   //
   // A UNIVERSAL scope becomes N sources, one per entity, rather than one source
-  // holding every fixture. `proto/scheduler.proto` refuses to carry a scope at
+  // holding every fixture. `packages/scheduler/proto/scheduler.proto` refuses to carry a scope at
   // all — "the ACL resolves the scope and sends the RESULT" — and the result of
   // "each entrant at most twice a day" is not one set of fixtures capped at two,
   // which would cap the whole COMPETITION at two and is the misreading

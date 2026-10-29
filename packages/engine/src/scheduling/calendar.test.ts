@@ -419,7 +419,7 @@ function dedupeIds(raw: SchedulableFixture[]): SchedulableFixture[] {
 // For every same-division pair with round_i < round_j and at least one
 // movable side: day_i <= day_j (unconditional) and, when they land on the
 // same day, start_i <= start_j (ties legal). Mirrors
-// `services/placement/tests/test_model.py`'s CP-SAT tests one for one — same
+// `seazn.club.placement/tests/test_model.py`'s CP-SAT tests one for one — same
 // day/round shapes, same expected verdicts — so the two sides can be read
 // side by side even though nothing here calls into Python.
 describe("validateAssignments — round order (C1, 2026-08-12 round-order design)", () => {
@@ -672,7 +672,7 @@ describe("slotFixtures — ascending roundNo per division-day (greedy regression
 // fork this whole module exists to prevent) — matches
 // `calendar-placer-verifier-parity.test.ts`'s own established pattern
 // exactly: feed the placer's OWN OUTPUT back into `validateAssignments` and
-// require it clean. `services/placement/tests/test_model.py` proves the same
+// require it clean. `seazn.club.placement/tests/test_model.py` proves the same
 // semantic rules hold on the CP-SAT solver side, over the identical day/round
 // shapes used above — the two suites cannot be run against each other
 // directly (different languages, different processes), so this is the
