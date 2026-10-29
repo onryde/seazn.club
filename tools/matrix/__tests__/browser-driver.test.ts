@@ -1119,7 +1119,7 @@ describe("BrowserDriver — the pad path (W1c Task 7)", () => {
         expect(only(driver, "mixed-driver-coverage").evidence, type).toContain(`score: exempt — → ${CRICKET_NO_CONTROL.wave}: ${CRICKET_NO_CONTROL.why}`);
         checked++;
       }
-      expect(checked).toBe(2);
+      expect(checked).toBe(4); // follow-on, time-expiry draw, and (Task 21) the interruption and the revise
     });
 
     it("the event is found wherever it stands in the stream — the generator's follow-on is in the MIDDLE (start, two innings, follow-on, an innings), the draw's time close LAST — and a stream without one is not barred", async () => {

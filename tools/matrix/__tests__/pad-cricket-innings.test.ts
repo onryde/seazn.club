@@ -215,7 +215,8 @@ describe("cricket two innings a side — the over route (W1d item 16)", () => {
 
   it("follow-on and the time-expiry draw have NO route: both are declared noControl, route to an open wave, are refused by name, and the product premise is pinned (the skin builds no tile, the More sheet's rows carry no testid)", () => {
     expect(cricketPad.noControl).toBeDefined();
-    expect([...cricketPad.noControl!.eventTypes].sort()).toEqual([CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE].sort());
+    // Task 21 added the interruption and the revise: the same cause (rows of the generic More sheet), the same route.
+    expect([...cricketPad.noControl!.eventTypes].sort()).toEqual([CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE, "cricket.interruption", "cricket.revise"].sort());
     expect(cricketPad.noControl!.route).toBe(CRICKET_NO_CONTROL);
     expect(Object.isFrozen(CRICKET_NO_CONTROL)).toBe(true);
     expect(CRICKET_NO_CONTROL.wave).toMatch(WAVE_ID);

@@ -44,13 +44,23 @@
 // renderActionRow) — nothing in the tap vocabulary can address them. They are
 // declared in `noControl`, a route to the wave that owns the pad's controls,
 // and the driver scores a stream holding either over http (browser-driver.ts).
+//
+// W2e Task 21 (G4, G5) adds three types. `cricket.superover.ball` IS tappable: while the match is tied (phase
+// "super_over") the skin's run tiles write it (cricket.tsx `ballEventType`: the same `run${r}` tiles, the type switching
+// on the phase; `runPayload` sets `boundary` for a 4 and a 6), so a generated super-over ball is one tap of the tile for
+// its bat runs, and a fallback: the pad names the striker, non-striker and bowler itself (`resolvePeople`) and the
+// generator's persons are only the lineup's, so the row is judged on over, ballInOver, runs and boundary, the persons
+// only as ids. The generator scores only what a run tile writes (0 1 2 3 4 6, no extras, no wicket). Like the Task 19/20
+// routes this is TEXT-pinned (pad-adapters.test.ts reads the skin's source), not driven in a browser. `cricket.interruption`
+// and `cricket.revise` ride the generic More sheet like the follow-on (cricket.tsx:57-64): no testid, so noControl, and a
+// stream holding either (a DLS win) goes over http whole - the driver never taps the chase that follows a revise.
 import { START_MATCH_TESTID, type TapAdapterContext, type TapStep } from "../../../bench/lib/drivers/scorer.ts";
 import type { LedgerRow } from "../../../bench/lib/ledger.ts";
 import { routeTo } from "../routing.ts";
 import { sportModule } from "../sport-cfg.ts";
 import { declaredAllOut } from "../streams/cricket.ts";
 import type { StreamEvent } from "../streams/types.ts";
-import { JUDGED_OK, asRecord, judgeKeys, show } from "./judge.ts";
+import { JUDGED_OK, asRecord, judgeKeys, judgeOneRow, show } from "./judge.ts";
 import type { FallbackJudgement, MatrixPadAdapter } from "./types.ts";
 
 /** The engine's cricket event type (cricket.eventSchemas; pinned). */
@@ -64,10 +74,18 @@ export const CRICKET_DECLARE = "cricket.innings.declare";
 /** The engine's follow-on and time-expiry draw events (cricket.eventSchemas; pinned). */
 export const CRICKET_FOLLOW_ON = "cricket.followon";
 export const CRICKET_MATCH_CLOSE = "cricket.match.close";
+/** Task 21 (engine cricket.eventSchemas; pinned): a super-over ball, an interruption (metadata) and the umpires' revision of the overs/target. */
+export const CRICKET_SUPER_OVER_BALL = "cricket.superover.ball";
+export const CRICKET_INTERRUPTION = "cricket.interruption";
+export const CRICKET_REVISE = "cricket.revise";
+/** cricket.tsx:1321 (text-pinned in pad-adapters.test.ts): the bat-run values the skin has a `run${r}` tile for. */
+export const CRICKET_RUN_VALUES: readonly number[] = Object.freeze([0, 1, 2, 3, 4, 6]);
+/** The keys naming persons on a ball: the pad resolves these itself, so they are stamped, not compared. */
+const BALL_PERSONS = ["striker", "nonStriker", "bowler"] as const;
 
 /** Why the pad cannot be driven to write either of the two: one cause, so one
  *  route (the mixed ledger refuses a second, different exemption per type). */
-export const CRICKET_NO_CONTROL = routeTo("W2", "the pad offers cricket's follow-on and time-expiry draw only as rows of the generic More sheet, whose buttons carry no testid; once they do, they are taps like any other");
+export const CRICKET_NO_CONTROL = routeTo("W2", "the pad offers cricket's follow-on, time-expiry draw, interruption and revision (the last only with DLS on) as rows of the generic More sheet, whose buttons carry no testid; once they do, they are taps like any other");
 
 export interface Over { readonly runs: number; readonly wickets: number; readonly balls: number }
 interface Innings { readonly runs: number; readonly wickets: number; readonly legalBalls: number }
@@ -206,6 +224,42 @@ function judgeInnings(event: StreamEvent, rows: readonly LedgerRow[]): FallbackJ
   return j.ok ? JUDGED_OK : { ok: false, note: `the last of ${overRows.length} over rows: ${j.note}` };
 }
 
+/** Task 21: a super-over ball is one tap of the run tile for its bat runs. A ball the tile cannot write - bat runs the skin
+ *  has no tile for, extras or a wicket (other tiles, the generator builds none), a boundary flag the tile would not set - is
+ *  refused by name, and so is a ball before the main match is done (the pad is not in the super over). */
+function superOverBallSteps(event: StreamEvent, ctx: TapAdapterContext, tapped: Map<string, Taken>): readonly TapStep[] {
+  const cfg = cfgOf(ctx.cfg);
+  const taken = tapped.get(fixtureOf(ctx));
+  if (taken === undefined) throw new Error("cricketPad: a super-over ball before core.start on this fixture — whose ball it is, is unknown");
+  if (taken.closed.length < cfg.inningsPerSide * 2 || taken.open) {
+    throw new Error(`cricketPad: a super-over ball before the match is tied (${taken.closed.length} of ${cfg.inningsPerSide * 2} innings closed${taken.open ? ", one open" : ""}) — the pad is not in the super over`);
+  }
+  const p = asRecord(event.payload);
+  const runs = asRecord(p.runs);
+  const bat = runs.bat;
+  if (typeof bat !== "number" || !CRICKET_RUN_VALUES.includes(bat)) {
+    throw new Error(`cricketPad: ${CRICKET_SUPER_OVER_BALL} ${JSON.stringify(event.payload)} — no run tile for ${show(bat)} bat runs (the skin offers ${CRICKET_RUN_VALUES.join(" ")})`);
+  }
+  if (runs.extras !== undefined || p.wicket !== undefined) {
+    throw new Error(`cricketPad: ${CRICKET_SUPER_OVER_BALL} ${JSON.stringify(event.payload)} — a run tile writes bat runs only, and this ball carries extras or a wicket (other tiles; the generator builds none)`);
+  }
+  const boundary = bat === 4 ? 4 : bat === 6 ? 6 : undefined; // cricket.tsx runPayload
+  if (p.boundary !== boundary) {
+    throw new Error(`cricketPad: ${CRICKET_SUPER_OVER_BALL} ${JSON.stringify(event.payload)} — boundary ${show(p.boundary)}, where the run${bat} tile writes ${show(boundary)}`);
+  }
+  return [{ kind: "tile", tileId: `run${bat}` }];
+}
+
+/** Task 21: the run tile's row is the ball's own over, ballInOver, runs and boundary; the persons are the pad's (resolvePeople)
+ *  and are held only to be ids. Any other key the pad stores is untolerated. */
+function judgeSuperOverBall(event: StreamEvent, rows: readonly LedgerRow[]): FallbackJudgement {
+  return judgeOneRow(rows, "the run tile", (row) => {
+    const bare: Record<string, unknown> = Object.fromEntries(Object.entries(asRecord(event.payload)).filter(([k]) => !(BALL_PERSONS as readonly string[]).includes(k)));
+    const stamped = Object.fromEntries(BALL_PERSONS.map((k) => [k, { shape: "a non-empty person id", is: (v: unknown) => typeof v === "string" && v.length > 0 } as const]));
+    return judgeKeys({ ...event, payload: bare }, row, { required: Object.keys(bare), stamped });
+  });
+}
+
 /** One adapter, with its own record of what each fixture has tapped (W1d M-4:
  *  this was a module-level map, so a second adapter, or a second case's replay
  *  in the same process, read the first's record). */
@@ -214,7 +268,7 @@ export function makeCricketPad(): MatrixPadAdapter {
   const tapped = new Map<string, Taken>();
   return {
     sport: "cricket",
-    emits: ["core.start", CRICKET_SUMMARY, CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE],
+    emits: ["core.start", CRICKET_SUMMARY, CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE, CRICKET_SUPER_OVER_BALL, CRICKET_INTERRUPTION, CRICKET_REVISE],
     fallbacks: [
       {
         eventType: CRICKET_SUMMARY,
@@ -226,15 +280,23 @@ export function makeCricketPad(): MatrixPadAdapter {
         },
         judge: judgeInnings,
       },
+      {
+        eventType: CRICKET_SUPER_OVER_BALL,
+        writes: [CRICKET_SUPER_OVER_BALL],
+        why: "cricket.tsx:1431-1438 — the run tiles (`run${r}`, RUN_VALUES at :1321) write the ball with the persons the pad resolves itself (resolvePeople, :583), the type switching on the super-over phase (ballEventType, :534); so the row is the ball's over, ballInOver, runs and boundary (runPayload, :786), and the persons are judged only as ids",
+        rowsFor: () => 1,
+        judge: judgeSuperOverBall,
+      },
     ],
-    noControl: { eventTypes: [CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE], route: CRICKET_NO_CONTROL },
+    noControl: { eventTypes: [CRICKET_FOLLOW_ON, CRICKET_MATCH_CLOSE, CRICKET_INTERRUPTION, CRICKET_REVISE], route: CRICKET_NO_CONTROL },
     stepsFor(event, ctx) {
       if (event.type === "core.start") {
         tapped.set(fixtureOf(ctx), { closed: [], open: false });
         return [{ kind: "testid", testid: START_MATCH_TESTID }];
       }
       if (event.type === CRICKET_SUMMARY) return summarySteps(event, ctx, tapped);
-      if (event.type === CRICKET_FOLLOW_ON || event.type === CRICKET_MATCH_CLOSE) {
+      if (event.type === CRICKET_SUPER_OVER_BALL) return superOverBallSteps(event, ctx, tapped);
+      if (event.type === CRICKET_FOLLOW_ON || event.type === CRICKET_MATCH_CLOSE || event.type === CRICKET_INTERRUPTION || event.type === CRICKET_REVISE) {
         throw new Error(`cricketPad: ${event.type} has no addressable pad control (→ ${CRICKET_NO_CONTROL.wave}: ${CRICKET_NO_CONTROL.why}); a stream holding it is scored over http`);
       }
       throw new Error(`cricketPad: no tap route for ${event.type} (a generator emitting it owes a route here)`);

@@ -5,8 +5,9 @@
 // generators. Every sweep counts what it checked, per sport and per variant, and zero is a failure (TEST-STRATEGY
 // anti-vacuity). `ALL_OUTCOMES` stays frozen: the new shapes run here, in their own sweeps (spec §10).
 import { decidedInFor } from "@seazn/engine/competition";
-import { StageKind } from "@seazn/engine/core";
-import { checkFixtureOverride, deciderKeysFor } from "@seazn/engine/sport";
+import { EngineError, StageKind } from "@seazn/engine/core";
+import { checkFixtureOverride, deciderKeysFor, stageKeysFor } from "@seazn/engine/sport";
+import { CricketBall, CricketCfg, dlsTarget, soBattingSideAt, type CricketState } from "@seazn/engine/sports/cricket";
 import { football, footballNextKicker, type ShootoutKick } from "@seazn/engine/sports/football";
 import { describe, expect, it, vi } from "vitest";
 import { mergeRulesOverride } from "../../../apps/web/src/server/engine-db/fixture-cfg.ts";
@@ -14,10 +15,11 @@ import { SPORT_KEYS } from "../lib/catalogue.ts";
 import { foldStream } from "../lib/fold.ts";
 import { resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { STREAM_GENERATORS, generateStream, matchesRequest } from "../lib/streams/index.ts";
+import { SO_PAIRS, superOverStream, type SuperOverPair } from "../lib/streams/cricket.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
 import {
-  ALL_OUTCOMES, DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, outcomeLabel,
-  type DecidingPath, type RequestedOutcome, type Side, type StreamRequest,
+  ALL_OUTCOMES, DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, outcomeLabel,
+  type DecidingPath, type RequestedOutcome, type Side, type StreamLineups, type StreamRequest,
 } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
@@ -524,5 +526,281 @@ describe("G2 G3 hockey and icehockey: a win by overtime, by the shoot-out, by th
     expect(() => generateStream(req("hockey", hk, "knockout", { kind: "win", winner: "home", path: "shootout" }))).toThrow(/the cfg does not switch the shoot-out on/);
     const hkOt = resolveSportCfg("hockey", "fih-shootout", { overtime: { kind: "sudden_death", minutes: 5 } });
     expect(() => generateStream(req("hockey", hkOt, "knockout", { kind: "win", winner: "home", path: "overtime" }))).toThrow("hockey has no 'overtime' deciding path");
+  });
+});
+
+
+// ---------------------------------------------------------------------------
+// Task 21 — G4 (cricket's super over, under each still-tied policy), G5 (cricket's DLS).
+
+const CKT = "cricket";
+type CkStream = Parameters<typeof foldStream>[4];
+/** The fields of a cricket cfg the sweeps read (the module's own schema: CricketCfg). */
+interface CkCfg { ballsPerOver: number; ballsPerInnings: number | null; inningsPerSide: number; superOver: boolean; superOverStillTied: string; dls: { enabled: boolean } }
+const ckModule = () => sportModule(CKT);
+/** The still-tied policies, from the engine's own cfg enum (CricketCfg.superOverStillTied). */
+const SO_POLICIES: readonly string[] = CricketCfg.shape.superOverStillTied.unwrap().options;
+/** What the rulebook (ICC super-over conditions; the cfg's own doc, cricket.ts superOverStillTied) says each policy does when
+ *  a pair of super overs is LEVEL on runs: repeat plays another pair; boundary_count decides on boundaries (and stands level if
+ *  those are level too); shared stands. The method and the innings played for a win by the FIRST pair's decision, and by a level pair. */
+const POLICY_RULE: Readonly<Record<string, { levelWinMethod: string; levelWinInnings: number; decisiveMethod: string }>> = {
+  repeat: { levelWinMethod: "super_over", levelWinInnings: 4, decisiveMethod: "super_over" },
+  boundary_count: { levelWinMethod: "boundary_count", levelWinInnings: 2, decisiveMethod: "super_over" },
+  shared: { levelWinMethod: "super_over", levelWinInnings: 2, decisiveMethod: "super_over" },
+};
+/** `lineups`: the probe persons by default; `null` folds under none (empty slots), as the harness did before Task 21. */
+const foldK = (cfg: unknown, events: CkStream, lineups: StreamLineups | null = PROBE_LINEUPS) => {
+  const f = foldStream(ckModule(), cfg, ID.home, ID.away, events, lineups ?? undefined);
+  return { outcome: f.outcome, state: f.state as CricketState };
+};
+/** The cfg a cricket knockout folds under: the division's variant, with `over` laid on it, then the stage preset. */
+const ckKnockout = (variant: string, over: Record<string, unknown> = {}): CkCfg => stageCfg(CKT, resolveSportCfg(CKT, variant, over), "knockout", variant) as CkCfg;
+const ckReq = (cfg: unknown, outcome: RequestedOutcome, lineups: StreamLineups | null = PROBE_LINEUPS): StreamRequest =>
+  ({ ...req(CKT, cfg, "knockout", outcome), ...(lineups === null ? {} : { lineups }) });
+const ckWin = (cfg: unknown, winner: Side, path: DecidingPath, lineups: StreamLineups | null = PROBE_LINEUPS): StreamRequest => ckReq(cfg, { kind: "win", winner, path }, lineups);
+/** The variants the ENGINE says play a super over in a knockout (the decider rule key, and the 'so' decidedIn its preset reaches),
+ *  and those it lets a stage set DLS on - both read off the module, never off a generator. */
+const SO_VARIANTS = variantKeys(CKT).filter((v) => deciderKeysFor(ckModule(), "knockout", v).includes("superOver") && ckModule().reachableDecidedIn(ckKnockout(v) as never, "knockout").has("so"));
+const DLS_VARIANTS = variantKeys(CKT).filter((v) => stageKeysFor(ckModule(), "knockout", v).includes("dls") && (ckKnockout(v).ballsPerInnings ?? 0) > 0 && ckKnockout(v).inningsPerSide === 1);
+/** Every ball of a stream's super overs, with the innings it belongs to (0-based across the match's super overs). */
+const SO_BALL = "cricket.superover.ball";
+const soBallsOf = (events: CkStream) => events.filter((e) => e.type === SO_BALL).map((e) => e.payload as { over: number; ballInOver: number; striker: string; nonStriker: string; bowler: string; runs: { bat: number }; boundary?: 4 | 6 });
+const boundariesOf = (st: CricketState, side: Side): number => (st.superOver?.innings ?? []).filter((i) => i.battingSide === side).reduce((n, i) => n + i.boundaries, 0);
+
+describe("G4 G5 cricket: a win by super over (each still-tied policy) and a win by DLS (Task 21)", () => {
+  it("empty case first: the engine's variants and policies, then everything a cfg or a request cannot build is refused BY NAME - no lineups, a path cricket has no rule for, super over switched off, DLS where there is no single limited innings", () => {
+    expect(SO_POLICIES, "the engine's still-tied policies").toEqual(["repeat", "boundary_count", "shared"]);
+    expect(SO_VARIANTS, "the limited-overs variants that play a super over (the test match plays none)").toEqual(["t20", "odi", "hundred"]);
+    expect(DLS_VARIANTS).toEqual(["t20", "odi", "hundred"]);
+    expect([...deciderKeysFor(ckModule(), "knockout", null)].sort()).toEqual(["superOver"]);
+    let refused = 0;
+    // No lineups: a super over names persons (striker, non-striker, bowler), so it cannot be built without the lineups the harness PUT.
+    for (const variant of SO_VARIANTS) {
+      const ask = () => generateStream(ckWin(ckKnockout(variant), "home", "superOver", null));
+      expect(ask, variant).toThrow(OutcomeUnreachable);
+      expect(ask, variant).toThrow(/lineup/);
+      refused++;
+    }
+    // Super over switched off (a league stage, or the division cfg with the preset undone) refuses it; the test variant plays none.
+    for (const variant of SO_VARIANTS) {
+      const off = { ...ckKnockout(variant), superOver: false };
+      expect(() => generateStream(ckWin(off, "home", "superOver")), variant).toThrow(/the cfg does not switch the super over on/);
+      refused++;
+    }
+    expect(() => generateStream(ckWin(ckKnockout("test"), "home", "superOver"))).toThrow(OutcomeUnreachable);
+    refused++;
+    // DLS: a two-innings cfg and an unlimited one have no single limited innings to revise.
+    expect(() => generateStream(ckWin(ckKnockout("test"), "home", "dls"))).toThrow(/revise applies to single-innings limited-overs/);
+    refused++;
+    // A path cricket has no rule for names the sport's own: its deciders are the engine's (superOver) and dls.
+    for (const path of DECIDING_PATHS.filter((p) => p !== "superOver" && p !== "dls")) {
+      const ask = () => generateStream(ckWin(ckKnockout("t20"), "home", path));
+      expect(ask, path).toThrow(OutcomeUnreachable);
+      expect(ask, path).toThrow(`cricket has no '${path}' deciding path (its deciders: superOver, dls)`);
+      refused++;
+    }
+    expect(refused).toBe(SO_VARIANTS.length * 2 + 2 + (DECIDING_PATHS.length - 2));
+    // The super over's balls are the engine's: without the lineups the engine itself refuses them, so the lineup requirement is real.
+    const events = generateStream(ckWin(ckKnockout("t20"), "home", "superOver"));
+    expect(() => foldK(ckKnockout("t20"), events, null)).toThrow(/is not in the fielding lineup/);
+  });
+
+  it("G4: a win down the super over, for each variant x each still-tied policy x both winners - decided in 'so' (engine), by the policy's method, in the innings the policy plays, the one over of the cfg's own size, every ball a legal CricketBall by the lineup's persons", () => {
+    const perVariant = new Map<string, number>();
+    const perPolicy = new Map<string, number>();
+    let balls = 0;
+    for (const variant of SO_VARIANTS) for (const policy of SO_POLICIES) for (const winner of SIDES) {
+      const cfg = ckKnockout(variant, { superOverStillTied: policy });
+      const at = `${variant}/${policy}/${winner}`;
+      expect(cfg.superOver, at).toBe(true);
+      expect(cfg.superOverStillTied, at).toBe(policy);
+      const r = ckWin(cfg, winner, "superOver");
+      const events = generateStream(r);
+      const { outcome, state } = foldK(cfg, events);
+      expect(outcome, at).toMatchObject({ kind: "win", winner: ID[winner], method: POLICY_RULE[policy]!.levelWinMethod });
+      expect(decidedInFor(ckModule(), outcome!), at).toBe("so");
+      expect(state.phase, at).toBe("done");
+      expect(state.superOver!.innings.length, at).toBe(POLICY_RULE[policy]!.levelWinInnings);
+      expect(state.superOver!.innings.every((i) => i.closed), at).toBe(true);
+      expect(state.margin?.kind, at).toBe(POLICY_RULE[policy]!.levelWinMethod);
+      expect(matchesRequest(r, outcome, state), at).toBe("match");
+      expect(matchesRequest(ckWin(cfg, winner === "home" ? "away" : "home", "superOver"), outcome, state), `${at}: the other winner`).toBe("mismatch");
+      // One over of the cfg's own size: the Hundred's five-ball set, a six-ball over elsewhere (ballsPerOver, the engine's cfg).
+      state.superOver!.innings.forEach((i, k) => {
+        expect(i.legalBalls, `${at} innings ${k}`).toBeLessThanOrEqual(cfg.ballsPerOver);
+        if (k % 2 === 0) expect(i.legalBalls, `${at} innings ${k}: the first of a pair bats its whole over`).toBe(cfg.ballsPerOver);
+        expect(i.battingSide, `${at} innings ${k}: the engine's alternation`).toBe(soBattingSideAt({ battingFirst: "home" }, k));
+      });
+      const sob = soBallsOf(events);
+      let k = -1;
+      for (const b of sob) {
+        const parsed = CricketBall.safeParse(b);
+        expect(parsed.success, `${at}: ${JSON.stringify(b)}`).toBe(true);
+        if (b.ballInOver === 1) k++;
+        const bat = soBattingSideAt({ battingFirst: "home" }, k);
+        const field = bat === "home" ? "away" : "home";
+        expect(PROBE_LINEUPS[bat], `${at}: striker`).toContain(b.striker);
+        expect(PROBE_LINEUPS[bat], `${at}: non-striker`).toContain(b.nonStriker);
+        expect(PROBE_LINEUPS[field], `${at}: bowler`).toContain(b.bowler);
+        expect(b.over, at).toBe(0);
+        balls++;
+      }
+      expect(balls).toBeGreaterThan(0);
+      expect(k + 1, `${at}: innings with a ball`).toBe(state.superOver!.innings.length);
+      perVariant.set(variant, (perVariant.get(variant) ?? 0) + 1);
+      perPolicy.set(policy, (perPolicy.get(policy) ?? 0) + 1);
+    }
+    console.info(`w2e-streams G4: ${balls} super-over ball(s); per variant ${JSON.stringify([...perVariant])}, per policy ${JSON.stringify([...perPolicy])}`);
+    for (const v of SO_VARIANTS) expect(perVariant.get(v) ?? 0, `variant ${v}`).toBe(SO_POLICIES.length * 2);
+    for (const p of SO_POLICIES) expect(perPolicy.get(p) ?? 0, `policy ${p}`).toBe(SO_VARIANTS.length * 2);
+    expect(ckKnockout("hundred").ballsPerOver, "the Hundred plays five-ball sets, and its super over is one of them").toBe(5);
+  });
+
+  it("G4 still tied: under EACH superOverStillTied value a level pair does what the policy says - repeat opens another pair (undecided, in the super over), shared stands level, boundary_count decides on the BALL-BY-BALL boundaries (a main-innings summary carries none) or stands level when those are level", () => {
+    const seen = new Map<string, number>();
+    let checked = 0;
+    for (const variant of SO_VARIANTS) for (const policy of SO_POLICIES) {
+      const cfg = ckKnockout(variant, { superOverStillTied: policy });
+      const bpo = cfg.ballsPerOver;
+      const at = `${variant}/${policy}`;
+      const pair = (p: (b: number) => SuperOverPair): SuperOverPair => p(bpo);
+      const level = superOverStream(ckReq(cfg, { kind: "tie" }), [pair(SO_PAIRS.level)]);
+      // A level pair really is level on runs: by the pair's own balls, not by the engine's say-so.
+      const lp = pair(SO_PAIRS.level);
+      expect(lp.first.reduce((a, b) => a + b, 0), `${at}: level pair`).toBe(lp.second.reduce((a, b) => a + b, 0));
+      const f = foldK(cfg, level);
+      if (policy === "repeat") {
+        expect(f.outcome, `${at}: repeat leaves the match undecided`).toBeNull();
+        expect(f.state.phase, at).toBe("super_over");
+        expect(f.state.superOver!.innings.length, at).toBe(2);
+        // ...and the NEXT pair opens on the next ball, the sides batting in the engine's alternation: another pair decides it.
+        const again = superOverStream(ckReq(cfg, { kind: "tie" }), [pair(SO_PAIRS.level), pair(SO_PAIRS.firstWins)]);
+        const g = foldK(cfg, again);
+        expect(g.outcome, at).toMatchObject({ kind: "win", method: "super_over" });
+        expect(g.state.superOver!.innings.map((i) => i.battingSide), at).toEqual([0, 1, 2, 3].map((k) => soBattingSideAt({ battingFirst: "home" }, k)));
+      } else if (policy === "shared") {
+        expect(f.outcome, at).toEqual({ kind: "tie" });
+        expect(f.state.phase, at).toBe("done");
+      } else {
+        // No boundary on either side: level on boundaries too, so it stands.
+        expect(f.outcome, at).toEqual({ kind: "tie" });
+        const equal = foldK(cfg, superOverStream(ckReq(cfg, { kind: "tie" }), [pair(SO_PAIRS.levelEqualBoundaries)]));
+        expect(equal.outcome, `${at}: two boundaries each`).toEqual({ kind: "tie" });
+        expect(boundariesOf(equal.state, "home"), at).toBe(boundariesOf(equal.state, "away"));
+        expect(boundariesOf(equal.state, "home"), `${at}: the equal case has boundaries to count`).toBeGreaterThan(0);
+        // The side with MORE boundaries wins, whichever side it is; the main innings carry none (summaries name no boundaries).
+        for (const [label, p] of [["first batter", SO_PAIRS.levelFirstMore], ["second batter", SO_PAIRS.levelSecondMore]] as const) {
+          const events = superOverStream(ckReq(cfg, { kind: "tie" }), [pair(p)]);
+          const g = foldK(cfg, events);
+          const h = boundariesOf(g.state, "home");
+          const a = boundariesOf(g.state, "away");
+          expect(h, `${at} ${label}`).not.toBe(a);
+          expect(g.outcome, `${at} ${label}`).toMatchObject({ kind: "win", winner: h > a ? ID.home : ID.away, method: "boundary_count" });
+          expect(decidedInFor(ckModule(), g.outcome!), at).toBe("so");
+          expect(g.state.innings.reduce((n, i) => n + i.boundaries, 0), `${at}: no main-innings boundary - only ball-by-ball ones count`).toBe(0);
+          expect(events.filter((e) => e.type === "cricket.innings.summary").every((e) => !("boundaries" in (e.payload as object))), at).toBe(true);
+          expect(soBallsOf(events).filter((b) => b.boundary !== undefined).length, `${at} ${label}`).toBe(h + a);
+          checked++;
+        }
+      }
+      seen.set(policy, (seen.get(policy) ?? 0) + 1);
+      checked++;
+    }
+    for (const p of SO_POLICIES) expect(seen.get(p) ?? 0, `policy ${p}`).toBe(SO_VARIANTS.length);
+    expect(checked).toBeGreaterThan(SO_POLICIES.length * SO_VARIANTS.length);
+  });
+
+  it("G4 tie: a 'tie' request is reachable exactly where the engine can end a super over level (canEndLevel: shared and boundary_count, not repeat), folds to a tie, and is refused by name without lineups", () => {
+    let reachable = 0;
+    let refused = 0;
+    for (const variant of SO_VARIANTS) for (const policy of SO_POLICIES) {
+      const cfg = ckKnockout(variant, { superOverStillTied: policy });
+      const at = `${variant}/${policy}`;
+      const can = ckModule().canEndLevel!(cfg as never);
+      expect(can, `${at}: the engine's own declaration`).toBe(policy !== "repeat");
+      if (can) {
+        const events = generateStream(ckReq(cfg, { kind: "tie" }));
+        expect(foldK(cfg, events).outcome, at).toEqual({ kind: "tie" });
+        expect(matchesRequest(ckReq(cfg, { kind: "tie" }), foldK(cfg, events).outcome), at).toBe("match");
+        reachable++;
+        expect(() => generateStream(ckReq(cfg, { kind: "tie" }, null)), `${at} without lineups`).toThrow(OutcomeUnreachable);
+      } else {
+        expect(() => generateStream(ckReq(cfg, { kind: "tie" })), at).toThrow(OutcomeUnreachable);
+        expect(() => generateStream(ckReq(cfg, { kind: "tie" })), at).toThrow(/super over/);
+      }
+      refused++;
+    }
+    expect(reachable).toBe(SO_VARIANTS.length * (SO_POLICIES.length - 1));
+    expect(refused).toBe(SO_VARIANTS.length * SO_POLICIES.length);
+    // The level question the bracket policy asks (levelReachable) needs no lineups and stays "no" for a super over: unchanged by Task 21.
+    expect(() => generateStream(ckReq(ckKnockout("t20", { superOverStillTied: "shared" }), { kind: "level" }, null))).toThrow(OutcomeUnreachable);
+  });
+
+  it("G5: a win by DLS, for each limited-overs variant x DLS off (the umpires' manual target) and on (the engine's own computation) x both winners - interruption, then the revise, then a chase inside the revised target's bound", () => {
+    const perVariant = new Map<string, number>();
+    const flavours = new Set<string>();
+    for (const variant of DLS_VARIANTS) for (const dlsOn of [false, true]) for (const winner of SIDES) {
+      const cfg = ckKnockout(variant, { dls: { enabled: dlsOn, edition: "standard" } });
+      const at = `${variant}/dls ${dlsOn ? "on" : "off"}/${winner}`;
+      expect(cfg.dls.enabled, at).toBe(dlsOn);
+      const r = ckWin(cfg, winner, "dls", null);
+      const events = generateStream(r);
+      expect(events.map((e) => e.type), at).toEqual(["core.start", "cricket.innings.summary", "cricket.interruption", "cricket.revise", "cricket.innings.summary"]);
+      const { outcome, state } = foldK(cfg, events, null);
+      expect(outcome, at).toMatchObject({ kind: "win", winner: ID[winner], method: "dls" });
+      expect(decidedInFor(ckModule(), outcome!), `${at}: a revised target is no extra play`).toBe("regulation");
+      const first = state.innings[0]!;
+      const chase = state.innings[1]!;
+      expect(state.targetSource, at).toBe(dlsOn ? "dls" : "manual");
+      if (dlsOn) expect(state.revisedTarget, `${at}: the engine's own Standard Edition target`).toBe(dlsTarget(first.runs, state.r1!, state.r2!));
+      expect(state.revisedTarget!, `${at}: the revision lowered the target`).toBeLessThan(first.runs + 1);
+      const revise = events.find((e) => e.type === "cricket.revise")!.payload as { oversPerSide: number; target?: number };
+      expect(state.quota, `${at}: the shortened quota is overs x the cfg's ballsPerOver`).toBe(revise.oversPerSide * cfg.ballsPerOver);
+      expect(revise.oversPerSide * cfg.ballsPerOver, `${at}: a real shortening`).toBeLessThan(cfg.ballsPerInnings!);
+      expect(chase.legalBalls, at).toBeLessThanOrEqual(state.quota!);
+      // CK-CH-1: a chase ends at the winning run - its total is within target - 1 + 7, the engine's bound (read here as the guard).
+      expect(chase.runs, at).toBeLessThanOrEqual(state.revisedTarget! - 1 + 7);
+      if (winner === "home") {
+        expect(chase.runs, `${at}: the chase fell short of the revised target`).toBeLessThan(state.revisedTarget! - 1);
+        expect(state.margin?.kind, at).toBe("runs");
+      } else {
+        expect(chase.runs, `${at}: the chase reached the revised target...`).toBeGreaterThanOrEqual(state.revisedTarget!);
+        expect(chase.runs, `${at}: ...which the unrevised target would NOT have been`).toBeLessThan(first.runs + 1);
+        expect(state.margin?.kind, at).toBe("wickets");
+        expect(state.margin).toMatchObject({ value: expect.any(Number) as number });
+      }
+      expect(matchesRequest(r, outcome, state), at).toBe("match");
+      expect(matchesRequest(ckWin(cfg, winner === "home" ? "away" : "home", "dls"), outcome, state), `${at}: the other winner`).toBe("mismatch");
+      // A plain win by the same chase, no revision, is NOT a DLS win: the same request for a regulation win carries no targetSource.
+      const plain = foldK(cfg, generateStream(ckReq(cfg, { kind: "win", winner }, null)), null);
+      expect((plain.outcome as { method?: string }).method, `${at}: a regulation win`).toBe("regulation");
+      expect(matchesRequest(r, plain.outcome, plain.state), `${at}: the witness refuses a regulation win as DLS`).toBe("mismatch");
+      flavours.add(`${dlsOn}`);
+      perVariant.set(variant, (perVariant.get(variant) ?? 0) + 1);
+    }
+    for (const v of DLS_VARIANTS) expect(perVariant.get(v) ?? 0, `variant ${v}`).toBe(4);
+    expect([...flavours].sort()).toEqual(["false", "true"]);
+  });
+
+  it("G5 bound: the chase total is the engine's CHASE_OVERSHOOT edge - target - 1 + 7 is accepted, one more is refused with the engine's code - so the generator's chase stays inside a guard that is reached", () => {
+    let edges = 0;
+    for (const variant of DLS_VARIANTS) {
+      const cfg = ckKnockout(variant);
+      const events = generateStream(ckWin(cfg, "away", "dls", null));
+      const target = foldK(cfg, events.slice(0, -1), null).state.revisedTarget!;
+      const withChase = (runs: number) => [...events.slice(0, -1), { ...events.at(-1)!, payload: { ...(events.at(-1)!.payload as object), runs } }];
+      expect(() => foldK(cfg, withChase(target - 1 + 7), null), `${variant}: the bound itself`).not.toThrow();
+      let code: string | undefined;
+      try { foldK(cfg, withChase(target - 1 + 7 + 1), null); } catch (e) { code = EngineError.is(e) ? e.code : String(e); }
+      expect(code, `${variant}: one past the bound`).toBe("CHASE_OVERSHOOT");
+      edges++;
+    }
+    expect(edges).toBe(DLS_VARIANTS.length);
+  });
+
+  it("G4 G5 vocabulary: ALL_OUTCOMES is still W2b's seven and nothing is known-unsupported - the new shapes run in their own sweeps", () => {
+    expect(ALL_OUTCOMES.map(outcomeLabel)).toEqual(["win-home", "win-away", "draw", "forfeit-away-walkover", "forfeit-home-retired", "abandon", "tie"]);
+    expect(ALL_OUTCOMES).toHaveLength(7);
+    expect(KNOWN_UNSUPPORTED).toEqual([]);
   });
 });

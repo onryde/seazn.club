@@ -60,7 +60,7 @@ export function partialPlay(req: StreamRequest): StreamEvent[] {
   const gen = STREAM_GENERATORS[req.sportKey];
   if (gen === undefined) throw new GeneratorUnsupported(req.sportKey, outcomeLabel(req.outcome), "no generator registered");
   const play = [START, ...gen.partial(req)];
-  const folded = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, play).outcome;
+  const folded = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, play, req.lineups).outcome;
   if (folded !== null) throw new OutcomeUnreachable(req.sportKey, outcomeLabel(req.outcome), `the sport's partial play folds to '${folded.kind}' — it must leave the match undecided`);
   return play;
 }
@@ -120,7 +120,7 @@ export function forfeitPosting(status: string, forfeit: { readonly by: string; r
 function decidingIndex(req: StreamRequest, win: readonly StreamEvent[]): number {
   const module = sportModule(req.sportKey);
   for (let i = 1; i <= win.length; i++) {
-    if (foldStream(module, req.cfg, req.home, req.away, win.slice(0, i)).outcome !== null) return i - 1;
+    if (foldStream(module, req.cfg, req.home, req.away, win.slice(0, i), req.lineups).outcome !== null) return i - 1;
   }
   throw new OutcomeUnreachable(req.sportKey, outcomeLabel(req.outcome), "the sport's own win stream never decides under this cfg, so there is no prefix to abandon");
 }
@@ -153,7 +153,7 @@ function levelStream(req: StreamRequest, gen: SportStreamGenerator): StreamEvent
   if (drawsAllowed(req.sportKey, req.cfg, "league")) events = gen.decided({ ...req, outcome: { kind: "draw" } });
   else if (gen.tied !== undefined) events = gen.tied(req);
   else throw new OutcomeUnreachable(req.sportKey, label, "the sport's generator declares no level result");
-  const folded = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, events).outcome;
+  const folded = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, events, req.lineups).outcome;
   if (folded === null || !isLevelOutcome(folded)) {
     throw new OutcomeUnreachable(req.sportKey, label, `the sport's level stream folds to ${folded === null ? "no outcome yet (a decider is pending)" : `'${folded.kind}'`} under this cfg`);
   }
@@ -185,7 +185,7 @@ export function generateStream(req: StreamRequest): StreamEvent[] {
   if (o.kind === "level") return levelStream(req, gen);
   if (o.kind === "settle") {
     const base = o.after === "level" ? levelStream({ ...req, outcome: { kind: "level" } }, gen) : abandonedAtScore({ ...req, outcome: { kind: "abandon", atScore: true } }, gen);
-    const after = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, base).outcome;
+    const after = foldStream(sportModule(req.sportKey), req.cfg, req.home, req.away, base, req.lineups).outcome;
     if (!settleableOutcome(after)) {
       throw new OutcomeUnreachable(req.sportKey, label, `the stream folds to '${after?.kind}', not a level outcome: core.settle does not apply (X-ST-1)`);
     }

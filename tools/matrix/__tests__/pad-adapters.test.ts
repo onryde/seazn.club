@@ -26,7 +26,7 @@ import { PAD_OWNER, PAD_SPORTS, PAD_UNOWNED, noPadReason } from "../lib/pad-spor
 import { foldStream } from "../lib/fold.ts";
 import { ARMAGEDDON, BOARDGAME_DRAW_TILE, BOARDGAME_RESULT, BOARDGAME_TIEBREAK, BOARDGAME_TIEBREAK_TILE, BLACK_OPTION_PREFIX, RESULT_OPTION_PREFIX, TIEBREAK_SCORE_NONE, boardgamePad, methodChipId } from "../lib/pads/boardgame.ts";
 import { CARROM_BOARD, CARROM_BOARD_TILE, CARROM_COIN_MAX, carromPad } from "../lib/pads/carrom.ts";
-import { CRICKET_OVER_TILE, CRICKET_SUMMARY, cricketPad, makeCricketPad, overSplit } from "../lib/pads/cricket.ts";
+import { CRICKET_INTERRUPTION, CRICKET_NO_CONTROL, CRICKET_OVER_TILE, CRICKET_REVISE, CRICKET_RUN_VALUES, CRICKET_SUMMARY, CRICKET_SUPER_OVER_BALL, cricketPad, makeCricketPad, overSplit } from "../lib/pads/cricket.ts";
 import { BADMINTON_SET_SCORE_TILE, BADMINTON_SUMMARY, badmintonPad } from "../lib/pads/badminton.ts";
 import { FOOTBALL_GOAL, FOOTBALL_KICK_MISSED, FOOTBALL_KICK_SCORED, FOOTBALL_PERIOD, FOOTBALL_PERIOD_TILE, FOOTBALL_SHOOTOUT_KICK, footballGoalTile, footballKickTile, footballPad } from "../lib/pads/football.ts";
 import { GENERIC_DRAW_TILE_ID, genericPad } from "../lib/pads/generic.ts";
@@ -43,7 +43,7 @@ import { replayOnModel, type RowIn } from "./pad-model.ts";
 import { drawsAllowed, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { declaredAllOut } from "../lib/streams/cricket.ts";
 import { generateStream, matchesRequest } from "../lib/streams/index.ts";
-import { DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
+import { DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, START, type RequestedOutcome, type StreamEvent, type StreamRequest } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..", "..");
@@ -69,7 +69,9 @@ const ORGANISER_ONLY_EVENTS: ReadonlySet<string> = new Set(["core.forfeit", "cor
 /** The requests a scorer's pad can author. */
 const padOutcomes = (os: readonly RequestedOutcome[]): RequestedOutcome[] => os.filter((o) => !ORGANISER_ONLY_OUTCOMES.has(o.kind));
 const req = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "league", home: HOME, away: AWAY, outcome });
-const bracketReq = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "knockout", home: HOME, away: AWAY, outcome });
+/** A bracket request carries probe lineups (Task 21): cricket's super-over balls name persons, and the sweeps ask what the
+ *  generator emits, not whom - a generator that names none ignores them. */
+const bracketReq = (sport: string, cfg: unknown, outcome: RequestedOutcome): StreamRequest => ({ sportKey: sport, cfg, stageKind: "knockout", home: HOME, away: AWAY, outcome, lineups: PROBE_LINEUPS });
 
 /** W2a (finding 16): what a BRACKET match can be asked — a win, a level result (where the sport reaches one), an
  *  abandon alone and at a score, every settle method after a level result and after an abandon, and every
@@ -177,7 +179,7 @@ describe("the pad adapter registry", () => {
       }
     }
     console.info(`pad-adapters: ${checked} registered fallback(s) declare writes and a judge`);
-    expect(checked).toBe(4); // football goal, cricket innings, icehockey and hockey advances
+    expect(checked).toBe(5); // football goal, cricket innings, icehockey and hockey advances, cricket super-over ball (Task 21)
   });
 
   it("I-1: registration refuses by name a fallback with no judge, or one that declares no row type it writes; its positive pair registers, frozen", () => {
@@ -210,21 +212,37 @@ describe.each(ADAPTERS)("%s adapter", (sport, a) => {
   it("every generated scorer event is routed to ≥1 tap — or its type is declared noControl, and refused by name — and every fallback cites its file:line", () => {
     let routed = 0;
     let barred = 0;
+    let afterBarred = 0;
     const noControl = new Set(a.noControl?.eventTypes ?? []);
+    const routedTypes = new Set<string>();
+    const afterBarredTypes = new Set<string>();
     for (const r of requestsFor(sport)) {
+      // A stream holding an event the pad has no control for goes over http WHOLE (browser-driver.ts, W1d item 16): the pad
+      // is never asked for the events after the first such event, and what they need may depend on it (Task 21: a chase
+      // after a revise is judged against the revised target the pad cannot set). So they are not routed here, but their
+      // TYPES must be routed in some stream the driver does tap - checked below, never skipped.
+      let sawBarred = false;
       for (const e of scorerEvents(streamOf(r))) {
         const at = `${JSON.stringify(r.outcome)} ${e.type}`;
         if (noControl.has(e.type)) {
           expect(() => a.stepsFor(e, ctxOf(r)), at).toThrow(/has no addressable pad control/);
           barred++;
+          sawBarred = true;
+          continue;
+        }
+        if (sawBarred) {
+          afterBarredTypes.add(e.type);
+          afterBarred++;
           continue;
         }
         expect(a.stepsFor(e, ctxOf(r)).length, at).toBeGreaterThan(0);
+        routedTypes.add(e.type);
         routed++;
       }
     }
-    console.info(`pad-adapters: ${sport}: ${routed} generated event(s) routed, ${barred} declared noControl`);
+    console.info(`pad-adapters: ${sport}: ${routed} generated event(s) routed, ${barred} declared noControl, ${afterBarred} after one (their types routed elsewhere)`);
     expect(routed).toBeGreaterThan(0);
+    for (const t of afterBarredTypes) expect(routedTypes.has(t), `${sport}: ${t} appears only after an event the pad has no control for, so no tappable stream routes it`).toBe(true);
     // Every type an adapter declares noControl is one its generator emits (a stale declaration is a failure), and the route is frozen.
     for (const t of noControl) expect(a.emits, t).toContain(t);
     if (a.noControl !== undefined) {
@@ -1330,7 +1348,7 @@ describe("cricket", () => {
     const last = { id: "r21", seq: 21, type: CRICKET_SUMMARY, payload: { runs: 150, partial: true, wickets: 5, legalBalls: 120 } };
     expect(sums[0]!.payload).toEqual({ runs: 150, wickets: 5, legalBalls: 120 });
     expect(compareRow(sums[0]!, last, cricketPad).verdict).toBe("mismatch");
-    expect(cricketPad.fallbacks.map((f) => f.eventType)).toEqual([CRICKET_SUMMARY]);
+    expect(cricketPad.fallbacks.map((f) => f.eventType)).toEqual([CRICKET_SUMMARY, CRICKET_SUPER_OVER_BALL]); // Task 21 added the super-over ball
     expect(cricketPad.tolerableExtraKeys?.(CRICKET_SUMMARY) ?? []).toEqual([]);
   });
 
@@ -1348,6 +1366,139 @@ describe("cricket", () => {
     expect(skin.split("\n")[Number(cite![1]) - 1]!.trim()).toBe("partial: true,");
     expect(sportModule("cricket")).toBe(cricket);
     expect(Object.keys(cricket.eventSchemas ?? {})).toContain(CRICKET_SUMMARY);
+  });
+
+  // -------------------------------------------------------------------------
+  // Task 21 (G4, G5): the super over's balls, the interruption and the revise.
+
+  /** The cfgs that play a super over, one per variant x still-tied policy, folded as a knockout does (the stage preset). */
+  const soCfgs = () => variantKeys("cricket").flatMap((v) => ["repeat", "boundary_count", "shared"].map((policy) => ({ v, policy, cfg: stageCfg("cricket", resolveSportCfg("cricket", v, { superOverStillTied: policy }), "knockout", v) })))
+    .filter(({ cfg }) => (cfg as { superOver: boolean }).superOver);
+  /** The run values the skin offers as tiles (`RUN_VALUES`), read from its source text. */
+  const runValuesOf = (src: string): number[] => {
+    const m = /const RUN_VALUES = \[([0-9, ]+)\] as const;/.exec(src);
+    expect(m, "cricket.tsx no longer declares RUN_VALUES as a literal").not.toBeNull();
+    return m![1]!.split(",").map((x) => Number(x.trim()));
+  };
+
+  it("Task 21: a super-over ball is the skin's run tile of its bat runs (one row, id `run<r>`, RUN_VALUES from the source), the event type switching on the super-over phase, the boundary flag the tile's own — for every variant x policy x winner the generator builds", () => {
+    const runValues = runValuesOf(skin);
+    expect(runValues.length).toBeGreaterThan(0);
+    expect([...CRICKET_RUN_VALUES], "the adapter's tile values are the skin's RUN_VALUES").toEqual(runValues);
+    // The premise, from the product's text: the tile ids, the phase switch and the boundary rule.
+    expect(skin).toMatch(/for \(const r of RUN_VALUES\) \{\s*tiles\.push\(ballTile\(\{\s*id: `run\$\{r\}`,/);
+    expect(skin).toMatch(/return state\.phase === "super_over" \? "cricket\.superover\.ball" : "cricket\.ball";/);
+    expect(skin).toMatch(/const boundary = runs === 4 \? 4 : runs === 6 \? 6 : undefined;/);
+    const fb = cricketPad.fallbacks.find((f) => f.eventType === CRICKET_SUPER_OVER_BALL);
+    expect(fb, "the super-over ball is declared a fallback").toBeDefined();
+    expect(fb!.why).toMatch(/\.tsx?:\d+/);
+    expect(fb!.writes).toEqual([CRICKET_SUPER_OVER_BALL]);
+    let balls = 0;
+    const perVariant = new Set<string>();
+    for (const { v, policy, cfg } of soCfgs()) for (const winner of ["home", "away"] as const) {
+      const r = bracketReq("cricket", cfg, { kind: "win", winner, path: "superOver" });
+      const evs = generateStream(r);
+      const pad = makeCricketPad();
+      for (const e of evs) {
+        const at = `${v}/${policy}/${winner} ${e.type}`;
+        if (e.type !== CRICKET_SUPER_OVER_BALL) { pad.stepsFor(e, ctxOf(r)); continue; }
+        const p = e.payload as { runs: { bat: number }; boundary?: number };
+        expect(runValues, `${at}: the generator scores only what a run tile writes`).toContain(p.runs.bat);
+        expect(pad.stepsFor(e, ctxOf(r)), at).toEqual([{ kind: "tile", tileId: `run${p.runs.bat}` }]);
+        // The tile writes a boundary for a 4 and a 6 and none otherwise: the generator's flag is the tile's.
+        expect(p.boundary, at).toBe(p.runs.bat === 4 ? 4 : p.runs.bat === 6 ? 6 : undefined);
+        expect(fb!.rowsFor(e, ctxOf(r)), at).toBe(1);
+        balls++;
+      }
+      perVariant.add(v);
+    }
+    console.info(`pad-adapters: cricket: ${balls} super-over ball(s) routed to run tiles`);
+    expect(balls).toBeGreaterThan(0);
+    expect([...perVariant].sort()).toEqual(["hundred", "odi", "t20"]);
+  });
+
+  it("Task 21: the super-over ball's fallback is JUDGED - the row holds over, ballInOver, runs and boundary to the event, the persons only to the shape of an id (the pad names them from the lineup it holds); a wrong run, an extra key, a dropped boundary, two rows each red", () => {
+    // boundary_count decides on the ball-by-ball boundaries, so its stream holds boundary balls (the other policies' need none).
+    const cfg = stageCfg("cricket", resolveSportCfg("cricket", "t20", { superOverStillTied: "boundary_count" }), "knockout", "t20");
+    const r = bracketReq("cricket", cfg, { kind: "win", winner: "home", path: "superOver" });
+    const ball = generateStream(r).find((e) => e.type === CRICKET_SUPER_OVER_BALL && (e.payload as { boundary?: number }).boundary !== undefined)!;
+    expect(ball, "the generated super over holds a boundary ball, or the boundary half of the judge is unwitnessed").toBeDefined();
+    const judge = cricketPad.fallbacks.find((f) => f.eventType === CRICKET_SUPER_OVER_BALL)!.judge!;
+    const p = ball.payload as Record<string, unknown>;
+    const row = (payload: unknown, seq = 5): LedgerRow => ({ id: `r${seq}`, seq, type: CRICKET_SUPER_OVER_BALL, payload });
+    // The pad's own persons are not the generated ones, and that is fine.
+    expect(judge(ball, [row({ ...p, striker: "pad-1", nonStriker: "pad-2", bowler: "pad-3" })])).toEqual({ ok: true, note: null });
+    expect(judge(ball, [row(p)])).toEqual({ ok: true, note: null });
+    const red = (payload: unknown, rows = [row(payload)]) => judge(ball, rows).ok;
+    expect(red({ ...p, runs: { bat: ((p.runs as { bat: number }).bat + 1) } }), "another run").toBe(false);
+    expect(red({ ...p, ballInOver: (p.ballInOver as number) + 1 }), "another ball").toBe(false);
+    const { boundary: _b, ...noBoundary } = p;
+    expect(red(noBoundary), "the boundary dropped").toBe(false);
+    expect(red({ ...p, extra: 1 }), "an untolerated key").toBe(false);
+    expect(red({ ...p, striker: "" }), "a person that is no id").toBe(false);
+    expect(red(p, [row(p), row(p, 6)]), "two rows").toBe(false);
+    expect(red(p, []), "no row").toBe(false);
+  });
+
+  it("Task 21: a super-over ball the pad cannot write as one run tile is refused by name - before the match is tied, off the tile values, with extras or a wicket - and the persons are not the adapter's to check", () => {
+    const cfg = stageCfg("cricket", resolveSportCfg("cricket", "t20"), "knockout", "t20");
+    const r = bracketReq("cricket", cfg, { kind: "win", winner: "home", path: "superOver" });
+    const evs = generateStream(r);
+    const ball = evs.find((e) => e.type === CRICKET_SUPER_OVER_BALL)!;
+    const p = ball.payload as Record<string, unknown>;
+    const started = () => { const pad = makeCricketPad(); pad.stepsFor(START, ctxOf(r)); return pad; };
+    // Before the main innings are done the match is not tied: there is no super over to tap.
+    expect(() => started().stepsFor(ball, ctxOf(r))).toThrow(/super-over ball before the match is tied/);
+    expect(() => makeCricketPad().stepsFor(ball, ctxOf(r))).toThrow(/before core\.start/);
+    const ready = () => { const pad = started(); for (const e of evs) { if (e.type === CRICKET_SUPER_OVER_BALL) break; pad.stepsFor(e, ctxOf(r)); } return pad; };
+    expect(() => ready().stepsFor({ type: CRICKET_SUPER_OVER_BALL, payload: { ...p, runs: { bat: 5 } } }, ctxOf(r))).toThrow(/no run tile for 5 bat runs/);
+    expect(() => ready().stepsFor({ type: CRICKET_SUPER_OVER_BALL, payload: { ...p, runs: { bat: 1, extras: { kind: "wide", runs: 1 } } } }, ctxOf(r))).toThrow(/extras or a wicket/);
+    expect(() => ready().stepsFor({ type: CRICKET_SUPER_OVER_BALL, payload: { ...p, wicket: { kind: "bowled", out: "x", bowlerCredited: true } } }, ctxOf(r))).toThrow(/extras or a wicket/);
+    expect(() => ready().stepsFor({ type: CRICKET_SUPER_OVER_BALL, payload: { ...p, boundary: 6, runs: { bat: 4 } } }, ctxOf(r))).toThrow(/boundary/);
+    expect(ready().stepsFor(ball, ctxOf(r))).toEqual([{ kind: "tile", tileId: `run${(p.runs as { bat: number }).bat}` }]);
+  });
+
+  it("Task 21: the interruption and the revise have NO route - both are rows of the generic More sheet (no testid) - declared noControl with the follow-on and the draw, refused by name, and the premise is pinned (the engine declares both as pad actions, the skin builds neither a tile nor a sheet)", () => {
+    expect([...cricketPad.noControl!.eventTypes].sort()).toEqual([CRICKET_INTERRUPTION, CRICKET_REVISE, "cricket.followon", "cricket.match.close"].sort());
+    expect(cricketPad.noControl!.route).toBe(CRICKET_NO_CONTROL);
+    const limited = resolveSportCfg("cricket", "t20", { dls: { enabled: true, edition: "standard" } });
+    const actionsOf = (cfg: unknown) => cricket.padSpec?.(cfg as never)?.panels.flatMap((p) => p.actions.map((a) => a.type)) ?? [];
+    const actions = actionsOf(limited);
+    // The engine's own fact (cricket.ts DLS panel): the revise is a pad action only where DLS is ON; the interruption always is.
+    expect(actionsOf(resolveSportCfg("cricket", "t20", { dls: { enabled: false, edition: "standard" } })), "DLS off: no revise action at all").not.toContain(CRICKET_REVISE);
+    expect(actionsOf(resolveSportCfg("cricket", "t20", { dls: { enabled: false, edition: "standard" } }))).toContain(CRICKET_INTERRUPTION);
+    for (const t of [CRICKET_INTERRUPTION, CRICKET_REVISE]) {
+      expect(actions, `the engine declares ${t} as a pad action (DLS on)`).toContain(t);
+      expect(Object.keys(cricket.eventSchemas ?? {}), t).toContain(t);
+      expect(skin, `cricket.tsx names ${t} as code: a tile or a sheet may now carry it`).not.toMatch(new RegExp(`(?:type|event): "${t.replace(/\./g, "\\.")}"`));
+      expect(() => makeCricketPad().stepsFor({ type: t, payload: {} }, ctxOf(req("cricket", limited, { kind: "win", winner: "home" }))), t).toThrow(new RegExp(`${t.replace(/\./g, "\\.")} has no addressable pad control`));
+    }
+    expect(skin).toMatch(/interruption,\s*\/\/ revise\) ride the chassis's generic "More" sheet/);
+  });
+
+  it("Task 21: a DLS stream is a barred stream - the first innings routes, the interruption and the revise are refused by name, and the driver scores the whole of it over http (so the pad is never asked for a chase against a target it cannot set)", () => {
+    let streams = 0;
+    for (const variant of variantKeys("cricket")) {
+      const base = resolveSportCfg("cricket", variant) as { inningsPerSide: number; ballsPerInnings: number | null };
+      if (base.inningsPerSide !== 1 || base.ballsPerInnings === null) continue;
+      for (const dlsOn of [false, true]) {
+        const cfg = stageCfg("cricket", resolveSportCfg("cricket", variant, { dls: { enabled: dlsOn, edition: "standard" } }), "knockout", variant);
+        const r = bracketReq("cricket", cfg, { kind: "win", winner: "away", path: "dls" });
+        const evs = generateStream(r);
+        const at = `${variant}/dls ${dlsOn ? "on" : "off"}`;
+        const barred = new Set(cricketPad.noControl!.eventTypes);
+        // The driver's rule (browser-driver.ts): any barred event in the stream sends the whole stream over http.
+        expect(evs.some((e) => barred.has(e.type)), `${at}: the stream is barred`).toBe(true);
+        const pad = makeCricketPad();
+        const types = evs.map((e) => e.type);
+        expect(types, at).toEqual(["core.start", CRICKET_SUMMARY, CRICKET_INTERRUPTION, CRICKET_REVISE, CRICKET_SUMMARY]);
+        pad.stepsFor(evs[0]!, ctxOf(r));
+        expect(pad.stepsFor(evs[1]!, ctxOf(r)).length, at).toBeGreaterThan(0);
+        for (const e of evs.slice(2, 4)) expect(() => pad.stepsFor(e, ctxOf(r)), `${at} ${e.type}`).toThrow(/has no addressable pad control/);
+        streams++;
+      }
+    }
+    expect(streams).toBe(6); // t20, odi and the hundred, each with DLS off and on
   });
 });
 

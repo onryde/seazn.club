@@ -102,6 +102,22 @@ export interface StreamEvent {
   readonly payload: unknown;
 }
 
+/** W2e (Task 21): each side's STARTING lineup as the harness PUT it - person ids in team-sheet order (order_no ascending),
+ *  what the engine's `init` reads as the side's batting and fielding order. A stream that names persons (cricket's
+ *  super-over balls: striker, non-striker, bowler) can only be built, and folded, against it; every fold of such a stream
+ *  - the generator's own checks, the harness's parity fold, the fake driver's - takes the same lineups. */
+export interface StreamLineups {
+  readonly home: readonly string[];
+  readonly away: readonly string[];
+}
+
+/** Persons nobody minted: for a PROBE - "can this generator build the path?", "which event types does it emit?" - where
+ *  no roster exists yet. Never posted. Eleven a side, the size of a cricket XI (the engine's all-out follows the lineup). */
+export const PROBE_LINEUPS: StreamLineups = Object.freeze({
+  home: Object.freeze(Array.from({ length: 11 }, (_, i) => `probe-home-${i + 1}`)),
+  away: Object.freeze(Array.from({ length: 11 }, (_, i) => `probe-away-${i + 1}`)),
+});
+
 export interface StreamRequest {
   readonly sportKey: string;
   readonly cfg: unknown;
@@ -109,6 +125,9 @@ export interface StreamRequest {
   readonly home: string;
   readonly away: string;
   readonly outcome: RequestedOutcome;
+  /** Task 21: the lineups the stream is built and folded against; absent where the request has none (a probe that names
+   *  no persons, a rosterless setup). A generator that needs persons refuses by name without them. */
+  readonly lineups?: StreamLineups;
 }
 
 export interface DecidedRequest extends StreamRequest {
@@ -139,6 +158,9 @@ export interface SportStreamGenerator {
    *  that declares none (GeneratorUnsupported), so no path is ever built as a plain win, and `decided` itself refuses
    *  (OutcomeUnreachable) a path its sport has no rule for, or one the request's cfg does not switch on. */
   pathWitness?(path: DecidingPath, fold: PathFold): boolean;
+  /** Task 21: whether this sport's streams under `cfg` may name PERSONS (a lineup is then part of the request, and of every
+   *  fold of the stream). Absent ≡ never: the harness folds such a sport under empty lineups, as it always has. */
+  namesPersons?(cfg: unknown): boolean;
 }
 
 /** W2e (Task 21): what the PRODUCT holds for a fixture after the harness drove it — the `summary` and `state` its
