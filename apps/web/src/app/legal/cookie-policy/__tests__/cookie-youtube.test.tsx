@@ -1,4 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 
 // YouTube Connect T19 (parked from T16, controller override O2). The public match page shows a recorded match with YouTube's player,
@@ -63,8 +65,12 @@ describe("cookie policy — the embedded YouTube player (T19, O2)", () => {
     ["before a tap: only the thumbnail, from the host the facade really loads - and only what WE control is claimed (M4)", () => {
       expect(ytText).toContain("until you tap play");
       expect(ytText).toContain(`from ${bare(THUMB_HOSTS[0]!)}`);
-      // What we can vouch for: our page sets no cookie and loads no Google script or frame before the tap (the facade test below holds it).
-      expect(ytText).toContain("our page sets no cookie and loads no Google script or player");
+      // What we can vouch for: the REPLAY sets no cookie of ours and loads no Google script or frame before the tap (the facade test and the
+      // storage-API scan below hold it). F3b (final review M2): not "our page" - the rest of the public page carries the session cookie
+      // and, if accepted, PostHog's, which the cookie table above lists; the sentence says so and the old absolute is gone.
+      expect(ytText).toContain("the replay itself sets no cookie of ours and loads no Google script or player");
+      expect(ytText).toContain("the rest of the page uses the cookies listed above");
+      expect(ytText).not.toContain("our page sets no cookie");
       // What we cannot: whether Google's image server sets one. The old absolute is gone, and the request is said to reach Google.
       expect(ytText).not.toContain("no player, no script and no cookie");
       expect(ytText).toContain("that request reaches Google's servers with your IP address and browser details");
@@ -73,6 +79,8 @@ describe("cookie policy — the embedded YouTube player (T19, O2)", () => {
       expect(ytText).toContain(`loaded from ${bare(PLAYER_HOSTS[0]!)}`);
       expect(ytText).toContain("Google may set its own cookies or similar storage on your device");
       expect(ytText).toContain("not ours");
+      // F3f (final review M6): the player is third-party content from YouTube.
+      expect(ytText).toContain("The player is third-party content from YouTube");
     }],
     ["links Google's privacy policy for what the player stores (DP III.A.2.c)", () => {
       expect(yt).toContain(`href="${POLICY_GOOGLE_PRIVACY}"`);
@@ -83,6 +91,19 @@ describe("cookie policy — the embedded YouTube player (T19, O2)", () => {
       expect(facade).not.toContain("<script");
       expect(playing, "and the tap is what mounts the player").toContain("<iframe");
     }],
+    ["F3b: the claim 'the replay sets no cookie of ours' is held by the component - it reaches for no cookie or storage API (6 tokens checked)", () => {
+      const source = readFileSync(join(__dirname, "../../../../components/public-site/match-centre/replay-embed.tsx"), "utf8");
+      expect(source.length, "anti-vacuity: the component source was read").toBeGreaterThan(2000);
+      const TOKENS = ["document.cookie", "localStorage", "sessionStorage", "indexedDB", "cookieStore", "navigator.sendBeacon"];
+      let checked = 0;
+      for (const token of TOKENS) {
+        expect(source, `replay-embed.tsx must not use ${token}`).not.toContain(token);
+        checked++;
+      }
+      expect(checked, "anti-vacuity: every token was tried").toBe(6);
+      // The positive pair: the scan is looking at the file that renders the facade (it names the facade the markup above came from).
+      expect(source).toContain('data-testid="replay-facade"');
+    }],
   ];
 
   it.each(ITEMS)("%s", (name, run) => {
@@ -90,9 +111,9 @@ describe("cookie policy — the embedded YouTube player (T19, O2)", () => {
     run();
   });
 
-  it("checked === 5: every item was evaluated (zero checked is a failure)", () => {
-    expect(ITEMS.length).toBe(5);
-    expect(ran.size).toBe(5);
+  it("checked === 6: every item was evaluated (zero checked is a failure)", () => {
+    expect(ITEMS.length).toBe(6);
+    expect(ran.size).toBe(6);
   });
 
   it("is dated 29 October 2026", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { renderToStaticMarkup } from "react-dom/server";
 
@@ -18,6 +18,7 @@ vi.mock("@/components/marketing-nav", () => ({ MarketingNav: () => null }));
 vi.mock("@/components/marketing-footer", () => ({ MarketingFooter: () => null }));
 
 import PrivacyPage from "../privacy/page";
+import SubProcessorsPage from "../sub-processors/page";
 import { GOOGLE_THIRD_PARTY_ACCESS_URL } from "@/lib/youtube";
 
 // ─── the rulebook ──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -88,9 +89,20 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
       const bullet = (label: string) => text(yt.match(new RegExp(`<li><strong>${label}</strong>.*?</li>`))?.[0] ?? "");
       const WANT: [label: string, needles: string[]][] = [
         ["What we access:", ["id and title", "live broadcasts and live streams"]],
-        ["What we store:", ["channel id and title", "refresh token (encrypted at rest)", "its id, which is also its video id, and its title", "stream keys"]],
+        ["What we store:", [
+          "channel id and title", "refresh token (encrypted at rest)", "its id, which is also its video id, and its title", "stream keys",
+          // F3a (final review M1): the keyed fingerprint of the channel id is stored too, and it is what survives a Disconnect.
+          "a keyed one-way fingerprint of the channel id",
+        ]],
         ["How we use it:", ["only to stream", "replay link", "do not sell it"]],
-        ["Who it is shared with:", ["Google", "We share it with no one else"]],
+        ["Who it is shared with:", [
+          "Google", "We share it with no one else",
+          // F3c (final review M3): the stream relay's providers carry the stream, and the stream key goes to the first of them.
+          "our stream relay, which our sub-processors run", "Cloudflare", "the stream key we created on your channel", "Fly.io", "score overlay",
+          "see the sub-processors list",
+          // F3d (final review M4): the filter reads the visibility Seazn asked YouTube for, not YouTube's live setting.
+          "a broadcast that Seazn Club created as Private is not shown there", "it is not read back from YouTube",
+        ]],
         // M2: every kind of thing the section says is stored has its own real retention, named in this bullet (read from the code: the token,
         // channel and account id live while connected (revokeConnection / purgeConnectionData clear them); the daily pass owns the 30-day
         // ceiling; an unfinished attempt expires after PENDING_LIFETIME_SECONDS and the daily pass deletes it; the consent record and the two
@@ -105,6 +117,9 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
           `are deleted when the channel is connected, and otherwise by the next daily check after the attempt expires, ${PENDING_MINUTES} minutes after it was started`,
           "choosing Cancel in the channel picker does not delete them sooner",
           "are not data from YouTube", "after a disconnect too, for as long as your organisation's account exists on Seazn Club",
+          // F3a/F3e: the exception to "everything" is named where "everything" is promised, and the idle key's delete reaches YouTube.
+          "we delete everything we stored from YouTube for it (except the channel fingerprint described under Disconnecting below)",
+          "asking YouTube to delete the stream where we can",
         ]],
       ];
       const missing: string[] = [];
@@ -118,7 +133,7 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
         }
       }
       expect(checked, "anti-vacuity: every needle was tried").toBe(WANT.reduce((n, [, ns]) => n + ns.length, 0));
-      expect(checked).toBe(21);
+      expect(checked).toBe(32);
       return missing;
     }],
     ["says Disconnect deletes at once what was stored and asks Google to revoke", () => {
@@ -127,6 +142,14 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
         ? ["the Disconnecting paragraph"]
         : ["Disconnecting deletes at once everything we stored from YouTube", "refresh token", "stream keys", "replay links", "channel id and title", "asks Google to revoke",
             "any reconnection of the channel that was started and not finished",
+            // F3a (M1): what survives, why, and that it is not the channel id.
+            "One thing is kept", "archived rather than deleted", "the history of earlier streams refers to it",
+            "a keyed one-way fingerprint of the channel id", "we cannot turn it back into the channel id",
+            "for as long as your organisation's account exists on Seazn Club", "The same applies when we delete a connection that stopped working",
+            // F3e (M5): what Disconnect does AT YouTube, where it can, and what it leaves.
+            "ends any broadcast of ours that is still running", "deletes any broadcast of ours that never went live",
+            "deletes the stream keys it created on your channel", "those stay at YouTube",
+            "Finished broadcasts and their videos stay on your channel", "we delete only our record of them",
             // M1: the revoke is NOT unconditional - it is skipped on purpose for an account another connected channel uses (disconnect.ts
             // `accountIsShared`) and cannot be made without a readable token - so the sentence says so.
             "unless another connected channel uses the same Google account", "cannot be read"]
@@ -190,15 +213,71 @@ describe("privacy — what the YouTube section says about the other halves of th
     expect(ytText, "the sign-in product is a different service (the login uses it; this feature does not)").not.toContain("Google sign-in");
   });
 
-  it("a private broadcast is not shown on public match pages; a replay link is shown to anyone who can open the page", () => {
-    expect(ytText).toContain("a broadcast that is private on YouTube is not shown there");
+  it("a Private broadcast is not shown on public match pages; a replay link is shown to anyone who can open the page", () => {
+    expect(ytText).toContain("a broadcast that Seazn Club created as Private is not shown there");
     expect(ytText).toContain("anyone who can open that page");
+    // F3d (M4): it is the visibility Seazn ASKED for, and the page says it does not follow YouTube's live setting. The old claim is gone.
+    expect(ytText).toContain("That is the visibility Seazn Club asked YouTube for when it created the broadcast");
+    expect(ytText).toContain("so a visibility you change later in YouTube is not followed here");
+    expect(ytText).not.toContain("private on YouTube");
+  });
+
+  it("F3d: the sentence is held by the code - the public view filters on the broadcast row's own privacy, and nothing reads privacyStatus back from YouTube", () => {
+    // Both halves are assumptions: if a refresh ever reads the live visibility, or the view starts reading YouTube's, this page is wrong.
+    const view = src("../../../../../../db/migration/deltas/V480__youtube_broadcast_actual_times.sql");
+    expect(view, "the public parts view").toContain("and b.privacy in ('unlisted', 'public')");
+    const dir = join(__dirname, "../../../server/youtube");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
+    expect(files.length, "anti-vacuity: the server/youtube sources were listed").toBeGreaterThan(10);
+    const mentions = files.map((f) => [f, (readFileSync(join(dir, f), "utf8").match(/privacyStatus/g) ?? []).length] as const).filter(([, n]) => n > 0);
+    // Exactly one mention, in the create call (google.ts) that WRITES the privacy: no file reads it back.
+    expect(mentions, "privacyStatus appears once, in the create call").toEqual([["google.ts", 1]]);
+    expect(src("../../../server/youtube/google.ts")).toContain("status: { privacyStatus: a.privacy, selfDeclaredMadeForKids: a.madeForKids }");
+  });
+
+  it("F3c: the processors the page names are on the sub-processors list it links, and the stream key goes to Cloudflare's ingest only", () => {
+    expect(yt, "the link to the list").toContain('href="/legal/sub-processors"');
+    const list = text(renderToStaticMarkup(<SubProcessorsPage />));
+    for (const name of ["Cloudflare", "Fly.io"]) expect(list, `${name} is on the sub-processors list`).toContain(name);
+    expect(list, "Cloudflare's listed purpose covers the live-stream ingest").toContain("live-stream video ingest");
+    // The key is handed to Cloudflare as a live-input output (addOutput) and the session effect reads it for no other port.
+    const effect = src("../../../server/usecases/stream-sessions.ts");
+    expect(effect).toContain("deps.drivers.ingest.addOutput(inputId, target");
+    expect(effect, "the composed destination key never reaches the Machine (spec 5.3)").toContain("a composed destination key reaches Cloudflare and never the Machine");
+  });
+
+  it("F3e: Disconnect's YouTube clean-up and the idle key's delete are held by the code; a finished broadcast is left alone", () => {
+    const d = src("../../../server/youtube/disconnect.ts");
+    const windDown = d.slice(d.indexOf("async function windDown("), d.indexOf("/** Test-only seam"));
+    expect(windDown.length, "anti-vacuity: windDown was found").toBeGreaterThan(300);
+    expect(windDown).toMatch(/case "live":\s*case "testing":\s*await attempt\(\(\) => port\.complete\(/);
+    expect(windDown).toMatch(/case "created":\s*case "ready":\s*await attempt\(\(\) => port\.deleteBroadcast\(/);
+    expect(windDown, "a finished, revoked or absent broadcast asks YouTube for nothing").toMatch(/case "complete":\s*case "revoked":\s*case "absent":\s*return;/);
+    expect(d).toContain("port.deleteStream(at.value, streamId)");
+    // The dead-grant purge asks Google to REVOKE only (its token is dead): the page does not promise a YouTube clean-up there.
+    expect(dailySrc).toContain("await revokeConnection(tx, c.org_id, c.id)");
+    expect(dailySrc).toContain("p.port.deleteStream(at, streamId)");
+  });
+
+  it("F3a: the fingerprint outliving a Disconnect is held by the code - nothing clears it, the destination is archived (never deleted), history references it", () => {
+    const dir = join(__dirname, "../../../server/youtube");
+    const files = readdirSync(dir).filter((f) => f.endsWith(".ts") && !f.endsWith(".test.ts"));
+    expect(files.length, "anti-vacuity").toBeGreaterThan(10);
+    const bad = files.filter((f) => /dest_fingerprint\s*=\s*null|delete from org_stream_targets/.test(readFileSync(join(dir, f), "utf8")));
+    expect(bad, "no server/youtube source clears the fingerprint or deletes a destination row").toEqual([]);
+    const tokenStore = src("../../../server/youtube/token-store.ts");
+    expect(tokenStore, "revoke ARCHIVES the destination").toContain("set archived_at = coalesce(archived_at, now()), label = ${DISCONNECTED_LABEL}");
+    expect(tokenStore, "and the fingerprint is stored on it at connect, so there is something to survive").toContain("dest_fingerprint");
+    expect(src("../../../server/youtube/connections.ts"), "the fingerprint is of the CHANNEL id").toContain("fingerprintYoutubeChannel(channelId)");
+    expect(src("../../../../../../db/migration/deltas/V410__stream_sessions.sql"), "history (stream sessions) references the destination row").toMatch(/target_id\s+uuid not null references org_stream_targets\(id\)/);
   });
 
   it("the device paragraph (III.A.2.g): nothing loads until the tap, a thumbnail only before it, Google's cookies after - and points at the Cookie Policy", () => {
     expect(ytText).toContain("Nothing from the player loads until you tap play");
     expect(ytText).toContain("only the video's thumbnail");
     expect(ytText).toContain("may store cookies or similar data on your device");
+    // F3f (M6): the player is third-party content from YouTube, not Seazn's.
+    expect(ytText).toContain("which is third-party content from YouTube, not part of Seazn Club");
     // M4: loading either one sends the visitor's address to Google.
     expect(ytText).toContain("each send your IP address and browser details to Google");
     expect(yt).toContain('href="/legal/cookie-policy"');
