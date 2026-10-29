@@ -966,7 +966,12 @@ test("Disconnect stays reachable after the org loses Go live - the restricted St
     await expect(page.getByTestId("youtube-disconnected")).toContainText(en("streaming.youtube.disconnect.done", { name }));
   }
   await expect(page.getByTestId("stream-disconnect-only-empty")).toHaveText(en("streaming.youtube.disconnectOnly.none"));
-  await expect(page, "still on the page").toHaveURL(/\/streaming$/);
+  // F7: the last one took the page's own nav with it - the page re-rendered at the emptied URL (not the 404), and what the person was
+  // told is still on screen, so the nav no longer offers a link that would 404 and the confirmation was not swapped for a 404.
+  await expect(page, "still on the page, at the emptied address").toHaveURL(/\/streaming\?disconnected=1$/);
+  await expect(page.getByTestId("nav-streaming"), "the nav dropped the item without a reload").toHaveCount(0);
+  await expect(page.getByTestId("youtube-disconnected"), "the news is still there").toContainText(en("streaming.youtube.disconnect.done", { name: b.title }));
+  await expect(page.getByTestId("stream-disconnect-only-empty"), "and the empty line").toHaveText(en("streaming.youtube.disconnectOnly.none"));
   await expectNoPageScroll(page, "the restricted page, emptied");
   await shot(page, "disconnect-only-empty-1280");
   const left = await withDb((sql) => sql<{ n: number }[]>`select count(*)::int as n from org_youtube_connections where org_id = ${r.orgId} and status <> 'revoked'`);

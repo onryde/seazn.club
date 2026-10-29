@@ -28,16 +28,22 @@ import { defaultDeps, expireTargetHolders } from "@/server/usecases/stream-sessi
 // Replace key / Remove render only for canEdit (owner or admin), matching the API's write gate. Read server-side
 // through the same use-case the API serves, so the list, its key hints and its "in use" badges are the API's projection,
 // never a second query.
-export default async function StreamingPage({ searchParams }: { searchParams: Promise<{ youtube?: string | string[]; pending?: string | string[] }> }) {
+export default async function StreamingPage({ searchParams }: { searchParams: Promise<{ youtube?: string | string[]; pending?: string | string[]; disconnected?: string | string[] }> }) {
   const { auth, canEdit } = await requirePageAuth();
   const access = await streamingPageAccess(auth.orgId, canEdit);
-  if (access === "none") notFound();
+  const query = await searchParams;
+  // An editor who has just disconnected the LAST channel of an org that cannot go live is sent here by the restricted page itself
+  // (`STREAMING_DISCONNECTED_HREF`): the page re-renders so its nav drops the item, and must not turn into the 404 under the person
+  // who is reading the confirmation. It lists nothing - there is nothing - and the query opens nothing else: every other case
+  // (a viewer, any other value, no query) is the 404 it always was.
+  const justEmptied = access === "none" && canEdit && query.disconnected === "1";
+  if (access === "none" && !justEmptied) notFound();
   const locale = await resolveLocale();
   const ui = await getDictionary(locale, "ui");
 
-  if (access === "disconnect_only") {
+  if (access === "disconnect_only" || justEmptied) {
     // The channels only: no pasted key is read, no holder expiry is run, and the page says nothing of going live.
-    const channels = await listStreamTargets(auth, auth.orgId, { channelsOnly: true });
+    const channels = justEmptied ? [] : await listStreamTargets(auth, auth.orgId, { channelsOnly: true });
     return (
       <DictProvider dict={ui} locale={locale}>
         <Nav />
@@ -66,7 +72,7 @@ export default async function StreamingPage({ searchParams }: { searchParams: Pr
   }
   const targets = await listStreamTargets(auth, auth.orgId);
   // Where the YouTube connect round trip landed (`?youtube=<code>[&pending=<id>]`): read once, here, into the one shape the panel takes.
-  const landing = youtubeLandingFrom(await searchParams);
+  const landing = youtubeLandingFrom(query);
 
   return (
     <DictProvider dict={ui} locale={locale}>

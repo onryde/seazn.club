@@ -4,19 +4,31 @@
 // plan change never strands a grant the organiser wants revoked. No Connect, no Settings, no Reconnect, no pasted keys (they are not
 // even read: `listStreamTargets(..., { channelsOnly })`), and no "matches can go live" sentence on a row (the note above says they can't).
 //
-// A disconnected channel leaves the list HERE, from local state, and the page is not refreshed: the server would answer the last
-// disconnect with the 404 an org with nothing to disconnect gets, and the person is looking at the confirmation. A reload or the next
-// navigation asks the server again.
+// A disconnected channel leaves the list HERE, from local state, and the page is not refreshed: the server would answer a re-read
+// after the last disconnect with the 404 an org with nothing to disconnect gets, and the person is looking at the confirmation. The
+// LAST one is the exception that proves it: the page's own nav is part of what the server renders, and would go on offering a link to
+// a page that now 404s, so it asks the server for the page again at `STREAMING_DISCONNECTED_HREF` - the one address that renders the
+// emptied page instead of the 404 (the notice and the list are this component's state, which that re-render keeps). A reload of the
+// bare address, or the next navigation, is the 404.
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { useMsg } from "@/components/i18n/dict-provider";
+import { STREAMING_DISCONNECTED_HREF } from "@/lib/youtube";
 import type { StreamTarget } from "@/server/api-v1/schemas";
 import { YoutubeChannelRow, YoutubeDisconnectedNotice, type DisconnectNews } from "./youtube-connect-panel";
 
 export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; targets: StreamTarget[] }) {
   const msg = useMsg();
+  const router = useRouter();
   const [gone, setGone] = useState<ReadonlySet<string>>(new Set());
   const [disconnected, setDisconnected] = useState<DisconnectNews | null>(null);
   const channels = targets.filter((t) => t.youtube !== null && !gone.has(t.id));
+
+  // A channel leaves the list; the last one to leave takes the page's nav with it (see the header).
+  const leave = (id: string) => {
+    setGone((g) => new Set(g).add(id));
+    if (channels.every((c) => c.id === id)) router.replace(STREAMING_DISCONNECTED_HREF);
+  };
 
   return (
     <div data-testid="stream-disconnect-only" className="space-y-4">
@@ -37,10 +49,10 @@ export function YoutubeDisconnectOnlyPanel({ orgId, targets }: { orgId: string; 
                 disconnectOnly
                 refreshAfter={false}
                 onDisconnected={(news) => {
-                  setGone((g) => new Set(g).add(t.id));
+                  leave(t.id);
                   setDisconnected(news);
                 }}
-                onGone={() => setGone((g) => new Set(g).add(t.id))}
+                onGone={() => leave(t.id)}
               />
             ))}
           </ul>

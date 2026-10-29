@@ -1339,6 +1339,29 @@ describe("the disconnect-only Streaming page (T18) - an org that can no longer g
     expect(kept).toBe(2);
   });
 
+  it("F7: when the LAST channel has left, the page asks to re-render itself at the emptied URL (so its own nav stops offering a link that would 404, and the notice stays) - once, and not before; by a success and by a 404 alike", async () => {
+    // a success on each of two rows: the first is not the last, the second is
+    const panel = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: two() });
+    (attr(rowsOf(panel)[0]!, "onDisconnected") as (n: { name: string; outcome: string }) => void)({ name: "Riverside FC", outcome: "revoked" });
+    expect(nav.replace, "one channel is still there: stay where we are").not.toHaveBeenCalled();
+    (attr(rowsOf(panel)[0]!, "onDisconnected") as (n: { name: string; outcome: string }) => void)({ name: "Riverside Juniors", outcome: "revoked" });
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(nav.replace, "the one href, from the constants").toHaveBeenCalledWith("/streaming?disconnected=1");
+    expect(nav.refresh, "a re-read of the bare page would be the 404").not.toHaveBeenCalled();
+
+    // the other tab already disconnected the last one: the same exit
+    nav.replace.mockReset();
+    const one = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: [two()[0]!] });
+    (attr(rowsOf(one)[0]!, "onGone") as () => void)();
+    expect(nav.replace).toHaveBeenCalledTimes(1);
+    expect(nav.replace).toHaveBeenCalledWith("/streaming?disconnected=1");
+
+    // an empty list handed in from the server (we are ALREADY at the emptied URL, or the org never had one) navigates nowhere
+    nav.replace.mockReset();
+    renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: [] });
+    expect(nav.replace).not.toHaveBeenCalled();
+  });
+
   it("the LAST channel leaves: an empty line instead of a list, the news stays, still no re-read (the empty case, then the sequence)", async () => {
     const panel = renderIsland(YoutubeDisconnectOnlyPanel, { orgId: "o", targets: two() });
     (attr(rowsOf(panel)[0]!, "onDisconnected") as (n: { name: string; outcome: string }) => void)({ name: "Riverside FC", outcome: "revoked" });
