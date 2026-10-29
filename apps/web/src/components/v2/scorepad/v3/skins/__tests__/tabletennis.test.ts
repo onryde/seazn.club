@@ -24,18 +24,16 @@ import type { EventEnvelope, Lineup, LineupPair, SquadState } from "@seazn/engin
 import { initSquads } from "@seazn/engine/core";
 import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
+import { tabletennisPadRules } from "@seazn/engine/pad";
 import { tabletennis } from "@seazn/engine/sports/setbased";
 import { EngineError } from "@seazn/engine/core";
 import { foldClient } from "../../../module-client";
 import { assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
 import { dedicatedEventTypes, moreActions } from "../../pad-host";
 import {
-  EVENT_BAND,
-  EXPEDITE_RETURNS_THRESHOLD,
   EXPEDITE_START_TILE_ID,
   EXPEDITE_TYPE,
   RALLY_TYPE,
-  SANCTION_LEVELS,
   SANCTION_TYPE,
   SERVE_ANCHOR_TILE_ID,
   SET_SCORE_TILE_ID,
@@ -208,19 +206,19 @@ const stripItem = (v: PadHostView, id: string) => buildScorebug(v, t).strip.find
 describe("the constants this skin restates cannot drift from the engine's own", () => {
   const spec = tabletennis.padSpec!(ITTF_CFG);
 
-  it("EVENT_BAND is padSpec's own `fidelity` map, entry for entry", () => {
-    expect(EVENT_BAND).toEqual(spec.fidelity);
+  it("tabletennisPadRules.eventBands is padSpec's own `fidelity` map, entry for entry", () => {
+    expect(tabletennisPadRules.eventBands).toEqual(spec.fidelity);
   });
 
 
-  it("SANCTION_LEVELS is the ladder padSpec itself offers, in padSpec's own order", () => {
+  it("tabletennisPadRules.sanctionLevels is the ladder padSpec itself offers, in padSpec's own order", () => {
     // The ITTF umpire has yellow and red only — offering the FIVB's four
     // steps on this pad would put a sanction on screen this federation has
     // no concept of.
     const action = spec.panels.flatMap((panel) => panel.actions).find((entry) => entry.type === SANCTION_TYPE)!;
     const level = action.fields.find((field) => field.path === "level") as { values: readonly string[] };
-    expect(SANCTION_LEVELS).toEqual([...level.values]);
-    expect(SANCTION_LEVELS).toHaveLength(2);
+    expect(tabletennisPadRules.sanctionLevels).toEqual([...level.values]);
+    expect(tabletennisPadRules.sanctionLevels).toHaveLength(2);
   });
 
   it("SUMMARY_TYPE is the FULLY QUALIFIED coarse type, never the preset's bare half", () => {
@@ -228,7 +226,7 @@ describe("the constants this skin restates cannot drift from the engine's own", 
     expect(SUMMARY_TYPE).not.toBe(tabletennis.coarseEventType);
   });
 
-  it("EXPEDITE_RETURNS_THRESHOLD is the ITTF 2.15.2 threshold the REAL fold enforces, at the exact boundary", () => {
+  it("tabletennisPadRules.expediteReturns is the ITTF 2.15.2 threshold the REAL fold enforces, at the exact boundary", () => {
     // Restated (the engine's own EXPEDITE_RETURNS is not exported from the
     // barrel this skin is limited to) and pinned against a live fold rather
     // than assumed: a rally crediting the SERVING side their Nth-return win
@@ -237,13 +235,13 @@ describe("the constants this skin restates cannot drift from the engine's own", 
     const events = stream(expedite());
     const state = foldClient(tabletennis, ITTF_CFG, SINGLES, events);
     const atThreshold = () =>
-      tabletennis.apply(state, ev(2, RALLY_TYPE, { wonBy: "H", serving: "H", returns: EXPEDITE_RETURNS_THRESHOLD }) as never, {
+      tabletennis.apply(state, ev(2, RALLY_TYPE, { wonBy: "H", serving: "H", returns: tabletennisPadRules.expediteReturns }) as never, {
         strict: true,
       });
     const belowThreshold = () =>
       tabletennis.apply(
         state,
-        ev(2, RALLY_TYPE, { wonBy: "H", serving: "H", returns: EXPEDITE_RETURNS_THRESHOLD - 1 }) as never,
+        ev(2, RALLY_TYPE, { wonBy: "H", serving: "H", returns: tabletennisPadRules.expediteReturns - 1 }) as never,
         { strict: true },
       );
     expect(atThreshold).toThrow(EngineError);
@@ -779,7 +777,7 @@ describe("sheets()", () => {
   it("tones the ladder — yellow is a caution, red is the dismissal end", () => {
     const sheet = buildSheets(view())[sanctionSheetKey("home")]!;
     const level = sheet.steps[0] as { options: { id: string; tone?: readonly string[] }[] };
-    expect(level.options.map((option) => option.id)).toEqual([...SANCTION_LEVELS]);
+    expect(level.options.map((option) => option.id)).toEqual([...tabletennisPadRules.sanctionLevels]);
     expect(level.options.find((option) => option.id === "warning")!.tone).toEqual(["caution"]);
     expect(level.options.find((option) => option.id === "penalty")!.tone).toEqual(["dismissal"]);
   });
@@ -874,7 +872,7 @@ describe("dock()", () => {
     // DOMAIN.tabletennis.md asks a pad that cannot enforce the rule not to do.
     expect(singlesDock.title).toBe("pad.tabletennis.dock.rally.expedite.unchecked.title");
     expect(singlesDock.chips.map((chip) => chip.id)).toEqual(["expediteReturn"]);
-    expect(singlesDock.chips[0]!.mutate({ wonBy: "H" })).toEqual({ wonBy: "H", returns: EXPEDITE_RETURNS_THRESHOLD });
+    expect(singlesDock.chips[0]!.mutate({ wonBy: "H" })).toEqual({ wonBy: "H", returns: tabletennisPadRules.expediteReturns });
     // Never touches `serving` — the chip's own doc reason: re-deriving the
     // pre-tap serving side here, after the optimistic fold has already
     // advanced past this rally, risks crediting the WRONG winner.
@@ -902,7 +900,7 @@ describe("dock()", () => {
     const settled = buildDock(RALLY_TYPE, v, t, {
       wonBy: "H",
       scorer: "H1",
-      returns: EXPEDITE_RETURNS_THRESHOLD,
+      returns: tabletennisPadRules.expediteReturns,
     })!;
     expect(settled, "a singles scorer answered a real question — the dock must not vanish").not.toBeNull();
     expect(settled.title).toBe("pad.tabletennis.dock.rally.expedite.unchecked.title");
@@ -916,7 +914,7 @@ describe("dock()", () => {
     const settled = buildDock(RALLY_TYPE, v, t, {
       wonBy: "H",
       scorer: "H-second",
-      returns: EXPEDITE_RETURNS_THRESHOLD,
+      returns: tabletennisPadRules.expediteReturns,
     })!;
     // The scorer chip alone was the whole dock before this fix, so the
     // expedite answer went unconfirmed even in the case the fix was written
@@ -944,7 +942,7 @@ describe("dock()", () => {
     // And that refusal is not squeamishness — this is what the chip WOULD have
     // produced, folded against the real engine.
     const state = foldClient(tabletennis, ITTF_CFG, SINGLES, events);
-    const stamped = { ...served, returns: EXPEDITE_RETURNS_THRESHOLD };
+    const stamped = { ...served, returns: tabletennisPadRules.expediteReturns };
     expect(() => tabletennis.apply(state, ev(2, RALLY_TYPE, stamped) as never, { strict: true })).toThrow(EngineError);
   });
 
@@ -998,10 +996,10 @@ describe("activityDetail()", () => {
       `${NAMES["H-second"]} · ${NAMES["A-first"]}`,
     );
     expect(
-      tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H1", server: "A1", returns: EXPEDITE_RETURNS_THRESHOLD })),
+      tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H1", server: "A1", returns: tabletennisPadRules.expediteReturns })),
     ).toBe(`${NAMES.H1} · ${NAMES.A1} · pad.tabletennis.ribbon.expediteReturn`);
     // Below the threshold: no flag.
-    expect(tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H1", returns: EXPEDITE_RETURNS_THRESHOLD - 1 }))).toBe(
+    expect(tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H1", returns: tabletennisPadRules.expediteReturns - 1 }))).toBe(
       NAMES.H1,
     );
     // No state to resolve `wonBy` against: nothing can be said.
@@ -1013,7 +1011,7 @@ describe("activityDetail()", () => {
     expect(tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "A" }, FOLDED))).toBe("scorepad.attribution.away");
     // The expedite flag rides along, since it alone cannot tell two rows apart.
     expect(
-      tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H", returns: EXPEDITE_RETURNS_THRESHOLD }, FOLDED)),
+      tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H", returns: tabletennisPadRules.expediteReturns }, FOLDED)),
     ).toBe("scorepad.attribution.home · pad.tabletennis.ribbon.expediteReturn");
     // A named person still wins: it is the more specific fact.
     expect(tabletennisDetail(ctx(RALLY_TYPE, { wonBy: "H", scorer: "H1" }, FOLDED))).toBe(NAMES.H1);

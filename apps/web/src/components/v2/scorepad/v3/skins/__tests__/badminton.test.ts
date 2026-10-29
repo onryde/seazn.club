@@ -21,15 +21,14 @@ import type { EventEnvelope, Lineup, LineupPair, SquadState } from "@seazn/engin
 import { initSquads } from "@seazn/engine/core";
 import type { FidelityBand, ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
+import { badmintonPadRules } from "@seazn/engine/pad";
 import { badminton } from "@seazn/engine/sports/setbased";
 import { foldClient } from "../../../module-client";
 import { assertScorebugSpec, type PadHostView, type ScorebugSpec, type TileSpec } from "../../types";
 import { dedicatedEventTypes, moreActions } from "../../pad-host";
 import {
-  EVENT_BAND,
   EXPEDITE_TYPE,
   RALLY_TYPE,
-  SANCTION_LEVELS,
   SANCTION_TYPE,
   SET_SCORE_TILE_ID,
   SUB_TYPE,
@@ -182,12 +181,12 @@ const stripItem = (v: PadHostView, id: string) => buildScorebug(v, t).strip.find
 describe("the constants this skin restates cannot drift from the engine's own", () => {
   const spec = badminton.padSpec!(BWF_CFG);
 
-  it("EVENT_BAND is padSpec's own `fidelity` map, entry for entry", () => {
-    expect(EVENT_BAND).toEqual(spec.fidelity);
+  it("badmintonPadRules.eventBands is padSpec's own `fidelity` map, entry for entry", () => {
+    expect(badmintonPadRules.eventBands).toEqual(spec.fidelity);
   });
 
 
-  it("SANCTION_LEVELS is the ladder padSpec itself offers, in padSpec's own order", () => {
+  it("badmintonPadRules.sanctionLevels is the ladder padSpec itself offers, in padSpec's own order", () => {
     // BWF has THREE cards and the black one is why this list is per sport:
     // offering the FIVB's four steps on a pad with the ITTF's two would put a
     // sanction on screen the federation has no concept of. Read off the
@@ -198,7 +197,7 @@ describe("the constants this skin restates cannot drift from the engine's own", 
       .flatMap((panel) => panel.actions)
       .find((entry) => entry.type === SANCTION_TYPE)!;
     const level = action.fields.find((field) => field.path === "level") as { values: readonly string[] };
-    expect(SANCTION_LEVELS).toEqual([...level.values]);
+    expect(badmintonPadRules.sanctionLevels).toEqual([...level.values]);
   });
 
   it("SUMMARY_TYPE is the FULLY QUALIFIED coarse type, never the preset's bare half", () => {
@@ -768,7 +767,7 @@ describe("sheets()", () => {
   it("tones the ladder — yellow is a caution, everything above it is the dismissal end", () => {
     const sheet = buildSheets(view(), t)[sanctionSheetKey("home")]!;
     const level = sheet.steps[0] as { options: { id: string; tone?: readonly string[] }[] };
-    expect(level.options.map((option) => option.id)).toEqual([...SANCTION_LEVELS]);
+    expect(level.options.map((option) => option.id)).toEqual([...badmintonPadRules.sanctionLevels]);
     expect(level.options.find((option) => option.id === "warning")!.tone).toEqual(["caution"]);
     for (const id of ["penalty", "expulsion", "disqualification"]) {
       expect(level.options.find((option) => option.id === id)!.tone).toEqual(["dismissal"]);

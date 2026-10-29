@@ -30,16 +30,15 @@ import type { EventEnvelope, Lineup, LineupPair, LineupPolicy, SquadMember } fro
 import { initSquads, memberOf, onFieldPersons, reduceLineupEvent } from "@seazn/engine/core";
 import { entrantKindCap, type FidelityBand, type ModuleEvent } from "@seazn/engine/sport";
 import { makeEnvelope } from "@seazn/engine/testkit";
+import { volleyballPadRules } from "@seazn/engine/pad";
 import { volleyball } from "@seazn/engine/sports/setbased";
 import { foldClient } from "../../../module-client";
 import { assertScorebugSpec, type PadHostView, type TileSpec } from "../../types";
 import { dedicatedEventTypes, moreActions, squadStateOf } from "../../pad-host";
 import {
-  EVENT_BAND,
   EXPEDITE_TYPE,
   LIBERO_TYPE,
   RALLY_TYPE,
-  SANCTION_LEVELS,
   SANCTION_TYPE,
   SERVE_ANCHOR_TILE_ID,
   SET_SCORE_TILE_ID,
@@ -274,8 +273,8 @@ const ctxOf = (v: PadHostView) => serveContextOf(v, v.state as Record<string, un
 describe("the constants this skin restates cannot drift from the engine's own", () => {
   const spec = volleyball.padSpec!(VB_CFG);
 
-  it("EVENT_BAND is padSpec's own `fidelity` map, entry for entry", () => {
-    expect(EVENT_BAND).toEqual(spec.fidelity);
+  it("volleyballPadRules.eventBands is padSpec's own `fidelity` map, entry for entry", () => {
+    expect(volleyballPadRules.eventBands).toEqual(spec.fidelity);
   });
 
   it("LIBERO_TYPE (core.lineup.replacement) carries no padSpec.fidelity entry for any sport — the band filter fails OPEN for it by design", () => {
@@ -283,10 +282,10 @@ describe("the constants this skin restates cannot drift from the engine's own", 
   });
 
 
-  it("SANCTION_LEVELS is the ladder padSpec itself offers, in padSpec's own order", () => {
+  it("volleyballPadRules.sanctionLevels is the ladder padSpec itself offers, in padSpec's own order", () => {
     const action = spec.panels.flatMap((panel) => panel.actions).find((entry) => entry.type === SANCTION_TYPE)!;
     const level = action.fields.find((field) => field.path === "level") as { values: readonly string[] };
-    expect(SANCTION_LEVELS).toEqual([...level.values]);
+    expect(volleyballPadRules.sanctionLevels).toEqual([...level.values]);
   });
 
   it("SUMMARY_TYPE is the FULLY QUALIFIED coarse type — volleyball's OWN 'set.summary', never badminton's 'game.summary'", () => {
@@ -961,7 +960,7 @@ describe("sheets()", () => {
   it("the sanction ladder is FIVB's own four steps, warning toned caution, everything else dismissal", () => {
     const sheet = buildSheets(view(), t)[sanctionSheetKey("home")]!;
     const level = sheet.steps[0] as { kind: "choice"; options: { id: string; tone?: readonly string[] }[] };
-    expect(level.options.map((o) => o.id)).toEqual(SANCTION_LEVELS);
+    expect(level.options.map((o) => o.id)).toEqual(volleyballPadRules.sanctionLevels);
     expect(level.options.find((o) => o.id === "warning")!.tone).toEqual(["caution"]);
     for (const id of ["penalty", "expulsion", "disqualification"]) {
       expect(level.options.find((o) => o.id === id)!.tone).toEqual(["dismissal"]);
