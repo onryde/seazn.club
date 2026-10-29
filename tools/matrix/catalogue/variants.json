@@ -16987,127 +16987,127 @@
           "sport": "volleyball",
           "a": "row=league",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=triple_rr",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=league_ko",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=groups_ko",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=group_stepladder",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=group_playoffs",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=swiss",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=swiss_playoff",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=swiss_knockout",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=knockout",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=ko_plate",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=qualifying_main",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=double_elim",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=americano",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=mexicano",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=ladder",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=group_only",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=group_group_ko",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=knockout_third_place",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=page_playoff_only",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "row=stepladder_only",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
@@ -17137,13 +17137,13 @@
           "sport": "volleyball",
           "a": "preset=beach",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "preset=indoor",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/indoor config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/indoor config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
@@ -17221,31 +17221,31 @@
           "sport": "volleyball",
           "a": "bestOf=option:1",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "bestOf=option:3",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "bestOf=option:5",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "bestOf=option:7",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "bestOf=blank",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
@@ -17353,7 +17353,7 @@
           "sport": "volleyball",
           "a": "setTo=blank",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
@@ -17377,7 +17377,7 @@
           "sport": "volleyball",
           "a": "finalSetTo=min",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
@@ -17437,7 +17437,7 @@
           "sport": "volleyball",
           "a": "finalSetTo=blank",
           "b": "cap=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
@@ -17461,19 +17461,19 @@
           "sport": "volleyball",
           "a": "cap=min",
           "b": "winBy=min",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "cap=min",
           "b": "winBy=max",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         },
         {
           "sport": "volleyball",
           "a": "cap=min",
           "b": "winBy=blank",
-          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid"
+          "reason": "sport-cfg: volleyball/beach config invalid — <root>: cap must be ≥ the set target — and no combination of the other factors' levels makes the pair valid (the schema accepts some, the write door VB-CF-1 refuses every one)"
         }
       ]
     },
