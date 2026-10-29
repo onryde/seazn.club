@@ -54,3 +54,41 @@ export async function connect(o: Org, g: GrantOpts = {}) {
   const saved = await saveConnectionFromGrant({ pendingId: p.id, channelId: ch.id, userId: g.userId ?? o.userId }, fake);
   return { ...saved, channel: ch, token: p.token, pendingId: p.id };
 }
+
+// ─── the account lock (B6 batch review M4) ─────────────────────────────────────────────────────────────────────────────────────────
+// The revoke decision of a Google account is serialised on `pg_advisory_xact_lock(hashtextextended('yt-sub:' || google_sub, 0))`. The key is
+// spelt out here, as the review gave it, and not imported from the code that takes the lock.
+
+/** A transaction that holds the account's lock until `release()`: whoever needs it queues behind. */
+export async function holdAccountLock(sub: string): Promise<{ release: () => Promise<void> }> {
+  let open!: () => void;
+  const gate = new Promise<void>((r) => { open = r; });
+  let locked!: () => void;
+  const held = new Promise<void>((r) => { locked = r; });
+  const tx = sql.begin(async (t) => {
+    await t`select pg_advisory_xact_lock(hashtextextended('yt-sub:' || ${sub}::text, 0))`;
+    locked();
+    await gate;
+  });
+  await held;
+  return { release: async () => { open(); await tx; } };
+}
+
+/** How many sessions are WAITING for the account's lock right now (pg_locks: an advisory lock's 64-bit key is split classid | objid). */
+export async function accountLockWaiters(sub: string): Promise<number> {
+  const [r] = await sql<{ n: number }[]>`
+    select count(*)::int as n from pg_locks l, (select hashtextextended('yt-sub:' || ${sub}::text, 0) as k) key
+     where l.locktype = 'advisory' and not l.granted
+       and l.classid = ((key.k >> 32) & 4294967295)::oid and l.objid = (key.k & 4294967295)::oid`;
+  return r!.n;
+}
+
+/** Wait until `n` sessions queue for the account's lock (or fail the test after `ms`): "the act is blocked" as a fact, not as a sleep. */
+export async function waitForAccountLockWaiters(sub: string, n: number, ms = 5000): Promise<void> {
+  const until = Date.now() + ms;
+  while (Date.now() < until) {
+    if ((await accountLockWaiters(sub)) >= n) return;
+    await new Promise((r) => setTimeout(r, 25));
+  }
+  throw new Error(`nothing queued for the account lock within ${ms} ms (wanted ${n})`);
+}

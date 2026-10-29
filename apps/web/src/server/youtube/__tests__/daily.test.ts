@@ -62,7 +62,9 @@ import { CLAIM_LEASE_MINUTES, endBackoffMinutes, endDueBroadcasts, type EndStepH
 import { FakeYouTube } from "../fake";
 import { YouTubeError, type YouTubePort } from "../port";
 import { markReconnectNeeded, openToken, replaceConnectionToken, revokeConnection } from "../token-store";
-import { connect as connectChannel, grant, refreshToken, type Ch, type Org } from "./_connect-rig";
+import {
+  accountLockWaiters, connect as connectChannel, grant, holdAccountLock, refreshToken, waitForAccountLockWaiters, type Ch, type Org,
+} from "./_connect-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -735,6 +737,34 @@ describe.skipIf(!HAS_DB)("YouTube Connect T17 - the daily pass", () => {
       await shiftConnection(sibling.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
       expect(await daily(w)).toEqual({ ...ZERO, purged: 1 });
       expect(callsOf(w.fake, "revoke"), "the last connection on the account revokes it").toBe(1);
+    });
+
+    it("M4: the dead-grant purge of an account whose lock is held WAITS for it, then purges and revokes (the same account lock as a disconnect's); the lock is the account's, so a purge of an unrelated account is not held by it", async () => {
+      const sub = `acct-lock-${randomUUID()}`;
+      const w = await world({ sub });
+      await markReconnectNeeded(sql, w.orgId, w.connectionId);
+      await shiftConnection(w.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      const hold = await holdAccountLock(sub);
+      let settled = false;
+      const pass = daily(w).then((r) => { settled = true; return r; });
+      await waitForAccountLockWaiters(sub, 1);
+      expect(settled, "queued behind the holder").toBe(false);
+      expect((await connRow(w.connectionId)).status, "nothing was purged behind the holder's back").toBe("reconnect_needed");
+      await hold.release();
+      expect(await pass).toEqual({ ...ZERO, purged: 1 });
+      expect(callsOf(w.fake, "revoke"), "and, the account not shared, revoked").toBe(1);
+      expect(await accountLockWaiters(sub)).toBe(0);
+
+      // The positive pair: another account's lock held by someone else does not hold this purge.
+      const other = await world({ sub: `acct-lock-${randomUUID()}` });
+      await markReconnectNeeded(sql, other.orgId, other.connectionId);
+      await shiftConnection(other.connectionId, YOUTUBE_DATA_CEILING_DAYS + 1);
+      const unrelated = await holdAccountLock(`acct-lock-${randomUUID()}`);
+      try {
+        expect(await daily(other)).toEqual({ ...ZERO, purged: 1 });
+      } finally {
+        await unrelated.release();
+      }
     });
 
     it("B6 m2: a Google revoke that is refused is reported by its CODE only (never the token) and the purge stands - not a failure to retry, the token is gone", async () => {

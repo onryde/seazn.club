@@ -58,7 +58,9 @@ import { endDueBroadcasts, type EndStepHooks, type YoutubeEndResult } from "../e
 import { FakeYouTube } from "../fake";
 import type { YouTubePort } from "../port";
 import { openToken, revokeConnection } from "../token-store";
-import { connect as connectChannel, grant, org as seedYoutubeOrg, type Ch, type Org } from "./_connect-rig";
+import {
+  accountLockWaiters, connect as connectChannel, grant, holdAccountLock, org as seedYoutubeOrg, waitForAccountLockWaiters, type Ch, type Org,
+} from "./_connect-rig";
 
 const HAS_DB = !!process.env.DATABASE_URL;
 
@@ -652,6 +654,49 @@ describe.skipIf(!HAS_DB)("YouTube Connect T18 - disconnect", () => {
     expect((await connRow(b.connectionId)).google_sub, "premise: the revoked row still holds the account id").toBe(sub);
     expect(await disconnect(w)).toMatchObject({ revokedAtGoogle: true });
     expect(count(w.fake, "revoke")).toBe(1);
+  });
+
+  it("M4: two connections on ONE Google account disconnected at the same moment: exactly one revokes the grant and the other is told it was shared - never both skipped, which would leave the grant alive at Google after both clubs are gone", async () => {
+    const sub = `sub-t18-${randomUUID()}`;
+    const w = await world({ sub });
+    const orgB = await seedYoutubeOrg();
+    const b = await w.addChannel({ sub, org: orgB });
+    // The window between "is the account shared?" and the write that acts on it: both disconnects are held there until BOTH have read (or
+    // 400 ms pass, which is what happens when the account lock makes the second wait for the first to commit).
+    let arrived = 0;
+    let meet!: () => void;
+    const met = new Promise<void>((r) => { meet = r; });
+    const hooks = { afterSharedRead: async () => { arrived++; if (arrived === 2) meet(); await Promise.race([met, new Promise((r) => setTimeout(r, 400))]); } };
+    const at = { now: () => new Date(w.now()), hooks };
+    const [x, y] = await Promise.all([
+      disconnectYoutube(w.auth, w.orgId, w.connectionId, w.fake, at),
+      disconnectYoutube(orgB.auth, orgB.orgId, b.connectionId, w.fake, at),
+    ]);
+    expect(arrived, "anti-vacuity: both disconnects reached the window").toBe(2);
+    expect([x.revokeOutcome, y.revokeOutcome].sort(), "one revoked, one was shared").toEqual(["revoked", "skipped_shared_account"]);
+    expect(count(w.fake, "revoke"), "the grant was revoked once").toBe(1);
+    await expect(w.fake.accessToken(w.token), "dead at Google").rejects.toMatchObject({ code: "youtube_reconnect_needed" });
+    await expect(w.fake.accessToken(b.token), "for the other club's connection too").rejects.toMatchObject({ code: "youtube_reconnect_needed" });
+    expect((await connRow(w.connectionId)).status).toBe("revoked");
+    expect((await connRow(b.connectionId)).status).toBe("revoked");
+  });
+
+  it("M4: a disconnect of an account whose lock is held WAITS for it (the key is hashtextextended('yt-sub:' || sub, 0)), then goes ahead; one with no account id is not held by it", async () => {
+    const sub = `sub-t18-${randomUUID()}`;
+    const w = await world({ sub });
+    const hold = await holdAccountLock(sub);
+    let settled = false;
+    const done = disconnect(w).then((r) => { settled = true; return r; });
+    await waitForAccountLockWaiters(sub, 1);
+    expect(settled, "queued behind the holder").toBe(false);
+    expect((await connRow(w.connectionId)).status, "nothing was written behind the holder's back").toBe("connected");
+    await hold.release();
+    expect(await done).toMatchObject({ revokeOutcome: "revoked" });
+    expect(await accountLockWaiters(sub), "and nobody is left queued").toBe(0);
+
+    // No account id: nothing to lock on, so the same act is not held by anyone's lock.
+    const n = await world({ sub: null });
+    expect(await disconnect(n)).toMatchObject({ revokeOutcome: "revoked" });
   });
 
   it("F1 - the revoke outcome is tri-state, and a Google answer, a damaged token and a shared account are told apart: revoked | skipped_shared_account | not_confirmed (anti-vacuity: 4 scenarios, all 3 values seen)", async () => {

@@ -252,9 +252,14 @@ export async function purgeConnectionData(tx: Tx, connectionId: string, hooks: D
 /** Whether another NON-revoked connection (any organisation) reports the same non-null Google account as this one. Revoking a grant at
  *  Google kills EVERY token of that account, so a connection whose account another still runs on must not revoke it (T6-R2 as amended:
  *  V479's one-live-channel index is global, so a shared CHANNEL cannot happen, but one person can administer two clubs). Shared by the
- *  dead-grant purge here and T18's disconnect; read in the transaction that revokes the connection. */
+ *  dead-grant purge here and T18's disconnect; read in the transaction that revokes the connection.
+ *  It first takes the ACCOUNT's advisory lock (transaction-scoped, so it frees at commit): two clubs on one account that leave at the same
+ *  moment would each read the other as still running on it (neither has committed) and neither would revoke, leaving the grant alive at
+ *  Google after both are gone (B6 batch review M4). With the lock the second reads after the first committed. Lock order: the caller holds
+ *  its connection `for update` already; this lock comes after it, and nothing that holds this lock waits on another connection's row. */
 export async function accountIsShared(tx: Tx, connectionId: string, googleSub: string | null): Promise<boolean> {
   if (googleSub === null) return false;
+  await tx`select pg_advisory_xact_lock(hashtextextended('yt-sub:' || ${googleSub}::text, 0))`;
   const [r] = await tx<{ shared: boolean }[]>`
     select exists (select 1 from org_youtube_connections o
                     where o.id <> ${connectionId} and o.status <> 'revoked' and o.google_sub = ${googleSub}) as shared`;

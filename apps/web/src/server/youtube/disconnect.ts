@@ -29,7 +29,9 @@ import "server-only";
 //   - the Google revoke - AFTER the above (revoking kills the access tokens they use) - unless another NON-revoked connection reports the
 //     same non-null Google account (T6-R2 as amended: V479's one-live-channel index is GLOBAL, so a shared CHANNEL cannot happen; a
 //     shared ACCOUNT can - one person administering two clubs - and revoking its grant would drop that club's connection). The skip is
-//     recorded on the revoked row as the code `revoke_skipped_shared_grant`.
+//     recorded on the revoked row as the code `revoke_skipped_shared_grant`. "Shared" is decided INSIDE the transaction, under the
+//     account's advisory lock (`accountIsShared`): two clubs on one account leaving at the same moment cannot both read the other as
+//     still running on it, so exactly one of them makes the revoke.
 // A YouTube failure never undoes or blocks the purge (it is already committed): the answer says what did not happen
 // (`revokeOutcome`: `not_confirmed`, a lower `keysDeleted`), and the report carries a CODE or a class name, never a body.
 //
@@ -112,12 +114,16 @@ async function windDown(port: YouTubePort, at: string, ytId: string, c: Ctx): Pr
   }
 }
 
+/** Test-only seam (daily.ts's `DailyHooks` precedent): runs in the window between reading "is the account shared?" and the write that
+ *  acts on it, the only place a concurrent disconnect of the same account can land. Production passes none. */
+export interface DisconnectHooks { afterSharedRead?: () => Promise<void> }
+
 /** Disconnect a channel: revoke it, purge what Seazn stored from YouTube, archive its destination. 404 for a connection that is missing,
  *  already revoked or another organisation's; 409 YOUTUBE_IN_USE while a match is using it (nothing changed). `opts` are test seams
  *  (the end rule's clock and the clean-up's wall clock). */
 export async function disconnectYoutube(
   auth: AuthCtx, orgId: string, connectionId: string, port: YouTubePort,
-  opts: { now?: () => Date; wallClock?: () => number } = {},
+  opts: { now?: () => Date; wallClock?: () => number; hooks?: DisconnectHooks } = {},
 ): Promise<YoutubeDisconnected> {
   if (auth.orgId !== orgId) throw new HttpError(404, "organization not found");
 
@@ -162,6 +168,7 @@ export async function disconnectYoutube(
 
     // The account's grant is shared when another NON-revoked connection (any org) reports the same non-null Google account.
     const shared = await accountIsShared(tx, connectionId, c.google_sub);
+    await opts.hooks?.afterSharedRead?.();
 
     if (!(await revokeConnection(tx, orgId, connectionId))) throw notFound();
     if (shared) {
