@@ -18,7 +18,7 @@ import { useConfirm } from "@/components/ui/confirm-provider";
 import { UTC, fmtPublicDate } from "@/lib/format";
 import type { MessageKey } from "@/lib/messages";
 import {
-  DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, STREAM_PLATFORMS, TARGET_UNREADABLE, isStreamPlatform,
+  ADDABLE_STREAM_PLATFORMS, DESTINATION_LABEL_EMPTY, DESTINATION_NOT_ALLOWED, STREAM_KEY_EMPTY, TARGET_UNREADABLE, isStreamPlatform,
   type StreamPlatform,
 } from "@/lib/stream-destinations";
 import { keyShapeWarning } from "@/lib/stream-key-shape";
@@ -341,9 +341,19 @@ function keyField(p: {
   );
 }
 
-export function AddForm({ onSave, onCancel }: { onSave: (b: AddBody) => Promise<void>; onCancel: () => void }) {
+/** The platforms the form offers, first one selected. Owner 2026-10-29: the list is ADDABLE_STREAM_PLATFORMS (Twitch hidden). */
+type Offered = readonly [StreamPlatform, ...StreamPlatform[]];
+
+export function AddForm({
+  onSave, onCancel, platforms = ADDABLE_STREAM_PLATFORMS,
+}: {
+  onSave: (b: AddBody) => Promise<void>;
+  onCancel: () => void;
+  /** Test seam: the platforms offered. The page never passes it — the form reads ADDABLE_STREAM_PLATFORMS. */
+  platforms?: Offered;
+}) {
   const msg = useMsg();
-  const [kind, setKind] = useState<StreamPlatform>(STREAM_PLATFORMS[0]);
+  const [kind, setKind] = useState<StreamPlatform>(platforms[0]);
   const [label, setLabel] = useState("");
   const [key, setKey] = useState("");
   const [show, setShow] = useState(false);
@@ -370,27 +380,36 @@ export function AddForm({ onSave, onCancel }: { onSave: (b: AddBody) => Promise<
 
   return (
     <form data-testid="stream-dest-form" className="card p-5 max-md:p-4" aria-label={msg("streamDest.add")} onSubmit={submit}>
-      <fieldset>
-        <legend className="text-sm font-medium text-slate-800">{msg("streamDest.platform")}</legend>
-        <div role="radiogroup" aria-label={msg("streamDest.platform")} className="mt-1.5 flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
-          {STREAM_PLATFORMS.map((p) => (
-            <button
-              key={p}
-              type="button"
-              role="radio"
-              aria-checked={kind === p}
-              data-testid={`stream-dest-platform-${p}`}
-              onClick={() => setKind(p)}
-              className={`flex min-h-11 flex-1 basis-[5.5rem] items-center justify-center gap-2 rounded-md px-3 text-sm font-medium ${
-                kind === p ? "bg-white text-purple-700 shadow-sm ring-1 ring-purple-200" : "text-slate-600 hover:text-slate-900"
-              }`}
-            >
-              <PlatformMark kind={p} size="sm" />
-              {platformName(msg, p)}
-            </button>
-          ))}
+      {platforms.length === 1 ? (
+        // One platform is no choice (owner 2026-10-29): no radio group, the form just says which key it is taking.
+        <div data-testid="stream-dest-platform-fixed" data-platform={platforms[0]} className="flex items-center gap-2 text-sm font-medium text-slate-800">
+          <PlatformMark kind={platforms[0]} size="sm" />
+          <span className="sr-only">{msg("streamDest.platform")} </span>
+          {platformName(msg, platforms[0])}
         </div>
-      </fieldset>
+      ) : (
+        <fieldset>
+          <legend className="text-sm font-medium text-slate-800">{msg("streamDest.platform")}</legend>
+          <div role="radiogroup" aria-label={msg("streamDest.platform")} className="mt-1.5 flex flex-wrap gap-1 rounded-lg bg-slate-100 p-1">
+            {platforms.map((p) => (
+              <button
+                key={p}
+                type="button"
+                role="radio"
+                aria-checked={kind === p}
+                data-testid={`stream-dest-platform-${p}`}
+                onClick={() => setKind(p)}
+                className={`flex min-h-11 flex-1 basis-[5.5rem] items-center justify-center gap-2 rounded-md px-3 text-sm font-medium ${
+                  kind === p ? "bg-white text-purple-700 shadow-sm ring-1 ring-purple-200" : "text-slate-600 hover:text-slate-900"
+                }`}
+              >
+                <PlatformMark kind={p} size="sm" />
+                {platformName(msg, p)}
+              </button>
+            ))}
+          </div>
+        </fieldset>
+      )}
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <div>
           <label htmlFor="stream-dest-name" className="text-sm font-medium text-slate-800">{msg("streamDest.name")}</label>

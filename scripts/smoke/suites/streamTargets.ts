@@ -3,8 +3,10 @@ import { randomBytes } from "node:crypto";
 import { type Session, raw, check, html } from "../harness.ts";
 
 /**
- * Streaming destinations over real HTTP (fixture-page stream T2b; spec §5.2, D2, D6): add a Twitch destination →
- * rename → replace its key → remove (an ARCHIVE) → remove again (404) → add the same key again (RESTORED: the same id)
+ * Streaming destinations over real HTTP (fixture-page stream T2b; spec §5.2, D2, D6): add a Twitch destination (the API still takes
+ * `twitch`; the organiser's add FORM stopped offering it, owner 2026-10-29 — the form is client state, absent from the server-rendered page, so
+ * it is proved by the panel's unit test and the streaming-destinations walkthrough, and this suite proves the other half over HTTP: the page still
+ * LISTS the Twitch row the API made) → rename → replace its key → remove (an ARCHIVE) → remove again (404) → add the same key again (RESTORED: the same id)
  * → the same key once more while it is ACTIVE (A19, owner decision (a): `outcome: existing`, NOT renamed) → remove. First
  * the Streaming page itself renders its panel (B4 fix round 1, m10 — the page's only PR-time signal, since
  * e2e runs on a push to main). Runs on the shared Pro org and archives everything it creates, so no later suite sees a
@@ -15,7 +17,7 @@ export async function streamTargetsSuite(admin: Session, orgId: string): Promise
   const ALNUM = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
   const twitchKey = () => "live_1_" + Array.from(randomBytes(24), (b) => ALNUM[b % ALNUM.length]).join("");
   type Target = { id: string; label: string; keyHint: string | null; inUse: unknown; outcome?: unknown };
-  const EXPECTED_STEPS = 9;
+  const EXPECTED_STEPS = 10;
   let steps = 0;
   const step = (label: string, cond: boolean) => {
     check(`stream targets smoke: ${label}`, cond);
@@ -42,6 +44,14 @@ export async function streamTargetsSuite(admin: Session, orgId: string): Promise
   );
   if (!t?.id) return done();
   const one = `${base}/${t.id}`;
+
+  // Owner 2026-10-29: Twitch is hidden from the add form, never from the list — the destination the API just made is on the page, with
+  // its own mark. Anchored on `="` (AGENTS.md); read AFTER the POST, so the positive is the row this suite created, not a leftover.
+  const listed = await html(admin, "/streaming");
+  step(
+    `GET /streaming still LISTS the Twitch destination (its row and Twitch mark) (got ${listed.status})`,
+    listed.status === 200 && listed.body.includes(`data-target-id="${t.id}"`) && listed.body.includes('data-platform-mark="twitch"'),
+  );
 
   const renamed = await raw(admin, one, "PATCH", { label: "smoke-tw-2" });
   step(

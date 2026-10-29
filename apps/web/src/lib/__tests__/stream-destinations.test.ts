@@ -13,6 +13,7 @@
 // tests below pin its absence as deliberately as the others' presence.
 import { describe, expect, it } from "vitest";
 import {
+  ADDABLE_STREAM_PLATFORMS,
   DESTINATION_REFUSALS,
   STREAM_DESTINATION_HOSTS,
   STREAM_PLATFORMS,
@@ -426,6 +427,29 @@ describe("platform presets (D6)", () => {
       checked++;
     }
     expect(checked).toBe(STREAM_PLATFORMS.length + legacy.length + 4);
+  });
+
+  // Owner 2026-10-29: "hide the Twitch option from the UI". The ADD form offers ADDABLE_STREAM_PLATFORMS; STREAM_PLATFORMS (what the
+  // API accepts, what a stored row may be, what Replace key repairs) is NOT narrowed — hidden is not removed.
+  it("ADDABLE_STREAM_PLATFORMS: a non-empty, duplicate-free subset of the platforms that does NOT offer Twitch (owner 2026-10-29) and does offer YouTube; the hidden ones stay platforms with a working preset", () => {
+    expect(ADDABLE_STREAM_PLATFORMS.length, "the form must offer something").toBeGreaterThan(0);
+    expect(new Set(ADDABLE_STREAM_PLATFORMS).size, "no duplicate").toBe(ADDABLE_STREAM_PLATFORMS.length);
+    let checked = 0;
+    for (const p of ADDABLE_STREAM_PLATFORMS) {
+      expect(STREAM_PLATFORMS as readonly string[], `${p} is an addable platform, so a platform`).toContain(p);
+      checked++;
+    }
+    expect(checked).toBe(ADDABLE_STREAM_PLATFORMS.length);
+    // The ruling itself, typed here on purpose: the expected value comes from the owner, not from the list under test.
+    expect(ADDABLE_STREAM_PLATFORMS as readonly string[]).not.toContain("twitch");
+    expect(ADDABLE_STREAM_PLATFORMS as readonly string[]).toContain("youtube");
+    // H2/H3: Twitch is still a platform — the API's create enum, the preset the server fills, the Replace-key recovery.
+    expect(STREAM_PLATFORMS as readonly string[]).toContain("twitch");
+    expect(isStreamPlatform("twitch")).toBe(true);
+    expect(checkDestination(STREAM_PLATFORM_PRESETS.twitch)).toMatchObject({ ok: true });
+    const hidden = STREAM_PLATFORMS.filter((p) => !(ADDABLE_STREAM_PLATFORMS as readonly string[]).includes(p));
+    expect(hidden.length, "something is hidden (Twitch)").toBeGreaterThan(0);
+    expect(hidden as readonly string[]).toContain("twitch");
   });
 
   // Moved here in T2a from stream-targets.test.ts, whose A18 cases drove these URLs through createStreamTarget's

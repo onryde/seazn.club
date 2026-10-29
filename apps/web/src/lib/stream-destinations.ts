@@ -162,6 +162,12 @@ export type StreamPlatform = (typeof STREAM_PLATFORMS)[number];
 /** Whether a stored kind is one of the platforms — the ONE membership test (Replace key's recovery, the unreadable remedy). */
 export const isStreamPlatform = (kind: string): kind is StreamPlatform => (STREAM_PLATFORMS as readonly string[]).includes(kind);
 
+/** The platforms the organiser's "Add destination" form OFFERS — a subset of STREAM_PLATFORMS. Owner 2026-10-29: Twitch is hidden from
+ *  the UI; re-adding it is this one line. Hidden is not removed: STREAM_PLATFORMS, the API's create enum, the presets and every stored
+ *  Twitch row are unchanged, so an existing Twitch destination still lists, renames, replaces its key and goes live. */
+export const ADDABLE_STREAM_PLATFORMS = ["youtube"] as const satisfies readonly StreamPlatform[];
+export type AddableStreamPlatform = (typeof ADDABLE_STREAM_PLATFORMS)[number];
+
 /** The ingest address the SERVER fills per platform — the organiser never types one (spec §4 "No server field").
  *  YouTube: rtmp://a.rtmp.youtube.com/live2 — delivered to YouTube on staging 2026-09-30 (spec §5.4); also OBS
  *  services' "YouTube - RTMPS" primary RTMP entry (the allowlist's source above).

@@ -553,7 +553,8 @@ for (const width of WIDTHS) {
     await page.goto("/streaming");
     await page.getByTestId("stream-dest-empty-add").click();
     const form = page.getByTestId("stream-dest-form");
-    await form.getByTestId("stream-dest-platform-youtube").click();
+    // Owner 2026-10-29: one addable platform is no choice — the form names YouTube and has no radio to tap.
+    await expect(form.getByTestId("stream-dest-platform-fixed")).toHaveAttribute("data-platform", "youtube");
     await form.getByTestId("stream-dest-name").fill(label);
     await form.getByTestId("stream-dest-key").fill(`e2e-${randomBytes(6).toString("hex")}`);
     if (width === 320) expect(await expectTapTargets(form), "destination form controls hit-tested").toBeGreaterThan(3);

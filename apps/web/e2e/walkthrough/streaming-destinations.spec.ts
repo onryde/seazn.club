@@ -10,6 +10,10 @@
 // Sport-agnostic by design: a destination reads no sport. The rigs that need a match seed ONE generic division (the
 // stream walkthroughs' own seed); the "another platform" axis is swept instead (STREAM_PLATFORMS, and a legacy kind).
 //
+// Twitch is HIDDEN from the add form (owner 2026-10-29: ADDABLE_STREAM_PLATFORMS), not removed: the API still takes `twitch`. No case adds
+// Twitch by tapping the form — it no longer offers it — and a case that needs a non-YouTube row (8+9's mixed list) seeds it through the
+// real API v1 POST (`addTargetApi`) and asserts only that the row renders.
+//
 // Every rig is a FRESH org: destinations and sessions are org-wide, and the walkthrough leg runs fully parallel.
 //
 // Stream capacity (plan premise 11): a held destination needs a session, and every active session holds a share of the
@@ -25,7 +29,7 @@ import { TAG, addEntrantsViaApi, apiJson, createStageAndGenerate, expectNoHorizo
 import { setRigPlan, signInAs } from "../overlay-kit";
 import { storeCameraOnly } from "../helpers/stream-mode";
 import { expectSelectedTarget, offeredTargetIds, offeredTargetNames, selectTarget, targetPicker } from "../helpers/stream-target-picker";
-import { STREAM_PLATFORMS, type StreamPlatform } from "../../src/lib/stream-destinations";
+import { ADDABLE_STREAM_PLATFORMS, STREAM_PLATFORMS, type AddableStreamPlatform, type StreamPlatform } from "../../src/lib/stream-destinations";
 import { STREAM_KIND_BRAND } from "../../src/components/v2/stream-platform-mark";
 import {
   FAKE_CONNECT_MS,
@@ -269,13 +273,53 @@ async function confirmRemove(page: Page, label: string): Promise<string> {
   await expect(dialog).toHaveCount(0, { timeout: SAVE_MS });
   return text;
 }
-/** Add through the form. `opener` is the list's add button, or the empty state's own. */
-async function addViaForm(page: Page, d: { platform: StreamPlatform; label: string; key: string; watch?: string }, opener: "stream-dest-add" | "stream-dest-empty-add" = "stream-dest-add"): Promise<Locator> {
+/** What the add form OFFERS (owner 2026-10-29: Twitch hidden from the UI), read off the form itself: the addable list — from the product's
+ *  own declaration — and nothing from the platforms it hides. One addable platform is no choice (no radio group): the form names it. */
+async function expectAddFormOffers(form: Locator): Promise<void> {
+  const addable: readonly string[] = ADDABLE_STREAM_PLATFORMS;
+  expect(addable, "the ruling, typed here on purpose: Twitch is not offered").not.toContain("twitch");
+  expect(addable.length, "the form offers something").toBeGreaterThan(0);
+  const hidden = STREAM_PLATFORMS.filter((p) => !addable.includes(p));
+  expect(hidden, "premise: Twitch is a platform the form hides").toContain("twitch");
+  if (addable.length === 1) {
+    const only = addable[0] as StreamPlatform;
+    await expect(form.getByRole("radio"), "one platform: no radio to tap").toHaveCount(0);
+    await expect(form.getByRole("radiogroup")).toHaveCount(0);
+    await expect(form.getByTestId("stream-dest-platform-fixed")).toHaveAttribute("data-platform", only);
+    await expect(form.getByTestId("stream-dest-platform-fixed")).toContainText(BRAND[only]);
+    await expect(form.locator("[data-platform-mark]"), "the form draws exactly the addable platform's mark").toHaveCount(1);
+    await expect(form.locator(`[data-platform-mark="${only}"]`)).toHaveCount(1);
+  } else {
+    const radios = form.getByRole("radio");
+    await expect(radios).toHaveCount(addable.length);
+    for (const [i, p] of addable.entries()) {
+      await expect(radios.nth(i)).toHaveAttribute("data-testid", `stream-dest-platform-${p}`);
+      await expect(radios.nth(i)).toHaveAccessibleName(BRAND[p as StreamPlatform]);
+    }
+  }
+  let absent = 0;
+  for (const p of hidden) {
+    await expect(form.getByTestId(`stream-dest-platform-${p}`), `${p}: no radio`).toHaveCount(0);
+    await expect(form.locator(`[data-platform-mark="${p}"]`), `${p}: no mark`).toHaveCount(0);
+    await expect(form, `${p}: not named anywhere in the form`).not.toContainText(BRAND[p]);
+    absent++;
+  }
+  expect(absent, "every hidden platform was checked").toBe(hidden.length);
+  await expect(form.locator('[data-testid*="server"], [data-testid*="rtmp"]')).toHaveCount(0);
+}
+/** Add through the form. `opener` is the list's add button, or the empty state's own. The platform is typed to what the form OFFERS
+ *  (`AddableStreamPlatform`), so a spec cannot ask it for a platform it hides. */
+async function addViaForm(page: Page, d: { platform: AddableStreamPlatform; label: string; key: string; watch?: string }, opener: "stream-dest-add" | "stream-dest-empty-add" = "stream-dest-add"): Promise<Locator> {
   const form = page.getByTestId("stream-dest-form");
   if ((await form.count()) === 0) await page.getByTestId(opener).click();
   await expect(form).toBeVisible();
-  await form.getByTestId(`stream-dest-platform-${d.platform}`).click();
-  await expect(form.getByTestId(`stream-dest-platform-${d.platform}`)).toHaveAttribute("aria-checked", "true");
+  if (ADDABLE_STREAM_PLATFORMS.length > 1) {
+    await form.getByTestId(`stream-dest-platform-${d.platform}`).click();
+    await expect(form.getByTestId(`stream-dest-platform-${d.platform}`)).toHaveAttribute("aria-checked", "true");
+  } else {
+    // One platform is no choice: the form names it, and there is nothing to tap.
+    await expect(form.getByTestId("stream-dest-platform-fixed")).toHaveAttribute("data-platform", d.platform);
+  }
   await form.getByTestId("stream-dest-name").fill(d.label);
   await form.getByTestId("stream-dest-key").fill(d.key);
   if (d.watch !== undefined) await form.getByTestId("stream-dest-watch").fill(d.watch);
@@ -321,11 +365,11 @@ function mutationLog(page: Page): { method: string; url: string }[] {
 // S — the owner-named sequence, at 320 and 1280
 // ===========================================================================
 for (const width of [320, 1280] as const) {
-  test(`S @${width}: empty → add YouTube → pick it on a match and Go live → Remove and Replace BLOCKED naming the match → Stop → Remove (a double tap sends ONE) → gone from the list AND the picker → re-add the same key restores the SAME destination → Replace key → add Twitch`, async ({
+  test(`S @${width}: empty → add YouTube → pick it on a match and Go live → Remove and Replace BLOCKED naming the match → Stop → Remove (a double tap sends ONE) → gone from the list AND the picker → re-add the same key restores the SAME destination → Replace key → the form still offers no Twitch`, async ({
     page,
   }) => {
     const NAVS = 9; // streaming ×5, fixture ×3, + the rig's sign-in
-    const SAVES = 7; // add, remove, re-add, the A19 repeat, replace, twitch, + go live / stop round trips
+    const SAVES = 6; // add, remove, re-add, the A19 repeat, replace, + go live / stop round trips
     test.setTimeout(SLOT_WAIT_MS + SEED_MS + CYCLE_MS + NAVS * NAV_MS + SAVES * SAVE_MS);
     await page.setViewportSize({ width, height: width < 768 ? 700 : 900 });
     const rig = await seedRig(page, { entrants: 2 });
@@ -457,18 +501,10 @@ for (const width of [320, 1280] as const) {
     await expect(row.getByTestId("stream-dest-subline")).toContainText(`…${hintOf(key2)}`);
     expect((await listApi(page, rig.orgId)).find((t) => t.id === id)?.keyHint, "the API's hint is the new key's").toBe(hintOf(key2));
 
-    // 9. ADD TWITCH — one POST for one save (m11: the per-platform count, Twitch's side).
-    const tLabel = `Twitch ${rig.tag}`;
-    const tKey = twitchKey();
-    const twitchPostsBefore = log.filter((r) => r.method === "POST").length;
-    await addViaForm(page, { platform: "twitch", label: tLabel, key: tKey });
-    await expect(form.getByTestId("stream-dest-key-warning")).toHaveCount(0);
-    await expect(form).toHaveCount(0, { timeout: SAVE_MS });
-    expect(log.filter((r) => r.method === "POST").length - twitchPostsBefore, "one POST for the Twitch save").toBe(1);
-    list = await listApi(page, rig.orgId);
-    expect(list.map((t) => [t.kind, t.label]), "YouTube (restored) then Twitch, oldest first").toEqual([["youtube", label2], ["twitch", tLabel]]);
-    await expect(rows(page)).toHaveCount(2);
-    await shot(panel, `S-${width}-9-two-platforms.png`);
+    // 9. NO TWITCH TO ADD (owner 2026-10-29) — with a YouTube destination already saved, the form still offers only the addable list.
+    await page.getByTestId("stream-dest-add").click();
+    await expectAddFormOffers(page.getByTestId("stream-dest-form"));
+    await shot(panel, `S-${width}-9-form-no-twitch.png`);
     await expectNoHorizontalScroll(page);
   });
 }
@@ -476,7 +512,7 @@ for (const width of [320, 1280] as const) {
 // ===========================================================================
 // 1–4 — the form and the row actions, one org each
 // ===========================================================================
-test("1: add with the shape warning (it warns, never blocks) and both sides of the key-hint floor; the form offers exactly STREAM_PLATFORMS with no server field", async ({ page }) => {
+test("1: add with the shape warning (it warns, never blocks) and both sides of the key-hint floor; the form offers exactly ADDABLE_STREAM_PLATFORMS (no Twitch, no choice for one platform) with no server field", async ({ page }) => {
   const NAVS = 2;
   test.setTimeout(SEED_MS + NAVS * NAV_MS + 3 * SAVE_MS);
   await page.setViewportSize({ width: 1280, height: 900 });
@@ -486,19 +522,9 @@ test("1: add with the shape warning (it warns, never blocks) and both sides of t
   await page.getByTestId("stream-dest-empty-add").click();
   const form = page.getByTestId("stream-dest-form");
 
-  // D6: the platforms are the one list's own, in its order, named by brand; no ingest url / server field.
-  const radios = form.getByRole("radio");
-  expect(STREAM_PLATFORMS.length, "the platform list names platforms").toBeGreaterThan(0);
-  await expect(radios).toHaveCount(STREAM_PLATFORMS.length);
-  let named = 0;
-  for (const [i, p] of STREAM_PLATFORMS.entries()) {
-    await expect(radios.nth(i)).toHaveAttribute("data-testid", `stream-dest-platform-${p}`);
-    // The accessible name — the brand; the mark beside it is aria-hidden decoration.
-    await expect(radios.nth(i)).toHaveAccessibleName(BRAND[p]);
-    named++;
-  }
-  expect(named, "every platform was checked").toBe(STREAM_PLATFORMS.length);
-  await expect(form.locator('[data-testid*="server"], [data-testid*="rtmp"]')).toHaveCount(0);
+  // Owner 2026-10-29: the platforms the form offers are ADDABLE_STREAM_PLATFORMS and nothing else — here one, so it is NAMED, not chosen
+  // (a one-option radio is noise); no ingest url / server field either (D6).
+  await expectAddFormOffers(form);
 
   // A key's NAME where the key belongs: warned, and Save stays enabled.
   const shortKey = "TestYouTube";
@@ -655,6 +681,8 @@ test("7: the empty state — the copy and its own Add, which opens the form; cap
     const form = page.getByTestId("stream-dest-form");
     await expect(form).toBeVisible();
     await expect(page.getByTestId("stream-dest-empty-add"), "its Add hides while the form is open").toHaveCount(0);
+    await expectAddFormOffers(form); // at every width: the addable platform named, no Twitch, no radio to tap
+    await shot(panel, `7-${width}-add-form.png`);
     await form.getByTestId("stream-dest-key").fill("TestYouTube");
     await expect(form.getByTestId("stream-dest-key-warning")).toBeVisible();
     await shot(panel, `7-${width}-add-warning.png`);
@@ -668,7 +696,7 @@ test("7: the empty state — the copy and its own Add, which opens the form; cap
 // ===========================================================================
 // 8–9 — the phone ⋯ menu, and no horizontal scroll with three rows one held (one slot for both)
 // ===========================================================================
-test("8+9: three rows (one HELD, one Twitch, one legacy with an unreadable key) — the phone ⋯ menu hit-tested at 320, and no horizontal scroll at 320, 768 and 1280", async ({ page }) => {
+test("8+9: three rows (one HELD, one Twitch seeded through the API, one legacy with an unreadable key) — the phone ⋯ menu hit-tested at 320, and no horizontal scroll at 320, 768 and 1280", async ({ page }) => {
   const WIDTHS = [320, 768, 1280] as const;
   test.setTimeout(Math.max(120_000, SEED_MS + CYCLE_MS + SLOT_WAIT_MS) + (WIDTHS.length + 2) * NAV_MS /* + the Directory strip check */);
   const rig = await seedRig(page, { entrants: 2 });
@@ -686,6 +714,10 @@ test("8+9: three rows (one HELD, one Twitch, one legacy with an unreadable key) 
     const panel = await openStreaming(page);
     await expect(rows(page)).toHaveCount(3);
     await expect(rowOf(page, legacy!.id).locator('[data-platform-mark="facebook"]')).toBeAttached();
+    // Owner 2026-10-29: Twitch is hidden from the add form, never from the list — the seeded row keeps its own mark and a readable key's hint.
+    await expect(rowOf(page, tw.id).locator('[data-platform-mark="twitch"]')).toBeAttached();
+    await expect(rowOf(page, tw.id).getByTestId("stream-dest-subline")).toContainText(`${BRAND.twitch} ·`);
+    await expect(rowOf(page, tw.id).getByTestId("stream-dest-subline"), "the positive twin: a readable key shows its hint").toContainText(KEY_HINT_WORDS);
     await expect(rowOf(page, legacy!.id).getByTestId("stream-dest-subline")).not.toContainText(KEY_HINT_WORDS);
     await expect(rowOf(page, held.id).getByTestId("stream-dest-subline"), "the positive twin: a readable key shows its hint").toContainText(KEY_HINT_WORDS);
     await expect(rowOf(page, legacy!.id), "a legacy row never says 'again' (D6)").not.toContainText(/again/i);
@@ -830,7 +862,7 @@ test("E: refusals read the page's own copy — a bad watch link, a duplicate key
   await lrow.getByTestId("stream-dest-replace-cancel").click();
   await lrow.getByTestId("stream-dest-remove").click();
   const body = await confirmRemove(page, `Old Kick ${rig.tag}`);
-  expect(body, "a legacy row's Remove says only YouTube and Twitch can be added").toContain(en("streamDest.confirmRemove.bodyLegacy"));
+  expect(body, "a legacy row's Remove says only YouTube can be added").toContain(en("streamDest.confirmRemove.bodyLegacy"));
   expect(body).not.toMatch(/again/i);
   await expect(lrow).toHaveCount(0, { timeout: SAVE_MS });
 });
@@ -964,7 +996,7 @@ for (const width of [320, 1280] as const) {
     //    its way to the Streaming page, not "removed, pick another" (B5 review m-2: there is nothing to pick). Nothing starts.
     await dir.bringToFront();
     const second = `Court 2 ${rig.tag}`;
-    await addViaForm(dir, { platform: "twitch", label: second, key: twitchKey() }, "stream-dest-empty-add");
+    await addViaForm(dir, { platform: "youtube", label: second, key: ytKey() }, "stream-dest-empty-add");
     await expect(dir.getByTestId("stream-dest-form")).toHaveCount(0, { timeout: SAVE_MS });
     const [b] = await listApi(page, rig.orgId);
     await returnTo(page);
