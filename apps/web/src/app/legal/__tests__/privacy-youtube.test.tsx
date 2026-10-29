@@ -100,7 +100,10 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
           `refreshed or deleted within ${CEILING} days`, `after ${REFRESH} days`,
           `has not been confirmed within ${CEILING} days`, `nothing has used for ${CEILING} days`,
           "The sealed token and channel names of a connection that was started and not finished",
-          `after it expires, ${PENDING_MINUTES} minutes after it was started`,
+          // F1 (final review C1): what is promised is what the code does - deleted by the save, otherwise by the daily pass after the
+          // attempt expires. The picker's Cancel deletes nothing (the guard test below holds that), so the page says so.
+          `are deleted when the channel is connected, and otherwise by the next daily check after the attempt expires, ${PENDING_MINUTES} minutes after it was started`,
+          "choosing Cancel in the channel picker does not delete them sooner",
           "are not data from YouTube", "after a disconnect too, for as long as your organisation's account exists on Seazn Club",
         ]],
       ];
@@ -115,7 +118,7 @@ describe("privacy — the YouTube API Services disclosure (T19, DP III.A.2)", ()
         }
       }
       expect(checked, "anti-vacuity: every needle was tried").toBe(WANT.reduce((n, [, ns]) => n + ns.length, 0));
-      expect(checked).toBe(20);
+      expect(checked).toBe(21);
       return missing;
     }],
     ["says Disconnect deletes at once what was stored and asks Google to revoke", () => {
@@ -154,6 +157,27 @@ describe("privacy — what the YouTube section says about the other halves of th
     expect(ytText).toContain("and, unless another connected channel uses the same Google account or the token cannot be read, ask Google to revoke the grant");
     // The negative pair: the window it replaced (the ceiling's) is not promised there.
     expect(ytText).not.toContain(`not reconnected within ${CEILING} days`);
+  });
+
+  it("F1 (final review C1): an unfinished connect is NOT promised deleted 'when it is finished or cancelled' - the picker's Cancel deletes nothing", () => {
+    // The negative pair of the needles above (a negative alone is vacuous): the old wording is gone, and the true clause is there.
+    expect(ytText).not.toMatch(/\bcancell?ed\b/i);
+    expect(ytText).not.toContain("deleted when it is finished");
+    expect(ytText).toContain("deleted when the channel is connected, and otherwise by the next daily check");
+  });
+
+  it("F1: the sentence is held by the code - Cancel only navigates, no route deletes a pending grant on request, and the daily pass deletes the expired ones", () => {
+    // An assumption is a guard. If a DELETE route or a deleting Cancel is added, the page UNDERSTATES what happens (not a false promise,
+    // but stale copy): this fails beside the sentence so the copy is revisited with the code.
+    const panel = src("../../../components/v2/youtube-connect-panel.tsx");
+    expect(panel, "the picker's cancel handler").toContain("const cancel = () => router.replace(STREAMING_PAGE_HREF);");
+    const pendingRoute = src("../../../app/api/v1/orgs/[id]/youtube-connections/pending/[pendingId]/route.ts");
+    expect(pendingRoute, "the pending route is read-only").toContain("export async function GET(");
+    expect(pendingRoute).not.toMatch(/export (async )?function (DELETE|POST|PUT|PATCH)\b/);
+    expect(dailySrc, "the daily pass's pending leg").toContain("delete from youtube_connect_pending where expires_at < ${now}");
+    // And the 'next daily check' really is a daily one: the pass that holds the leg rides the relay-sweep firing at 04:17 UTC.
+    const schedule = src("../../../../../cron-worker/src/schedule.ts");
+    expect(schedule).toMatch(/id: "relay-sweep",[\s\S]*?due: \{ kind: "daily", hourUtc: 4 \}/);
   });
 
   it("M2: the section no longer says 'everything else' is refreshed or deleted within 30 days (the account id, the consent record and a pending grant each have their own retention)", () => {
