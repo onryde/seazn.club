@@ -8,6 +8,7 @@ import { readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { SETTLE_METHODS } from "@seazn/engine/core";
+import { writeConfigIssues } from "@seazn/engine/sport";
 import { ARMAGEDDON_RESULTS, BoardgameMethod, DECISIVE_METHODS, DRAWN_METHODS, TIEBREAK_RUNGS, boardgame, effectiveRungs, type TiebreakRung } from "@seazn/engine/sports/boardgame";
 import { carrom } from "@seazn/engine/sports/carrom";
 import { cricket } from "@seazn/engine/sports/cricket";
@@ -34,12 +35,13 @@ import { hockeyPad } from "../lib/pads/hockey.ts";
 import { icehockeyPad } from "../lib/pads/icehockey.ts";
 import { PAD_ADAPTERS, registerPads } from "../lib/pads/index.ts";
 import { TABLETENNIS_SET_SCORE_TILE, TABLETENNIS_SUMMARY, tabletennisPad } from "../lib/pads/tabletennis.ts";
-import { TENNIS_SET_SCORE_TILE, TENNIS_SUMMARY, tennisPad } from "../lib/pads/tennis.ts";
+import { TENNIS_SET_SCORE_TILE, TENNIS_SUMMARY, makeTennisPad, tennisPad } from "../lib/pads/tennis.ts";
 import { PERIOD_ADVANCE_TILE, PERIOD_ATTEMPT_MISSED, PERIOD_ATTEMPT_SCORED, periodAttemptTile, periodGoalTile } from "../lib/pads/period.ts";
 import type { MatrixPadAdapter } from "../lib/pads/types.ts";
 import { VOLLEYBALL_SET_SCORE_TILE, VOLLEYBALL_SUMMARY, volleyballPad } from "../lib/pads/volleyball.ts";
 import { compareRow } from "../lib/pads/replay.ts";
 import { replayOnModel, type RowIn } from "./pad-model.ts";
+import { engineRefuses } from "./tennis-oracles.ts";
 import { drawsAllowed, resolveSportCfg, sportModule, stageCfg, variantKeys } from "../lib/sport-cfg.ts";
 import { declaredAllOut } from "../lib/streams/cricket.ts";
 import { generateStream, matchesRequest } from "../lib/streams/index.ts";
@@ -585,17 +587,27 @@ describe("tennis", () => {
   let skin = "";
   beforeAll(() => { skin = readFileSync(resolve(REPO, SKINS, "tennis.tsx"), "utf8"); });
 
+  /** The sheet's steps for a set (setScoreSheet): home, away, then - only for a tie-break-shaped set - the tie-break's two numbers. */
+  const tennisSteps = (p: { home: number; away: number; tb?: { home: number; away: number } }) => [
+    ...sheetSteps(TENNIS_SET_SCORE_TILE, p),
+    ...(p.tb === undefined ? [] : [{ kind: "number", value: p.tb.home }, { kind: "confirm" }, { kind: "number", value: p.tb.away }, { kind: "confirm" }]),
+  ];
+  const tennisCtx = (cfg: unknown): TapAdapterContext => ({ cfg, entrants: { home: HOME, away: AWAY } });
+  const TN_SET = (home: number, away: number, tb?: { home: number; away: number }): StreamEvent => ({ type: TENNIS_SUMMARY, payload: tb === undefined ? { home, away } : { home, away, tb } });
+
   it("tennis: a 6-3 set's steps carry no tie-break numbers — exactly 5 steps, home first, for every generated set", () => {
     let checked = 0;
     for (const winner of ["home", "away"] as const) {
       const { cfg, r, sums } = summariesOf("tennis", TENNIS_SUMMARY, winner);
       const at = (cfg as { set: { tiebreakAt: number } }).set.tiebreakAt;
       expect(sums.length).toBe(Math.ceil((cfg as { bestOf: number }).bestOf / 2));
+      const pad = makeTennisPad();
+      pad.stepsFor(START, ctxOf(r));
       for (const s of sums) {
         const p = s.payload as { home: number; away: number };
         // Not the tie-break shape (at+1 : at), which is the only one whose sheet asks more (tennis.tsx:851-855).
         expect(Math.min(p.home, p.away)).toBeLessThan(at);
-        const steps = tennisPad.stepsFor(s, ctxOf(r));
+        const steps = pad.stepsFor(s, ctxOf(r));
         expect(steps).toHaveLength(5);
         expect(steps).toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, p));
         checked++;
@@ -604,20 +616,155 @@ describe("tennis", () => {
     expect(checked).toBe(4);
   });
 
-  it("a tie-break-shaped set (tiebreakAt+1 : tiebreakAt, from the cfg) is refused by name, never typed as two numbers; its positive pair is typed", () => {
+  it("a tie-break-shaped set (tiebreakAt+1 : tiebreakAt, from the cfg) is typed with its tie-break numbers (tbHome, tbAway: 9 steps) and refused by name when its payload omits tb; a plain set beside it is 5 steps", () => {
     const { cfg, r } = summariesOf("tennis", TENNIS_SUMMARY, "home");
     const at = (cfg as { set: { tiebreakAt: number } }).set.tiebreakAt;
+    const to = (cfg as { set: { tiebreakTo: number } }).set.tiebreakTo;
     let checked = 0;
-    for (const payload of [{ home: at + 1, away: at }, { home: at, away: at + 1 }]) {
-      expect(() => tennisPad.stepsFor({ type: TENNIS_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is a tie-break set/);
+    for (const [home, away] of [[at + 1, at], [at, at + 1]] as const) {
+      const tb = home > away ? { home: to, away: to - 2 } : { home: to - 2, away: to };
+      const pad = makeTennisPad();
+      pad.stepsFor(START, ctxOf(r));
+      expect(() => pad.stepsFor(TN_SET(home, away), ctxOf(r)), `${home}-${away} without tb`).toThrow(/is a tie-break set — the payload omits tb/);
+      const steps = pad.stepsFor(TN_SET(home, away, tb), ctxOf(r));
+      expect(steps, `${home}-${away} with tb`).toHaveLength(9);
+      expect(steps).toEqual(tennisSteps({ home, away, tb }));
       checked++;
     }
     expect(checked).toBe(2);
-    // One game fewer on the loser is a plain set: typed.
-    expect(tennisPad.stepsFor({ type: TENNIS_SUMMARY, payload: { home: at + 1, away: at - 1 } }, ctxOf(r))).toHaveLength(5);
-    for (const payload of [null, { home: 6 }, { home: 6, away: 3, tb: { home: 7, away: 5 } }] as unknown[]) {
-      expect(() => tennisPad.stepsFor({ type: TENNIS_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not the sheet's \{home, away\} of whole numbers/);
+    // One game fewer on the loser is a plain set: typed as two numbers, and a tb block on it is refused by name.
+    const pad = makeTennisPad();
+    pad.stepsFor(START, ctxOf(r));
+    expect(pad.stepsFor(TN_SET(at + 1, at - 1), ctxOf(r))).toHaveLength(5);
+    expect(() => pad.stepsFor(TN_SET(at + 1, at - 1, { home: to, away: to - 2 }), ctxOf(r))).toThrow(/carries tb on a score that is not a tie-break set/);
+    for (const payload of [null, { home: 6 }, { home: 6, away: 3, extra: 1 }, { home: 7, away: 6, tb: { home: 7 } }, { home: 7, away: 6, tb: { home: 7, away: 5, x: 1 } }, { home: 7, away: 6, tb: 7 }] as unknown[]) {
+      expect(() => pad.stepsFor({ type: TENNIS_SUMMARY, payload }, ctxOf(r)), JSON.stringify(payload)).toThrow(/is not the sheet's \{home, away\} of whole numbers/);
     }
+  });
+
+  it("CL7-3 the adapter accepts an MTB-decided summary and refuses a 7–6 without tb where tiebreakAt is absent", () => {
+    // The match tie-break to 7 by 1 (the ENGINE's cfg: finalSet.matchTiebreakTo, tiebreak.winBy): 7-6 is a finished MATCH TIE-BREAK in the
+    // deciding set and a tie-break-shaped ORDINARY set (tiebreakAt+1 : tiebreakAt) anywhere else. The engine says which, then the pad follows.
+    const mtb = resolveSportCfg("tennis", "tour", { finalSet: { matchTiebreakTo: 7 }, tiebreak: { winBy: 1 } }) as { set: { tiebreakAt: number }; bestOf: number };
+    expect(writeConfigIssues(sportModule("tennis"), mtb), "a cfg a write door accepts").toEqual([]);
+    const level = [START, TN_SET(6, 3), TN_SET(3, 6)];
+    expect(engineRefuses(mtb, [...level, TN_SET(7, 6)]), "the engine accepts 7-6 as the match tie-break of the deciding set").toBe(false);
+    expect(engineRefuses(mtb, [START, TN_SET(7, 6)]), "...and refuses 7-6 without tb in an ordinary set").toBe(true);
+    expect(engineRefuses(mtb, [...level, TN_SET(7, 6, { home: 7, away: 5 })]), "...and refuses a tb block in the match tie-break's place").toBe(true);
+    expect(mtb.set.tiebreakAt, "tiebreakAt+1 : tiebreakAt is 7-6, the deciding set's score").toBe(6);
+    // The pad, driven the way the replay drives it: sets 1-1, then 7-6 is typed as the sheet's two numbers.
+    const pad = makeTennisPad();
+    const ctx = tennisCtx(mtb);
+    const sent = [...level, TN_SET(7, 6)].map((e) => pad.stepsFor(e, ctx));
+    expect(sent.at(-1), "an MTB-decided summary is two numbers").toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, { home: 7, away: 6 }));
+    // ...and an MTB summary with a tb block is refused (the kernel refuses it; the sheet asks no tb in the MTB position).
+    const again = makeTennisPad();
+    for (const e of level) again.stepsFor(e, ctx);
+    expect(() => again.stepsFor(TN_SET(7, 6, { home: 7, away: 5 }), ctx)).toThrow(/match tie-break/);
+    // The same payload in an ordinary set, from the same cfg, is refused without tb.
+    const first = makeTennisPad();
+    first.stepsFor(START, ctx);
+    expect(() => first.stepsFor(TN_SET(7, 6), ctx)).toThrow(/is a tie-break set — the payload omits tb/);
+    // tiebreakAt ABSENT: the skin defaults it to 6 (rulesFor: `set.tiebreakAt === undefined ? 6 : ...`, pinned below), so a 7-6 without tb
+    // is a tie-break set that omits its tb - refused, not silently typed (the guard used to return null for a cfg with no tiebreakAt).
+    const { tiebreakAt: _dropped, ...setNoAt } = mtb.set as Record<string, unknown>;
+    expect(_dropped).toBe(6);
+    const noAt = { ...mtb, set: setNoAt, finalSet: "same" };
+    const bare = makeTennisPad();
+    bare.stepsFor(START, tennisCtx(noAt));
+    expect(() => bare.stepsFor(TN_SET(7, 6), tennisCtx(noAt)), "7-6 without tb, tiebreakAt absent").toThrow(/is a tie-break set — the payload omits tb/);
+    expect(bare.stepsFor(TN_SET(7, 6, { home: 7, away: 5 }), tennisCtx(noAt)), "with tb: typed, the default trigger").toEqual(tennisSteps({ home: 7, away: 6, tb: { home: 7, away: 5 } }));
+    // ...and with the match tie-break standing in for the deciding set, the absent trigger is no obstacle: the MTB summary is accepted.
+    const noAtMtb = { ...mtb, set: setNoAt };
+    const decider = makeTennisPad();
+    for (const e of level) decider.stepsFor(e, tennisCtx(noAtMtb));
+    expect(decider.stepsFor(TN_SET(7, 6), tennisCtx(noAtMtb))).toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, { home: 7, away: 6 }));
+  });
+
+  it("the guard follows the product's rulesFor from per-replay state: sets won since core.start decide which set is the deciding one; a second start resets; two adapters share nothing; a summary before core.start is refused by name", () => {
+    const mtb = resolveSportCfg("tennis", "doubles-noad-mtb10") as { bestOf: number; set: { tiebreakAt: number }; finalSet: { matchTiebreakTo: number } };
+    const ctx = tennisCtx(mtb);
+    const to = mtb.finalSet.matchTiebreakTo;
+    const win = (n: number) => TN_SET(n, n - 4 < 0 ? 0 : n - 4);
+    expect(() => makeTennisPad().stepsFor(win(6), ctx), "no core.start").toThrow(/before core\.start/);
+    const pad = makeTennisPad();
+    pad.stepsFor(START, ctx);
+    // 1-0 up: set two is not the deciding one - a match-tie-break-shaped score there is just games.
+    pad.stepsFor(TN_SET(6, 2), ctx);
+    expect(() => pad.stepsFor(TN_SET(mtb.set.tiebreakAt + 1, mtb.set.tiebreakAt), ctx), "7-6 at 1-0: an ordinary set").toThrow(/is a tie-break set/);
+    // 1-1: now the deciding set - the match tie-break's points are typed, 10-8 included (more than a games sheet allows by the games rule).
+    pad.stepsFor(TN_SET(2, 6), ctx);
+    expect(pad.stepsFor(TN_SET(to, to - 2), ctx)).toEqual(sheetSteps(TENNIS_SET_SCORE_TILE, { home: to, away: to - 2 }));
+    // A second start is a new fixture: the count restarts, so 7-6 is an ordinary set again.
+    pad.stepsFor(START, ctx);
+    expect(() => pad.stepsFor(TN_SET(7, 6), ctx)).toThrow(/is a tie-break set/);
+    // Two adapters share nothing: the first's 1-1 does not make the second's set a deciding one.
+    const a = makeTennisPad();
+    const b = makeTennisPad();
+    a.stepsFor(START, ctx); b.stepsFor(START, ctx);
+    a.stepsFor(TN_SET(6, 2), ctx); a.stepsFor(TN_SET(2, 6), ctx);
+    expect(a.stepsFor(TN_SET(7, 6), ctx)).toHaveLength(5);
+    expect(() => b.stepsFor(TN_SET(7, 6), ctx)).toThrow(/is a tie-break set/);
+    // Two fixtures (distinct entrant pairs) on one adapter are kept apart too.
+    const shared = makeTennisPad();
+    const other: TapAdapterContext = { cfg: mtb, entrants: { home: "x-home", away: "x-away" } };
+    shared.stepsFor(START, ctx); shared.stepsFor(START, other);
+    shared.stepsFor(TN_SET(6, 2), ctx); shared.stepsFor(TN_SET(2, 6), ctx);
+    expect(shared.stepsFor(TN_SET(7, 6), ctx)).toHaveLength(5);
+    expect(() => shared.stepsFor(TN_SET(7, 6), other)).toThrow(/is a tie-break set/);
+    // The module-level adapter is one instance of the same factory (the registry's).
+    expect(PAD_ADAPTERS.tennis).toBe(tennisPad);
+  });
+
+  it("G8 every generated tie-break-set and short-set tie-break stream is typed as the sheet's steps - tb numbers exactly where the summary has a tb block, every number within the engine's declared field bound - counted per variant and path", () => {
+    const perKey = new Map<string, number>();
+    let tbSteps = 0;
+    let mtbSets = 0;
+    for (const variant of variantKeys("tennis")) {
+      const cfg = stageCfg("tennis", resolveSportCfg("tennis", variant), "knockout", variant);
+      const actions = sportModule("tennis").padSpec!(cfg as never).panels.flatMap((pn) => pn.actions).filter((a) => a.type === TENNIS_SUMMARY);
+      const plainAction = actions.find((a) => a.fields.length === 2)!;
+      const tbAction = actions.find((a) => a.fields.length === 4)!;
+      expect(plainAction, `${variant}: padSpec declares the plain set-score action`).toBeDefined();
+      expect(tbAction, `${variant}: padSpec declares the tie-break set-score action`).toBeDefined();
+      const maxOf = (a: typeof plainAction, path: string) => (a.fields.find((f) => f.path === path) as { max: number }).max;
+      for (const path of ["tiebreakSet", "shortSetTb"] as const) for (const winner of ["home", "away"] as const) {
+        const r: StreamRequest = { sportKey: "tennis", cfg, stageKind: "knockout", home: HOME, away: AWAY, outcome: { kind: "win", winner, path } };
+        let stream: StreamEvent[];
+        try { stream = generateStream(r); } catch (e) {
+          if (e instanceof OutcomeUnreachable) continue; // the variant declares no such path
+          throw e;
+        }
+        const pad = makeTennisPad();
+        for (const e of stream) {
+          const steps = pad.stepsFor(e, ctxOf(r));
+          if (e.type !== TENNIS_SUMMARY) { expect(steps).toEqual([{ kind: "testid", testid: START_MATCH_TESTID }]); continue; }
+          const p = e.payload as { home: number; away: number; tb?: { home: number; away: number } };
+          expect(steps, `${variant} ${path} ${winner}: ${JSON.stringify(p)}`).toEqual(tennisSteps(p));
+          expect(Math.max(p.home, p.away), `${variant} ${path}: games/points within the sheet's bound`).toBeLessThanOrEqual(maxOf(p.tb === undefined ? plainAction : tbAction, "home"));
+          if (p.tb !== undefined) {
+            expect(Math.max(p.tb.home, p.tb.away), `${variant} ${path}: tie-break points within the sheet's bound`).toBeLessThanOrEqual(maxOf(tbAction, "tb.home"));
+            tbSteps++;
+          } else if (Math.max(p.home, p.away) > (cfg as { set: { gamesTo: number } }).set.gamesTo + 2) mtbSets++;
+        }
+        perKey.set(`${variant}/${path}`, (perKey.get(`${variant}/${path}`) ?? 0) + 1);
+      }
+    }
+    console.info(`pad-adapters: tennis tie-break streams typed ${JSON.stringify(Object.fromEntries(perKey))}; ${tbSteps} set(s) with tb numbers, ${mtbSets} match tie-break(s)`);
+    expect([...perKey.keys()].sort()).toEqual(["doubles-noad-mtb10/tiebreakSet", "fast4/shortSetTb", "grand-slam/tiebreakSet", "short-sets/shortSetTb", "tour/tiebreakSet"]);
+    for (const [k, n] of perKey) expect(n, k).toBe(2);
+    expect(tbSteps, "tb numbers were typed").toBeGreaterThan(0);
+    expect(mtbSets, "a match tie-break was typed").toBeGreaterThan(0);
+  });
+
+  it("the skin's sheet is what the adapter models: tbHome and tbAway are asked only `when: tbShape`, tbShape is false for a match tie-break or an advantage set, tiebreakAt defaults to 6 and bestOf to 3, and the payload's tb block rides only a tb-shaped answer", () => {
+    expect(skin).toMatch(/id: "tbHome",[\s\S]*?when: tbShape,/);
+    expect(skin).toMatch(/id: "tbAway",[\s\S]*?when: tbShape,/);
+    expect(skin).toMatch(/if \(rules\.mtbTo !== null \|\| rules\.tiebreakAt === null\) return false;/);
+    expect(skin).toMatch(/const tiebreakAt = set\.tiebreakAt === undefined \? 6 : set\.tiebreakAt;/);
+    expect(skin).toMatch(/const bestOf = cfg\.bestOf \?\? 3;/);
+    expect(skin).toMatch(/\.\.\.\(tbShape\(answers\) \? \{ tb: \{ home: Number\(answers\.tbHome\), away: Number\(answers\.tbAway\) \} \} : \{\}\),/);
+    expect(skin).toMatch(/if \("matchTiebreakTo" in finalSet\) return \{ \.\.\.base, mtbTo: finalSet\.matchTiebreakTo \};/);
   });
 
   it("Step 0: the 6-3 row Step 0 saw (no tb key) is equal to the generated summary; no fallback, no tolerated key", () => {

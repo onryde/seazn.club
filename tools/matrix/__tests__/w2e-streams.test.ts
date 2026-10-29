@@ -6,7 +6,7 @@
 // anti-vacuity). `ALL_OUTCOMES` stays frozen: the new shapes run here, in their own sweeps (spec §10).
 import { decidedInFor } from "@seazn/engine/competition";
 import { EngineError, StageKind } from "@seazn/engine/core";
-import { checkFixtureOverride, deciderKeysFor, stageKeysFor, writeConfigIssues } from "@seazn/engine/sport";
+import { BO1_MATCH_TIEBREAK, checkFixtureOverride, deciderKeysFor, stageKeysFor, writeConfigIssues } from "@seazn/engine/sport";
 import { CricketBall, CricketCfg, dlsTarget, soBattingSideAt, type CricketState } from "@seazn/engine/sports/cricket";
 import { football, footballNextKicker, type ShootoutKick } from "@seazn/engine/sports/football";
 import { describe, expect, it, vi } from "vitest";
@@ -18,12 +18,14 @@ import { STREAM_GENERATORS, generateStream, matchesRequest } from "../lib/stream
 import { SO_PAIRS, superOverStream, type SuperOverPair } from "../lib/streams/cricket.ts";
 import { KNOWN_UNSUPPORTED } from "../lib/streams/known-unsupported.ts";
 import { setbasedGenerator } from "../lib/streams/setbased.ts";
+import { tennisGenerator } from "../lib/streams/tennis.ts";
 import {
-  ALL_OUTCOMES, DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, outcomeLabel,
+  ALL_OUTCOMES, DECIDING_PATHS, GeneratorUnsupported, OutcomeUnreachable, PROBE_LINEUPS, START, outcomeLabel,
   type DecidingPath, type PathFold, type ProductFold, type RequestedOutcome, type Side, type StreamEvent, type StreamLineups, type StreamRequest,
 } from "../lib/streams/types.ts";
 import { offlineBuilderDefault } from "../lib/variants.ts";
 import { capBinds, decidingSetReachable, foldSet, majority, setSportsOf, type SetCfg, type SetFoldState } from "./set-oracles.ts";
+import { engineRefuses, foldTennis, tbIsClosestFinish, tennisSetsWonBy, withLastTb, type TennisCfg, type TennisFoldState } from "./tennis-oracles.ts";
 
 // The product's own override merge lives in a `server-only` file that reaches its siblings by the app's `@/` alias, neither of
 // which the matrix's vitest (no config of its own) resolves: both are stubbed to the REAL thing, so `mergeRulesOverride` below
@@ -1148,6 +1150,369 @@ describe("G6 G7 set sports: a win in the deciding set, a win by the score cap (T
   });
 
   it("G6 G7 vocabulary: ALL_OUTCOMES is still W2b's seven and nothing is known-unsupported - the new shapes run in their own sweep", () => {
+    expect(ALL_OUTCOMES.map(outcomeLabel)).toEqual(["win-home", "win-away", "draw", "forfeit-away-walkover", "forfeit-home-retired", "abandon", "tie"]);
+    expect(ALL_OUTCOMES).toHaveLength(7);
+    expect(ALL_OUTCOMES.filter((o) => o.kind === "win" && o.path !== undefined)).toEqual([]);
+    expect(KNOWN_UNSUPPORTED).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Task 23 — G8 (a win down a tie-break set, a win down the short-set tie-break): tennis. Neither path is NAMED by the outcome
+// (a tennis win is method 'regulation', decided 'regulation' however its sets ended), so both are state only: the witness reads
+// the closed sets the fold holds - the PRODUCT's state when the fold carries it (Task 21) - and which rules closed the last one.
+
+const TENNIS = "tennis";
+const TN_PATHS = ["tiebreakSet", "shortSetTb"] as const;
+type TnPath = (typeof TN_PATHS)[number];
+const TN_VARIANTS = variantKeys(TENNIS);
+/** RULEBOOK ANCHORS, typed once as the independent answer (the cfg's declarations are the engine's, the code under test reads
+ *  them): which tie-break a shipped variant ends its sets with. ITF Rules of Tennis: the set tie-break at 6-all, first to 7 by
+ *  2 (tour, the grand slam's, the doubles norm); the deciding set of the slam plays its own tie-break to 10, and the doubles norm
+ *  replaces it with a match tie-break to 10 (Appendix VI). Appendix VI short sets: first to 4 games, the tie-break at 3-all
+ *  (Fast4) or at 4-all ("short-sets"), first to 5 with a deciding point at 4-all (Tennis Canada, Rules of the Court 2026
+ *  pp.33-35, which reproduces Appendix VI; the ITF PDF itself was not retrievable, a0-findings E30). */
+const TN_RULEBOOK: Readonly<Record<string, readonly TnPath[]>> = {
+  tour: ["tiebreakSet"], "grand-slam": ["tiebreakSet"], "doubles-noad-mtb10": ["tiebreakSet"], fast4: ["shortSetTb"], "short-sets": ["shortSetTb"],
+};
+/** Every tennis variant x every stage kind the engine declares, under the cfg the product folds that stage's fixtures under. */
+const TN_CELLS = TN_VARIANTS.flatMap((variant) =>
+  StageKind.options.map((kind) => ({ variant, kind, cfg: stageCfg(TENNIS, resolveSportCfg(TENNIS, variant), kind, variant) as TennisCfg })));
+const foldT = (cfg: unknown, events: readonly StreamEvent[]) => foldTennis(cfg, events, ID.home, ID.away);
+const tnWin = (cfg: unknown, winner: Side, path?: DecidingPath): StreamRequest => req(TENNIS, cfg, "knockout", path === undefined ? { kind: "win", winner } : { kind: "win", winner, path });
+/** A tennis cfg the product could WRITE: the variant with `over` laid on it, parsed by the module's schema and not refused by the
+ *  write door (TN-CF-1) - so no stream below is built from a cfg the product would refuse at create. */
+function tnCfg(variant: string, over: Record<string, unknown> = {}): TennisCfg {
+  const cfg = stageCfg(TENNIS, resolveSportCfg(TENNIS, variant, over), "knockout", variant);
+  expect(writeConfigIssues(sportModule(TENNIS), cfg), `${variant} ${JSON.stringify(over)} is a cfg a write door refuses`).toEqual([]);
+  return cfg as TennisCfg;
+}
+/** The rules the tie-break of a set was played under, read off the cfg's declarations (nested/kernel.ts `rulesFor`, W2e RB2A-12):
+ *  an ordinary set's own target and margin (`set.tiebreakWinBy`, else the match's), the deciding set's override
+ *  (`finalSet.tiebreakTo`, at the MATCH margin - the short set's margin is not carried over, Task 13), the match tie-break's
+ *  (`finalSet.matchTiebreakTo`, at the match margin). */
+function tbRules(cfg: TennisCfg, deciding: boolean): { to: number; winBy: number } {
+  if (deciding && typeof cfg.finalSet === "object" && "matchTiebreakTo" in cfg.finalSet) return { to: cfg.finalSet.matchTiebreakTo, winBy: cfg.tiebreak.winBy };
+  if (deciding && typeof cfg.finalSet === "object" && "tiebreakTo" in cfg.finalSet) return { to: cfg.finalSet.tiebreakTo, winBy: cfg.tiebreak.winBy };
+  return { to: cfg.set.tiebreakTo, winBy: cfg.set.tiebreakWinBy ?? cfg.tiebreak.winBy };
+}
+const isDecidingAt = (cfg: TennisCfg, before: TennisFoldState["sets"]): boolean =>
+  tennisSetsWonBy(before, "home") === majority(cfg.bestOf) - 1 && tennisSetsWonBy(before, "away") === majority(cfg.bestOf) - 1;
+
+describe("G8 tennis: a win down a tie-break set, a win down the short-set tie-break (Task 23)", () => {
+  it("empty case first: the engine's tennis variants all have a rulebook verdict, tennis declares no decider rule key and reaches nothing but regulation (so the outcome cannot name either path - both are state only), and a path win's outcome is the plain win's", () => {
+    expect(TN_VARIANTS.length).toBeGreaterThan(0);
+    expect([...TN_VARIANTS].sort(), "a new tennis variant owes a rulebook verdict here").toEqual(Object.keys(TN_RULEBOOK).sort());
+    expect([...tennisGenerator.sportKeys]).toEqual([TENNIS]);
+    expect(STREAM_GENERATORS[TENNIS]!.pathWitness, "tennis builds paths").toBeDefined();
+    const m = sportModule(TENNIS);
+    let cells = 0;
+    for (const { variant, kind, cfg } of TN_CELLS) {
+      expect(deciderKeysFor(m, kind, variant), `${variant}/${kind}`).toEqual([]);
+      expect([...m.reachableDecidedIn(cfg as never, kind)], `${variant}/${kind}`).toEqual(["regulation"]);
+      cells++;
+    }
+    expect(cells).toBe(TN_VARIANTS.length * StageKind.options.length);
+    let paths = 0;
+    for (const { variant, cfg } of TN_CELLS.filter((c) => c.kind === "knockout")) for (const path of TN_RULEBOOK[variant]!) {
+      for (const winner of SIDES) {
+        expect(foldT(cfg, generateStream(tnWin(cfg, winner, path))).outcome, `${variant} ${path} ${winner}`).toEqual(foldT(cfg, generateStream(tnWin(cfg, winner))).outcome);
+        paths++;
+      }
+    }
+    expect(paths).toBe(2 * Object.values(TN_RULEBOOK).flat().length);
+  });
+
+  it("everything a request or a cfg cannot build is refused BY NAME as OutcomeUnreachable, never GeneratorUnsupported: a path tennis has no rule for, the other tennis path where the cfg declares none, a tie-break a cfg without one cannot end a set with, and TN-CF-1's best of one with a match tie-break (no stream may use it)", () => {
+    // A path tennis has no rule for - and a tennis path asked of any OTHER sport whose generator builds paths: all OutcomeUnreachable.
+    const foreign = DECIDING_PATHS.filter((p) => !(TN_PATHS as readonly string[]).includes(p));
+    let refused = 0;
+    for (const variant of TN_VARIANTS) {
+      const cfg = tnCfg(variant);
+      for (const path of foreign) {
+        const ask = () => generateStream(tnWin(cfg, "home", path));
+        expect(ask, `${variant} ${path}`).toThrow(OutcomeUnreachable);
+        expect(ask, `${variant} ${path}`).toThrow(`tennis has no '${path}' deciding path (its deciders: tiebreakSet, shortSetTb)`);
+        refused++;
+      }
+    }
+    expect(refused).toBe(TN_VARIANTS.length * foreign.length);
+    expect(foreign.length).toBe(DECIDING_PATHS.length - 2);
+    let elsewhere = 0;
+    for (const sportKey of SPORT_KEYS) {
+      if (sportKey === TENNIS || STREAM_GENERATORS[sportKey]!.pathWitness === undefined) continue;
+      const variant = offlineBuilderDefault(sportKey);
+      const cfg = stageCfg(sportKey, resolveSportCfg(sportKey, variant), "knockout", variant);
+      for (const path of TN_PATHS) {
+        expect(() => generateStream({ ...req(sportKey, cfg, "knockout", { kind: "win", winner: "home", path }), lineups: PROBE_LINEUPS }), `${sportKey} ${path}`).toThrow(OutcomeUnreachable);
+        elsewhere++;
+      }
+    }
+    expect(elsewhere, "the sports that build paths refuse tennis's by name").toBeGreaterThan(2 * TN_PATHS.length);
+    // The other tennis path, where the cfg declares none: each variant builds exactly its rulebook paths.
+    let lacking = 0;
+    for (const { variant, kind, cfg } of TN_CELLS) for (const path of TN_PATHS) {
+      if (TN_RULEBOOK[variant]!.includes(path)) continue;
+      expect(() => generateStream(tnWin(cfg, "home", path)), `${variant}/${kind} ${path}`).toThrow(OutcomeUnreachable);
+      lacking++;
+    }
+    expect(lacking).toBe(StageKind.options.length * (TN_VARIANTS.length * TN_PATHS.length - Object.values(TN_RULEBOOK).flat().length));
+    // An advantage set (tiebreakAt null) ends no set in a tie-break: with the deciding set an ordinary set, neither path exists...
+    const advantage = tnCfg("tour", { set: { gamesTo: 6, winBy: 2, tiebreakAt: null, tiebreakTo: 7 } });
+    for (const path of TN_PATHS) expect(() => generateStream(tnWin(advantage, "home", path)), `advantage set ${path}`).toThrow(/OutcomeUnreachable|cannot reach/);
+    // ...but a match tie-break still stands in for the deciding set, so the doubles norm keeps a tiebreakSet win (the engine says
+    // the set sheet needs no games tie-break for it).
+    const advantageMtb = tnCfg("doubles-noad-mtb10", { set: { gamesTo: 6, winBy: 2, tiebreakAt: null, tiebreakTo: 7 } });
+    const viaMtb = foldT(advantageMtb, generateStream(tnWin(advantageMtb, "home", "tiebreakSet")));
+    expect(viaMtb.state.sets.at(-1)!.mtb, "the deciding set is the match tie-break").toBe(true);
+    expect(viaMtb.state.sets.every((s) => s.tb === undefined), "no set ended in a games tie-break").toBe(true);
+    expect(() => generateStream(tnWin(advantageMtb, "home", "shortSetTb"))).toThrow(OutcomeUnreachable);
+    // TN-CF-1 (RB2A-13): a best of one with a match tie-break is refused when a config is written, so no stream is built from it.
+    const bo1Mtb = resolveSportCfg(TENNIS, "doubles-noad-mtb10", { bestOf: 1 });
+    expect(writeConfigIssues(sportModule(TENNIS), bo1Mtb), "the engine's write door refuses it").toEqual([BO1_MATCH_TIEBREAK]);
+    for (const path of TN_PATHS) {
+      expect(() => generateStream(tnWin(bo1Mtb, "home", path)), path).toThrow(OutcomeUnreachable);
+      expect(() => generateStream(tnWin(bo1Mtb, "home", path)), path).toThrow(/TN-CF-1/);
+    }
+    // ...while a best of one whose deciding set is a SET with a final-set tie-break is no match tie-break and is built.
+    const bo1Final = tnCfg("tour", { bestOf: 1, finalSet: { tiebreakTo: 10 } });
+    const one = foldT(bo1Final, generateStream(tnWin(bo1Final, "away", "tiebreakSet")));
+    expect(one.state.sets, "a single set, the deciding one, ended in the tie-break to the final-set target").toHaveLength(1);
+    expect(one.state.sets[0]!.tb![ "away" ]).toBe(10);
+    // ...and a best of one short set is its own short-set tie-break win.
+    const bo1Short = tnCfg("short-sets", { bestOf: 1 });
+    expect(foldT(bo1Short, generateStream(tnWin(bo1Short, "home", "shortSetTb"))).state.sets).toHaveLength(1);
+  });
+
+  it("G8: every tennis variant x stage kind builds a win down each tie-break path the rulebook gives it (tiebreakSet, shortSetTb) for both winners - the last set closed by a tie-break at its own target and margin (the engine's edges), the deciding set played where its rules differ (the slam's tie-break to 10, the match tie-break) - under a strict fold, counted per variant and per path", () => {
+    const perVariant = new Map<string, number>();
+    const perPath = new Map<TnPath, number>();
+    let refusedPaths = 0;
+    let decider = 0;
+    let mtbs = 0;
+    let finalSetTbs = 0;
+    for (const { variant, kind, cfg } of TN_CELLS) {
+      for (const path of TN_PATHS) {
+        const at0 = `${variant}/${kind} ${path}`;
+        if (!TN_RULEBOOK[variant]!.includes(path)) { refusedPaths++; continue; }
+        for (const winner of SIDES) {
+          const at = `${at0} ${winner}`;
+          const loser = otherSide(winner);
+          const r = tnWin(cfg, winner, path);
+          const events = generateStream(r);
+          const f = foldT(cfg, events);
+          expect(f.outcome, at).toMatchObject({ kind: "win", winner: ID[winner], loser: ID[loser] });
+          // State only: the outcome is the plain win's, byte for byte, decided 'regulation' - the outcome cannot say it.
+          expect(f.outcome, at).toEqual(foldT(cfg, generateStream(tnWin(cfg, winner))).outcome);
+          expect(decidedInFor(sportModule(TENNIS), f.outcome!), at).toBe("regulation");
+          const sets = f.state.sets;
+          const last = sets.at(-1)!;
+          const deciding = isDecidingAt(cfg, sets.slice(0, -1));
+          expect(last[winner] > last[loser], `${at}: the winner took the match-deciding set`).toBe(true);
+          // The deciding set is PLAYED where its rules differ from an ordinary set's (the engine's finalSet declaration), and only then.
+          const decidingDiffers = cfg.finalSet !== "same" && cfg.bestOf >= 3 && path === "tiebreakSet";
+          expect(sets.length, `${at}: straight sets, or the whole best of ${cfg.bestOf}`).toBe(decidingDiffers ? cfg.bestOf : majority(cfg.bestOf));
+          expect(deciding, at).toBe(decidingDiffers);
+          // What closed the last set, by the cfg's declarations; the engine's own edges pin the target and the margin.
+          const rules = tbRules(cfg, deciding);
+          if (last.mtb === true) {
+            expect(deciding && typeof cfg.finalSet === "object" && "matchTiebreakTo" in cfg.finalSet, `${at}: a match tie-break only stands in for the deciding set`).toBe(true);
+            expect(last.tb, at).toBeUndefined();
+            expect([last[winner], last[loser]], `${at}: the match tie-break's closest finish`).toEqual([rules.to, rules.to - rules.winBy]);
+            mtbs++;
+          } else {
+            expect(cfg.set.tiebreakAt, at).not.toBeNull();
+            expect([last[winner], last[loser]], `${at}: tiebreakAt+1 : tiebreakAt`).toEqual([cfg.set.tiebreakAt! + 1, cfg.set.tiebreakAt!]);
+            expect([last.tb![winner], last.tb![loser]], `${at}: the tie-break's closest finish`).toEqual([rules.to, rules.to - rules.winBy]);
+            if (deciding && typeof cfg.finalSet === "object" && "tiebreakTo" in cfg.finalSet) finalSetTbs++;
+          }
+          expect(tbIsClosestFinish(cfg, events), `${at}: the engine accepts it as streamed and refuses it a point short of the target and of the margin`).toEqual({ accepted: true, targetEdge: true, marginEdge: true });
+          // Which tie-break: the short-set tie-break is the SET's own margin (declared); the tie-break set's is the match's, or the match tie-break.
+          const shortTb = last.mtb !== true && cfg.set.tiebreakWinBy !== undefined && !(deciding && typeof cfg.finalSet === "object" && "tiebreakTo" in cfg.finalSet);
+          expect(shortTb, `${at}: the path names the margin the last set was closed under`).toBe(path === "shortSetTb");
+          // Every set the winner took ended in the tie-break where the cfg has one; every set the loser took is plain games.
+          for (const [i, s] of sets.entries()) {
+            if (s.mtb === true) continue;
+            if (s[winner] > s[loser]) expect(s.tb !== undefined, `${at} set ${i + 1}: the winner's set`).toBe(cfg.set.tiebreakAt !== null);
+            else expect(s.tb, `${at} set ${i + 1}: the loser's set`).toBeUndefined();
+          }
+          expect(matchesRequest(r, f.outcome, f.state), at).toBe("match");
+          expect(matchesRequest(tnWin(cfg, loser, path), f.outcome, f.state), `${at}: the other winner`).toBe("mismatch");
+          for (const other of TN_PATHS.filter((p) => p !== path)) expect(matchesRequest(tnWin(cfg, winner, other), f.outcome, f.state), `${at}: asked as '${other}'`).toBe("mismatch");
+          expect(foldT(cfg, events.slice(0, -1)).outcome, `${at}: decides on its last event`).toBeNull();
+          expect(generateStream(r), `${at}: a second call`).toEqual(events);
+          if (deciding) decider++;
+          perVariant.set(variant, (perVariant.get(variant) ?? 0) + 1);
+          perPath.set(path, (perPath.get(path) ?? 0) + 1);
+        }
+      }
+    }
+    console.info(`G8 tennis: wins per variant ${JSON.stringify(Object.fromEntries(perVariant))}, per path ${JSON.stringify(Object.fromEntries(perPath))}; ${decider} reached the deciding set (${mtbs} match tie-breaks, ${finalSetTbs} final-set tie-breaks); ${refusedPaths} (cell, path) pairs refused by name`);
+    for (const v of TN_VARIANTS) expect(perVariant.get(v) ?? 0, `${v}: no tie-break win was checked`).toBeGreaterThan(0);
+    for (const p of TN_PATHS) expect(perPath.get(p) ?? 0, `${p}: no win was checked`).toBeGreaterThan(0);
+    expect(decider, "some variant plays its deciding set").toBeGreaterThan(0);
+    expect(mtbs, "the doubles norm's match tie-break").toBeGreaterThan(0);
+    expect(finalSetTbs, "the slam's final-set tie-break").toBeGreaterThan(0);
+    expect(refusedPaths).toBeGreaterThan(0);
+  });
+
+  it("G8 the right answer differs from the wrong one: tour's 7-6, Fast4's 4-3 and the short-sets variant's 5-4 each end a set in a tie-break - and the strict fold refuses each under the others' cfgs; the rulebook anchors all three (the ITF set tie-break at 6-all; App VI's short-set tie-break at 3-all and at 4-all)", () => {
+    // The rulebook's numbers, typed once as the independent anchor.
+    const ANCHOR: Readonly<Record<string, { games: [number, number]; tb: [number, number]; path: TnPath }>> = {
+      tour: { games: [7, 6], tb: [7, 5], path: "tiebreakSet" },
+      fast4: { games: [4, 3], tb: [5, 4], path: "shortSetTb" },
+      "short-sets": { games: [5, 4], tb: [5, 4], path: "shortSetTb" },
+    };
+    const cfgs = new Map(Object.keys(ANCHOR).map((v) => [v, tnCfg(v)] as const));
+    const streams = new Map([...cfgs].map(([v, cfg]) => [v, generateStream(tnWin(cfg, "home", ANCHOR[v]!.path))] as const));
+    for (const [v, a] of Object.entries(ANCHOR)) {
+      const set = foldT(cfgs.get(v), streams.get(v)!).state.sets[0]!;
+      expect([set.home, set.away], `${v}: the tie-break set`).toEqual(a.games);
+      expect([set.tb!.home, set.tb!.away], `${v}: its tie-break`).toEqual(a.tb);
+    }
+    expect(new Set([...cfgs.values()].map((c) => c.set.tiebreakAt)).size, "the variants' tie-break triggers differ").toBe(cfgs.size);
+    let refused = 0;
+    for (const [a, eventsA] of streams) for (const [b, cfgB] of cfgs) {
+      if (a === b) continue;
+      expect(engineRefuses(cfgB, eventsA), `${a}'s tie-break set under ${b}`).toBe(true);
+      expect(matchesRequest(tnWin(cfgB, "home", ANCHOR[a]!.path), { kind: "win", winner: ID.home, loser: ID.away, method: "regulation" }, foldT(cfgs.get(a), eventsA).state), `${a}'s state asked under ${b}'s cfg`).toBe("mismatch");
+      refused++;
+    }
+    expect(refused).toBe(cfgs.size * (cfgs.size - 1));
+    // ...and a games-only 7-6 (no tie-break block) is refused where the trigger is 6, while Fast4's trigger makes 7-6 a plain set it cannot be.
+    const tour = cfgs.get("tour")!;
+    expect(engineRefuses(tour, [START, { type: "tennis.set_summary", payload: { home: 7, away: 6 } }]), "7-6 without its tie-break under tour").toBe(true);
+  });
+
+  it("G8 the right answer differs from the wrong one: the match tie-break is to 10 (closest finish 10-8) and the set tie-break to 7 (7-5) - each constant is refused where the other is played, and the tie-break block is refused in the match tie-break's place", () => {
+    const doubles = tnCfg("doubles-noad-mtb10");
+    const tour = tnCfg("tour");
+    const stream = generateStream(tnWin(doubles, "home", "tiebreakSet"));
+    const deciding = stream.at(-1)!;
+    const setTb = stream.find((e) => (e.payload as { tb?: unknown }).tb !== undefined)!;
+    // The rulebook's: App VI's match tie-break is first to 10 points by 2; the set tie-break first to 7 by 2.
+    expect(deciding.payload).toEqual({ home: 10, away: 8 });
+    expect((setTb.payload as { tb: unknown }).tb).toEqual({ home: 7, away: 5 });
+    let refused = 0;
+    // The match tie-break's finish as an ordinary set's games (tour plays its deciding set as an ordinary set).
+    const asGames = [...stream.slice(0, -1), deciding];
+    expect(engineRefuses(tour, asGames), "10-8 as games under tour").toBe(true); refused++;
+    // The set tie-break's finish as the match tie-break's points (target 10 not reached).
+    const asMtb = [...stream.slice(0, -1), { type: deciding.type, payload: { home: 7, away: 5 } }];
+    expect(engineRefuses(doubles, asMtb), "7-5 as the match tie-break under doubles").toBe(true); refused++;
+    // A tie-break block in the match tie-break's place.
+    const withTb = [...stream.slice(0, -1), { type: deciding.type, payload: { home: 7, away: 6, tb: { home: 7, away: 5 } } }];
+    expect(() => foldT(doubles, withTb)).toThrow(/match tie-break summary carries its points in home\/away, not tb/); refused++;
+    // Positive control: the long set tie-break (deuce) admits 10-8 at a target of 7, which is why the anchors are CLOSEST finishes.
+    const long = [START, { type: deciding.type, payload: { home: 7, away: 6, tb: { home: 10, away: 8 } } }, { type: deciding.type, payload: { home: 7, away: 6, tb: { home: 10, away: 8 } } }];
+    expect(engineRefuses(tour, long), "a deuce tie-break to 12-10").toBe(false);
+    expect(refused).toBe(3);
+  });
+
+  it("G8 the final-set tie-break keeps the MATCH margin (Task 13): a short-set cfg whose deciding set plays a tie-break to 10 closes its ordinary sets at margin 1 (5-4) and its deciding set at margin 2 (10-8, never 10-9) - one cfg, both paths, each its own closest finish", () => {
+    const cfg = tnCfg("short-sets", { finalSet: { tiebreakTo: 10 } });
+    expect([cfg.set.tiebreakWinBy, cfg.tiebreak.winBy], "the set's own margin (1) beside the match's (2)").toEqual([1, 2]);
+    const shortStream = generateStream(tnWin(cfg, "home", "shortSetTb"));
+    const standardStream = generateStream(tnWin(cfg, "home", "tiebreakSet"));
+    const shortFold = foldT(cfg, shortStream);
+    const standardFold = foldT(cfg, standardStream);
+    // The short-set tie-break win: straight sets, the last an ordinary set, closed 5-4 (a lead of ONE).
+    expect(shortFold.state.sets).toHaveLength(majority(cfg.bestOf));
+    expect(shortFold.state.sets.at(-1)!.tb).toEqual({ home: 5, away: 4 });
+    // The tie-break set win: the deciding set reached, closed to the FINAL-SET target by two.
+    expect(standardFold.state.sets).toHaveLength(cfg.bestOf);
+    expect(standardFold.state.sets.at(-1)!.tb).toEqual({ home: 10, away: 8 });
+    expect(tbIsClosestFinish(cfg, shortStream)).toEqual({ accepted: true, targetEdge: true, marginEdge: true });
+    expect(tbIsClosestFinish(cfg, standardStream)).toEqual({ accepted: true, targetEdge: true, marginEdge: true });
+    // The short set's margin is NOT carried into the deciding set: 10-9 is refused there, while a lead of one is a finished tie-break in an ordinary set.
+    expect(engineRefuses(cfg, withLastTb(standardStream, 0, 1)), "10-9 in the deciding set").toBe(true);
+    expect(engineRefuses(cfg, withLastTb(shortStream, 0, 0)), "5-4 in an ordinary short set").toBe(false);
+    // ...and the right path under the wrong key: each stream's state is the other path's miss.
+    expect(matchesRequest(tnWin(cfg, "home", "tiebreakSet"), shortFold.outcome, shortFold.state), "the short-set win asked as a tie-break set").toBe("mismatch");
+    expect(matchesRequest(tnWin(cfg, "home", "shortSetTb"), standardFold.outcome, standardFold.state), "the tie-break set win asked as short-set").toBe("mismatch");
+    expect(matchesRequest(tnWin(cfg, "home", "shortSetTb"), shortFold.outcome, shortFold.state)).toBe("match");
+    expect(matchesRequest(tnWin(cfg, "home", "tiebreakSet"), standardFold.outcome, standardFold.state)).toBe("match");
+  });
+
+  it("the witness reads the PRODUCT's state when the fold carries it: a product that never reached the path reds a stream the local fold proves, the product's state is believed over the local fold's, a right path under the wrong key reds, a plain win reds, product null falls back to the local fold, and a half or inconsistent product reds", () => {
+    const double = tnCfg("short-sets", { finalSet: { tiebreakTo: 10 } });
+    const triples: readonly (readonly [string, TennisCfg, DecidingPath, DecidingPath | null])[] = [
+      ["tour", tnCfg("tour"), "tiebreakSet", null], ["grand-slam", tnCfg("grand-slam"), "tiebreakSet", null], ["doubles-noad-mtb10", tnCfg("doubles-noad-mtb10"), "tiebreakSet", null],
+      ["fast4", tnCfg("fast4"), "shortSetTb", null], ["short-sets", tnCfg("short-sets"), "shortSetTb", null],
+      ["short-sets+final tb", double, "tiebreakSet", "shortSetTb"], ["short-sets+final tb", double, "shortSetTb", "tiebreakSet"],
+    ];
+    let rows = 0;
+    for (const [name, cfg, path, otherBuilt] of triples) {
+      const at = `${name} ${path}`;
+      const events = generateStream(tnWin(cfg, "home", path));
+      const plain = generateStream(tnWin(cfg, "home"));
+      const own = productOfFold(TENNIS, cfg, events);
+      const straight = productOfFold(TENNIS, cfg, plain);
+      const row = (label: string, want: boolean, local: readonly StreamEvent[], product: ProductFold | null, asked: DecidingPath = path) => {
+        expect(witnessOf(TENNIS, asked, pathFoldOf(TENNIS, cfg, local, product)), `${at}: ${label}`).toBe(want);
+        rows++;
+      };
+      row("the product's own state", true, events, own);
+      row("no product: the generator's own request match reads the local fold", true, events, null);
+      row("a product that never reached the path (a plain win) although the local fold did", false, events, straight);
+      row("the product's state is believed over the local fold's", true, plain, own);
+      row("the local fold plain and no product", false, plain, null);
+      row("a plain win's own state asked as the path", false, plain, straight);
+      // Right path under the wrong key: the other tennis path (where this cfg ends in the other class too, its own stream is the true one), or a path tennis lacks.
+      for (const other of TN_PATHS.filter((p) => p !== path)) row(`asked as '${other}'`, false, events, own, other);
+      for (const foreign of ["decidingSet", "cap", "shootout"] as const) row(`asked as '${foreign}'`, false, events, own, foreign);
+      if (otherBuilt !== null) {
+        const theirs = generateStream(tnWin(cfg, "home", otherBuilt));
+        row(`the product reached '${otherBuilt}', not this path`, false, events, productOfFold(TENNIS, cfg, theirs));
+        row(`the other path's own stream under its own key (control)`, true, theirs, productOfFold(TENNIS, cfg, theirs), otherBuilt);
+      }
+      // A half or inconsistent product.
+      row("no summary", false, events, { summary: null, state: own.state });
+      row("no state", false, events, { summary: own.summary, state: null });
+      row("a state that is no object", false, events, { summary: own.summary, state: "done" });
+      type SetRow = { home: number; away: number; closed?: boolean; tb?: { home: number; away: number }; mtb?: boolean };
+      const withSets = (edit: (sets: SetRow[]) => void, extra?: (c: { state: { cfg: TennisCfg; outcome: { winner: string }; phase: string } }) => void): ProductFold => {
+        const c = clone(own) as { summary: { detail: { sets: SetRow[] } }; state: { sets: SetRow[]; cfg: TennisCfg; outcome: { winner: string }; phase: string } };
+        edit(c.state.sets);
+        edit(c.summary.detail.sets);
+        extra?.(c);
+        return c as unknown as ProductFold;
+      };
+      const stripEdit = clone(own) as { summary: { detail: { sets: { home: number }[] } } };
+      stripEdit.summary.detail.sets[0]!.home += 1;
+      row("a summary whose set strip is not the state's", false, events, stripEdit as unknown as ProductFold);
+      const noStrip = clone(own) as { summary: { detail: { sets?: unknown } } };
+      delete noStrip.summary.detail.sets;
+      row("a summary carrying no set strip", false, events, noStrip as unknown as ProductFold);
+      const otherCfg = clone(own) as { state: { cfg: TennisCfg } };
+      otherCfg.state.cfg.set.tiebreakTo += 1;
+      row("a state folded under another tie-break target than the one asked", false, events, otherCfg as unknown as ProductFold);
+      const noMargin = clone(own) as { state: { cfg: TennisCfg } };
+      if (noMargin.state.cfg.set.tiebreakWinBy !== undefined) { delete noMargin.state.cfg.set.tiebreakWinBy; row("a state folded without the short set's own margin", false, events, noMargin as unknown as ProductFold); }
+      const otherWinner = clone(own) as { state: { outcome: { winner: string } } };
+      otherWinner.state.outcome.winner = ID.away;
+      row("a state whose own outcome names the other winner", false, events, otherWinner as unknown as ProductFold);
+      row("a match not yet done", false, events, withSets(() => undefined, (c) => { c.state.phase = "live"; }));
+      row("no closed set at all", false, events, withSets((sets) => { sets.length = 0; }));
+      row("the last set is the loser's (home and away swapped)", false, events, withSets((sets) => { const l = sets.at(-1)!; [l.home, l.away] = [l.away, l.home]; if (l.tb !== undefined) l.tb = { home: l.tb.away, away: l.tb.home }; }));
+      row("the last set ended in games alone (its tie-break dropped)", false, events, withSets((sets) => { const l = sets.at(-1)!; delete l.tb; delete l.mtb; }));
+      const l0 = (clone(own) as { state: { sets: SetRow[] } }).state.sets.at(-1)!;
+      if (l0.tb !== undefined) {
+        row("a tie-break set whose games are not tiebreakAt+1 : tiebreakAt", false, events, withSets((sets) => { sets.at(-1)!.home += 1; }));
+        row("a tie-break a point short of its target", false, events, withSets((sets) => { const l = sets.at(-1)!; l.tb = { home: l.tb!.home - 1, away: l.tb!.away - 1 }; }));
+        row("a tie-break won by the other side than the set", false, events, withSets((sets) => { const l = sets.at(-1)!; l.tb = { home: l.tb!.away, away: l.tb!.home }; }));
+        row("a tie-break with a lead short of the margin", false, events, withSets((sets) => { const l = sets.at(-1)!; l.tb = { home: l.tb!.home, away: l.tb!.home - 1 + (l.tb!.home - l.tb!.away === 1 ? 1 : 0) }; }));
+        row("a tie-break set claiming a match tie-break as well", false, events, withSets((sets) => { sets.at(-1)!.mtb = true; }));
+      } else {
+        row("a match tie-break set claiming a tie-break block", false, events, withSets((sets) => { sets.at(-1)!.tb = { home: 7, away: 5 }; }));
+        row("a match tie-break standing in a set that is not the deciding one", false, events, withSets((sets) => { sets.shift(); }));
+      }
+    }
+    console.info(`G8 witness: ${rows} row(s) over ${triples.length} path win(s)`);
+    expect(rows).toBeGreaterThan(triples.length * 15);
+  });
+
+  it("G8 vocabulary: ALL_OUTCOMES is still W2b's seven and nothing is known-unsupported - the new shapes run in their own sweep", () => {
     expect(ALL_OUTCOMES.map(outcomeLabel)).toEqual(["win-home", "win-away", "draw", "forfeit-away-walkover", "forfeit-home-retired", "abandon", "tie"]);
     expect(ALL_OUTCOMES).toHaveLength(7);
     expect(ALL_OUTCOMES.filter((o) => o.kind === "win" && o.path !== undefined)).toEqual([]);
