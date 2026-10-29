@@ -7,12 +7,13 @@ export const metadata: Metadata = { title: "Changelog & versioning" };
 const ENTRIES: { date: string; title: string; lines: string[] }[] = [
   {
     date: "2026-10-29",
-    title: "The standings export prints what the public standings table prints",
+    title: "Breaking: the standings export prints what the public standings table prints",
     lines: [
-      "GET /divisions/{id}/exports/standings (PDF and XLSX) now builds its columns and cells from the same selection as the public table. After Pts it prints the sport's derived columns the stage's tie-break order uses (cricket NRR, set-sport ratios and differences, carrom ratios, chess Buchholz Cut-1, Buchholz and Sonneborn-Berger, hockey field goals, tennis game ratio), in the public order, with the public header and text.",
-      "A value nobody recorded prints \u2014 where it used to print 0: a team that has not played shows \u2014 for goals for, goals against and goal difference, as the public table does. Counts (played, won, drawn, lost, points) stay numbers. In the XLSX a recorded whole number is still a numeric cell; a \u2014, a decimal under a declared precision, a half-point (1\u00bd) and every derived value is a text cell.",
-      "A reader that finds a column by its header text is unaffected; one that reads columns by position will find the derived columns after Pts. The PDF's standings columns are also sized from their own content now.",
-      "This is the document the organiser prints: no JSON field of the API changes.",
+      "GET /divisions/{id}/exports/standings (PDF and XLSX) now builds its columns and cells from the same selection as the public table. After Pts it prints the sport's derived columns the stage's tie-break order uses (cricket NRR, set-sport ratios and differences, carrom ratios, chess Buchholz Cut-1, Buchholz and Sonneborn-Berger, hockey field goals, tennis game ratio), in the public order, with the public header and text. Every derived value is a text cell.",
+      "A metric nobody recorded for an entrant is now the text \u2014 where it was the number 0: a team that has not played shows \u2014 for goals for, goals against and goal difference, as the public table does. A recorded 0 and the counts (played, won, drawn, lost, points) stay numbers. A metric the sport declares with decimals is now a text cell with them (3.0); no built-in sport declares one today.",
+      "# now prints the row's stored place, as the public table does, where it used to print the row's position in the document. The engine's places run 1 to n and are distinct, so a table the engine ranked prints the same numbers; a stored table whose places are not 1 to n prints them as stored. Positions up to and including Pts do not move.",
+      "Read the sheet by header text, treat \u2014 as no value, and do not assume Pts is the last column. The PDF's standings columns are also sized from their own content now.",
+      "This lands in v1 in place: no client outside the web app uses the API yet. Details: docs/api-v1-breaking-changes.md.",
     ],
   },
   {
