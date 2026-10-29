@@ -965,7 +965,7 @@ spec("two matches on one channel: both go live together, each on its own broadca
 // ===========================================================================
 // 12. the consent links
 // ===========================================================================
-spec("consent links resolve: the consent card links YouTube's terms, guidelines and our privacy page; the privacy page's YouTube section links Google's policy, the revocation page and the terms - at the exact URLs", async ({ page }) => {
+spec("consent links: every link the consent card renders is read from the page - each path of ours returns 200 and each external link is one of the two pinned YouTube URLs, in a new tab (external pages are not fetched); the privacy page's YouTube section links Google's policy, the revocation page and the terms at the exact URLs", async ({ page }) => {
   test.setTimeout(budget({ navs: 5 }));
   await page.setViewportSize({ width: 1280, height: 900 });
   await seedRig(page);
@@ -993,12 +993,32 @@ spec("consent links resolve: the consent card links YouTube's terms, guidelines 
       cardLinks++;
     }
   }
-  const privacy = card.locator('a[href="/legal/privacy"]');
-  await expect(privacy, "the consent card links our privacy policy").toHaveCount(1);
   expect(cardLinks, "the card's external links were read").toBeGreaterThanOrEqual(3);
-  const resolved = await page.request.get("/legal/privacy");
-  expect(resolved.status(), "the privacy link resolves").toBe(200);
-  expect(await resolved.text(), "and lands on the page that has the YouTube section").toContain('id="youtube-api-services"');
+
+  // EVERY link the card renders, read from the page (not only the ones named above): a path of ours must resolve, an external one must be
+  // one of the two pinned URLs. External pages are never fetched (this run has no business depending on youtube.com being up), so for
+  // them the claim is the exact URL and the new-tab attributes, not a status.
+  const hrefs = await card.locator("a[href]").evaluateAll((as) => as.map((a) => a.getAttribute("href") ?? ""));
+  expect(hrefs.length, "anti-vacuity: the consent card renders links").toBeGreaterThan(0);
+  const unique = [...new Set(hrefs)];
+  const paths = unique.filter((h) => h.startsWith("/"));
+  const externals = unique.filter((h) => h.startsWith("https://"));
+  expect(paths.length + externals.length, `every link on the card is a path of ours or an https URL (no mailto:, javascript: or bare fragment): ${unique.join(" ")}`).toBe(unique.length);
+  expect(paths, "the card links our privacy policy and nothing else of ours").toEqual(["/legal/privacy"]);
+  expect([...externals].sort(), "the card's external links are exactly the two YouTube URLs").toEqual([YOUTUBE_GUIDELINES_URL, YOUTUBE_TOS_URL].sort());
+  for (const l of await card.locator("a[href]").all()) {
+    await expect(l, "every link on the card opens in a new tab").toHaveAttribute("target", "_blank");
+    await expect(l).toHaveAttribute("rel", /noopener/);
+  }
+  let fetched = 0;
+  for (const path of paths) {
+    const resolved = await page.request.get(path);
+    expect(resolved.status(), `${path} resolves`).toBe(200);
+    if (path === "/legal/privacy") expect(await resolved.text(), "and lands on the page that has the YouTube section").toContain('id="youtube-api-services"');
+    fetched++;
+  }
+  expect(fetched, "anti-vacuity: every path the card links was fetched").toBe(paths.length);
+  expect(fetched).toBeGreaterThan(0);
 
   // 2. The privacy page's YouTube section: the three links the Developer Policies require (III.A.2).
   await page.goto("/legal/privacy#youtube-api-services");
