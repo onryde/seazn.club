@@ -26,7 +26,7 @@ import { ApiV1Error } from "@/lib/client-v1";
 import { AuthError, HttpError, PaymentRequiredError } from "@/lib/errors";
 import { LOCALES, type Dict } from "@/lib/i18n-constants";
 import { messages, type MessageKey } from "@/lib/messages";
-import { GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_LANDING_CODES, YOUTUBE_PRIVACIES } from "@/lib/youtube";
+import { GOOGLE_THIRD_PARTY_ACCESS_URL, YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_DISCONNECTED_LABEL, YOUTUBE_LANDING_CODES, YOUTUBE_PRIVACIES } from "@/lib/youtube";
 import { ROUTES } from "@/server/api-v1/openapi";
 import { v1 } from "@/server/api-v1/http";
 import { PickYoutubeChannel, StreamTargetKind, YOUTUBE_REVOKE_OUTCOMES, YoutubeConnectionSaved, YoutubeConnectionSettings, type StreamTarget } from "@/server/api-v1/schemas";
@@ -707,6 +707,65 @@ describe("a connected channel's row", () => {
     expect(channelStatus({ status: "revoked" as View["status"], liveState: "enabled" }).tone).toBe("bad");
   });
 
+  // U1 (PO ruling, T19 fix round 2): the reconnect-needed row warns that the channel's stored data is deleted a fixed time after it
+  // stopped working. The number is the daily pass's own declaration (lib/youtube's YOUTUBE_DEAD_GRANT_PURGE_DAYS, which daily.ts purges
+  // by), never a figure typed here - so a change to the purge moves the sentence with it.
+  describe("the reconnect-needed warning (the dead-grant purge, in the customer's words)", () => {
+    const WARNING = "youtube-channel-purge";
+    const KEY = "streaming.youtube.statusLine.reconnectPurge" as MessageKey;
+    const rowIn = (l: string, t: StreamTarget, opts: { disconnectOnly?: boolean } = {}) =>
+      inLocale(l, <ul><YoutubeChannelRow t={t} canEdit orgId="o" badge={null} {...opts} /></ul>);
+    const warningOf = (html: string): string | null => {
+      const hit = new RegExp(`<p[^>]*data-testid="${WARNING}"[^>]*>(.*?)</p>`).exec(html);
+      return hit ? plain(hit[1]!) : null;
+    };
+
+    it("in every locale the warning carries the purge window, the number comes from the declaration, and no `{days}` slot is left unfilled", () => {
+      let checked = 0;
+      for (const l of LOCALES) {
+        const raw = localeDict(l)[KEY];
+        expect(raw, `${l}: the sentence exists`).toBeTypeOf("string");
+        expect(raw, `${l}: the number is a slot, not typed into the translation`).toContain("{days}");
+        const said = warningOf(rowIn(l, channel({ status: "reconnect_needed" })));
+        expect(said, `${l}: the warning is on the reconnect-needed row`).not.toBeNull();
+        expect(said, `${l}: says the window`).toContain(String(YOUTUBE_DEAD_GRANT_PURGE_DAYS));
+        expect(said, `${l}: no slot left`).not.toMatch(/[{}]/);
+        expect(said, `${l}: it is THIS locale's sentence`).toBe(plain(raw!.replaceAll("{days}", String(YOUTUBE_DEAD_GRANT_PURGE_DAYS))));
+        if (l !== "en") expect(raw, `${l}: translated, not the English fallback`).not.toBe(localeDict("en")[KEY]);
+        checked++;
+      }
+      expect(checked, "every locale").toBe(LOCALES.length);
+      expect(LOCALES.length).toBeGreaterThan(1);
+    });
+
+    it("it sits with the reconnect-needed state only: no other cell of the matrix, and not the restricted (disconnect-only) page", () => {
+      let on = 0;
+      let off = 0;
+      for (const [status, liveState] of MATRIX) {
+        const html = rowIn("en", channel({ status, liveState: liveState as View["liveState"] }));
+        if (status === "reconnect_needed") {
+          expect(warningOf(html), `${status}/${liveState}`).not.toBeNull();
+          on++;
+        } else {
+          expect(warningOf(html), `${status}/${liveState}`).toBeNull();
+          expect(plain(html), `${status}/${liveState}`).not.toContain(m(KEY, { days: YOUTUBE_DEAD_GRANT_PURGE_DAYS }));
+          off++;
+        }
+      }
+      expect([on, off], "both sides of the matrix ran").toEqual([4, 5]);
+      // The restricted page cannot reconnect, so a "reconnect to keep it" sentence there would point at a button that is not there.
+      expect(warningOf(rowIn("en", channel({ status: "reconnect_needed" }), { disconnectOnly: true }))).toBeNull();
+    });
+
+    it("it is a separate sentence from the status line, which keeps saying what stopped and what that blocks", () => {
+      const html = rowIn("en", channel({ status: "reconnect_needed" }));
+      expect(plain(html)).toContain(m("streaming.youtube.statusLine.reconnectNeeded"));
+      expect(plain(html)).toContain(m(KEY, { days: YOUTUBE_DEAD_GRANT_PURGE_DAYS }));
+      // A reconnect with the terms to review first still warns: the clock runs whatever the agreement text says.
+      expect(warningOf(rowIn("en", channel({ status: "reconnect_needed", termsOutdated: true })))).not.toBeNull();
+    });
+  });
+
   it("not-enabled carries YouTube's up-to-24-hours hint; no other state does", () => {
     let withHint = 0;
     let without = 0;
@@ -1119,7 +1178,7 @@ describe("Disconnect (T18) — the one way a channel leaves", () => {
         const where = `${status}/${liveState}/${termsOutdated}`;
         expect(html, where).toContain('data-testid="youtube-disconnect"');
         expect(html, where).toContain('data-testid="youtube-channel-status"');
-        for (const id of ["youtube-reconnect", "youtube-reconnect-form", "youtube-settings", "youtube-review-terms", "youtube-channel-line", "youtube-channel-terms", "youtube-channel-terms-line", "youtube-channel-hint"]) {
+        for (const id of ["youtube-reconnect", "youtube-reconnect-form", "youtube-settings", "youtube-review-terms", "youtube-channel-line", "youtube-channel-purge", "youtube-channel-terms", "youtube-channel-terms-line", "youtube-channel-hint"]) {
           expect(html, `${where} ${id}`).not.toContain(`data-testid="${id}"`);
         }
         for (const k of statusLines) expect(plain(html), `${where} ${k}`).not.toContain(m(k));

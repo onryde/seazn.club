@@ -194,6 +194,17 @@ export const GOOGLE_PRIVACY_URL = "http://www.google.com/policies/privacy";
  *  constant for the page may exist (lib/__tests__/youtube-google-urls.test.ts sweeps every export). */
 export const GOOGLE_THIRD_PARTY_ACCESS_URL = "https://security.google.com/settings/security/permissions";
 
+/** A grant that has been dead this long (counted from the flip to `reconnect_needed`) has its YouTube data purged. SEVEN days, not the
+ *  ceiling's thirty (PO ruling, T19 fix round 1): Google's Developer Policies (III.D.2) give 30 days from the REVOCATION when access is
+ *  revoked at Google's page, and the daily pass finds a revoked grant only on its next check - a day later, more when the health slice
+ *  defers the connection - so a purge clocked from the flip at the ceiling could land past 30 days from the revocation. A week leaves a
+ *  club time to reconnect and every deadline room.
+ *
+ *  Declared HERE, not in server/youtube/daily.ts (which re-exports it), because the customer is told the figure: the Streaming page's
+ *  reconnect-needed row (a client component, which cannot import a `server-only` module) fills its warning from this, so the sentence
+ *  and the purge are one number. */
+export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = 7;
+
 // --- The Streaming page and the connect round trip's landing --------------------------------------------------------------
 
 /** The org's Streaming page (owner, 2026-10-27: Streaming is its own top-nav page, not a Directory tab, and nothing forwards from

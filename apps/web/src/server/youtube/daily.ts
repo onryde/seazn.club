@@ -62,7 +62,7 @@ import "server-only";
 // token is opened in memory for one pass, and what is reported carries ids and codes only. The file names no sealed column.
 import { sql, type Tx } from "@/lib/db";
 import { captureError } from "@/lib/sentry";
-import { YOUTUBE_LIVE_STATE_OF_REFUSAL, youtubeVideoId, type YoutubeLiveStateRefusal } from "@/lib/youtube";
+import { YOUTUBE_DEAD_GRANT_PURGE_DAYS, YOUTUBE_LIVE_STATE_OF_REFUSAL, youtubeVideoId, type YoutubeLiveStateRefusal } from "@/lib/youtube";
 import { fireDivisionRevalidate } from "@/server/public-site/revalidate";
 import { ACTIVE_STATES } from "@/server/relay/domain/session";
 import { recordLiveState } from "./connections";
@@ -87,12 +87,9 @@ export const YOUTUBE_REFRESH_AFTER_DAYS = 25;
 /** THE CEILING (Google API Services User Data Policy III.E.4): what Seazn stores from YouTube is refreshed or deleted within this many
  *  days. Every other 30 here is this one fact, so a change to it moves them together. */
 export const YOUTUBE_DATA_CEILING_DAYS = 30;
-/** A grant that has been dead this long (counted from the flip to `reconnect_needed`) has its YouTube data purged. SEVEN days, not the
- *  ceiling's thirty (PO ruling, T19 fix round 1): Google's Developer Policies (III.D.2) give 30 days from the REVOCATION when access is
- *  revoked at Google's page, and this pass finds a revoked grant only on its next daily check - a day later, more when the health slice
- *  defers the connection - so a purge clocked from the flip at the ceiling could land past 30 days from the revocation. A week leaves a
- *  club time to reconnect and every deadline room. */
-export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = 7;
+/** A grant that has been dead this long (counted from the flip to `reconnect_needed`) has its YouTube data purged: SEVEN days, declared in
+ *  lib/youtube (the Streaming page tells the customer the same figure) and re-exported here for the pass's own callers and tests. */
+export { YOUTUBE_DEAD_GRANT_PURGE_DAYS };
 /** A `failed` broadcast row is deleted this long after it failed (DP III.E.4; the plan names no other figure). */
 export const YOUTUBE_FAILED_ROW_RETENTION_DAYS = YOUTUBE_DATA_CEILING_DAYS;
 

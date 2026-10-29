@@ -1421,6 +1421,7 @@
   "streaming.youtube.status.reviewTerms": "Vérifier les conditions mises à jour",
   "streaming.youtube.statusLine.connected": "Les matchs peuvent passer en direct sur cette chaîne.",
   "streaming.youtube.statusLine.reconnectNeeded": "Google n’accepte plus l’accès de Seazn. Les matchs ne peuvent pas passer en direct ici tant que vous n’avez pas reconnecté la chaîne.",
+  "streaming.youtube.statusLine.reconnectPurge": "Seazn supprime les données enregistrées de cette chaîne {days} jours après l’arrêt de son fonctionnement, sauf si vous la reconnectez.",
   "streaming.youtube.statusLine.notEnabled": "Les directs ne sont pas encore activés sur cette chaîne.",
   "streaming.youtube.notEnabledHint": "YouTube peut mettre jusqu’à 24 heures.",
   "streaming.youtube.statusLine.blocked": "YouTube a bloqué les directs sur cette chaîne. Les matchs ne peuvent pas passer en direct ici tant que YouTube n’a pas levé le blocage.",

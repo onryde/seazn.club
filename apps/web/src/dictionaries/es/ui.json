@@ -1421,6 +1421,7 @@
   "streaming.youtube.status.reviewTerms": "Revisar condiciones actualizadas",
   "streaming.youtube.statusLine.connected": "Los partidos pueden salir en directo en este canal.",
   "streaming.youtube.statusLine.reconnectNeeded": "Google ha dejado de aceptar el acceso de Seazn. Los partidos no pueden salir en directo aquí hasta que reconectes.",
+  "streaming.youtube.statusLine.reconnectPurge": "Seazn elimina los datos guardados de este canal {days} días después de que dejara de funcionar, salvo que lo reconectes.",
   "streaming.youtube.statusLine.notEnabled": "Este canal aún no tiene activadas las emisiones en directo.",
   "streaming.youtube.notEnabledHint": "YouTube puede tardar hasta 24 horas.",
   "streaming.youtube.statusLine.blocked": "YouTube ha bloqueado las emisiones en directo en este canal. Los partidos no pueden salir en directo aquí hasta que YouTube lo levante.",

@@ -35,7 +35,10 @@ const declaredDays = (name: string): number => {
 };
 const CEILING = declaredDays("YOUTUBE_DATA_CEILING_DAYS");
 const REFRESH = declaredDays("YOUTUBE_REFRESH_AFTER_DAYS");
-const DEAD = declaredDays("YOUTUBE_DEAD_GRANT_PURGE_DAYS");
+// The purge window is declared in lib/youtube (the Streaming page tells the customer the same figure); daily.ts re-exports it.
+const libYoutubeSrc = src("../../../lib/youtube.ts");
+const DEAD = Number(libYoutubeSrc.match(/export const YOUTUBE_DEAD_GRANT_PURGE_DAYS = (\d+);/)?.[1] ?? NaN);
+if (!Number.isFinite(DEAD)) throw new Error("YOUTUBE_DEAD_GRANT_PURGE_DAYS is no longer declared as a plain number in lib/youtube.ts; read the new declaration here");
 // How long an unfinished connection attempt (the sealed token and the picker's channel names) lives: connect-flow.ts's own declaration.
 const connectFlowSrc = src("../../../server/youtube/connect-flow.ts");
 const PENDING_SECONDS = Number(connectFlowSrc.match(/export const PENDING_LIFETIME_SECONDS = (\d+);/)?.[1] ?? NaN);
