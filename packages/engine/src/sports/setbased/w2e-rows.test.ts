@@ -33,7 +33,8 @@ import { volleyball } from "./volleyball.ts";
 const STRICT = { strictFromSeq: 0 } as const;
 
 type Spec = [type: string, payload?: unknown, voids?: string];
-type SetSport = typeof badminton | typeof tabletennis | typeof volleyball;
+// badminton, tabletennis and volleyball are one SportModule<SetBasedCfg, SetBasedState, ...> type, so one name stands for all three.
+type SetSport = typeof badminton;
 
 const START: Spec = ["core.start"];
 const stream = (specs: readonly Spec[]): EventEnvelope[] =>

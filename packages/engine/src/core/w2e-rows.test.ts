@@ -202,7 +202,7 @@ describe("X-DV-1 no sport can end a ladder, double-elimination, stepladder or pa
   const drawCapablePairs = (): Array<{ key: string; name: string; cfg: unknown }> => {
     const pairs: Array<{ key: string; name: string; cfg: unknown }> = [];
     forEachSport(({ module: m }) => {
-      for (const { name, cfg } of cfgsOf(m)) if (m.supportsDraws(cfg as never, "league")) pairs.push({ key: m.key, name, cfg });
+      for (const { name, cfg } of cfgsOf(m)) if (m.supportsDraws(cfg, "league")) pairs.push({ key: m.key, name, cfg });
     });
     return pairs;
   };

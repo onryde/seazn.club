@@ -141,7 +141,7 @@ describe("TN-SE-2 a tennis point penalty or game penalty stays entered as a poin
 
   it("TN-SE-2 limit: a game penalty in a match tie-break is entered as the breaker's points - the match goes to the opponent, and the award is refused there too", () => {
     // doubles-noad-mtb10: one set all, the deciding set is a 10-point match tie-break (ITF Appendix VI). USTA (secondary): the match is lost.
-    const mtb = cfgOf(tennis.variants["doubles-noad-mtb10"] as Record<string, unknown>);
+    const mtb = cfgOf(tennis.variants["doubles-noad-mtb10"]);
     const oneSetAll: Spec[] = [START, ...Array.from({ length: 6 }, () => game(H)).flat(), ...Array.from({ length: 6 }, () => game(A)).flat()];
     const inBreaker = fold(mtb, oneSetAll);
     expect(inBreaker.sets).toHaveLength(2);
@@ -158,7 +158,7 @@ describe("TN-SE-2 a tennis point penalty or game penalty stays entered as a poin
   it("TN-SE-2 under no-ad scoring the point a penalty concedes at deuce closes the game, where ad scoring would give only the advantage", () => {
     // Penalty-point behaviour is the config's scoring: 40-all, then one point conceded to A. The default (ad) config leaves a game on, the no-ad config ends it.
     const toDeuce: Spec[] = [START, ...points(H, A, H, A, H, A)];
-    const noAd = cfgOf(tennis.variants["doubles-noad-mtb10"] as Record<string, unknown>);
+    const noAd = cfgOf(tennis.variants["doubles-noad-mtb10"]);
     const ad = cfg;
     expect(scoreView(fold(noAd, [...toDeuce, sanction(H, "point_penalty")])), "no-ad: the sanction alone").toEqual(scoreView(fold(noAd, toDeuce)));
     expect(scoreView(fold(ad, [...toDeuce, sanction(H, "point_penalty")])), "ad: the sanction alone").toEqual(scoreView(fold(ad, toDeuce)));

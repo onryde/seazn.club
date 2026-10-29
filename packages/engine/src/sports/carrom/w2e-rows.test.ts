@@ -186,7 +186,7 @@ describe("CA-DG-1 under the tieBoard draw house rule a game level after its last
   it("CA-DG-1 a match is decided by games won: a drawn game is no win for either side", () => {
     // [description, the games in order, the match: winner entrant or "draw", games won, games drawn]
     type Game = "draw" | "H" | "A";
-    const cases: Array<[Game[], string | "draw", { home: number; away: number }, number]> = [
+    const cases: Array<[Game[], string, { home: number; away: number }, number]> = [
       [["draw", "H", "H"], H, { home: 2, away: 0 }, 1],
       [["H", "draw", "H"], H, { home: 2, away: 0 }, 1],
       [["draw", "H", "A"], "draw", { home: 1, away: 1 }, 1],
